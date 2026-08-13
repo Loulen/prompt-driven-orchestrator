@@ -1,6 +1,9 @@
 # Prompt Driven Orchestrator (PDO) — Glossaire métier
 
-Glossaire vivant. Mis à jour au fil des décisions, lazy.
+Glossaire vivant : définitions, volonté produit, vocabulaire à éviter. Le contrat détaillé d'une
+décision vit dans `docs/adr/` (renvois « ADR-NNNN »), l'implémentation dans le code, l'historique
+dans git. Ce fichier ne porte que la vérité courante — jamais de changelog ni de détail
+d'implémentation (voir `docs/agents/domain.md`).
 
 ---
 
@@ -8,9 +11,9 @@ Glossaire vivant. Mis à jour au fil des décisions, lazy.
 
 Un **Pipeline** est un DAG nommé, à **orchestration déterministe**, qui décrit l'enchaînement de rôles d'agents pour accomplir une tâche d'ingénierie.
 
-- **Orchestration déterministe** : aucun *LLM-router*. Le routage entre nœuds suit des prédicats mécaniques portés par les edges conditionnelles (`when:`/`else`) et les régions de boucle du bloc `loops:` (ADR-0011, qui supplante le placement `Switch`/`Loop` d'ADR-0002). Aucun LLM ne décide à l'exécution quel nœud activer.
+- **Orchestration déterministe** : aucun *LLM-router*. Le routage entre nœuds suit des prédicats mécaniques portés par les edges conditionnelles (`when:`/`else`) et les régions de boucle du bloc `loops:` (ADR-0011). Aucun LLM ne décide à l'exécution quel nœud activer.
 - **Pas de routage probabiliste** : le déterminisme porte sur la *structure d'orchestration* (qui appelle qui dans quel ordre), pas sur le contenu produit par chaque nœud (les LLM aux feuilles restent stochastiques).
-- **Graphe modifiable pendant l'exécution** : la topologie n'est pas immuable. L'utilisateur peut éditer le graphe pendant qu'un Run tourne (ADR-0007) — ajouter un nœud, créer une edge, etc. — et le scheduler se réajuste au prochain tick. Les nœuds en cours d'exécution restent immutables (cf. *Édition pendant un Run* ci-dessous).
+- **Graphe modifiable pendant l'exécution** : la topologie n'est pas immuable. L'utilisateur peut éditer le graphe pendant qu'un Run tourne (ADR-0007) et le scheduler se réajuste au prochain tick. Les nœuds en cours d'exécution restent immutables (cf. *Édition pendant un Run*).
 - **Multiples pipelines plutôt qu'embranchements** : pour gérer des trade-offs coût/complexité (ex. *quick-fix* vs *feature-with-adversarial-review*), on définit plusieurs pipelines distincts. Pas un seul pipeline avec des branches.
 
 Contrairement à : Liza (pipelines YAML), Langgraph (conditional edges + LLM-router), TPM workflow (orchestrateur LLM qui décide quand spawner).
@@ -19,52 +22,48 @@ Contrairement à : Liza (pipelines YAML), Langgraph (conditional edges + LLM-rou
 
 ## Node
 
-Unité atomique d'un Pipeline. Un **Node** représente un rôle. La plupart des nodes lancent une instance de Claude Code à laquelle on confie un prompt système qui définit sa mission (Implementer, Planner, Reviewer, etc.). Un node **`script`** fait exception : il exécute du **bash déterministe fourni par l'auteur**, sans LLM (cf. *Node `script`* ci-dessous, ADR-0017).
+Unité atomique d'un Pipeline. Un **Node** représente un rôle. La plupart des nodes lancent une instance de Claude Code à laquelle on confie un prompt système qui définit sa mission (Implementer, Planner, Reviewer, etc.). Un node **`script`** fait exception : il exécute du **bash déterministe fourni par l'auteur**, sans LLM (ADR-0017).
 
 Un Node se définit par :
 
 - **Nom** — identifiant lisible affiché dans le canvas.
 - **Prompt système** — le rôle, écrit dans la zone de texte qui s'ouvre à l'édition.
-- **Ports de sortie — déclarés.** Un ou plusieurs documents produits, chacun un port nommé : c'est le **contrat de production** du Node (avec son schéma de frontmatter optionnel, cf. *Blackboard*). Multi-fan-out supporté (le Debugger sort `repro_steps` + `screenshots`). Rendu : **un dot vert par document**, drag-source des edges, librement placé.
-- **Ports d'entrée — émergents.** Un Node ne **déclare pas** ses entrées : elles sont *dérivées des edges entrantes*. Connecter `debugger.repro_steps` vers un Node y crée de facto une entrée `repro_steps` (le nom suit le document amont). Plusieurs edges de même nom **poolent** dans une seule entrée-liste — pooling **sémantique**, jamais un groupement visuel des flèches : chaque flèche atterrit où le designer veut sur le Node, **sans dot d'entrée**. Sur collision de noms *distincts*, on qualifie par source. L'accumulation cross-itérations (glob `iter-*`) est un flag `repeated` porté par l'**edge**, pas par l'entrée.
+- **Ports de sortie — déclarés.** Un ou plusieurs documents produits, chacun un port nommé : c'est le **contrat de production** du Node (avec son schéma de frontmatter optionnel, cf. *Blackboard*). Multi-fan-out supporté. Rendu : un dot vert par document, drag-source des edges.
+- **Ports d'entrée — émergents.** Un Node ne **déclare pas** ses entrées : elles sont *dérivées des edges entrantes*. Connecter `debugger.repro_steps` vers un Node y crée de facto une entrée `repro_steps`. Plusieurs edges de même nom **poolent** dans une seule entrée-liste — pooling **sémantique**, jamais un groupement visuel des flèches. Sur collision de noms *distincts*, on qualifie par source. L'accumulation cross-itérations est un flag `repeated` porté par l'**edge**, pas par l'entrée.
 
-Asymétrie assumée (et déjà présente dans le typage : output = contrat vérifié, input = best-effort) : le Node *connaît* ses sorties, *découvre* ses entrées au câblage. Conséquence sur la bibliothèque : un Node réutilisable porte ses **outputs + rôle + type**, pas ses inputs (purement pipeline-spécifiques).
+Asymétrie assumée : le Node *connaît* ses sorties, *découvre* ses entrées au câblage. Conséquence sur la bibliothèque : un Node réutilisable porte ses **outputs + rôle + type**, pas ses inputs (purement pipeline-spécifiques).
 
 Distinct de :
 
-- **NodeRun** *(à valider)* — l'exécution d'un Node au sein d'un Pipeline Run précis. Un NodeRun = une session tmux Claude Code dans un sous-worktree dédié, avec un statut (pending/running/done/failed).
+- **NodeRun** — l'exécution d'un Node au sein d'un Pipeline Run précis. Un NodeRun = une session tmux Claude Code dans un sous-worktree dédié, avec un statut (pending/running/done/failed).
 
 ### Modèle (par node)
 
-Chaque Node peut porter un **modèle** optionnel (`model: Option<String>`) : l'identifiant du modèle Claude avec lequel sa session est lancée (`claude --model <x>`). Absent ⇒ le node utilise le modèle par défaut du compte (aucun `--model` n'est passé). Permet de payer un modèle capable là où le raisonnement est dur (Planner, Reviewer) et un modèle économique sur les nodes mécaniques.
+Chaque Node peut porter un **modèle** optionnel : l'identifiant du modèle Claude avec lequel sa session est lancée. Permet de payer un modèle capable là où le raisonnement est dur et un modèle économique sur les nodes mécaniques.
 
-- **Texte libre, pass-through, aucune validation** : la valeur est un alias (`opus`, `sonnet`, `haiku`, `opusplan`, `fable`…) ou un id complet (`claude-opus-4-8`), transmise verbatim à `claude`. Un id invalide fait échouer `claude` au démarrage — *sharp tool*, responsabilité du designer (ADR-0001). Pas d'enum fermé qui périmerait à chaque sortie de modèle.
-- **Sémantique, pas layout** : le modèle fait partie de l'identité du pipeline (il change *quel agent* tourne). Il entre donc dans le **diff sémantique**, contrairement à `view`/`mode`/`waypoints`/`target_side`. Deux pipelines ne différant que par le modèle d'un node comparent **différent**.
-- **S'applique aux nodes qui lancent un agent** : `doc-only`, `code-mutating`, `merge`. Les nodes structurels (`start`, `end`) ne lancent pas de session → pas de modèle.
-- **Resume** : une session reprise (`claude --continue`) **conserve son modèle** d'origine (garanti par la doc Claude Code), donc pas besoin de re-passer `--model` au resume. La garantie porte sur le *modèle* et sur lui seul : elle **ne s'étend pas** au niveau d'effort, que PDO re-pose explicitement (cf. *Niveau d'effort (par node)*).
-- **Défaut d'instance** (#347) : un `default_model` daemon-wide, réglable dans la page Settings (`instance_config`, ADR-0015), s'applique à tout node de travail **sans** `model:` propre. Précédence : **`node.model` (override) → `default_model` d'instance (stocké → env `PDO_DEFAULT_MODEL`) → défaut du compte** (aucun `--model`). Réglé une fois, pris en compte au node suivant sans redémarrage (lu frais à chaque spawn). « Default » (chaîne vide) le remet au défaut du compte. Le manager et le `__merge_resolver__` (sessions infra sans `NodeDef`) restent toujours au défaut du compte. _Éviter_ : « modèle global », « modèle du run » (le modèle est *par node* ou *par instance*, jamais par run).
+- **Texte libre, pass-through, aucune validation** : alias ou id complet, transmis verbatim à `claude`. Un id invalide fait échouer `claude` au démarrage — *sharp tool* (ADR-0001). Pas d'enum fermé qui périmerait à chaque sortie de modèle.
+- **Sémantique, pas layout** : le modèle change *quel agent* tourne ; il entre dans le **diff sémantique**, contrairement au layout.
+- **S'applique aux nodes qui lancent un agent** (`doc-only`, `code-mutating`, `merge`). Le manager et le résolveur de merge (sessions d'infra) restent au défaut du compte.
+- **Resume** : une session reprise conserve son modèle d'origine (garanti par Claude Code) — la garantie ne s'étend pas à l'effort (ci-dessous).
+- **Défaut d'instance** (#347) : un `default_model` daemon-wide (Configuration d'instance, ADR-0015) s'applique à tout node de travail sans `model:` propre. Précédence : `node.model` → défaut d'instance → défaut du compte. _Éviter_ : « modèle global », « modèle du run » (le modèle est *par node* ou *par instance*, jamais par run).
 
 ### Niveau d'effort (par node)
 
-Chaque Node peut porter un **niveau d'effort** optionnel (`effort: Option<String>`) : le budget de raisonnement avec lequel sa session est lancée (`claude --effort <level>`). Absent ⇒ aucun `--effort` n'est passé, le node prend le niveau par défaut du compte. Axe **orthogonal au modèle** : le modèle dit *quel agent* tourne, l'effort dit *combien il réfléchit*. Aucun défaut d'instance — il n'existe pas de `default_effort` (#424).
+Chaque Node peut porter un **niveau d'effort** optionnel : le budget de raisonnement de sa session. Axe **orthogonal au modèle** : le modèle dit *quel agent* tourne, l'effort dit *combien il réfléchit*. Aucun défaut d'instance (#424).
 
-- **Texte libre, pass-through, aucune validation** : la valeur est transmise verbatim à `claude`, comme `model`. Pas d'enum fermé qui périmerait à chaque sortie de modèle. L'**UI**, elle, propose un jeu **curaté** — `low`, `medium`, `high`, `xhigh`, `max`, plus l'état « Default » (non posé, `null`, jamais sérialisé) — et affiche une valeur hors-jeu dans un segment dédié plutôt que de la masquer : le wire reste ouvert, rien n'est effacé en silence (ADR-0001, clarification #268).
-- **Un niveau invalide est silencieux, contrairement à `model`** : un id de modèle inconnu fait échouer `claude` au démarrage (le designer le voit) ; un niveau d'effort inconnu ne produit qu'un **warning sur stderr** et la session démarre au niveau par défaut. Le node tourne donc *vert* avec un budget qui n'est pas celui demandé. C'est **la** raison de l'asymétrie UI/wire : le picker ferme le seul mode d'échec que le designer ne peut pas constater.
-- **Sémantique, pas layout** : l'effort fait partie de l'identité du pipeline (il change le comportement de l'agent). Il entre donc dans le **diff sémantique** et dans le `content_hash` de la bibliothèque, comme `model` et contrairement à `view`/`mode`/`waypoints`/`target_side`.
-- **S'applique aux nodes qui lancent un agent** : `doc-only`, `code-mutating`, `merge`. Le `__merge_resolver__` et le manager (sessions d'infra sans `NodeDef`) restent au défaut du compte, comme pour `model`.
-- **Resume — l'asymétrie avec le modèle** (#424) : une session reprise `claude --continue` conserve son **modèle** d'origine (garanti par la doc Claude Code), mais **aucune garantie équivalente n'existe pour l'effort** — mesuré sur `claude` 2.1.220 : le niveau est perdu, et le transcript n'en porte aucune trace à restaurer. PDO **re-pose donc le flag** au resume, depuis le `model` + `effort` enregistrés dans le payload de `NodeStarted` au spawn — pas depuis le YAML courant, qui a pu être édité entre-temps (ADR-0007 : une édition n'a pas d'effet sur l'itération en vol). Conséquence : le YAML est la source de vérité au *spawn*, l'event log l'est au *resume*.
-- **Effort demandé ≠ effort obtenu** : le flag exprime une **intention**. Un niveau non supporté retombe **en silence** sur le plus haut niveau supporté ≤ demandé (`xhigh` → `high` sur Opus 4.6, qui supporte `max` mais pas `xhigh` — la matrice n'est pas totalement ordonnée, d'où un contrôle segmenté et non un slider) ; un plafond d'organisation peut clamper côté serveur ; et `CLAUDE_CODE_EFFORT_LEVEL`, s'il est positionné dans l'environnement du daemon, **bat le flag** sur tous les nodes. Un skill ou un sous-agent peut par ailleurs porter son propre `effort:` en frontmatter, qui surclasse le niveau de session : le `--effort` d'un node est le niveau **de la session**, pas de chaque tour. À lire comme un levier de **déterminisme et de latence**, pas comme un cadran de coût. _Éviter_ : « effort garanti », « effort du run », « mode économique » (l'effort est *par node*, demandé et non garanti, et ne chiffre rien).
+- **Texte libre côté wire, jeu curaté côté UI** : la valeur est transmise verbatim (comme `model`), mais l'UI propose un picker fermé + l'état « Default ». Raison de l'asymétrie : un id de modèle invalide fait échouer `claude` (le designer le voit) ; un niveau d'effort inconnu ne produit qu'un warning et la session démarre au défaut — le node tourne *vert* avec un budget qui n'est pas celui demandé. Le picker ferme le seul mode d'échec que le designer ne peut pas constater (#268).
+- **Sémantique, pas layout** : entre dans le diff sémantique et le `content_hash` de la bibliothèque.
+- **Re-posé au resume** (#424) : contrairement au modèle, l'effort est perdu par `claude --continue` ; PDO re-pose le flag depuis ce qui a été enregistré au spawn — pas depuis le YAML courant, qui a pu être édité entre-temps (ADR-0007). Le YAML est la source de vérité au *spawn*, l'event log l'est au *resume*.
+- **Effort demandé ≠ effort obtenu** : le flag exprime une **intention** — un niveau non supporté retombe en silence, un plafond d'organisation peut clamper, un skill/sous-agent peut surclasser le niveau de session. À lire comme un levier de déterminisme et de latence, pas un cadran de coût. _Éviter_ : « effort garanti », « effort du run », « mode économique ».
 
 ### Node `script` — exécution déterministe (ADR-0017)
 
-Un node **`script`** exécute le bash de l'auteur au lieu de lancer Claude. Il tourne dans une **session tmux** (attachable comme tout NodeRun, ADR-0005) dont le tail est `timeout N bash <corps>` : **exit 0 ⇒ node `completed`**, non-zéro ou timeout ⇒ `failed`. En v1 il est d'**effet doc-only** (pas de sous-worktree ; tourne dans le worktree du Run ; doit le laisser propre).
+Un node **`script`** exécute le bash de l'auteur au lieu de lancer Claude, dans une **session tmux** attachable comme tout NodeRun (ADR-0005) : exit 0 ⇒ `completed`, non-zéro ou timeout ⇒ `failed`. En v1 il est d'**effet doc-only** (tourne dans le worktree du Run, doit le laisser propre).
 
-- **I/O par variables d'environnement** (un script ne lit pas le préambule prose) : `PDO_INPUT_<PORT>`, `PDO_OUTPUT_<PORT>`, `PDO_ARTIFACTS_DIR`, `PDO_VAR_<NAME>`, plus les `PDO_RUN_ID/NODE_ID/NODE_ITER/DAEMON_URL` habituels. Le script écrit lui-même `output.md` à `$PDO_OUTPUT_<port>` ; pour piloter une edge `when:`, il y écrit sa propre frontmatter YAML. `outputs_validator` s'applique en **fail-fast** (pas de retry interactif — la session a quitté) : raison **`"script output validation failed"`**, détail **imbriqué sous `detail`** (`{kind, missing|violations}`) et volontairement distinct de la forme plate d'un échec après retry — deux causes, deux remèdes, deux empreintes d'audit. Réponse : `409 {"error":"script_validation_failed","recoverable":false,"detail":{…}}` (#490, ADR-0035).
-- **Le tail du node teste le code de sortie `4`** de `pdo complete` : un refus terminal n'y déclenche donc **pas** le `pdo fail` de repli, qui doublerait `NodeFailed` **et** `RunFailed` (ce dernier n'est pas gardé) avec une raison fausse. Le tail ne signale l'échec que sur un code de sortie qui n'est **ni** `0` **ni** `4`.
-- **Corps** stocké dans le slot prompt du node (`<pipeline>.prompts/<node>.md`). Un corps vide fait échouer le lancement (fail-loud, pas de no-op silencieux).
-- **Ni `model` ni `effort`** (aucun agent lancé). Le seam de test `tmux_cmd_override` ne s'applique pas à un script (le bash *est* déterministe, donc testable sans stub).
-- **Sécurité** : équivalent au guard de Trigger et au bash d'un agent — le bash de l'auteur dans son propre pipeline, aucune nouvelle frontière de confiance (#260 reste le contrôle réel).
-- **Sharp tool** : un script doc-only qui fait `git commit` laisse l'arbre propre et passe le garde d'immutabilité — c'est la responsabilité de l'auteur.
+- **I/O par variables d'environnement** (`PDO_INPUT_<PORT>`, `PDO_OUTPUT_<PORT>`, `PDO_ARTIFACTS_DIR`, `PDO_VAR_<NAME>`…) : un script ne lit pas le préambule prose. Il écrit lui-même ses outputs ; la validation d'outputs s'applique en **fail-fast** (pas de retry interactif — la session a quitté). Contrat de refus → ADR-0035.
+- **Corps** stocké dans le slot prompt du node. Un corps vide fait échouer le lancement (fail-loud).
+- **Ni `model` ni `effort`** (aucun agent lancé).
+- **Sharp tool** : même surface de confiance que le guard de Trigger et le bash d'un agent — le bash de l'auteur dans son propre pipeline. Un script doc-only qui commit laisse l'arbre propre : responsabilité de l'auteur.
 
 ## Dataflow
 
@@ -74,17 +73,15 @@ Modèle (A) — **document-first, code en side-channel** :
 - Le **code** vit dans la branche du Pipeline Run. Quand un NodeRun finit, son sous-worktree est mergé dans la branche du Pipeline Run. Le NodeRun suivant fork un nouveau sous-worktree depuis cet état.
 - Les wires de l'éditeur = dataflow documentaire intentionnel. L'état du code suit en arrière-plan.
 
-À traiter plus tard : conflit potentiel quand deux NodeRuns parallèles modifient le code → stratégie de waves / disjoint-files (cf. Liza/TPM).
-
 ---
 
 ## Edges conditionnelles — le routage vit sur l'arête
 
-Le nœud **`Switch`** est **supprimé** (obsolète), ainsi que le pattern "clause `when:` portée par les ports de sortie d'un Switch". **La condition de routage vit désormais directement sur l'edge**, attachée à l'output port qu'elle quitte. Un Switch n'était qu'un pass-through ré-émettant son input sur un port gardé — un hop fantôme dans le dataflow que l'edge conditionnelle élimine : le `review` d'un Reviewer va directement vers `implementer` (`verdict=FAIL`) ou `end` (`verdict=PASS`), chaque arête gardée, sans nœud intermédiaire. Cf. ADR-0011 (supersede le placement décidé en ADR-0002).
+**La condition de routage vit directement sur l'edge**, attachée à l'output port qu'elle quitte (ADR-0011 ; les nœuds `Switch`/`Loop`/`ForEach` sont supprimés). Le `review` d'un Reviewer va directement vers `implementer` (`verdict=FAIL`) ou `end` (`verdict=PASS`), chaque arête gardée, sans nœud intermédiaire.
 
 ### Forme
 
-Une edge porte une clause `when:` **optionnelle** (même grammaire de prédicats qu'avant). Sans clause, l'edge est inconditionnelle (fire toujours).
+Une edge porte une clause `when:` **optionnelle**. Sans clause, l'edge est inconditionnelle.
 
 ```yaml
 edges:
@@ -98,25 +95,25 @@ edges:
 
 ### Évaluation — multi-match, pas d'ordre
 
-À l'arrivée d'un artefact sur un output port, **toutes** les edges sortantes dont la clause est satisfaite **firent** — le flux peut fan-out vers plusieurs nœuds simultanément. Pas de `first-match-wins`, aucun ordre déclaré ne compte (supersede la sémantique first-match-wins du Switch). Si deux conditions se chevauchent, les deux branches partent : c'est voulu (ADR-0001, *sharp tool*) — le designer écrit des conditions disjointes pour un XOR, ou converge un fan-out `code-mutating` via un `Merge`. Une edge **`else`** (clause vide marquée `else: true`) fire **uniquement si aucune edge sœur** (même output port source) n'a matché.
+À l'arrivée d'un artefact sur un output port, **toutes** les edges sortantes dont la clause est satisfaite **firent** — le flux peut fan-out vers plusieurs nœuds simultanément. Pas de `first-match-wins`. Si deux conditions se chevauchent, les deux branches partent : c'est voulu (ADR-0001, *sharp tool*) — le designer écrit des conditions disjointes pour un XOR, ou converge un fan-out `code-mutating` via un `Merge`. Une edge **`else`** fire **uniquement si aucune edge sœur** (même output port source) n'a matché.
 
-Feedback runtime : un nœud qui a firé passe au vert ; les edges déclenchées sont marquées d'un indicateur sur le canvas, pour rendre le fan-out lisible.
+Feedback runtime : un nœud qui a firé passe au vert ; les edges déclenchées sont marquées sur le canvas.
 
 ### Champs référençables
 
 - Tout champ de frontmatter de l'artefact quittant le port source.
 - Toute variable pipeline `$<name>`.
-- **`iter`** — le compteur de la région englobante (cf. *Loop regions*). Re-autorisé comme champ de `when:` : il n'avait été retiré que parce que le nœud `Loop` portait le compteur ; le nœud disparaissant, le compteur redevient adressable. Sert notamment à câbler une sortie d'épuisement (`iter: { gte: $max }`).
+- **`iter`** — le compteur de la région englobante (cf. *Loops*). Sert notamment à câbler une sortie d'épuisement (`iter: { gte: $max }`).
 
-Prédicats : `eq`, `neq`, `lt`, `lte`, `gt`, `gte`, `in`, `not_in`. Pas d'eval libre, jamais de LLM-router — le principe mécanique d'ADR-0002 tient. Plusieurs prédicats dans une clause sont **AND'd** ; pour OR, `in: [...]` sur un champ, ou plusieurs edges sœurs vers la même target.
+Prédicats : `eq`, `neq`, `lt`, `lte`, `gt`, `gte`, `in`, `not_in`. Pas d'eval libre, jamais de LLM-router. Plusieurs prédicats dans une clause sont **AND'd** ; pour OR, `in: [...]` sur un champ, ou plusieurs edges sœurs vers la même target.
 
 ---
 
 ## Loops — boucles matérialisées, nommées
 
-Les nœuds **`Loop`** et **`ForEach`** sont **supprimés** (obsolètes). Une boucle n'est plus un nœud à ports `body`/`done`/`break` : c'est une **entrée nommée du bloc `loops:`** du YAML, qui référence un ensemble de nœuds membres. Le mot *région* désigne son **rendu** sur le canvas (boîte translucide autour des membres ; simple marqueur si la boucle n'a qu'un membre). Les edges restent uniformes : **aucune edge n'est marquée "back-edge"**, son rôle est *dérivé* de la boucle, jamais stocké.
+Une boucle est une **entrée nommée du bloc `loops:`** du YAML, qui référence un ensemble de nœuds membres. Le mot *région* désigne son **rendu** sur le canvas (boîte translucide autour des membres). Les edges restent uniformes : **aucune edge n'est marquée « back-edge »**, son rôle est *dérivé* de la boucle, jamais stocké.
 
-Pourquoi une identité nommée plutôt qu'une détection de cycle pure : "quelle edge est *la* back-edge" est une propriété topologique globale qui bascule quand on édite le graphe ailleurs. Un **id stable** sort cette identité de la topologie, stabilise la persistance du bound, et ouvre les boucles imbriquées. Cf. ADR-0011.
+Pourquoi une identité nommée plutôt qu'une détection de cycle pure : « quelle edge est *la* back-edge » est une propriété topologique globale qui bascule quand on édite le graphe ailleurs. Un **id stable** sort cette identité de la topologie, stabilise la persistance du bound, et ouvre les boucles imbriquées. Cf. ADR-0011.
 
 ### Forme
 
@@ -132,220 +129,136 @@ loops:
     over: issues           # champ liste dans l'artefact entrant
 ```
 
-- `members` : **liste explicite d'ids de nœuds, ≥ 1** (jamais spatial — déplacer un nœud hors de la boîte ne le retire pas de la boucle). Une boucle **n'est pas nécessairement un sous-graphe** : un seul membre est légal et fréquent.
-  - `collection` à un membre = fan-out d'**un** nœud par item (le foreach le plus courant : « un fixer par issue »).
-  - `bounded` à un membre = un nœud qui **se relance** (self-edge) jusqu'à `max_iter`.
-- **Entrée** = le membre ayant une in-edge depuis un non-membre (membre unique : ce nœud). **Re-entry** = une edge d'un membre vers cette entrée (membre unique : sa self-edge).
-- **Rendu** : ≥ 2 membres → boîte englobante ; 1 membre → marqueur compact sur le nœud. Header : `↻ X/Y` (bounded) ou `⇉ laps/total items` (collection, le total venant de `collection_states[id].total_items` — pas de `max(iter)` sur les membres, qui ne dit que le dernier lap *atteint* et rendait un fan-out figé à 1/2 indiscernable d'une région à 1 item terminée, #453), **en lecture seule sur le canvas** — ni id ni éditeur inline (règle slim card #149). Le `max_iter` et l'id se consultent/s'éditent dans l'**inspecteur de région** (clic sur le header).
+- `members` : **liste explicite d'ids de nœuds, ≥ 1** (jamais spatial — déplacer un nœud hors de la boîte ne le retire pas de la boucle). Une boucle n'est pas nécessairement un sous-graphe : un seul membre est légal et fréquent (`collection` à un membre = un fan-out par item ; `bounded` à un membre = self-edge jusqu'à `max_iter`).
+- **Entrée** = le membre ayant une in-edge depuis un non-membre. **Re-entry** = une edge d'un membre vers cette entrée.
+- **Rendu** : boîte englobante (≥ 2 membres) ou marqueur compact (1 membre), header `↻ X/Y` ou `⇉ laps/total`, **en lecture seule sur le canvas** — id et `max_iter` se consultent/s'éditent dans l'**inspecteur de région**.
 
 ### Deux drivers
 
-- **`bounded`** — driver = compteur `max_iter`. **Naît par auto-détection d'un cycle** (self-edge incluse) : id généré + `max_iter` par défaut, pour qu'un cycle ne soit jamais accidentellement non-borné. L'auto-détection vit **à la frontière du modèle, pas dans le geste** (#396, addendum ADR-0011) : `parse_pipeline` matérialise les régions manquantes, donc tout lecteur — éditeur, snapshot de run, jumeau de bibliothèque — voit la même boucle, qu'elle ait été dessinée, écrite à la main ou importée. Dérivée, jamais écrite : ouvrir un pipeline ne salit pas l'onglet et ne réécrit pas le YAML ; l'id étant une fonction pure des membres triés, deux lectures s'accordent et le compteur de lap garde son identité. Le miroir canvas (`addEdge`) ne couvre plus que l'edge à peine dessinée. **Exception** : un cycle traversant un nœud legacy `type: loop` n'est pas matérialisé (il porte déjà sa borne et son propre chemin d'itération) — le parse émet un diagnostic « lancer `pdo migrate` » à la place.
-- **`collection`** (ex-ForEach) — driver = `over: <field>`, liste lue dans la frontmatter de l'artefact entrant. **Naît par geste explicite** (clic droit sur le(s) membre(s) → « Fan out over \"<field>\" », un item de menu par champ frontmatter `type: list` entrant) : un fan-out parallèle n'a aucune signature topologique à détecter. Un output typé `list` câblé en aval peut *suggérer* le geste, sans l'imposer. Câblé live depuis #269 / ADR-0026 — **v1 mono-membre** : un body multi-nœuds (itération composite) est différé derrière un nouvel ADR. **Les laps sont réellement concurrents** : c'est la seule exception à « un nœud a au plus une itération vive » que le garde de transition (#212) fait respecter partout ailleurs. L'exemption est portée par la projection (`collection_states[id].members` + `total_items`, écrits par `collection_started`) et bornée trois fois : région **ouverte** (`!done`), nœud **gouverné** par la région, `iter ∈ 1..=total_items`. Hors de ces bornes — et pour `restart_node`, la veille de vivacité et boot recovery, qui partagent le même chokepoint — le refus de #212 tient. _Éviter_ : sérialiser le fan-out pour « respecter » #212 (20 items = 20× plus long, et ADR-0026 dit « en parallèle »), ou élargir le garde à tous les nœuds (#453 : sans l'exemption, les laps ≥ 2 étaient refusés 1 ms après le lap 1, la barrière ne firait jamais et le Run restait `running` sans session vive).
+- **`bounded`** — driver = compteur `max_iter`. **Naît par auto-détection d'un cycle** (self-edge incluse) : id généré + `max_iter` par défaut, pour qu'un cycle ne soit jamais accidentellement non-borné. L'auto-détection vit **à la frontière du modèle, pas dans le geste** (#396, addendum ADR-0011) : le parse matérialise les régions manquantes, donc tout lecteur — éditeur, snapshot de run, jumeau de bibliothèque — voit la même boucle. Dérivée, jamais écrite : ouvrir un pipeline ne salit pas l'onglet et ne réécrit pas le YAML.
+- **`collection`** — driver = `over: <field>`, liste lue dans la frontmatter de l'artefact entrant. **Naît par geste explicite** (clic droit → « Fan out over "<field>" ») : un fan-out parallèle n'a aucune signature topologique à détecter. Câblé live (ADR-0026) — **v1 mono-membre**. **Les laps sont réellement concurrents** : c'est la seule exception à « un nœud a au plus une itération vive » (garde de transition #212), bornée par la projection de région (région ouverte, nœud gouverné, `iter` dans les bornes). Hors de ces bornes le refus tient. _Éviter_ : sérialiser le fan-out pour « respecter » #212, ou élargir le garde à tous les nœuds (mesuré en #453 : la barrière ne firait jamais).
 
 ### Compteur d'itération
 
-- **Par-boucle**, keyé sur l'`id` : une boucle = un `iter`. Tout nœud **membre** estampille ses artefacts avec l'`iter` courant. Un nœud hors boucle garde l'`iter` de ses propres runs (1 s'il n'a couru qu'une fois) : il n'est **jamais re-spawné par un lap** (#195/#199 — seul un vrai cycle émergent ou le moteur de région peut re-lancer un nœud déjà complété ; un membre n'est jamais spawné au-delà de `max_iter`).
-- **Résolution d'inputs** (canonique, #194/#210 — module `input_resolution`) : un input se résout vers **la dernière itération complétée** du nœud source — jamais l'artefact d'une itération échouée, jamais un alignement positionnel sur l'`iter` du consommateur. Un feeder externe à une boucle continue de servir son artefact complété à n'importe quel lap.
-- `bounded` : le compteur **incrémente quand une re-entry fire**, et l'entrée est re-spawnée **une seule fois par lap** même si plusieurs re-entries firent (coalescées — absorbe le double-spawn iter+1 de #108). La barrière de lap dans un body multi-nœuds est le fan-in naturel du nœud de jointure, pas une machinerie dédiée.
-- Adressage inchangé : `reviewer/iter-2/review/output.md`. L'accumulation (`repeated: true`) suit la **même quarantaine** que la résolution simple ci-dessus : un artefact par lap **complété** du nœud source (les itérations échouées/interrompues restent sur disque mais ne sont jamais poolées), ordonné par N — la résolution passe par la projection (`RunState::completed_iters`), jamais par un glob `iter-*` brut du disque (#353).
+- **Par-boucle**, keyé sur l'`id`. Tout nœud **membre** estampille ses artefacts avec l'`iter` courant. Un nœud hors boucle n'est **jamais re-spawné par un lap** (#195/#199).
+- **Résolution d'inputs** (canonique, #194/#210) : un input se résout vers **la dernière itération complétée** du nœud source — jamais l'artefact d'une itération échouée, jamais un alignement positionnel sur l'`iter` du consommateur.
+- `bounded` : le compteur **incrémente quand une re-entry fire**, et l'entrée est re-spawnée **une seule fois par lap** même si plusieurs re-entries firent (coalescées). La barrière de lap dans un body multi-nœuds est le fan-in naturel du nœud de jointure.
+- Adressage : `reviewer/iter-2/review/output.md`. L'accumulation (`repeated: true`) suit la même quarantaine : un artefact par lap **complété** du nœud source, ordonné par N — la résolution passe par la projection, jamais par un glob disque brut (#353).
 
 ### Sortie de boucle
 
-- **Succès anticipé** : une edge forward conditionnelle quittant un membre (`verdict=PASS → end`). Remplace l'ancien `break`.
-- **Épuisement** (`bounded`) : à `iter = max_iter` avec la condition de continuation encore vraie, la re-entry est plafonnée. Le designer **peut** câbler une sortie d'épuisement (`when: { iter: { gte: $max } }`) vers où il veut. Sinon, et si aucune edge forward ne matche, la boucle entre dans un état **bloqué "exhausted — unrouted"** explicite (jamais de stall silencieux), routable par le Pipeline Manager (#126). Pas d'auto-proceed implicite.
-- **`collection`** : **barrière** — les edges quittant la boucle firent **une seule fois, quand tous les items sont terminés** (préserve `done → Merge`, ADR-0006). Liste vide → barrière immédiate, edges sortantes firent une fois sans item-artefact. Items `code-mutating` → chacun son sous-worktree, convergence via `Merge`.
+- **Succès anticipé** : une edge forward conditionnelle quittant un membre (`verdict=PASS → end`).
+- **Épuisement** (`bounded`) : à `iter = max_iter`, la re-entry est plafonnée. Le designer **peut** câbler une sortie d'épuisement (`when: { iter: { gte: $max } }`). Sinon, la boucle entre dans un état **bloqué « exhausted — unrouted »** explicite (jamais de stall silencieux), routable par le Pipeline Manager. Pas d'auto-proceed implicite.
+- **`collection`** : **barrière** — les edges quittant la boucle firent **une seule fois, quand tous les items sont terminés**. Liste vide → barrière immédiate. Items `code-mutating` → chacun son sous-worktree, convergence via `Merge`.
 
 ### Imbrication — différée
 
-Le modèle à id autorise de *déclarer* `inner ⊂ outer`, mais la **sémantique d'itération imbriquée** (coordonnée composite `outer-2/inner-3`, accumulation scopée au lap parent) est **différée** : v1 = itération plate, un seul niveau.
+Le modèle à id autorise de *déclarer* `inner ⊂ outer`, mais la sémantique d'itération imbriquée est **différée** : v1 = itération plate, un seul niveau.
 
 ### Édition pendant un Run & intra-Run
 
-Supprimer l'edge qui retire le **dernier cycle** des membres d'une boucle `bounded` déclenche un **popup de confirmation** (« ceci détruira la boucle <id> ») ; confirmé, l'entrée `loops:` est retirée, bound et état d'itération partent avec. L'interaction avec un Run actif est régie par ADR-0007 (nœuds running immuables, edges libres). Les compteurs `iter` repartent de zéro à chaque Run — pas de mémoire d'itérations entre Runs.
+Supprimer l'edge qui retire le **dernier cycle** d'une boucle `bounded` déclenche un popup de confirmation ; confirmé, l'entrée `loops:` part avec son état. L'interaction avec un Run actif est régie par ADR-0007. Les compteurs `iter` repartent de zéro à chaque Run.
 
 ---
 
 ## Edges — structure
 
-Une edge câble un output port source vers un input port target, et porte une clause `when:` **optionnelle** (sémantique multi-match : cf. *Edges conditionnelles*). La terminaison du Run passe toujours par un edge vers le nœud `End` mandatoire (#39) ; le pattern halt-edge des versions antérieures reste déprécié.
+Une edge câble un output port source vers un input port target, et porte une clause `when:` optionnelle. La terminaison du Run passe toujours par un edge vers le nœud `End` mandatoire (#39).
 
 ### Routage — `mode` + `waypoints` (#154)
 
-Le tracé d'une edge est **orthogonal** (connecteur à angle droit) : l'auto-routage évite les autres nœuds et se recalcule quand un nœud bouge. Le routage vit sur l'edge via deux champs :
+Le tracé d'une edge est **orthogonal**, auto-routé par défaut. `mode: manual` épingle un tracé via des `waypoints` absolus ; « re-route automatically » les efface.
 
-- **`mode`** : `auto` (défaut, absent) ou `manual`. Une edge `auto` ne stocke **aucun** waypoint — son chemin est recalculé déterministiquement à chaque rendu (re-route gratuit au déplacement d'un nœud). Une edge `manual` épingle son tracé.
-- **`waypoints`** : liste de points **absolus** `{ x, y }`, significative seulement en `manual`. Le premier drag d'une poignée de segment épingle la route (`mode: manual`) ; l'action par-edge « re-route automatically » (panneau de détail d'edge) les efface et repasse en `auto`. Les waypoints absolus acceptent le drift quand un nœud bouge : le reset est l'échappatoire.
-
-`mode` + `waypoints` (comme `view` sur les nœuds) sont du **layout, pas de la sémantique** : ils persistent **dans le fichier pipeline** (le routage voyage quand un workflow est partagé) mais sont **exclus du diff sémantique** — deux pipelines ne différant que par leur routage ou les positions de leurs nœuds comparent **égaux** (déplacer un nœud ou bouger un waypoint ne marque jamais le pipeline « modifié »). Cf. #154, design screen 14.
-
-Le partitionnement layout/sémantique a un **propriétaire unique** : `frontend/src/lib/layoutFields.ts` (`SEMANTIC_FIELDS` / `LAYOUT_FIELDS` + `stripLayout`). Ajouter un champ au sérialiseur (`frontend/src/lib/serializePipeline.ts`, `pipelineToYamlObject`) sans le classer y fait échouer le test d'exhaustivité `layoutFields.test.ts` — qui compare par scope les clés réellement émises à `SEMANTIC ∪ LAYOUT`, et qui tourne sous `vitest` (donc **pas** dans la CI actuelle, cf. `.github/workflows/ci.yml`). `notes` est stripé en **bloc entier** (ADR-0018 R1) ; le côté de port (`side`) reste **sémantique** (#355), au même titre que dans l'étoile du node-library.
-
-Le daemon en tient un **miroir** dans `crates/pdo-daemon/src/pipeline_semantics.rs` (#395), consommé par le seul comparateur Rust : `library_store::pipelines::content_hash`. Deux garde-fous le tiennent aligné — chaque projection **déstructure** sa struct source (un champ neuf de `PipelineDef` / `NodeDef` / `Port` / `EdgeDef` / `LoopRegion` ne compile pas avant d'être classé), et le test `layout_fields_match_frontend_owner` **lit `layoutFields.ts`** et compare les ensembles LAYOUT scope par scope. Le miroir ne porte que la moitié LAYOUT : la surface de parse Rust connaît quelques champs que le sérialiseur frontend n'émet pas (`EdgeDef::reason`, `EdgeDef::repeated`, `Port::description`, `NodeDef::over`), comptés **sémantiques** — un sur-ensemble sémantique ne peut que rendre le drift plus strict, jamais ressusciter un faux positif.
+`mode` + `waypoints` (comme `view` sur les nœuds) sont du **layout, pas de la sémantique** : ils persistent **dans le fichier pipeline** (le routage voyage quand un workflow est partagé) mais sont **exclus du diff sémantique** — deux pipelines ne différant que par leur layout comparent **égaux**. Le partitionnement layout/sémantique a un propriétaire unique côté frontend, miroité côté daemon avec des gardes d'exhaustivité (#154, #355, #395).
 
 ### Ancrage de l'edge entrante — `target_side` (#168)
 
-Les inputs sont **émergents** (#149) : une flèche entrante n'atterrit pas sur un dot d'input déclaré mais **sur le corps** du nœud cible. `target_side` mémorise **de quel côté** (`left` / `right` / `top` / `bottom`) la flèche s'ancre : la règle décidée est *le côté de la carte cible le plus proche du point de dépôt*. Le routage orthogonal arrive alors par ce côté (plus de gauche-vers-droite forcé). Absent ⇒ `left` (ancrage historique), jamais écrit.
-
-`target_side` est du **layout, pas de la sémantique** (au même titre que `mode`/`waypoints`/`view`) : il persiste dans le fichier (l'arrivée des flèches voyage avec un workflow partagé) mais est exclu du diff sémantique. Les ports **déclarés** (l'input `result` du nœud `End`, les ports des nœuds structurels `merge` / `loop` / `for-each`) gardent leur côté fixe et **ne sont pas** affectés par l'ancrage au dépôt.
+Les inputs étant émergents, une flèche entrante atterrit **sur le corps** du nœud cible. `target_side` mémorise de quel côté (le plus proche du point de dépôt). C'est du **layout** : persiste dans le fichier, exclu du diff sémantique. Les ports **déclarés** gardent leur côté fixe.
 
 ---
 
 ## Note (note de canvas)
 
-Une **Note** est une annotation de documentation **inerte** posée sur le canvas : un texte libre que le designer épingle près d'un groupe de nœuds pour expliquer une intention (« ce loop est borné à 3 exprès », « TODO câbler l'edge d'épuisement »). Elle **n'est pas un Node** — aucun titre/`name`, aucun type (`doc-only`/`code-mutating`/`merge`/`script`), aucun port, aucune edge, aucune session, aucune place dans le dataflow ni l'ordonnancement : le runtime l'**ignore entièrement**.
+Une **Note** est une annotation de documentation **inerte** posée sur le canvas : un texte libre épinglé près d'un groupe de nœuds pour expliquer une intention. Elle **n'est pas un Node** — aucun type, aucun port, aucune edge, aucune session : le runtime l'**ignore entièrement** (ADR-0018).
 
-- **Persistée dans un bloc racine `notes:`** du YAML (sibling de `loops:`/`edges:`, jamais dans `nodes:`), chaque entrée = `{ id, content, view }`. C'est la forme éprouvée de `loops:` — une entité nommée de premier niveau, rendue sur le canvas, qui n'est délibérément **pas** un type de nœud (cf. ADR-0018).
-- **`content` = texte brut en v1** — pas de markdown, pour ne pas ouvrir une 2ᵉ surface `react-markdown` ni le sink `dangerouslySetInnerHTML` d'ADR-0013. Édité dans l'inspecteur (clic sur la note), pas inline sur la carte.
-- **`view` = layout, pas sémantique** — même classe que `view`/`mode`/`waypoints`/`target_side` : persiste **dans le fichier** (une note partagée suit le workflow) mais est **exclu du diff sémantique** ; deux pipelines ne différant que par leurs notes comparent **égaux** (le star « synced/diverged » ne bouge pas). La puce « non sauvegardé » (dirty), elle, s'allume — normal. Taille pilotée par le contenu en v1 ; redimensionnement différé.
-- **Mutable pendant un Run** : inerte, aucune session à orphaner — `mutation_validator` ne doit jamais rejeter l'ajout/édition/suppression d'une note sur un Run actif (contraste avec la suppression d'un node non-`pending`, interdite par ADR-0007).
+- **Persistée dans un bloc racine `notes:`** du YAML (sibling de `loops:`/`edges:`, jamais dans `nodes:`).
+- **`content` = texte brut en v1** — pas de markdown, pour ne pas ouvrir une seconde surface de rendu (ADR-0013/0018).
+- **`view` = layout, pas sémantique** : deux pipelines ne différant que par leurs notes comparent égaux.
+- **Mutable pendant un Run** : inerte, aucune session à orphaner — jamais rejetée sur un Run actif (contraste avec la suppression d'un node non-`pending`, interdite par ADR-0007).
 
-_Éviter_ : « commentaire » (évoque un commentaire YAML `#` ou un commentaire d'issue GitHub), et « placeholder annoté » (qui est, lui, un **vrai** nœud `doc-only` produit par l'import de workflow, ADR-0016).
+_Éviter_ : « commentaire » (évoque un commentaire YAML `#` ou d'issue), « placeholder annoté » (qui est un **vrai** nœud `doc-only` produit par l'import de workflow, ADR-0016).
 
 ---
 
 ## Blackboard
 
-Le **Blackboard** est le store partagé où vivent tous les artefacts d'un Pipeline Run. Toutes les sorties documentaires de tous les NodeRuns y sont persistées et adressées par chemin.
+Le **Blackboard** est le store partagé où vivent tous les artefacts d'un Pipeline Run, persistés et adressés par chemin.
 
-- **Localisation** : `<pipeline-worktree>/.pdo/artifacts/`. Suit la branche du Pipeline Run. Part au cleanup **du worktree** — mais est d'abord copié vers le *Blackboard archivé* global (`~/.pdo/runs/<run-id>/artifacts/`, lecture seule, survit au cleanup ; cf. §*Cleanup vs archive* et ADR-0020).
-- **Format** : markdown brut (`.md`) avec **YAML frontmatter** pour les métadonnées structurées (verdict, statut, références, etc.). Le corps reste lisible humainement, le frontmatter est parsable par le runtime.
-- **Wires** : dans l'éditeur, un wire de `Node A → Node B` n'est pas un transport ; c'est une **déclaration de dépendance**. Le runtime traduit en : *"avant de lancer B, attendre que A ait posé son artefact ; l'input port de B le lit depuis le Blackboard"*.
-- **Cycles + accumulation** : chaque tour de cycle écrit dans un sous-dossier `iter-<N>/`. Les ports d'entrée qui veulent accumuler (ex. `reviews_bloquantes`) lisent un glob `iter-*/review.md` → liste naturellement ordonnée.
+- **Localisation** : `<pipeline-worktree>/.pdo/artifacts/`. Suit la branche du Pipeline Run. Part au cleanup **du worktree** — mais est d'abord copié vers le *Blackboard archivé* (cf. §*Cleanup vs archive*, ADR-0020).
+- **Format** : markdown brut avec **YAML frontmatter** pour les métadonnées structurées. Le corps reste lisible humainement, le frontmatter est parsable par le runtime.
+- **Wires** : un wire de `Node A → Node B` n'est pas un transport ; c'est une **déclaration de dépendance**. Le runtime traduit en : *« avant de lancer B, attendre que A ait posé son artefact ; l'input port de B le lit depuis le Blackboard »*.
+- **Cycles** : chaque tour écrit dans un sous-dossier `iter-<N>/`.
 
-**Blackboard archivé** *(terme)* : copie **durable et lecture seule** du Blackboard d'un Run (plus son `pipeline.yaml` + `pipeline.prompts/`), écrite sous `~/.pdo/runs/<run-id>/` (store **global**, hors du `run_dir` repo-local) au moment de l'archivage, **avant** la suppression du worktree. Contrairement au Blackboard vif (qui *part au cleanup*), il **survit** au cleanup — c'est ce qui permet de rouvrir un Run `archived` et d'accéder à ses outputs (canvas réhydraté en lecture seule via `GET /runs/<id>/pipeline`). **N'est pas** récupéré par `cleanup_run` (repo-local) ; sa suppression relève du `forget` (cf. §*Cleanup vs archive*, ADR-0020).
+**Blackboard archivé** *(terme)* : copie **durable et lecture seule** du Blackboard d'un Run (plus son `pipeline.yaml` + prompts), écrite sous `~/.pdo/runs/<run-id>/` (store global) à l'archivage, **avant** la suppression du worktree. C'est ce qui permet de rouvrir un Run `archived` et d'accéder à ses outputs. Sa suppression relève du `forget` (ADR-0020, ADR-0024).
 
 ### Schéma d'adressage
-
-Chaque artefact produit par un NodeRun a un chemin canonique :
 
 ```
 <pipeline-worktree>/.pdo/artifacts/<node-id>/iter-<N>/<port-name>.md
 ```
 
-- `<node-id>` : slug stable du Node dans le pipeline (assigné à l'édition, ex. `implementer-1`).
-- `<N>` : compteur d'itération du NodeRun. Vaut `1` pour les nœuds non-cycliques.
-- `<port-name>` : nom du port de sortie (ex. `summary`, `review`, `plan`).
+Résolution des inputs : wire simple → dernière itération **complétée** du nœud source ; wire d'accumulation (`repeated`) → un artefact par itération complétée, ordonné par N. La résolution passe par la projection, pas par un glob disque (#353).
 
-**Résolution des inputs** :
-- Wire simple → input port lit `<artifacts>/<source-node>/iter-<latest>/<port>.md`.
-- Wire d'accumulation (port marqué `repeated`, typiquement le port `reviews_bloquantes` côté Implementer dans un cycle) → input port lit un artefact par **itération complétée** du nœud source (`<artifacts>/<source>/iter-<N>/<port>.md`), ordonné par N. La résolution passe par la projection (`input_resolution` / `RunState::completed_iters`), **pas** par un glob `iter-*` du disque : une itération échouée qui a laissé un `output.md` n'est jamais poolée (#353).
-
-**html** *(type de port de sortie)* :
-Un port de sortie dont l'artefact est un `output.html` **rendu** dans une iframe `sandbox=""`
-(`srcDoc`), pour une relecture experte confortable — HTML + CSS **statiques**, **aucun JS exécuté**
-(même classe de confiance « contenu rendu » qu'ADR-0013/0018 ; voir ADR-0028). Surface de relecture,
-**non consommée en aval** en v1. Le daemon ne sert jamais l'artefact en `text/html`.
-_Éviter_ : « aperçu HTML interactif » (la variante JS est hors périmètre v1).
+**html** *(type de port de sortie)* : un port dont l'artefact est un `output.html` **rendu** dans une iframe sandboxée — HTML + CSS statiques, **aucun JS exécuté**, jamais servi en `text/html` par le daemon (ADR-0028). Surface de relecture, non consommée en aval en v1. _Éviter_ : « aperçu HTML interactif ».
 
 ### Frontmatter — minimal
 
-Les artefacts sont des `.md` avec **frontmatter YAML minimale**. La frontmatter sert au *runtime* (parser un verdict, savoir quoi router) — **pas** à structurer le contenu. Tout ce qui est destiné à être lu par un autre LLM (issues bloquantes, justifications, recommandations) reste dans le **corps** markdown.
-
-Exemple :
-
-```markdown
----
-verdict: FAIL
----
-
-## Blocking issues
-
-- error_handling_missing_in_foo
-- test_coverage_below_threshold
-
-## Detailed review
-
-Le code de `foo()` ne gère pas le cas où...
-```
-
-Pas de structures imbriquées, pas de listes lourdes en frontmatter. Si on a besoin de structure exploitable par le runtime, on l'ajoute champ par champ et on documente.
+La frontmatter sert au *runtime* (parser un verdict, router) — **pas** à structurer le contenu. Tout ce qui est destiné à être lu par un autre LLM reste dans le **corps** markdown. Pas de structures imbriquées ni de listes lourdes en frontmatter.
 
 ### Schéma déclaratif par output port
 
-Un Node peut **déclarer le schéma de frontmatter attendu** sur chacun de ses output ports. Le runtime utilise ce schéma pour (a) injecter une description précise dans le préambule (l'agent sait quels champs écrire avec quelles contraintes) et (b) **valider à la complétion du NodeRun** que la frontmatter écrite respecte le schéma.
+Un Node peut **déclarer le schéma de frontmatter attendu** sur chacun de ses output ports. Le runtime l'utilise pour (a) injecter une description précise dans le préambule et (b) **valider à la complétion**.
 
-Types supportés en v1 : `enum` (avec liste `allowed`), `int`, `string`, `bool`, `list` (de strings). Pas de `float`, pas de `date`, pas de nested — si un cas concret le force, on étend.
-
-YAML :
+Types supportés v1 : `enum` (avec `allowed`), `int`, `string`, `bool`, `list` (de strings). Si un cas concret force plus, on étend.
 
 ```yaml
 outputs:
   - name: review
     frontmatter:
-      verdict:
-        type: enum
-        allowed: [PASS, FAIL]
-      score:
-        type: int
-      issues:
-        type: list
+      verdict: { type: enum, allowed: [PASS, FAIL] }
+      score: { type: int }
+      issues: { type: list }
 ```
 
-**Pas de typage côté input** — l'agent fait du best-effort sur ce qu'il reçoit (un wire vers un upstream typé donne malgré tout un format lisible dans le préambule, mais aucune validation runtime ni lint d'incompatibilité). Asymétrique volontaire : l'output est un contrat de production qu'on peut mécaniquement vérifier ; l'input est un contexte que l'agent interprète.
+**Pas de typage côté input** — l'agent fait du best-effort sur ce qu'il reçoit. Asymétrie volontaire : l'output est un contrat de production mécaniquement vérifiable ; l'input est un contexte que l'agent interprète.
 
 ### Validation à la complétion + fallback tmux
 
-Quand un NodeRun signale `pdo complete`, le runtime parse la frontmatter de chaque output produit et la matche contre le schéma déclaré. Si **mismatch** :
+Quand un NodeRun signale `pdo complete`, le runtime valide la frontmatter contre le schéma déclaré. Si mismatch : **fallback** — un message est envoyé dans la session tmux du NodeRun (« corrige et retry »), le nœud reste `running` ; **1 retry max**, puis `failed`. Ce mécanisme évite de fail loud sur une erreur que l'agent peut corriger seul, tout en bornant la dérive. Formes de refus exactes → ADR-0035.
 
-1. **Fallback** : le runtime envoie un message dans la session tmux du NodeRun (*"Ton frontmatter ne respecte pas le schéma : <champ X manquant / valeur Y hors enum>. Corrige et retry."*). Le NodeRun reste en status `running` (pas marqué failed). La 1re tentative répond `409` `{"error":"frontmatter_retry_pending","recoverable":true,"violations":[…]}` : le refus dit « c'est encore ton tour », pas « c'est raté » — et c'est bien un **refus**, la complétion n'a pas été accordée (#490, ADR-0035 §2).
-2. L'agent corrige et appelle à nouveau `pdo complete`. Le runtime re-valide.
-3. Si la 2e tentative échoue (limite : **1 retry max**, 2 tentatives au total), le NodeRun est marqué `failed` avec raison **`"output validation failed"`**. Cette chaîne est **exacte et load-bearing** : la bannière rouge du panneau de nœud s'allume sur l'égalité `failure_reason.includes("output validation failed")`, et le fail-fast d'un node `script` la préfixe (`"script output validation failed"`) pour rester distinguable. Réponse : `409` `{"error":"frontmatter_retry_exhausted","recoverable":false,"violations":[…]}` — `NodeFailed` + `RunFailed` sont **déjà** appendés.
-   _Éviter_ : « output frontmatter mismatch après retry » (ancienne formulation, jamais présente dans le code ; écrire la chaîne exacte).
+### Contrat de refus de la complétion (ADR-0035)
 
-Ce mécanisme évite de fail loud sur une erreur que l'agent peut typiquement corriger seul, tout en bornant la dérive (un agent qui boucle dans le mismatch finit failé en deux tours).
+Une tentative de complétion (`pdo complete` ou *Mark complete*) a **quatre issues** : **Completed** (2xx), **NoOp** (2xx — doublon légal sur un nœud déjà terminal, aucun événement), **Refused** (**jamais 2xx** — slug d'erreur stable + `recoverable` disant si c'est encore le tour de l'agent), panne/cible inconnue (404/500/410). Le point de discrimination est le **slug**, jamais le statut HTTP. Les codes de sortie de `pdo complete` (0/3/4/1) sont un **contrat public** : un refus terminal (exit 4) ne doit **pas** enchaîner sur `pdo fail` (l'échec est déjà enregistré). Détail complet → ADR-0035.
 
-### Contrat de refus de la complétion (#490, ADR-0035)
+_Éviter_ : « erreur de complétion » pour un refus récupérable (rien n'est cassé, c'est encore le tour de l'agent) ; « échec de `pdo complete` » pour un noop (c'est un succès).
 
-Une tentative de complétion — `pdo complete` (`POST …/nodes/<node-id>/done`) ou *Mark complete*
-(`POST …/commands` `kind=mark_node_done`) — a **quatre** issues, et une seule non-succès peut porter un `2xx` :
+### Avance détachée après transition terminale (ADR-0023)
 
-| Issue | Statut | Événement terminal | Exit `pdo complete` |
-|---|---|---|---|
-| **Completed** | `2xx` | appendé, avance planifiée (ADR-0023) | `0` |
-| **NoOp** — doublon légal sur un nœud déjà terminal | `2xx` `{"ok":true,"noop":true,"reason":…}` | **aucun** | `0` |
-| **Refused** | **jamais `2xx`** | selon `recoverable` | `3` ou `4` |
-| panne / cible inconnue | `404`/`500` | — | `1` |
-
-Forme **unique** de tout refus, sur les deux routes : `{"error":"<slug>","recoverable":<bool>, …détail}`.
-
-- **`error`** — slug `snake_case` stable, **le** point de discrimination. Brancher sur le statut est une faute : un statut n'a pas assez de bits pour neuf causes. Un slug inconnu se rend tel quel (ADR-0001).
-- **`recoverable`** — *est-ce encore ton tour ?* `true` ⇒ le nœud est toujours `running`, **rien de terminal n'est enregistré** ; `false` ⇒ le daemon a **déjà** enregistré l'issue terminale.
-- **Le détail est verbatim celui d'avant #490** (`missing`, `violations`, `detail`, `reason`, `message`).
-- Slugs : `missing_outputs` et `frontmatter_retry_pending` (récupérables) ; `frontmatter_retry_exhausted`, `script_validation_failed`, `doc_violated_code_immutability`, `merge_conflict`, `merge_resolution_failed`, `completion_rejected` (terminaux, `409`) ; `run_forgotten` (**`410`**, ADR-0024, inchangé).
-- « Jamais `2xx` » **≠** « toujours `409` » : le `410` du Run oublié, le `404` d'une cible inconnue et le `500` d'une panne ne bougent pas.
-
-Codes de sortie de `pdo complete` — contrat **public** (ils vivent dans le bash d'auteurs de pipelines) :
-
-| Code | Sens | Geste attendu |
-|---|---|---|
-| `0` | succès, ou doublon légal | rien |
-| `3` | refus **récupérable** | corriger, rappeler `pdo complete`. **Pas** `pdo fail` |
-| `4` | refus **terminal** | s'arrêter et rapporter. **Pas** `pdo fail` (déjà enregistré) ; `resume_run` est le seul levier |
-| `1` | panne, transport, corps illisible | ici **seulement**, `pdo fail` est le bon conseil |
-
-_Éviter_ : « erreur de complétion » pour un refus récupérable (rien n'est cassé, c'est encore le tour de l'agent) ; « échec de `pdo complete` » pour un `noop` (c'est un succès).
-
-### Avance détachée après transition terminale (#304, ADR-0023)
-
-Le 2xx de `pdo complete` (et `fail`/`skip`) signifie « ton événement terminal est durablement enregistré et l'avance est planifiée », **pas** « le run a avancé » — et, depuis #490/ADR-0035, aussi « **ta complétion n'a pas été refusée** ». Après l'append de l'événement terminal (`NodeCompleted`/`NodeFailed`/marqueur skip), la queue du handler — reap de la session tmux + avance du run (spawn du successeur, finalisation du port `end`, `RunFailed`/`RunSkipped`, `retry_waiting_nodes`) — s'exécute sur une tâche `tokio::spawn` **détachée** de la requête HTTP. Raison : le reap tue la session tmux du client `pdo` lui-même ; inline, hyper annulait la future de la requête à la fermeture de la socket et l'avance était silencieusement perdue (run coincé `running`). Les erreurs de validation (guard, merge conflict, outputs) restent renvoyées **in-request**, et y sont en **`409`** (cf. *Contrat de refus de la complétion*) ; les erreurs d'avance surfacent via `RunFailed` + logs, jamais via la réponse HTTP. Un panic dans la queue détachée est isolé (`catch_unwind`) et émet un `RunFailed` explicite.
+Le 2xx de `pdo complete` (et `fail`/`skip`) signifie « ton événement terminal est durablement enregistré et l'avance est planifiée », **pas** « le run a avancé » — et, depuis ADR-0035, aussi « ta complétion n'a pas été refusée ». L'avance s'exécute sur une tâche détachée de la requête HTTP (le reap tue la session du client `pdo` lui-même — inline, l'avance était silencieusement perdue). Les erreurs de validation restent renvoyées in-request ; les erreurs d'avance surfacent via `RunFailed` + logs.
 
 ---
 
 ## Variables pipeline
 
-Une pipeline déclare au niveau racine un block `variables:` — paires nom/valeur typées (entiers, floats, strings, listes, booléens) qui peuvent être référencées dans n'importe quelle clause `when:` via `$<name>`.
+Une pipeline déclare au niveau racine un bloc `variables:` — paires nom/valeur typées référençables dans toute clause `when:` via `$<name>`.
 
 ```yaml
 variables:
   max_iter_review: 5
-  max_iter_plan: 3
   min_quality_score: 7
 ```
 
-**Override au lancement d'un Run** : le payload `POST /runs` peut inclure un objet `variables: { ... }` qui écrase les valeurs déclarées. Permet de relancer une même pipeline avec une config différente sans toucher au YAML. Les variables non-overridées gardent leur valeur de la pipeline.
-
-Pas d'expressions calculées dans la déclaration des variables — uniquement des littéraux. La logique reste dans les `when:`.
+**Override au lancement d'un Run** : `POST /runs` peut inclure un objet `variables:` qui écrase les valeurs déclarées. Pas d'expressions calculées — uniquement des littéraux ; la logique reste dans les `when:`.
 
 ---
 
@@ -353,29 +266,16 @@ Pas d'expressions calculées dans la déclaration des variables — uniquement d
 
 Chaque NodeRun voit son prompt construit en deux couches :
 
-1. **Prompt utilisateur** — la zone de texte que le designer du pipeline a remplie à l'édition (le "rôle" du nœud : *"Tu es un Reviewer. Tu lis le code, tu identifies les blocking issues..."*).
-2. **Préambule runtime** — généré déterministiquement à partir des ports configurés. Ne dépend pas du LLM, écrit par PDO à chaque NodeRun.
+1. **Prompt utilisateur** — le rôle, écrit par le designer du pipeline.
+2. **Préambule runtime** — généré déterministiquement à partir des ports configurés, écrit par PDO à chaque NodeRun.
 
-Le préambule contient au minimum :
+Le préambule contient au minimum : les **inputs disponibles** (nom du port + chemin sur disque), les **outputs attendus** (chemin où écrire + schéma de frontmatter requis), les **capacités CLI** (`pdo complete`, `pdo fail --reason` — pas packagées en skills : 100 % systématiques, sans bénéfice de progressive disclosure), l'**itération courante**, et les **variables pipeline résolues**.
 
-- **Inputs disponibles** :
-  - Pour chaque port d'entrée : nom du port + chemin absolu sur disque + (optionnel) inline du contenu si court.
-  - Ex. *"Tu as accès à : `plan` (lis `<artifacts>/planner-1/iter-1/plan.md`), `task` (lis `<artifacts>/planner-1/iter-1/task.md`), `reviews_bloquantes` (lis tous les fichiers `<artifacts>/reviewer-1/iter-*/review.md`)."*
-- **Outputs attendus** :
-  - Pour chaque port de sortie : chemin où écrire + schéma de frontmatter requis.
-  - Ex. *"Tu dois produire à `<artifacts>/reviewer-1/iter-2/review.md` un fichier markdown avec frontmatter YAML contenant le champ `verdict: PASS | FAIL`. Le contenu détaillé (blocking issues, justifications) va dans le corps."*
-- **Capacités PDO-specific (CLI)** :
-  - `pdo complete` — à appeler via Bash quand le NodeRun est terminé (cf. signal de complétion, Q10). Peut être **refusé** : exit `3` ⇒ corriger et rappeler, exit `4` ⇒ ne **pas** enchaîner sur `pdo fail` (l'échec est déjà enregistré). Cf. *Contrat de refus de la complétion*.
-  - `pdo fail --reason "..."` — à appeler en cas d'incapacité à finir.
-  - Ces commandes ne sont **pas** packagées comme skills Claude Code — elles sont 100% systématiques, sans bénéfice de progressive disclosure.
-- **Itération courante** : *"Tu es à l'itération {iter} de ce nœud."* Permet à l'agent d'adapter son comportement au tour de boucle (par exemple : Implementer en iter 1 implémente from scratch ; en iter 2+ il itère sur les reviews).
-- **Variables pipeline résolues** : injecte les valeurs des variables référencées dans le préambule (utile si l'agent doit savoir le `max_iter_review` pour adapter son verbosité, par exemple).
-
-Conséquence : le designer du pipeline n'a pas à se soucier dans son prompt utilisateur de *"où écrire / quoi mettre en frontmatter / comment signaler la fin"* — c'est imposé par le runtime. Il se concentre sur le *rôle*.
+Conséquence : le designer n'a pas à se soucier dans son prompt de « où écrire / quoi mettre en frontmatter / comment signaler la fin » — c'est imposé par le runtime. Il se concentre sur le *rôle*.
 
 ### Skills Claude Code — délégué
 
-PDO **ne gère pas** les skills. Les skills disponibles dans une session NodeRun sont ceux que Claude Code charge naturellement : `~/.claude/skills/`, `<target-repo>/.claude/skills/`, `<sub-worktree>/.claude/skills/`. Pas d'attachement par-Node, pas de symlink, pas de mécanisme custom. Si le user veut une capacité spécifique, il l'exprime soit dans le prompt du nœud, soit en modifiant la pipeline elle-même.
+PDO **ne gère pas** les skills. Les skills disponibles dans une session NodeRun sont ceux que Claude Code charge naturellement (`~/.claude/skills/`, repo cible, sous-worktree). Pas d'attachement par-Node, pas de mécanisme custom.
 
 ---
 
@@ -383,121 +283,90 @@ PDO **ne gère pas** les skills. Les skills disponibles dans une session NodeRun
 
 Chaque Node est typé par son **effet sur le code** :
 
-- **`code-mutating`** — Implementer, Refactorer, Migrator, Merge. Reçoit un sous-worktree forké depuis la branche du Pipeline Run. Peut éditer/commit/merger. À la fin du NodeRun, son sous-worktree est mergé dans la branche du Pipeline Run.
-- **`doc-only`** — Planner, Reviewer, Architect, PRD-writer. Pas de sous-worktree. Lit la branche du Pipeline Run en read-only (`git show`, `git diff`, `git log`). Écrit uniquement dans le Blackboard.
+- **`code-mutating`** — Implementer, Refactorer, Merge. Reçoit un sous-worktree forké depuis la branche du Pipeline Run. Peut éditer/commit/merger. À la fin du NodeRun, son sous-worktree est mergé dans la branche du Pipeline Run.
+- **`doc-only`** — Planner, Reviewer, Architect. Pas de sous-worktree. Lit la branche du Pipeline Run en read-only. Écrit uniquement dans le Blackboard.
 
-Garde-fou : à la fin d'un NodeRun `doc-only`, la branche du Pipeline Run doit rester intacte (pas de commit). Si une violation est détectée, le NodeRun échoue.
+Garde-fou : à la fin d'un NodeRun `doc-only`, la branche du Pipeline Run doit rester intacte. Violation détectée ⇒ le NodeRun échoue.
 
-Conséquence sur la parallélisation : les `doc-only` sont gratis-parallèles (pas de merge possible). Les `code-mutating` parallèles voient leurs branches mergées séquentiellement à la fin (ordre de complétion).
+Parallélisation : les `doc-only` sont gratis-parallèles ; les `code-mutating` parallèles voient leurs branches mergées séquentiellement à la fin (ordre de complétion).
 
-### Merge-back d'un sous-worktree (#503, ADR-0036)
+### Merge-back d'un sous-worktree (ADR-0036)
 
-Le sous-worktree est coupé depuis la branche pipeline, donc le merge-back suppose que le **tip de la
-branche pipeline reste un ancêtre de la branche du nœud** : tant que c'est vrai, `git merge` est un
-fast-forward. Un nœud qui **se rebase** casse l'invariant (typiquement un `Ship It` qui se rebase sur
-une branche d'intégration ayant bougé pendant le Run) : les deux branches portent alors chacune sa
-propre copie du même travail et le merge conflicte.
-
-Le garde est **structurel**, et sa donnée est la **base de spawn** : `create_sub_worktree` retourne le
-commit depuis lequel il a coupé, et les deux chemins de spawn l'écrivent dans le payload `NodeStarted`
-sous `base_sha`.
-
-- **Base de spawn == tip pipeline** — la divergence est l'histoire du Run réécrite par le nœud
-  lui-même : tout commit que le tip a et que le nœud n'a pas est un commit dont le nœud **est parti**.
-  Le merge-back se **résout en faveur du nœud** : un commit de merge dont l'arbre est celui du nœud,
-  avec l'ancien tip pipeline en **premier parent** — rien ne devient inatteignable. Événement
-  `merge_resolved_in_node_favour` ; jamais silencieux.
-- **Base périmée, ou inconnue** — quelque chose a atteint la branche pipeline entre-temps et peut être
-  absent de l'arbre du nœud : conflit, `NodeFailed` + `RunFailed`, comme avant. Résoudre perdrait ce
-  travail. Une base inconnue (Run pré-#503) n'est pas un permis de réécrire une branche.
-
-Un conflit porte désormais de quoi le diagnostiquer sans archéologie : le rapport de `git merge`
-**stdout inclus** (il n'écrit rien sur stderr en cas de conflit — le `detail` était vide sur 100 % des
-conflits), les deux SHA et la liste des chemins non mergés. Et le nœud dont le merge-back échoue est
-marqué `failed` et sa session reapée : il ne reste plus projeté `running`.
-
-Aucun garde de **contenu** ne marche : blobs, chemins et tree-sémantique refusent tous les trois
-l'occurrence qu'ils devaient sauver — un agent qui rebase renomme aussi, et un conflit est symétrique
-donc `merge-tree` conflicte partout où `git merge` a conflicté. Détail mesuré : ADR-0036 §3.
+Le merge-back suppose que le tip de la branche pipeline reste un **ancêtre** de la branche du nœud (fast-forward). Un nœud qui **se rebase** casse l'invariant. Le garde est **structurel**, keyé sur la **base de spawn** (`base_sha`) : si la divergence est l'histoire du Run réécrite par le nœud lui-même, le merge-back se **résout en faveur du nœud** (commit de merge, rien ne devient inatteignable, événement nommé — jamais silencieux) ; si la base est périmée ou inconnue, conflit + échec comme avant (résoudre perdrait du travail arrivé entre-temps). Aucun garde de **contenu** ne marche — mesuré : blobs, chemins et tree-sémantique refusent tous les trois l'occurrence qu'ils devaient sauver (ADR-0036 §3).
 
 ---
 
 ## Merge — nœud first-class
 
-Le **`Merge`** est un nœud first-class du DAG, type `code-mutating` toujours, à placer explicitement par le designer (ADR-0006). Il remplace l'ancien Merge Resolver auto-spawné, dont la formulation est désormais **obsolète** (auto-spawn supprimé, toggle `auto_merge_resolver` supprimé). L'utilisateur dessine la convergence ; le runtime ne l'invente pas.
+Le **`Merge`** est un nœud first-class du DAG, type `code-mutating`, à placer explicitement par le designer (ADR-0006). L'utilisateur dessine la convergence ; le runtime ne l'invente pas.
 
 ### Forme
 
-- 1 input port `branches: repeated` — accumule les branches **réellement firées** qui convergent (compte dynamique : une branche routée ailleurs ou supprimée par un `else` n'y entre pas — cf. addendum ADR-0006).
-- 1 output port `merged` — artefact résumé du merge avec frontmatter `conflict_count`, `branches: [...]`, et corps narratif.
+- 1 input port `branches: repeated` — accumule les branches **réellement firées** qui convergent.
+- 1 output port `merged` — artefact résumé avec frontmatter `conflict_count`, `branches: [...]`.
 
 ### Sémantique runtime
 
-1. **Barrière (edge-centrée, addendum ADR-0006)** : le Merge est prêt quand **toutes ses edges entrantes sont résolues** — chacune a soit **firé** (producteur `Completed` + garde satisfaite / edge inconditionnelle), soit est **morte** (producteur `Completed` mais l'edge n'a pas firé, ou producteur lui-même mort) — et qu'**au moins une a firé**. Il spawne en consommant **uniquement les branches firées**, ignorant les mortes. (L'ancienne formulation node-centrée « attend que tous les upstream soient `Completed` » est superseded par les edges conditionnels d'ADR-0011 : une branche non-routée ne devient jamais `Completed` et bloquerait le Merge — stall silencieux.) Un Merge dont **toutes** les branches sont mortes est lui-même mort et sauté tant que `End` reste atteignable ; si la cascade de mort rend `End` inatteignable, le Run **halt explicitement** (« unrouted »), jamais de stall silencieux.
-2. **Fork** : forke un sous-worktree depuis la branche du Pipeline Run.
-3. **`git merge`** : tente le merge automatique sur chaque upstream qui a une branche dédiée (= les `code-mutating`). Les `doc-only` upstream n'ont pas de branche, leurs artefacts sont consommés via le Blackboard pour le summary.
-4. **Si conflit** → spawn Claude Code dans le sous-worktree, qui lit les artefacts du Blackboard pour reconstituer les intentions, résout, commit, écrit le `merged.md` avec frontmatter et résumé narratif.
-5. **Si pas de conflit** → écrit un `merged.md` trivial (frontmatter `conflict_count: 0`), commit le merge, sans LLM.
-6. À la fin : son sous-worktree est mergé dans la branche du Pipeline Run.
+1. **Barrière edge-centrée** (addendum ADR-0006) : le Merge est prêt quand toutes ses edges entrantes sont résolues — chacune a soit **firé**, soit est **morte** (producteur complété sans firer, ou lui-même mort) — et qu'au moins une a firé. Il consomme uniquement les branches firées. Un Merge dont toutes les branches sont mortes est lui-même mort et sauté tant que `End` reste atteignable ; sinon le Run **halt explicitement** (« unrouted »), jamais de stall silencieux.
+2. **Fork** d'un sous-worktree depuis la branche du Pipeline Run, **`git merge`** de chaque upstream `code-mutating`.
+3. **Si conflit** → spawn Claude Code dans le sous-worktree, qui lit le Blackboard pour reconstituer les intentions, résout, commit, écrit le `merged.md`.
+4. **Si pas de conflit** → `merged.md` trivial, commit, sans LLM.
 
 ### Lint info-only
 
-Si le designer dessine un fan-out `code-mutating` sans `Merge` downstream, l'éditeur affiche un diagnostic info-only sur le canvas (cf. ADR-0001 : pas bloquant, juste lisible). Pas de blocage à la sauvegarde. Le canvas est l'unique surface de ces diagnostics pipeline-wide : un overlay flottant, jamais dupliqué dans l'inspecteur (qui reste scopé au nœud et aux métadonnées de pipeline). Cf. #63.
+Un fan-out `code-mutating` sans `Merge` downstream affiche un diagnostic info-only sur le canvas (ADR-0001 : pas bloquant). Le canvas est l'unique surface des diagnostics pipeline-wide (#63).
 
 ---
 
 ## Principe — Sharp tool, not safe tool
 
-L'outil ne contraint pas l'utilisateur à dessiner des pipelines "sains". Pas de validation prescriptive du graphe (genre *"interdit fan-out `code-mutating` sans Reviewer downstream"*), pas de warnings paternalistes. Si une pipeline est foireuse — fan-out non revu, accumulation infinie, deadlock conceptuel — c'est la responsabilité du designer du pipeline. PDO fournit des primitives nettes ; l'usage est libre.
+L'outil ne contraint pas l'utilisateur à dessiner des pipelines « sains ». Pas de validation prescriptive du graphe, pas de warnings paternalistes. Si une pipeline est foireuse, c'est la responsabilité du designer. PDO fournit des primitives nettes ; l'usage est libre. (ADR-0001)
 
-Conséquences à anticiper sur les décisions futures :
-- Schéma déclaratif côté output uniquement (cf. *Frontmatter — Schéma déclaratif par output port*) ; pas de typage côté input — l'agent fait du best-effort.
-- Pas de "lint pipeline" bloquant. Au max, un lint info-only (ex. fan-out `code-mutating` sans Merge downstream).
-- L'éditeur permet des graphes "exotiques" (cycles, fan-out `code-mutating` sans Merge explicite, ports déconnectés). Le runtime se débrouille ou halt explicitement.
+Conséquences :
+- Schéma déclaratif côté output uniquement ; pas de typage côté input.
+- Pas de « lint pipeline » bloquant. Au max, un lint info-only.
+- L'éditeur permet des graphes exotiques. Le runtime se débrouille ou halt explicitement.
 
 ---
 
 ## Principe — Deliberate, then autonomous (trust-earned)
 
-PDO ne **démarre** pas en *"set it and forget it"* : la valeur initiale est dans le **temps passé en conception**, et le défaut reste délibéré (humain dans la boucle). Mais l'autonomie est une **cible atteignable, pas un interdit** : une fois qu'un pipeline a gagné la confiance de l'utilisateur sur une classe de tâches, celui-ci **peut** le laisser aller jusqu'au bout — pousser, ouvrir une PR, merger — sans intervention.
+PDO ne **démarre** pas en *set it and forget it* : la valeur initiale est dans le **temps passé en conception**, et le défaut reste délibéré (humain dans la boucle). Mais l'autonomie est une **cible atteignable, pas un interdit** : une fois qu'un pipeline a gagné la confiance de l'utilisateur, celui-ci **peut** le laisser aller jusqu'au bout — pousser, ouvrir une PR, merger — sans intervention.
 
-Point clé : **l'autonomie est une propriété du *pipeline*, jamais une faveur du runtime ni du Trigger.** Le tool ne court-circuite jamais l'humain de sa propre initiative ; c'est le *designer* qui inscrit les actions durables dans le graphe (nœud Shipper avec `gh pr create`, nœud de merge vers main, etc.). Conséquence directe : un pipeline auto-shippant se comporte **à l'identique** qu'il soit lancé à la main ou par un Trigger — aucune divergence manuel/automatique. La confiance se construit et s'audite sur le *pipeline*, pas sur le déclencheur.
+Point clé : **l'autonomie est une propriété du *pipeline*, jamais une faveur du runtime ni du Trigger.** Le tool ne court-circuite jamais l'humain de sa propre initiative ; c'est le *designer* qui inscrit les actions durables dans le graphe. Conséquence : un pipeline auto-shippant se comporte à l'identique lancé à la main ou par un Trigger. La confiance se construit et s'audite sur le *pipeline*, pas sur le déclencheur. (ADR-0012)
 
 Conséquences :
 
-- **Tout NodeRun est attachable** en tmux à n'importe quel moment ; l'utilisateur peut intervenir, converser, corriger.
-- **Un Node peut être marqué `interactive: true`** à l'édition. Quand son NodeRun spawn, il s'arrête en attente que l'utilisateur attache la session et signale la complétion (slash command, fichier sentinelle, ou autre — TBD). Cas typique : nœud d'entrée qui grille l'utilisateur pour construire l'input du pipeline (à la `grill-with-docs`).
-- **Le Pipeline Manager** est conversationnel et permet de débloquer des Runs (relancer un cycle pour N itérations de plus, etc.) — pas juste de lire l'état. Il vit dans l'onglet info de la toolbar (cf. *UX — un seul mode d'édition unifié*).
-- **Aucune action durable auto par le runtime lui-même.** PDO ne merge, ne PR, ne cleanup **jamais de sa propre initiative**. Si ces effets se produisent, c'est qu'un **nœud du pipeline** les exécute — choix explicite du designer, versionné dans le graphe, auditable. (Révise l'ancien « pas d'auto-merge, jamais » : l'interdit ne porte plus sur l'*effet* mais sur son *origine* — jamais le runtime, toujours le pipeline.)
-  - **« auto-cleanup » vs « reapable surfacing » (#128).** Faire **supprimer** worktrees/branches par le runtime de lui-même = `auto-cleanup` = **interdit** (ADR-0012(a) ; un `git branch -D` est irréversible, même classe d'effet que merge/PR). **Exposer** les candidats sans rien supprimer = `reapable surfacing` = **autorisé** : le runtime *liste*, la suppression reste au pipeline/humain via `cleanup_run`. C'est ce que fait `GET /runs/reapable` (lecture seule). La recette `docs/recipes/disk-janitor.md` ferme le disk-fill non-surveillé en câblant ce surfacing à un Trigger cron qui appelle `cleanup_run` — l'autonomie reste *dans le pipeline*.
-  - **Reapable run** *(terme)* : un Run **terminal** (`completed`/`failed`/`halted`/`skipped`) et **pas encore `archived`**, dont le(s) worktree(s) sur disque existent encore. Son disque est récupérable via `cleanup_run`. Le *surfacer* est lecture seule et permis au runtime ; *exécuter* la récupération est une action pipeline/humaine (ADR-0012).
+- **Tout NodeRun est attachable** en tmux ; l'utilisateur peut intervenir, converser, corriger.
+- **Un Node peut être marqué `interactive: true`** : son NodeRun attend que l'utilisateur attache la session et signale la complétion.
+- **Le Pipeline Manager** est conversationnel et permet de débloquer des Runs — pas juste de lire l'état.
+- **Aucune action durable auto par le runtime lui-même.** PDO ne merge, ne PR, ne cleanup **jamais de sa propre initiative**. Si ces effets se produisent, c'est qu'un **nœud du pipeline** les exécute — choix explicite du designer, versionné, auditable.
+  - **« auto-cleanup » vs « reapable surfacing » (#128)** : faire supprimer worktrees/branches par le runtime de lui-même = interdit (ADR-0012). **Exposer** les candidats sans rien supprimer = autorisé : le runtime *liste* (`GET /runs/reapable`, lecture seule), la suppression reste au pipeline/humain via `cleanup_run`. La recette `docs/recipes/disk-janitor.md` câble ce surfacing à un Trigger cron — l'autonomie reste *dans le pipeline*.
+  - **Reapable run** *(terme)* : un Run **terminal** pas encore `archived`, dont le(s) worktree(s) existent encore. Son disque est récupérable via `cleanup_run`.
 
-À distinguer de *Sharp tool* (ADR-0001) : *Sharp tool* parle de l'**éditeur** (on ne contraint pas le design). *Deliberate, then autonomous* parle du **runtime** (on ne court-circuite pas l'humain de force ; on lui laisse *choisir* d'inscrire l'autonomie dans son pipeline).
+À distinguer de *Sharp tool* (ADR-0001) : *Sharp tool* parle de l'**éditeur** (on ne contraint pas le design). *Deliberate, then autonomous* parle du **runtime** (on laisse l'utilisateur *choisir* d'inscrire l'autonomie dans son pipeline).
 
 ---
 
 ## Édition pendant un Run
 
-Le canvas est **toujours interactif** (ADR-0007). L'ancienne dichotomie "mode Edit" vs "mode Run" avec toggle global est **obsolète** — un seul mode d'édition, qui s'adapte selon que la pipeline tourne ou pas.
+Le canvas est **toujours interactif** (ADR-0007) — un seul mode d'édition, qui s'adapte selon que la pipeline tourne ou pas.
 
 ### Modèle de mutation
 
-- **Quand aucun Run ne tourne** sur une pipeline : l'édition modifie directement la template en bibliothèque (`~/.pdo/library/pipelines/<id>.yaml`).
-- **Quand un Run tourne** : l'édition modifie le **snapshot run-scope** (`<repo>/.pdo/runs/<run-id>/pipeline.yaml`) ET propage la même modif vers la template d'origine en bibliothèque (auto-sync montant). Le pipeline_watcher observe le snapshot run-scope et émet un event `PipelineModified` à chaque mutation ; le scheduler se réajuste au prochain tick (la fonction est pure, pas de cache à invalider).
-- **Contrat de l'event `PipelineModified`** : `payload.kind` vaut `"yaml"` (mutation de `pipeline.yaml`) ou `"prompt"` (mutation d'un fichier sous `pipeline.prompts/`), exclusivement — la décision est **par chemin** (`detect_run_scoped_change`). Les events ne sont **jamais coalescés** entre fichiers : une édition YAML et une édition prompt rapprochées produisent deux events distincts. Un même run peut légitimement émettre les deux kinds presque simultanément (la copie initiale du snapshot déclenche le watcher) ; tout consommateur qui attend un kind précis doit donc **filtrer sur `payload.kind`** plutôt que prendre le premier event venu (#182).
-- **`PipelineModified` n'altère jamais le statut du Run (#221)** : dans la projection, c'est un signal **passif** — il peut provenir d'une écriture parasite ou étrangère (y compris pour un node absent du DAG du Run). Il ne ré-ouvre donc **aucun** Run terminal : un Run qui a atteint `RunCompleted` reste `Completed`, exactement comme `Failed`/`Halted` (intégrité de l'état terminal). Pour un Run **vivant** (`Running`/`AwaitingUser`), aucun changement de statut n'est nécessaire : `spawn_ready_after_event` relit le fichier au tick suivant et amorce les nodes nouvellement ajoutés. Reprendre un Run **terminé** pour y consommer du nouveau travail est une opération **explicite** (`resume_run`), pas un effet de bord du watcher. (Avant le fix, ré-ouvrir un `Completed` le laissait *phantom-`running`* indéfiniment — sans chemin de re-complétion fiable —, retenait sa session manager + worktree, faisait *skip* tout déclenchement de trigger en overlap-`skip`, et laissait un `resume_run` ultérieur re-spawner une boucle déjà satisfaite.)
+- **Aucun Run en cours** : l'édition modifie directement la template en bibliothèque.
+- **Run en cours** : l'édition modifie le **snapshot run-scope** (`<repo>/.pdo/runs/<run-id>/pipeline.yaml`) ET propage vers la template d'origine (auto-sync montant). Le watcher émet `PipelineModified` ; le scheduler se réajuste au prochain tick.
+- **`PipelineModified` est un signal passif** (#221) : il ne ré-ouvre **aucun** Run terminal (intégrité de l'état terminal). Reprendre un Run terminé est une opération **explicite** (`resume_run`), jamais un effet de bord du watcher.
 
 ### Politique de mutation pendant un Run
 
-- **Suppression** : interdiction stricte de supprimer un node de status non-`pending`. Les nodes `running` ou `completed` restent dans le graphe (le designer peut juste déconnecter leurs edges s'il veut les neutraliser).
-- **Modif config** : le `max_iter` d'un Loop live peut être modifié à chaud — équivaut à la commande `extend_cycle` du Pipeline Manager, qui devient redondante.
-- **Ajout de node + edge** : libre. Si la nouvelle edge active un node non-encore-spawné, le scheduler le pickup au prochain tick. Les nodes already-completed/running ne re-tournent pas — modif sans effet sur leur iter en cours, mais visible à l'iter suivante (Loop).
+- **Suppression** : interdiction stricte de supprimer un node de status non-`pending`.
+- **Modif config** : le `max_iter` d'une boucle live peut être modifié à chaud.
+- **Ajout de node + edge** : libre. Le scheduler pickup au prochain tick ; les nodes completed/running ne re-tournent pas.
 
 ### Étanchéité
 
-- Modif d'un run-snapshot n'impacte aucun autre run en cours (chaque run a son propre snapshot).
-- Modif d'une template hors-Run n'impacte aucun run en cours (qui ont déjà leur propre snapshot).
-- L'auto-sync montant ne va que du run-scope vers la template, jamais l'inverse.
+Modif d'un run-snapshot n'impacte aucun autre run ; modif d'une template hors-Run n'impacte aucun run en cours ; l'auto-sync ne va que du run-scope vers la template, jamais l'inverse.
 
 ---
 
@@ -505,311 +374,181 @@ Le canvas est **toujours interactif** (ADR-0007). L'ancienne dichotomie "mode Ed
 
 ### Input
 
-Un Run prend un **input unique**, qui est soit :
+Un Run prend un **input unique** : du free-text, une référence d'issue, ou un mélange. Le runtime ne distingue pas : il pose le contenu tel quel dans `<artifacts>/_input.md`. Le nœud d'entrée (un Claude Code avec tous ses tools) se débrouille à partir de là.
 
-- du **free-text prompt** (description en texte libre),
-- une **référence d'issue** GitHub (URL ou `#123` — résolue via `gh issue view`),
-- un mélange des deux dans le free-text (l'utilisateur colle un lien d'issue dans son prompt — le nœud d'entrée, qui est un Claude Code avec accès à tous ses tools/MCP, va lui-même chercher l'info).
+L'input peut aussi être **construit interactivement** via un nœud d'entrée `interactive: true` : le user écrit un prompt brut court, attache la session, l'agent grille jusqu'à un input structuré.
 
-Le runtime ne distingue pas (i) de (ii) : il pose le contenu utilisateur tel quel dans un artefact `<artifacts>/_input.md` du Blackboard. Le nœud d'entrée se débrouille à partir de là.
-
-L'input peut aussi être **construit interactivement** via un nœud d'entrée marqué `interactive: true` (cf. principe *Deliberate over autonomous*). Pattern typique : le user écrit un prompt brut court, attache la session du nœud d'entrée, l'agent grille jusqu'à un input structuré, le user "submit", le pipeline démarre vraiment.
-
-- **Saisie persistante de la modale New Run.** Le contenu saisi (prompt, repo cible, pipeline, overrides de variables, images) survit à une fermeture/réouverture de la modale — un `dismiss` accidentel ne le perd pas — et n'est vidé qu'après un **lancement réussi** (`POST /runs`).
-
-#### Images d'input
-
-Le user peut **téléverser des images** à côté du prompt texte (New Run modal). Le runtime les stocke dans `_input/` du Blackboard, à côté de `output.md`, et le préambule du nœud d'entrée les liste. Ces images sont **portées par le nœud Start** : le `StartNodeInfo` projeté expose `input_images` (les noms de fichiers, dans l'ordre de téléversement). L'UI les affiche en bandeau de vignettes sur la carte Start du canvas et en pleine taille (cliquables, lightbox) dans le StartInspector, aux côtés du prompt. Un Run sans image rend le nœud Start et le StartInspector à l'identique (prompt seul).
+- **Saisie persistante de la modale New Run** : le contenu saisi survit à une fermeture/réouverture et n'est vidé qu'après un lancement réussi.
+- **Images d'input** : téléversables à côté du prompt, stockées dans `_input/` du Blackboard, listées dans le préambule du nœud d'entrée, affichées sur la carte Start et dans son inspecteur.
 
 ### `prompt_required` — pipeline runnable sans prompt
 
-Flag racine du pipeline YAML (à côté de `variables:`), **défaut `true`** (préserve le comportement actuel). Mis à `false`, le pipeline est *self-sufficient* : son nœud d'entrée sait trouver son propre travail (lire le backlog, `git diff main`, etc.). Rendu UI : case « Prompt required » cochée par défaut, décochable.
-
-- **New Run modal** : si `prompt_required: false`, le champ prompt devient optionnel (`canLaunch` ne l'exige plus). Un prompt fourni est passé comme *« additional info »*, pas comme tâche principale.
-- **Runtime** : un input vide n'est légal que si `prompt_required: false`. Le préambule du nœud d'entrée s'adapte — avec input : « additional info : … » ; sans : le nœud source son travail lui-même.
+Flag racine du YAML, défaut `true`. Mis à `false`, le pipeline est *self-sufficient* : son nœud d'entrée sait trouver son propre travail (backlog, `git diff`…). Le champ prompt du New Run devient optionnel ; un prompt fourni est passé comme *additional info*.
 
 ### Termination
 
-À la fin d'un Run réussi, **niveau 0** par défaut : la branche `pdo/run-<run-id>` reste en l'état, le worktree reste sur disque, l'utilisateur fait ce qu'il veut. PDO ne fait **pas** de PR auto, **pas** de commentaire d'issue, **pas** d'auto-merge. Si un projet veut ce comportement, il l'exprime en ajoutant un nœud "Shipper" dans son pipeline (un Claude Code avec `gh pr create` dans son prompt).
+À la fin d'un Run réussi, **niveau 0** par défaut : la branche `pdo/run-<run-id>` reste en l'état, le worktree reste sur disque. PDO ne fait **pas** de PR auto, **pas** d'auto-merge. Si un projet veut ce comportement, il ajoute un nœud « Shipper » dans son pipeline.
 
 ### Échec / blocage
 
-NodeRun en échec, halt déclenché par une `when:` clause (`run_halted` event), Merge node foiré, etc. → le Run passe en status `BLOCKED` ou `FAILED`. La branche pipeline et les sous-worktrees restent vivants pour debug. **Pas d'auto-cleanup, jamais.** L'utilisateur peut :
-
-- Cleanup manuel intégral (suppression branches/worktrees).
-- Reprendre la main directement sur la branche.
-- Débloquer via le **Pipeline Manager** : conversation au cours de laquelle le user peut, par exemple, demander *"continue le cycle pour 3 itérations de plus"*. Le manager dispose des commandes pour modifier l'état runtime.
-- Éditer le graphe à chaud (ADR-0007) — ajouter un Reviewer, déconnecter une edge bloquante, etc.
-- Automatiser le cleanup **sans réintroduire l'auto-cleanup runtime** : `GET /runs/reapable` *surface* (lecture seule) les Runs terminaux dont le worktree traîne encore ; le pipeline **`disk-janitor`** (livré : `.pdo/pipelines/disk-janitor.yaml`, un nœud `script` qui lance `pdo reap`) + un Trigger cron exécute la récupération via `cleanup_run`. `pdo reap` applique une politique TTL graduée pure (`reap_policy`) et n'échoue jamais son propre Run sur un lot partiel. Recette : `docs/recipes/disk-janitor.md` (#128 Track A, #480). L'origine de la suppression reste *dans le pipeline*, jamais le runtime.
+NodeRun en échec, halt, Merge foiré → le Run passe en statut d'échec/blocage. La branche et les sous-worktrees restent vivants pour debug. **Pas d'auto-cleanup, jamais.** L'utilisateur peut : cleanup manuel, reprendre la main sur la branche, débloquer via le Pipeline Manager, éditer le graphe à chaud, ou automatiser la récupération *dans un pipeline* — `GET /runs/reapable` *surface* (lecture seule) les Runs terminaux au worktree résiduel, et le pipeline **`disk-janitor`** (livré) + un Trigger cron exécute `pdo reap` (politique TTL graduée pure, `reap_policy`, ne rate jamais son propre Run sur un lot partiel) via `cleanup_run`. L'origine de la suppression reste *dans le pipeline*, jamais le runtime. Recette : `docs/recipes/disk-janitor.md` (#128, #480).
 
 ### Parallélisation entre Runs
 
-Plusieurs Runs du même pipeline (ou de pipelines différents) peuvent tourner simultanément sur le même repo target. Convention de nommage qui garantit l'absence de collision :
+Plusieurs Runs peuvent tourner simultanément sur le même repo. Conventions anti-collision :
 
-- Branche : `pdo/run-<run-id>` (ex. `pdo/run-2026-05-05-1430-a3f`).
+- Branche : `pdo/run-<run-id>`.
 - Worktree pipeline : `<repo>/.pdo/runs/<run-id>/worktree/`.
-- Sous-worktrees `code-mutating` : `<repo>/.pdo/runs/<run-id>/nodes/<node-id>/iter-<N>/`.
-- Blackboard : `<pipeline-worktree>/.pdo/artifacts/...` (déjà défini).
+- Sous-worktrees : `<repo>/.pdo/runs/<run-id>/nodes/<node-id>/iter-<N>/`.
+- `<run-id>` = slug `<timestamp>-<short-uuid>`, lisible et unique.
 
-`<run-id>` = slug `<timestamp>-<short-uuid>` pour rester lisible humainement et garanti unique.
+**Nom placeholder** *(terme)* : nom lisible posé par le daemon au spawn, déterministe et immédiat, garanti présent même pour un Run prompt-less. _Éviter_ : nom temporaire, titre par défaut.
 
-**Nom placeholder (placeholder name)** :
-Nom lisible posé par le daemon au spawn du Run, déterministe et immédiat (dérivé du timestamp du
-run-id), garanti présent même pour un Run prompt-less ou déclenché par Trigger.
-_Éviter_ : nom temporaire, titre par défaut.
-
-**Nom descriptif (descriptive name)** :
-Nom lisible posé best-effort par le Pipeline Manager dans son propre tour, une fois qu'il sait ce que
-fait le Run ; remplace le placeholder s'il aboutit, sans jamais le supprimer (un Run a toujours un nom).
-Ce nommage descriptif est **désactivable par-Run et par-Trigger**, avec un défaut d'instance
-`default_auto_name` (booléen, résolu `stored → env PDO_DEFAULT_AUTO_NAME → défaut true`, ADR-0015, #338) :
-désactivé, le Run garde son *nom placeholder* et le manager n'est pas instruit de renommer.
-_Éviter_ : nom final, nom auto, rename automatique.
+**Nom descriptif** *(terme)* : nom posé best-effort par le Pipeline Manager dans son propre tour, une fois qu'il sait ce que fait le Run ; remplace le placeholder s'il aboutit, sans jamais le supprimer (un Run a toujours un nom). **Désactivable par-Run et par-Trigger** (défaut d'instance `default_auto_name`, résolu `stored → env PDO_DEFAULT_AUTO_NAME → true`, ADR-0015, #338) : désactivé, le Run garde son nom placeholder et le manager n'est pas instruit de renommer. _Éviter_ : nom final, rename automatique.
 
 ### Statistiques de Run
 
-Le panneau d'info d'un Run expose un petit bloc de stats (cf. #100, #272). **Quatre métriques** ; le **coût** est une **estimation** — pas une facture — dérivée des transcripts Claude Code locaux (`~/.claude/projects/<cwd-encodé>/*.jsonl`) : somme des `usage` par message (dédupliqués par `(message.id, requestId)`) × table de prix publics par modèle (cache dérivé 1.25×/2×/0.1× de l'input). La table se résout **`manuel → fetché → embarquée`**, **par clé de famille** : `~/.pdo/prices/models.yaml` (édité à la main) gagne sur `~/.pdo/prices/fetched.json` (écrit par le daemon depuis models.dev, hors du chemin de lecture), qui gagne sur la table compilée — laquelle reste le **plancher** et le seul tarificateur de trois familles retirées de toute source distante. Les deux fichiers sont absents par défaut et rien n'est jamais seedé (cf. #427, ADR-0034). Reversé #272 (2026-07-06, ratifié par le propriétaire) : le blocage historique (« aucune télémétrie fiable ») était faux — la télémétrie n'est pas requise, les transcripts portent l'usage. Modèle inconnu → $0 + drapeau « borne basse » ; aucun `costUSD` dans les transcripts (mode *calculate*). Voir ADR-0022.
+Quatre métriques dans le panneau d'info (#100, #272) :
 
-- **Durée** : temps écoulé entre `started_at` et `completed_at`. **Dérivée à l'affichage** (frontend) à partir des deux timestamps déjà projetés depuis l'event log — pas de `duration_ms` backend (qui figerait un Run vivant). Horloge **live** (tick) tant que le Run est vivant (`Running`/`AwaitingUser`/`Paused`) ; figée à `completed_at` à l'entrée terminale. La durée est du **wall-clock** : un Run `Paused` continue de compter (le temps de pause est inclus).
-- **Sessions de nœud lancées** (*node sessions started*) : **compte cumulatif** des événements `NodeStarted` sur tout le Run. Mesure les sessions tmux NodeRun réellement spawnées — **y compris** les re-spawns au **même** `(node, iter)` (restart/recovery), donc ≥ le nombre de `(node, iter)` distincts (une projection dédupliquée par `(node, iter)` *sous-compterait*). Le **Pipeline Manager** n'émet pas `NodeStarted` → exclu par construction (« exclure le manager » est un no-op). Distinct de la gauge « sessions vivantes » du cap (cf. *Cap de sessions concurrentes*).
-- **LOC** (lignes changées par le Run) : `git diff --numstat` en **trois-points** (`HEAD...pdo/run-<run-id>`) — la base est le **point de fork** (merge-base), donc stable même si `main` avance (un diff deux-points dériverait). **Exclut `.pdo/`** (artefacts/prompts générés ne sont pas du code produit ; protégé par `.gitignore` mais un pathspec `:(exclude).pdo/` défensif couvre les repos cibles externes). **Dérivé du git, live-only** : la branche `pdo/run-<run-id>` est supprimée au cleanup → la stat affiche **« — »** pour un Run archivé/nettoyé (branche absente = `None`), à distinguer de **« 0 »** (diff réellement vide). Même schéma que le snapshot de pane qui survit au reap.
-- **Coût (est.)** : `Some { usd, partial, unpriced_models }` **dérivé à la lecture**, jamais persisté (comme LOC), dans `run_cost::compute_run_cost`. Agrège TOUTES les sessions du Run (nœuds, manager, merge-resolver, subagents) via prefix-glob sur `~/.claude/projects/`. `None` → « — » quand aucun transcript n'est trouvé. **Plus durable que LOC** : le cleanup supprime la branche (LOC → « — ») mais **pas** `~/.claude/projects/`, donc un Run archivé garde son coût. `partial: true` (un modèle non tarifé a contribué, donc exclu) → borne basse, signalée par un « † » dans l'UI. **`unpriced_models`** (#425, AC#4) **nomme** les clés de famille dé-datées que le `†` masquait — `partial` en est **dérivé** (`partial ⟺ !unpriced_models.is_empty()`) ; le champ voyage sur `GET /runs/:id` et, unioné par bucket, sur `GET /stats/cost` (clé du memo inchangée), et l'UI le rend dans le tooltip du `†`. Le chargeur de la table est **tolérant mais pas muet** : fichier absent → silencieux ; ligne rejetée (clé datée, sentinelle, prix négatif ou non fini) → inerte, la clé retombe sur le tier suivant, et le rejet est nommé **une fois** dans le journal et en `reason` sur `GET /settings`. Un `fetched.json` dont le `schema` n'est pas `prices-v1` est **entièrement** inerte. Encodeur de chemin **propre** (`cc_project_dirname`), volontairement distinct de `stale_detector::encode_working_dir` (bogué, à corriger séparément — cf. ADR-0022 et le doc-comment).
-
-**Table de prix embarquée / fetchée / manuelle / résolue** *(termes, #427)* :
-Quatre choses distinctes. L'**embarquée** est le `const` livré dans le binaire — le **plancher**, et
-le seul tarificateur de `claude-opus-4-0`, `claude-sonnet-4-0` et `claude-3-5-haiku`, absentes de
-toute source distante. La **fetchée** est `~/.pdo/prices/fetched.json`, écrite par le daemon **seul**
-depuis `models.dev/api.json` hors du chemin de lecture (`POST /settings/cost-prices/sync`, plus un
-rafraîchissement au démarrage qui ne fetche **que** si le fichier existe déjà et a plus de 24 h —
-aucun egress avant le premier clic). La **manuelle** est `~/.pdo/prices/models.yaml`, écrite par
-l'**humain seul** et jamais touchée par PDO. La **résolue** est celle avec laquelle
-`compute_run_cost` chiffre : précédence **`manuel → fetché → embarquée`**, **par clé de famille**,
-jamais un remplacement. Un écrivain par fichier, et une empreinte de la table résolue entre dans la
-clé du memo de `/stats/cost`.
-Depuis #528, la table **résolue** est aussi **exposée en lecture** : `GET /stats/cost` porte un
-tableau **`resolved`** (une entrée par clé de famille : tier gagnant + `$/MTok`), rendu dans l'onglet
-**Stats → Cost** à côté du bouton **« Sync costs »** — on synchronise et on lit ce que PDO sait
-tarifer au même endroit. Additif, lecture seule, aucune route dédiée (cf. *Versioning*) ; il lit la
-**même** `PriceTable` que le fold de coût, donc la vue ne peut jamais diverger du tarificateur.
-_Éviter_ : « surcharge de prix » (dans ce domaine « surcharge » désigne déjà un supplément tarifaire,
-cf. ADR-0022 *Hors-scope* « surcharge input Sonnet-4.5 ») ; « override de prix » (dans PDO un
-override est un **tier de précédence**, pas un contournement) ; « merge » / « fusion des tables » ;
-« prix seedés » (rien n'est copié du binaire vers le disque, et c'est délibéré — cf. ADR-0031 §2) ;
-« prix live » (la lecture est **toujours** locale).
+- **Durée** : wall-clock entre `started_at` et `completed_at`, dérivée à l'affichage (jamais persistée), live tant que le Run est vivant. Un Run `Paused` continue de compter.
+- **Sessions de nœud lancées** : compte **cumulatif** des démarrages de session, re-spawns inclus, manager exclu. À distinguer de la gauge « sessions vivantes » du cap.
+- **LOC** : `git diff --numstat` en **trois-points** depuis le point de fork (stable même si `main` avance), **exclut `.pdo/`**. Live-only : « — » pour un Run archivé (branche supprimée), à distinguer de « 0 » (diff vide).
+- **Coût (est.)** : **estimation** — pas une facture — dérivée à la lecture des transcripts Claude Code locaux, jamais persistée. Agrège toutes les sessions du Run. Un modèle non tarifé ⇒ borne basse signalée « † » (`partial`), et `unpriced_models` (#425) nomme les familles concernées — champ rendu dans le tooltip du † et présent sur `GET /runs/:id` comme, unioné par bucket, sur `GET /stats/cost`. Survit à l'archivage (les transcripts restent). Modèle de calcul et dédup → ADR-0022 ; table de prix → ADR-0034.
+**Table de prix embarquée / fetchée / manuelle / résolue** *(termes, ADR-0034)* : l'**embarquée** est le plancher compilé dans le binaire ; la **fetchée** est écrite par le daemon seul depuis models.dev, hors du chemin de lecture ; la **manuelle** est écrite par l'humain seul ; la **résolue** est la fusion **par clé de famille** avec précédence `manuel → fetché → embarquée`. Un écrivain par fichier ; rien n'est jamais seedé. Depuis #528, la **résolue** est aussi **exposée en lecture** sur `GET /stats/cost` (tableau `resolved` : tier gagnant + `$/MTok` par famille, rendu dans l'onglet Stats → Cost à côté de « Sync costs ») — additif, lecture seule, même `PriceTable` que le fold de coût, donc jamais divergente du tarificateur (#373). _Éviter_ : « surcharge de prix », « merge des tables », « prix seedés », « prix live » (la lecture est toujours locale).
 
 ### Statistiques d'instance (cockpit, #377)
 
-Modale **Stats** (sœur de Settings, icône dédiée dans le TopBar) : agrégats **transverses** filtrables
-par période, à distinguer des **Statistiques de Run** (par-run, panneau d'info). Dérivés à la lecture,
-**jamais matérialisés** (ADR-0029, préserve ADR-0022) :
-
-- **Deux endpoints** : `GET /stats/overview` (SQL bon marché, index `events(kind,ts)` +
-  `trigger_fires(ts)`) et `GET /stats/cost` (lourd, lazy, memo RAM `(run_id, mtime-max, empreinte de
-  la table de prix)` — sans le troisième composant, un sync de prix ne serait jamais visible sur un
-  Run terminé, dont les transcripts sont figés, alors que `GET /runs/:id` afficherait le nouveau
-  montant : deux surfaces qui se contredisent, cf. #427).
-- **Runs/erreurs/sessions par période** : `GROUP BY strftime` sur `events` — erreurs = `run_failed`
-  (`run_skipped` **exclu**), sessions = `node_started` (démarrages, re-spawns inclus, manager exclu).
-- **Fires par pipeline** : `LEFT JOIN triggers` sur `pipeline_id` — un fire orphelin (trigger
-  supprimé, pas de cascade) tombe dans « (deleted trigger) ». **Triggers ayant créé un run** =
-  `outcome='fired'` (⟺ `run_id` non-null) ; KPI = N distincts sur M activés.
-- **Coût par période/pipeline/projet** : scalaire par-run (ADR-0022) **plié côté app** — « par
-  pipeline » via `pipeline_id` (sinon `pipeline_name`), « par projet » via `effective_repo` (pas de
-  bucket « Unassigned », cf. *Repo cible* — la raison change avec #470 : ce n'est plus « aucun Run
-  n'est sans cible » mais « aucun *nouveau* Run ne l'est », et le repli de lecture place les
-  historiques). **Somme de bornes basses** : un bucket avec ≥ 1 run
-  `partial` est borne-basse (`†`) ; les runs sans transcript sont exclus de la somme mais comptés
-  (`null`), un bucket sans coût calculable affiche « — » (jamais `$0`).
-- **`pipeline_id` dans `RunStarted`** (fallback `pipeline_name`) : « par pipeline » survit à un
-  renommage (cf. #230). La période est un état de vue **côté client** (pas `instance_config`). La
-  bibliothèque de graphes (recharts) est **lazy-loaded** (premier `React.lazy` du repo).
+Modale **Stats** : agrégats **transverses** filtrables par période (runs/erreurs/sessions, fires par pipeline, coût par période/projet), à distinguer des Statistiques de Run. Dérivés à la lecture, **jamais matérialisés** (ADR-0029). Les sommes de coût sont des sommes de bornes basses ; un bucket sans coût calculable affiche « — », jamais `$0`.
 
 ### Diff de Run (surface de relecture)
 
-Le panneau d'info d'un Run expose une section **Diff** repliable (#116, #376) qui rend le patch git du Run comme surface de relecture — distincte de la stat **LOC** (qui n'en compte que les lignes) et du **diff sémantique** (comparaison de pipelines, star synced/diverged). Trois portées :
-
-- **Diff de Run** (agrégat) : `git diff` en **trois-points** (`HEAD...pdo/run-<run-id>`), base = point de fork (merge-base), **exclut `.pdo/`** — mêmes bornes que la stat LOC, pour que « lignes comptées » et « lignes montrées » coïncident. Un diff deux-points polluerait avec l'avance de `main` (suppressions fantômes) et le blackboard. Le frontend regroupe le patch **par fichier** (chemin, compteurs +/-, sections repliables) via un parser pur `frontend/src/lib/parseUnifiedDiff.ts`.
-- **Diff de nœud** : **deux-points** aujourd'hui, connu-imparfait (une sous-branche est mergée dans la branche de pipeline à la complétion, donc un trois-points serait toujours vide ; un deux-points peut inclure du bruit post-merge d'autres nœuds). La base fidèle par nœud (SHA de fork persisté) est **différée**.
-- **Run archivé/nettoyé** : la branche `pdo/run-<run-id>` est supprimée au cleanup (ADR-0020 ne préserve que `artifacts/` + `pipeline.yaml` + `pipeline.prompts/`) → diff impossible à reconstruire : le frontend court-circuite le fetch et affiche un message honnête **« Diff not preserved for archived runs. »**, à distinguer de « No changes » (diff réellement vide).
-
-_Éviter_ : confondre avec le **diff sémantique** (identité de pipeline) ou avec la stat **LOC**.
+Section **Diff** repliable du panneau d'info (#116, #376) — distincte de la stat LOC et du diff sémantique. Trois portées : **diff de Run** (trois-points depuis le fork, exclut `.pdo/`, mêmes bornes que LOC pour que « compté » et « montré » coïncident), **diff de nœud** (deux-points, connu-imparfait — la base fidèle par nœud est différée), **Run archivé** (« Diff not preserved for archived runs », à distinguer de « No changes »).
 
 ### Contrôles de Run (niveau Run)
 
-Trois commandes agissent sur le **Run entier** (`pause_run`, `resume_run`, `retry_all`), à ne pas confondre avec le niveau **nœud**, que **deux surfaces distinctes** portent : les routes par nœud `POST /runs/<id>/nodes/<node-id>/{start,stop,retry}` (boutons Start / Stop / Retry du canvas — `retry_node` et `stop_node` sont *ces* routes, jamais des `kind` de `POST /runs/<id>/commands`), et les commandes du Pipeline Manager (`kill_node`, `restart_node`, `mark_node_done`, `start_node` — cf. *Commandes disponibles*). `retry_node` (UI) et `restart_node` (manager) ne sont **pas** synonymes : seul `retry_node` invalide l'aval, `restart_node` re-spawne le seul nœud. De même `stop_node` (UI) laisse le nœud `stopped`, `kill_node` (manager) le marque `failed`. L'UI (liste des Runs) expose les trois commandes de Run en actions de ligne gatées par status — c'est la couche 3 d'ADR-0009. Le gating client est un sous-ensemble strict des status acceptés par le daemon : aucune **de ces trois actions de ligne** ne peut donc produire un 409. La garantie s'arrête là : elle **ne s'étend pas** aux surfaces par nœud, où un `409` nommé est un résultat normal et documenté (cf. *Contrat de réponse des commandes*, et le rappel de portée en § *Bouton Mark complete*).
+Trois commandes agissent sur le **Run entier** — `pause_run`, `resume_run`, `retry_all` — à ne pas confondre avec le niveau **nœud** (boutons Start/Stop/Retry du canvas, et commandes du manager).
 
-- **Pause / Resume** — `pause_run` fait passer un Run **vivant** (`Running`/`AwaitingUser`) en `Paused` : aucun nouveau nœud n'est spawné, mais l'horloge de durée continue de tourner (le temps de pause est inclus, cf. *Statistiques de Run*). `pause_run` est refusé (409) sur tout autre status, y compris un Run déjà `Paused`. `resume_run` ramène un `Paused` en `Running`. `resume_run` est **dual-purpose** : sur un Run `Halted`/`Failed` il **relance** depuis l'état courant (re-drive post-conflit résolu, cf. *Échec / blocage*), ce qui n'est pas une simple levée de pause — l'UI ne propose toutefois Resume que sur `Paused`.
-- **Retry-all** *(terme canonique)* — `retry_all` sur un Run **terminal** (`Completed`/`Failed`/`Skipped`/`Halted` ; **jamais** `Archived`) **archive le Run d'origine** (via `cleanup_run`) puis **crée un Run neuf** avec les mêmes pipeline / input / variables / repo / branche et un nouveau `run-id` (réponse `201 Created`). Le nouveau Run **ne porte aucune référence de filiation** vers l'ancien : il est indiscernable d'un lancement manuel (pas de `retry_of`). L'UI, derrière une confirmation, sélectionne d'office ce Run *offspring* au retour.
-  _Éviter_ : « retry » tout court (réservé au niveau **nœud** — `retry_node` ré-exécute un seul nœud et invalide son aval, cf. ADR-0009), « relancer le même Run » (le `run-id` change et l'ancien est archivé).
+- `retry_node` (UI) et `restart_node` (manager) ne sont **pas** synonymes : seul `retry_node` invalide l'aval ; `restart_node` re-spawne le seul nœud. `stop_node` (UI) laisse le nœud `stopped` ; `kill_node` (manager) le marque `failed`.
+- **Pause / Resume** : `pause_run` fait passer un Run vivant en `Paused` (aucun nouveau spawn, l'horloge continue). `resume_run` est **dual-purpose** : sur un Run `Halted`/`Failed` il **relance** depuis l'état courant. C'est le seul levier qui ré-ouvre un Run failed ; il ne réanime jamais un `completed`.
+- **Retry-all** *(terme canonique)* : sur un Run terminal, archive l'original puis crée un Run **neuf** avec les mêmes paramètres — sans référence de filiation, indiscernable d'un lancement manuel. _Éviter_ : « retry » tout court (réservé au niveau nœud), « relancer le même Run » (le run-id change).
 
 ## Repo cible (`target_repo`)
 
-Le **repo cible** d'un Run ou d'un Trigger est le dépôt git dans lequel il travaille (worktrees, artefacts, exécution du guard). Chemin absolu, stocké **verbatim** — jamais canonicalisé (`validate_target_repo`).
+Le **repo cible** d'un Run ou d'un Trigger est le dépôt git dans lequel il travaille. Chemin absolu, stocké **verbatim** — jamais canonicalisé.
 
-- **Obligatoire à l'écriture, replié à la lecture** (#470, ADR-0033). *À l'écriture*, `target_repo` est un **champ requis** aux quatre frontières : `POST /runs` (JSON **et** multipart), `POST /triggers`, `PATCH /triggers/:id`, `POST /triggers/guard/test`. Absent, vide ou blanc ⇒ **400 nommant le champ**, avant tout effet (aucun `run_id`, aucun event, aucun worktree, aucune session). Le prédicat partagé `required_target_repo` **trim et adopte la valeur trimée**, donc un seul chemin canonique circule (validation, worktree, payload). *À la lecture*, `effective_repo_root` (et ses copies inline : `stats.rs::cost_project_root`, l'`effective_repo` des listes) **conserve** sa substitution par le `repo_root` du daemon, pour les enregistrements **antérieurs** au durcissement — ≈ 46/101 runs de dev portent légitimement `target_repo: null`. Conséquence inchangée : **pas de bucket « Unassigned »** — un Run historique sans cible et un Run ciblant explicitement le `repo_root` sont le *même* projet. **L'asymétrie est volontaire et permanente** : obligatoire là où il y a un appelant à qui répondre 400, résolu là où il n'y a qu'un enregistrement passé à interpréter — ne jamais « symétriser » le côté lecture.
-- **Racine du daemon (`repo_root`)** *(terme)* — le répertoire dont le daemon dérive son cwd au démarrage (`WorkingDirectory=` de l'unité systemd, ADR-0019 ; `~/.pdo/app` en production). Trois rôles, à ne pas confondre : (1) **racine de stockage** — `<repo_root>/.pdo/pipelines`, la bibliothèque, les prompts, `pdo.db` ; (2) **cible de Run implicite** — **supprimé** par #470, c'était le bug ; (3) **valeur de repli à la lecture** pour les Runs/Triggers historiques sans cible (ci-dessus). Un `WorkingDirectory` mal placé change donc où PDO *stocke*, plus jamais où un Run *mute du code*.
-- **Un Trigger à dépôt nul est une référence pendante, pas un défaut.** Le refus vit dans `trigger_dangling_reason`, donc **en amont du guard** : le guard n'est jamais lancé (5 des 9 Triggers vivants font `git pull` / `gh issue list` — de vrais effets de bord), la transition `Dangling` met `next_fire_at` à `NULL` (Trigger **dormant**, pas une ligne rouge par tick indéfiniment), et « Run now » répond **409** avec la raison. Le `PATCH` reste un **merge partiel** : champ **absent ⇒ inchangé** (c'est ce qui rend `{"enabled": true}` du toggle de liste légal), présent-`null` ou présent-blanc ⇒ **400**. Câbler `deserialize_double_option` sur `target_repo` rend ce clear *atteignable* — pour le refuser ; avant #470 un `null` explicite s'effondrait en no-op silencieux côté serde. **`retry_all` lit le dépôt résolu**, jamais le champ brut : il archive l'original *avant* de créer le remplaçant, donc recopier un `None` historique 400erait après l'archivage (original archivé, remplaçant jamais créé).
-- **Clé de regroupement des listes (« par projet »).** Les listes Runs et Triggers se regroupent par repo cible résolu. Regroupement **conditionnel** : un en-tête par repo n'apparaît que si la liste contient **≥ 2 repos distincts** ; sinon (cas mono-repo courant) la liste reste **plate, identique à avant** — aucun en-tête, aucun badge ajouté. Seuil calculé **par liste** (l'onglet Runs et l'onglet Triggers sont indépendants) et sur les **lignes actives** de chaque liste. Côté Runs, les Runs `archived` sont **exclus du seuil** : ils sont extraits vers une section « Archived » repliable et plate, sous les groupes actifs (#136) — le regroupement par repo ne s'applique donc qu'aux Runs actifs. Côté Triggers, il n'existe pas de notion d'archive : toutes les lignes comptent. Clé = chemin complet (deux repos de même basename ⇒ deux groupes distincts) ; libellé = basename, chemin complet au survol, **suffixe discriminant minimal** en cas de collision de basename (`/a/foo` + `/b/foo` ⇒ « a/foo » + « b/foo »). Tri des groupes : alphabétique par chemin complet (déterministe) ; ordre intra-groupe = ordre serveur préservé (Runs `run_id DESC`, Triggers `created_at DESC`).
-- **`effective_repo` (résolu) ≠ `target_repo` (brut).** Le champ brut `target_repo` (nullable) reste la valeur saisie par l'utilisateur — il pilote le badge repo de la ligne Trigger, le panneau détail, le pré-remplissage Run-now. Le champ résolu `effective_repo` (toujours concret, exposé par les *endpoints de liste* uniquement) ne sert qu'à la clé de regroupement. **On ne réécrit jamais `target_repo` côté serveur** : sinon badge/détail/pré-remplissage afficheraient un repo jamais saisi en mono-repo (régression). Le regroupement vit **côté client** (UI réversible) ; le serveur se contente de résoudre la clé. Même posture pour le **filtrage** de la liste Runs (#336) : trois filtres client-side (repo cible résolu, nom de pipeline snapshotté, trigger — dont « Manual » pour `triggered_by` absent), combinés en ET, options dérivées des runs eux-mêmes (un pipeline renommé/supprimé ou un trigger supprimé reste filtrable), sans paramètre de requête ajouté à `GET /runs`.
-- **Repos récents (`GET /repos/recent`).** Projection *à la lecture* des `target_repo` portés par les événements `RunStarted` : jusqu'à 5 chemins distincts, plus récent d'abord. Comparaison **verbatim** (cohérent avec la règle jamais-canonicaliser ci-dessus : `/a/repo` et `/a/repo/` comptent comme deux entrées). Les Runs **historiques** lancés sans `target_repo` ne contribuent pas aux récents ; depuis #470 tout nouveau Run en porte un, donc l'exclusion ne concerne plus que l'antériorité.
+- **Obligatoire à l'écriture, replié à la lecture** (ADR-0033) : requis à toutes les frontières d'écriture (400 nommant le champ, avant tout effet) ; à la lecture, les enregistrements historiques sans cible sont résolus vers le `repo_root` du daemon. **L'asymétrie est volontaire et permanente** — ne jamais « symétriser » le côté lecture.
+- **Racine du daemon (`repo_root`)** *(terme)* : le répertoire de travail du daemon. Racine de **stockage** (bibliothèque, pipelines, `pdo.db`) et **valeur de repli à la lecture** — plus jamais une cible de Run implicite (ADR-0033).
+- **Un Trigger à dépôt nul est une référence pendante, pas un défaut** : refus en amont du guard (jamais lancé), Trigger **dormant**, « Run now » répond 409 avec la raison.
+- **`effective_repo` (résolu) ≠ `target_repo` (brut)** : le brut reste la valeur saisie (badge, détail, pré-remplissage) ; le résolu ne sert qu'à la clé de regroupement des listes. On ne réécrit jamais le brut côté serveur. Le regroupement par repo (listes Runs/Triggers) n'apparaît que si ≥ 2 repos distincts ; sinon liste plate.
+- **Repos récents** : projection à la lecture des cibles portées par les Runs, comparaison verbatim.
 
 ### Multi-repo par Run (#465, ADR-0042)
 
-- **Dépôt primaire** (*primary repo*) — le dépôt sur lequel un Run écrit et mène ses MR ;
-  `target_repos[0]`. Porte exactement la sémantique de l'ancien `target_repo` (ADR-0033), et **reste**
-  dans `target_repo` (il n'est pas matérialisé comme `RepoPin`).
-- **Dépôt secondaire** (*secondary repo*) — un dépôt associé à un Run en **lecture seule**, offert
-  aux nœuds comme contexte. Matérialisé par un **snapshot** figé à un SHA au démarrage. N'a ni
-  worktree pipeline, ni comptabilité d'archive/coût, ni MR. En list/cost, un Run multi-repo se range
-  sous le primaire `[0]`. Voir ADR-0042.
-- **Snapshot secondaire** (*secondary snapshot*) — worktree détaché (`git worktree add --detach`)
-  d'un dépôt secondaire, pinné au SHA enregistré dans `RunStarted`, vivant sous
-  `<primaire>/.pdo/runs/<id>/repos/<alias>/` (**3e frère** de `worktree/` et `nodes/`). Read-only par
-  convention, garde `secondary_repo_dirtied` (409, fichiers *suivis* seulement). Injecté aux nœuds
-  par **chemin absolu** (préambule + env `PDO_SECONDARY_REPOS`) car les sous-worktrees n'héritent pas
-  de ses fichiers. Récupéré au teardown par `worktree remove --force` **+ `prune`** dans le dépôt
-  secondaire (sans le prune : registration dangling, classe #498).
+- **Dépôt primaire** *(terme)* — celui sur lequel le Run écrit et mène ses MR ; `target_repos[0]`, sémantique de l'ancien `target_repo` (ADR-0033), reste dans `target_repo` (pas matérialisé en `RepoPin`).
+- **Dépôt secondaire** *(terme)* — associé en **lecture seule**, offert aux nœuds comme contexte via un snapshot figé à un SHA au démarrage. Ni worktree pipeline, ni archive/coût, ni MR ; en list/cost, le Run se range sous le primaire.
+- **Snapshot secondaire** *(terme)* — worktree détaché pinné au SHA de `RunStarted`, sous `<primaire>/.pdo/runs/<id>/repos/<alias>/` (**3e frère** de `worktree/` et `nodes/`). Read-only par convention (garde `secondary_repo_dirtied`, 409 sur fichiers *suivis*), injecté aux nœuds par **chemin absolu** (préambule + env `PDO_SECONDARY_REPOS`). Récupéré au teardown par `worktree remove --force` **+ `prune`** (sans le prune : registration dangling, classe #498).
 
 ### Explorateur de fichiers (générique, `GET /fs/browse` + `FsExplorerModal`)
 
-L'**explorateur de fichiers** est la brique unique de sélection de chemin à la souris : une route de listing à **un niveau** (`GET /fs/browse?path=&files=&hidden=`) et **un** composant (`FsExplorerModal`). Deux consommateurs aujourd'hui — le **sélecteur de repo** du New-Run modal (`mode="dir"`) et le **sélecteur de Dockerfile** des Settings (`mode="file" showHidden`) — zéro duplication. Né repo-spécifique (#131, `/repos/browse` cloué dans `RepoCombobox`), généralisé et **renommé franchement, sans alias**, en #431.
-
-- **Défauts = comportement historique au bit près.** Sans paramètre : répertoires seuls, dot-entrées filtrées. `files=true` ajoute les **fichiers réguliers**, `hidden=true` les dot-entrées. Vocabulaire filaire **strict** : seuls les littéraux minuscules `true`/`false` (un `?files=1` est un `400 text/plain`, jamais un `false` silencieux).
-- **Ce qui n'est jamais offert** (dans aucun mode) : liens symboliques **cassés** et fichiers **spéciaux** (fifo, socket, device) — tout consommateur d'un chemin choisi le résout, donc l'entrée serait impickable par construction, et un fifo offert à `ensure_image` donnerait une lecture qui bloque indéfiniment. Un symlink vers un répertoire est **suivi** (`is_dir: true` **et** `is_symlink: true`).
-- **Cap de 1000 par genre, répertoires prioritaires** sur le budget. Un budget unique laisserait les fichiers **affamer** les répertoires (50 000 fichiers + 2 sous-dossiers ⇒ plus rien à traverser) : c'est une panne du picker, pas un détail cosmétique.
-- **Mode fichier = select-then-confirm**, jamais pick-and-close : un seul chemin vers `onPick`, et un misclick ne peut pas écrire silencieusement dans un réglage persisté.
-- **Exposition, dite exactement** : le daemon bind `0.0.0.0` et cette surface n'a **aucune authentification** (#260 est **closed**, pas différée — la portée LAN est assumée par le propriétaire). Les drapeaux élargissent l'énumération des noms de répertoires aux **noms de fichiers** ; les **contenus** ne sont jamais renvoyés (l'endpoint n'émet que des noms, un chemin et trois booléens). La bonne frontière est l'authentification de toute la surface HTTP — autre chantier.
-
-_Éviter_ : « explorateur de repo » / « repo browser » (il ne l'est plus), « `/repos/browse` » (retiré, sans alias — la route répond désormais la SPA), « lister récursivement » (un niveau à la fois, jamais de récursion).
+La brique **unique** de sélection de chemin à la souris : un listing à **un niveau**, un composant, plusieurs consommateurs (sélecteur de repo, sélecteur de Dockerfile). Jamais de récursion, jamais de **contenus** renvoyés (noms seulement) ; liens cassés et fichiers spéciaux invisibles ; mode fichier = select-then-confirm. Surface non authentifiée comme tout le HTTP du daemon — portée LAN assumée (#260 closed). _Éviter_ : « repo browser » (généralisé en #431, sans alias).
 
 ---
 
 ## Trigger
 
-Un **Trigger** est une liaison nommée et persistée entre une **condition de déclenchement** et un **template de Run**. Quand la condition se réalise, PDO crée un Pipeline Run *ordinaire* à partir du template.
+Un **Trigger** est une liaison nommée et persistée entre une **condition de déclenchement** et un **template de Run**. Quand la condition se réalise, PDO crée un Pipeline Run *ordinaire*.
 
-- **Template de Run** = exactement la charge utile d'un `POST /runs` : pipeline (depuis la bibliothèque) + repo cible + source branch + input + overrides de variables.
-- **Start-only.** Un Trigger sait *quand* déclencher et *quel input* passer — rien de plus. Il ne décide jamais de la terminaison du Run (pas de policy de finish côté Trigger, cf. *Deliberate, then autonomous*). L'autonomie de bout-en-bout (push/PR/merge) est une propriété du **pipeline** visé (nœud Shipper), pas du Trigger.
-- **Provenance.** Un Run créé par un Trigger porte une référence `triggered_by: <trigger-id>` ; à part ça c'est un Run ordinaire, indistinguable dans son cycle de vie.
-- **Pas de chaînage interne.** Un Trigger ne déclenche pas un autre Trigger. Les pipelines se couplent par le **monde extérieur** (ex. un pipeline auditeur écrit des issues GitHub `ready-for-agent` ; un Trigger de polling les ramasse), jamais par un wiring interne PDO — cohérent avec « les Runs ne partagent pas de blackboard ».
+- **Template de Run** = exactement la charge utile d'un `POST /runs`.
+- **Start-only.** Un Trigger sait *quand* déclencher et *quel input* passer — rien de plus. Il ne décide jamais de la terminaison du Run. L'autonomie de bout-en-bout est une propriété du **pipeline** visé, pas du Trigger (ADR-0012).
+- **Provenance.** Un Run créé par un Trigger porte `triggered_by` ; à part ça c'est un Run ordinaire.
+- **Pas de chaînage interne.** Un Trigger ne déclenche pas un autre Trigger. Les pipelines se couplent par le **monde extérieur** (labels GitHub, etc.), jamais par un wiring interne PDO.
 
 ### Condition de déclenchement
 
 Un Trigger porte un **heartbeat cron** (obligatoire) et un **guard script optionnel** :
 
-- **Sans guard** : à chaque tick cron, le Trigger fire — un Run est spawné. (Le pipeline visé est typiquement *self-sufficient*, cf. #137 : pas d'input requis.)
-- **Avec guard** : à chaque tick, PDO exécute d'abord le script (cheap, avant tout spawn). Contrat : **exit 0 ⇒ fire ; exit non-zéro ⇒ skip** (aucun Run spawné, pas de pollution de la liste). **Le `stdout` du guard devient l'input du Run** (stdout vide ⇒ pas d'input). Exemple issue-polling : `gh issue list --label ready-for-agent --json number,title` → vide ⇒ exit 1 (skip) ; non-vide ⇒ exit 0, la liste sert d'input.
+- **Sans guard** : à chaque tick cron, le Trigger fire.
+- **Avec guard** : le script tourne d'abord (cheap, avant tout spawn). Contrat : **exit 0 ⇒ fire ; non-zéro ⇒ skip**. **Le stdout du guard devient l'input du Run.** Exécuté avec CWD = repo cible, timeout dur configurable, hors du thread de tick (un guard qui hang ne gèle jamais le scheduler).
 
-**Un firing = un Run.** PDO ne fan-out jamais un Run par work-item. Si le guard ramène N issues, c'est *un* Run dont l'input liste les N issues ; la multiplicité est gérée *dans le pipeline* par une boucle `collection` (ex-ForEach, « un fixer par issue »). Le Trigger reste bête : il démarre un Run.
+**Un firing = un Run.** PDO ne fan-out jamais un Run par work-item : si le guard ramène N issues, c'est *un* Run dont l'input les liste ; la multiplicité est gérée *dans le pipeline* par une boucle `collection`.
 
-**Exécution du guard** : lancé `sh -c "<command>"` avec **CWD = `target_repo`** (pour que `gh issue list` / `git log` marchent dans le contexte du repo sans chemins en dur), héritant l'environnement du daemon (auth `gh`, PATH). Variable `PDO_TARGET_REPO` injectée. **Timeout dur 60 s** (configurable via la *Configuration d'instance*, en secondes ; #129, ADR-0015 — l'env `PDO_GUARD_TIMEOUT_MS` reste le seam de test), exécuté **hors du thread de tick** (task spawnée) : un guard qui hang ne doit jamais geler le scheduler — dépassement ⇒ kill, `guard-error (timeout)` dans `trigger_fires`, fire sauté, le tick reste réactif.
+**Références cassées** : un Trigger dont le pipeline ou le repo a disparu ne fire plus et affiche un `last_outcome` d'erreur — pas d'auto-suppression, pas de pourrissement silencieux.
 
-**Références cassées** : si le pipeline (library) ou le repo cible d'un Trigger a été supprimé/renommé depuis la création, le Trigger **ne fire plus et affiche un `last_outcome` d'erreur** (« pipeline not found ») dans l'onglet — pas d'auto-suppression, pas de pourrissement silencieux (*Sharp tool* : on surface, on ne masque pas).
-
-**Résolution de l'input du Run déclenché**, dans l'ordre : `stdout` du guard (s'il existe et non-vide) → `input_template` statique du Trigger → rien. Si l'input résolu est vide *et* que le pipeline a `prompt_required: true`, le Trigger est **rejeté à la création** (erreur claire : « ce pipeline exige un prompt ; ajoute un guard, un input template, ou passe le pipeline en prompt-not-required »). Échec loud au config-time plutôt qu'un nœud d'entrée paumé toutes les 15 min. (Le guard prime quand présent ; pas de merge template+stdout en v1 — `echo` ton texte statique dans le guard si tu veux les deux.)
+**Résolution de l'input**, dans l'ordre : stdout du guard → `input_template` statique → rien. Input vide + pipeline `prompt_required` ⇒ Trigger **rejeté à la création** (échec loud au config-time plutôt qu'un nœud d'entrée paumé toutes les 15 min).
 
 ### Idempotence — déléguée au monde extérieur
 
-**PDO ne tient aucun état de dedup.** Pas de `fired_keys`, pas de mémoire « ai-je déjà traité ce work-item ». L'idempotence est une responsabilité de l'utilisateur (*Sharp tool*), naturellement satisfaite quand le pipeline **mute l'état qu'il poll** : le nœud Shipper du fixer relabel/ferme l'issue (`ready-for-agent` → `in-progress`/closed), donc le prochain `gh issue list --label ready-for-agent` du guard ne la voit plus. Le label GitHub *est* le registre de dedup.
-
-Risque assumé : un guard qui renvoie toujours le même work + un pipeline qui ne mute pas l'état ⇒ Runs dupliqués en boucle, bornés seulement par la politique de recouvrement. Choix v1 délibéré : pas de moteur de dedup qui *devine* l'intention ; la boucle est à l'utilisateur de la fermer.
+**PDO ne tient aucun état de dedup.** L'idempotence est une responsabilité de l'utilisateur (*Sharp tool*), naturellement satisfaite quand le pipeline **mute l'état qu'il poll** (relabel/fermeture d'issue) : le label GitHub *est* le registre de dedup. Risque assumé : un pipeline qui ne mute pas l'état qu'il poll ⇒ Runs dupliqués, bornés seulement par la politique de recouvrement.
 
 ### Politique de recouvrement — skip
 
-Un Trigger **ne fire pas** si **son propre** Run précédent est encore vivant (`running`/`awaiting_user`/`blocked`). Le tick est sauté (loggué « skipped — previous run still active »), pas mis en file. Justification : ferme la fenêtre de course du dedup-par-label (Q4) — tant que le fixer-run-1 travaille l'issue #42, l'issue reste `ready-for-agent`, donc sans skip les polls suivants re-firent sur #42. Le skip est le défaut, surchargeable en `allow` par-Trigger pour qui veut des fires concurrents.
-
-**Recouvrement borné — `allow` + `max_concurrent`** (#239) : `allow` accepte un plafond optionnel `max_concurrent` (entier ≥ 1, nullable). `None`/vide ⇒ concurrence illimitée (compat ascendante des `allow` existants) ; `Some(m)` ⇒ fire tant que le Trigger a `< m` Runs vivants *à lui*, puis skip. Les trois modes se ramènent à un **plafond effectif** unique : `skip` ⇒ plafond 1 (jamais d'empilement sur son propre Run vivant), `allow+None` ⇒ illimité, `allow+Some(m)` ⇒ m. La décision (`fire_decision::overlap_ceiling`) et la gate du guard passent toutes deux par ce même plafond, donc le guard ne tourne jamais sur un tick qu'on sauterait. Le décompte est dérivé de la provenance `triggered_by` (Runs vivants), pas d'un état neuf : un Run qui se termine libère un slot.
-
-**Pas d'empilement de Runs en attente.** On ne crée jamais un Run entièrement « en attente ». La seule attente possible est *au niveau nœud* (back-pressure du cap de sessions, ci-dessous), à l'intérieur d'un Run déjà admis.
+Un Trigger **ne fire pas** si son propre Run précédent est encore vivant : le tick est sauté, pas mis en file. Ferme la fenêtre de course du dedup-par-label. Surchargeable en `allow` par-Trigger, avec plafond optionnel `max_concurrent` (#239) : les trois modes se ramènent à un plafond effectif unique (`skip` = 1, `allow` = illimité ou m). Le guard ne tourne jamais sur un tick qu'on sauterait. **Pas d'empilement de Runs en attente** — la seule attente possible est au niveau nœud (cap de sessions), dans un Run déjà admis.
 
 ### Mécanisme cron & cycle de vie
 
-- **Format** : expression cron 5 champs (crate cron + `chrono`), interprétée en **UTC** (cohérente entre première planification et recalculs). L'UI propose des presets (toutes les 15 min / horaire / quotidien 09:00) compilés en cron + une échappatoire expression brute. (Cron en heure *locale* = enhancement séparé ; cf. #222, hors scope.)
-- **Scheduler** : nouvelle task background (`tokio::time::interval`, sœur du reaper/stale) qui tick ~toutes les 30 s ; résolution cron à la minute. À chaque tick : pour chaque Trigger activé dont `next_fire ≤ now`, applique le skip de recouvrement, exécute le guard, spawn le Run, recalcule `next_fire`.
-- **Invariant `next_fire_at` = UTC canonique (`…Z`)** (#222) : tout writer (création/édition/scheduler) stocke en UTC, et la requête « quels Triggers sont dûs » compare/ordonne via `julianday()` (tz-normalisé), donc une ligne à offset local (donnée legacy ou régression `Local::now()`) ne peut plus se mettre en dormance silencieuse pendant des heures.
-- **Résilience du tick** (#222) : un panic pendant un tick est **isolé** (frontière `tokio::spawn`) — la boucle survit et le tick suivant rattrape les Triggers non firés (forward-only). `GET /triggers/health` expose `last_tick_at` + l'intervalle + le flag `paused` (#348), pour qu'un scheduler mort/bloqué — ou délibérément mis en pause — soit observable plutôt que silencieux (une pause fait avancer `last_tick_at` : pause ≠ mort).
-- **Fires manqués = forward-only, pas de backfill.** Daemon down pendant 50 slots ⇒ au redémarrage `next_fire` est recalculé depuis *now*, les slots manqués ne sont pas rejoués. Correct *par construction* : le dedup étant externe, un seul poll forward voit *tout* le travail accumulé (`gh issue list` ramène toutes les issues en attente d'un coup). À distinguer de la ré-activation d'un Trigger (#372), qui saute le slot manqué au lieu de le firer une fois au prochain tick (cf. addendum ADR-0012) ; la **dé-pause globale (#348)**, elle, rattrape le slot courant une fois — comme le boot.
-- **Daemon best-effort par défaut, persistant sur demande (#156)** : un `pdo daemon` lancé à la main ne fire que tant que le process vit (survit à la fermeture de l'UI, meurt au reboot/logout). `pdo service install` le rend **persistant** — installé comme **service unit** (systemd `--user` sous Linux, LaunchAgent launchd best-effort sous macOS), il démarre au boot et survit au logout, résolvant la limitation v1 que l'onglet Triggers signalait. La status-bar distingue désormais un daemon persistant (silencieux) d'un daemon **éphémère** (pastille ambre `ephemeral` pointant sur `pdo service install`). Détails : *Service unit persistant (#156)* + ADR-0019.
+- **Cron 5 champs, interprété en UTC** (#222). Presets UI + expression brute.
+- **Fires manqués = forward-only, pas de backfill** : daemon down pendant 50 slots ⇒ `next_fire` recalculé depuis *now*. Correct par construction : le dedup étant externe, un seul poll forward voit tout le travail accumulé. La ré-activation d'un Trigger saute le slot manqué (#372) ; la dé-pause globale rattrape le slot courant une fois, comme le boot (#348).
+- **Résilience** : un panic de tick est isolé, la boucle survit ; `GET /triggers/health` rend le scheduler observable (pause ≠ mort).
+- **Daemon best-effort par défaut, persistant sur demande** : `pdo service install` installe une unité OS (ADR-0019) ; la status-bar signale un daemon éphémère.
 
-### Persistence — table SQLite
+### Persistence
 
-Les Triggers vivent dans une **nouvelle table `triggers`** de `~/.pdo/pdo.db`, *pas* en YAML sur disque. Un Trigger est de la **config + état de scheduling** (créé via modale, pas un artefact canvas-backed comme un pipeline), et son état mutable (`enabled`, `next_fire_at`, `last_fired_at`, `last_outcome`) serait réécrit à chaque tick — mauvais fit YAML. La requête centrale du scheduler (« quels Triggers sont dûs ») est une requête indexée triviale.
+Les Triggers vivent dans une table SQLite (`~/.pdo/pdo.db`), pas en YAML : un Trigger est de la **config + état de scheduling**, réécrit à chaque tick — mauvais fit YAML. Ne viole pas l'event-sourcing : l'event log reste la vérité du **Run** ; un Trigger *produit* des Runs.
 
-Ligne : `id, name, pipeline_id, target_repo, source_branch, input_template, variables(JSON), cron, guard_command(nullable), overlap_policy, max_concurrent(nullable), enabled, next_fire_at, last_fired_at, last_outcome`. (Pas de migration runner : la colonne `max_concurrent` est ajoutée à `init` via un `ALTER TABLE … ADD COLUMN` idempotent, gardé par un `pragma_table_info`, pour migrer les `pdo.db` antérieurs à #239. Même précédent pour les colonnes `guard_stdout`/`guard_stderr`/`guard_exit_code` de `trigger_fires`, ajoutées à `init` pour migrer les bases antérieures à #244.)
-
-Ne viole pas l'event-sourcing : l'event log reste la vérité du **Run** (keyé `run_id`) ; un Trigger *produit* des Runs (eux event-sourcés normalement, avec provenance `triggered_by`).
-
-**Table `trigger_fires`** (audit) : un enregistrement horodaté par tick significatif — `fired→run_id` / `skipped-overlap` / `guard-exit-nonzero` / `guard-error`. Répond à la question #1 du debug (« pourquoi mon Trigger n'a pas firé cette nuit ? »). L'onglet Triggers la lit pour « last fired / last skipped + raison ». Un skip dû au plafond borné (#239) **réutilise l'outcome `skipped-overlap`** (pas de nouveau statut à apprendre à l'UI), le plafond étant porté dans la *raison* (« max concurrent runs reached (2/2) ») — la colonne raison du panneau d'historique répond au « pourquoi » précisément. Historique **par-Trigger** : chaque ligne de `trigger_fires` est keyée par `trigger_id` (lecture `WHERE trigger_id = ?`), donc chaque Trigger possède son propre historique de fires, distinct du scalaire `last_fired_at`/`last_outcome` porté par la ligne `triggers`. Le fire d'un Trigger A n'apparaît jamais dans l'historique d'un Trigger B : le broadcast WS `trigger_fired` porte le `trigger_id` émetteur, et un panneau détail ouvert ne refetch son historique que si c'est *son* Trigger qui a firé (sinon le message est ignoré).
-
-**Capture de la sortie du guard (#244)** : sur une ligne `guard-exit-nonzero`, PDO conserve désormais ce que le guard a imprimé — colonnes additives `guard_stdout`, `guard_stderr`, `guard_exit_code` (exit code `NULL` si tué par signal). Chaque flux est **plafonné à 16 KB, queue conservée** (un marqueur de troncature préfixe le reste, car l'erreur s'imprime en général en dernier). Indispensable pour les guards type grep (`gh issue list … | grep .`) : sur « rien à faire » le stdout est vide, le *pourquoi* vit sur stderr + l'exit code. Le panneau détail révèle ces champs derrière une **disclosure par-ligne « Guard output »** (repliée par défaut), uniquement sur les lignes `guard-exit-nonzero` ; un `guard-error` (spawn/timeout) n'a pas de flux capturé (son détail reste dans `reason`). **Côté skip ces flux sont purement diagnostiques** : ils n'altèrent pas le contrat d'input (cf. *Résolution de l'input* ci-dessus — seul le stdout d'un `Pass` devient l'input du Run, et lui n'est jamais plafonné). En capturant stderr, on draine désormais ce flux en continu, ce qui corrige au passage un deadlock latent (un guard inondant stderr > ~64 KB bloquait jusqu'au timeout et était mal classé `guard-error`).
-
-**Provenance du fire (#341)** : colonne additive `source` sur `trigger_fires` (`manual` pour un « Run now », `cron` pour un tick ; NULL legacy ≈ cron), migrée par le même `ALTER` gardé `pragma_table_info` que #239/#244. Dimension orthogonale à l'outcome — pas de nouveaux outcomes ; le panneau détail affiche un badge « manual » sur la ligne.
+**Table `trigger_fires`** (audit) : un enregistrement horodaté par tick significatif (`fired` / `skipped-overlap` / `guard-exit-nonzero` / `guard-error`), keyé par Trigger. Répond à la question #1 du debug : « pourquoi mon Trigger n'a pas firé cette nuit ? ». Sur un skip de guard, PDO conserve stdout/stderr/exit code (plafonnés, queue conservée — l'erreur s'imprime en dernier) : purement diagnostiques, ils n'altèrent pas le contrat d'input. La provenance (`manual` vs `cron`) est une dimension orthogonale à l'outcome (#341).
 
 ### UI — onglet Triggers
 
-- **Ligne** : status dot (depuis `last_outcome`, tooltip au survol « last run date : XXX, result : YYY ») · nom · pipeline · badge repo · planning lisible (« every 15 min ») · toggle enable/disable · « next fire in … / last fired … ». Actions au survol : run-now, edit, delete. Langage visuel calqué sur les lignes Runs.
-- **Sélection → panneau détail droit** : config complète + **historique des fires** (table `trigger_fires` : horodatage · outcome · lien run-id). C'est là qu'on répond à « pourquoi pas firé cette nuit » (skips et guard-errors listés avec raison).
-- **Run now** (#341, ADR-0027) = un **fire de première classe** via `POST /triggers/{id}/fire`, partageant verbatim le chemin cron (`fire_one_trigger`) : le **guard est exécuté**, l'overlap honoré, une ligne `trigger_fires` est écrite (`source = manual`), le Run porte `triggered_by`. Deux différences : `due` est forcé (le clic est le planning) et `next_fire_at` reste **intact** (le heartbeat cron possède le planning). Contrat véridique (ADR-0025) : 404 inconnu ; **409 si disabled** ou référence cassée (avant tout effet, aucune ligne d'audit) ; sinon `200 {ok, fired, run_id?/outcome?, reason?}` — un skip guard/overlap est un 200 honnête. Le bouton ouvre ensuite le panneau détail du Trigger, où la nouvelle ligne apparaît (refetch sur le WS `trigger_fired`). L'ancien choix v1 (« le guard n'est pas exécuté », modale New Run pré-remplie) est **abrogé** — il contournait guard, overlap et historique.
-- **Tester le guard (dry-run)** (#350, #351) = exécuter la commande de guard *telle qu'en cours de saisie dans l'onglet New trigger (Trigger pas forcément sauvegardé, #350), ou celle d'un Trigger déjà sauvegardé depuis son panneau détail (#351)*, **sans aucun effet de bord** : aucun Run créé, aucune ligne `trigger_fires`, `next_fire_at` intact, ni lock de tick ni gate d'overlap. `POST /triggers/guard/test` passe par le **même seam pur** (`run_guard`) que le chemin cron mais s'arrête au verdict ; l'endpoint est *guard-faithful* (mappe `GuardResult` 1:1) et le verdict **would-fire / would-reject** est composé **côté client** depuis l'`outcome`. À distinguer de **Run now** (fire *réel*, avec effets, sur un Trigger *sauvegardé* — ADR-0027) et du **rejet de champ vide** à la création (`prompt_required` sans input résolu — un refus de *config*, pas un verdict de *guard*).
-- **Trigger désactivé** (`enabled=false`, canal **par-ligne**) : reste dans la liste, grisé, badge `disabled`, ne fire pas. **Ré-activer (#372)** recalcule `next_fire_at` vers l'avant depuis *now* : le slot manqué pendant la désactivation est *sauté* (pas de fire immédiat de rattrapage), le Trigger repart au prochain slot cron.
-- **Pause globale des Triggers (#348)** (canal **daemon-wide**, distinct du `disabled` par-ligne — *ne pas* collapser les deux sous « désactivé ») : un master switch dans l'en-tête de l'onglet lève un flag serveur `triggers_paused` (`instance_config`) qui **court-circuite le tick** du scheduler (early-return après le heartbeat de liveness, avant `due_triggers`) — aucun fire cron tant que la pause tient. Le `enabled` par-Trigger n'est **jamais** muté : à la reprise chaque Trigger retrouve son état antérieur *gratuitement* (rien à restaurer), robuste au restart (flag persisté) et cohérent cross-clients (broadcast WS `triggers_paused` + bannière ambre `st-await`, hydratation au mount via `GET /triggers/health` qui expose désormais `paused`). **Dé-pause = rattrapage one-shot du slot courant** (forward-only, comme le boot du daemon), sans code dédié : `due_triggers` n'étant pas appelé pendant la pause, `next_fire_at` reste gelé dans le passé et le tick ordinaire suivant le fire une fois via l'arm `CronTick`. Résout l'asymétrie que l'addendum #372 avait réservée (le boot et la dé-pause conservent le rattrapage ; la ré-activation par-Trigger le saute). **« Run now » manuel fire quand même pendant la pause** (permissif, derrière confirmation UI) : le chemin manuel est disjoint du tick. Kill-switch opérationnel : quota API > 90 %, départ en vacances, session de debug.
+- **Ligne** : status dot, nom, pipeline, badge repo, planning lisible, toggle enable/disable, next/last fire. **Panneau détail** : config + historique des fires avec raison.
+- **Run now** (ADR-0027) = un **fire de première classe** partageant verbatim le chemin cron : guard exécuté, overlap honoré, ligne d'audit écrite, `next_fire_at` intact (le heartbeat possède le planning). Un skip guard/overlap est un 200 honnête (ADR-0025).
+- **Tester le guard (dry-run)** (#350/#351) : exécute la commande de guard **sans aucun effet de bord** — aucun Run, aucune ligne d'audit. À distinguer de Run now (fire réel).
+- **Trigger désactivé** (par-ligne) : grisé, ne fire pas ; la ré-activation repart au prochain slot.
+- **Pause globale** (#348, canal **daemon-wide**, à ne pas collapser avec le `disabled` par-ligne) : un master switch court-circuite le tick sans muter le `enabled` de personne — à la reprise chaque Trigger retrouve son état gratuitement. « Run now » manuel fire quand même pendant la pause (chemin disjoint, derrière confirmation). Kill-switch opérationnel : quota API, vacances, debug.
 
 ---
 
 ## Pipeline Manager
 
-Agent conversationnel attaché à un Pipeline Run. Permet à l'utilisateur de **lire l'état** et **émettre des commandes** sur le Run.
+Agent conversationnel attaché à un Pipeline Run. Permet de **lire l'état** et d'**émettre des commandes** sur le Run.
 
 ### Cycle de vie
 
-- **Un manager par Run.** Spawn automatique au démarrage du Run dans une session tmux dédiée nommée `pdo-mgr-<run-id>`. Persiste tant que le Run n'est pas cleanup (donc aussi après success/failed/blocked, pour interrogation post-mortem).
-- **Pas de polling actif.** Le manager ne tourne effectivement que quand l'utilisateur lui parle. Quand attaché, il lit l'état frais à la demande.
-- **Nommage descriptif dans son propre tour.** Quand un Run porte un *nom placeholder* (posé par le daemon au spawn, cf. *cycle de vie*), le manager lui donne un *nom descriptif* via `rename_run` **best-effort, à l'intérieur de son propre tour** — une fois qu'il sait ce que fait le Run, jamais réveillé par le daemon ni par un nœud (cohérent avec « Pas de polling actif »). Pour un Run prompt-less purement non-attendu, le manager n'a souvent jamais le contexte : le placeholder persiste, et c'est le comportement voulu (#184).
+- **Un manager par Run**, session tmux dédiée `pdo-mgr-<run-id>`, spawn au démarrage du Run, persiste jusqu'au cleanup (interrogation post-mortem).
+- **Pas de polling actif.** Le manager ne tourne que quand l'utilisateur lui parle.
+- **Nommage descriptif dans son propre tour** : quand un Run porte un nom placeholder, le manager pose un nom descriptif best-effort — jamais réveillé par le daemon (#184).
 
 ### Implémentation
 
-- Le manager **est** une instance Claude Code standard, pas un agent custom.
-- Son **prompt système est augmenté** par le runtime avec :
-  - L'identité du Run qu'il gère (`<run-id>`).
-  - La liste des **endpoints HTTP** du daemon PDO accessibles (URL de base, schéma, exemples d'invocation curl).
-  - La liste des **commandes** disponibles avec leur payload attendu.
-- **Pas de MCP custom.** L'agent appelle les endpoints via `bash` + `curl`. Justification : MCP est utile pour des clients agentiques distants/inconnus ; ici on possède le prompt de la session, autant documenter les endpoints en clair.
-- Pour la lecture brute (sans passer par les endpoints), le manager a accès à `bash` complet : `ls`, `cat`, `git log`, `tmux capture-pane`, etc. Tout l'état du Run est sur disque, donc grep-able.
+Le manager **est** une instance Claude Code standard, prompt augmenté par le runtime (identité du Run, endpoints HTTP documentés en clair + exemples curl). **Pas de MCP custom** : on possède le prompt de la session, autant documenter les endpoints. Pour la lecture brute, bash complet — tout l'état du Run est sur disque.
 
 ### Commandes disponibles (v1)
 
-Toutes exposées comme endpoints `POST /runs/<id>/commands` du daemon :
+Exposées comme `POST /runs/<id>/commands` :
 
 | Commande | Effet |
 |---|---|
-| `bump_region` | Accorde N itérations supplémentaires à une région de boucle bornée (`region_id` = id de la région `loops:`) et relance |
-| `end_region` | Déclenche la complétion d'une région de boucle bornée sans itération supplémentaire |
-| `extend_cycle` | (Legacy, cycles `$var` hors région) Augmente le `max_iter` d'un cycle bloqué de N et relance. Cible = le nœud porteur de l'arête de cycle sortante (nœud de condition de sortie), jamais la tête. Refusé (`409`) si le nœud est membre d'une région `loops:` bornée — utiliser `bump_region` |
-| `resume_run` | Relance le Run depuis l'état actuel (utile post-conflit résolu manuellement) |
-| `kill_node` | Tue un NodeRun en cours |
-| `restart_node` | Re-spawn un NodeRun au **même `iter`** (perd l'état tmux courant). Sur un nœud `code-mutating`/`merge`, **le sous-worktree est réutilisé en place : le travail non commité de la session morte survit** (#489) — c'est ce qui distingue `restart_node` de `node_retry` côté disque. Refusé, et **avant le kill**, si : le garde de transition rejette (`409 restart_refused`), la cible est absente du pipeline du Run (`400 node_not_found`), le conteneur sandbox n'est pas prêt (`409 sandbox_prep_not_ready`) ou le sous-worktree est tenu ailleurs (`409 sub_worktree_occupied`). Cf. *Contrat de réponse des commandes* |
-| `mark_node_done` | Force la complétion d'un NodeRun (cas typique : nœud `interactive: true` que l'utilisateur signale fini). Passe par le **même corps partagé** que `pdo complete` : refusé en `409` nommant la cause (cf. *Contrat de refus de la complétion*) |
+| `bump_region` | Accorde N itérations de plus à une région bornée et relance |
+| `end_region` | Complète une région bornée sans itération supplémentaire |
+| `extend_cycle` | (Legacy, cycles hors région) — refusé sur un membre de région : utiliser `bump_region` |
+| `resume_run` | Relance le Run depuis l'état actuel (post-conflit résolu, etc.) |
+| `kill_node` | Tue un NodeRun en cours (le marque `failed`) |
+| `restart_node` | Re-spawn un NodeRun au **même `iter`** ; sur un nœud `code-mutating`/`merge`, le sous-worktree est réutilisé en place — le travail non commité survit (#489). Préconditions et refus → ADR-0037 |
+| `mark_node_done` | Force la complétion (nœud `interactive`, ou récupération d'un failed corrigé à la main). Même corps que `pdo complete` : refus 409 nommé → ADR-0035 |
 | `inject_artifact` | Pose un artefact à la main dans le Blackboard |
-| `cleanup_run` | Supprime branches, worktrees, artefacts, événements |
-| `rename_run` | Donne au Run un nom descriptif (remplace le nom placeholder posé au spawn) |
-| `start_node` | Spawne un NodeRun immédiatement, sans attendre la complétion amont (force-spawn) ; inputs résolus best-effort ; refusé (`409`) si le Run n'accepte pas de spawn ou si le cap de sessions est atteint |
+| `cleanup_run` | Supprime branches, worktrees, artefacts (archive d'abord — ADR-0020) |
+| `rename_run` | Donne au Run un nom descriptif |
+| `start_node` | Spawne un NodeRun immédiatement, hors ordre de dépendance (force-spawn) |
 
-L'effet de la plupart des commandes est l'**append d'un événement** dans l'event log : le runtime consomme ces événements et agit en conséquence. **Trois font davantage**, et l'événement n'y est qu'une trace — `inject_artifact` écrit un fichier, `cleanup_run` démonte worktrees et branches sur disque, `retry_all` archive le Run et **en crée un neuf** (`201 Created`). Rejouer l'event log ne défait aucune des trois.
+L'effet de la plupart des commandes est l'**append d'un événement**. Trois font davantage — `inject_artifact` écrit un fichier, `cleanup_run` démonte du disque, `retry_all` archive et **crée un Run neuf** : rejouer l'event log ne défait aucune des trois.
 
-### Contrat de réponse des commandes (ADR-0025)
+### Contrat de réponse des commandes (ADR-0025, ADR-0035, ADR-0037)
 
-Les commandes de pilotage de boucle (`extend_cycle`, `bump_region`, `end_region`, `resume_run`) **et les commandes de spawn par nœud** (`restart_node`) disent la vérité sur leur effet :
+Les commandes disent **la vérité sur leur effet** : cible inconnue ⇒ 400 avant tout append ; mauvais mécanisme ⇒ 409 orientant vers le bon ; valide mais sans effet ⇒ `200 {noop: true, reason}` honnête. La convention noop ne couvre que le *sans-effet* : un **refus** de complétion n'est jamais un 2xx (ADR-0035), et un **spawn demandé mais non advenu** non plus (ADR-0037) — le throttle d'admission répond `waiting`, pas `noop`. _Éviter_ : discriminer sur le statut HTTP plutôt que sur le slug d'erreur.
 
-- **Cible inconnue** (`node_id` ou `region_id` absent du pipeline du Run — snapshot du Run, pas la bibliothèque) → `400` `{"error":"node '<id>' not found in pipeline"}` (resp. `region '<id>'`). La validation précède l'append du `CommandIssued` **et** la levée du `Halted` : une commande rejetée ne modifie pas l'event log.
-- **Mauvais mécanisme** (`extend_cycle` sur un membre de région bornée) → `409` `{"error":"node '<id>' is a member of loop region '<region>'; use bump_region with region_id '<region>'"}`.
-- **Valide mais sans effet immédiat** (itération encore vivante, région déjà complétée, throttle d'admission) → `200` `{"ok":true,"noop":true,"reason":"..."}` (même convention que `mark_node_done`). La convention noop ne s'étend **qu'au** sans-effet : sur le chemin de complétion, un **refus** n'est jamais un `2xx` (#490, ADR-0035 — qui amende cette section). Et elle **ne couvre pas** le throttle d'un spawn **par nœud**, qui répond `waiting` et non `noop` — cf. la puce suivante (#489, ADR-0037).
-- **Effet réel** → `200` `{"ok":true,"spawned":[{"node_id":...,"iter":...}]}`.
-- **Spawn demandé, spawn non advenu** (#489, ADR-0037) — le `SpawnOutcome` se projette vers HTTP, jamais vers un `200` inconditionnel. Refus du garde → `409` `{"error":"restart_refused","recoverable":true,"message":"<prose du garde>"}` ; sandbox pas prête → `409 sandbox_prep_not_ready` ; sous-worktree tenu ailleurs → `409 sub_worktree_occupied` ; cible absente du pipeline **du Run** → `400 node_not_found` ; panne de spawn → `500` `{"error":"spawn_failed","run_failed":<bool>,"recoverable":<!run_failed>}` ; throttle d'admission → `200` `{"ok":true,"waiting":true,"reason":…}` — **pas** `noop` : un `NodeWaiting` **a** été appendé, il a flippé le nœud en `waiting`, et le balayage d'admission le reprend. Succès → `200` `{"ok":true,"spawned":[…],"reused_sub_worktree":<bool>,"base_sha":…,"interrupted_git_ops":[…]}`. **Tout refus connaissable est rendu avant le kill de la session** ; le champ `session_killed` du corps d'erreur dit lequel des deux mondes on est : `false` = rien n'a été touché, `true` = la session est morte et rien ne l'a remplacée (ce nœud demande un autre levier, pas un retry). _Éviter_ : discriminer sur le statut plutôt que sur `error`, ou lire `resp.ok` seul.
-- **Opération git interrompue** *(terme)* : les marqueurs qu'une session tuée laisse dans le gitdir privé d'un sous-worktree (`index.lock`, `MERGE_HEAD`, `rebase-merge/`, `rebase-apply/`). Sur une réutilisation, `restart_node` les **inventorie tous** dans `interrupted_git_ops` (corps de réponse **et** préambule du nœud re-spawné, avec une consigne différenciée) et n'en supprime **aucun** — PDO ne peut pas prouver que l'écrivain est mort (#485). L'agent frais résout. _Éviter_ : « verrou git périmé » / `stale_git_lock` (faux pour 3 marqueurs sur 4 — un `MERGE_HEAD` ou un rebase interrompu n'est pas un verrou, et le nommer ainsi a masqué le second marqueur derrière le premier → `pdo complete` prenait un merge à 2 parents silencieux, #516).
-
+**Opération git interrompue** *(terme, #516)* : les marqueurs qu'une session tuée laisse dans le gitdir d'un sous-worktree (`index.lock`, `MERGE_HEAD`, `rebase-merge/`, `rebase-apply/`). Sur une réutilisation, `restart_node` les **inventorie tous** dans `interrupted_git_ops` (corps de réponse **et** préambule du nœud re-spawné, consigne différenciée) et n'en supprime **aucun** — PDO ne peut pas prouver l'écrivain mort (#485), l'agent frais résout. _Éviter_ : « verrou git périmé » / `stale_git_lock` (faux pour 3 marqueurs sur 4, et le nom masquait le second marqueur → `pdo complete` prenait un merge à 2 parents silencieux).
 ### Ce que le manager ne peut **pas** faire
 
-- **Spawner des sous-agents ad hoc hors-DAG.** Pas d'orchestration probabiliste émergente. Le manager parle, lit, et exécute des commandes prédéfinies. Il peut en revanche force-spawn un nœud **déjà déclaré** dans le DAG via `start_node` (hors ordre de dépendance). Si l'utilisateur veut une investigation profonde, il attache directement la session tmux du nœud concerné.
+**Spawner des sous-agents ad hoc hors-DAG.** Pas d'orchestration probabiliste émergente. Il peut force-spawn un nœud **déjà déclaré** dans le DAG (`start_node`). Pour une investigation profonde, l'utilisateur attache directement la session du nœud.
 
 ---
 
@@ -817,70 +556,27 @@ Les commandes de pilotage de boucle (`extend_cycle`, `bump_region`, `end_region`
 
 ### Source de vérité = event log
 
-Toutes les transitions d'état d'un Pipeline Run sont enregistrées comme **événements append-only** dans une **SQLite locale** (`~/.pdo/pdo.db`). L'état courant d'un Run = projection des événements de ce Run.
-
-Pas de "state.yaml" ou "STATE.md" stocké en plus. Seul l'event log persiste.
-
-Schéma indicatif (à raffiner) :
-
-```sql
-CREATE TABLE events (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  run_id TEXT NOT NULL,
-  ts TEXT NOT NULL,
-  kind TEXT NOT NULL,        -- 'run_started', 'node_started', 'node_completed',
-                             -- 'cycle_iteration', 'merge_conflict', 'command_issued', etc.
-  node_id TEXT,
-  iter INTEGER,
-  payload JSON               -- métadonnées arbitraires : artefacts produits, session tmux, exit code, etc.
-);
-```
+Toutes les transitions d'état d'un Pipeline Run sont des **événements append-only** dans une SQLite locale (`~/.pdo/pdo.db`). L'état courant d'un Run = projection des événements. Pas de « state.yaml » stocké en plus.
 
 ### Daemon PDO
 
-Process local toujours-actif (lazy start) qui :
-
-- Héberge le **serveur HTTP** (REST + WebSocket).
-- Est l'**ordonnanceur** : il lit l'event log, détermine quels NodeRuns sont prêts, spawn les sessions tmux + sous-worktrees, écoute leur complétion, append les événements correspondants.
-- Sert d'**API surface** unique pour : la session manager, l'UI web/desktop, et tout futur client.
-
-### Endpoints (esquisse, à raffiner)
-
-```
-GET    /pipelines                          — liste des définitions de pipelines
-GET    /pipelines/<id>                     — définition d'un pipeline
-
-POST   /runs                               — démarre un nouveau Run (body: pipeline-id + input)
-GET    /runs                               — liste des Runs (filtrable par statut)
-GET    /runs/<id>                          — projection d'état courante d'un Run
-GET    /runs/<id>/events                   — historique brut
-GET    /runs/<id>/events?subscribe         — WebSocket push des nouveaux events
-GET    /runs/<id>/nodes                    — état de tous les NodeRuns
-GET    /runs/<id>/nodes/<node-id>          — détail d'un NodeRun (statut, iter, session tmux, artefacts)
-POST   /runs/<id>/commands                 — émet une commande (body: { kind, payload })
-
-GET    /repos/validate?path=               — valide un repo cible (chemin absolu + is_dir + `git rev-parse`)
-GET    /repos/branches?path=               — liste les branches locales du repo donné
-GET    /repos/recent                       — jusqu'à 5 `target_repo` distincts, projetés des événements `run_started`, plus récent d'abord
-GET    /fs/browse?path=&files=&hidden=     — listing filesystem à un niveau (explorateur générique : sélecteur de repo du New-Run modal + sélecteur de Dockerfile des Settings, #131/#431 ; surface non authentifiée — #260 est closed, pas différée —, les drapeaux élargissent l'énumération des noms de répertoires aux noms de fichiers, jamais aux contenus)
-```
+Process local qui héberge le **serveur HTTP** (REST + WebSocket), est l'**ordonnanceur** (lit l'event log, spawn les sessions tmux + sous-worktrees, écoute les complétions), et sert d'**API surface** unique pour le manager, l'UI et tout futur client.
 
 ### Conséquence pour la prompt augmentation
 
-Le préambule runtime injecté dans chaque NodeRun (cf. section *Prompt augmentation*) inclut, en plus des chemins d'inputs/outputs, **l'URL de base du daemon** pour les nœuds qui en ont besoin (typiquement le manager, mais aussi un nœud "Shipper" qui voudrait poster un commentaire sur l'issue source via les endpoints, etc.). Cette URL **n'est pas une constante** : elle dépend du côté où l'agent s'exécute (`http://localhost:<port>` sur l'hôte, la gateway du conteneur en sandbox) et passe donc par le **résolveur d'URL du daemon** — cf. section *Sandbox*.
+Le préambule inclut **l'URL de base du daemon** pour les nœuds qui en ont besoin. Cette URL **n'est pas une constante** : elle dépend du côté où l'agent s'exécute (hôte vs conteneur) et passe par le résolveur d'URL du daemon — cf. *Sandbox*.
 
 ---
 
 ## Configuration d'instance (instance-wide config)
 
-Réglages **daemon-wide** — ils s'appliquent à *toutes* les Runs/Triggers d'une instance PDO, à distinguer d'une variable *pipeline* (scopée à un pipeline) ou d'un override de Run. Livrés par la **page de réglages instance-wide** (#129, ADR-0015). _Éviter_ : « préférences globales », « config » tout court (ambigu avec la config pipeline).
+Réglages **daemon-wide** (ADR-0015), à distinguer d'une variable *pipeline* ou d'un override de Run. _Éviter_ : « préférences globales », « config » tout court.
 
-- **Store** : table SQLite **singleton** `instance_config` de `pdo.db` (une seule ligne, `id = 1`, seedée à l'`init` avec les défauts). Même justification que les Triggers (config + état mutable, pas un artefact canvas-backed → mauvais fit YAML, cf. *Persistence — table SQLite*). Nouveau réglage = colonne `ALTER TABLE … ADD COLUMN` idempotente (précédent `max_concurrent` #239), jamais de migration runner.
-- **Réglages** : (1) **cap de sessions** (cf. *Cap de sessions concurrentes*) ; (2) **reaper TTL** (cf. *Balayage d'orphelins*) ; (3) **timeout du guard de Trigger** (cf. *Trigger* — exposé en **secondes**, l'env `PDO_GUARD_TIMEOUT_MS` reste le seam de test en ms) ; (4) **`default_model`** (#347, cf. *Modèle*) — modèle par défaut des nodes de travail, **chaîne** (pas un knob numérique) sans validation, env de bootstrap `PDO_DEFAULT_MODEL`.
-- **Précédence `stored → env → default`** (ADR-0015) : la valeur **stockée (UI) gagne**, l'env est un bootstrap consulté quand le stored est `NULL`, le défaut est le plancher. Pour `default_model` il n'y a **pas de défaut codé** — le tier `default` est *nul* (= modèle du compte, aucun `--model`). _Éviter_ : « l'env gagne » (rendrait la page no-op pour les opérateurs qui l'utilisent).
-- **API** : `GET /settings` renvoie par champ `{ effective, source, stored, env, default }` (`source ∈ {stored, env, default}`) — assez riche pour que l'UI **révèle** un env masqué (« `PDO_SESSION_CAP=10` positionné mais surclassé par 30 »). `PUT /settings` écrit le seul tier `stored`, valide **fail-fast** (rejet `400` : cap `< 1`, TTL `< 1`, timeout hors `[1, 600]` s — pas de retombée silencieuse sur le défaut comme le parseur d'env). `default_model` échappe à cette validation numérique (texte libre, *sharp tool*) : la **chaîne vide** est le sentinelle de *clear* (normalisée en `NULL`), jamais un `400`. `GET /sessions` (barre de statut) reste inchangé.
-- **Prise d'effet sans redémarrage** : **les quatre réglages sont lus frais**, aucun n'est figé au boot — le reaper TTL est relu *dans* le corps de la boucle de balayage (ADR-0015 D5, #129), le cap par chaque décision d'admission, le timeout guard par tick, le `default_model` par spawn de node. Il n'existe donc **aucun réglage dont un `PUT` reste no-op jusqu'au redémarrage**. (Cette puce a décrit le contraire pour le TTL jusqu'au 2026-07-31 : une phrase qui documentait un défaut **déjà corrigé** par #129 — même mode d'échec que la phrase périmée du proxy mtime, cf. #290. Repérée en grillant #485, sans lien avec lui.)
-- **Hors scope (frontière ADR)** : « le manager vérifie périodiquement le pipeline » reste **exclu** — réveiller le manager depuis le runtime renverse *Pas de polling actif* (cf. *Pipeline Manager*) et touche l'origine-de-l'autonomie d'ADR-0012 ; décision humaine/ADR séparée.
+- **Store** : table SQLite singleton (même justification que les Triggers : config + état mutable, mauvais fit YAML).
+- **Réglages** : cap de sessions, reaper TTL, timeout du guard de Trigger, `default_model`, `default_sandbox`.
+- **Précédence `stored → env → default`** : la valeur **stockée (UI) gagne**, l'env est un bootstrap. _Éviter_ : « l'env gagne » (rendrait la page no-op pour ses propres opérateurs).
+- **Prise d'effet sans redémarrage** : tous les réglages sont lus frais — aucun `PUT` n'est no-op jusqu'au redémarrage.
+- **Frontière** : « le manager vérifie périodiquement le pipeline » reste exclu — réveiller le manager depuis le runtime renverse *Pas de polling actif* et l'origine-de-l'autonomie d'ADR-0012.
 
 ---
 
@@ -888,835 +584,215 @@ Réglages **daemon-wide** — ils s'appliquent à *toutes* les Runs/Triggers d'u
 
 ### Modèle d'exécution
 
-Chaque NodeRun = **une session tmux détachée** créée par le daemon (`tmux new-session -d -s <name>`). Le contenu de la session est Claude Code en mode interactif, lancé avec le prompt augmenté du Node. Conventions de nommage :
+Chaque NodeRun = **une session tmux détachée** créée par le daemon, contenant Claude Code en mode interactif avec le prompt augmenté. Nommage :
 
 - NodeRun : `pdo-<run-id>-<node-id>-iter-<N>`.
-- Manager : `pdo-mgr-<run-id>` (cf. section *Pipeline Manager*).
-- Shell de run : `pdo-shell-<run-id>` (cf. sous-section *Shell de run*, #316).
+- Manager : `pdo-mgr-<run-id>`.
+- Shell de run : `pdo-shell-<run-id>`.
 
-Les sessions sont **invisibles à l'utilisateur** par défaut — pas de fenêtre OS qui s'ouvre. Elles tournent en arrière-plan et survivent au crash de l'UI ou du daemon (le runtime peut récupérer leur état au redémarrage).
+Les sessions sont invisibles par défaut, survivent au crash de l'UI ou du daemon (récupération au redémarrage).
 
-### Shell de run — « Open session » (#316, ADR-0021)
+### Shell de run — « Open session » (ADR-0021)
 
-**Shell de run** *(terme)* : un **bash interactif ad-hoc** (`bash -i`, pas une REPL Claude Code) spawné à la demande dans une session tmux dédiée `pdo-shell-<run-id>`, cwd = le **worktree pipeline** du Run (`<repo>/.pdo/runs/<run-id>/worktree/`). Sert à inspecter/déboguer un Run post-mortem (lire les fichiers, `git log`/`git diff`, relancer un test). _Éviter_ : « session » tout court (= session tmux NodeRun), « manager » (= REPL conversationnelle attachée au Run), « terminal » (= le pont xterm.js d'attache).
+**Shell de run** *(terme)* : un **bash interactif ad-hoc** (pas une REPL Claude Code) spawné à la demande dans `pdo-shell-<run-id>`, cwd = worktree pipeline. Sert à inspecter/déboguer un Run post-mortem. _Éviter_ : « session » tout court (= NodeRun), « manager » (= REPL conversationnelle), « terminal » (= le pont d'attache).
 
-- **Action « Open session »** dans la liste de Runs (à gauche), visible uniquement sur les Runs **terminaux non-archivés** dont le worktree existe encore (= un *Reapable run*). Gate serveur : `is_terminal() && ≠ Archived && worktree_dir_for_run(...).exists()` (source de vérité — le client n'a pas le chemin worktree, il gate sur le seul `status`). Les Runs **live** (`Running`/`AwaitingUser`/`Paused`) sont exclus au MVP : un edit concurrent dans le worktree pipeline casserait le `git merge` d'un `node_done` en vol.
-- **Un seul shell par Run**, create-if-absent (`pdo-shell-<run-id>` fixe ; re-clic = ré-attache). Endpoint `POST /sessions/{run_id}/shell` → `{ ok, session, created }` ; **ne crée pas d'événement, ne mute pas la projection** (donc pas un `run_command` kind — une opération side-band comme `session_attach`). L'attache se fait par le `WS /sessions/<session>/pty` existant + le composant `TmuxTerminal` (inline xterm.js, ADR-0005 ; le spawn OS reste l'escape hatch « détacher »).
-- **Persistant**, comme le Manager : survit à la fermeture du terminal, reapé **uniquement** si le Run est absent ou archivé (bras `Shell` du *balayage d'orphelins*, miroir du bras Manager, **sans TTL**), tué par `cleanup_run` à l'archivage. Marker reaper `__shell__`, iter 0. **Le tail est une boucle de respawn `while true; do bash -i; sleep 0.2; done`, pas un `exec bash -i` nu** : un `bash -i` sort sur EOF (Ctrl-D, `exit`, ou un EOF poussé dans le pane à la coupure du WS) et, étant la seule fenêtre, emporte toute la session — le bug de persistance de l'itération 1 (contrairement à `claude`/`sleep` qui ne sortent pas sur EOF). La boucle rend le pane indépendant d'un bash donné (respawn dans le même pane, scrollback conservé) ; corollaire : `exit`/Ctrl-D ne ferme pas la session, il ouvre un shell frais. Garde : `tests/run_shell.rs::shell_survives_eof_and_exit` (ADR-0021 #4).
-- **Exempt du cap** (§ *Cap de sessions concurrentes*), par construction : pas un nœud projeté, n'appelle pas la gate d'admission — exactement comme le Manager.
-- **Sûreté env** : le shell passe par `wrap_with_env` → exporte `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`. Sans ça, un `claude` tapé dedans 409/SIGKILL les sessions vivantes du compte (cf. commentaire `wrap_with_env`). Le spawn **ignore** `tmux_cmd_override` (bash déterministe, comme un node `script`).
-- **Interlock resume** : `resume_run` (Halted/Failed résumables) tue le shell best-effort **avant** de ré-armer le scheduler — un writer concurrent dans le worktree pipeline casserait le merge / la garde doc-only. Refuser (409) déadlockerait (le shell ne meurt que sur archive).
+Visible uniquement sur les Runs terminaux non-archivés dont le worktree existe (*reapable*). **Un seul shell par Run**, create-if-absent, persistant (sans TTL), tué par `cleanup_run`. Exempt du cap. `resume_run` le tue best-effort avant de ré-armer le scheduler (un writer concurrent casserait le merge). Détails → ADR-0021.
 
 ### Cap de sessions concurrentes (admission control)
 
-Borne globale, daemon-wide, sur le nombre de **sessions NodeRun (Claude Code)** vivantes simultanément — la ressource qui s'effondre réellement (cf. tmux-collapse, #77/#78). S'applique à *tous* les Runs, manuels comme déclenchés (les Triggers ne font qu'exposer le besoin).
+Borne globale sur le nombre de **sessions NodeRun vivantes** — la ressource qui s'effondre réellement (tmux-collapse, #77/#78).
 
-- **Définition de « session vivante » (#215)** : un nœud `Running`/`AwaitingUser` ne compte que s'il appartient à un **Run lui-même vivant** (`Running`/`AwaitingUser`/`Paused`). Un nœud resté `Running`/`AwaitingUser` dans un Run **terminal** (`Completed`/`Failed`/`Halted`, ou `Archived`) ne tient plus de session par construction (les sessions sont reapées à l'entrée terminale, #205) : le compter serait un artefact de projection qui ampute le cap d'un slot fantôme à vie. Le compteur (`count_live_node_sessions`) filtre donc sur la *liveness du Run*, pas seulement sur `≠ Archived`. (Le `RunStatus` terminal est `Completed`/`Failed`/`Halted` — il n'existe pas de `RunStatus::Stopped` ; `Stopped` est un statut de *nœud*.)
-- **Admission par spawn de nœud**, pas par Run : quand le scheduler veut spawner un NodeRun et que `live_sessions + 1 > cap`, le nœud passe en état **`waiting`** jusqu'à libération d'un slot, puis spawn. Le Run est admis immédiatement ; ce sont les *nœuds* qui s'étranglent.
-- **Les sessions Pipeline Manager ne comptent pas** dans le cap (légères, 1/Run ; les compter risquerait un soft-deadlock où N managers saturent le budget sans laisser de slot au travail réel).
-- **Valeur configurable** via la *Configuration d'instance* (page de réglages instance-wide ; #129, ADR-0015). Précédence `stored → env → default` : la valeur UI surclasse `PDO_SESSION_CAP`, lue frais à chaque décision d'admission (prend effet sans redémarrage).
-- **Compteur de sessions** dans la **barre de statut basse** (avec les autres infos techniques), ex. « 7/10 », vire à l'ambre à l'approche du cap pour rendre le throttling lisible avant qu'il morde. C'est une **gauge instantanée** (sessions *vivantes* à l'instant T, au plus une par nœud) — **à ne pas confondre** avec la stat **« Sessions de nœud lancées »** d'un Run (total *cumulatif* des `NodeStarted`, cf. *Statistiques de Run* dans le cycle de vie).
-- **Admission atomique (check-and-reserve, #213)** : la décision d'admission (compter les sessions vivantes → décider → réserver le slot en appendant `NodeStarted`/`NodeWaiting`) est sérialisée par un verrou (`admission_lock`). Sans lui, des spawns concurrents (retries des nœuds `waiting` sur plusieurs Runs) observent tous le même slot libre et dépassent le cap.
-- **Le slot qu'un spawn REPREND ne compte pas contre lui (#489, ADR-0037 §8)** : le comptage n'est pas « sessions vivantes » tout court, c'est « sessions vivantes **moins celle que ce spawn même est en train de remplacer** ». `restart_node` tue la session d'un nœud puis re-spawne la **même** itération sans appender d'événement de cycle de vie entre les deux : le nœud projette encore `Running`, donc à `live == cap` le restart se throttlait **contre lui-même**, déterministiquement — et le gel était définitif (aucun timer sur `retry_waiting_nodes`, `resume_run` no-op sur un throttlé, boot recovery aveugle au `Waiting`, bouton Stop en `409`). La clé d'exclusion est le **triplet `(run_id, node_id, iter)`** : le comptage est global à tous les Runs alors que les ids de nœuds sont **locaux au pipeline**, donc une clé `(node_id, iter)` écarterait l'`implementer` vivant d'un **autre** Run du même pipeline et **dépasserait** le cap. L'exclusion ne mord que si ce triplet détient réellement une session, et elle est calculée **sous le verrou d'admission**. `GET /sessions` et la gauge de la barre de statut continuent de rapporter le compte **vrai**, sans exclusion.
-- **`kill_node` réveille les `waiting`** (#489) : libérer un slot ne re-drivait aucun nœud throttlé depuis la surface commandes. Les bras halt/pause et le boot recovery ont le même trou, ouvert et fiché.
+- **« Session vivante »** (#215) : un nœud `Running`/`AwaitingUser` dans un **Run lui-même vivant**. Un nœud session-holding dans un Run terminal est un artefact de projection, pas une session.
+- **Admission par spawn de nœud**, pas par Run : au cap, le nœud passe **`waiting`** jusqu'à libération d'un slot. Le Run est admis immédiatement ; ce sont les nœuds qui s'étranglent.
+- **Les sessions Manager ne comptent pas** (légères ; les compter risquerait un soft-deadlock).
+- **Configurable** (Configuration d'instance), gauge dans la status-bar (ambre à l'approche du cap) — à ne pas confondre avec la stat cumulative « sessions lancées » d'un Run.
+- **Admission atomique** (check-and-reserve sous verrou, #213), et **le slot qu'un spawn reprend ne compte pas contre lui** (ADR-0037 §8 — sinon un `restart_node` à cap plein se throttlait contre lui-même, gel définitif). Libérer un slot (`kill_node`) réveille les `waiting`.
 
-### Cycle de vie process — résilience (fail-fast, #213)
+### Cycle de vie process — résilience (fail-fast)
 
-Posture **fail-fast** partout : jamais d'auto-réparation silencieuse, toute divergence est rendue visible (état `Failed` avec cause lisible). Toutes les transitions vers `Failed` émises ci-dessous passent par la **garde de transitions** (#212).
+Posture **fail-fast pour ce que le runtime sait** : toute divergence constatée est rendue visible (`Failed` avec cause lisible), et le runtime **refuse de conclure sur ce qu'il ne sait pas** (ADR-0032).
 
-**Amendement #469 (ADR-0032), à lire avant tout le reste de cette section.** La posture vaut pour ce que le runtime *sait*, et refuse désormais de conclure sur ce qu'il ne sait pas. Depuis #469, un agent **vivant mais wedgé** (prompt interactif, menu #290, retries API épuisés) est une divergence **ni visible ni `Failed`** : il garde son slot indéfiniment. C'est un arbitrage assumé, pas un trou — le seul verdict terminal de liveness est la **mort de session**, parce que le proxy qui prétendait détecter « sans progrès » (mtime du transcript, seuil 120 s) tuait des agents parfaitement sains dès qu'un appel d'outil dépassait deux minutes (`docker build`, `cargo test --workspace` : cinq trous au-dessus du seuil dans *un seul* nœud sain mesuré). Un faux positif coûtait un Run entier ; un slot occupé est un coût borné et visible, et le nœud reste `Running`, sa session attachable et son pane lisible. **Correction (#489)** : la version antérieure de cette phrase invoquait « les boutons Stop/Retry de l'humain » comme sortie de secours. Ces deux boutons vivent dans la bannière **`stale`** du panneau de nœud, donc justement **pas** affichée sur le nœud `Running`-wedgé que la phrase décrit — et depuis #469 lui-même plus rien ne produit `NodeStale`. La sortie de secours invoquée n'existait pas pour le cas invoqué. Les leviers réels sont : les commandes du manager (`kill_node`, `restart_node`) et la route par nœud `POST …/stop`. Lire ADR-0032 avant de « reboucher » ce qui ressemble à un stall silencieux.
-
-- **Résilience du balayage (#251)** : les trois boucles background (scheduler de Triggers, stale detector, reaper) partagent une frontière d'isolation commune (`run_isolated`) : un panic pendant un balayage est **contenu** (frontière `tokio::spawn`) — la boucle survit et le balayage suivant rattrape. Sans cela, un seul panic dans le stale detector (un `unwrap` égaré, un cas limite de `project`, un chemin mal formé) tuait silencieusement *toute* la détection (stall/idle/mort de session) pour le reste de la vie du daemon : c'était la cause-racine du stall silencieux où le daemon affichait `running` indéfiniment sans rien détecter. `GET /stale/health` expose `last_tick_at` + l'intervalle (sœur de `GET /triggers/health`, #222), pour qu'un stale detector mort/bloqué soit observable — et pour distinguer, à la prochaine récidive, un balayage mort (heartbeat figé) d'un ratage de sonde par nœud (heartbeat qui avance).
-- **Détection de mort de session (liveness sweep)** : le stale detector sonde, à chaque tick, chaque nœud `Running`/`AwaitingUser` ; si sa session tmux n'existe plus, le nœud passe `Failed` avec une cause **nommant la session** (`session_died: tmux session pdo-… no longer exists`). Plus de nœud zombie qui brûle un slot d'admission indéfiniment (#202). **C'est le seul verdict terminal de liveness** (#469, ADR-0032 §1), et il est exact par construction plutôt que par heuristique : `wrap_with_env` puis `build_agent_tail` émettent un **double `exec`**, donc le processus `claude` *est* le leader du pane, seul window de la session — il sort, la session meurt. Idem en sandbox (le pane porte le client `docker exec`). Corollaire : il n'existe **plus aucun seuil d'idle** dans le daemon, et le mot « stale » ne décrit plus qu'un statut de nœud **historique**.
-- **Complétion automatique sur fin de tour (#469, ADR-0032 §2)** — le seul chemin par lequel le runtime peut terminer l'itération d'un nœud *vivant*, et il est **décoché par défaut**. Le vrai danger que le seuil d'idle prétendait couvrir n'est pas une mort : `claude --dangerously-skip-permissions "<prompt>"` ne sort pas à la fin d'un tour, il reste dans le REPL. Un agent qui a fini sans appeler `pdo complete` est donc **vivant et immobile**, et il a une signature *positive* dans son transcript, que `stale_detector::parse_turn_state` lit sur les 256 derniers Ko du `.jsonl` : quatre états dont **un seul actionnable** — `InToolCall` (un `tool_use` sans `tool_result` : l'agent est *dans* un appel d'outil, quelle que soit la durée du silence), `AwaitingAssistant` (dernier record substantiel = `user`/`tool_result` : l'assistant doit encore répondre — **c'est le cas des retries API épuisés, #251**), `TurnEnded` (dernier substantiel = message `assistant`, aucun `tool_use` pendant), `Unknown` (rien de parsable, ou un seul record dépassant la fenêtre). Un **record substantiel** porte un objet `message` de `role` `assistant`/`user` : un « regarde la dernière ligne » naïf lit un des records de métadonnées non horodatés que CC écrit en queue (`last-prompt`, `ai-title`, `mode`, `permission-mode`) et ne conclut rien. **`Unknown` se comporte comme « au travail »** — à signal absent, on ne touche à rien.
-  - **Deux gardes indépendantes, toutes deux obligatoires** : `TurnEnded` **et** outputs valides. La seconde couvre l'agent qui termine son tour pour *poser une question* (tour fini, travail pas fini). Un **anti-rebond** de 60 s depuis la dernière écriture précède les deux : la mtime du transcript survit dans **ce seul rôle**, et ce n'est plus un oracle de vivacité.
-  - **L'action passe par le même chemin que `POST …/done`** (`complete_node_iteration`, dont le handler HTTP n'est plus qu'un adaptateur) : refus « run oublié » (#328), garde de complétion (#212/#354), **`commit_and_merge_sub_worktree_inner`**, garde doc-only, validation d'outputs, puis l'append terminal et la queue détachée (#304/ADR-0023). Un append direct produirait, sur un nœud `code-mutating`/`merge`, un `Completed` avec le commit resté sur `pdo/sub-…` et l'aval qui ne reçoit rien. L'événement est `NodeAutoCompleted` — projeté comme une complétion, mais le log doit dire qu'elle est automatique.
-  - **Réglage** : global instance, patron ADR-0015 (`stored → env PDO_AUTOCOMPLETE_TURN_END → default(false)`), libellé sur ce qui est **mesuré** et jamais sur une durée, **lu une fois par balayage** et non au boot (précédent du TTL reaper, #129) — un basculement prend effet en moins de 30 s sans redémarrage. Décoché, **aucune lecture de transcript** : le chemin par défaut se réduit à un `session_exists` par nœud, donc moins cher qu'avant #469 (qui payait un `read_dir` plus une validation d'outputs par nœud et par tick). C'est l'application directe d'ADR-0012 : une action durable initiée par le runtime se mérite.
-  - **Ce que ça ne détecte pas, volontairement** : « Bloqué ». Un agent sur un prompt interactif garde un `tool_use` pendant ; un nœud coincé sur le menu de limite d'usage (#290) est en `AwaitingAssistant`. Ni l'un ni l'autre ne sera jamais complété. Le format JSONL de CC n'est pas un contrat documenté — même précaution que les ancres de pane de #290, même si les blocs `tool_use`/`tool_result` et leurs `id` en sont la partie la plus stable.
-- **Reap sur état terminal (#205)** : à l'entrée d'un état terminal (`completed`/`failed`/`stopped`), un **snapshot du pane** est persisté sous `…/runs/<run>/nodes/<node>/pane-iter-<N>.snapshot` (hors du sous-worktree, donc il survit à sa suppression), **puis** la session est tuée. Invariant : **au plus une itération live par nœud** côté tmux. `GET …/pane` sert le snapshot quand la session est partie et l'indique via `source: "snapshot"` (vs `"live"` / `"resumed"` / `"unavailable"`). Plus de sessions qui s'accumulent vers le point d'effondrement (#77/#78).
-  - **Ce que l'invariant ne couvre pas (2026-07-30)** : la phrase ci-dessus vaut pour les chemins **terminaux** — `done`/`fail`/`skip`, bouton Stop, veille de liveness, et le bras `kill_node` de la surface commandes. Deux classes de trous voisines restent ouvertes : les kills nus **non terminaux** (`restart_node`, `node_retry` → #487), dont un snapshot serait écrit mais jamais servi (`GET …/pane` ne sert un snapshot que sur une itération **terminale**, et ces deux gestes laissent le nœud non terminal — de surcroît le chemin est réécrit à l'`iter` identique, sur la **même branche de sous-worktree** que le restart ne reape pas, ou la ligne d'itération est effacée par `NodeInvalidated`) ; et la **terminalité au niveau Run** (conflit de merge, `RunHalted`, échec de prep sandbox), qui laisse des nœuds `Running` avec leur session **vivante** — un leak, pas une preuve perdue.
-- **Balayage d'orphelins (#485, ADR-0038)** : périodiquement (et une fois au boot), le daemon inventorie les sessions tmux de son socket privé et tue celles qu'il juge orphelines — trois motifs, et trois seulement : le Run est **absent** du log, le Run est **archivé**, ou c'est une session de nœud dont l'itération a **complété il y a plus que le reaper TTL** (ce dernier bras ne vaut que pour les nœuds : ni le Manager, #458, ni le shell de run, #316, n'ont de TTL). Le verdict **« absent » est rendu sur un log lu *après* l'inventaire, jamais avant** : le log ne fait que croître, donc une absence constatée après l'inventaire garantit une absence *au moment* de l'inventaire, et une session née entre les deux est simplement hors du jeu jugé — elle sera examinée au balayage suivant, réservation visible. La monotonie ne travaille que dans ce sens ; l'ordre inverse n'a pas de preuve symétrique, et c'est lui qui a coûté **deux Runs en une nuit** (le 2026-07-30) : le daemon tuait la session qu'il venait de spawner, 150 ms plus tôt, puis imputait la mort à tmux sous un `session_died` parfaitement crédible. **L'ordre ne suffit pas seul** — il repose sur un invariant qui appartient au **spawn** : *aucune session tmux n'existe avant que l'événement qui la réserve soit durablement enregistré*. Le balayage en est le consommateur, pas le propriétaire ; tout nouveau chemin de spawn doit réserver avant de spawner, sous peine de livrer au reaper une session qu'il tuera légitimement. Ce que le balayage ne décide **pas** : *qui* est un orphelin (les trois motifs sont inchangés depuis #205/#316/#458) ; il décide **comment on le sait**. Ce qu'il ne répare **pas** : le sous-worktree et la branche d'une session tuée **survivent**, et leur collision au respawn condamne le nœud (#498, dont ce balayage n'était que le producteur principal). Observabilité : `GET /sessions` porte `reaper: { last_sweep_at, killed, killed_for_absent_run }`, les deux compteurs **cumulés depuis le boot** — un kill est un *événement*, donc il se compte ; le remettre à zéro à chaque passe (ce que fait à raison `blocked_on_limit`, qui est un *niveau*) rendait la réponse « le reaper a-t-il tué mon nœud ? » ~toujours `0`, la passe qui tue étant suivie en quelques secondes d'une passe à vide. `killed_for_absent_run` doit rester **plat** — et c'est précisément le cumul qui rend l'affirmation vérifiable (plat = *jamais incrémenté*, non pas *dernière passe oisive*) — puisqu'après #485 une absence sur une session vivante est un « ne peut plus arriver ». Les compteurs ne sont **pas persistés** (un redémarrage les remet à zéro) et restent instance-wide : « *qui* a tué mon nœud » demanderait un événement, et `journalctl` garde le détail par session — les kills d'absence y sont en `warn!`, le ménage nominal (archivé, TTL) reste en `info!`.
-- **Recovery au boot** : au démarrage, le daemon réconcilie l'état persisté avec le monde process réel. Un nœud `Running`/`AwaitingUser` sans session vivante → `Failed` avec cause. Une branche de sous-worktree mergée dans la branche pipeline sans `NodeCompleted` correspondant → divergence **détectée et signalée** (jamais complétée en silence). De même, un nœud resté `Running`/`AwaitingUser` dans un Run **déjà terminal** (le boot recovery « live-run » ne le couvrait pas) est réconcilié vers `Failed` avec une cause nommant la situation (`run terminal: node left session-holding`), de sorte que la projection soit cohérente et qu'aucun slot fantôme ne subsiste après redémarrage (#215).
-- **Réconciliation au niveau Run (#214)** : la recovery par nœud ci-dessus ne couvre pas le cas **run-level**. Un Run resté `Running` mais **sans aucun nœud vivant** (`Running`/`Waiting`/`AwaitingUser`), **sans merge resolver actif**, et où l'ordonnanceur ne peut produire **aucune action** (aucun nœud `ready`, aucune boucle à amorcer) est un **stall silencieux** — typiquement coincé derrière un nœud terminal non-`Completed` (`Failed`/`Stopped`, ou `Stale` pour un Run **historique** — depuis #469 rien ne produit plus ce statut, cf. ADR-0032 §1) dont l'aval ne pourra jamais être schedulé. Il est réconcilié vers `Failed` avec une cause `run_stalled: …` nommant le(s) nœud(s) bloquant(s), **au boot ET à chaque balayage périodique** du stale detector, au lieu de rester `Running` pour toujours. Garde-fous (jamais de faux positif) : tout statut ≠ `Running` est ignoré (`AwaitingUser` attend un humain, `Halted`/`Paused`/terminal n'ont rien à réconcilier) ; une **région de boucle/foreach ouverte** (non-`done`) n'est jamais auto-failée — un état « exhausted — unrouted » est routé par le Pipeline Manager, pas un fail-fast ; le cas « tous les nœuds `Completed` » reste géré par la complétion normale.
-  - **Nuance de vocabulaire à ne jamais collapser** : le « nœud vivant » du *stall* inclut `Waiting` (`Running`/`Waiting`/`AwaitingUser`) — un nœud throttlé avancera dès qu'un slot se libère, donc le compter évite un faux stall ; la « session vivante » de l'*admission* (§ Cap) l'exclut (`Running`/`AwaitingUser` seulement — un `Waiting` ne tient pas encore de session tmux). Ce sont **deux prédicats distincts, jamais un seul** : « tient une session » (admission) ≠ « peut encore progresser » (stall). Les unifier re-créerait un faux positif (un Run `Waiting`-derrière-blocage serait faussement `run_stalled`→`Failed`).
-- **Blocage sur menu de limite d'usage (#290)** : un troisième état « vivant mais sans progrès », distinct de la mort de session et du stall run-level. Quand la session Claude Code d'un nœud atteint la limite 5 h **en cours de tour**, CC affiche un **menu interactif bloquant** dans le pane (« Stop and wait for limit to reset / Switch to usage credits ») et attend une frappe qui ne vient jamais. La session tmux reste vivante (donc ni `session_died` ni, faute de progrès, une transition terminale) : ni la sonde de liveness ni le proxy de fraîcheur (mtime du `.jsonl`) ne le voient. Le stale detector **lit donc le contenu du pane** (`tmux capture-pane`) pour les nœuds jugés `Ok`, et sur reconnaissance du menu émet un événement **informationnel** `NodeBlockedOnLimit` (no-op de projection, comme `PipelineLint` — le nœud **reste `Running`**) et incrémente un compteur `blocked_on_limit` exposé par `GET /stale/health`. L'ancre textuelle du menu n'est pas documentée officiellement et **dérive** selon la version de CC : la détection est **best-effort / observabilité seule** (un ratage = statu quo, un faux positif = un événement inoffensif), volontairement scopée ainsi (#290 Slice 1). La **récupération** (auto-dismiss + attente + re-nudge, ou état `blocked_on_limit` first-class libérant le slot) et l'**échappatoire de concurrence** pour les pipelines à la minute restent des décisions humaines (action durable initiée par le runtime → ADR-0012) — Slices 2 et 3. NB (corrigé deux fois) : la phrase « le proxy mtime est de toute façon inerte sur les vrais runs » était vraie jusqu'à #373 (2026-07-23), qui a réparé `encode_working_dir` et **rendu le seuil vivant** — c'est cette phrase périmée qui a masqué le risque pendant six jours, jusqu'à ce qu'un `docker build` tue un Run (#469). Depuis #469 il n'y a plus de proxy mtime **du tout** : le seuil et ses verdicts sont supprimés (ADR-0032 §1). Le détecteur de menu lit le pane directement et n'a jamais rien dû à la mtime. Il reste par ailleurs le seul à voir ce blocage : la complétion automatique sur fin de tour (ci-dessous) ne peut pas confondre un nœud coincé sur ce menu avec un nœud fini, la limite tombant en *demandant* le message assistant suivant (état `AwaitingAssistant`).
+- **Le seul verdict terminal de liveness est la mort de session** (ADR-0032) : la session tmux d'un nœud `Running`/`AwaitingUser` n'existe plus ⇒ `Failed` avec cause nommant la session. Exact par construction (le process agent est le leader du pane : il sort, la session meurt). Il n'existe **plus aucun seuil d'idle** : le proxy « sans progrès » (mtime, seuil 120 s) tuait des agents sains dès qu'un appel d'outil dépassait deux minutes — un faux positif coûtait un Run entier, un slot occupé est un coût borné et visible. Conséquence assumée : un agent **vivant mais wedgé** (prompt interactif, menu de limite, retries épuisés) garde son slot indéfiniment ; les leviers sont humains (`kill_node`, `restart_node`, stop). Le mot « stale » ne décrit plus qu'un statut historique.
+- **Complétion automatique sur fin de tour** (ADR-0032 §2, **opt-in, décoché par défaut**) : le seul chemin par lequel le runtime peut terminer l'itération d'un nœud *vivant*. Un agent qui a fini sans appeler `pdo complete` reste dans le REPL, vivant et immobile, avec une signature positive dans son transcript. Deux gardes obligatoires : tour terminé **et** outputs valides (couvre l'agent qui termine son tour pour *poser une question*). Signal illisible ⇒ « au travail », on ne touche à rien. Passe par le même chemin que `pdo complete` (merge du sous-worktree compris) ; l'événement dit que la complétion est automatique. Application directe d'ADR-0012 : une action durable initiée par le runtime se mérite.
+- **Reap sur état terminal** (#205) : à l'entrée d'un état terminal, un **snapshot du pane** est persisté (il survit à la suppression du sous-worktree), **puis** la session est tuée. Invariant : au plus une itération live par nœud côté tmux.
+- **Balayage d'orphelins** (ADR-0038) : périodiquement et au boot, le daemon tue les sessions de son socket dont le Run est **absent** du log, **archivé**, ou dont l'itération a complété au-delà du reaper TTL (nœuds seulement : ni Manager ni shell n'ont de TTL). Le verdict « absent » est rendu sur un log lu **après** l'inventaire — l'ordre inverse a tué des sessions fraîchement spawnées sous un `session_died` crédible. L'ordre repose sur un invariant qui appartient au **spawn** : aucune session n'existe avant que l'événement qui la réserve soit durablement enregistré ; tout nouveau chemin de spawn doit réserver avant de spawner. Le sous-worktree d'une session tuée **survit** (collision au respawn → #498).
+- **Recovery au boot** : réconciliation de l'état persisté avec le monde process réel — nœud vivant sans session ⇒ `Failed` avec cause ; branche mergée sans complétion correspondante ⇒ divergence signalée, jamais complétée en silence ; nœud session-holding dans un Run terminal ⇒ réconcilié (#215).
+- **Réconciliation run-level** (#214) : un Run `Running` sans aucun nœud vivant ni action possible est un **stall silencieux**, réconcilié vers `Failed` avec une cause nommant le(s) nœud(s) bloquant(s) — au boot et à chaque balayage. Garde-fous : une région de boucle ouverte n'est jamais auto-failée ; `AwaitingUser` attend un humain. **Nuance à ne jamais collapser** : le « nœud vivant » du *stall* inclut `Waiting` (un throttlé avancera) ; la « session vivante » de l'*admission* l'exclut (un `Waiting` ne tient pas de session). Deux prédicats distincts : « tient une session » ≠ « peut encore progresser ».
+- **Blocage sur menu de limite d'usage** (#290) : la session est vivante mais coincée sur un menu interactif — invisible pour la sonde de liveness. Le détecteur lit le pane et émet un événement **informationnel** (le nœud reste `Running`), best-effort (l'ancre textuelle dérive avec les versions de CC). La récupération automatique reste une décision humaine différée (ADR-0012).
 
 ### Pont UI ↔ tmux : terminal inline xterm.js
 
-ADR-0005. L'option A historique (preview read-only + spawn d'une fenêtre OS native) est **obsolète**. Mécanisme actuel :
+ADR-0005. **Terminal interactif inline** dans le panneau de détail du nœud (WebSocket ↔ PTY ↔ `tmux attach`), bidirectionnel, temps réel. Icônes : **agrandir** (plein cadre) et **détacher** (fallback opt-in vers une fenêtre OS native — escape hatch).
 
-- **Statut** (pending / running / awaiting_user / done / failed / blocked) — projeté depuis l'event log.
-- **Terminal interactif inline** dans le panneau de détail du nœud, rendu via xterm.js. Le daemon expose `WS /sessions/<id>/pty` : pour chaque connexion, il spawn `tmux attach -t <session>` dans un PTY (crate `portable-pty`) et bridge les bytes I/O entre le browser et le PTY. Bidirectionnel : l'utilisateur tape dedans, voit la sortie en temps réel. Plus de polling 1-2 s — la WebSocket pousse.
-- **Icônes du panneau** : (1) **agrandir** — le terminal occupe tout l'espace vertical du panneau de détail ; (2) **détacher** — fallback opt-in qui spawn une fenêtre OS native (`gnome-terminal`/`konsole`/`Terminal.app`/`kitty`) attachée à la session via `tmux attach`. Garde un escape hatch pour les cas limite (copy-paste exotique, freeze WebSocket).
-- **« agrandir » est toujours un geste utilisateur explicite (#270)** : ni la sélection d'un nœud, ni l'auto-snap sur le nœud vivant à l'entrée d'un Run live n'agrandit le terminal de lui-même. On garde l'auto-sélection du nœud vivant ; seule l'expansion forcée est retirée. Un réglage rendant l'auto-agrandissement opt-in est différé : la *Configuration d'instance* existe (#129, ADR-0015) mais ce toggle terminal-spécifique reste hors du scope MVP de #129.
-- **Trois états d'affichage du terminal** (#346) : `split` (terminal ~45 % / panneau de détail ~55 %, défaut d'une node vivante), `agrandi` (terminal plein cadre, geste utilisateur), et `réduit` — l'encart terminal se replie en une fine barre et les **Outputs** prennent toute la hauteur. `réduit` est le **défaut au clic sur une node à session terminée** (`completed`/`failed`/`stopped`, ou run archivé) : une fois la session finie, les outputs priment. Il exclut `stale`-non-archivé (session encore vivante, récupérée *dans* le terminal) et `awaiting_user`/`running` (interaction requise). Le terminal réapparaît en `split` via « agrandir » (barre) ou Retry. C'est un défaut au **montage** (pas de repli réactif : une node qui se termine sous les yeux ne se replie pas), cohérent avec « agrandir = geste explicite » (#270). En `réduit`, `TmuxTerminal` n'est **pas monté** (session morte → pas de WebSocket) : sous-arbre déclaratif séparé, hors du `ResizablePanelGroup`, ce qui laisse le chemin vivant (split/agrandi) et son invariant de non-remontage intacts.
+- **« Agrandir » est toujours un geste utilisateur explicite** (#270) : ni la sélection d'un nœud ni l'auto-snap n'agrandit d'eux-mêmes.
+- **Trois états d'affichage** (#346) : `split` (défaut d'une node vivante), `agrandi` (geste), `réduit` (défaut au clic sur une node à session terminée — les outputs priment). Défaut au **montage**, pas de repli réactif.
 
-Détection du terminal natif (pour l'icône détacher) : variable `PDO_TERMINAL` ou heuristique sur `$TERM_PROGRAM` / OS / `which`.
-
-Multi-client par session (deux onglets browser sur la même session tmux) : gratuit côté tmux, pas à coder. Sécurité : origin check sur la WebSocket pour éviter le DNS-rebinding (le daemon écoute sur `127.0.0.1` mais ce n'est pas suffisant en soi).
+Multi-client par session : gratuit côté tmux. Sécurité : origin check sur la WebSocket (anti DNS-rebinding).
 
 ### Nœuds interactifs — signal de complétion
 
-Un Node marqué `interactive: true` spawn une session tmux normale, et **n'auto-complète jamais**. La session reste attachable indéfiniment ; l'utilisateur peut détach/réattacher autant de fois que nécessaire et continuer à interagir.
+Un Node `interactive: true` spawn une session normale et **n'auto-complète jamais**. La complétion est signalée **depuis l'UI** par un bouton « Mark complete » (pas de slash-command in-session : le bouton reste accessible sans être attaché). Les artefacts présents sur disque sont alors pris tels quels — le préambule le dit à l'agent et au user.
 
-La complétion est signalée **depuis l'UI**, par un bouton "Mark complete" sur le nœud. Click → `POST /runs/<id>/commands { kind: "mark_node_done", node_id, iter }`. Pas de slash-command in-session (un slash-command suppose qu'on est attaché ; le bouton UI reste toujours accessible).
-
-Le bouton **n'est pas une garantie** : il est gaté sur le seul `status` du nœud (`awaiting_user`/`running`/`failed`/`stale`) et `NodeState` ne porte pas `node_type` — il s'affiche donc aussi sur un nœud `script` `failed`. C'est **voulu** : le garde de transition autorise explicitement « mark_node_done sur un nœud failed dont les outputs ont été corrigés à la main » comme chemin de récupération. Le clic peut donc être **refusé** (`409` nommant la cause), et le refus s'affiche au niveau du bouton — cf. *Contrat de refus de la complétion*. Ne pas confondre avec la phrase *« aucun bouton affiché ne peut produire un 409 »* de § *Contrôles de Run*, qui est scopée aux trois actions de **Run** (`pause_run`/`resume_run`/`retry_all`).
-
-À ce moment-là, les artefacts présents sur disque dans `<artifacts>/<node-id>/iter-<N>/` sont considérés comme finaux. Le préambule du nœud le dit explicitement à l'agent et au user : *"écris tes outputs aux chemins X, Y, Z ; quand tu cliques 'Mark complete' dans l'UI, ces fichiers seront pris tels quels"*.
+Le bouton **n'est pas une garantie** : il est gaté sur le seul statut, et le garde autorise explicitement « mark complete sur un nœud failed corrigé à la main » comme chemin de récupération. Le clic peut donc être **refusé** (409 nommé, affiché au niveau du bouton) — cf. ADR-0035.
 
 ---
 
 ## Sandbox (exécution isolée d'un Run)
 
-> Section seedée par #404, complétée par les slices suivantes du PRD #403. Couvert **ici** :
-> staging fs (#404) + **fourniture de l'image** (#405, *Image (fourniture)*) + **exécution /
-> conteneur** (#406, *Exécution (conteneur)*) + **câblage run-advance** (#407 : prep eager fail-fast,
-> wrapping des tails au chokepoint, kill/cleanup/boot/run-shell) fixé par **ADR-0030** (modèle
-> d'exécution : réseau/uid, trou d'auth assumé v1 lié à #260) + **observabilité** (#408 : `merge_back`
-> câblé à la transition terminale + `cleanup_run`, seam `transcripts_root` pour coût/stale) +
-> **mode `full` de bout en bout** (#409 : vérifie `prepare`(allowlist `full`) → conteneur →
-> `merge_back` ; même câblage mode-agnostique que #407, ne diffère de `minimal` que par le seed de
-> `prepare` — deref des symlinks échappants + walk best-effort en sus) + **fourniture hybride de
-> l'image** (#411 : `ensure_image` pull GHCR-puis-retag / fallback build, réglage `image_source`
-> depuis retiré par #471,
-> job release GHCR) + **exposition run-level + sources de config** (#410 : sélecteur tri-état du
-> NewRunModal grisé par la **sonde Docker**, badge + bannière `sandbox_prep`, défaut d'instance
-> `default_sandbox`, défaut par-Trigger `sandbox`, **précédence** résolue par `effective_sandbox`) +
-> **vocabulaire + plancher de garanties** (#426 : tri-état renommé `off` | `minimal` | `full` sans
-> alias, plancher tenu par `prepare` dans les **deux** modes — `remote-settings.json` consenti +
-> `skipDangerousModePermissionPrompt` dans le `settings.json` stagé ; **ADR-0031 §1** + amendement
-> **ADR-0030 §1**).
-
-> **Décidé au grilling 2026-07-24 (ADR-0031), pas encore en vigueur** — livré par les slices
-> **profils** du PRD : les valeurs non-`off` deviennent des noms de **profil de staging** (liste
-> nommée, éditable, sélectionnable par Run et par Trigger), et une **entrée de profil** peut désigner
-> une exception `$HOME` hors `.claude`. Les deux termes concernés portent le même marqueur. Le
-> renommage du tri-état et le plancher de **garanties**, décidés au même grilling, sont **en vigueur**
-> depuis #426.
+Modèle d'exécution (conteneur, mounts, réseau, uid) → **ADR-0030**. Profils de staging et garanties → **ADR-0031**. Ici : le vocabulaire.
 
 **Sandbox** :
-Propriété **par Run**, **immuable après création**, portée par l'événement de création (projetée
-dans l'état du Run). Tri-état `off` | `minimal` | `full` (renommé en #426, ex-`pure`/`copy`, **sans
-alias**) : `off` = comportement historique (sessions sur l'hôte, défaut) ; **tout autre nom** est un
-**profil de staging** (#432) — `minimal` / `full` en sont les deux défauts virtuels — et toutes les
-tails du Run s'exécutent alors dans un conteneur dédié. Le champ n'est donc plus un tri-état fermé
-mais `off | <nom de profil>` : `SandboxMode::parse` est **purement syntaxique** (l'existence d'un
-profil est une question de **base**, tranchée au bord), et un nom inconnu échoue fort partout.
-C'est une propriété de l'**environnement d'exécution**, jamais de la sémantique du pipeline (le YAML
-reste intouché — #403 US-5). Modèle d'exécution (conteneur `pdo-sbx-<run-id>`, identity mounts, uid
-hôte, trou réseau/auth) → **ADR-0030 / #407**. La **source** du mode suit la précédence **choix
-explicite du Run → défaut par-Trigger → `default_sandbox` d'instance** (résolveur pur
-`effective_sandbox`, #410) ; `off` reste le plancher.
-_Éviter_ : « mode conteneur », « isolation » seul (ambigu) ; ne pas confondre avec l'attribut
-`sandbox=""` de l'iframe du port de sortie `html` (#333, ADR-0028) — sans rapport ; « `copy` » /
-« `pure` » (vocabulaire mort depuis #426, aucun alias).
+Propriété **par Run**, **immuable après création**, gelée dans l'événement de création. Valeur `off` **ou un nom de profil de staging** (`minimal` et `full` en sont les deux défauts virtuels) : `off` = sessions sur l'hôte (défaut) ; tout autre nom ⇒ toutes les tails du Run s'exécutent dans un conteneur dédié. C'est une propriété de l'**environnement d'exécution**, jamais de la sémantique du pipeline (le YAML reste intouché). Un nom de profil inconnu **échoue fort** partout, jamais de retombée silencieuse. La source du mode suit la précédence **choix explicite du Run → défaut par-Trigger → défaut d'instance** ; `off` reste le plancher.
+_Éviter_ : « mode conteneur », « isolation » seul ; « copy »/« pure » (vocabulaire mort, aucun alias) ; confondre avec l'attribut `sandbox=""` de l'iframe du port `html` (ADR-0028) — sans rapport.
 
-**Staging dir (répertoire de staging)** :
-Répertoire par Run sous `~/.pdo/sandbox/<run-id>/`, créé au démarrage d'un Run sandboxé et purgé à
-`cleanup_run`. Héberge le *staged Claude home*, un `.claude.json` sibling et un `home/` portant les
-**exceptions `$HOME`** déclarées par le profil (#432). Le vrai `~/.claude`
-n'est **jamais** monté — et l'invariant s'étend au reste de `$HOME` : ce sont toujours des copies
-qui sont montées. Racines home/staging **injectables** (testabilité temp dirs + compat recette HP
-fake-HOME). _Éviter_ : « home copié », « sandbox dir » (collision avec la racine `~/.pdo/sandbox/`).
+**Staging dir** :
+Répertoire par Run sous `~/.pdo/sandbox/<run-id>/`, créé au démarrage d'un Run sandboxé, purgé à `cleanup_run`. Héberge le *staged Claude home*, un `.claude.json` sibling et les exceptions `$HOME` du profil. Le vrai `~/.claude` n'est **jamais** monté — ce sont toujours des **copies** qui sont montées. _Éviter_ : « home copié », « sandbox dir » (collision avec la racine `~/.pdo/sandbox/`).
 
-**Staged Claude home (`claude-home/`)** :
-Sous-répertoire `~/.pdo/sandbox/<run-id>/claude-home/` qui tient lieu de `.claude` aux sessions du
-Run (monté tel quel : `claude-home/` **est** `$HOME/.claude`). Contenu selon le **profil de staging**
-(voir `prepare`).
-Le `.claude.json` vit à côté (`~/.pdo/sandbox/<run-id>/.claude.json`), monté séparément vers
-`$HOME/.claude.json`. _Éviter_ : « fake home », « home miroir ».
+**Staged Claude home** :
+Le sous-répertoire du staging dir qui tient lieu de `.claude` aux sessions du Run. _Éviter_ : « fake home », « home miroir ».
 
-**Profil de staging** :
-Liste **nommée** de ce qu'un Run sandboxé stage dans son home. Le champ sandbox d'un Run, d'un
-Trigger ou de l'instance vaut `off` **ou un nom de profil** — jamais une liste : la précédence
-existante (`effective_sandbox`) et les `<select>` de l'UI restent inchangés. `minimal` et `full`
-sont des **défauts virtuels** (aucune ligne en base) jusqu'à édition. Ce qui est stocké est un
-**diff** d'intention (`disabled` / `extras`), jamais un instantané — sinon une install ne verrait
-plus les évolutions futures du défaut. Le nom **et** la liste résolue sont gelés dans `RunStarted` :
-`prepare` lit l'état du Run, jamais le réglage vivant. Un nom inconnu **échoue fort** (400 à la
-création, tir de Trigger en échec, `RunFailed` en boot recovery), jamais de retombée silencieuse.
-Table `sandbox_profiles` (`name` en clé, `disabled`/`extras` en JSON, `updated_at`) ; **pas de rename
-en v1** — rename = delete + create, car le nom est aussi la valeur stockée par les trois consommateurs
-(Trigger, défaut d'instance, payload `RunStarted`). Réalisé en **#432**. Un profil porte depuis deux
-champs de plus, tous deux **non-diff** (aucun défaut intégré à folder, donc la valeur stockée *est* la
-valeur effective) et gelés dans `RunStarted` aux côtés de la liste : son **env** (`sandbox_env`, #468,
-ADR-0031 §8) et sa **source d'image** (`sandbox_image`, #467, ADR-0031 §9). Chacun est sa propre
-colonne JSON additive, posée par l'idiome PRAGMA-gardé `ALTER TABLE … ADD COLUMN`.
-_Éviter_ : « allowlist » seul (c'était la constante Rust d'avant), « preset », « template » ; croire
-que le profil ne décrit que le home (il décrit le home, l'env **et** le conteneur).
+**Profil de staging** (ADR-0031) :
+Liste **nommée** de ce qu'un Run sandboxé stage dans son home — plus son **env** et sa **source d'image** : un profil décrit le home, l'env **et** le conteneur. Ce qui est stocké est un **diff** d'intention (`disabled`/`extras`), jamais un instantané — sinon une install ne verrait plus les évolutions futures du défaut. Le nom **et** la liste résolue sont **gelés au lancement du Run** : la préparation lit l'état du Run, jamais le réglage vivant. Pas de rename en v1 (le nom est aussi la valeur stockée par ses trois consommateurs). _Éviter_ : « allowlist » seul, « preset », « template » ; croire que le profil ne décrit que le home.
 
 **Plancher de staging** :
-Les **garanties** que `prepare` tient dans les **deux** modes (`minimal` et `full`) — et demain quel
-que soit le **profil** : credentials valides (`.credentials.json`), managed settings de l'org
-**consentis** (copie de `~/.claude/remote-settings.json` quand elle existe), bypass permissions
-accepté (`skipDangerousModePermissionPrompt: true` **mergé** dans le `settings.json` copié en `full`,
-**synthétisé** en `minimal`), confiance pré-accordée à la racine du Run (dans le `.claude.json`
-stagé, #409), `projects/` **vide**. Chaque garantie est satisfaite soit par une **copie** de l'hôte,
-soit par une **synthèse de repli** — c'est ce qui rend le décochage d'une entrée de profil sûr sans
-l'interdire (ADR-0031 §1). Formulé en fichiers verrouillés, le plancher se contredirait dès
-`settings.json` (copié quand l'entrée est cochée, synthétisé sinon). Réalisé en **#426** ; le
-décochage effectif est arrivé avec les profils (**#432**), et trois garanties — credentials,
-managed settings de l'org, `projects/` vide — ne sont **pas** des entrées du tout : elles sont
-affichées en lecture seule et **refusées même en extra**.
-_Éviter_ : « fichiers obligatoires », « liste verrouillée ».
+Les **garanties** tenues quel que soit le profil : credentials valides, managed settings de l'org consentis, bypass permissions accepté, confiance pré-accordée à la racine du Run, `projects/` vide. Chaque garantie est satisfaite par une **copie** de l'hôte ou une **synthèse de repli** — c'est ce qui rend le décochage d'une entrée sûr sans l'interdire. Trois garanties ne sont pas des entrées du tout : affichées en lecture seule, refusées même en extra. _Éviter_ : « fichiers obligatoires », « liste verrouillée » (formulé en fichiers verrouillés, le plancher se contredirait).
 
 **Entrée de profil / exception `$HOME`** :
-Une entrée est un chemin **relatif à `$HOME`** (`.claude/skills`, `.gitconfig`, `.config/gh`).
-Refusés à l'écriture (400) : absolu, `..`, `\`, NUL, glob, sortie de `$HOME`, `.claude` nu, `.pdo`,
-et les trois chemins que le plancher possède **en entier** (`.credentials.json`,
-`remote-settings.json`, `projects/` sous `.claude`). Une entrée **hors
-`.claude`** est copiée dans `<staging>/home/<chemin>` puis montée rw à `$HOME/<chemin>` — jamais un
-bind direct du fichier hôte (un agent ferait `git config --global` et réécrirait le `~/.gitconfig`
-de l'utilisateur). Une entrée **sous `.claude/`** ne reçoit **pas** de mount propre : elle est déjà
-servie par le mount `.claude` — ce n'est pas un cas spécial mais la **conséquence** du
-classificateur unique `landing()`, partagé par la vue *copie* (`prepare`) et la vue *mount*
-(`extra_mounts`), qui ne peuvent donc pas diverger. **Règle M1** : on ne monte que ce qui a été
-réellement stagé — un `-v` dont la source manque fait créer par Docker un répertoire `root:root`,
-ce qui à terme rend le staging indélébile par le daemon. _Éviter_ : « fichier monté » (c'est une
-copie qui est montée), « exclusion » pour parler d'un décochage.
+Un chemin **relatif à `$HOME`** (`.claude/skills`, `.gitconfig`, `.config/gh`). Une entrée hors `.claude` est **copiée puis montée** — jamais un bind direct du fichier hôte (un agent ferait `git config --global` et réécrirait le fichier de l'utilisateur). Une entrée absente de l'hôte est loggée et sautée : l'échec dur ferait dépendre la politique de qui a tapé le chemin, et sur une instance à Triggers horaires, désinstaller un outil tuerait chaque tir. _Éviter_ : « fichier monté » (c'est une copie qui est montée), « exclusion » pour un décochage.
 
-**`prepare(entries, run_id)`** :
-Seede le *staged Claude home* depuis la **liste d'entrées résolue et gelée** du profil (#432 — le
-paramètre `mode` a disparu avec le tri-état), en tenant le **plancher de staging** dans tous les cas.
-Le défaut `full` porte **9 entrées** : `.claude.json`, `.claude/*.md`, `.claude/settings.json`,
-`.claude/settings.local.json`, `.claude/agents`, `.claude/commands`, `.claude/output-styles`,
-`.claude/plugins`, `.claude/skills` — et **exclut `projects/`** et tout état hôte volumineux
-(`history.jsonl`, `session-env/`, …). Les symlinks
-qui **sortent** de `~/.claude` (skills liés à `~/.agents`) sont **déréférencés** (recréés verbatim ils
-dangleraient dans le conteneur) ; les liens intra-arbre (`node_modules/.bin`) restent des liens. Walk
-**best-effort par entrée** : un `~/.claude` volatil ne fait jamais échouer le Run. Une entrée absente
-de l'hôte est **loggée et sautée** (défaut comme extra) : l'échec dur ferait dépendre la politique de
-qui a tapé le chemin, et sur une instance à Triggers horaires désinstaller `gh` tuerait chaque tir.
-**Liste vide** (`minimal`) : n'apporte **rien** en propre — `minimal` *est* le plancher. Le
-**plancher**, profil-agnostique, tient
-ensuite les cinq garanties : `.credentials.json` copié ; `remote-settings.json` copié de `~/.claude/`
-quand il existe (absent → no-op loggé, jamais une erreur) ; `skipDangerousModePermissionPrompt: true`
-dans le `settings.json` stagé (**mergé** non destructivement dans la copie hôte quand l'entrée est
-cochée, **synthétisé** sinon — sans quoi la session bute sur le dialogue de bypass permissions) ;
-confiance de la racine du Run mergée dans le `.claude.json` stagé (#409 D5 — sinon un Run autonome se
-bloquerait sur le dialogue « trust this folder ? ») ; `projects/` créé **vide** (puits de transcripts
-runtime). Le plancher est le **writer unique** de `remote-settings.json` et de la clé de bypass : ni
-l'un ni l'autre n'est une entrée du défaut. Bits exécutables préservés. **Volume/PII (#409)** :
-`full` pèse **~1 Go/run** (dominé par `plugins/*/node_modules`, requis par les serveurs MCP
-*in-container* — délibérément non strippés) et expose en plus le profil PII
-(`oauthAccount`/`userID`/`emailAddress`) + settings + `.md` globaux que `minimal` retient (choix
-conscient, aligné sur le trou d'auth d'ADR-0030). Depuis #432 c'est **décochable entrée par entrée** :
-retirer `.claude/plugins` fait tomber le staging d'un ordre de grandeur. Dette disque : le staging
-n'est purgé qu'au `cleanup_run` (surveiller vs la récurrence disque connue).
-_Éviter_ : « init », « seed » seul.
-
-**`merge_back(run_id)`** :
-À la transition terminale du Run **et** à `cleanup_run` : recopie **uniquement** les `*.jsonl` de
-`projects/` du staging vers `~/.claude/projects/`, **récursivement** (transcripts de sessions **et**
-de sous-agents `<uuid>/subagents/*.jsonl`), sous le **même dirname encodé** (cwd identique côté
-conteneur, garanti par les identity mounts, ADR-0030). **Idempotent** : copie ssi le fichier hôte est
-absent ou plus court (transcripts append-only) ; ne réécrit jamais un fichier hôte. Aucune autre
-écriture vers l'hôte. **Jeté délibérément (v1)** : settings, statsig, todos, `history.jsonl`,
-shell-snapshots — tout sauf les transcripts (#403 US-29). **Câblé dans le run-advance (#408)** : à la
-transition terminale (chokepoint `append_event`, tâche détachée) **et** à `cleanup_run` (avant
-`teardown`, synchrone), via le seam `transcripts_root` qui rend coût/stale sandbox-conscients. Double
-merge = état identique (idempotence). _Éviter_ : « sync », « flush », « commit ».
-
-**`transcripts_root(run_id)` (seam d'observabilité)** :
-La racine `projects/` que le coût (`run_cost`) et la stale-detection (`stale_detector`) lisent pour un
-Run. `off` → `~/.claude/projects/`. Sandboxé **vivant** → le staging
-(`~/.pdo/sandbox/<run-id>/claude-home/projects/`, transcripts en direct via l'identity mount) ;
-**après `cleanup_run`** → `~/.claude/projects/` (où `merge_back` a flushé). Dispatch keyé sur
-l'**existence du staging dir**, pas le statut terminal du Run (reste correct même si le merge terminal
-best-effort a échoué). L'encodage du cwd reste la source unique de vérité (`encode_working_dir`,
-#373) — le seam ne fait que substituer la base. _Éviter_ : « home », « projects dir » seul.
-
-**`teardown(run_id)`** :
-Purge le *staging dir* du Run ; sans effet s'il est déjà absent. _Éviter_ : « cleanup » (réservé à
-`cleanup_run`, niveau Run) et « destroy » (réservé à la destruction du conteneur, #406).
-
-### Image (fourniture)
-
-Périmètre **provisionnement** (fabrication + nommage de l'image), landé par #405 (`sandbox_image`).
-L'**exécution** de l'image (instanciation en conteneur, mounts, réseau) → #406/#407, ADR-0030.
+**Cycle de vie du staging** :
+`prepare` seede le staged home depuis la liste gelée du profil (plancher tenu dans tous les cas ; symlinks échappants déréférencés ; walk best-effort) → les sessions tournent → **merge-back** : à la transition terminale du Run **et** à `cleanup_run`, seuls les **transcripts** (`*.jsonl` de `projects/`) sont recopiés vers `~/.claude/projects/`, sous le même dirname encodé, de façon **idempotente** — aucune autre écriture ne revient vers l'hôte → `teardown` purge le staging dir. Le coût et la veille lisent les transcripts **du staging** tant qu'un Run sandboxé est vivant. Le staging n'est purgé qu'au `cleanup_run` (dette disque à surveiller). _Éviter_ : « sync », « flush » pour le merge-back ; « cleanup » pour le teardown (réservé au niveau Run).
 
 **Image sandbox (`pdo-sandbox:h-<hash>`)** :
-L'image Docker dans laquelle tournent les sessions d'un Run sandboxé. Son ref est un **couple**
-dont les deux moitiés sortent du même fichier : le **tag** est le hash du **contenu** du Dockerfile
-(`h-<hash>`), pas une version — deux Dockerfiles identiques → même tag, une édition → tag
-différent ; le **nom** est celui de la **variante**, dérivé du nom de fichier (#466, ci-dessous).
-Identité **adressée par contenu** — c'est elle qui rend une image tirée d'un registry et une image
-buildée localement **interchangeables sous le même nom** (#411). _Éviter_ : « image latest », « tag
-de version », « image du conteneur » (l'image n'est pas le conteneur, #406).
+L'image Docker d'un Run sandboxé. Identité **adressée par contenu** : le tag est le hash du contenu du Dockerfile (pas une version), le nom celui de la **variante**. C'est ce qui rend une image tirée d'un registry et une image buildée localement **interchangeables sous le même nom**. Le provisionnement est **build-si-absent, pull-d'abord** quand la source est le registry (fallback build si le pull rate). _Éviter_ : « image latest », « tag de version », « image du conteneur » (l'image n'est pas le conteneur).
 
-**Variante d'image / `image_name_for_dockerfile` (#466)** :
-Un **nom d'image** distinct pour un Dockerfile sandbox outillé différemment, dérivé de son **nom de
-fichier** : `Dockerfile` → `pdo-sandbox`, `Dockerfile.chrome-dev` → `pdo-sandbox-chrome-dev` (tout
-autre nom — `sbx.Dockerfile`, `Dockerfile-custom` — retombe sur `pdo-sandbox` : un Dockerfile que
-l'utilisateur *pointe* n'a pas à suivre notre convention, et son tag reste le hash de ses octets,
-donc zéro collision). Le renommer renomme l'image. Trois propriétés qui se retiennent ensemble :
-(a) une variante est **autonome** — `FROM ubuntu:24.04` + les steps de la base **dupliqués**, jamais
-`FROM ghcr.io/loulen/pdo-sandbox:h-<hash>`, parce qu'injecter le hash de la base obligerait à
-*générer* les octets de la variante alors que ces octets **sont** la source de vérité de son propre
-tag ; (b) l'**image de base reste minimale** — le coût d'une variante n'est payé que par qui la
-pointe ; (c) la **sélection** se fait **par profil de staging** (#467, seul chemin depuis #471 —
-pointer la variante change nom et hash, donc build local) : un profil chrome-devtools et un profil
-minimal cohabitent alors sur la même instance.
-La seule variante livrée est **`pdo-sandbox-chrome-dev`** : node 22 + Google Chrome +
-`chrome-devtools-mcp` préinstallé, exception assumée à ADR-0001 (sans elle **aucun** serveur MCP node
-ne démarre dans le sandbox — l'image de base n'a ni runtime JS ni navigateur). Elle est **amd64
-seule** (pas de .deb Chrome arm64 en amont) et son point non-évident est un **shim** à
-`/opt/google/chrome/chrome` : le plugin lance `npx chrome-devtools-mcp` sans flag, puppeteer résout
-donc `channel: stable` vers ce chemin exact (en ignorant `PUPPETEER_EXECUTABLE_PATH`), et le shim est
-le seul endroit où injecter `--headless=new` (pas de X dans le conteneur), `--no-sandbox` (namespaces
-sous `--user`) et `--disable-dev-shm-usage` (`/dev/shm` à 64 Mo). _Éviter_ : « image chrome » (c'est
-une variante nommée), croire qu'un `FROM` de la base ferait l'affaire, ajouter node/chromium à la base.
+**Variante d'image** :
+Un nom d'image distinct pour un Dockerfile outillé différemment, dérivé de son nom de fichier (`Dockerfile.chrome-dev` → `pdo-sandbox-chrome-dev`). Une variante est **autonome** (steps dupliqués, jamais un `FROM` de la base — le tag doit rester le hash de ses propres octets) ; l'image de base reste minimale ; la sélection se fait **par profil**. _Éviter_ : « image chrome » (c'est une variante nommée), ajouter du tooling à la base.
 
 **Dockerfile embarqué / seedé / résolu** :
-Trois choses distinctes depuis #431. Le Dockerfile est **embarqué dans le binaire** (contenu minimal :
-Ubuntu, git, ripgrep, Claude Code auto-update off, sudo NOPASSWD ; ni tmux ni `pdo`, fournis par
-l'hôte). Au premier usage il est **seedé** sur disque à `~/.pdo/sandbox/Dockerfile` — inconditionnellement,
-et **jamais ailleurs** — puis **jamais écrasé** : c'est la copie de référence éditable et la
-matérialisation du tier `default`. Le **résolu** est celui que `ensure_image` hashe et builde
-réellement : le seedé par défaut, ou celui qu'un **profil** (ou `PDO_SANDBOX_DOCKERFILE`) désigne.
-_Éviter_ : confondre les trois ; « image de base ».
+L'**embarqué** vit dans le binaire ; il est **seedé** au premier usage à `~/.pdo/sandbox/Dockerfile` puis **jamais écrasé** (copie de référence éditable) ; le **résolu** est celui réellement hashé et buildé — le seedé par défaut, ou celui qu'un profil (ou l'env) désigne. Un Dockerfile pointé doit être **auto-porteur, sans `COPY`/`ADD`** (contexte de build vide). _Éviter_ : confondre les trois.
 
-**`ensure_image()`** :
-Le **point d'entrée unique** du provisionnement d'image, un **aiguillage à deux branches** sur le
-`ImagePlan` résolu au bord (#467) : hash-dérivé (ci-dessous) ou **ref explicite** d'un profil
-(`ensure_explicit_ref` : `image inspect` puis `docker pull`, et un pull raté est une **erreur dure
-nommant le ref**, jamais un build — voir « Source d'image d'un profil »). Branche hash-dérivée
-(`ensure_hash_derived_image`, tout ce qui existait avant #467) :
-garantit que `<nom>:h-<hash>` existe **localement** et retourne **toujours** le ref local
-(invariant `sandbox_container`) : seed du Dockerfile par défaut → contrôle que le Dockerfile
-**résolu** est un fichier régulier (sinon **erreur dure** nommant chemin + tier, jamais de repli) →
-présente → réutilise (**fast-path**, zéro réseau) ; absente, source `registry` (le défaut de profil)
-**et** Dockerfile résolu **à l'emplacement seedé par défaut** → `docker pull` le ref GHCR puis **retag**
-sous le ref local, avec **fallback build** si le pull échoue (offline / 404 / registry down) ;
-source `dockerfile` **ou** Dockerfile résolu ailleurs → `docker build` direct, **jamais** de pull
-(un hash custom ne peut pas exister en amont) ; échec de build → erreur explicite (consommée par le
-fail-fast du Run). Le prédicat de skip-pull porte sur le **chemin**, pas sur les octets (ADR-0030 §5 —
-un prédicat-octets classerait « custom » toute machine ayant mis PDO à jour). _Éviter_ : « ensure =
-build-**seul** » (c'est build-**si-absent**, et pull-**d'abord** en registry au chemin par défaut),
-« warm-up ».
-
-**Défaut d'image de profil / `DEFAULT_PROFILE_IMAGE` (#471)** :
-Ce qu'un profil **qui ne pose pas d'image** résout : source `registry` (pull GHCR-puis-retag +
-fallback build) sur le **Dockerfile seedé** `<sandbox_root>/Dockerfile`. Une **constante de la couche
-de défauts de profil**, à côté de `DEFAULT_FULL_ENTRIES` — plus un réglage : #471 a retiré
-`image_source` et `dockerfile_path` d'`instance_config`, de `GET /settings`, du validateur de
-`PUT /settings` et de l'écran, parce que depuis #467 la source d'image d'un Run se configurait à
-**deux** endroits dont un seul décidait. Ce qui subsiste au-dessus du défaut, dans l'ordre :
-un **profil** qui pose une image (le tier le plus fort, gelé par Run), puis les **deux variables
-d'env** `PDO_SANDBOX_IMAGE_SOURCE` et `PDO_SANDBOX_DOCKERFILE` — conservées exprès, parce qu'une
-instance **headless** n'a que des profils virtuels et pas d'UI, donc l'env est son seul moyen de
-changer d'image sans POSTer un profil. Résolution **pure** (`resolve_image_plan`,
-`resolve_dockerfile`, `resolve_image_source` — les tiers env sont *injectés*, jamais lus dans le
-cœur), une seule lecture d'env au bord (`image_plan_with`). Trois propriétés du Dockerfile résolu se
-retiennent ensemble : (a) le tag reste le hash du contenu du fichier **pointé**, donc l'édition
-rebuilde ; (b) le contexte de build reste `<sandbox_root>/.build-ctx`, **vide** — un Dockerfile pointé
-doit être **auto-porteur, sans `COPY`/`ADD`** ; (c) un chemin qui n'est pas un fichier régulier
-**échoue fort au prep** (`RunFailed` nommant chemin + tier, et la remédiation dépend du tier gagnant).
-Une valeur laissée en base dans l'une des deux colonnes retirées est **inerte** et déclenche **un**
-`warn!` au boot qui la nomme et renvoie vers le profil ; un `PUT /settings` portant l'un des deux
-champs répond **400 en le nommant**, jamais 200 en l'ignorant. _Éviter_ : « le réglage d'image »
-(il n'y en a plus), « mode registry » (le mode = off/`<profil>`), croire qu'un `COPY` fonctionne.
-
-**Source d'image d'un profil / `ProfileImage` (#467)** :
-Ce qu'un **profil de staging** peut poser pour décider **quel conteneur** ses Runs obtiennent, en
-deux formes exclusives : `{kind: "dockerfile", path}` — un Dockerfile choisi par profil, le tier le
-plus fort de la chaîne, même hash, même nom dérivé du nom de fichier — ou `{kind: "registry", ref}` —
-un ref **libre** (`ghcr.io/acme/agent:1.4`) tiré **tel quel**.
-Ne rien poser est l'état par défaut et reste **bit pour bit** le comportement d'avant #467 (le
-**défaut d'image de profil** décide, l'env pouvant l'override — voir l'entrée ci-dessus). Trois
-propriétés à retenir ensemble : (a) un ref explicite
-**sort de l'adressage par contenu**, donc pas de repli build, pas de retag, un pull raté = **erreur
-dure nommant le ref et le profil** (amendement #467 d'ADR-0030 pt 7) ; (b) la source est **gelée par
-Run** (`sandbox_image` dans `RunStarted`) — éditer le profil ne peut pas faire tourner deux nœuds du
-même Run dans deux images différentes ; (c) PDO **ne vérifie pas** que l'image contient `claude`, ni
-qu'un ref existe : c'est la responsabilité de qui le fournit. Le mot `registry` désigne encore **deux
-choses** — la source `registry` du **défaut de profil** tire l'image prébuild *du Dockerfile seedé*
-(dont le tag EST le sha256 de ses octets), le `kind: registry` d'un profil est un ref arbitraire —
-mais depuis #471 les deux se choisissent dans le **même** `<select>`, ce qui est précisément ce qui
-rend la distinction énonçable en une phrase au lieu de quatre lignes renvoyant vers un autre écran.
-_Éviter_ : « override d'image » (c'est un tier de précédence, pas un contournement), confondre les
-deux `registry`, « image du profil » pour parler du conteneur d'un Run (c'est la **source**, résolue
-au bord en `ImagePlan`).
-
-**`registry_image_ref` / `ghcr.io/loulen/<variante>`** :
-Le ref GHCR de l'image publiée, `ghcr.io/loulen/pdo-sandbox:h-<hash>` (ou
-`…/pdo-sandbox-chrome-dev:h-<hash>`) — **mêmes nom et hash** que le ref local, d'où
-l'interchangeabilité. Owner **lowercasé** (`Loulen`→`loulen` : GHCR rejette l'uppercase).
-Poussé par un job release additif, **en matrice une-jambe-par-variante** depuis #466 (tags
-`h-<hash>` + `latest` ; multi-arch pour la base, `amd64` seul pour `chrome-dev`) : chaque variante est
-un dépôt GHCR distinct, donc deux `latest` qui ne s'écrasent pas. Ce job reste **additif** (aucun
-`needs:`) et ne publie **aucun artefact** (`DOCKER_BUILD_RECORD_UPLOAD=false`) — le build record
-`*.dockerbuild` avait déjà cassé une release en s'invitant dans le `download-artifact` du job
-`release` (#464, dont le `pattern: pdo-*` reste en deuxième couche). _Éviter_ : « latest »
-(le daemon ne tire que `h-<hash>` ; `latest` est informatif), « tag de version ».
-
-**`pull_image` / `tag_image`** :
-Les deux effets docker du chemin registry : `pull_image` = `docker pull <registry_ref>` (`Ok(true)`
-si tiré, `Ok(false)` si non-zéro → fallback build ; le stderr de progression n'est **pas** un
-signal d'échec, seul l'exit code compte) ; `tag_image` = `docker tag <registry_ref> <local_ref>`
-(le retag qui garde `sandbox_container` inchangé). _Éviter_ : confondre `pull` (réseau) et
-`ensure`/`build` (local).
-
-### Exécution (conteneur)
-
-Périmètre **exécution** de l'image (instanciation, mounts, cycle de vie du conteneur), landé par
-#406 (`sandbox_container`). Le **câblage** run-advance et l'ADR-0030 qui fixe le modèle → #407.
+**Source d'image d'un profil** (ADR-0031 §9) :
+Ce qu'un profil peut poser pour décider quel conteneur ses Runs obtiennent : un **Dockerfile choisi** (adressage par contenu) ou un **ref registry libre** tiré tel quel. Un ref explicite sort de l'adressage par contenu : pas de repli build, un pull raté = erreur dure nommant le ref. Gelée par Run. PDO **ne vérifie pas** que l'image contient `claude` : responsabilité de qui la fournit. Ne rien poser ⇒ le défaut (registry sur le Dockerfile seedé), l'env pouvant l'override (échappatoire headless). _Éviter_ : « override d'image » (c'est un tier de précédence), « le réglage d'image » (retiré de l'écran Settings — un axe par écran).
 
 **Conteneur sandbox (`pdo-sbx-<run-id>`)** :
-Le conteneur **unique et long-vécu** d'un Run sandboxé, nommé de façon déterministe d'après le
-run-id, dormant (`sleep infinity`, PID 1 = `tini` via `--init`). Toutes les tails du Run y entrent
-par `docker exec` ; il naît au premier nœud, meurt au `cleanup_run`. Un nom par-Run rend kill et
-destruction **ciblés** (jamais un balayage global). _Éviter_ : « la sandbox » (= la feature/le
-mode), « VM », « image du conteneur » (l'image est le template, #405).
+Le conteneur **unique et long-vécu** d'un Run sandboxé, nommé d'après le run-id, dormant ; toutes les tails y entrent par `docker exec`. Naît au premier nœud, meurt au `cleanup_run` — un nom par-Run rend kill et destruction ciblés. _Éviter_ : « la sandbox » (= la feature), « VM ».
 
 **Identity mounts** :
-Les bind-mounts qui **répliquent l'identité de l'hôte** pour que le chemin de travail soit identique
-des deux côtés : repo cible monté rw à son **chemin absolu hôte** (couvre tous les worktrees de
-nœuds, sous `.pdo/runs/`), *staged Claude home* → `$HOME/.claude`, `.claude.json` sibling →
-`$HOME/.claude.json`, binaire `pdo` hôte monté ro dans le PATH, **uid/gid hôte** adoptés par le
-process (`--user`). C'est ce qui garantit le **même dirname encodé** que `merge_back`. La liste
-reste à **quatre** — c'est la propriété : donner un *nom* à l'uid hôte n'en ajoute pas un cinquième,
-c'est l'**injection d'identité** (ci-dessous), qui n'est pas un mount. _Éviter_ : « volumes » seul,
-« partage de fichiers ».
+Les bind-mounts qui **répliquent l'identité de l'hôte** : repo cible monté rw à son chemin absolu hôte, staged home → `$HOME/.claude`, `.claude.json` sibling, binaire `pdo` ro dans le PATH — plus l'uid/gid hôte adoptés par le process. C'est ce qui garantit le **même chemin de travail des deux côtés**, donc le même dirname de transcripts pour le merge-back. _Éviter_ : « volumes » seul.
 
-**Injection d'identité (`ensure_identity`)** :
-Le `docker exec --user 0:0` que `ensure_running` lance **juste après le `start`**, sur ses **trois**
-branches, pour donner à l'uid/gid hôte une **identité nommée** (`pdo`) dans le conteneur : il
-**ajoute** deux lignes aux `/etc/passwd` et `/etc/group` **réels de l'image**, derrière une garde
-`getent`. Le défaut qu'il ferme : le conteneur tourne en `--user` **numérique**, et `ubuntu:24.04` ne
-connaît de nom que pour l'uid 1000 — pour tout autre uid, `sudo` appelle `getpwuid()` avant
-d'appliquer NOPASSWD et abandonne (« you do not exist in the passwd database »), donc l'agent perd
-`apt install`, et `whoami` échoue. La garde **est** la conditionnalité, et elle est exacte : elle
-interroge l'image réelle au lieu de supposer laquelle c'est, donc en uid 1000 rien n'est écrit
-(fichiers byte-identiques) et le script est **idempotent**. Champ mot de passe `*` et non `x` (avec
-`x`, PAM cherche `/etc/shadow` et `sudo` rend « account validation failure »), **append** et jamais
-`replace` (`sudo` résout `root` par nom avant tout le reste), **best-effort** (`warn!`, jamais un Run
-cassé : la majorité des Runs n'invoquent pas `sudo`). _Éviter_ : « créer un utilisateur » (rien n'est
-créé, le conteneur tourne toujours en `--user` numérique), « identity mount » (ce n'est pas un
-mount), « nss_wrapper » (écarté, ADR-0030).
+**Injection d'identité** :
+Le geste post-démarrage qui donne à l'uid hôte une **identité nommée** dans le conteneur (append à `/etc/passwd`/`/etc/group` derrière une garde, idempotent, best-effort). Ferme le défaut mesuré : en `--user` numérique inconnu de l'image, `sudo` abandonne avant NOPASSWD (« you do not exist in the passwd database ») et l'agent perd `apt install`. La prescription initiale (bind-monter des fichiers passwd générés) est **mesurée cassante** en `:ro` comme en `:rw` (ADR-0030). _Éviter_ : « créer un utilisateur » (le conteneur tourne toujours en `--user` numérique), « identity mount » (pas un mount).
 
-**Préfixe `docker exec` (`exec_prefix`)** :
-La séquence d'arguments préposée à la tail d'un nœud pour la faire tourner **dans** le conteneur
-(`docker exec -it -e PDO_SBX_SESSION=… --user <uid>:<gid> -w <cwd> pdo-sbx-<run-id> …`) au lieu de
-l'hôte. En mode `off` le préfixe est **vide** (exécution hôte). Pur : construction d'argv, sans
-effet de bord. Ne re-passe jamais `PDO_DAEMON_URL` (posé au create vers `host.docker.internal`).
-_Éviter_ : « wrapper », « shim ».
-
-**Résolveur d'URL du daemon (`daemon_url(port, sandboxed)`)** :
-La fonction **pure et unique** qui rend l'URL du daemon **telle qu'elle est joignable depuis le côté
-où l'agent s'exécute** : `http://localhost:<port>` côté hôte, `http://host.docker.internal:<port>`
-depuis l'intérieur du conteneur. Vit dans `sandbox_container` parce que c'est le module qui possède
-le `--add-host` créant cette gateway : le hostname n'a donc **qu'une** occurrence. Ses deux
-consommateurs sont le `-e PDO_DAEMON_URL` du `docker create` **et** le **texte** du préambule
-manager — c'est ce qui interdit la dérive #447 (l'env résolu, la prose codée en dur sur `localhost`,
-un manager sandboxé qui déclare le daemon mort). Son booléen nomme le **côté d'exécution**, pas le
-mode du Run : les exports d'env côté hôte du wrapper passent `false` même pour un Run sandboxé,
-puisqu'ils ne traversent pas le `docker exec`. _Éviter_ : « URL du daemon » tout court (ambigu entre
-l'env et le texte), « unifier les occurrences de localhost » (deux d'entre elles sont légitimes).
+**Résolveur d'URL du daemon** :
+La fonction **unique** qui rend l'URL du daemon telle qu'elle est joignable **depuis le côté où l'agent s'exécute** (`localhost` côté hôte, la gateway côté conteneur). Ses deux consommateurs sont l'env du conteneur **et** le texte du préambule manager — c'est ce qui interdit la dérive « env résolu, prose en dur » (un manager sandboxé qui déclare le daemon mort, #447). _Éviter_ : « unifier les occurrences de localhost » (certaines sont légitimes côté hôte).
 
 **Marqueur de session (`PDO_SBX_SESSION`)** :
-La **variable d'environnement** (`PDO_SBX_SESSION=<nom-de-session>`) posée sur **chaque** `docker
-exec`, **héritée par `claude` et toute sa descendance**. C'est la clé du **kill ciblé** : un scan
-`/proc/*/environ` la retrouve sur l'arbre de process de la session. Ce n'est **pas** un label Docker
-(réservé, non utilisé en v1). _Éviter_ : « tag » (réservé à l'image, #405), « label ».
+Variable d'environnement posée sur chaque `docker exec`, héritée par toute la descendance : la clé du **kill ciblé** — arrêt du seul arbre de process porteur du marqueur, dans le conteneur partagé ; les sessions sœurs du même Run survivent. Nécessaire car tuer le client `docker exec` côté tmux ne tue pas le process conteneur. _Éviter_ : « tag » (réservé à l'image), « label ».
 
-**`ensure_running(run_id)`** :
-Provisionneur **idempotent** du conteneur (miroir de `ensure_image`) : sonde `docker container
-inspect` → absent → `docker create` + `start` ; présent arrêté → `start` ; déjà up → no-op. La sonde
-**ne confond jamais** une erreur transitoire (daemon Docker down, permission) avec une absence.
-_Éviter_ : « launch », « boot », « run » seul.
+**Précédence du mode (`effective_sandbox`)** :
+Résolution **pure**, une fois, au point où tous les chemins de création de Run convergent : choix explicite du Run → défaut par-Trigger → défaut d'instance → `off`. Le défaut par-Trigger est clearable (revient à l'héritage). Le sélecteur du New Run propose « Use instance default » qui **nomme** le défaut résolu au lieu de le recopier dans le champ (un prefill async ratait sa fenêtre et posait un `off` explicite jamais choisi, #452). _Éviter_ : « merge des modes » ; dire que le dialogue « choisit toujours » un mode.
 
-**Kill ciblé** :
-Arrêt du **seul** arbre de process porteur d'un **marqueur de session** donné, **dans** le conteneur
-partagé (`docker exec` séparé qui scanne `/proc`, `TERM` puis `KILL`) — les sessions sœurs du même
-Run **survivent**. Nécessaire car le client `docker exec` tué côté tmux ne tue pas le process
-conteneur (reparenté sur PID 1). Best-effort. Distinct de `remove` (destruction du conteneur
-entier). _Éviter_ : « stop all », « docker kill » (large).
+**Sonde Docker** :
+Check de disponibilité Docker côté hôte, TTL-caché, **advisory** : grise les options de profil et refuse le Launch quand le mode effectif en demande un — mais ne **clampe jamais** la valeur (écrire un verdict métier dans le champ le rendait indistinguable d'un choix utilisateur). Le fail-fast du run-advance reste le gate autoritaire. _Éviter_ : « sandbox available » (ambigu avec le mode).
 
-**`remove` / destruction du conteneur** :
-Suppression du conteneur (`docker rm -f pdo-sbx-<run-id>`) à `cleanup_run` ; sans effet s'il est déjà
-absent (idempotent). C'est **le** verbe « destroy / destruction » réservé par `teardown`. _Éviter_ :
-« teardown » (= purge du staging dir, #404), « cleanup » (= niveau Run).
-
-### Exposition run-level + sources de config (#410)
-
-Périmètre **utilisateur** : d'où vient le mode d'un Run, comment on le choisit/le voit. L'exécution
-elle-même est inchangée (#406/#407). Landé par #410.
-
-**`effective_sandbox` (résolveur de précédence)** :
-Fonction **pure** (`event_log`) `(explicit: Option<SandboxMode>, trigger: Option<SandboxMode>,
-instance_default: SandboxMode) → SandboxMode` : le **premier `Some` gagne**, `instance_default` est le
-plancher. Appelée **une fois** au chokepoint `create_run_inner` (où JSON, multipart et fire de Trigger
-convergent), juste avant le gel du mode dans `RunStarted` (immuable, ADR-0030 pt 8). _Éviter_ :
-« merge », « override », « fusion des modes ».
-
-**`default_sandbox` (défaut d'instance)** :
-Défaut du mode sandbox **par-daemon** : colonne **nullable** `instance_config` (`off`/`minimal`/`full`,
-`""` = sentinelle clear → NULL). Résolveur `default_sandbox_with` (`stored → env(`PDO_DEFAULT_SANDBOX`)
-→ default(`off`)`, ADR-0015), lu **frais** au bord et partagé par `create_run_inner` **et** `GET
-/settings` (0 drift #373). Éditable dans la Settings UI (`<select>`).
-**Atteignable depuis le dialogue de lancement** (#452) : le sélecteur du NewRunModal mène, dans les
-**deux** modes, sur « Use instance default » — la sentinelle `""` qui **omet** la clé `sandbox` de la
-requête. C'est la seule façon de déférer, `Some(Off)` étant final ; en mode run l'option **nomme** le
-défaut résolu au lieu de le **recopier** dans le champ (un prefill async best-effort ratait sa fenêtre
-sur un fetch lent, en échec, ou en cache d'une ouverture précédente, et atterrissait sur un `off`
-explicite que l'utilisateur n'avait pas choisi).
-_Éviter_ : confondre avec la **source d'image** d'un profil (provisionnement, orthogonal) ; « mode
-d'instance » ; dire que le dialogue de lancement « choisit toujours » un mode (c'était le défaut
-#452). Depuis **#471** c'est le **seul** réglage sandbox de cet écran, avec l'accès aux profils : cet
-écran répond « quel profil un Run prend par défaut », un profil répond « ce qu'est le sandbox ».
-
-**Défaut par-Trigger (`Trigger.sandbox`)** :
-Mode par défaut d'un **Trigger** : colonne **nullable** `sandbox` sur `triggers`. `None` = **déférer**
-à `default_sandbox`. Édité dans le NewRunModal en mode Trigger, **clearable** via
-`deserialize_double_option` (présent-`null` = repasse à l'héritage ; précédent `max_concurrent` #239 —
-`target_repo` a rejoint le patron en #470, mais pour **refuser** le clear plutôt que l'appliquer ; reste
-le frère `guard_command` en `serde(default)`, qui ne sait pas clear).
-_Éviter_ : « sandbox du trigger » comme si le trigger s'exécutait (les guards restent hôte, ADR-0030).
-
-**Sonde Docker (`sandbox_docker`)** :
-Check de disponibilité host (`docker version`, exit 0 = disponible ; binaire absent →
-`DOCKER_NOT_FOUND_MSG` ; daemon injoignable → message dédié). **TTL-cachée** (~10 s) par-daemon,
-surfacée sur `GET /settings` comme `sandbox_docker {available, reason, checked_at}` (pas un
-`settings_field` : aucun tier stored/env/default) à côté du knob `default_sandbox`, pour un **seul**
-fetch du modal. Affordance **advisory** : grise les options de profil du sélecteur et **refuse le
-Launch** quand le mode effectif en est un (#452 — elle ne **clampe plus** sur `off` : écrire un verdict
-métier dans le champ le rendait indistinguable d'un choix utilisateur) ; le fail-fast du run-advance
-(ADR-0030 pt 4) reste le gate **autoritaire**. Passe par le seam `docker_cmd_override`.
-_Éviter_ : « Docker health », « sandbox available » (ambigu avec le mode), confondre avec
-`ensure_image`/`probe_state` (provisionnement/liveness par-Run).
-
-**Préparation du sandbox (`sandbox_prep`)** :
-État **additif** projeté sur le Run (`pending`|`ready`) qui rend visible la fenêtre de prep eager
-(ADR-0030 pt 4/10) : `SandboxPrepStarted` (avant `ensure_ready`) → `pending`, `SandboxPrepReady`
-(avant le 1er spawn) → `ready`. Émis au chokepoint `append_event`, **jamais** pour un Run `off`.
-N'altère **pas** `status` (reste `running`). Échec → `RunFailed` (pas d'événement de prep dédié).
-L'UI du Run affiche une **bannière** « préparation du sandbox » tant que `pending`, plus un **badge**
-`sandbox : minimal|full` persistant. Depuis #445 la paire n'est plus **seulement informationnelle** :
-elle porte la **précondition de spawn** ci-dessous, donc `SandboxPrepReady` est aussi émis par
-`resume_run` et la boot recovery quand elles ré-arment le conteneur d'un Run resté `pending`
-(amendement ADR-0030 §3 ; `open_run_shell` reste non émetteur — Run terminal). _Éviter_ : « statut
-preparing » (écarté, pas un état de la machine à statut) ; l'inférence client (écartée : faux positifs
-advance-détaché/#159) ; « événement purement informationnel » (plus vrai depuis #445).
-
-**Précondition de spawn du sandbox** (`RunState::sandbox_spawn_block`) :
-Règle « **un Run sandboxé dont la prep n'est pas `ready` n'est pas schedulable** », portée par
-`spawn_node` lui-même (après le garde de transition, avant l'admission et tout sous-worktree) et
-répétée en `409` par `force_spawn_node`, qui ne passe pas par le spawn. Décision **pure** sur la
-projection : `off` jamais bloqué, `ready` jamais bloqué, `pending` **et** `absent` bloqués. Le refus
-n'écrit **rien** — ni `NodeStarted` ni `NodeWaiting` — parce qu'un nœud sans état reste dans
-`compute_ready_to_spawn` : c'est ce qui permet le **rejeu** par l'`advance_run` qui suit
-`SandboxPrepReady`. Issue de spawn dédiée `SpawnOutcome::Deferred`, distincte de `Refused` (rien à
-reprendre) et de `Throttled` (réservation posée). Sans elle, un avancement déclenché par le watcher de
-pipeline ou par `retry_waiting_nodes` pendant la prep lançait un `docker exec` sur un conteneur
-inexistant → exit 1 en ~30 ms → `session_died` 25 s plus tard (#445, profil `full` inutilisable).
-_Éviter_ : « garde du watcher » (le défaut était l'absence de précondition au spawn, corriger le site
-d'appel laisse le suivant la réintroduire) ; confondre avec l'**admission** (cap de sessions
-concurrentes) ni avec le **garde de transition** (#212, légalité d'un `NodeStarted`).
-
-### Relations
-- Une **Sandbox** `minimal`/`full` possède un **staging dir** (`~/.pdo/sandbox/<run-id>/`) contenant un
-  **staged Claude home** (`claude-home/`) + un `.claude.json` sibling.
-- `prepare` seede → `merge_back` extrait les transcripts vers `~/.claude/projects/` → `teardown`
-  supprime le staging dir.
-- Une **Sandbox** `minimal`/`full` s'exécute dans un **conteneur sandbox** (`pdo-sbx-<run-id>`)
-  instancié depuis l'**image sandbox** `pdo-sandbox:h-<hash>` (garantie par `ensure_image`, #405) via
-  `ensure_running` (#406) ; ses **identity mounts** rendent le chemin de travail identique
-  hôte/conteneur (d'où le même dirname encodé pour `merge_back`), et toutes les tails y entrent par le
-  **préfixe `docker exec`** portant un **marqueur de session**. Kill ciblé + `remove` au `cleanup_run`.
-- **Câblé (#407, ADR-0030)** : `prepare`/`ensure_image`/`ensure_running`/`exec_prefix` dans le
-  run-advance — prep eager fail-fast au create (Docker indispo → `RunFailed`, zéro spawn hôte),
-  wrapping des tails au chokepoint `build_tmux_script` (`off` byte-identique), kill ciblé dans
-  `reap_node_session`/`kill_node`/`restart_node`, `remove`+`teardown` au `cleanup_run`,
-  `ensure_running` à `boot_recovery` (Run live) et `open_run_shell` (ressuscite-ou-échoue).
-- **Câblé (#408, ADR-0030)** : `merge_back` dans le run-advance — transition terminale (chokepoint
-  `append_event`, détaché) **et** `cleanup_run` (avant `teardown`, synchrone) ; observabilité coût
-  (`run_cost`) + stale (`stale_detector`) via le seam `transcripts_root` (staging si Run sandboxé
-  vivant, `~/.claude/projects/` sinon) ; garde `ensure_ready`-ou-échec ajouté à `resume_run` (re-arme
-  le conteneur après reboot hôte).
-- **Vérifié e2e (#409)** : le mode `full` tourne le **même câblage mode-agnostique** que #407 (aucun
-  net-new run-advance) ; il ne diffère de `minimal` que par le seed de `prepare` — deref des symlinks
-  **échappants** (les skills liés à `~/.agents` ne danglent plus), walk **best-effort**, et confiance
-  `repo_root` mergée dans le `.claude.json` copié (D5). Aucune écriture de config ne revient vers
-  l'hôte (`merge_back` reste jsonl-only). Couvert par unit + 4 tests layer-3 (`sandbox_tracer`) + le
-  Feature Path agentique L5 (Docker réel).
-- **Fourniture hybride de l'image (#411)** : `ensure_image` devient hybride — fast-path local, puis
-  en `registry` (défaut) `pull_image` GHCR + `tag_image` sous le ref local, **fallback build** si le
-  pull rate ; en `dockerfile`, build direct. Valeur de retour **toujours le ref local** → aucun
-  changement dans `sandbox_container`. Réglage **par-daemon** `image_source` (`instance_config`,
-  résolveur `stored → env → default(registry)` partagé par `ensure_image` **et** `GET /settings`,
-  0 drift #373), éditable dans la Settings UI (`<select>`) — **retiré par #471**, dont le défaut de
-  profil reprend la valeur. `context_from_state` devient **async** (lit `instance_config` frais au
-  bord) ; `ensure_ready` reste sync. La release publie l'image sur
-  GHCR (job additif, multi-arch, tags `h-<hash>` + `latest`) avec parité hash bash/Rust. Pull anonyme
-  sur image publique → trou d'auth #260 inchangé. Couvert par unit (`sandbox_image`/`instance_config`
-  /settings) + tests layer-3 (`sandbox_tracer`) + FP-411 (L5, Docker réel).
-- **Câblé (#410, ADR-0030 pt 8+10)** : **exposition run-level + sources de config**. Précédence
-  **réalisée** — résolveur pur `effective_sandbox(explicit, trigger, instance_default)` (run → trigger
-  → `default_sandbox`, plancher `off`) au chokepoint `create_run_inner` ; param filaire
-  `Option<SandboxMode>` (absent ≠ `off` explicite) ; `default_sandbox` colonne `instance_config`
-  (résolveur `default_sandbox_with`, `stored → env → default(off)`) ; défaut par-Trigger colonne
-  nullable `sandbox` (clearable `deserialize_double_option`, précédent #239). **Sonde Docker** advisory
-  (`GET /settings.sandbox_docker`, TTL-cachée) → grise `minimal`/`full` du sélecteur. **Visibilité prep**
-  via événements additifs `SandboxPrepStarted`/`Ready` → `RunState.sandbox_prep` (badge + bannière).
-  Testé layer-1 (résolveur pur) + unit (settings/probe) + FE (vitest) + FP-410 (L5, Docker réel).
-- **Réalisé (#426, ADR-0031 §1 + amendement ADR-0030 §1)** : **vocabulaire + plancher de garanties**.
-  Le tri-état est renommé `off` | `minimal` | `full`, **sans alias** de compatibilité (aucune valeur
-  persistée dans l'instance prod ni dev — les colonnes `default_sandbox`/`triggers.sandbox` n'y
-  existent même pas ; un alias n'aurait servi que des instances de validation jetables) ; un token
-  inconnu garde `parse() → None` et est désormais **loggé** aux trois décodeurs (projection
-  `RunStarted`, `default_sandbox_with`, tir de Trigger) — la dégradation va vers **moins**
-  d'isolation, elle ne doit pas être silencieuse. `prepare` tient le **plancher** dans les deux modes,
-  en deux phases (profil puis `enforce_staging_floor` mode-agnostique) : `minimal` est un bras de
-  `match` **vide**. Restent à livrer par les slices **profils** : le profil de staging lui-même (liste
-  nommée/éditable/sélectionnable, diff `disabled`/`extras`, défauts virtuels, gel dans `RunStarted`,
-  échec fort sur nom inconnu — ADR-0031 §2/§5/§6/§7), les **exceptions `$HOME`** (§3/§4, amendement
-  ADR-0030 §2/§3).
-- **Réalisé (#431, amendement ADR-0030 §5)** : **explorateur de fichiers générique + Dockerfile
-  réglable**. `GET /repos/browse` devient `GET /fs/browse` (renommage franc, sans alias : rien de cette
-  route n'était repo-spécifique) et gagne deux drapeaux optionnels `files` / `hidden` dont les défauts
-  reproduisent le listing d'avant **au bit près** (répertoires seuls, dot-entrées filtrées), plus un
-  `is_dir` par entrée ; le cap de 1000 devient **par genre, répertoires prioritaires** (un budget unique
-  laissait 50 000 fichiers affamer les 2 répertoires à traverser — panne fonctionnelle du picker, pas un
-  détail). Côté FE, l'explorateur sort de `RepoCombobox` dans un `FsExplorerModal` réutilisable
-  (`mode: "dir" | "file"`, `showHidden`, testids préfixés) — `RepoCombobox` en est le premier
-  consommateur, **inchangé au pixel** (ses 12 tests et l'e2e `repo-explorer-pick` passent sans édition
-  d'assertion), le `SettingsModal` le second. Réglage **par-daemon** `dockerfile_path` — **retiré par
-  #471** avec le champ de la Settings UI, le chemin résolu et le tag qu'elle exposait ; ce que ce
-  réglage valait par défaut est devenu le **défaut d'image de profil** (voir le lexique), et
-  `PDO_SANDBOX_DOCKERFILE` survit comme échappatoire headless.
-  `/fs` étant un **nouveau préfixe top-level**, il entre dans la whitelist du proxy vite (même piège que
-  `/nodes` #345 et `/stats` #377). Couvert par unit (query/classification/merge, résolveur pur,
-  `ensure_image`, `instance_config`, settings HTTP) + layer-3 (`fs_browse` : anti-SPA sur le
-  content-type, forme additive, les 2 drapeaux, liens cassés et spéciaux invisibles ; `sandbox_tracer` :
-  build depuis le chemin custom **sans pull**, et chemin disparu → `RunFailed` nommant chemin + tier)
-  + FE (vitest) + FP-431 (L5, Docker réel).
-- **Réalisé (#471, ADR-0031 §9 amendée, ADR-0015 amendée)** : **un axe par écran** — `image_source`
-  et `dockerfile_path` sortent d'`instance_config`, de `GET /settings`, du validateur de
-  `PUT /settings`, de `types.ts` et du `SettingsModal` (avec la disclosure de 4 lignes qui devait
-  renvoyer vers un autre écran : quand un réglage a besoin d'un paragraphe pour expliquer sa relation
-  à un autre écran, il est sur le mauvais écran). Depuis #467 les deux étaient redondants avec la
-  source d'image du profil, qui gagnait déjà ; sur la seule instance existante ils n'avaient **jamais**
-  porté de décision. Ce qu'ils valaient par défaut devient `DEFAULT_PROFILE_IMAGE`, **constante de la
-  couche de défauts de profil** à côté de `DEFAULT_FULL_ENTRIES` — registre hash-dérivé sur le
-  Dockerfile seedé, donc un profil qui ne pose rien produit **exactement** le même ref qu'avant (test
-  golden sur le ref). Les deux tiers **env** sont **conservés** et repointés sur ce défaut (une
-  instance headless n'a que des profils virtuels et pas d'UI). Trois conséquences non négociables : un
-  `PUT /settings` portant l'un des champs répond **400 en le nommant** (jamais 200 en l'ignorant) ; une
-  valeur restée en base déclenche **un** `warn!` au boot qui la nomme et renvoie vers le profil, et
-  n'affecte **aucun** Run ; un Run **archivé** dont le payload porte les anciens champs s'ouvre et se
-  chiffre toujours. Bénéfice collatéral : `image_plan_with` se scinde en `resolve_image_plan` **pur**
-  (tiers env *injectés*) + un wrapper de bord, ce qui rend la précédence env testable sans muter
-  `std::env`. Couvert par unit (`sandbox_image` golden + précédence, `instance_config` colonnes
-  retirées, settings HTTP 400/boot-warn) + layer-3 (`sandbox_tracer` repointé sur le profil) + FE
-  (vitest : inventaire de l'écran).
-- **Réalisé (#445, amendement ADR-0030 « précondition du spawn »)** : la garantie du point 4 (« conteneur
-  prêt avant le premier spawn ») était rejouée par le **seul** parcours de création ; le watcher de
-  pipeline et `retry_waiting_nodes` atteignaient le spawn pendant la prep → `docker exec` sur un
-  conteneur inexistant → `session_died` (profil `full` mort 7 fois sur 7 en reproduction, et
-  **systématiquement dès qu'un onglet du Run était ouvert**, la lecture de `pipeline.yaml` réveillant le
-  watcher). La règle devient une **précondition portée par `spawn_node`** (voir le lexique ci-dessus),
-  répétée en `409` par `force_spawn_node` ; le refus n'écrit rien, donc le spawn est **rejoué** par
-  l'`advance_run` qui suit `SandboxPrepReady` — d'où l'extension des émetteurs de cet event
-  (`resume_run`, boot recovery) sans laquelle un Run ayant échoué *pendant* sa prep serait bloqué à vie.
-  `run_stall_reason` gagne une **grâce sandbox** de 15 min (une prep de 2 Go dure 83-87 s, davantage sur
-  un build froid : la fenêtre #279 de 120 s tuait précisément les Runs lents que la précondition sauve),
-  et une prep dont le Run est devenu terminal est **abandonnée** (ni event, ni spawn, `docker rm -f` du
-  conteneur ; le staging reste pour `merge_back`/`cleanup_run`). Couvert layer-1 (décision pure, table
-  complète) + unit (spawn différé sans event, `off` jamais bloqué, rejeu de bout en bout sur
-  `advance_run`, `409` du force-spawn, les deux bornes de la grâce sandbox) + FP-445 (L5, Docker réel,
-  recette `full-heavy`).
-- **Réalisé (#414, ADR-0030 pt 1)** : un conteneur tourne en `--user <uid>:<gid>` **numérique**, et
-  `ubuntu:24.04` ne connaît de nom que pour l'uid 1000 — sur toute machine dont l'uid ≠ 1000, `sudo`
-  refusait de démarrer (« you do not exist in the passwd database ») et `whoami` échouait, donc
-  l'agent perdait `apt install`, la raison même pour laquelle l'image embarque `sudo` NOPASSWD.
-  L'issue prescrivait de générer `/etc/passwd`+`/etc/group` au `prepare`-time et de les bind-monter :
-  **mesuré, ce mécanisme casse `useradd`/`apt` en `:ro` comme en `:rw`** (`rename()` par-dessus un
-  mount de fichier), soit une régression sur le chemin uid 1000. La livraison est donc une
-  **injection d'identité** (voir le lexique) : un `docker exec --user 0:0` **après le `start`**, sur
-  les trois branches d'`ensure_running`, qui **ajoute** les lignes manquantes derrière une garde
-  `getent` — la liste des mounts ne bouge pas et l'argv du `create` reste byte-identique. La prémisse
-  `claude`/`ERR_SYSTEM_ERROR` de l'issue était **fausse** : le `claude` de l'image est un binaire
-  **Bun**, qui ignore la base passwd. Couvert par unit (`identity_script` golden + `*` vs `x` +
-  append-jamais-truncate + quoting hostile + `identity_exec_args` + les trois branches + best-effort)
-  + layer-3 (`sandbox_tracer` : l'exec suit le `start`, `off` n'exec rien) + FP-414 (L5, Docker réel).
-- **Non traité, à ficher** : le réveil parasite du watcher. La première **lecture** de
-  `<run>/pipeline.yaml` produit un `pipeline_modified` mensonger (masque inotify `OPEN`, debouncer sans
-  filtre d'`EventKind`, `content_actually_changed` sans baseline pour un Run neuf —`seed_run_mtimes` ne
-  tourne qu'au boot ; `copy_pipeline_to_run` est en outre le seul écrivain de l'arbre qui n'appelle
-  jamais `mark_self_write`). Indépendant de #445 : la précondition tient quel que soit qui avance le Run.
-- **Différé** : auto-flip de la visibilité publique du package GHCR (non supporté par l'API → manuel
-  one-time après la 1ʳᵉ release, #411).
+**Préparation du sandbox (`sandbox_prep`) et précondition de spawn** :
+État additif projeté sur le Run (`pending`|`ready`) rendant visible la fenêtre de prep eager (bannière + badge). Porte la **précondition de spawn** : un Run sandboxé dont la prep n'est pas `ready` n'est **pas schedulable** — le refus n'écrit rien, ce qui permet le **rejeu** par l'avance qui suit la fin de prep. Sans elle, tout chemin d'avance concurrent lançait un `docker exec` sur un conteneur inexistant → faux `session_died` (#445). Une grâce couvre la durée de prep dans la détection de stall ; une prep dont le Run est devenu terminal est abandonnée. _Éviter_ : « statut preparing » (pas un état de la machine à statut) ; « événement purement informationnel ».
 
 ### Ambiguïté signalée
-« sandbox » désigne deux choses : (1) cette feature (exécution conteneurisée d'un Run, #403) ;
-(2) l'attribut `sandbox=""` de l'iframe du port `html` (#333, ADR-0028). Le contexte tranche ;
-ne jamais fusionner.
+
+« sandbox » désigne deux choses : (1) cette feature (exécution conteneurisée d'un Run) ; (2) l'attribut `sandbox=""` de l'iframe du port `html` (ADR-0028). Le contexte tranche ; ne jamais fusionner.
 
 ---
 
 ## UX — un seul mode d'édition unifié
 
-PDO est un **atelier de production de code** ; la conception de pipelines est un *moyen*, pas le centre de gravité. ADR-0007. L'ancienne dichotomie "mode Run" vs "mode Edit (toggle crayon)" est **obsolète** — un seul mode, le canvas est toujours interactif, et son comportement s'adapte à l'état de la pipeline (running ou pas).
-
-> **Source visuelle de référence** : voir [`docs/design/`](./docs/design/) pour les écrans rendus en HTML/CSS/JS. Note : les écrans pré-2026-05 reflètent l'ancienne dichotomie Run/Edit avec toggle ; à re-designer en phase suivante.
+PDO est un **atelier de production de code** ; la conception de pipelines est un *moyen*, pas le centre de gravité. Un seul mode, le canvas est toujours interactif (ADR-0007). Source visuelle de référence : [`docs/design/`](./docs/design/).
 
 ### Layout 3 panneaux
 
-- **Gauche — Liste, à trois onglets** `Runs | Triggers | Library` (l'ancien empilement de sections collapsibles devient une barre d'onglets, cf. mockup `lp-tabs`). Triggers est au milieu : il *produit* des Runs (gauche) et *consomme* des pipelines de la Library (droite).
-  - **Runs** : les Runs **actifs** en haut (regroupés par repo cible si ≥ 2 repos distincts, sinon liste plate — cf. *Repo cible*), puis une section **« Archived »** repliable et **plate** regroupant les Runs `archived` (repliée par défaut ; s'ouvre d'office quand le Run sélectionné vient d'être archivé, pour ne pas le faire disparaître sous les yeux). La section Archived (dans la liste de gauche) est un **regroupement de vue** — pas ce dossier de la liste qui serait un répertoire disque, et jamais un delete (cf. *Cleanup vs archive*). À ne pas confondre avec le *Blackboard archivé* (`~/.pdo/runs/<id>/`), qui est bien un dossier disque durable mais côté store, pas côté UI. Un Run créé par un Trigger porte un badge de provenance (icône + nom du Trigger, cliquable vers celui-ci).
-  - **Triggers** : liste des Triggers (cf. *Trigger*), toggle enable/disable, « + New Trigger ».
-  - **Library** : pipelines templates avec badge favorite.
-  - Click → bascule l'affichage middle/droite. Le contexte d'édition (run-snapshot ou template) est inféré du clic, pas d'un toggle global.
-- **Centre — Canvas du graphe.** Render du DAG, toujours interactif (drag-drop nodes, créer edges, sélection multiple). Quand le contexte est un Run en cours :
-  - **Highlight** sur le(s) nœud(s) en cours d'exécution (pluriel — fan-out parallèle peut en avoir plusieurs simultanés).
-  - **Encart overlay** flottant : run-id, status global, boutons d'action niveau Run (cancel, cleanup, attacher manager).
-  - Mutations contraintes par la politique d'édition pendant un Run (cf. *Édition pendant un Run*).
-- **Droite — Détail du nœud sélectionné** (NodeRun ou node-template).
-  - **Terminal interactif inline** (xterm.js, ADR-0005) si NodeRun sur Run actif. Icônes "agrandir" et "détacher OS".
-  - **Inputs résolus** : noms des ports + chemins absolus des artefacts amont + bouton "open" pour les lire dans un viewer markdown.
-  - **Outputs produits** : pareil pour les fichiers du nœud lui-même + le schéma de frontmatter déclaré.
-  - **Prompt initial** : visualisation du préambule runtime + prompt-utilisateur tels que reçus par le Claude Code de cette session.
-  - **Bouton "Mark complete"** si le nœud est interactif et en attente.
-  - **Formulaire d'édition du node** : nom, type (`code-mutating`/`doc-only`), `interactive`, prompt (textarea reliée au `prompt_file`), inputs, outputs (avec frontmatter schema). En mutation, contraintes par la politique d'édition pendant un Run.
+- **Gauche — Liste à trois onglets** `Runs | Triggers | Library`. Runs : les actifs en haut (regroupés par repo si ≥ 2), puis une section « Archived » repliable et plate (regroupement de **vue**, jamais un delete). Un Run créé par un Trigger porte un badge de provenance cliquable.
+- **Centre — Canvas du graphe**, toujours interactif. Contexte Run : highlight des nœuds en cours, overlay flottant (run-id, status, actions).
+- **Droite — Détail du nœud sélectionné** : terminal inline, inputs résolus (+ viewer markdown), outputs produits, prompt initial tel que reçu, bouton Mark complete, formulaire d'édition du node.
 
 ### Toolbar — bouton info pipeline
 
-La toolbar du canvas (où vivent les types de nodes ajoutables) contient une icône `i` qui ouvre un panneau **info pipeline** :
-- Nom de la pipeline, statut (running, idle), variables.
-- Bouton **favoriter** (= ajouter / retirer de la bibliothèque).
-- **Pipeline Manager** : si la pipeline tourne, le terminal manager (`pdo-mgr-<run-id>`) prend la place dominante du panneau ; les métadonnées restent en haut compactes. Hors run, pas de terminal manager — juste les métadonnées.
-
-Realtime via WebSocket depuis le daemon → chaque événement de l'event log push une update vers l'UI.
+L'icône `i` ouvre un panneau **info pipeline** : nom, statut, variables, bouton favoriter. Si la pipeline tourne, le terminal manager y prend la place dominante. Realtime via WebSocket : chaque événement de l'event log push une update vers l'UI.
 
 ### Workflow utilisateur typique
 
-1. **Monitor** : ouvre PDO, voit ses Runs actifs, debug un Run bloqué via le manager (onglet info) ou en attachant directement (terminal inline).
-2. **Lancer un nouveau Run** : bouton "+ New Run", modale avec sélecteur de **pipeline depuis la bibliothèque** (dropdown peuplé par les pipelines favorites) + textarea input (free-text ou lien d'issue ou mix) + accordion "variables overrides". Confirme → POST `/runs` qui clone la pipeline depuis la bibliothèque vers `<repo>/.pdo/runs/<run-id>/pipeline.yaml` et lance le Run.
-3. **Créer une nouvelle pipeline** : depuis la liste de gauche, bouton "+ New Pipeline" → ouvre un canvas vierge dans le scope template-bibliothèque.
-4. **Modifier une pipeline** : click dessus dans la liste, le canvas l'affiche, on édite. Pas de toggle.
-5. **Modifier pendant un Run** : click sur le Run en cours, le canvas affiche le run-snapshot, on édite à chaud. La politique d'édition pendant un Run s'applique.
+1. **Monitor** : voir ses Runs actifs, débugger via le manager ou en attachant directement.
+2. **Lancer un Run** : « + New Run », sélecteur de pipeline (bibliothèque) + input + overrides de variables.
+3. **Créer une pipeline** : « + New Pipeline » → canvas vierge.
+4. **Modifier une pipeline** : clic dans la liste, on édite. Pas de toggle.
+5. **Modifier pendant un Run** : clic sur le Run, le canvas affiche le run-snapshot, on édite à chaud.
 
 ### Status icon par Run
-
-Chaque entrée de la liste de gauche porte un icône coloré indiquant son statut, lisible en un coup d'œil :
 
 | Status | Couleur / icône |
 |---|---|
 | `running` | bleu pulsant |
-| `awaiting_user` (nœud interactif en attente) | jaune |
+| `awaiting_user` | jaune |
 | `done` | vert plein |
-| `blocked` (run_halted ou conflit non résolu) | orange |
+| `blocked` | orange |
 | `failed` | rouge |
 | `archived` | gris |
 
-Le point ne peut pas être **tout** le signal (#503) : un Run non vert projette la raison de son
-événement terminal (`run_failed`/`run_skipped`.`reason`, `run_halted`.`message`) dans
-`RunState.failure_reason`, effacée par un resume. Elle titre le point dans la liste et s'affiche dans
-le panneau du Run — le premier endroit où l'on arrive en cliquant un point rouge.
+Le point ne peut pas être **tout** le signal (#503) : un Run non vert projette la **raison** de son événement terminal, qui titre le point dans la liste et s'affiche dans le panneau du Run — le premier endroit où l'on arrive en cliquant un point rouge.
 
 ### Cleanup vs archive
 
-Pas de "permanent delete" v1 (mais cf. `forget` ci-dessous). Le bouton "Cleanup" sur un Run terminé :
-
-- supprime la branche `pdo/run-<run-id>`,
-- supprime le worktree pipeline et tous les sous-worktrees,
-- **copie** les sorties du Run vers le *Blackboard archivé* global (`~/.pdo/runs/<run-id>/` : `artifacts/` + `pipeline.yaml` + `pipeline.prompts/`, lecture seule) **avant** de supprimer la copie repo-local. Les outputs ne partent donc plus au cleanup — c'est ce qui rend un Run `archived` consultable (canvas + outputs) ; cf. **ADR-0020**.
-
-**Mais ne touche pas à l'event log** : les événements en SQLite restent. Le Run passe en status `archived`, reste dans la liste de gauche avec un icône gris, et reste **interrogeable post-mortem** — via les events *et* via le Blackboard archivé (rouvrir le canvas en lecture seule, relire les outputs des nodes). Pas d'auto-cleanup, jamais.
-
-L'event log **et** le Blackboard archivé peuvent grossir indéfiniment ; on évalue la taille avant de décider d'une politique de purge. Pas de v1. Le seul reclaim v1 du Blackboard archivé est le **`forget`** (`DELETE /runs/<id>`, autorisé sur un Run déjà `archived`) : il purge les events *et* `~/.pdo/runs/<id>`.
+Le bouton « Cleanup » sur un Run terminé supprime la branche et les worktrees, **après copie** des sorties vers le *Blackboard archivé* (ADR-0020) — c'est ce qui rend un Run `archived` consultable (canvas en lecture seule + outputs). **L'event log n'est pas touché** : le Run reste interrogeable post-mortem. Pas d'auto-cleanup, jamais. Le seul reclaim du Blackboard archivé est le `forget`.
 
 ### Forget durable
 
-Le `forget` (`DELETE /runs/<id>`) est **durable** (ADR-0024) : il pose un *tombstone* dans la table `forgotten_runs` et purge les events dans une même transaction. Conséquences :
-
-- `append_event` refuse **tout** kind d'événement pour un run_id tombstoné (garde `INSERT … WHERE NOT EXISTS`, sans fenêtre TOCTOU) — un écrivain tardif (session `pdo-mgr` orpheline, tail détaché post-#304/ADR-0023) ne peut plus ressusciter le run ; il logge l'erreur et continue.
-- `POST /runs/<id>/commands` et `POST …/nodes/<n>/done` répondent **410 Gone** pour un run oublié, avant tout side-effect.
-- `forget` tue en best-effort les sessions `pdo-mgr-<id>` / `pdo-shell-<id>` (un run oublié n'a plus rien à récupérer).
-- Un run_id oublié n'est **jamais réutilisable** (le tombstone bloque aussi `RunStarted`) ; les run_id sont horodatés, la collision est impraticable.
-- `project()` ne projette jamais un log sans `RunStarted` : un fragment événementiel orphelin rend `None` au lieu d'un fantôme `running` sans nom.
+Le `forget` (`DELETE /runs/<id>`, autorisé sur un Run `archived`) est **durable** (ADR-0024) : tombstone + purge des events en une transaction. Un écrivain tardif ne peut plus ressusciter le run ; les commandes sur un run oublié répondent **410 Gone** ; un run_id oublié n'est jamais réutilisable.
 
 ### Notifications
 
-Pas de notifications système v1. Le status icon dans la liste de gauche suffit. Si plus tard ça manque, on rajoute optionnellement (desktop notification API, opt-in). Pas avant.
+Pas de notifications système v1. Le status icon suffit. Si ça manque, opt-in plus tard.
 
 ---
 
 ## Stack technique
 
-Cf. ADR-0003.
-
-### Daemon (Rust)
-
-- **Runtime async** : Tokio.
-- **HTTP + WebSocket** : Axum (intégré avec Tokio).
-- **DB** : SQLite via `sqlx` (async, type-safe, query-checked à la compile).
-- **File-watching** : crate `notify` (cross-platform `inotify`/`fsevents`/`ReadDirectoryChangesW`).
-- **YAML** : `serde_yaml` (parsing des pipelines + des frontmatters).
-- **Process spawning** : `std::process` + `tokio::process` pour l'async ; plus une fine couche pour piloter `tmux new-session` / `tmux capture-pane` / `tmux kill-session` et `git worktree add` / `git merge`.
-- **Frontend embedding** : `rust-embed` ou `include_dir` pour bundler le build statique du frontend dans le binaire du daemon.
-
-### Frontend (React + Vite)
-
-- **Framework UI** : React + Vite.
-- **Canvas DAG** : **xyflow** (anciennement React Flow). Lib mature, custom nodes/edges/handles, support pan/zoom/mini-map/fit-view natif.
-- **Composants UI** : **shadcn/ui** (Radix + Tailwind) pour la chrome (panneaux, dialogs, formulaires, dropdowns).
-- **State management** : Zustand pour l'état UI ; **TanStack Query** pour les fetch HTTP avec cache.
-- **WebSocket client** : natif + petit reconnect-wrapper.
+Choix et pourquoi → ADR-0003. Daemon **Rust** (Tokio, Axum, SQLite/sqlx, `notify`, serde_yaml) ; frontend **React + Vite** (canvas **xyflow**, shadcn/ui, Zustand + TanStack Query), embarqué dans le binaire du daemon.
 
 ### Distribution
 
-- v1 : binaires pré-buildés sur GitHub Releases (Linux x86_64, Linux ARM64, macOS x86_64, macOS ARM64) + script `curl -fsSL <url>/install.sh | bash`. Pas de npm (le daemon est en Rust, pas en JS).
-- Plus tard : formula Homebrew (macOS), package AUR (Arch).
-- Plus tard (v2) : wrapper Tauri pour distribution desktop native, qui réutilise le même daemon Rust + le même frontend.
+Binaires pré-buildés sur GitHub Releases + `install.sh`. Plus tard : Homebrew, AUR ; wrapper Tauri en v2.
 
-### Service unit persistant (#156)
+### Service unit persistant (ADR-0019)
 
-**Service unit** : le fichier d'unité OS qui fait démarrer le daemon au boot et survivre au logout — une `systemd --user` unit sous Linux (`~/.config/systemd/user/pdo.service`), un LaunchAgent launchd sous macOS (`~/Library/LaunchAgents/com.pdo.daemon.plist`, best-effort). C'est la différence entre « les Triggers ne tournent que tant que tu es loggé » et un orchestrateur autonome fiable (résout la limitation v1 d'ADR-0012). Voir ADR-0019.
-
-- **CLI** : `pdo service {install [--port N] [--dry-run] | uninstall | status}` — un sous-commande top-level (comme `daemon`/`complete`/`fail`/`skip`), one-shot bloquant sans runtime tokio. `install` génère l'unité, la `daemon-reload`, `enable-linger` (pour survivre au logout, sans sudo depuis une session active — dégrade avec un hint `sudo …` sinon), puis `enable --now`. `--dry-run` imprime l'unité + le plan de commandes **sans aucun effet de bord** (seam de test/preview).
-- **Fidélité au recette prod** : l'unité systemd est un portage byte-fidèle de la recette `Makefile` (`service-install`), paramétrée. Deux lignes **load-bearing** : `KillMode=process` (le défaut `control-group` SIGKILL-erait le serveur tmux enfant qui tient toutes les sessions Claude live — cf. #234) et `Environment=PATH=…<dir de node>…` (le daemon shelle vers `claude`/`node`/`git`/`tmux` ; un PATH nu casse silencieusement les spawns). `WorkingDirectory` est load-bearing aussi (le daemon dérive `repo_root` du cwd) — mais depuis #470 (ADR-0033) il gouverne la racine de **stockage** (pipelines, bibliothèque, prompts, `pdo.db`), **plus jamais** le dépôt qu'un Run mute : ce dernier est un champ requis de chaque Run. L'analogue macOS de `KillMode=process` est `AbandonProcessGroup=true`.
-- **Garde de conflit de port** : deux daemons ne peuvent jamais partager un port (bind sans `SO_REUSEADDR`, `EADDRINUSE` fatal). `install` sonde `127.0.0.1:<port>` : port libre → `enable --now` ; un daemon PDO répond déjà → idempotent (enable pour le boot **sans** `--now`, pas de compétiteur) ; process étranger → **refus loud** (l'unité crash-looperait sous `Restart=on-failure`). Remplace l'item « lazy-start » de l'issue, qui reposait sur un mécanisme d'auto-spawn inexistant dans le code.
-- **Signal UI** : le champ `service` de `GET /sessions` (`{ supervisor, persistent }`) est calculé **une fois au boot** et caché dans `AppState` (zéro coût par poll). `supervisor` = détection best-effort par marqueurs d'env (`systemd`/`launchd`/`none`) ; `persistent` = `systemctl --user is-enabled pdo.service` (timeout ~1s, dégrade en `null`, jamais une erreur). La status-bar reste silencieuse quand `persistent` vaut `true`/`null` et affiche une pastille ambre `ephemeral` (même token `text-st-await` que le dot reconnecting / le compteur near-cap) quand il vaut `false` — le seul signal que le dot de connexion ne peut pas exprimer (joignable ≠ persistant). Le seam d'observation `PDO_SERVICE_HEALTH` (`persistent`|`ephemeral`|`unknown`, `None` en prod) force l'état affiché pour exercer la branche `ephemeral` sur une box où une unité est déjà enabled.
-- **Limites acceptées (v1)** : le chemin launchd réel n'est **pas testé sur la CI Linux** (génération golden-testée seulement) ; pas d'équivalent linger pour un LaunchAgent (headless macOS vrai = LaunchDaemon root, différé, human-ratified) ; la valeur `persistent` cachée peut être **stale** si on installe le service pendant qu'un daemon non-service tourne (le flux normal est install-puis-run) ; le bind `0.0.0.0` reste inchangé (→ #260).
+**Service unit** : l'unité OS qui fait démarrer le daemon au boot et survivre au logout (systemd `--user` sous Linux, LaunchAgent best-effort sous macOS) — la différence entre « les Triggers ne tournent que tant que tu es loggé » et un orchestrateur autonome fiable. CLI `pdo service {install|uninstall|status}`. Garde de conflit de port à l'install (deux daemons ne partagent jamais un port). La status-bar affiche une pastille `ephemeral` quand le daemon ne survit pas au reboot — le seul signal que le dot de connexion ne peut pas exprimer (joignable ≠ persistant). Lignes load-bearing de l'unité et pourquoi → ADR-0019.
 
 ### Versioning (#139)
 
-- **Source de vérité unique : le `version` du `Cargo.toml` workspace.** `frontend/package.json` reste à `0.0.0` en permanence — intentionnel, ne jamais le bumper (le release flow ne touche que Cargo.toml).
-- Le daemon expose sa version compilée (`CARGO_PKG_VERSION`) dans la réponse de **`GET /sessions`** (`{ live, cap, version, service, reaper }`), l'endpoint qui alimente déjà la status-bar. Pas de route `GET /version` dédiée : un champ JSON additionnel est rétro-compatible et évite une entrée de plus dans la whitelist du proxy vite dev. Le même argument vaut pour le champ **`service`** (#156, `{ supervisor, persistent }`, cf. *Service unit persistant*) : plutôt qu'une route `GET /service/status`, un champ additionnel — d'autant qu'il est **calculé une seule fois au boot et caché** (état quasi-statique, ne change qu'à l'install/uninstall), donc zéro coût subprocess par poll. Et une troisième fois pour **`reaper`** (#485, ADR-0038, cf. *Balayage d'orphelins*) : la jauge du balayage d'orphelins va ici et **pas** sur `/stale/health`, qui est le battement du stale detector (tick 30 s) alors que le reaper est une autre boucle (60 s) — les mélanger serait un mensonge de nommage en attente.
-- Le footer affiche `v<version>` à partir de ce payload, rafraîchi au mount et à chaque event WebSocket. Tant que le daemon n'a pas répondu, **rien n'est rendu** (pas de placeholder) ; le dot de connexion signale déjà l'injoignabilité.
-- En prod le binaire embarque le frontend, donc daemon et UI ne peuvent pas diverger. En dev le footer montre la version du daemon debug réellement joignable.
+**Source de vérité unique : le `version` du `Cargo.toml` workspace.** `frontend/package.json` reste à `0.0.0` en permanence — intentionnel. Le daemon expose sa version compilée via `GET /sessions` (l'endpoint de la status-bar — pas de route dédiée : un champ JSON additionnel est rétro-compatible et évite une entrée de whitelist proxy). En prod le binaire embarque le frontend, donc daemon et UI ne divergent pas.
 
 ### Mono-user, local
 
-Le daemon bind **`0.0.0.0:<port>`**, pas `127.0.0.1` — il est donc joignable depuis le LAN, c'est **délibéré** (accès depuis un autre appareil du réseau local) et #260 est **CLOSED**, pas différée (cf. `lib.rs:1902` et le commentaire `lib.rs:1990`). Pas d'auth, pas de TLS, pas de multi-user : single-user local par design, sur un réseau de confiance. Tout ce qu'il faut pour ça : SQLite locale, FS local, tmux local, git local.
+Le daemon bind **`0.0.0.0:<port>`** — joignable depuis le LAN, c'est **délibéré** (#260 est closed, pas différée). Pas d'auth, pas de TLS, pas de multi-user : single-user local par design, sur un réseau de confiance.
 
-Aucun service distant ne détient l'état ni ne conditionne le fonctionnement ; **le chemin de lecture ne dépend jamais d'Internet**. Les egress du produit sont tous **opt-in et tolérants à l'échec** : `docker pull` (ADR-0030), les guards de Trigger shellés (`gh`), et le sync de la table de prix (#427, ADR-0034). Chaque nœud est par ailleurs une session `claude`, donc le produit ne fonctionne pas hors ligne (ADR-0004 l'assume) — « pas de dépendance réseau » n'a jamais été littéral.
+**Le chemin de lecture ne dépend jamais d'Internet.** Les egress du produit sont tous **opt-in et tolérants à l'échec** : `docker pull`, guards de Trigger shellés, sync de la table de prix. Chaque nœud est par ailleurs une session `claude`, donc le produit ne fonctionne pas hors ligne — « pas de dépendance réseau » n'a jamais été littéral.
 
 ### Persistance et hot-reload
 
-- **Save explicite** (#35) : un bouton **Save** dans la barre d'onglets, le raccourci **Cmd/Ctrl+S**, et un **flush automatique au lancement d'un Run** (toutes les modifs non sauvegardées sont écrites avant de démarrer le Run). Pas d'auto-save debounced. Le canvas EST le fichier YAML + les fichiers prompts.
-- **Hot-reload bidirectionnel** : PDO watch les fichiers (`fswatch`/`inotify`). Édition externe (Vim, VS Code) → re-parse et re-render. Last-write-wins.
-- **Historique d'édition (undo/redo)** (#226) : pile **par onglet** des états d'édition successifs du canvas (Ctrl/Cmd+Z annuler, Ctrl/Cmd+Shift+Z ou Ctrl+Y rétablir, plus deux boutons toolbar), scopée à l'**édition** (positions, nœuds, edges, loops, métadonnées) — **exclut l'état de Run** (statuts/overlay) et les prompts. In-memory (vidée au reload, pas de persistance cross-session), plafonnée. Vidée sur reload-propre / "Take theirs" / "Reload changes" ; conservée à travers un Save. À distinguer de l'**historique** d'un Run (events SQLite) et des fires d'un Trigger. Cf. ADR-0014.
-- **Pas de git intégration v1.** Le user fait ses commits manuellement s'il versionne.
+- **Save explicite** (#35) : bouton Save, Cmd/Ctrl+S, et flush automatique au lancement d'un Run. Pas d'auto-save debounced. Le canvas EST le fichier YAML + les prompts.
+- **Hot-reload bidirectionnel** : édition externe (Vim, VS Code) → re-parse et re-render. Last-write-wins.
+- **Undo/redo** (#226, ADR-0014) : pile **par onglet**, scopée à l'**édition** (exclut l'état de Run et les prompts), in-memory, plafonnée.
+- **Pas de git intégration v1.**
 
 ### Onglets de pipeline (canvas)
 
-Un **onglet de pipeline** (ou *onglet canvas*) = un document ouvert dans la zone centrale : un `PipelineDef` + ses prompts + son historique d'undo, matérialisé par une entrée de `openTabs` et un onglet de la `TabBar`. À **ne pas confondre** avec les **onglets de liste** du panneau gauche (`Runs | Triggers | Library`) ni l'**onglet info** de la toolbar — ceux-là basculent une vue, ne se ferment ni ne se « désactivent » jamais.
+Un **onglet de pipeline** = un document ouvert dans la zone centrale (un `PipelineDef` + prompts + historique d'undo). À ne pas confondre avec les onglets de **liste** du panneau gauche ni l'onglet **info** de la toolbar.
 
-- **Onglet de run** — onglet dont le contexte est un Run (id `__run__<run-id>`, `scope: "run"`), ouvert au clic sur un Run ; édite le snapshot run-scope (cf. *Édition pendant un Run*). Un onglet **de template** (scope `repo`/`library`/`user`) édite la template en bibliothèque.
-- **Onglet actif** — l'unique onglet affiché (`activeTabId`). Fermer l'actif réactive le dernier onglet restant.
-- **Mode mono-onglet** *(préférence UI, #342)* — comportement optionnel : ouvrir une pipeline **remplace** l'onglet courant au lieu d'en empiler un nouveau (au plus un onglet à la fois). Préférence **purement UI, par-poste**, persistée en `localStorage` (`pdo.ui.tabsDisabled`) au même titre que la taille des panneaux et les bannières masquées — **hors `instance_config`** : ADR-0015 ne couvre que les réglages runtime daemon-wide, pas une préférence de présentation locale. Basculer en mono-onglet avec plusieurs onglets ouverts referme les autres (confirmation si l'un est *dirty*). _Éviter_ « mode document » (collision avec *document* = artefact du Blackboard) et « onglets désactivés » comme nom d'état (verbe du toggle, évoque à tort les onglets de liste de gauche).
+- **Onglet de run** : contexte = un Run, édite le snapshot run-scope. Un onglet de **template** édite la bibliothèque.
+- **Mode mono-onglet** *(préférence UI, #342)* : ouvrir une pipeline **remplace** l'onglet courant. Préférence par-poste (`localStorage`), hors Configuration d'instance (ADR-0015 ne couvre pas la présentation locale). _Éviter_ : « mode document » (collision avec *document* = artefact).
 
 ### Création d'un nouveau nœud
 
-- **From scratch** : "+ Add node" → nœud vide à remplir.
-- **Duplicate existing** : right-click sur un nœud → copie avec id auto-incrémenté.
-- **Depuis la bibliothèque** : drag-drop d'un node favori (cf. *Bibliothèque* ci-dessous).
-- **Depuis un YAML** (#345) : "+ Add node" → *Add node from YAML…* — colle une définition de nœud (presse-papier) **ou** charge un fichier `.yaml`, validée côté daemon (`POST /nodes/parse`, même forme qu'une entrée de la bibliothèque de nodes), et instancie le nœud sur le **canvas** (id régénéré, sans arête, comme le *duplicate*). Round-trip **natif et sans perte** du *Export as YAML…* (menu contextuel du nœud, pur front-end). À **ne pas confondre** avec l'*Import de workflow* (format *étranger* CC → **brouillon de pipeline** en bibliothèque, avec perte — ADR-0016). _Éviter_ : « importer/import » (réservé au workflow ; deux affordances « Import » côte à côte brouilleraient le modèle mental) et « coller/paste » comme **nom du concept** (le fichier est aussi supporté).
-- **Pas de library de templates PDO-shipped en v1** (cohérent avec ADR-0001 : pas d'opinion vendor sur "à quoi ressemble un Implementer"). La bibliothèque est exclusivement user-managed.
+From scratch (« + Add node »), duplicate (clic droit), drag-drop depuis la bibliothèque, ou **depuis un YAML** (#345 : coller/charger une définition, round-trip natif du *Export as YAML…* — à ne pas confondre avec l'*Import de workflow*, format étranger avec perte, ADR-0016). **Pas de library de templates PDO-shipped** (ADR-0001 : pas d'opinion vendor sur « à quoi ressemble un Implementer »).
 
 ---
 
@@ -1724,48 +800,29 @@ Un **onglet de pipeline** (ou *onglet canvas*) = un document ouvert dans la zone
 
 `~/.pdo/library/` — store user-managed à deux niveaux :
 
-- **Nodes** (`~/.pdo/library/nodes/`) — nodes réutilisables d'une pipeline à l'autre. Drag-drop depuis le panneau bibliothèque vers le canvas pour les instancier. Endpoint daemon `POST /library/nodes` accepte une node spec inline ; la création n'est jamais bloquée par un état "pipeline dirty". Une entrée porte désormais le `model` et l'`effort` par-node (#296/#345, #424) : la bibliothèque de nodes est **model- et effort-aware** (elle les droppait silencieusement avant), et une entrée est aussi la forme d'un *Export as YAML…* (elle s'importe telle quelle via *Add node from YAML…*).
-- **Pipelines** (`~/.pdo/library/pipelines/`) — pipelines complètes templatées. C'est cette liste qui peuple le **dropdown du modal "+ New Run"**. Bouton favoriter dans le panneau info de la toolbar pour ajouter / retirer une pipeline de la bibliothèque.
+- **Nodes** (`library/nodes/`) — nodes réutilisables, drag-drop vers le canvas. Une entrée porte le `model` et l'`effort` par-node, et est aussi la forme d'un *Export as YAML…*.
+- **Pipelines** (`library/pipelines/`) — templates complets. C'est cette liste qui peuple le dropdown « + New Run ». Le clone vers `<repo>/.pdo/runs/<run-id>/pipeline.yaml` se produit au démarrage d'un Run ; les modifs pendant un Run propagent vers la template (auto-sync montant, ADR-0007).
 
-Le clone d'une pipeline depuis la bibliothèque vers `<repo>/.pdo/runs/<run-id>/pipeline.yaml` se produit au démarrage d'un Run. Les modifs pendant un Run propagent vers la template d'origine (auto-sync montant, ADR-0007).
-
-- **Drift de librairie** (`drifted`, badge ⚠ dans *New Run → Pipeline*) — verdict **sémantique** : « la *source* a-t-elle changé de sens depuis son promote ? ». `promote` enregistre dans `<id>.meta.json` (`promoted_from`) le `content_hash` de la source, qui hashe la **projection sémantique** du pipeline parsé (`pipeline_semantics`), pas les octets du fichier (#395). Conséquences : déplacer un nœud, épingler une route, ré-ancrer une flèche ou ajouter une note **ne drifte pas** ; le reformatage intégral qu'un `Save` canvas fait subir à un fichier écrit à la main non plus ; renommer, ajouter un nœud, changer un port / une edge / une condition / un `model` / un `effort` **drifte**. Un source qui ne parse plus est hashé sur ses octets dans un **domaine distinct** — il lit « drifté », jamais « synced ». À distinguer du **drift de settings** (#373) et du drift de waypoints absolus quand un nœud bouge (§ routage).
-  - `promoted_from.hash_algo` (`"semantic-v1"`) marque l'algorithme. **Absent** ⇒ `meta.json` pré-#395, dont le hash est un digest d'octets : il est relu dans son algèbre d'origine (sinon *tous* les pipelines promus passeraient en ⚠ à la mise à jour), et si les octets ont bougé, la sémantique promue est récupérée depuis la **copie de librairie** (que `promote` a écrite verbatim depuis la source) tant que celle-ci n'a pas été éditée. Aucune réécriture paresseuse : `list` / `check_drift` sont des chemins de **lecture**. Le marqueur apparaît au prochain `promote`, le geste qui rafraîchit légitimement le hash.
-- **Duplicate (library pipeline)** (`POST /library/pipelines/{id}/duplicate`, #224) — clone **délié** d'une template de la bibliothèque : id frais, nom suffixé `(copy)`/`(copy N)` (calculé unique sur les deux scopes), **aucune** métadonnée de promotion (`meta.json` / `promoted_from`). Le YAML est réécrit **verbatim sauf la ligne `name:` de colonne 0** (jamais re-sérialisé), pour préserver clés top-level inconnues (`auto_merge_resolver`), commentaires et ordre des champs. À distinguer de **Promote** (qui enregistre `promoted_from`) et du **duplicate** de nœud sur le canvas (`{name} copy`, sans parenthèses). _Éviter_ : copy, clone quand le contexte le rend ambigu avec promote.
-- **Supprimer une pipeline ≠ supprimer sa copie en bibliothèque** (#227) — par défaut la copie favorite (durable) subsiste après la suppression de la pipeline de travail et reste visible comme entrée *library-only* (*Sharp tool* : on surface, on ne masque pas — pas d'auto-cleanup, pas de re-surfacement silencieux). Une case opt-in (décochée par défaut, libellé `Also remove the Library copy`) permet de retirer aussi la copie dans le même geste, **uniquement** si une seule copie de même nom existe (match sur le `name`, jamais sur l'id qui diverge) ; sur un double-favori ambigu la case est supprimée et les deux copies sont conservées. Toute suppression rafraîchit désormais les **deux** listes (merged `/pipelines` + `/library/pipelines`).
+- **Drift de librairie** (badge ⚠) — verdict **sémantique** : « la source a-t-elle changé de sens depuis son promote ? ». Le hash porte sur la **projection sémantique** du pipeline parsé, pas les octets (#395) : déplacer un nœud, épingler une route ou ajouter une note ne drifte pas ; renommer, changer un port, une condition, un `model` ou un `effort` drifte. Un source qui ne parse plus lit « drifté », jamais « synced ».
+- **Duplicate (library pipeline)** (#224) — clone **délié** : id frais, nom suffixé `(copy)`, aucune métadonnée de promotion, YAML réécrit verbatim sauf la ligne `name:` (préserve clés inconnues, commentaires, ordre). À distinguer de **Promote** (qui enregistre la provenance) et du duplicate de nœud sur canvas.
+- **Supprimer une pipeline ≠ supprimer sa copie en bibliothèque** (#227) — par défaut la copie favorite subsiste, visible comme entrée *library-only* (pas d'auto-cleanup). Case opt-in pour retirer aussi la copie, uniquement si non ambigu.
 
 ---
 
 ## Import de workflow (Claude Code → pipeline)
 
 **Import de workflow** :
-Décompilation **avec perte** d'un workflow Claude Code (`.claude/workflows/*.js`, format dynamique
-officiel CC) en un **brouillon de Pipeline** déposé en Bibliothèque (scope user, jamais lancé). But =
-**onboarding** depuis un artéfact officiellement supporté, **pas fidélité** — « importe le câblage,
-signale le reste ». Parsing par AST statique (`oxc`), **jamais d'exécution du `.js`** (ADR-0016).
-_Éviter_ : « conversion », « migration » — la **migration** (`pipeline_migrator`) réécrit du YAML PDO
-d'un ancien schéma vers le courant (même format) ; l'**import** traduit un format étranger.
+Décompilation **avec perte** d'un workflow Claude Code (`.claude/workflows/*.js`) en un **brouillon de Pipeline** déposé en Bibliothèque (jamais lancé). But = **onboarding**, pas fidélité — « importe le câblage, signale le reste ». Parsing par AST statique, **jamais d'exécution du `.js`** (ADR-0016 — le daemon bind `0.0.0.0`, exécuter du JS étranger serait un RCE).
+_Éviter_ : « conversion », « migration » — la **migration** réécrit du YAML PDO d'un ancien schéma vers le courant (même format) ; l'**import** traduit un format étranger.
 
 **Placeholder annoté** :
-Nœud `doc-only` (aucun type de nœud dédié) dont le corps explique un idiome de workflow que l'import
-v1 ne matérialise pas (boucle imbriquée, garde budgétaire, `try/finally`, accumulation cross-lap, prompt
-bâti par helper nu). L'annotation **est** le tutoriel d'onboarding : elle nomme ce qu'un utilisateur PDO
-n'écrirait jamais à la main (gestion worktrees, auto-cleanup, boucle budgétaire — remplacés par des
-features plateforme) et le traduit en interaction délibérée. Distinct du *nom placeholder* d'un Run (#184).
+Nœud `doc-only` dont le corps explique un idiome de workflow que l'import v1 ne matérialise pas. L'annotation **est** le tutoriel d'onboarding : elle nomme ce qu'un utilisateur PDO n'écrirait jamais à la main (gestion worktrees, boucle budgétaire — remplacés par des features plateforme) et le traduit en interaction délibérée. Distinct du *nom placeholder* d'un Run.
 
 **Extraction verbatim** :
-Règle de récupération des prompts. Un string-literal ou un template-literal **sans** interpolation →
-corps de prompt **verbatim**. Un template-literal inline **avec** `${…}` → texte statique extrait verbatim,
-chaque trou rendu en marqueur annoté câblable en port d'entrée. Un prompt **sans aucun texte statique**
-(appel de helper nu `agent(buildPrompt())`, identifiant) → placeholder annoté. Cohérent avec la *prompt
-augmentation* (le corps est ajouté verbatim, jamais substitué ; les inputs arrivent en bloc de chemins).
+Règle de récupération des prompts : string-literal sans interpolation → verbatim ; template-literal avec `${…}` → texte statique verbatim + marqueurs câblables ; prompt sans texte statique → placeholder annoté.
 
 ### Relations
 
-- Un **Import de workflow** produit un **brouillon de Pipeline** en **Bibliothèque** (scope user).
-- Un workflow CC contient des **idiomes** mappés : `agent()` → **Node**, `pipeline()` → **boucle
-  `collection`**, `for`/`while` (dont le corps contient un `agent()`) → **boucle `bounded`**, `if`/`return`
-  gardé → **edge conditionnelle** (`when:`), schémas JSON → **frontmatter de port de sortie**.
-- Un idiome hors sous-ensemble reconnu → **placeholder annoté**. Un `git merge` scripté (fixed-worktree,
-  ordre imposé, build par merge) → **Node `code-mutating` annoté**, **pas** le **Merge** first-class
-  (ADR-0006) dont il excède le contrat.
+- Un **Import de workflow** produit un **brouillon de Pipeline** en Bibliothèque.
+- Idiomes mappés : `agent()` → **Node**, `pipeline()` → boucle **`collection`**, `for`/`while` autour d'un `agent()` → boucle **`bounded`**, `if`/`return` gardé → **edge conditionnelle**, schémas JSON → **frontmatter de port de sortie**.
+- Un idiome hors sous-ensemble → **placeholder annoté**. Un `git merge` scripté → Node `code-mutating` annoté, **pas** le Merge first-class (dont il excède le contrat).

@@ -16,7 +16,13 @@
 //!   freeze the table against future releases.
 //! - **The embedded tier is a FLOOR, not a seed.** `claude-opus-4-0`,
 //!   `claude-sonnet-4-0` and `claude-3-5-haiku` are absent from every remote
-//!   source examined, so the `const` is their ONLY pricer.
+//!   source examined, so the `const` is their ONLY pricer. Since #527 the floor
+//!   ALSO carries the current generation (`claude-opus-5`, `claude-sonnet-5`,
+//!   `claude-fable-5`), so a never-synced, offline instance prices its default
+//!   model out of the box instead of reading `~$0.0000 †`. models.dev DOES carry
+//!   these, so a sync still overrides them by key — a floor, not a mirror
+//!   (ADR-0034 §Amendement #527). "Seed" in ADR-0034 means materialising the
+//!   `const` onto a disk file; adding `const` rows is not that.
 //! - **De-dating is asymmetric on purpose.** A dated key in the *manual* file is
 //!   REFUSED (stripping would silently collapse two rows the author wanted
 //!   distinct, and the refusal teaches); a dated id from the *source* is
@@ -41,14 +47,27 @@ use tracing::warn;
 /// The prices PDO ships — the former `run_cost::PRICES`, moved here verbatim.
 ///
 /// Source: https://platform.claude.com/docs/en/about-claude/pricing (fetched
-/// 2026-07-06). Per-MTok list prices `(family_key, input, output)`. Cache prices
-/// are DERIVED (write_5m = 1.25×in, write_1h = 2×in, read = 0.1×in) — verified
-/// universal across every current row. Match on the FULL family key: Opus
-/// 4.5–4.8 are $5/$25 but Opus 4.1/4.0 are $15/$75 — never a
-/// `starts_with("opus-4")` shortcut.
+/// 2026-07-06; gen-5 rows added 2026-08-13, #527). Per-MTok list prices
+/// `(family_key, input, output)`. Cache prices are DERIVED (write_5m = 1.25×in,
+/// write_1h = 2×in, read = 0.1×in) — verified universal across every current
+/// row. Match on the FULL family key: Opus 4.5–4.8 are $5/$25 but Opus 4.1/4.0
+/// are $15/$75 — never a `starts_with("opus-4")` shortcut.
 ///
-/// Since #427 this is the **floor**, not a seed: a sync never replaces it, and
-/// three of these rows exist in no remote source at all.
+/// Since #427 this is the **floor**, not a seed: a sync never replaces it (merge
+/// by key, [`PriceTable::resolve`]), and nothing here is ever written to disk.
+/// Two kinds of row live here, both floored, never frozen:
+///   - families **no remote source carries** (`claude-opus-4-0`,
+///     `claude-sonnet-4-0`, `claude-3-5-haiku`) — the `const` is their ONLY pricer;
+///   - the **current generation** (`claude-opus-5`, `claude-sonnet-5`,
+///     `claude-fable-5`), seeded by #527 so a never-synced instance prices its
+///     default model out of the box instead of reading `~$0.0000 †`. models.dev
+///     DOES carry these, so any sync overrides them the moment it runs — this is
+///     a floor, not a mirror.
+///
+/// `claude-sonnet-5` is graved at its **post-intro** $3/$15, not the dated intro
+/// $2/$10: the `const` cannot be dated, the intro expires 2026-08-31, and a sync
+/// corrects the ~0.5 % pre-cutover drift — ADR-0034's already-ratified posture for
+/// the fetched tier, now shared by the floor.
 const PRICES: &[(&str, f64, f64)] = &[
     ("claude-opus-4-8", 5.0, 25.0),
     ("claude-opus-4-7", 5.0, 25.0),
@@ -61,6 +80,12 @@ const PRICES: &[(&str, f64, f64)] = &[
     ("claude-sonnet-4-0", 3.0, 15.0),
     ("claude-haiku-4-5", 1.0, 5.0),
     ("claude-3-5-haiku", 0.80, 4.0),
+    // Current generation — floored by #527 so an offline, never-synced instance
+    // prices its default model instead of reading `~$0.0000 †`. models.dev carries
+    // these, so any sync overrides them by key. `sonnet-5` is post-intro $3/$15.
+    ("claude-opus-5", 5.0, 25.0),
+    ("claude-sonnet-5", 3.0, 15.0),
+    ("claude-fable-5", 10.0, 50.0),
 ];
 
 /// Claude Code's local/no-cost sentinel. Priced $0 **above every tier** so it can
@@ -801,6 +826,22 @@ mod tests {
     }
 
     #[test]
+    fn gen_5_is_priced_by_the_embedded_floor_out_of_the_box() {
+        // #527: the offline, never-synced default. `sonnet-5` is the post-intro
+        // $3/$15, not the dated intro $2/$10 — the `const` cannot be dated.
+        let t = PriceTable::builtin();
+        assert_eq!(t.price_for("claude-opus-5"), Some(p(5.0, 25.0)));
+        assert_eq!(t.price_for("claude-sonnet-5"), Some(p(3.0, 15.0)));
+        assert_eq!(t.price_for("claude-fable-5"), Some(p(10.0, 50.0)));
+        // A dated gen-5 id resolves to its family price the same way.
+        assert_eq!(
+            t.price_for("claude-opus-5-20260723"),
+            Some(p(5.0, 25.0)),
+            "a dated gen-5 id must strip to its family"
+        );
+    }
+
+    #[test]
     fn opus_4_1_and_4_0_are_not_collapsed_with_4_5_plus() {
         // The single most error-prone row: same "opus-4" prefix, different price.
         let t = PriceTable::builtin();
@@ -1023,12 +1064,15 @@ mod tests {
 
     #[test]
     fn a_key_only_the_disk_knows_is_priced_and_no_longer_partial() {
+        // A model NEWER than the floor knows (`claude-opus-6`): the enduring value
+        // of the fetched tier once #527 floored the current generation.
         let t = PriceTable::resolve(
             ParsedTier::default(),
-            ParsedTier::of(&[("claude-fable-5", 10.0, 50.0)]),
+            ParsedTier::of(&[("claude-opus-6", 10.0, 50.0)]),
             7,
         );
-        assert_eq!(t.price_for("claude-fable-5"), Some(p(10.0, 50.0)));
+        assert_eq!(t.price_for("claude-opus-6"), Some(p(10.0, 50.0)));
+        assert_eq!(t.tier_of("claude-opus-6"), Some(PriceTier::Fetched));
         // Merge BY KEY: the rest of the floor survives a partial disk tier.
         assert_eq!(t.price_for("claude-opus-4-8"), Some(p(5.0, 25.0)));
     }
@@ -1050,6 +1094,11 @@ mod tests {
         for k in ["claude-opus-4-0", "claude-sonnet-4-0", "claude-3-5-haiku"] {
             assert_eq!(t.tier_of(k), Some(PriceTier::Embedded), "key = {k}");
         }
+        // #527: the gen-5 floor is the OPPOSITE case — models.dev carries these, so a
+        // sync overrides them by key. The live intro `sonnet-5` $2/$10 wins over the
+        // floor's post-intro $3/$15. That is what makes it a floor, not a mirror.
+        assert_eq!(t.price_for("claude-sonnet-5"), Some(p(2.0, 10.0)));
+        assert_eq!(t.tier_of("claude-sonnet-5"), Some(PriceTier::Fetched));
     }
 
     #[test]
@@ -1085,14 +1134,15 @@ mod tests {
     // --- resolved_entries: the read view (#528) ---
 
     #[test]
-    fn resolved_entries_on_builtin_are_the_eleven_embedded_families() {
+    fn resolved_entries_on_builtin_are_the_fourteen_embedded_families() {
         let rows: Vec<(String, Price, PriceTier)> = PriceTable::builtin()
             .resolved_entries()
             .map(|(k, p, t)| (k.to_string(), p, t))
             .collect();
-        // Exactly the floor, no more, no less.
+        // Exactly the floor, no more, no less — fourteen families since #527
+        // seeded the current generation into the embedded floor.
         assert_eq!(rows.len(), PRICES.len());
-        assert_eq!(rows.len(), 11);
+        assert_eq!(rows.len(), 14);
         // Every floor line is the embedded tier.
         assert!(rows.iter().all(|(_, _, t)| *t == PriceTier::Embedded));
         // The most error-prone distinction survives round-tripping through the
@@ -1107,7 +1157,7 @@ mod tests {
     fn resolved_entries_report_the_winning_tier_per_family() {
         let t = PriceTable::resolve(
             ParsedTier::of(&[("claude-opus-4-8", 4.5, 22.5)]),
-            ParsedTier::of(&[("claude-opus-5", 5.0, 25.0)]),
+            ParsedTier::of(&[("claude-opus-6", 10.0, 50.0)]),
             7,
         );
         let rows: Vec<(String, Price, PriceTier)> = t
@@ -1124,12 +1174,13 @@ mod tests {
                 PriceTier::Manual
             ))
         );
-        // Fetch-only family: Fetched tier.
+        // Fetch-only family (beyond the #527 floor, so only the fetched tier
+        // knows it): Fetched tier.
         assert_eq!(
-            row("claude-opus-5"),
+            row("claude-opus-6"),
             Some((
-                "claude-opus-5".to_string(),
-                p(5.0, 25.0),
+                "claude-opus-6".to_string(),
+                p(10.0, 50.0),
                 PriceTier::Fetched
             ))
         );
@@ -1243,8 +1294,13 @@ mod tests {
         assert_eq!(t.fingerprint(), 0);
         assert_eq!(t.diagnostic(), None);
         assert_eq!(t.price_for("claude-opus-4-8"), Some(p(5.0, 25.0)));
-        assert_eq!(t.price_for("claude-opus-5"), None);
-        // Byte-identical to the pre-#427 behaviour.
+        // #527: gen-5 is floored, so a never-synced instance prices its default
+        // model out of the box — the whole point of the amendment.
+        assert_eq!(t.price_for("claude-opus-5"), Some(p(5.0, 25.0)));
+        assert_eq!(t.tier_of("claude-opus-5"), Some(PriceTier::Embedded));
+        // A model the floor cannot know yet is still unpriced until a sync.
+        assert_eq!(t.price_for("claude-opus-6"), None);
+        // The floor is exactly `builtin()` — nothing seeded on disk.
         assert_eq!(t.resolved, PriceTable::builtin().resolved);
     }
 
@@ -1268,7 +1324,10 @@ mod tests {
         write_fetched_raw(home.path(), "{not json");
         let t = PriceTable::load(home.path());
         assert_eq!(t.price_for("claude-opus-4-8"), Some(p(5.0, 25.0)));
-        assert_eq!(t.price_for("claude-opus-5"), None);
+        // #527: gen-5 falls back to the embedded floor when the fetched tier is inert.
+        assert_eq!(t.price_for("claude-opus-5"), Some(p(5.0, 25.0)));
+        // A model beyond the floor stays unpriced.
+        assert_eq!(t.price_for("claude-opus-6"), None);
         let d = t.diagnostic().expect("a corrupt file must be said");
         assert!(d.contains("fetched.json"), "the path must be named: {d}");
     }

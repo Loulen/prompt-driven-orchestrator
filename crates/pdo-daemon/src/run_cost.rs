@@ -539,16 +539,13 @@ mod tests {
         // #425: several lines, three of them on models no tier prices. The dated
         // and undated forms of the SAME family collapse to one name (the family
         // key a human would add to price it), and the set is sorted + unique.
+        // #527 floored gen-5, so the unpriced exemplars are models BEYOND the
+        // floor (`claude-opus-6`/`claude-opus-7`) — the case a sync still repairs.
         let lines = vec![
             line(Some("m1"), Some("r1"), "claude-opus-4-8", 1_000_000), // priced
-            line(Some("m2"), Some("r2"), "claude-sonnet-5", 1_000_000),
-            line(
-                Some("m3"),
-                Some("r3"),
-                "claude-sonnet-5-20260501",
-                1_000_000,
-            ), // same family
-            line(Some("m4"), Some("r4"), "claude-fable-5", 1_000_000),
+            line(Some("m2"), Some("r2"), "claude-opus-6", 1_000_000),
+            line(Some("m3"), Some("r3"), "claude-opus-6-20260501", 1_000_000), // same family
+            line(Some("m4"), Some("r4"), "claude-opus-7", 1_000_000),
         ];
         let c = aggregate(lines.into_iter(), &builtin());
         // Only the one priced line contributes.
@@ -556,7 +553,7 @@ mod tests {
         assert!(c.partial);
         assert_eq!(
             c.unpriced_models,
-            vec!["claude-fable-5".to_string(), "claude-sonnet-5".to_string()],
+            vec!["claude-opus-6".to_string(), "claude-opus-7".to_string()],
             "de-dated, de-duplicated, sorted"
         );
         // The invariant the whole design rests on.
@@ -745,7 +742,9 @@ mod tests {
             repo.path(),
             run_id,
             // A model NO tier prices out of the box → $0 + partial, the very symptom.
-            &assistant("m1", "r1", "claude-fable-5", 1_000_000, 0),
+            // Since #527 floored gen-5, this must be a model beyond the floor
+            // (`claude-opus-6`) for the $0 to be genuine.
+            &assistant("m1", "r1", "claude-opus-6", 1_000_000, 0),
         );
         let mtime_before =
             filetime::FileTime::from_last_modification_time(&std::fs::metadata(&file).unwrap());
@@ -755,7 +754,7 @@ mod tests {
         assert!(unpriced.partial, "an unknown model flags partial");
         assert_eq!(
             unpriced.unpriced_models,
-            vec!["claude-fable-5".to_string()],
+            vec!["claude-opus-6".to_string()],
             "and the memo carries the offender's name, not just the flag (#425)"
         );
 
@@ -765,7 +764,7 @@ mod tests {
         std::fs::create_dir_all(manual.parent().unwrap()).unwrap();
         std::fs::write(
             &manual,
-            "models:\n  claude-fable-5: { input: 10.0, output: 50.0 }\n",
+            "models:\n  claude-opus-6: { input: 10.0, output: 50.0 }\n",
         )
         .unwrap();
         let synced = crate::price_table::PriceTable::load(home2.path());

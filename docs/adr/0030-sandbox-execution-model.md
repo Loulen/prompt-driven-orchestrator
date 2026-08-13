@@ -1,496 +1,287 @@
 # ADR-0030 — Modèle d'exécution de la Sandbox (conteneur par Run)
 
-> Statut : accepted (#407, tracer bullet du PRD #403). Vocabulaire : CONTEXT.md § « Sandbox ».
-> Consolide aussi la rationale du tag image content-hashé (#405) — pas d'ADR séparé.
+> Statut : accepted (#407, tracer bullet du PRD #403 ; amendements #405, #410, #414, #426, #431,
+> #445, #447, #466, #467, #471 repliés dans le corps). Vocabulaire : CONTEXT.md § « Sandbox ».
+> ADR-0031 dit *ce que* contient le home stagé et l'environnement d'un Run sandboxé ; celle-ci dit
+> *où* et *comment* le Run s'exécute — y compris le contrat de l'image, dont la rationale complète
+> vit ici (pt 7).
 
-Un Run en mode `copy`/`pure` exécute **toutes ses tails** (nœuds agents, manager, merge-resolver,
-nœuds `script`, run-shell) dans un unique conteneur long-vécu `pdo-sbx-<run-id>` (`sleep infinity`,
-PID 1 = tini). Les guards de Trigger restent hôte (décision de fiançailles, pas de travail de Run).
+Un Run en mode `minimal`/`full` exécute **toutes ses tails** (nœuds agents, manager,
+merge-resolver, nœuds `script`, run-shell) dans un unique conteneur long-vécu par Run
+(`sleep infinity`, PID 1 = tini). Les guards de Trigger restent hôte (décision de fiançailles, pas
+de travail de Run).
+
+Le tri-état du mode est **`off | minimal | full`** (#426, ex-`pure`/`copy`), **sans alias de
+compatibilité** : aucune valeur persistée n'existait dans les instances réelles. Corollaire
+assumé : un token pré-renommage retrouvé dans un log d'événements se dégrade en `off` — vers
+**moins** d'isolation — et les décodeurs le loggent (le pt 4 interdisant tout fallback hôte
+silencieux). `minimal` est plus juste que `pure` : le plancher de garanties (ADR-0031 §1) y seede
+des consentements — le mode n'est pas *pur*, il est *minimal*.
 
 ## Ce qu'on décide
 
-1. **Identity mounts.** Le repo cible est bind-monté rw à son **chemin absolu hôte** (un seul mount
-   couvre repo + tous les worktrees de nœuds sous `.pdo/runs/` + `.pdo/prompts`) ; le *staged Claude
-   home* → `$HOME/.claude`, son `.claude.json` sibling → `$HOME/.claude.json`, le binaire `pdo` hôte
-   → `/usr/local/bin/pdo:ro`. Le conteneur adopte l'**uid/gid hôte** (`--user` numérique). Résultat :
-   le chemin de travail est identique des deux côtés → le dirname encodé des transcripts matche
-   (pré-requis du merge-back, câblé en #408).
+1. **Identity mounts + injection d'identité.** Le repo cible est bind-monté rw à son **chemin
+   absolu hôte** (un seul mount couvre repo + worktrees de nœuds + prompts) ; le *staged Claude
+   home* et son `.claude.json` sibling sont montés aux chemins `$HOME` correspondants ; le binaire
+   `pdo` hôte en lecture seule. S'y ajoutent les **exceptions déclarées** par le profil de staging
+   (ADR-0031 §4) : une entrée hors `.claude` est copiée dans le staging puis montée rw à
+   `$HOME/<chemin>` — la liste de mounts n'est plus fermée. Le conteneur adopte l'**uid/gid hôte**
+   (`--user` numérique). Résultat : le chemin de travail est identique des deux côtés → le dirname
+   encodé des transcripts matche (pré-requis du merge-back, pt 9).
 
-   **Amendement #414 — l'identité de l'uid hôte se pose sur le conteneur démarré, pas dans la liste
-   des mounts.** La liste des mounts **ne bouge pas** (elle reste celle ci-dessus + la queue
-   d'exception `$HOME` d'ADR-0031 §4), et l'argv du `docker create` reste **byte-identique** : le
-   `--user` numérique donne au process l'uid/gid hôte, mais l'image ne connaît de *nom* que pour
-   l'uid 1000. `ensure_running` lance donc, juste après le `start` et **sur ses trois branches**, un
-   `docker exec --user 0:0` qui **ajoute** les deux lignes manquantes aux `/etc/passwd` et
-   `/etc/group` réels de l'image, derrière une garde `getent` — no-op exact en uid 1000 (fichiers
-   byte-identiques), best-effort partout (`warn!`, jamais un Run cassé). Voir « Injection
-   d'identité » dans le lexique, et les alternatives écartées ci-dessous pour pourquoi ce n'est
-   **pas** un bind-mount.
+   **L'identité de l'uid hôte se pose sur le conteneur démarré, pas dans les mounts (#414).** La
+   liste des mounts ne bouge pas et l'argv du create reste byte-identique : le `--user` numérique
+   donne au process l'uid/gid hôte, mais l'image ne connaît de *nom* que pour l'uid 1000. Après le
+   start, un exec root ajoute les entrées manquantes aux `/etc/passwd`/`/etc/group` **réels** de
+   l'image, derrière une garde — no-op exact en uid 1000, best-effort partout (jamais un Run
+   cassé). Le **Dockerfile n'est pas modifié — pas même un commentaire** : il est hashé octet par
+   octet pour dériver le tag (pt 7), toute édition périmerait l'image buildée et publiée.
 
-   Le **Dockerfile n'est pas modifié** — pas même un commentaire : il est hashé octet par octet
-   (`sha256`, sans normalisation) pour dériver le tag `pdo-sandbox:h-<hash>`, donc toute édition
-   périmerait l'image buildée et publiée. Son commentaire de la règle sudoers (« pour tout autre uid
-   hôte, le RUNTIME doit injecter une entrée passwd — hors périmètre de l'image ») **devient vrai**
-   avec cette livraison ; seul son pointeur `(#406)` est daté, et se lit désormais `(#414)`.
+2. **Staging par Run.** Un répertoire de staging par Run sous le sandbox root (jamais le vrai
+   `~/.claude`), seedé à la prep selon le profil, purgé au `cleanup_run`. En `minimal`, la
+   confiance est pré-accordée à la **racine du repo** — l'ancêtre commun du worktree pipeline et de
+   tous les worktrees de nœuds, donc héritée par chaque cwd de session.
 
-2. **Staging par Run.** `~/.pdo/sandbox/<run-id>/` (jamais le vrai `~/.claude`), seedé par `prepare`
-   selon le mode, purgé par `teardown` au `cleanup_run`. En `pure`, la confiance (`hasTrustDialogAccepted`)
-   est pré-accordée à la **racine du repo** — l'ancêtre commun du worktree de pipeline ET de tous les
-   worktrees de nœuds, donc héritée par chaque cwd de session.
+3. **Réseau = host-gateway, et l'URL du daemon a un résolveur unique (#447).** Le conteneur joint
+   le daemon hôte via la gateway Docker, l'URL étant posée **au create** (jamais re-passée à
+   l'exec : un `-e` nu re-forwarderait le `localhost` hôte et clobbererait la gateway). C'est ce
+   qui permet à `pdo complete`/`fail`/`skip` in-container de rappeler le daemon.
 
-3. **Réseau = host-gateway + `PDO_DAEMON_URL`.** Le conteneur joint le daemon hôte via
-   `--add-host host.docker.internal:host-gateway` + `PDO_DAEMON_URL=http://host.docker.internal:<port>`
-   posé **au create** (jamais re-passé à l'exec — un `-e` nu re-forwarderait le `localhost` hôte et
-   clobbererait la gateway). C'est ce qui permet au `pdo complete`/`fail`/`skip` in-container de
-   rappeler le daemon.
+   Le résolveur d'URL est **unique**, possédé par le module qui possède la gateway (le hostname de
+   la gateway et la gateway sont le même fait), et consommé à la fois par l'env du create **et**
+   par le texte du préambule manager — les deux ne peuvent plus diverger. Avant #447, le préambule
+   codait `localhost:<port>` en dur : toute la surface de commande du manager était inatteignable
+   sur un Run sandboxé (reproduit 3/3 avec contrôle négatif `off`) — panne silencieuse, non
+   déterministe et affirmative (le manager concluait de bonne foi que le daemon était mort).
+   Nuance load-bearing : l'argument du résolveur nomme le **côté d'exécution**, pas le mode du
+   Run — les exports d'env côté hôte du wrapper (pt 5) résolvent « hôte » même pour un Run
+   sandboxé, parce qu'ils s'exécutent avant le `docker exec` et ne traversent pas.
 
-4. **Préparation eager fail-fast.** Image + conteneur + staging sont garantis prêts **avant le premier
-   spawn** ; toute indisponibilité de Docker → `RunFailed` explicite. **Jamais de fallback hôte
-   silencieux** pour le travail d'un Run sandboxé. La prep tourne sur une tâche détachée (le
-   `docker build` du 1er run machine ne doit pas bloquer le 201 — cohérent ADR-0023) ; `ensure_ready`
-   étant bloquant, il vit dans un `spawn_blocking` (panic isolée en `JoinError` → `RunFailed`).
+4. **Préparation eager fail-fast, portée comme précondition du spawn (#445).** Image + conteneur +
+   staging sont garantis prêts **avant le premier spawn** ; toute indisponibilité de Docker →
+   `RunFailed` explicite. **Jamais de fallback hôte silencieux** — règle étendue au profil inconnu
+   (400 à la création, tir de Trigger en échec visible, `RunFailed` en boot recovery, ADR-0031 §7)
+   et au Dockerfile pointé invalide (pt 7). La prep tourne sur une tâche détachée (le build du
+   premier run machine ne doit pas bloquer la création — cohérent ADR-0023), panic isolée →
+   `RunFailed`.
 
-5. **Wrapping au chokepoint unique.** Toutes les familles de tails funnel par `build_tmux_script`
-   (+ `build_resume_script` pour le `claude --continue`) : quand le Run est sandboxé, la tail est
-   enveloppée en `docker exec … pdo-sbx-<run> bash -lc '<tail>'`. Les exports d'env de base restent
-   côté **hôte** (inoffensifs) — d'où l'invariant `off` **byte-identique** quand le wrapping est absent.
-   Le catalogue d'env **dynamique** d'un nœud `script` (`PDO_ARTIFACTS_DIR`/`PDO_INPUT_*`/`PDO_OUTPUT_*`/
-   `PDO_VAR_*`) traverse l'exec en `-e KEY=VALUE` **explicites** (un `-e` nu ne forwarderait que la
-   valeur du shell hôte, que la sandbox n'exporte pas) — **jamais `PDO_DAEMON_URL`**.
+   La garantie était d'abord rejouée par le seul parcours de création : le watcher de pipeline et
+   le balayage d'admission cross-Run atteignaient le spawn **pendant** la prep, la tail tombait sur
+   un conteneur inexistant et ~25 s plus tard le Run mourait en `session_died` (reproduit 7 fois ;
+   le profil `full` était inutilisable dès qu'on regardait son Run — l'onglet ouvert déclenchait le
+   watcher). D'où :
 
-6. **Kill ciblé.** Un kill de session est doublé d'un `docker exec` séparé qui scanne `/proc/*/environ`
-   pour le marqueur de session (`PDO_SBX_SESSION` = le nom de session tmux) et `TERM`→`KILL` le seul
-   arbre porteur ; les sessions sœurs survivent (le client `docker exec` tué côté tmux ne tue pas le
-   process conteneur, reparenté sur PID 1).
+   - **la précondition est portée par le spawn lui-même, pas par ses appelants** — « un Run
+     sandboxé dont la prep n'est pas prête n'est pas schedulable » ; corriger le site d'appel
+     aurait laissé le prochain appelant réintroduire le défaut (même argument que le garde de
+     transition #212). Un `off` n'est **jamais** bloqué ; une prep *absente* bloque comme une prep
+     *pendante* (fail-safe : un blocage à tort coûte un spawn rejoué, un passage à tort un nœud
+     mort) ;
+   - **le refus n'écrit rien** — ni événement de démarrage (celui qui, seul, fait rendre
+     `session_died`), ni réservation `Waiting` (qui sortirait le nœud de l'ensemble prêt et
+     pourrait le coincer pour toujours). Sans état, le premier advance suivant la fin de prep le
+     démarre ;
+   - **l'événement de fin de prep lève la précondition**, donc tout parcours qui rend le conteneur
+     réel l'émet — y compris resume et boot recovery (sinon un Run échoué pendant sa prep resterait
+     différé pour toujours). Émis seulement après une prep en succès, et seulement si le Run était
+     effectivement bloqué ; le run-shell reste non émetteur (il ressuscite un Run terminal où rien
+     ne sera spawné) ;
+   - **la réconciliation de stall accorde une grâce plus longue (15 min), pas une exemption** : un
+     Run en prep présente exactement la signature d'un spawn silencieusement avorté, et sans grâce
+     le filet tuait précisément les Runs lents que la précondition venait de sauver (83-87 s
+     mesurés pour un profil de 2 Go, davantage sur un build froid, contre une fenêtre de 120 s).
+     Au-delà, le Run échoue avec une cause qui **nomme la sandbox** au lieu d'accuser tmux ;
+     différer indéfiniment échangerait un faux échec contre un stall silencieux (ADR-0004) ;
+   - **une prep dont le Run est devenu terminal est abandonnée** : aucun event, aucun spawn, et le
+     conteneur est supprimé (idempotent, best-effort). Le staging est **conservé** — c'est le
+     cleanup qui le purge, et le détruire ici détruirait les transcripts que le merge-back
+     moissonne.
 
-7. **Tag image adressé par contenu + fourniture hybride (#411).** `pdo-sandbox:h-<hash>` où
-   `<hash>` = SHA-256[..12] des octets exacts du Dockerfile sur disque. Deux Dockerfiles identiques →
-   même tag ; une édition → rebuild. `.gitattributes` épingle `eol=lf` pour la reproductibilité.
-   C'est l'identité qui rend une image **tirée d'un registry** et une image **buildée localement**
-   interchangeables sous le même nom. Une **source d'image** (`registry` défaut | `dockerfile`,
-   précédence `env → défaut de profil` depuis #471 — voir l'amendement en fin de point) pilote
-   `ensure_image` : en `registry`, si l'image n'est pas déjà locale, `docker pull
-   ghcr.io/loulen/pdo-sandbox:h-<hash>` puis **retag** sous le ref local, avec **fallback build** si
-   le pull échoue (offline / 404 tag absent / registry down) ; en `dockerfile`, build direct, jamais
-   de pull. La valeur de retour est **toujours le ref local** → `sandbox_container` inchangé (reçoit
-   `pdo-sandbox:h-<hash>` que l'image vienne d'un pull ou d'un build). Le pull est **anonyme** sur une
-   image **publique** : aucune nouvelle surface d'auth, le trou d'auth #260 reste **inchangé**. La
-   release publie l'image sur GHCR (job additif indépendant, multi-arch `amd64`+`arm64`, tags
-   `h-<hash>` + `latest` informatif) ; le hash CI (bash `sha256sum | cut`) est byte-identique au Rust,
-   gardé par un self-check de parité.
+   **Visibilité de la prep (#410).** La fenêtre est observable via deux événements additifs et
+   informationnels (début/fin de prep), **jamais** émis pour un Run `off`, projetés dans un champ
+   additif sans toucher le statut du Run (qui reste `running`). On écarte un statut `Preparing`
+   (blast radius sur toute la machine à états) et l'inférence client « running + 0 session ⇒
+   preparing » (faux positifs pendant la fenêtre d'advance détaché et le throttling). L'échec de
+   prep reste porté par `RunFailed`. Le marqueur survit à un restart daemon par replay du log.
 
-   **Amendement #466 — le NOM d'image est une donnée de la variante.** Un ref d'image sandbox est
-   désormais un couple `<nom>:h-<hash>` dont les deux moitiés sortent du même fichier : le hash de
-   ses **octets**, le nom de son **nom de fichier** (`image_name_for_dockerfile` :
-   `Dockerfile` → `pdo-sandbox`, `Dockerfile.<variante>` → `pdo-sandbox-<variante>` ; tout autre nom
-   retombe sur `pdo-sandbox`, un Dockerfile que l'utilisateur *pointe* n'ayant pas à suivre notre
-   convention — son tag reste le hash de ses octets, donc aucune collision). Corollaire assumé : un
-   Dockerfile de variante est **autonome** (`FROM ubuntu:24.04` + steps de la base dupliqués), et
-   **jamais** `FROM ghcr.io/loulen/pdo-sandbox:h-<hash>` — injecter le hash de la base obligerait à
-   *générer* les octets de la variante, or ces octets **sont** la source de vérité de son propre tag.
-   La duplication est le prix de l'adressage par contenu. `release.yml` devient une matrice une-jambe-
-   par-variante (le nom y est re-dérivé en bash, avec son propre self-check de parité), et la première
-   variante livrée est `pdo-sandbox-chrome-dev` (#466 : node 22 + Chrome + `chrome-devtools-mcp`,
-   `amd64` seul faute de .deb Chrome arm64 en amont). La **sélection** de la variante reste, dans cette
-   slice, le réglage `dockerfile_path` existant (§5) — pointer la variante change nom **et** hash, donc
-   build local ; aucune 3e valeur de la source n'est inventée, la sélection par profil de staging
-   arrivant séparément (#467, et devenant l'unique chemin en #471).
+5. **Wrapping au chokepoint unique.** Toutes les familles de tails funnel par le même constructeur
+   de script tmux : quand le Run est sandboxé, la tail est enveloppée en `docker exec … bash -lc`.
+   Les exports d'env de base restent côté **hôte** (inoffensifs) — d'où l'invariant `off`
+   **byte-identique** quand le wrapping est absent. Le catalogue d'env dynamique d'un nœud `script`
+   traverse l'exec en `-e KEY=VALUE` **explicites** (un `-e` nu ne forwarderait que la valeur du
+   shell hôte, que la sandbox n'exporte pas) — jamais l'URL du daemon.
 
-   **Amendement #467 — un ref registry explicite sort de l'adressage par contenu, et l'assume.**
-   Un profil de staging peut désormais porter sa propre source d'image (ADR-0031 §9), sous deux
-   formes. La première, `kind: dockerfile`, ne change **rien** ici : c'est le Dockerfile résolu (§5)
-   choisi par profil, donc un tier de précédence de plus et pas une nouvelle mécanique — même hash,
-   même nom dérivé du nom de fichier, même prédicat de skip-pull sur l'**emplacement**. La seconde, `kind: registry` avec un ref **libre** (p.ex.
-   `ghcr.io/acme/agent:1.4`), casse en revanche l'identité qui fonde tout ce point, et il faut
-   l'écrire noir sur blanc plutôt que le découvrir en prod :
+6. **Kill ciblé.** Un kill de session est doublé d'un exec séparé qui retrouve, via un marqueur de
+   session dans l'environnement des process, le seul arbre porteur et le termine ; les sessions
+   sœurs survivent (le client `docker exec` tué côté tmux ne tue pas le process conteneur,
+   reparenté sur PID 1).
 
-   - **Pas de repli build.** Le repli existe parce que `<nom>:h-<hash>` est le hash des octets d'un
-     Dockerfile *connu* : tirer ou builder produit alors la même image. Un ref libre n'a pas de
-     Dockerfile, donc pas de hash, donc rien à builder — un « fallback » ne pourrait que builder une
-     image **sans rapport** et la faire passer pour celle demandée. Un `docker pull` en échec est
-     donc une **erreur DURE** qui NOMME le ref (et le profil qui l'a désigné), jamais un build
-     silencieux.
-   - **Pas de retag.** Le ref local **est** le ref demandé, tel quel : il n'y a pas de second nom
-     content-addressé sous lequel le poser. `sandbox_container` reçoit donc, selon la branche, soit
-     `<nom>:h-<hash>` soit le ref du profil — sa seule exigence (« on me donne un ref ») tient.
-   - **Fast-path conservé.** `image inspect` précède toujours le réseau : un ref déjà local (tiré
-     hier, ou buildé à la main sous ce nom) est réutilisé offline. C'est la seule propriété du
-     chemin hash-dérivé qui survit intacte.
-   - **PDO ne vérifie pas que l'image contient `claude`**, ni au write (ce serait un aller-retour
-     réseau dans un handler PUT) ni au prep. C'est la responsabilité de qui fournit le ref ; une
-     image sans `claude` échoue au premier `docker exec`, avec le stderr de docker.
+7. **Image : tag adressé par contenu, fourniture hybride, variantes, ref registry explicite.**
 
-   Conséquence de vocabulaire, et source de confusion à traiter dans l'UI plutôt qu'à subir : le mot
-   `registry` désigne maintenant **deux choses différentes**. La source `registry` tire l'image
-   *prébuild de VOTRE Dockerfile* — d'où le fait, non documenté avant #467 et **correct**, que le
-   Dockerfile reste **obligatoire** dans ce mode : le tag EST le sha256 de ses octets, sans eux
-   l'image est innommable. Le `kind: registry` d'un profil, lui, est un ref arbitraire sans
-   Dockerfile.
+   **Le tag est le hash du contenu (#405).** `pdo-sandbox:h-<hash>` où `<hash>` = SHA-256 tronqué
+   des octets exacts du Dockerfile sur disque. Deux Dockerfiles identiques → même tag ; une
+   édition → rebuild ; fins de ligne épinglées pour la reproductibilité. C'est l'identité qui rend
+   une image **tirée d'un registry** et une image **buildée localement** interchangeables sous le
+   même nom (#411) : en source `registry` (défaut), si l'image n'est pas locale, pull anonyme
+   depuis GHCR puis retag sous le ref local, avec **fallback build** si le pull échoue (offline /
+   tag absent / registry down) ; en source `dockerfile`, build direct, jamais de pull. Le pull
+   anonyme d'une image publique n'ouvre aucune surface d'auth. La release publie l'image
+   (multi-arch), avec un self-check de parité du hash entre CI et daemon.
 
-   **Amendement #471 — la source d'image n'est plus un réglage d'instance, c'est un défaut de
-   profil.** `image_source` et `dockerfile_path` sortent d'`instance_config`, de `GET /settings`, du
-   validateur de `PUT /settings` et de l'écran de réglages ; ce qu'ils valaient **par défaut** devient
-   la constante `sandbox_profile::DEFAULT_PROFILE_IMAGE` (registre hash-dérivé sur le Dockerfile
-   seedé), à côté de `DEFAULT_FULL_ENTRIES`. La précédence de ce point devient donc **profil (si
-   posé) → env → défaut de profil**. Rien de ce qui est écrit ci-dessus sur le tag, le hash, le pull,
-   le retag ou le fast-path ne change : c'est la **provenance du choix** qui change, pas la mécanique.
-   Deux points qui se plantent si on les bâcle :
+   **Le nom d'image est une donnée de la variante (#466).** Un ref est un couple `<nom>:h-<hash>`
+   dont les deux moitiés sortent du même fichier : le hash de ses **octets**, le nom de son **nom
+   de fichier** (`Dockerfile` → nom de base, `Dockerfile.<variante>` → nom suffixé ; tout autre nom
+   retombe sur le nom de base — un Dockerfile pointé par l'utilisateur n'a pas à suivre la
+   convention, son tag reste le hash de ses octets). Corollaire assumé : un Dockerfile de variante
+   est **autonome** (steps de la base dupliqués), jamais `FROM` l'image de base par hash — injecter
+   le hash de la base obligerait à *générer* les octets de la variante, or ces octets **sont** la
+   source de vérité de son propre tag. La duplication est le prix de l'adressage par contenu.
+   Première variante livrée : chrome-dev (#466).
 
-   - **Les deux variables d'env survivent** (`PDO_SANDBOX_IMAGE_SOURCE`, `PDO_SANDBOX_DOCKERFILE`),
-     repointées sur ce défaut. Une instance **headless** fraîche n'a que des profils virtuels et pas
-     d'UI : l'env est son seul moyen de changer d'image sans POSTer un profil. Ce qui disparaît est le
-     champ d'`instance_config` et l'écran, pas la variable.
-   - **`seed_dockerfile` continue d'écrire la copie de référence** à `<sandbox_root>/Dockerfile`. Ce
-     n'est pas un réglage, c'est la **matérialisation du défaut** : l'utilisateur l'édite pour changer
-     le hash, donc l'image.
+   **Le Dockerfile résolu se choisit par profil (#431, #467, #471).** Précédence
+   **profil (si posé) → env → défaut de profil** : la source d'image n'est plus un réglage
+   d'instance — ce qu'elle valait par défaut est devenu une constante de la couche des profils
+   (registre hash-dérivé sur le Dockerfile seedé), et les deux variables d'env survivent,
+   repointées sur ce défaut (une instance headless fraîche n'a pas d'UI ; l'env est son seul moyen
+   de changer d'image sans POSTer un profil). Le fichier seedé par défaut reste écrit : ce n'est
+   pas un réglage, c'est la **matérialisation du défaut** — l'utilisateur l'édite pour changer le
+   hash, donc l'image. Trois précisions dont chacune a failli produire la mauvaise
+   implémentation :
 
-   Conséquence sur la confusion de vocabulaire ci-dessus : elle rétrécit sans disparaître. Les deux
-   sens de `registry` se choisissent maintenant dans le **même** `<select>`, celui de l'éditeur de
-   profil — ce qui rend la distinction énonçable en une phrase, là où elle demandait quatre lignes
-   renvoyant vers un autre écran.
+   - **Le prédicat de skip-pull porte sur le CHEMIN, pas sur les octets.** Le seed n'écrase
+     jamais : une machine à jour garde le Dockerfile d'une release antérieure, dont le tag existe
+     en amont. Un prédicat sur les octets classerait ce cas **dominant** en « custom » et
+     imposerait un build local de plusieurs minutes. Le skip-pull est une optimisation, pas un gate
+     de correction : fast-path local et fallback build rendent un pull inutile inoffensif dans les
+     deux sens, donc le prédicat le moins cher gagne.
+   - **Le contexte de build reste un répertoire dédié gardé vide**, y compris sous un chemin
+     custom : un Dockerfile pointé doit être **auto-porteur** (pas de `COPY`/`ADD`). Suivre le
+     répertoire parent du fichier pointé rouvrirait le piège des siblings écrits concurremment
+     (staging dirs par-Run) et ferait du tag adressé par contenu un mensonge : le hash ne porte que
+     sur les octets du Dockerfile, donc le fast-path figerait pour toujours une image dont le
+     contexte a changé.
+   - **Un chemin résolu qui n'est pas un fichier régulier échoue fort au prep** (la cause nomme le
+     chemin **et** le tier gagnant), plus un refus précoce à l'écriture du réglage. Jamais de repli
+     vers le seedé : ce serait builder silencieusement **une autre image que celle que l'équipe a
+     versionnée**, symptôme reporté au fond d'un node avec un tag d'apparence saine. Le tier env
+     contourne la validation d'écriture par construction — échappatoire assumée ; il reste gaté au
+     prep.
 
-8. **Mode immuable par Run.** `off`|`copy`|`pure` est porté par `RunStarted`, projeté une fois, jamais
-   muté. Un Run reste sandboxé (ou non) toute sa vie : sinon `claude --continue` (resume) ne
-   retrouverait pas son transcript (indexé par chemin de travail). En #407 le mode n'arrivait que par
-   le paramètre de l'API `POST /runs`. Depuis **#410** il est **résolu** au chokepoint unique de
-   création (`create_run_inner`, où les trois parcours — JSON, multipart, fire de Trigger —
-   convergent) par le résolveur **pur** `event_log::effective_sandbox(explicit, trigger,
-   instance_default)`, précédence **choix explicite du Run → défaut par-Trigger → `default_sandbox`
-   d'instance** (plancher `off`). Le paramètre filaire devient `Option<SandboxMode>` (absent = `None`,
-   **distinct** d'un `off` explicite qu'un défaut `copy`/`pure` ne doit jamais surclasser).
-   `default_sandbox` est lu **frais** en base au bord (précédence `stored → env → default(off)`,
-   ADR-0015, miroir d'`image_source`). L'invariant `off` byte-identique tient : un mode résolu `off`
-   n'injecte rien dans le payload (chokepoint inchangé).
+   **Un ref registry explicite (profil `kind: registry`, ADR-0031 §9) sort de l'adressage par
+   contenu, et l'assume.** Un ref libre (ex. `ghcr.io/acme/agent:1.4`) n'a pas de Dockerfile, donc
+   pas de hash, donc rien à builder : un « fallback » ne pourrait que builder une image **sans
+   rapport** et la faire passer pour celle demandée. Donc : **pas de repli build** — un pull en
+   échec est une erreur **dure** qui nomme le ref et le profil, jamais un build silencieux ; **pas
+   de retag** — le ref local est le ref demandé, tel quel ; **fast-path conservé** — un ref déjà
+   local est réutilisé offline (la seule propriété du chemin hash-dérivé qui survit intacte) ; et
+   **PDO ne vérifie pas que l'image contient `claude`** (ni au write — un aller-retour réseau dans
+   un handler d'écriture — ni au prep) : c'est la responsabilité de qui fournit le ref ; une image
+   sans lui échoue au premier exec, avec le stderr de docker.
 
-9. **Observabilité (câblée #408).** `merge_back` est câblé dans le run-advance — à la **transition
-   terminale** (chokepoint `append_event`, tâche détachée pour ne pas coupler la latence/l'échec de la
-   transition, cohérent ADR-0023) **et** à `cleanup_run` (avant `teardown`, synchrone, pour capter la
-   croissance post-terminale : resume, flushs tardifs de sous-agents). Double merge = état identique
-   (copy-if-absent-or-larger idempotent). Coût (`run_cost`) et stale/AutoComplete (`stale_detector`)
-   deviennent sandbox-conscients via le seam `transcripts_root(mode, run_id, home_root, sandbox_root)`,
-   consommé par les **deux** (source unique, pas d'encodeur dupliqué — leçon #373) : Run sandboxé
-   **vivant** → le staging ; après `cleanup_run` → `~/.claude/projects/`. Dispatch **keyé sur
-   l'existence du staging dir** (pas le statut terminal : reste correct si le merge terminal best-effort
-   a échoué). `resume_run` re-arme d'abord le conteneur (`ensure_ready`-ou-échec, miroir du run-shell)
-   car sans `--restart` il est down après un reboot hôte. **session-died** reste
-   transcript-indépendante.
+   Vocabulaire, confusion assumée : la **source** `registry` tire l'image prébuild de VOTRE
+   Dockerfile — qui reste **obligatoire** dans ce mode, le tag étant le hash de ses octets, sans
+   eux l'image est innommable ; le **`kind: registry`** d'un profil est un ref arbitraire sans
+   Dockerfile. Les deux se choisissent dans le même sélecteur de l'éditeur de profil, ce qui rend
+   la distinction énonçable en une phrase. Fournir un ref d'image tout fait au niveau *instance*
+   reste hors périmètre ; le profil `kind: registry` est la seule porte, avec les contreparties
+   ci-dessus.
 
-10. **Visibilité de la préparation (#410).** La fenêtre de prep eager (point 4) devient observable via
-    deux événements **additifs et informationnels** — `SandboxPrepStarted` (en tête de la tâche
-    détachée, avant `ensure_ready`) / `SandboxPrepReady` (juste avant le 1er spawn) — émis au
-    chokepoint `append_event` (donc broadcast WS + `refreshRun` gratuits, aucune allowlist à toucher),
-    **jamais** pour un Run `off` (invariant `off` byte-identique préservé). Ils se projettent dans un
-    champ **additif** `RunState.sandbox_prep` (`pending`|`ready`) **sans** toucher `status` (qui reste
-    `running` : `is_live`/overlap/admission/reconcilers inchangés — même grain que `NodeBlockedOnLimit`
-    / `NodeAutoCompleteObserved`). On **écarte** un statut `Preparing` (blast radius sur toute la
-    machine à états + tous les consommateurs de statut) et l'**inférence client** (`running` + 0
-    session vive ⇒ preparing : faux positifs pendant la fenêtre d'advance détaché ADR-0023, le
-    throttling #159, et l'attente d'un successeur). L'échec de prep reste porté par `RunFailed`
-    (`fail_run_sandbox_prep`), **sans** événement de prep dédié. Fast-path (image locale) : la paire
-    Started/Ready bascule instantanément. **Non émis** au ré-armement (`resume_run`/`open_run_shell`) :
-    hors « premier usage ». Le marqueur `ready` survit à un restart daemon par replay du log.
+8. **Mode immuable par Run.** `off`|`minimal`|`full` est porté par `RunStarted`, projeté une fois,
+   jamais muté : sinon le resume (`claude --continue`) ne retrouverait pas son transcript (indexé
+   par chemin de travail). Le mode est **résolu** au chokepoint unique de création — où les trois
+   parcours (JSON, multipart, fire de Trigger) convergent — par un résolveur pur, précédence
+   **choix explicite du Run → défaut par-Trigger → défaut d'instance** (plancher `off`) (#410). Le
+   paramètre filaire est optionnel : absent est **distinct** d'un `off` explicite, qu'un défaut
+   `minimal`/`full` ne doit jamais surclasser. Le défaut d'instance suit ADR-0015
+   (`stored → env → default`), lu frais au bord. L'invariant `off` byte-identique tient : un mode
+   résolu `off` n'injecte rien dans le payload.
+
+9. **Observabilité des transcripts (#408).** Le merge-back des transcripts est câblé à la
+   transition terminale (tâche détachée, cohérent ADR-0023) **et** au `cleanup_run` (synchrone,
+   avant teardown, pour capter la croissance post-terminale : resume, flushs tardifs de
+   sous-agents) ; le double merge est idempotent. Le calcul de coût et la sonde de fin de tour
+   deviennent sandbox-conscients via un seam unique `transcripts_root` consommé par les deux
+   (source unique, pas d'encodeur dupliqué — leçon #373) : Run sandboxé **vivant** → le staging ;
+   après cleanup → le home hôte. Dispatch keyé sur l'**existence du staging dir**, pas le statut
+   terminal (reste correct si le merge terminal best-effort a échoué). `resume_run` re-arme
+   d'abord le conteneur (prep-ou-échec) car sans politique de restart il est down après un reboot
+   hôte. La détection de mort de session reste transcript-indépendante.
 
 ## Pourquoi (le trou d'auth assumé v1)
 
-Le daemon expose une API HTTP **non authentifiée**, liée à `0.0.0.0` (lib.rs, #260 CLOSED — choix
-délibéré d'accès LAN). N'importe quel code dans le conteneur (y compris un agent prompt-injecté) peut
-appeler **tout** endpoint via la gateway, pas seulement sa propre complétion.
+Le daemon expose une API HTTP **non authentifiée**, liée à `0.0.0.0` (#260 CLOSED — choix délibéré
+d'accès LAN). N'importe quel code dans le conteneur (y compris un agent prompt-injecté) peut appeler
+**tout** endpoint via la gateway, pas seulement sa propre complétion.
 
-On l'accepte pour v1 **parce que ce n'est pas net-new** : un nœud hôte **non** sandboxé tourne déjà
-en `claude --dangerously-skip-permissions` avec exactement le même accès non authentifié au daemon
-(`PDO_DAEMON_URL=http://localhost:<port>`). Le conteneur n'est qu'un client de plus sur un socket
-déjà atteignable depuis tout le LAN — un **sous-ensemble strict** de l'exposition que #260 assume, pas
-une extension.
+On l'accepte pour v1 **parce que ce n'est pas net-new** : un nœud hôte non sandboxé tourne déjà en
+`claude --dangerously-skip-permissions` avec exactement le même accès non authentifié au daemon. Le
+conteneur n'est qu'un client de plus sur un socket déjà atteignable depuis tout le LAN — un
+sous-ensemble strict de l'exposition que #260 assume.
 
 On **ne prétend donc pas** que la sandbox est une frontière de sécurité réseau/creds en v1 : elle
 tourne en uid/gid hôte, bind-monte le repo rw à son chemin hôte, et stage de vraies credentials
-Claude (`.credentials.json`) avec réseau sortant ouvert. Sa **seule** valeur sécurité v1 est un
-**blast radius filesystem réduit par défaut** (pas d'accès ambiant au reste de `$HOME`, aux autres
-repos, à `~/.ssh`) + le **containment de l'arbre de process** (kill ciblé). Utile, mais inutile face
-à un adversaire déterminé ou injecté.
+Claude avec réseau sortant ouvert. Sa seule valeur sécurité v1 est un **refus par défaut du reste de
+`$HOME`** — devenu, avec les profils, une **liste d'exceptions déclarées et visibles** (le défaut
+reste le refus ; l'utilisateur peut déclarer `.ssh` s'il l'assume, et l'UI l'avertit sans
+l'interdire, ADR-0031 §3) — plus le **containment de l'arbre de process** (kill ciblé). Utile, mais
+inutile face à un adversaire déterminé ou injecté.
 
 Fermer le trou (auth de l'API daemon, ou tokens de complétion scopés par Run) est **différé au
-chantier d'auth du daemon, lié à #260**. D'ici là, un Run sandboxé n'est pas plus fiable vis-à-vis de
-l'hôte qu'un Run hôte.
+chantier d'auth du daemon, lié à #260**. D'ici là, un Run sandboxé n'est pas plus fiable vis-à-vis
+de l'hôte qu'un Run hôte.
 
 ## Alternatives écartées
 
-- **`docker run -d` par session** (conteneur éphémère par nœud) : rejeté — un conteneur par-Run
-  long-vécu rend kill et destruction ciblés, partage les mounts, et amortit le coût de démarrage.
+- **Un conteneur éphémère par session/nœud** : rejeté — un conteneur par-Run long-vécu rend kill et
+  destruction ciblés, partage les mounts, et amortit le coût de démarrage.
 - **Fallback hôte si Docker absent** : rejeté frontalement (#403 US-16) — masquerait l'isolation
   demandée ; fail-fast `RunFailed` à la place.
 - **`--restart unless-stopped`** : rejeté — PDO possède le cycle de vie ; ressusciterait des
   conteneurs que PDO croit finis.
-- **Envelopper `wrap_with_env` entier dans le `docker exec`** (au lieu d'`-e` explicites) : rejeté —
-  ré-exporterait `PDO_DAEMON_URL=localhost` dans le conteneur et casserait la gateway.
-- **Bind-monter un `/etc/passwd` + `/etc/group` générés au `prepare`-time** (le mécanisme que #414
-  prescrivait) : rejeté **sur mesure**. Un `/etc/passwd` bind-monté casse `sudo apt-get install` de
-  tout paquet créant un utilisateur système — `groupadd: cannot open /etc/group`, dpkg laissé en
-  `iU` — en `:ro` **comme** en `:rw` : `useradd` fait un `rename()` par-dessus le point de montage,
-  ce qui échoue toujours. C'est une **régression sur le chemin uid 1000 actuel**. S'y ajoutent deux
-  coûts de conception : construire le fichier exige de connaître la **baseline de l'image**, or le
-  Dockerfile est éditable par l'utilisateur et un profil peut pointer une image de registry
-  arbitraire (il faudrait donc lire la baseline via Docker, ce que `sandbox_staging` s'interdit par
-  contrat) ; et un mount dont la source manque rend le staging de ~1 Go **indélébile** par le
-  daemon. L'`exec` gardé ne paie aucun des trois.
-- **`nss_wrapper`** (`LD_PRELOAD` + un passwd de substitution) : rejeté — la lib doit être *dans*
-  l'image, donc le problème devient circulaire (c'est justement le Dockerfile qu'on ne touche pas),
-  et un `LD_PRELOAD` est sans effet sur un binaire statique.
-- **`--user <nom>` au lieu du numérique**, une fois passwd peuplé : rejeté — cela rouvrirait le bug
-  que le `--user` numérique existe pour fermer. `--user <nom>` (ou `--user <uid>` seul) fait
-  résoudre le **gid primaire** via `/etc/passwd` ; pour un uid que l'image ne connaît pas, Docker
-  retombe sur **gid 0** — bug silencieux de propriété de fichiers. Écrit séparément parce qu'un
-  nettoyage bien intentionné (« maintenant que passwd est peuplé, autant nommer l'utilisateur »)
-  est exactement la forme que prendrait la régression.
+- **Envelopper le wrapper d'env entier dans le `docker exec`** (au lieu d'`-e` explicites) :
+  rejeté — ré-exporterait l'URL `localhost` hôte dans le conteneur et casserait la gateway.
+- **Bind-monter un `/etc/passwd` + `/etc/group` générés à la prep** (le mécanisme que #414
+  prescrivait) : rejeté **sur mesure**. Un `/etc/passwd` bind-monté casse l'installation de tout
+  paquet créant un utilisateur système — `useradd` fait un `rename()` par-dessus le point de
+  montage, qui échoue **en `:ro` comme en `:rw`** (dpkg laissé à moitié configuré) — c'est-à-dire
+  une **régression sur le chemin uid 1000 actuel**. S'y ajoutent deux coûts de conception :
+  construire le fichier exige de connaître la baseline de l'image (éditable, voire un ref registry
+  arbitraire), et un mount dont la source manque rend le staging de ~1 Go indélébile par le daemon.
+- **`nss_wrapper`** (`LD_PRELOAD` + passwd de substitution) : rejeté — la lib devrait être *dans*
+  l'image (circulaire : c'est justement le Dockerfile qu'on ne touche pas), et un `LD_PRELOAD` est
+  sans effet sur un binaire statique.
+- **`--user <nom>` une fois passwd peuplé** : rejeté — pour un uid que l'image ne connaît pas,
+  Docker résout le gid primaire via `/etc/passwd` et retombe sur **gid 0** — bug silencieux de
+  propriété de fichiers. Écrit séparément parce qu'un nettoyage bien intentionné (« maintenant que
+  passwd est peuplé, autant nommer l'utilisateur ») est exactement la forme que prendrait la
+  régression.
 
 ## Limites acceptées
 
-- **uid hôte ≠ 1000.** `sudo` (getpwuid avant NOPASSWD) et `claude` (`os.userInfo()`) peuvent casser
-  faute d'entrée `/etc/passwd` ; ubuntu:24.04 livre `ubuntu`=1000 → le cas laptop courant résout.
-  Injection `/etc/passwd`+`/etc/group` différée à une issue de suivi (ne PAS éditer le Dockerfile,
-  content-hashé).
-  *(levé par #414 — voir l'amendement du point 1 ; la prémisse `os.userInfo()` était fausse, le
-  `claude` de l'image est un binaire Bun, qui lit `$HOME`/`$USER` et ignore la base passwd :
-  `claude --version` et `claude -p` se comportent à l'identique en uid 1234 et 1000. Seuls `sudo`
-  et `whoami` cassaient réellement.)*
-- **run-shell in-container** peut être *moins* fidèle pour l'inspection statique (les mounts identité
-  donnent déjà la parité fichiers) et perd les outils `sudo`-installés éphémères. On garde le
-  wrapping pour l'uniformité + zéro divergence hôte silencieuse (`ensure_running`-or-fail).
-
-## Amendement — Vocabulaire, exceptions de mount `$HOME`, maîtrise du Dockerfile (grilling 2026-07-24, PRD #403)
-
-Quatre points de cette ADR sont amendés à l'issue de la validation manuelle du PRD, **avant** le
-merge vers `main`. Le détail du modèle de contenu vit dans **ADR-0031** ; ici, ce qui change du
-modèle d'*exécution*.
-
-1. **Vocabulaire (réalisé en #426).** Le tri-état devient `off` | `minimal` | `full`
-   (ex-`pure`/`copy`). Aucun alias de compatibilité : aucune valeur persistée n'existe dans
-   l'instance prod ni dans l'instance dev (0/399 et 0/103 `run_started` ; ni l'une ni l'autre n'a même
-   les colonnes `default_sandbox` / `triggers.sandbox`), un alias n'aurait donc servi que des
-   instances de validation jetables. Corollaire assumé : un token pré-renommage retrouvé dans un log
-   d'événements se dégrade en `off`, donc vers **moins** d'isolation — les trois décodeurs le
-   **loggent** (#426), le point 4 interdisant tout fallback hôte silencieux. `minimal` est plus juste
-   que `pure` depuis que le plancher de garanties (ADR-0031 §1) y seede des consentements — le mode
-   n'est pas *pur*, il est *minimal*.
-
-2. **Les identity mounts ne sont plus une liste fermée.** Aux quatre mounts du point 1 (repo,
-   `.claude` stagé, `.claude.json` stagé, binaire `pdo`) s'ajoutent les **exceptions déclarées** par
-   le profil de staging : une entrée hors `.claude` est copiée dans `<staging>/home/<chemin>` puis
-   montée rw à `$HOME/<chemin>` (ADR-0031 §4, dédup des entrées internes à `.claude` incluse).
-   `create_args` gagne donc une **queue variable** — le golden test qui fige l'ordre canonique doit
-   l'accommoder plutôt que la figer.
-
-3. **La valeur sécurité v1 est reformulée, pas retirée.** La section « Pourquoi » revendique comme
-   seule valeur un « blast radius filesystem réduit par défaut (pas d'accès ambiant au reste de
-   `$HOME`, aux autres repos, à `~/.ssh`) ». Ce n'est plus exact : le refus par défaut de `$HOME`
-   devient une **liste d'exceptions déclarées et visibles**. Le défaut reste le refus — un profil
-   vierge ne monte rien de plus — mais l'utilisateur peut déclarer `.ssh` s'il l'assume, et l'UI
-   l'avertit sans l'interdire (ADR-0031 §3). La posture générale est inchangée : la sandbox n'est
-   pas une frontière de sécurité en v1.
-
-4. **Échec fort étendu au profil inconnu.** Le point 4 (« jamais de fallback hôte silencieux »)
-   couvrait l'indisponibilité de Docker ; il couvre désormais aussi un nom de profil non résolu —
-   400 à la création, tir de Trigger en échec visible, `RunFailed` en boot recovery (ADR-0031 §7).
-
-5. **Le Dockerfile résolu devient un réglage.** Le point 7 supposait un Dockerfile unique, seedé à
-   `~/.pdo/sandbox/Dockerfile`. Un réglage d'instance `dockerfile_path` (précédence
-   `stored → env → défaut seedé`, ADR-0015) permet d'en pointer un autre — typiquement versionné
-   dans le repo, donc partagé par l'équipe. *(#471 : ce réglage d'instance est retiré ; la
-   précédence devient `profil → env → défaut seedé`, et tout ce qui suit dans ce point vaut à
-   l'identique pour le chemin résolu, quel que soit le tier qui l'a nommé.)* Le tag reste le hash du contenu du fichier **pointé** :
-   l'édition déclenche toujours le rebuild. Conséquence opérationnelle : quand le Dockerfile résolu
-   **n'est pas à l'emplacement seedé par défaut** (`<sandbox_root>/Dockerfile`), `ensure_image`
-   **saute le pull GHCR** (un hash custom ne peut pas exister en amont) et build directement.
-
-   Trois précisions issues du grilling de la slice (#431), parce que la formulation initiale de ce
-   point était ambiguë au point d'induire la mauvaise implémentation :
-
-   - **Le prédicat de skip-pull porte sur le CHEMIN, pas sur les octets.** `seed_dockerfile`
-     n'écrasant jamais, une machine ayant mis PDO à jour garde sur disque le Dockerfile d'une
-     release **antérieure** — dont le tag `h-<hash>` *existe* sur GHCR, puisque `release.yml` publie
-     le hash du Dockerfile de chaque arbre de release. Un prédicat comparant les octets au Dockerfile
-     embarqué du binaire courant classerait ce cas (le cas dominant, pas un cas limite) en « custom »
-     et lui refuserait un pull valide, imposant un build local de plusieurs minutes. Le skip-pull est
-     une **optimisation, pas un gate de correction** : le fast-path local et le fallback build rendent
-     un pull inutile inoffensif dans les deux sens, donc le prédicat le moins cher gagne. Corollaire
-     assumé : un Dockerfile **édité sur place** au chemin par défaut continue de tenter un pull qui
-     404 puis retombe sur le build — comportement inchangé depuis #411, une fois par content-hash.
-   - **Le contexte de build reste `<sandbox_root>/.build-ctx`, gardé vide**, y compris sous un chemin
-     custom. Donc **un Dockerfile pointé doit être auto-porteur : pas de `COPY`/`ADD`**. Suivre le
-     répertoire parent du fichier pointé réouvrirait le piège D8 de #405 (les siblings de
-     `sandbox_root` sont les staging dirs par-run, écrits concurremment) et, surtout, ferait du tag
-     adressé par contenu un mensonge : le hash ne porte que sur les octets du Dockerfile, donc le
-     fast-path figerait pour toujours une image dont le contexte a changé. Supporter `COPY`
-     demanderait de hasher le contexte : autre contrat de tag, hors périmètre (même catégorie que le
-     ref d'image tout fait ci-dessous).
-   - **Un chemin résolu qui n'est pas un fichier régulier échoue fort au prep** (`RunFailed` dont la
-     `reason` nomme le chemin **et** le tier gagnant), plus un `400` à `PUT /settings` comme gate
-     précoce. Jamais de repli vers le seedé : ce serait builder silencieusement **une autre image que
-     celle que l'équipe a versionnée**, symptôme reporté au fond d'un node (`gh: command not found`)
-     avec un tag d'apparence saine. C'est le point 4 (« jamais de fallback hôte silencieux ») appliqué
-     au Dockerfile. Le tier **env** contourne la validation `PUT` par construction — c'est
-     l'échappatoire assumée pour un chemin sur volume amovible ; les deux tiers restent gatés au prep.
-
-   Fournir un **ref d'image tout fait** reste hors périmètre : ça
-   supprimerait le tag adressé par contenu, exigerait d'écrire le contrat d'image (bash, `claude`
-   installé, auto-updater off, `$HOME` inscriptible au chemin hôte) et rouvrirait une question
-   d'auth que le pull anonyme évite.
-
-## Amendement — La garantie du point 4 devient une précondition du spawn (#445)
-
-Le point 4 promet « image + conteneur + staging garantis prêts **avant le premier spawn** ». Cette
-garantie n'était **pas** portée par le spawn : elle était rejouée par le seul parcours de création,
-qui attend `ensure_ready` avant `spawn_ready_after_event`. Les autres déclencheurs d'avancement
-n'en savaient rien — le watcher de pipeline (`handle_run_pipeline_modifications`) et le balayage
-d'admission cross-Run (`retry_waiting_nodes`) atteignaient le spawn pendant la prep. La tail
-`docker exec … pdo-sbx-<run>` tombait alors sur un conteneur inexistant : **exit 1 en ~30 ms**, la
-commande de la fenêtre tmux se terminait, et ~25 s plus tard le détecteur de sessions mortes rendait
-`session_died`. Reproduit 7 fois sur stack isolée ; le profil `full` était **inutilisable dès qu'on
-regardait son Run** (l'onglet ouvert lit `<run>/pipeline.yaml`, ce que le watcher rapporte comme une
-modification externe la première fois — inotify `OPEN`, pas d'édition).
-
-1. **La précondition est portée par `spawn_node`, pas par ses appelants** : « un Run sandboxé dont la
-   prep n'est pas `ready` n'est pas schedulable ». Décision pure
-   (`event_log::RunState::sandbox_spawn_block`) évaluée sur la projection déjà chargée pour le garde
-   de transition, **après** lui et **avant** l'admission comme avant toute création de sous-worktree.
-   Corriger le site d'appel du watcher aurait laissé le prochain appelant réintroduire le défaut ;
-   c'est le même argument qui a mis le garde de transition (#212) dans le spawn. Un `off` n'est
-   **jamais** bloqué (invariant byte-identique). Une prep *absente* bloque comme une prep *pendante* :
-   `RunStarted` et `SandboxPrepStarted` sont à ~100 ms l'un de l'autre et la course y tient déjà ;
-   bloquer est en outre le sens fail-safe (un blocage à tort coûte un spawn rejoué, un passage à tort
-   coûte un nœud mort).
-
-2. **Le refus n'écrit RIEN — et c'est ce qui rend le rejeu possible.** Pas de `NodeStarted` (l'event
-   qui, seul, fait rendre `session_died` 25 s plus tard), et pas de `NodeWaiting` non plus : un nœud
-   `Waiting` sort de `compute_ready_to_spawn`, donc la réservation déplacerait le rejeu sur le
-   balayage d'admission cross-Run et un Run dont le seul déclencheur était le watcher pourrait rester
-   coincé pour toujours. Sans état, le nœud reste dans l'ensemble prêt et le premier `advance_run`
-   suivant `SandboxPrepReady` le démarre. Nouvelle issue de `SpawnOutcome` (`Deferred`), distincte de
-   `Refused` (rien à reprendre) et de `Throttled` (réservation posée, retry cross-Run).
-
-3. **Le point 10 est amendé : `SandboxPrepReady` n'est plus seulement informationnel.** Il devient
-   le fait qui lève la précondition, donc **tout** parcours qui rend le conteneur réel doit l'émettre
-   — ce qui **renverse** le « non émis au ré-armement » du point 10 pour `resume_run` et la boot
-   recovery. Sans ça, un Run qui a échoué *pendant* sa prep garde une projection `pending` pour
-   toujours et chaque spawn est différé pour toujours : l'interblocage que la précondition ne doit
-   pas créer. Émis seulement après un `ensure_ready` en `Ok` (l'event ne prétend jamais qu'un
-   conteneur est là), et seulement si le Run était effectivement bloqué (un resume ou un boot de
-   routine n'ajoute pas d'event no-op). `open_run_shell` reste **non émetteur** : il ressuscite un Run
-   terminal, où rien ne sera spawné — un resume ultérieur repasse par `ensure_ready` de toute façon.
-
-4. **La réconciliation de stall devient sandbox-consciente.** Un Run en prep présente *exactement* la
-   signature #279 d'un spawn silencieusement avorté (nœud prêt, aucun nœud vivant, horloge d'inactivité
-   qui monte — la prep n'émet rien pendant qu'elle travaille). Sans arme dédiée, `run_stall_reason`
-   tuait donc précisément les Runs lents que la précondition venait de sauver (83-87 s mesurés pour un
-   profil de 2 Go, davantage sur un `docker build` froid, contre une fenêtre de 120 s). D'où une
-   **grâce plus longue et non une exemption** (`SANDBOX_PREP_STALL_GRACE_SECS`, 15 min) : au-delà, la
-   tâche de prep est réellement perdue (morte avec un daemon précédent) et le Run échoue avec une
-   cause qui **nomme la sandbox** au lieu d'accuser tmux. Différer indéfiniment aurait échangé un faux
-   échec contre un stall silencieux, qu'ADR-0004 interdit tout autant.
-
-5. **Le chemin force-spawn répète la précondition, en `409`.** `force_spawn_node` (bouton Start de
-   l'UI, `start_node` du manager) ne passe pas par `spawn_node` : il pilote
-   `node_primitives::start_node`. Il refuse donc explicitement plutôt que de différer — « démarrer
-   maintenant » ne doit pas se mettre en file — en miroir du fail-fast au cap de sessions.
-
-6. **Une prep dont le Run est devenu terminal est abandonnée.** Observé : `container Created` +27 à
-   +35 s **après** `run_failed`, puis un `sandbox_prep_ready` sur un cadavre — un conteneur que
-   personne n'exécutera jamais. Le point 1 supprime la cause ; il reste les cas légitimes (l'humain
-   stoppe ou tue un Run en cours de prep). À la fin d'`ensure_ready`, si le Run est terminal : aucun
-   event, aucun spawn, aucun manager, et `docker rm -f` du conteneur (idempotent, best-effort — un
-   `resume_run` le recrée). Le staging est **conservé** : c'est `cleanup_run` qui le purge, et le
-   détruire ici détruirait les transcripts que `merge_back` moissonne. **Résidu assumé** : la marche
-   filesystem déjà lancée n'est pas interrompue — `sandbox_staging::prepare` est un module pur sans
-   seam d'annulation, et y ajouter un jeton de cancellation pour ce seul cas coûterait plus que le
-   gigaoctet qu'il économise. Le gaspillage est borné à une copie, sans conteneur ni event derrière.
-
-Non traité ici, et **volontairement** : le réveil parasite du watcher lui-même. La première *lecture*
-de `<run>/pipeline.yaml` est rapportée comme une modification externe (masque inotify `OPEN` armé par
-`notify`, aucun filtrage d'`EventKind` par le debouncer, et `content_actually_changed` renvoie `true`
-faute de baseline pour un Run neuf — `seed_run_mtimes` ne tourne qu'au boot ; `copy_pipeline_to_run`
-est par ailleurs le seul écrivain de l'arbre qui n'appelle jamais `mark_self_write`). C'est un
-`pipeline_modified` mensonger, une fois par Run, à traiter pour lui-même : supprimer ce déclencheur
-n'aurait rien corrigé, puisque la précondition doit tenir quel que soit **qui** avance le Run.
-
-Le corps de cette ADR (points 1-10) est laissé **tel quel**, dans le vocabulaire d'avant #426 : y
-lire `full` partout où il dit `copy`, et `minimal` partout où il dit `pure`.
-
-## Amendement — L'URL du daemon a un résolveur unique ; le préambule en est un consommateur (#447)
-
-Le point 3 ne parlait que de **l'env** `PDO_DAEMON_URL`. Le **texte** des préambules construisait la
-sienne, codée en dur sur `localhost:<port>`, indépendamment du mode du Run. Un préambule de manager
-sandboxé listait donc des `curl` que le conteneur ne peut pas joindre : `localhost` y désigne le
-conteneur. Le manager obéissait, récoltait des refus de connexion sur **tous** ses appels, et en
-concluait — de bonne foi et avec assurance — que le daemon était mort, pendant que le pied de page de
-la même fenêtre affichait « Daemon: connected ». Reproduit 3 fois sur 3 sur stack isolée, avec
-contrôle négatif `off`.
-
-Ce n'était pas de la prose fausse mais une **perte de fonctionnalité** : toute la surface de commande
-du manager (`rename_run`, `restart_node`, `kill_node`, `mark_node_done`, `extend_cycle`,
-`cleanup_run`…) devenait inatteignable sur un Run sandboxé, en commençant par le `rename_run` que le
-préambule impose comme première action — d'où des Runs sandboxés restés sans nom. Et la panne est
-**intermittente** : sur deux Runs mesurés, un manager s'en est sorti en inspectant `$PDO_DAEMON_URL`
-de sa propre initiative, l'autre a refusé d'émettre quoi que ce soit. Le pire profil de panne :
-silencieuse, non déterministe, et affirmative.
-
-1. **Un résolveur pur unique, `sandbox_container::daemon_url(port, sandboxed)`.** Il vit dans le
-   module qui possède le `--add-host host.docker.internal:host-gateway`, parce que le hostname de la
-   gateway et la gateway elle-même sont **le même fait** : le littéral n'apparaît donc qu'une fois.
-   Le `-e PDO_DAEMON_URL` du create et le texte du préambule manager sont désormais deux
-   **consommateurs** du même appel — l'env et la prose ne peuvent plus diverger (leçon #373 : un seul
-   résolveur, zéro drift).
-
-2. **L'argument nomme le côté d'exécution, pas le mode du Run.** Nuance load-bearing : les exports
-   d'env côté hôte du wrapper (`wrap_with_env`, point 5) appellent avec `sandboxed = false` **même
-   pour un Run sandboxé**, parce qu'ils s'exécutent avant le `docker exec` et ne traversent pas. Y
-   plaquer le résolveur « selon le mode du Run » aurait inversé la logique, ou produit des octets
-   morts sur le chemin sandbox tout en cassant l'identité-octet du chemin `off`. Un résolveur partagé
-   n'autorise pas à unifier les sites sans distinguer les côtés.
-
-3. **Le préambule de nœud n'était pas le symptôme, et le reste.** `AugmentContext.daemon_url` n'a
-   **aucun consommateur** : aucun préambule de nœud n'imprime d'URL ni de `curl` (vérifié en
-   exécution, 489 octets sans URL). Les deux sites de nœud sont donc des valeurs mortes ; ils passent
-   quand même par le résolveur, pour qu'un futur préambule de nœud n'hérite pas du bug — mais la
-   preuve d'acceptation ne peut passer que par le manager, seul préambule qui imprime l'URL.
-
-4. **La preuve est un test de couche 3, pas un unit test.** `build_manager_preamble` prend l'URL en
-   paramètre : un unit test ne prouve que la composition, jamais que `spawn_manager_session` passe le
-   bon booléen — exactement ce que le bug ratait. Le test lit donc le **fichier de préambule écrit sur
-   disque** (`<worktree>/.pdo/prompts/__manager__-iter-0.md`, écrit avant l'appel à tmux, donc
-   assertable sans vrai claude) pour un Run `minimal` et pour son jumeau `off`. L'assertion portante
-   est l'**absence** de `localhost:<port>` : un préambule qui mentionne la gateway quelque part tout
-   en gardant des `curl` hôte reproduit le bug à l'identique.
+- **run-shell in-container** peut être *moins* fidèle pour l'inspection statique (les mounts
+  identité donnent déjà la parité fichiers) et perd les outils installés éphémères. On garde le
+  wrapping pour l'uniformité + zéro divergence hôte silencieuse.
+- Le réveil parasite du watcher de pipeline (la première *lecture* du YAML d'un Run rapportée comme
+  modification externe) est un défaut distinct, volontairement non traité ici : la précondition du
+  pt 4 doit tenir quel que soit **qui** avance le Run.
 
 ## Relations
 
-- **ADR-0032** (liveness) : le seam `transcripts_root` du point 9 reste **vivant et à deux
-  consommateurs**, mais l'un des deux a changé de nature. « stale/AutoComplete » n'existe plus :
-  #469 a supprimé le seuil d'idle et ses verdicts, et le second consommateur est désormais la sonde
-  de **fin de tour** (`parse_turn_state`, opt-in, décochée par défaut) — qui lit le même
-  `projects/` root, par le même encodeur unique. À lire aussi pour la raison pour laquelle la mort
-  d'un nœud sandboxé est exacte par construction : le pane porte le client `docker exec`, qui rend
-  la main dès que `claude` sort dans le conteneur.
-- **ADR-0031** (profils de staging) : *ce que* le home stagé contient, là où cette ADR fixe *où* et
-  *comment* le Run s'exécute. §1 (le plancher de garanties) est **réalisé en #426**, avec le point 1
-  de l'amendement ci-dessus.
-- **ADR-0004** (stratégie de test) : golden des tails wrappées (unit) + layer-3 (Docker indispo →
-  RunFailed, off inchangé, cleanup/boot/kill) via les seams `docker_cmd_override` +
-  `sandbox_home_override` (per-daemon, #181) — jamais d'`std::env` global ni de vrai Docker en CI.
-- **ADR-0009** (3 couches) : le wrapping vit au chokepoint `build_tmux_script` ; `ensure_ready` est un
-  effet atomique qui ne réentre jamais le scheduler.
-- **ADR-0012** (autonomie gagnée) : la sandbox réduit le blast radius par défaut du travail autonome ;
-  le cap global reste la primitive de sûreté.
-- **ADR-0015** (précédence config) : la source du mode est **réalisée en #410** — résolveur pur
-  `effective_sandbox` (run → trigger → `default_sandbox`, plancher `off`), `default_sandbox` = nouvelle
-  colonne nullable d'`instance_config` (`stored → env → default`, résolveur `default_sandbox_with`
-  partagé create/`GET /settings`, 0 drift #373) ; défaut par-Trigger = colonne nullable `sandbox` sur
-  `triggers`, clearable via `deserialize_double_option` (précédent `max_concurrent` #239). La **sonde
-  Docker** (`docker version`, TTL-cachée, `GET /settings.sandbox_docker`) est **advisory** : le
-  fail-fast (point 4) reste le gate autoritaire.
-- **ADR-0020 / ADR-0021** (archivage / run-shell) : le conteneur vit de la création au `cleanup_run`
-  (= archive), coextensif à la fenêtre d'éligibilité du run-shell ; après un reboot hôte,
-  `open_run_shell` ressuscite le conteneur (`ensure_running`-or-fail), car `boot_recovery` saute les
-  Runs terminaux.
-- **ADR-0023** (advance détaché) : la prep eager suit la même forme détachée + panic-isolée →
-  `RunFailed`.
-- **#260** : trou d'auth du daemon ; fermeture de la sandbox liée à ce chantier.
+- **ADR-0031** (profils de staging) : *ce que* le home stagé contient et l'env du conteneur, là où
+  cette ADR fixe *où* et *comment* le Run s'exécute. La rationale image (§9 de 0031) vit ici, pt 7.
+- **ADR-0032** (liveness) : le seam `transcripts_root` du pt 9 a deux consommateurs — le coût et la
+  sonde de **fin de tour** (le verdict stale/AutoComplete n'existe plus depuis #469). À lire aussi
+  pour la raison pour laquelle la mort d'un nœud sandboxé est exacte par construction : le pane
+  porte le client `docker exec`, qui rend la main dès que `claude` sort dans le conteneur.
+- **ADR-0004** : golden des tails wrappées (unit) + couche 3 (Docker indispo → RunFailed, `off`
+  inchangé, cleanup/boot/kill) via des seams d'override per-daemon — jamais de vrai Docker en CI.
+- **ADR-0009** : le wrapping vit au chokepoint de construction des tails ; la prep est un effet
+  atomique qui ne réentre jamais le scheduler.
+- **ADR-0012** : la sandbox réduit le blast radius par défaut du travail autonome ; le cap global
+  reste la primitive de sûreté.
+- **ADR-0015** : précédence du mode (run → trigger → instance) et des réglages d'instance.
+- **ADR-0020 / ADR-0021** : le conteneur vit de la création au `cleanup_run` (= archive),
+  coextensif à la fenêtre d'éligibilité du run-shell ; après un reboot hôte, le run-shell
+  ressuscite le conteneur (prep-ou-échec), car la boot recovery saute les Runs terminaux.
+- **ADR-0023** : la prep eager suit la même forme détachée + panic-isolée → `RunFailed`.
+- **#260** : trou d'auth du daemon ; la fermeture côté sandbox est liée à ce chantier.

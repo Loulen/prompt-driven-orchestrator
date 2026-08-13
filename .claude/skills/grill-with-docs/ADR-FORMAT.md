@@ -22,6 +22,26 @@ Only include these when they add genuine value. Most ADRs won't need them.
 - **Considered Options** — only when the rejected alternatives are worth remembering
 - **Consequences** — only when non-obvious downstream effects need to be called out
 
+## What stays out
+
+An ADR records the decision and its why. The implementation lives elsewhere — move to the issue/PR (or delete):
+
+- **Implementation plans**: step lists, exhaustive case matrices, test inventories, rollout steps. The grilling produced them; the issue consumes them.
+- **Code citations**: function names, `file.rs:42` references, pinned log strings, test names. They rot at the first refactor. Exception: a name that *is* the public contract (a CLI exit code, a wire-format field).
+- **Restatements of what the code shows**: payload shapes, table schemas, UI copy.
+
+What *does* belong even when it looks technical: the measurements that killed an alternative ("we tried X on the real data; it failed on the exact case it was meant to save"). No amount of code reading will ever reveal those — they are the treasure an ADR exists to keep.
+
+**Size smell**: past ~100 lines, an ADR is almost certainly absorbing the implementation plan. Cut before committing.
+
+## Amending an ADR
+
+When a later decision revises an existing ADR:
+
+- **Rewrite the body** in the current vocabulary so it reads true today. Never stack a dated addendum on top of a body that has become wrong, and never leave a translation instruction ("read X wherever it says Y").
+- Mark the old ADR with a one-line pointer (`superseded by ADR-NNNN`, or `amended by ADR-NNNN: <one clause>`) in its status/preamble.
+- Git owns the document's history; the document owns only the current truth. No dated correction trails.
+
 ## Numbering
 
 Scan `docs/adr/` for the highest existing number and increment by one.

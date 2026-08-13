@@ -10,7 +10,7 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## 1.20.0
+## 1.21.0
 
 Rien de cassant. Un champ **purement additif, lecture seule** : `GET /stats/cost` porte désormais un
 tableau **`resolved`** — une entrée par clé de famille, avec le **tier gagnant** (`manual` / `fetched`
@@ -21,8 +21,18 @@ que celle avec laquelle le fold de coût chiffre, donc la vue ne peut jamais div
 réellement (#373). **Dans le cadre d'ADR-0034** : cette slice **amende sa hors-scope** (qui déclinait
 un `GET /prices` en le jugeant redondant avec `manual_keys` + `fetched_rows`) — **pas de nouvel ADR**,
 **pas de route dédiée** (champ additif sur un endpoint déjà consommé par l'onglet Cost, rétro-compatible,
-zéro taxe proxy vite dev, cf. *Versioning*). Bump posé contre `origin/main` (1.19.0) ; à re-poser au
-next-free si un autre Run livre entre-temps.
+zéro taxe proxy vite dev, cf. *Versioning*). Bump re-posé contre `origin/main` (1.20.0, #527) après
+collision de bump : la vue `resolved` reflète désormais aussi le plancher gen-5 introduit par #527
+(quatorze familles embarquées au lieu de onze).
+
+## 1.20.0
+
+Rien de cassant. Le **plancher de prix embarqué** amorce désormais la génération courante
+(`claude-opus-5` / `claude-sonnet-5` / `claude-fable-5`), si bien qu'une instance **jamais
+synchronisée, hors ligne** chiffre son modèle par défaut au lieu d'afficher `~$0.00 †` (#527,
+amende ADR-0034). Le plancher reste un **plancher, pas un miroir** : un sync surcharge encore
+chaque clé (p. ex. `sonnet-5` à son intro live). Bump posé contre `origin/main` (1.19.0) ; à
+re-poser au next-free si un autre Run livre entre-temps.
 
 ## 1.18.0
 

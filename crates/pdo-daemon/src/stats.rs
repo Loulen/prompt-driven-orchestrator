@@ -899,14 +899,15 @@ mod tests {
     #[test]
     fn resolved_price_rows_project_the_floor_faithfully() {
         // The projection `resolved_entries -> ResolvedPriceRow` is faithful: the
-        // eleven embedded families, every one `Embedded`, with the single most
-        // error-prone distinction surviving (opus-4-8 5/25 ≠ opus-4-1 15/75), in
-        // BTreeMap key order. The winning-tier PRECEDENCE (manual > fetched >
-        // embedded) is exercised by `price_table::resolved_entries_*` and
-        // end-to-end over `/stats/cost` in `tests/cost_prices.rs`.
+        // fourteen embedded families (since #527 floored the current generation),
+        // every one `Embedded`, with the single most error-prone distinction
+        // surviving (opus-4-8 5/25 ≠ opus-4-1 15/75), in BTreeMap key order. The
+        // winning-tier PRECEDENCE (manual > fetched > embedded) is exercised by
+        // `price_table::resolved_entries_*` and end-to-end over `/stats/cost` in
+        // `tests/cost_prices.rs`.
         use crate::price_table::{PriceTable, PriceTier};
         let floor = resolved_price_rows(&PriceTable::builtin());
-        assert_eq!(floor.len(), 11);
+        assert_eq!(floor.len(), 14);
         assert!(floor.iter().all(|r| r.tier == PriceTier::Embedded));
         let by = |key: &str| floor.iter().find(|r| r.key == key).unwrap();
         assert_eq!(

@@ -654,16 +654,25 @@ Le **repo cible** d'un Run ou d'un Trigger est le dépôt git dans lequel il tra
   `target_repos[0]`. Porte exactement la sémantique de l'ancien `target_repo` (ADR-0033), et **reste**
   dans `target_repo` (il n'est pas matérialisé comme `RepoPin`).
 - **Dépôt secondaire** (*secondary repo*) — un dépôt associé à un Run en **lecture seule**, offert
-  aux nœuds comme contexte. Matérialisé par un **snapshot** figé à un SHA au démarrage. N'a ni
-  worktree pipeline, ni comptabilité d'archive/coût, ni MR. En list/cost, un Run multi-repo se range
-  sous le primaire `[0]`. Voir ADR-0042.
+  aux nœuds comme contexte. Matérialisé par un **snapshot** figé à un SHA **au moment de l'ajout**
+  (jamais re-résolu par une édition tierce). La liste des secondaires d'un Run est un **ensemble
+  par-Run éditable en cours de Run** (ajout/retrait ; le primaire reste immuable). N'a ni worktree
+  pipeline, ni comptabilité d'archive/coût, ni MR. En list/cost, un Run multi-repo se range sous le
+  primaire `[0]`. Voir ADR-0042.
+- **Visibilité au spawn** (*spawn-time visibility*) — le contrat d'une édition mid-run de la liste de
+  dépôts : elle affecte les nœuds lancés **après** elle ; les nœuds déjà vivants gardent le contexte
+  (préambule + `PDO_SECONDARY_REPOS`) figé à leur spawn. Un ajout matérialise le snapshot à
+  l'édition ; un retrait le retire de la projection mais laisse le snapshot sur disque jusqu'au
+  cleanup, pour ne pas casser un lecteur vivant.
 - **Snapshot secondaire** (*secondary snapshot*) — worktree détaché (`git worktree add --detach`)
-  d'un dépôt secondaire, pinné au SHA enregistré dans `RunStarted`, vivant sous
-  `<primaire>/.pdo/runs/<id>/repos/<alias>/` (**3e frère** de `worktree/` et `nodes/`). Read-only par
-  convention, garde `secondary_repo_dirtied` (409, fichiers *suivis* seulement). Injecté aux nœuds
-  par **chemin absolu** (préambule + env `PDO_SECONDARY_REPOS`) car les sous-worktrees n'héritent pas
-  de ses fichiers. Récupéré au teardown par `worktree remove --force` **+ `prune`** dans le dépôt
-  secondaire (sans le prune : registration dangling, classe #498).
+  d'un dépôt secondaire, pinné au SHA enregistré dans `RunStarted` (ou dans un `RunReposEdited` pour
+  un ajout mid-run), vivant sous `<primaire>/.pdo/runs/<id>/repos/<alias>/` (**3e frère** de
+  `worktree/` et `nodes/`). Read-only par convention, garde `secondary_repo_dirtied` (409, fichiers
+  *suivis* seulement). Injecté aux nœuds par **chemin absolu** (préambule + env
+  `PDO_SECONDARY_REPOS`) car les sous-worktrees n'héritent pas de ses fichiers. Récupéré au teardown
+  par un **balayage disque** de `repos/*` (`worktree remove --force` **+ `prune`** dans le dépôt
+  secondaire ; sans le prune : registration dangling, classe #498) qui couvre aussi les snapshots
+  retirés-mais-persistants et orphelins.
 
 ### Explorateur de fichiers (générique, `GET /fs/browse` + `FsExplorerModal`)
 

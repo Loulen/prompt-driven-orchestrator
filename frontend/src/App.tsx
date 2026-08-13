@@ -715,7 +715,7 @@ export default function App() {
                   <NoteInspector />
                 ) : null}
                 {selection.kind === "none" && isEditingRun && selectedRun && (
-                  <RunInfoSidebar run={selectedRun} />
+                  <RunInfoSidebar run={selectedRun} onEdited={refreshRun} />
                 )}
                 {selection.kind === "none" && !isEditingRun && (
                   <PipelineInspector

@@ -602,6 +602,58 @@ export function createRun(req: CreateRunRequest): Promise<CreateRunResponse> {
   return request<CreateRunResponse>("POST", "/runs", { body: jsonBody, label: "POST /runs" });
 }
 
+/** The body of a mid-run repo-list edit (#465 slice 2). `add` entries mirror the
+ *  create-modal secondary rows; `remove` names aliases. Both optional — an empty
+ *  body is a legal no-op. */
+export interface EditRunReposBody {
+  add?: TargetRepoInput[];
+  remove?: string[];
+}
+
+/**
+ * What one `PATCH /runs/{id}/repos` did (#465 slice 2, ADR-0042).
+ *
+ * A refusal is a **verdict, not an exception** — same contract as {@link markNodeDone}:
+ * the daemon names the cause with a slug and prose, so the panel shows it inline
+ * rather than throwing a hard error. Only a breakdown of the call itself (network)
+ * throws.
+ */
+export type EditRunReposOutcome =
+  | { kind: "ok"; run: RunState }
+  | { kind: "refused"; slug: string | null; message: string; status: number };
+
+/**
+ * Add / remove read-only secondary repos on a live Run (#465 slice 2, ADR-0042).
+ *
+ * Returns the reprojected {@link RunState} on success (so the caller refreshes in one
+ * round-trip), or a typed refusal on any 4xx/5xx the daemon argues
+ * (`run_not_editable`, `secondary_is_primary`, `bad_secondary_repo`, …). Precedent:
+ * `PATCH /triggers/{id}` for the verb, {@link markNodeDone} for the verdict shape.
+ */
+export async function editRunRepos(
+  runId: string,
+  body: EditRunReposBody,
+): Promise<EditRunReposOutcome> {
+  // Raw mode: a 4xx/5xx here is a nameable refusal, not a failed call, so we read the
+  // body ourselves instead of letting `request` throw.
+  const resp = await request<Response>(
+    "PATCH",
+    `/runs/${encodeURIComponent(runId)}/repos`,
+    { body, responseMode: "raw", label: `PATCH /runs/${runId}/repos` },
+  );
+  const parsed: unknown = await resp.json().catch(() => null);
+  if (resp.ok) {
+    return { kind: "ok", run: parsed as RunState };
+  }
+  const b = parsed as { error?: unknown } | null;
+  return {
+    kind: "refused",
+    slug: typeof b?.error === "string" ? b.error : null,
+    message: apiErrorMessage(parsed, `edit repos refused: ${resp.status}`),
+    status: resp.status,
+  };
+}
+
 // --- Triggers (#160) ---
 
 export interface CreateTriggerRequest {

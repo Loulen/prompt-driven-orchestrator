@@ -604,6 +604,20 @@ export interface CollectionStateInfo {
   members?: string[];
 }
 
+/**
+ * One read-only secondary repo pinned to a Run (#465, ADR-0042). Mirror of the
+ * server `RepoPin`: `repo` is the absolute host path, `alias` the disambiguated
+ * snapshot folder name (the handle a `remove` names), `sha` the frozen commit, and
+ * `base_branch` the ref it was resolved from (provenance only; the SHA is
+ * authoritative). Absent `base_branch` means the pin defaulted to `HEAD`.
+ */
+export interface RepoPin {
+  repo: string;
+  alias: string;
+  sha: string;
+  base_branch?: string | null;
+}
+
 export interface RunState {
   run_id: string;
   status: RunStatus;
@@ -630,6 +644,14 @@ export interface RunState {
   foreach_states?: Record<string, ForEachStateInfo>;
   collection_states?: Record<string, CollectionStateInfo>;
   target_repo?: string | null;
+  /**
+   * The Run's read-only secondary repos (#465, ADR-0042). Absent/empty on a
+   * mono-repo Run. **Editable mid-run** (slice 2) via `editRunRepos`: adding/removing
+   * a secondary rewrites this list, and the change is visible to nodes launched
+   * AFTER the edit (spawn-time visibility) — already-live nodes keep their frozen
+   * context. Never contains the primary (that stays in `target_repo`).
+   */
+  target_repos?: RepoPin[];
   source_branch?: string | null;
   /**
    * Isolation for this Run (#403 / #407 / #410 / #432): `"off"`, or the name of the

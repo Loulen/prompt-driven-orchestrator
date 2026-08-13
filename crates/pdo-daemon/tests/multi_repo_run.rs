@@ -89,6 +89,71 @@ fn seed_daemon_repo(repo: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+// --- #465 slice 2 helpers: mid-run repo-list edit -----------------------------
+
+/// Create a mono-repo Run against the daemon's own repo and return its id. The Run
+/// is `running` the moment `POST /runs` returns (RunStarted is appended before the
+/// response), so a `PATCH …/repos` right after edits a LIVE Run.
+async fn create_mono_run(daemon: &TestDaemon) -> String {
+    let body = serde_json::json!({
+        "pipeline": PIPELINE_NAME,
+        "input": "test input",
+        "target_repo": daemon.target_repo(),
+    });
+    let resp = reqwest::Client::new()
+        .post(format!("{}/runs", daemon.url()))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201, "mono-repo create must succeed");
+    let json: serde_json::Value = resp.json().await.unwrap();
+    json["run_id"].as_str().unwrap().to_string()
+}
+
+async fn patch_repos(
+    daemon: &TestDaemon,
+    run_id: &str,
+    body: serde_json::Value,
+) -> reqwest::Response {
+    reqwest::Client::new()
+        .patch(format!("{}/runs/{}/repos", daemon.url(), run_id))
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+}
+
+/// A fresh git repo (one commit) at `dir`, ready to be pinned as a secondary.
+fn make_secondary_repo(dir: &std::path::Path) {
+    std::fs::create_dir_all(dir).unwrap();
+    git_init_with_commit(dir).unwrap();
+}
+
+/// `<primary>/.pdo/runs/<run_id>/repos/<alias>/` — the on-disk snapshot location.
+fn snapshot_dir(daemon: &TestDaemon, run_id: &str, alias: &str) -> std::path::PathBuf {
+    daemon
+        .repo_root()
+        .join(".pdo")
+        .join("runs")
+        .join(run_id)
+        .join("repos")
+        .join(alias)
+}
+
+/// How many worktrees `secondary` has registered (`worktree list --porcelain` counts
+/// `worktree ` records): 1 = just the repo itself, 2 = repo + one snapshot.
+fn registered_worktree_count(secondary: &std::path::Path) -> usize {
+    let out = Command::new("git")
+        .args(["worktree", "list", "--porcelain"])
+        .current_dir(secondary)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout)
+        .matches("worktree ")
+        .count()
+}
+
 // --- Tests ---
 
 #[tokio::test]
@@ -406,4 +471,421 @@ async fn validate_repo_endpoint_rejects_non_git() {
     let json: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(json["valid"], false);
     assert!(json["error"].as_str().is_some());
+}
+
+// --- #465 slice 2: mid-run edit of the secondary list -------------------------
+
+/// A live mono-repo Run grows a secondary: the pin projects, the snapshot is on disk
+/// at the frozen SHA with a detached HEAD, and the secondary repo registers it.
+#[tokio::test]
+async fn edit_add_secondary_mid_run() {
+    let daemon = TestDaemon::spawn(seed_daemon_repo).await.unwrap();
+    let run_id = create_mono_run(&daemon).await;
+
+    let secondary = tempfile::tempdir().unwrap();
+    make_secondary_repo(secondary.path());
+
+    let resp = patch_repos(
+        &daemon,
+        &run_id,
+        serde_json::json!({ "add": [{ "repo": secondary.path().to_str().unwrap() }] }),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "adding a secondary to a live Run must succeed"
+    );
+
+    let state: serde_json::Value = resp.json().await.unwrap();
+    let repos = state["target_repos"].as_array().unwrap();
+    assert_eq!(repos.len(), 1, "the projection must carry the new pin");
+    let alias = repos[0]["alias"].as_str().unwrap();
+    let sha = repos[0]["sha"].as_str().unwrap();
+    assert!(!sha.is_empty());
+
+    let snap = snapshot_dir(&daemon, &run_id, alias);
+    assert!(
+        snap.exists(),
+        "the snapshot dir must be materialised on disk"
+    );
+
+    // Detached HEAD, pinned at the frozen SHA.
+    let head = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&snap)
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&head.stdout).trim(), sha);
+
+    // The secondary now has two registered worktrees (itself + the detached snapshot).
+    assert_eq!(
+        registered_worktree_count(secondary.path()),
+        2,
+        "the secondary must register the snapshot worktree"
+    );
+    let list = Command::new("git")
+        .args(["worktree", "list", "--porcelain"])
+        .current_dir(secondary.path())
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&list.stdout).contains("detached"),
+        "the snapshot worktree must be detached (no branch)"
+    );
+}
+
+/// Removing a secondary drops it from the projection but LEAVES the snapshot on disk
+/// (deferred teardown, decision 5) — a still-live reader keeps a valid path.
+#[tokio::test]
+async fn edit_remove_secondary_mid_run() {
+    let daemon = TestDaemon::spawn(seed_daemon_repo).await.unwrap();
+    let run_id = create_mono_run(&daemon).await;
+
+    let secondary = tempfile::tempdir().unwrap();
+    make_secondary_repo(secondary.path());
+
+    let add = patch_repos(
+        &daemon,
+        &run_id,
+        serde_json::json!({ "add": [{ "repo": secondary.path().to_str().unwrap() }] }),
+    )
+    .await;
+    let added: serde_json::Value = add.json().await.unwrap();
+    let alias = added["target_repos"][0]["alias"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let snap = snapshot_dir(&daemon, &run_id, &alias);
+    assert!(snap.exists());
+
+    let remove = patch_repos(&daemon, &run_id, serde_json::json!({ "remove": [alias] })).await;
+    assert_eq!(remove.status(), 200);
+    let state: serde_json::Value = remove.json().await.unwrap();
+    assert!(
+        state["target_repos"]
+            .as_array()
+            .map(|a| a.is_empty())
+            .unwrap_or(true),
+        "the removed secondary must be gone from the projection"
+    );
+
+    assert!(
+        snap.exists(),
+        "the snapshot must remain on disk after removal — teardown is deferred to cleanup"
+    );
+}
+
+/// #221 (handler half): a terminal (archived) Run's list is frozen — the edit is
+/// refused 409 `run_not_editable`, never applied.
+#[tokio::test]
+async fn edit_rejects_terminal_run() {
+    let daemon = TestDaemon::spawn(seed_daemon_repo).await.unwrap();
+    let run_id = create_mono_run(&daemon).await;
+
+    // Archive it (terminal, but NOT forgotten — so it reaches the terminal guard, not
+    // the 410 tombstone guard).
+    let cleanup = reqwest::Client::new()
+        .post(format!("{}/runs/{}/commands", daemon.url(), run_id))
+        .json(&serde_json::json!({ "kind": "cleanup_run" }))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        cleanup.status().is_success(),
+        "cleanup_run must archive the Run"
+    );
+
+    let secondary = tempfile::tempdir().unwrap();
+    make_secondary_repo(secondary.path());
+
+    let resp = patch_repos(
+        &daemon,
+        &run_id,
+        serde_json::json!({ "add": [{ "repo": secondary.path().to_str().unwrap() }] }),
+    )
+    .await;
+    assert_eq!(resp.status(), 409, "a terminal Run is not editable");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "run_not_editable");
+}
+
+/// The `add` refusals: the primary (self-reference) and an already-pinned repo.
+#[tokio::test]
+async fn edit_rejects_primary_and_duplicate() {
+    let daemon = TestDaemon::spawn(seed_daemon_repo).await.unwrap();
+    let run_id = create_mono_run(&daemon).await;
+
+    // Adding the primary as its own secondary → 400.
+    let self_ref = patch_repos(
+        &daemon,
+        &run_id,
+        serde_json::json!({ "add": [{ "repo": daemon.target_repo() }] }),
+    )
+    .await;
+    assert_eq!(self_ref.status(), 400);
+    let body: serde_json::Value = self_ref.json().await.unwrap();
+    assert_eq!(body["error"], "secondary_is_primary");
+
+    // Adding the same secondary that is already pinned → 409.
+    let secondary = tempfile::tempdir().unwrap();
+    make_secondary_repo(secondary.path());
+    let path = secondary.path().to_str().unwrap();
+    let first = patch_repos(
+        &daemon,
+        &run_id,
+        serde_json::json!({ "add": [{ "repo": path }] }),
+    )
+    .await;
+    assert_eq!(first.status(), 200);
+
+    let dup = patch_repos(
+        &daemon,
+        &run_id,
+        serde_json::json!({ "add": [{ "repo": path }] }),
+    )
+    .await;
+    assert_eq!(dup.status(), 409);
+    let body: serde_json::Value = dup.json().await.unwrap();
+    assert_eq!(body["error"], "secondary_already_pinned");
+}
+
+/// A bad base branch fails fast: 400 `bad_secondary_repo`, no snapshot, no change to
+/// the projection — and never a git fetch.
+#[tokio::test]
+async fn edit_bad_branch_leaves_no_trace() {
+    let daemon = TestDaemon::spawn(seed_daemon_repo).await.unwrap();
+    let run_id = create_mono_run(&daemon).await;
+
+    let secondary = tempfile::tempdir().unwrap();
+    make_secondary_repo(secondary.path());
+
+    let resp = patch_repos(
+        &daemon,
+        &run_id,
+        serde_json::json!({
+            "add": [{ "repo": secondary.path().to_str().unwrap(), "base_branch": "nope-not-a-branch" }]
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), 400);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "bad_secondary_repo");
+
+    // No snapshot was materialised, and the projection is still mono-repo.
+    let repos_dir = daemon
+        .repo_root()
+        .join(".pdo")
+        .join("runs")
+        .join(&run_id)
+        .join("repos");
+    let has_any = std::fs::read_dir(&repos_dir)
+        .map(|rd| rd.flatten().next().is_some())
+        .unwrap_or(false);
+    assert!(!has_any, "a failed add must leave no snapshot on disk");
+
+    let state: serde_json::Value = reqwest::get(format!("{}/runs/{}", daemon.url(), run_id))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(state["target_repos"]
+        .as_array()
+        .map(|a| a.is_empty())
+        .unwrap_or(true));
+}
+
+/// Removing an alias that is not pinned is an idempotent no-op (200, list unchanged)
+/// — the UI removes by displayed alias and a double-click must not 404.
+#[tokio::test]
+async fn edit_remove_absent_alias_is_noop() {
+    let daemon = TestDaemon::spawn(seed_daemon_repo).await.unwrap();
+    let run_id = create_mono_run(&daemon).await;
+
+    let resp = patch_repos(
+        &daemon,
+        &run_id,
+        serde_json::json!({ "remove": ["ghost-alias"] }),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "removing an absent alias is a no-op, not a 404"
+    );
+    let state: serde_json::Value = resp.json().await.unwrap();
+    assert!(state["target_repos"]
+        .as_array()
+        .map(|a| a.is_empty())
+        .unwrap_or(true));
+}
+
+/// An empty body is a legal no-op 200.
+#[tokio::test]
+async fn edit_empty_body_is_noop() {
+    let daemon = TestDaemon::spawn(seed_daemon_repo).await.unwrap();
+    let run_id = create_mono_run(&daemon).await;
+
+    let resp = patch_repos(&daemon, &run_id, serde_json::json!({})).await;
+    assert_eq!(resp.status(), 200);
+}
+
+/// A forgotten (tombstoned) Run refuses the edit 410 before any other check.
+#[tokio::test]
+async fn edit_forgotten_run_is_410() {
+    let daemon = TestDaemon::spawn(seed_daemon_repo).await.unwrap();
+    let run_id = create_mono_run(&daemon).await;
+
+    // A run must be archived before it can be forgotten (tombstoned).
+    let cleanup = reqwest::Client::new()
+        .post(format!("{}/runs/{}/commands", daemon.url(), run_id))
+        .json(&serde_json::json!({ "kind": "cleanup_run" }))
+        .send()
+        .await
+        .unwrap();
+    assert!(cleanup.status().is_success());
+    let forget = reqwest::Client::new()
+        .delete(format!("{}/runs/{}", daemon.url(), run_id))
+        .send()
+        .await
+        .unwrap();
+    assert!(forget.status().is_success());
+
+    let secondary = tempfile::tempdir().unwrap();
+    make_secondary_repo(secondary.path());
+    let resp = patch_repos(
+        &daemon,
+        &run_id,
+        serde_json::json!({ "add": [{ "repo": secondary.path().to_str().unwrap() }] }),
+    )
+    .await;
+    assert_eq!(resp.status(), 410);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "run_forgotten");
+}
+
+/// Alias disambiguation is seeded from disk: `add repoB` → `remove` → `add another
+/// repoB` gets a DISTINCT alias, because the removed-but-persistent snapshot still
+/// owns its folder name.
+#[tokio::test]
+async fn alias_collision_after_remove_readd() {
+    let daemon = TestDaemon::spawn(seed_daemon_repo).await.unwrap();
+    let run_id = create_mono_run(&daemon).await;
+
+    // Two DIFFERENT repos that share the basename "libB".
+    let a = tempfile::tempdir().unwrap();
+    let repo_a = a.path().join("libB");
+    make_secondary_repo(&repo_a);
+    let b = tempfile::tempdir().unwrap();
+    let repo_b = b.path().join("libB");
+    make_secondary_repo(&repo_b);
+
+    let add_a = patch_repos(
+        &daemon,
+        &run_id,
+        serde_json::json!({ "add": [{ "repo": repo_a.to_str().unwrap() }] }),
+    )
+    .await;
+    let state_a: serde_json::Value = add_a.json().await.unwrap();
+    assert_eq!(state_a["target_repos"][0]["alias"], "libB");
+
+    // Remove it — the snapshot folder `repos/libB` persists on disk.
+    let remove = patch_repos(&daemon, &run_id, serde_json::json!({ "remove": ["libB"] })).await;
+    assert_eq!(remove.status(), 200);
+
+    // Re-add the OTHER repoB: the disk-seeded disambiguation must avoid `libB`.
+    let add_b = patch_repos(
+        &daemon,
+        &run_id,
+        serde_json::json!({ "add": [{ "repo": repo_b.to_str().unwrap() }] }),
+    )
+    .await;
+    assert_eq!(add_b.status(), 200);
+    let state_b: serde_json::Value = add_b.json().await.unwrap();
+    assert_eq!(
+        state_b["target_repos"][0]["alias"], "libB-2",
+        "the second repoB must not reuse the removed snapshot's folder name"
+    );
+    assert!(snapshot_dir(&daemon, &run_id, "libB").exists());
+    assert!(snapshot_dir(&daemon, &run_id, "libB-2").exists());
+}
+
+/// `cleanup_run` is disk-driven: it prunes EVERY snapshot under `repos/*` — the
+/// active one AND the removed-but-persistent one — from its owning secondary, so no
+/// dangling `--detach` registration survives (anti-#498).
+#[tokio::test]
+async fn cleanup_removes_all_snapshots_disk_scan() {
+    let daemon = TestDaemon::spawn(seed_daemon_repo).await.unwrap();
+    let run_id = create_mono_run(&daemon).await;
+
+    let active = tempfile::tempdir().unwrap();
+    make_secondary_repo(active.path());
+    let removed = tempfile::tempdir().unwrap();
+    make_secondary_repo(removed.path());
+
+    // Pin both, then remove one (its snapshot persists on disk, off-projection).
+    let add1 = patch_repos(
+        &daemon,
+        &run_id,
+        serde_json::json!({ "add": [{ "repo": active.path().to_str().unwrap() }] }),
+    )
+    .await;
+    assert_eq!(add1.status(), 200);
+    let add2 = patch_repos(
+        &daemon,
+        &run_id,
+        serde_json::json!({ "add": [{ "repo": removed.path().to_str().unwrap() }] }),
+    )
+    .await;
+    let state2: serde_json::Value = add2.json().await.unwrap();
+    let removed_alias = state2["target_repos"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["repo"] == serde_json::json!(removed.path().to_str().unwrap()))
+        .unwrap()["alias"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let drop = patch_repos(
+        &daemon,
+        &run_id,
+        serde_json::json!({ "remove": [removed_alias] }),
+    )
+    .await;
+    assert_eq!(drop.status(), 200);
+
+    // Both secondaries currently register their snapshot.
+    assert_eq!(registered_worktree_count(active.path()), 2);
+    assert_eq!(registered_worktree_count(removed.path()), 2);
+
+    // Archive — the disk scan must prune BOTH.
+    let cleanup = reqwest::Client::new()
+        .post(format!("{}/runs/{}/commands", daemon.url(), run_id))
+        .json(&serde_json::json!({ "kind": "cleanup_run" }))
+        .send()
+        .await
+        .unwrap();
+    assert!(cleanup.status().is_success());
+
+    assert!(
+        !daemon
+            .repo_root()
+            .join(".pdo")
+            .join("runs")
+            .join(&run_id)
+            .exists(),
+        "the run dir must be gone after cleanup"
+    );
+    assert_eq!(
+        registered_worktree_count(active.path()),
+        1,
+        "the active secondary's snapshot registration must be pruned"
+    );
+    assert_eq!(
+        registered_worktree_count(removed.path()),
+        1,
+        "the removed-but-persistent secondary's registration must be pruned too"
+    );
 }

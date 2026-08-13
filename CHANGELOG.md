@@ -10,6 +10,31 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.21.0
+
+Rien de cassant. La **liste de dépôts d'un Run devient éditable en cours de Run** — ajout/retrait de
+dépôts secondaires read-only, primaire verrouillé (#465 slice 2, ADR-0042). Bump posé contre
+`origin/main` (1.20.0) ; à re-poser au next-free si un autre Run livre entre-temps.
+
+### Édition mid-run de la liste de dépôts (#465, ADR-0042)
+
+La slice 1 gelait la liste de secondaires à la création du Run. Cette slice livre le dernier besoin
+explicite de #465 : « la liste de repos doit rester modifiable à tout moment ». Purement additive —
+on reste dans le modèle snapshot read-only (aucun merge-back, aucun `base_sha`, aucun `commit-tree`).
+
+- `PATCH /runs/{run_id}/repos` (`{ add, remove }`) ajoute/retire des secondaires sur un Run **vivant**,
+  depuis le panneau de détail du Run (primaire verrouillé). Refus typés (`RepoEditRefusal`) :
+  `run_not_editable`, `secondary_is_primary`, `secondary_already_pinned`, `bad_secondary_repo`, …
+- Nouvel event `run_repos_edited` portant la **liste active complète re-gelée** ;
+  `RunState.target_repos` n'est plus figé à `RunStarted`. Le réducteur écrase la liste et **no-op sur
+  un Run terminal** (garde #221 en double, avec le refus 409 du handler).
+- **Visibilité au spawn** : une édition touche les nœuds lancés **après** elle ; les nœuds déjà
+  vivants gardent leur contexte figé. Un ajout matérialise le snapshot (0 mount neuf) ; un retrait le
+  laisse sur disque jusqu'au cleanup, désormais **piloté par le disque** (balaie `repos/*`, couvre
+  les snapshots retirés-mais-persistants et orphelins).
+- Restent différés : le sélecteur `repo:` par nœud, le `git` in-sandbox sur un secondaire, et
+  l'écriture / MR dans un secondaire.
+
 ## 1.20.0
 
 Rien de cassant. Le **plancher de prix embarqué** amorce désormais la génération courante

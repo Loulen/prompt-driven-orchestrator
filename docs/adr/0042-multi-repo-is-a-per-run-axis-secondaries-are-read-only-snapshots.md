@@ -2,7 +2,7 @@
 
 ## Statut
 
-Accepté — #465 slice 1.
+Accepté — #465 slices 1 & 2.
 
 > Numéro posé sur la branche de base (1.12.0), où le max d'ADR sur disque est 0039 ;
 > 0040/0041 sont réservés (disputés par #512/#509/#507). À **renuméroter au next-free
@@ -31,6 +31,22 @@ target branch par dépôt.
    seulement ; untracked toléré), via `worktree_has_tracked_changes`, à l'edge de complétion. Le
    refus est **non terminal** (le nœud reste vivant : revert du fichier suivi puis re-complétion
    passent) ; il n'est **pas** dans `transition_guard` (pur/IO-free).
+5. **La liste de secondaires d'un Run est mutable en cours de Run** (slice 2). `PATCH
+   /runs/{id}/repos` (`{ add, remove }`) ajoute/retire des secondaires read-only sur un Run **vivant**
+   ; le primaire reste immuable (pas d'alias ⇒ inatteignable par `remove` ; un `add` égal au primaire
+   est refusé `secondary_is_primary`). L'édition émet un event **`RunReposEdited`** portant la liste
+   active complète **re-gelée** (`Vec<RepoPin>`, SHA/alias déjà résolus), et le réducteur écrase
+   `RunState.target_repos` (miroir du bras `RunStarted`). Le contrat est la **visibilité au spawn**
+   (*spawn-time visibility*) : une édition affecte les nœuds lancés **après** elle ; les nœuds déjà
+   vivants gardent le contexte figé à leur spawn (préambule + `PDO_SECONDARY_REPOS` sont écrits une
+   fois au lancement, jamais relus). Un **ajout** matérialise le snapshot à l'édition (visible
+   in-conteneur par le mount `repo_root:rw` existant — **0 mount neuf**) ; un **retrait** le retire de
+   la projection mais **laisse le snapshot sur disque** (un nœud vivant qui lit encore ce chemin
+   absolu reste valide), le démontage physique étant différé au `cleanup_run`. **Garde #221 en
+   double** : le handler refuse l'édition d'un Run terminal (`409 run_not_editable`) **et** le
+   réducteur `RunReposEdited` est un no-op sur un Run terminal — un event passif ne doit jamais
+   « dé-terminaliser » un Run. Refus typés (`RepoEditRefusal`, patron `CompletionRefusal`,
+   projection unique). L'édition **n'est pas** dans `transition_guard` (nœud-lifecycle seul).
 
 ## Conséquences
 
@@ -41,14 +57,28 @@ target branch par dépôt.
 - Le sandbox ne gagne aucun mount en slice 1 (secondaires déjà sous `repo_root`, monté rw à chemin
   identique). Le git in-sandbox sur un secondaire est hors-slice (exigerait de monter le `.git` du
   secondaire ; `:ro` casse `git status`/l'index — EROFS).
-- `cleanup_run` doit `git worktree remove --force` **+ `git worktree prune`** dans **chaque**
-  secondaire, depuis le dépôt secondaire (la registration `--detach` vit hors `repo_root`), sinon
-  registration dangling — classe #498. `cleanup_run` ne prunait rien auparavant.
+- `cleanup_run` démonte chaque secondaire par **`git worktree remove --force` + `git worktree
+  prune`** depuis le dépôt secondaire (la registration `--detach` vit hors `repo_root`), sinon
+  registration dangling — classe #498. Depuis la slice 2 il est **piloté par le disque** : il balaie
+  `<run_dir>/repos/*` et démonte **chaque** snapshot présent (actif, retiré-mais-persistant, ou
+  orphelin — créé mais dont l'event n'a pas été appendé sur un crash), en résolvant le dépôt
+  propriétaire par le pointeur `.git` du snapshot. Itérer la seule projection raterait les
+  retirés-mais-persistants et les orphelins. `cleanup_run` ne prunait rien avant la slice 1.
 - L'alias d'un secondaire est désambiguïsé sur collision de basename (deux secondaires de même nom
-  ⇒ `<base>`, `<base>-2`, …) : les chemins de snapshot ne doivent jamais collisionner.
+  ⇒ `<base>`, `<base>-2`, …) : les chemins de snapshot ne doivent jamais collisionner. Sur une
+  **édition mid-run**, la désambiguïsation est **seedée depuis le disque** (`<run_dir>/repos/*`) en
+  plus des alias actifs, pour qu'un `remove repoB` suivi d'un `add <autre>/repoB` n'essaie pas de
+  réutiliser le dossier `repoB` d'un snapshot retiré-mais-persistant.
+- Le garde de complétion `secondary_repos_dirtied` itère la liste **active** (`RunState.target_repos`)
+  : un secondaire retiré n'est plus dirty-checké — comportement voulu (on l'abandonne).
 - Les Triggers portent la liste (colonne `target_repos TEXT`, JSON brut, ALTER gardé PRAGMA),
   forwardée au fire ; le chokepoint de création re-gèle chaque SHA.
-- L'édition mid-run de la liste et le sélecteur `repo:` par nœud sont différés.
+- La validation par-secondaire (chemin absolu + git, self-référence, doublon, `rev-parse --verify`,
+  alias) est **un seul helper** (`resolve_one_secondary_pin`) partagé par le chokepoint de création
+  **et** `patch_run_repos`, pour que les deux surfaces ne divergent pas (classe #509).
+- Restent **différés** (slices ultérieures) : l'écriture / MR dans un secondaire (retomberait dans le
+  merge-back multi-repo rejeté), le `git` in-sandbox sur un secondaire, et le sélecteur `repo:` par
+  nœud.
 
 ## Alternatives écartées
 

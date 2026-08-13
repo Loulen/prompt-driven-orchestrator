@@ -83,6 +83,10 @@ fetch out-of-band (bouton, ou rafraîchissement au démarrage)
   trois sources distantes examinées** — models.dev et LiteLLM les ont purgées de leur namespace
   `anthropic`, OpenRouter a délisté 3.5-haiku tout court. Le `const` est donc le **seul tarificateur**
   de ces familles, pas un jeu de données jetable qu'un sync remplacerait.
+  **Amendé par #527** (voir l'amendement en fin d'ADR) : le `const` tarife désormais **aussi** les
+  familles de la génération courante (gen-5), en plancher, **toujours surchargées par un sync**. Le
+  *principe de membership* s'élargit ; le mécanisme (fusion par clé, rien de seedé sur disque) ne bouge
+  pas.
 
 - **Fusion par clé, jamais remplacement.** Une clé présente dans un tier gagne ; une clé absente garde
   ce que le tier suivant en dit. Sous remplacement global, oublier `claude-opus-4-8` effacerait
@@ -335,3 +339,44 @@ fetch out-of-band (bouton, ou rafraîchissement au démarrage)
 - **Transcrire dans `docs/agents/run-scenario.md` la recette de pile isolée et de teardown** que le
   Feature Path de #427 a dû porter lui-même : ce playbook ne dit nulle part comment démarrer ni démonter
   une pile, ce qui est la cause racine documentée de #422, et il omet le socket tmux dérivé du port.
+
+## Amendement — La génération courante entre au plancher embarqué (#527, fork de #425)
+
+Le grill de #425 a isolé une question qui **révise le principe de membership de D2** et ne devait pas
+être exécutée en autonome : faut-il **amorcer** `const PRICES` avec la génération 5 (`claude-opus-5`,
+`claude-sonnet-5`, `claude-fable-5`) pour qu'un montant de coût soit **non nul, hors ligne, d'emblée** —
+sans clic « Sync coûts » ni `models.yaml` ? Le propriétaire a tranché le 2026-08-13 : « **On amende** »
+(issue #527).
+
+**Le symptôme corrigé.** Sur une instance jamais synchronisée et sans `models.yaml` — l'état par défaut
+d'un install neuf, et le seul mode strictement hors ligne — un Run sur un modèle de génération 5 (le
+modèle que le produit fait tourner **par défaut**) lisait son coût `~$0.0000 †`. Le recensement de cette
+ADR chiffre ~30 % de la dépense lue à $0 pour cette seule raison ; le tier fetché la corrige, mais
+**seulement après le premier clic**, et le retard de version du daemon de production rend ce clic tardif.
+
+**Ce qui change.** La table embarquée tarife désormais **ce qu'aucun remote ne porte + les familles de
+la génération courante**, en plancher, **toujours surchargées par un sync**. D2 disait « le `const` est
+le **seul** tarificateur des familles qu'aucune source distante ne porte » ; c'est le *principe de
+membership* qui s'élargit — la gen-5 est le cas inverse (models.dev la porte), et on l'ajoute quand même,
+en plancher.
+
+**Ce qui ne change pas — et pourquoi ce n'est pas « amorcer » au sens interdit.** « Amorcer » dans D2 /
+§9 = **matérialiser le `const` sur un fichier disque** (seeder un `.json`), ce qui figerait un instantané
+qu'une release future masquerait. Ajouter des lignes au `const` n'est pas ça : `builtin()` reste pur, la
+fusion par clé est intacte (`resolve()` insère `PRICES` en plus basse précédence, un sync gagne toujours
+par clé), **aucun fichier n'est seedé**, et une release qui ajoute une ligne au `const` reste visible. La
+table est un plancher, pas un miroir des prix fetchables.
+
+**`sonnet-5` = $3/$15, pas $2/$10.** Le `const` ne peut pas être daté (no-date, délibéré). Le prix
+d'intro ($2/$10) expire le **2026-08-31** ; graver $3/$15 (post-intro) n'est faux que pour les lignes
+sonnet-5 **pré-cutover** des instances **jamais synchronisées** (~0,5 % d'un nombre déjà préfixé `~`, la
+dérive **déjà ratifiée** par cette ADR pour le tier fetché) et se **corrige au premier sync**. Graver
+$2/$10 serait faux pour toute la vie post-31-août de chaque release.
+
+**Tests.** `price_table.rs` : `gen_5_is_priced_by_the_embedded_floor_out_of_the_box` (nouveau) épingle
+les trois prix ; `load_..._is_the_builtin_floor_and_silent` et `load_of_a_corrupt_fetched_file_...`
+passent `claude-opus-5` de `None` à `Some` ; `the_embedded_tier_is_a_floor_not_a_seed` documente en plus
+que la gen-5, elle, **est** surchargée par le tier fetché. La démonstration « un sync répare un $0 »
+(unit `a_key_only_the_disk_knows...`, intégration `a_sync_reprices_a_live_run...`,
+`run_cost::cached_recomputes_when_only_the_price_table_changes`) porte désormais sur un modèle **au-delà
+du plancher** (`claude-opus-6`) — la valeur pérenne du sync une fois la gen-5 devenue plancher.

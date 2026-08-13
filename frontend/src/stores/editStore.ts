@@ -28,7 +28,12 @@ import {
   regionsDestroyedByEdgeRemoval,
 } from "../lib/loopRegions";
 
-export type SelectionKind = "node" | "edge" | "region" | "note" | "none";
+// `"run"` is not a canvas element: it means the right pane shows the Run-info /
+// Repositories sidebar for the active run tab (#465 slice 2, F1). It is set by
+// an explicit toggle (canvas toolbar) rather than a canvas click, and — unlike
+// `"none"` — it survives the App auto-snap, so the panel stays reachable while a
+// live run's node is running. Cleared to `"none"` on any tab switch.
+export type SelectionKind = "node" | "edge" | "region" | "note" | "run" | "none";
 
 export interface Selection {
   kind: SelectionKind;

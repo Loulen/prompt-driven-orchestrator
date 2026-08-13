@@ -32,6 +32,9 @@ on reste dans le modèle snapshot read-only (aucun merge-back, aucun `base_sha`,
   vivants gardent leur contexte figé. Un ajout matérialise le snapshot (0 mount neuf) ; un retrait le
   laisse sur disque jusqu'au cleanup, désormais **piloté par le disque** (balaie `repos/*`, couvre
   les snapshots retirés-mais-persistants et orphelins).
+- Le panneau « Repositories » reste atteignable **pendant qu'un nœud tourne** : un bouton dédié de la
+  barre d'outils du canvas ouvre le détail du Run sans que l'auto-sélection du nœud vivant ne le
+  reprenne aussitôt (sinon l'édition « à tout moment » était infaisable au navigateur).
 - Restent différés : le sélecteur `repo:` par nœud, le `git` in-sandbox sur un secondaire, et
   l'écriture / MR dans un secondaire.
 

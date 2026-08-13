@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import FsExplorerModal from "./FsExplorerModal";
 import type { BrowseResponse } from "../api";
 import { browseFs } from "../api";
@@ -245,5 +247,122 @@ describe("FsExplorerModal — testids, layering, errors", () => {
     expect(await screen.findByTestId("fs-browse-error")).toHaveTextContent(
       "path must be an absolute path",
     );
+  });
+});
+
+// A11y (#437). Renders a focusable element OUTSIDE the modal: without it the Tab would
+// loop through the card anyway and the trap test would be a false positive.
+function renderWithOutside(overrides: Partial<Parameters<typeof FsExplorerModal>[0]> = {}) {
+  const props = {
+    onPick: vi.fn(),
+    onClose: vi.fn(),
+    ...overrides,
+  };
+  render(
+    <>
+      <button data-testid="outside">outside</button>
+      <FsExplorerModal {...props} />
+    </>,
+  );
+  return props;
+}
+
+// Harness for focus restoration: a trigger button that mounts the modal on click, so
+// `document.activeElement` at mount is the trigger (what the restoration effect captures).
+function FocusHarness() {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button data-testid="trigger" onClick={() => setOpen(true)}>
+        open
+      </button>
+      {open && <FsExplorerModal onPick={vi.fn()} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
+describe("FsExplorerModal — accessibility (#437)", () => {
+  it("marks the card as an aria-modal dialog", async () => {
+    renderModal();
+    const modal = await screen.findByTestId("fs-browse-modal");
+    expect(modal).toHaveAttribute("role", "dialog");
+    expect(modal).toHaveAttribute("aria-modal", "true");
+  });
+
+  it("names the dialog from the title row when a title is given", async () => {
+    renderModal({ mode: "file", title: "Choose a Dockerfile" });
+    await screen.findByTestId("fs-browse-modal");
+    expect(screen.getByRole("dialog")).toHaveAccessibleName("Choose a Dockerfile");
+  });
+
+  it("derives the name from mode when no title — dir mode says 'Choose a folder'", async () => {
+    renderModal();
+    await screen.findByTestId("fs-browse-modal");
+    expect(screen.getByRole("dialog")).toHaveAccessibleName("Choose a folder");
+  });
+
+  it("derives the name from mode when no title — file mode says 'Choose a file'", async () => {
+    renderModal({ mode: "file" });
+    await screen.findByTestId("fs-browse-modal");
+    expect(screen.getByRole("dialog")).toHaveAccessibleName("Choose a file");
+  });
+
+  it("moves initial focus to the dialog card", async () => {
+    renderModal();
+    await screen.findByTestId("fs-browse-modal");
+    await waitFor(() => expect(screen.getByTestId("fs-browse-modal")).toHaveFocus());
+  });
+
+  it("traps Tab: from the last focusable it wraps to the first, never escaping", async () => {
+    const user = userEvent.setup();
+    renderWithOutside();
+    await screen.findByTestId("fs-browse-select");
+    // Wait for the load so 'Up' is enabled (parent "/") — it is the first focusable.
+    await waitFor(() => expect(screen.getByTestId("fs-browse-up")).toBeEnabled());
+    screen.getByTestId("fs-browse-select").focus(); // last focusable
+    await user.tab();
+    expect(screen.getByTestId("fs-browse-up")).toHaveFocus();
+    expect(screen.getByTestId("outside")).not.toHaveFocus();
+  });
+
+  it("traps Shift+Tab: from the first focusable it wraps to the last, never escaping", async () => {
+    const user = userEvent.setup();
+    renderWithOutside();
+    await screen.findByTestId("fs-browse-select");
+    await waitFor(() => expect(screen.getByTestId("fs-browse-up")).toBeEnabled());
+    screen.getByTestId("fs-browse-up").focus(); // first focusable
+    await user.tab({ shift: true });
+    expect(screen.getByTestId("fs-browse-select")).toHaveFocus();
+    expect(screen.getByTestId("outside")).not.toHaveFocus();
+  });
+
+  it.each(["cancel", "escape", "confirm"] as const)(
+    "restores focus to the opener on close via %s",
+    async (closeVia) => {
+      const user = userEvent.setup();
+      render(<FocusHarness />);
+      const trigger = screen.getByTestId("trigger");
+      await user.click(trigger);
+      // Open: the card holds focus; the confirm button is enabled once the load lands.
+      await waitFor(() => expect(screen.getByTestId("fs-browse-modal")).toHaveFocus());
+      await waitFor(() => expect(screen.getByTestId("fs-browse-select")).toBeEnabled());
+
+      if (closeVia === "cancel") {
+        await user.click(screen.getByRole("button", { name: "Cancel" }));
+      } else if (closeVia === "escape") {
+        fireEvent.keyDown(document, { key: "Escape" });
+      } else {
+        await user.click(screen.getByTestId("fs-browse-select"));
+      }
+
+      await waitFor(() => expect(trigger).toHaveFocus());
+    },
+  );
+
+  it("does not swallow Escape — the trap effect ignores non-Tab keys", async () => {
+    const props = renderModal();
+    await screen.findByTestId("fs-browse-modal");
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(props.onClose).toHaveBeenCalled();
   });
 });

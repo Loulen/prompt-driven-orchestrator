@@ -7512,10 +7512,15 @@ fn spawn_manager_session(
         state.port,
         state.tmux_cmd_override.as_deref(),
         // manager has no NodeDef — always an agent at the account default (#296),
-        // and for the same reason no effort level either (#424)
+        // and for the same reason no effort level either (#424). No pinned session
+        // id either (#473): the manager owns no `NodeStarted`, the sweep never
+        // probes it and it is never resumed, so it keeps the legacy id-less launch —
+        // and resolving nodes by their own id is precisely what stops the manager's
+        // transcript, which shares this cwd, from being read as a node's.
         tmux_session_manager::SessionTail::Agent {
             model: None,
             effort: None,
+            session_id: None,
         },
         sandbox_wrap.as_ref(),
     ) {
@@ -9644,6 +9649,11 @@ struct SweepNodeProbes<'a> {
     /// [`sandbox_run::transcripts_root`]; the encoded cwd segment is still derived
     /// from `working_dir` (the single source of truth), never re-encoded here.
     projects_root: &'a Path,
+    /// #473: the Claude Code session id this node's iteration was launched with,
+    /// read back from its latest `NodeStarted` payload. `Some` ⇒ resolve the
+    /// transcript by identity (`<uuid>.jsonl`); `None` (a pre-#473 row / a script
+    /// node) ⇒ the legacy newest-mtime fallback.
+    session_id: Option<&'a str>,
     pipeline_path: &'a Path,
     artifacts_dir: &'a Path,
     run_id: &'a str,
@@ -9658,7 +9668,17 @@ impl stale_detector::NodeProbes for SweepNodeProbes<'_> {
     }
 
     fn transcript_tail(&self) -> Option<stale_detector::TranscriptTail> {
-        stale_detector::find_session_jsonl(self.projects_root, self.working_dir)
+        // #473: resolve by pinned session identity when we have one — this node's
+        // own `<uuid>.jsonl`, never the newest `.jsonl` in a cwd shared with the
+        // manager / sibling non-CM nodes. A pre-#473 node (no recorded id) falls
+        // back to the legacy newest-mtime resolution.
+        let resolved = match self.session_id {
+            Some(sid) => {
+                stale_detector::session_jsonl_by_id(self.projects_root, self.working_dir, sid)
+            }
+            None => stale_detector::find_session_jsonl(self.projects_root, self.working_dir),
+        };
+        resolved
             .as_deref()
             .and_then(stale_detector::read_transcript_tail)
     }
@@ -9803,6 +9823,11 @@ async fn run_stale_detection(state: &Arc<AppState>) {
 
             let session_name = tmux_session_manager::node_session_name(run_id, node_id, *iter);
 
+            // #473: the session id this iteration was launched with (its latest
+            // `NodeStarted`), so the probe resolves the transcript by identity.
+            // `None` for a script node or a pre-#473 row ⇒ legacy newest-mtime pick.
+            let launch_session_id = find_launch_session_id(&events, node_id, *iter);
+
             // #373: the whole probe → gate → decide → events → diagnostics →
             // usage-limit-dedup pipeline lives in `assess_node`, with all tmux +
             // filesystem I/O injected via this adapter. The sweep only appends
@@ -9812,6 +9837,7 @@ async fn run_stale_detection(state: &Arc<AppState>) {
                 session_name: &session_name,
                 working_dir: &working_dir,
                 projects_root: &projects_root,
+                session_id: launch_session_id.as_deref(),
                 pipeline_path: &pipeline_path,
                 artifacts_dir: &artifacts_dir,
                 run_id,
@@ -10249,10 +10275,14 @@ async fn node_pane(
                     marker: &session_name,
                     workdir: &working_dir,
                 });
-            // #424: `--continue` restores the model but loses the effort level
+            // #424: a resume restores the model but loses the effort level
             // (measured on claude 2.1.220, and the transcript carries nothing to
             // read back), so re-pose the level the node was LAUNCHED with.
             let launch_effort = find_launch_effort(&events, &node_id, iter);
+            // #473: resume by the pinned session id — `--resume <uuid>`, this node's
+            // own transcript. A pre-#473 row (no id) falls back to a bare
+            // `--continue`, which is the very collision this issue fixes.
+            let launch_session_id = find_launch_session_id(&events, &node_id, iter);
             if let Err(e) = tmux_session_manager::resume(
                 &session_name,
                 &working_dir,
@@ -10261,6 +10291,7 @@ async fn node_pane(
                 iter,
                 state.port,
                 launch_effort.as_deref(),
+                launch_session_id.as_deref(),
                 state.tmux_cmd_override.as_deref(),
                 sandbox_wrap.as_ref(),
             ) {
@@ -10324,6 +10355,32 @@ fn find_launch_effort(events: &[event_log::Event], node_id: &str, iter: i64) -> 
         })
         .and_then(|e| e.payload.as_ref())
         .and_then(|p| p.get("effort"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+}
+
+/// The Claude Code session id a node's iteration was launched with (#473), read
+/// back from the **latest** `NodeStarted` payload for `(node_id, iter)`.
+///
+/// `.rev().find(...)` takes the most recent `NodeStarted`, so a `restart_node`
+/// that re-spawned the same iteration (a legal same-iter restart) resolves to the
+/// *fresh* id it pinned, not the dead session's. The event log is the source of
+/// truth here for the same reason as [`find_launch_effort`]: ADR-0007 makes a live
+/// iteration immutable to YAML edits. A missing key — every pre-#473 row, every
+/// script node, every infra session — yields `None`, i.e. the legacy newest-mtime
+/// transcript resolution and a bare `--continue` on resume. No migration.
+fn find_launch_session_id(events: &[event_log::Event], node_id: &str, iter: i64) -> Option<String> {
+    events
+        .iter()
+        .rev()
+        .find(|e| {
+            e.kind == event_log::EventKind::NodeStarted
+                && e.node_id.as_deref() == Some(node_id)
+                && e.iter == Some(iter)
+        })
+        .and_then(|e| e.payload.as_ref())
+        .and_then(|p| p.get("session_id"))
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
@@ -10583,12 +10640,14 @@ async fn spawn_merge_resolver(
         state.port,
         state.tmux_cmd_override.as_deref(),
         // __merge_resolver__ has no NodeDef — agent at the account default (#296),
-        // hence no effort level either (#424). NOT to be confused with a `merge`
-        // NODE, which is a regular NodeDef routed through `spawn_node` and DOES
-        // carry an effort.
+        // hence no effort level either (#424), and no pinned session id (#473): it
+        // owns no `NodeStarted` and is neither probed nor resumed. NOT to be
+        // confused with a `merge` NODE, which is a regular NodeDef routed through
+        // `spawn_node` and DOES carry an effort and a pinned id.
         tmux_session_manager::SessionTail::Agent {
             model: None,
             effort: None,
+            session_id: None,
         },
         sandbox_wrap.as_ref(),
     ) {

@@ -9,6 +9,12 @@
 > *détecteur* et était fausse pour le *reaper* : celui-ci **fabriquait** la mort que le détecteur
 > observait ensuite fidèlement, sous un `session_died` parfaitement crédible. Le verdict terminal
 > reste le bon ; ce qu'il faut lire avec lui, c'est **qui** a tué la session.
+>
+> **Amendé par #473 (résolution du transcript par identité de session, 1.22.0).** Le §2 lisait « *son*
+> transcript » ; le code lisait en réalité le `.jsonl` le plus récent du dossier projet CC, résolu par
+> **cwd**. Or un nœud ni `code-mutating` ni `merge` tourne dans le worktree du Run, qui est **aussi** le
+> cwd de la session manager — un seul dossier, plusieurs transcripts, la sonde prenait le dernier touché
+> (souvent celui du manager). Voir « Résolution du transcript » ci-dessous.
 
 Trois décisions durables, arbitrées sur deux réponses du owner : *on veut détecter Mort, pas un seuil
 qui ne serait pas robuste* ; *un faux positif ne doit pas coûter un Run*.
@@ -107,6 +113,24 @@ avec `CompletionSource::TurnEnded`. Sans cela, sur un nœud `code-mutating`/`mer
 `run_advance::complete_node`, dans le handler. L'événement émis est `EventKind::NodeAutoCompleted` (déjà
 projeté comme une complétion, déjà couvert par la même garde) — pour que le log dise que la complétion
 est automatique.
+
+**Résolution du transcript : par identité de session, jamais par cwd (#473).** « *Son* transcript »
+n'est pas ce que le code mesurait : la sonde encodait le **cwd** puis prenait le `.jsonl` de mtime
+maximale du dossier projet CC. Un nœud ni `code-mutating` ni `merge` partage ce cwd (le worktree du
+Run) avec la session manager — donc un dossier, plusieurs `.jsonl`, et le plus récent est **souvent
+celui du manager**. La même racine frappait `claude --continue` au resume (`build_resume_script`),
+toujours actif même case décochée : un nœud non-CM respawné reprenait « la conv. la plus récente du
+cwd » = potentiellement celle du manager ou d'un nœud frère. Correctif : **PDO épingle un `sessionId`
+au spawn** (`claude --session-id <uuid>`, enregistré sur `NodeStarted`) ; CC nomme son transcript
+`<uuid>.jsonl`, donc la sonde résout par **nom exact** (`session_jsonl_by_id`) et le resume cible ce
+transcript-là (`--resume <uuid>`). Les infra sessions (`__manager__` / `__merge_resolver__`) restent
+sans id : elles n'ont pas de `NodeStarted`, ne sont jamais sondées ni reprises — et résoudre chaque
+nœud par *son* id suffit à ignorer leur transcript partagé. Les nœuds `code-mutating`/`merge` étaient
+déjà immunisés (sous-worktree dédié, dossier non partagé) ; ils reçoivent un id quand même, par
+uniformité. Une ligne d'avant #473 (aucun id enregistré) retombe proprement sur l'ancienne résolution
+mtime et le `--continue` positionnel — aucune migration. **L'invariant byte-identité du tail** (#296 /
+#347 / #424) ne vaut donc plus pour un nœud agent : chaque tail porte désormais `--session-id`. Il est
+conservé pour le cas `None` (infra sessions) et la parité host≡sandbox reste entière.
 
 ### 3. #373 Unit B est fermé en won't-do
 

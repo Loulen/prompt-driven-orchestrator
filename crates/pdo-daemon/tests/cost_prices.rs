@@ -57,14 +57,19 @@ edges:
 "#;
 
 /// The real shape of `models.dev/api.json`, trimmed to what the normaliser reads.
-/// Three of these rows are the models #427 measured as unpriced ($0 on ~30 % of
-/// the corpus); `eu.anthropic` is here to prove regional prices are ignored.
+/// The gen-5 rows are the models #427 measured as unpriced; since #527 the
+/// embedded floor prices them out of the box, so `claude-opus-6` stands in as the
+/// model the floor cannot know yet — the case a sync still repairs. `sonnet-5`'s
+/// live intro $2/$10 differs from the floor's post-intro $3/$15, exercising the
+/// "floor always overridden by a sync" invariant. `eu.anthropic` proves regional
+/// prices are ignored.
 const MODELS_DEV: &str = r#"{
   "anthropic": { "models": {
     "claude-opus-4-8":   { "id": "claude-opus-4-8",   "cost": { "input": 5,  "output": 25 } },
     "claude-opus-5":     { "id": "claude-opus-5",     "cost": { "input": 5,  "output": 25 } },
     "claude-sonnet-5":   { "id": "claude-sonnet-5",   "cost": { "input": 2,  "output": 10 } },
     "claude-fable-5":    { "id": "claude-fable-5",    "cost": { "input": 10, "output": 50 } },
+    "claude-opus-6":     { "id": "claude-opus-6",     "cost": { "input": 10, "output": 50 } },
     "claude-haiku-4-5-20251001": { "id": "claude-haiku-4-5-20251001", "cost": { "input": 1, "output": 5 } }
   } },
   "eu.anthropic": { "models": {
@@ -270,18 +275,30 @@ async fn sync_is_registered_and_answers_json() {
     assert_eq!(body["ok"], true);
     assert_eq!(body["source"], fixture.url());
 
-    // The three models #427 measured as unpriced are now priced.
+    // #527: gen-5 is now priced by the embedded FLOOR, so a sync no longer "adds"
+    // it out of the box. What a sync still does — the enduring value ADR-0034
+    // promises — is (a) price models the floor cannot know yet (`claude-opus-6`),
+    // and (b) override the floor when the live source moved: `claude-sonnet-5`'s
+    // floor is the post-intro $3/$15, the live source carries the current intro
+    // $2/$10, so it is UPDATED. This proves the floor is a floor, not a mirror.
     let added: Vec<String> = serde_json::from_value(body["added"].clone()).unwrap();
-    for k in ["claude-opus-5", "claude-sonnet-5", "claude-fable-5"] {
-        assert!(added.contains(&k.to_string()), "added = {added:?}");
-    }
-    // `claude-opus-4-8` was ALREADY priced by the embedded floor at the same price →
-    // unchanged, not added. Merge by key, never replacement.
-    assert!(!added.contains(&"claude-opus-4-8".to_string()));
-    // The dated source id landed de-dated.
+    let updated: Vec<String> = serde_json::from_value(body["updated"].clone()).unwrap();
     assert!(
-        added.contains(&"claude-haiku-4-5".to_string()) || body["unchanged"].as_u64() > Some(0)
+        added.contains(&"claude-opus-6".to_string()),
+        "a model newer than the floor must be added: added = {added:?}"
     );
+    assert!(
+        updated.contains(&"claude-sonnet-5".to_string()),
+        "the live source overrides the floor: updated = {updated:?}"
+    );
+    // `claude-opus-5` / `claude-fable-5` / `claude-opus-4-8` were ALREADY priced by
+    // the embedded floor at the same price → unchanged, neither added nor updated.
+    for k in ["claude-opus-5", "claude-fable-5", "claude-opus-4-8"] {
+        assert!(!added.contains(&k.to_string()), "added = {added:?}");
+        assert!(!updated.contains(&k.to_string()), "updated = {updated:?}");
+    }
+    // The dated source id landed de-dated (and is unchanged: the floor prices it).
+    assert!(body["unchanged"].as_u64() > Some(0));
 
     assert!(
         fetched_path(&daemon).exists(),
@@ -310,8 +327,9 @@ async fn a_sync_reprices_a_live_run_without_restarting_the_daemon() {
         .unwrap();
     let run_id = start_run(&daemon).await;
 
-    // A transcript on a model NO tier prices out of the box: 1 MTok of fable-5.
-    plant_transcript(&daemon, &run_id, "claude-fable-5", 1_000_000);
+    // A transcript on a model NO tier prices out of the box: 1 MTok of opus-6.
+    // #527 floored gen-5, so the demonstrator is a model beyond the floor.
+    plant_transcript(&daemon, &run_id, "claude-opus-6", 1_000_000);
 
     let before = get_run(&daemon, &run_id).await;
     assert_eq!(
@@ -330,7 +348,7 @@ async fn a_sync_reprices_a_live_run_without_restarting_the_daemon() {
         serde_json::from_value(before["cost"]["unpriced_models"].clone()).unwrap();
     assert_eq!(
         named,
-        vec!["claude-fable-5".to_string()],
+        vec!["claude-opus-6".to_string()],
         "GET /runs/:id must name the unpriced model, got {}",
         before["cost"]
     );
@@ -342,7 +360,7 @@ async fn a_sync_reprices_a_live_run_without_restarting_the_daemon() {
     let usd = after["cost"]["usd"].as_f64().unwrap_or(-1.0);
     assert!(
         (usd - 10.0).abs() < 1e-9,
-        "1 MTok of claude-fable-5 at $10/MTok = $10 after the sync, got {usd} ({})",
+        "1 MTok of claude-opus-6 at $10/MTok = $10 after the sync, got {usd} ({})",
         after["cost"]
     );
     assert_eq!(
@@ -418,7 +436,7 @@ async fn an_empty_harvest_answers_502_and_leaves_the_table_byte_identical() {
     );
     // And the table still prices what it used to.
     let s = settings(&daemon2).await;
-    assert_eq!(s["price_table"]["fetched_rows"].as_u64(), Some(5));
+    assert_eq!(s["price_table"]["fetched_rows"].as_u64(), Some(6));
 }
 
 // --- 4. a second sync with nothing to change ---------------------------------
@@ -673,5 +691,5 @@ async fn an_unreachable_source_at_boot_leaves_the_table_and_the_daemon_alive() {
     );
     // The daemon is still serving.
     let s = settings(&daemon2).await;
-    assert_eq!(s["price_table"]["fetched_rows"].as_u64(), Some(5));
+    assert_eq!(s["price_table"]["fetched_rows"].as_u64(), Some(6));
 }

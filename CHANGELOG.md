@@ -10,6 +10,15 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.20.0
+
+Rien de cassant. Le **plancher de prix embarqué** amorce désormais la génération courante
+(`claude-opus-5` / `claude-sonnet-5` / `claude-fable-5`), si bien qu'une instance **jamais
+synchronisée, hors ligne** chiffre son modèle par défaut au lieu d'afficher `~$0.00 †` (#527,
+amende ADR-0034). Le plancher reste un **plancher, pas un miroir** : un sync surcharge encore
+chaque clé (p. ex. `sonnet-5` à son intro live). Bump posé contre `origin/main` (1.19.0) ; à
+re-poser au next-free si un autre Run livre entre-temps.
+
 ## 1.18.0
 
 Rien de cassant. Une capacité **purement additive** : un Run peut désormais lire plusieurs dépôts

@@ -70,7 +70,10 @@ fetch out-of-band (bouton, ou rafraîchissement au démarrage)
   et `claude-3-5-haiku` sont dans le `const` et **absentes des trois sources distantes examinées**
   (models.dev et LiteLLM les ont purgées de leur namespace `anthropic`, OpenRouter a délisté
   3.5-haiku). Le `const` est donc le **seul** tarificateur de ces familles, pas un jeu de données
-  jetable qu'un sync remplacerait.
+  jetable qu'un sync remplacerait. **Amendé par #527** (voir l'amendement en fin d'ADR) : le `const`
+  tarife désormais **aussi** les familles de la génération courante (gen-5), en plancher, toujours
+  surchargées par un sync — le *principe de membership* s'élargit, le mécanisme (fusion par clé, rien
+  de seedé sur disque) ne bouge pas.
 
 - **Fusion par clé, jamais remplacement.** Une clé présente dans un tier gagne ; une clé absente
   garde ce que le tier suivant en dit. Sous remplacement global, oublier `claude-opus-4-8`
@@ -265,3 +268,35 @@ fetch out-of-band (bouton, ou rafraîchissement au démarrage)
 - **Une dimension de date par ligne.** La bonne horloge n'est pas l'heure courante : gater sur elle
   **retariferait l'histoire** — le coût d'un Run terminé changerait sans que ses transcripts
   changent — et serait invisible de la clé du memo. Purement additif plus tard.
+
+## Amendement — La génération courante entre au plancher embarqué (#527, fork de #425)
+
+Le grill de #425 a isolé une question qui **révise le principe de membership de D2** et ne devait pas
+être exécutée en autonome : faut-il **amorcer** `const PRICES` avec la génération 5 (`claude-opus-5`,
+`claude-sonnet-5`, `claude-fable-5`) pour qu'un montant de coût soit **non nul, hors ligne, d'emblée** —
+sans clic « Sync coûts » ni `models.yaml` ? Le propriétaire a tranché le 2026-08-13 : « **On amende** »
+(issue #527).
+
+**Le symptôme corrigé.** Sur une instance jamais synchronisée et sans `models.yaml` — l'état par défaut
+d'un install neuf, et le seul mode strictement hors ligne — un Run sur un modèle de génération 5 (celui
+que le produit fait tourner **par défaut**) lisait son coût `~$0.0000 †`. ~30 % de la dépense lue à $0
+pour cette seule raison ; le tier fetché la corrige, mais **seulement après le premier clic**, et le
+retard de version du daemon de production rend ce clic tardif.
+
+**Ce qui change.** La table embarquée tarife désormais **ce qu'aucun remote ne porte + les familles de
+la génération courante**, en plancher, **toujours surchargées par un sync**. C'est le *principe de
+membership* de D2 qui s'élargit — la gen-5 est le cas inverse (models.dev la porte), et on l'ajoute quand
+même, en plancher.
+
+**Pourquoi ce n'est pas « amorcer » au sens interdit.** « Amorcer » dans D2 / §9 = **matérialiser le
+`const` sur un fichier disque** (seeder un `.json`), ce qui figerait un instantané qu'une release future
+masquerait. Ajouter des lignes au `const` n'est pas ça : `builtin()` reste pur, la fusion par clé est
+intacte (un sync gagne toujours par clé), **aucun fichier n'est seedé**, et une release qui ajoute une
+ligne au `const` reste visible. La table est un plancher, pas un miroir des prix fetchables.
+
+**`sonnet-5` = $3/$15, pas $2/$10.** Le `const` ne peut pas être daté (délibéré). Le prix d'intro
+($2/$10) expire le **2026-08-31** ; graver $3/$15 (post-intro) n'est faux que pour les lignes sonnet-5
+**pré-cutover** des instances **jamais synchronisées** (~0,5 %, dérive déjà ratifiée par cette ADR pour
+le tier fetché) et se **corrige au premier sync**. Graver $2/$10 serait faux pour toute la vie
+post-31-août de chaque release. Critère fermé par des tests couche 1 sur `price_table.rs` et
+`run_cost.rs` (ADR-0004).

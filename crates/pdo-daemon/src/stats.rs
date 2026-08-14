@@ -776,6 +776,7 @@ mod tests {
                     usd: 1.0,
                     partial: false,
                     unpriced_models: vec![],
+                    uncosted_harnesses: vec![],
                 }),
             },
             CostRow {
@@ -786,6 +787,7 @@ mod tests {
                     usd: 2.0,
                     partial: true,
                     unpriced_models: vec!["claude-sonnet-5".into()],
+                    uncosted_harnesses: vec![],
                 }),
             },
             CostRow {
@@ -861,6 +863,7 @@ mod tests {
                     usd: 0.0,
                     partial: true,
                     unpriced_models: vec!["claude-sonnet-5".into(), "claude-fable-5".into()],
+                    uncosted_harnesses: vec![],
                 }),
             },
             CostRow {
@@ -871,6 +874,7 @@ mod tests {
                     usd: 0.0,
                     partial: true,
                     unpriced_models: vec!["claude-fable-5".into(), "claude-opus-5".into()],
+                    uncosted_harnesses: vec![],
                 }),
             },
         ];

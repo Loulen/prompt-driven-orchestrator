@@ -598,6 +598,17 @@ pub struct CostStat {
     /// — stayed invisible on `/stats/cost` for weeks. Empty ⟺ `partial == false`.
     #[serde(default)]
     pub unpriced_models: Vec<String>,
+    /// The harnesses this Run launched a node on that have **no cost source**
+    /// capability (#553, ADR-0045). Non-empty ⇒ the Run's cost is not honestly
+    /// summable — a harness like `opencode` writes its cost where PDO does not read
+    /// (its own SQLite), so adding `claude`'s real dollars to that harness's
+    /// invisible $0 would be a silent under-count. So the surface shows **"—" with
+    /// a reason naming these harnesses**, never a `$0`, never a mute `partial`
+    /// (same "name what is missing" vein as `unpriced_models`). Sorted, deduped.
+    /// Empty on every all-`claude` Run, so `usd`/`partial` mean exactly what they
+    /// meant before this field existed.
+    #[serde(default)]
+    pub uncosted_harnesses: Vec<String>,
 }
 
 /// A secondary repository pinned to a Run (#465, ADR-0042).

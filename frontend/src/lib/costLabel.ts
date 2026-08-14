@@ -37,6 +37,21 @@ function lowerBoundClause(unpricedModels: string[], runSuffix = ""): string {
   return body + runSuffix;
 }
 
+/**
+ * The clause for a Run whose cost is **unavailable** because one or more harnesses
+ * has no cost source (#553, ADR-0045). Names the harness(es) — the same "name what
+ * is missing" discipline as {@link lowerBoundClause} for unpriced models — so the
+ * user never reads an anonymous blank, and never a `$0` standing in for "unknown".
+ * A categorically different state from a lower bound: there is no figure at all.
+ */
+export function uncostedClause(uncostedHarnesses: string[]): string {
+  return ` Cost unavailable: ${
+    uncostedHarnesses.length === 1 ? "harness" : "harnesses"
+  } ${uncostedHarnesses.join(", ")} ${
+    uncostedHarnesses.length === 1 ? "has" : "have"
+  } no cost source, so this Run's cost cannot be estimated.`;
+}
+
 export interface CostLabel {
   /** Display text, e.g. `~$1.2345`. */
   text: string;
@@ -55,7 +70,20 @@ export function formatEstCost(
   usd: number,
   partial: boolean,
   unpricedModels: string[] = [],
+  uncostedHarnesses: string[] = [],
 ): CostLabel {
+  // #553: a harness with no cost source makes the Run's cost not honestly
+  // summable — show "—" with a reason naming the harness, never a $ figure and
+  // never a mute dagger (that would read as "priced, lower bound", which this is
+  // not). This branch takes precedence over `partial`, since "unavailable" is a
+  // stronger statement than "incomplete".
+  if (uncostedHarnesses.length > 0) {
+    return {
+      text: "—",
+      dagger: false,
+      title: COST_ESTIMATE_NOTE + uncostedClause(uncostedHarnesses),
+    };
+  }
   return {
     text: `~$${usd.toFixed(costPrecision(usd))}`,
     dagger: partial,

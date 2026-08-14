@@ -203,4 +203,26 @@ describe("PipelineInfoPanel — Stats block (#100)", () => {
     expect(cost).toHaveTextContent("—");
     expect(cost).not.toHaveTextContent("$");
   });
+
+  it("renders '—' with a reason (never $0, no dagger) when a harness has no cost source (#553)", () => {
+    // A Run with an opencode node: cost is present but not summable → "—" naming
+    // the harness in the tooltip, never a misleading $0.
+    renderPanel(
+      makeRun({
+        cost: {
+          usd: 0,
+          partial: false,
+          unpriced_models: [],
+          uncosted_harnesses: ["opencode"],
+        },
+      }),
+    );
+    const cost = screen.getByTestId("stat-cost");
+    expect(cost).toHaveTextContent("—");
+    expect(cost).not.toHaveTextContent("$");
+    expect(cost).not.toHaveTextContent("†");
+    const title = cost.querySelector("[title]")?.getAttribute("title") ?? "";
+    expect(title).toMatch(/cost unavailable/i);
+    expect(title).toContain("opencode");
+  });
 });

@@ -4,6 +4,7 @@
 #![warn(unreachable_pub)]
 
 pub mod admission;
+mod audit_log;
 mod blackboard;
 mod boot_recovery;
 pub(crate) mod completion_refusal;
@@ -3071,6 +3072,7 @@ async fn guard_test(
 
 async fn create_trigger(
     State(state): State<Arc<AppState>>,
+    actor: audit_log::Actor,
     Json(req): Json<CreateTriggerRequest>,
 ) -> Response {
     if req.name.trim().is_empty() {
@@ -3223,6 +3225,19 @@ async fn create_trigger(
                 "type": "trigger_created",
                 "trigger_id": trigger.id,
             }));
+            // #507: audit AFTER the row committed (§2·B — never over-report).
+            audit_log::record_best_effort(
+                &state.db,
+                audit_log::NewAuditEntry {
+                    actor_hint: actor.as_hint().to_string(),
+                    action: "trigger.created".to_string(),
+                    target_kind: Some("trigger".to_string()),
+                    target_id: Some(trigger.id.clone()),
+                    before: None,
+                    after: serde_json::to_value(&trigger).ok(),
+                },
+            )
+            .await;
             (StatusCode::CREATED, Json(trigger)).into_response()
         }
         Err(e) => {
@@ -3275,13 +3290,33 @@ async fn list_triggers(State(state): State<Arc<AppState>>) -> Response {
 async fn delete_trigger(
     State(state): State<Arc<AppState>>,
     AxumPath(trigger_id): AxumPath<String>,
+    actor: audit_log::Actor,
 ) -> Response {
+    // #507: `trigger_store::delete` returns `bool`, never the row — so read the
+    // "before" snapshot HERE, before it is gone, or the audit of a delete
+    // degrades to a dead UUID. Best-effort (a read miss → `None`).
+    let before = trigger_store::get(&state.db, &trigger_id)
+        .await
+        .ok()
+        .flatten();
     match trigger_store::delete(&state.db, &trigger_id).await {
         Ok(true) => {
             let _ = state.pipeline_tx.send(serde_json::json!({
                 "type": "trigger_deleted",
                 "trigger_id": trigger_id,
             }));
+            audit_log::record_best_effort(
+                &state.db,
+                audit_log::NewAuditEntry {
+                    actor_hint: actor.as_hint().to_string(),
+                    action: "trigger.deleted".to_string(),
+                    target_kind: Some("trigger".to_string()),
+                    target_id: Some(trigger_id.clone()),
+                    before: before.as_ref().and_then(|t| serde_json::to_value(t).ok()),
+                    after: None,
+                },
+            )
+            .await;
             StatusCode::NO_CONTENT.into_response()
         }
         Ok(false) => (
@@ -3385,6 +3420,7 @@ struct PatchTriggerRequest {
 async fn patch_trigger(
     State(state): State<Arc<AppState>>,
     AxumPath(trigger_id): AxumPath<String>,
+    actor: audit_log::Actor,
     Json(req): Json<PatchTriggerRequest>,
 ) -> Response {
     // The Trigger must exist.
@@ -3649,6 +3685,21 @@ async fn patch_trigger(
                 "type": "trigger_updated",
                 "trigger_id": trigger_id,
             }));
+            // #507: persist BOTH snapshots (§2·D) — "a patch happened" cannot tell
+            // a manual `enabled:false` (the #505 gesture) from a cron edit unless
+            // before→after is on the row. `existing` (:3391) is still borrowed-only.
+            audit_log::record_best_effort(
+                &state.db,
+                audit_log::NewAuditEntry {
+                    actor_hint: actor.as_hint().to_string(),
+                    action: "trigger.updated".to_string(),
+                    target_kind: Some("trigger".to_string()),
+                    target_id: Some(trigger_id.clone()),
+                    before: serde_json::to_value(&existing).ok(),
+                    after: serde_json::to_value(&updated).ok(),
+                },
+            )
+            .await;
             Json(updated).into_response()
         }
         _ => (
@@ -3673,6 +3724,51 @@ async fn list_trigger_fires(
             )
                 .into_response()
         }
+    }
+}
+
+/// `GET /audit` — the out-of-Run audit feed (#507, ADR-0044). All filters are
+/// OPTIONAL: with none, a global newest-first feed (the #505 posture — you
+/// discover *which* target in the flow, you do not know it up front). `from`/`to`
+/// bound a half-open `[from, to)` ISO-8601 window; `target_kind`/`target_id`
+/// narrow to one target; `limit` defaults to 200. `house` param style mirrors
+/// `stats.rs`.
+#[derive(Debug, Deserialize)]
+struct AuditQuery {
+    #[serde(default)]
+    from: Option<String>,
+    #[serde(default)]
+    to: Option<String>,
+    #[serde(default)]
+    target_kind: Option<String>,
+    #[serde(default)]
+    target_id: Option<String>,
+    #[serde(default = "default_audit_limit")]
+    limit: i64,
+}
+
+fn default_audit_limit() -> i64 {
+    200
+}
+
+async fn get_audit(State(state): State<Arc<AppState>>, Query(q): Query<AuditQuery>) -> Response {
+    match audit_log::list(
+        &state.db,
+        q.from.as_deref(),
+        q.to.as_deref(),
+        q.target_kind.as_deref(),
+        q.target_id.as_deref(),
+        q.limit,
+    )
+    .await
+    {
+        // Bare JSON array, newest-first — same shape as `list_trigger_fires`.
+        Ok(rows) => Json(rows).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("audit list: {e}") })),
+        )
+            .into_response(),
     }
 }
 
@@ -3918,6 +4014,11 @@ fn build_router(state: Arc<AppState>) -> Router {
         // fetched only when the cost tab is shown).
         .route("/stats/overview", get(stats::stats_overview))
         .route("/stats/cost", get(stats::stats_cost))
+        // Out-of-Run audit feed (#507, ADR-0044). NEW top-level `/audit` prefix
+        // → added to the vite dev proxy whitelist (frontend/vite.config.ts) so a
+        // dev-mode GET hits the daemon instead of the SPA fallback (same trap as
+        // `/nodes` #345, `/stats` #377, `/fs` #431).
+        .route("/audit", get(get_audit))
         .route(
             "/triggers/{trigger_id}",
             get(get_trigger).patch(patch_trigger).delete(delete_trigger),
@@ -3982,6 +4083,13 @@ async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
     sandbox_profile::init(db)
         .await
         .context("failed to create sandbox_profiles table")?;
+
+    // #507 / ADR-0044: the third journal — out-of-Run config mutations. Sibling
+    // store, its own `audit_log` table, no `run_id`. `CREATE TABLE IF NOT
+    // EXISTS`, no ALTER, no backfill.
+    audit_log::init(db)
+        .await
+        .context("failed to create audit_log table")?;
 
     Ok(())
 }
@@ -8945,14 +9053,31 @@ struct PauseTriggersRequest {
 /// Contract: `200 { ok, paused }`; `500 { error }` on a DB write failure.
 async fn pause_triggers(
     State(state): State<Arc<AppState>>,
+    actor: audit_log::Actor,
     Json(req): Json<PauseTriggersRequest>,
 ) -> Response {
+    // #507: this endpoint writes blind (no prior read) — capture the "before" flag
+    // first, or the audit entry cannot show the direction of the flip. The single
+    // `POST /triggers/pause` handles pause AND resume; `req.paused` captures both.
+    let before = instance_config::triggers_paused(&state.db).await.ok();
     match instance_config::set_triggers_paused(&state.db, req.paused).await {
         Ok(()) => {
             let _ = state.pipeline_tx.send(serde_json::json!({
                 "type": "triggers_paused",
                 "paused": req.paused,
             }));
+            audit_log::record_best_effort(
+                &state.db,
+                audit_log::NewAuditEntry {
+                    actor_hint: actor.as_hint().to_string(),
+                    action: "triggers.pause_changed".to_string(),
+                    target_kind: Some("instance".to_string()),
+                    target_id: None,
+                    before: Some(serde_json::json!({ "paused": before })),
+                    after: Some(serde_json::json!({ "paused": req.paused })),
+                },
+            )
+            .await;
             Json(serde_json::json!({ "ok": true, "paused": req.paused })).into_response()
         }
         Err(e) => (
@@ -18943,6 +19068,173 @@ mod tests {
         // The trigger is left exactly as it was.
         let after = trigger_store::get(&state.db, &id).await.unwrap().unwrap();
         assert_eq!(after.pipeline_id, "watch-pipe");
+    }
+
+    // --- #507: out-of-Run audit seams (create / patch / delete / pause) ---
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn create_trigger_writes_one_audit_row() {
+        // A successful create leaves exactly one `trigger.created` row whose
+        // `after` is the FULL trigger (not a bare id) and whose `before` is empty.
+        let _home = FakeHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        write_optional_pipeline(tmp.path(), "watch-pipe");
+        init_test_repo(tmp.path());
+        let state = test_state_with_dir(tmp.path()).await;
+        let id = create_trigger_ok(&state, tmp.path()).await;
+
+        let rows = audit_log::list(&state.db, None, None, None, None, 200)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1, "create leaves exactly one audit row");
+        let e = &rows[0];
+        assert_eq!(e.action, "trigger.created");
+        assert_eq!(e.target_kind.as_deref(), Some("trigger"));
+        assert_eq!(e.target_id.as_deref(), Some(id.as_str()));
+        // No header on `create_trigger_ok`'s request → the honest default.
+        assert_eq!(e.actor_hint, "unknown");
+        assert!(e.before.is_none(), "create has no before");
+        let after = e.after.as_ref().expect("create carries an after snapshot");
+        assert_eq!(after["id"], serde_json::json!(id));
+        assert_eq!(after["name"], serde_json::json!("T"));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn delete_trigger_audits_the_full_before_snapshot() {
+        // Load-bearing (#507 §6): `trigger_store::delete` returns `bool`, so the
+        // handler must `get()` the row BEFORE deleting or the audit degrades to a
+        // dead UUID. Assert the `before` is the WHOLE row, `after` empty.
+        let _home = FakeHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        write_optional_pipeline(tmp.path(), "watch-pipe");
+        init_test_repo(tmp.path());
+        let state = test_state_with_dir(tmp.path()).await;
+        let id = create_trigger_ok(&state, tmp.path()).await;
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/triggers/{id}"))
+                    .header("X-PDO-Actor", "ui")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+        let rows = audit_log::list(&state.db, None, None, Some("trigger"), Some(&id), 200)
+            .await
+            .unwrap();
+        let del = rows
+            .iter()
+            .find(|e| e.action == "trigger.deleted")
+            .expect("a delete row");
+        assert_eq!(del.actor_hint, "ui", "X-PDO-Actor header plumbed through");
+        assert!(del.after.is_none(), "delete has no after");
+        let before = del
+            .before
+            .as_ref()
+            .expect("delete carries the pre-image, NOT a bare UUID");
+        assert_eq!(before["id"], serde_json::json!(id));
+        assert_eq!(before["name"], serde_json::json!("T"));
+        assert_eq!(before["cron"], serde_json::json!("0 4 * * 1"));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn patch_disable_audits_before_true_after_false() {
+        // The #505 discriminator: a manual disable must leave a row where
+        // before.enabled=true and after.enabled=false — that is what tells a
+        // "disabled by a gesture" apart from "no longer scheduled".
+        let _home = FakeHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        write_optional_pipeline(tmp.path(), "watch-pipe");
+        init_test_repo(tmp.path());
+        let state = test_state_with_dir(tmp.path()).await;
+        let id = create_trigger_ok(&state, tmp.path()).await;
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/triggers/{id}"))
+                    .header("content-type", "application/json")
+                    .header("X-PDO-Actor", "ui")
+                    .body(Body::from(
+                        serde_json::json!({ "enabled": false }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let rows = audit_log::list(&state.db, None, None, Some("trigger"), Some(&id), 200)
+            .await
+            .unwrap();
+        let upd = rows
+            .iter()
+            .find(|e| e.action == "trigger.updated")
+            .expect("an update row");
+        assert_eq!(upd.actor_hint, "ui");
+        assert_eq!(
+            upd.before.as_ref().unwrap()["enabled"],
+            serde_json::json!(true)
+        );
+        assert_eq!(
+            upd.after.as_ref().unwrap()["enabled"],
+            serde_json::json!(false)
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn pause_triggers_audits_the_flag_flip() {
+        // Pause is the instance-scoped seam: target_kind=instance, no target_id,
+        // and both directions of the flip are captured from `req.paused`.
+        let _home = FakeHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        init_test_repo(tmp.path());
+        let state = test_state_with_dir(tmp.path()).await;
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/triggers/pause")
+                    .header("content-type", "application/json")
+                    .header("X-PDO-Actor", "ui")
+                    .body(Body::from(
+                        serde_json::json!({ "paused": true }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let rows = audit_log::list(&state.db, None, None, Some("instance"), None, 200)
+            .await
+            .unwrap();
+        let p = rows
+            .iter()
+            .find(|e| e.action == "triggers.pause_changed")
+            .expect("a pause row");
+        assert_eq!(p.actor_hint, "ui");
+        assert_eq!(p.target_kind.as_deref(), Some("instance"));
+        assert!(p.target_id.is_none(), "instance-global has no target_id");
+        assert_eq!(
+            p.before.as_ref().unwrap()["paused"],
+            serde_json::json!(false)
+        );
+        assert_eq!(p.after.as_ref().unwrap()["paused"], serde_json::json!(true));
     }
 
     // --- A Trigger is a Run template: no target repo, no Trigger (#470) ---

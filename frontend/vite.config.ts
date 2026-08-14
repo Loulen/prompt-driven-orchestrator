@@ -36,6 +36,10 @@ export default defineConfig({
       // (#345) and `/stats` (#377): without it a dev GET /fs/browse answers 200
       // with the SPA and any smoke test would lie.
       '/fs': daemonTarget,
+      // #507: out-of-Run audit feed. New top-level `/audit` prefix — same trap
+      // as `/nodes`/`/stats`/`/fs`: without it a dev GET /audit answers 200 with
+      // the SPA.
+      '/audit': daemonTarget,
     },
   },
   test: {

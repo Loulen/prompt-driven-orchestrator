@@ -1,4 +1,4 @@
-# ADR-0044 — Le harnais agentique est un axe à quatre tiers ; le modèle et l'effort sont conditionnés par lui, jamais résolus à part
+# ADR-0046 — Le harnais agentique est un axe à quatre tiers ; le modèle et l'effort sont conditionnés par lui, jamais résolus à part
 
 > Statut : accepted (grilling du 2026-08-14). Vocabulaire : CONTEXT.md §*Harnais agentique*, §*Modèle
 > et effort*, §*Projet*. **Amende ADR-0015** (la Configuration d'instance gagne un tier au-dessus

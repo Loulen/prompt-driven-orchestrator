@@ -43,14 +43,14 @@ Le **harnais agentique** est le programme qui fait tourner l'agent d'un NodeRun 
 _Éviter_ : « CLI » comme terme — réservé au binaire `pdo` (cf. *Prompt augmentation*, « capacités CLI ») ; « modèle » (le harnais est le programme, le modèle est ce qu'il appelle) ; « provider ».
 
 - **Résident, jamais one-shot** : un harnais éligible reste vivant après la fin de son tour, dans une session attachable où l'utilisateur peut reprendre la main — c'est le principe même de PDO (ADR-0012). Un harnais qui sort en fin de travail est **inéligible** : sa mort de session serait indiscernable d'un échec (ADR-0032). Contrat d'éligibilité et forme du descripteur → ADR-0045.
-- **Précédence à quatre tiers** : `node` → Run → Projet → Configuration d'instance → plancher (`claude`). Résolue une fois **au spawn** et gelée dans l'événement de démarrage du nœud : une édition de YAML ou de Projet n'atteint jamais une itération vivante (ADR-0007). Contrat → ADR-0044.
+- **Précédence à quatre tiers** : `node` → Run → Projet → Configuration d'instance → plancher (`claude`). Résolue une fois **au spawn** et gelée dans l'événement de démarrage du nœud : une édition de YAML ou de Projet n'atteint jamais une itération vivante (ADR-0007). Contrat → ADR-0046.
 - **Épinglage ≠ paramétrage** : épingler un harnais sur un node dit « ce rôle exige ce harnais » et le soustrait à un changement de tier supérieur ; la carte des réglages par harnais dit seulement *comment* le node tourne sur chacun.
 - **Instrumentation inégale, jamais silencieuse** : coût, complétion sur fin de tour, détection de menu de limite, plancher de staging sont des **capacités** écrites harnais par harnais. Absente, la capacité rend la feature absente et le **dit** (« — », jamais `$0`) — ADR-0045.
 - **Sessions d'infra** (Pipeline Manager, résolveur de merge) : elles suivent le harnais **du Run**, sans modèle ni effort propres.
 
 ### Modèle et effort (par node, conditionnés par le harnais)
 
-Le **modèle** dit *quel agent* tourne, le **niveau d'effort** *combien il réfléchit* : orthogonaux entre eux, mais **aucun des deux n'a de sens hors d'un harnais** — un slug Anthropic ne veut rien dire pour `opencode`. Ils vivent donc dans une carte du node, une entrée par harnais, et se lisent dans l'entrée du **harnais gagnant** ; ils n'ont pas de précédence propre (ADR-0044).
+Le **modèle** dit *quel agent* tourne, le **niveau d'effort** *combien il réfléchit* : orthogonaux entre eux, mais **aucun des deux n'a de sens hors d'un harnais** — un slug Anthropic ne veut rien dire pour `opencode`. Ils vivent donc dans une carte du node, une entrée par harnais, et se lisent dans l'entrée du **harnais gagnant** ; ils n'ont pas de précédence propre (ADR-0046).
 
 - **Texte libre, pass-through, aucune validation** : alias ou id complet, transmis verbatim. Pas d'enum fermé qui périmerait à chaque sortie de modèle — *sharp tool* (ADR-0001).
 - **Le mode d'échec d'un modèle appartient au harnais, pas à PDO** : `claude` sort non-zéro sur un id invalide, donc le designer le voit ; `opencode` **retombe en silence sur son défaut** quand le modèle demandé est injoignable, et le nœud tourne *vert* avec un autre modèle que celui écrit. L'asymétrie « le modèle échoue fort, l'effort échoue en silence » (#268) n'est donc pas une propriété du produit — elle se vérifie harnais par harnais (ADR-0045).
@@ -466,7 +466,7 @@ Un **Projet** est un regroupement **nommé** de dépôts qui se travaillent ense
 
 - **Un chemin appartient à au plus un Projet**, et le Projet d'un Run est celui qui possède son **dépôt primaire**. Un secondaire membre d'un autre Projet n'y change rien : c'est un contexte read-only, pas une appartenance (ADR-0042).
 - **Matérialisé à la demande, jamais seedé** : tant qu'aucun nom n'est donné ni aucun réglage attaché, il n'existe pas de Projet — les listes se groupent sur le libellé dérivé du chemin. Nommer un en-tête de groupe est ce qui crée l'entité.
-- **Premier réglage porté** : le harnais agentique, dont il est le tier intermédiaire (ADR-0044).
+- **Premier réglage porté** : le harnais agentique, dont il est le tier intermédiaire (ADR-0046).
 
 _Éviter_ : « projet » pour un dépôt seul (c'est le *repo cible*) ou pour le `projects/` d'un home stagé.
 

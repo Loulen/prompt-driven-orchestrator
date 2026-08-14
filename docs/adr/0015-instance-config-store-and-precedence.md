@@ -1,6 +1,6 @@
 # Configuration d'instance : store SQLite singleton + précédence `stored → env → default`
 
-> **Amendé par ADR-0044** : l'instance n'est plus le tier le plus haut pour tout réglage — le harnais
+> **Amendé par ADR-0046** : l'instance n'est plus le tier le plus haut pour tout réglage — le harnais
 > agentique en compte deux au-dessous d'elle (Run, Projet) — et son défaut de modèle devient un défaut
 > **par harnais**. La précédence `stored → env → default` de chaque réglage est inchangée.
 

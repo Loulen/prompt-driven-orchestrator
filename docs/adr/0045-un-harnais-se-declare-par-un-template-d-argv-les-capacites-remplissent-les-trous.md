@@ -1,7 +1,7 @@
 # ADR-0045 — Un harnais se déclare par un template d'argv ; les capacités remplissent les trous ; l'absence est dite, jamais suppléée
 
 > Statut : accepted (grilling du 2026-08-14, mesures sur `claude` 2.x et `opencode` 1.18.18).
-> Vocabulaire : CONTEXT.md §*Harnais agentique*. Précédence et conditionnement du modèle → **ADR-0044**.
+> Vocabulaire : CONTEXT.md §*Harnais agentique*. Précédence et conditionnement du modèle → **ADR-0046**.
 > **Amende ADR-0032** : « la mort de session est le seul verdict de mort » devient un **critère
 > d'éligibilité** d'un harnais, pas seulement un constat sur `claude`.
 

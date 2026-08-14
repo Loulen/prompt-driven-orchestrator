@@ -498,6 +498,9 @@ Les Triggers vivent dans une table SQLite (`~/.pdo/pdo.db`), pas en YAML : un Tr
 
 **Table `trigger_fires`** (audit) : un enregistrement horodaté par tick significatif (`fired` / `skipped-overlap` / `guard-exit-nonzero` / `guard-error`), keyé par Trigger. Répond à la question #1 du debug : « pourquoi mon Trigger n'a pas firé cette nuit ? ». Sur un skip de guard, PDO conserve stdout/stderr/exit code (plafonnés, queue conservée — l'erreur s'imprime en dernier) : purement diagnostiques, ils n'altèrent pas le contrat d'input. La provenance (`manual` vs `cron`) est une dimension orthogonale à l'outcome (#341).
 
+**Trois journaux, trois questions.** PDO tient trois journaux disjoints, chacun pour une question de debug distincte : l'**event log** (« qu'est-il arrivé *dans ce Run* ? » — vérité event-sourced du Run, `run_id` obligatoire) ; **`trigger_fires`** (« pourquoi mon Trigger a-t-il firé, ou pas ? » — les évaluations de scheduling) ; et l'**`audit_log`** (« qui a changé la config de l'app, et quand ? » — les mutations *hors-Run* : create/patch/delete de Trigger et pause globale). L'audit log est le seul sans `run_id` : un geste de config n'appartient à aucun Run. Origine best-effort (`actor_hint`, falsifiable, jamais un gate — bind 0.0.0.0 sans auth). Contrat : ADR-0044.
+_Éviter_ : « le log » sans qualifier lequel des trois.
+
 ### UI — onglet Triggers
 
 - **Ligne** : status dot, nom, pipeline, badge repo, planning lisible, toggle enable/disable, next/last fire. **Panneau détail** : config + historique des fires avec raison.

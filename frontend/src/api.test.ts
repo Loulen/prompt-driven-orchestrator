@@ -216,7 +216,18 @@ describe("request core", () => {
     await request("POST", "/upload", { body: form });
     const [, init] = fetchMock.mock.calls[0];
     expect(init?.body).toBeInstanceOf(FormData);
-    expect(init?.headers).toBeUndefined();
+    // #507: the origin hint rides on every request, but Content-Type must stay
+    // absent so the browser sets the multipart boundary itself.
+    expect(init?.headers).toEqual({ "X-PDO-Actor": "ui" });
+  });
+
+  it("declares X-PDO-Actor: ui on every request, even a body-less GET (#507)", async () => {
+    const fetchMock = captureFetch(200, { id: "x" });
+    await request("GET", "/things");
+    const [, init] = fetchMock.mock.calls[0];
+    expect((init?.headers as Record<string, string>)["X-PDO-Actor"]).toBe("ui");
+    // No body → no Content-Type.
+    expect((init?.headers as Record<string, string>)["Content-Type"]).toBeUndefined();
   });
 
   it("appends query params, encoding values and dropping undefined", async () => {

@@ -100,12 +100,17 @@ export async function request<T = unknown>(
   }
 
   const init: RequestInit = { method };
+  // #507: declare the request's origin on EVERY call (falsifiable hint read
+  // into `audit_log.actor_hint`, never a gate). Set unconditionally — the JSON
+  // branch alone would miss FormData and body-less GET/DELETE.
+  const headers: Record<string, string> = { "X-PDO-Actor": "ui" };
   if (body instanceof FormData) {
     init.body = body; // browser sets the multipart boundary — no Content-Type
   } else if (body !== undefined) {
-    init.headers = { "Content-Type": "application/json" };
+    headers["Content-Type"] = "application/json";
     init.body = JSON.stringify(body);
   }
+  init.headers = headers;
 
   const resp = await fetch(url, init);
   if (responseMode === "raw") return resp as unknown as T; // caller owns status

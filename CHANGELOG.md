@@ -10,6 +10,18 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.25.0
+
+Rien de cassant, aucune migration (`CREATE TABLE IF NOT EXISTS`, aucun backfill). PDO gagne un
+**troisième journal** : `audit_log`, le foyer des **mutations de configuration hors-Run** —
+create/patch/delete de Trigger et pause globale — jusqu'ici invisibles à l'`event_log` (dont
+l'`Event.run_id` est obligatoire). Table dédiée sans `run_id` dans `pdo.db`, écrite au **handler
+HTTP** après commit (best-effort : sous-rapport possible, sur-rapport jamais), lue par `GET /audit`
+(feed global décroissant, filtrable par cible et fenêtre `[from, to)`). L'origine est un indice
+**déclaratif et falsifiable** (`actor_hint` via l'en-tête `X-PDO-Actor`, jamais un gate — bind
+0.0.0.0 sans auth). Referme la cause de la fausse #505 : un Trigger coupé à la main laisse désormais
+une trace. AC5 (signal *vivant* `overdue`) différé hors v1 (#507, ADR-0044).
+
 ## 1.24.0
 
 Rien de cassant, aucune migration. La **complétion sur fin de tour gagne un substrat primaire,

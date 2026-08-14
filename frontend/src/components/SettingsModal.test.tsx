@@ -46,6 +46,8 @@ function sample(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
     guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
     // Unset by default (account default): effective/stored/env/default all null.
     default_model: { effective: null, source: "default", stored: null, env: null, default: null },
+    default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
+    default_harness_model: { effective: {}, stored: {} },
     // Default sandbox (#410): built-in default `off`, nothing stored/env. The ONLY sandbox
     // knob on this screen since #471 — image and Dockerfile belong to a staging profile.
     default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off", reason: null },
@@ -381,6 +383,8 @@ describe("SettingsModal", () => {
     updateSettingsMock.mockResolvedValue(
       sample({
         default_model: { effective: "opus", source: "stored", stored: "opus", env: null, default: null },
+        default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
+        default_harness_model: { effective: {}, stored: {} },
       }),
     );
     const onClose = vi.fn();
@@ -401,6 +405,8 @@ describe("SettingsModal", () => {
     fetchSettingsMock.mockResolvedValue(
       sample({
         default_model: { effective: "opus", source: "stored", stored: "opus", env: null, default: null },
+        default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
+        default_harness_model: { effective: {}, stored: {} },
       }),
     );
     updateSettingsMock.mockResolvedValue(sample());
@@ -422,6 +428,8 @@ describe("SettingsModal", () => {
     fetchSettingsMock.mockResolvedValue(
       sample({
         default_model: { effective: "opus", source: "stored", stored: "opus", env: "sonnet", default: null },
+        default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
+        default_harness_model: { effective: {}, stored: {} },
       }),
     );
     render(<SettingsModal open onClose={() => {}} />);

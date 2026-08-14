@@ -1,4 +1,5 @@
 import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport } from "./types";
+import { foldHarnessOntoNode } from "./lib/harness";
 
 const BASE = "";
 
@@ -1085,12 +1086,27 @@ export function forgetRun(runId: string): Promise<void> {
 
 // --- Run-scoped pipeline ---
 
+// #550/ADR-0046: the daemon returns each node's per-harness `harnesses` map; the
+// editor's pickers edit a flat `model`/`effort` view of the RESOLVED harness. Fold
+// on the way in so the existing UI + library sync keep working; `serializePipeline`
+// folds back on save. Applied at every pipeline-load boundary.
+function foldPipelineDetail(detail: PipelineDetail): PipelineDetail {
+  if (!detail?.pipeline?.nodes) return detail;
+  return {
+    ...detail,
+    pipeline: {
+      ...detail.pipeline,
+      nodes: detail.pipeline.nodes.map(foldHarnessOntoNode),
+    },
+  };
+}
+
 export function fetchRunPipeline(runId: string): Promise<PipelineDetail> {
   return request<PipelineDetail>(
     "GET",
     `/runs/${encodeURIComponent(runId)}/pipeline`,
     { label: `GET /runs/${runId}/pipeline` },
-  );
+  ).then(foldPipelineDetail);
 }
 
 export function saveRunPipeline(
@@ -1120,7 +1136,7 @@ export function fetchPipeline(id: string, scope?: string): Promise<PipelineDetai
     "GET",
     `/pipelines/${encodeURIComponent(id)}${scopeQuery(scope)}`,
     { label: `GET /pipelines/${id}` },
-  );
+  ).then(foldPipelineDetail);
 }
 
 export function savePipeline(

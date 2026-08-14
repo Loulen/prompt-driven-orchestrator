@@ -22,8 +22,9 @@ use crate::worktree_ops::{
 };
 use crate::{
     admission, append_event_with, count_global_live_sessions_excluding, event_log,
-    input_resolution, merge_action, panic_payload_message, pipeline, prompt_augmenter,
-    reload_run_state_with, stored_autocomplete_turn_end, stored_default_model, stored_session_cap,
+    harness_registry, harness_resolver, input_resolution, merge_action, panic_payload_message,
+    pipeline, prompt_augmenter, reload_run_state_with, stored_autocomplete_turn_end,
+    stored_default_harness, stored_default_harness_models, stored_session_cap,
     tmux_session_manager, transition_guard, AppState,
 };
 
@@ -315,6 +316,54 @@ pub(crate) async fn spawn_node(
 
     let foreach_context = find_collection_context(spawn_ctx, &node.id, iter);
 
+    // #550/ADR-0046: resolve the harness ONCE, here — before any side effect — so
+    // its result freezes into `NodeStarted` and is re-posed at resume (ADR-0007).
+    // A `script` node launches no agent (ADR-0017), so it resolves no harness. The
+    // binary fail-fast runs BEFORE the sub-worktree is created and BEFORE the
+    // reservation span, so a missing harness leaves no orphan and writes no spawn
+    // event (AC #10 / ADR-0037: never a 2xx for a spawn that did not happen).
+    // Skipped under the tmux command override — the test seam launches a stand-in,
+    // not the real binary.
+    let resolved_harness = if node.node_type == pipeline::NodeType::Script {
+        None
+    } else {
+        let default_harness = stored_default_harness(deps.db).await;
+        let default_models = stored_default_harness_models(deps.db).await;
+        let tiers = harness_resolver::HarnessTiers {
+            node_pin: node.pin_harness.as_deref(),
+            run: None,     // #551
+            project: None, // #552
+            instance_default: default_harness.as_deref(),
+        };
+        Some(harness_resolver::resolve(
+            &tiers,
+            &node.harnesses,
+            &default_models,
+        ))
+    };
+    let harness_descriptor = match &resolved_harness {
+        None => None,
+        Some(r) => match harness_registry::resolve(&r.harness) {
+            Some(d) => Some(d),
+            None => {
+                // Unknown harness — a spawn that cannot happen. Fail fast, naming it.
+                return SpawnOutcome::Failed {
+                    reason: format!("node {}: unknown harness '{}'", node.id, r.harness),
+                };
+            }
+        },
+    };
+    if let Some(d) = &harness_descriptor {
+        if deps.tmux_cmd_override.is_none() && !tmux_session_manager::binary_available(&d.binary) {
+            return SpawnOutcome::Failed {
+                reason: format!(
+                    "node {}: harness '{}' binary '{}' not found on PATH",
+                    node.id, d.name, d.binary
+                ),
+            };
+        }
+    }
+
     let has_sub_worktree = node.node_type == pipeline::NodeType::CodeMutating
         || node.node_type == pipeline::NodeType::Merge;
 
@@ -383,29 +432,24 @@ pub(crate) async fn spawn_node(
         spawn_ctx.worktree_dir.to_path_buf()
     };
 
-    // #347/#424: resolve what the session will actually launch with, BEFORE the
-    // span below. The `NodeStarted` payload appended *inside* the span records the
-    // **resolved** values (what the flags really carried, which is what the resume
-    // path reads back), and `stored_default_model` is async — it cannot be awaited
-    // from the spawn seam further down and still be visible to the append. This is
-    // a move, not an extra read: the same single DB read, earlier.
-    // `__manager__` / `__merge_resolver__` are infra sessions with no NodeDef and
-    // stay at the account default — they don't route through `spawn_node` (#296).
-    let default_effective = stored_default_model(deps.db).await;
-    let resolved_model = tmux_session_manager::resolve_node_model(
-        node.model.as_deref(),
-        default_effective.as_deref(),
-    );
-    let resolved_effort = tmux_session_manager::resolve_node_effort(node.effort.as_deref());
-    // #473: pin a Claude Code session id for an AGENT node so its transcript is
-    // `<uuid>.jsonl` and the liveness sweep resolves it by identity — never by the
-    // newest `.jsonl` in a cwd it shares with the manager and sibling non-CM nodes.
-    // Recorded on `NodeStarted` (below) so the resume path and the sweep read it
-    // back; a fresh id per spawn means a `restart_node` of the same iteration gets
-    // its own transcript. A `script` node launches no `claude`, so it gets no id
-    // (`null` in the payload) — nothing would resolve it and nothing resumes it.
-    let session_id: Option<String> =
-        (node.node_type != pipeline::NodeType::Script).then(|| uuid::Uuid::new_v4().to_string());
+    // #550/#347/#424: the model and effort come from the harness resolved above
+    // (post node → instance precedence, post empty-string collapse), read from the
+    // winning harness's entry — NOT the raw NodeDef. The `NodeStarted` payload
+    // records these resolved values (what the flags really carried, which the
+    // resume path reads back). `__manager__` / `__merge_resolver__` are infra
+    // sessions with no NodeDef and stay at the account default — they don't route
+    // through `spawn_node`.
+    let resolved_model = resolved_harness.as_ref().and_then(|r| r.model.clone());
+    let resolved_effort = resolved_harness.as_ref().and_then(|r| r.effort.clone());
+    // #473/#550: pin a session id only for a harness that can honour it
+    // (`claude`); a harness that cannot (`opencode`: a fresh id errors) gets
+    // `None` and is attributed by working dir. Recorded on `NodeStarted` so the
+    // resume path and the sweep read it back; a fresh id per spawn means a
+    // `restart_node` of the same iteration gets its own transcript.
+    let session_id: Option<String> = harness_descriptor
+        .as_ref()
+        .filter(|d| d.pins_session_id())
+        .map(|_| uuid::Uuid::new_v4().to_string());
 
     // Panic/cancellation-isolated spawn window (#279). Everything from here to
     // the `NodeStarted` append can panic (`build_full_prompt`, image discovery,
@@ -577,8 +621,12 @@ pub(crate) async fn spawn_node(
                 // reads it yet: the meaning of an effort level depends on the
                 // model (supported levels and the default both vary per model),
                 // so storing the effort alone would store half a fact.
-                "model": resolved_model,
-                "effort": resolved_effort,
+                "model": resolved_model.as_deref(),
+                "effort": resolved_effort.as_deref(),
+                // #550/ADR-0046: the harness resolved at spawn, FROZEN here so the
+                // resume path re-poses what was launched, never what the YAML or a
+                // tier says now (ADR-0007). `null` for a `script` node (no agent).
+                "harness": resolved_harness.as_ref().map(|r| r.harness.as_str()),
                 // #473: the pinned Claude Code session id the agent launches with
                 // (`claude --session-id <uuid>`). The sweep resolves this node's
                 // transcript by it (`<uuid>.jsonl`), and the resume path re-enters
@@ -661,10 +709,15 @@ pub(crate) async fn spawn_node(
         }
     } else {
         // Resolved above the panic span so the `NodeStarted` payload could record
-        // the same values the flags carry (#347/#424/#473).
+        // the same values the flags carry (#347/#424/#473/#550). A non-`script`
+        // node always has a resolved descriptor (the fail-fast returned otherwise).
+        let descriptor = harness_descriptor
+            .as_ref()
+            .expect("a non-script node resolved a harness descriptor");
         tmux_session_manager::SessionTail::Agent {
-            model: resolved_model,
-            effort: resolved_effort,
+            harness: descriptor,
+            model: resolved_model.as_deref(),
+            effort: resolved_effort.as_deref(),
             session_id: session_id.as_deref(),
         }
     };

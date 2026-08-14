@@ -30,10 +30,16 @@ export default function EffortPicker({
   value,
   onChange,
   testid,
+  disabled = false,
 }: {
   value: string | null;
   onChange: (v: string | null) => void;
   testid: string; // "node-effort" | "merge-effort"
+  /* #550/ADR-0046: greyed when the resolved harness has no launch-time effort
+     axis (`opencode`). An absence DECLARED by the descriptor's shape, not a
+     default — so the control is disabled, not hidden. Assert on the `disabled`
+     attribute, never `.value` (a `.value` assertion cannot fail — a known trap). */
+  disabled?: boolean;
 }) {
   const set = value != null && value !== "";
   const known = set && (EFFORT_LEVELS as readonly string[]).includes(value);
@@ -46,7 +52,12 @@ export default function EffortPicker({
   ];
 
   return (
-    <div role="radiogroup" aria-label="Effort" className="flex gap-1">
+    <div
+      role="radiogroup"
+      aria-label="Effort"
+      aria-disabled={disabled}
+      className={`flex gap-1 ${disabled ? "opacity-50" : ""}`}
+    >
       {options.map((o) => {
         // `""` is normalised to unset, so an empty-string value selects Default.
         const selected = (set ? value : null) === o.id;
@@ -56,9 +67,14 @@ export default function EffortPicker({
             type="button"
             role="radio"
             aria-checked={selected}
+            disabled={disabled}
             data-testid={`${testid}-option-${o.slug}`}
-            onClick={() => onChange(o.id)}
-            className={`flex-1 cursor-pointer rounded border px-2 py-1 font-medium transition-colors ${
+            onClick={() => {
+              if (!disabled) onChange(o.id);
+            }}
+            className={`flex-1 rounded border px-2 py-1 font-medium transition-colors ${
+              disabled ? "cursor-not-allowed" : "cursor-pointer"
+            } ${
               selected
                 ? o.id == null
                   ? "border-fg-4 bg-bg-3 text-fg"

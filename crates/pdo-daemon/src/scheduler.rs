@@ -319,9 +319,40 @@ pub(crate) fn evaluate_outgoing_edges_full(
                     },
                 );
                 actions.push(SchedulerAction::Halt { message: rendered });
-            } else {
+            } else if check_all_upstream_completed(
+                pipeline,
+                run_state,
+                target_id,
+                completed_node_id,
+                frontmatter_by_node,
+                resolved_vars,
+            ) {
+                // ── `End` is a CONVERGENCE BARRIER, not first-past-the-post (#394) ──
+                //
+                // A flat parallel fan-out (`start→A→end`, `start→B→end`, with NO
+                // edge between the branches, no `Merge`, no `collection`) reaches
+                // this site with two independent edges into `End`. Firing
+                // `Complete` on the FIRST one flipped the WHOLE run to `completed`
+                // the instant the fast branch arrived — stranding the sibling
+                // branch `running` forever, with no supported way back (its late
+                // `pdo complete` → 409 "resume the run first"; `resume_run` is a
+                // no-op on a terminal run). Every OTHER join in the graph already
+                // waits on a barrier — a `Merge` gates on `check_all_upstream_
+                // completed`, a `collection` region on its lap barrier — and the
+                // completion guard the drivers own (`should_complete_run` /
+                // `all_nodes_completed`) requires the FULL node set. `End` was the
+                // lone exception. It now converges through the very same gate a
+                // `Merge` uses: complete only once EVERY inbound edge to `End` is
+                // resolved — its source completed, is the node that just completed,
+                // or is a dead (permanently-suppressed) branch, so a suppressed
+                // conditional path never stalls the run. The last live branch to
+                // reach `End` completes the run; each earlier arrival is a no-op.
                 actions.push(SchedulerAction::Complete);
             }
+            // else: a sibling edge into `End` is still live (its source is running
+            // or not yet done). Suppress — the branch that resolves the LAST inbound
+            // edge will complete the run. `End` staying unreached keeps `is_node_dead`
+            // false, so the unrouted-convergence halt below does not misfire either.
         } else if let Some(region) = crate::loop_region::bounded_region_reentered_by_edge(
             pipeline,
             completed_node_id,
@@ -1601,6 +1632,128 @@ mod tests {
 
         let actions = evaluate_outgoing_edges(&pipeline, &state, "implementer");
         assert_eq!(actions, vec![SchedulerAction::Complete]);
+    }
+
+    /// #394 regression: `End` is a convergence barrier, not first-past-the-post.
+    ///
+    /// Two independent parallel branches converge on `End` (`a→end`, `b→end`) with
+    /// no edge between them and no `Merge`/`collection`. When the fast branch `a`
+    /// completes while `b` is still running, the run MUST NOT complete — doing so
+    /// stranded `b` `running` forever (its late `pdo complete` → 409, `resume_run`
+    /// → no-op). The run completes only once the slow branch `b` also finishes and
+    /// every inbound edge to `End` is resolved.
+    #[test]
+    fn parallel_fanout_to_end_waits_for_the_slow_sibling() {
+        let pipeline = PipelineDef {
+            name: "parallel-end".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("a", &["in"], &["out"]),
+                make_node("b", &["in"], &["out"]),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_edge("a", "out", "end", "result"),
+                make_edge("b", "out", "end", "result"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+        };
+
+        // Fast branch `a` completes while `b` is still running.
+        let mut state = empty_run_state();
+        state.nodes.insert("a".into(), completed_node("a"));
+        state.nodes.insert("b".into(), running_node("b"));
+
+        let actions = evaluate_outgoing_edges(&pipeline, &state, "a");
+        assert!(
+            actions.is_empty(),
+            "first branch to End must neither complete nor halt while the sibling \
+             still runs: {actions:?}"
+        );
+
+        // Slow branch `b` finishes: every inbound edge to End is now resolved.
+        state.nodes.insert("b".into(), completed_node("b"));
+        let actions = evaluate_outgoing_edges(&pipeline, &state, "b");
+        assert_eq!(
+            actions,
+            vec![SchedulerAction::Complete],
+            "the last branch to reach End completes the run",
+        );
+    }
+
+    /// #394 companion: a suppressed (dead) sibling branch must NOT block End's
+    /// convergence. `classifier` fans out to `hotfix` (guard matches) and `dead`
+    /// (guard fails → never spawns); both would feed `End`, but only `hotfix`
+    /// runs. When `hotfix` reaches `End`, the dead branch is resolved-by-death, so
+    /// the run completes rather than stalling on a branch that will never arrive.
+    #[test]
+    fn parallel_fanout_to_end_completes_past_a_dead_sibling() {
+        let pipeline = PipelineDef {
+            name: "parallel-end-dead".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("classifier", &["task"], &["triage"]),
+                make_node("hotfix", &["triage"], &["patch"]),
+                make_node("dead", &["triage"], &["note"]),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_cond_edge(
+                    "classifier",
+                    "triage",
+                    "hotfix",
+                    "triage",
+                    Some("severity: { eq: high }"),
+                    false,
+                ),
+                make_cond_edge(
+                    "classifier",
+                    "triage",
+                    "dead",
+                    "triage",
+                    Some("severity: { eq: low }"),
+                    false,
+                ),
+                make_edge("hotfix", "patch", "end", "result"),
+                make_edge("dead", "note", "end", "result"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+        };
+
+        // classifier + hotfix completed; `dead` never spawned (its guard failed).
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("classifier".into(), completed_node("classifier"));
+        state
+            .nodes
+            .insert("hotfix".into(), completed_node("hotfix"));
+
+        let fm: HashMap<String, serde_yaml::Value> =
+            [("severity".into(), serde_yaml::Value::String("high".into()))]
+                .into_iter()
+                .collect();
+        let fm_by_node: HashMap<String, HashMap<String, serde_yaml::Value>> =
+            [("classifier".to_string(), fm)].into_iter().collect();
+
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "hotfix",
+            &HashMap::new(),
+            &HashMap::new(),
+            &fm_by_node,
+        );
+        assert!(
+            actions.contains(&SchedulerAction::Complete),
+            "a dead sibling branch must not block End's convergence: {actions:?}"
+        );
     }
 
     #[test]

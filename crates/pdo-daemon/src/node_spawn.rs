@@ -59,6 +59,12 @@ pub(crate) struct SpawnDeps<'a> {
     /// Per-daemon `docker` binary override for the sandbox wiring (#407), `Copy`
     /// like the rest of the bundle. `None` in production (real `docker`).
     pub(crate) docker_cmd_override: Option<&'a str>,
+    /// The host home root override (#407 seam), borrowed so the bundle stays
+    /// `Copy`. `None` in production ⇒ the real `$HOME`. #553 uses it as the root
+    /// under which the **disk descriptor tier** (`~/.pdo/harnesses/`) is read, so a
+    /// user-declared harness resolves at spawn — and so a layer-3 test that sets
+    /// the override reads descriptors from its own tempdir, never the real home.
+    pub(crate) home_override: Option<&'a std::path::Path>,
 }
 
 impl<'a> SpawnDeps<'a> {
@@ -72,7 +78,41 @@ impl<'a> SpawnDeps<'a> {
             port: state.port,
             tmux_cmd_override: state.tmux_cmd_override.as_deref(),
             docker_cmd_override: state.docker_cmd_override.as_deref(),
+            home_override: state.sandbox_home_override.as_deref(),
         }
+    }
+}
+
+/// The host home root the disk descriptor tier (#553) is read under: the per-daemon
+/// override when set (the layer-3 seam), else the real `$HOME`. Mirrors
+/// `sandbox_run::sandbox_home_roots` exactly, but reachable from the narrow
+/// [`SpawnDeps`] bundle (which carries no `AppState`). An unresolved `$HOME`
+/// degrades to an empty root, i.e. the embedded floor — never a spawn failure.
+fn spawn_home_root(deps: &SpawnDeps<'_>) -> PathBuf {
+    deps.home_override
+        .map(PathBuf::from)
+        .or_else(|| crate::sandbox_staging::default_roots_from_env().map(|(home, _)| home))
+        .unwrap_or_default()
+}
+
+/// #553 / ADR-0031: say ONCE per `(run, harness)` that a sandboxed Run's node runs
+/// on a harness with no staging floor. The message is the pure
+/// [`crate::harness_probes::staging_floor_absence_note`] (so it is unit-tested
+/// there, not against a terminal); the process-static dedup keeps a busy scheduler
+/// from repeating it on every retry or collection lap. A no-op for `claude`, which
+/// has the floor.
+fn warn_missing_staging_floor_once(run_id: &str, harness: &str) {
+    use std::collections::HashSet;
+    use std::sync::Mutex;
+    static SAID: Mutex<Option<HashSet<(String, String)>>> = Mutex::new(None);
+
+    let Some(note) = crate::harness_probes::staging_floor_absence_note(harness) else {
+        return; // the harness has a staging floor (claude) — nothing to say
+    };
+    let mut guard = SAID.lock().unwrap_or_else(|e| e.into_inner());
+    let said = guard.get_or_insert_with(HashSet::new);
+    if said.insert((run_id.to_string(), harness.to_string())) {
+        warn!("run {run_id}: {note}");
     }
 }
 
@@ -343,15 +383,31 @@ pub(crate) async fn spawn_node(
     };
     let harness_descriptor = match &resolved_harness {
         None => None,
-        Some(r) => match harness_registry::resolve(&r.harness) {
-            Some(d) => Some(d),
-            None => {
-                // Unknown harness — a spawn that cannot happen. Fail fast, naming it.
-                return SpawnOutcome::Failed {
-                    reason: format!("node {}: unknown harness '{}'", node.id, r.harness),
-                };
+        Some(r) => {
+            // #553: resolve against the embedded floor MERGED with the user's disk
+            // descriptor tier (`~/.pdo/harnesses/`), so a harness declared in data
+            // launches without a rebuild. The registry reads a root we hand it — it
+            // never touches `$HOME` itself.
+            let registry = harness_registry::HarnessRegistry::load(&spawn_home_root(&deps));
+            match registry.resolve(&r.harness) {
+                Some(d) => {
+                    // #553 / ADR-0031: a sandboxed Run whose node runs on a harness
+                    // with no staging floor holds only by the profile's image and
+                    // its `$HOME` exceptions — say it once, visibly (the plancher is
+                    // claude-specific and built per-Run regardless of the harness).
+                    if run_sandboxed {
+                        warn_missing_staging_floor_once(run_id, &r.harness);
+                    }
+                    Some(d)
+                }
+                None => {
+                    // Unknown harness — a spawn that cannot happen. Fail fast, naming it.
+                    return SpawnOutcome::Failed {
+                        reason: format!("node {}: unknown harness '{}'", node.id, r.harness),
+                    };
+                }
             }
-        },
+        }
     };
     if let Some(d) = &harness_descriptor {
         if deps.tmux_cmd_override.is_none() && !tmux_session_manager::binary_available(&d.binary) {

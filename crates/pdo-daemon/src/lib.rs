@@ -20,6 +20,7 @@ mod frontmatter_parser;
 mod graph_resolver;
 mod guard_runner;
 mod harness_argv;
+mod harness_probes;
 pub mod harness_registry;
 mod harness_resolver;
 mod input_resolution;
@@ -8155,6 +8156,36 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
         }),
     };
 
+    // --- harness descriptors: the disk tier, surfaced (#553, ADR-0045) ---
+    // Same posture as `price_table` above: a hand-edited descriptor file passes
+    // through NO validator (ADR-0001), so the only honest place to say a descriptor
+    // is inert or refused is here, beside the facts. `names` lists what actually
+    // resolves (floor merged with disk), so a user learns their declared harness
+    // "appeared"; `reason` carries the SAME string the loader logs. The path is
+    // ALWAYS reported so the user knows where to write — nothing is ever seeded.
+    let harness_descriptors_view = match &host_home_path {
+        Some(home) => {
+            let registry = harness_registry::HarnessRegistry::load(home);
+            serde_json::json!({
+                "path": harness_registry::HarnessRegistry::descriptors_path(home).to_string_lossy(),
+                "names": registry.names(),
+                "rejected": registry
+                    .rejected()
+                    .iter()
+                    .map(|r| serde_json::json!({ "name": r.name, "why": r.why }))
+                    .collect::<Vec<_>>(),
+                "reason": registry.diagnostic(),
+            })
+        }
+        None => serde_json::json!({
+            "path": null,
+            "names": harness_registry::HarnessRegistry::builtin().names(),
+            "rejected": [],
+            "reason": "HOME is unset, so the descriptor file has no resolvable path — \
+                       only the harnesses compiled into the binary apply",
+        }),
+    };
+
     Ok(serde_json::json!({
         "session_cap": settings_field(cap_effective, cap_source, cfg.session_cap, cap_env, cap_default),
         "reaper_ttl_secs": settings_field(ttl_effective, ttl_source, cfg.reaper_ttl_secs, ttl_env, ttl_default),
@@ -8169,6 +8200,10 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
             "effective": dhm_effective,
             "stored": dhm_stored,
         },
+        // #553/ADR-0045: the disk descriptor tier — which harnesses resolve (floor
+        // ∪ disk), the file path, and any inert/refused descriptor named. The
+        // settings surface is where a broken descriptor is ALWAYS said.
+        "harness_descriptors": harness_descriptors_view,
         "default_sandbox": {
             "effective": sbx_effective.as_str(),
             "source": sbx_source,
@@ -9481,7 +9516,13 @@ async fn get_run(
             // HOST home — prices are an instance concept), while transcripts come
             // from `projects_root` (the #408 seam, which moves for a sandboxed Run).
             let prices = price_table::PriceTable::load(&home_root);
-            augment_run_state_from_disk(&mut run_state, &projects_root, &repo_root, &prices);
+            augment_run_state_from_disk(
+                &mut run_state,
+                &events,
+                &projects_root,
+                &repo_root,
+                &prices,
+            );
             Json(run_state).into_response()
         }
         None => (StatusCode::NOT_FOUND, "run not found").into_response(),
@@ -10110,6 +10151,20 @@ async fn run_stale_detection(state: &Arc<AppState>) {
                 running: &running,
             };
 
+            // #553: gate the turn-end and usage-limit probes on the node's
+            // FROZEN-at-spawn harness (ADR-0046), never the current YAML. `None`
+            // (a script node, a pre-#550 row) is the `claude` floor, which has both
+            // capabilities — so the sweep is byte-identical to pre-#553 there. A
+            // node on a harness without them runs neither probe: no auto-completion
+            // on an invented heuristic, no capture for another harness's menu.
+            let node_harness = find_launch_harness(&events, node_id, *iter)
+                .unwrap_or_else(|| harness_registry::CLAUDE.to_string());
+            let hc = harness_probes::capabilities(&node_harness);
+            let caps = stale_detector::HarnessCapabilities {
+                turn_end: hc.turn_end,
+                usage_limit: hc.usage_limit,
+            };
+
             let assessment = stale_detector::assess_node(
                 &probes,
                 &events,
@@ -10118,6 +10173,7 @@ async fn run_stale_detection(state: &Arc<AppState>) {
                 *iter,
                 now,
                 autocomplete_turn_end,
+                caps,
             );
 
             if assessment.blocked_on_limit {
@@ -10551,9 +10607,20 @@ async fn node_pane(
             // now. A pre-#550 row (no key) or an unknown harness falls back to the
             // `claude` floor, byte-identical to the legacy resume.
             let launch_harness = find_launch_harness(&events, &node_id, iter);
+            // #553: resolve the frozen harness against the embedded floor MERGED
+            // with the disk descriptor tier, so a user-declared harness resumes
+            // like the built-in ones. The registry reads a root we hand it (never
+            // `$HOME`); a resolution failure, a pre-#550 row, or an unresolved home
+            // all fall back to the `claude` floor — byte-identical to the legacy
+            // resume.
+            let harness_home_root = sandbox_run::sandbox_home_roots(&state)
+                .map(|(home, _)| home)
+                .unwrap_or_default();
             let descriptor = launch_harness
                 .as_deref()
-                .and_then(harness_registry::resolve)
+                .and_then(|name| {
+                    harness_registry::HarnessRegistry::load(&harness_home_root).resolve(name)
+                })
                 .unwrap_or_else(harness_registry::claude);
             // AC #9: a harness with no resume mechanism serves its last pane
             // snapshot (the same branch as a `script` node), never a resume error.
@@ -13966,6 +14033,7 @@ fn compute_run_loc(repo_root: &std::path::Path, run_id: &str) -> Option<event_lo
 
 fn augment_run_state_from_disk(
     run_state: &mut event_log::RunState,
+    events: &[event_log::Event],
     projects_root: &std::path::Path,
     repo_root: &std::path::Path,
     prices: &price_table::PriceTable,
@@ -13978,8 +14046,13 @@ fn augment_run_state_from_disk(
     // Claude Code transcripts under `projects_root` (the #408 seam — the staged
     // home while a sandboxed Run is live, `~/.claude/projects/` otherwise), not
     // the run dir. `repo_root` builds the run-id dir prefix, not the read root.
+    // #553/ADR-0045: honest about a harness with no cost source. If a node ran on
+    // such a harness the aggregate is not summable, so this yields a "—"-with-reason
+    // `CostStat` (never `$0`); otherwise it is exactly `compute_run_cost`. Needs the
+    // raw events for the frozen-at-spawn harnesses (`RunState` alone does not carry
+    // them per node).
     run_state.cost =
-        run_cost::compute_run_cost(projects_root, repo_root, &run_state.run_id, prices);
+        run_cost::run_cost_or_absence(events, projects_root, repo_root, &run_state.run_id, prices);
 
     let yaml_path = run_scoped_pipeline_path(repo_root, &run_state.run_id);
     let Ok(yaml) = std::fs::read_to_string(&yaml_path) else {

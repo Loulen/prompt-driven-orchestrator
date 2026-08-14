@@ -300,6 +300,9 @@ function InfoTab({
                     run.cost.usd,
                     run.cost.partial,
                     run.cost.unpriced_models,
+                    // #553: "—" + reason when a node ran on a harness with no cost
+                    // source (e.g. opencode) — never a misleading $0.
+                    run.cost.uncosted_harnesses ?? [],
                   );
                   return (
                     <span className="flex items-center gap-1" title={c.title}>

@@ -88,6 +88,14 @@ function sample(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
       manual_keys: [],
       reason: null,
     },
+    // Harness descriptors (#553): the default clean state — only the built-in
+    // floor resolves, nothing inert. The path is reported all the same.
+    harness_descriptors: {
+      path: "/home/user/.pdo/harnesses/descriptors.yaml",
+      names: ["claude", "opencode"],
+      rejected: [],
+      reason: null,
+    },
     updated_at: "2026-07-01T10:00:00.000Z",
     ...overrides,
   };
@@ -294,6 +302,49 @@ describe("SettingsModal", () => {
     // And what the manual tier shadows is visible.
     expect(screen.getByTestId("setting-price-table-manual-path")).toHaveTextContent(
       "claude-opus-4-8",
+    );
+  });
+
+  it("lists the resolved harnesses and stays silent when no descriptor is inert (#553)", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    render(<SettingsModal open onClose={() => {}} />);
+    const names = await screen.findByTestId("setting-harness-descriptors-names");
+    // A declared harness "appears" here (floor ∪ disk); the clean fixture shows the floor.
+    expect(names).toHaveTextContent("claude");
+    expect(names).toHaveTextContent("opencode");
+    expect(screen.getByTestId("setting-harness-descriptors-path")).toHaveTextContent(
+      "/home/user/.pdo/harnesses/descriptors.yaml",
+    );
+    // Absent is SILENT: no advisory when nothing is wrong.
+    expect(
+      screen.queryByTestId("setting-harness-descriptors-reason"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("surfaces the daemon's reason and merged names when a descriptor went inert (#553)", async () => {
+    // Corrupting the file makes it inert and diagnosed; the built-in floor keeps
+    // resolving — the only honest place to say so, since a descriptor passes
+    // through no validator (ADR-0001).
+    fetchSettingsMock.mockResolvedValue(
+      sample({
+        harness_descriptors: {
+          path: "/home/user/.pdo/harnesses/descriptors.yaml",
+          names: ["claude", "opencode"],
+          rejected: [
+            { name: "claude", why: "missing `binary`" },
+          ],
+          reason:
+            "harness descriptors (#553) — harness descriptor tier (/home/user/.pdo/harnesses/descriptors.yaml) refused 1 descriptor(s), each key falling through to the next tier: `claude` (missing `binary`)",
+        },
+      }),
+    );
+    render(<SettingsModal open onClose={() => {}} />);
+    const reason = await screen.findByTestId("setting-harness-descriptors-reason");
+    expect(reason).toHaveTextContent("claude");
+    expect(reason).toHaveTextContent(/falling through/);
+    // …and the floor still resolves alongside the diagnostic.
+    expect(screen.getByTestId("setting-harness-descriptors-names")).toHaveTextContent(
+      "opencode",
     );
   });
 

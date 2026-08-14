@@ -318,7 +318,33 @@ export interface InstanceSettings {
    * honest place to surface it (the #432 argument).
    */
   price_table: PriceTableView;
+  /**
+   * The harness descriptor disk tier (#553, ADR-0045) — an observed STATE, like
+   * `price_table`. `names` lists the harnesses that actually resolve (embedded
+   * floor merged with the user's disk file), so a declared harness "appears";
+   * `path` is always reported (nothing is seeded) so the user knows where to
+   * write; `reason` is the same string the daemon logs, non-null exactly when a
+   * descriptor went inert or was refused — the only honest place to say so, since
+   * a hand-edited descriptor passes through no validator (ADR-0001).
+   *
+   * Optional in the type (the SettingsModal guards on it) so a UI built against a
+   * daemon that predates #553 still typechecks — same defensive posture the modal
+   * takes for `price_table`. In production the SPA is embedded, so they agree.
+   */
+  harness_descriptors?: HarnessDescriptorsView;
   updated_at: string;
+}
+
+/** `GET /settings` → `harness_descriptors` (#553). */
+export interface HarnessDescriptorsView {
+  /** `~/.pdo/harnesses/descriptors.yaml`. `null` only when `HOME` is unset. */
+  path: string | null;
+  /** The harnesses the registry resolves (floor ∪ disk), in resolution order. */
+  names: string[];
+  /** Descriptors the disk tier refused — each inert, its key on the floor. */
+  rejected: { name: string; why: string }[];
+  /** Advisory: an inert file or refused descriptor, named. `null` when all is well. */
+  reason: string | null;
 }
 
 /** `GET /settings` → `price_table` (#427). */
@@ -723,11 +749,18 @@ export interface RunState {
    * lower bound; `unpriced_models` names which family keys were excluded (#425),
    * so the UI can say *which* model rather than an anonymous "an unpriced model".
    * Invariant: `partial ⟺ unpriced_models.length > 0`.
+   *
+   * `uncosted_harnesses` (#553): the harnesses a node ran on that have **no cost
+   * source** (e.g. `opencode`). Non-empty ⇒ the Run's cost is not honestly
+   * summable, so the UI shows "—" with a reason naming them, never a `$0` and
+   * never a mute lower-bound — a categorically different state from `partial`
+   * (which still shows a figure). Empty on every all-`claude` Run.
    */
   cost?: {
     usd: number;
     partial: boolean;
     unpriced_models: string[];
+    uncosted_harnesses?: string[];
   } | null;
 }
 

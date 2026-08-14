@@ -755,6 +755,52 @@ function SettingsForm({
           </div>
         )}
 
+        {/* #553/ADR-0045: the harness descriptor disk tier — declare a harness PDO
+            does not ship by writing this file; it merges over the built-in floor by
+            name. Same posture as the price table above: the path is always shown
+            (nothing is seeded), and a broken/refused descriptor is named here (the
+            only place, since a hand-edited descriptor passes through no validator).
+            Guarded so a daemon predating #553 renders nothing. */}
+        {settings.harness_descriptors && (
+          <div className="flex flex-col gap-1.5" data-testid="setting-harness-descriptors">
+            <label className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
+              Harness descriptors
+            </label>
+            <div className="text-fg-4" style={{ fontSize: "10.5px" }}>
+              Declare a harness PDO does not ship by writing this file; it merges over
+              the built-in <span className="font-mono">claude</span> /{" "}
+              <span className="font-mono">opencode</span> by name. Nothing is ever
+              seeded — the built-in harnesses are the floor.
+            </div>
+            <div
+              className="text-fg-3"
+              style={{ fontSize: "10.5px" }}
+              data-testid="setting-harness-descriptors-path"
+            >
+              File:{" "}
+              <span className="font-mono">
+                {settings.harness_descriptors.path ?? "— (HOME unset)"}
+              </span>
+            </div>
+            <div
+              className="text-fg-3"
+              style={{ fontSize: "10.5px" }}
+              data-testid="setting-harness-descriptors-names"
+            >
+              Harnesses: {settings.harness_descriptors.names.join(", ")}
+            </div>
+            {settings.harness_descriptors.reason && (
+              <div
+                className="text-st-failed"
+                style={{ fontSize: "10.5px" }}
+                data-testid="setting-harness-descriptors-reason"
+              >
+                {settings.harness_descriptors.reason}
+              </div>
+            )}
+          </div>
+        )}
+
         {error && (
           <div
             className="rounded-md border border-st-failed/30 bg-st-failed-bg px-3 py-2 text-st-failed"

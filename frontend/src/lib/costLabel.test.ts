@@ -51,6 +51,30 @@ describe("formatEstCost (single run, #272)", () => {
     const c = formatEstCost(2.5, true, []);
     expect(c.title).toMatch(/an unpriced model was excluded/);
   });
+
+  it("renders — (never $0, no dagger) and names the harness for an uncosted harness (#553)", () => {
+    // A Run with a node on a harness with no cost source: "—" with a reason
+    // naming the harness — categorically different from a lower bound.
+    const c = formatEstCost(0, false, [], ["opencode"]);
+    expect(c.text).toBe("—");
+    expect(c.text).not.toContain("$");
+    expect(c.dagger).toBe(false);
+    expect(c.title).toMatch(/cost unavailable/i);
+    expect(c.title).toContain("opencode");
+    expect(c.title).toMatch(/no cost source/);
+  });
+
+  it("takes the uncosted branch even when partial/priced data is present (#553)", () => {
+    // "Unavailable" is a stronger statement than "lower bound": it wins.
+    const c = formatEstCost(4.2, true, ["claude-fable-5"], ["opencode", "codex"]);
+    expect(c.text).toBe("—");
+    expect(c.dagger).toBe(false);
+    expect(c.title).toContain("opencode");
+    expect(c.title).toContain("codex");
+    expect(c.title).toMatch(/harnesses .* have no cost source/);
+    // Not framed as a lower bound — there is no figure at all.
+    expect(c.title).not.toContain("claude-fable-5");
+  });
 });
 
 describe("formatBucketCost (aggregate, #377)", () => {

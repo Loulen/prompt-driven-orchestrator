@@ -704,7 +704,30 @@ pub(crate) async fn spawn_node(
         sandbox_wrap.as_ref(),
         inject_hook,
     ) {
-        error!("failed to spawn tmux session: {e}");
+        // #508: the tmux spawn itself failed *after* `NodeStarted` is durable. It
+        // used to be swallowed (`error!` + fall through), leaving the node
+        // projected `Running` with NO session — the liveness sweep then rewrote it
+        // `Failed` ~30s later with a false `session_died` cause, and `restart_node`
+        // answered a lying `200 {spawned}`. Fail loud right here instead: append
+        // `NodeFailed` (legal now that the iteration is `Running`) → reap only what
+        // this spawn created → `RunFailed`, then return `Failed`. This lands BEFORE
+        // the `NodeAwaitingUser` block below, so a session that never launched can
+        // never collect a phantom `NodeAwaitingUser`. (ADR-0037 §1/§3.)
+        let reason = format!(
+            "failed to spawn tmux session {session_name} for node {}: {e}",
+            node.id
+        );
+        fail_spawn_after_start(
+            deps,
+            spawn_ctx.repo_root,
+            run_id,
+            &node.id,
+            iter,
+            orphan_to_reap.as_ref(),
+            &reason,
+        )
+        .await;
+        return SpawnOutcome::Failed { reason };
     }
 
     if node.interactive {
@@ -761,5 +784,64 @@ async fn fail_spawn_before_start(
     };
     if let Err(e) = append_event_with(deps.db, deps.event_tx, &run_failed).await {
         error!("Run {run_id}: failed to append RunFailed after spawn abort: {e}");
+    }
+}
+
+/// Fail a run loud when a node spawn aborts *after* `NodeStarted` is appended
+/// (#508). Unlike [`fail_spawn_before_start`], the iteration is already
+/// `Running`, so a `NodeFailed` is a legal transition
+/// (`transition_guard::validate_fail` → `Allow`) and IS appended: it moves the
+/// *node* terminal, closing the window where the liveness sweep would rewrite it
+/// `Failed` with a false `session_died` cause and where `GET …/pane` /
+/// boot_recovery could re-drive a `Running` node that has no session.
+/// `RunFailed` then moves the *run* terminal (the sole event that sets
+/// `state.status = Failed`). The reap is gated on `orphan` (Some iff THIS spawn
+/// created the sub-worktree — a reuse must destroy nothing; ADR-0037 §6). The
+/// order (node-terminal → reap → run-terminal) mirrors the #488 "terminal event
+/// first, reap second" convention; it is not required by the guard
+/// (`validate_fail` ignores run status).
+async fn fail_spawn_after_start(
+    deps: SpawnDeps<'_>,
+    repo_root: &std::path::Path,
+    run_id: &str,
+    node_id: &str,
+    iter: i64,
+    orphan: Option<&(PathBuf, String)>,
+    reason: &str,
+) {
+    error!("Run {run_id}: node {node_id} spawn failed after NodeStarted — {reason}");
+
+    // 1) Node terminal (legal: the iteration is `Running` after `NodeStarted`).
+    let node_failed = event_log::Event {
+        id: None,
+        run_id: run_id.to_string(),
+        ts: event_log::now_iso(),
+        kind: event_log::EventKind::NodeFailed,
+        node_id: Some(node_id.to_string()),
+        iter: Some(iter),
+        payload: Some(serde_json::json!({ "reason": reason, "source": "spawn" })),
+    };
+    if let Err(e) = append_event_with(deps.db, deps.event_tx, &node_failed).await {
+        error!("Run {run_id}: failed to append NodeFailed after spawn failure: {e}");
+    }
+
+    // 2) Reap ONLY what this spawn created (gated; ADR-0037 §6 — a reuse loses
+    //    nothing).
+    if let Some((sub_worktree_dir, sub_branch)) = orphan {
+        reap_orphan_sub_worktree(repo_root, sub_worktree_dir, sub_branch);
+    }
+
+    // 3) Run terminal (the sole event that sets `state.status = Failed`).
+    let run_failed = event_log::Event {
+        id: None,
+        run_id: run_id.to_string(),
+        ts: event_log::now_iso(),
+        kind: event_log::EventKind::RunFailed,
+        node_id: None,
+        iter: None,
+        payload: Some(serde_json::json!({ "reason": reason })),
+    };
+    if let Err(e) = append_event_with(deps.db, deps.event_tx, &run_failed).await {
+        error!("Run {run_id}: failed to append RunFailed after spawn failure: {e}");
     }
 }

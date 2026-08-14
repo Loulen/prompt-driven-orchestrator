@@ -1,6 +1,6 @@
 ---
 id: HP-02
-covers: [run, start-node, tmux-session, dataflow, conditional-routing, loop-region, collection, merge, artifact, run-stats, sandbox, staging-profile, staging-floor, sandbox-prep]
+covers: [run, start-node, tmux-session, dataflow, conditional-routing, loop-region, collection, merge, artifact, run-stats, sandbox, staging-profile, staging-floor, sandbox-prep, harness, harness-pin, harness-capability]
 ---
 
 # HP-02 — Launch a run to completion
@@ -8,9 +8,10 @@ covers: [run, start-node, tmux-session, dataflow, conditional-routing, loop-regi
 ## Goal
 
 A user launches a **Run** on a pipeline: picks a target repo, enters a prompt (optionally images),
-and watches nodes spawn real **tmux sessions** running `claude`, data route through edges / a loop
-region / a collection fan-out into a **Merge**, until the Run reaches a clean **Completed** state with
-inspectable artifacts and live stats — the core "drive an orchestration to its end" loop.
+and watches nodes spawn real **tmux sessions** running each node's resolved **harness** (`claude` is
+the floor, not the only one), data route through edges / a loop region / a collection fan-out into a
+**Merge**, until the Run reaches a clean **Completed** state with inspectable artifacts and live
+stats — the core "drive an orchestration to its end" loop.
 
 ## Drive-by
 
@@ -38,11 +39,18 @@ Features validated while crossing the run screens (grafted from retired per-issu
   business outcome by two visibly different routes. The `off` twin is the **control**: without it, a
   green sandboxed Run proves nothing (a Run that silently fell back to the host path also looks
   green). See the journey's §10-12 and the dedicated checks below.
+- **Agentic harness, as an A/B pair** (PRD #549, ADR-0045, ADR-0046): a **two-node** pipeline runs one
+  node pinned to **`claude`** and one pinned to **`opencode`** in the **same Run**. The pair is the
+  control, exactly as for the sandbox: a single-harness Run that silently resolved to the `claude`
+  floor is indistinguishable from a correctly resolved one, so the second harness is what makes the
+  four-tier resolution observable at all. See the journey's §14-15.
 
 ## Preconditions
 
 - The app is running locally and reachable in a browser; status bar shows the daemon **connected**.
 - `claude` is on `PATH` (the daemon shells out to it for each node session).
+- `opencode` is on `PATH` too: the second harness of the embedded floor (ADR-0045), and the harness
+  A/B needs both binaries resident.
 - A valid pipeline and a target git repo are available. No hard-coded ports/ids in the journey — see
   `docs/agents/run-scenario.md` for how to drive PDO and probe side-effects.
 
@@ -81,6 +89,12 @@ Features validated while crossing the run screens (grafted from retired per-issu
     Open the profile editor → it lists the floor entry by entry, and its **Image** control offers
     `default` / `dockerfile` / `registry`, the `default` option saying in one sentence that the tag is
     the SHA-256 of the seeded Dockerfile's bytes.
+14. **Harness A/B.** Seed a **two-node** pipeline: two parallel nodes, each asked for a single line of
+    output. In the **node inspector**, pin the first node's harness to **`claude`** and the second's to
+    **`opencode`**; each node's inspector reads back which harness it **resolves** to. Launch it once,
+    sandbox **`off`** (the two axes are deliberately not crossed — see the notes).
+15. Both nodes start, both reach **completed**, and the Run reaches **Completed** with the End
+    `result` port **received**: one Run, two harnesses, one outcome.
 
 ## Checks
 
@@ -118,6 +132,20 @@ Features validated while crossing the run screens (grafted from retired per-issu
   floor entry by entry, offers the three-way **Image** control, warns on credential-bearing entries,
   and lists a profile's referents before confirming its deletion.
 
+#### Harness A/B (steps 14-15)
+
+- The node inspector offers **Default / claude / opencode** and reads back the **resolved** harness,
+  saying whether that is a **pin** or the **floor**.
+- The **effort picker is greyed on the `opencode` node** and live on the `claude` one. That is the
+  descriptor's missing `{effort}` hole surfacing on screen (ADR-0045): an absence *declared*, not a
+  defect, and the cheapest visible proof that the resolved harness reached the UI at all.
+- **Est. cost reads "—" and names `opencode`** — never `$0`, and never the `claude` node's dollars on
+  their own. A Run that launched a node on a harness with no cost source is not honestly summable, so
+  the whole amount goes (#553, the `unpriced_models` vein of #425). A number reappearing there is the
+  regression, and it is the one that would otherwise pass for a plausible total.
+- Neither pane sits on an interactive dialog: `--auto` is `opencode`'s bypass flag, so a permission
+  prompt on that pane is a finding.
+
 ### Backing store
 
 - A tmux session named for the run/node/iter is alive while the node runs and shows `claude` (not a
@@ -137,6 +165,17 @@ Sandbox A/B, read-only probes:
   baseline when the host has one, and a settings file bearing the bypass-permissions key.
 - The `off` twin creates **no** container and **no** staging directory.
 
+Harness A/B, read-only probes:
+
+- The `claude` node's session really runs `claude`, the `opencode` node's really runs `opencode`, **and
+  each agrees with the harness frozen in that node's start event** (#550). The event is the contract —
+  the harness is resolved once, at spawn, and never re-read from the YAML — so a pane that contradicts
+  it is the finding, and this is the only place the disagreement is visible.
+- **Do not assert the `opencode` node's model.** Measured on 1.18.18: an unreachable model id falls
+  back **silently** to another provider and the turn still goes green, so a model assertion there is a
+  false pass either way. Same for any transcript-based probe: `opencode` cannot pin a session identity,
+  so PDO attributes by working directory alone.
+
 ## Cleanup (best-effort)
 
 - Archive the Run (`cleanup_run`): it reaps sessions and the worktree. Delete any pipeline the agent
@@ -145,6 +184,9 @@ Sandbox A/B, read-only probes:
   container named for either Run survives, and the `full` Run's staging directory is gone. Its ~1 GB
   is reclaimed **only** here — a missed purge is the known disk-fill recurrence, and a silent leak
   is a finding.
+- Archive the **harness A/B** Run and delete its two-node pipeline. Leave `opencode`'s own store
+  (`~/.local/share/opencode/`) **alone**: the run legitimately writes a session there, that is the
+  harness's business, and deleting a user's harness database is not cleanup.
 
 ## Notes
 
@@ -154,7 +196,8 @@ Sandbox A/B, read-only probes:
 - **Select data by characteristics, not hard-coded ids** (HP mode): if no data satisfies a condition,
   that is a legitimate finding, not an excuse to bypass the UI.
 - A first `claude` launch in a fresh worktree lands on the trust dialog — confirm it (see the driving
-  playbook) before expecting chat output.
+  playbook) before expecting chat output. That one is **`claude`'s**, not the product's: `opencode
+  --auto` shows no such dialog, so a dialog on an `opencode` pane is a finding rather than a step.
 - A node with no output yet returns **409 `missing_outputs`** on "Mark complete" — that guard is
   expected, not a bug.
 
@@ -177,3 +220,24 @@ Sandbox A/B, read-only probes:
   Asserting it here would report a documented backlog item as a regression on every execution. The
   host-uid half of this note is **gone**: since #414 a named identity is injected into the container,
   so `whoami` and `sudo -n true` DO work under any host uid — a failure there is a finding.
+
+### Harness A/B — why it is built this way
+
+- **Its own two-node pipeline, not a pin on the main journey's nodes.** Those nodes carry the dataflow
+  (conditional routing, loop region, collection, merge); a node that fails to complete among them costs
+  six steps of assertions downstream. Isolating the newest axis is the same call the sandbox twin makes
+  by getting its own one-node pipeline.
+- **The two axes are not crossed, on purpose.** HP-02 already pays ~1 GB of staging for the sandbox
+  pair; harness × sandbox would be four combinations for no extra information. The harness pair rides
+  the `off` side, where it costs two panes.
+- **`opencode` completes because the agent runs `pdo complete` itself, and for now that IS the
+  contract.** It has neither of PDO's automatic substrates: no turn-end `Stop` hook (its argv template
+  carries no `{settings}` hole, so the hook file is written and never referenced) and no turn-end sweep
+  probe (no `turn_end_substrate` capability, #553). That instrumentation is deliberately later work and
+  **is not a defect to raise here** — what this journey asserts is the outcome, that the node reaches
+  completed.
+- **Bound the wait on the `opencode` node.** Because the harness is *resident* (ADR-0045: it stays
+  alive after its turn), a node that never self-completes stays `running`, **alive and mute rather than
+  dead** — there is no session death to notice and nothing times it out. Give it a finite wait and
+  raise a finding on the harness's obedience; do not sit on it, and do not read the silence as the
+  missing auto-completion above.

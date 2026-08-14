@@ -27,7 +27,7 @@ Two levels:
 | ID | Title | Covers | Status |
 |---|---|---|---|
 | [HP-01](HP-01-author-and-save.md) | Author & save a pipeline | pipeline authoring, library, unified canvas | active |
-| [HP-02](HP-02-run-to-completion.md) | Launch a run to completion | run lifecycle, dataflow, artifacts, stats, **sandbox A/B (`full` vs `off`)** | active |
+| [HP-02](HP-02-run-to-completion.md) | Launch a run to completion | run lifecycle, dataflow, artifacts, stats, **sandbox A/B (`full` vs `off`)**, **harness A/B (`claude` vs `opencode`)** | active |
 | HP-03 | *(reserved — free slot)* | candidate: Triggers, once it is core | — |
 
 The 3rd slot is intentionally free. To add it: allocate `HP-03`, follow `SCENARIO-FORMAT.md`, update
@@ -42,3 +42,10 @@ before running the suite: each execution copies ~1 GB of staging and spends tens
 preparing, and the journey must **stay on the Run** during preparation (see HP-02's notes for why
 that is load-bearing). The day the instance default stops being `off` — a VPS deployment, where
 most Runs will be sandboxed — this drive-by is the natural candidate to be promoted to `HP-03`.
+
+**The agentic-harness axis (PRD #549) is grafted onto HP-02 for the same reason, at a far lower
+price.** The pair `claude` + `opencode` is what makes it meaningful: a single-harness Run that
+silently resolved to the `claude` floor is indistinguishable from a correctly resolved one, so the
+second harness is the control that makes the four-tier resolution observable. Unlike the sandbox pair
+it costs almost nothing — two panes inside one Run, no staging, no image — which is why it rides
+HP-02's `off` side rather than claiming the free slot. `HP-03` stays reserved for Triggers.

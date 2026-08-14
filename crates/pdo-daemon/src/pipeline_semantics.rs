@@ -137,12 +137,16 @@ struct NodeProjection<'a> {
     name: &'a str,
     node_type: &'a NodeType,
     interactive: bool,
-    model: Option<&'a str>,
-    /// Per-node reasoning-effort override (#424). Semantic for the same reason as
-    /// `model`: it changes how the agent behaves, so a pipeline that differs only
-    /// by an effort level is *not* the same pipeline — the library drift badge and
-    /// the pipeline diff must both see it.
-    effort: Option<&'a str>,
+    /// Pinned harness (#550, ADR-0046). Semantic: pinning a node to `opencode`
+    /// changes what runs it, so a pipeline that differs only by a pin is *not* the
+    /// same pipeline.
+    pin_harness: Option<&'a str>,
+    /// Per-harness `{model, effort}` map (#550, ADR-0046) — replaces the flat
+    /// `model:`/`effort:` of #296/#424. Semantic for the same reason: it changes
+    /// how the agent behaves, so the library drift badge and the pipeline diff must
+    /// both see it. A `BTreeMap` so the canonical form is key-ordered; empty ⇒
+    /// serialized as `{}` (a plain claude node with no settings).
+    harnesses: &'a std::collections::BTreeMap<String, crate::harness_resolver::HarnessEntry>,
     max_iter: Option<serde_json::Value>,
     /// Legacy per-node collection driver. The frontend serializer no longer emits
     /// it, so it is absent from `SEMANTIC_FIELDS.node`; it is still a behavioural
@@ -164,8 +168,8 @@ impl<'a> NodeProjection<'a> {
             view,
             max_iter,
             over,
-            model,
-            effort,
+            pin_harness,
+            harnesses,
         } = node;
         let _layout = view; // LAYOUT_FIELDS["node"]
         Self {
@@ -173,8 +177,8 @@ impl<'a> NodeProjection<'a> {
             name,
             node_type,
             interactive: *interactive,
-            model: model.as_deref(),
-            effort: effort.as_deref(),
+            pin_harness: pin_harness.as_deref(),
+            harnesses,
             max_iter: max_iter.as_ref().map(canon_yaml),
             over: over.as_deref(),
             inputs: inputs.iter().map(PortProjection::of).collect(),
@@ -462,6 +466,26 @@ mod tests {
                 // launch a stale copy believing it current.
                 "per-node effort",
                 base.replace("  type: doc-only", "  type: doc-only\n  effort: low"),
+            ),
+            (
+                // #550/ADR-0046: a pinned harness changes what runs the node, so it
+                // is a semantic change — the library drift badge and the diff see it.
+                "pin_harness",
+                base.replace(
+                    "  type: doc-only",
+                    "  type: doc-only\n  pin_harness: opencode",
+                ),
+            ),
+            (
+                // #550/ADR-0046: the per-harness `{model, effort}` map is semantic
+                // (it replaces the flat model/effort). Authored directly under
+                // `harnesses.claude` here (not folded from a flat key) to pin the map
+                // projection itself.
+                "harnesses map",
+                base.replace(
+                    "  type: doc-only",
+                    "  type: doc-only\n  harnesses:\n    claude:\n      model: opus",
+                ),
             ),
             (
                 "edge condition",

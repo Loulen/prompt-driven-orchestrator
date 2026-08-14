@@ -19,6 +19,9 @@ mod fire_decision;
 mod frontmatter_parser;
 mod graph_resolver;
 mod guard_runner;
+mod harness_argv;
+pub mod harness_registry;
+mod harness_resolver;
 mod input_resolution;
 mod instance_config;
 mod library_store;
@@ -4409,6 +4412,41 @@ async fn stored_default_model(db: &sqlx::SqlitePool) -> Option<String> {
     tmux_session_manager::default_model_with(stored)
 }
 
+/// The instance-wide default **harness**, resolved `stored → env → None` from a
+/// *fresh* read of `instance_config` (#550, ADR-0046). Feeds the `instance` tier
+/// of [`harness_resolver`] at every spawn seam so a `PUT /settings` takes effect
+/// on the next node with no restart. `None` ⇒ the resolver's `claude` floor.
+async fn stored_default_harness(db: &sqlx::SqlitePool) -> Option<String> {
+    let stored = instance_config::get(db)
+        .await
+        .ok()
+        .and_then(|c| c.default_harness);
+    tmux_session_manager::default_harness_with(stored)
+}
+
+/// The per-harness default model map for the resolver (#550, ADR-0046), from a
+/// *fresh* read of `instance_config`. The stored `default_harness_model` map, with
+/// the legacy single instance default (`default_model` stored/env) folded under
+/// `claude` when the map is silent for it — so a pre-#550 setup keeps working
+/// unchanged. A DB read error yields an empty map (fall through to no default).
+async fn stored_default_harness_models(
+    db: &sqlx::SqlitePool,
+) -> std::collections::BTreeMap<String, String> {
+    let cfg = instance_config::get(db).await.ok();
+    let mut map = cfg
+        .as_ref()
+        .map(|c| c.default_harness_model.clone())
+        .unwrap_or_default();
+    if !map.contains_key(harness_registry::CLAUDE) {
+        if let Some(legacy) =
+            tmux_session_manager::default_model_with(cfg.and_then(|c| c.default_model))
+        {
+            map.insert(harness_registry::CLAUDE.to_string(), legacy);
+        }
+    }
+    map
+}
+
 /// Resolve turn-end auto-completion the way the liveness sweep does, from a
 /// *fresh* read of `instance_config` (#433, ADR-0043). Consulted at every agent
 /// spawn/resume seam so injecting the `Stop` hook tracks a `PUT /settings` with
@@ -5388,6 +5426,10 @@ const KNOWN_NODE_KEYS: &[&str] = &[
     "max_iter",
     "branches",
     "prompt",
+    // #550/ADR-0046: the harness axis. `model`/`effort` above stay accepted (a
+    // pasted flat pair is folded into `harnesses.claude` by `normalize_node_value`).
+    "pin_harness",
+    "harnesses",
     // Accepted-and-dropped, not a semantic loss → no warning.
     "id",
     "view",
@@ -5468,7 +5510,32 @@ fn parse_node_spec(yaml: &str) -> Result<serde_json::Value, String> {
         }
     }
 
-    // 7. Deserialize the (normalized) map into a LibraryEntry. `prompt` defaults
+    // 7. #550/ADR-0046: read the harness axis off the (folded) value before it is
+    //    consumed. `normalize_node_value` above folded any flat `model:`/`effort:`
+    //    into `harnesses.claude`, so the claude entry is the source for the
+    //    (claude-aware) `spec.model`/`spec.effort` the node library shows — and the
+    //    full `harnesses` map + `pin_harness` ride through for the harness UI.
+    let claude = value
+        .get("harnesses")
+        .and_then(|h| h.get(harness_registry::CLAUDE));
+    let claude_model = claude
+        .and_then(|c| c.get("model"))
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let claude_effort = claude
+        .and_then(|c| c.get("effort"))
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let pin_harness = value
+        .get("pin_harness")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let harnesses = value
+        .get("harnesses")
+        .map(yaml_value_to_json)
+        .unwrap_or(serde_json::Value::Null);
+
+    // 8. Deserialize the (normalized) map into a LibraryEntry. `prompt` defaults
     //    to empty (a structural node carries none); unknown fields are ignored.
     let entry: library_store::LibraryEntry =
         serde_yaml::from_value(value).map_err(|e| format!("{e}"))?;
@@ -5480,8 +5547,12 @@ fn parse_node_spec(yaml: &str) -> Result<serde_json::Value, String> {
             "inputs": entry.inputs,
             "outputs": entry.outputs,
             "interactive": entry.interactive,
-            "model": entry.model,
-            "effort": entry.effort,
+            // Claude-aware view (#345) — derived from the folded harnesses map.
+            "model": claude_model,
+            "effort": claude_effort,
+            // #550: the harness axis, for the pin selector + per-harness UI.
+            "pin_harness": pin_harness,
+            "harnesses": harnesses,
             "max_iter": entry.max_iter,
             "branches": entry.branches,
         },
@@ -7638,6 +7709,10 @@ fn spawn_manager_session(
         marker: &session_name,
         workdir: worktree_dir,
     });
+    // #550/ADR-0046: infra sessions follow the Run's harness; the Run tier is #551,
+    // so in this slice the manager runs on the `claude` floor — byte-identical to
+    // the legacy manager launch (no model, no effort, no session id).
+    let manager_harness = harness_registry::claude();
     if let Err(e) = tmux_session_manager::spawn(
         &session_name,
         &full_prompt,
@@ -7654,6 +7729,7 @@ fn spawn_manager_session(
         // and resolving nodes by their own id is precisely what stops the manager's
         // transcript, which shares this cwd, from being read as a node's.
         tmux_session_manager::SessionTail::Agent {
+            harness: &manager_harness,
             model: None,
             effort: None,
             session_id: None,
@@ -7914,6 +7990,29 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
         "default"
     };
 
+    // --- default harness (#550, ADR-0046) — same `stored → env → floor` shape as
+    // `default_model`. `effective`=null ⇒ the `claude` floor applies at resolve. ---
+    let dh_stored = cfg.default_harness.as_deref().filter(|s| !s.is_empty());
+    let dh_env = tmux_session_manager::env_default_harness();
+    let dh_effective = tmux_session_manager::default_harness_with(cfg.default_harness.clone());
+    let dh_source = if dh_stored.is_some() {
+        "stored"
+    } else if dh_env.is_some() {
+        "env"
+    } else {
+        "default"
+    };
+    // The per-harness default model map (#550): disclosed verbatim (the stored map)
+    // plus the legacy `PDO_DEFAULT_MODEL` env folded under `claude`, so the screen
+    // shows exactly what the resolver's `instance` tier will read.
+    let dhm_stored = cfg.default_harness_model.clone();
+    let mut dhm_effective = dhm_stored.clone();
+    if !dhm_effective.contains_key(harness_registry::CLAUDE) {
+        if let Some(m) = dm_effective.clone() {
+            dhm_effective.insert(harness_registry::CLAUDE.to_string(), m);
+        }
+    }
+
     // --- default sandbox mode (enum ; built-in default `off`) (#410) ---
     // The empty-string filter treats a stored `""` as unset, and `effective` is computed by
     // the SAME resolver the create-run chokepoint consumes, so the disclosed value can never
@@ -8061,6 +8160,15 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
         "reaper_ttl_secs": settings_field(ttl_effective, ttl_source, cfg.reaper_ttl_secs, ttl_env, ttl_default),
         "guard_timeout_secs": settings_field(guard_effective, guard_source, cfg.guard_timeout_secs, guard_env_ms, guard_default),
         "default_model": settings_field_str(dm_effective.as_deref(), dm_source, dm_stored, dm_env.as_deref()),
+        // #550/ADR-0046: the harness axis. `default_harness` is a plain
+        // stored→env→floor string field; `default_harness_model` is a per-harness
+        // map, disclosed as {effective, stored} so the screen shows both what is
+        // set and what the resolver will read (env fold under claude included).
+        "default_harness": settings_field_str(dh_effective.as_deref(), dh_source, dh_stored, dh_env.as_deref()),
+        "default_harness_model": {
+            "effective": dhm_effective,
+            "stored": dhm_stored,
+        },
         "default_sandbox": {
             "effective": sbx_effective.as_str(),
             "source": sbx_source,
@@ -10439,6 +10547,31 @@ async fn node_pane(
             // own transcript. A pre-#473 row (no id) falls back to a bare
             // `--continue`, which is the very collision this issue fixes.
             let launch_session_id = find_launch_session_id(&events, &node_id, iter);
+            // #550/ADR-0046: re-pose the harness FROZEN at spawn — never the YAML's
+            // now. A pre-#550 row (no key) or an unknown harness falls back to the
+            // `claude` floor, byte-identical to the legacy resume.
+            let launch_harness = find_launch_harness(&events, &node_id, iter);
+            let descriptor = launch_harness
+                .as_deref()
+                .and_then(harness_registry::resolve)
+                .unwrap_or_else(harness_registry::claude);
+            // AC #9: a harness with no resume mechanism serves its last pane
+            // snapshot (the same branch as a `script` node), never a resume error.
+            if !descriptor.can_resume() {
+                let snapshot_path = pane_snapshot_path(&repo_root, &run_id, &node_id, iter);
+                let (content, source) = match std::fs::read_to_string(&snapshot_path) {
+                    Ok(c) => (c, "snapshot"),
+                    Err(_) => ("Session no longer available".to_string(), "unavailable"),
+                };
+                return Json(PaneResponse {
+                    content,
+                    session_name,
+                    resumed: false,
+                    stale: false,
+                    source,
+                })
+                .into_response();
+            }
             // #433 / ADR-0043 (D7): re-resolve turn-end auto-completion FRESH — it
             // may have toggled since spawn — so a resurrected session re-carries
             // the `Stop` hook. A `script` node returned early above, so this tail is
@@ -10451,6 +10584,7 @@ async fn node_pane(
                 &node_id,
                 iter,
                 state.port,
+                &descriptor,
                 launch_effort.as_deref(),
                 launch_session_id.as_deref(),
                 state.tmux_cmd_override.as_deref(),
@@ -10543,6 +10677,27 @@ fn find_launch_session_id(events: &[event_log::Event], node_id: &str, iter: i64)
         })
         .and_then(|e| e.payload.as_ref())
         .and_then(|p| p.get("session_id"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+}
+
+/// The harness a node's iteration was **launched** with (#550, ADR-0046), read
+/// back from its `NodeStarted` payload — never re-resolved from the current YAML
+/// or the tiers above (ADR-0007: a live iteration is immutable to edits). A
+/// missing key (every pre-#550 row, every infra session) yields `None`, which the
+/// resume seam treats as the `claude` floor — byte-identical to the legacy tail.
+fn find_launch_harness(events: &[event_log::Event], node_id: &str, iter: i64) -> Option<String> {
+    events
+        .iter()
+        .rev()
+        .find(|e| {
+            e.kind == event_log::EventKind::NodeStarted
+                && e.node_id.as_deref() == Some(node_id)
+                && e.iter == Some(iter)
+        })
+        .and_then(|e| e.payload.as_ref())
+        .and_then(|p| p.get("harness"))
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
@@ -10792,6 +10947,9 @@ async fn spawn_merge_resolver(
         marker: &session_name,
         workdir: worktree_dir,
     });
+    // #550/ADR-0046: infra sessions follow the Run's harness (Run tier = #551), so
+    // the merge resolver runs on the `claude` floor in this slice — byte-identical.
+    let resolver_harness = harness_registry::claude();
     if let Err(e) = tmux_session_manager::spawn(
         &session_name,
         &prompt,
@@ -10807,6 +10965,7 @@ async fn spawn_merge_resolver(
         // confused with a `merge` NODE, which is a regular NodeDef routed through
         // `spawn_node` and DOES carry an effort and a pinned id.
         tmux_session_manager::SessionTail::Agent {
+            harness: &resolver_harness,
             model: None,
             effort: None,
             session_id: None,
@@ -12010,6 +12169,9 @@ async fn force_spawn_node(state: &Arc<AppState>, run_id: &str, node_id: &str) ->
         // (wiring only one seam would leave this path at the account default —
         // a silent bug visible only on a manual force-spawn).
         default_model: stored_default_model(&state.db).await,
+        // #550/ADR-0046: same fresh-resolution discipline for the harness axis.
+        default_harness: stored_default_harness(&state.db).await,
+        default_harness_models: stored_default_harness_models(&state.db).await,
         // #433 / ADR-0043: same reasoning as `default_model` — resolve turn-end
         // auto-completion fresh so a force-spawned node arms the `Stop` hook when
         // the setting is on, instead of silently missing it on this seam alone.
@@ -12283,6 +12445,9 @@ async fn node_retry(
         docker_cmd_override: state.docker_cmd_override.as_deref(),
         // #347: retry honours the instance default like the live scheduler path.
         default_model: stored_default_model(&state.db).await,
+        // #550/ADR-0046: retry resolves the harness axis fresh, like model.
+        default_harness: stored_default_harness(&state.db).await,
+        default_harness_models: stored_default_harness_models(&state.db).await,
         // #433 / ADR-0043: retry re-arms the `Stop` hook per the current setting,
         // like the live scheduler path — not the value at the original spawn.
         inject_hook: stored_autocomplete_turn_end(&state.db).await,
@@ -17803,8 +17968,8 @@ mod tests {
             view: None,
             max_iter: None,
             over: None,
-            model: None,
-            effort: None,
+            pin_harness: None,
+            harnesses: Default::default(),
         }
     }
 
@@ -26437,8 +26602,8 @@ edges: []
             view: None,
             max_iter: None,
             over: None,
-            model: None,
-            effort: None,
+            pin_harness: None,
+            harnesses: Default::default(),
         };
         let pipeline = pipeline::PipelineDef {
             name: "spawn-unit".into(),

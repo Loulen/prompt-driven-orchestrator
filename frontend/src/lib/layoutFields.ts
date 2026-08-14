@@ -43,11 +43,13 @@ export type SerializerScope =
 
 export const SEMANTIC_FIELDS: Record<SerializerScope, readonly string[]> = {
   pipeline: ["name", "version", "prompt_required", "variables", "nodes", "edges", "loops"] satisfies (keyof PipelineDef)[],
-  // #424: `effort` is SEMANTIC, like `model` — it changes how the agent behaves,
-  // so it belongs in the pipeline diff and in the library content hash. What is
-  // load-bearing is its ABSENCE from LAYOUT_FIELDS.node: that is what keeps
-  // `stripLayout` from dropping it.
-  node: ["id", "name", "type", "interactive", "model", "effort", "max_iter", "inputs", "outputs"] satisfies (keyof NodeDef)[],
+  // #550/ADR-0046: the harness axis replaces the flat `model`/`effort` (#296/#424)
+  // the serializer used to emit. `pin_harness` and the per-harness `harnesses` map
+  // are SEMANTIC — they change what runs the node and how — so they belong in the
+  // pipeline diff and the library content hash. What is load-bearing is their
+  // ABSENCE from LAYOUT_FIELDS.node: that is what keeps `stripLayout` from dropping
+  // them.
+  node: ["id", "name", "type", "interactive", "pin_harness", "harnesses", "max_iter", "inputs", "outputs"] satisfies (keyof NodeDef)[],
   // `side` is SEMANTIC today (emitted, not stripped) — deliberate, see #355 D5:
   // the node-library star already treats port side as identity, so the pipeline
   // diff must agree or the two stars contradict each other on the same edit.

@@ -24,6 +24,8 @@ vi.mock("../api", () => ({
     reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
     guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
     default_model: { effective: null, source: "default", stored: null, env: null, default: null },
+    default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
+    default_harness_model: { effective: {}, stored: {} },
     default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off", reason: null },
     sandbox_docker: { available: true, reason: null, checked_at: "2026-07-01T10:00:00.000Z" },
     // #432: the sandbox `<select>` options are DATA now — the two virtual defaults.
@@ -794,6 +796,8 @@ describe("NewRunModal — auto-naming default (#338)", () => {
       reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
       guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
       default_model: { effective: null, source: "default", stored: null, env: null, default: null },
+      default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
+      default_harness_model: { effective: {}, stored: {} },
       default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off", reason: null },
       sandbox_docker: { available: true, reason: null, checked_at: "2026-07-01T10:00:00.000Z" },
       sandbox_profiles: [{ name: "full", virtual: true }, { name: "minimal", virtual: true }],
@@ -1538,6 +1542,8 @@ describe("NewRunModal — sandbox selector (#410)", () => {
       reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
       guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
       default_model: { effective: null, source: "default", stored: null, env: null, default: null },
+      default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
+      default_harness_model: { effective: {}, stored: {} },
       default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off", reason: null },
       // #431: required fields on InstanceSettings; this modal reads neither, they are
       // here to satisfy the typed fixture.
@@ -1823,6 +1829,8 @@ describe("NewRunModal — the launch dialog can defer to default_sandbox (#452)"
       reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
       guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
       default_model: { effective: null, source: "default", stored: null, env: null, default: null },
+      default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
+      default_harness_model: { effective: {}, stored: {} },
       default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off", reason: null },
       sandbox_docker: { available: true, reason: null, checked_at: "2026-07-01T10:00:00.000Z" },
       sandbox_profiles: [
@@ -2034,6 +2042,8 @@ describe("NewRunModal — the target repo is required at the boundary (#470)", (
       reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
       guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
       default_model: { effective: null, source: "default", stored: null, env: null, default: null },
+      default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
+      default_harness_model: { effective: {}, stored: {} },
       default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off", reason: null },
       sandbox_docker: { available: true, reason: null, checked_at: "2026-07-01T10:00:00.000Z" },
       sandbox_profiles: [

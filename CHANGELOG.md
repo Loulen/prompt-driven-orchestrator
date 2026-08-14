@@ -10,6 +10,29 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.26.0
+
+**Cassant, migration automatique.** Première tranche du **harnais agentique** (#550, PRD #549) :
+le programme qui fait tourner l'agent d'un nœud (`claude`, `opencode`) devient un axe à quatre
+tiers (`node → Run → Projet → instance → plancher claude`), résolu **une fois au spawn** et **gelé**
+dans l'événement de démarrage — la reprise re-pose ce qui a été lancé, jamais ce que le YAML dit
+maintenant (ADR-0007). Cette tranche livre `node → instance → plancher` ; les tiers Run et Projet
+suivent (#551, #552).
+
+Le tail n'est plus composé de flags en dur : un **descripteur** (ADR-0045) porte deux templates
+d'argv (lancement, reprise) et un bloc d'env, et un module **pur** (`harness_argv`) rend la chaîne
+avec une seule règle — *un token dont un trou est vide disparaît en entier*. Le tail `claude` reste
+**identique au byte** quand rien de neuf n'est posé (goldens). `claude` et `opencode` sont dans le
+**plancher embarqué** ; rien n'est écrit sur disque.
+
+**Migration du schéma de nœud** : les champs plats `model:` / `effort:` deviennent une carte par
+harnais `harnesses.<nom>.{model, effort}` (le modèle et l'effort se lisent dans l'entrée du harnais
+gagnant, pas d'axe propre — ADR-0046). Le migrateur de pipelines les replie sous `harnesses.claude`
+au démarrage ; un `pin_harness:` scalaire épingle le harnais d'un nœud. La carte est **sémantique**
+(diff + `content_hash`). Un défaut de harnais **et** un défaut de modèle **par harnais** rejoignent
+la Configuration d'instance (`stored → env → default`, ADR-0015 amendée). Un binaire de harnais
+introuvable au spawn échoue **fort** (jamais un 2xx, ADR-0037) en nommant le harnais.
+
 ## 1.25.0
 
 Rien de cassant, aucune migration (`CREATE TABLE IF NOT EXISTS`, aucun backfill). PDO gagne un

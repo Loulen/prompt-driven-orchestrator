@@ -248,6 +248,18 @@ function SettingsForm({
   // Model is `null` when unset (account default); ModelPicker speaks the same
   // `string | null` contract as the per-node inspector (#296/#324/#347).
   const [model, setModel] = useState<string | null>(() => settings.default_model.effective);
+  // #550/ADR-0046: the harness axis. `defaultHarness` is `""` when unset (the
+  // `claude` floor applies); the two per-harness default models are edited as
+  // free text, empty = that harness's account default.
+  const [defaultHarness, setDefaultHarness] = useState<string>(
+    () => settings.default_harness.effective ?? "",
+  );
+  const [claudeDefaultModel, setClaudeDefaultModel] = useState<string>(
+    () => settings.default_harness_model.stored["claude"] ?? "",
+  );
+  const [opencodeDefaultModel, setOpencodeDefaultModel] = useState<string>(
+    () => settings.default_harness_model.stored["opencode"] ?? "",
+  );
   // Default sandbox (#410/#432): `off` or a staging-profile name. `effective` is always
   // a present string (the `?? "off"` is belt-and-braces).
   const [defaultSandbox, setDefaultSandbox] = useState<string>(
@@ -322,6 +334,24 @@ function SettingsForm({
     // sent when it actually changed (avoids a needless clear/no-op PUT).
     if (model !== settings.default_model.effective) {
       patch.default_model = model ?? "";
+    }
+    // #550: the harness axis. `""` clears the default harness (same sentinel as
+    // the model). The per-harness default model map is sent whole when either
+    // known entry changed; a trimmed-empty value drops that harness's entry.
+    if (defaultHarness !== (settings.default_harness.effective ?? "")) {
+      patch.default_harness = defaultHarness;
+    }
+    const storedModels = settings.default_harness_model.stored;
+    const claudeM = claudeDefaultModel.trim();
+    const opencodeM = opencodeDefaultModel.trim();
+    if (
+      (claudeM || undefined) !== (storedModels["claude"] || undefined) ||
+      (opencodeM || undefined) !== (storedModels["opencode"] || undefined)
+    ) {
+      const map: Record<string, string> = {};
+      if (claudeM) map["claude"] = claudeM;
+      if (opencodeM) map["opencode"] = opencodeM;
+      patch.default_harness_model = map;
     }
 
     // Default sandbox mode (#410): a concrete enum variant, only sent when it changed. The
@@ -515,6 +545,71 @@ function SettingsForm({
             data-testid="setting-source-default-model"
           >
             {modelSourceNote(settings.default_model)}
+          </div>
+        </div>
+
+        {/* Default harness (#550/ADR-0046): the harness a new node runs on unless
+            it pins its own or a coarser tier sets one. Precedence at spawn:
+            node → Run → Projet → instance (this) → claude floor. */}
+        <div className="flex flex-col gap-1.5" data-testid="setting-default-harness">
+          <label className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
+            Default harness
+          </label>
+          <select
+            value={defaultHarness}
+            onChange={(e) => setDefaultHarness(e.target.value)}
+            data-testid="setting-default-harness-select"
+            className="rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg"
+            style={{ fontSize: "11px" }}
+          >
+            <option value="">Default (claude floor)</option>
+            <option value="claude">claude</option>
+            <option value="opencode">opencode</option>
+          </select>
+          <div className="text-fg-4" style={{ fontSize: "10.5px" }}>
+            Every new node runs on this harness unless it pins its own. "Default"
+            leaves it to the <span className="font-mono">claude</span> floor.
+          </div>
+          <div
+            className="text-fg-3"
+            style={{ fontSize: "10.5px" }}
+            data-testid="setting-source-default-harness"
+          >
+            {modelSourceNote(settings.default_harness)}
+          </div>
+        </div>
+
+        {/* Default model per harness (#550/ADR-0046): a slug means nothing outside
+            its harness, so the instance default model is per-harness. Free text. */}
+        <div className="flex flex-col gap-1.5" data-testid="setting-default-harness-model">
+          <label className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
+            Default model per harness
+          </label>
+          <label className="flex items-center gap-2 text-fg-3" style={{ fontSize: "11px" }}>
+            <span className="w-16 font-mono">claude</span>
+            <input
+              type="text"
+              value={claudeDefaultModel}
+              onChange={(e) => setClaudeDefaultModel(e.target.value)}
+              placeholder="account default"
+              data-testid="setting-default-model-claude"
+              className="flex-1 rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg"
+            />
+          </label>
+          <label className="flex items-center gap-2 text-fg-3" style={{ fontSize: "11px" }}>
+            <span className="w-16 font-mono">opencode</span>
+            <input
+              type="text"
+              value={opencodeDefaultModel}
+              onChange={(e) => setOpencodeDefaultModel(e.target.value)}
+              placeholder="account default"
+              data-testid="setting-default-model-opencode"
+              className="flex-1 rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg"
+            />
+          </label>
+          <div className="text-fg-4" style={{ fontSize: "10.5px" }}>
+            The model a node runs with on that harness when it sets none. Empty = the
+            harness account default.
           </div>
         </div>
 

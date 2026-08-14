@@ -978,8 +978,8 @@ mod tests {
                 view: None,
                 max_iter: None,
                 over: None,
-                model: None,
-                effort: None,
+                pin_harness: None,
+                harnesses: Default::default(),
             }],
             edges: vec![],
             loops: Vec::new(),
@@ -1121,8 +1121,8 @@ mod tests {
             view: None,
             max_iter: None,
             over: None,
-            model: None,
-            effort: None,
+            pin_harness: None,
+            harnesses: Default::default(),
         });
         pipeline.edges.push(EdgeDef {
             source: EdgeEndpoint {
@@ -1258,8 +1258,8 @@ mod tests {
             view: None,
             max_iter: None,
             over: None,
-            model: None,
-            effort: None,
+            pin_harness: None,
+            harnesses: Default::default(),
         });
         pipeline.edges.push(EdgeDef {
             source: EdgeEndpoint {
@@ -1318,8 +1318,8 @@ mod tests {
             view: None,
             max_iter: None,
             over: None,
-            model: None,
-            effort: None,
+            pin_harness: None,
+            harnesses: Default::default(),
         });
 
         let node = &pipeline.nodes[1]; // implementer
@@ -1350,8 +1350,8 @@ mod tests {
             view: None,
             max_iter: None,
             over: None,
-            model: None,
-            effort: None,
+            pin_harness: None,
+            harnesses: Default::default(),
         });
         pipeline.edges.push(EdgeDef {
             source: EdgeEndpoint {
@@ -1396,8 +1396,8 @@ mod tests {
             view: None,
             max_iter: None,
             over: None,
-            model: None,
-            effort: None,
+            pin_harness: None,
+            harnesses: Default::default(),
         });
         pipeline.edges.push(EdgeDef {
             source: EdgeEndpoint {
@@ -1546,8 +1546,8 @@ mod tests {
                     view: None,
                     max_iter: None,
                     over: None,
-                    model: None,
-                    effort: None,
+                    pin_harness: None,
+                    harnesses: Default::default(),
                 },
                 NodeDef {
                     id: "researcher".into(),
@@ -1567,8 +1567,8 @@ mod tests {
                     view: None,
                     max_iter: None,
                     over: None,
-                    model: None,
-                    effort: None,
+                    pin_harness: None,
+                    harnesses: Default::default(),
                 },
                 NodeDef {
                     id: "implementer".into(),
@@ -1607,8 +1607,8 @@ mod tests {
                     view: None,
                     max_iter: None,
                     over: None,
-                    model: None,
-                    effort: None,
+                    pin_harness: None,
+                    harnesses: Default::default(),
                 },
             ],
             edges: vec![
@@ -1716,8 +1716,8 @@ mod tests {
                 view: None,
                 max_iter: None,
                 over: None,
-                model: None,
-                effort: None,
+                pin_harness: None,
+                harnesses: Default::default(),
             }],
             edges: vec![],
             loops: Vec::new(),
@@ -1975,8 +1975,8 @@ mod tests {
                 view: None,
                 max_iter: None,
                 over: None,
-                model: None,
-                effort: None,
+                pin_harness: None,
+                harnesses: Default::default(),
             }],
             edges: vec![],
             loops: Vec::new(),
@@ -2026,8 +2026,8 @@ mod tests {
                 view: None,
                 max_iter: None,
                 over: None,
-                model: None,
-                effort: None,
+                pin_harness: None,
+                harnesses: Default::default(),
             }],
             edges: vec![],
             loops: Vec::new(),
@@ -2072,8 +2072,8 @@ mod tests {
                 view: None,
                 max_iter: None,
                 over: None,
-                model: None,
-                effort: None,
+                pin_harness: None,
+                harnesses: Default::default(),
             }],
             edges: vec![],
             loops: Vec::new(),

@@ -87,6 +87,13 @@ fn needs_migration(yaml_value: &serde_yaml::Value) -> bool {
         return true;
     }
     for node in nodes {
+        // #550/ADR-0046: a flat `model:` / `effort:` on ANY node (including a
+        // `merge` node, which spawns an agent) migrates under `harnesses.claude.*`.
+        // Checked before the structural-node `continue` below so a `merge` node's
+        // flat fields are not skipped.
+        if node.get("model").is_some() || node.get("effort").is_some() {
+            return true;
+        }
         let node_type = node.get("type").and_then(|v| v.as_str()).unwrap_or("");
         if matches!(node_type, "start" | "end" | "switch" | "loop" | "merge") {
             continue;
@@ -338,6 +345,20 @@ pub(crate) fn migrate_pipeline_yaml(
     }
 
     inject_start_end_nodes(&mut doc);
+
+    // #550/ADR-0046: fold every node's flat `model:` / `effort:` into
+    // `harnesses.claude.*`, removing the flat keys. Reuses the exact fold
+    // `pipeline::normalize_node_value` runs, so a persisted rewrite and an
+    // in-memory parse agree — and it is idempotent (an already-folded node is a
+    // no-op). Runs after `inject_start_end_nodes` so injected Start/End nodes
+    // (which carry neither) are harmlessly visited too.
+    if let Some(nodes) = doc.get_mut("nodes").and_then(|n| n.as_sequence_mut()) {
+        for node in nodes.iter_mut() {
+            if let Some(mapping) = node.as_mapping_mut() {
+                pipeline::fold_flat_model_effort_into_harnesses(mapping);
+            }
+        }
+    }
 
     let yaml_text =
         serde_yaml::to_string(&doc).map_err(|e| format!("YAML serialize error: {e}"))?;
@@ -1692,6 +1713,105 @@ edges: []
     }
 
     #[test]
+    fn migrates_flat_model_effort_into_harnesses_claude() {
+        // #550/ADR-0046: a pipeline whose only legacy trait is a flat model/effort
+        // must fold them under `harnesses.claude` and drop the flat keys — then a
+        // second run is a no-op (idempotent).
+        let yaml = r#"
+name: test
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: aBcD1234
+    name: implementer
+    type: code-mutating
+    model: opus
+    effort: low
+    outputs:
+      - name: code
+        side: right
+    view: { x: 100, y: 160 }
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges: []
+"#;
+        let result = migrate_pipeline_yaml(yaml, Path::new("/tmp/test.yaml")).unwrap();
+        assert!(
+            result.migrated,
+            "a flat model/effort must trigger migration"
+        );
+        let parsed: serde_yaml::Value = serde_yaml::from_str(&result.yaml_text).unwrap();
+        let node = parsed["nodes"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|n| n["name"].as_str() == Some("implementer"))
+            .unwrap();
+        assert!(node.get("model").is_none(), "flat model removed");
+        assert!(node.get("effort").is_none(), "flat effort removed");
+        assert_eq!(node["harnesses"]["claude"]["model"].as_str(), Some("opus"));
+        assert_eq!(node["harnesses"]["claude"]["effort"].as_str(), Some("low"));
+
+        // Idempotent: re-running the migrated YAML is a no-op.
+        let again = migrate_pipeline_yaml(&result.yaml_text, Path::new("/tmp/test.yaml")).unwrap();
+        assert!(
+            !again.migrated,
+            "an already-folded pipeline must not migrate again"
+        );
+    }
+
+    #[test]
+    fn migrates_flat_model_effort_on_a_merge_node() {
+        // #550: a `merge` node spawns an agent, so its flat model/effort migrate too
+        // — the `needs_migration` clause runs before the structural-node `continue`.
+        let yaml = r#"
+name: test
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: aBcD1234
+    name: merger
+    type: merge
+    model: sonnet
+    outputs:
+      - name: merged
+        side: right
+    view: { x: 100, y: 160 }
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges: []
+"#;
+        let result = migrate_pipeline_yaml(yaml, Path::new("/tmp/test.yaml")).unwrap();
+        assert!(result.migrated, "a merge node's flat model must migrate");
+        let parsed: serde_yaml::Value = serde_yaml::from_str(&result.yaml_text).unwrap();
+        let node = parsed["nodes"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|n| n["name"].as_str() == Some("merger"))
+            .unwrap();
+        assert!(node.get("model").is_none());
+        assert_eq!(
+            node["harnesses"]["claude"]["model"].as_str(),
+            Some("sonnet")
+        );
+    }
+
+    #[test]
     fn drops_declared_inputs_on_regular_nodes() {
         // #149: inputs are emergent (derived from edges). The migrator strips the
         // now-redundant declared `inputs` from doc-only / code-mutating nodes.
@@ -2347,8 +2467,8 @@ edges:
             view: None,
             max_iter: None,
             over: None,
-            model: None,
-            effort: None,
+            pin_harness: None,
+            harnesses: Default::default(),
         }
     }
 
@@ -2379,8 +2499,8 @@ edges:
             view: None,
             max_iter: None,
             over: None,
-            model: None,
-            effort: None,
+            pin_harness: None,
+            harnesses: Default::default(),
         }
     }
 
@@ -2411,8 +2531,8 @@ edges:
             view: None,
             max_iter: None,
             over: None,
-            model: None,
-            effort: None,
+            pin_harness: None,
+            harnesses: Default::default(),
         }
     }
 

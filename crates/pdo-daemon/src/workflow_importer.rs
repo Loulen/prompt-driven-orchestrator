@@ -517,6 +517,17 @@ impl Importer {
         };
         out_port.frontmatter = frontmatter;
 
+        // #550: the imported `model` / `effort` land under `harnesses.claude`
+        // (workflow import stays claude-only, ADR-0016). Only materialise an entry
+        // when at least one is present, so a plain node keeps an empty map.
+        let mut harnesses = std::collections::BTreeMap::new();
+        if model.is_some() || effort.is_some() {
+            harnesses.insert(
+                crate::harness_registry::CLAUDE.to_string(),
+                crate::harness_resolver::HarnessEntry { model, effort },
+            );
+        }
+
         let node = NodeDef {
             id: id.clone(),
             name: display_name,
@@ -530,8 +541,8 @@ impl Importer {
             }),
             max_iter: None,
             over: None,
-            model,
-            effort,
+            pin_harness: None,
+            harnesses,
         };
         self.nodes.push(node);
         self.prompts.insert(id.clone(), prompt_body);
@@ -926,8 +937,8 @@ fn start_node() -> NodeDef {
         view: Some(ViewPosition { x: 320.0, y: 0.0 }),
         max_iter: None,
         over: None,
-        model: None,
-        effort: None,
+        pin_harness: None,
+        harnesses: Default::default(),
     }
 }
 
@@ -945,8 +956,8 @@ fn end_node(agent_count: usize) -> NodeDef {
         }),
         max_iter: None,
         over: None,
-        model: None,
-        effort: None,
+        pin_harness: None,
+        harnesses: Default::default(),
     }
 }
 
@@ -1842,10 +1853,12 @@ mod tests {
         let src = r#"agent(`work`, { label: 'w', model: 'opus', effort: 'low' }); agent(`plain`, { label: 'p' })"#;
         let (result, parsed) = import_and_parse(src, "t");
         let node = |name: &str| parsed.nodes.iter().find(|n| n.name == name).unwrap();
-        assert_eq!(node("w").effort.as_deref(), Some("low"));
-        assert_eq!(node("w").model.as_deref(), Some("opus"));
-        // An agent with no effort stays unset — no key, no flag.
-        assert_eq!(node("p").effort, None);
+        // #550: imported model/effort land under `harnesses.claude` (claude-only import).
+        let claude = |name: &str| node(name).harnesses.get("claude").cloned();
+        assert_eq!(claude("w").and_then(|e| e.effort).as_deref(), Some("low"));
+        assert_eq!(claude("w").and_then(|e| e.model).as_deref(), Some("opus"));
+        // An agent with no effort/model stays unset — no claude entry at all.
+        assert_eq!(claude("p"), None);
         assert!(
             result
                 .warnings
@@ -1855,15 +1868,13 @@ mod tests {
             result.warnings
         );
         // Structural nodes never carry one.
-        assert_eq!(
-            parsed
-                .nodes
-                .iter()
-                .find(|n| n.node_type == NodeType::Start)
-                .unwrap()
-                .effort,
-            None
-        );
+        assert!(parsed
+            .nodes
+            .iter()
+            .find(|n| n.node_type == NodeType::Start)
+            .unwrap()
+            .harnesses
+            .is_empty());
     }
 
     #[test]
@@ -1873,10 +1884,14 @@ mod tests {
         // dropping it in silence.
         let src = r#"const lvl = 'low'; agent(`work`, { label: 'w', effort: lvl })"#;
         let (result, parsed) = import_and_parse(src, "t");
-        assert_eq!(
-            parsed.nodes.iter().find(|n| n.name == "w").unwrap().effort,
-            None
-        );
+        // A computed (non-literal) effort is lost, so the node carries no claude entry.
+        assert!(parsed
+            .nodes
+            .iter()
+            .find(|n| n.name == "w")
+            .unwrap()
+            .harnesses
+            .is_empty());
         assert!(
             result.warnings.iter().any(|w| w.message.contains("effort")),
             "a computed effort must raise a warning: {:?}",

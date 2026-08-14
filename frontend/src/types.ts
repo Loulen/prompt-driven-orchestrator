@@ -248,6 +248,16 @@ export interface InstanceSettings {
   reaper_ttl_secs: SettingField;
   guard_timeout_secs: SettingField;
   default_model: StringSettingField;
+  /** #550/ADR-0046: instance-wide default harness (`stored → env → floor claude`).
+   *  `effective: null` ⇒ the `claude` floor applies at resolve. */
+  default_harness: StringSettingField;
+  /** #550/ADR-0046: instance-wide default model **per harness**. `effective` is
+   *  the resolved map (the stored map plus the legacy `PDO_DEFAULT_MODEL` folded
+   *  under `claude`); `stored` is the raw stored map. */
+  default_harness_model: {
+    effective: Record<string, string>;
+    stored: Record<string, string>;
+  };
   /**
    * Instance-wide default sandbox (#410/#432): `"off"` (host, default) or the name of a
    * **staging profile**. No longer a closed enum — its value space is the user's profile
@@ -366,6 +376,11 @@ export interface UpdateSettingsRequest {
   reaper_ttl_secs?: number;
   guard_timeout_secs?: number;
   default_model?: string;
+  /** #550: instance default harness; `""` clears it (same sentinel as
+   *  `default_model`). */
+  default_harness?: string;
+  /** #550: per-harness default model map; replaces the stored map wholesale. */
+  default_harness_model?: Record<string, string>;
   /** Default sandbox (#410/#432): `"off"` or a staging-profile name, or `""` to clear
    *  back to the built-in default (`off`). Same `""`-sentinel discipline as
    *  `default_model`. The daemon 400s a name that does not resolve.
@@ -816,7 +831,25 @@ export interface NodeDef {
   /** Optional per-node reasoning-effort override (#424): free-text pass-through
    *  to `claude --effort <level>`. Absent/null ⇒ no flag (account default).
    *  Orthogonal to `model`, and semantic — it enters the pipeline diff and the
-   *  node-library content hash. */
+   *  node-library content hash.
+   *
+   *  Since #550 this is the **resolved harness's** effort: folded out of
+   *  `harnesses[resolved].effort` on load, folded back on save. */
+  effort?: string | null;
+  /** #550/ADR-0046: the pinned harness (`claude`, `opencode`), or null/absent to
+   *  follow the tier above (instance default, else the `claude` floor). A pin both
+   *  selects the harness and shields it from every coarser tier. */
+  pin_harness?: string | null;
+  /** #550/ADR-0046: per-harness `{model, effort}` settings. `model`/`effort` above
+   *  are the RESOLVED harness's view (folded from this map on load, back into it on
+   *  save); the map preserves entries for the non-resolved harnesses. */
+  harnesses?: Record<string, HarnessSettings>;
+}
+
+/** #550/ADR-0046: a node's `{model, effort}` for one harness. Free-text
+ *  pass-through — a slug means nothing outside the harness that accepts it. */
+export interface HarnessSettings {
+  model?: string | null;
   effort?: string | null;
 }
 

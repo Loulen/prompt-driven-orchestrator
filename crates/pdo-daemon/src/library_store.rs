@@ -200,10 +200,18 @@ pub(crate) fn entry_from_node(node: &pipeline::NodeDef, prompt: &str) -> Library
         outputs: node.outputs.clone(),
         interactive: node.interactive,
         // #345/#296: carry the per-node model so a starred node stays synced
-        // instead of flipping to `diverged` the moment it has an override.
-        model: node.model.clone(),
+        // instead of flipping to `diverged` the moment it has an override. Since
+        // #550 the model/effort live under `harnesses.claude`; the node library
+        // stays claude-aware (its pre-#550 contract), so project that entry.
+        model: node
+            .harnesses
+            .get(crate::harness_registry::CLAUDE)
+            .and_then(|e| e.model.clone()),
         // #424: same reasoning for the effort level.
-        effort: node.effort.clone(),
+        effort: node
+            .harnesses
+            .get(crate::harness_registry::CLAUDE)
+            .and_then(|e| e.effort.clone()),
         max_iter: None,
         branches: None,
         prompt: prompt.to_string(),
@@ -1011,6 +1019,18 @@ mod tests {
         });
     }
 
+    /// #550: set a node's `harnesses.claude` entry — the source `entry_from_node`
+    /// now projects into a `LibraryEntry`'s `model`/`effort`.
+    fn set_claude_entry(node: &mut pipeline::NodeDef, model: Option<&str>, effort: Option<&str>) {
+        node.harnesses.insert(
+            crate::harness_registry::CLAUDE.to_string(),
+            crate::harness_resolver::HarnessEntry {
+                model: model.map(str::to_string),
+                effort: effort.map(str::to_string),
+            },
+        );
+    }
+
     fn make_node(name: &str) -> pipeline::NodeDef {
         pipeline::NodeDef {
             id: "test-id".to_string(),
@@ -1038,8 +1058,8 @@ mod tests {
             view: None,
             max_iter: None,
             over: None,
-            model: None,
-            effort: None,
+            pin_harness: None,
+            harnesses: Default::default(),
         }
     }
 
@@ -1242,7 +1262,7 @@ mod tests {
         // #345/#296: a node with a per-node model must produce a model-aware
         // library entry (previously the model was silently dropped).
         let mut node = make_node("Modelled");
-        node.model = Some("sonnet".to_string());
+        set_claude_entry(&mut node, Some("sonnet"), None);
         let entry = entry_from_node(&node, "prompt");
         assert_eq!(entry.model, Some("sonnet".to_string()));
     }
@@ -1280,8 +1300,7 @@ mod tests {
         // #424: a node with a per-node effort must produce an effort-aware library
         // entry, and the two axes must not interfere.
         let mut node = make_node("Effortful");
-        node.model = Some("sonnet".to_string());
-        node.effort = Some("xhigh".to_string());
+        set_claude_entry(&mut node, Some("sonnet"), Some("xhigh"));
         let entry = entry_from_node(&node, "prompt");
         assert_eq!(entry.effort, Some("xhigh".to_string()));
         assert_eq!(entry.model, Some("sonnet".to_string()));
@@ -1294,14 +1313,14 @@ mod tests {
         // bug #345, one field later.
         with_temp_home(|| {
             let mut node = make_node("Effortful");
-            node.effort = Some("low".to_string());
+            set_claude_entry(&mut node, None, Some("low"));
             save(&entry_from_node(&node, "prompt")).unwrap();
             assert_eq!(sync_state(&node, "prompt"), SyncState::Synced);
 
-            node.effort = Some("high".to_string());
+            set_claude_entry(&mut node, None, Some("high"));
             assert_eq!(sync_state(&node, "prompt"), SyncState::Diverged);
 
-            node.effort = None;
+            set_claude_entry(&mut node, None, None);
             assert_eq!(sync_state(&node, "prompt"), SyncState::Diverged);
         });
     }

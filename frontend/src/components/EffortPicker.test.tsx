@@ -119,4 +119,34 @@ describe("EffortPicker (#424)", () => {
     expect(screen.getByTestId("merge-effort-option-low")).toBeInTheDocument();
     expect(screen.queryByTestId("node-effort-option-low")).toBeNull();
   });
+
+  // #550/AC #13: greyed when the resolved harness has no launch-time effort axis.
+  it("is greyed when disabled — every option carries the `disabled` attribute", () => {
+    render(<EffortPicker value={null} onChange={() => {}} testid="node-effort" disabled />);
+    // Assert the DISABLED attribute, never `.value`: a `.value` assertion on a
+    // control cannot fail (the known trap this AC calls out).
+    for (const radio of screen.getAllByRole("radio")) {
+      expect(radio).toBeDisabled();
+    }
+    expect(screen.getByRole("radiogroup", { name: "Effort" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  });
+
+  it("does not fire onChange while disabled", async () => {
+    const onChange = vi.fn();
+    render(<EffortPicker value={null} onChange={onChange} testid="node-effort" disabled />);
+    await userEvent.click(screen.getByTestId("node-effort-option-high"));
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("is enabled and fires onChange by default (no `disabled` prop)", async () => {
+    const onChange = vi.fn();
+    render(<EffortPicker value={null} onChange={onChange} testid="node-effort" />);
+    const high = screen.getByTestId("node-effort-option-high");
+    expect(high).not.toBeDisabled();
+    await userEvent.click(high);
+    expect(onChange).toHaveBeenCalledWith("high");
+  });
 });

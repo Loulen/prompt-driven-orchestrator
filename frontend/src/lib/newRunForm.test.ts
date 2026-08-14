@@ -35,6 +35,8 @@ function settings(over: Partial<InstanceSettings> = {}): InstanceSettings {
     reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
     guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
     default_model: { effective: null, source: "default", stored: null, env: null, default: null },
+    default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
+    default_harness_model: { effective: {}, stored: {} },
     default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off", reason: null },
     sandbox_docker: { available: true, reason: null, checked_at: "2026-07-01T10:00:00.000Z" },
     sandbox_profiles: [

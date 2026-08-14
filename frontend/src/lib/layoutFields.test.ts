@@ -67,6 +67,10 @@ const NODE: Complete<NodeDef> = {
   // `serializePipeline.test.ts` (the key lands in the YAML object) and in
   // `editStore.test.ts` (edit → spread → serializer → save payload).
   effort: "low",
+  // #550/ADR-0046: `Complete<NodeDef>` forces these two; same caveat as above —
+  // naming them proves nothing about emission (the serializer tests do that).
+  pin_harness: "claude",
+  harnesses: { claude: { model: "opus", effort: "low" } },
 };
 const EDGE: Complete<EdgeDef> = {
   source: { node: "n1", port: "out" },

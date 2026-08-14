@@ -86,6 +86,9 @@ fn build_tmux_script_uses_exec_bash_and_invokes_claude() {
     // `claude --dangerously-skip-permissions` and the `exec bash -c` shape.
     // `None` override → production claude tail.
     let prompt_path = std::path::Path::new("/tmp/pdo-test/solo-iter-1.md");
+    // #550: the `claude` descriptor — its launch template reproduces the legacy
+    // tail byte for byte once the holes are empty (the state this test asserts).
+    let claude = pdo_daemon::harness_registry::claude();
     let script = build_tmux_script(
         "run-abc",
         "solo",
@@ -94,6 +97,7 @@ fn build_tmux_script_uses_exec_bash_and_invokes_claude() {
         prompt_path,
         None,
         SessionTail::Agent {
+            harness: &claude,
             model: None,
             effort: None,
             session_id: None,

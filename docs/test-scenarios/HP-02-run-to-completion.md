@@ -91,10 +91,15 @@ Features validated while crossing the run screens (grafted from retired per-issu
     the SHA-256 of the seeded Dockerfile's bytes.
 14. **Harness A/B.** Seed a **two-node** pipeline: two parallel nodes, each asked for a single line of
     output. In the **node inspector**, pin the first node's harness to **`claude`** and the second's to
-    **`opencode`**; each node's inspector reads back which harness it **resolves** to. Launch it once,
-    sandbox **`off`** (the two axes are deliberately not crossed — see the notes).
-15. Both nodes start, both reach **completed**, and the Run reaches **Completed** with the End
-    `result` port **received**: one Run, two harnesses, one outcome.
+    **`opencode`**; each node's inspector reads back which harness it **resolves** to. On the
+    `opencode` node, also set a **model** through the picker's `Custom…` escape hatch — a
+    `provider/model` slug that supports tool use (e.g. `openrouter/anthropic/claude-haiku-4.5`).
+    **This is not optional**, and the notes say why.
+15. Open **New Run** on it. Set the Run's **Harness** field to **`claude`** and sandbox to **`off`**,
+    then Launch. Setting the Run tier to `claude` is what turns the second node's pin into a real
+    proof: it must still run `opencode` *against* the tier above it. Both nodes start, both reach
+    **completed**, and the Run reaches **Completed** with the End `result` port **received**: one Run,
+    two harnesses, one outcome.
 
 ## Checks
 
@@ -135,7 +140,11 @@ Features validated while crossing the run screens (grafted from retired per-issu
 #### Harness A/B (steps 14-15)
 
 - The node inspector offers **Default / claude / opencode** and reads back the **resolved** harness,
-  saying whether that is a **pin** or the **floor**.
+  saying whether that is a **pin** or the **floor** ("Resolved: opencode (pinned)" vs "Resolved:
+  claude (floor — no pin)").
+- Saving writes the pin as the node's own `pin_harness`, and the custom model under the **resolved
+  harness's key** (`harnesses: { opencode: { model: … } }`), not as a flat `model:` — the per-harness
+  map of #550, since a model means nothing outside a harness.
 - The **effort picker is greyed on the `opencode` node** and live on the `claude` one. That is the
   descriptor's missing `{effort}` hole surfacing on screen (ADR-0045): an absence *declared*, not a
   defect, and the cheapest visible proof that the resolved harness reached the UI at all.
@@ -171,6 +180,12 @@ Harness A/B, read-only probes:
   each agrees with the harness frozen in that node's start event** (#550). The event is the contract —
   the harness is resolved once, at spawn, and never re-read from the YAML — so a pane that contradicts
   it is the finding, and this is the only place the disagreement is visible.
+- Each pane's **real argv** matches its descriptor's template: the `claude` one carries
+  `--dangerously-skip-permissions` and a `--session-id`, the `opencode` one carries `--auto --prompt`
+  and **neither** `--session-id` (it cannot pin an identity) **nor** `--settings` (its template has no
+  such hole). Those two absences are the descriptor's shape showing through to the process table.
+- Both output artifacts carry the expected line. A `completed` status is not evidence on its own
+  (#490): read the artifact.
 - **Do not assert the `opencode` node's model.** Measured on 1.18.18: an unreachable model id falls
   back **silently** to another provider and the turn still goes green, so a model assertion there is a
   false pass either way. Same for any transcript-based probe: `opencode` cannot pin a session identity,
@@ -241,3 +256,20 @@ Harness A/B, read-only probes:
   dead** — there is no session death to notice and nothing times it out. Give it a finite wait and
   raise a finding on the harness's obedience; do not sit on it, and do not read the silence as the
   missing auto-completion above.
+- **The `opencode` node MUST carry a model, and this is the trap that sinks a first run.** PDO passes
+  no `--model` when a node declares none, and `opencode` then resolves its **own** default from the
+  operator's config — whatever they last selected. Measured here: it landed on an *image* model and the
+  turn died on `No endpoints found that support tool use`, so the node could neither write its artifact
+  nor complete, and simply sat there resident. Nothing in PDO is at fault and nothing warns: a model id
+  is meaningless outside its harness, so `opencode` needs an explicit `provider/model`.
+- **The model picker still speaks `claude` on an `opencode` node.** It offers `sonnet` / `opus` /
+  `haiku` / `opusplan` / `fable` — Anthropic aliases that mean nothing to `opencode` — so `Custom…` is
+  the only usable path. The effort picker greys correctly off the descriptor; the model *list* does not
+  follow the resolved harness. Do not pick `haiku` here and assume it took.
+- **`opencode`'s residency is conditional, and its exit reads as a session death.** It is resident
+  after a *completed* turn (that is its ADR-0045 eligibility), but after the hard provider error above
+  it exited on its own a couple of minutes later, which surfaced as `session_died` and reconciled the
+  Run to `failed` with `run_stalled: … blocked behind: <node>`. Two things it is **not**: the PTY
+  bridge (it kills its own `tmux attach` client on socket close, never the session — verified by
+  opening and closing a bridge on a live session, which survived), and memory pressure (the detector's
+  own diagnostics carry `mem_available_kb` / `swap_free_kb`, so read them before blaming the machine).

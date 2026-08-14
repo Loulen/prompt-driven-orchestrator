@@ -57,6 +57,15 @@ pub(crate) struct StartNodeParams<'a> {
     /// Instance per-harness default model map, resolved fresh by the caller (#550).
     /// Feeds the fallback tier of the model resolution for the winning harness.
     pub default_harness_models: std::collections::BTreeMap<String, String>,
+    /// The harness carried by the **Projet** of this Run's primary repo, resolved
+    /// by the caller (#552, ADR-0046). Same DB-less contract as
+    /// [`Self::default_harness`]: `start_node` is sync, so the async caller looks
+    /// up `project_store::harness_for_path` on the Run's effective repo and passes
+    /// the result in. Feeds the `project` tier of [`harness_resolver`], between the
+    /// Run and the instance default. `None` ⇒ the primary is in no Projet (or its
+    /// Projet carries no harness), so the tier is transparent. Resolved from the
+    /// **primary** repo only, so a secondary (ADR-0042) never sways it.
+    pub project_harness: Option<String>,
     /// Turn-end auto-completion, already resolved `stored → env → default` by the
     /// caller (#433, ADR-0043). Same DB-less contract as [`Self::default_model`]:
     /// the async caller reads [`crate::stored_autocomplete_turn_end`] and passes
@@ -393,7 +402,10 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
             // from the projected state the caller already holds. A pinned node ignores
             // it; a free node follows it (ADR-0046). Mirrors `node_spawn`.
             run: params.run_state.harness.as_deref(),
-            project: None, // #552
+            // #552: the Projet of the Run's primary repo, resolved DB-lessly by
+            // the caller (an empty string never wins a tier — the `Some("")` trap
+            // of #347).
+            project: params.project_harness.as_deref().filter(|s| !s.is_empty()),
             instance_default: params.default_harness.as_deref(),
         };
         Some(harness_resolver::resolve(
@@ -1013,6 +1025,7 @@ mod tests {
             default_model: None,
             default_harness: None,
             default_harness_models: Default::default(),
+            project_harness: None,
             inject_hook: false,
         };
 
@@ -1055,6 +1068,7 @@ mod tests {
             default_model: None,
             default_harness: None,
             default_harness_models: Default::default(),
+            project_harness: None,
             inject_hook: false,
         };
 
@@ -1103,6 +1117,7 @@ mod tests {
             default_model: None,
             default_harness: None,
             default_harness_models: Default::default(),
+            project_harness: None,
             inject_hook: true,
         };
         let result = start_node(&params);
@@ -1156,6 +1171,7 @@ mod tests {
             default_model: None,
             default_harness: None,
             default_harness_models: Default::default(),
+            project_harness: None,
             inject_hook: true,
         };
         let result = start_node(&params);
@@ -1221,6 +1237,7 @@ mod tests {
             default_model: None,
             default_harness: None,
             default_harness_models: Default::default(),
+            project_harness: None,
             inject_hook: false,
         };
 
@@ -1282,6 +1299,7 @@ mod tests {
             default_model: None,
             default_harness: None,
             default_harness_models: Default::default(),
+            project_harness: None,
             inject_hook: false,
         };
 
@@ -1329,6 +1347,7 @@ mod tests {
             default_model: None,
             default_harness: None,
             default_harness_models: Default::default(),
+            project_harness: None,
             inject_hook: false,
         };
 
@@ -1400,6 +1419,7 @@ mod tests {
             default_model: None,
             default_harness: None,
             default_harness_models: Default::default(),
+            project_harness: None,
             inject_hook: false,
         };
 
@@ -1494,6 +1514,7 @@ mod tests {
             default_model: None,
             default_harness: None,
             default_harness_models: Default::default(),
+            project_harness: None,
             inject_hook: false,
         };
 
@@ -1561,6 +1582,7 @@ mod tests {
             default_model: None,
             default_harness: None,
             default_harness_models: Default::default(),
+            project_harness: None,
             inject_hook: false,
         };
 
@@ -1628,6 +1650,7 @@ mod tests {
             default_model: None,
             default_harness: None,
             default_harness_models: Default::default(),
+            project_harness: None,
             inject_hook: false,
         };
 
@@ -1891,6 +1914,7 @@ mod tests {
             default_model: None,
             default_harness: None,
             default_harness_models: Default::default(),
+            project_harness: None,
             inject_hook: false,
         };
 

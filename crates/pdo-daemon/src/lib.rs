@@ -40,6 +40,7 @@ mod pipeline_migrator;
 mod pipeline_semantics;
 mod pipeline_watcher;
 mod price_table;
+mod project_store;
 mod prompt_augmenter;
 mod pty_bridge;
 mod reap_policy;
@@ -567,6 +568,34 @@ struct TriggerListEntry {
     #[serde(flatten)]
     trigger: trigger_store::Trigger,
     effective_repo: String,
+}
+
+/// Body of `POST /projects` — materialise a Projet from a bare name (#552). The
+/// only path that creates a `projects` row from a name; membership and the
+/// harness are attached afterwards, so a Projet begins empty and harness-less.
+#[derive(Deserialize)]
+struct CreateProjectRequest {
+    name: String,
+}
+
+/// Body of `PATCH /projects/{id}` — rename the Projet and/or (re)set the harness
+/// it carries (#552). `harness` is a double-`Option` (mirror of
+/// `UpdateTrigger.sandbox`): **absent** leaves it untouched, `null` clears it,
+/// a string sets it. An empty string clears it too (the `Some("")` trap of #347).
+#[derive(Deserialize)]
+struct PatchProjectRequest {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    harness: Option<Option<String>>,
+}
+
+/// Body of `POST` / `DELETE /projects/{id}/members` — one member path, compared
+/// **verbatim** (ADR-0033). The attach enforces at-most-one membership before any
+/// write; a path owned by another Projet is a 409 naming the owner (#552).
+#[derive(Deserialize)]
+struct ProjectMemberRequest {
+    path: String,
 }
 
 #[derive(Serialize)]
@@ -4055,6 +4084,21 @@ fn build_router(state: Arc<AppState>) -> Router {
         // dev-mode GET hits the daemon instead of the SPA fallback (same trap as
         // `/nodes` #345, `/stats` #377, `/fs` #431).
         .route("/audit", get(get_audit))
+        // Projets (#552, ADR-0046) — the group-header pencil's CRUD and the middle
+        // tier of the harness axis. NEW top-level `/projects` prefix → added to the
+        // vite dev proxy whitelist (frontend/vite.config.ts) so a dev-mode GET hits
+        // the daemon, not the SPA fallback (same trap as `/audit` #507). The
+        // members sub-resource is a static segment under the param — axum 0.8
+        // allows it (cf. `/triggers/{id}/fires`).
+        .route("/projects", get(list_projects).post(create_project))
+        .route(
+            "/projects/{project_id}",
+            get(get_project).patch(patch_project).delete(delete_project),
+        )
+        .route(
+            "/projects/{project_id}/members",
+            post(add_project_member).delete(remove_project_member),
+        )
         .route(
             "/triggers/{trigger_id}",
             get(get_trigger).patch(patch_trigger).delete(delete_trigger),
@@ -4065,6 +4109,245 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/triggers/{trigger_id}/fire", post(fire_trigger_now))
         .fallback(static_handler)
         .with_state(state)
+}
+
+// --- Projets (#552, ADR-0046) ---
+//
+// A Projet is the middle tier of the harness axis and a named grouping of member
+// repo paths. Nothing is seeded: a row exists only once a human names a group or
+// attaches a setting (ADR-0046). The lists group by Projet client-side; these
+// endpoints are the CRUD behind the group-header pencil. `/projects` is a NEW
+// top-level prefix → it has its own entry in the vite dev proxy whitelist
+// (`frontend/vite.config.ts`), same trap as `/nodes` (#345) / `/stats` (#377) /
+// `/audit` (#507).
+
+fn project_list_error() -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({ "error": "project store unavailable" })),
+    )
+        .into_response()
+}
+
+async fn list_projects(State(state): State<Arc<AppState>>) -> Response {
+    match project_store::list(&state.db).await {
+        Ok(projects) => Json(projects).into_response(),
+        Err(e) => {
+            error!("failed to list projects: {e}");
+            project_list_error()
+        }
+    }
+}
+
+async fn get_project(
+    State(state): State<Arc<AppState>>,
+    AxumPath(project_id): AxumPath<String>,
+) -> Response {
+    match project_store::get(&state.db, &project_id).await {
+        Ok(Some(p)) => Json(p).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "no such project").into_response(),
+        Err(e) => {
+            error!("failed to load project {project_id}: {e}");
+            project_list_error()
+        }
+    }
+}
+
+async fn create_project(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateProjectRequest>,
+) -> Response {
+    let name = req.name.trim();
+    if name.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "project name is required" })),
+        )
+            .into_response();
+    }
+    match project_store::create(&state.db, name).await {
+        Ok(project) => {
+            let _ = state.pipeline_tx.send(serde_json::json!({
+                "type": "project_changed",
+                "project_id": project.id,
+            }));
+            (StatusCode::CREATED, Json(project)).into_response()
+        }
+        Err(e) => {
+            error!("failed to create project: {e}");
+            project_list_error()
+        }
+    }
+}
+
+async fn patch_project(
+    State(state): State<Arc<AppState>>,
+    AxumPath(project_id): AxumPath<String>,
+    Json(req): Json<PatchProjectRequest>,
+) -> Response {
+    // The Projet must exist first — a PATCH never materialises one (only the
+    // pencil's create does, via POST /projects).
+    match project_store::get(&state.db, &project_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return (StatusCode::NOT_FOUND, "no such project").into_response(),
+        Err(e) => {
+            error!("failed to load project {project_id}: {e}");
+            return project_list_error();
+        }
+    }
+    if let Some(name) = req.name.as_deref() {
+        let name = name.trim();
+        if name.is_empty() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "project name cannot be blank" })),
+            )
+                .into_response();
+        }
+        if let Err(e) = project_store::rename(&state.db, &project_id, name).await {
+            error!("failed to rename project {project_id}: {e}");
+            return project_list_error();
+        }
+    }
+    // Double-`Option`: `Some(_)` means the field was present. `Some(None)` and
+    // `Some(Some(""))` both clear; `Some(Some(h))` sets. `set_harness` normalises
+    // the empty string to NULL itself (#347).
+    if let Some(harness) = req.harness {
+        let harness = harness.as_deref();
+        if let Err(e) = project_store::set_harness(&state.db, &project_id, harness).await {
+            error!("failed to set harness on project {project_id}: {e}");
+            return project_list_error();
+        }
+    }
+    match project_store::get(&state.db, &project_id).await {
+        Ok(Some(p)) => {
+            let _ = state.pipeline_tx.send(serde_json::json!({
+                "type": "project_changed",
+                "project_id": project_id,
+            }));
+            Json(p).into_response()
+        }
+        Ok(None) => (StatusCode::NOT_FOUND, "no such project").into_response(),
+        Err(e) => {
+            error!("failed to reload project {project_id}: {e}");
+            project_list_error()
+        }
+    }
+}
+
+async fn delete_project(
+    State(state): State<Arc<AppState>>,
+    AxumPath(project_id): AxumPath<String>,
+) -> Response {
+    match project_store::delete(&state.db, &project_id).await {
+        Ok(true) => {
+            let _ = state.pipeline_tx.send(serde_json::json!({
+                "type": "project_changed",
+                "project_id": project_id,
+            }));
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(false) => (StatusCode::NOT_FOUND, "no such project").into_response(),
+        Err(e) => {
+            error!("failed to delete project {project_id}: {e}");
+            project_list_error()
+        }
+    }
+}
+
+async fn add_project_member(
+    State(state): State<Arc<AppState>>,
+    AxumPath(project_id): AxumPath<String>,
+    Json(req): Json<ProjectMemberRequest>,
+) -> Response {
+    let path = req.path.trim();
+    if path.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "member path is required" })),
+        )
+            .into_response();
+    }
+    // The target Projet must exist (materialised by the pencil's create).
+    match project_store::get(&state.db, &project_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return (StatusCode::NOT_FOUND, "no such project").into_response(),
+        Err(e) => {
+            error!("failed to load project {project_id}: {e}");
+            return project_list_error();
+        }
+    }
+    match project_store::add_member(&state.db, &project_id, path).await {
+        Ok(project_store::AddMember::Added) | Ok(project_store::AddMember::AlreadyMember) => {
+            let _ = state.pipeline_tx.send(serde_json::json!({
+                "type": "project_changed",
+                "project_id": project_id,
+            }));
+            match project_store::get(&state.db, &project_id).await {
+                Ok(Some(p)) => Json(p).into_response(),
+                _ => StatusCode::NO_CONTENT.into_response(),
+            }
+        }
+        // AC: a path already owned by another Projet is refused BEFORE any effect,
+        // and the refusal NAMES the owner (409, so the pencil can say which one).
+        Ok(project_store::AddMember::Refused {
+            owner_id,
+            owner_name,
+        }) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": format!("path already belongs to project '{owner_name}'"),
+                "owner_id": owner_id,
+                "owner_name": owner_name,
+            })),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("failed to add member to project {project_id}: {e}");
+            project_list_error()
+        }
+    }
+}
+
+async fn remove_project_member(
+    State(state): State<Arc<AppState>>,
+    AxumPath(project_id): AxumPath<String>,
+    Json(req): Json<ProjectMemberRequest>,
+) -> Response {
+    let path = req.path.trim();
+    // Scope the detach to the named Projet: a path owned by a *different* Projet
+    // is left alone (idempotent no-op), so a stale client can't strip another
+    // Projet's member.
+    match project_store::owner_of(&state.db, path).await {
+        Ok(Some(owner)) if owner.id == project_id => {}
+        Ok(_) => {
+            // Not a member of this Projet (or of any) — nothing to do.
+            return match project_store::get(&state.db, &project_id).await {
+                Ok(Some(p)) => Json(p).into_response(),
+                Ok(None) => (StatusCode::NOT_FOUND, "no such project").into_response(),
+                Err(e) => {
+                    error!("failed to load project {project_id}: {e}");
+                    project_list_error()
+                }
+            };
+        }
+        Err(e) => {
+            error!("failed to resolve owner of {path}: {e}");
+            return project_list_error();
+        }
+    }
+    if let Err(e) = project_store::remove_member(&state.db, path).await {
+        error!("failed to remove member from project {project_id}: {e}");
+        return project_list_error();
+    }
+    let _ = state.pipeline_tx.send(serde_json::json!({
+        "type": "project_changed",
+        "project_id": project_id,
+    }));
+    match project_store::get(&state.db, &project_id).await {
+        Ok(Some(p)) => Json(p).into_response(),
+        _ => StatusCode::NO_CONTENT.into_response(),
+    }
 }
 
 async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
@@ -4126,6 +4409,13 @@ async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
     audit_log::init(db)
         .await
         .context("failed to create audit_log table")?;
+
+    // #552 / ADR-0046: Projets — the middle tier of the harness axis. Brand-new
+    // tables, materialised on demand (nothing seeded), same `CREATE TABLE IF NOT
+    // EXISTS` idiom as `sandbox_profiles` / `audit_log`.
+    project_store::init(db)
+        .await
+        .context("failed to create project tables")?;
 
     Ok(())
 }
@@ -12345,6 +12635,14 @@ async fn force_spawn_node(state: &Arc<AppState>, run_id: &str, node_id: &str) ->
         // #550/ADR-0046: same fresh-resolution discipline for the harness axis.
         default_harness: stored_default_harness(&state.db).await,
         default_harness_models: stored_default_harness_models(&state.db).await,
+        // #552/ADR-0046: the Projet tier — the harness carried by the Projet that
+        // owns this Run's primary (effective) repo. Resolved fresh here so a manual
+        // force-spawn honours a Projet setting attached mid-Run, like the model /
+        // harness defaults above. A DB error degrades to a transparent tier.
+        project_harness: project_store::harness_for_path(&state.db, &repo_root.to_string_lossy())
+            .await
+            .ok()
+            .flatten(),
         // #433 / ADR-0043: same reasoning as `default_model` — resolve turn-end
         // auto-completion fresh so a force-spawned node arms the `Stop` hook when
         // the setting is on, instead of silently missing it on this seam alone.
@@ -12621,6 +12919,12 @@ async fn node_retry(
         // #550/ADR-0046: retry resolves the harness axis fresh, like model.
         default_harness: stored_default_harness(&state.db).await,
         default_harness_models: stored_default_harness_models(&state.db).await,
+        // #552/ADR-0046: retry resolves the Projet tier fresh too, from the Run's
+        // primary (effective) repo — a secondary never sways it (ADR-0042).
+        project_harness: project_store::harness_for_path(&state.db, &repo_root.to_string_lossy())
+            .await
+            .ok()
+            .flatten(),
         // #433 / ADR-0043: retry re-arms the `Stop` hook per the current setting,
         // like the live scheduler path — not the value at the original spawn.
         inject_hook: stored_autocomplete_turn_end(&state.db).await,

@@ -459,6 +459,22 @@ export interface RunListEntry {
 }
 
 /**
+ * A **Projet** (#552, ADR-0046): a named grouping of member repo paths, and the
+ * middle tier of the harness precedence axis. Materialised on demand — a Projet
+ * exists only once a human names a group header or attaches a setting; until then
+ * the lists group by the derived path label (#258). Membership is compared
+ * verbatim (ADR-0033).
+ */
+export interface Project {
+  id: string;
+  name: string;
+  /** The harness this Projet carries, or absent/null when it carries none. */
+  harness?: string | null;
+  /** Member repository paths (the effective-repo keys the lists group by). */
+  members: string[];
+}
+
+/**
  * A persisted Trigger (#160 / ADR-0012): a cron schedule bound to a run
  * template. Cron-only in this slice — `guard_command` is reserved for #161.
  */
@@ -796,7 +812,8 @@ export interface WsMessage {
     | "trigger_fired"
     | "trigger_updated"
     | "trigger_deleted"
-    | "triggers_paused";
+    | "triggers_paused"
+    | "project_changed";
   event?: DaemonEvent;
   pipeline_id?: string;
   path?: string;
@@ -807,6 +824,8 @@ export interface WsMessage {
   run_id?: string | null;
   /** Set on `triggers_paused` messages (#348): the new global pause state. */
   paused?: boolean;
+  /** Set on `project_changed` messages (#552): the mutated Projet's id. */
+  project_id?: string;
 }
 
 export type EditScope = null | "run";

@@ -1,4 +1,4 @@
-import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport } from "./types";
+import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, Project } from "./types";
 import { foldHarnessOntoNode } from "./lib/harness";
 
 const BASE = "";
@@ -750,6 +750,71 @@ export function updateTrigger(
     `/triggers/${encodeURIComponent(triggerId)}`,
     { body: req, label: `PATCH /triggers/${triggerId}` },
   );
+}
+
+// --- Projets (#552, ADR-0046) ---
+
+/** All Projets with their members (`GET /projects`). */
+export function fetchProjects(): Promise<Project[]> {
+  return request<Project[]>("GET", "/projects");
+}
+
+/** Materialise a Projet from a bare name (`POST /projects`). */
+export function createProject(name: string): Promise<Project> {
+  return request<Project>("POST", "/projects", {
+    body: { name },
+    label: "POST /projects",
+  });
+}
+
+/**
+ * Rename a Projet and/or (re)set the harness it carries (`PATCH /projects/{id}`).
+ * `harness`: a string sets it, `null` clears it, `undefined` leaves it unchanged
+ * (double-`Option` on the wire). `name` omitted leaves it unchanged.
+ */
+export interface UpdateProjectRequest {
+  name?: string;
+  harness?: string | null;
+}
+
+export function updateProject(
+  projectId: string,
+  req: UpdateProjectRequest,
+): Promise<Project> {
+  return request<Project>("PATCH", `/projects/${encodeURIComponent(projectId)}`, {
+    body: req,
+    label: `PATCH /projects/${projectId}`,
+  });
+}
+
+/**
+ * Attach a member path to a Projet (`POST /projects/{id}/members`). Throws an
+ * {@link ApiError} with `status: 409` whose message names the owning Projet when
+ * the path already belongs to a different one (AC: refus nommant le propriétaire).
+ */
+export function addProjectMember(projectId: string, path: string): Promise<Project> {
+  return request<Project>(
+    "POST",
+    `/projects/${encodeURIComponent(projectId)}/members`,
+    { body: { path }, label: `POST /projects/${projectId}/members` },
+  );
+}
+
+/** Detach a member path from a Projet (`DELETE /projects/{id}/members`). */
+export function removeProjectMember(projectId: string, path: string): Promise<Project> {
+  return request<Project>(
+    "DELETE",
+    `/projects/${encodeURIComponent(projectId)}/members`,
+    { body: { path }, label: `DELETE /projects/${projectId}/members` },
+  );
+}
+
+/** Delete a Projet and its memberships (`DELETE /projects/{id}`). */
+export function deleteProject(projectId: string): Promise<void> {
+  return request<void>("DELETE", `/projects/${encodeURIComponent(projectId)}`, {
+    responseMode: "void",
+    label: `DELETE /projects/${projectId}`,
+  });
 }
 
 export async function deleteTrigger(triggerId: string): Promise<void> {

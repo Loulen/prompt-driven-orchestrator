@@ -369,13 +369,33 @@ pub(crate) async fn spawn_node(
     } else {
         let default_harness = stored_default_harness(deps.db).await;
         let default_models = stored_default_harness_models(deps.db).await;
+        // #552/ADR-0046: the Projet tier — the harness carried by the Projet that
+        // owns this Run's **primary** repo. The primary is `target_repo` (else the
+        // daemon repo root — the same `effective_repo` key the lists group and
+        // attach by). A secondary repo (ADR-0042) lives in `target_repos` and is
+        // never consulted, so adding or removing one changes neither the Projet nor
+        // the resolved harness. A DB error degrades the tier to transparent — a
+        // Projet lookup never fails a spawn.
+        let primary_repo = projected
+            .and_then(|s| s.target_repo.clone())
+            .unwrap_or_else(|| spawn_ctx.repo_root.to_string_lossy().into_owned());
+        let project_harness =
+            match crate::project_store::harness_for_path(deps.db, &primary_repo).await {
+                Ok(h) => h,
+                Err(e) => {
+                    warn!("project harness lookup failed for {primary_repo}: {e}");
+                    None
+                }
+            };
         let tiers = harness_resolver::HarnessTiers {
             node_pin: node.pin_harness.as_deref(),
             // #551: the Run tier — the harness frozen in this Run's `RunStarted`
             // (`projected` is the fresh projection loaded at the head of this spawn).
             // A pinned node still ignores it; a free node follows it (ADR-0046).
             run: projected.and_then(|s| s.harness.as_deref()),
-            project: None, // #552
+            // #552: the Projet tier — resolved just above from this Run's primary
+            // repo. Sits below the Run and above the instance default (ADR-0046).
+            project: project_harness.as_deref(),
             instance_default: default_harness.as_deref(),
         };
         Some(harness_resolver::resolve(

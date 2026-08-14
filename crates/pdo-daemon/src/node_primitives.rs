@@ -389,7 +389,10 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         }
         let tiers = harness_resolver::HarnessTiers {
             node_pin: node.pin_harness.as_deref(),
-            run: None,     // #551
+            // #551: the Run tier — the harness frozen in this Run's `RunStarted`, read
+            // from the projected state the caller already holds. A pinned node ignores
+            // it; a free node follows it (ADR-0046). Mirrors `node_spawn`.
+            run: params.run_state.harness.as_deref(),
             project: None, // #552
             instance_default: params.default_harness.as_deref(),
         };

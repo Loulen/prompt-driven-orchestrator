@@ -467,6 +467,17 @@ struct CreateRunRequest {
     /// (`create_run_inner`) resolves it once against the fresh instance default.
     #[serde(default)]
     sandbox: Option<event_log::SandboxMode>,
+    /// The agentic harness this Run chooses (#551, ADR-0046) — the `run` tier of the
+    /// precedence chain `nœud → Run → Projet → instance → plancher (claude)`. Free
+    /// text (ADR-0045: PDO does not validate a harness name; an unknown one fails fast
+    /// at spawn, naming it). `#[serde(default)]` → an omitted/`null`/blank field means
+    /// "the Run names no harness", so each free node resolves through the instance
+    /// default and the floor — byte-identical to the pre-#551 shape. Frozen into
+    /// `RunStarted` at the create chokepoint (same immutability as `sandbox`); a
+    /// pinned node still ignores it. A Trigger fire folds its stored harness in here
+    /// (a Run has a single origin), so "Run now" and a cron tick produce the same one.
+    #[serde(default)]
+    harness: Option<String>,
     /// Whether the manager auto-names this Run (#338). `Option`, NOT `bool`:
     /// `#[serde(default)]` → `None` is an **omitted** field, which resolves
     /// back-compatibly by the presence of `name` (a supplied `name` with no flag
@@ -1877,6 +1888,7 @@ impl DaemonHandle {
                 overlap_policy: "skip".to_string(),
                 max_concurrent: None,
                 sandbox: None,
+                harness: None,
                 auto_name: true,
                 next_fire_at: Some("2030-01-01T00:00:00.000Z".to_string()),
             },
@@ -2882,6 +2894,11 @@ struct CreateTriggerRequest {
     /// request's explicit tier.
     #[serde(default)]
     sandbox: Option<String>,
+    /// Per-Trigger harness (#551, ADR-0046): a harness name, or absent/`null`/blank to
+    /// inherit the instance default. Read at fire time and folded into the fired Run's
+    /// harness (there is no separate Trigger tier). Free text — no validation (ADR-0045).
+    #[serde(default)]
+    harness: Option<String>,
     /// Whether Runs this Trigger fires are auto-named (#338). Seeded from the instance
     /// default in the create modal and frozen on the row; `#[serde(default)]` → `true`
     /// so an older client that omits the field keeps the pre-#338 auto-naming behaviour.
@@ -3215,6 +3232,9 @@ async fn create_trigger(
         // #410: normalise `Some("")` to `None` (inherit the instance default), so an
         // empty selector value never persists as a bogus stored mode.
         sandbox: req.sandbox.filter(|s| !s.trim().is_empty()),
+        // #551: same normalisation for the harness — a blank selector value inherits the
+        // instance default at fire time rather than persisting as a harness named "".
+        harness: req.harness.filter(|s| !s.trim().is_empty()),
         // #338: freeze the auto-naming choice on the row (seeded from the instance
         // default in the modal). No re-resolution at fire time — the runtime never
         // decides autonomy (ADR-0012 frontier).
@@ -3412,6 +3432,12 @@ struct PatchTriggerRequest {
     /// from JSON — that is what lets the UI reset a Trigger to "use the instance default".
     #[serde(default, deserialize_with = "deserialize_double_option")]
     sandbox: Option<Option<String>>,
+    /// Per-Trigger harness (#551), double-wrapped like `sandbox`: absent = leave, present
+    /// `null` = clear back to inheriting the instance default, `"name"` = set. The custom
+    /// deserializer makes present-`null` → `Some(None)` reachable from JSON — what lets the
+    /// UI reset a Trigger to "use the instance default".
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    harness: Option<Option<String>>,
     /// Auto-naming toggle (#338), a FLAT `Option<bool>` like `enabled` — NOT
     /// double-wrapped like `sandbox`/`max_concurrent`. There is no "inherit" state to
     /// clear back to: a Trigger's autonomy is a plain on/off. `None` leaves it,
@@ -3663,6 +3689,12 @@ async fn patch_trigger(
         // instance default, `None` leaves it. The FE maps the "use instance default"
         // option to `null`, so an empty string never reaches here.
         sandbox: req.sandbox,
+        // #551: `Some(Some(name))` sets, `Some(None)` clears to inherit, `None` leaves it.
+        // Normalise a stray `Some(Some(""))` to a clean clear (`Some(None)`) so a blank
+        // never persists as a harness named "" (defence in depth; the FE sends `null`).
+        harness: req
+            .harness
+            .map(|inner| inner.filter(|s| !s.trim().is_empty())),
         // #338: flat toggle — `Some(v)` sets, `None` leaves. No clear state.
         auto_name: req.auto_name,
         next_fire_at,
@@ -4877,6 +4909,12 @@ async fn fire_one_trigger(
                     .sandbox
                     .as_deref()
                     .and_then(event_log::SandboxMode::parse),
+                // #551 (ADR-0046): the Trigger carries the harness IN its Run template —
+                // there is no separate Trigger tier. Fold the stored harness into the
+                // create request's `run` choice, so a cron tick and a "Run now" (both
+                // route through here) freeze the SAME harness. A blank/absent stored
+                // value defers to the instance default. No validation (ADR-0045).
+                harness: trigger.harness.clone(),
                 // #338: pass the Trigger's frozen auto-naming choice as the explicit
                 // tier. `Some(b)` wins the chokepoint resolution unconditionally, so a
                 // fire with `auto_name=false` keeps a stable per-id name and the manager
@@ -6711,6 +6749,11 @@ async fn parse_multipart_create_run(
     // defers to the trigger/instance default at the chokepoint. An unknown token is
     // treated as unset (defensive; the FE only ever sends valid variants).
     let mut sandbox: Option<event_log::SandboxMode> = None;
+    // #551: an explicit harness may ride the multipart (browser) create when images
+    // are attached, so a harness choice is honoured on that path too. `None` when the
+    // field is absent/blank — the chokepoint then freezes nothing and the Run resolves
+    // through the instance default and the floor.
+    let mut harness: Option<String> = None;
     // #338: an explicit auto-naming choice may ride the multipart (browser) create
     // when images are attached, so an unchecked "Auto-generated" box is honoured on
     // that path too. `None` when the field is absent — the chokepoint then resolves
@@ -6809,6 +6852,17 @@ async fn parse_multipart_create_run(
                     sandbox = event_log::SandboxMode::parse(&v);
                 }
             }
+            "harness" => {
+                // #551: the explicit harness threaded off the multipart form. Empty →
+                // leave `None` (the Run names no harness). No validation (ADR-0045).
+                let v = field
+                    .text()
+                    .await
+                    .map_err(|e| format!("bad field harness: {e}"))?;
+                if !v.trim().is_empty() {
+                    harness = Some(v);
+                }
+            }
             "auto_name" => {
                 // #338: an explicit flag off the multipart form. Reuses the shared
                 // boolean parser; an unrecognised token leaves `None` (defer to the
@@ -6855,6 +6909,8 @@ async fn parse_multipart_create_run(
         // create with attached images). `None` when the field is absent — the
         // chokepoint then defers to the trigger/instance default.
         sandbox,
+        // #551: the explicit harness threaded off the multipart form.
+        harness,
         // #338: the explicit auto-naming choice threaded off the multipart form.
         auto_name,
     };
@@ -7312,6 +7368,24 @@ async fn create_run_inner(
     if let Some(ref branch) = effective_source_branch {
         run_payload["source_branch"] = serde_json::json!(branch);
     }
+    // #551 (ADR-0046): FREEZE the Run's harness choice into `RunStarted`, the same
+    // immutability posture as `sandbox` above — editing the pipeline or the instance
+    // default afterwards can never re-decide a Run in flight. Written ONLY for a
+    // non-blank choice, so a Run that names no harness keeps its payload byte-identical
+    // to the pre-#551 shape (absent key → `None` → resolve through the instance default
+    // and the floor). A blank/whitespace value is normalised to absent here, so the
+    // `Some("")` trap of #347 can never persist. `req.harness` already carries the Run's
+    // single-origin choice: a manual create's field, or a Trigger fire's folded harness.
+    // No validation (ADR-0045): an unknown name fails fast at the first node spawn,
+    // naming it — never here, never silently.
+    if let Some(h) = req
+        .harness
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        run_payload["harness"] = serde_json::json!(h);
+    }
     // Auto-naming autonomy decision (#338, ADR-0015). Resolved ONCE here, at the
     // same chokepoint as the sandbox default, and read FRESH from the DB so a
     // `PUT /settings` bites on the very next create with no restart (never cached at
@@ -7465,7 +7539,7 @@ async fn create_run_inner(
     if sandbox.is_off() {
         // Historical host path — inline, byte-identical to pre-#407. NO docker.
         spawn_ready_after_event(state, &run_id).await;
-        spawn_manager_session(state, &run_id, &worktree_dir, name_hint, false);
+        spawn_manager_session(state, &run_id, &worktree_dir, name_hint, false).await;
     } else {
         // #407 D3/D4: eager fail-fast prep on a detached, panic-isolated task
         // (mirror ADR-0023 — the 201 must not block on a first-run `docker
@@ -7544,7 +7618,8 @@ async fn create_run_inner(
                         &task_worktree,
                         name_hint,
                         true,
-                    );
+                    )
+                    .await;
                 }
                 Ok(Err(e)) => {
                     fail_run_sandbox_prep(
@@ -7673,7 +7748,7 @@ pub(crate) async fn fail_run_sandbox_prep(state: &AppState, run_id: &str, reason
 /// today: `create_run` appends `RunStarted` and `return Err`s on failure, well
 /// before either spawn site here (host, or the detached sandbox task). Keep it
 /// that way.
-fn spawn_manager_session(
+async fn spawn_manager_session(
     state: &AppState,
     run_id: &str,
     worktree_dir: &std::path::Path,
@@ -7709,10 +7784,28 @@ fn spawn_manager_session(
         marker: &session_name,
         workdir: worktree_dir,
     });
-    // #550/ADR-0046: infra sessions follow the Run's harness; the Run tier is #551,
-    // so in this slice the manager runs on the `claude` floor — byte-identical to
-    // the legacy manager launch (no model, no effort, no session id).
-    let manager_harness = harness_registry::claude();
+    // #551/ADR-0046: the manager follows the harness OF THE RUN — `Run → instance →
+    // floor`, no node tier and (deliberately) no model/effort. So "ce Run tourne sur
+    // X" holds with no exception to remember: an A/B on a new harness exercises the
+    // manager too. When the Run named no harness AND the instance default is unset,
+    // this resolves to the `claude` floor — byte-identical to the legacy manager
+    // launch. An unknown name (only reachable via an unvalidated Run choice, ADR-0045)
+    // falls back to `claude` with a warning rather than failing the whole Run here:
+    // the first NODE spawn is where an unknown harness fails fast (ADR-0037), and the
+    // manager is a best-effort assist that must not itself wedge the Run.
+    let run_harness = reload_run_state(state, run_id)
+        .await
+        .and_then(|(_, s)| s.harness);
+    let default_harness = stored_default_harness(&state.db).await;
+    let manager_harness_name =
+        harness_resolver::resolve_infra_harness(run_harness.as_deref(), default_harness.as_deref());
+    let manager_harness = harness_registry::resolve(&manager_harness_name).unwrap_or_else(|| {
+        warn!(
+            "manager for run {run_id}: unknown harness '{manager_harness_name}' — \
+             launching the manager on the claude floor (the first node spawn fails fast)"
+        );
+        harness_registry::claude()
+    });
     if let Err(e) = tmux_session_manager::spawn(
         &session_name,
         &full_prompt,
@@ -10918,11 +11011,13 @@ async fn spawn_merge_resolver(
     let prompt = load_merge_resolver_prompt(&state.repo_root);
     let session_name = tmux_session_manager::node_session_name(run_id, MERGE_RESOLVER_NODE_ID, 1);
 
-    // #407: the merge resolver runs inside the Run's container when sandboxed.
-    // Project the (immutable) mode; default `off` if the state can't be reloaded.
-    let sandbox_mode = reload_run_state(state, run_id)
+    // #407/#551: the merge resolver runs inside the Run's container when sandboxed
+    // AND on the harness OF THE RUN. Project both from the SAME (immutable) reload —
+    // the mode defaults to `off`, the harness to `None`, if the state can't be
+    // reloaded.
+    let (sandbox_mode, run_harness) = reload_run_state(state, run_id)
         .await
-        .map(|(_, s)| s.sandbox)
+        .map(|(_, s)| (s.sandbox, s.harness))
         .unwrap_or_default();
 
     let resolver_started = event_log::Event {
@@ -10947,9 +11042,20 @@ async fn spawn_merge_resolver(
         marker: &session_name,
         workdir: worktree_dir,
     });
-    // #550/ADR-0046: infra sessions follow the Run's harness (Run tier = #551), so
-    // the merge resolver runs on the `claude` floor in this slice — byte-identical.
-    let resolver_harness = harness_registry::claude();
+    // #551/ADR-0046: the merge resolver follows the harness OF THE RUN, exactly like
+    // the manager — `Run → instance → floor`, no node tier, no model/effort. Unknown
+    // name (unvalidated Run choice, ADR-0045) falls back to `claude` with a warning:
+    // the resolver is dead in production since ADR-0006, so this is defence in depth.
+    let default_harness = stored_default_harness(&state.db).await;
+    let resolver_harness_name =
+        harness_resolver::resolve_infra_harness(run_harness.as_deref(), default_harness.as_deref());
+    let resolver_harness = harness_registry::resolve(&resolver_harness_name).unwrap_or_else(|| {
+        warn!(
+            "merge resolver for run {run_id}: unknown harness '{resolver_harness_name}' — \
+             launching on the claude floor"
+        );
+        harness_registry::claude()
+    });
     if let Err(e) = tmux_session_manager::spawn(
         &session_name,
         &prompt,

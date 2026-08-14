@@ -331,7 +331,10 @@ pub(crate) async fn spawn_node(
         let default_models = stored_default_harness_models(deps.db).await;
         let tiers = harness_resolver::HarnessTiers {
             node_pin: node.pin_harness.as_deref(),
-            run: None,     // #551
+            // #551: the Run tier — the harness frozen in this Run's `RunStarted`
+            // (`projected` is the fresh projection loaded at the head of this spawn).
+            // A pinned node still ignores it; a free node follows it (ADR-0046).
+            run: projected.and_then(|s| s.harness.as_deref()),
             project: None, // #552
             instance_default: default_harness.as_deref(),
         };

@@ -91,11 +91,19 @@ fn git_init_with_commit(repo: &std::path::Path) -> anyhow::Result<()> {
 }
 
 async fn create_run(daemon: &TestDaemon) -> String {
-    let body = serde_json::json!({
+    create_run_with_harness(daemon, None).await
+}
+
+/// Create a Run, optionally choosing a **Run-level harness** (#551) — the `run` tier.
+async fn create_run_with_harness(daemon: &TestDaemon, harness: Option<&str>) -> String {
+    let mut body = serde_json::json!({
         "pipeline": PIPELINE_NAME,
         "input": "go",
         "target_repo": daemon.target_repo(),
     });
+    if let Some(h) = harness {
+        body["harness"] = serde_json::json!(h);
+    }
     let resp = reqwest::Client::new()
         .post(format!("{}/runs", daemon.url()))
         .json(&body)
@@ -105,6 +113,17 @@ async fn create_run(daemon: &TestDaemon) -> String {
     assert_eq!(resp.status(), 201, "POST /runs should return 201");
     let json: serde_json::Value = resp.json().await.unwrap();
     json["run_id"].as_str().unwrap().to_string()
+}
+
+/// The Run's projected state (`GET /runs/<id>`), which serializes `RunState` — so its
+/// `harness` key is the frozen Run harness the panel shows (#551).
+async fn get_run(daemon: &TestDaemon, run_id: &str) -> serde_json::Value {
+    reqwest::get(format!("{}/runs/{run_id}", daemon.url()))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
 }
 
 async fn events(daemon: &TestDaemon, run_id: &str) -> Vec<serde_json::Value> {
@@ -184,5 +203,106 @@ async fn resume_reposes_the_frozen_harness() {
         pane["source"].as_str(),
         Some("unavailable"),
         "a resumable pinned node must re-pose, not report unavailable: {pane}"
+    );
+}
+
+// -----------------------------------------------------------------------------
+// #551 — the Run tier (`nœud → Run → instance → plancher`), end to end.
+// -----------------------------------------------------------------------------
+
+/// Poll for the manager session (`pdo-mgr-<run>`) to come up on the daemon's own tmux
+/// socket, proving the manager spawned on the resolved harness without failing fast.
+async fn wait_for_manager_session(daemon: &TestDaemon, run_id: &str) -> bool {
+    let socket = daemon.tmux_socket();
+    let session = format!("pdo-mgr-{run_id}");
+    for _ in 0..50 {
+        let up = std::process::Command::new("tmux")
+            .args(["-L", &socket, "has-session", "-t", &session])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if up {
+            return true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    false
+}
+
+/// The Run tier moves a **free** node off the floor: a Run created on `opencode` freezes
+/// `opencode` into the unpinned node's `NodeStarted` (it followed the Run), while the
+/// Run's own frozen harness is visible in `GET /runs/<id>` (the Run panel, AC), and the
+/// Pipeline Manager comes up on that harness (the infra session follows the Run — AC).
+#[tokio::test]
+async fn run_harness_moves_the_free_node_and_manager() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run_with_harness(&daemon, Some("opencode")).await;
+    let evs = wait_for_both_started(&daemon, &run_id).await;
+
+    // The unpinned node followed the Run tier off the `claude` floor to `opencode`…
+    assert_eq!(
+        started_harness(&evs, "aaaaaaaa").as_deref(),
+        Some("opencode"),
+        "a free node must follow the Run's harness"
+    );
+    // …and the pinned node stays `opencode` too (its pin agrees with the Run here).
+    assert_eq!(
+        started_harness(&evs, "bbbbbbbb").as_deref(),
+        Some("opencode")
+    );
+
+    // The frozen Run harness is visible in the Run panel (AC): `GET /runs/<id>`.
+    let run = get_run(&daemon, &run_id).await;
+    assert_eq!(
+        run["harness"].as_str(),
+        Some("opencode"),
+        "the Run panel must show the frozen Run harness: {run}"
+    );
+
+    // The Pipeline Manager followed the Run's harness (AC): its session came up, so the
+    // manager spawn resolved `opencode` and did not fail fast. (The exact harness the
+    // manager launches is proven purely by `harness_resolver::resolve_infra_harness`;
+    // the tmux command override erases the tail, so an L3 asserts the spawn, not bytes.)
+    assert!(
+        wait_for_manager_session(&daemon, &run_id).await,
+        "the manager session must come up on the Run's harness"
+    );
+}
+
+/// A **pinned** node resists the Run tier: a Run created on `claude` cannot pull the
+/// `opencode`-pinned node off its pin (ADR-0046, épinglage ≠ paramétrage), while the free
+/// node follows the Run down to `claude`.
+#[tokio::test]
+async fn pinned_node_resists_the_run_harness() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run_with_harness(&daemon, Some("claude")).await;
+    let evs = wait_for_both_started(&daemon, &run_id).await;
+
+    // The pinned node ignores the Run's `claude` choice and stays on its `opencode` pin.
+    assert_eq!(
+        started_harness(&evs, "bbbbbbbb").as_deref(),
+        Some("opencode"),
+        "a pinned node must resist the Run harness"
+    );
+    // The free node follows the Run to `claude`.
+    assert_eq!(started_harness(&evs, "aaaaaaaa").as_deref(), Some("claude"));
+
+    // And the Run panel shows the Run's own frozen choice.
+    let run = get_run(&daemon, &run_id).await;
+    assert_eq!(run["harness"].as_str(), Some("claude"), "{run}");
+}
+
+/// A Run created with **no** harness names none: the free node stays on the floor and the
+/// Run panel omits the key (byte-identical to the pre-#551 shape).
+#[tokio::test]
+async fn a_run_without_a_harness_freezes_none() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon).await;
+    wait_for_both_started(&daemon, &run_id).await;
+
+    let run = get_run(&daemon, &run_id).await;
+    assert!(
+        run.get("harness").is_none() || run["harness"].is_null(),
+        "a Run that named no harness must not carry the key: {run}"
     );
 }

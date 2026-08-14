@@ -103,6 +103,22 @@ pub(crate) fn resolve_effort(node_entry_effort: Option<&str>) -> Option<String> 
         .map(str::to_string)
 }
 
+/// The harness an **infra** session (Pipeline Manager, merge resolver) runs on
+/// (#551, ADR-0046). Infra sessions have no NodeDef, so no `node` tier and no
+/// model/effort of their own: they follow the Run's frozen harness, then the
+/// instance default, then the `claude` floor — `Run → instance → plancher`. This
+/// is what makes "ce Run tourne sur X" true with no exception to remember (the
+/// A/B on a new harness also exercises the unblocking tool). Same empty-string
+/// collapse as [`resolve_harness`] (the `Some("")` trap of #347).
+pub(crate) fn resolve_infra_harness(run: Option<&str>, instance_default: Option<&str>) -> String {
+    resolve_harness(&HarnessTiers {
+        node_pin: None,
+        run,
+        project: None,
+        instance_default,
+    })
+}
+
 /// The single precedence point both spawn seams call (like `effective_sandbox`):
 /// resolve the harness, then read the model and effort from the **winning
 /// harness's** entry. Shaped so #551/#552 fill `tiers.run`/`tiers.project`
@@ -209,6 +225,31 @@ mod tests {
         assert_eq!(resolve_harness(&tiers), CLAUDE);
     }
 
+    // ---- infra sessions follow the Run's harness (#551) ---------------------
+
+    #[test]
+    fn infra_harness_follows_the_run_then_instance_then_floor() {
+        // AC: the Pipeline Manager and merge resolver run on the harness OF THE RUN,
+        // no node tier, no model/effort. Run wins over the instance default…
+        assert_eq!(
+            resolve_infra_harness(Some(OPENCODE), Some(CLAUDE)),
+            OPENCODE
+        );
+        // …the instance default backs an unset Run…
+        assert_eq!(resolve_infra_harness(None, Some(OPENCODE)), OPENCODE);
+        // …and with neither set, the manager stays on the `claude` floor — the
+        // byte-identical legacy manager launch (the control).
+        assert_eq!(resolve_infra_harness(None, None), CLAUDE);
+    }
+
+    #[test]
+    fn infra_harness_ignores_a_blank_run_choice() {
+        // A blank Run harness (`Some("")`) is "unset", not a harness named "" — it
+        // must fall through to the instance default, never to an unknown harness.
+        assert_eq!(resolve_infra_harness(Some(""), Some(OPENCODE)), OPENCODE);
+        assert_eq!(resolve_infra_harness(Some(""), Some("")), CLAUDE);
+    }
+
     // ---- model / effort read from the WINNING harness's entry ---------------
 
     #[test]
@@ -226,6 +267,33 @@ mod tests {
         // opencode's entry wins — NOT claude's, even though claude has richer settings.
         assert_eq!(r.model.as_deref(), Some("openrouter/foo"));
         assert_eq!(r.effort, None);
+    }
+
+    #[test]
+    fn a_run_switched_to_another_harness_reads_the_new_harness_entry_not_the_old() {
+        // AC (#551): a Run basculé sur un autre harnais n'hérite jamais du slug écrit pour
+        // le précédent — the model/effort come from the WINNING (Run-tier) harness entry.
+        // Same node, two Runs: no Run harness → claude wins → claude's slug; Run picks
+        // opencode → opencode wins → opencode's slug, never claude's.
+        let node_entries = entries(&[
+            (CLAUDE, Some("opus"), Some("high")),
+            (OPENCODE, Some("openrouter/foo"), None),
+        ]);
+
+        let on_claude = resolve(&HarnessTiers::default(), &node_entries, &no_defaults());
+        assert_eq!(on_claude.harness, CLAUDE);
+        assert_eq!(on_claude.model.as_deref(), Some("opus"));
+        assert_eq!(on_claude.effort.as_deref(), Some("high"));
+
+        let run_opencode = HarnessTiers {
+            run: Some(OPENCODE),
+            ..Default::default()
+        };
+        let on_opencode = resolve(&run_opencode, &node_entries, &no_defaults());
+        assert_eq!(on_opencode.harness, OPENCODE);
+        // opencode's entry wins — claude's `opus`/`high` never leak onto the switched Run.
+        assert_eq!(on_opencode.model.as_deref(), Some("openrouter/foo"));
+        assert_eq!(on_opencode.effort, None);
     }
 
     #[test]

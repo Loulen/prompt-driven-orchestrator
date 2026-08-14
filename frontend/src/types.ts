@@ -465,6 +465,10 @@ export interface Trigger {
   /** Per-Trigger sandbox (#410/#432): `"off"` or a staging-profile name, or null/absent
    *  to inherit the instance default. Read at fire time. */
   sandbox?: string | null;
+  /** Per-Trigger harness (#551, ADR-0046): a harness name, or null/absent to inherit the
+   *  instance default. Read at fire time and folded into the fired Run's harness (no
+   *  separate Trigger tier — a cron tick and a "Run now" produce the same one). */
+  harness?: string | null;
   /** Whether Runs this Trigger fires are auto-named (#338). Frozen at creation from the
    *  instance default; `true` is the pre-#338 behaviour. A flat bool (no inherit state). */
   auto_name: boolean;
@@ -704,6 +708,14 @@ export interface RunState {
    * throughout, so this drives a banner only.
    */
   sandbox_prep?: "pending" | "ready";
+  /**
+   * The agentic harness this Run was created on (#551, ADR-0046) — the `run` tier of
+   * the precedence chain, **frozen** at creation like {@link RunState.sandbox}. Absent
+   * when the Run named no harness (every historical Run, and any Run that inherited the
+   * instance default): each free node then resolved through the instance default and
+   * the `claude` floor. Shown in the Run panel; a pinned node ignored it.
+   */
+  harness?: string;
   /**
    * Cumulative count of NodeRun sessions this run spawned — raw `NodeStarted`
    * count, not distinct `(node, iter)`; manager excluded (#100). Defaults to 0

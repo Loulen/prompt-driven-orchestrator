@@ -10,6 +10,20 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.26.0
+
+### Cassant — un spawn tmux échoué fait échouer le nœud et le Run, plus jamais `Spawned` (#508, ADR-0037)
+
+`spawn_node` avalait l'`Err` de `tmux_session_manager::spawn` et rendait `Spawned` alors que
+`NodeStarted` était déjà durable : le nœud se projetait `Running` **sans session**, puis la veille de
+vivacité le réécrivait `Failed` ~30 s plus tard avec une **cause fausse** (`session_died`), et
+`restart_node` répondait un `200 {"spawned":[…]}` menteur. Désormais le bras `Err` appende `NodeFailed`
+(légal : l'itération est `Running`) **puis** un reap gaté (le seul sous-worktree que *ce* spawn a créé,
+jamais un réutilisé) **puis** `RunFailed`, et rend `SpawnOutcome::Failed`. Effets filaires (véracité,
+ADR-0037 §1/§3) : `restart_node` répond **`500 {"error":"spawn_failed","recoverable":false,"run_failed":true}`**
+au lieu de `200 {"spawned":[…]}` ; les routes `resume`/`pause` comptent le nœud en **`noop`** (avec sa
+raison) au lieu de le déclarer `spawned`. Ferme la « Limite acceptée » homonyme d'ADR-0037.
+
 ## 1.25.0
 
 Rien de cassant, aucune migration (`CREATE TABLE IF NOT EXISTS`, aucun backfill). PDO gagne un

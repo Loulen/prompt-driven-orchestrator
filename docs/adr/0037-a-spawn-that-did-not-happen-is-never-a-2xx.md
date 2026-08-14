@@ -220,9 +220,13 @@ libérer le slot qu'un restart throttlé attend, et le retry des nœuds en atten
   corps et l'erreur, et le seul bouton câblé vit dans une bannière que plus rien ne produit depuis
   #469. Trou connu, propriété de **#492**, énoncé pour qu'un prochain grilling ne le fiche pas en
   régression. Zéro travail frontend dans ce lot.
-- **`Spawned` est rendu même quand le spawn tmux lui-même a échoué** — l'erreur est loguée et le
-  flux continue. Le `200 {spawned}` de cette ADR est donc lui-même non véridique dans ce cas. Bug
-  distinct, à ficher, cité ici pour ne pas créditer la décision d'un cas qu'elle ne couvre pas.
+- ~~**`Spawned` est rendu même quand le spawn tmux lui-même a échoué** — l'erreur est loguée et le
+  flux continue. Le `200 {spawned}` de cette ADR est donc lui-même non véridique dans ce cas.~~
+  **Fermé par #508** : le bras `Err` de `tmux_session_manager::spawn` appende désormais `NodeFailed`
+  **puis** un reap gaté (seul le sous-worktree que *ce* spawn a créé) **puis** `RunFailed`
+  (`return SpawnOutcome::Failed`), via le helper `fail_spawn_after_start`. Un spawn qui n'a pas eu
+  lieu retombe donc sous l'invariant §1 (jamais `2xx` — `restart_node` répond `500 spawn_failed`) et
+  sous l'ordre §3 (la cause connaissable se pose avant l'effet), au lieu d'y échapper.
 - **`restart_node` n'invalide jamais les artefacts** : les sorties partielles de la tentative
   avortée survivent au même `iter`, et une complétion ultérieure peut valider l'**ancien** output.
   Vrai avant comme après.
@@ -255,4 +259,8 @@ libérer le slot qu'un restart throttlé attend, et le retry des nœuds en atten
 - **#498** — sa slice A doit consommer la classification posée ici via le bras `Recyclable`, pas la
   réimplémenter. Son levier 3 (un spawn échoué du scheduler doit appender un événement) reste chez
   elle : le chemin du scheduler n'a aucune réponse HTTP, l'événement y est le seul canal.
+- **#508** — ferme la limite acceptée du `Spawned` sur échec tmux : le chemin de spawn appende
+  `NodeFailed` + `RunFailed` (reap gaté du seul sous-worktree que ce spawn a créé) sur `Err`, si bien
+  que la panne tmux honore §1 (jamais `2xx`) et §3 (cause avant effet). Effet filaire annexe : les
+  routes `resume`/`pause` comptent le nœud en `noop` (avec sa raison) au lieu de le déclarer `spawned`.
 - **#491** vient après (corps texte brut vs JSON). **#492** possède le trou côté UI.

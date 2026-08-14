@@ -70,6 +70,22 @@ export default function RunInfoSidebar({
             ? "Archived run · read-only · outputs preserved"
             : "Editing run-scoped pipeline · changes sync to template"}
         </div>
+        {/* #551 (ADR-0046): the harness this Run was FROZEN on — the `run` tier that
+            made it an A/B of the same pipeline on another harness. Shown only when the
+            Run named one; absence means it inherited the instance default (and the
+            `claude` floor), which the panel does not need to spell out per-Run. */}
+        {run.harness && (
+          <div
+            className="mt-2 flex items-center gap-1.5 text-fg-3"
+            style={{ fontSize: "10.5px" }}
+            data-testid="run-harness"
+          >
+            <span className="text-fg-4">Harness</span>
+            <span className="rounded bg-bg-3 px-1.5 py-0.5 font-mono text-fg-2">
+              {run.harness}
+            </span>
+          </div>
+        )}
       </div>
 
       {run.target_repo && (

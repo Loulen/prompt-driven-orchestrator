@@ -563,6 +563,10 @@ export interface CreateRunRequest {
   /** Explicit sandbox (#410/#432): `"off"` or a staging-profile name. Omitted → the
    *  server defers to the trigger/instance default at the create chokepoint. */
   sandbox?: string;
+  /** Explicit harness (#551, ADR-0046): the `run` tier of the precedence chain. Omitted/
+   *  blank → the Run names no harness and each free node resolves through the instance
+   *  default and the `claude` floor. Frozen into `RunStarted` at the create chokepoint. */
+  harness?: string;
   /** Whether the manager auto-names this Run (#338). The modal always sends it; omit and
    *  the server resolves back-compat by the presence of `name`, then the instance default. */
   auto_name?: boolean;
@@ -593,6 +597,10 @@ export function createRun(req: CreateRunRequest): Promise<CreateRunResponse> {
     // sandboxed Run created WITH attached images keeps its mode (the daemon's
     // multipart parser reads this field).
     if (req.sandbox) form.append("sandbox", req.sandbox);
+    // #551: thread the explicit harness through the multipart path too, so a Run created
+    // WITH attached images keeps its harness choice (the daemon's multipart parser reads
+    // this field). Omitted when blank — the Run then names no harness.
+    if (req.harness) form.append("harness", req.harness);
     // #338: thread the explicit auto-naming choice through the multipart path too, so an
     // unchecked "Auto-generated" box is honoured on a create WITH attached images. Sent as
     // a stringified bool; only when the caller made a choice (it always does from the modal).
@@ -680,6 +688,9 @@ export interface CreateTriggerRequest {
   /** Per-Trigger sandbox (#410/#432): `"off"` or a staging-profile name, or null/omit to
    *  inherit the instance default. */
   sandbox?: string | null;
+  /** Per-Trigger harness (#551): a harness name, or null/omit to inherit the instance
+   *  default. Folded into the fired Run's harness (no separate Trigger tier). */
+  harness?: string | null;
   /** Whether Runs this Trigger fires are auto-named (#338). Seeded from the instance
    *  default in the modal; omit → the server defaults to `true` (pre-#338 behaviour). */
   auto_name?: boolean;
@@ -722,6 +733,9 @@ export interface UpdateTriggerRequest {
   /** Per-Trigger sandbox (#410/#432): a value sets it, `null` clears back to
    *  inheriting the instance default, `undefined` leaves it unchanged. */
   sandbox?: string | null;
+  /** Per-Trigger harness (#551): a value sets it, `null` clears back to inheriting the
+   *  instance default, `undefined` leaves it unchanged. */
+  harness?: string | null;
   /** Auto-naming toggle (#338): a bool sets it, `undefined` leaves it unchanged. A flat
    *  bool (no clear state) — mirror of `enabled`. */
   auto_name?: boolean;

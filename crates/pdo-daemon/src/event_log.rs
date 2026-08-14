@@ -773,6 +773,21 @@ pub struct RunState {
     pub sandbox_prep: Option<SandboxPrepState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_branch: Option<String>,
+    /// The harness chosen at Run creation (#551, ADR-0046), **frozen** here from the
+    /// `RunStarted` payload — the middle tier of the precedence chain
+    /// `nœud → Run → Projet → instance → plancher (claude)`. Immutable, exactly like
+    /// [`RunState::sandbox`]: set once from the create event, never mutated, so a
+    /// pipeline edit or a changed instance default cannot re-decide a Run in flight.
+    ///
+    /// `None` ⇒ the Run named no harness, so each free node resolves through the
+    /// instance default and the floor as before (every historical Run, and any Run
+    /// created without an explicit choice — the payload omits the key, keeping it
+    /// byte-identical to the pre-#551 shape). A blank/empty stored value collapses to
+    /// `None` at the freeze (`Some("")` never persists), so it can never win a tier
+    /// (#347). Read at every spawn seam as the `run` tier of [`crate::harness_resolver`]
+    /// and by the infra sessions (Pipeline Manager, merge resolver).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<String>,
     /// Provenance: the id of the Trigger that created this Run, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub triggered_by: Option<String>,
@@ -836,6 +851,7 @@ impl RunState {
             sandbox_image_raw_error: None,
             sandbox_prep: None,
             source_branch: None,
+            harness: None,
             triggered_by: None,
             pipeline_id: None,
             sessions_spawned: 0,
@@ -1285,6 +1301,18 @@ fn apply_run_event(state: &mut RunState, event: &Event) {
                 }
                 if let Some(sb) = payload.get("source_branch").and_then(|v| v.as_str()) {
                     state.source_branch = Some(sb.to_string());
+                }
+                // #551 (ADR-0046): the FROZEN Run harness, projected the same way as
+                // `source_branch`. The create chokepoint only writes this key for a
+                // non-empty choice, so an absent key (every historical Run, every Run
+                // with no explicit harness) leaves `None` — the free nodes then resolve
+                // through the instance default and the `claude` floor. A blank string
+                // never reaches here (normalised away at the freeze), so it cannot win a
+                // tier (#347).
+                if let Some(h) = payload.get("harness").and_then(|v| v.as_str()) {
+                    if !h.is_empty() {
+                        state.harness = Some(h.to_string());
+                    }
                 }
                 if let Some(tb) = payload.get("triggered_by").and_then(|v| v.as_str()) {
                     state.triggered_by = Some(tb.to_string());
@@ -4702,6 +4730,36 @@ mod tests {
             serde_json::json!({ "pipeline_name": "p", "target_repos": "not-an-array" }),
         )];
         assert!(project(&malformed).unwrap().target_repos.is_empty());
+    }
+
+    /// #551 (ADR-0046): the `RunStarted.harness` freeze projects into
+    /// `RunState.harness`; an absent key (every historical Run, every Run with no
+    /// explicit choice) stays `None`; an empty string never wins a tier (#347).
+    #[test]
+    fn harness_projects_and_defaults_to_none() {
+        // Present + non-empty → frozen verbatim.
+        let with = vec![make_event_with_payload(
+            EventKind::RunStarted,
+            None,
+            serde_json::json!({ "pipeline_name": "p", "harness": "opencode" }),
+        )];
+        assert_eq!(project(&with).unwrap().harness.as_deref(), Some("opencode"));
+
+        // Absent key → None (resolve through the instance default and the floor).
+        let legacy = vec![make_event_with_payload(
+            EventKind::RunStarted,
+            None,
+            serde_json::json!({ "pipeline_name": "p" }),
+        )];
+        assert_eq!(project(&legacy).unwrap().harness, None);
+
+        // Empty string → None: a blank freeze can never win a precedence tier (#347).
+        let blank = vec![make_event_with_payload(
+            EventKind::RunStarted,
+            None,
+            serde_json::json!({ "pipeline_name": "p", "harness": "" }),
+        )];
+        assert_eq!(project(&blank).unwrap().harness, None);
     }
 
     /// #465 slice 2 (ADR-0042): `RunReposEdited` overwrites `target_repos`

@@ -311,6 +311,7 @@ mod tests {
             overlap_policy: "skip".to_string(),
             max_concurrent: None,
             sandbox: None,
+            harness: None,
             auto_name: true,
             enabled: true,
             next_fire_at: next_fire_at.map(str::to_string),

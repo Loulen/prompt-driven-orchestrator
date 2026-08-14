@@ -141,6 +141,13 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
   const [settingsFailed, setSettingsFailed] = useState(false);
   const [sandbox, setSandbox] = useState<string>("");
   const sandboxSeeded = useRef(false);
+  // Harness (#551/#452). `harness` is the selector value in BOTH modes: `""` = "the user
+  // did not choose" (inherit), or a concrete harness name. Seeded to `""` (asserts
+  // nothing) synchronously — the inherited default is only ever the inherit option's
+  // LABEL, never copied into the field (the #452 prefill trap). `""` omits the key from
+  // the request, the only value that lets the daemon resolve its own default.
+  const [harness, setHarness] = useState<string>("");
+  const harnessSeeded = useRef(false);
   const autoNameSeeded = useRef(false);
 
   const recentRepos = useRecentReposStore((s) => s.recentRepos);
@@ -365,6 +372,22 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     setSandbox(openIntent.kind === "edit-trigger" ? (openIntent.trigger.sandbox ?? "") : "");
   }, [open, openIntent]);
 
+  // #551/#452: seed the harness selector once per open, matched to the intent — the same
+  // ref-gated, synchronous, assertion-free seed as the sandbox selector above. An
+  // `edit-trigger` round-trips the Trigger's own stored harness (whose `null` already
+  // means "inherit"); a run / new-trigger seeds `""`, so the field asserts nothing and the
+  // inherited default stays a LABEL. Never waits on `settings` (the #452 trap).
+  useEffect(() => {
+    if (!open) {
+      harnessSeeded.current = false;
+      return;
+    }
+    if (harnessSeeded.current) return;
+    // One-shot seeding gated by the ref: bounded, does not re-fire.
+    harnessSeeded.current = true;
+    setHarness(openIntent.kind === "edit-trigger" ? (openIntent.trigger.harness ?? "") : "");
+  }, [open, openIntent]);
+
   // #338: seed the "Auto-generated" box once per open, ref-gated (same anti-reseed guard as
   // the sandbox selector, so a `settings` state surviving a close cannot re-seed a REOPEN
   // from a stale value — the #452 trap). An `edit-trigger` seeds SYNCHRONOUSLY from the
@@ -498,6 +521,14 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     [settings, sandbox, mode],
   );
 
+  // #551/#452: the harness selector's derived state — the known harnesses and the
+  // inherited default's NAME (a label, never a seed). Memoized like `sandboxState` so its
+  // destructured fields are stable. Pure over (settings, harness).
+  const { knownHarnesses, instanceDefaultHarness } = useMemo(
+    () => newRunForm.harnessState({ settings, harness }),
+    [settings, harness],
+  );
+
   // #465: every non-empty secondary row must have resolved to a valid repo before a
   // launch (mirror of the primary `repoValid` gate). An empty row is incomplete.
   const secondariesReady = secondaryRepos.every(
@@ -536,6 +567,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
           autoName,
           runName,
           sandbox,
+          harness,
           images,
           // #465: full list ([0] = primary, [1..] = secondaries), or undefined
           // for a mono-repo Run (keeps the request byte-identical).
@@ -557,7 +589,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     } finally {
       setSubmitting(false);
     }
-  }, [selectedPipeline, input, hasRequiredPrompt, overrides, onCreated, onClose, flushPendingSaves, repoValid, targetRepo, sourceBranch, buildTargetRepos, autoName, runName, images, sandbox, settings, refreshRecentRepos]);
+  }, [selectedPipeline, input, hasRequiredPrompt, overrides, onCreated, onClose, flushPendingSaves, repoValid, targetRepo, sourceBranch, buildTargetRepos, autoName, runName, images, sandbox, harness, settings, refreshRecentRepos]);
 
   const canLaunch = newRunForm.canLaunch({
     repoValid,
@@ -631,6 +663,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
       allowOverlap,
       maxConcurrent,
       sandbox,
+      harness,
       autoName,
       variables,
       // #465: full list ([0] = primary, [1..] = secondaries), or undefined for
@@ -682,6 +715,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     sourceBranch,
     buildTargetRepos,
     sandbox,
+    harness,
     autoName,
     flushPendingSaves,
     onTriggerSaved,
@@ -1132,6 +1166,49 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
                   This Run will use the instance default.
                 </span>
               )}
+            </div>
+
+            {/* Harness (#551/#452, ADR-0046): "Use instance default", or one of the
+                embedded harnesses. The inherit option is the SEEDED value and NAMES what
+                it resolves to in run mode ("the choice is made now, the user is entitled
+                to know what they inherit"); a Trigger resolves when it fires, so naming
+                today's value there would be a promise the modal cannot keep. Unlike the
+                sandbox selector there is nothing to grey and nothing to block — a harness
+                name is free text with no availability probe (ADR-0045); an unknown one
+                fails fast at the node spawn, not here. A node that PINS its harness
+                (NodeInspector) ignores this Run-level choice (ADR-0046). */}
+            <div className="flex flex-col gap-1.5">
+              <label
+                htmlFor="harness-select"
+                className="font-medium text-fg-2"
+                style={{ fontSize: "11.5px" }}
+              >
+                Harness
+              </label>
+              <select
+                id="harness-select"
+                data-testid="harness-select"
+                value={harness}
+                onChange={(e) => setHarness(e.target.value)}
+                className="w-full rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5 font-mono text-fg transition-colors focus:border-acc focus:outline-none disabled:opacity-40"
+                style={{ fontSize: "12px" }}
+              >
+                <option value="">
+                  {mode === "run" && instanceDefaultHarness
+                    ? `Use instance default (${instanceDefaultHarness})`
+                    : "Use instance default"}
+                </option>
+                {knownHarnesses.map((h) => (
+                  <option key={h} value={h}>
+                    {h}
+                  </option>
+                ))}
+              </select>
+              <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
+                {mode === "trigger"
+                  ? "Every fired Run launches on this harness. Nodes that pin their own harness ignore it."
+                  : "The harness every free node runs on for this Run. Nodes that pin their own harness ignore it."}
+              </span>
             </div>
           </div>
 

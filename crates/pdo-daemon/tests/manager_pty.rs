@@ -55,10 +55,9 @@ async fn manager_pty_ws_roundtrip() {
     // This test exercises the PTY bridge, not the reaper. The manager session
     // below is created out-of-band (its run is absent from the event log), so
     // the daemon's orphan sweep would race the test and kill it — opt out of
-    // all automatic cleanup for this daemon.
-    std::env::set_var("PDO_DAEMON_NO_CLEANUP", "1");
-    let daemon = TestDaemon::spawn(|_repo| Ok(())).await.unwrap();
-    std::env::remove_var("PDO_DAEMON_NO_CLEANUP");
+    // all automatic cleanup for this daemon, per-daemon rather than through the
+    // process-global env var (cf. `TestDaemon::spawn_nested`).
+    let daemon = TestDaemon::spawn_nested(|_repo| Ok(())).await.unwrap();
     let socket = daemon.tmux_socket();
 
     kill_tmux_session(&socket, &session_name);

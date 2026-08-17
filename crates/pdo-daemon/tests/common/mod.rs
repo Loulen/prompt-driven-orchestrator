@@ -380,6 +380,45 @@ impl TestDaemon {
         self.repo_root().to_string_lossy().into_owned()
     }
 
+    /// The Claude Code session id this daemon pinned for `node_id`'s latest
+    /// iteration, read back from its `node_started` payload (#473).
+    ///
+    /// Mandatory for any test that **plants** a transcript. Since #473 the liveness
+    /// sweep resolves a node's transcript by exact filename — `<session_id>.jsonl`
+    /// under the encoded-cwd project dir — instead of picking the newest `.jsonl`
+    /// in that dir, so a fixture written under any other name resolves to nothing
+    /// and the sweep sees "no signal" rather than the planted turn state. The id is
+    /// a fresh uuid per spawn, so reading it back is the only way to know it.
+    ///
+    /// Panics if the node has no `node_started` yet, or none carrying an id (a
+    /// `script` node legitimately has none — it launches no agent and nothing would
+    /// resolve its transcript anyway).
+    pub async fn pinned_session_id(&self, run_id: &str, node_id: &str) -> String {
+        let events: Vec<serde_json::Value> = reqwest::Client::new()
+            .get(format!("{}/runs/{run_id}/events", self.url()))
+            .send()
+            .await
+            .expect("GET /runs/<id>/events")
+            .json()
+            .await
+            .expect("events decode as JSON");
+
+        // The LAST `node_started` for this node: a `restart_node` of the same
+        // iteration pins a fresh id, and the sweep reads back the latest one.
+        events
+            .iter()
+            .filter(|e| e["kind"] == "node_started" && e["node_id"] == node_id)
+            .filter_map(|e| e["payload"]["session_id"].as_str())
+            .next_back()
+            .unwrap_or_else(|| {
+                panic!(
+                    "no node_started with a pinned session_id for {node_id} in run {run_id} \
+                     — plant the transcript AFTER the node has started"
+                )
+            })
+            .to_string()
+    }
+
     /// Tmux socket scoped to this daemon (`tmux -L <name>`). Tests that
     /// spawn or inspect tmux sessions out-of-band must use this socket so
     /// they hit the same tmux server the daemon talks to.

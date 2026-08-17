@@ -44,13 +44,19 @@ qu'un A/B sur un harnais neuf met donc aussi à l'épreuve (ADR-0046).
 
 **Le Projet est une entité** (#552) : un regroupement **nommé** de dépôts qui se travaillent
 ensemble, et le tier du milieu de la précédence. **Rien n'est seedé** — tant que personne n'a nommé
-un groupe, il n'existe aucune ligne de Projet et les listes se groupent exactement comme avant
-(dérivé du chemin, côté client) ; c'est le crayon sur un en-tête de groupe qui **crée** l'entité,
+un groupe, il n'existe aucune ligne de Projet et les listes se groupent **par les mêmes chemins
+qu'avant**, dérivés côté client ; c'est le crayon sur un en-tête de groupe qui **crée** l'entité,
 même posture que la table de prix (ADR-0034). Un chemin appartient à **au plus un** Projet, comparé
 **verbatim** (aucune canonicalisation — ADR-0033), et un ajout conflictuel est un **refus nommant**
 le Projet propriétaire. Le Projet d'un Run est celui de son **dépôt primaire** : ajouter ou retirer
 un secondaire ne change ni le Projet ni le harnais résolu (ADR-0042). Le seuil « ne grouper qu'à
 partir de 2 » porte désormais sur les **projets**.
+
+**Changement visible : l'ordre des en-têtes de groupe.** Les groupes se trient désormais sur le
+**libellé affiché** (départagé par la clé), là où #258 triait sur le **chemin complet** du dépôt.
+C'est ce qui permet à un Projet — dont le nom n'a aucun chemin — de prendre sa place dans le même
+ordre que les groupes-chemins. Conséquence à connaître : à contenu identique, une liste peut
+apparaître dans un ordre différent de la version précédente, sans qu'aucun Projet ait été créé.
 
 **Les capacités sont du code par harnais, et leur absence est dite** (#553). Les cinq — source de
 coût, résolution du transcript, substrat de fin de tour, ancre de menu de limite, plancher de

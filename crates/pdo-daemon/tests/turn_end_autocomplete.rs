@@ -256,16 +256,26 @@ async fn set_autocomplete(daemon_url: &str, on: bool) {
 
 /// Plant a Claude Code transcript for `working_dir` under the daemon's (temp)
 /// home, back-dated `quiet` so the sweep sees the write as settled.
+///
+/// `session_id` is the id PDO pinned for the node at spawn
+/// ([`TestDaemon::pinned_session_id`]), and it names the file. That is not a
+/// cosmetic detail: since #473 the sweep resolves a node's transcript by exact
+/// filename (`<session_id>.jsonl`) rather than by picking the newest `.jsonl` in
+/// the encoded-cwd dir, so a fixture planted under any other name resolves to
+/// nothing and every assertion here degrades into "the sweep had no signal" —
+/// which is indistinguishable from "the sweep read it and decided to do nothing".
+/// Naming it as production would is what keeps the no-op assertions falsifiable.
 fn plant_transcript(
     home: &std::path::Path,
     working_dir: &std::path::Path,
+    session_id: &str,
     contents: &str,
     quiet: Duration,
 ) {
     let encoded = stale_detector::encode_working_dir(working_dir);
     let proj = home.join(".claude").join("projects").join(encoded);
     std::fs::create_dir_all(&proj).unwrap();
-    let jsonl = proj.join("session.jsonl");
+    let jsonl = proj.join(format!("{session_id}.jsonl"));
     std::fs::write(&jsonl, contents).unwrap();
     filetime::set_file_mtime(
         &jsonl,
@@ -326,9 +336,11 @@ async fn a_long_silent_tool_call_never_kills_the_run() {
     // Outputs ALREADY valid, so only the turn-state guard stands between this
     // node and a completion it must not get.
     write_valid_outputs(&worktree);
+    let sid = daemon.pinned_session_id(&run_id, NODE_ID).await;
     plant_transcript(
         &home,
         &worktree,
+        &sid,
         FIXTURE_IN_TOOL_CALL,
         Duration::from_secs(300),
     );
@@ -385,7 +397,8 @@ async fn an_idle_transcript_with_incomplete_outputs_is_no_longer_stale() {
 
     let worktree = home.join(".pdo/runs").join(&run_id).join("worktree");
     // No outputs written: incomplete, the old `Detection::Stale` arm.
-    plant_transcript(&home, &worktree, "{}\n", Duration::from_secs(600));
+    let sid = daemon.pinned_session_id(&run_id, NODE_ID).await;
+    plant_transcript(&home, &worktree, &sid, "{}\n", Duration::from_secs(600));
 
     daemon.run_stale_detection_tick().await;
 
@@ -500,7 +513,8 @@ async fn the_setting_gates_completion_and_takes_effect_on_the_next_sweep() {
 
     let worktree = home.join(".pdo/runs").join(&run_id).join("worktree");
     write_valid_outputs(&worktree);
-    plant_transcript(&home, &worktree, FIXTURE_TURN_ENDED, settled());
+    let sid = daemon.pinned_session_id(&run_id, NODE_ID).await;
+    plant_transcript(&home, &worktree, &sid, FIXTURE_TURN_ENDED, settled());
 
     // --- box unchecked: nothing happens (AC8) ---
     daemon.run_stale_detection_tick().await;
@@ -824,7 +838,8 @@ async fn auto_completing_a_code_mutating_node_merges_its_commit() {
     // and forgot to call `pdo complete` leaves behind.
     std::fs::write(sub_worktree.join("IMPLEMENTED.md"), "the work\n").unwrap();
     write_valid_outputs(&worktree);
-    plant_transcript(&home, &sub_worktree, FIXTURE_TURN_ENDED, settled());
+    let sid = daemon.pinned_session_id(&run_id, NODE_ID).await;
+    plant_transcript(&home, &sub_worktree, &sid, FIXTURE_TURN_ENDED, settled());
 
     daemon.run_stale_detection_tick().await;
 

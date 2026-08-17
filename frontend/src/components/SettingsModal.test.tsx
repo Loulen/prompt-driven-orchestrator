@@ -46,6 +46,8 @@ function sample(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
     guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
     // Unset by default (account default): effective/stored/env/default all null.
     default_model: { effective: null, source: "default", stored: null, env: null, default: null },
+    default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
+    default_harness_model: { effective: {}, stored: {} },
     // Default sandbox (#410): built-in default `off`, nothing stored/env. The ONLY sandbox
     // knob on this screen since #471 — image and Dockerfile belong to a staging profile.
     default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off", reason: null },
@@ -84,6 +86,14 @@ function sample(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
       fetched_at: null,
       fetched_rows: 0,
       manual_keys: [],
+      reason: null,
+    },
+    // Harness descriptors (#553): the default clean state — only the built-in
+    // floor resolves, nothing inert. The path is reported all the same.
+    harness_descriptors: {
+      path: "/home/user/.pdo/harnesses/descriptors.yaml",
+      names: ["claude", "opencode"],
+      rejected: [],
       reason: null,
     },
     updated_at: "2026-07-01T10:00:00.000Z",
@@ -295,6 +305,49 @@ describe("SettingsModal", () => {
     );
   });
 
+  it("lists the resolved harnesses and stays silent when no descriptor is inert (#553)", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    render(<SettingsModal open onClose={() => {}} />);
+    const names = await screen.findByTestId("setting-harness-descriptors-names");
+    // A declared harness "appears" here (floor ∪ disk); the clean fixture shows the floor.
+    expect(names).toHaveTextContent("claude");
+    expect(names).toHaveTextContent("opencode");
+    expect(screen.getByTestId("setting-harness-descriptors-path")).toHaveTextContent(
+      "/home/user/.pdo/harnesses/descriptors.yaml",
+    );
+    // Absent is SILENT: no advisory when nothing is wrong.
+    expect(
+      screen.queryByTestId("setting-harness-descriptors-reason"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("surfaces the daemon's reason and merged names when a descriptor went inert (#553)", async () => {
+    // Corrupting the file makes it inert and diagnosed; the built-in floor keeps
+    // resolving — the only honest place to say so, since a descriptor passes
+    // through no validator (ADR-0001).
+    fetchSettingsMock.mockResolvedValue(
+      sample({
+        harness_descriptors: {
+          path: "/home/user/.pdo/harnesses/descriptors.yaml",
+          names: ["claude", "opencode"],
+          rejected: [
+            { name: "claude", why: "missing `binary`" },
+          ],
+          reason:
+            "harness descriptors (#553) — harness descriptor tier (/home/user/.pdo/harnesses/descriptors.yaml) refused 1 descriptor(s), each key falling through to the next tier: `claude` (missing `binary`)",
+        },
+      }),
+    );
+    render(<SettingsModal open onClose={() => {}} />);
+    const reason = await screen.findByTestId("setting-harness-descriptors-reason");
+    expect(reason).toHaveTextContent("claude");
+    expect(reason).toHaveTextContent(/falling through/);
+    // …and the floor still resolves alongside the diagnostic.
+    expect(screen.getByTestId("setting-harness-descriptors-names")).toHaveTextContent(
+      "opencode",
+    );
+  });
+
   it("discloses a shadowed env source for the cap", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
     render(<SettingsModal open onClose={() => {}} />);
@@ -381,6 +434,8 @@ describe("SettingsModal", () => {
     updateSettingsMock.mockResolvedValue(
       sample({
         default_model: { effective: "opus", source: "stored", stored: "opus", env: null, default: null },
+        default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
+        default_harness_model: { effective: {}, stored: {} },
       }),
     );
     const onClose = vi.fn();
@@ -401,6 +456,8 @@ describe("SettingsModal", () => {
     fetchSettingsMock.mockResolvedValue(
       sample({
         default_model: { effective: "opus", source: "stored", stored: "opus", env: null, default: null },
+        default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
+        default_harness_model: { effective: {}, stored: {} },
       }),
     );
     updateSettingsMock.mockResolvedValue(sample());
@@ -422,6 +479,8 @@ describe("SettingsModal", () => {
     fetchSettingsMock.mockResolvedValue(
       sample({
         default_model: { effective: "opus", source: "stored", stored: "opus", env: "sonnet", default: null },
+        default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
+        default_harness_model: { effective: {}, stored: {} },
       }),
     );
     render(<SettingsModal open onClose={() => {}} />);

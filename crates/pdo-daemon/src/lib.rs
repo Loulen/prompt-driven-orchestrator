@@ -19,6 +19,10 @@ mod fire_decision;
 mod frontmatter_parser;
 mod graph_resolver;
 mod guard_runner;
+mod harness_argv;
+mod harness_probes;
+pub mod harness_registry;
+mod harness_resolver;
 mod input_resolution;
 mod instance_config;
 mod library_store;
@@ -36,6 +40,7 @@ mod pipeline_migrator;
 mod pipeline_semantics;
 mod pipeline_watcher;
 mod price_table;
+mod project_store;
 mod prompt_augmenter;
 mod pty_bridge;
 mod reap_policy;
@@ -464,6 +469,17 @@ struct CreateRunRequest {
     /// (`create_run_inner`) resolves it once against the fresh instance default.
     #[serde(default)]
     sandbox: Option<event_log::SandboxMode>,
+    /// The agentic harness this Run chooses (#551, ADR-0046) — the `run` tier of the
+    /// precedence chain `nœud → Run → Projet → instance → plancher (claude)`. Free
+    /// text (ADR-0045: PDO does not validate a harness name; an unknown one fails fast
+    /// at spawn, naming it). `#[serde(default)]` → an omitted/`null`/blank field means
+    /// "the Run names no harness", so each free node resolves through the instance
+    /// default and the floor — byte-identical to the pre-#551 shape. Frozen into
+    /// `RunStarted` at the create chokepoint (same immutability as `sandbox`); a
+    /// pinned node still ignores it. A Trigger fire folds its stored harness in here
+    /// (a Run has a single origin), so "Run now" and a cron tick produce the same one.
+    #[serde(default)]
+    harness: Option<String>,
     /// Whether the manager auto-names this Run (#338). `Option`, NOT `bool`:
     /// `#[serde(default)]` → `None` is an **omitted** field, which resolves
     /// back-compatibly by the presence of `name` (a supplied `name` with no flag
@@ -552,6 +568,34 @@ struct TriggerListEntry {
     #[serde(flatten)]
     trigger: trigger_store::Trigger,
     effective_repo: String,
+}
+
+/// Body of `POST /projects` — materialise a Projet from a bare name (#552). The
+/// only path that creates a `projects` row from a name; membership and the
+/// harness are attached afterwards, so a Projet begins empty and harness-less.
+#[derive(Deserialize)]
+struct CreateProjectRequest {
+    name: String,
+}
+
+/// Body of `PATCH /projects/{id}` — rename the Projet and/or (re)set the harness
+/// it carries (#552). `harness` is a double-`Option` (mirror of
+/// `UpdateTrigger.sandbox`): **absent** leaves it untouched, `null` clears it,
+/// a string sets it. An empty string clears it too (the `Some("")` trap of #347).
+#[derive(Deserialize)]
+struct PatchProjectRequest {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    harness: Option<Option<String>>,
+}
+
+/// Body of `POST` / `DELETE /projects/{id}/members` — one member path, compared
+/// **verbatim** (ADR-0033). The attach enforces at-most-one membership before any
+/// write; a path owned by another Projet is a 409 naming the owner (#552).
+#[derive(Deserialize)]
+struct ProjectMemberRequest {
+    path: String,
 }
 
 #[derive(Serialize)]
@@ -1874,6 +1918,7 @@ impl DaemonHandle {
                 overlap_policy: "skip".to_string(),
                 max_concurrent: None,
                 sandbox: None,
+                harness: None,
                 auto_name: true,
                 next_fire_at: Some("2030-01-01T00:00:00.000Z".to_string()),
             },
@@ -2913,6 +2958,11 @@ struct CreateTriggerRequest {
     /// request's explicit tier.
     #[serde(default)]
     sandbox: Option<String>,
+    /// Per-Trigger harness (#551, ADR-0046): a harness name, or absent/`null`/blank to
+    /// inherit the instance default. Read at fire time and folded into the fired Run's
+    /// harness (there is no separate Trigger tier). Free text — no validation (ADR-0045).
+    #[serde(default)]
+    harness: Option<String>,
     /// Whether Runs this Trigger fires are auto-named (#338). Seeded from the instance
     /// default in the create modal and frozen on the row; `#[serde(default)]` → `true`
     /// so an older client that omits the field keeps the pre-#338 auto-naming behaviour.
@@ -3246,6 +3296,9 @@ async fn create_trigger(
         // #410: normalise `Some("")` to `None` (inherit the instance default), so an
         // empty selector value never persists as a bogus stored mode.
         sandbox: req.sandbox.filter(|s| !s.trim().is_empty()),
+        // #551: same normalisation for the harness — a blank selector value inherits the
+        // instance default at fire time rather than persisting as a harness named "".
+        harness: req.harness.filter(|s| !s.trim().is_empty()),
         // #338: freeze the auto-naming choice on the row (seeded from the instance
         // default in the modal). No re-resolution at fire time — the runtime never
         // decides autonomy (ADR-0012 frontier).
@@ -3443,6 +3496,12 @@ struct PatchTriggerRequest {
     /// from JSON — that is what lets the UI reset a Trigger to "use the instance default".
     #[serde(default, deserialize_with = "deserialize_double_option")]
     sandbox: Option<Option<String>>,
+    /// Per-Trigger harness (#551), double-wrapped like `sandbox`: absent = leave, present
+    /// `null` = clear back to inheriting the instance default, `"name"` = set. The custom
+    /// deserializer makes present-`null` → `Some(None)` reachable from JSON — what lets the
+    /// UI reset a Trigger to "use the instance default".
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    harness: Option<Option<String>>,
     /// Auto-naming toggle (#338), a FLAT `Option<bool>` like `enabled` — NOT
     /// double-wrapped like `sandbox`/`max_concurrent`. There is no "inherit" state to
     /// clear back to: a Trigger's autonomy is a plain on/off. `None` leaves it,
@@ -3694,6 +3753,12 @@ async fn patch_trigger(
         // instance default, `None` leaves it. The FE maps the "use instance default"
         // option to `null`, so an empty string never reaches here.
         sandbox: req.sandbox,
+        // #551: `Some(Some(name))` sets, `Some(None)` clears to inherit, `None` leaves it.
+        // Normalise a stray `Some(Some(""))` to a clean clear (`Some(None)`) so a blank
+        // never persists as a harness named "" (defence in depth; the FE sends `null`).
+        harness: req
+            .harness
+            .map(|inner| inner.filter(|s| !s.trim().is_empty())),
         // #338: flat toggle — `Some(v)` sets, `None` leaves. No clear state.
         auto_name: req.auto_name,
         next_fire_at,
@@ -4053,6 +4118,21 @@ fn build_router(state: Arc<AppState>) -> Router {
         // dev-mode GET hits the daemon instead of the SPA fallback (same trap as
         // `/nodes` #345, `/stats` #377, `/fs` #431).
         .route("/audit", get(get_audit))
+        // Projets (#552, ADR-0046) — the group-header pencil's CRUD and the middle
+        // tier of the harness axis. NEW top-level `/projects` prefix → added to the
+        // vite dev proxy whitelist (frontend/vite.config.ts) so a dev-mode GET hits
+        // the daemon, not the SPA fallback (same trap as `/audit` #507). The
+        // members sub-resource is a static segment under the param — axum 0.8
+        // allows it (cf. `/triggers/{id}/fires`).
+        .route("/projects", get(list_projects).post(create_project))
+        .route(
+            "/projects/{project_id}",
+            get(get_project).patch(patch_project).delete(delete_project),
+        )
+        .route(
+            "/projects/{project_id}/members",
+            post(add_project_member).delete(remove_project_member),
+        )
         .route(
             "/triggers/{trigger_id}",
             get(get_trigger).patch(patch_trigger).delete(delete_trigger),
@@ -4063,6 +4143,245 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/triggers/{trigger_id}/fire", post(fire_trigger_now))
         .fallback(static_handler)
         .with_state(state)
+}
+
+// --- Projets (#552, ADR-0046) ---
+//
+// A Projet is the middle tier of the harness axis and a named grouping of member
+// repo paths. Nothing is seeded: a row exists only once a human names a group or
+// attaches a setting (ADR-0046). The lists group by Projet client-side; these
+// endpoints are the CRUD behind the group-header pencil. `/projects` is a NEW
+// top-level prefix → it has its own entry in the vite dev proxy whitelist
+// (`frontend/vite.config.ts`), same trap as `/nodes` (#345) / `/stats` (#377) /
+// `/audit` (#507).
+
+fn project_list_error() -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({ "error": "project store unavailable" })),
+    )
+        .into_response()
+}
+
+async fn list_projects(State(state): State<Arc<AppState>>) -> Response {
+    match project_store::list(&state.db).await {
+        Ok(projects) => Json(projects).into_response(),
+        Err(e) => {
+            error!("failed to list projects: {e}");
+            project_list_error()
+        }
+    }
+}
+
+async fn get_project(
+    State(state): State<Arc<AppState>>,
+    AxumPath(project_id): AxumPath<String>,
+) -> Response {
+    match project_store::get(&state.db, &project_id).await {
+        Ok(Some(p)) => Json(p).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "no such project").into_response(),
+        Err(e) => {
+            error!("failed to load project {project_id}: {e}");
+            project_list_error()
+        }
+    }
+}
+
+async fn create_project(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateProjectRequest>,
+) -> Response {
+    let name = req.name.trim();
+    if name.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "project name is required" })),
+        )
+            .into_response();
+    }
+    match project_store::create(&state.db, name).await {
+        Ok(project) => {
+            let _ = state.pipeline_tx.send(serde_json::json!({
+                "type": "project_changed",
+                "project_id": project.id,
+            }));
+            (StatusCode::CREATED, Json(project)).into_response()
+        }
+        Err(e) => {
+            error!("failed to create project: {e}");
+            project_list_error()
+        }
+    }
+}
+
+async fn patch_project(
+    State(state): State<Arc<AppState>>,
+    AxumPath(project_id): AxumPath<String>,
+    Json(req): Json<PatchProjectRequest>,
+) -> Response {
+    // The Projet must exist first — a PATCH never materialises one (only the
+    // pencil's create does, via POST /projects).
+    match project_store::get(&state.db, &project_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return (StatusCode::NOT_FOUND, "no such project").into_response(),
+        Err(e) => {
+            error!("failed to load project {project_id}: {e}");
+            return project_list_error();
+        }
+    }
+    if let Some(name) = req.name.as_deref() {
+        let name = name.trim();
+        if name.is_empty() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "project name cannot be blank" })),
+            )
+                .into_response();
+        }
+        if let Err(e) = project_store::rename(&state.db, &project_id, name).await {
+            error!("failed to rename project {project_id}: {e}");
+            return project_list_error();
+        }
+    }
+    // Double-`Option`: `Some(_)` means the field was present. `Some(None)` and
+    // `Some(Some(""))` both clear; `Some(Some(h))` sets. `set_harness` normalises
+    // the empty string to NULL itself (#347).
+    if let Some(harness) = req.harness {
+        let harness = harness.as_deref();
+        if let Err(e) = project_store::set_harness(&state.db, &project_id, harness).await {
+            error!("failed to set harness on project {project_id}: {e}");
+            return project_list_error();
+        }
+    }
+    match project_store::get(&state.db, &project_id).await {
+        Ok(Some(p)) => {
+            let _ = state.pipeline_tx.send(serde_json::json!({
+                "type": "project_changed",
+                "project_id": project_id,
+            }));
+            Json(p).into_response()
+        }
+        Ok(None) => (StatusCode::NOT_FOUND, "no such project").into_response(),
+        Err(e) => {
+            error!("failed to reload project {project_id}: {e}");
+            project_list_error()
+        }
+    }
+}
+
+async fn delete_project(
+    State(state): State<Arc<AppState>>,
+    AxumPath(project_id): AxumPath<String>,
+) -> Response {
+    match project_store::delete(&state.db, &project_id).await {
+        Ok(true) => {
+            let _ = state.pipeline_tx.send(serde_json::json!({
+                "type": "project_changed",
+                "project_id": project_id,
+            }));
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(false) => (StatusCode::NOT_FOUND, "no such project").into_response(),
+        Err(e) => {
+            error!("failed to delete project {project_id}: {e}");
+            project_list_error()
+        }
+    }
+}
+
+async fn add_project_member(
+    State(state): State<Arc<AppState>>,
+    AxumPath(project_id): AxumPath<String>,
+    Json(req): Json<ProjectMemberRequest>,
+) -> Response {
+    let path = req.path.trim();
+    if path.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "member path is required" })),
+        )
+            .into_response();
+    }
+    // The target Projet must exist (materialised by the pencil's create).
+    match project_store::get(&state.db, &project_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return (StatusCode::NOT_FOUND, "no such project").into_response(),
+        Err(e) => {
+            error!("failed to load project {project_id}: {e}");
+            return project_list_error();
+        }
+    }
+    match project_store::add_member(&state.db, &project_id, path).await {
+        Ok(project_store::AddMember::Added) | Ok(project_store::AddMember::AlreadyMember) => {
+            let _ = state.pipeline_tx.send(serde_json::json!({
+                "type": "project_changed",
+                "project_id": project_id,
+            }));
+            match project_store::get(&state.db, &project_id).await {
+                Ok(Some(p)) => Json(p).into_response(),
+                _ => StatusCode::NO_CONTENT.into_response(),
+            }
+        }
+        // AC: a path already owned by another Projet is refused BEFORE any effect,
+        // and the refusal NAMES the owner (409, so the pencil can say which one).
+        Ok(project_store::AddMember::Refused {
+            owner_id,
+            owner_name,
+        }) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": format!("path already belongs to project '{owner_name}'"),
+                "owner_id": owner_id,
+                "owner_name": owner_name,
+            })),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("failed to add member to project {project_id}: {e}");
+            project_list_error()
+        }
+    }
+}
+
+async fn remove_project_member(
+    State(state): State<Arc<AppState>>,
+    AxumPath(project_id): AxumPath<String>,
+    Json(req): Json<ProjectMemberRequest>,
+) -> Response {
+    let path = req.path.trim();
+    // Scope the detach to the named Projet: a path owned by a *different* Projet
+    // is left alone (idempotent no-op), so a stale client can't strip another
+    // Projet's member.
+    match project_store::owner_of(&state.db, path).await {
+        Ok(Some(owner)) if owner.id == project_id => {}
+        Ok(_) => {
+            // Not a member of this Projet (or of any) — nothing to do.
+            return match project_store::get(&state.db, &project_id).await {
+                Ok(Some(p)) => Json(p).into_response(),
+                Ok(None) => (StatusCode::NOT_FOUND, "no such project").into_response(),
+                Err(e) => {
+                    error!("failed to load project {project_id}: {e}");
+                    project_list_error()
+                }
+            };
+        }
+        Err(e) => {
+            error!("failed to resolve owner of {path}: {e}");
+            return project_list_error();
+        }
+    }
+    if let Err(e) = project_store::remove_member(&state.db, path).await {
+        error!("failed to remove member from project {project_id}: {e}");
+        return project_list_error();
+    }
+    let _ = state.pipeline_tx.send(serde_json::json!({
+        "type": "project_changed",
+        "project_id": project_id,
+    }));
+    match project_store::get(&state.db, &project_id).await {
+        Ok(Some(p)) => Json(p).into_response(),
+        _ => StatusCode::NO_CONTENT.into_response(),
+    }
 }
 
 async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
@@ -4124,6 +4443,13 @@ async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
     audit_log::init(db)
         .await
         .context("failed to create audit_log table")?;
+
+    // #552 / ADR-0046: Projets — the middle tier of the harness axis. Brand-new
+    // tables, materialised on demand (nothing seeded), same `CREATE TABLE IF NOT
+    // EXISTS` idiom as `sandbox_profiles` / `audit_log`.
+    project_store::init(db)
+        .await
+        .context("failed to create project tables")?;
 
     Ok(())
 }
@@ -4441,6 +4767,41 @@ async fn stored_default_model(db: &sqlx::SqlitePool) -> Option<String> {
         .ok()
         .and_then(|c| c.default_model);
     tmux_session_manager::default_model_with(stored)
+}
+
+/// The instance-wide default **harness**, resolved `stored → env → None` from a
+/// *fresh* read of `instance_config` (#550, ADR-0046). Feeds the `instance` tier
+/// of [`harness_resolver`] at every spawn seam so a `PUT /settings` takes effect
+/// on the next node with no restart. `None` ⇒ the resolver's `claude` floor.
+async fn stored_default_harness(db: &sqlx::SqlitePool) -> Option<String> {
+    let stored = instance_config::get(db)
+        .await
+        .ok()
+        .and_then(|c| c.default_harness);
+    tmux_session_manager::default_harness_with(stored)
+}
+
+/// The per-harness default model map for the resolver (#550, ADR-0046), from a
+/// *fresh* read of `instance_config`. The stored `default_harness_model` map, with
+/// the legacy single instance default (`default_model` stored/env) folded under
+/// `claude` when the map is silent for it — so a pre-#550 setup keeps working
+/// unchanged. A DB read error yields an empty map (fall through to no default).
+async fn stored_default_harness_models(
+    db: &sqlx::SqlitePool,
+) -> std::collections::BTreeMap<String, String> {
+    let cfg = instance_config::get(db).await.ok();
+    let mut map = cfg
+        .as_ref()
+        .map(|c| c.default_harness_model.clone())
+        .unwrap_or_default();
+    if !map.contains_key(harness_registry::CLAUDE) {
+        if let Some(legacy) =
+            tmux_session_manager::default_model_with(cfg.and_then(|c| c.default_model))
+        {
+            map.insert(harness_registry::CLAUDE.to_string(), legacy);
+        }
+    }
+    map
 }
 
 /// Resolve turn-end auto-completion the way the liveness sweep does, from a
@@ -4873,6 +5234,12 @@ async fn fire_one_trigger(
                     .sandbox
                     .as_deref()
                     .and_then(event_log::SandboxMode::parse),
+                // #551 (ADR-0046): the Trigger carries the harness IN its Run template —
+                // there is no separate Trigger tier. Fold the stored harness into the
+                // create request's `run` choice, so a cron tick and a "Run now" (both
+                // route through here) freeze the SAME harness. A blank/absent stored
+                // value defers to the instance default. No validation (ADR-0045).
+                harness: trigger.harness.clone(),
                 // #338: pass the Trigger's frozen auto-naming choice as the explicit
                 // tier. `Some(b)` wins the chokepoint resolution unconditionally, so a
                 // fire with `auto_name=false` keeps a stable per-id name and the manager
@@ -5422,6 +5789,10 @@ const KNOWN_NODE_KEYS: &[&str] = &[
     "max_iter",
     "branches",
     "prompt",
+    // #550/ADR-0046: the harness axis. `model`/`effort` above stay accepted (a
+    // pasted flat pair is folded into `harnesses.claude` by `normalize_node_value`).
+    "pin_harness",
+    "harnesses",
     // Accepted-and-dropped, not a semantic loss → no warning.
     "id",
     "view",
@@ -5502,7 +5873,32 @@ fn parse_node_spec(yaml: &str) -> Result<serde_json::Value, String> {
         }
     }
 
-    // 7. Deserialize the (normalized) map into a LibraryEntry. `prompt` defaults
+    // 7. #550/ADR-0046: read the harness axis off the (folded) value before it is
+    //    consumed. `normalize_node_value` above folded any flat `model:`/`effort:`
+    //    into `harnesses.claude`, so the claude entry is the source for the
+    //    (claude-aware) `spec.model`/`spec.effort` the node library shows — and the
+    //    full `harnesses` map + `pin_harness` ride through for the harness UI.
+    let claude = value
+        .get("harnesses")
+        .and_then(|h| h.get(harness_registry::CLAUDE));
+    let claude_model = claude
+        .and_then(|c| c.get("model"))
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let claude_effort = claude
+        .and_then(|c| c.get("effort"))
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let pin_harness = value
+        .get("pin_harness")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let harnesses = value
+        .get("harnesses")
+        .map(yaml_value_to_json)
+        .unwrap_or(serde_json::Value::Null);
+
+    // 8. Deserialize the (normalized) map into a LibraryEntry. `prompt` defaults
     //    to empty (a structural node carries none); unknown fields are ignored.
     let entry: library_store::LibraryEntry =
         serde_yaml::from_value(value).map_err(|e| format!("{e}"))?;
@@ -5514,8 +5910,12 @@ fn parse_node_spec(yaml: &str) -> Result<serde_json::Value, String> {
             "inputs": entry.inputs,
             "outputs": entry.outputs,
             "interactive": entry.interactive,
-            "model": entry.model,
-            "effort": entry.effort,
+            // Claude-aware view (#345) — derived from the folded harnesses map.
+            "model": claude_model,
+            "effort": claude_effort,
+            // #550: the harness axis, for the pin selector + per-harness UI.
+            "pin_harness": pin_harness,
+            "harnesses": harnesses,
             "max_iter": entry.max_iter,
             "branches": entry.branches,
         },
@@ -6674,6 +7074,11 @@ async fn parse_multipart_create_run(
     // defers to the trigger/instance default at the chokepoint. An unknown token is
     // treated as unset (defensive; the FE only ever sends valid variants).
     let mut sandbox: Option<event_log::SandboxMode> = None;
+    // #551: an explicit harness may ride the multipart (browser) create when images
+    // are attached, so a harness choice is honoured on that path too. `None` when the
+    // field is absent/blank — the chokepoint then freezes nothing and the Run resolves
+    // through the instance default and the floor.
+    let mut harness: Option<String> = None;
     // #338: an explicit auto-naming choice may ride the multipart (browser) create
     // when images are attached, so an unchecked "Auto-generated" box is honoured on
     // that path too. `None` when the field is absent — the chokepoint then resolves
@@ -6772,6 +7177,17 @@ async fn parse_multipart_create_run(
                     sandbox = event_log::SandboxMode::parse(&v);
                 }
             }
+            "harness" => {
+                // #551: the explicit harness threaded off the multipart form. Empty →
+                // leave `None` (the Run names no harness). No validation (ADR-0045).
+                let v = field
+                    .text()
+                    .await
+                    .map_err(|e| format!("bad field harness: {e}"))?;
+                if !v.trim().is_empty() {
+                    harness = Some(v);
+                }
+            }
             "auto_name" => {
                 // #338: an explicit flag off the multipart form. Reuses the shared
                 // boolean parser; an unrecognised token leaves `None` (defer to the
@@ -6818,6 +7234,8 @@ async fn parse_multipart_create_run(
         // create with attached images). `None` when the field is absent — the
         // chokepoint then defers to the trigger/instance default.
         sandbox,
+        // #551: the explicit harness threaded off the multipart form.
+        harness,
         // #338: the explicit auto-naming choice threaded off the multipart form.
         auto_name,
     };
@@ -7275,6 +7693,24 @@ async fn create_run_inner(
     if let Some(ref branch) = effective_source_branch {
         run_payload["source_branch"] = serde_json::json!(branch);
     }
+    // #551 (ADR-0046): FREEZE the Run's harness choice into `RunStarted`, the same
+    // immutability posture as `sandbox` above — editing the pipeline or the instance
+    // default afterwards can never re-decide a Run in flight. Written ONLY for a
+    // non-blank choice, so a Run that names no harness keeps its payload byte-identical
+    // to the pre-#551 shape (absent key → `None` → resolve through the instance default
+    // and the floor). A blank/whitespace value is normalised to absent here, so the
+    // `Some("")` trap of #347 can never persist. `req.harness` already carries the Run's
+    // single-origin choice: a manual create's field, or a Trigger fire's folded harness.
+    // No validation (ADR-0045): an unknown name fails fast at the first node spawn,
+    // naming it — never here, never silently.
+    if let Some(h) = req
+        .harness
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        run_payload["harness"] = serde_json::json!(h);
+    }
     // Auto-naming autonomy decision (#338, ADR-0015). Resolved ONCE here, at the
     // same chokepoint as the sandbox default, and read FRESH from the DB so a
     // `PUT /settings` bites on the very next create with no restart (never cached at
@@ -7428,7 +7864,7 @@ async fn create_run_inner(
     if sandbox.is_off() {
         // Historical host path — inline, byte-identical to pre-#407. NO docker.
         spawn_ready_after_event(state, &run_id).await;
-        spawn_manager_session(state, &run_id, &worktree_dir, name_hint, false);
+        spawn_manager_session(state, &run_id, &worktree_dir, name_hint, false).await;
     } else {
         // #407 D3/D4: eager fail-fast prep on a detached, panic-isolated task
         // (mirror ADR-0023 — the 201 must not block on a first-run `docker
@@ -7507,7 +7943,8 @@ async fn create_run_inner(
                         &task_worktree,
                         name_hint,
                         true,
-                    );
+                    )
+                    .await;
                 }
                 Ok(Err(e)) => {
                     fail_run_sandbox_prep(
@@ -7636,7 +8073,7 @@ pub(crate) async fn fail_run_sandbox_prep(state: &AppState, run_id: &str, reason
 /// today: `create_run` appends `RunStarted` and `return Err`s on failure, well
 /// before either spawn site here (host, or the detached sandbox task). Keep it
 /// that way.
-fn spawn_manager_session(
+async fn spawn_manager_session(
     state: &AppState,
     run_id: &str,
     worktree_dir: &std::path::Path,
@@ -7672,6 +8109,28 @@ fn spawn_manager_session(
         marker: &session_name,
         workdir: worktree_dir,
     });
+    // #551/ADR-0046: the manager follows the harness OF THE RUN — `Run → instance →
+    // floor`, no node tier and (deliberately) no model/effort. So "ce Run tourne sur
+    // X" holds with no exception to remember: an A/B on a new harness exercises the
+    // manager too. When the Run named no harness AND the instance default is unset,
+    // this resolves to the `claude` floor — byte-identical to the legacy manager
+    // launch. An unknown name (only reachable via an unvalidated Run choice, ADR-0045)
+    // falls back to `claude` with a warning rather than failing the whole Run here:
+    // the first NODE spawn is where an unknown harness fails fast (ADR-0037), and the
+    // manager is a best-effort assist that must not itself wedge the Run.
+    let run_harness = reload_run_state(state, run_id)
+        .await
+        .and_then(|(_, s)| s.harness);
+    let default_harness = stored_default_harness(&state.db).await;
+    let manager_harness_name =
+        harness_resolver::resolve_infra_harness(run_harness.as_deref(), default_harness.as_deref());
+    let manager_harness = harness_registry::resolve(&manager_harness_name).unwrap_or_else(|| {
+        warn!(
+            "manager for run {run_id}: unknown harness '{manager_harness_name}' — \
+             launching the manager on the claude floor (the first node spawn fails fast)"
+        );
+        harness_registry::claude()
+    });
     if let Err(e) = tmux_session_manager::spawn(
         &session_name,
         &full_prompt,
@@ -7688,6 +8147,7 @@ fn spawn_manager_session(
         // and resolving nodes by their own id is precisely what stops the manager's
         // transcript, which shares this cwd, from being read as a node's.
         tmux_session_manager::SessionTail::Agent {
+            harness: &manager_harness,
             model: None,
             effort: None,
             session_id: None,
@@ -7948,6 +8408,29 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
         "default"
     };
 
+    // --- default harness (#550, ADR-0046) — same `stored → env → floor` shape as
+    // `default_model`. `effective`=null ⇒ the `claude` floor applies at resolve. ---
+    let dh_stored = cfg.default_harness.as_deref().filter(|s| !s.is_empty());
+    let dh_env = tmux_session_manager::env_default_harness();
+    let dh_effective = tmux_session_manager::default_harness_with(cfg.default_harness.clone());
+    let dh_source = if dh_stored.is_some() {
+        "stored"
+    } else if dh_env.is_some() {
+        "env"
+    } else {
+        "default"
+    };
+    // The per-harness default model map (#550): disclosed verbatim (the stored map)
+    // plus the legacy `PDO_DEFAULT_MODEL` env folded under `claude`, so the screen
+    // shows exactly what the resolver's `instance` tier will read.
+    let dhm_stored = cfg.default_harness_model.clone();
+    let mut dhm_effective = dhm_stored.clone();
+    if !dhm_effective.contains_key(harness_registry::CLAUDE) {
+        if let Some(m) = dm_effective.clone() {
+            dhm_effective.insert(harness_registry::CLAUDE.to_string(), m);
+        }
+    }
+
     // --- default sandbox mode (enum ; built-in default `off`) (#410) ---
     // The empty-string filter treats a stored `""` as unset, and `effective` is computed by
     // the SAME resolver the create-run chokepoint consumes, so the disclosed value can never
@@ -8090,11 +8573,54 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
         }),
     };
 
+    // --- harness descriptors: the disk tier, surfaced (#553, ADR-0045) ---
+    // Same posture as `price_table` above: a hand-edited descriptor file passes
+    // through NO validator (ADR-0001), so the only honest place to say a descriptor
+    // is inert or refused is here, beside the facts. `names` lists what actually
+    // resolves (floor merged with disk), so a user learns their declared harness
+    // "appeared"; `reason` carries the SAME string the loader logs. The path is
+    // ALWAYS reported so the user knows where to write — nothing is ever seeded.
+    let harness_descriptors_view = match &host_home_path {
+        Some(home) => {
+            let registry = harness_registry::HarnessRegistry::load(home);
+            serde_json::json!({
+                "path": harness_registry::HarnessRegistry::descriptors_path(home).to_string_lossy(),
+                "names": registry.names(),
+                "rejected": registry
+                    .rejected()
+                    .iter()
+                    .map(|r| serde_json::json!({ "name": r.name, "why": r.why }))
+                    .collect::<Vec<_>>(),
+                "reason": registry.diagnostic(),
+            })
+        }
+        None => serde_json::json!({
+            "path": null,
+            "names": harness_registry::HarnessRegistry::builtin().names(),
+            "rejected": [],
+            "reason": "HOME is unset, so the descriptor file has no resolvable path — \
+                       only the harnesses compiled into the binary apply",
+        }),
+    };
+
     Ok(serde_json::json!({
         "session_cap": settings_field(cap_effective, cap_source, cfg.session_cap, cap_env, cap_default),
         "reaper_ttl_secs": settings_field(ttl_effective, ttl_source, cfg.reaper_ttl_secs, ttl_env, ttl_default),
         "guard_timeout_secs": settings_field(guard_effective, guard_source, cfg.guard_timeout_secs, guard_env_ms, guard_default),
         "default_model": settings_field_str(dm_effective.as_deref(), dm_source, dm_stored, dm_env.as_deref()),
+        // #550/ADR-0046: the harness axis. `default_harness` is a plain
+        // stored→env→floor string field; `default_harness_model` is a per-harness
+        // map, disclosed as {effective, stored} so the screen shows both what is
+        // set and what the resolver will read (env fold under claude included).
+        "default_harness": settings_field_str(dh_effective.as_deref(), dh_source, dh_stored, dh_env.as_deref()),
+        "default_harness_model": {
+            "effective": dhm_effective,
+            "stored": dhm_stored,
+        },
+        // #553/ADR-0045: the disk descriptor tier — which harnesses resolve (floor
+        // ∪ disk), the file path, and any inert/refused descriptor named. The
+        // settings surface is where a broken descriptor is ALWAYS said.
+        "harness_descriptors": harness_descriptors_view,
         "default_sandbox": {
             "effective": sbx_effective.as_str(),
             "source": sbx_source,
@@ -9407,7 +9933,13 @@ async fn get_run(
             // HOST home — prices are an instance concept), while transcripts come
             // from `projects_root` (the #408 seam, which moves for a sandboxed Run).
             let prices = price_table::PriceTable::load(&home_root);
-            augment_run_state_from_disk(&mut run_state, &projects_root, &repo_root, &prices);
+            augment_run_state_from_disk(
+                &mut run_state,
+                &events,
+                &projects_root,
+                &repo_root,
+                &prices,
+            );
             Json(run_state).into_response()
         }
         None => (StatusCode::NOT_FOUND, "run not found").into_response(),
@@ -10036,6 +10568,20 @@ async fn run_stale_detection(state: &Arc<AppState>) {
                 running: &running,
             };
 
+            // #553: gate the turn-end and usage-limit probes on the node's
+            // FROZEN-at-spawn harness (ADR-0046), never the current YAML. `None`
+            // (a script node, a pre-#550 row) is the `claude` floor, which has both
+            // capabilities — so the sweep is byte-identical to pre-#553 there. A
+            // node on a harness without them runs neither probe: no auto-completion
+            // on an invented heuristic, no capture for another harness's menu.
+            let node_harness = find_launch_harness(&events, node_id, *iter)
+                .unwrap_or_else(|| harness_registry::CLAUDE.to_string());
+            let hc = harness_probes::capabilities(&node_harness);
+            let caps = stale_detector::HarnessCapabilities {
+                turn_end: hc.turn_end,
+                usage_limit: hc.usage_limit,
+            };
+
             let assessment = stale_detector::assess_node(
                 &probes,
                 &events,
@@ -10044,6 +10590,7 @@ async fn run_stale_detection(state: &Arc<AppState>) {
                 *iter,
                 now,
                 autocomplete_turn_end,
+                caps,
             );
 
             if assessment.blocked_on_limit {
@@ -10473,6 +11020,42 @@ async fn node_pane(
             // own transcript. A pre-#473 row (no id) falls back to a bare
             // `--continue`, which is the very collision this issue fixes.
             let launch_session_id = find_launch_session_id(&events, &node_id, iter);
+            // #550/ADR-0046: re-pose the harness FROZEN at spawn — never the YAML's
+            // now. A pre-#550 row (no key) or an unknown harness falls back to the
+            // `claude` floor, byte-identical to the legacy resume.
+            let launch_harness = find_launch_harness(&events, &node_id, iter);
+            // #553: resolve the frozen harness against the embedded floor MERGED
+            // with the disk descriptor tier, so a user-declared harness resumes
+            // like the built-in ones. The registry reads a root we hand it (never
+            // `$HOME`); a resolution failure, a pre-#550 row, or an unresolved home
+            // all fall back to the `claude` floor — byte-identical to the legacy
+            // resume.
+            let harness_home_root = sandbox_run::sandbox_home_roots(&state)
+                .map(|(home, _)| home)
+                .unwrap_or_default();
+            let descriptor = launch_harness
+                .as_deref()
+                .and_then(|name| {
+                    harness_registry::HarnessRegistry::load(&harness_home_root).resolve(name)
+                })
+                .unwrap_or_else(harness_registry::claude);
+            // AC #9: a harness with no resume mechanism serves its last pane
+            // snapshot (the same branch as a `script` node), never a resume error.
+            if !descriptor.can_resume() {
+                let snapshot_path = pane_snapshot_path(&repo_root, &run_id, &node_id, iter);
+                let (content, source) = match std::fs::read_to_string(&snapshot_path) {
+                    Ok(c) => (c, "snapshot"),
+                    Err(_) => ("Session no longer available".to_string(), "unavailable"),
+                };
+                return Json(PaneResponse {
+                    content,
+                    session_name,
+                    resumed: false,
+                    stale: false,
+                    source,
+                })
+                .into_response();
+            }
             // #433 / ADR-0043 (D7): re-resolve turn-end auto-completion FRESH — it
             // may have toggled since spawn — so a resurrected session re-carries
             // the `Stop` hook. A `script` node returned early above, so this tail is
@@ -10485,6 +11068,7 @@ async fn node_pane(
                 &node_id,
                 iter,
                 state.port,
+                &descriptor,
                 launch_effort.as_deref(),
                 launch_session_id.as_deref(),
                 state.tmux_cmd_override.as_deref(),
@@ -10577,6 +11161,27 @@ fn find_launch_session_id(events: &[event_log::Event], node_id: &str, iter: i64)
         })
         .and_then(|e| e.payload.as_ref())
         .and_then(|p| p.get("session_id"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+}
+
+/// The harness a node's iteration was **launched** with (#550, ADR-0046), read
+/// back from its `NodeStarted` payload — never re-resolved from the current YAML
+/// or the tiers above (ADR-0007: a live iteration is immutable to edits). A
+/// missing key (every pre-#550 row, every infra session) yields `None`, which the
+/// resume seam treats as the `claude` floor — byte-identical to the legacy tail.
+fn find_launch_harness(events: &[event_log::Event], node_id: &str, iter: i64) -> Option<String> {
+    events
+        .iter()
+        .rev()
+        .find(|e| {
+            e.kind == event_log::EventKind::NodeStarted
+                && e.node_id.as_deref() == Some(node_id)
+                && e.iter == Some(iter)
+        })
+        .and_then(|e| e.payload.as_ref())
+        .and_then(|p| p.get("harness"))
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
@@ -10797,11 +11402,13 @@ async fn spawn_merge_resolver(
     let prompt = load_merge_resolver_prompt(&state.repo_root);
     let session_name = tmux_session_manager::node_session_name(run_id, MERGE_RESOLVER_NODE_ID, 1);
 
-    // #407: the merge resolver runs inside the Run's container when sandboxed.
-    // Project the (immutable) mode; default `off` if the state can't be reloaded.
-    let sandbox_mode = reload_run_state(state, run_id)
+    // #407/#551: the merge resolver runs inside the Run's container when sandboxed
+    // AND on the harness OF THE RUN. Project both from the SAME (immutable) reload —
+    // the mode defaults to `off`, the harness to `None`, if the state can't be
+    // reloaded.
+    let (sandbox_mode, run_harness) = reload_run_state(state, run_id)
         .await
-        .map(|(_, s)| s.sandbox)
+        .map(|(_, s)| (s.sandbox, s.harness))
         .unwrap_or_default();
 
     let resolver_started = event_log::Event {
@@ -10826,6 +11433,20 @@ async fn spawn_merge_resolver(
         marker: &session_name,
         workdir: worktree_dir,
     });
+    // #551/ADR-0046: the merge resolver follows the harness OF THE RUN, exactly like
+    // the manager — `Run → instance → floor`, no node tier, no model/effort. Unknown
+    // name (unvalidated Run choice, ADR-0045) falls back to `claude` with a warning:
+    // the resolver is dead in production since ADR-0006, so this is defence in depth.
+    let default_harness = stored_default_harness(&state.db).await;
+    let resolver_harness_name =
+        harness_resolver::resolve_infra_harness(run_harness.as_deref(), default_harness.as_deref());
+    let resolver_harness = harness_registry::resolve(&resolver_harness_name).unwrap_or_else(|| {
+        warn!(
+            "merge resolver for run {run_id}: unknown harness '{resolver_harness_name}' — \
+             launching on the claude floor"
+        );
+        harness_registry::claude()
+    });
     if let Err(e) = tmux_session_manager::spawn(
         &session_name,
         &prompt,
@@ -10841,6 +11462,7 @@ async fn spawn_merge_resolver(
         // confused with a `merge` NODE, which is a regular NodeDef routed through
         // `spawn_node` and DOES carry an effort and a pinned id.
         tmux_session_manager::SessionTail::Agent {
+            harness: &resolver_harness,
             model: None,
             effort: None,
             session_id: None,
@@ -12044,6 +12666,17 @@ async fn force_spawn_node(state: &Arc<AppState>, run_id: &str, node_id: &str) ->
         // (wiring only one seam would leave this path at the account default —
         // a silent bug visible only on a manual force-spawn).
         default_model: stored_default_model(&state.db).await,
+        // #550/ADR-0046: same fresh-resolution discipline for the harness axis.
+        default_harness: stored_default_harness(&state.db).await,
+        default_harness_models: stored_default_harness_models(&state.db).await,
+        // #552/ADR-0046: the Projet tier — the harness carried by the Projet that
+        // owns this Run's primary (effective) repo. Resolved fresh here so a manual
+        // force-spawn honours a Projet setting attached mid-Run, like the model /
+        // harness defaults above. A DB error degrades to a transparent tier.
+        project_harness: project_store::harness_for_path(&state.db, &repo_root.to_string_lossy())
+            .await
+            .ok()
+            .flatten(),
         // #433 / ADR-0043: same reasoning as `default_model` — resolve turn-end
         // auto-completion fresh so a force-spawned node arms the `Stop` hook when
         // the setting is on, instead of silently missing it on this seam alone.
@@ -12317,6 +12950,15 @@ async fn node_retry(
         docker_cmd_override: state.docker_cmd_override.as_deref(),
         // #347: retry honours the instance default like the live scheduler path.
         default_model: stored_default_model(&state.db).await,
+        // #550/ADR-0046: retry resolves the harness axis fresh, like model.
+        default_harness: stored_default_harness(&state.db).await,
+        default_harness_models: stored_default_harness_models(&state.db).await,
+        // #552/ADR-0046: retry resolves the Projet tier fresh too, from the Run's
+        // primary (effective) repo — a secondary never sways it (ADR-0042).
+        project_harness: project_store::harness_for_path(&state.db, &repo_root.to_string_lossy())
+            .await
+            .ok()
+            .flatten(),
         // #433 / ADR-0043: retry re-arms the `Stop` hook per the current setting,
         // like the live scheduler path — not the value at the original spawn.
         inject_hook: stored_autocomplete_turn_end(&state.db).await,
@@ -13835,6 +14477,7 @@ fn compute_run_loc(repo_root: &std::path::Path, run_id: &str) -> Option<event_lo
 
 fn augment_run_state_from_disk(
     run_state: &mut event_log::RunState,
+    events: &[event_log::Event],
     projects_root: &std::path::Path,
     repo_root: &std::path::Path,
     prices: &price_table::PriceTable,
@@ -13847,8 +14490,13 @@ fn augment_run_state_from_disk(
     // Claude Code transcripts under `projects_root` (the #408 seam — the staged
     // home while a sandboxed Run is live, `~/.claude/projects/` otherwise), not
     // the run dir. `repo_root` builds the run-id dir prefix, not the read root.
+    // #553/ADR-0045: honest about a harness with no cost source. If a node ran on
+    // such a harness the aggregate is not summable, so this yields a "—"-with-reason
+    // `CostStat` (never `$0`); otherwise it is exactly `compute_run_cost`. Needs the
+    // raw events for the frozen-at-spawn harnesses (`RunState` alone does not carry
+    // them per node).
     run_state.cost =
-        run_cost::compute_run_cost(projects_root, repo_root, &run_state.run_id, prices);
+        run_cost::run_cost_or_absence(events, projects_root, repo_root, &run_state.run_id, prices);
 
     let yaml_path = run_scoped_pipeline_path(repo_root, &run_state.run_id);
     let Ok(yaml) = std::fs::read_to_string(&yaml_path) else {
@@ -17873,8 +18521,8 @@ mod tests {
             view: None,
             max_iter: None,
             over: None,
-            model: None,
-            effort: None,
+            pin_harness: None,
+            harnesses: Default::default(),
         }
     }
 
@@ -26507,8 +27155,8 @@ edges: []
             view: None,
             max_iter: None,
             over: None,
-            model: None,
-            effort: None,
+            pin_harness: None,
+            harnesses: Default::default(),
         };
         let pipeline = pipeline::PipelineDef {
             name: "spawn-unit".into(),

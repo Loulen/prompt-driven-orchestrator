@@ -10,6 +10,10 @@
 > observait ensuite fidèlement, sous un `session_died` parfaitement crédible. Le verdict terminal
 > reste le bon ; ce qu'il faut lire avec lui, c'est **qui** a tué la session.
 >
+> **Amendé par ADR-0045.** « La mort de session est le seul verdict terminal » cesse d'être un constat
+> sur Claude Code pour devenir un **critère d'éligibilité** d'un harnais agentique : un harnais qui sort
+> en fin de travail rendrait ce verdict indiscernable d'un succès, donc il est refusé.
+>
 > **Amendé par ADR-0043 (#433).** La complétion sur fin de tour (§2) gagne un substrat de livraison
 > **primaire, event-driven, côté agent** : un hook `Stop` de Claude Code, injecté par le runtime, qui
 > exécute `pdo complete --auto` à chaque fin de tour. Le balayage daemon décrit ci-dessous en devient

@@ -5,10 +5,10 @@ import type { ConnectionStatus } from "./hooks/useDaemonSocket";
 import { useResizableLayout } from "./hooks/useResizableLayout";
 import { useLibrary } from "./hooks/useLibrary";
 import { useLibraryPipelines } from "./hooks/useLibraryPipelines";
-import { fetchRuns, fetchRun, fetchTriggers, fetchSessions, fetchTriggersHealth, pauseTriggers } from "./api";
+import { fetchRuns, fetchRun, fetchTriggers, fetchProjects, fetchSessions, fetchTriggersHealth, pauseTriggers } from "./api";
 import { pickLatestLiveNode } from "./lib/pickLatestLiveNode";
 import { useRightPaneRouter } from "./hooks/useRightPaneRouter";
-import type { RunListEntry, RunState, Trigger, DaemonStatus } from "./types";
+import type { RunListEntry, RunState, Trigger, Project, DaemonStatus } from "./types";
 import { shouldAutoSnapToLiveNode } from "./lib/autoSnap";
 import SessionCounter from "./components/SessionCounter";
 import ServiceHealthIndicator from "./components/ServiceHealthIndicator";
@@ -95,6 +95,22 @@ function useTriggers() {
   return { triggers, refresh };
 }
 
+// #552 — Projets, hydrated on mount and refreshed on a `project_changed` WS push
+// (the daemon broadcasts one on every project mutation). Mirror of useTriggers.
+function useProjects() {
+  const [projects, setProjects] = useState<Project[]>([]);
+
+  const refresh = useCallback(async () => {
+    try {
+      setProjects(await fetchProjects());
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  return { projects, refresh };
+}
+
 function useSelectedRun() {
   const [run, setRun] = useState<RunState | null>(null);
   const currentIdRef = useRef<string | null>(null);
@@ -136,6 +152,7 @@ export default function App() {
   const { runs, refresh: refreshRuns } = useRuns();
   const { sessions, refresh: refreshSessions } = useSessions();
   const { triggers, refresh: refreshTriggers } = useTriggers();
+  const { projects, refresh: refreshProjects } = useProjects();
   // #348: global Trigger pause. Lifted here (not in a per-panel hook) so the WS
   // dispatcher can flip it live and every consumer stays in sync; hydrated on
   // mount from GET /triggers/health since there is no trigger polling.
@@ -393,6 +410,7 @@ export default function App() {
       refreshRuns();
       refreshSessions();
       refreshTriggers();
+      refreshProjects();
       // #348: hydrate the global pause flag once — no trigger polling carries it,
       // so without this a page reload would show the banner off while paused.
       fetchTriggersHealth()
@@ -400,7 +418,7 @@ export default function App() {
         .catch(() => {});
       useRecentReposStore.getState().refresh();
     }
-  }, [refreshRuns, refreshSessions, refreshTriggers]);
+  }, [refreshRuns, refreshSessions, refreshTriggers, refreshProjects]);
 
   // A WS reconnect usually means the daemon restarted — possibly as a different
   // binary, so the /sessions payload (version included, #139) may be stale. An
@@ -493,6 +511,13 @@ export default function App() {
         setTriggersPaused(!!msg.paused);
         return;
       }
+      // #552: a Projet mutation (name/harness/members) — refresh the Projet list
+      // so the Runs and Triggers regrouping is live across clients. The Runs /
+      // Triggers rows themselves are unchanged, so only the Projet list refetches.
+      if (msg.type === "project_changed") {
+        refreshProjects();
+        return;
+      }
       // Trigger lifecycle (#160/#162): create/update/delete refreshes the
       // Triggers list; a fire also creates a Run, so refresh both.
       if (
@@ -525,7 +550,7 @@ export default function App() {
       // count (#159) — keep the status-bar counter current.
       refreshSessions();
     });
-  }, [subscribe, refreshRuns, refreshRun, refreshSessions, refreshTriggers, reloadPipeline, loadPipelines]);
+  }, [subscribe, refreshRuns, refreshRun, refreshSessions, refreshTriggers, refreshProjects, reloadPipeline, loadPipelines]);
 
   // Detect: active tab is a run whose library twin (matched by id, then name)
   // diverges from the run snapshot — pipeline or prompts, the same comparison
@@ -622,6 +647,8 @@ export default function App() {
               onEditTrigger={(t) => openNewRunModal({ kind: "edit-trigger", trigger: t })}
               triggersPaused={triggersPaused}
               onTogglePause={handleTogglePause}
+              projects={projects}
+              onProjectsChanged={refreshProjects}
             />
           </ResizablePanel>
 

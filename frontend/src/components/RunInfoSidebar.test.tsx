@@ -89,6 +89,23 @@ describe("RunInfoSidebar", () => {
     expect(screen.queryByTestId("run-failure-reason")).toBeNull();
   });
 
+  // #551 (ADR-0046): the frozen Run harness is visible in the panel.
+  it("shows the Run's frozen harness when it named one", () => {
+    render(
+      <RunInfoSidebar run={{ ...makeRun("running"), harness: "opencode" } as unknown as RunState} />,
+    );
+    const chip = screen.getByTestId("run-harness");
+    expect(chip.textContent).toContain("Harness");
+    expect(chip.textContent).toContain("opencode");
+  });
+
+  it("shows no harness chip when the Run inherited the default", () => {
+    // Absent harness = inherited the instance default (and the floor) — the panel does
+    // not spell that out per-Run.
+    render(<RunInfoSidebar run={makeRun("running")} />);
+    expect(screen.queryByTestId("run-harness")).toBeNull();
+  });
+
   // #465 slice 2 — the Repositories section.
   it("shows no Repositories section for a mono-repo run (no target_repo)", () => {
     render(<RunInfoSidebar run={makeRun("running")} />);

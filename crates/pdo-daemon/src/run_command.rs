@@ -1381,6 +1381,15 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 // Side effect, intended: a profile deleted since makes the retry 400,
                 // loudly, instead of quietly running something else.
                 sandbox: Some(run_state.sandbox.clone()),
+                // #551 (ADR-0046): a retry is a new Run, but it must reproduce the
+                // original's harness — an A/B comparison that silently reverted to the
+                // instance default on retry would be worthless. The frozen harness is
+                // projected from the original's `RunStarted`; `None` (the Run named no
+                // harness) forwards as `None`, so the retry resolves through the instance
+                // default exactly as the original did. Unlike `sandbox` this needs no
+                // `Some`-wrapping-for-explicit dance: the create chokepoint freezes
+                // `req.harness` verbatim, with no precedence resolution of its own.
+                harness: run_state.harness.clone(),
                 // #338: pin the historical retry behaviour exactly. A retry has always
                 // set `name: None` and re-derived the name (placeholder or from input);
                 // `Some(true)` reproduces that regardless of the instance default, so a
@@ -2285,8 +2294,8 @@ mod tests {
                 view: None,
                 max_iter: None,
                 over: None,
-                model: None,
-                effort: None,
+                pin_harness: None,
+                harnesses: Default::default(),
             }],
             edges: vec![EdgeDef {
                 source: EdgeEndpoint {
@@ -2338,8 +2347,8 @@ mod tests {
                 view: None,
                 max_iter: None,
                 over: None,
-                model: None,
-                effort: None,
+                pin_harness: None,
+                harnesses: Default::default(),
             }],
             edges: vec![EdgeDef {
                 source: EdgeEndpoint {

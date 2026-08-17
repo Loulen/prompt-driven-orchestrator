@@ -1646,6 +1646,88 @@ async fn trigger_auto_name_true_fires_an_unnamed_run_for_manager_to_derive() {
     cleanup_runs(&daemon).await;
 }
 
+/// The Run's projected state (`GET /runs/<id>`), which serializes `RunState` — the only
+/// place the frozen Run `harness` is observable (the list entry does not carry it).
+async fn get_run(daemon: &TestDaemon, run_id: &str) -> serde_json::Value {
+    reqwest::get(format!("{}/runs/{run_id}", daemon.url()))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
+}
+
+/// #551 (ADR-0046): a Trigger carries the harness IN its Run template, and both a cron
+/// tick and a "Run now" manual fire produce a Run FROZEN on that harness — the AC's
+/// "« Run now » et un tir cron produisent le même harnais", proven because both routes
+/// share `fire_one_trigger`. Overlap `allow`, so the two fires both create a Run.
+#[tokio::test]
+async fn trigger_fire_freezes_the_declared_harness_cron_and_run_now() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    let body = serde_json::json!({
+        "name": "on opencode",
+        "pipeline_id": PIPELINE_NAME,
+        "cron": "* * * * *",
+        "target_repo": daemon.target_repo(),
+        "harness": "opencode",
+        "overlap_policy": "allow",
+    });
+    let trigger: serde_json::Value = reqwest::Client::new()
+        .post(format!("{}/triggers", daemon.url()))
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+    // The stored Trigger carries the harness in its Run template.
+    assert_eq!(
+        get_trigger(&daemon, &trigger_id).await["harness"].as_str(),
+        Some("opencode"),
+        "the Trigger must store the harness in its Run template"
+    );
+
+    // "Run now" (manual fire) → a Run frozen on opencode.
+    let now_fire: serde_json::Value = reqwest::Client::new()
+        .post(format!("{}/triggers/{}/fire", daemon.url(), trigger_id))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(now_fire["fired"].as_bool(), Some(true), "{now_fire}");
+    let run_now_id = now_fire["run_id"].as_str().unwrap().to_string();
+    assert_eq!(
+        get_run(&daemon, &run_now_id).await["harness"].as_str(),
+        Some("opencode"),
+        "a \"Run now\" fire must freeze the Trigger's harness"
+    );
+
+    // A cron tick → a Run frozen on the SAME harness.
+    daemon.force_trigger_due(&trigger_id).await;
+    daemon.run_trigger_tick().await;
+    let cron_run = list_runs(&daemon)
+        .await
+        .into_iter()
+        .find(|r| {
+            r["triggered_by"].as_str() == Some(trigger_id.as_str())
+                && r["run_id"].as_str() != Some(run_now_id.as_str())
+        })
+        .expect("the cron tick must have fired a second run");
+    let cron_run_id = cron_run["run_id"].as_str().unwrap();
+    assert_eq!(
+        get_run(&daemon, cron_run_id).await["harness"].as_str(),
+        Some("opencode"),
+        "a cron tick must freeze the same harness as \"Run now\""
+    );
+
+    cleanup_runs(&daemon).await;
+}
+
 /// Best-effort: kill any tmux sessions the runs spawned so a `sleep 60` doesn't
 /// leak past the test.
 async fn cleanup_runs(daemon: &TestDaemon) {

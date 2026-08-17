@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -139,27 +139,26 @@ pub(crate) struct NodeDef {
     pub max_iter: Option<serde_yaml::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub over: Option<String>,
-    /// Optional per-node model override (#296): free-text pass-through to
-    /// `claude --model <x>` when the node spawns. Absent ⇒ account default
-    /// (no flag emitted, launch command byte-identical to the legacy path).
-    /// Semantic, not layout — included in the pipeline diff (ADR-0001).
+    /// Optional pinned harness (#550, ADR-0046): the harness this node **requires**
+    /// (`claude`, `opencode`). A pin both selects the harness and shields it from
+    /// every coarser tier (Run / Projet / instance). Absent ⇒ the node follows the
+    /// tier above (in this slice: instance default, else the `claude` floor).
+    /// Free-text pass-through (ADR-0001: no closed enum). Semantic, not layout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    /// Optional per-node reasoning-effort override (#424): free-text pass-through
-    /// to `claude --effort <level>` when the node spawns. Absent ⇒ no flag emitted,
-    /// launch command byte-identical to the legacy path.
+    pub pin_harness: Option<String>,
+    /// Per-harness settings map (#550, ADR-0046): `harnesses.<name> = {model,
+    /// effort}`. The model and effort are **not** axes with their own precedence —
+    /// they are read from the entry of the *winning* harness, so the same node
+    /// stays executable on `claude` and `opencode` instead of launching every node
+    /// with a slug the other harness rejects. This replaces the flat `model:` /
+    /// `effort:` of #296/#424, which the pipeline migrator folds into
+    /// `harnesses.claude.*`.
     ///
-    /// Orthogonal to `model`: the model says *which* agent runs, the effort says
-    /// *how long it thinks*. Unlike `--model` (an invalid id makes `claude` exit
-    /// non-zero), an invalid `--effort` is only a stderr warning and the session
-    /// starts at the default — a silent wrong value. That is why the UI proposes a
-    /// closed set while the wire stays open (ADR-0001: sharp tool, no closed enum
-    /// that would perish at every model release).
-    ///
-    /// Semantic, not layout — included in the pipeline diff and in the library
-    /// content hash (`pipeline_semantics`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub effort: Option<String>,
+    /// `BTreeMap` for a deterministic serialization + canonical form. Semantic, not
+    /// layout — included in the pipeline diff and the library content hash
+    /// (`pipeline_semantics`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub harnesses: BTreeMap<String, crate::harness_resolver::HarnessEntry>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -487,7 +486,88 @@ pub(crate) fn normalize_node_value(
         }
         _ => {}
     }
+
+    // #550: fold a legacy flat `model:` / `effort:` into `harnesses.claude.*` so
+    // that a parse is lossless even before the on-disk migrator has rewritten the
+    // file. The migrator persists the same fold; this is the in-memory safety net
+    // that keeps `harnesses` the single source the resolver reads.
+    fold_flat_model_effort_into_harnesses(node_map);
+
     Ok(diagnostics)
+}
+
+/// Fold a node's legacy flat `model:` / `effort:` keys (#296/#424) into
+/// `harnesses.claude.{model, effort}` (#550, ADR-0046), removing the flat keys.
+///
+/// Shared by [`normalize_node_value`] (lossless in-memory parse) and the pipeline
+/// migrator (persisted rewrite), so both fold identically. Returns `true` iff it
+/// removed a flat key — i.e. the raw YAML changed — which is what the migrator's
+/// `needs_migration` guard keys off.
+///
+/// An explicit `harnesses.claude` entry is authoritative: a flat value fills a
+/// slot only when the map has none, so a second run is a no-op (idempotent).
+pub(crate) fn fold_flat_model_effort_into_harnesses(node_map: &mut serde_yaml::Mapping) -> bool {
+    let removed_model = node_map.remove(serde_yaml::Value::String("model".into()));
+    let removed_effort = node_map.remove(serde_yaml::Value::String("effort".into()));
+    let changed = removed_model.is_some() || removed_effort.is_some();
+
+    let flat_model = removed_model
+        .as_ref()
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let flat_effort = removed_effort
+        .as_ref()
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    if flat_model.is_none() && flat_effort.is_none() {
+        return changed; // the flat keys were absent or empty — nothing to carry
+    }
+
+    let harnesses_key = serde_yaml::Value::String("harnesses".into());
+    if !node_map
+        .get(&harnesses_key)
+        .map(serde_yaml::Value::is_mapping)
+        .unwrap_or(false)
+    {
+        node_map.insert(
+            harnesses_key.clone(),
+            serde_yaml::Value::Mapping(serde_yaml::Mapping::new()),
+        );
+    }
+    let harnesses = node_map
+        .get_mut(&harnesses_key)
+        .and_then(serde_yaml::Value::as_mapping_mut)
+        .expect("harnesses just ensured to be a mapping");
+
+    let claude_key = serde_yaml::Value::String(crate::harness_registry::CLAUDE.into());
+    if !harnesses
+        .get(&claude_key)
+        .map(serde_yaml::Value::is_mapping)
+        .unwrap_or(false)
+    {
+        harnesses.insert(
+            claude_key.clone(),
+            serde_yaml::Value::Mapping(serde_yaml::Mapping::new()),
+        );
+    }
+    let claude = harnesses
+        .get_mut(&claude_key)
+        .and_then(serde_yaml::Value::as_mapping_mut)
+        .expect("harnesses.claude just ensured to be a mapping");
+
+    if let Some(m) = flat_model {
+        claude
+            .entry(serde_yaml::Value::String("model".into()))
+            .or_insert(serde_yaml::Value::String(m));
+    }
+    if let Some(e) = flat_effort {
+        claude
+            .entry(serde_yaml::Value::String("effort".into()))
+            .or_insert(serde_yaml::Value::String(e));
+    }
+    changed
 }
 
 pub(crate) fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
@@ -2451,8 +2531,8 @@ nodes:
             view: None,
             max_iter: None,
             over: None,
-            model: None,
-            effort: None,
+            pin_harness: None,
+            harnesses: Default::default(),
         };
         let yaml = serde_yaml::to_string(&node).unwrap();
         assert!(yaml.contains("type: script"), "serializes to kebab: {yaml}");
@@ -3614,9 +3694,15 @@ nodes:
             .iter()
             .find(|n| n.id == "ab000001")
             .unwrap();
-        assert_eq!(node.model.as_deref(), Some("opus"));
+        // #550: a flat `model:` is folded into `harnesses.claude.model` on parse.
+        assert_eq!(
+            node.harnesses
+                .get("claude")
+                .and_then(|e| e.model.as_deref()),
+            Some("opus")
+        );
 
-        // Round-trips: re-serialize, re-parse — the model survives.
+        // Round-trips: re-serialize, re-parse — the model survives (now under the map).
         let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
         let result2 = parse_pipeline(&serialized).unwrap();
         let node2 = result2
@@ -3625,7 +3711,13 @@ nodes:
             .iter()
             .find(|n| n.id == "ab000001")
             .unwrap();
-        assert_eq!(node2.model.as_deref(), Some("opus"));
+        assert_eq!(
+            node2
+                .harnesses
+                .get("claude")
+                .and_then(|e| e.model.as_deref()),
+            Some("opus")
+        );
     }
 
     #[test]
@@ -3651,10 +3743,11 @@ nodes:
             .iter()
             .find(|n| n.id == "ab000001")
             .unwrap();
-        assert!(node.model.is_none());
+        assert!(node.harnesses.is_empty());
         // Absent ⇒ never serialized (clean file, round-trips by absence).
         let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
         assert!(!serialized.contains("model:"));
+        assert!(!serialized.contains("harnesses:"));
     }
 
     #[test]
@@ -3683,12 +3776,12 @@ nodes:
 "#,
         );
         let result = parse_pipeline(&yaml).unwrap();
+        // #550: flat `effort:` is folded into `harnesses.claude.effort` on parse.
         let find = |p: &PipelineDef, id: &str| {
             p.nodes
                 .iter()
                 .find(|n| n.id == id)
-                .map(|n| n.effort.clone())
-                .unwrap()
+                .and_then(|n| n.harnesses.get("claude").and_then(|e| e.effort.clone()))
         };
         assert_eq!(find(&result.pipeline, "ab000001").as_deref(), Some("low"));
         // Orthogonal to the model — both land, neither clobbers the other.
@@ -3699,8 +3792,9 @@ nodes:
                 .iter()
                 .find(|n| n.id == "ab000001")
                 .unwrap()
-                .model
-                .as_deref(),
+                .harnesses
+                .get("claude")
+                .and_then(|e| e.model.as_deref()),
             Some("opus")
         );
         // An unknown level parses fine (pass-through, no closed enum).
@@ -3740,7 +3834,7 @@ nodes:
             .iter()
             .find(|n| n.id == "ab000001")
             .unwrap();
-        assert!(node.effort.is_none());
+        assert!(node.harnesses.is_empty());
         // Absent ⇒ never serialized (clean file, round-trips by absence).
         let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
         assert!(!serialized.contains("effort:"));

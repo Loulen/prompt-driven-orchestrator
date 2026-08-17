@@ -178,6 +178,37 @@ pub enum Detection {
     Ok,
 }
 
+/// The two harness capabilities the sweep gates its probes on (#553, ADR-0045).
+///
+/// Absent ⇒ the probe **does not run**: no turn-end auto-completion on an invented
+/// heuristic (the substrate is claude's JSONL transcript), and no pane capture for
+/// a usage-limit menu whose wording is proper to another harness. The sweep
+/// ([`crate::lib`]) fills this from [`crate::harness_probes`] for the node's
+/// frozen-at-spawn harness; keeping it a plain two-bool struct here keeps
+/// [`assess_node`] pure and injected, exactly like `autocomplete_turn_end`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HarnessCapabilities {
+    /// The harness has an end-of-turn substrate PDO can read
+    /// ([`crate::harness_probes::HarnessProbes::turn_end_substrate`]).
+    pub turn_end: bool,
+    /// The harness has a usage-limit menu anchor PDO can match
+    /// ([`crate::harness_probes::HarnessProbes::usage_limit_anchor`]).
+    pub usage_limit: bool,
+}
+
+impl HarnessCapabilities {
+    /// Both present — `claude`, and the shape the pre-#553 sweep always assumed.
+    pub const CLAUDE: HarnessCapabilities = HarnessCapabilities {
+        turn_end: true,
+        usage_limit: true,
+    };
+    /// Both absent — a data-declared harness: neither probe runs.
+    pub const NONE: HarnessCapabilities = HarnessCapabilities {
+        turn_end: false,
+        usage_limit: false,
+    };
+}
+
 /// Pure liveness decision: session alive or not (#469 §1).
 ///
 /// This *is* the whole of it now. `session_alive == false` is the single
@@ -665,6 +696,9 @@ fn informational_event(
 ///
 /// `prior_events` is the run's event-log snapshot, used purely for the
 /// rising-edge de-dup of `NodeBlockedOnLimit` (see [`episode_has_event`]).
+// The probe set + policy toggles are all distinct facts a sweep tick needs; the
+// same posture as the four `tmux_session_manager` builders that allow this lint.
+#[allow(clippy::too_many_arguments)]
 pub fn assess_node(
     probes: &impl NodeProbes,
     prior_events: &[event_log::Event],
@@ -673,6 +707,7 @@ pub fn assess_node(
     iter: i64,
     now: SystemTime,
     autocomplete_turn_end: bool,
+    caps: HarnessCapabilities,
 ) -> Assessment {
     let detection = decide(probes.session_alive());
 
@@ -691,9 +726,14 @@ pub fn assess_node(
     // Alive, but maybe wedged on Claude Code's usage-limit menu (#290):
     // observability only — the node keeps running. The gauge counts every sweep
     // the menu is visible; the event is emitted once per (node, iter) episode.
-    let blocked_on_limit = probes
-        .capture_pane()
-        .is_some_and(|pane| detect_usage_limit(&pane));
+    //
+    // #553: the menu anchor is proper to a harness. Gate the probe on the
+    // capability — a harness without it never has its pane captured for a menu
+    // whose wording belongs to another harness (ANDed first, so no pane I/O runs).
+    let blocked_on_limit = caps.usage_limit
+        && probes
+            .capture_pane()
+            .is_some_and(|pane| detect_usage_limit(&pane));
     let events = if blocked_on_limit
         && !episode_has_event(prior_events, &EventKind::NodeBlockedOnLimit, node_id, iter)
     {
@@ -713,7 +753,13 @@ pub fn assess_node(
     // "<prompt>"` does not exit at the end of a turn — it stays in the REPL — so
     // an agent that finished without calling `pdo complete` is alive and
     // motionless, and this is its positive signature.
+    //
+    // #553: the turn-end substrate is a capability. Gate the probe on it — a
+    // harness without it is never auto-completed on an invented heuristic (its
+    // store is not the claude JSONL `parse_turn_state` reads). ANDed BEFORE the
+    // transcript read, so an un-instrumented harness pays no transcript I/O.
     let turn_ended = autocomplete_turn_end
+        && caps.turn_end
         && probes.transcript_tail().is_some_and(|tail| {
             quiet_long_enough(tail.mtime, now)
                 && parse_turn_state(&tail.text) == TurnState::TurnEnded
@@ -1669,6 +1715,9 @@ SwapFree:         204800 kB
     }
 
     fn assess(probes: &FakeProbes, autocomplete: bool) -> Assessment {
+        // The existing suite is about the `claude` sweep, which has both
+        // capabilities; #553's capability gating is exercised by the dedicated
+        // tests below with `HarnessCapabilities::NONE`.
         assess_node(
             probes,
             &[],
@@ -1677,6 +1726,7 @@ SwapFree:         204800 kB
             1,
             SystemTime::now(),
             autocomplete,
+            HarnessCapabilities::CLAUDE,
         )
     }
 
@@ -1884,6 +1934,7 @@ SwapFree:         204800 kB
             1,
             SystemTime::now(),
             true,
+            HarnessCapabilities::CLAUDE,
         );
         assert!(
             a.blocked_on_limit,
@@ -1908,5 +1959,70 @@ SwapFree:         204800 kB
         assert!(a.blocked_on_limit);
         assert_eq!(a.events.len(), 1);
         assert_eq!(a.events[0].kind, EventKind::NodeBlockedOnLimit);
+    }
+
+    // --- #553: capability gating — a data-declared harness runs no probe ---
+
+    fn assess_caps(
+        probes: &FakeProbes,
+        autocomplete: bool,
+        caps: HarnessCapabilities,
+    ) -> Assessment {
+        assess_node(
+            probes,
+            &[],
+            "run1",
+            "worker",
+            1,
+            SystemTime::now(),
+            autocomplete,
+            caps,
+        )
+    }
+
+    #[test]
+    fn a_harness_without_the_turn_end_capability_is_never_auto_completed() {
+        // The node HAS finished its turn with valid outputs and the setting is ON —
+        // but its harness has no turn-end substrate, so the sweep must not complete
+        // it, and must not even read a transcript (the substrate is not claude's).
+        let probes = FakeProbes::finished_turn();
+        let a = assess_caps(&probes, true, HarnessCapabilities::NONE);
+        assert_eq!(
+            a.detection,
+            Detection::Ok,
+            "no auto-completion without the capability"
+        );
+        assert_eq!(
+            probes.tail_calls.get(),
+            0,
+            "no transcript read for an un-instrumented harness"
+        );
+        assert_eq!(probes.validate_calls.get(), 0);
+    }
+
+    #[test]
+    fn a_harness_with_the_turn_end_capability_still_auto_completes() {
+        // The control: with the capability present (and the setting on) the same
+        // finished turn IS completed — the gate is the capability, nothing else.
+        let probes = FakeProbes::finished_turn();
+        let a = assess_caps(&probes, true, HarnessCapabilities::CLAUDE);
+        assert_eq!(a.detection, Detection::TurnEnded);
+    }
+
+    #[test]
+    fn a_harness_without_the_usage_limit_capability_is_never_flagged_blocked() {
+        // The pane shows what WOULD be a usage-limit menu, but this harness has no
+        // such anchor — so the probe short-circuits and the node is not flagged.
+        let probes = FakeProbes {
+            pane: Some("❯ 1. Stop and wait for limit to reset".to_string()),
+            ..FakeProbes::alive()
+        };
+        let a = assess_caps(&probes, true, HarnessCapabilities::NONE);
+        assert_eq!(a.detection, Detection::Ok);
+        assert!(
+            !a.blocked_on_limit,
+            "no menu probe runs without the usage-limit capability"
+        );
+        assert!(a.events.is_empty());
     }
 }

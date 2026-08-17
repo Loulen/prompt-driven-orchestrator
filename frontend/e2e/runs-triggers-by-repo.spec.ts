@@ -163,14 +163,18 @@ test("Triggers list groups by repo across ≥2 repos, including the daemon's own
   expect(labels).toContain(path.basename(WORKSPACE_ROOT));
   expect(labels.join(" ")).not.toMatch(/unassigned/i);
 
-  // Groups are ordered by full PATH (groupByRepo), not by the basename label.
-  // Assert the displayed label order equals sorting the three repos by full path,
-  // so the check is robust to the workspace's absolute path — which differs
-  // between local (…/Maestro) and CI (…/prompt-driven-orchestrator) and would
-  // otherwise flip basename order relative to full-path order.
+  // Groups are ordered by the DISPLAYED LABEL (groupByProject, #552), tie-broken
+  // by group key — no longer by full path as #258's groupByRepo did. Sorting on
+  // what the user actually reads is why a Projet, whose name has no path at all,
+  // can take its place in the same ordering.
+  //
+  // This also removes the local/CI trap the previous assertion had to work around:
+  // the expectation now sorts the same strings the UI sorts, so it no longer
+  // depends on the workspace's absolute path (…/Maestro locally,
+  // …/prompt-driven-orchestrator in CI) landing on the same side as its basename.
   const expectedLabelOrder = [repoA, repoB, WORKSPACE_ROOT]
-    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
-    .map((p) => path.basename(p));
+    .map((p) => path.basename(p))
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   expect(labels).toEqual(expectedLabelOrder);
 
   // Full path on hover: the repoA group header carries title=repoA.

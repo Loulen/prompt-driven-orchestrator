@@ -24,6 +24,8 @@ vi.mock("../api", () => ({
     reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
     guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
     default_model: { effective: null, source: "default", stored: null, env: null, default: null },
+    default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
+    default_harness_model: { effective: {}, stored: {} },
     default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off", reason: null },
     sandbox_docker: { available: true, reason: null, checked_at: "2026-07-01T10:00:00.000Z" },
     // #432: the sandbox `<select>` options are DATA now — the two virtual defaults.
@@ -794,6 +796,8 @@ describe("NewRunModal — auto-naming default (#338)", () => {
       reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
       guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
       default_model: { effective: null, source: "default", stored: null, env: null, default: null },
+      default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
+      default_harness_model: { effective: {}, stored: {} },
       default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off", reason: null },
       sandbox_docker: { available: true, reason: null, checked_at: "2026-07-01T10:00:00.000Z" },
       sandbox_profiles: [{ name: "full", virtual: true }, { name: "minimal", virtual: true }],
@@ -1538,6 +1542,8 @@ describe("NewRunModal — sandbox selector (#410)", () => {
       reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
       guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
       default_model: { effective: null, source: "default", stored: null, env: null, default: null },
+      default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
+      default_harness_model: { effective: {}, stored: {} },
       default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off", reason: null },
       // #431: required fields on InstanceSettings; this modal reads neither, they are
       // here to satisfy the typed fixture.
@@ -1823,6 +1829,8 @@ describe("NewRunModal — the launch dialog can defer to default_sandbox (#452)"
       reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
       guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
       default_model: { effective: null, source: "default", stored: null, env: null, default: null },
+      default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
+      default_harness_model: { effective: {}, stored: {} },
       default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off", reason: null },
       sandbox_docker: { available: true, reason: null, checked_at: "2026-07-01T10:00:00.000Z" },
       sandbox_profiles: [
@@ -2034,6 +2042,8 @@ describe("NewRunModal — the target repo is required at the boundary (#470)", (
       reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
       guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
       default_model: { effective: null, source: "default", stored: null, env: null, default: null },
+      default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
+      default_harness_model: { effective: {}, stored: {} },
       default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off", reason: null },
       sandbox_docker: { available: true, reason: null, checked_at: "2026-07-01T10:00:00.000Z" },
       sandbox_profiles: [
@@ -2243,5 +2253,157 @@ describe("NewRunModal — multi-repo (#465)", () => {
       expect(validateRepo).toHaveBeenCalledWith("/home/user/bad");
     });
     expect(screen.getByTestId("launch-button")).toBeDisabled();
+  });
+});
+
+describe("NewRunModal — harness selector (#551)", () => {
+  function harnessSettings(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
+    return {
+      session_cap: { effective: 20, source: "default", stored: null, env: null, default: 20 },
+      reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
+      guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
+      default_model: { effective: null, source: "default", stored: null, env: null, default: null },
+      default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
+      default_harness_model: { effective: {}, stored: {} },
+      default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off", reason: null },
+      sandbox_docker: { available: true, reason: null, checked_at: "2026-07-01T10:00:00.000Z" },
+      sandbox_profiles: [],
+      home: "/home/user",
+      autocomplete_turn_end: { effective: false, source: "default", stored: null, env: null, default: false },
+      default_auto_name: { effective: true, source: "default", stored: null, env: null, default: true },
+      price_table: { manual_path: null, fetched_path: null, source: null, fetched_at: null, fetched_rows: 0, manual_keys: [], reason: null },
+      updated_at: "2026-07-01T10:00:00.000Z",
+      ...overrides,
+    };
+  }
+
+  /** #452 for the harness axis: the run selector NAMES the instance default on the inherit
+   *  option; it never copies it into the field. Assert on the OPTION TEXT and the presence
+   *  of the concrete options — never on `select.value` for the "names it" claim (a value
+   *  assertion cannot fail here — the memory of #347/#452). */
+  it("names the instance default on the inherit option without seeding the field", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(
+      harnessSettings({
+        default_harness: { effective: "opencode", source: "stored", stored: "opencode", env: null, default: null },
+      }),
+    );
+    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: "repo" })]);
+    renderModal();
+    const select = (await screen.findByTestId("harness-select")) as HTMLSelectElement;
+    await waitFor(() => {
+      expect(Array.from(select.options).find((o) => o.value === "")).toHaveTextContent(
+        "Use instance default (opencode)",
+      );
+    });
+    // The field asserts nothing of its own — the inherit sentinel, not the copied value.
+    expect(select.value).toBe("");
+    // The embedded harnesses are offered as concrete options.
+    const values = Array.from(select.options).map((o) => o.value);
+    expect(values).toContain("claude");
+    expect(values).toContain("opencode");
+  });
+
+  it("names the claude floor when the instance sets no default", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(harnessSettings());
+    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: "repo" })]);
+    renderModal();
+    const select = (await screen.findByTestId("harness-select")) as HTMLSelectElement;
+    await waitFor(() => {
+      expect(Array.from(select.options).find((o) => o.value === "")).toHaveTextContent(
+        "Use instance default (claude)",
+      );
+    });
+  });
+
+  it("passes the chosen harness to createRun", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(harnessSettings());
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Optional Pipeline", scope: "repo", prompt_required: false }),
+    ]);
+    renderModal();
+    await enterValidRepo();
+
+    const select = (await screen.findByTestId("harness-select")) as HTMLSelectElement;
+    await waitFor(() => expect(Array.from(select.options).some((o) => o.value === "opencode")).toBe(true));
+    fireEvent.change(select, { target: { value: "opencode" } });
+
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByRole("button", { name: /launch/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: /launch/i }));
+
+    await waitFor(() => {
+      expect(createRun).toHaveBeenCalledWith(expect.objectContaining({ harness: "opencode" }));
+    });
+  });
+
+  it("omits the harness key when left on the inherit default", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(harnessSettings());
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Optional Pipeline", scope: "repo", prompt_required: false }),
+    ]);
+    renderModal();
+    await enterValidRepo();
+    // Leave the harness selector on "" (inherit).
+    await screen.findByTestId("harness-select");
+
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByRole("button", { name: /launch/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: /launch/i }));
+
+    await waitFor(() => expect(createRun).toHaveBeenCalled());
+    // The Run names no harness — the daemon resolves through the instance default.
+    expect(vi.mocked(createRun).mock.calls[0][0].harness).toBeUndefined();
+  });
+
+  it("round-trips a Trigger's harness and clears it to null on reset", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(harnessSettings());
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Auditor", scope: "repo", prompt_required: false }),
+    ]);
+    const trigger: Trigger = {
+      id: "trg-hns",
+      name: "Nightly",
+      pipeline_id: "p1",
+      pipeline_name: "Auditor",
+      target_repo: "/home/user/project",
+      source_branch: "dev",
+      input_template: "audit",
+      variables: {},
+      cron: "0 9 * * *",
+      guard_command: null,
+      overlap_policy: "skip",
+      harness: "opencode",
+      auto_name: true,
+      enabled: true,
+      next_fire_at: null,
+      last_fired_at: null,
+      last_outcome: null,
+    };
+    render(
+      <NewRunModal open={true} onClose={noop} onCreated={noop}
+        openIntent={{ kind: "edit-trigger", trigger }} />,
+    );
+
+    const select = (await screen.findByTestId("harness-select")) as HTMLSelectElement;
+    await waitFor(() => expect(select.value).toBe("opencode"));
+    // Trigger mode exposes the inherit option.
+    expect(Array.from(select.options).some((o) => o.value === "")).toBe(true);
+
+    // Repo validation must resolve so Save is enabled.
+    await vi.advanceTimersByTimeAsync(500);
+    await waitFor(() => expect(validateRepo).toHaveBeenCalledWith("/home/user/project"));
+
+    // Reset to "use instance default" → the PATCH must clear it (null).
+    fireEvent.change(select, { target: { value: "" } });
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByTestId("save-trigger-button")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("save-trigger-button"));
+
+    await waitFor(() => {
+      expect(updateTrigger).toHaveBeenCalledWith(
+        "trg-hns",
+        expect.objectContaining({ harness: null }),
+      );
+    });
   });
 });

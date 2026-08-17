@@ -10,7 +10,7 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## 1.26.0
+## 1.27.0
 
 **Cassant, migration automatique.** Le **harnais agentique** (PRD #549, quatre tranches — #550,
 #551, #552, #553) : le programme qui fait tourner l'agent d'un nœud (`claude`, `opencode`) devient
@@ -69,6 +69,21 @@ sa clé retombe sur le tier suivant, jamais partiellement appliquée.
 capacités d'`opencode` (il se lance, s'attache, se reprend et se complète par `pdo complete` — aucun
 coût, aucune fin de tour automatique), l'effort sur `opencode` (aucun axe d'effort au lancement), et
 le catalogue de modèles (le modèle reste du texte libre).
+
+## 1.26.0
+
+### Cassant — un spawn tmux échoué fait échouer le nœud et le Run, plus jamais `Spawned` (#508, ADR-0037)
+
+`spawn_node` avalait l'`Err` de `tmux_session_manager::spawn` et rendait `Spawned` alors que
+`NodeStarted` était déjà durable : le nœud se projetait `Running` **sans session**, puis la veille de
+vivacité le réécrivait `Failed` ~30 s plus tard avec une **cause fausse** (`session_died`), et
+`restart_node` répondait un `200 {"spawned":[…]}` menteur. Désormais le bras `Err` appende `NodeFailed`
+(légal : l'itération est `Running`) **puis** un reap gaté (le seul sous-worktree que *ce* spawn a créé,
+jamais un réutilisé) **puis** `RunFailed`, et rend `SpawnOutcome::Failed`. Effets filaires (véracité,
+ADR-0037 §1/§3) : `restart_node` répond **`500 {"error":"spawn_failed","recoverable":false,"run_failed":true}`**
+au lieu de `200 {"spawned":[…]}` ; les routes `resume`/`pause` comptent le nœud en **`noop`** (avec sa
+raison) au lieu de le déclarer `spawned`. Ferme la « Limite acceptée » homonyme d'ADR-0037.
+
 
 ## 1.25.0
 

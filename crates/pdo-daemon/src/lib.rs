@@ -27246,6 +27246,319 @@ edges: []
         );
     }
 
+    /// #508 hermetic seam: make `tmux_session_manager::spawn` fail at its very
+    /// first statement (`create_dir_all(working_dir/.pdo/prompts)`) by planting a
+    /// *file* named `.pdo/prompts` where a directory is expected. `create_dir_all`
+    /// returns `AlreadyExists` (os error 17) BEFORE tmux is ever invoked, for
+    /// every node type — no real tmux, no debug poison. `commit` decides whether
+    /// the file is only on disk (a doc-only node runs straight in `worktree_dir`)
+    /// or committed onto HEAD (a code-mutating node's sub-worktree is a fresh
+    /// checkout of the pipeline branch that must carry the collision file).
+    fn plant_pdo_prompts_file(dir: &std::path::Path, commit: bool) {
+        let pdo = dir.join(".pdo");
+        std::fs::create_dir_all(&pdo).unwrap();
+        std::fs::write(pdo.join("prompts"), "collision\n").unwrap();
+        if commit {
+            let run = |args: &[&str]| {
+                std::process::Command::new("git")
+                    .args(args)
+                    .current_dir(dir)
+                    .output()
+                    .unwrap()
+            };
+            run(&["add", "-f", ".pdo/prompts"]);
+            run(&[
+                "commit",
+                "-m",
+                "seed .pdo/prompts collision file (#508 test)",
+            ]);
+        }
+    }
+
+    /// The `reason` prose carried by the first event of `kind` for `run_id`.
+    async fn event_reason(
+        state: &Arc<AppState>,
+        run_id: &str,
+        kind: event_log::EventKind,
+    ) -> String {
+        let events = load_events(&state.db, run_id).await.unwrap();
+        events
+            .iter()
+            .find(|e| e.kind == kind)
+            .and_then(|e| e.payload.as_ref())
+            .and_then(|p| p.get("reason"))
+            .and_then(|r| r.as_str())
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    /// #508 (core, no sub-worktree): when the tmux spawn itself fails *after*
+    /// `NodeStarted` is durable, `spawn_node` no longer swallows the `Err` and
+    /// returns a lying `Spawned`. It appends `NodeFailed` (legal — the iteration
+    /// is `Running`) THEN `RunFailed`, moving both node and run terminal with the
+    /// TRUE cause (a tmux spawn failure), never the false `session_died` the
+    /// liveness sweep would have written ~30s later. A doc-only node owns no
+    /// sub-worktree, so nothing is reaped.
+    #[tokio::test]
+    async fn spawn_node_tmux_err_fails_run_loud_no_worktree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+        let state = test_state_with_dir(repo).await;
+
+        let run_id = "spawn-unit-tmuxerr-noworktree";
+        seed_run_for_node_control(&state, run_id, "spawn-unit").await;
+
+        // Plant the collision file directly in the doc-only node's working dir
+        // (= `worktree_dir`); no commit needed since it runs there in place.
+        plant_pdo_prompts_file(repo, false);
+
+        let (pipeline, node, pipeline_path) =
+            spawn_test_fixture(repo, "worker", pipeline::NodeType::DocOnly);
+        let artifacts_dir = repo.join(".pdo").join("artifacts");
+        let resolved_vars = HashMap::new();
+        let ctx = SpawnContext {
+            pipeline: &pipeline,
+            run_id,
+            pipeline_path: &pipeline_path,
+            worktree_dir: repo,
+            artifacts_dir: &artifacts_dir,
+            resolved_vars: &resolved_vars,
+            repo_root: repo,
+        };
+
+        let outcome = spawn_node(SpawnDeps::from_state(&state), &ctx, &node, 1).await;
+        assert!(
+            matches!(outcome, SpawnOutcome::Failed { .. }),
+            "a failed tmux spawn must return Failed, not a lying Spawned, got {outcome:?}"
+        );
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        // The reservation was durably recorded (this is the *after-start* path)...
+        assert!(
+            events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::NodeStarted
+                    && e.node_id.as_deref() == Some("worker")),
+            "the after-start path keeps its NodeStarted (the reservation was durable)"
+        );
+        // ...and BOTH terminal events follow it.
+        assert!(
+            events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::NodeFailed
+                    && e.node_id.as_deref() == Some("worker")),
+            "a failed tmux spawn on a Running iteration must append NodeFailed"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::RunFailed),
+            "a failed tmux spawn must move the run terminal with RunFailed"
+        );
+
+        let (_, run_state) = reload_run_state(&state, run_id).await.unwrap();
+        assert_eq!(
+            run_state.status,
+            event_log::RunStatus::Failed,
+            "RunFailed must project a terminal Failed run state"
+        );
+
+        for kind in [
+            event_log::EventKind::NodeFailed,
+            event_log::EventKind::RunFailed,
+        ] {
+            let reason = event_reason(&state, run_id, kind.clone()).await;
+            assert!(
+                reason.contains("failed to spawn tmux session"),
+                "{kind:?} cause must name the tmux spawn failure, got {reason:?}"
+            );
+            assert!(
+                !reason.contains("session_died"),
+                "{kind:?} cause must NOT be the false session_died, got {reason:?}"
+            );
+        }
+    }
+
+    /// #508 (fresh sub-worktree → reap): a code-mutating node whose fresh
+    /// sub-worktree this spawn created reaps that orphan (dir + branch) on a tmux
+    /// spawn failure, exactly as the pre-start abort does — the run goes terminal
+    /// with no leaked worktree.
+    #[tokio::test]
+    async fn spawn_node_tmux_err_reaps_fresh_sub_worktree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+        // Commit the collision file so the sub-worktree checkout carries it.
+        plant_pdo_prompts_file(repo, true);
+        let state = test_state_with_dir(repo).await;
+
+        let run_id = "spawn-unit-tmuxerr-reap";
+        seed_run_for_node_control(&state, run_id, "spawn-unit").await;
+
+        let wt_dir = repo.join(".pdo/runs").join(run_id).join("worktree");
+        let pipeline_branch = format!("pdo/run-{run_id}");
+        create_worktree(repo, &wt_dir, &pipeline_branch, "HEAD").unwrap();
+
+        let (pipeline, node, pipeline_path) =
+            spawn_test_fixture(repo, "worker", pipeline::NodeType::CodeMutating);
+        let artifacts_dir = wt_dir.join(".pdo").join("artifacts");
+        let resolved_vars = HashMap::new();
+        let ctx = SpawnContext {
+            pipeline: &pipeline,
+            run_id,
+            pipeline_path: &pipeline_path,
+            worktree_dir: &wt_dir,
+            artifacts_dir: &artifacts_dir,
+            resolved_vars: &resolved_vars,
+            repo_root: repo,
+        };
+
+        let outcome = spawn_node(SpawnDeps::from_state(&state), &ctx, &node, 1).await;
+        assert!(
+            matches!(outcome, SpawnOutcome::Failed { .. }),
+            "a failed tmux spawn must return Failed, got {outcome:?}"
+        );
+
+        // The orphaned sub-worktree dir + branch this spawn created are reaped.
+        let sub_wt = sub_worktree_path(repo, run_id, "worker", 1);
+        assert!(
+            !sub_wt.exists(),
+            "the fresh sub-worktree {} this spawn created must be reaped",
+            sub_wt.display()
+        );
+        let sub_branch = sub_worktree_branch(run_id, "worker", 1);
+        let branch_list = std::process::Command::new("git")
+            .args(["branch", "--list", &sub_branch])
+            .current_dir(repo)
+            .output()
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&branch_list.stdout)
+                .trim()
+                .is_empty(),
+            "the fresh sub-worktree branch {sub_branch} must be deleted after the reap"
+        );
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::NodeStarted
+                    && e.node_id.as_deref() == Some("worker")),
+            "the after-start path keeps its NodeStarted"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::NodeFailed
+                    && e.node_id.as_deref() == Some("worker")),
+            "a failed tmux spawn on a Running iteration must append NodeFailed"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::RunFailed),
+            "a failed tmux spawn must move the run terminal with RunFailed"
+        );
+        let (_, run_state) = reload_run_state(&state, run_id).await.unwrap();
+        assert_eq!(run_state.status, event_log::RunStatus::Failed);
+        let reason = event_reason(&state, run_id, event_log::EventKind::RunFailed).await;
+        assert!(
+            reason.contains("failed to spawn tmux session") && !reason.contains("session_died"),
+            "RunFailed cause must be the true tmux spawn failure, got {reason:?}"
+        );
+    }
+
+    /// #508 (reused sub-worktree → NO reap): the critical leg. When the
+    /// sub-worktree already existed (classified `Reusable`, `created=false`), a
+    /// tmux spawn failure must destroy NOTHING — the reused work is preserved.
+    /// `orphan_to_reap` is `None`, so the after-start failure appends
+    /// `NodeFailed` + `RunFailed` but leaves the sub-worktree and its branch
+    /// intact (ADR-0037 §6). Inverse of the fresh-worktree case.
+    #[tokio::test]
+    async fn spawn_node_tmux_err_preserves_reused_sub_worktree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+        plant_pdo_prompts_file(repo, true);
+        let state = test_state_with_dir(repo).await;
+
+        let run_id = "spawn-unit-tmuxerr-reuse";
+        seed_run_for_node_control(&state, run_id, "spawn-unit").await;
+
+        let wt_dir = repo.join(".pdo/runs").join(run_id).join("worktree");
+        let pipeline_branch = format!("pdo/run-{run_id}");
+        create_worktree(repo, &wt_dir, &pipeline_branch, "HEAD").unwrap();
+
+        // Pre-create the sub-worktree so `ensure_sub_worktree` classifies it
+        // `Reusable` → `created=false` → `orphan_to_reap = None`.
+        let sub_wt = sub_worktree_path(repo, run_id, "worker", 1);
+        let sub_branch = sub_worktree_branch(run_id, "worker", 1);
+        create_sub_worktree(repo, &sub_wt, &sub_branch, &pipeline_branch).unwrap();
+        assert!(
+            sub_wt.exists(),
+            "precondition: the reused sub-worktree exists"
+        );
+
+        let (pipeline, node, pipeline_path) =
+            spawn_test_fixture(repo, "worker", pipeline::NodeType::CodeMutating);
+        let artifacts_dir = wt_dir.join(".pdo").join("artifacts");
+        let resolved_vars = HashMap::new();
+        let ctx = SpawnContext {
+            pipeline: &pipeline,
+            run_id,
+            pipeline_path: &pipeline_path,
+            worktree_dir: &wt_dir,
+            artifacts_dir: &artifacts_dir,
+            resolved_vars: &resolved_vars,
+            repo_root: repo,
+        };
+
+        let outcome = spawn_node(SpawnDeps::from_state(&state), &ctx, &node, 1).await;
+        assert!(
+            matches!(outcome, SpawnOutcome::Failed { .. }),
+            "a failed tmux spawn must return Failed, got {outcome:?}"
+        );
+
+        // The run is still failed loud...
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::NodeFailed
+                    && e.node_id.as_deref() == Some("worker")),
+            "a failed tmux spawn on a Running iteration must append NodeFailed"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::RunFailed),
+            "a failed tmux spawn must move the run terminal with RunFailed"
+        );
+        let (_, run_state) = reload_run_state(&state, run_id).await.unwrap();
+        assert_eq!(run_state.status, event_log::RunStatus::Failed);
+
+        // ...but the REUSED sub-worktree and its branch are UNTOUCHED (the whole
+        // point of the gate: a reuse loses nothing).
+        assert!(
+            sub_wt.exists(),
+            "the reused sub-worktree {} must NOT be reaped — a reuse loses nothing",
+            sub_wt.display()
+        );
+        let branch_list = std::process::Command::new("git")
+            .args(["branch", "--list", &sub_branch])
+            .current_dir(repo)
+            .output()
+            .unwrap();
+        assert!(
+            !String::from_utf8_lossy(&branch_list.stdout)
+                .trim()
+                .is_empty(),
+            "the reused sub-worktree branch {sub_branch} must still be listed"
+        );
+    }
+
     /// INV-1 (#212): the transition guard refuses an illegal NodeStarted BEFORE
     /// any side effect. Spawning iter-2 of a node whose iter-1 is still live is
     /// rejected — `Refused`, and no NodeStarted for iter-2 is appended.

@@ -1154,11 +1154,11 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                     },
                 ),
                 // A panne, not a verdict → `500`. `run_failed` is re-PROJECTED, never
-                // guessed: the four producers of `Failed` disagree (three append
-                // `RunFailed`, the sub-worktree branch appended nothing at all), and a
-                // `500` routes the CLI toward `pdo fail` — catastrophic advice if
-                // `RunFailed` is already on the log. Homogenising the producers is
-                // #498-B.
+                // guessed: the five producers of `Failed` disagree (three append
+                // `RunFailed`, #508's tmux-spawn arm appends `NodeFailed` + `RunFailed`,
+                // the sub-worktree branch appended nothing at all), and a `500` routes
+                // the CLI toward `pdo fail` — catastrophic advice if `RunFailed` is
+                // already on the log. Homogenising the producers is #498-B.
                 SpawnOutcome::Failed { reason } => {
                     let run_failed = reload_run_state(&state, &run_id)
                         .await

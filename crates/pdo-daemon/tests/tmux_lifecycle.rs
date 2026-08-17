@@ -13,9 +13,8 @@ use std::time::Duration;
 use common::TestDaemon;
 use pdo_daemon::tmux_session_manager;
 
-/// Tests in this file mutate process-wide env vars
-/// (PDO_REAPER_*_SECS, PDO_DAEMON_NO_CLEANUP) and assert on
-/// timing-sensitive reaper behaviour. They MUST run serially or one test will
+/// Tests in this file mutate process-wide env vars (PDO_REAPER_*_SECS) and assert
+/// on timing-sensitive reaper behaviour. They MUST run serially or one test will
 /// see another's values. (The tmux command override is per-daemon config now —
 /// `TestDaemon::spawn`'s harmless `sleep` default — not a process-global env.)
 static SERIAL: Mutex<()> = Mutex::new(());
@@ -274,12 +273,15 @@ async fn orphan_sweep_at_boot_kills_stale_session() {
     std::env::remove_var(tmux_session_manager::REAPER_INTERVAL_SECS_ENV);
 }
 
-/// Layer 3a: A daemon spawned with `PDO_DAEMON_NO_CLEANUP=1` (mirrors
-/// what happens when a sub-claude accidentally runs `pdo daemon` —
-/// `PDO_NODE_ID` is set in its env by `wrap_with_env`) MUST NOT reap
-/// any orphan session, even one its own socket can see. Pinned by #86
-/// follow-up: the only safe behaviour for a nested daemon is to be
+/// Layer 3a: A daemon in nested mode — what an operator gets from
+/// `PDO_DAEMON_NO_CLEANUP=1`, and what a sub-claude accidentally running
+/// `pdo daemon` gets from the `PDO_NODE_ID` that `wrap_with_env` exported into its
+/// env — MUST NOT reap any orphan session, even one its own socket can see. Pinned
+/// by #86 follow-up: the only safe behaviour for a nested daemon is to be
 /// completely passive on tmux state.
+///
+/// The posture is injected as config here; that either env var *produces* this
+/// posture is the separate, purely-tested claim of `nested_daemon_from`.
 #[tokio::test]
 // Holds the process-wide `serial_guard()` MutexGuard across `.await`s to keep
 // the env-var-sensitive reaper tests from racing each other — intentional, and
@@ -294,9 +296,14 @@ async fn nested_daemon_skips_orphan_sweep_and_reaper() {
 
     std::env::set_var(tmux_session_manager::REAPER_TTL_SECS_ENV, "0");
     std::env::set_var(tmux_session_manager::REAPER_INTERVAL_SECS_ENV, "1");
-    std::env::set_var("PDO_DAEMON_NO_CLEANUP", "1");
 
-    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    // The posture is per-daemon config (`DaemonConfig::nested_daemon`), not the
+    // env var: with the reaper interval forced to 1 s, a sibling test clearing a
+    // process-global `PDO_DAEMON_NO_CLEANUP` mid-`spawn` would arm this daemon's
+    // reaper and delete the very orphan the assertion below expects to survive.
+    // The env → posture mapping is pinned separately and purely by
+    // `pdo_daemon`'s `nested_daemon_from` unit tests.
+    let daemon = TestDaemon::spawn_nested(seed).await.unwrap();
     let socket = daemon.tmux_socket();
 
     let orphan_session = "pdo-20260101-120000-aaaaaaa-orphan-iter-1";
@@ -312,14 +319,13 @@ async fn nested_daemon_skips_orphan_sweep_and_reaper() {
 
     assert!(
         tmux_has_session(&socket, orphan_session),
-        "nested daemon must NOT sweep orphans (PDO_DAEMON_NO_CLEANUP=1)"
+        "nested daemon must NOT sweep orphans"
     );
 
     // Cleanup
     let _ = std::process::Command::new("tmux")
         .args(["-L", &socket, "kill-session", "-t", orphan_session])
         .output();
-    std::env::remove_var("PDO_DAEMON_NO_CLEANUP");
     std::env::remove_var(tmux_session_manager::REAPER_TTL_SECS_ENV);
     std::env::remove_var(tmux_session_manager::REAPER_INTERVAL_SECS_ENV);
 }

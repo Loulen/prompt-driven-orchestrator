@@ -48,15 +48,38 @@ impl TestDaemon {
     where
         F: FnOnce(&Path) -> Result<()>,
     {
-        // When the test suite itself runs inside a PDO node (e.g. an agent
-        // worktree), `PDO_NODE_ID` is exported in the environment and the
-        // daemon under test would consider itself "nested" — silently disabling
-        // the orphan sweep and reaper, and failing every test that asserts on
-        // them. A TestDaemon must behave like a top-level daemon regardless of
-        // where the tests run; nested-mode tests opt back in explicitly via
-        // `PDO_DAEMON_NO_CLEANUP=1`.
-        std::env::remove_var("PDO_NODE_ID");
+        Self::spawn_inner(setup, tmux_cmd_override, false).await
+    }
 
+    /// Spawn a daemon in **nested (no-cleanup) mode**: no boot orphan sweep, no
+    /// periodic reaper, no boot recovery, no stale detector — completely passive on
+    /// tmux state, exactly as when a sub-claude accidentally runs `pdo daemon`.
+    ///
+    /// Two kinds of test need it: one that asserts the passivity itself, and one
+    /// that creates a tmux session **out of band** (no run in the event log), which
+    /// an armed reaper kills on sight as an unrecognised `pdo-*` name — with no TTL
+    /// grace on that arm.
+    ///
+    /// It is a `DaemonConfig` field and not `set_var("PDO_DAEMON_NO_CLEANUP")`
+    /// because the env var is process-global while a test binary holds several
+    /// daemons: the sibling `remove_var` used to land inside another test's
+    /// in-flight `serve_with_config` and boot *that* daemon with cleanup armed.
+    /// See `DaemonConfig::nested_daemon`.
+    pub async fn spawn_nested<F>(setup: F) -> Result<Self>
+    where
+        F: FnOnce(&Path) -> Result<()>,
+    {
+        Self::spawn_inner(setup, Some("exec sleep 600".to_string()), true).await
+    }
+
+    async fn spawn_inner<F>(
+        setup: F,
+        tmux_cmd_override: Option<String>,
+        nested_daemon: bool,
+    ) -> Result<Self>
+    where
+        F: FnOnce(&Path) -> Result<()>,
+    {
         let tempdir = tempfile::tempdir()?;
         setup(tempdir.path())?;
 
@@ -76,6 +99,11 @@ impl TestDaemon {
                 // #450: layer-3 tests drive firing via `run_trigger_tick`; the
                 // background heartbeat's immediate boot tick would race the seam.
                 run_trigger_scheduler_loop: false,
+                // The caller's choice, defaulting to `false` in every other
+                // constructor: a TestDaemon behaves like a TOP-LEVEL daemon (sweeps
+                // armed) whatever env the suite itself was launched with, and
+                // `spawn_nested` is the only way to opt out.
+                nested_daemon,
             },
         )
         .await?;
@@ -100,8 +128,6 @@ impl TestDaemon {
     where
         F: FnOnce(&Path) -> Result<()>,
     {
-        std::env::remove_var("PDO_NODE_ID");
-
         let tempdir = tempfile::tempdir()?;
         setup(tempdir.path())?;
 
@@ -123,6 +149,10 @@ impl TestDaemon {
                 // #450: layer-3 tests drive firing via `run_trigger_tick`; the
                 // background heartbeat's immediate boot tick would race the seam.
                 run_trigger_scheduler_loop: false,
+                // A TestDaemon behaves like a TOP-LEVEL daemon: sweeps armed,
+                // whatever env the suite itself was launched with. The opt-out is
+                // `TestDaemon::spawn_nested`, per daemon.
+                nested_daemon: false,
             },
         )
         .await?;
@@ -151,8 +181,6 @@ impl TestDaemon {
     where
         F: FnOnce(&Path) -> Result<()>,
     {
-        std::env::remove_var("PDO_NODE_ID");
-
         let tempdir = tempfile::tempdir()?;
         setup(tempdir.path())?;
 
@@ -172,6 +200,10 @@ impl TestDaemon {
                 // #450: layer-3 tests drive firing via `run_trigger_tick`; the
                 // background heartbeat's immediate boot tick would race the seam.
                 run_trigger_scheduler_loop: false,
+                // A TestDaemon behaves like a TOP-LEVEL daemon: sweeps armed,
+                // whatever env the suite itself was launched with. The opt-out is
+                // `TestDaemon::spawn_nested`, per daemon.
+                nested_daemon: false,
             },
         )
         .await?;
@@ -203,8 +235,6 @@ impl TestDaemon {
     where
         F: FnOnce(&Path) -> Result<()>,
     {
-        std::env::remove_var("PDO_NODE_ID");
-
         let tempdir = tempfile::tempdir()?;
         setup(tempdir.path())?;
 
@@ -224,6 +254,10 @@ impl TestDaemon {
                 // #450: layer-3 tests drive firing via `run_trigger_tick`; the
                 // background heartbeat's immediate boot tick would race the seam.
                 run_trigger_scheduler_loop: false,
+                // A TestDaemon behaves like a TOP-LEVEL daemon: sweeps armed,
+                // whatever env the suite itself was launched with. The opt-out is
+                // `TestDaemon::spawn_nested`, per daemon.
+                nested_daemon: false,
             },
         )
         .await?;
@@ -244,8 +278,6 @@ impl TestDaemon {
     where
         F: FnOnce(&Path) -> Result<()>,
     {
-        std::env::remove_var("PDO_NODE_ID");
-
         let tempdir = tempfile::tempdir()?;
         setup(tempdir.path())?;
 
@@ -265,6 +297,10 @@ impl TestDaemon {
                 // #450: layer-3 tests drive firing via `run_trigger_tick`; the
                 // background heartbeat's immediate boot tick would race the seam.
                 run_trigger_scheduler_loop: false,
+                // A TestDaemon behaves like a TOP-LEVEL daemon: sweeps armed,
+                // whatever env the suite itself was launched with. The opt-out is
+                // `TestDaemon::spawn_nested`, per daemon.
+                nested_daemon: false,
             },
         )
         .await?;
@@ -294,8 +330,6 @@ impl TestDaemon {
     where
         F: FnOnce(&Path) -> Result<()>,
     {
-        std::env::remove_var("PDO_NODE_ID");
-
         let tempdir = tempfile::tempdir()?;
         setup(tempdir.path())?;
 
@@ -314,6 +348,8 @@ impl TestDaemon {
                 price_refresh_at_boot: true,
                 // #450: deterministic tick seam — no background heartbeat.
                 run_trigger_scheduler_loop: false,
+                // See the sibling literals: armed sweeps, per-daemon opt-out.
+                nested_daemon: false,
             },
         )
         .await?;

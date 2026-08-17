@@ -2118,6 +2118,36 @@ pub struct DaemonConfig {
     /// Same charter as `price_refresh_at_boot`: true in prod, false in the
     /// `tests/common/mod.rs` literals — never a process-global env read (#181).
     pub run_trigger_scheduler_loop: bool,
+    /// **Nested (no-cleanup) mode**: suppress the boot orphan sweep, the periodic
+    /// reaper, boot recovery and the stale detector, leaving the daemon completely
+    /// passive on tmux state. `false` in production unless the env says otherwise
+    /// (`PDO_NODE_ID` — a sub-claude context — or `PDO_DAEMON_NO_CLEANUP`), which
+    /// [`DaemonConfig::from_env`] resolves once at boot via [`nested_daemon_from`].
+    ///
+    /// It is a config field and not an env read at boot precisely because the
+    /// alternative was a **cross-test race** (#181 charter, same as
+    /// `tmux_cmd_override`): a test binary holds several daemons, and the two
+    /// `pty_bridge` tests each wrapped their `spawn` in
+    /// `set_var`/`remove_var("PDO_DAEMON_NO_CLEANUP")`. A sibling's `remove_var`
+    /// landing inside the other's in-flight `serve_with_config` booted that daemon
+    /// with cleanup ARMED; its reaper then killed the out-of-band `pdo-pty-test-*`
+    /// session as an unrecognised name (no TTL on that arm), and the attached
+    /// client printed `[exited]` instead of the echo. Per-daemon config cannot
+    /// interleave.
+    pub nested_daemon: bool,
+}
+
+/// Resolve the daemon's cleanup posture from the two env signals production
+/// carries it on — **pure**, so the truth table is testable without touching
+/// process-global env.
+///
+/// - `PDO_NODE_ID` present at all ⇒ nested. A sub-claude context exports it via
+///   `wrap_with_env`, and its mere presence is the signal (an empty value still
+///   means "we are inside a NodeRun").
+/// - `PDO_DAEMON_NO_CLEANUP` ⇒ nested when set to anything but `""` or `"0"`, the
+///   same truthiness the `PDO_DEBUG_PANIC_*` knobs use.
+pub(crate) fn nested_daemon_from(node_id: Option<&str>, no_cleanup: Option<&str>) -> bool {
+    node_id.is_some() || no_cleanup.is_some_and(|v| !v.is_empty() && v != "0")
 }
 
 impl DaemonConfig {
@@ -2170,6 +2200,13 @@ impl DaemonConfig {
             // No env seam — the loop is core daemon behaviour, only the layer-3
             // test literals opt out (deterministic tick seam).
             run_trigger_scheduler_loop: true,
+            // The ONE place either env var is read. `serve_with_config` consumes
+            // the resolved boolean, so a test can pick the posture per daemon
+            // instead of racing every sibling on a process-global (#181).
+            nested_daemon: nested_daemon_from(
+                std::env::var("PDO_NODE_ID").ok().as_deref(),
+                std::env::var("PDO_DAEMON_NO_CLEANUP").ok().as_deref(),
+            ),
         }
     }
 }
@@ -2259,6 +2296,10 @@ pub async fn serve_with_config(
     // (see `DaemonConfig::run_trigger_scheduler_loop`).
     let run_trigger_scheduler_loop = config.run_trigger_scheduler_loop;
 
+    // Same capture, same reason (see `DaemonConfig::nested_daemon`): the cleanup
+    // posture is decided by the caller, not re-read from process-global env here.
+    let nested_daemon = config.nested_daemon;
+
     let state = Arc::new(AppState {
         db,
         event_tx,
@@ -2297,22 +2338,15 @@ pub async fn serve_with_config(
     // is scoped to its own private socket (`pdo-<port>`) so we can
     // never reach into another daemon's tmux state on the same host.
     //
-    // If we detect that we were spawned from inside a PDO pipeline
-    // (sub-claude context exports `PDO_NODE_ID` via wrap_with_env),
-    // or the operator set `PDO_DAEMON_NO_CLEANUP=1`, suppress every
-    // cleanup pathway. A Tester or Implementer that accidentally runs
-    // `pdo daemon` then can't trigger reaper-based kills, even on
-    // its own socket. The daemon still serves HTTP and accepts
-    // explicit `cleanup_run` calls — only the *automatic* sweeps go away.
-    let nested_daemon = std::env::var("PDO_NODE_ID").is_ok()
-        || std::env::var("PDO_DAEMON_NO_CLEANUP")
-            .map(|v| !v.is_empty() && v != "0")
-            .unwrap_or(false);
-
+    // A nested daemon suppresses every cleanup pathway: a Tester or
+    // Implementer that accidentally runs `pdo daemon` can't trigger
+    // reaper-based kills, even on its own socket. The daemon still serves
+    // HTTP and accepts explicit `cleanup_run` calls — only the *automatic*
+    // sweeps go away. The decision is `config.nested_daemon`, resolved from
+    // env ONCE in `DaemonConfig::from_env`, never re-read here (#181).
     if nested_daemon {
         warn!(
-            "PDO daemon launched from a sub-claude context \
-             (PDO_NODE_ID or PDO_DAEMON_NO_CLEANUP set) — \
+            "PDO daemon in nested (no-cleanup) mode — \
              skipping boot-time orphan sweep and periodic reaper. \
              This daemon will not auto-reap any tmux sessions."
         );
@@ -14322,6 +14356,42 @@ mod tests {
         use std::sync::atomic::{AtomicU16, Ordering};
         static NEXT: AtomicU16 = AtomicU16::new(20000);
         NEXT.fetch_add(1, Ordering::Relaxed)
+    }
+
+    // --- The nested-daemon (no-cleanup) posture resolver ---
+    //
+    // The truth table used to be inlined in `serve_with_config` as two
+    // `std::env::var` reads, which made it untestable except by mutating
+    // process-global env — the very thing that raced the `pty_bridge` tests into
+    // a red CI. Pure fn, so each case is a plain assertion.
+
+    #[test]
+    fn nested_daemon_is_off_when_neither_signal_is_present() {
+        assert!(!nested_daemon_from(None, None));
+    }
+
+    #[test]
+    fn a_sub_claude_context_is_nested_on_the_mere_presence_of_a_node_id() {
+        // `wrap_with_env` exports PDO_NODE_ID; presence is the signal, so even an
+        // empty value means "inside a NodeRun" (the pre-existing `.is_ok()` shape).
+        assert!(nested_daemon_from(Some("implementer"), None));
+        assert!(nested_daemon_from(Some(""), None));
+    }
+
+    #[test]
+    fn the_operator_knob_is_truthy_but_not_merely_set() {
+        assert!(nested_daemon_from(None, Some("1")));
+        assert!(nested_daemon_from(None, Some("yes")));
+        // Same truthiness as the `PDO_DEBUG_PANIC_*` knobs: "" and "0" are OFF, so
+        // `PDO_DAEMON_NO_CLEANUP=0` disarms rather than arms.
+        assert!(!nested_daemon_from(None, Some("")));
+        assert!(!nested_daemon_from(None, Some("0")));
+    }
+
+    #[test]
+    fn either_signal_alone_is_enough() {
+        assert!(nested_daemon_from(Some("worker"), Some("0")));
+        assert!(nested_daemon_from(None, Some("1")));
     }
 
     // --- POST /nodes/parse (#345): single-node YAML → canvas-instantiable spec.

@@ -4746,7 +4746,10 @@ mod tests {
         )];
         let state = project(&started).unwrap();
         assert_eq!(state.target_repos.len(), 2);
-        assert!(state.target_repos[0].read_only, "explicit true projects true");
+        assert!(
+            state.target_repos[0].read_only,
+            "explicit true projects true"
+        );
         assert!(
             !state.target_repos[1].read_only,
             "absent key projects writable"

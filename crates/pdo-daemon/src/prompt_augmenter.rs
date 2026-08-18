@@ -605,8 +605,8 @@ pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
                  sandbox). PDO does **not** deliver them for you: do it yourself from the \
                  repository's own directory (e.g. `git checkout -b …`, commit, then \
                  `gh pr create` / `git push`), exactly as you would the primary. \
-                 Uncommitted changes are lost when the Run is torn down. The env var \
-                 `PDO_WRITABLE_SECONDARY_REPOS` lists them as `alias=abspath` lines.\n\n",
+                 Uncommitted changes are lost when the Run is torn down. Their \
+                 absolute paths are listed below.\n\n",
             );
             for sec in &writable {
                 preamble.push_str(&format!(

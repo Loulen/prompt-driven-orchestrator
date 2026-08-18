@@ -15630,15 +15630,14 @@ mod tests {
         std::fs::write(ro_snap.join("F.txt"), "tampered\n").unwrap();
         std::fs::write(rw_snap.join("F.txt"), "tampered\n").unwrap();
 
-        let pin = |repo: &std::path::Path, alias: &str, sha: &str, read_only: bool| {
-            event_log::RepoPin {
+        let pin =
+            |repo: &std::path::Path, alias: &str, sha: &str, read_only: bool| event_log::RepoPin {
                 repo: repo.to_string_lossy().to_string(),
                 alias: alias.to_string(),
                 sha: sha.to_string(),
                 base_branch: None,
                 read_only,
-            }
-        };
+            };
         let mut state = event_log::RunState::new(run_id.to_string(), "p".to_string());
 
         // A writable secondary, dirtied, is tolerated → no refusal.
@@ -15658,10 +15657,16 @@ mod tests {
         }
 
         // Mixed list: the writable one is skipped, the read-only one is caught.
-        state.target_repos = vec![pin(&rw, "rw", &rw_sha, false), pin(&ro, "ro", &ro_sha, true)];
+        state.target_repos = vec![
+            pin(&rw, "rw", &rw_sha, false),
+            pin(&ro, "ro", &ro_sha, true),
+        ];
         match secondary_repos_dirtied_refusal(&primary, run_id, &state) {
             Some(completion_refusal::CompletionRefusal::SecondaryRepoDirtied { alias, .. }) => {
-                assert_eq!(alias, "ro", "must skip the writable pin and catch the read-only one");
+                assert_eq!(
+                    alias, "ro",
+                    "must skip the writable pin and catch the read-only one"
+                );
             }
             other => panic!("expected the read-only pin to be refused, got {other:?}"),
         }

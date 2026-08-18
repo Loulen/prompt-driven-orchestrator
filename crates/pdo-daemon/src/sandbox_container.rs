@@ -1213,7 +1213,10 @@ mod tests {
         let got = create_args("r1", &fx.spec());
         assert_eq!(got, expected);
         // Structurel : chaque `.git` précède l'image, et coûte exactement 2 args.
-        let image_at = got.iter().position(|a| a == "pdo-sandbox:h-abc123").unwrap();
+        let image_at = got
+            .iter()
+            .position(|a| a == "pdo-sandbox:h-abc123")
+            .unwrap();
         assert_eq!(&got[image_at..], &create_argv_suffix()[..]);
         assert_eq!(got[image_at - 2], "-v");
     }

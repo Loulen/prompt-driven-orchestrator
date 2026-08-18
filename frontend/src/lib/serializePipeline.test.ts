@@ -133,6 +133,60 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
     expect(serializePipeline(makeFullPipeline([impl]))).toContain("effort: turbo");
   });
 
+  // #550/ADR-0046: the flat model/effort view is folded under `harnesses.<resolved>`
+  // — the substring assertions above pass by coincidence (the block CONTAINS
+  // "model: opus"); these pin the STRUCTURE and the pin.
+  it("folds model/effort under harnesses.claude for an unpinned node (#550)", () => {
+    const impl: NodeDef = {
+      id: "impl", name: "implementer", type: "code-mutating",
+      inputs: [], outputs: [{ name: "code", repeated: false, side: "right" }],
+      interactive: false, view: { x: 200, y: 0 }, model: "opus", effort: "low",
+    };
+    const yaml = serializePipeline(makeFullPipeline([impl]));
+    expect(yaml).toContain("harnesses:");
+    // The dumper emits a small map in flow style.
+    expect(yaml).toContain("claude: { model: opus, effort: low }");
+    // No pin when the node relies on the floor.
+    expect(yaml).not.toContain("pin_harness:");
+  });
+
+  it("emits pin_harness and folds model under the PINNED harness (#550)", () => {
+    const impl: NodeDef = {
+      id: "impl", name: "implementer", type: "code-mutating",
+      inputs: [], outputs: [{ name: "code", repeated: false, side: "right" }],
+      interactive: false, view: { x: 200, y: 0 },
+      pin_harness: "opencode", model: "openrouter/foo",
+    };
+    const yaml = serializePipeline(makeFullPipeline([impl]));
+    expect(yaml).toContain("pin_harness: opencode");
+    expect(yaml).toContain("opencode: { model: openrouter/foo }");
+  });
+
+  it("preserves a non-resolved harness's entry across a round-trip (#550)", () => {
+    // Editing on the resolved harness (claude) must not clobber opencode's entry.
+    const impl: NodeDef = {
+      id: "impl", name: "implementer", type: "code-mutating",
+      inputs: [], outputs: [{ name: "code", repeated: false, side: "right" }],
+      interactive: false, view: { x: 200, y: 0 },
+      model: "opus", // resolved = claude (no pin)
+      harnesses: { opencode: { model: "openrouter/bar" } },
+    };
+    const yaml = serializePipeline(makeFullPipeline([impl]));
+    expect(yaml).toContain("openrouter/bar"); // opencode entry survived
+    expect(yaml).toContain("opus"); // claude entry from the flat view
+  });
+
+  it("omits harnesses entirely for a plain node (#550, no-diverge default)", () => {
+    const impl: NodeDef = {
+      id: "impl", name: "implementer", type: "code-mutating",
+      inputs: [], outputs: [{ name: "code", repeated: false, side: "right" }],
+      interactive: false, view: { x: 200, y: 0 },
+    };
+    const yaml = serializePipeline(makeFullPipeline([impl]));
+    expect(yaml).not.toContain("harnesses:");
+    expect(yaml).not.toContain("pin_harness:");
+  });
+
   it("omits effort when unset/null/empty — the byte-identical default (#424)", () => {
     // `undefined`, `null` and `""` must all serialize as an ABSENT key: an
     // `effort: ""` in the file would reach the tail as an empty `--effort`, which

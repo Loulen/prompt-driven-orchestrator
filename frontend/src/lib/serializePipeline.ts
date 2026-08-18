@@ -29,6 +29,8 @@ import type {
   PortSide,
   FrontmatterFieldDecl,
 } from "../types";
+// #550: the per-harness fold (pure, `../types`-only) — keeps this module pure.
+import { foldNodeIntoHarnesses } from "./harness";
 
 /**
  * Drops the null-valued keys of every frontmatter declaration (#457).
@@ -90,18 +92,16 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
       type: n.type,
     };
     if (n.interactive) node.interactive = true;
-    // Per-node model override (#296): semantic (compared in the pipeline diff),
-    // emitted only when set so an unset node and a library twin with no model
-    // both produce objects without the key and stay `synced`, not `diverged`.
-    if (n.model) node.model = n.model;
-    // Per-node effort override (#424): semantic (compared in the pipeline diff),
-    // emitted only when set — the truthiness guard folds `undefined`, `null` AND
-    // `""` into "absent", which is what keeps an unset node byte-identical to a
-    // library twin with no effort (`synced`, not `diverged`) and what holds the
-    // launch-command byte-identity gate. This emitter and `exportNodeAsYaml` are
-    // deliberately NOT unified (see the note further down) — a field added here
-    // must be added there too.
-    if (n.effort) node.effort = n.effort;
+    // #550/ADR-0046: the harness axis replaces flat `model:`/`effort:`. The pin is
+    // emitted when set; the flat model/effort view is folded back into the
+    // resolved harness's entry in the per-harness `harnesses` map, emitted only
+    // when non-empty — so an unset node and a library twin with no settings both
+    // produce objects without the keys and stay `synced`, not `diverged`. This
+    // emitter and `exportNodeAsYaml` are deliberately NOT unified (see the note
+    // further down) — a field added here must be added there too.
+    if (n.pin_harness) node.pin_harness = n.pin_harness;
+    const harnesses = foldNodeIntoHarnesses(n);
+    if (harnesses) node.harnesses = harnesses;
     // Legacy `type: loop` nodes (pre-region model, ADR-0011) carry a node-level
     // `max_iter` that the daemon still requires and validates
     // (`pipeline.rs` `NodeType::Loop`). The current model emits `max_iter` on the

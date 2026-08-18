@@ -74,6 +74,21 @@ pub(crate) struct InstanceConfig {
     /// [`Self::autocomplete_turn_end`]: `NULL` is what makes the `stored → env → default`
     /// fall-through work; a stored `0` is a decision that beats the env.
     pub default_auto_name: Option<i64>,
+    /// Stored instance-wide default **harness** (`claude`, `opencode`), or `None`
+    /// when unset (#550, ADR-0046 amending ADR-0015). `None` falls through to the
+    /// env seam ([`crate::tmux_session_manager::DEFAULT_HARNESS_ENV`]) then the
+    /// `claude` floor. Free-text pass-through, no enum (ADR-0001). `Some("")` is
+    /// the clear sentinel — [`update`] normalises it to SQL `NULL`.
+    pub default_harness: Option<String>,
+    /// Stored instance-wide default **model per harness** (#550, ADR-0046): a map
+    /// `harness → model`, e.g. `{"claude":"opus"}`. The single `default_model`
+    /// became per-harness because a model slug means nothing outside its harness.
+    /// Empty map ⇒ no per-harness default (for `claude` the legacy
+    /// [`crate::tmux_session_manager::DEFAULT_MODEL_ENV`] still contributes at the
+    /// spawn seam). Persisted as a JSON object in the `default_harness_model`
+    /// column (`trigger_store::variables` idiom).
+    #[serde(default)]
+    pub default_harness_model: std::collections::BTreeMap<String, String>,
     /// RFC3339-millis UTC timestamp of the last write (or the seed).
     pub updated_at: String,
 }
@@ -113,6 +128,13 @@ pub(crate) struct UpdateInstanceConfig {
     /// storing `0` for "off" is what lets unticking the box override a
     /// `PDO_DEFAULT_AUTO_NAME=1`, which a `NULL` fall-through would not.
     pub default_auto_name: Option<bool>,
+    /// Set the instance-wide default harness (#550). `Some("")` clears it back to
+    /// unset (same `""`-sentinel as `default_model`); `None` leaves it untouched.
+    pub default_harness: Option<String>,
+    /// Set the instance-wide per-harness default model map (#550). `Some(map)`
+    /// replaces the stored map wholesale; an empty map clears it. `None` leaves it
+    /// untouched.
+    pub default_harness_model: Option<std::collections::BTreeMap<String, String>>,
 }
 
 impl UpdateInstanceConfig {
@@ -124,6 +146,8 @@ impl UpdateInstanceConfig {
             && self.default_sandbox.is_none()
             && self.autocomplete_turn_end.is_none()
             && self.default_auto_name.is_none()
+            && self.default_harness.is_none()
+            && self.default_harness_model.is_none()
     }
 }
 
@@ -145,6 +169,8 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             default_sandbox    TEXT,
             autocomplete_turn_end INTEGER,
             default_auto_name  INTEGER,
+            default_harness    TEXT,
+            default_harness_model TEXT,
             updated_at         TEXT NOT NULL
         )",
     )
@@ -241,6 +267,33 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
+    // Additive migration for pre-#550 databases: the `default_harness` and
+    // `default_harness_model` columns are absent on tables created before the
+    // multi-harness axis. Same guarded `ADD COLUMN` idiom — NULLABLE so an
+    // existing install falls through env → the `claude` floor unchanged.
+    let has_default_harness = sqlx::query(
+        "SELECT 1 FROM pragma_table_info('instance_config') WHERE name = 'default_harness'",
+    )
+    .fetch_optional(db)
+    .await?
+    .is_some();
+    if !has_default_harness {
+        sqlx::query("ALTER TABLE instance_config ADD COLUMN default_harness TEXT")
+            .execute(db)
+            .await?;
+    }
+    let has_default_harness_model = sqlx::query(
+        "SELECT 1 FROM pragma_table_info('instance_config') WHERE name = 'default_harness_model'",
+    )
+    .fetch_optional(db)
+    .await?
+    .is_some();
+    if !has_default_harness_model {
+        sqlx::query("ALTER TABLE instance_config ADD COLUMN default_harness_model TEXT")
+            .execute(db)
+            .await?;
+    }
+
     Ok(())
 }
 
@@ -253,6 +306,14 @@ fn row_to_config(row: &sqlx::sqlite::SqliteRow) -> InstanceConfig {
         default_sandbox: row.get("default_sandbox"),
         autocomplete_turn_end: row.get("autocomplete_turn_end"),
         default_auto_name: row.get("default_auto_name"),
+        default_harness: row.get("default_harness"),
+        // Stored as a JSON object in a TEXT column (trigger_store::variables
+        // idiom). NULL / empty / unparseable ⇒ an empty map, so a fresh row and a
+        // corrupt one both fall through to env → floor rather than erroring.
+        default_harness_model: row
+            .get::<Option<String>, _>("default_harness_model")
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default(),
         updated_at: row.get("updated_at"),
     }
 }
@@ -301,6 +362,12 @@ pub(crate) async fn update(
     if edit.default_auto_name.is_some() {
         sets.push("default_auto_name = ?");
     }
+    if edit.default_harness.is_some() {
+        sets.push("default_harness = ?");
+    }
+    if edit.default_harness_model.is_some() {
+        sets.push("default_harness_model = ?");
+    }
     // Always bump the write timestamp on a real edit.
     sets.push("updated_at = ?");
 
@@ -339,6 +406,16 @@ pub(crate) async fn update(
         // 0/1, never NULL: unticking must persist a stored `0` that beats a
         // `PDO_DEFAULT_AUTO_NAME=1`, not fall through to it (#338).
         query = query.bind(if v { 1_i64 } else { 0_i64 });
+    }
+    if let Some(v) = edit.default_harness {
+        // "" = clear sentinel → SQL NULL (#550, mirrors default_model): a stored
+        // "" would win precedence and shadow env/floor. NULL restores fall-through.
+        query = query.bind(if v.is_empty() { None } else { Some(v) });
+    }
+    if let Some(v) = edit.default_harness_model {
+        // Persist the map as JSON; an empty map stores `{}` (a real "no defaults"
+        // decision). Serialisation cannot fail for a String→String map.
+        query = query.bind(serde_json::to_string(&v).unwrap_or_else(|_| "{}".to_string()));
     }
     query = query.bind(crate::event_log::now_iso());
     query.execute(db).await?;
@@ -458,7 +535,122 @@ mod tests {
         assert_eq!(cfg.default_sandbox, None);
         assert_eq!(cfg.autocomplete_turn_end, None);
         assert_eq!(cfg.default_auto_name, None);
+        assert_eq!(cfg.default_harness, None);
+        assert!(cfg.default_harness_model.is_empty());
         assert!(!cfg.updated_at.is_empty(), "seed must stamp updated_at");
+    }
+
+    #[tokio::test]
+    async fn update_sets_and_reads_back_default_harness() {
+        // #550/ADR-0046: the scalar default harness round-trips like `default_model`.
+        let db = test_db().await;
+        let updated = update(
+            &db,
+            UpdateInstanceConfig {
+                default_harness: Some("opencode".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.default_harness.as_deref(), Some("opencode"));
+        assert_eq!(
+            get(&db).await.unwrap().default_harness.as_deref(),
+            Some("opencode")
+        );
+        // "" clears it back to unset (the resolver's floor then applies).
+        update(
+            &db,
+            UpdateInstanceConfig {
+                default_harness: Some(String::new()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(get(&db).await.unwrap().default_harness, None);
+    }
+
+    #[tokio::test]
+    async fn update_sets_and_reads_back_per_harness_default_model() {
+        // #550/ADR-0046: the per-harness default model map persists as JSON and
+        // round-trips through a re-read.
+        let db = test_db().await;
+        let map: std::collections::BTreeMap<String, String> = [
+            ("claude".to_string(), "opus".to_string()),
+            ("opencode".to_string(), "openrouter/foo".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        update(
+            &db,
+            UpdateInstanceConfig {
+                default_harness_model: Some(map.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(get(&db).await.unwrap().default_harness_model, map);
+    }
+
+    #[tokio::test]
+    async fn init_migrates_pre_harness_schema() {
+        // #550: a table created before the harness columns gains them on init,
+        // idempotently, without clobbering a pre-existing knob.
+        let db = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        // The full pre-#550 schema (everything except the two harness columns).
+        sqlx::query(
+            "CREATE TABLE instance_config (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                session_cap INTEGER,
+                reaper_ttl_secs INTEGER,
+                guard_timeout_secs INTEGER,
+                default_model TEXT,
+                triggers_paused INTEGER,
+                default_sandbox TEXT,
+                autocomplete_turn_end INTEGER,
+                default_auto_name INTEGER,
+                updated_at TEXT NOT NULL
+            )",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO instance_config (id, session_cap, updated_at) VALUES (1, 7, 'seed')",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+
+        // First init adds the columns; a second is a no-op (PRAGMA guard holds).
+        init(&db).await.unwrap();
+        init(&db).await.unwrap();
+
+        let cfg = get(&db).await.unwrap();
+        assert_eq!(cfg.session_cap, Some(7), "pre-existing knob survives");
+        assert_eq!(cfg.default_harness, None, "new column defaults to NULL");
+        assert!(cfg.default_harness_model.is_empty());
+
+        // …and both new columns are writable afterward.
+        let map: std::collections::BTreeMap<String, String> =
+            [("claude".to_string(), "opus".to_string())]
+                .into_iter()
+                .collect();
+        update(
+            &db,
+            UpdateInstanceConfig {
+                default_harness: Some("opencode".to_string()),
+                default_harness_model: Some(map.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let cfg = get(&db).await.unwrap();
+        assert_eq!(cfg.default_harness.as_deref(), Some("opencode"));
+        assert_eq!(cfg.default_harness_model, map);
     }
 
     #[tokio::test]

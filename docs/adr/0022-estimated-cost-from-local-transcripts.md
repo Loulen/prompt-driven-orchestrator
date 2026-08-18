@@ -1,5 +1,10 @@
 # Coût estimé d'un Run à partir des transcripts Claude Code locaux
 
+> **Amendé par ADR-0045** : le coût **dérivé** décrit ici (tokens des transcripts × table de prix) n'est
+> plus la seule forme. Un harnais qui calcule lui-même le coût de chaque message en fournit un
+> **rapporté**, qu'on somme tel quel — mesuré indispensable : ses buckets de cache ne se mappent pas sur
+> les quatre d'ici, donc un recalcul uniforme est impossible. Un harnais sans capacité de coût rend « — ».
+>
 > **Amendé par ADR-0034 (#427)** : la table de prix n'est plus un `const` seul — elle a trois tiers
 > (`manuel → fetché → embarquée`, fusion par clé) remplis par un fetch hors du chemin de lecture.
 > Ce qui survit intact ici : le coût reste une **estimation**, **dérivée à la lecture**, jamais

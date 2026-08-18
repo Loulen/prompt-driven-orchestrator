@@ -22,7 +22,7 @@ Contrairement à : Liza (pipelines YAML), Langgraph (conditional edges + LLM-rou
 
 ## Node
 
-Unité atomique d'un Pipeline. Un **Node** représente un rôle. La plupart des nodes lancent une instance de Claude Code à laquelle on confie un prompt système qui définit sa mission (Implementer, Planner, Reviewer, etc.). Un node **`script`** fait exception : il exécute du **bash déterministe fourni par l'auteur**, sans LLM (ADR-0017).
+Unité atomique d'un Pipeline. Un **Node** représente un rôle. La plupart des nodes lancent un **harnais agentique** (cf. §*Harnais agentique*) à qui on confie un prompt système qui définit sa mission (Implementer, Planner, Reviewer, etc.). Un node **`script`** fait exception : il exécute du **bash déterministe fourni par l'auteur**, sans LLM (ADR-0017).
 
 Un Node se définit par :
 
@@ -35,26 +35,31 @@ Asymétrie assumée : le Node *connaît* ses sorties, *découvre* ses entrées a
 
 Distinct de :
 
-- **NodeRun** — l'exécution d'un Node au sein d'un Pipeline Run précis. Un NodeRun = une session tmux Claude Code dans un sous-worktree dédié, avec un statut (pending/running/done/failed).
+- **NodeRun** — l'exécution d'un Node au sein d'un Pipeline Run précis. Un NodeRun = une session tmux d'un harnais agentique dans un sous-worktree dédié, avec un statut (pending/running/done/failed).
 
-### Modèle (par node)
+### Harnais agentique
 
-Chaque Node peut porter un **modèle** optionnel : l'identifiant du modèle Claude avec lequel sa session est lancée. Permet de payer un modèle capable là où le raisonnement est dur et un modèle économique sur les nodes mécaniques.
+Le **harnais agentique** est le programme qui fait tourner l'agent d'un NodeRun (`claude`, `opencode`, …). PDO le lance, l'attache, le tue ; il n'en embarque et n'en fournit aucun.
+_Éviter_ : « CLI » comme terme — réservé au binaire `pdo` (cf. *Prompt augmentation*, « capacités CLI ») ; « modèle » (le harnais est le programme, le modèle est ce qu'il appelle) ; « provider ».
 
-- **Texte libre, pass-through, aucune validation** : alias ou id complet, transmis verbatim à `claude`. Un id invalide fait échouer `claude` au démarrage — *sharp tool* (ADR-0001). Pas d'enum fermé qui périmerait à chaque sortie de modèle.
-- **Sémantique, pas layout** : le modèle change *quel agent* tourne ; il entre dans le **diff sémantique**, contrairement au layout.
-- **S'applique aux nodes qui lancent un agent** (`doc-only`, `code-mutating`, `merge`). Le manager et le résolveur de merge (sessions d'infra) restent au défaut du compte.
-- **Resume** : une session reprise conserve son modèle d'origine (garanti par Claude Code) — la garantie ne s'étend pas à l'effort (ci-dessous).
-- **Défaut d'instance** (#347) : un `default_model` daemon-wide (Configuration d'instance, ADR-0015) s'applique à tout node de travail sans `model:` propre. Précédence : `node.model` → défaut d'instance → défaut du compte. _Éviter_ : « modèle global », « modèle du run » (le modèle est *par node* ou *par instance*, jamais par run).
+- **Résident, jamais one-shot** : un harnais éligible reste vivant après la fin de son tour, dans une session attachable où l'utilisateur peut reprendre la main — c'est le principe même de PDO (ADR-0012). Un harnais qui sort en fin de travail est **inéligible** : sa mort de session serait indiscernable d'un échec (ADR-0032). Contrat d'éligibilité et forme du descripteur → ADR-0045.
+- **Précédence à quatre tiers** : `node` → Run → Projet → Configuration d'instance → plancher (`claude`). Résolue une fois **au spawn** et gelée dans l'événement de démarrage du nœud : une édition de YAML ou de Projet n'atteint jamais une itération vivante (ADR-0007). Contrat → ADR-0046.
+- **Épinglage ≠ paramétrage** : épingler un harnais sur un node dit « ce rôle exige ce harnais » et le soustrait à un changement de tier supérieur ; la carte des réglages par harnais dit seulement *comment* le node tourne sur chacun.
+- **Instrumentation inégale, jamais silencieuse** : coût, complétion sur fin de tour, détection de menu de limite, plancher de staging sont des **capacités** écrites harnais par harnais. Absente, la capacité rend la feature absente et le **dit** (« — », jamais `$0`) — ADR-0045.
+- **Sessions d'infra** (Pipeline Manager, résolveur de merge) : elles suivent le harnais **du Run**, sans modèle ni effort propres.
 
-### Niveau d'effort (par node)
+### Modèle et effort (par node, conditionnés par le harnais)
 
-Chaque Node peut porter un **niveau d'effort** optionnel : le budget de raisonnement de sa session. Axe **orthogonal au modèle** : le modèle dit *quel agent* tourne, l'effort dit *combien il réfléchit*. Aucun défaut d'instance (#424).
+Le **modèle** dit *quel agent* tourne, le **niveau d'effort** *combien il réfléchit* : orthogonaux entre eux, mais **aucun des deux n'a de sens hors d'un harnais** — un slug Anthropic ne veut rien dire pour `opencode`. Ils vivent donc dans une carte du node, une entrée par harnais, et se lisent dans l'entrée du **harnais gagnant** ; ils n'ont pas de précédence propre (ADR-0046).
 
-- **Texte libre côté wire, jeu curaté côté UI** : la valeur est transmise verbatim (comme `model`), mais l'UI propose un picker fermé + l'état « Default ». Raison de l'asymétrie : un id de modèle invalide fait échouer `claude` (le designer le voit) ; un niveau d'effort inconnu ne produit qu'un warning et la session démarre au défaut — le node tourne *vert* avec un budget qui n'est pas celui demandé. Le picker ferme le seul mode d'échec que le designer ne peut pas constater (#268).
-- **Sémantique, pas layout** : entre dans le diff sémantique et le `content_hash` de la bibliothèque.
-- **Re-posé au resume** (#424) : contrairement au modèle, l'effort est perdu par `claude --continue` ; PDO re-pose le flag depuis ce qui a été enregistré au spawn — pas depuis le YAML courant, qui a pu être édité entre-temps (ADR-0007). Le YAML est la source de vérité au *spawn*, l'event log l'est au *resume*.
-- **Effort demandé ≠ effort obtenu** : le flag exprime une **intention** — un niveau non supporté retombe en silence, un plafond d'organisation peut clamper, un skill/sous-agent peut surclasser le niveau de session. À lire comme un levier de déterminisme et de latence, pas un cadran de coût. _Éviter_ : « effort garanti », « effort du run », « mode économique ».
+- **Texte libre, pass-through, aucune validation** : alias ou id complet, transmis verbatim. Pas d'enum fermé qui périmerait à chaque sortie de modèle — *sharp tool* (ADR-0001).
+- **Le mode d'échec d'un modèle appartient au harnais, pas à PDO** : `claude` sort non-zéro sur un id invalide, donc le designer le voit ; `opencode` **retombe en silence sur son défaut** quand le modèle demandé est injoignable, et le nœud tourne *vert* avec un autre modèle que celui écrit. L'asymétrie « le modèle échoue fort, l'effort échoue en silence » (#268) n'est donc pas une propriété du produit — elle se vérifie harnais par harnais (ADR-0045).
+- **Un harnais peut n'avoir aucun axe d'effort** — `opencode` ne l'expose pas au lancement. L'UI grise alors le picker : c'est une absence déclarée, pas un défaut.
+- **Effort demandé ≠ effort obtenu** : le flag exprime une **intention** — un niveau non supporté retombe en silence, un plafond d'organisation peut clamper, un skill/sous-agent peut surclasser le niveau de session. À lire comme un levier de déterminisme et de latence, pas un cadran de coût. _Éviter_ : « effort garanti », « effort du run », « mode économique », « modèle global », « modèle du run ».
+- **Sémantique, pas layout** : la carte entre dans le **diff sémantique** et le `content_hash` de la bibliothèque.
+- **S'applique aux nodes qui lancent un agent** (`doc-only`, `code-mutating`, `merge`), jamais à un node `script`.
+- **Ce que la reprise conserve dépend du harnais** : sur `claude`, le modèle survit, l'effort non — PDO le re-pose depuis l'événement de démarrage, jamais depuis le YAML courant, qui a pu être édité entre-temps (#424, ADR-0007). Le YAML est la vérité au *spawn*, l'event log au *resume*.
+- **Défaut d'instance** (#347) : un modèle par harnais peut être posé daemon-wide (Configuration d'instance, ADR-0015).
 
 ### Node `script` — exécution déterministe (ADR-0017)
 
@@ -273,9 +278,9 @@ Le préambule contient au minimum : les **inputs disponibles** (nom du port + ch
 
 Conséquence : le designer n'a pas à se soucier dans son prompt de « où écrire / quoi mettre en frontmatter / comment signaler la fin » — c'est imposé par le runtime. Il se concentre sur le *rôle*.
 
-### Skills Claude Code — délégué
+### Skills et extensions — délégués au harnais
 
-PDO **ne gère pas** les skills. Les skills disponibles dans une session NodeRun sont ceux que Claude Code charge naturellement (`~/.claude/skills/`, repo cible, sous-worktree). Pas d'attachement par-Node, pas de mécanisme custom.
+PDO **ne gère pas** les skills, sous-agents, plugins ou MCP d'un harnais. Ce qui est disponible dans une session NodeRun est ce que le harnais charge naturellement depuis son propre home et le repo cible. Pas d'attachement par-Node, pas de mécanisme custom.
 
 ---
 
@@ -445,14 +450,26 @@ Le **repo cible** d'un Run ou d'un Trigger est le dépôt git dans lequel il tra
 ### Multi-repo par Run (#465, ADR-0042)
 
 - **Dépôt primaire** *(terme)* — celui sur lequel le Run écrit et mène ses MR ; `target_repos[0]`, sémantique de l'ancien `target_repo` (ADR-0033), reste dans `target_repo` (pas matérialisé en `RepoPin`).
-- **Dépôt secondaire** *(terme)* — dépôt associé au Run en plus du primaire, offert aux nœuds via un snapshot figé à un SHA **au moment de l'ajout**. **Modifiable par défaut** (ADR-0045) : un nœud peut y écrire, y committer et l'y livrer (`gh pr create`, `git merge`) exactement comme dans le primaire — PDO ne livre jamais lui-même, c'est le nœud (cf. *Nœud `Ship It`*, ADR-0036) qui ship chaque dépôt indépendamment. La liste des secondaires est un **ensemble par-Run éditable en cours de Run** (ajout/retrait ; le primaire reste immuable). Ni worktree pipeline, ni archive/coût côté PDO ; en list/cost, le Run se range sous le primaire.
-- **Read-only opt-in** *(terme, ADR-0045)* — case à cocher **par dépôt secondaire** (défaut **décoché** ⇒ modifiable). Cochée, elle rétablit l'ancien comportement : le dépôt n'est que du **contexte en lecture**, et écrire un fichier *suivi* dedans fait échouer la complétion (garde `secondary_repo_dirtied`, 409). Porté par le flag `read_only` de `RepoPin`/`TargetRepoInput` (défaut `false`). _Éviter_ : « secondaire read-only » comme s'il n'y avait qu'un mode — c'est désormais un axe par dépôt.
+- **Dépôt secondaire** *(terme)* — dépôt associé au Run en plus du primaire, offert aux nœuds via un snapshot figé à un SHA **au moment de l'ajout**. **Modifiable par défaut** (ADR-0047) : un nœud peut y écrire, y committer et l'y livrer (`gh pr create`, `git merge`) exactement comme dans le primaire — PDO ne livre jamais lui-même, c'est le nœud (cf. *Nœud `Ship It`*, ADR-0036) qui ship chaque dépôt indépendamment. La liste des secondaires est un **ensemble par-Run éditable en cours de Run** (ajout/retrait ; le primaire reste immuable). Ni worktree pipeline, ni archive/coût côté PDO ; en list/cost, le Run se range sous le primaire.
+- **Read-only opt-in** *(terme, ADR-0047)* — case à cocher **par dépôt secondaire** (défaut **décoché** ⇒ modifiable). Cochée, elle rétablit l'ancien comportement : le dépôt n'est que du **contexte en lecture**, et écrire un fichier *suivi* dedans fait échouer la complétion (garde `secondary_repo_dirtied`, 409). Porté par le flag `read_only` de `RepoPin`/`TargetRepoInput` (défaut `false`). _Éviter_ : « secondaire read-only » comme s'il n'y avait qu'un mode — c'est désormais un axe par dépôt.
 - **Visibilité au spawn** *(terme)* — contrat d'une édition mid-run de la liste : elle affecte les nœuds lancés **après** elle ; les nœuds déjà vivants gardent leur contexte (préambule + `PDO_SECONDARY_REPOS`) figé à leur spawn. Un ajout matérialise le snapshot à l'édition ; un retrait le sort de la projection mais laisse le snapshot sur disque jusqu'au cleanup (ne casse pas un lecteur vivant).
-- **Snapshot secondaire** *(terme)* — worktree détaché pinné au SHA de `RunStarted` (ou d'un `RunReposEdited` pour un ajout mid-run), sous `<primaire>/.pdo/runs/<id>/repos/<alias>/` (**3e frère** de `worktree/` et `nodes/`). Injecté aux nœuds par **chemin absolu** (préambule + env `PDO_SECONDARY_REPOS`). Sur un secondaire **read-only** (opt-in), la garde `secondary_repo_dirtied` (409 sur fichiers *suivis*) fait respecter la lecture seule ; sur un secondaire **modifiable**, la garde est passée et le `.git` du dépôt est monté rw en sandbox pour que `git` y fonctionne (ADR-0045, étend ADR-0030). Récupéré au teardown par un **balayage disque** de `repos/*` (`worktree remove --force` **+ `prune`** ; sans le prune : registration dangling, classe #498), couvrant aussi les snapshots retirés-mais-persistants et orphelins.
+- **Snapshot secondaire** *(terme)* — worktree détaché pinné au SHA de `RunStarted` (ou d'un `RunReposEdited` pour un ajout mid-run), sous `<primaire>/.pdo/runs/<id>/repos/<alias>/` (**3e frère** de `worktree/` et `nodes/`). Injecté aux nœuds par **chemin absolu** (préambule + env `PDO_SECONDARY_REPOS`). Sur un secondaire **read-only** (opt-in), la garde `secondary_repo_dirtied` (409 sur fichiers *suivis*) fait respecter la lecture seule ; sur un secondaire **modifiable**, la garde est passée et le `.git` du dépôt est monté rw en sandbox pour que `git` y fonctionne (ADR-0047, étend ADR-0030). Récupéré au teardown par un **balayage disque** de `repos/*` (`worktree remove --force` **+ `prune`** ; sans le prune : registration dangling, classe #498), couvrant aussi les snapshots retirés-mais-persistants et orphelins.
 
 ### Explorateur de fichiers (générique, `GET /fs/browse` + `FsExplorerModal`)
 
 La brique **unique** de sélection de chemin à la souris : un listing à **un niveau**, un composant, plusieurs consommateurs (sélecteur de repo, sélecteur de Dockerfile). Jamais de récursion, jamais de **contenus** renvoyés (noms seulement) ; liens cassés et fichiers spéciaux invisibles ; mode fichier = select-then-confirm. Surface non authentifiée comme tout le HTTP du daemon — portée LAN assumée (#260 closed). _Éviter_ : « repo browser » (généralisé en #431, sans alias).
+
+---
+
+## Projet
+
+Un **Projet** est un regroupement **nommé** de dépôts qui se travaillent ensemble (un front et un back, par exemple). Il porte un nom éditable et une liste de chemins **membres**, comparés verbatim comme partout ailleurs (cf. *Repo cible*).
+
+- **Un chemin appartient à au plus un Projet**, et le Projet d'un Run est celui qui possède son **dépôt primaire**. Un secondaire membre d'un autre Projet n'y change rien : c'est un contexte read-only, pas une appartenance (ADR-0042).
+- **Matérialisé à la demande, jamais seedé** : tant qu'aucun nom n'est donné ni aucun réglage attaché, il n'existe pas de Projet — les listes se groupent sur le libellé dérivé du chemin. Nommer un en-tête de groupe est ce qui crée l'entité.
+- **Premier réglage porté** : le harnais agentique, dont il est le tier intermédiaire (ADR-0046).
+
+_Éviter_ : « projet » pour un dépôt seul (c'est le *repo cible*) ou pour le `projects/` d'un home stagé.
 
 ---
 
@@ -524,7 +541,7 @@ Agent conversationnel attaché à un Pipeline Run. Permet de **lire l'état** et
 
 ### Implémentation
 
-Le manager **est** une instance Claude Code standard, prompt augmenté par le runtime (identité du Run, endpoints HTTP documentés en clair + exemples curl). **Pas de MCP custom** : on possède le prompt de la session, autant documenter les endpoints. Pour la lecture brute, bash complet — tout l'état du Run est sur disque.
+Le manager **est** une instance standard du harnais du Run, prompt augmenté par le runtime (identité du Run, endpoints HTTP documentés en clair + exemples curl). **Pas de MCP custom** : on possède le prompt de la session, autant documenter les endpoints. Pour la lecture brute, bash complet — tout l'état du Run est sur disque.
 
 ### Commandes disponibles (v1)
 
@@ -589,7 +606,7 @@ Réglages **daemon-wide** (ADR-0015), à distinguer d'une variable *pipeline* ou
 
 ### Modèle d'exécution
 
-Chaque NodeRun = **une session tmux détachée** créée par le daemon, contenant Claude Code en mode interactif avec le prompt augmenté. Nommage :
+Chaque NodeRun = **une session tmux détachée** créée par le daemon, contenant le harnais du nœud en mode interactif avec le prompt augmenté. Nommage :
 
 - NodeRun : `pdo-<run-id>-<node-id>-iter-<N>`.
 - Manager : `pdo-mgr-<run-id>`.

@@ -7,6 +7,7 @@ import OutputPortCard from "./OutputPortCard";
 import PooledInputRow from "./PooledInputRow";
 import ModelPicker from "./ModelPicker";
 import EffortPicker from "./EffortPicker";
+import { KNOWN_HARNESSES, harnessHasEffort, resolveEditorHarness } from "../lib/harness";
 import DestroyLoopModal from "./DestroyLoopModal";
 import { derivePooledInputs } from "../lib/derivePooledInputs";
 import { regionsDestroyedByEdgeRemoval } from "../lib/loopRegions";
@@ -82,6 +83,12 @@ export default function NodeInspector({
   // fixed (no doc-only↔code-mutating toggle), it has no model, and its "prompt"
   // is a bash body whose I/O arrives as PDO_* env vars, not a prose preamble.
   const isScript = node.type === "script";
+
+  // #550/ADR-0046: the harness this node resolves to in the editor — its pin,
+  // else the `claude` floor. Drives the model/effort meaning and the effort
+  // greying. (The daemon re-resolves authoritatively at spawn, with the instance
+  // tier the editor does not fetch per-node.)
+  const resolvedHarness = resolveEditorHarness(node);
 
   // #339: delete one contributing edge of a pooled input — the canonical
   // "delete an input" since inputs are emergent (#149/ADR-0011). Last-cycle
@@ -215,9 +222,57 @@ export default function NodeInspector({
           </div>
         </Tooltip>
 
+        {/* Harness (#550/ADR-0046): the program that runs this node's agent. The
+            pin both selects the harness and shields it from coarser tiers; the
+            RESOLVED harness (pin, else the `claude` floor here in the editor) is
+            what the model/effort below apply to and what greys the effort picker.
+            Hidden for a script node — it launches no agent (ADR-0017). */}
+        {!isScript && (
+          <Field label="Harness">
+            <div
+              role="radiogroup"
+              aria-label="Harness"
+              className="flex gap-1"
+              data-testid="node-harness"
+              data-resolved={resolvedHarness}
+            >
+              {[
+                { id: null as string | null, label: "Default", slug: "default" },
+                ...KNOWN_HARNESSES.map((h) => ({ id: h as string, label: h, slug: h })),
+              ].map((o) => {
+                const selected = (node.pin_harness ?? null) === o.id;
+                return (
+                  <button
+                    key={o.slug}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    data-testid={`node-harness-option-${o.slug}`}
+                    onClick={() => handleField("pin_harness", o.id)}
+                    className={`flex-1 cursor-pointer rounded border px-2 py-1 font-medium transition-colors ${
+                      selected
+                        ? o.id == null
+                          ? "border-fg-4 bg-bg-3 text-fg"
+                          : "border-acc bg-acc-bg text-acc"
+                        : "border-line-strong bg-bg-3 text-fg-4 hover:text-fg-3"
+                    }`}
+                    style={{ fontSize: "10px" }}
+                  >
+                    {o.label}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-1 text-fg-4" style={{ fontSize: "9.5px" }}>
+              Resolved: <span data-testid="node-harness-resolved">{resolvedHarness}</span>
+              {node.pin_harness ? " (pinned)" : " (floor — no pin)"}
+            </p>
+          </Field>
+        )}
+
         {/* Model (#296/#324): dropdown + Custom… escape hatch (see ModelPicker).
-            Hidden for a script node (#248): it launches no agent, so it has no
-            model. */}
+            Since #550 it edits the RESOLVED harness's model. Hidden for a script
+            node (#248): it launches no agent, so it has no model. */}
         {!isScript && (
           <Field label="Model">
             <ModelPicker
@@ -239,6 +294,9 @@ export default function NodeInspector({
               value={node.effort ?? null}
               onChange={(v) => handleField("effort", v)}
               testid="node-effort"
+              /* #550/AC #13: greyed when the resolved harness has no launch-time
+                 effort axis (measured: `opencode` has none). */
+              disabled={!harnessHasEffort(resolvedHarness)}
             />
           </Field>
         )}

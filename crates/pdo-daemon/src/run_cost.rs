@@ -172,7 +172,74 @@ fn aggregate(lines: impl Iterator<Item = Line>, prices: &PriceTable) -> CostStat
         usd,
         partial: !unpriced_models.is_empty(),
         unpriced_models,
+        // The aggregate is transcript-derived — i.e. it already ran because the
+        // Run's harness HAS a cost source. Absent-cost-source harnesses never reach
+        // this fold; they are handled one layer up in [`run_cost_or_absence`], which
+        // returns a "—"-with-reason `CostStat` before any transcript is read.
+        uncosted_harnesses: Vec::new(),
     }
+}
+
+/// The distinct harnesses this Run launched a node on that have **no cost source**
+/// capability (#553) — sorted, deduplicated. Read off the `NodeStarted` payloads
+/// (the frozen-at-spawn harness, ADR-0046), never the current YAML. A `null`
+/// harness (a `script` node, or any pre-#550 row) is the `claude` floor, which HAS
+/// a cost source, so it never lands here — only an explicit `opencode` or a
+/// data-declared harness does.
+pub(crate) fn uncosted_harnesses(events: &[crate::event_log::Event]) -> Vec<String> {
+    let mut names: BTreeSet<String> = BTreeSet::new();
+    for e in events {
+        if e.kind != crate::event_log::EventKind::NodeStarted {
+            continue;
+        }
+        let Some(harness) = e
+            .payload
+            .as_ref()
+            .and_then(|p| p.get("harness"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        else {
+            continue; // null harness ⇒ the claude floor ⇒ has a cost source
+        };
+        if !crate::harness_probes::can_cost(harness) {
+            names.insert(harness.to_string());
+        }
+    }
+    names.into_iter().collect()
+}
+
+/// The Run's cost, made **honest about harnesses without a cost source** (#553).
+///
+/// If any node ran on a harness PDO cannot cost, the Run's aggregate is not
+/// honestly summable — adding `claude`'s real dollars to that harness's invisible
+/// $0 would be a silent under-count — so this returns `Some(CostStat)` carrying
+/// **`uncosted_harnesses`** and no dollars, which the surfaces render as "—" with a
+/// reason (never `$0`, never a mute `partial`). Otherwise it is exactly
+/// [`compute_run_cost`].
+///
+/// `events` is the Run's event-log snapshot (for the frozen harnesses); the rest
+/// is [`compute_run_cost`]'s signature verbatim.
+pub(crate) fn run_cost_or_absence(
+    events: &[crate::event_log::Event],
+    projects_root: &Path,
+    repo_root: &Path,
+    run_id: &str,
+    prices: &PriceTable,
+) -> Option<CostStat> {
+    let uncosted = uncosted_harnesses(events);
+    if !uncosted.is_empty() {
+        return Some(CostStat {
+            usd: 0.0,
+            // NOT `partial`: `partial` means "priced, but a lower bound" and still
+            // shows a dollar figure. This is a categorically different state — the
+            // aggregate is unavailable, not merely incomplete — so it stays out of
+            // the `partial ⟺ !unpriced_models.is_empty()` invariant (both empty).
+            partial: false,
+            unpriced_models: Vec::new(),
+            uncosted_harnesses: uncosted,
+        });
+    }
+    compute_run_cost(projects_root, repo_root, run_id, prices)
 }
 
 /// Encode an absolute path exactly as Claude Code names its `~/.claude/projects`
@@ -917,5 +984,83 @@ mod tests {
 
         // Querying "run-1" must NOT pick up "run-1x"'s transcript.
         assert!(compute_run_cost(&projects, repo.path(), "run-1", &builtin()).is_none());
+    }
+
+    // --- run_cost_or_absence / uncosted_harnesses (#553) ---
+    //
+    // The test that guarantees "absence is said": a Run on a harness with no cost
+    // source shows "—" and a reason, never `0`.
+
+    use crate::event_log::{Event, EventKind};
+
+    fn node_started(node: &str, harness: Option<&str>) -> Event {
+        Event {
+            id: None,
+            run_id: "r".into(),
+            ts: crate::event_log::now_iso(),
+            kind: EventKind::NodeStarted,
+            node_id: Some(node.into()),
+            iter: Some(1),
+            payload: Some(serde_json::json!({ "harness": harness })),
+        }
+    }
+
+    #[test]
+    fn uncosted_harnesses_names_only_the_harnesses_without_a_cost_source() {
+        let events = vec![
+            node_started("a", Some("claude")),   // has a cost source
+            node_started("b", Some("opencode")), // none
+            node_started("c", None),             // script/legacy ⇒ claude floor ⇒ costed
+            node_started("d", Some("opencode")), // duplicate ⇒ deduped
+        ];
+        assert_eq!(uncosted_harnesses(&events), vec!["opencode".to_string()]);
+    }
+
+    #[test]
+    fn run_cost_or_absence_is_dash_with_reason_not_zero_for_an_uncosted_harness() {
+        // A Run with an `opencode` node: no transcript need even be read — the
+        // aggregate is not honestly summable, so cost is "—" (usd 0, NOT partial)
+        // and names the harness.
+        let home = tempfile::tempdir().unwrap();
+        let projects = home.path().join(".claude").join("projects");
+        std::fs::create_dir_all(&projects).unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        let events = vec![node_started("n", Some("opencode"))];
+
+        let cost = run_cost_or_absence(&events, &projects, repo.path(), "run-x", &builtin())
+            .expect("an uncosted harness yields Some(—), not a bare None");
+        assert_eq!(cost.usd, 0.0);
+        assert!(!cost.partial, "not a lower bound — it is unavailable");
+        assert!(cost.unpriced_models.is_empty());
+        // The offender is NAMED (the frontend builds the "— because opencode has no
+        // cost source" sentence from this, the same way it names `unpriced_models`).
+        assert_eq!(cost.uncosted_harnesses, vec!["opencode".to_string()]);
+    }
+
+    #[test]
+    fn run_cost_or_absence_is_plain_compute_run_cost_for_an_all_claude_run() {
+        // The negative control: a claude Run (and a script node) costs exactly as
+        // before — no `uncosted_harnesses`, real dollars.
+        let home = tempfile::tempdir().unwrap();
+        let projects = home.path().join(".claude").join("projects");
+        let repo = tempfile::tempdir().unwrap();
+        let run_id = "claude-run";
+        seed_transcript(
+            &projects,
+            repo.path(),
+            run_id,
+            &assistant("m1", "r1", "claude-opus-4-8", 1_000_000, 0),
+        );
+        let events = vec![node_started("n", Some("claude")), node_started("s", None)];
+
+        let honest =
+            run_cost_or_absence(&events, &projects, repo.path(), run_id, &builtin()).unwrap();
+        let plain = compute_run_cost(&projects, repo.path(), run_id, &builtin()).unwrap();
+        assert_eq!(
+            honest, plain,
+            "an all-claude Run is byte-identical to before"
+        );
+        assert!(honest.uncosted_harnesses.is_empty());
+        assert!((honest.usd - 5.0).abs() < 1e-9);
     }
 }

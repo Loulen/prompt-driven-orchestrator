@@ -10,11 +10,11 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## 1.26.0
+## 1.28.0
 
 Rien de cassant, aucune migration (payload d'event schemaless, blob JSON de trigger — le champ
 voyage tel quel). Les **dépôts secondaires d'un Run multi-repo sont modifiables par défaut** ;
-`read-only` devient une **case à cocher opt-in par dépôt** (#565, ADR-0045 révisant ADR-0042). Un
+`read-only` devient une **case à cocher opt-in par dépôt** (#565, ADR-0047 révisant ADR-0042). Un
 flag `read_only: bool` (défaut `false`) sur `RepoPin`/`TargetRepoInput` (`#[serde(default)]` +
 `skip_serializing_if` ⇒ un pin historique se relit *modifiable*, byte-identique sur le fil). La garde
 `secondary_repo_dirtied` (409) ne se déclenche plus que sur un secondaire **coché read-only** ; un
@@ -25,6 +25,86 @@ de l'agent (`Ship It`, `gh pr create` / `git merge`), par dépôt et indépendam
 multi-repo n'est réintroduit. Limite assumée : un secondaire rendu modifiable **mid-run** n'a son
 `.git` monté qu'après recréation du conteneur (mount figé à la création, cohérent avec la visibilité
 au spawn).
+
+## 1.27.0
+
+**Cassant, migration automatique.** Le **harnais agentique** (PRD #549, quatre tranches — #550,
+#551, #552, #553) : le programme qui fait tourner l'agent d'un nœud (`claude`, `opencode`) devient
+un axe à quatre tiers (`node → Run → Projet → instance → plancher claude`), résolu **une fois au
+spawn** et **gelé** dans l'événement de démarrage — la reprise re-pose ce qui a été lancé, jamais ce
+que le YAML dit maintenant (ADR-0007). L'axe entier est livré ici : le nœud épingle (#550), le Run
+choisit (#551), le Projet porte le tier du milieu (#552), et les capacités sont dispatchées par
+harnais (#553).
+
+Le tail n'est plus composé de flags en dur : un **descripteur** (ADR-0045) porte deux templates
+d'argv (lancement, reprise) et un bloc d'env, et un module **pur** (`harness_argv`) rend la chaîne
+avec une seule règle — *un token dont un trou est vide disparaît en entier*. Le tail `claude` reste
+**identique au byte** quand rien de neuf n'est posé (goldens). `claude` et `opencode` sont dans le
+**plancher embarqué** ; rien n'est écrit sur disque.
+
+**Migration du schéma de nœud** : les champs plats `model:` / `effort:` deviennent une carte par
+harnais `harnesses.<nom>.{model, effort}` (le modèle et l'effort se lisent dans l'entrée du harnais
+gagnant, pas d'axe propre — ADR-0046). Le migrateur de pipelines les replie sous `harnesses.claude`
+au démarrage ; un `pin_harness:` scalaire épingle le harnais d'un nœud. La carte est **sémantique**
+(diff + `content_hash`). Un défaut de harnais **et** un défaut de modèle **par harnais** rejoignent
+la Configuration d'instance (`stored → env → default`, ADR-0015 amendée). Un binaire de harnais
+introuvable au spawn échoue **fort** (jamais un 2xx, ADR-0037) en nommant le harnais.
+
+**Le Run est un tier** (#551) : le harnais choisi à la création est **gelé dans l'événement de
+création** — même posture d'immuabilité que le mode de sandbox — proposé par le dialogue de
+lancement, et porté par un Trigger **par construction** (le template d'un Trigger *est* la charge
+utile d'une création de Run, donc aucun tier Trigger séparé). Un nœud qui a **épinglé** résiste au
+choix du Run. Les **sessions d'infra** (Pipeline Manager, résolveur de merge) suivent le harnais du
+Run : « ce Run tourne sur X » devient vrai sans exception — y compris pour l'outil de déblocage, ce
+qu'un A/B sur un harnais neuf met donc aussi à l'épreuve (ADR-0046).
+
+**Le Projet est une entité** (#552) : un regroupement **nommé** de dépôts qui se travaillent
+ensemble, et le tier du milieu de la précédence. **Rien n'est seedé** — tant que personne n'a nommé
+un groupe, il n'existe aucune ligne de Projet et les listes se groupent **par les mêmes chemins
+qu'avant**, dérivés côté client ; c'est le crayon sur un en-tête de groupe qui **crée** l'entité,
+même posture que la table de prix (ADR-0034). Un chemin appartient à **au plus un** Projet, comparé
+**verbatim** (aucune canonicalisation — ADR-0033), et un ajout conflictuel est un **refus nommant**
+le Projet propriétaire. Le Projet d'un Run est celui de son **dépôt primaire** : ajouter ou retirer
+un secondaire ne change ni le Projet ni le harnais résolu (ADR-0042). Le seuil « ne grouper qu'à
+partir de 2 » porte désormais sur les **projets**.
+
+**Changement visible : l'ordre des en-têtes de groupe.** Les groupes se trient désormais sur le
+**libellé affiché** (départagé par la clé), là où #258 triait sur le **chemin complet** du dépôt.
+C'est ce qui permet à un Projet — dont le nom n'a aucun chemin — de prendre sa place dans le même
+ordre que les groupes-chemins. Conséquence à connaître : à contenu identique, une liste peut
+apparaître dans un ordre différent de la version précédente, sans qu'aucun Projet ait été créé.
+
+**Les capacités sont du code par harnais, et leur absence est dite** (#553). Les cinq — source de
+coût, résolution du transcript, substrat de fin de tour, ancre de menu de limite, plancher de
+staging — passent derrière une fabrique (`harness_probes`) dont **toutes les méthodes ont un défaut
+« absent »** : un harnais déclaré en donnée n'obtient aucune capacité sans qu'on puisse l'oublier.
+`claude` garde les cinq à l'identique. Conséquences visibles : un Run dont le harnais n'a pas de
+source de coût affiche **« — » et une raison**, jamais `$0` ni un `partial` muet (même veine que
+`unpriced_models`, #425) ; les sondes de fin de tour et de menu de limite **ne tournent pas** sans la
+capacité, donc aucun nœud n'est auto-complété sur une heuristique inventée ; un Run sandboxé sur un
+harnais sans plancher de staging **le dit une fois** (ADR-0031). Cette tranche livre aussi le **tier
+disque** des descripteurs : on déclare un harnais inconnu et on le lance sans recompiler, par fusion
+**par nom** avec le plancher embarqué, et un descripteur illisible reste **inerte et diagnostiqué** —
+sa clé retombe sur le tier suivant, jamais partiellement appliquée.
+
+**Hors périmètre, assumé** : la sandbox (le plancher de staging reste propre à `claude`), les
+capacités d'`opencode` (il se lance, s'attache, se reprend et se complète par `pdo complete` — aucun
+coût, aucune fin de tour automatique), l'effort sur `opencode` (aucun axe d'effort au lancement), et
+le catalogue de modèles (le modèle reste du texte libre).
+
+## 1.26.0
+
+### Cassant — un spawn tmux échoué fait échouer le nœud et le Run, plus jamais `Spawned` (#508, ADR-0037)
+
+`spawn_node` avalait l'`Err` de `tmux_session_manager::spawn` et rendait `Spawned` alors que
+`NodeStarted` était déjà durable : le nœud se projetait `Running` **sans session**, puis la veille de
+vivacité le réécrivait `Failed` ~30 s plus tard avec une **cause fausse** (`session_died`), et
+`restart_node` répondait un `200 {"spawned":[…]}` menteur. Désormais le bras `Err` appende `NodeFailed`
+(légal : l'itération est `Running`) **puis** un reap gaté (le seul sous-worktree que *ce* spawn a créé,
+jamais un réutilisé) **puis** `RunFailed`, et rend `SpawnOutcome::Failed`. Effets filaires (véracité,
+ADR-0037 §1/§3) : `restart_node` répond **`500 {"error":"spawn_failed","recoverable":false,"run_failed":true}`**
+au lieu de `200 {"spawned":[…]}` ; les routes `resume`/`pause` comptent le nœud en **`noop`** (avec sa
+raison) au lieu de le déclarer `spawned`. Ferme la « Limite acceptée » homonyme d'ADR-0037.
 
 ## 1.25.0
 

@@ -1,15 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, FileUp, Pause, Pencil, Play, Plus, RotateCcw, SquareTerminal, Trash2, Zap } from "lucide-react";
-import { isLiveRun, isTerminalRun, type RunListEntry, type RunStatus, type PipelineListEntry, type PipelineScope, type Trigger } from "../types";
+import { isLiveRun, isTerminalRun, type RunListEntry, type RunStatus, type PipelineListEntry, type PipelineScope, type Trigger, type Project } from "../types";
 import type { LibraryPipelineEntry } from "../api";
 import { cleanupRun, createPipeline, deleteLibraryPipeline, duplicateLibraryPipeline, forgetRun, importWorkflow, openRunShell, pauseRun, renameRun, resumeRun, retryAll } from "../api";
 import { useEditStore } from "../stores/editStore";
-import { groupByRepo } from "../lib/groupByRepo";
+import { groupByProject, type ProjectRef } from "../lib/groupByRepo";
+import { projectLookup } from "../lib/projectLookup";
 import { cascadableTwin, isStarred, libraryOnly } from "../lib/libraryTwins";
 import CleanupConfirmModal from "./CleanupConfirmModal";
 import ConfirmDeleteModal from "./ConfirmDeleteModal";
 import ForgetRunModal from "./ForgetRunModal";
 import LibraryRow from "./LibraryRow";
+import ProjectEditModal from "./ProjectEditModal";
 import RunFilters from "./RunFilters";
 import { EMPTY_RUN_FILTER, runMatchesFilter } from "./runFilter";
 import RunShellModal from "./RunShellModal";
@@ -48,6 +50,11 @@ interface Props {
    * callers/tests keep working (defaults to not-paused, no-op toggle). */
   triggersPaused?: boolean;
   onTogglePause?: () => void;
+  /** Projets (#552) — the group-by-Projet layer and the pencil's source of
+   *  truth. Optional so existing callers/tests keep working (no Projet → the
+   *  #258 per-path grouping, unchanged). */
+  projects?: Project[];
+  onProjectsChanged?: () => void;
 }
 
 export default function UnifiedLeftPanel({
@@ -66,6 +73,8 @@ export default function UnifiedLeftPanel({
   onEditTrigger,
   triggersPaused = false,
   onTogglePause,
+  projects = [],
+  onProjectsChanged,
 }: Props) {
   const [activeTab, setActiveTab] = useState<LeftTab>("runs");
   const [confirmCleanup, setConfirmCleanup] = useState<
@@ -80,6 +89,13 @@ export default function UnifiedLeftPanel({
   const [renamingRunId, setRenamingRunId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const renameInputRef = useRef<HTMLInputElement>(null);
+  // #552 — the group-header pencil. Holds the Projet being edited (or `null` for
+  // a fresh one, when the header is a derived path group) plus the pre-fill.
+  const [projectEditor, setProjectEditor] = useState<{
+    project: Project | null;
+    name: string;
+    memberPaths: string[];
+  } | null>(null);
 
   const pipelines = useEditStore((s) => s.pipelines);
   const loadPipelines = useEditStore((s) => s.loadPipelines);
@@ -470,9 +486,47 @@ export default function UnifiedLeftPanel({
     if (selectedArchivedId !== null) setArchivedOpen(true);
   }
 
-  // Group the active Runs list by project (#258) only when ≥ 2 distinct repos are
-  // present; otherwise `null` ⇒ the flat list, byte-identical to before.
-  const runGroups = groupByRepo(activeRuns, (r) => r.effective_repo);
+  // #552 — verbatim `path → Projet` lookup, and the candidate repos the pencil
+  // can attach (the distinct effective repos across ALL runs, so a filtered view
+  // never hides an attachable repo).
+  const projectOf = useMemo<(path: string) => ProjectRef | null>(
+    () => projectLookup(projects),
+    [projects],
+  );
+  const availableRepos = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of runs) if (r.effective_repo) set.add(r.effective_repo);
+    return [...set];
+  }, [runs]);
+
+  // Group the active Runs list by Projet (#552), falling back to the #258
+  // per-path grouping when nothing is named; `null` ⇒ the flat list.
+  const runGroups = groupByProject(activeRuns, (r) => r.effective_repo, projectOf);
+
+  // Open the pencil on a group header: an existing Projet pre-fills its record;
+  // a derived path group pre-fills the label + its own path as the sole member.
+  const openProjectEditor = (group: {
+    kind: "project" | "path";
+    key: string;
+    repoPath: string;
+    label: string;
+  }) => {
+    if (group.kind === "project") {
+      const id = group.key.slice("project:".length);
+      const project = projects.find((p) => p.id === id) ?? null;
+      setProjectEditor({
+        project,
+        name: project?.name ?? group.label,
+        memberPaths: project?.members ?? [],
+      });
+    } else {
+      setProjectEditor({
+        project: null,
+        name: group.label,
+        memberPaths: group.repoPath ? [group.repoPath] : [],
+      });
+    }
+  };
 
   const tabs: { id: LeftTab; label: string }[] = [
     { id: "runs", label: "Runs" },
@@ -555,15 +609,29 @@ export default function UnifiedLeftPanel({
           {runGroups === null
             ? activeRuns.map(renderRunRow)
             : runGroups.map((group) => (
-                <div key={group.repoPath} data-testid="run-repo-group">
+                <div
+                  key={group.key}
+                  data-testid="run-repo-group"
+                  data-project={group.kind === "project" ? "true" : "false"}
+                >
                   <div
-                    className="flex h-[22px] shrink-0 items-center border-b border-line-soft bg-bg-3/40 px-3 font-medium text-fg-3"
+                    className="group/hdr flex h-[22px] shrink-0 items-center gap-1 border-b border-line-soft bg-bg-3/40 px-3 font-medium text-fg-3"
                     style={{ fontSize: "10px" }}
-                    title={group.repoPath}
+                    title={group.title}
                   >
                     <span className="truncate" data-testid="run-repo-label">
                       {group.label}
                     </span>
+                    {/* #552 — the pencil that names / renames the Projet. */}
+                    <button
+                      onClick={() => openProjectEditor(group)}
+                      className="ml-auto hidden shrink-0 cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2 group-hover/hdr:inline-flex"
+                      title={group.kind === "project" ? "Edit project" : "Name project"}
+                      aria-label={group.kind === "project" ? "Edit project" : "Name project"}
+                      data-testid="run-group-pencil"
+                    >
+                      <Pencil size={10} />
+                    </button>
                   </div>
                   {group.items.map(renderRunRow)}
                 </div>
@@ -606,6 +674,8 @@ export default function UnifiedLeftPanel({
             onEditTrigger={onEditTrigger}
             paused={triggersPaused}
             onTogglePause={onTogglePause ?? (() => {})}
+            projects={projects}
+            onProjectsChanged={onProjectsChanged}
           />
         </div>
       )}
@@ -725,6 +795,18 @@ export default function UnifiedLeftPanel({
         <RunShellModal
           session={shellRun.session}
           onClose={() => setShellRun(null)}
+        />
+      )}
+
+      {projectEditor && (
+        <ProjectEditModal
+          initialProject={projectEditor.project}
+          initialName={projectEditor.name}
+          initialMemberPaths={projectEditor.memberPaths}
+          availableRepos={availableRepos}
+          projects={projects}
+          onClose={() => setProjectEditor(null)}
+          onSaved={() => onProjectsChanged?.()}
         />
       )}
 

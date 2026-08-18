@@ -488,3 +488,76 @@ describe("NodeInspector StarButton — library save is independent of pipeline s
     expect(mockDelete).not.toHaveBeenCalled();
   });
 });
+
+// #550/ADR-0046: the harness axis in the node inspector.
+function seedNode(node: Record<string, unknown>) {
+  useEditStore.setState({
+    openTabs: [
+      {
+        id: "p1",
+        scope: "repo",
+        pipeline: {
+          name: "p1",
+          version: "1.0",
+          variables: {},
+          nodes: [
+            {
+              id: "n1",
+              name: "worker",
+              type: "doc-only",
+              interactive: false,
+              inputs: [{ name: "in", repeated: false, side: "left" }],
+              outputs: [{ name: "out", repeated: false, side: "right" }],
+              view: { x: 0, y: 0 },
+              ...node,
+            },
+          ],
+          edges: [],
+        },
+        prompts: { n1: "do the thing" },
+        diagnostics: [],
+        dirty: false,
+        externalDirty: false,
+      },
+    ],
+    activeTabId: "p1",
+    selection: { kind: "node", id: "n1" },
+  });
+}
+
+describe("NodeInspector — harness axis (#550, ADR-0046)", () => {
+  beforeEach(() => {
+    seedNode({});
+  });
+
+  it("resolves to the claude floor when the node has no pin", () => {
+    seedNode({});
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    expect(screen.getByTestId("node-harness-resolved")).toHaveTextContent("claude");
+    // The effort picker is ENABLED on claude (it has an effort axis).
+    expect(screen.getByTestId("node-effort-option-high")).not.toBeDisabled();
+  });
+
+  it("shows the pinned harness as resolved and greys the effort picker on opencode", () => {
+    seedNode({ pin_harness: "opencode" });
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    expect(screen.getByTestId("node-harness-resolved")).toHaveTextContent("opencode");
+    // AC #13: opencode has no launch-time effort axis → the picker is greyed.
+    // Assert the `disabled` attribute, never `.value`.
+    expect(screen.getByTestId("node-effort-option-high")).toBeDisabled();
+  });
+
+  it("pinning a harness writes pin_harness onto the node", async () => {
+    seedNode({});
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    await userEvent.click(screen.getByTestId("node-harness-option-opencode"));
+    const node = useEditStore.getState().openTabs[0].pipeline.nodes[0];
+    expect(node.pin_harness).toBe("opencode");
+  });
+
+  it("hides the harness selector for a script node", () => {
+    seedNode({ type: "script" });
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    expect(screen.queryByTestId("node-harness")).toBeNull();
+  });
+});

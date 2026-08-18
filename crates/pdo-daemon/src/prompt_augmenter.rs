@@ -29,12 +29,12 @@ pub(crate) struct ForEachContext {
     pub total: i64,
 }
 
-/// A secondary repo made visible to a node (#465, ADR-0042/0045), already
+/// A secondary repo made visible to a node (#465, ADR-0042/0047), already
 /// resolved to its **absolute snapshot path** so this pure module never touches
 /// the run-dir path math. The absolute path is identical on host and in the
 /// sandbox (invariant D3), so the same string is valid from either.
 ///
-/// `read_only` is the ADR-0045 opt-in: `false` (the default) means the node may
+/// `read_only` is the ADR-0047 opt-in: `false` (the default) means the node may
 /// modify/commit/deliver the repo; `true` restores read-only-context semantics.
 /// The preamble branches on it, and the writable subset is exposed to scripts as
 /// `PDO_WRITABLE_SECONDARY_REPOS`.
@@ -104,7 +104,7 @@ pub(crate) struct AugmentContext<'a> {
     /// failed iterations are quarantined, and no raw `iter-*` glob is ever
     /// handed to an agent or script.
     pub repeated_iters: HashMap<String, Vec<i64>>,
-    /// Secondary repos visible to this node (#465, ADR-0042/0045), each with its
+    /// Secondary repos visible to this node (#465, ADR-0042/0047), each with its
     /// absolute snapshot path, pinned SHA and `read_only` opt-in. Empty for a
     /// mono-repo Run. The nodes reach these ONLY by absolute path (their
     /// sub-worktrees do not inherit the snapshot files), so `build_preamble`
@@ -333,7 +333,7 @@ pub(crate) fn build_script_env(ctx: &AugmentContext<'_>) -> Vec<(String, String)
             .join("\n");
         env.push(("PDO_SECONDARY_REPOS".to_string(), value));
 
-        // ADR-0045: the writable subset, same `alias=abspath` format. A delivery
+        // ADR-0047: the writable subset, same `alias=abspath` format. A delivery
         // script (e.g. the `Ship It` node) iterates this to know which secondaries
         // it may commit + deliver, without having to re-derive read-only. Only set
         // when non-empty — an all-read-only Run (or a mono-repo one) leaves it
@@ -580,11 +580,11 @@ pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
         preamble.push('\n');
     }
 
-    // #465 (ADR-0042/0045): secondary repositories. Injected by ABSOLUTE path
+    // #465 (ADR-0042/0047): secondary repositories. Injected by ABSOLUTE path
     // because a node's sub-worktree does not inherit the snapshot files (they are
     // siblings under the run dir; `.pdo/` is gitignored). The path is identical on
     // host and in the sandbox (invariant D3). A secondary is **writable by
-    // default** (ADR-0045): the node may modify/commit/deliver it. A `read_only`
+    // default** (ADR-0047): the node may modify/commit/deliver it. A `read_only`
     // opt-in restores read-only-context semantics — writing a tracked file there
     // trips the `secondary_repo_dirtied` guard (409).
     if !ctx.secondary_repos.is_empty() {
@@ -600,7 +600,7 @@ pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
 
         if !writable.is_empty() {
             preamble.push_str(
-                "**Writable** (ADR-0045) — you **MAY** modify, commit, and deliver these \
+                "**Writable** (ADR-0047) — you **MAY** modify, commit, and deliver these \
                  repositories. `git` works inside them (their `.git` is mounted rw in the \
                  sandbox). PDO does **not** deliver them for you: do it yourself from the \
                  repository's own directory (e.g. `git checkout -b …`, commit, then \
@@ -1034,8 +1034,8 @@ mod tests {
                 view: None,
                 max_iter: None,
                 over: None,
-                model: None,
-                effort: None,
+                pin_harness: None,
+                harnesses: Default::default(),
             }],
             edges: vec![],
             loops: Vec::new(),
@@ -1069,7 +1069,7 @@ mod tests {
         }
     }
 
-    /// ADR-0045: the secondary preamble branches per pin. A writable secondary is
+    /// ADR-0047: the secondary preamble branches per pin. A writable secondary is
     /// invited to write/commit/deliver and never labelled read-only; a read-only
     /// one keeps the "do not modify" wording. The section title no longer lies
     /// ("(read-only)" is gone from the header).
@@ -1117,7 +1117,7 @@ mod tests {
         );
     }
 
-    /// ADR-0045: an all-read-only Run behaves like the pre-feature read-only mode —
+    /// ADR-0047: an all-read-only Run behaves like the pre-feature read-only mode —
     /// no writable section, no `PDO_WRITABLE_SECONDARY_REPOS` var at all.
     #[test]
     fn all_read_only_secondaries_emit_no_writable_env() {
@@ -1252,8 +1252,8 @@ mod tests {
             view: None,
             max_iter: None,
             over: None,
-            model: None,
-            effort: None,
+            pin_harness: None,
+            harnesses: Default::default(),
         });
         pipeline.edges.push(EdgeDef {
             source: EdgeEndpoint {
@@ -1389,8 +1389,8 @@ mod tests {
             view: None,
             max_iter: None,
             over: None,
-            model: None,
-            effort: None,
+            pin_harness: None,
+            harnesses: Default::default(),
         });
         pipeline.edges.push(EdgeDef {
             source: EdgeEndpoint {
@@ -1449,8 +1449,8 @@ mod tests {
             view: None,
             max_iter: None,
             over: None,
-            model: None,
-            effort: None,
+            pin_harness: None,
+            harnesses: Default::default(),
         });
 
         let node = &pipeline.nodes[1]; // implementer
@@ -1481,8 +1481,8 @@ mod tests {
             view: None,
             max_iter: None,
             over: None,
-            model: None,
-            effort: None,
+            pin_harness: None,
+            harnesses: Default::default(),
         });
         pipeline.edges.push(EdgeDef {
             source: EdgeEndpoint {
@@ -1527,8 +1527,8 @@ mod tests {
             view: None,
             max_iter: None,
             over: None,
-            model: None,
-            effort: None,
+            pin_harness: None,
+            harnesses: Default::default(),
         });
         pipeline.edges.push(EdgeDef {
             source: EdgeEndpoint {
@@ -1677,8 +1677,8 @@ mod tests {
                     view: None,
                     max_iter: None,
                     over: None,
-                    model: None,
-                    effort: None,
+                    pin_harness: None,
+                    harnesses: Default::default(),
                 },
                 NodeDef {
                     id: "researcher".into(),
@@ -1698,8 +1698,8 @@ mod tests {
                     view: None,
                     max_iter: None,
                     over: None,
-                    model: None,
-                    effort: None,
+                    pin_harness: None,
+                    harnesses: Default::default(),
                 },
                 NodeDef {
                     id: "implementer".into(),
@@ -1738,8 +1738,8 @@ mod tests {
                     view: None,
                     max_iter: None,
                     over: None,
-                    model: None,
-                    effort: None,
+                    pin_harness: None,
+                    harnesses: Default::default(),
                 },
             ],
             edges: vec![
@@ -1847,8 +1847,8 @@ mod tests {
                 view: None,
                 max_iter: None,
                 over: None,
-                model: None,
-                effort: None,
+                pin_harness: None,
+                harnesses: Default::default(),
             }],
             edges: vec![],
             loops: Vec::new(),
@@ -2106,8 +2106,8 @@ mod tests {
                 view: None,
                 max_iter: None,
                 over: None,
-                model: None,
-                effort: None,
+                pin_harness: None,
+                harnesses: Default::default(),
             }],
             edges: vec![],
             loops: Vec::new(),
@@ -2157,8 +2157,8 @@ mod tests {
                 view: None,
                 max_iter: None,
                 over: None,
-                model: None,
-                effort: None,
+                pin_harness: None,
+                harnesses: Default::default(),
             }],
             edges: vec![],
             loops: Vec::new(),
@@ -2203,8 +2203,8 @@ mod tests {
                 view: None,
                 max_iter: None,
                 over: None,
-                model: None,
-                effort: None,
+                pin_harness: None,
+                harnesses: Default::default(),
             }],
             edges: vec![],
             loops: Vec::new(),

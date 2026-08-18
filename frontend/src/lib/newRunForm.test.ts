@@ -6,6 +6,7 @@ import {
   buildVariables,
   canCreateTrigger,
   canLaunch,
+  harnessState,
   hasRequiredPrompt,
   overrideCount,
   parseVariableValue,
@@ -35,6 +36,8 @@ function settings(over: Partial<InstanceSettings> = {}): InstanceSettings {
     reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
     guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
     default_model: { effective: null, source: "default", stored: null, env: null, default: null },
+    default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
+    default_harness_model: { effective: {}, stored: {} },
     default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off", reason: null },
     sandbox_docker: { available: true, reason: null, checked_at: "2026-07-01T10:00:00.000Z" },
     sandbox_profiles: [
@@ -136,6 +139,7 @@ describe("buildVariables", () => {
       autoName: true,
       runName: "",
       sandbox: "",
+      harness: "",
       images: [],
     };
     const triggerFields = {
@@ -149,6 +153,7 @@ describe("buildVariables", () => {
       allowOverlap: false,
       maxConcurrent: "",
       sandbox: "",
+      harness: "",
       autoName: true,
       variables,
     };
@@ -451,6 +456,48 @@ describe("sandboxState (#410/#432/#452)", () => {
   });
 });
 
+/** The default_harness tier resolving to `name` (#551). */
+const defaultHarnessIs = (name: string): Partial<InstanceSettings> => ({
+  default_harness: { effective: name, source: "stored", stored: name, env: null, default: null },
+});
+
+describe("harnessState (#551/#452)", () => {
+  it("does not know the default until settings arrive", () => {
+    // The honest render: `null`, not a guess. The selector shows a bare "Use instance
+    // default" until it knows what that is — it never seeds a value from a late fetch.
+    const state = harnessState({ settings: null, harness: "" });
+    expect(state.instanceDefaultHarness).toBeNull();
+    expect(state.effectiveHarness).toBeNull();
+  });
+
+  it("names the instance default through the claude floor when none is set", () => {
+    // #452: the inherit option is LABELLED with what it resolves to — the floor when the
+    // instance names no harness — but the value stays `""` (asserts nothing).
+    const state = harnessState({ settings: settings(), harness: "" });
+    expect(state.instanceDefaultHarness).toBe("claude");
+    expect(state.effectiveHarness).toBe("claude");
+  });
+
+  it("names a stored instance default", () => {
+    const state = harnessState({ settings: settings(defaultHarnessIs("opencode")), harness: "" });
+    expect(state.instanceDefaultHarness).toBe("opencode");
+    // The inherit sentinel resolves to the instance default…
+    expect(state.effectiveHarness).toBe("opencode");
+  });
+
+  it("resolves a concrete selection to itself, not the default", () => {
+    const state = harnessState({ settings: settings(defaultHarnessIs("claude")), harness: "opencode" });
+    expect(state.effectiveHarness).toBe("opencode");
+  });
+
+  it("offers the embedded harnesses", () => {
+    expect(harnessState({ settings: settings(), harness: "" }).knownHarnesses).toEqual([
+      "claude",
+      "opencode",
+    ]);
+  });
+});
+
 describe("buildRunPayload", () => {
   const fields = {
     selectedPipeline: pipeline({ id: "p1", name: "Auditor" }),
@@ -461,8 +508,19 @@ describe("buildRunPayload", () => {
     autoName: false,
     runName: "  Fix bug  ",
     sandbox: "full",
+    harness: "",
     images: [new File(["png"], "design.png", { type: "image/png" })],
   };
+
+  /**
+   * #551/#452, the harness twin of the sandbox assertion: `""` means "the user did not
+   * choose", and only an ABSENT `harness` lets the daemon resolve through the instance
+   * default and the floor. A concrete choice is sent verbatim.
+   */
+  it("omits the harness key for the inherit sentinel, and sends an explicit choice", () => {
+    expect(buildRunPayload({ ...fields, harness: "" }).harness).toBeUndefined();
+    expect(buildRunPayload({ ...fields, harness: "opencode" }).harness).toBe("opencode");
+  });
 
   it("posts the trimmed form values", () => {
     expect(buildRunPayload(fields)).toMatchObject({
@@ -525,6 +583,7 @@ describe("buildTriggerCreatePayload / buildTriggerUpdatePayload", () => {
     allowOverlap: true,
     maxConcurrent: " 2 ",
     sandbox: "minimal",
+    harness: "",
     autoName: true,
     variables: { max_iter: 5 },
   };
@@ -542,6 +601,9 @@ describe("buildTriggerCreatePayload / buildTriggerUpdatePayload", () => {
       overlap_policy: "allow",
       max_concurrent: 2,
       sandbox: "minimal",
+      // #551: the inherit sentinel `""` maps to `null` on a Trigger (a real inherit
+      // state), exactly like `sandbox`.
+      harness: null,
       auto_name: true,
       variables: { max_iter: 5 },
     });
@@ -562,6 +624,7 @@ describe("buildTriggerCreatePayload / buildTriggerUpdatePayload", () => {
       overlap_policy: "allow",
       max_concurrent: 2,
       sandbox: "minimal",
+      harness: null,
       auto_name: true,
       variables: { max_iter: 5 },
     });
@@ -602,6 +665,15 @@ describe("buildTriggerCreatePayload / buildTriggerUpdatePayload", () => {
   it("sends null for the inherit sentinel on both paths", () => {
     expect(buildTriggerCreatePayload({ ...fields, sandbox: "" }).sandbox).toBeNull();
     expect(buildTriggerUpdatePayload({ ...fields, sandbox: "" }).sandbox).toBeNull();
+  });
+
+  // #551: the harness has the same real "inherit" state — `""` → `null` on both paths,
+  // a concrete name is sent verbatim.
+  it("maps the harness inherit sentinel to null, and sends a concrete choice", () => {
+    expect(buildTriggerCreatePayload({ ...fields, harness: "" }).harness).toBeNull();
+    expect(buildTriggerUpdatePayload({ ...fields, harness: "" }).harness).toBeNull();
+    expect(buildTriggerCreatePayload({ ...fields, harness: "opencode" }).harness).toBe("opencode");
+    expect(buildTriggerUpdatePayload({ ...fields, harness: "opencode" }).harness).toBe("opencode");
   });
 
   // A create sends no input_template at all when blank; a patch clears it to "".

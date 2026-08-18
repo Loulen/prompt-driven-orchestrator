@@ -311,17 +311,26 @@ fn priced_line(id: &str, req: &str, input: u64) -> String {
 
 /// Plant a transcript for `run_id`'s worktree cwd under `projects_root`, returning
 /// the `.jsonl` path. Optionally back-date it so the stale sweep sees it idle.
+///
+/// `file_name` matters to exactly one reader. Cost and the terminal merge walk the
+/// project dir, so any name will do (`s.jsonl`, and the merge tests assert on that
+/// literal to prove the copy is verbatim). The **liveness sweep** does not: since
+/// #473 it resolves a node's transcript by exact filename (`<session_id>.jsonl`,
+/// the id PDO pinned at spawn — see `TestDaemon::pinned_session_id`), so a fixture
+/// meant for the sweep MUST carry that name or it resolves to nothing and the
+/// sweep's "no signal" masquerades as its verdict.
 fn plant_transcript(
     projects_root: &Path,
     daemon: &TestDaemon,
     run_id: &str,
+    file_name: &str,
     body: &str,
     age: Option<Duration>,
 ) -> PathBuf {
     let enc = encode_working_dir(&worktree_dir(daemon, run_id));
     let proj = projects_root.join(enc);
     std::fs::create_dir_all(&proj).unwrap();
-    let file = proj.join("s.jsonl");
+    let file = proj.join(file_name);
     std::fs::write(&file, body).unwrap();
     if let Some(age) = age {
         filetime::set_file_mtime(
@@ -370,6 +379,7 @@ async fn cost_reads_staging_during_minimal_run() {
         &staging_projects(&daemon, &run_id),
         &daemon,
         &run_id,
+        "s.jsonl",
         &format!("{}\n", priced_line("m1", "r1", 1_000_000)),
         None,
     );
@@ -377,6 +387,7 @@ async fn cost_reads_staging_during_minimal_run() {
         &host_projects(&daemon),
         &daemon,
         &run_id,
+        "s.jsonl",
         &format!("{}\n", priced_line("m2", "r2", 2_000_000)),
         None,
     );
@@ -451,10 +462,15 @@ async fn liveness_sweep_reads_staging_during_minimal_run() {
         "the control needs a live staging, or the host fallback is legitimate"
     );
     write_node_output(&daemon, &control_run, "# out\n");
+    // Named with the id the daemon pinned for THIS node, so the sweep would resolve
+    // it if it read the host home — without that the control is vacuous (#473: an
+    // unresolvable name yields "no signal", not a verdict).
+    let control_sid = daemon.pinned_session_id(&control_run, NODE_ID).await;
     plant_transcript(
         &host_projects(&daemon),
         &daemon,
         &control_run,
+        &format!("{control_sid}.jsonl"),
         FIXTURE_TURN_ENDED,
         // Settled past the anti-bounce window, so only the ROOT can explain a no-op.
         Some(Duration::from_secs(600)),
@@ -480,10 +496,12 @@ async fn liveness_sweep_reads_staging_during_minimal_run() {
         "the staging home must exist during a live sandboxed run"
     );
     write_node_output(&daemon, &run_id, "# out\n");
+    let sid = daemon.pinned_session_id(&run_id, NODE_ID).await;
     plant_transcript(
         &staging_projects(&daemon, &run_id),
         &daemon,
         &run_id,
+        &format!("{sid}.jsonl"),
         FIXTURE_TURN_ENDED,
         Some(Duration::from_secs(600)),
     );
@@ -531,6 +549,7 @@ async fn terminal_merges_staging_into_host_claude_projects() {
         &staging_projects(&daemon, &run_id),
         &daemon,
         &run_id,
+        "s.jsonl",
         &body,
         None,
     );
@@ -595,6 +614,7 @@ async fn double_merge_terminal_then_cleanup_is_identical() {
         &staging_projects(&daemon, &run_id),
         &daemon,
         &run_id,
+        "s.jsonl",
         &body,
         None,
     );

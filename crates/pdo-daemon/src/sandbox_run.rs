@@ -82,11 +82,11 @@ pub(crate) struct SandboxContext {
     /// path, so the core still needs no DB access.
     pub(crate) image_plan: sandbox_image::ImagePlan,
     /// Host `.git` directories of the Run's **writable** secondary repos
-    /// (ADR-0045). Each is bind-mounted rw at its identical host path so `git`
+    /// (ADR-0047). Each is bind-mounted rw at its identical host path so `git`
     /// works inside a writable secondary snapshot (whose gitdir lives under
     /// `<secondary>/.git`, outside `repo_root` and thus otherwise unmounted).
     /// Empty for a mono-repo Run, an all-read-only one, or host mode. Frozen at
-    /// container creation, like every other mount (ADR-0045 conséquence 2).
+    /// container creation, like every other mount (ADR-0047 conséquence 2).
     pub(crate) writable_secondary_gitdirs: Vec<PathBuf>,
 }
 
@@ -246,7 +246,7 @@ pub(crate) async fn context_from_state(
         .as_ref(),
         &sandbox_root,
     );
-    // ADR-0045: harvest the `.git` of every WRITABLE secondary (read_only ==
+    // ADR-0047: harvest the `.git` of every WRITABLE secondary (read_only ==
     // false). A writable secondary snapshot is a detached worktree whose object
     // store is `<secondary>/.git` — outside `repo_root`, so the single repo mount
     // does not cover it. Bind-mounting that gitdir rw (below, at container
@@ -483,10 +483,10 @@ pub(crate) fn ensure_ready(ctx: &SandboxContext) -> Result<()> {
         // arm — `docker start` never re-evaluates a pre-existing container's env, any more
         // than its mounts. That is exactly the freeze of ADR-0031 §6/§8, guaranteed twice.
         env: &ctx.env,
-        // ADR-0045: the `.git` of each writable secondary, mounted rw so `git`
+        // ADR-0047: the `.git` of each writable secondary, mounted rw so `git`
         // works inside it. Same freeze caveat as the mounts above — a secondary
         // added writable mid-run only sees its gitdir mounted after container
-        // recreation (documented limitation, ADR-0045 conséquence 2).
+        // recreation (documented limitation, ADR-0047 conséquence 2).
         writable_secondary_gitdirs: &ctx.writable_secondary_gitdirs,
     };
     sandbox_container::ensure_running(&ctx.docker_bin, &ctx.run_id, &spec)
@@ -734,7 +734,7 @@ mod tests {
             gid: 1000,
             pdo_bin: tmp.join("pdo"),
             image_plan,
-            // No writable secondaries in these unit fixtures (ADR-0045).
+            // No writable secondaries in these unit fixtures (ADR-0047).
             writable_secondary_gitdirs: Vec::new(),
         }
     }

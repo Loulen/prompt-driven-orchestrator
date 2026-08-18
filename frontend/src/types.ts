@@ -248,6 +248,16 @@ export interface InstanceSettings {
   reaper_ttl_secs: SettingField;
   guard_timeout_secs: SettingField;
   default_model: StringSettingField;
+  /** #550/ADR-0046: instance-wide default harness (`stored → env → floor claude`).
+   *  `effective: null` ⇒ the `claude` floor applies at resolve. */
+  default_harness: StringSettingField;
+  /** #550/ADR-0046: instance-wide default model **per harness**. `effective` is
+   *  the resolved map (the stored map plus the legacy `PDO_DEFAULT_MODEL` folded
+   *  under `claude`); `stored` is the raw stored map. */
+  default_harness_model: {
+    effective: Record<string, string>;
+    stored: Record<string, string>;
+  };
   /**
    * Instance-wide default sandbox (#410/#432): `"off"` (host, default) or the name of a
    * **staging profile**. No longer a closed enum — its value space is the user's profile
@@ -308,7 +318,33 @@ export interface InstanceSettings {
    * honest place to surface it (the #432 argument).
    */
   price_table: PriceTableView;
+  /**
+   * The harness descriptor disk tier (#553, ADR-0045) — an observed STATE, like
+   * `price_table`. `names` lists the harnesses that actually resolve (embedded
+   * floor merged with the user's disk file), so a declared harness "appears";
+   * `path` is always reported (nothing is seeded) so the user knows where to
+   * write; `reason` is the same string the daemon logs, non-null exactly when a
+   * descriptor went inert or was refused — the only honest place to say so, since
+   * a hand-edited descriptor passes through no validator (ADR-0001).
+   *
+   * Optional in the type (the SettingsModal guards on it) so a UI built against a
+   * daemon that predates #553 still typechecks — same defensive posture the modal
+   * takes for `price_table`. In production the SPA is embedded, so they agree.
+   */
+  harness_descriptors?: HarnessDescriptorsView;
   updated_at: string;
+}
+
+/** `GET /settings` → `harness_descriptors` (#553). */
+export interface HarnessDescriptorsView {
+  /** `~/.pdo/harnesses/descriptors.yaml`. `null` only when `HOME` is unset. */
+  path: string | null;
+  /** The harnesses the registry resolves (floor ∪ disk), in resolution order. */
+  names: string[];
+  /** Descriptors the disk tier refused — each inert, its key on the floor. */
+  rejected: { name: string; why: string }[];
+  /** Advisory: an inert file or refused descriptor, named. `null` when all is well. */
+  reason: string | null;
 }
 
 /** `GET /settings` → `price_table` (#427). */
@@ -366,6 +402,11 @@ export interface UpdateSettingsRequest {
   reaper_ttl_secs?: number;
   guard_timeout_secs?: number;
   default_model?: string;
+  /** #550: instance default harness; `""` clears it (same sentinel as
+   *  `default_model`). */
+  default_harness?: string;
+  /** #550: per-harness default model map; replaces the stored map wholesale. */
+  default_harness_model?: Record<string, string>;
   /** Default sandbox (#410/#432): `"off"` or a staging-profile name, or `""` to clear
    *  back to the built-in default (`off`). Same `""`-sentinel discipline as
    *  `default_model`. The daemon 400s a name that does not resolve.
@@ -418,6 +459,22 @@ export interface RunListEntry {
 }
 
 /**
+ * A **Projet** (#552, ADR-0046): a named grouping of member repo paths, and the
+ * middle tier of the harness precedence axis. Materialised on demand — a Projet
+ * exists only once a human names a group header or attaches a setting; until then
+ * the lists group by the derived path label (#258). Membership is compared
+ * verbatim (ADR-0033).
+ */
+export interface Project {
+  id: string;
+  name: string;
+  /** The harness this Projet carries, or absent/null when it carries none. */
+  harness?: string | null;
+  /** Member repository paths (the effective-repo keys the lists group by). */
+  members: string[];
+}
+
+/**
  * A persisted Trigger (#160 / ADR-0012): a cron schedule bound to a run
  * template. Cron-only in this slice — `guard_command` is reserved for #161.
  */
@@ -450,6 +507,10 @@ export interface Trigger {
   /** Per-Trigger sandbox (#410/#432): `"off"` or a staging-profile name, or null/absent
    *  to inherit the instance default. Read at fire time. */
   sandbox?: string | null;
+  /** Per-Trigger harness (#551, ADR-0046): a harness name, or null/absent to inherit the
+   *  instance default. Read at fire time and folded into the fired Run's harness (no
+   *  separate Trigger tier — a cron tick and a "Run now" produce the same one). */
+  harness?: string | null;
   /** Whether Runs this Trigger fires are auto-named (#338). Frozen at creation from the
    *  instance default; `true` is the pre-#338 behaviour. A flat bool (no inherit state). */
   auto_name: boolean;
@@ -618,11 +679,11 @@ export interface CollectionStateInfo {
 }
 
 /**
- * One secondary repo pinned to a Run (#465, ADR-0042/0045). Mirror of the server
+ * One secondary repo pinned to a Run (#465, ADR-0042/0047). Mirror of the server
  * `RepoPin`: `repo` is the absolute host path, `alias` the disambiguated snapshot
  * folder name (the handle a `remove` names), `sha` the frozen commit, `base_branch`
  * the ref it was resolved from (provenance only; the SHA is authoritative), and
- * `read_only` the per-repo opt-in (ADR-0045). Absent `base_branch` means the pin
+ * `read_only` the per-repo opt-in (ADR-0047). Absent `base_branch` means the pin
  * defaulted to `HEAD`; absent `read_only` means writable (the default).
  */
 export interface RepoPin {
@@ -692,6 +753,14 @@ export interface RunState {
    */
   sandbox_prep?: "pending" | "ready";
   /**
+   * The agentic harness this Run was created on (#551, ADR-0046) — the `run` tier of
+   * the precedence chain, **frozen** at creation like {@link RunState.sandbox}. Absent
+   * when the Run named no harness (every historical Run, and any Run that inherited the
+   * instance default): each free node then resolved through the instance default and
+   * the `claude` floor. Shown in the Run panel; a pinned node ignored it.
+   */
+  harness?: string;
+  /**
    * Cumulative count of NodeRun sessions this run spawned — raw `NodeStarted`
    * count, not distinct `(node, iter)`; manager excluded (#100). Defaults to 0
    * on older payloads.
@@ -710,11 +779,18 @@ export interface RunState {
    * lower bound; `unpriced_models` names which family keys were excluded (#425),
    * so the UI can say *which* model rather than an anonymous "an unpriced model".
    * Invariant: `partial ⟺ unpriced_models.length > 0`.
+   *
+   * `uncosted_harnesses` (#553): the harnesses a node ran on that have **no cost
+   * source** (e.g. `opencode`). Non-empty ⇒ the Run's cost is not honestly
+   * summable, so the UI shows "—" with a reason naming them, never a `$0` and
+   * never a mute lower-bound — a categorically different state from `partial`
+   * (which still shows a figure). Empty on every all-`claude` Run.
    */
   cost?: {
     usd: number;
     partial: boolean;
     unpriced_models: string[];
+    uncosted_harnesses?: string[];
   } | null;
 }
 
@@ -738,7 +814,8 @@ export interface WsMessage {
     | "trigger_fired"
     | "trigger_updated"
     | "trigger_deleted"
-    | "triggers_paused";
+    | "triggers_paused"
+    | "project_changed";
   event?: DaemonEvent;
   pipeline_id?: string;
   path?: string;
@@ -749,6 +826,8 @@ export interface WsMessage {
   run_id?: string | null;
   /** Set on `triggers_paused` messages (#348): the new global pause state. */
   paused?: boolean;
+  /** Set on `project_changed` messages (#552): the mutated Projet's id. */
+  project_id?: string;
 }
 
 export type EditScope = null | "run";
@@ -818,7 +897,25 @@ export interface NodeDef {
   /** Optional per-node reasoning-effort override (#424): free-text pass-through
    *  to `claude --effort <level>`. Absent/null ⇒ no flag (account default).
    *  Orthogonal to `model`, and semantic — it enters the pipeline diff and the
-   *  node-library content hash. */
+   *  node-library content hash.
+   *
+   *  Since #550 this is the **resolved harness's** effort: folded out of
+   *  `harnesses[resolved].effort` on load, folded back on save. */
+  effort?: string | null;
+  /** #550/ADR-0046: the pinned harness (`claude`, `opencode`), or null/absent to
+   *  follow the tier above (instance default, else the `claude` floor). A pin both
+   *  selects the harness and shields it from every coarser tier. */
+  pin_harness?: string | null;
+  /** #550/ADR-0046: per-harness `{model, effort}` settings. `model`/`effort` above
+   *  are the RESOLVED harness's view (folded from this map on load, back into it on
+   *  save); the map preserves entries for the non-resolved harnesses. */
+  harnesses?: Record<string, HarnessSettings>;
+}
+
+/** #550/ADR-0046: a node's `{model, effort}` for one harness. Free-text
+ *  pass-through — a slug means nothing outside the harness that accepts it. */
+export interface HarnessSettings {
+  model?: string | null;
   effort?: string | null;
 }
 

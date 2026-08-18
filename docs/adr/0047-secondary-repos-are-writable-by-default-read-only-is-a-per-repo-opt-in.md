@@ -1,4 +1,4 @@
-# 45. Les dépôts secondaires sont modifiables par défaut ; read-only devient un opt-in par dépôt
+# 47. Les dépôts secondaires sont modifiables par défaut ; read-only devient un opt-in par dépôt
 
 ## Statut
 

@@ -70,6 +70,13 @@ pub enum SessionTail<'a> {
     /// Agent node / manager / merge-resolver. `model` is the per-node model
     /// override (#296); `None` ⇒ account default (byte-identical legacy launch).
     Agent {
+        /// The resolved harness descriptor (#550, ADR-0045). Its `launch`
+        /// template renders the tail via [`crate::harness_argv`]; its `env` block
+        /// is exported before the tail (that is where `claude`'s CCR suppression
+        /// now comes from — AC #4). For infra sessions and the byte-identity gate
+        /// this is the `claude` descriptor, whose template reproduces the legacy
+        /// tail exactly once its holes are empty.
+        harness: &'a crate::harness_registry::HarnessDescriptor,
         model: Option<&'a str>,
         /// Per-node reasoning-effort override (#424). `None` *or* an empty string
         /// ⇒ no `--effort`, byte-identical tail. A `Script` tail carries no such
@@ -233,19 +240,35 @@ fn wrap_tail_in_docker_exec(
 /// tmux pane), writes `~/.claude.json`, and force-exits via `kill(getpid(),
 /// SIGKILL)`. That's the "Tester dies silently 20–60 s in" bug.
 ///
-/// `extra_env` are additional `export K=V` pairs injected *after* the base four
-/// and the CCR suppression, before the tail. Agents pass `&[]`, so the emitted
-/// bytes are identical to the legacy command (the #296 byte-identity discipline)
-/// — only `script` nodes populate it with the `PDO_INPUT_*`/`PDO_OUTPUT_*`/…
-/// catalogue.
+/// `harness_env` are the harness descriptor's env pairs (`claude`'s CCR
+/// suppression — AC #4), exported *after* the base four and *before* `extra_env`.
+/// For the `claude` descriptor this is exactly `[(CCR, "1")]`, so the emitted
+/// bytes match the legacy hard-coded `export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`
+/// — the value is rendered by [`sh_quote_arg`] (bare-if-safe), which leaves `1`
+/// unquoted, preserving byte-identity. `script` / `shell` tails pass the same
+/// forced `[(CCR, "1")]` (the wrapper still poses it — a hand-typed `claude` in a
+/// run shell depends on it, CONTEXT.md §*Shell de run*).
+///
+/// `extra_env` are additional `export K=V` pairs injected after `harness_env`,
+/// before the tail. Agents pass `&[]`, so the emitted bytes are identical to the
+/// legacy command (the #296 byte-identity discipline) — only `script` nodes
+/// populate it with the `PDO_INPUT_*`/`PDO_OUTPUT_*`/… catalogue.
 fn wrap_with_env(
     run_id: &str,
     node_id: &str,
     iter: i64,
     daemon_port: u16,
+    harness_env: &[(String, String)],
     extra_env: &[(String, String)],
     tail_cmd: &str,
 ) -> String {
+    // #550/AC #4: the harness env (CCR for `claude`) — `sh_quote_arg` keeps a safe
+    // value like `1` bare, so `export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`
+    // is byte-identical to the legacy hard-coded export.
+    let harness_exports: String = harness_env
+        .iter()
+        .map(|(k, v)| format!("export {k}={} && ", sh_quote_arg(v)))
+        .collect();
     let extra_exports: String = extra_env
         .iter()
         .map(|(k, v)| format!("export {k}={} && ", sh_single_quote(v)))
@@ -256,8 +279,7 @@ fn wrap_with_env(
          export PDO_NODE_ID={node_id_q} && \
          export PDO_NODE_ITER={iter_q} && \
          export PDO_DAEMON_URL={daemon_url_q} && \
-         export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 && \
-         {extra_exports}{tail_cmd}",
+         {harness_exports}{extra_exports}{tail_cmd}",
         run_id_q = sh_single_quote(run_id),
         node_id_q = sh_single_quote(node_id),
         iter_q = sh_single_quote(&iter.to_string()),
@@ -288,64 +310,56 @@ fn wrap_with_env(
 /// exports `wrap_with_env` set, so no env has to be threaded into the JSON.
 pub(crate) const STOP_HOOK_SETTINGS_JSON: &str = r#"{"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"pdo complete --auto; exit 0"}]}]}}"#;
 
-/// Build the `exec claude …` tail for an agent node. A non-empty `model`
-/// inserts `--model '<m>'`, a non-empty `effort` inserts `--effort '<lvl>'`
-/// after it, then a `Some` `settings_path` inserts `--settings '<file>'` (#433),
-/// and a non-empty `session_id` inserts `--session-id '<uuid>'` last (#473);
-/// `None` *or* an empty string on all of them reproduces the legacy command
-/// byte-for-byte (the state infra sessions launch in).
+/// Build the agent tail by rendering the harness descriptor's launch template
+/// through [`crate::harness_argv`] (#550, ADR-0045). The caller shell-quotes each
+/// hole value here — where the shell semantics live — and the renderer only
+/// substitutes and drops empty-hole tokens. For the `claude` descriptor with all
+/// holes empty this reproduces the legacy `build_agent_tail` **byte for byte**
+/// (the #550 gate, pinned by the goldens in `harness_argv`): a non-empty `model`
+/// inserts `--model '<m>'`, `effort` inserts `--effort '<lvl>'` after it, a `Some`
+/// `settings_path` inserts `--settings '<file>'` (#433), and a non-empty
+/// `session_id` inserts `--session-id '<uuid>'` last (#473). `None` *or* an empty
+/// string on any of them drops its token (the `Some("")` last-resort guard of
+/// #347: a stray `""` never reaches the tail as `--model ''`).
 fn build_agent_tail(
+    descriptor: &crate::harness_registry::HarnessDescriptor,
     prompt_path: &Path,
     model: Option<&str>,
     effort: Option<&str>,
     settings_path: Option<&Path>,
     session_id: Option<&str>,
 ) -> String {
-    // A non-empty `Some` ⇒ a single-quoted `--model '<m>' ` with a trailing
-    // space; `None` OR `Some("")` ⇒ empty string, so the command collapses to
-    // the exact legacy literal (one space before the `"$(cat …)"`). The
-    // empty-string arm is the last-resort guard (#347): every upstream tier
-    // already filters "", but a missed source would otherwise emit `--model ''`
-    // and crash `claude` — keeping the guard here covers them all at once.
-    let model_flag = match model {
-        Some(m) if !m.is_empty() => format!("--model {} ", sh_single_quote(m)),
-        _ => String::new(),
+    let quote_opt = |v: Option<&str>| {
+        v.filter(|s| !s.is_empty())
+            .map(sh_single_quote)
+            .unwrap_or_default()
     };
-    // #424: same shape as the model flag, and deliberately placed *after* it —
-    // the tail test pins the substring `--dangerously-skip-permissions --model
-    // '<m>' `, so inserting before would break it for nothing. `None` OR
-    // `Some("")` ⇒ empty fragment, so the no-effort command collapses to the exact
-    // legacy literal (one space before the `"$(cat …)"`).
-    let effort_flag = match effort {
-        Some(e) if !e.is_empty() => format!("--effort {} ", sh_single_quote(e)),
-        _ => String::new(),
+    let holes = crate::harness_argv::Holes {
+        prompt: format!(
+            "\"$(cat {})\"",
+            sh_single_quote(&prompt_path.to_string_lossy())
+        ),
+        model: quote_opt(model),
+        effort: quote_opt(effort),
+        settings: settings_path
+            .map(|p| sh_single_quote(&p.to_string_lossy()))
+            .unwrap_or_default(),
+        session_id: quote_opt(session_id),
+        // The launch template carries no `{resume}` hole.
+        resume: String::new(),
     };
-    // #433: `--settings '<file>'` arms the turn-end `Stop` hook. Placed AFTER
-    // `--effort` — the position that leaves every model/effort substring test
-    // untouched. `None` ⇒ empty fragment, so the hook-off tail stays
-    // byte-identical to the legacy launch.
-    let settings_flag = match settings_path {
-        Some(p) => format!("--settings {} ", sh_single_quote(&p.to_string_lossy())),
-        None => String::new(),
-    };
-    // #473: pin the Claude Code session id so its transcript is `<uuid>.jsonl` and
-    // the liveness sweep resolves it by identity, never by newest-mtime in a shared
-    // cwd. Placed LAST (after model/effort/settings) so the model/effort byte-identity
-    // substrings the #296/#424 tests pin stay contiguous. `None` OR `Some("")` ⇒
-    // empty fragment (infra sessions): the tail then reproduces the legacy launch
-    // byte-for-byte, so the pre-#473 "no id" behaviour is what `None` still means.
-    let session_flag = match session_id {
-        Some(s) if !s.is_empty() => format!("--session-id {} ", sh_single_quote(s)),
-        _ => String::new(),
-    };
-    format!(
-        "exec claude --dangerously-skip-permissions {}{}{}{}\"$(cat {})\"",
-        model_flag,
-        effort_flag,
-        settings_flag,
-        session_flag,
-        sh_single_quote(&prompt_path.to_string_lossy())
-    )
+    crate::harness_argv::render(&descriptor.launch, &holes)
+}
+
+/// The `claude` CCR suppression, forced by the wrapper for `script` / `shell`
+/// tails (AC #4): those run bash, not an agent, so they carry no descriptor — but
+/// a hand-typed `claude` in a run shell still depends on it (CONTEXT.md §*Shell de
+/// run*). An **agent** tail gets this from its descriptor's `env` instead.
+fn forced_ccr_env() -> Vec<(String, String)> {
+    vec![(
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".to_string(),
+        "1".to_string(),
+    )]
 }
 
 /// Build the bash tail for a `script` node (#248 / ADR-0017).
@@ -406,10 +420,16 @@ pub fn build_tmux_script(
     settings_path: Option<&Path>,
 ) -> String {
     const NO_ENV: &[(String, String)] = &[];
-    let (tail_cmd, extra_env): (String, &[(String, String)]) = match tail {
-        SessionTail::Script { timeout_secs, env } => {
-            (build_script_tail(prompt_path, timeout_secs), env)
-        }
+    // #550/AC #4: `harness_env` sources the CCR export — from the harness
+    // descriptor for an agent tail, forced by the wrapper for `script` / `shell`.
+    // (Type inferred, not annotated: an explicit 3-tuple type trips clippy's
+    // `type_complexity`, which CI denies.)
+    let (tail_cmd, extra_env, harness_env) = match tail {
+        SessionTail::Script { timeout_secs, env } => (
+            build_script_tail(prompt_path, timeout_secs),
+            env,
+            forced_ccr_env(),
+        ),
         SessionTail::Shell => {
             // #316: a deterministic interactive bash. Like `Script`, the test
             // seam must not clobber it (`sleep 600` instead of a real shell is
@@ -433,9 +453,11 @@ pub fn build_tmux_script(
             (
                 "while true; do bash -i; sleep 0.2; done".to_string(),
                 NO_ENV,
+                forced_ccr_env(),
             )
         }
         SessionTail::Agent {
+            harness,
             model,
             effort,
             session_id,
@@ -443,12 +465,21 @@ pub fn build_tmux_script(
             // #433: `settings_path` (the turn-end `Stop` hook) is honoured ONLY on
             // the agent tail — a `Script`/`Shell` tail runs bash, never `claude`,
             // so it structurally cannot carry `--settings`. #473: `session_id` pins
-            // the transcript identity, threaded through the enum variant.
+            // the transcript identity, threaded through the enum variant. #550: the
+            // harness descriptor's `launch` template renders the tail and its `env`
+            // block carries the CCR suppression (AC #4).
             let cmd = match tmux_cmd_override {
                 Some(cmd) => cmd.to_string(),
-                None => build_agent_tail(prompt_path, model, effort, settings_path, session_id),
+                None => build_agent_tail(
+                    harness,
+                    prompt_path,
+                    model,
+                    effort,
+                    settings_path,
+                    session_id,
+                ),
             };
-            (cmd, NO_ENV)
+            (cmd, NO_ENV, harness.env.clone())
         }
     };
 
@@ -461,9 +492,25 @@ pub fn build_tmux_script(
     match sandbox {
         Some(wrap) => {
             let docker_tail = wrap_tail_in_docker_exec(run_id, wrap, extra_env, &tail_cmd);
-            wrap_with_env(run_id, node_id, iter, daemon_port, NO_ENV, &docker_tail)
+            wrap_with_env(
+                run_id,
+                node_id,
+                iter,
+                daemon_port,
+                &harness_env,
+                NO_ENV,
+                &docker_tail,
+            )
         }
-        None => wrap_with_env(run_id, node_id, iter, daemon_port, extra_env, &tail_cmd),
+        None => wrap_with_env(
+            run_id,
+            node_id,
+            iter,
+            daemon_port,
+            &harness_env,
+            extra_env,
+            &tail_cmd,
+        ),
     }
 }
 
@@ -508,47 +555,71 @@ fn build_resume_script(
     node_id: &str,
     iter: i64,
     daemon_port: u16,
+    descriptor: &crate::harness_registry::HarnessDescriptor,
     effort: Option<&str>,
     session_id: Option<&str>,
     tmux_cmd_override: Option<&str>,
     sandbox: Option<&SandboxWrap<'_>>,
     settings_path: Option<&Path>,
 ) -> String {
-    let effort_flag = match effort {
-        Some(e) if !e.is_empty() => format!(" --effort {}", sh_single_quote(e)),
-        _ => String::new(),
-    };
-    // #473: `--resume <uuid>` targets THIS node's transcript by identity; a
-    // pre-#473 row with no recorded id falls back to positional `--continue`.
-    let resume_flag = match session_id {
+    // #473/ADR-0045: the resume *selector* is the one thing the pure hole-drop
+    // rule cannot express (emit `--continue` precisely *when* the id is empty), so
+    // it is computed here — "reprendre par identité ou en aveugle" stays in code.
+    // `--resume <uuid>` targets THIS node's transcript by identity; a row with no
+    // recorded id (pre-#473, or a harness like `opencode` that can't pin one)
+    // falls back to blind `--continue`. Both delivered harnesses blind-continue
+    // with `--continue`.
+    let resume_selector = match session_id {
         Some(s) if !s.is_empty() => format!("--resume {}", sh_single_quote(s)),
         _ => "--continue".to_string(),
     };
-    // #433 / ADR-0043 (D7): re-arm the `Stop` hook on resume, or a resurrected
-    // session silently loses it — the daemon sweep still covers the node, but the
-    // PRIMARY substrate must survive resurrection. Leading space matches this
-    // function's local `effort_flag` convention; `None` ⇒ byte-identical tail.
-    let settings_flag = match settings_path {
-        Some(p) => format!(" --settings {}", sh_single_quote(&p.to_string_lossy())),
-        None => String::new(),
+    let quote_opt = |v: Option<&str>| {
+        v.filter(|s| !s.is_empty())
+            .map(sh_single_quote)
+            .unwrap_or_default()
+    };
+    let holes = crate::harness_argv::Holes {
+        resume: resume_selector,
+        // #424: a resume restores the model but loses the effort, so re-pose it.
+        effort: quote_opt(effort),
+        // #433 / ADR-0043 (D7): re-arm the `Stop` hook on resume.
+        settings: settings_path
+            .map(|p| sh_single_quote(&p.to_string_lossy()))
+            .unwrap_or_default(),
+        ..Default::default()
     };
     let tail_cmd = match tmux_cmd_override {
         Some(cmd) => cmd.to_string(),
-        None => format!(
-            "exec claude --dangerously-skip-permissions {resume_flag}{effort_flag}{settings_flag}"
-        ),
+        None => crate::harness_argv::render(&descriptor.resume, &holes),
     };
 
-    // #407: the 6th tail path (`claude --continue`) is wrapped identically — a
-    // resumed sandboxed session re-enters the same container. `--continue` matches
-    // its transcript by working-dir path; the container mounts the repo at the
-    // same host path, so the path (hence the transcript) still matches.
+    // #407: the resume tail is wrapped identically — a resumed sandboxed session
+    // re-enters the same container. `--continue` matches its transcript by
+    // working-dir path; the container mounts the repo at the same host path, so
+    // the path (hence the transcript) still matches.
+    let harness_env = descriptor.env.clone();
     match sandbox {
         Some(wrap) => {
             let docker_tail = wrap_tail_in_docker_exec(run_id, wrap, &[], &tail_cmd);
-            wrap_with_env(run_id, node_id, iter, daemon_port, &[], &docker_tail)
+            wrap_with_env(
+                run_id,
+                node_id,
+                iter,
+                daemon_port,
+                &harness_env,
+                &[],
+                &docker_tail,
+            )
         }
-        None => wrap_with_env(run_id, node_id, iter, daemon_port, &[], &tail_cmd),
+        None => wrap_with_env(
+            run_id,
+            node_id,
+            iter,
+            daemon_port,
+            &harness_env,
+            &[],
+            &tail_cmd,
+        ),
     }
 }
 
@@ -713,6 +784,7 @@ pub fn resume(
     node_id: &str,
     iter: i64,
     daemon_port: u16,
+    descriptor: &crate::harness_registry::HarnessDescriptor,
     effort: Option<&str>,
     session_id: Option<&str>,
     tmux_cmd_override: Option<&str>,
@@ -738,6 +810,7 @@ pub fn resume(
         node_id,
         iter,
         daemon_port,
+        descriptor,
         effort,
         session_id,
         tmux_cmd_override,
@@ -999,6 +1072,48 @@ pub fn env_default_model() -> Option<String> {
 /// without a daemon restart.
 pub fn default_model_with(stored: Option<String>) -> Option<String> {
     stored.filter(|s| !s.is_empty()).or_else(env_default_model)
+}
+
+/// Env var supplying the instance-wide default **harness** (#550, ADR-0046).
+/// `None`/empty ⇒ fall through to the `claude` floor, byte-identical launch.
+pub const DEFAULT_HARNESS_ENV: &str = "PDO_DEFAULT_HARNESS";
+
+/// The default harness contributed by [`DEFAULT_HARNESS_ENV`] alone, or `None`
+/// when unset or empty. Exposed so `GET /settings` can disclose a shadowed env
+/// var and compute the winning tier identically to [`default_harness_with`].
+pub fn env_default_harness() -> Option<String> {
+    std::env::var(DEFAULT_HARNESS_ENV)
+        .ok()
+        .filter(|s| !s.is_empty())
+}
+
+/// Resolve the instance-wide default harness, `stored → env → None` (#550,
+/// ADR-0046, mirroring [`default_model_with`]). `None` ⇒ the resolver's `claude`
+/// floor applies. Read FRESH at every spawn seam so a `PUT /settings` takes
+/// effect on the next node without a daemon restart (ADR-0015).
+pub fn default_harness_with(stored: Option<String>) -> Option<String> {
+    stored
+        .filter(|s| !s.is_empty())
+        .or_else(env_default_harness)
+}
+
+/// Whether `binary` resolves on the current `PATH` — the fail-fast spawn check
+/// (#550, AC #10). A name with a `/` is checked directly; a bare name is searched
+/// across `$PATH`. **Never executes** the binary (a probe run could hang a
+/// resident harness), and lives here (not in the pure `harness_registry`) because
+/// it reads `$PATH`. A missing binary makes the spawn fail *before* any session
+/// or start event exists (ADR-0037).
+pub fn binary_available(binary: &str) -> bool {
+    if binary.is_empty() {
+        return false;
+    }
+    if binary.contains('/') {
+        return Path::new(binary).is_file();
+    }
+    match std::env::var_os("PATH") {
+        Some(path) => std::env::split_paths(&path).any(|dir| dir.join(binary).is_file()),
+        None => false,
+    }
 }
 
 /// Resolve the model a work node launches with: the node's own `model:`
@@ -1803,6 +1918,26 @@ mod tests {
         assert_eq!(decisions[2].verdict, SweepVerdict::Keep);
     }
 
+    /// #550/AC #10: the fail-fast PATH probe. A bare name absent from `$PATH` is
+    /// unavailable; an empty name is never available; a slash-path is checked as a
+    /// file directly. `sh` is on every CI box, so it stands in for "installed".
+    #[test]
+    fn binary_available_probes_path_without_executing() {
+        assert!(!binary_available(""), "empty name is never available");
+        assert!(
+            !binary_available("pdo-definitely-not-a-real-binary-xyz"),
+            "a name absent from PATH is unavailable"
+        );
+        assert!(
+            binary_available("sh"),
+            "a ubiquitous binary resolves on PATH"
+        );
+        assert!(
+            !binary_available("/no/such/absolute/path/binary"),
+            "a missing slash-path is unavailable"
+        );
+    }
+
     #[test]
     fn build_script_default_and_override() {
         let prompt_path = Path::new("/tmp/test-prompt.md");
@@ -1816,6 +1951,7 @@ mod tests {
             prompt_path,
             None,
             SessionTail::Agent {
+                harness: &crate::harness_registry::claude(),
                 model: None,
                 effort: None,
                 session_id: None,
@@ -1838,6 +1974,7 @@ mod tests {
             prompt_path,
             Some("exec sleep 60"),
             SessionTail::Agent {
+                harness: &crate::harness_registry::claude(),
                 model: None,
                 effort: None,
                 session_id: None,
@@ -1864,6 +2001,7 @@ mod tests {
             prompt_path,
             None,
             SessionTail::Agent {
+                harness: &crate::harness_registry::claude(),
                 model: None,
                 effort: None,
                 session_id: None,
@@ -1900,6 +2038,7 @@ mod tests {
             prompt_path,
             None,
             SessionTail::Agent {
+                harness: &crate::harness_registry::claude(),
                 model: Some("opus"),
                 effort: None,
                 session_id: None,
@@ -1940,6 +2079,7 @@ mod tests {
             prompt_path,
             None,
             SessionTail::Agent {
+                harness: &crate::harness_registry::claude(),
                 model: Some(""),
                 effort: None,
                 session_id: None,
@@ -1969,6 +2109,7 @@ mod tests {
             Path::new("/tmp/test-prompt.md"),
             None,
             SessionTail::Agent {
+                harness: &crate::harness_registry::claude(),
                 model,
                 effort,
                 session_id: None,
@@ -2057,6 +2198,7 @@ mod tests {
             Path::new("/tmp/test-prompt.md"),
             None,
             SessionTail::Agent {
+                harness: &crate::harness_registry::claude(),
                 model: None,
                 effort: None,
                 session_id: None,
@@ -2080,6 +2222,7 @@ mod tests {
             Path::new("/tmp/test-prompt.md"),
             None,
             SessionTail::Agent {
+                harness: &crate::harness_registry::claude(),
                 model,
                 effort,
                 session_id,
@@ -2135,6 +2278,7 @@ mod tests {
             Path::new("/tmp/test-prompt.md"),
             None,
             SessionTail::Agent {
+                harness: &crate::harness_registry::claude(),
                 model: Some("opus"),
                 effort: Some("low"),
                 session_id: None,
@@ -2236,6 +2380,7 @@ mod tests {
             Path::new("/tmp/test-prompt.md"),
             None,
             SessionTail::Agent {
+                harness: &crate::harness_registry::claude(),
                 model: None,
                 effort: None,
                 session_id: None,
@@ -2284,7 +2429,18 @@ mod tests {
     fn build_resume_script_omits_settings_when_none() {
         // D7 off path: a resume with no hook is byte-identical to the legacy
         // `--continue` tail.
-        let script = build_resume_script("r1", "solo", 1, 6172, None, None, None, None, None);
+        let script = build_resume_script(
+            "r1",
+            "solo",
+            1,
+            6172,
+            &crate::harness_registry::claude(),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
         assert!(!script.contains("--settings"), "{script}");
         assert!(
             script.contains("exec claude --dangerously-skip-permissions --continue"),
@@ -2301,6 +2457,7 @@ mod tests {
             "solo",
             1,
             6172,
+            &crate::harness_registry::claude(),
             Some("low"),
             None,
             None,
@@ -2741,6 +2898,7 @@ mod tests {
             prompt_path,
             None,
             SessionTail::Agent {
+                harness: &crate::harness_registry::claude(),
                 model: None,
                 effort: None,
                 session_id: None,
@@ -2871,6 +3029,7 @@ mod tests {
             prompt_path,
             None,
             SessionTail::Agent {
+                harness: &crate::harness_registry::claude(),
                 model: None,
                 effort: None,
                 session_id: None,
@@ -2895,8 +3054,18 @@ mod tests {
         // here (#473) ⇒ the legacy `--continue` fallback.
         let wt = Path::new("/repo/.pdo/runs/r1/nodes/solo/iter-1");
         let wrap = sample_wrap("pdo-r1-solo-iter-1", wt);
-        let wrapped =
-            build_resume_script("r1", "solo", 1, 6172, None, None, None, Some(&wrap), None);
+        let wrapped = build_resume_script(
+            "r1",
+            "solo",
+            1,
+            6172,
+            &crate::harness_registry::claude(),
+            None,
+            None,
+            None,
+            Some(&wrap),
+            None,
+        );
         assert!(
             wrapped.contains("docker exec -i -t -e PDO_SBX_SESSION=pdo-r1-solo-iter-1"),
             "{wrapped}"
@@ -2904,7 +3073,18 @@ mod tests {
         assert!(wrapped.contains("pdo-sbx-r1 bash -lc"), "{wrapped}");
         assert!(wrapped.contains("--continue"), "{wrapped}");
         // off path unchanged.
-        let off = build_resume_script("r1", "solo", 1, 6172, None, None, None, None, None);
+        let off = build_resume_script(
+            "r1",
+            "solo",
+            1,
+            6172,
+            &crate::harness_registry::claude(),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
         assert!(!off.contains("docker"), "{off}");
         assert!(
             off.contains("exec claude --dangerously-skip-permissions --continue"),
@@ -2920,7 +3100,18 @@ mod tests {
         // cwd is the shared Run worktree). The uuid is single-quoted, hence `'\''`
         // once `wrap_with_env` re-wraps the tail in `bash -c '…'`.
         let sid = "11111111-2222-3333-4444-555555555555";
-        let off = build_resume_script("r1", "solo", 1, 6172, None, Some(sid), None, None, None);
+        let off = build_resume_script(
+            "r1",
+            "solo",
+            1,
+            6172,
+            &crate::harness_registry::claude(),
+            None,
+            Some(sid),
+            None,
+            None,
+            None,
+        );
         assert!(
             off.contains(&format!(r"--resume '\''{sid}'\''")),
             "resume must target the pinned session id: {off}"
@@ -2940,6 +3131,7 @@ mod tests {
             "solo",
             1,
             6172,
+            &crate::harness_registry::claude(),
             Some("low"),
             Some(sid),
             None,
@@ -2960,7 +3152,18 @@ mod tests {
     fn build_resume_script_falls_back_to_continue_for_empty_session_id() {
         // #473: an empty pinned id behaves exactly like `None` (a pre-#473 row) —
         // the legacy positional `--continue`, byte-identical.
-        let script = build_resume_script("r1", "solo", 1, 6172, None, Some(""), None, None, None);
+        let script = build_resume_script(
+            "r1",
+            "solo",
+            1,
+            6172,
+            &crate::harness_registry::claude(),
+            None,
+            Some(""),
+            None,
+            None,
+            None,
+        );
         assert!(!script.contains("--resume"), "{script}");
         assert!(
             script.contains(r"exec claude --dangerously-skip-permissions --continue'"),
@@ -2974,7 +3177,18 @@ mod tests {
         // byte-identical to the legacy tail. `Some("")` behaves like `None` — the
         // same last-resort guard as the spawn tail.
         for effort in [None, Some("")] {
-            let script = build_resume_script("r1", "solo", 1, 6172, effort, None, None, None, None);
+            let script = build_resume_script(
+                "r1",
+                "solo",
+                1,
+                6172,
+                &crate::harness_registry::claude(),
+                effort,
+                None,
+                None,
+                None,
+                None,
+            );
             assert!(
                 !script.contains("--effort"),
                 "no effort flag when unset ({effort:?}): {script}"
@@ -2996,8 +3210,18 @@ mod tests {
         // the transcript stores no effort field to read back. So the level is
         // re-posed here, from the `NodeStarted` payload. Still no `--model`: that
         // one really is restored.
-        let script =
-            build_resume_script("r1", "solo", 1, 6172, Some("low"), None, None, None, None);
+        let script = build_resume_script(
+            "r1",
+            "solo",
+            1,
+            6172,
+            &crate::harness_registry::claude(),
+            Some("low"),
+            None,
+            None,
+            None,
+            None,
+        );
         assert!(
             script.contains(r"--continue --effort '\''low'\''"),
             "effort must be re-posed right after --continue: {script}"
@@ -3019,6 +3243,7 @@ mod tests {
             "solo",
             1,
             6172,
+            &crate::harness_registry::claude(),
             Some("low"),
             Some("11111111-2222-3333-4444-555555555555"),
             Some("exec sleep 60"),

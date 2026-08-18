@@ -1,5 +1,9 @@
 # Configuration d'instance : store SQLite singleton + précédence `stored → env → default`
 
+> **Amendé par ADR-0046** : l'instance n'est plus le tier le plus haut pour tout réglage — le harnais
+> agentique en compte deux au-dessous d'elle (Run, Projet) — et son défaut de modèle devient un défaut
+> **par harnais**. La précédence `stored → env → default` de chaque réglage est inchangée.
+
 Trois réglages runtime daemon-wide n'existaient qu'en variable d'environnement (shell + redémarrage) : le **cap de sessions** (`PDO_SESSION_CAP`, défaut 20), le **reaper TTL** (`PDO_REAPER_TTL_SECS`, défaut 3600 s) et le **timeout du guard de Trigger** (`PDO_GUARD_TIMEOUT_MS`, défaut 60 s). CONTEXT.md promettait de longue date une page de réglages instance-wide qui les expose (#129 ; cf. *Cap de sessions*, *Trigger*, *terminal inline*). C'est la mauvaise ergonomie pour l'arc d'autonomie non-attendue (ADR-0012 nomme le cap comme *la* primitive de sécurité contre l'effondrement tmux #77/#78).
 
 **Décision.** On introduit une **Configuration d'instance** : une table SQLite **singleton** `instance_config` (une seule ligne) dans `pdo.db`, calquée sur le store des Triggers (config + état mutable, pas un artefact canvas-backed → mauvais fit YAML, cf. CONTEXT.md *Persistence — table SQLite*) ; des routes daemon `GET`/`PUT /settings` ; un écran de réglages frontend. La résolution de chaque réglage suit l'ordre **`stored → env → default`** : la valeur stockée (UI) **gagne**, la variable d'environnement devient un *bootstrap* consulté seulement quand le stored est `NULL`, le défaut est le plancher. `GET /settings` renvoie par champ `{ effective, source, stored, env, default }` (`source ∈ {stored, env, default}`) pour que l'UI **révèle** un env masqué plutôt que de l'ignorer en silence.

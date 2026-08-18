@@ -535,7 +535,7 @@ async fn edit_add_secondary_mid_run() {
     );
 }
 
-/// ADR-0045: the `read_only` opt-in survives the create/edit chokepoint and the
+/// ADR-0047: the `read_only` opt-in survives the create/edit chokepoint and the
 /// `RunReposEdited` projection — a `read_only: true` pin comes back flagged, a pin
 /// added without the key comes back writable (default). This is the data-layer
 /// round-trip of the whole feature, through the real HTTP handler.

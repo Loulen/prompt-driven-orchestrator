@@ -1154,11 +1154,11 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                     },
                 ),
                 // A panne, not a verdict → `500`. `run_failed` is re-PROJECTED, never
-                // guessed: the four producers of `Failed` disagree (three append
-                // `RunFailed`, the sub-worktree branch appended nothing at all), and a
-                // `500` routes the CLI toward `pdo fail` — catastrophic advice if
-                // `RunFailed` is already on the log. Homogenising the producers is
-                // #498-B.
+                // guessed: the five producers of `Failed` disagree (three append
+                // `RunFailed`, #508's tmux-spawn arm appends `NodeFailed` + `RunFailed`,
+                // the sub-worktree branch appended nothing at all), and a `500` routes
+                // the CLI toward `pdo fail` — catastrophic advice if `RunFailed` is
+                // already on the log. Homogenising the producers is #498-B.
                 SpawnOutcome::Failed { reason } => {
                     let run_failed = reload_run_state(&state, &run_id)
                         .await
@@ -1335,13 +1335,13 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 let mut v = vec![TargetRepoInput {
                     repo: target_repo.clone().unwrap_or_default(),
                     base_branch: source_branch.clone(),
-                    // The primary is always writable (ADR-0045).
+                    // The primary is always writable (ADR-0047).
                     read_only: false,
                 }];
                 v.extend(run_state.target_repos.iter().map(|p| TargetRepoInput {
                     repo: p.repo.clone(),
                     base_branch: p.base_branch.clone(),
-                    // Preserve the read-only opt-in across a retry (ADR-0045).
+                    // Preserve the read-only opt-in across a retry (ADR-0047).
                     read_only: p.read_only,
                 }));
                 v
@@ -1385,6 +1385,15 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 // Side effect, intended: a profile deleted since makes the retry 400,
                 // loudly, instead of quietly running something else.
                 sandbox: Some(run_state.sandbox.clone()),
+                // #551 (ADR-0046): a retry is a new Run, but it must reproduce the
+                // original's harness — an A/B comparison that silently reverted to the
+                // instance default on retry would be worthless. The frozen harness is
+                // projected from the original's `RunStarted`; `None` (the Run named no
+                // harness) forwards as `None`, so the retry resolves through the instance
+                // default exactly as the original did. Unlike `sandbox` this needs no
+                // `Some`-wrapping-for-explicit dance: the create chokepoint freezes
+                // `req.harness` verbatim, with no precedence resolution of its own.
+                harness: run_state.harness.clone(),
                 // #338: pin the historical retry behaviour exactly. A retry has always
                 // set `name: None` and re-derived the name (placeholder or from input);
                 // `Some(true)` reproduces that regardless of the instance default, so a
@@ -2289,8 +2298,8 @@ mod tests {
                 view: None,
                 max_iter: None,
                 over: None,
-                model: None,
-                effort: None,
+                pin_harness: None,
+                harnesses: Default::default(),
             }],
             edges: vec![EdgeDef {
                 source: EdgeEndpoint {
@@ -2342,8 +2351,8 @@ mod tests {
                 view: None,
                 max_iter: None,
                 over: None,
-                model: None,
-                effort: None,
+                pin_harness: None,
+                harnesses: Default::default(),
             }],
             edges: vec![EdgeDef {
                 source: EdgeEndpoint {

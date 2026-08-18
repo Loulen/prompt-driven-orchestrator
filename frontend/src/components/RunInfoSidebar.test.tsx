@@ -97,6 +97,23 @@ describe("RunInfoSidebar", () => {
     expect(screen.queryByTestId("run-failure-reason")).toBeNull();
   });
 
+  // #551 (ADR-0046): the frozen Run harness is visible in the panel.
+  it("shows the Run's frozen harness when it named one", () => {
+    render(
+      <RunInfoSidebar run={{ ...makeRun("running"), harness: "opencode" } as unknown as RunState} />,
+    );
+    const chip = screen.getByTestId("run-harness");
+    expect(chip.textContent).toContain("Harness");
+    expect(chip.textContent).toContain("opencode");
+  });
+
+  it("shows no harness chip when the Run inherited the default", () => {
+    // Absent harness = inherited the instance default (and the floor) — the panel does
+    // not spell that out per-Run.
+    render(<RunInfoSidebar run={makeRun("running")} />);
+    expect(screen.queryByTestId("run-harness")).toBeNull();
+  });
+
   // #465 slice 2 — the Repositories section.
   it("shows no Repositories section for a mono-repo run (no target_repo)", () => {
     render(<RunInfoSidebar run={makeRun("running")} />);
@@ -121,7 +138,7 @@ describe("RunInfoSidebar", () => {
     expect(screen.getByTestId("remove-secondary-repo-lib")).toBeInTheDocument();
   });
 
-  // ADR-0045: the badge reflects the per-repo mode. A writable pin (the default,
+  // ADR-0047: the badge reflects the per-repo mode. A writable pin (the default,
   // no `read_only`) reads WRITABLE; an opted-in read-only pin reads READ-ONLY.
   it("badges each secondary by its writable/read-only mode", () => {
     const run = makeMultiRepoRun("running", [
@@ -133,7 +150,7 @@ describe("RunInfoSidebar", () => {
     expect(screen.getByTestId("secondary-repo-mode-ro").textContent).toBe("READ-ONLY");
   });
 
-  it("adds a read-only draft with read_only:true in the PATCH (ADR-0045)", async () => {
+  it("adds a read-only draft with read_only:true in the PATCH (ADR-0047)", async () => {
     const run = makeMultiRepoRun("running", []);
     render(<RunInfoSidebar run={run} onEdited={() => {}} />);
 

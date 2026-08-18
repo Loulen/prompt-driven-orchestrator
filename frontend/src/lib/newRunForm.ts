@@ -6,6 +6,7 @@ import type {
 } from "../api";
 import type { InstanceSettings, PipelineListEntry, SandboxProfileRef } from "../types";
 import { presetToCron, type CronPresetId } from "../cronPresets";
+import { HARNESS_FLOOR, KNOWN_HARNESSES } from "./harness";
 
 /**
  * The New Run / Trigger form's pure logic (#359), lifted out of `NewRunModal.tsx`.
@@ -295,6 +296,54 @@ export function sandboxState({
   };
 }
 
+/** Everything the harness selector derives from `settings` + the selected value (#551, ADR-0046). */
+export interface HarnessState {
+  /** The harnesses the pin selector offers (the embedded floor, ADR-0045). */
+  knownHarnesses: readonly string[];
+  /**
+   * The instance default harness, used to **label** the inherit option — never to seed
+   * the value (the #452 trap: a prefilled field freezes a stale value the user never
+   * chose). `null` while `settings` are unknown (the honest "we don't know yet" render).
+   * Resolves through the floor when the instance names none, so run mode always has a
+   * concrete name to show.
+   */
+  instanceDefaultHarness: string | null;
+  /**
+   * What will actually apply to the Run being created. `""` is not a value — it means the
+   * key is omitted and the instance default (then the floor) decides — so it resolves to
+   * `instanceDefaultHarness`. A concrete selection is itself.
+   */
+  effectiveHarness: string | null;
+}
+
+/**
+ * The harness cluster (#551, ADR-0046). `harness` is the selector value in BOTH modes:
+ * `""` = "the user did not choose" (inherit), or a concrete harness name. Mirror of
+ * {@link sandboxState}, minus the Docker/profile machinery — a harness name is free text
+ * with no availability probe (ADR-0045: PDO does not validate it; an unknown one fails
+ * fast at spawn), so there is nothing to grey and nothing to block.
+ */
+export function harnessState({
+  settings,
+  harness,
+}: {
+  settings: InstanceSettings | null;
+  harness: string;
+}): HarnessState {
+  // #452: the instance default LABELS the inherit option, never seeds the value. `null`
+  // while settings are unknown; resolves through the `claude` floor once known, so run
+  // mode always names a concrete harness the Run would inherit.
+  const instanceDefaultHarness = settings
+    ? (settings.default_harness.effective || HARNESS_FLOOR)
+    : null;
+  const effectiveHarness = harness === "" ? instanceDefaultHarness : harness;
+  return {
+    knownHarnesses: KNOWN_HARNESSES,
+    instanceDefaultHarness,
+    effectiveHarness,
+  };
+}
+
 /** The form values `POST /runs` reads. */
 export interface RunPayloadInput {
   selectedPipeline: PipelineListEntry;
@@ -305,6 +354,8 @@ export interface RunPayloadInput {
   autoName: boolean;
   runName: string;
   sandbox: string;
+  /** #551: the harness selector value — `""` (inherit) or a concrete name. */
+  harness: string;
   images: File[];
   /** #465: `[0]` = primary, `[1..]` = secondaries. Omit / `undefined` for a mono-repo Run. */
   targetRepos?: TargetRepoInput[];
@@ -319,6 +370,7 @@ export function buildRunPayload({
   autoName,
   runName,
   sandbox,
+  harness,
   images,
   targetRepos,
 }: RunPayloadInput): CreateRunRequest {
@@ -341,6 +393,10 @@ export function buildRunPayload({
     // and OMITS the key: only an absent `sandbox` lets the daemon apply
     // `default_sandbox`, because it reads a present `off` as final.
     sandbox: sandbox || undefined,
+    // #551: the explicit harness choice. `""` (inherit) OMITS the key, so the Run names
+    // no harness and each free node resolves through the instance default and the floor —
+    // exactly the "name the default, don't copy it" contract of the selector (#452).
+    harness: harness || undefined,
     images: images.length > 0 ? images : undefined,
   };
 }
@@ -357,6 +413,8 @@ export interface TriggerPayloadInput {
   allowOverlap: boolean;
   maxConcurrent: string;
   sandbox: string;
+  /** #551: the harness selector value — `""` (inherit) or a concrete name. */
+  harness: string;
   autoName: boolean;
   variables: Record<string, unknown>;
   /** #465: `[0]` = primary, `[1..]` = secondaries. Omit / `undefined` for a mono-repo Trigger. */
@@ -380,6 +438,7 @@ export function buildTriggerUpdatePayload({
   allowOverlap,
   maxConcurrent,
   sandbox,
+  harness,
   autoName,
   variables,
   targetRepos,
@@ -402,6 +461,9 @@ export function buildTriggerUpdatePayload({
     // #410: `""` (Use instance default) clears back to inheriting (`null`);
     // `off` or a staging profile name sets it.
     sandbox: sandbox || null,
+    // #551: `""` (Use instance default) clears back to inheriting (`null`); a concrete
+    // harness name sets it. Mirror of `sandbox`.
+    harness: harness || null,
     // #338: round-trip the auto-naming choice (flat bool, mirror of `enabled`).
     auto_name: autoName,
     variables,
@@ -419,6 +481,7 @@ export function buildTriggerCreatePayload({
   allowOverlap,
   maxConcurrent,
   sandbox,
+  harness,
   autoName,
   variables,
   targetRepos,
@@ -437,6 +500,8 @@ export function buildTriggerCreatePayload({
     max_concurrent: allowOverlap && maxConcurrent.trim() ? Number(maxConcurrent) : undefined,
     // #410: `""` (Use instance default) → `null` (inherit); `off` or a profile sets it.
     sandbox: sandbox || null,
+    // #551: `""` (Use instance default) → `null` (inherit); a concrete harness sets it.
+    harness: harness || null,
     // #338: freeze the auto-naming choice on the new Trigger (seeded from the
     // instance default when the modal opened).
     auto_name: autoName,

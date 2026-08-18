@@ -6,7 +6,7 @@ use serde::Serialize;
 use crate::event_log::{self, EventKind, NodeStatus};
 use crate::pipeline::{self, PipelineDef};
 use crate::worktree_ops::{ensure_sub_worktree, sub_worktree_branch, sub_worktree_path};
-use crate::{blackboard, tmux_session_manager};
+use crate::{blackboard, harness_registry, harness_resolver, tmux_session_manager};
 
 // ---------------------------------------------------------------------------
 // Result types
@@ -49,6 +49,23 @@ pub(crate) struct StartNodeParams<'a> {
     /// / retry callers resolve it and pass it in; the node's own `model:` still
     /// wins over it via [`tmux_session_manager::resolve_node_model`].
     pub default_model: Option<String>,
+    /// Instance default **harness**, already resolved `stored → env → None` by the
+    /// caller (#550, ADR-0046). Same DB-less contract as [`Self::default_model`]:
+    /// feeds the `instance` tier of [`harness_resolver`]; the node's `pin_harness`
+    /// still wins over it.
+    pub default_harness: Option<String>,
+    /// Instance per-harness default model map, resolved fresh by the caller (#550).
+    /// Feeds the fallback tier of the model resolution for the winning harness.
+    pub default_harness_models: std::collections::BTreeMap<String, String>,
+    /// The harness carried by the **Projet** of this Run's primary repo, resolved
+    /// by the caller (#552, ADR-0046). Same DB-less contract as
+    /// [`Self::default_harness`]: `start_node` is sync, so the async caller looks
+    /// up `project_store::harness_for_path` on the Run's effective repo and passes
+    /// the result in. Feeds the `project` tier of [`harness_resolver`], between the
+    /// Run and the instance default. `None` ⇒ the primary is in no Projet (or its
+    /// Projet carries no harness), so the tier is transparent. Resolved from the
+    /// **primary** repo only, so a secondary (ADR-0042) never sways it.
+    pub project_harness: Option<String>,
     /// Turn-end auto-completion, already resolved `stored → env → default` by the
     /// caller (#433, ADR-0043). Same DB-less contract as [`Self::default_model`]:
     /// the async caller reads [`crate::stored_autocomplete_turn_end`] and passes
@@ -97,6 +114,9 @@ pub(crate) struct StartNodeSpawn {
 /// cannot be carried across the append.
 enum StartNodeTail {
     Agent {
+        /// #550: the resolved harness descriptor (owned; `execute` borrows it into
+        /// [`tmux_session_manager::SessionTail::Agent`]).
+        harness: harness_registry::HarnessDescriptor,
         model: Option<String>,
         effort: Option<String>,
         /// #473: the pinned Claude Code session id (owned mirror of
@@ -130,10 +150,12 @@ impl StartNodeSpawn {
     pub(crate) fn execute(&self) -> anyhow::Result<()> {
         let tail = match &self.tail {
             StartNodeTail::Agent {
+                harness,
                 model,
                 effort,
                 session_id,
             } => tmux_session_manager::SessionTail::Agent {
+                harness,
                 model: model.as_deref(),
                 effort: effort.as_deref(),
                 session_id: session_id.as_deref(),
@@ -358,21 +380,85 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
     } else {
         Vec::new()
     };
-    // #347/#424: resolved once, then used by both the tail and the `NodeStarted`
-    // payload — the payload must record what the flags actually carried, because
-    // that is what the resume path reads back to re-pose `--effort`. Unlike
-    // `spawn_node`, this primitive is synchronous and already holds
-    // `params.default_model`, so nothing has to be hoisted.
-    let resolved_model = tmux_session_manager::resolve_node_model(
-        node.model.as_deref(),
-        params.default_model.as_deref(),
-    );
-    let resolved_effort = tmux_session_manager::resolve_node_effort(node.effort.as_deref());
-    // #473: pin a Claude Code session id for an agent node so the sweep resolves
-    // its transcript by identity and the resume path re-enters it. `None` for a
-    // script node (no claude) — mirrors `node_spawn`. Recorded on `NodeStarted`
-    // below and threaded into the tail.
-    let session_id: Option<String> = (!is_script).then(|| uuid::Uuid::new_v4().to_string());
+    // #550/ADR-0046: resolve the harness (mirrors `node_spawn`), reading model +
+    // effort from the winning harness's entry. `params.default_harness` /
+    // `default_harness_models` are the instance tier, resolved DB-lessly by the
+    // caller. A `script` node resolves no harness.
+    let resolved_harness = if is_script {
+        None
+    } else {
+        // Fold the legacy single `default_model` under `claude` when the per-harness
+        // map is silent for it — the same back-compat fold `stored_default_harness_models`
+        // does, kept here so this DB-less primitive is self-contained given its inputs.
+        let mut default_models = params.default_harness_models.clone();
+        if !default_models.contains_key(harness_registry::CLAUDE) {
+            if let Some(m) = params.default_model.as_deref().filter(|s| !s.is_empty()) {
+                default_models.insert(harness_registry::CLAUDE.to_string(), m.to_string());
+            }
+        }
+        let tiers = harness_resolver::HarnessTiers {
+            node_pin: node.pin_harness.as_deref(),
+            // #551: the Run tier — the harness frozen in this Run's `RunStarted`, read
+            // from the projected state the caller already holds. A pinned node ignores
+            // it; a free node follows it (ADR-0046). Mirrors `node_spawn`.
+            run: params.run_state.harness.as_deref(),
+            // #552: the Projet of the Run's primary repo, resolved DB-lessly by
+            // the caller (an empty string never wins a tier — the `Some("")` trap
+            // of #347).
+            project: params.project_harness.as_deref().filter(|s| !s.is_empty()),
+            instance_default: params.default_harness.as_deref(),
+        };
+        Some(harness_resolver::resolve(
+            &tiers,
+            &node.harnesses,
+            &default_models,
+        ))
+    };
+    let harness_descriptor = match &resolved_harness {
+        None => None,
+        Some(r) => match harness_registry::resolve(&r.harness) {
+            Some(d) => Some(d),
+            None => {
+                return StartNodeResult {
+                    outcome: PrimitiveOutcome::Rejected {
+                        reason: format!(
+                            "node '{}': unknown harness '{}'",
+                            params.node_id, r.harness
+                        ),
+                    },
+                    events: vec![],
+                    spawn: None,
+                };
+            }
+        },
+    };
+    // AC #10: a missing harness binary is a spawn that cannot happen — reject
+    // (never a 2xx), naming the harness. Skipped under the test seam.
+    if let Some(d) = &harness_descriptor {
+        if params.tmux_cmd_override.is_none() && !tmux_session_manager::binary_available(&d.binary)
+        {
+            return StartNodeResult {
+                outcome: PrimitiveOutcome::Rejected {
+                    reason: format!(
+                        "node '{}': harness '{}' binary '{}' not found on PATH",
+                        params.node_id, d.name, d.binary
+                    ),
+                },
+                events: vec![],
+                spawn: None,
+            };
+        }
+    }
+    // #347/#424/#550: model + effort come from the resolved harness's entry, used
+    // by both the tail and the `NodeStarted` payload (which records what the flags
+    // carried — what the resume path reads back to re-pose `--effort`).
+    let resolved_model = resolved_harness.as_ref().and_then(|r| r.model.clone());
+    let resolved_effort = resolved_harness.as_ref().and_then(|r| r.effort.clone());
+    // #473/#550: pin a session id only for a harness that can honour it (`claude`).
+    let session_id: Option<String> = harness_descriptor
+        .as_ref()
+        .filter(|d| d.pins_session_id())
+        .map(|_| uuid::Uuid::new_v4().to_string());
     let tail = if is_script {
         StartNodeTail::Script {
             timeout_secs: tmux_session_manager::SCRIPT_TIMEOUT_SECS,
@@ -380,8 +466,11 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         }
     } else {
         StartNodeTail::Agent {
-            model: resolved_model.map(str::to_string),
-            effort: resolved_effort.map(str::to_string),
+            harness: harness_descriptor
+                .clone()
+                .expect("a non-script node resolved a harness descriptor"),
+            model: resolved_model.clone(),
+            effort: resolved_effort.clone(),
             session_id: session_id.clone(),
         }
     };
@@ -400,8 +489,11 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
             // #424: launch-time model + effort, **resolved**. Mirrors the
             // `spawn_node` payload; see the comment there for why the model is
             // recorded even though nothing reads it back yet.
-            "model": resolved_model,
-            "effort": resolved_effort,
+            "model": resolved_model.as_deref(),
+            "effort": resolved_effort.as_deref(),
+            // #550/ADR-0046: the harness resolved at spawn, FROZEN so the resume
+            // path re-poses what was launched (ADR-0007). Mirrors `spawn_node`.
+            "harness": resolved_harness.as_ref().map(|r| r.harness.as_str()),
             // #473: the pinned Claude Code session id — read back by the sweep
             // (transcript resolution) and the resume path. `null` for a script node
             // and every pre-#473 row. Mirrors the `spawn_node` payload.
@@ -775,8 +867,8 @@ mod tests {
             view: None,
             max_iter: None,
             over: None,
-            model: None,
-            effort: None,
+            pin_harness: None,
+            harnesses: Default::default(),
         }
     }
 
@@ -807,8 +899,8 @@ mod tests {
             view: None,
             max_iter: None,
             over: None,
-            model: None,
-            effort: None,
+            pin_harness: None,
+            harnesses: Default::default(),
         }
     }
 
@@ -931,6 +1023,9 @@ mod tests {
             tmux_cmd_override: Some("exec true"),
             docker_cmd_override: None,
             default_model: None,
+            default_harness: None,
+            default_harness_models: Default::default(),
+            project_harness: None,
             inject_hook: false,
         };
 
@@ -971,6 +1066,9 @@ mod tests {
             tmux_cmd_override: Some("exec true"),
             docker_cmd_override: None,
             default_model: None,
+            default_harness: None,
+            default_harness_models: Default::default(),
+            project_harness: None,
             inject_hook: false,
         };
 
@@ -1017,6 +1115,9 @@ mod tests {
             tmux_cmd_override: Some("exec true"),
             docker_cmd_override: None,
             default_model: None,
+            default_harness: None,
+            default_harness_models: Default::default(),
+            project_harness: None,
             inject_hook: true,
         };
         let result = start_node(&params);
@@ -1068,6 +1169,9 @@ mod tests {
             tmux_cmd_override: Some("exec true"),
             docker_cmd_override: None,
             default_model: None,
+            default_harness: None,
+            default_harness_models: Default::default(),
+            project_harness: None,
             inject_hook: true,
         };
         let result = start_node(&params);
@@ -1131,6 +1235,9 @@ mod tests {
             tmux_cmd_override: Some("exec true"),
             docker_cmd_override: None,
             default_model: None,
+            default_harness: None,
+            default_harness_models: Default::default(),
+            project_harness: None,
             inject_hook: false,
         };
 
@@ -1190,6 +1297,9 @@ mod tests {
             tmux_cmd_override: Some("exec true"),
             docker_cmd_override: None,
             default_model: None,
+            default_harness: None,
+            default_harness_models: Default::default(),
+            project_harness: None,
             inject_hook: false,
         };
 
@@ -1235,6 +1345,9 @@ mod tests {
             tmux_cmd_override: Some("exec true"),
             docker_cmd_override: None,
             default_model: None,
+            default_harness: None,
+            default_harness_models: Default::default(),
+            project_harness: None,
             inject_hook: false,
         };
 
@@ -1304,6 +1417,9 @@ mod tests {
             tmux_cmd_override: Some("exec true"),
             docker_cmd_override: None,
             default_model: None,
+            default_harness: None,
+            default_harness_models: Default::default(),
+            project_harness: None,
             inject_hook: false,
         };
 
@@ -1396,6 +1512,9 @@ mod tests {
             tmux_cmd_override: Some("exec true"),
             docker_cmd_override: None,
             default_model: None,
+            default_harness: None,
+            default_harness_models: Default::default(),
+            project_harness: None,
             inject_hook: false,
         };
 
@@ -1461,6 +1580,9 @@ mod tests {
             tmux_cmd_override: Some("exec true"),
             docker_cmd_override: None,
             default_model: None,
+            default_harness: None,
+            default_harness_models: Default::default(),
+            project_harness: None,
             inject_hook: false,
         };
 
@@ -1526,6 +1648,9 @@ mod tests {
             tmux_cmd_override: Some("exec true"),
             docker_cmd_override: None,
             default_model: None,
+            default_harness: None,
+            default_harness_models: Default::default(),
+            project_harness: None,
             inject_hook: false,
         };
 
@@ -1787,6 +1912,9 @@ mod tests {
             tmux_cmd_override: Some("exec true"),
             docker_cmd_override: None,
             default_model: None,
+            default_harness: None,
+            default_harness_models: Default::default(),
+            project_harness: None,
             inject_hook: false,
         };
 

@@ -22,8 +22,9 @@ use crate::worktree_ops::{
 };
 use crate::{
     admission, append_event_with, count_global_live_sessions_excluding, event_log,
-    input_resolution, merge_action, panic_payload_message, pipeline, prompt_augmenter,
-    reload_run_state_with, stored_autocomplete_turn_end, stored_default_model, stored_session_cap,
+    harness_registry, harness_resolver, input_resolution, merge_action, panic_payload_message,
+    pipeline, prompt_augmenter, reload_run_state_with, stored_autocomplete_turn_end,
+    stored_default_harness, stored_default_harness_models, stored_session_cap,
     tmux_session_manager, transition_guard, AppState,
 };
 
@@ -58,6 +59,12 @@ pub(crate) struct SpawnDeps<'a> {
     /// Per-daemon `docker` binary override for the sandbox wiring (#407), `Copy`
     /// like the rest of the bundle. `None` in production (real `docker`).
     pub(crate) docker_cmd_override: Option<&'a str>,
+    /// The host home root override (#407 seam), borrowed so the bundle stays
+    /// `Copy`. `None` in production ⇒ the real `$HOME`. #553 uses it as the root
+    /// under which the **disk descriptor tier** (`~/.pdo/harnesses/`) is read, so a
+    /// user-declared harness resolves at spawn — and so a layer-3 test that sets
+    /// the override reads descriptors from its own tempdir, never the real home.
+    pub(crate) home_override: Option<&'a std::path::Path>,
 }
 
 impl<'a> SpawnDeps<'a> {
@@ -71,7 +78,41 @@ impl<'a> SpawnDeps<'a> {
             port: state.port,
             tmux_cmd_override: state.tmux_cmd_override.as_deref(),
             docker_cmd_override: state.docker_cmd_override.as_deref(),
+            home_override: state.sandbox_home_override.as_deref(),
         }
+    }
+}
+
+/// The host home root the disk descriptor tier (#553) is read under: the per-daemon
+/// override when set (the layer-3 seam), else the real `$HOME`. Mirrors
+/// `sandbox_run::sandbox_home_roots` exactly, but reachable from the narrow
+/// [`SpawnDeps`] bundle (which carries no `AppState`). An unresolved `$HOME`
+/// degrades to an empty root, i.e. the embedded floor — never a spawn failure.
+fn spawn_home_root(deps: &SpawnDeps<'_>) -> PathBuf {
+    deps.home_override
+        .map(PathBuf::from)
+        .or_else(|| crate::sandbox_staging::default_roots_from_env().map(|(home, _)| home))
+        .unwrap_or_default()
+}
+
+/// #553 / ADR-0031: say ONCE per `(run, harness)` that a sandboxed Run's node runs
+/// on a harness with no staging floor. The message is the pure
+/// [`crate::harness_probes::staging_floor_absence_note`] (so it is unit-tested
+/// there, not against a terminal); the process-static dedup keeps a busy scheduler
+/// from repeating it on every retry or collection lap. A no-op for `claude`, which
+/// has the floor.
+fn warn_missing_staging_floor_once(run_id: &str, harness: &str) {
+    use std::collections::HashSet;
+    use std::sync::Mutex;
+    static SAID: Mutex<Option<HashSet<(String, String)>>> = Mutex::new(None);
+
+    let Some(note) = crate::harness_probes::staging_floor_absence_note(harness) else {
+        return; // the harness has a staging floor (claude) — nothing to say
+    };
+    let mut guard = SAID.lock().unwrap_or_else(|e| e.into_inner());
+    let said = guard.get_or_insert_with(HashSet::new);
+    if said.insert((run_id.to_string(), harness.to_string())) {
+        warn!("run {run_id}: {note}");
     }
 }
 
@@ -315,6 +356,93 @@ pub(crate) async fn spawn_node(
 
     let foreach_context = find_collection_context(spawn_ctx, &node.id, iter);
 
+    // #550/ADR-0046: resolve the harness ONCE, here — before any side effect — so
+    // its result freezes into `NodeStarted` and is re-posed at resume (ADR-0007).
+    // A `script` node launches no agent (ADR-0017), so it resolves no harness. The
+    // binary fail-fast runs BEFORE the sub-worktree is created and BEFORE the
+    // reservation span, so a missing harness leaves no orphan and writes no spawn
+    // event (AC #10 / ADR-0037: never a 2xx for a spawn that did not happen).
+    // Skipped under the tmux command override — the test seam launches a stand-in,
+    // not the real binary.
+    let resolved_harness = if node.node_type == pipeline::NodeType::Script {
+        None
+    } else {
+        let default_harness = stored_default_harness(deps.db).await;
+        let default_models = stored_default_harness_models(deps.db).await;
+        // #552/ADR-0046: the Projet tier — the harness carried by the Projet that
+        // owns this Run's **primary** repo. The primary is `target_repo` (else the
+        // daemon repo root — the same `effective_repo` key the lists group and
+        // attach by). A secondary repo (ADR-0042) lives in `target_repos` and is
+        // never consulted, so adding or removing one changes neither the Projet nor
+        // the resolved harness. A DB error degrades the tier to transparent — a
+        // Projet lookup never fails a spawn.
+        let primary_repo = projected
+            .and_then(|s| s.target_repo.clone())
+            .unwrap_or_else(|| spawn_ctx.repo_root.to_string_lossy().into_owned());
+        let project_harness =
+            match crate::project_store::harness_for_path(deps.db, &primary_repo).await {
+                Ok(h) => h,
+                Err(e) => {
+                    warn!("project harness lookup failed for {primary_repo}: {e}");
+                    None
+                }
+            };
+        let tiers = harness_resolver::HarnessTiers {
+            node_pin: node.pin_harness.as_deref(),
+            // #551: the Run tier — the harness frozen in this Run's `RunStarted`
+            // (`projected` is the fresh projection loaded at the head of this spawn).
+            // A pinned node still ignores it; a free node follows it (ADR-0046).
+            run: projected.and_then(|s| s.harness.as_deref()),
+            // #552: the Projet tier — resolved just above from this Run's primary
+            // repo. Sits below the Run and above the instance default (ADR-0046).
+            project: project_harness.as_deref(),
+            instance_default: default_harness.as_deref(),
+        };
+        Some(harness_resolver::resolve(
+            &tiers,
+            &node.harnesses,
+            &default_models,
+        ))
+    };
+    let harness_descriptor = match &resolved_harness {
+        None => None,
+        Some(r) => {
+            // #553: resolve against the embedded floor MERGED with the user's disk
+            // descriptor tier (`~/.pdo/harnesses/`), so a harness declared in data
+            // launches without a rebuild. The registry reads a root we hand it — it
+            // never touches `$HOME` itself.
+            let registry = harness_registry::HarnessRegistry::load(&spawn_home_root(&deps));
+            match registry.resolve(&r.harness) {
+                Some(d) => {
+                    // #553 / ADR-0031: a sandboxed Run whose node runs on a harness
+                    // with no staging floor holds only by the profile's image and
+                    // its `$HOME` exceptions — say it once, visibly (the plancher is
+                    // claude-specific and built per-Run regardless of the harness).
+                    if run_sandboxed {
+                        warn_missing_staging_floor_once(run_id, &r.harness);
+                    }
+                    Some(d)
+                }
+                None => {
+                    // Unknown harness — a spawn that cannot happen. Fail fast, naming it.
+                    return SpawnOutcome::Failed {
+                        reason: format!("node {}: unknown harness '{}'", node.id, r.harness),
+                    };
+                }
+            }
+        }
+    };
+    if let Some(d) = &harness_descriptor {
+        if deps.tmux_cmd_override.is_none() && !tmux_session_manager::binary_available(&d.binary) {
+            return SpawnOutcome::Failed {
+                reason: format!(
+                    "node {}: harness '{}' binary '{}' not found on PATH",
+                    node.id, d.name, d.binary
+                ),
+            };
+        }
+    }
+
     let has_sub_worktree = node.node_type == pipeline::NodeType::CodeMutating
         || node.node_type == pipeline::NodeType::Merge;
 
@@ -383,29 +511,24 @@ pub(crate) async fn spawn_node(
         spawn_ctx.worktree_dir.to_path_buf()
     };
 
-    // #347/#424: resolve what the session will actually launch with, BEFORE the
-    // span below. The `NodeStarted` payload appended *inside* the span records the
-    // **resolved** values (what the flags really carried, which is what the resume
-    // path reads back), and `stored_default_model` is async — it cannot be awaited
-    // from the spawn seam further down and still be visible to the append. This is
-    // a move, not an extra read: the same single DB read, earlier.
-    // `__manager__` / `__merge_resolver__` are infra sessions with no NodeDef and
-    // stay at the account default — they don't route through `spawn_node` (#296).
-    let default_effective = stored_default_model(deps.db).await;
-    let resolved_model = tmux_session_manager::resolve_node_model(
-        node.model.as_deref(),
-        default_effective.as_deref(),
-    );
-    let resolved_effort = tmux_session_manager::resolve_node_effort(node.effort.as_deref());
-    // #473: pin a Claude Code session id for an AGENT node so its transcript is
-    // `<uuid>.jsonl` and the liveness sweep resolves it by identity — never by the
-    // newest `.jsonl` in a cwd it shares with the manager and sibling non-CM nodes.
-    // Recorded on `NodeStarted` (below) so the resume path and the sweep read it
-    // back; a fresh id per spawn means a `restart_node` of the same iteration gets
-    // its own transcript. A `script` node launches no `claude`, so it gets no id
-    // (`null` in the payload) — nothing would resolve it and nothing resumes it.
-    let session_id: Option<String> =
-        (node.node_type != pipeline::NodeType::Script).then(|| uuid::Uuid::new_v4().to_string());
+    // #550/#347/#424: the model and effort come from the harness resolved above
+    // (post node → instance precedence, post empty-string collapse), read from the
+    // winning harness's entry — NOT the raw NodeDef. The `NodeStarted` payload
+    // records these resolved values (what the flags really carried, which the
+    // resume path reads back). `__manager__` / `__merge_resolver__` are infra
+    // sessions with no NodeDef and stay at the account default — they don't route
+    // through `spawn_node`.
+    let resolved_model = resolved_harness.as_ref().and_then(|r| r.model.clone());
+    let resolved_effort = resolved_harness.as_ref().and_then(|r| r.effort.clone());
+    // #473/#550: pin a session id only for a harness that can honour it
+    // (`claude`); a harness that cannot (`opencode`: a fresh id errors) gets
+    // `None` and is attributed by working dir. Recorded on `NodeStarted` so the
+    // resume path and the sweep read it back; a fresh id per spawn means a
+    // `restart_node` of the same iteration gets its own transcript.
+    let session_id: Option<String> = harness_descriptor
+        .as_ref()
+        .filter(|d| d.pins_session_id())
+        .map(|_| uuid::Uuid::new_v4().to_string());
 
     // Panic/cancellation-isolated spawn window (#279). Everything from here to
     // the `NodeStarted` append can panic (`build_full_prompt`, image discovery,
@@ -577,8 +700,12 @@ pub(crate) async fn spawn_node(
                 // reads it yet: the meaning of an effort level depends on the
                 // model (supported levels and the default both vary per model),
                 // so storing the effort alone would store half a fact.
-                "model": resolved_model,
-                "effort": resolved_effort,
+                "model": resolved_model.as_deref(),
+                "effort": resolved_effort.as_deref(),
+                // #550/ADR-0046: the harness resolved at spawn, FROZEN here so the
+                // resume path re-poses what was launched, never what the YAML or a
+                // tier says now (ADR-0007). `null` for a `script` node (no agent).
+                "harness": resolved_harness.as_ref().map(|r| r.harness.as_str()),
                 // #473: the pinned Claude Code session id the agent launches with
                 // (`claude --session-id <uuid>`). The sweep resolves this node's
                 // transcript by it (`<uuid>.jsonl`), and the resume path re-enters
@@ -661,10 +788,15 @@ pub(crate) async fn spawn_node(
         }
     } else {
         // Resolved above the panic span so the `NodeStarted` payload could record
-        // the same values the flags carry (#347/#424/#473).
+        // the same values the flags carry (#347/#424/#473/#550). A non-`script`
+        // node always has a resolved descriptor (the fail-fast returned otherwise).
+        let descriptor = harness_descriptor
+            .as_ref()
+            .expect("a non-script node resolved a harness descriptor");
         tmux_session_manager::SessionTail::Agent {
-            model: resolved_model,
-            effort: resolved_effort,
+            harness: descriptor,
+            model: resolved_model.as_deref(),
+            effort: resolved_effort.as_deref(),
             session_id: session_id.as_deref(),
         }
     };
@@ -704,7 +836,30 @@ pub(crate) async fn spawn_node(
         sandbox_wrap.as_ref(),
         inject_hook,
     ) {
-        error!("failed to spawn tmux session: {e}");
+        // #508: the tmux spawn itself failed *after* `NodeStarted` is durable. It
+        // used to be swallowed (`error!` + fall through), leaving the node
+        // projected `Running` with NO session — the liveness sweep then rewrote it
+        // `Failed` ~30s later with a false `session_died` cause, and `restart_node`
+        // answered a lying `200 {spawned}`. Fail loud right here instead: append
+        // `NodeFailed` (legal now that the iteration is `Running`) → reap only what
+        // this spawn created → `RunFailed`, then return `Failed`. This lands BEFORE
+        // the `NodeAwaitingUser` block below, so a session that never launched can
+        // never collect a phantom `NodeAwaitingUser`. (ADR-0037 §1/§3.)
+        let reason = format!(
+            "failed to spawn tmux session {session_name} for node {}: {e}",
+            node.id
+        );
+        fail_spawn_after_start(
+            deps,
+            spawn_ctx.repo_root,
+            run_id,
+            &node.id,
+            iter,
+            orphan_to_reap.as_ref(),
+            &reason,
+        )
+        .await;
+        return SpawnOutcome::Failed { reason };
     }
 
     if node.interactive {
@@ -761,5 +916,64 @@ async fn fail_spawn_before_start(
     };
     if let Err(e) = append_event_with(deps.db, deps.event_tx, &run_failed).await {
         error!("Run {run_id}: failed to append RunFailed after spawn abort: {e}");
+    }
+}
+
+/// Fail a run loud when a node spawn aborts *after* `NodeStarted` is appended
+/// (#508). Unlike [`fail_spawn_before_start`], the iteration is already
+/// `Running`, so a `NodeFailed` is a legal transition
+/// (`transition_guard::validate_fail` → `Allow`) and IS appended: it moves the
+/// *node* terminal, closing the window where the liveness sweep would rewrite it
+/// `Failed` with a false `session_died` cause and where `GET …/pane` /
+/// boot_recovery could re-drive a `Running` node that has no session.
+/// `RunFailed` then moves the *run* terminal (the sole event that sets
+/// `state.status = Failed`). The reap is gated on `orphan` (Some iff THIS spawn
+/// created the sub-worktree — a reuse must destroy nothing; ADR-0037 §6). The
+/// order (node-terminal → reap → run-terminal) mirrors the #488 "terminal event
+/// first, reap second" convention; it is not required by the guard
+/// (`validate_fail` ignores run status).
+async fn fail_spawn_after_start(
+    deps: SpawnDeps<'_>,
+    repo_root: &std::path::Path,
+    run_id: &str,
+    node_id: &str,
+    iter: i64,
+    orphan: Option<&(PathBuf, String)>,
+    reason: &str,
+) {
+    error!("Run {run_id}: node {node_id} spawn failed after NodeStarted — {reason}");
+
+    // 1) Node terminal (legal: the iteration is `Running` after `NodeStarted`).
+    let node_failed = event_log::Event {
+        id: None,
+        run_id: run_id.to_string(),
+        ts: event_log::now_iso(),
+        kind: event_log::EventKind::NodeFailed,
+        node_id: Some(node_id.to_string()),
+        iter: Some(iter),
+        payload: Some(serde_json::json!({ "reason": reason, "source": "spawn" })),
+    };
+    if let Err(e) = append_event_with(deps.db, deps.event_tx, &node_failed).await {
+        error!("Run {run_id}: failed to append NodeFailed after spawn failure: {e}");
+    }
+
+    // 2) Reap ONLY what this spawn created (gated; ADR-0037 §6 — a reuse loses
+    //    nothing).
+    if let Some((sub_worktree_dir, sub_branch)) = orphan {
+        reap_orphan_sub_worktree(repo_root, sub_worktree_dir, sub_branch);
+    }
+
+    // 3) Run terminal (the sole event that sets `state.status = Failed`).
+    let run_failed = event_log::Event {
+        id: None,
+        run_id: run_id.to_string(),
+        ts: event_log::now_iso(),
+        kind: event_log::EventKind::RunFailed,
+        node_id: None,
+        iter: None,
+        payload: Some(serde_json::json!({ "reason": reason })),
+    };
+    if let Err(e) = append_event_with(deps.db, deps.event_tx, &run_failed).await {
+        error!("Run {run_id}: failed to append RunFailed after spawn failure: {e}");
     }
 }

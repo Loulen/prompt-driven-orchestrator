@@ -1,8 +1,11 @@
+import { useMemo, useState } from "react";
 import { AlertCircle, PauseCircle, Pencil, Play, Plus, Power, Trash2, Zap } from "lucide-react";
-import type { Trigger } from "../types";
+import type { Trigger, Project } from "../types";
 import { deleteTrigger, updateTrigger } from "../api";
 import { humanizeCron } from "../cronPresets";
-import { groupByRepo, repoGroupLabel } from "../lib/groupByRepo";
+import { groupByProject, repoGroupLabel, type ProjectRef } from "../lib/groupByRepo";
+import { projectLookup } from "../lib/projectLookup";
+import ProjectEditModal from "./ProjectEditModal";
 
 interface Props {
   triggers: Trigger[];
@@ -18,6 +21,10 @@ interface Props {
   paused?: boolean;
   /** #348: flip the global pause flag. */
   onTogglePause?: () => void;
+  /** Projets (#552) — the group-by-Projet layer and the pencil. Optional so
+   *  existing callers/tests keep working. */
+  projects?: Project[];
+  onProjectsChanged?: () => void;
 }
 
 /**
@@ -56,7 +63,16 @@ export default function TriggersListPanel({
   onEditTrigger,
   paused = false,
   onTogglePause,
+  projects = [],
+  onProjectsChanged,
 }: Props) {
+  // #552 — the group-header pencil editor (see UnifiedLeftPanel for the shape).
+  const [projectEditor, setProjectEditor] = useState<{
+    project: Project | null;
+    name: string;
+    memberPaths: string[];
+  } | null>(null);
+
   async function handleDelete(triggerId: string) {
     try {
       await deleteTrigger(triggerId);
@@ -191,9 +207,44 @@ export default function TriggersListPanel({
     );
   }
 
-  // Group the Triggers list by project (#258) only when ≥ 2 distinct repos are
-  // present; otherwise `null` ⇒ the flat list, byte-identical to before.
-  const triggerGroups = groupByRepo(triggers, (t) => t.effective_repo);
+  // #552 — verbatim `path → Projet` lookup and the candidate repos the pencil can
+  // attach (the distinct effective repos across the Triggers list).
+  const projectOf = useMemo<(path: string) => ProjectRef | null>(
+    () => projectLookup(projects),
+    [projects],
+  );
+  const availableRepos = useMemo(() => {
+    const set = new Set<string>();
+    for (const t of triggers) if (t.effective_repo) set.add(t.effective_repo);
+    return [...set];
+  }, [triggers]);
+
+  // Group the Triggers list by Projet (#552), falling back to the #258 per-path
+  // grouping when nothing is named; `null` ⇒ the flat list.
+  const triggerGroups = groupByProject(triggers, (t) => t.effective_repo, projectOf);
+
+  const openProjectEditor = (group: {
+    kind: "project" | "path";
+    key: string;
+    repoPath: string;
+    label: string;
+  }) => {
+    if (group.kind === "project") {
+      const id = group.key.slice("project:".length);
+      const project = projects.find((p) => p.id === id) ?? null;
+      setProjectEditor({
+        project,
+        name: project?.name ?? group.label,
+        memberPaths: project?.members ?? [],
+      });
+    } else {
+      setProjectEditor({
+        project: null,
+        name: group.label,
+        memberPaths: group.repoPath ? [group.repoPath] : [],
+      });
+    }
+  };
 
   return (
     <div className="flex h-full flex-col" data-testid="triggers-list-panel">
@@ -280,20 +331,46 @@ export default function TriggersListPanel({
           {triggerGroups === null
             ? triggers.map(renderTriggerRow)
             : triggerGroups.map((group) => (
-                <div key={group.repoPath} data-testid="trigger-repo-group">
+                <div
+                  key={group.key}
+                  data-testid="trigger-repo-group"
+                  data-project={group.kind === "project" ? "true" : "false"}
+                >
                   <div
-                    className="flex h-[22px] shrink-0 items-center border-b border-line-soft bg-bg-3/40 px-3 font-medium text-fg-3"
+                    className="group/hdr flex h-[22px] shrink-0 items-center gap-1 border-b border-line-soft bg-bg-3/40 px-3 font-medium text-fg-3"
                     style={{ fontSize: "10px" }}
-                    title={group.repoPath}
+                    title={group.title}
                   >
                     <span className="truncate" data-testid="trigger-repo-label">
                       {group.label}
                     </span>
+                    {/* #552 — the pencil that names / renames the Projet. */}
+                    <button
+                      onClick={() => openProjectEditor(group)}
+                      className="ml-auto hidden shrink-0 cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2 group-hover/hdr:inline-flex"
+                      title={group.kind === "project" ? "Edit project" : "Name project"}
+                      aria-label={group.kind === "project" ? "Edit project" : "Name project"}
+                      data-testid="trigger-group-pencil"
+                    >
+                      <Pencil size={10} />
+                    </button>
                   </div>
                   {group.items.map(renderTriggerRow)}
                 </div>
               ))}
         </div>
+      )}
+
+      {projectEditor && (
+        <ProjectEditModal
+          initialProject={projectEditor.project}
+          initialName={projectEditor.name}
+          initialMemberPaths={projectEditor.memberPaths}
+          availableRepos={availableRepos}
+          projects={projects}
+          onClose={() => setProjectEditor(null)}
+          onSaved={() => onProjectsChanged?.()}
+        />
       )}
     </div>
   );

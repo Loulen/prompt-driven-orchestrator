@@ -200,7 +200,7 @@ pub(crate) struct ContainerSpec<'a> {
     /// change rien pour ses nœuds suivants — c'est l'AC3 de #468, et c'est garanti deux
     /// fois (par le gel du payload ET par Docker).
     pub env: &'a BTreeMap<String, String>,
-    /// `.git` hôte de chaque secondaire **modifiable** (ADR-0045), monté rw à
+    /// `.git` hôte de chaque secondaire **modifiable** (ADR-0047), monté rw à
     /// chemin **identique** (`-v <g>:<g>:rw`, invariant D3). Le store d'objets
     /// d'un snapshot secondaire vit sous `<secondary>/.git`, hors `repo_root` :
     /// sans ce mount, `git status`/`commit` échouent en sandbox. `:rw` obligatoire
@@ -331,7 +331,7 @@ pub(crate) fn create_args(run_id: &str, spec: &ContainerSpec) -> Vec<String> {
             mount.target.display()
         ));
     }
-    // Queue variable (ADR-0045) : le `.git` de chaque secondaire MODIFIABLE, monté
+    // Queue variable (ADR-0047) : le `.git` de chaque secondaire MODIFIABLE, monté
     // rw à chemin identique (host == conteneur, invariant D3). Après la queue #432
     // et avant l'image (tout ce qui suit l'image devient la commande). Vide ⇒ argv
     // byte-identique — un secondaire read-only n'en gagne aucun.
@@ -913,7 +913,7 @@ mod tests {
         extras: Vec<crate::sandbox_staging::StagedMount>,
         /// Queue variable (#468). Vide par défaut, pour la même raison.
         env: BTreeMap<String, String>,
-        /// Queue variable (ADR-0045). Vide par défaut — un Run sans secondaire
+        /// Queue variable (ADR-0047). Vide par défaut — un Run sans secondaire
         /// modifiable rend un argv byte-identique.
         writable_gitdirs: Vec<PathBuf>,
     }
@@ -1169,7 +1169,7 @@ mod tests {
         assert_eq!(one[image_at - 2], "-v");
     }
 
-    // -- 1a-bis. create_args × secondaires modifiables (ADR-0045) -------------
+    // -- 1a-bis. create_args × secondaires modifiables (ADR-0047) -------------
 
     /// Un secondaire modifiable ⇒ un `-v <g>:<g>:rw` (chemin identique host==conteneur),
     /// inséré entre les `-v` fixes/extras et l'image. Un read-only n'en gagne aucun (il
@@ -1184,7 +1184,7 @@ mod tests {
     }
 
     /// Aucun secondaire modifiable ⇒ argv byte-identique (la propriété qui garantit
-    /// qu'un Run mono-repo ou tout-read-only n'est pas touché par ADR-0045).
+    /// qu'un Run mono-repo ou tout-read-only n'est pas touché par ADR-0047).
     #[test]
     fn create_args_without_writable_gitdirs_is_byte_identical() {
         let fx = Fixtures::sample().with_writable_gitdirs(&[]);
@@ -1194,7 +1194,7 @@ mod tests {
     }
 
     /// Ordre des deux queues variables : les mounts d'exception `$HOME` (#432) d'abord,
-    /// puis les `.git` modifiables (ADR-0045), puis l'image. Deux `.git` → deux entrées.
+    /// puis les `.git` modifiables (ADR-0047), puis l'image. Deux `.git` → deux entrées.
     #[test]
     fn writable_gitdirs_follow_extras_and_precede_the_image() {
         let fx = Fixtures::sample()

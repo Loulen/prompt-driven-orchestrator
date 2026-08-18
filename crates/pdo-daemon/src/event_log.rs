@@ -598,6 +598,17 @@ pub struct CostStat {
     /// — stayed invisible on `/stats/cost` for weeks. Empty ⟺ `partial == false`.
     #[serde(default)]
     pub unpriced_models: Vec<String>,
+    /// The harnesses this Run launched a node on that have **no cost source**
+    /// capability (#553, ADR-0045). Non-empty ⇒ the Run's cost is not honestly
+    /// summable — a harness like `opencode` writes its cost where PDO does not read
+    /// (its own SQLite), so adding `claude`'s real dollars to that harness's
+    /// invisible $0 would be a silent under-count. So the surface shows **"—" with
+    /// a reason naming these harnesses**, never a `$0`, never a mute `partial`
+    /// (same "name what is missing" vein as `unpriced_models`). Sorted, deduped.
+    /// Empty on every all-`claude` Run, so `usd`/`partial` mean exactly what they
+    /// meant before this field existed.
+    #[serde(default)]
+    pub uncosted_harnesses: Vec<String>,
 }
 
 /// A secondary repository pinned to a Run (#465, ADR-0042).
@@ -626,7 +637,7 @@ pub struct RepoPin {
     /// for provenance / UI display; the SHA is what is authoritative.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_branch: Option<String>,
-    /// Opt-in read-only flag (ADR-0045). `false` (the default) means the
+    /// Opt-in read-only flag (ADR-0047). `false` (the default) means the
     /// secondary is **writable**: the agent may modify/commit/deliver it and the
     /// completion guard tolerates a dirty tracked tree. `true` restores the
     /// ADR-0042 behaviour — the snapshot is read-only context and writing a
@@ -634,13 +645,13 @@ pub struct RepoPin {
     ///
     /// Polarity: `#[serde(default)]` reads an absent key as `false`, so a
     /// historical pin (written before this flag existed) is treated as writable.
-    /// This is intentional and safe — see ADR-0045 decision 2.
+    /// This is intentional and safe — see ADR-0047 decision 2.
     #[serde(default, skip_serializing_if = "is_false")]
     pub read_only: bool,
 }
 
 /// serde `skip_serializing_if` helper: a `read_only == false` pin serialises
-/// byte-identically to a pre-ADR-0045 pin (no `read_only` key).
+/// byte-identically to a pre-ADR-0047 pin (no `read_only` key).
 fn is_false(b: &bool) -> bool {
     !*b
 }
@@ -790,6 +801,21 @@ pub struct RunState {
     pub sandbox_prep: Option<SandboxPrepState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_branch: Option<String>,
+    /// The harness chosen at Run creation (#551, ADR-0046), **frozen** here from the
+    /// `RunStarted` payload — the middle tier of the precedence chain
+    /// `nœud → Run → Projet → instance → plancher (claude)`. Immutable, exactly like
+    /// [`RunState::sandbox`]: set once from the create event, never mutated, so a
+    /// pipeline edit or a changed instance default cannot re-decide a Run in flight.
+    ///
+    /// `None` ⇒ the Run named no harness, so each free node resolves through the
+    /// instance default and the floor as before (every historical Run, and any Run
+    /// created without an explicit choice — the payload omits the key, keeping it
+    /// byte-identical to the pre-#551 shape). A blank/empty stored value collapses to
+    /// `None` at the freeze (`Some("")` never persists), so it can never win a tier
+    /// (#347). Read at every spawn seam as the `run` tier of [`crate::harness_resolver`]
+    /// and by the infra sessions (Pipeline Manager, merge resolver).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<String>,
     /// Provenance: the id of the Trigger that created this Run, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub triggered_by: Option<String>,
@@ -853,6 +879,7 @@ impl RunState {
             sandbox_image_raw_error: None,
             sandbox_prep: None,
             source_branch: None,
+            harness: None,
             triggered_by: None,
             pipeline_id: None,
             sessions_spawned: 0,
@@ -1302,6 +1329,18 @@ fn apply_run_event(state: &mut RunState, event: &Event) {
                 }
                 if let Some(sb) = payload.get("source_branch").and_then(|v| v.as_str()) {
                     state.source_branch = Some(sb.to_string());
+                }
+                // #551 (ADR-0046): the FROZEN Run harness, projected the same way as
+                // `source_branch`. The create chokepoint only writes this key for a
+                // non-empty choice, so an absent key (every historical Run, every Run
+                // with no explicit harness) leaves `None` — the free nodes then resolve
+                // through the instance default and the `claude` floor. A blank string
+                // never reaches here (normalised away at the freeze), so it cannot win a
+                // tier (#347).
+                if let Some(h) = payload.get("harness").and_then(|v| v.as_str()) {
+                    if !h.is_empty() {
+                        state.harness = Some(h.to_string());
+                    }
                 }
                 if let Some(tb) = payload.get("triggered_by").and_then(|v| v.as_str()) {
                     state.triggered_by = Some(tb.to_string());
@@ -4703,10 +4742,10 @@ mod tests {
         assert_eq!(state.target_repos[0].alias, "secondary");
         assert_eq!(state.target_repos[0].sha, "deadbeef");
         assert_eq!(state.target_repos[0].base_branch.as_deref(), Some("main"));
-        // ADR-0045: a payload without `read_only` projects `false` (writable).
+        // ADR-0047: a payload without `read_only` projects `false` (writable).
         assert!(
             !state.target_repos[0].read_only,
-            "an absent read_only key must read as writable (ADR-0045 decision 2)"
+            "an absent read_only key must read as writable (ADR-0047 decision 2)"
         );
 
         // Legacy payload (no key) → empty, mono-repo.
@@ -4726,7 +4765,7 @@ mod tests {
         assert!(project(&malformed).unwrap().target_repos.is_empty());
     }
 
-    /// ADR-0045: the `read_only` opt-in projects through both `RunStarted` and
+    /// ADR-0047: the `read_only` opt-in projects through both `RunStarted` and
     /// `RunReposEdited`, defaults to `false` when the key is absent, and a writable
     /// pin serialises byte-identically to a pre-flag pin (no `read_only` key).
     #[test]
@@ -4774,7 +4813,7 @@ mod tests {
         );
 
         // serde skip: a writable pin round-trips without a `read_only` key, byte-
-        // identical to a pre-ADR-0045 pin; a read-only pin carries the key.
+        // identical to a pre-ADR-0047 pin; a read-only pin carries the key.
         let writable = RepoPin {
             repo: "/r".into(),
             alias: "r".into(),
@@ -4795,6 +4834,36 @@ mod tests {
             serde_json::to_value(&read_only).unwrap().get("read_only"),
             Some(&serde_json::Value::Bool(true))
         );
+    }
+
+    /// #551 (ADR-0046): the `RunStarted.harness` freeze projects into
+    /// `RunState.harness`; an absent key (every historical Run, every Run with no
+    /// explicit choice) stays `None`; an empty string never wins a tier (#347).
+    #[test]
+    fn harness_projects_and_defaults_to_none() {
+        // Present + non-empty → frozen verbatim.
+        let with = vec![make_event_with_payload(
+            EventKind::RunStarted,
+            None,
+            serde_json::json!({ "pipeline_name": "p", "harness": "opencode" }),
+        )];
+        assert_eq!(project(&with).unwrap().harness.as_deref(), Some("opencode"));
+
+        // Absent key → None (resolve through the instance default and the floor).
+        let legacy = vec![make_event_with_payload(
+            EventKind::RunStarted,
+            None,
+            serde_json::json!({ "pipeline_name": "p" }),
+        )];
+        assert_eq!(project(&legacy).unwrap().harness, None);
+
+        // Empty string → None: a blank freeze can never win a precedence tier (#347).
+        let blank = vec![make_event_with_payload(
+            EventKind::RunStarted,
+            None,
+            serde_json::json!({ "pipeline_name": "p", "harness": "" }),
+        )];
+        assert_eq!(project(&blank).unwrap().harness, None);
     }
 
     /// #465 slice 2 (ADR-0042): `RunReposEdited` overwrites `target_repos`

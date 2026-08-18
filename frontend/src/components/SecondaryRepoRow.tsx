@@ -3,9 +3,9 @@ import { GitBranch, X } from "lucide-react";
 import { validateRepo, listBranches } from "../api";
 import RepoCombobox from "./RepoCombobox";
 
-/** One secondary repo line of the multi-repo create modal (#465, ADR-0042/0045).
+/** One secondary repo line of the multi-repo create modal (#465, ADR-0042/0047).
  *  `valid` is `null` while unknown/empty, so `canLaunch` can require every
- *  non-empty line to have resolved. `readOnly` is the ADR-0045 opt-in — default
+ *  non-empty line to have resolved. `readOnly` is the ADR-0047 opt-in — default
  *  `false` ⇒ the secondary is writable. */
 export interface SecondaryRepo {
   path: string;

@@ -45,12 +45,13 @@ async fn pty_ws_roundtrip_echo() {
     }
 
     // This test exercises the PTY bridge, not the reaper. The session below is
-    // created out-of-band (no run in the event log), so the daemon's orphan
-    // sweep would race the test and kill it as unrecognised — opt out of all
-    // automatic cleanup for this daemon.
-    std::env::set_var("PDO_DAEMON_NO_CLEANUP", "1");
-    let daemon = TestDaemon::spawn(|_repo| Ok(())).await.unwrap();
-    std::env::remove_var("PDO_DAEMON_NO_CLEANUP");
+    // created out-of-band (no run in the event log), so an armed orphan sweep
+    // kills it as an unrecognised `pdo-*` name (no TTL on that arm) and the
+    // attached client prints `[exited]` instead of the echo — opt out of all
+    // automatic cleanup for THIS daemon, per-daemon, never via process-global env
+    // (a sibling's `remove_var` used to land inside this `spawn`, cf.
+    // `TestDaemon::spawn_nested`).
+    let daemon = TestDaemon::spawn_nested(|_repo| Ok(())).await.unwrap();
     let socket = daemon.tmux_socket();
 
     let session_name = "pdo-pty-test-echo";
@@ -221,10 +222,10 @@ async fn pty_ws_reaps_tmux_child_on_close() {
     }
 
     // Out-of-band session (no run in the event log) → opt out of the orphan
-    // sweep so it can't race the test and kill the session/client for us.
-    std::env::set_var("PDO_DAEMON_NO_CLEANUP", "1");
-    let daemon = TestDaemon::spawn(|_repo| Ok(())).await.unwrap();
-    std::env::remove_var("PDO_DAEMON_NO_CLEANUP");
+    // sweep so it can't race the test and kill the session/client for us. A
+    // per-daemon flag, not `set_var`: this test's own `remove_var` is what used to
+    // arm the sibling echo test's reaper (cf. `TestDaemon::spawn_nested`).
+    let daemon = TestDaemon::spawn_nested(|_repo| Ok(())).await.unwrap();
     let socket = daemon.tmux_socket();
 
     let session_name = "pdo-pty-test-reap";

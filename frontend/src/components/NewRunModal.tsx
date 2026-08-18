@@ -166,7 +166,8 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
   const addSecondary = useCallback(() => {
     setSecondaryRepos((prev) => [
       ...prev,
-      { path: "", baseBranch: "", valid: null },
+      // Writable by default (ADR-0045); the row's checkbox opts into read-only.
+      { path: "", baseBranch: "", valid: null, readOnly: false },
     ]);
   }, []);
 
@@ -253,13 +254,16 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
         // repo, which is exactly the case the daemon now 400s.
         resetRepo(trigger.target_repo ?? "");
         setSourceBranch(trigger.source_branch ?? "");
-        // #465: round-trip the stored secondaries (raw JSON `[{repo, base_branch?}]`
-        // with `[0]` = primary). Drop `[0]` — it prefills `targetRepo` above.
+        // #465: round-trip the stored secondaries (raw JSON
+        // `[{repo, base_branch?, read_only?}]` with `[0]` = primary). Drop `[0]` —
+        // it prefills `targetRepo` above. An absent `read_only` reads `false`
+        // (writable), matching the daemon default (ADR-0045).
         try {
           const parsed = trigger.target_repos
             ? (JSON.parse(trigger.target_repos) as Array<{
                 repo?: string;
                 base_branch?: string;
+                read_only?: boolean;
               }>)
             : [];
           setSecondaryRepos(
@@ -267,6 +271,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
               path: r.repo ?? "",
               baseBranch: r.base_branch ?? "",
               valid: null,
+              readOnly: r.read_only ?? false,
             })),
           );
         } catch {
@@ -509,10 +514,12 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
   const buildTargetRepos = useCallback(() => {
     if (secondaryRepos.length === 0) return undefined;
     return [
+      // The primary ([0]) is always writable — no `read_only` (ADR-0045).
       { repo: targetRepo.trim(), base_branch: sourceBranch || undefined },
       ...secondaryRepos.map((r) => ({
         repo: r.path.trim(),
         base_branch: r.baseBranch || undefined,
+        read_only: r.readOnly,
       })),
     ];
   }, [secondaryRepos, targetRepo, sourceBranch]);

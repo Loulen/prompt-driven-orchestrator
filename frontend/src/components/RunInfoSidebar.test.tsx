@@ -1,11 +1,15 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import RunInfoSidebar from "./RunInfoSidebar";
 import type { RunState, RunStatus, RepoPin } from "../types";
-import { editRunRepos } from "../api";
+import { editRunRepos, validateRepo, listBranches } from "../api";
 
 vi.mock("../api", () => ({
   editRunRepos: vi.fn(async () => ({ kind: "ok", run: {} as RunState })),
+  // A draft `SecondaryRepoRow` self-validates via these; stub them so a draft can
+  // reach `valid === true` (which is what reveals the read-only checkbox).
+  validateRepo: vi.fn(async () => ({ valid: true })),
+  listBranches: vi.fn(async () => ["main"]),
 }));
 
 // The store is a zustand hook (selector in, slice out) — stub it to a stable empty
@@ -16,9 +20,13 @@ vi.mock("../stores/recentReposStore", () => ({
 }));
 
 const editRunReposMock = vi.mocked(editRunRepos);
+const validateRepoMock = vi.mocked(validateRepo);
+const listBranchesMock = vi.mocked(listBranches);
 
 beforeEach(() => {
   editRunReposMock.mockClear();
+  validateRepoMock.mockClear();
+  listBranchesMock.mockClear();
 });
 
 function makeRun(status: RunStatus, failure_reason?: string): RunState {
@@ -111,6 +119,46 @@ describe("RunInfoSidebar", () => {
     expect(secondary.textContent).toContain("/repos/lib");
     expect(secondary.textContent).toContain("cafebabe");
     expect(screen.getByTestId("remove-secondary-repo-lib")).toBeInTheDocument();
+  });
+
+  // ADR-0045: the badge reflects the per-repo mode. A writable pin (the default,
+  // no `read_only`) reads WRITABLE; an opted-in read-only pin reads READ-ONLY.
+  it("badges each secondary by its writable/read-only mode", () => {
+    const run = makeMultiRepoRun("running", [
+      { repo: "/repos/rw", alias: "rw", sha: "aaaa1111" },
+      { repo: "/repos/ro", alias: "ro", sha: "bbbb2222", read_only: true },
+    ]);
+    render(<RunInfoSidebar run={run} onEdited={() => {}} />);
+    expect(screen.getByTestId("secondary-repo-mode-rw").textContent).toBe("WRITABLE");
+    expect(screen.getByTestId("secondary-repo-mode-ro").textContent).toBe("READ-ONLY");
+  });
+
+  it("adds a read-only draft with read_only:true in the PATCH (ADR-0045)", async () => {
+    const run = makeMultiRepoRun("running", []);
+    render(<RunInfoSidebar run={run} onEdited={() => {}} />);
+
+    fireEvent.click(screen.getByTestId("add-secondary-repo"));
+    const draft = screen.getByTestId("secondary-repo-draft");
+    fireEvent.change(within(draft).getByTestId("target-repo-input"), {
+      target: { value: "/repos/newlib" },
+    });
+
+    // The row debounces then self-validates; the checkbox appears once valid.
+    const checkbox = await within(draft).findByTestId(
+      "secondary-readonly-0",
+      {},
+      { timeout: 2000 },
+    );
+    fireEvent.click(checkbox);
+
+    const confirm = screen.getByTestId("confirm-add-secondary-repo");
+    await waitFor(() => expect(confirm).toBeEnabled());
+    fireEvent.click(confirm);
+
+    await waitFor(() => expect(editRunReposMock).toHaveBeenCalled());
+    expect(editRunReposMock).toHaveBeenCalledWith(run.run_id, {
+      add: [expect.objectContaining({ repo: "/repos/newlib", read_only: true })],
+    });
   });
 
   it("clicking a secondary's X calls editRunRepos({ remove: [alias] })", async () => {

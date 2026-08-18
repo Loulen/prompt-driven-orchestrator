@@ -535,6 +535,57 @@ async fn edit_add_secondary_mid_run() {
     );
 }
 
+/// ADR-0045: the `read_only` opt-in survives the create/edit chokepoint and the
+/// `RunReposEdited` projection — a `read_only: true` pin comes back flagged, a pin
+/// added without the key comes back writable (default). This is the data-layer
+/// round-trip of the whole feature, through the real HTTP handler.
+#[tokio::test]
+async fn edit_add_secondary_carries_read_only_flag() {
+    let daemon = TestDaemon::spawn(seed_daemon_repo).await.unwrap();
+    let run_id = create_mono_run(&daemon).await;
+
+    let ro = tempfile::tempdir().unwrap();
+    let rw = tempfile::tempdir().unwrap();
+    make_secondary_repo(ro.path());
+    make_secondary_repo(rw.path());
+
+    let resp = patch_repos(
+        &daemon,
+        &run_id,
+        serde_json::json!({
+            "add": [
+                { "repo": ro.path().to_str().unwrap(), "read_only": true },
+                { "repo": rw.path().to_str().unwrap() }
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), 200, "adding secondaries must succeed");
+
+    let state: serde_json::Value = resp.json().await.unwrap();
+    let repos = state["target_repos"].as_array().unwrap();
+    assert_eq!(repos.len(), 2, "both pins must project");
+
+    // The read-only pin carries the flag; the default one omits it (writable).
+    let ro_pin = repos
+        .iter()
+        .find(|p| p["repo"] == serde_json::json!(ro.path().to_str().unwrap()))
+        .expect("read-only pin present");
+    let rw_pin = repos
+        .iter()
+        .find(|p| p["repo"] == serde_json::json!(rw.path().to_str().unwrap()))
+        .expect("writable pin present");
+    assert_eq!(
+        ro_pin["read_only"],
+        serde_json::json!(true),
+        "the opted-in pin must project read_only=true"
+    );
+    assert!(
+        rw_pin.get("read_only").is_none(),
+        "a writable pin must omit read_only on the wire (serde skip), got {rw_pin}"
+    );
+}
+
 /// Removing a secondary drops it from the projection but LEAVES the snapshot on disk
 /// (deferred teardown, decision 5) — a still-live reader keeps a valid path.
 #[tokio::test]

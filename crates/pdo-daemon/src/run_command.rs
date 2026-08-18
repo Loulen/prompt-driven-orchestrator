@@ -1335,10 +1335,14 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 let mut v = vec![TargetRepoInput {
                     repo: target_repo.clone().unwrap_or_default(),
                     base_branch: source_branch.clone(),
+                    // The primary is always writable (ADR-0045).
+                    read_only: false,
                 }];
                 v.extend(run_state.target_repos.iter().map(|p| TargetRepoInput {
                     repo: p.repo.clone(),
                     base_branch: p.base_branch.clone(),
+                    // Preserve the read-only opt-in across a retry (ADR-0045).
+                    read_only: p.read_only,
                 }));
                 v
             };

@@ -10,6 +10,22 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.26.0
+
+Rien de cassant, aucune migration (payload d'event schemaless, blob JSON de trigger — le champ
+voyage tel quel). Les **dépôts secondaires d'un Run multi-repo sont modifiables par défaut** ;
+`read-only` devient une **case à cocher opt-in par dépôt** (#565, ADR-0045 révisant ADR-0042). Un
+flag `read_only: bool` (défaut `false`) sur `RepoPin`/`TargetRepoInput` (`#[serde(default)]` +
+`skip_serializing_if` ⇒ un pin historique se relit *modifiable*, byte-identique sur le fil). La garde
+`secondary_repo_dirtied` (409) ne se déclenche plus que sur un secondaire **coché read-only** ; un
+secondaire modifiable voit son `.git` monté **rw** en sandbox (`-v <g>:<g>:rw`, chemin identique) pour
+que `git` y fonctionne, et son préambule l'invite à écrire/committer/livrer (env
+`PDO_WRITABLE_SECONDARY_REPOS`). **PDO ne livre toujours rien lui-même** : la livraison reste le fait
+de l'agent (`Ship It`, `gh pr create` / `git merge`), par dépôt et indépendamment — aucun merge-back
+multi-repo n'est réintroduit. Limite assumée : un secondaire rendu modifiable **mid-run** n'a son
+`.git` monté qu'après recréation du conteneur (mount figé à la création, cohérent avec la visibilité
+au spawn).
+
 ## 1.25.0
 
 Rien de cassant, aucune migration (`CREATE TABLE IF NOT EXISTS`, aucun backfill). PDO gagne un

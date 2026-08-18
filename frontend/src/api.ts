@@ -540,12 +540,15 @@ export function fetchPipelines(): Promise<PipelineListEntry[]> {
   return request<PipelineListEntry[]>("GET", "/pipelines");
 }
 
-/** One repo line of a multi-repo create (#465, ADR-0042): a path plus an optional
- *  base branch (default HEAD, the local ref). `[0]` is the primary; `[1..]` become
- *  read-only secondary snapshots. */
+/** One repo line of a multi-repo create (#465, ADR-0042/0045): a path, an optional
+ *  base branch (default HEAD, the local ref), and an optional `read_only` opt-in
+ *  (default `false` ⇒ writable). `[0]` is the primary; `[1..]` become secondary
+ *  snapshots, writable unless `read_only`. Shared by create, `EditRunReposBody.add`
+ *  and the trigger `target_repos` blob. */
 export interface TargetRepoInput {
   repo: string;
   base_branch?: string;
+  read_only?: boolean;
 }
 
 export interface CreateRunRequest {

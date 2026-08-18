@@ -26,6 +26,15 @@ To install a specific version:
 PDO_VERSION=v0.1.0 curl -fsSL https://github.com/Loulen/prompt-driven-orchestrator/releases/latest/download/install.sh | bash
 ```
 
+### Runtime requirements
+
+The install script fetches only the `pdo` binary. The daemon shells out to a couple of tools on the host at runtime — install them yourself (they are **not** bundled, and their absence surfaces only when a node tries to run):
+
+- **tmux** — every node and run shell is a tmux session on the host. Required, always, whatever harness you use.
+- **git** — each node's work is isolated in a git worktree. Required.
+
+Each node runs its agent through a **harness**, which is your choice, not a fixed dependency. PDO ships descriptors for `claude` (default) and `opencode`, and the set is pluggable ([ADR-0045](docs/adr/0045-un-harnais-se-declare-par-un-template-d-argv-les-capacites-remplissent-les-trous.md)). PDO neither bundles nor requires any specific harness: installing the harness and **its** own dependencies is up to you — e.g. for Claude Code, the `claude` CLI, plus Node.js >= 22 for MCP servers and ripgrep for search.
+
 Then start the daemon:
 
 ```bash

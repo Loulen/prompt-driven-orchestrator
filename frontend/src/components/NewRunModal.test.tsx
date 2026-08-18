@@ -2201,6 +2201,45 @@ describe("NewRunModal — multi-repo (#465)", () => {
     const call = vi.mocked(createRun).mock.calls.at(-1)![0];
     expect(call.target_repos).toHaveLength(2);
     expect(call.target_repos![0].repo).toBe("/home/user/primary");
+    // ADR-0047: a secondary is writable by default (checkbox left unchecked).
+    expect(call.target_repos![1].read_only).toBe(false);
+    // The primary [0] never carries read_only.
+    expect(call.target_repos![0]).not.toHaveProperty("read_only");
+  });
+
+  it("marks a secondary read_only when its checkbox is ticked (ADR-0047)", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "P1", scope: "repo" }),
+    ]);
+    renderModal();
+    await enterValidRepo("/home/user/primary");
+
+    fireEvent.click(screen.getByTestId("add-secondary-repo"));
+    const secRow = await screen.findByTestId("secondary-repo-row-0");
+    const secInput = within(secRow).getByTestId("target-repo-input");
+    fireEvent.change(secInput, { target: { value: "/home/user/secondary" } });
+    await vi.advanceTimersByTimeAsync(500);
+    await waitFor(() => {
+      expect(validateRepo).toHaveBeenCalledWith("/home/user/secondary");
+    });
+    // The read-only checkbox only shows once the row resolves valid.
+    const checkbox = await within(secRow).findByTestId("secondary-readonly-0");
+    expect(checkbox).not.toBeChecked();
+    fireEvent.click(checkbox);
+    expect(checkbox).toBeChecked();
+
+    fireEvent.change(screen.getByTestId("pipeline-select"), { target: { value: "p1" } });
+    fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), {
+      target: { value: "do the thing" },
+    });
+
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("launch-button"));
+
+    await waitFor(() => expect(createRun).toHaveBeenCalled());
+    const call = vi.mocked(createRun).mock.calls.at(-1)![0];
+    expect(call.target_repos![1].read_only).toBe(true);
   });
 
   it("omits target_repos for a mono-repo launch (no secondary rows)", async () => {

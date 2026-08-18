@@ -491,16 +491,28 @@ struct CreateRunRequest {
     auto_name: Option<bool>,
 }
 
-/// One repo line of a multi-repo create request (#465, ADR-0042).
+/// One repo line of a multi-repo create request (#465, ADR-0042/0047).
 ///
-/// The wire shape the front sends per row: a `repo` path plus an optional
-/// `base_branch` (default `HEAD`, the LOCAL ref — there is no fetch). Index `[0]`
-/// is the primary; `[1..]` become read-only secondary snapshots.
+/// The wire shape the front sends per row: a `repo` path, an optional
+/// `base_branch` (default `HEAD`, the LOCAL ref — there is no fetch), and an
+/// optional `read_only` opt-in (default `false` ⇒ writable, ADR-0047). Index
+/// `[0]` is the primary; `[1..]` become secondary snapshots (writable unless
+/// `read_only`). This input is shared by create, `PATCH /runs/{id}/repos`
+/// (`add`) and the trigger `target_repos` blob — one field covers every write
+/// surface.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct TargetRepoInput {
     repo: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     base_branch: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    read_only: bool,
+}
+
+/// serde `skip_serializing_if` helper (ADR-0047): a writable pin serialises
+/// without a `read_only` key, byte-identical to a pre-flag input.
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// Body of `PATCH /runs/{run_id}/repos` — the mid-run edit of a Run's read-only
@@ -11887,6 +11899,14 @@ fn secondary_repos_dirtied_refusal(
     run_state: &event_log::RunState,
 ) -> Option<completion_refusal::CompletionRefusal> {
     for pin in &run_state.target_repos {
+        // ADR-0047: the guard is now conditional. A writable secondary (the
+        // default, `read_only == false`) is *meant* to be modified/committed —
+        // its dirty tracked tree is not a refusal. Only a read-only opt-in still
+        // enforces read-only-context semantics. This `continue` is the single
+        // switch that turns "writing is refused" into "writing is offered".
+        if !pin.read_only {
+            continue;
+        }
         let snapshot = secondary_snapshot_path(repo_root, run_id, &pin.alias);
         if !snapshot.exists() {
             continue;
@@ -13923,6 +13943,11 @@ fn resolve_one_secondary_pin(
         alias,
         sha,
         base_branch: base.map(str::to_string),
+        // ADR-0047: the opt-in read-only flag flows straight from the input.
+        // Both construction paths (create via `resolve_secondary_pins`, mid-run
+        // edit via `patch_run_repos`) route through here, so the flag can never
+        // diverge between the two surfaces.
+        read_only: input.read_only,
     })
 }
 
@@ -16271,6 +16296,97 @@ mod tests {
                 "timed out waiting for run {run_id} to reach {want:?}"
             );
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+
+    /// ADR-0047: `secondary_repos_dirtied_refusal` now skips writable secondaries
+    /// (`read_only == false`, the default) and only trips on a read-only opt-in
+    /// with a dirty tracked tree. This is the switch that turns "writing refused"
+    /// into "writing offered" — the A/B control of the whole feature.
+    #[test]
+    fn secondary_dirtied_guard_only_trips_on_read_only_pins() {
+        use crate::worktree_ops::{create_secondary_snapshot, secondary_snapshot_path};
+
+        fn git(dir: &std::path::Path, args: &[&str]) {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?} failed");
+        }
+        fn init_repo_with_tracked_file(dir: &std::path::Path) -> String {
+            std::fs::create_dir_all(dir).unwrap();
+            git(dir, &["init", "-b", "main"]);
+            git(dir, &["config", "user.email", "t@t"]);
+            git(dir, &["config", "user.name", "t"]);
+            std::fs::write(dir.join("F.txt"), "v1\n").unwrap();
+            git(dir, &["add", "-A"]);
+            git(dir, &["commit", "-m", "init"]);
+            let out = std::process::Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(dir)
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("primary"); // acts as repo_root
+        std::fs::create_dir_all(&primary).unwrap();
+        let run_id = "guard-run";
+
+        // Two secondaries: snapshot each, then dirty a TRACKED file in both.
+        let ro = tmp.path().join("ro");
+        let rw = tmp.path().join("rw");
+        let ro_sha = init_repo_with_tracked_file(&ro);
+        let rw_sha = init_repo_with_tracked_file(&rw);
+        let ro_snap = secondary_snapshot_path(&primary, run_id, "ro");
+        let rw_snap = secondary_snapshot_path(&primary, run_id, "rw");
+        create_secondary_snapshot(&ro, &ro_snap, &ro_sha).unwrap();
+        create_secondary_snapshot(&rw, &rw_snap, &rw_sha).unwrap();
+        std::fs::write(ro_snap.join("F.txt"), "tampered\n").unwrap();
+        std::fs::write(rw_snap.join("F.txt"), "tampered\n").unwrap();
+
+        let pin =
+            |repo: &std::path::Path, alias: &str, sha: &str, read_only: bool| event_log::RepoPin {
+                repo: repo.to_string_lossy().to_string(),
+                alias: alias.to_string(),
+                sha: sha.to_string(),
+                base_branch: None,
+                read_only,
+            };
+        let mut state = event_log::RunState::new(run_id.to_string(), "p".to_string());
+
+        // A writable secondary, dirtied, is tolerated → no refusal.
+        state.target_repos = vec![pin(&rw, "rw", &rw_sha, false)];
+        assert!(
+            secondary_repos_dirtied_refusal(&primary, run_id, &state).is_none(),
+            "a writable secondary with a dirty tracked tree must NOT be refused"
+        );
+
+        // A read-only secondary, dirtied, still trips the guard.
+        state.target_repos = vec![pin(&ro, "ro", &ro_sha, true)];
+        match secondary_repos_dirtied_refusal(&primary, run_id, &state) {
+            Some(completion_refusal::CompletionRefusal::SecondaryRepoDirtied { alias, .. }) => {
+                assert_eq!(alias, "ro");
+            }
+            other => panic!("expected SecondaryRepoDirtied for a read-only pin, got {other:?}"),
+        }
+
+        // Mixed list: the writable one is skipped, the read-only one is caught.
+        state.target_repos = vec![
+            pin(&rw, "rw", &rw_sha, false),
+            pin(&ro, "ro", &ro_sha, true),
+        ];
+        match secondary_repos_dirtied_refusal(&primary, run_id, &state) {
+            Some(completion_refusal::CompletionRefusal::SecondaryRepoDirtied { alias, .. }) => {
+                assert_eq!(
+                    alias, "ro",
+                    "must skip the writable pin and catch the read-only one"
+                );
+            }
+            other => panic!("expected the read-only pin to be refused, got {other:?}"),
         }
     }
 

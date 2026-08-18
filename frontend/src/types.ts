@@ -679,17 +679,19 @@ export interface CollectionStateInfo {
 }
 
 /**
- * One read-only secondary repo pinned to a Run (#465, ADR-0042). Mirror of the
- * server `RepoPin`: `repo` is the absolute host path, `alias` the disambiguated
- * snapshot folder name (the handle a `remove` names), `sha` the frozen commit, and
- * `base_branch` the ref it was resolved from (provenance only; the SHA is
- * authoritative). Absent `base_branch` means the pin defaulted to `HEAD`.
+ * One secondary repo pinned to a Run (#465, ADR-0042/0047). Mirror of the server
+ * `RepoPin`: `repo` is the absolute host path, `alias` the disambiguated snapshot
+ * folder name (the handle a `remove` names), `sha` the frozen commit, `base_branch`
+ * the ref it was resolved from (provenance only; the SHA is authoritative), and
+ * `read_only` the per-repo opt-in (ADR-0047). Absent `base_branch` means the pin
+ * defaulted to `HEAD`; absent `read_only` means writable (the default).
  */
 export interface RepoPin {
   repo: string;
   alias: string;
   sha: string;
   base_branch?: string | null;
+  read_only?: boolean;
 }
 
 export interface RunState {

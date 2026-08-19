@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { fetchPipelines, listBranches } from "../api";
-import type { PipelineListEntry } from "../types";
+import { pickDefaultBranch } from "../lib/branchSelect";
+import type { BranchRef, PipelineListEntry } from "../types";
 
 /**
  * What a Run/Trigger can be launched AGAINST (#359): the target repo's branches and the
@@ -16,7 +17,7 @@ import type { PipelineListEntry } from "../types";
 export function useLaunchTargets(open: boolean) {
   const [pipelines, setPipelines] = useState<PipelineListEntry[]>([]);
   const [selectedPipelineId, setSelectedPipelineId] = useState("");
-  const [branches, setBranches] = useState<string[]>([]);
+  const [branches, setBranches] = useState<BranchRef[]>([]);
   const [sourceBranch, setSourceBranch] = useState("");
   const [branchesLoading, setBranchesLoading] = useState(false);
 
@@ -39,11 +40,15 @@ export function useLaunchTargets(open: boolean) {
         // failed with `branch 'main' does not exist`, blaming the daemon for a
         // value the UI never showed. Testing membership instead subsumes the
         // empty case and still preserves a deliberate choice the new repo honours.
-        if (branchList.length > 0 && !branchList.includes(sourceBranch)) {
-          const main = branchList.find((b) => b === "main")
-            ?? branchList.find((b) => b === "master")
-            ?? branchList[0];
-          setSourceBranch(main);
+        // #571: membership is on `name` (the verbatim value posted); the default
+        // is locality-aware (see `pickDefaultBranch`) so a remote never wins over
+        // an available local.
+        if (
+          branchList.length > 0 &&
+          !branchList.some((b) => b.name === sourceBranch)
+        ) {
+          const def = pickDefaultBranch(branchList);
+          if (def) setSourceBranch(def);
         }
       } catch {
         setBranches([]);

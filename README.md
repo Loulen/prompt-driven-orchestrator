@@ -26,6 +26,15 @@ To install a specific version:
 PDO_VERSION=v0.1.0 curl -fsSL https://github.com/Loulen/prompt-driven-orchestrator/releases/latest/download/install.sh | bash
 ```
 
+### Runtime requirements
+
+The install script fetches only the `pdo` binary. The daemon shells out to a couple of tools on the host at runtime — install them yourself (they are **not** bundled, and their absence surfaces only when a node tries to run):
+
+- **tmux** — every node and run shell is a tmux session on the host. Required, always, whatever harness you use.
+- **git** — each node's work is isolated in a git worktree. Required.
+
+Each node runs its agent through a **harness**, which is your choice, not a fixed dependency. PDO ships descriptors for `claude` (default) and `opencode`, and the set is pluggable ([ADR-0045](docs/adr/0045-un-harnais-se-declare-par-un-template-d-argv-les-capacites-remplissent-les-trous.md)). PDO neither bundles nor requires any specific harness: installing the harness and **its** own dependencies is up to you — e.g. for Claude Code, the `claude` CLI, plus Node.js >= 22 for MCP servers and ripgrep for search.
+
 Then start the daemon:
 
 ```bash
@@ -41,6 +50,18 @@ pdo service install          # systemd --user unit (Linux) / launchd LaunchAgent
 pdo service install --dry-run # preview the unit + commands, change nothing
 pdo service status            # inspect the installed service
 ```
+
+### Behind a reverse proxy
+
+The daemon binds `0.0.0.0:<port>` with **no authentication and no TLS** — it is meant to sit behind something that provides both. As a DNS-rebinding / cross-site-WebSocket-hijacking guard, both WebSockets (`/ws`, the dashboard event stream, and `/sessions/<id>/pty`, the terminal) reject any browser `Origin` other than `localhost` / `127.0.0.1:<port>`. Behind a reverse proxy or an ALB on a public domain the browser sends the *public* origin (`https://pdo.example.tld`), so with the default allowlist the terminal and dashboard go dark (HTTP 403).
+
+Name the public origin(s) with `PDO_ALLOWED_WS_ORIGINS`, a comma-separated list of **exact** origins (`scheme://host[:port]`, as the browser sends them) that **add to** the localhost defaults — loopback keeps working:
+
+```bash
+PDO_ALLOWED_WS_ORIGINS="https://pdo.example.tld,https://pdo.internal:8443" pdo daemon
+```
+
+Set it in the service unit (`pdo service install` runs `pdo daemon` for you; add the variable to that unit's environment). Nothing changes on the client: the UI derives its WebSocket URL from `window.location`, so `wss://` behind TLS already works. This only restores the origin guard for your domain — it adds **neither auth nor TLS**; the proxy must carry authentication. The "Mono-user, local" posture is unchanged.
 
 ## Design principles
 
@@ -71,7 +92,7 @@ npm install
 npm run dev
 ```
 
-The Vite dev server starts on `http://localhost:5173` and proxies `/ws` to the daemon at `127.0.0.1:5172`.
+The Vite dev server starts on `http://localhost:5173` and proxies `/ws`, `/sessions` and the REST routes to the daemon at `127.0.0.1:5172`. The two WebSocket proxies set `rewriteWsOrigin: true` so the daemon's Origin check (see *Behind a reverse proxy*) accepts the dev server — without it the dashboard and terminal would 403 in `make dev`.
 
 ### Daemon
 
@@ -81,7 +102,7 @@ cargo run -p pdo-daemon -- daemon
 cargo run -p pdo-daemon -- daemon --port 9999
 ```
 
-The daemon binds to `127.0.0.1:5172` by default. In dev mode it shows a placeholder page — use the Vite dev server for frontend work.
+The daemon binds `0.0.0.0:5172` by default and serves the real embedded UI (the frontend `dist/` is built by `build.rs` and bundled via `rust-embed`), so `http://localhost:5172` works on its own. For frontend work, use the Vite dev server anyway — it gives you HMR and proxies API + WebSocket calls back to the daemon.
 
 ### Production build
 

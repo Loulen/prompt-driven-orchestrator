@@ -84,7 +84,7 @@ use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{
     FromRequest, Json, Multipart, Path as AxumPath, Query, State, WebSocketUpgrade,
 };
-use axum::http::{header, StatusCode, Uri};
+use axum::http::{header, HeaderMap, StatusCode, Uri};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
@@ -405,6 +405,12 @@ struct AppState {
     /// Whether the boot pass may refresh the fetched tier (#427). See
     /// [`DaemonConfig::price_refresh_at_boot`].
     price_refresh_at_boot: bool,
+    /// Extra WebSocket Origin allowlist entries from `PDO_ALLOWED_WS_ORIGINS`
+    /// (#564), already parsed + normalised at boot. Shared by BOTH WS upgrades
+    /// (`/ws` and `/sessions/{id}/pty`) via [`pty_bridge::check_origin`]; the
+    /// four localhost defaults are always added on top. See
+    /// [`DaemonConfig::allowed_ws_origins`].
+    allowed_ws_origins: Vec<String>,
 }
 
 impl AppState {
@@ -2142,7 +2148,8 @@ pub struct DaemonConfig {
     /// `PDO_TMUX_CMD_OVERRIDE` (#181) — never a process-global env read.
     pub price_source_url: Option<String>,
     /// Refresh the fetched price tier at startup (#427). `true` in production,
-    /// `false` in the five `tests/common/mod.rs` literals. Even armed it fetches
+    /// `false` in the six `tests/common/mod.rs` literals that don't test price
+    /// sync (the seventh, `spawn_with_price_source`, sets it `true`). Even armed it fetches
     /// ONLY if `fetched.json` already exists and is over 24 h old: no egress before
     /// the user has clicked "Sync costs" once (ADR-0034 — the click IS the consent).
     /// `PDO_PRICE_SYNC=off|0|""` disarms it.
@@ -2180,6 +2187,36 @@ pub struct DaemonConfig {
     /// client printed `[exited]` instead of the echo. Per-daemon config cannot
     /// interleave.
     pub nested_daemon: bool,
+    /// Extra exact WebSocket Origin allowlist entries (#564), parsed once at boot
+    /// from [`pty_bridge::ALLOWED_WS_ORIGINS_ENV`] (`PDO_ALLOWED_WS_ORIGINS`).
+    ///
+    /// **Why it exists.** Both WS upgrades — `/ws` (dashboard events) and
+    /// `/sessions/{id}/pty` (terminal) — reject any browser `Origin` outside
+    /// `localhost`/`127.0.0.1:<port>` as a DNS-rebinding / CSWSH guard. Behind a
+    /// reverse proxy or an ALB on a public domain the browser sends
+    /// `Origin: https://pdo.example.tld`, so the terminal and event stream die
+    /// with a 403. This list lets an operator name those public origins.
+    ///
+    /// **Additive, never a replacement (D2).** These entries ADD to the four
+    /// localhost defaults; the loopback origins always keep working (operator
+    /// debugging, Playwright's `127.0.0.1` baseURL). Empty (unset or blank) is
+    /// exactly the historical localhost-only behaviour.
+    ///
+    /// **Exact-match, no wildcards (D3).** Each entry is one origin as the browser
+    /// sends it (`scheme://host[:port]`), compared case-insensitively. `*` / globs
+    /// are not interpreted.
+    ///
+    /// **Env-only, deliberately NOT a UI/instance setting (D7).** The daemon's
+    /// HTTP surface is unauthenticated, so an Origin allowlist editable through
+    /// the UI would be self-disarmable by the very attacker it blocks (ADR-0015's
+    /// `stored → env → default` precedence is knowingly not applied here).
+    ///
+    /// **Dev note.** The new `/ws` check would break `make dev` (Vite serves the
+    /// UI from `:5173`, a different origin). That is fixed on the FRONTEND with
+    /// `rewriteWsOrigin` in `vite.config.ts` — never by baking `5173` into the
+    /// binary's defaults, which would let any page on that port attach a PTY in
+    /// production. Empty in every `tests/common/mod.rs` literal.
+    pub allowed_ws_origins: Vec<String>,
 }
 
 /// Resolve the daemon's cleanup posture from the two env signals production
@@ -2252,6 +2289,13 @@ impl DaemonConfig {
                 std::env::var("PDO_NODE_ID").ok().as_deref(),
                 std::env::var("PDO_DAEMON_NO_CLEANUP").ok().as_deref(),
             ),
+            // WS Origin allowlist extension (#564) — the ONE read of
+            // PDO_ALLOWED_WS_ORIGINS, here at boot. Parsing is pure (see
+            // `pty_bridge::parse_allowed_origins`); an unset or blank value
+            // yields an empty list, i.e. localhost-only, unchanged behaviour.
+            allowed_ws_origins: std::env::var(pty_bridge::ALLOWED_WS_ORIGINS_ENV)
+                .map(|v| pty_bridge::parse_allowed_origins(&v))
+                .unwrap_or_default(),
         }
     }
 }
@@ -2377,6 +2421,10 @@ pub async fn serve_with_config(
         price_sync_lock: tokio::sync::Mutex::new(()),
         price_source_url: config.price_source_url,
         price_refresh_at_boot: config.price_refresh_at_boot,
+        // WS Origin allowlist extension (#564). Moved in last; `config` is fully
+        // consumed by this literal. The boot summary/lint below reads it back off
+        // `state`, so no pre-literal clone is needed.
+        allowed_ws_origins: config.allowed_ws_origins,
     });
 
     // The orphan sweep — and every other tmux call this daemon makes —
@@ -2416,6 +2464,43 @@ pub async fn serve_with_config(
     let app = build_router(state.clone());
 
     info!("PDO daemon listening on http://{bound_addr}");
+
+    // WS Origin allowlist summary + lint (#564, D8). Only speak up when the
+    // operator actually configured extras — silence is the localhost-only
+    // default. A malformed entry is KEPT (never fail-fast: the check is a nominal
+    // protective path, and a remote client shouldn't be able to crash the boot),
+    // but flagged, because once a public domain is configured a typo in
+    // PDO_ALLOWED_WS_ORIGINS is the #1 cause of a dead terminal/dashboard — and
+    // the 403 itself is otherwise mute. Mirrors the "ignore-if-invalid" posture
+    // of PDO_SERVICE_HEALTH.
+    if !state.allowed_ws_origins.is_empty() {
+        info!(
+            "WS Origin allowlist extended with {} operator origin(s): {} \
+             (added on top of the localhost defaults)",
+            state.allowed_ws_origins.len(),
+            state.allowed_ws_origins.join(", ")
+        );
+        for entry in &state.allowed_ws_origins {
+            // An origin is `scheme://host[:port]` with no path. Flag anything that
+            // lacks an http(s) scheme, carries a wildcard, or has a '/' past the
+            // "://" (a path) — the trailing slash of a bare origin is already
+            // stripped by `parse_allowed_origins`.
+            let after_scheme = entry
+                .strip_prefix("https://")
+                .or_else(|| entry.strip_prefix("http://"));
+            let looks_valid = match after_scheme {
+                Some(rest) => !rest.is_empty() && !rest.contains('/') && !entry.contains('*'),
+                None => false,
+            };
+            if !looks_valid {
+                warn!(
+                    "Suspicious PDO_ALLOWED_WS_ORIGINS entry {entry:?}: expected an \
+                     exact origin like \"https://pdo.example.tld\" (scheme + host, no \
+                     path, no wildcard). Kept as-is; it will simply never match."
+                );
+            }
+        }
+    }
 
     // Spawn reaper background task — unless we're a nested daemon, in
     // which case we stay completely passive on tmux state.
@@ -13681,7 +13766,24 @@ async fn forget_run(
 
 // --- WebSocket handler with event broadcasting ---
 
-async fn ws_handler(State(state): State<Arc<AppState>>, ws: WebSocketUpgrade) -> Response {
+async fn ws_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+) -> Response {
+    // #564: `/ws` streams every event of every Run to any subscriber — until now
+    // with NO Origin guard, so any web page open in the operator's browser could
+    // silently subscribe and exfiltrate repos/prompts/verdicts. Apply the same
+    // DNS-rebinding/CSWSH guard the PTY bridge already has (shared allowlist).
+    // `headers` must precede `ws`: the upgrade extractor consumes the request, so
+    // it stays last (axum 0.8), mirroring `session_pty_handler`.
+    if !pty_bridge::check_origin(&headers, state.port, &state.allowed_ws_origins) {
+        warn!(
+            "Rejected /ws WebSocket upgrade: Origin not allowed ({})",
+            pty_bridge::origin_for_log(&headers)
+        );
+        return (StatusCode::FORBIDDEN, "Origin not allowed").into_response();
+    }
     ws.on_upgrade(move |socket| handle_ws(socket, state))
 }
 
@@ -15624,6 +15726,7 @@ mod tests {
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: None,
             price_refresh_at_boot: false,
+            allowed_ws_origins: Vec::new(),
         })
     }
 
@@ -15668,6 +15771,7 @@ mod tests {
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: None,
             price_refresh_at_boot: false,
+            allowed_ws_origins: Vec::new(),
         })
     }
 
@@ -19689,6 +19793,7 @@ mod tests {
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: None,
             price_refresh_at_boot: false,
+            allowed_ws_origins: Vec::new(),
         })
     }
 
@@ -25690,6 +25795,7 @@ edges: []
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: None,
             price_refresh_at_boot: false,
+            allowed_ws_origins: Vec::new(),
         });
         let app = build_router(state);
 
@@ -25886,6 +25992,7 @@ edges: []
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: None,
             price_refresh_at_boot: false,
+            allowed_ws_origins: Vec::new(),
         });
         let app = build_router(state);
 

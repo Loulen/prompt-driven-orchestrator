@@ -2,5 +2,8 @@
   "devDependencies": {
     "@ai-hero/sandcastle": "^0.5.7",
     "tsx": "^4.21.1"
+  },
+  "dependencies": {
+    "puppeteer": "^25.8.0"
   }
 }

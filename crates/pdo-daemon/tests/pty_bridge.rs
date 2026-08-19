@@ -105,18 +105,18 @@ async fn pty_ws_roundtrip_echo() {
     kill_tmux_session(&socket, session_name);
 }
 
-/// Layer 3a: WS /sessions/<id>/pty rejects requests with bad Origin header.
-#[tokio::test]
-async fn pty_ws_rejects_bad_origin() {
-    let daemon = TestDaemon::spawn(|_repo| Ok(())).await.unwrap();
-
-    let ws_url = format!("ws://{}/sessions/fake-session/pty", daemon.addr);
-
-    // Build a request with a malicious origin
-    let request = tokio_tungstenite::tungstenite::http::Request::builder()
-        .uri(&ws_url)
-        .header("Host", format!("{}", daemon.addr))
-        .header("Origin", "http://evil.com")
+/// Build a raw WS upgrade request carrying an explicit `Origin`, so a test can
+/// forge the header a browser would send. `host` is the daemon's real address
+/// (routing), `origin` is the value under test (the guard).
+fn ws_upgrade_request(
+    url: &str,
+    host: &str,
+    origin: &str,
+) -> tokio_tungstenite::tungstenite::http::Request<()> {
+    tokio_tungstenite::tungstenite::http::Request::builder()
+        .uri(url)
+        .header("Host", host)
+        .header("Origin", origin)
         .header("Connection", "Upgrade")
         .header("Upgrade", "websocket")
         .header("Sec-WebSocket-Version", "13")
@@ -125,13 +125,150 @@ async fn pty_ws_rejects_bad_origin() {
             tokio_tungstenite::tungstenite::handshake::client::generate_key(),
         )
         .body(())
-        .unwrap();
+        .unwrap()
+}
+
+/// Assert a handshake failed with an exact HTTP 403 (`Origin not allowed`),
+/// not merely "some error" — a DNS/refused/timeout error would satisfy
+/// `is_err()` while proving nothing about the origin guard.
+fn assert_handshake_403(
+    result: Result<
+        (
+            tokio_tungstenite::WebSocketStream<
+                tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+            >,
+            tokio_tungstenite::tungstenite::handshake::client::Response,
+        ),
+        tokio_tungstenite::tungstenite::Error,
+    >,
+) {
+    match result {
+        Err(tokio_tungstenite::tungstenite::Error::Http(resp)) => {
+            assert_eq!(resp.status(), 403, "expected 403 Origin refusal");
+        }
+        Ok(_) => panic!("expected HTTP 403 handshake refusal, got a successful upgrade"),
+        Err(other) => panic!("expected HTTP 403 handshake refusal, got {other:?}"),
+    }
+}
+
+/// Layer 3a: WS /sessions/<id>/pty rejects requests with bad Origin header.
+#[tokio::test]
+async fn pty_ws_rejects_bad_origin() {
+    let daemon = TestDaemon::spawn(|_repo| Ok(())).await.unwrap();
+
+    let ws_url = format!("ws://{}/sessions/fake-session/pty", daemon.addr);
+    let request = ws_upgrade_request(&ws_url, &daemon.addr.to_string(), "http://evil.com");
 
     let result = tokio_tungstenite::connect_async(request).await;
-    assert!(
-        result.is_err(),
-        "WS connect with bad origin should fail (403)"
+    assert_handshake_403(result);
+}
+
+/// Layer 3a (#564): a configured origin is accepted on the PTY upgrade. The
+/// session doesn't exist, so the bridge collapses right after — but the
+/// handshake has already returned 101, which is all this asserts (no I/O).
+#[tokio::test]
+async fn pty_ws_accepts_configured_origin() {
+    let origin = "http://pdo.example:9999";
+    let daemon =
+        TestDaemon::spawn_with_allowed_ws_origins(|_repo| Ok(()), vec![origin.to_string()])
+            .await
+            .unwrap();
+
+    let ws_url = format!("ws://{}/sessions/fake-session/pty", daemon.addr);
+    let request = ws_upgrade_request(&ws_url, &daemon.addr.to_string(), origin);
+
+    let (_ws, resp) = tokio_tungstenite::connect_async(request)
+        .await
+        .expect("configured origin should complete the WS handshake");
+    assert_eq!(resp.status(), 101, "configured origin should upgrade");
+}
+
+/// Layer 3a (#564): with an allowlist set, an origin NOT on it is still 403 on
+/// the PTY upgrade.
+#[tokio::test]
+async fn pty_ws_rejects_origin_absent_from_allowlist() {
+    let daemon = TestDaemon::spawn_with_allowed_ws_origins(
+        |_repo| Ok(()),
+        vec!["https://pdo.example.com".to_string()],
+    )
+    .await
+    .unwrap();
+
+    let ws_url = format!("ws://{}/sessions/fake-session/pty", daemon.addr);
+    let request = ws_upgrade_request(&ws_url, &daemon.addr.to_string(), "http://evil.com");
+
+    let result = tokio_tungstenite::connect_async(request).await;
+    assert_handshake_403(result);
+}
+
+/// Layer 3a (#564): `/ws` (dashboard event stream) rejects a bad Origin. This is
+/// the one endpoint whose behaviour CHANGES — it had no guard before — so it had
+/// zero coverage until now.
+#[tokio::test]
+async fn ws_events_rejects_bad_origin() {
+    let daemon = TestDaemon::spawn(|_repo| Ok(())).await.unwrap();
+
+    let ws_url = format!("ws://{}/ws", daemon.addr);
+    let request = ws_upgrade_request(&ws_url, &daemon.addr.to_string(), "http://evil.com");
+
+    let result = tokio_tungstenite::connect_async(request).await;
+    assert_handshake_403(result);
+}
+
+/// Layer 3a (#564): a configured origin is accepted on `/ws`, AND the event
+/// stream still works — a bare 101 wouldn't prove the stream survived, so read
+/// the first frame and assert the `{"type":"ready"}` handshake.
+#[tokio::test]
+async fn ws_events_accepts_configured_origin() {
+    let origin = "https://pdo.example.com";
+    let daemon =
+        TestDaemon::spawn_with_allowed_ws_origins(|_repo| Ok(()), vec![origin.to_string()])
+            .await
+            .unwrap();
+
+    let ws_url = format!("ws://{}/ws", daemon.addr);
+    let request = ws_upgrade_request(&ws_url, &daemon.addr.to_string(), origin);
+
+    let (mut ws, resp) = tokio_tungstenite::connect_async(request)
+        .await
+        .expect("configured origin should complete the /ws handshake");
+    assert_eq!(resp.status(), 101, "configured origin should upgrade");
+
+    let msg = ws
+        .next()
+        .await
+        .expect("stream should yield a first frame")
+        .expect("first frame should not be an error");
+    let text = msg.into_text().expect("first frame should be text");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&text).expect("first frame should be JSON");
+    assert_eq!(
+        parsed["type"], "ready",
+        "the event stream should still open with a ready frame"
     );
+}
+
+/// Layer 3a (#564): the localhost default keeps working when a third-party
+/// allowlist is set (additive, D2) — the layer-3b / Playwright guard-rail. The
+/// port is ephemeral, so the "default" origin is built from the bound addr,
+/// never a literal, and the allowlist entry is deliberately unrelated to it.
+#[tokio::test]
+async fn ws_default_localhost_origin_still_allowed_with_allowlist_set() {
+    let daemon = TestDaemon::spawn_with_allowed_ws_origins(
+        |_repo| Ok(()),
+        vec!["https://pdo.example.com".to_string()],
+    )
+    .await
+    .unwrap();
+
+    let ws_url = format!("ws://{}/ws", daemon.addr);
+    let default_origin = format!("http://127.0.0.1:{}", daemon.addr.port());
+    let request = ws_upgrade_request(&ws_url, &daemon.addr.to_string(), &default_origin);
+
+    let (_ws, resp) = tokio_tungstenite::connect_async(request)
+        .await
+        .expect("loopback origin should still upgrade with an allowlist set");
+    assert_eq!(resp.status(), 101, "loopback default must remain allowed");
 }
 
 // --- #495: the PTY bridge must reap its `tmux attach` child on WS close ---
@@ -163,14 +300,16 @@ fn proc_pids() -> Vec<u32> {
         .collect()
 }
 
-/// Count live `tmux attach` clients that are children of `me` and whose command
+/// PIDs of live `tmux attach` clients that are children of `me` and whose command
 /// line mentions `session_name`. The session name is unique per test, so this
 /// never collides with a sibling `#[test]` running in the same binary. A client
 /// that was spawned but never reaped shows up here (pre-#495 it stays ALIVE,
 /// because the reader task keeps a dup of the master fd open, so no SIGHUP ever
-/// reaches it).
+/// reaches it). Returning the PIDs (not a count) lets the caller pin the exact
+/// child it forged and track *that* PID across the reap, instead of a
+/// process-wide zombie tally shared with sibling tests.
 #[cfg(target_os = "linux")]
-fn attach_children(me: u32, session_name: &str) -> usize {
+fn attach_child_pids(me: u32, session_name: &str) -> Vec<u32> {
     proc_pids()
         .into_iter()
         .filter(|&pid| match read_proc_stat(pid) {
@@ -181,24 +320,26 @@ fn attach_children(me: u32, session_name: &str) -> usize {
             }
             _ => false,
         })
-        .count()
+        .collect()
 }
 
-/// Count zombie (`<defunct>`) `tmux` children of `me`. Zombies carry no cmdline
-/// so they can't be filtered by session name — the caller measures the delta
-/// against a baseline captured before acting (sibling tests in the same binary
-/// share this process, cf. reaper test traps).
+/// Of `pids` (captured while the clients were alive and name-matched), the ones
+/// that are STILL our `tmux` children — paired with their process state. A fully
+/// reaped child has left `/proc` (the parent `wait()`ed it) and so is absent
+/// here; a live orphan reports its run/sleep state; a `<defunct>` child reports
+/// `'Z'`. `read_proc_stat` reads comm/state even for zombies (whose cmdline is
+/// empty), so this works after close when a name filter no longer would. The
+/// `ppid == me && comm ~ "tmux"` guard rejects a recycled PID that the OS handed
+/// to some unrelated process after the reap — this measurement is scoped to
+/// THIS test's own children, never a sibling's.
 #[cfg(target_os = "linux")]
-fn tmux_zombies(me: u32) -> usize {
-    proc_pids()
-        .into_iter()
-        .filter(|&pid| {
-            matches!(
-                read_proc_stat(pid),
-                Some((comm, 'Z', ppid)) if ppid == me && comm.contains("tmux")
-            )
+fn surviving_children(me: u32, pids: &[u32]) -> Vec<(u32, char)> {
+    pids.iter()
+        .filter_map(|&pid| match read_proc_stat(pid) {
+            Some((comm, state, ppid)) if ppid == me && comm.contains("tmux") => Some((pid, state)),
+            _ => None,
         })
-        .count()
+        .collect()
 }
 
 /// Layer 3a (#495): after the PTY WebSocket closes, the daemon must reap the
@@ -208,8 +349,17 @@ fn tmux_zombies(me: u32) -> usize {
 /// The daemon runs in-process (`serve_with_config`), so the client it forks is
 /// a child of THIS test process and is observable via `/proc`. Pre-fix the
 /// client stays ALIVE after close (task 1 keeps a dup of the master fd, so no
-/// SIGHUP reaches it), and `attach_children` never returns to 0 — the poll
-/// below times out and the test fails. That is the negative control.
+/// SIGHUP reaches it), and its PID never leaves `/proc` — the poll below times
+/// out and the test fails. That is the negative control.
+///
+/// Both assertions are scoped to the exact child PID(s) this test forged,
+/// captured while the client is still alive. An earlier version tallied *all*
+/// `<defunct>` tmux children of the shared test-process PID against a baseline;
+/// because every `#[test]` in this binary runs in that one process, a sibling
+/// test's transient zombie could land inside this test's measurement window and
+/// trip the assertion — a false failure under the full parallel workspace run,
+/// aggravated once #564 added sibling PTY tests here. Pinning the specific PID
+/// removes that cross-test race without serialising the test.
 ///
 /// Linux-only: the assertion reads `/proc`. On other platforms the test is
 /// compiled out (there is no CI target for them).
@@ -233,9 +383,6 @@ async fn pty_ws_reaps_tmux_child_on_close() {
     create_tmux_session_with_cat(&socket, session_name);
 
     let me = std::process::id();
-    // Zombies are shared across sibling `#[test]`s and can't be name-filtered,
-    // so assert on the delta from a pre-action baseline, not an absolute count.
-    let baseline_zombies = tmux_zombies(me);
 
     let ws_url = format!("ws://{}/sessions/{}/pty", daemon.addr, session_name);
     let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url)
@@ -244,13 +391,19 @@ async fn pty_ws_reaps_tmux_child_on_close() {
 
     // Wait for the attach client to actually come up before acting — this is
     // both a positive control (proves the /proc probe sees the child) and a
-    // guard against measuring the reap before the child even exists.
+    // guard against measuring the reap before the child even exists. Capture the
+    // exact PID(s) now, while the client is alive and its cmdline still carries
+    // the (unique) session name; after close a zombie's cmdline is empty, so the
+    // name filter no longer applies and only this pinned PID lets us tell OUR
+    // child apart from a sibling test's.
     let up_deadline = tokio::time::Instant::now() + Duration::from_secs(3);
-    while attach_children(me, session_name) == 0 && tokio::time::Instant::now() < up_deadline {
+    let mut child_pids = attach_child_pids(me, session_name);
+    while child_pids.is_empty() && tokio::time::Instant::now() < up_deadline {
         tokio::time::sleep(Duration::from_millis(50)).await;
+        child_pids = attach_child_pids(me, session_name);
     }
     assert!(
-        attach_children(me, session_name) >= 1,
+        !child_pids.is_empty(),
         "tmux attach client never appeared as a child of the test process"
     );
 
@@ -262,26 +415,35 @@ async fn pty_ws_reaps_tmux_child_on_close() {
     tokio::time::sleep(Duration::from_millis(100)).await;
     let _ = ws.close(None).await;
 
-    // The reap runs asynchronously after the bridge's `select!` returns; poll.
+    // The reap runs asynchronously after the bridge's `select!` returns; poll
+    // until every child PID we forged has left `/proc` (parent `wait()`ed it).
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    let mut live = attach_children(me, session_name);
-    let mut zombies = tmux_zombies(me);
-    while tokio::time::Instant::now() < deadline && (live > 0 || zombies > baseline_zombies) {
+    while tokio::time::Instant::now() < deadline && !surviving_children(me, &child_pids).is_empty()
+    {
         tokio::time::sleep(Duration::from_millis(100)).await;
-        live = attach_children(me, session_name);
-        zombies = tmux_zombies(me);
     }
 
     // Clean up before asserting so a failure can't leak the session.
     kill_tmux_session(&socket, session_name);
 
-    assert_eq!(
-        live, 0,
-        "PTY bridge leaked a live `tmux attach` client after WS close (#495)"
+    // Classify whatever is left of OUR children only — scoped to `child_pids`,
+    // never a process-wide count. A survivor in run/sleep state is a leaked live
+    // orphan; one in `'Z'` is a leaked `<defunct>` zombie. Both must be empty.
+    let survivors = surviving_children(me, &child_pids);
+    let live: Vec<_> = survivors
+        .iter()
+        .filter(|(_, state)| *state != 'Z')
+        .collect();
+    let zombies: Vec<_> = survivors
+        .iter()
+        .filter(|(_, state)| *state == 'Z')
+        .collect();
+    assert!(
+        live.is_empty(),
+        "PTY bridge leaked a live `tmux attach` client after WS close (#495): {live:?}"
     );
     assert!(
-        zombies <= baseline_zombies,
-        "PTY bridge leaked a `<defunct>` tmux zombie after WS close (#495): \
-         {zombies} > baseline {baseline_zombies}"
+        zombies.is_empty(),
+        "PTY bridge leaked a `<defunct>` tmux zombie after WS close (#495): {zombies:?}"
     );
 }

@@ -801,6 +801,15 @@ pub struct RunState {
     pub sandbox_prep: Option<SandboxPrepState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_branch: Option<String>,
+    /// The commit `pdo/run-<id>` was cut from at Run start — the run's fork point,
+    /// FROZEN here from the `RunStarted` payload (#417), same immutability posture as
+    /// `source_branch`/`harness`/`RepoPin.sha`. The stable 3-dot base for the LOC stat
+    /// and the Run diff, so a shared checkout whose HEAD later wanders can no longer
+    /// displace the merge-base and inflate the count. `None` ⇒ a pre-#417 Run (payload
+    /// omits the key) → fall back to `source_branch`, then `HEAD`. NB: distinct from the
+    /// per-node `NodeStarted.base_sha` (sub-worktree ← pipeline branch, ADR-0036).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fork_sha: Option<String>,
     /// The harness chosen at Run creation (#551, ADR-0046), **frozen** here from the
     /// `RunStarted` payload — the middle tier of the precedence chain
     /// `nœud → Run → Projet → instance → plancher (claude)`. Immutable, exactly like
@@ -879,6 +888,7 @@ impl RunState {
             sandbox_image_raw_error: None,
             sandbox_prep: None,
             source_branch: None,
+            fork_sha: None,
             harness: None,
             triggered_by: None,
             pipeline_id: None,
@@ -1329,6 +1339,13 @@ fn apply_run_event(state: &mut RunState, event: &Event) {
                 }
                 if let Some(sb) = payload.get("source_branch").and_then(|v| v.as_str()) {
                     state.source_branch = Some(sb.to_string());
+                }
+                // #417: the FROZEN fork point, projected the same way as `source_branch`.
+                // The create chokepoint writes this key for every new Run (a resolvable
+                // `source_ref`); an absent key (every pre-#417 Run) leaves `None`, and the
+                // LOC/diff base then falls back to `source_branch`, then `HEAD`.
+                if let Some(fs) = payload.get("fork_sha").and_then(|v| v.as_str()) {
+                    state.fork_sha = Some(fs.to_string());
                 }
                 // #551 (ADR-0046): the FROZEN Run harness, projected the same way as
                 // `source_branch`. The create chokepoint only writes this key for a

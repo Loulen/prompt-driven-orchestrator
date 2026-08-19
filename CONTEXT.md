@@ -299,6 +299,8 @@ Parallélisation : les `doc-only` sont gratis-parallèles ; les `code-mutating` 
 
 Le merge-back suppose que le tip de la branche pipeline reste un **ancêtre** de la branche du nœud (fast-forward). Un nœud qui **se rebase** casse l'invariant. Le garde est **structurel**, keyé sur la **base de spawn** (`base_sha`) : si la divergence est l'histoire du Run réécrite par le nœud lui-même, le merge-back se **résout en faveur du nœud** (commit de merge, rien ne devient inatteignable, événement nommé — jamais silencieux) ; si la base est périmée ou inconnue, conflit + échec comme avant (résoudre perdrait du travail arrivé entre-temps). Aucun garde de **contenu** ne marche — mesuré : blobs, chemins et tree-sémantique refusent tous les trois l'occurrence qu'ils devaient sauver (ADR-0036 §3).
 
+**À ne pas confondre** : cette **base de spawn (`base_sha`)** est le fork *sous-worktree ← branche pipeline*, et elle **avance** au fil des merge-backs des nœuds sœurs. C'est un axe distinct du **point de fork du Run (`fork_sha`)** (§*Parallélisation entre Runs*), qui est le fork *branche du Run ← branche source*, **figé** à la création et jamais avancé — la base de la stat LOC / du diff de Run (#417). Réutiliser `base_sha` pour la stat surchargerait silencieusement un terme critique au merge-back : ce sont deux forks, deux durées de vie.
+
 ---
 
 ## Merge — nœud first-class
@@ -407,6 +409,8 @@ Plusieurs Runs peuvent tourner simultanément sur le même repo. Conventions ant
 - Sous-worktrees : `<repo>/.pdo/runs/<run-id>/nodes/<node-id>/iter-<N>/`.
 - `<run-id>` = slug `<timestamp>-<short-uuid>`, lisible et unique.
 
+**Point de fork du Run (`fork_sha`)** *(terme, #417)* : le commit d'où `pdo/run-<run-id>` est **coupé** à la création, **gelé** dans l'événement `RunStarted` (résolu contre le ref local, sans fetch — même posture d'immuabilité que `source_branch`, le harnais gelé et `RepoPin.sha`, ADR-0042/0030). C'est la **base stable en trois-points** de la stat LOC et du diff de Run : figé à la création, il ne peut plus être déplacé par un `HEAD` du checkout partagé qui erre ensuite (le bug #417). Absent (Run d'avant #417) ⇒ repli sur `source_branch`, puis `HEAD`. _Éviter_ : le confondre avec **`base_sha`** (la base de spawn *sous-worktree ← branche pipeline*, ADR-0036 — un autre fork, qui **avance** au fil des merge-backs) ; « HEAD » comme base (c'est précisément l'ancre errante que #417 supprime) ; « checkout partagé » comme référence de diff ; le `source_branch` **vivant** comme cible de diff (même classe d'instabilité que le bug — l'opérateur peut le rebaser/supprimer).
+
 **Nom placeholder** *(terme)* : nom lisible posé par le daemon au spawn, déterministe et immédiat, garanti présent même pour un Run prompt-less. _Éviter_ : nom temporaire, titre par défaut.
 
 **Nom descriptif** *(terme)* : nom posé best-effort par le Pipeline Manager dans son propre tour, une fois qu'il sait ce que fait le Run ; remplace le placeholder s'il aboutit, sans jamais le supprimer (un Run a toujours un nom). **Désactivable par-Run et par-Trigger** (défaut d'instance `default_auto_name`, résolu `stored → env PDO_DEFAULT_AUTO_NAME → true`, ADR-0015, #338) : désactivé, le Run garde son nom placeholder et le manager n'est pas instruit de renommer. _Éviter_ : nom final, rename automatique.
@@ -417,7 +421,7 @@ Quatre métriques dans le panneau d'info (#100, #272) :
 
 - **Durée** : wall-clock entre `started_at` et `completed_at`, dérivée à l'affichage (jamais persistée), live tant que le Run est vivant. Un Run `Paused` continue de compter.
 - **Sessions de nœud lancées** : compte **cumulatif** des démarrages de session, re-spawns inclus, manager exclu. À distinguer de la gauge « sessions vivantes » du cap.
-- **LOC** : `git diff --numstat` en **trois-points** depuis le point de fork (stable même si `main` avance), **exclut `.pdo/`**. Live-only : « — » pour un Run archivé (branche supprimée), à distinguer de « 0 » (diff vide).
+- **LOC** : `git diff --numstat` en **trois-points** depuis le **point de fork du Run (`fork_sha`)** — jamais depuis le `HEAD` du checkout partagé (#417) —, stable même si `main` avance **et** si le checkout est garé sur une branche divergente, **exclut `.pdo/`**. Live-only : « — » pour un Run archivé (branche supprimée), à distinguer de « 0 » (diff vide).
 - **Coût (est.)** : **estimation** — pas une facture — dérivée à la lecture des transcripts Claude Code locaux, jamais persistée. Agrège toutes les sessions du Run. Un modèle non tarifé ⇒ borne basse signalée « † » (`partial`), et `unpriced_models` (#425) nomme les familles concernées — champ rendu dans le tooltip du † et présent sur `GET /runs/:id` comme, unioné par bucket, sur `GET /stats/cost`. Survit à l'archivage (les transcripts restent). Modèle de calcul et dédup → ADR-0022 ; table de prix → ADR-0034.
 **Table de prix embarquée / fetchée / manuelle / résolue** *(termes, ADR-0034)* : l'**embarquée** est le plancher compilé dans le binaire ; la **fetchée** est écrite par le daemon seul depuis models.dev, hors du chemin de lecture ; la **manuelle** est écrite par l'humain seul ; la **résolue** est la fusion **par clé de famille** avec précédence `manuel → fetché → embarquée`. Un écrivain par fichier ; rien n'est jamais seedé. Depuis #528, la **résolue** est aussi **exposée en lecture** sur `GET /stats/cost` (tableau `resolved` : tier gagnant + `$/MTok` par famille, rendu dans l'onglet Stats → Cost à côté de « Sync costs ») — additif, lecture seule, même `PriceTable` que le fold de coût, donc jamais divergente du tarificateur (#373). _Éviter_ : « surcharge de prix », « merge des tables », « prix seedés », « prix live » (la lecture est toujours locale).
 
@@ -427,7 +431,7 @@ Modale **Stats** : agrégats **transverses** filtrables par période (runs/erreu
 
 ### Diff de Run (surface de relecture)
 
-Section **Diff** repliable du panneau d'info (#116, #376) — distincte de la stat LOC et du diff sémantique. Trois portées : **diff de Run** (trois-points depuis le fork, exclut `.pdo/`, mêmes bornes que LOC pour que « compté » et « montré » coïncident), **diff de nœud** (deux-points, connu-imparfait — la base fidèle par nœud est différée), **Run archivé** (« Diff not preserved for archived runs », à distinguer de « No changes »).
+Section **Diff** repliable du panneau d'info (#116, #376) — distincte de la stat LOC et du diff sémantique. Trois portées : **diff de Run** (trois-points depuis le **point de fork du Run (`fork_sha`)**, jamais depuis le `HEAD` du checkout partagé — #417 —, exclut `.pdo/`, mêmes bornes que LOC pour que « compté » et « montré » coïncident), **diff de nœud** (deux-points, connu-imparfait — la base fidèle par nœud est différée), **Run archivé** (« Diff not preserved for archived runs », à distinguer de « No changes »).
 
 ### Contrôles de Run (niveau Run)
 

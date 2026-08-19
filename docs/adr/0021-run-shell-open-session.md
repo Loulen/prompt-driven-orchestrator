@@ -75,7 +75,7 @@ attachable via le terminal inline existant.
 
 - Kill-on-resume enlève le writer, pas la saleté déjà posée ; le fix robuste (stash/reset au
   resume) est hors MVP.
-- Origin check WebSocket = localhost (ADR-0005) : même contrainte que tous les terminaux inline.
+- Origin check WebSocket = allowlist explicite, défaut localhost et extensible par configuration (ADR-0005, #564) : même contrainte que tous les terminaux inline.
 - `exit`/Ctrl-D respawn un shell frais au lieu de fermer : la persistance prime — la fermeture
   réelle passe par l'archivage ou le reaper, jamais par le shell lui-même.
 

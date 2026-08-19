@@ -648,7 +648,7 @@ ADR-0005. **Terminal interactif inline** dans le panneau de détail du nœud (We
 - **« Agrandir » est toujours un geste utilisateur explicite** (#270) : ni la sélection d'un nœud ni l'auto-snap n'agrandit d'eux-mêmes.
 - **Trois états d'affichage** (#346) : `split` (défaut d'une node vivante), `agrandi` (geste), `réduit` (défaut au clic sur une node à session terminée — les outputs priment). Défaut au **montage**, pas de repli réactif.
 
-Multi-client par session : gratuit côté tmux. Sécurité : origin check sur la WebSocket (anti DNS-rebinding).
+Multi-client par session : gratuit côté tmux. Sécurité : un contrôle d'`Origin` garde **les deux** WebSockets (le terminal PTY *et* le flux d'événements du dashboard) contre le DNS-rebinding / CSWSH. L'allowlist par défaut est loopback (`localhost`/`127.0.0.1`) et **s'étend** par configuration pour un déploiement derrière reverse-proxy / domaine public — posture « Mono-user, local » inchangée (le daemon reste sans auth ni TLS ; le proxy les porte).
 
 ### Nœuds interactifs — signal de complétion
 

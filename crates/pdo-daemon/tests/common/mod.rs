@@ -96,6 +96,7 @@ impl TestDaemon {
                 sandbox_home_override: None,
                 price_source_url: None,
                 price_refresh_at_boot: false,
+                allowed_ws_origins: Vec::new(),
                 // #450: layer-3 tests drive firing via `run_trigger_tick`; the
                 // background heartbeat's immediate boot tick would race the seam.
                 run_trigger_scheduler_loop: false,
@@ -146,6 +147,7 @@ impl TestDaemon {
                 sandbox_home_override: Some(tempdir.path().to_path_buf()),
                 price_source_url: None,
                 price_refresh_at_boot: false,
+                allowed_ws_origins: Vec::new(),
                 // #450: layer-3 tests drive firing via `run_trigger_tick`; the
                 // background heartbeat's immediate boot tick would race the seam.
                 run_trigger_scheduler_loop: false,
@@ -197,6 +199,7 @@ impl TestDaemon {
                 sandbox_home_override: Some(tempdir.path().to_path_buf()),
                 price_source_url: None,
                 price_refresh_at_boot: false,
+                allowed_ws_origins: Vec::new(),
                 // #450: layer-3 tests drive firing via `run_trigger_tick`; the
                 // background heartbeat's immediate boot tick would race the seam.
                 run_trigger_scheduler_loop: false,
@@ -251,6 +254,7 @@ impl TestDaemon {
                 sandbox_home_override: Some(tempdir.path().to_path_buf()),
                 price_source_url: None,
                 price_refresh_at_boot: false,
+                allowed_ws_origins: Vec::new(),
                 // #450: layer-3 tests drive firing via `run_trigger_tick`; the
                 // background heartbeat's immediate boot tick would race the seam.
                 run_trigger_scheduler_loop: false,
@@ -294,6 +298,7 @@ impl TestDaemon {
                 sandbox_home_override: None,
                 price_source_url: None,
                 price_refresh_at_boot: false,
+                allowed_ws_origins: Vec::new(),
                 // #450: layer-3 tests drive firing via `run_trigger_tick`; the
                 // background heartbeat's immediate boot tick would race the seam.
                 run_trigger_scheduler_loop: false,
@@ -346,10 +351,57 @@ impl TestDaemon {
                 sandbox_home_override: Some(tempdir.path().to_path_buf()),
                 price_source_url: Some(price_source_url),
                 price_refresh_at_boot: true,
+                allowed_ws_origins: Vec::new(),
                 // #450: deterministic tick seam — no background heartbeat.
                 run_trigger_scheduler_loop: false,
                 // See the sibling literals: armed sweeps, per-daemon opt-out.
                 nested_daemon: false,
+            },
+        )
+        .await?;
+
+        Ok(Self {
+            addr: handle.addr,
+            tempdir,
+            handle: Some(handle),
+        })
+    }
+
+    /// Spawn a daemon whose WebSocket Origin allowlist is EXTENDED with `origins`
+    /// (#564), as if `PDO_ALLOWED_WS_ORIGINS` were set. Additive: the four
+    /// localhost/127.0.0.1 defaults still pass, so a test can assert both that a
+    /// configured public origin is accepted and that loopback keeps working.
+    ///
+    /// Per-daemon config, never a process-global `std::env::set_var` (#181): the
+    /// env is read exactly once in `DaemonConfig::from_env`, and the seam a test
+    /// drives is this `DaemonConfig` field. The daemon binds an ephemeral port,
+    /// so an allowlist entry must be PORT-INDEPENDENT (a public domain, not
+    /// `127.0.0.1:<port>` — the defaults already cover loopback).
+    pub async fn spawn_with_allowed_ws_origins<F>(setup: F, origins: Vec<String>) -> Result<Self>
+    where
+        F: FnOnce(&Path) -> Result<()>,
+    {
+        let tempdir = tempfile::tempdir()?;
+        setup(tempdir.path())?;
+
+        let handle = serve_with_config(
+            SocketAddr::from(([127, 0, 0, 1], 0)),
+            tempdir.path().to_path_buf(),
+            DaemonConfig {
+                tmux_cmd_override: Some("exec true".to_string()),
+                panic_on_trigger_name: None,
+                panic_on_stale_sweep: false,
+                panic_on_spawn: false,
+                service_health_override: None,
+                docker_cmd_override: None,
+                sandbox_home_override: None,
+                price_source_url: None,
+                price_refresh_at_boot: false,
+                // #450: deterministic tick seam — no background heartbeat.
+                run_trigger_scheduler_loop: false,
+                // See the sibling literals: armed sweeps, per-daemon opt-out.
+                nested_daemon: false,
+                allowed_ws_origins: origins,
             },
         )
         .await?;

@@ -10,6 +10,25 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.28.0
+
+**Changement de comportement observable (durcissement sécurité).** Le contrôle d'`Origin`
+WebSocket s'étend au second endpoint : `/ws` (le flux d'événements du dashboard) **vérifie
+désormais l'`Origin`** comme le fait déjà le terminal PTY. Jusqu'ici `/ws` n'avait aucune garde —
+n'importe quelle page ouverte dans le navigateur de l'opérateur pouvait s'y abonner et exfiltrer
+passivement tous les événements (repos, prompts, verdicts). Un `Origin` hors allowlist reçoit
+maintenant un `403`.
+
+L'allowlist est **configurable** via `PDO_ALLOWED_WS_ORIGINS` (liste d'origines exactes séparées
+par des virgules), **additive** aux défauts localhost — nécessaire derrière un reverse-proxy / ALB
+sur domaine public (cf. README, *Behind a reverse proxy*). Env-only et jamais réglable depuis l'UI
+(le HTTP du daemon n'est pas authentifié).
+
+Échappatoire en développement : le proxy Vite réécrit déjà l'`Origin` (`rewriteWsOrigin` dans
+`vite.config.ts`), donc `make dev` fonctionne sans configuration. Pour un front dev servi sur un
+port non standard, poser `PDO_ALLOWED_WS_ORIGINS=http://localhost:<port>`. Bonus : ce même correctif
+répare le terminal PTY, cassé en dev Vite depuis toujours (même cause d'`Origin`).
+
 ## 1.27.0
 
 **Cassant, migration automatique.** Le **harnais agentique** (PRD #549, quatre tranches — #550,

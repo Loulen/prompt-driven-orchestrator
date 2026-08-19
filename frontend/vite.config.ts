@@ -16,8 +16,16 @@ export default defineConfig({
   server: {
     host: true,
     proxy: {
-      '/ws': { target: daemonTarget, ws: true },
-      '/sessions': { target: daemonTarget, ws: true },
+      // #564: the daemon checks the WebSocket `Origin` on BOTH WS routes as a
+      // DNS-rebinding / CSWSH guard. In `make dev` the browser's Origin is the
+      // Vite dev server (`:5173`), not the daemon, so without rewriting it the
+      // daemon answers 403 and the dashboard/terminal go dark. `rewriteWsOrigin`
+      // sets the upstream Origin to the proxy target so the check passes — the
+      // dev-only counterpart to `PDO_ALLOWED_WS_ORIGINS` in prod, and it never
+      // touches the shipped binary's defaults. (This also fixes the PTY terminal,
+      // which was silently broken under Vite dev for the same reason.)
+      '/ws': { target: daemonTarget, ws: true, rewriteWsOrigin: true },
+      '/sessions': { target: daemonTarget, ws: true, rewriteWsOrigin: true },
       '/runs': daemonTarget,
       '/pipelines': daemonTarget,
       '/library': daemonTarget,

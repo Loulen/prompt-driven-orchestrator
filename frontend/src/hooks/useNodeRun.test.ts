@@ -379,4 +379,92 @@ describe("useNodeRun — retry", () => {
     expect(result.current.retryConfirm).toBeNull();
     expect(api.retryNode).not.toHaveBeenCalled();
   });
+
+  // #487: the daemon's 409 must become a rendered verdict, not a swallowed error.
+  it("surfaces a refused retry as an actionVerdict instead of swallowing it", async () => {
+    vi.mocked(api.retryNode)
+      .mockRejectedValue(
+        new Error(
+          "run r is Failed: no scheduling on a non-running run — resume the run first",
+        ),
+      );
+    const onRetryStarted = vi.fn();
+    const { result } = renderHook(() =>
+      useNodeRun("run-1", makeNode({ status: "failed" }), 1, { onRetryStarted }),
+    );
+    await flush();
+
+    await act(async () => {
+      await result.current.retry();
+    });
+    expect(result.current.actionVerdict).toEqual({
+      action: "retry",
+      message: "run r is Failed: no scheduling on a non-running run — resume the run first",
+    });
+    // A refused retry did not revive the terminal.
+    expect(onRetryStarted).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a refused retry from the confirm path too", async () => {
+    vi.mocked(api.retryNodePreview).mockResolvedValue({
+      downstream: ["b"],
+      affected_count: 1,
+      with_artifacts: ["b"],
+    });
+    vi.mocked(api.retryNode).mockRejectedValue(new Error("resume the run first"));
+    const { result } = renderHook(() =>
+      useNodeRun("run-1", makeNode({ status: "failed" }), 1, {}),
+    );
+    await flush();
+
+    await act(async () => {
+      await result.current.retry();
+    });
+    expect(result.current.retryConfirm).toEqual({ affectedCount: 1 });
+
+    await act(async () => {
+      await result.current.confirmRetry();
+    });
+    expect(result.current.retryConfirm).toBeNull();
+    expect(result.current.actionVerdict).toEqual({
+      action: "retry",
+      message: "resume the run first",
+    });
+  });
+
+  it("clears a prior refusal when a fresh retry is attempted", async () => {
+    vi.mocked(api.retryNode).mockRejectedValueOnce(new Error("resume the run first"));
+    const { result } = renderHook(() =>
+      useNodeRun("run-1", makeNode({ status: "failed" }), 1, {}),
+    );
+    await flush();
+
+    await act(async () => {
+      await result.current.retry();
+    });
+    expect(result.current.actionVerdict?.message).toBe("resume the run first");
+
+    // Second attempt succeeds (mock falls back to the resolved default): the stale
+    // refusal must not linger.
+    await act(async () => {
+      await result.current.retry();
+    });
+    expect(result.current.actionVerdict).toBeNull();
+  });
+
+  it("surfaces a refused Start (force-spawn 409) as an actionVerdict", async () => {
+    vi.mocked(api.startNode).mockRejectedValue(new Error("session cap reached"));
+    const { result } = renderHook(() =>
+      useNodeRun("run-1", makeNode({ status: "pending" }), 1, {}),
+    );
+    await flush();
+
+    await act(async () => {
+      await result.current.start();
+    });
+    expect(result.current.actionVerdict).toEqual({
+      action: "start",
+      message: "session cap reached",
+    });
+  });
 });

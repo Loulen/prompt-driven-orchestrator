@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { X, ChevronLeft, ChevronRight } from "lucide-react";
 import Markdown from "react-markdown";
+import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { fetchArtifact, fetchNodeIO, artifactUrl } from "../api";
 import type { FileInfo } from "../api";
@@ -8,6 +9,16 @@ import type { IterationInfo, PortType } from "../types";
 import type { Element } from "hast";
 import ImageLightbox from "./ImageLightbox";
 import MermaidDiagram from "./MermaidDiagram";
+
+// #369 (residual flicker): react-markdown remounts a custom component whenever the
+// `components` entry at its position changes IDENTITY. NodeDetailPanel polls node
+// I/O and re-renders the modal on every tick; rebuilding `remarkPlugins`/`components`
+// inline handed react-markdown a fresh `components.pre` each time, remounting the
+// routed <MermaidDiagram> — which resets to its empty `aria-busy` frame before
+// re-rendering the SVG (the blink). Hoisting `remarkPlugins` to module scope (and
+// memoising `components` per instance below) keeps those identities stable, so a
+// poll-driven re-render no longer remounts the diagram.
+const REMARK_PLUGINS = [remarkGfm];
 
 export type ArtifactSource =
   | { kind: "static"; files: FileInfo[] }
@@ -177,6 +188,56 @@ export default function MarkdownArtifactModal({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [handleKeyDown]);
 
+  // #369: memoise the markdown component overrides so their identities survive a
+  // poll-driven re-render (see the module-scope note on REMARK_PLUGINS). `setLightbox`
+  // is a stable useState setter, so an empty dep array is correct and keeps the
+  // `pre`/`img` references constant for the modal's whole lifetime — no remount of
+  // the routed <MermaidDiagram>, hence no flicker.
+  const markdownComponents = useMemo<Components>(
+    () => ({
+      img: ({ src, alt }) => {
+        const url = typeof src === "string" ? src : undefined;
+        return (
+          <img
+            src={url}
+            alt={alt ?? ""}
+            className="cursor-zoom-in rounded transition-opacity hover:opacity-90"
+            onClick={() => {
+              // A markdown-embedded <img> is rendered in isolation by
+              // react-markdown — there is no collected list to page through, so it
+              // is an honest single-image set.
+              if (url) setLightbox({ images: [url], index: 0 });
+            }}
+          />
+        );
+      },
+      // A ```mermaid fenced block parses to
+      // <pre><code class="language-mermaid">src</code></pre>. Detect it on the
+      // child <code> and unwrap to a rendered SVG diagram; every other block falls
+      // through to a plain <pre>. We override `pre` (not `code`) to avoid emitting a
+      // <div> inside a <pre> (invalid nesting). Regular ```ts / ```bash fences are
+      // untouched. (#240)
+      pre: ({ node, children, ...rest }) => {
+        const child = node?.children?.[0];
+        const isMermaid =
+          child?.type === "element" &&
+          child.tagName === "code" &&
+          ((child.properties?.className as string[]) ?? []).includes(
+            "language-mermaid",
+          );
+        if (isMermaid) {
+          const codeEl = child as Element;
+          const text = codeEl.children?.[0];
+          const source =
+            text && text.type === "text" ? text.value.replace(/\n$/, "") : "";
+          return <MermaidDiagram source={source} />;
+        }
+        return <pre {...rest}>{children}</pre>;
+      },
+    }),
+    [],
+  );
+
   const frontmatter = file?.frontmatter;
   const bodyContent = content ? stripFrontmatter(content) : null;
 
@@ -341,52 +402,8 @@ export default function MarkdownArtifactModal({
               ) : bodyContent ? (
                 <div className="artifact-markdown prose-sm">
                   <Markdown
-                    remarkPlugins={[remarkGfm]}
-                    components={{
-                      img: ({ src, alt }) => {
-                        const url = typeof src === "string" ? src : undefined;
-                        return (
-                          <img
-                            src={url}
-                            alt={alt ?? ""}
-                            className="cursor-zoom-in rounded transition-opacity hover:opacity-90"
-                            onClick={() => {
-                              // A markdown-embedded <img> is rendered in
-                              // isolation by react-markdown — there is no
-                              // collected list to page through, so it is an
-                              // honest single-image set.
-                              if (url) setLightbox({ images: [url], index: 0 });
-                            }}
-                          />
-                        );
-                      },
-                      // A ```mermaid fenced block parses to
-                      // <pre><code class="language-mermaid">src</code></pre>.
-                      // Detect it on the child <code> and unwrap to a rendered
-                      // SVG diagram; every other block falls through to a plain
-                      // <pre>. We override `pre` (not `code`) to avoid emitting a
-                      // <div> inside a <pre> (invalid nesting). Regular ```ts /
-                      // ```bash fences are untouched. (#240)
-                      pre: ({ node, children, ...rest }) => {
-                        const child = node?.children?.[0];
-                        const isMermaid =
-                          child?.type === "element" &&
-                          child.tagName === "code" &&
-                          (
-                            (child.properties?.className as string[]) ?? []
-                          ).includes("language-mermaid");
-                        if (isMermaid) {
-                          const codeEl = child as Element;
-                          const text = codeEl.children?.[0];
-                          const source =
-                            text && text.type === "text"
-                              ? text.value.replace(/\n$/, "")
-                              : "";
-                          return <MermaidDiagram source={source} />;
-                        }
-                        return <pre {...rest}>{children}</pre>;
-                      },
-                    }}
+                    remarkPlugins={REMARK_PLUGINS}
+                    components={markdownComponents}
                   >
                     {bodyContent}
                   </Markdown>

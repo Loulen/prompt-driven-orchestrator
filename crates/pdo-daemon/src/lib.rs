@@ -26710,10 +26710,9 @@ edges: []
         git(repo, &["commit", "-m", "advance main after divergence"]);
 
         // Freeze the fork point = current default-branch tip.
-        let fork_sha =
-            String::from_utf8_lossy(&git(repo, &["rev-parse", "HEAD"]).stdout)
-                .trim()
-                .to_string();
+        let fork_sha = String::from_utf8_lossy(&git(repo, &["rev-parse", "HEAD"]).stdout)
+            .trim()
+            .to_string();
 
         let run_id = "diff-parked-fork";
         let state = test_state_with_dir(repo).await;

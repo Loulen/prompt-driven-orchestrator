@@ -1,4 +1,4 @@
-import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, Project } from "./types";
+import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, Project, BranchRef } from "./types";
 import { foldHarnessOntoNode } from "./lib/harness";
 
 const BASE = "";
@@ -926,8 +926,8 @@ export async function validateRepo(path: string): Promise<ValidateRepoResponse> 
   return resp.json();
 }
 
-export function listBranches(repoPath: string): Promise<string[]> {
-  return request<string[]>(
+export function listBranches(repoPath: string): Promise<BranchRef[]> {
+  return request<BranchRef[]>(
     "GET",
     `/repos/branches?path=${encodeURIComponent(repoPath)}`,
     { label: "GET /repos/branches" },

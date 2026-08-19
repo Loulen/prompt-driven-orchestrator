@@ -2,12 +2,16 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { useLaunchTargets } from "./useLaunchTargets";
 import * as api from "../api";
-import type { PipelineListEntry } from "../types";
+import type { BranchRef, PipelineListEntry } from "../types";
 
 vi.mock("../api", () => ({
   fetchPipelines: vi.fn(),
   listBranches: vi.fn(),
 }));
+
+// #571: /repos/branches returns `[{name, kind}]`. These keep the fixtures terse.
+const local = (name: string): BranchRef => ({ name, kind: "local" });
+const remote = (name: string): BranchRef => ({ name, kind: "remote" });
 
 function pipeline(over: Partial<PipelineListEntry> = {}): PipelineListEntry {
   return {
@@ -24,7 +28,9 @@ function pipeline(over: Partial<PipelineListEntry> = {}): PipelineListEntry {
 
 beforeEach(() => {
   vi.mocked(api.fetchPipelines).mockReset().mockResolvedValue([]);
-  vi.mocked(api.listBranches).mockReset().mockResolvedValue(["main", "dev", "feature-x"]);
+  vi.mocked(api.listBranches)
+    .mockReset()
+    .mockResolvedValue([local("main"), local("dev"), local("feature-x")]);
 });
 
 function setup(open = true) {
@@ -121,14 +127,18 @@ describe("useLaunchTargets — the branches", () => {
     const { result } = setup();
     await load(result, "/home/user/project");
     expect(api.listBranches).toHaveBeenCalledWith("/home/user/project");
-    expect(result.current.branches).toEqual(["main", "dev", "feature-x"]);
+    expect(result.current.branches).toEqual([
+      local("main"),
+      local("dev"),
+      local("feature-x"),
+    ]);
     expect(result.current.branchesLoading).toBe(false);
   });
 
   it("flags the load while it is in flight", async () => {
-    let release!: (branches: string[]) => void;
+    let release!: (branches: BranchRef[]) => void;
     vi.mocked(api.listBranches).mockReturnValue(
-      new Promise<string[]>((resolve) => {
+      new Promise<BranchRef[]>((resolve) => {
         release = resolve;
       }),
     );
@@ -140,11 +150,11 @@ describe("useLaunchTargets — the branches", () => {
     expect(result.current.branchesLoading).toBe(true);
 
     await act(async () => {
-      release(["main"]);
+      release([local("main")]);
       await pending;
     });
     expect(result.current.branchesLoading).toBe(false);
-    expect(result.current.branches).toEqual(["main"]);
+    expect(result.current.branches).toEqual([local("main")]);
   });
 
   /**
@@ -159,7 +169,7 @@ describe("useLaunchTargets — the branches", () => {
     await load(result, "/home/user/project-a");
     expect(result.current.sourceBranch).toBe("main");
 
-    vi.mocked(api.listBranches).mockResolvedValue(["master"]);
+    vi.mocked(api.listBranches).mockResolvedValue([local("master")]);
     await load(result, "/home/user/project-b");
     expect(result.current.sourceBranch).toBe("master");
   });
@@ -171,7 +181,7 @@ describe("useLaunchTargets — the branches", () => {
     await load(result, "/home/user/project-a");
     act(() => result.current.setSourceBranch("feature-x"));
 
-    vi.mocked(api.listBranches).mockResolvedValue(["main", "feature-x"]);
+    vi.mocked(api.listBranches).mockResolvedValue([local("main"), local("feature-x")]);
     await load(result, "/home/user/project-b");
     expect(result.current.sourceBranch).toBe("feature-x");
   });
@@ -179,17 +189,79 @@ describe("useLaunchTargets — the branches", () => {
   it("prefers main, then master, then whatever comes first", async () => {
     const { result } = setup();
 
-    vi.mocked(api.listBranches).mockResolvedValue(["dev", "master", "main"]);
+    vi.mocked(api.listBranches).mockResolvedValue([
+      local("dev"),
+      local("master"),
+      local("main"),
+    ]);
     await load(result, "/a");
     expect(result.current.sourceBranch).toBe("main");
 
-    vi.mocked(api.listBranches).mockResolvedValue(["dev", "master"]);
+    vi.mocked(api.listBranches).mockResolvedValue([local("dev"), local("master")]);
     await load(result, "/b");
     expect(result.current.sourceBranch).toBe("master");
 
-    vi.mocked(api.listBranches).mockResolvedValue(["topic", "other"]);
+    vi.mocked(api.listBranches).mockResolvedValue([local("topic"), local("other")]);
     await load(result, "/c");
     expect(result.current.sourceBranch).toBe("topic");
+  });
+
+  // #571: the default is locality-aware. A remote is NEVER chosen while a local
+  // exists — even when a remote `origin/main` is present and the only local is
+  // `master`. This is the exact bug the #454 rule exists to prevent, now that
+  // remotes share the list.
+  it("never defaults to a remote while a local exists (#571)", async () => {
+    const { result } = setup();
+    vi.mocked(api.listBranches).mockResolvedValue([
+      local("master"),
+      remote("origin/main"),
+      remote("origin/master"),
+    ]);
+    await load(result, "/a");
+    expect(result.current.sourceBranch).toBe("master");
+  });
+
+  // #571: with zero local branches (a remote-only repo state), fall through to a
+  // remote — preferring `/main`, then `/master`, then the first remote.
+  it("falls back to a remote only when there is no local (#571)", async () => {
+    const { result } = setup();
+
+    vi.mocked(api.listBranches).mockResolvedValue([
+      remote("origin/dev"),
+      remote("origin/master"),
+      remote("origin/main"),
+    ]);
+    await load(result, "/a");
+    expect(result.current.sourceBranch).toBe("origin/main");
+
+    vi.mocked(api.listBranches).mockResolvedValue([
+      remote("origin/dev"),
+      remote("origin/master"),
+    ]);
+    await load(result, "/b");
+    expect(result.current.sourceBranch).toBe("origin/master");
+
+    vi.mocked(api.listBranches).mockResolvedValue([
+      remote("upstream/topic"),
+      remote("origin/other"),
+    ]);
+    await load(result, "/c");
+    expect(result.current.sourceBranch).toBe("upstream/topic");
+  });
+
+  // #571: membership is on `name`, so a remote branch the user picked survives a
+  // re-list that still offers it (no needless re-seed to the default local).
+  it("keeps a chosen remote branch when the repo still offers it (#571)", async () => {
+    const { result } = setup();
+    vi.mocked(api.listBranches).mockResolvedValue([
+      local("main"),
+      remote("origin/feature-x"),
+    ]);
+    await load(result, "/a");
+    act(() => result.current.setSourceBranch("origin/feature-x"));
+
+    await load(result, "/a");
+    expect(result.current.sourceBranch).toBe("origin/feature-x");
   });
 
   it("re-selects nothing for a repo that lists no branch at all", async () => {

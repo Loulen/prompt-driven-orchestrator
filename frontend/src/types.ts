@@ -837,6 +837,21 @@ export interface PipelineVariableInfo {
   default: unknown;
 }
 
+// --- Launch targets ---
+
+/**
+ * A branch the daemon offers as a Run source (#571). `name` is posted back as
+ * `source_branch` **verbatim** — a remote-tracking ref keeps its `origin/`
+ * prefix, so what the field shows is exactly what launches (#452/#454). `kind`
+ * is authoritative and comes from the full refname on the daemon: never
+ * re-derive locality by string surgery client-side, a *local* branch may
+ * legitimately be named `origin/x`.
+ */
+export interface BranchRef {
+  name: string;
+  kind: "local" | "remote";
+}
+
 // --- Edit mode types ---
 
 export type PipelineScope = "repo" | "user" | "library";

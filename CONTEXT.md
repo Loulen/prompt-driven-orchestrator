@@ -451,6 +451,7 @@ Le **repo cible** d'un Run ou d'un Trigger est le dépôt git dans lequel il tra
 - **Un Trigger à dépôt nul est une référence pendante, pas un défaut** : refus en amont du guard (jamais lancé), Trigger **dormant**, « Run now » répond 409 avec la raison.
 - **`effective_repo` (résolu) ≠ `target_repo` (brut)** : le brut reste la valeur saisie (badge, détail, pré-remplissage) ; le résolu ne sert qu'à la clé de regroupement des listes. On ne réécrit jamais le brut côté serveur. Le regroupement par repo (listes Runs/Triggers) n'apparaît que si ≥ 2 repos distincts ; sinon liste plate.
 - **Repos récents** : projection à la lecture des cibles portées par les Runs, comparaison verbatim.
+- **Branche source** *(terme, #571)* : le point de coupe d'un Run — la réf de branche depuis laquelle sa branche `pdo/run-<id>` est créée. Une branche **locale** (`feature-x`) ou une **branche de suivi remote** (`origin/feature-x`), stockée **verbatim** — on ne réécrit jamais ce que l'utilisateur a choisi. Optionnelle : absente, le HEAD du repo cible fait défaut. Résolue **sans fetch** : une réf de suivi vaut ce que le dernier `git fetch` de l'opérateur en a fait (même contrat que la base des secondaires, ADR-0042) ; la fraîcheur appartient à l'opérateur, jamais au daemon. _Éviter_ : « branche distante » au sens « réf vivante côté serveur » (le daemon ne parle jamais au remote), « pull automatique ».
 
 ### Multi-repo par Run (#465, ADR-0042)
 

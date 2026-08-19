@@ -916,11 +916,31 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
                   {!branchesLoading && branches.length === 0 && (
                     <option value="">Loading...</option>
                   )}
-                  {branches.map((b) => (
-                    <option key={b} value={b}>
-                      {b}
-                    </option>
-                  ))}
+                  {/* #571: two groups, Local then Remote — mirroring the pipeline
+                      select below. The `value` is the branch name verbatim
+                      (`origin/x` for a remote), so what shows is what launches. */}
+                  {branches.some((b) => b.kind === "local") && (
+                    <optgroup label="Local">
+                      {branches
+                        .filter((b) => b.kind === "local")
+                        .map((b) => (
+                          <option key={`local-${b.name}`} value={b.name}>
+                            {b.name}
+                          </option>
+                        ))}
+                    </optgroup>
+                  )}
+                  {branches.some((b) => b.kind === "remote") && (
+                    <optgroup label="Remote">
+                      {branches
+                        .filter((b) => b.kind === "remote")
+                        .map((b) => (
+                          <option key={`remote-${b.name}`} value={b.name}>
+                            {b.name}
+                          </option>
+                        ))}
+                    </optgroup>
+                  )}
                 </select>
               </div>
             )}

@@ -10,6 +10,18 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.29.0
+
+Rien de cassant, aucune migration. Les **branches remote entrent dans la sélection de branche
+source** du formulaire de nouveau Run (#571). `list_branches` liste désormais les réfs de suivi
+(`git for-each-ref refs/remotes`) en plus des locales ; l'endpoint `GET /repos/branches` renvoie un
+tableau `{name, kind}` (`local` | `remote`), locales d'abord. La note de version qui ne se déduit pas
+du titre : la branche source choisie est **stockée verbatim** (une remote reste `origin/xxx`), le
+worktree est **coupé directement sur la réf de suivi sans `git fetch`** ni matérialisation d'une
+branche locale, la **jumelle locale d'une remote est dédupliquée**, le symref `origin/HEAD` est filtré,
+et le défaut proposé n'est **jamais une remote** tant qu'une locale existe. Une réf source inconnue
+est rejetée en 400 (nommant branche et dépôt), jamais un Run à moitié né.
+
 ## 1.28.0
 
 Rien de cassant, aucune migration (payload d'event schemaless, blob JSON de trigger — le champ

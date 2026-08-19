@@ -2,7 +2,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import NewRunModal from "./NewRunModal";
 import { useEditStore } from "../stores/editStore";
-import type { InstanceSettings, PipelineListEntry, Trigger } from "../types";
+import type { BranchRef, InstanceSettings, PipelineListEntry, Trigger } from "../types";
+
+// #571: /repos/branches returns `[{name, kind}]`. Terse constructors for fixtures.
+const local = (name: string): BranchRef => ({ name, kind: "local" });
+const remote = (name: string): BranchRef => ({ name, kind: "remote" });
 
 const makePipeline = (overrides: Partial<PipelineListEntry> = {}): PipelineListEntry => ({
   id: "test-pipe",
@@ -57,7 +61,11 @@ vi.mock("../api", () => ({
   createTrigger: vi.fn().mockResolvedValue({ id: "trg-test" }),
   updateTrigger: vi.fn().mockResolvedValue({ id: "trg-test" }),
   validateRepo: vi.fn().mockResolvedValue({ valid: true }),
-  listBranches: vi.fn().mockResolvedValue(["main", "dev", "feature-x"]),
+  listBranches: vi.fn().mockResolvedValue([
+    { name: "main", kind: "local" },
+    { name: "dev", kind: "local" },
+    { name: "feature-x", kind: "local" },
+  ]),
   promotePipeline: vi.fn().mockResolvedValue({ id: "test-pipe", drifted: false }),
   testGuard: vi.fn().mockResolvedValue({
     outcome: "pass",
@@ -78,7 +86,7 @@ beforeEach(() => {
   // `mockResolvedValue` set inside one test leaks into every later one. The
   // repo-switch tests (#454) re-point this mock per repo, so restore the
   // documented default here rather than trusting each test to clean up.
-  vi.mocked(listBranches).mockResolvedValue(["main", "dev", "feature-x"]);
+  vi.mocked(listBranches).mockResolvedValue([local("main"), local("dev"), local("feature-x")]);
   vi.useFakeTimers({ shouldAdvanceTime: true });
   useEditStore.setState({
     openTabs: [],
@@ -309,6 +317,58 @@ describe("NewRunModal — multi-repo form flow", () => {
     });
   });
 
+  // #571: remote-tracking refs render under a "Remote" optgroup, locals under
+  // "Local", and the default lands on the local `main` — never a remote while a
+  // local exists.
+  it("groups branches into Local and Remote, defaulting to a local (#571)", async () => {
+    vi.mocked(listBranches).mockResolvedValue([
+      local("main"),
+      remote("origin/feature-remote-only"),
+    ]);
+    renderModal();
+    await enterValidRepo();
+
+    const branchSelect = screen.getByLabelText(/source branch/i) as HTMLSelectElement;
+    await waitFor(() => {
+      expect(branchSelect.querySelector('optgroup[label="Local"]')).not.toBeNull();
+    });
+    const remoteGroup = branchSelect.querySelector('optgroup[label="Remote"]');
+    expect(remoteGroup).not.toBeNull();
+    expect(remoteGroup!.querySelector("option")!.value).toBe("origin/feature-remote-only");
+    // Default is the local main, not the remote.
+    expect(branchSelect.value).toBe("main");
+  });
+
+  // #571 / #452: what the field shows is what launches. A remote source is posted
+  // as `source_branch` VERBATIM — prefix and all — never stripped to a bare name.
+  it("launches a remote branch verbatim, prefix and all (#571)", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "P1", scope: "repo" }),
+    ]);
+    vi.mocked(listBranches).mockResolvedValue([
+      local("main"),
+      remote("origin/feature-remote-only"),
+    ]);
+    renderModal();
+    await enterValidRepo();
+
+    const branchSelect = screen.getByLabelText(/source branch/i) as HTMLSelectElement;
+    fireEvent.change(branchSelect, { target: { value: "origin/feature-remote-only" } });
+    fireEvent.change(screen.getByTestId("pipeline-select"), { target: { value: "p1" } });
+    fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), {
+      target: { value: "do the thing" },
+    });
+
+    vi.useRealTimers();
+    fireEvent.click(screen.getByRole("button", { name: /launch/i }));
+
+    await waitFor(() => {
+      expect(createRun).toHaveBeenCalledWith(
+        expect.objectContaining({ source_branch: "origin/feature-remote-only" }),
+      );
+    });
+  });
+
   /**
    * #454: the `!sourceBranch` guard blocked re-selection when the repo changed.
    * The `<select>` then DISPLAYED the new repo's only option while the state
@@ -327,11 +387,11 @@ describe("NewRunModal — multi-repo form flow", () => {
       vi.mocked(fetchPipelines).mockResolvedValue([
         makePipeline({ id: "p1", name: "P1", scope: "repo" }),
       ]);
-      vi.mocked(listBranches).mockResolvedValue(["main", "dev", "feature-x"]);
+      vi.mocked(listBranches).mockResolvedValue([local("main"), local("dev"), local("feature-x")]);
       renderModal();
       await enterValidRepo("/home/user/project-a"); // → main
 
-      vi.mocked(listBranches).mockResolvedValue(["master"]);
+      vi.mocked(listBranches).mockResolvedValue([local("master")]);
       await enterValidRepo("/home/user/project-b");
 
       const branchSelect = screen.getByLabelText(/source branch/i) as HTMLSelectElement;
@@ -366,7 +426,7 @@ describe("NewRunModal — multi-repo form flow", () => {
       vi.mocked(fetchPipelines).mockResolvedValue([
         makePipeline({ id: "p1", name: "P1", scope: "repo" }),
       ]);
-      vi.mocked(listBranches).mockResolvedValue(["main", "dev", "feature-x"]);
+      vi.mocked(listBranches).mockResolvedValue([local("main"), local("dev"), local("feature-x")]);
       renderModal();
       await enterValidRepo("/home/user/project-a");
 
@@ -374,7 +434,7 @@ describe("NewRunModal — multi-repo form flow", () => {
       fireEvent.change(branchSelect, { target: { value: "feature-x" } });
       expect(branchSelect.value).toBe("feature-x");
 
-      vi.mocked(listBranches).mockResolvedValue(["main", "feature-x"]);
+      vi.mocked(listBranches).mockResolvedValue([local("main"), local("feature-x")]);
       await enterValidRepo("/home/user/project-b");
 
       fireEvent.change(screen.getByTestId("pipeline-select"), { target: { value: "p1" } });
@@ -2240,6 +2300,55 @@ describe("NewRunModal — multi-repo (#465)", () => {
     await waitFor(() => expect(createRun).toHaveBeenCalled());
     const call = vi.mocked(createRun).mock.calls.at(-1)![0];
     expect(call.target_repos![1].read_only).toBe(true);
+  });
+
+  // #571 mirror: a secondary row offers the same Local/Remote groups and posts a
+  // remote base_branch VERBATIM — the duplicated logic must not drift from the
+  // primary's.
+  it("sends a secondary's remote base_branch verbatim (#571)", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "P1", scope: "repo" }),
+    ]);
+    vi.mocked(listBranches).mockResolvedValue([
+      local("main"),
+      remote("origin/feature-remote-only"),
+    ]);
+    renderModal();
+    await enterValidRepo("/home/user/primary");
+
+    fireEvent.click(screen.getByTestId("add-secondary-repo"));
+    const secRow = await screen.findByTestId("secondary-repo-row-0");
+    fireEvent.change(within(secRow).getByTestId("target-repo-input"), {
+      target: { value: "/home/user/secondary" },
+    });
+    await vi.advanceTimersByTimeAsync(500);
+    const secSelect = (await within(secRow).findByTestId(
+      "secondary-branch-select-0",
+    )) as HTMLSelectElement;
+    // The remote group is present, and the row can carry a remote base.
+    await waitFor(() => {
+      expect(secSelect.querySelector('optgroup[label="Remote"]')).not.toBeNull();
+    });
+    fireEvent.change(secSelect, { target: { value: "origin/feature-remote-only" } });
+
+    fireEvent.change(screen.getByTestId("pipeline-select"), { target: { value: "p1" } });
+    fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), {
+      target: { value: "do the thing" },
+    });
+
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("launch-button"));
+
+    await waitFor(() => {
+      const call = vi.mocked(createRun).mock.calls.at(-1)![0];
+      expect(call.target_repos![1]).toEqual(
+        expect.objectContaining({
+          repo: "/home/user/secondary",
+          base_branch: "origin/feature-remote-only",
+        }),
+      );
+    });
   });
 
   it("omits target_repos for a mono-repo launch (no secondary rows)", async () => {

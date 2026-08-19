@@ -14036,29 +14036,40 @@ fn validate_target_repo(path: &str) -> Result<PathBuf, String> {
     }
 }
 
+/// Accept exactly a local branch OR a remote-tracking ref as a Run source (#571),
+/// probing each namespace with an exact-ref lookup.
+///
+/// Two `git show-ref --verify` probes replace the old `git branch --list <b>`,
+/// which had two holes closed here at once: it is blind to remote-tracking refs,
+/// AND it treats its argument as a glob (`mai*` matches `main`). `show-ref
+/// --verify` takes a full refname literally — no globbing. Deliberately NOT
+/// widened to any commit-ish (`rev-parse` would accept SHAs and tags): the
+/// contract is a *branch*, and `git worktree add -b … <ref>` accepts a
+/// remote-tracking ref as its start point unchanged (no fetch, no local branch
+/// materialised — decision #571).
 fn validate_source_branch(repo: &Path, branch: &str) -> Result<(), String> {
-    let output = std::process::Command::new("git")
-        .args(["branch", "--list", branch])
-        .current_dir(repo)
-        .output();
-    match output {
-        Ok(o) if o.status.success() => {
-            let stdout = String::from_utf8_lossy(&o.stdout);
-            if stdout.trim().is_empty() {
-                Err(format!(
-                    "branch '{branch}' does not exist in {}",
-                    repo.display()
-                ))
-            } else {
-                Ok(())
-            }
+    for fullref in [
+        format!("refs/heads/{branch}"),
+        format!("refs/remotes/{branch}"),
+    ] {
+        let output = std::process::Command::new("git")
+            .args(["show-ref", "--verify", "--quiet", &fullref])
+            .current_dir(repo)
+            .output();
+        match output {
+            Ok(o) if o.status.success() => return Ok(()),
+            // Ref absent in this namespace (exit 1, no output under --quiet): try
+            // the next namespace before giving up.
+            Ok(_) => {}
+            Err(e) => return Err(format!("failed to run git: {e}")),
         }
-        Ok(o) => {
-            let stderr = String::from_utf8_lossy(&o.stderr);
-            Err(format!("git branch --list failed: {stderr}"))
-        }
-        Err(e) => Err(format!("failed to run git: {e}")),
     }
+    Err(format!(
+        "branch '{branch}' does not exist in {} \
+         (looked for a local branch refs/heads/{branch} and a \
+         remote-tracking ref refs/remotes/{branch})",
+        repo.display()
+    ))
 }
 
 /// Validate and freeze the read-only secondary repos of a multi-repo create
@@ -14409,22 +14420,150 @@ async fn patch_run_repos(
     }
 }
 
-fn list_branches(repo: &Path) -> Result<Vec<String>, String> {
+/// A branch offered as a Run source (#571): a local branch or a remote-tracking
+/// ref. `name` is the exact string the client posts back as `source_branch` — a
+/// remote-tracking ref keeps its `origin/` prefix. Never re-derive locality by
+/// string surgery: a *local* branch may legitimately be named `origin/x`, so
+/// `kind` (classified from the full refname) is the only authoritative signal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct BranchEntry {
+    name: String,
+    kind: BranchKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum BranchKind {
+    Local,
+    Remote,
+}
+
+/// The configured remote names, longest first so stripping a remote's `<name>/`
+/// prefix off a tracking ref is unambiguous even when a remote name itself
+/// contains `/` (or is a prefix of another). Empty on a repo with no remotes.
+fn git_remote_names(repo: &Path) -> Result<Vec<String>, String> {
     let output = std::process::Command::new("git")
-        .args(["branch", "--format=%(refname:short)"])
+        .args(["remote"])
         .current_dir(repo)
         .output();
     match output {
         Ok(o) if o.status.success() => {
             let stdout = String::from_utf8_lossy(&o.stdout);
-            Ok(stdout.lines().map(|l| l.to_string()).collect())
+            let mut names: Vec<String> = stdout
+                .lines()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect();
+            names.sort_by_key(|n| std::cmp::Reverse(n.len()));
+            Ok(names)
         }
         Ok(o) => {
             let stderr = String::from_utf8_lossy(&o.stderr);
-            Err(format!("git branch failed: {stderr}"))
+            Err(format!("git remote failed: {stderr}"))
         }
         Err(e) => Err(format!("failed to run git: {e}")),
     }
+}
+
+/// Strip the `<remote>/` prefix off a remote-tracking short name, yielding the
+/// bare branch name used for the dedup test. Falls back to the input unchanged
+/// when no configured remote prefixes it.
+fn strip_remote_prefix(short: &str, remotes: &[String]) -> String {
+    for r in remotes {
+        if let Some(rest) = short.strip_prefix(&format!("{r}/")) {
+            return rest.to_string();
+        }
+    }
+    short.to_string()
+}
+
+/// List the branches a Run can be cut from: local branches AND remote-tracking
+/// refs (#571). Everything is resolved **locally, without a single `git fetch`**
+/// (ADR-0034/0042) — freshness of the tracking refs is the operator's own
+/// concern.
+///
+/// Uses `git for-each-ref` rather than `git branch -a`, which has three verified
+/// traps: a `(HEAD detached at …)` pseudo-entry in detached HEAD, sensitivity to
+/// the operator's `branch.sort`, and porcelain. The `%(symref)` column is the
+/// only robust discriminant of `origin/HEAD` (which otherwise appears as a bare
+/// `origin` entry).
+///
+/// A remote-tracking ref whose bare name (its `<remote>/` prefix removed) already
+/// exists as a local branch is dropped unconditionally — no divergence test — on
+/// the VS Code / gh convention that the local branch is what the user
+/// manipulates. Remote-vs-remote twins (`origin/foo` + `upstream/foo`) are BOTH
+/// kept: two remotes may point at different SHAs, so merging them would lie.
+///
+/// Locals (alpha) come before remotes (alpha) via an explicit partition — never
+/// lean on `refs/heads` < `refs/remotes` lexical luck, since the first entry may
+/// become the client's default and a local `main` must win.
+fn list_branches(repo: &Path) -> Result<Vec<BranchEntry>, String> {
+    let remotes = git_remote_names(repo)?;
+
+    let output = std::process::Command::new("git")
+        .args([
+            "for-each-ref",
+            "--sort=refname",
+            "--format=%(refname)%09%(refname:short)%09%(symref)",
+            "refs/heads",
+            "refs/remotes",
+        ])
+        .current_dir(repo)
+        .output();
+    let stdout = match output {
+        Ok(o) if o.status.success() => o.stdout,
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            return Err(format!("git for-each-ref failed: {stderr}"));
+        }
+        Err(e) => return Err(format!("failed to run git: {e}")),
+    };
+    let stdout = String::from_utf8_lossy(&stdout);
+
+    let mut locals: Vec<BranchEntry> = Vec::new();
+    // (short name, bare name) — bare name only for the local-twin dedup below.
+    let mut remote_pairs: Vec<(String, String)> = Vec::new();
+    let mut local_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for line in stdout.lines() {
+        let mut fields = line.split('\t');
+        let refname = fields.next().unwrap_or("");
+        let short = fields.next().unwrap_or("");
+        let symref = fields.next().unwrap_or("");
+        // A non-empty symref is a symbolic ref (e.g. `origin/HEAD`), never a branch.
+        if !symref.is_empty() {
+            continue;
+        }
+        // Classify by the FULL refname prefix, never the short name: a local
+        // branch literally named `origin/ambig` lives under refs/heads/ and must
+        // list as local.
+        if refname.starts_with("refs/heads/") {
+            local_names.insert(short.to_string());
+            locals.push(BranchEntry {
+                name: short.to_string(),
+                kind: BranchKind::Local,
+            });
+        } else if refname.starts_with("refs/remotes/") {
+            let bare = strip_remote_prefix(short, &remotes);
+            remote_pairs.push((short.to_string(), bare));
+        }
+    }
+
+    let mut remotes_out: Vec<BranchEntry> = remote_pairs
+        .into_iter()
+        .filter(|(_short, bare)| !local_names.contains(bare))
+        .map(|(short, _bare)| BranchEntry {
+            name: short,
+            kind: BranchKind::Remote,
+        })
+        .collect();
+
+    locals.sort_by(|a, b| a.name.cmp(&b.name));
+    remotes_out.sort_by(|a, b| a.name.cmp(&b.name));
+
+    let mut out = locals;
+    out.extend(remotes_out);
+    Ok(out)
 }
 
 /// Resolve the repository a Run works in, for a **projected** `RunState`.
@@ -19616,6 +19755,79 @@ mod tests {
         std::fs::write(dir.join("README.md"), "# test\n").unwrap();
         run(&["add", "README.md"]);
         run(&["commit", "-m", "initial"]);
+    }
+
+    fn run_git(dir: &std::path::Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// A `git clone` of a freshly-seeded origin, so `work` carries real
+    /// remote-tracking refs (`origin/main` — the twin of the local `main` — and
+    /// `origin/feature-remote-only`) PLUS the `origin/HEAD` symref every clone
+    /// writes, covering the symref-filter case for free. Returns `(origin,
+    /// work)`; keep both alive so the refs keep resolving.
+    fn init_repo_with_remote() -> (tempfile::TempDir, tempfile::TempDir) {
+        let origin = tempfile::tempdir().unwrap();
+        run_git(origin.path(), &["init", "-b", "main"]);
+        run_git(origin.path(), &["config", "user.email", "test@test.com"]);
+        run_git(origin.path(), &["config", "user.name", "Test"]);
+        std::fs::write(origin.path().join("README.md"), "# test\n").unwrap();
+        run_git(origin.path(), &["add", "."]);
+        run_git(origin.path(), &["commit", "-m", "init"]);
+        run_git(origin.path(), &["checkout", "-b", "feature-remote-only"]);
+        std::fs::write(origin.path().join("x.txt"), "x\n").unwrap();
+        run_git(origin.path(), &["add", "."]);
+        run_git(origin.path(), &["commit", "-m", "feat"]);
+        run_git(origin.path(), &["checkout", "main"]);
+
+        let work = tempfile::tempdir().unwrap();
+        run_git(
+            origin.path(),
+            &[
+                "clone",
+                "--quiet",
+                origin.path().to_str().unwrap(),
+                work.path().to_str().unwrap(),
+            ],
+        );
+        run_git(work.path(), &["config", "user.email", "test@test.com"]);
+        run_git(work.path(), &["config", "user.name", "Test"]);
+        (origin, work)
+    }
+
+    /// Add a second remote `upstream` (from a fresh local origin) that also has a
+    /// `feature-remote-only` branch, then fetch it — no network, a filesystem
+    /// path. Leaves `work` with both `origin/feature-remote-only` and
+    /// `upstream/feature-remote-only`. Returns the upstream tempdir to keep alive.
+    fn add_upstream_with_same_branch(work: &std::path::Path) -> tempfile::TempDir {
+        let up = tempfile::tempdir().unwrap();
+        run_git(up.path(), &["init", "-b", "main"]);
+        run_git(up.path(), &["config", "user.email", "test@test.com"]);
+        run_git(up.path(), &["config", "user.name", "Test"]);
+        std::fs::write(up.path().join("README.md"), "# up\n").unwrap();
+        run_git(up.path(), &["add", "."]);
+        run_git(up.path(), &["commit", "-m", "init"]);
+        run_git(up.path(), &["checkout", "-b", "feature-remote-only"]);
+        std::fs::write(up.path().join("y.txt"), "y\n").unwrap();
+        run_git(up.path(), &["add", "."]);
+        run_git(up.path(), &["commit", "-m", "feat"]);
+        run_git(up.path(), &["checkout", "main"]);
+
+        run_git(
+            work,
+            &["remote", "add", "upstream", up.path().to_str().unwrap()],
+        );
+        run_git(work, &["fetch", "--quiet", "upstream"]);
+        up
     }
 
     #[test]
@@ -26259,10 +26471,127 @@ edges: []
     fn list_branches_returns_branches() {
         let tmp = tempfile::tempdir().unwrap();
         init_test_repo(tmp.path());
-        let result = list_branches(tmp.path());
-        assert!(result.is_ok());
-        let branches = result.unwrap();
-        assert!(!branches.is_empty());
+        // Exactly one local branch (the default checked-out one, whatever the
+        // operator's `init.defaultBranch` names it) and no remotes — the shape,
+        // not just "non-empty".
+        let branches = list_branches(tmp.path()).unwrap();
+        assert_eq!(branches.len(), 1, "one local branch expected: {branches:?}");
+        assert_eq!(branches[0].kind, BranchKind::Local);
+    }
+
+    #[test]
+    fn list_branches_includes_remote_tracking_branches() {
+        let (_origin, work) = init_repo_with_remote();
+        let branches = list_branches(work.path()).unwrap();
+        assert!(
+            branches.contains(&BranchEntry {
+                name: "origin/feature-remote-only".into(),
+                kind: BranchKind::Remote,
+            }),
+            "remote-only tracking ref must be listed: {branches:?}"
+        );
+    }
+
+    #[test]
+    fn list_branches_excludes_origin_head_symref() {
+        let (_origin, work) = init_repo_with_remote();
+        let branches = list_branches(work.path()).unwrap();
+        // Neither the symref itself nor its bare-`origin` shadow may appear.
+        assert!(
+            !branches.iter().any(|b| b.name == "origin/HEAD"),
+            "origin/HEAD symref must never be listed: {branches:?}"
+        );
+        assert!(
+            !branches.iter().any(|b| b.name == "origin"),
+            "bare 'origin' (the symref's short form) must never be listed: {branches:?}"
+        );
+    }
+
+    #[test]
+    fn list_branches_dedups_remote_twin_of_local_branch() {
+        let (_origin, work) = init_repo_with_remote();
+        let branches = list_branches(work.path()).unwrap();
+        // The clone created a local `main` tracking `origin/main`; the remote twin
+        // is dropped, the local kept.
+        assert!(
+            branches.contains(&BranchEntry {
+                name: "main".into(),
+                kind: BranchKind::Local,
+            }),
+            "local main must be listed: {branches:?}"
+        );
+        assert!(
+            !branches.iter().any(|b| b.name == "origin/main"),
+            "origin/main (twin of local main) must be deduped away: {branches:?}"
+        );
+    }
+
+    #[test]
+    fn list_branches_keeps_both_remotes_for_same_name() {
+        let (_origin, work) = init_repo_with_remote();
+        let _upstream = add_upstream_with_same_branch(work.path());
+        let branches = list_branches(work.path()).unwrap();
+        // No local `feature-remote-only`, so BOTH tracking refs survive — two
+        // remotes may point at different SHAs; merging them would lie.
+        assert!(
+            branches
+                .iter()
+                .any(|b| b.name == "origin/feature-remote-only" && b.kind == BranchKind::Remote),
+            "origin twin must be listed: {branches:?}"
+        );
+        assert!(
+            branches
+                .iter()
+                .any(|b| b.name == "upstream/feature-remote-only" && b.kind == BranchKind::Remote),
+            "upstream twin must be listed: {branches:?}"
+        );
+    }
+
+    #[test]
+    fn list_branches_orders_locals_before_remotes() {
+        let (_origin, work) = init_repo_with_remote();
+        let branches = list_branches(work.path()).unwrap();
+        let first_remote = branches.iter().position(|b| b.kind == BranchKind::Remote);
+        let last_local = branches.iter().rposition(|b| b.kind == BranchKind::Local);
+        // Both partitions are non-empty here (local main + remote feature), so a
+        // strict last-local < first-remote proves the ordering, not luck.
+        let (Some(fr), Some(ll)) = (first_remote, last_local) else {
+            panic!("expected at least one local and one remote: {branches:?}");
+        };
+        assert!(ll < fr, "all locals must precede all remotes: {branches:?}");
+    }
+
+    #[test]
+    fn validate_source_branch_accepts_remote_tracking_ref() {
+        let (_origin, work) = init_repo_with_remote();
+        // The remote-only branch has no local counterpart — this was the 400 the
+        // change fixes.
+        let result = validate_source_branch(work.path(), "origin/feature-remote-only");
+        assert!(
+            result.is_ok(),
+            "remote-tracking ref must validate: {result:?}"
+        );
+    }
+
+    #[test]
+    fn validate_source_branch_rejects_unknown_remote_ref() {
+        let (_origin, work) = init_repo_with_remote();
+        let err = validate_source_branch(work.path(), "origin/nope").unwrap_err();
+        assert!(err.contains("does not exist"), "message was: {err}");
+        assert!(
+            err.contains("origin/nope"),
+            "message must name the ref: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_source_branch_does_not_glob() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_test_repo(tmp.path());
+        // A default branch exists (main/master); a glob would match it. The exact
+        // `show-ref --verify` probe must NOT — `mai*` is not a real branch.
+        let err = validate_source_branch(tmp.path(), "mai*").unwrap_err();
+        assert!(err.contains("does not exist"), "message was: {err}");
     }
 
     #[tokio::test]
@@ -26572,10 +26901,9 @@ edges: []
         git(repo, &["commit", "-m", "advance main after divergence"]);
 
         // Freeze the fork point = current default-branch tip.
-        let fork_sha =
-            String::from_utf8_lossy(&git(repo, &["rev-parse", "HEAD"]).stdout)
-                .trim()
-                .to_string();
+        let fork_sha = String::from_utf8_lossy(&git(repo, &["rev-parse", "HEAD"]).stdout)
+            .trim()
+            .to_string();
 
         let run_id = "diff-parked-fork";
         let state = test_state_with_dir(repo).await;

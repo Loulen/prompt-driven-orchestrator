@@ -286,6 +286,13 @@ export default function NodeDetailPanel({
       : { kind: "static", files: modal.files };
   }, [modal, node.iterations, node.node_id, selectedIter]);
 
+  // #369: a stable `onClose` (setModal is a stable useState setter, so no deps).
+  // The panel re-renders on every I/O poll tick; an inline `() => setModal(null)`
+  // handed the modal a fresh prop each tick, re-rendering it needlessly. A constant
+  // identity lets the modal's memoised markdown props do their job (no diagram
+  // remount, no flicker).
+  const closeModal = useCallback(() => setModal(null), []);
+
   return (
     <aside className="flex h-full flex-col bg-bg-2">
       {/* Header */}
@@ -687,7 +694,7 @@ export default function NodeDetailPanel({
           portName={modal.portName}
           portType={modal.portType}
           source={modalSource}
-          onClose={() => setModal(null)}
+          onClose={closeModal}
         />
       )}
 

@@ -5,13 +5,15 @@ import { pickDefaultBranch } from "../lib/branchSelect";
 import type { BranchRef } from "../types";
 import RepoCombobox from "./RepoCombobox";
 
-/** One read-only secondary repo line of the multi-repo create modal (#465,
- *  ADR-0042). `valid` is `null` while unknown/empty, so `canLaunch` can require
- *  every non-empty line to have resolved. */
+/** One secondary repo line of the multi-repo create modal (#465, ADR-0042/0047).
+ *  `valid` is `null` while unknown/empty, so `canLaunch` can require every
+ *  non-empty line to have resolved. `readOnly` is the ADR-0047 opt-in — default
+ *  `false` ⇒ the secondary is writable. */
 export interface SecondaryRepo {
   path: string;
   baseBranch: string;
   valid: boolean | null;
+  readOnly: boolean;
 }
 
 interface Props {
@@ -177,6 +179,21 @@ export default function SecondaryRepoRow({
           )}
         </select>
       )}
+      {repo.valid && (
+        <label
+          className="flex items-center gap-1.5 text-fg-3"
+          style={{ fontSize: "10.5px" }}
+        >
+          <input
+            type="checkbox"
+            className="accent-acc"
+            checked={repo.readOnly}
+            onChange={(e) => onChange(index, { readOnly: e.target.checked })}
+            data-testid={`secondary-readonly-${index}`}
+          />
+          Read-only (context only; do not modify)
+        </label>
+      )}
     </div>
   );
 }
@@ -189,7 +206,7 @@ export function SecondaryRepoLabel() {
       style={{ fontSize: "11.5px" }}
     >
       <GitBranch size={12} className="text-fg-3" />
-      Secondary repositories (read-only)
+      Secondary repositories
     </span>
   );
 }

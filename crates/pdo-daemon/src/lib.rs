@@ -491,16 +491,28 @@ struct CreateRunRequest {
     auto_name: Option<bool>,
 }
 
-/// One repo line of a multi-repo create request (#465, ADR-0042).
+/// One repo line of a multi-repo create request (#465, ADR-0042/0047).
 ///
-/// The wire shape the front sends per row: a `repo` path plus an optional
-/// `base_branch` (default `HEAD`, the LOCAL ref — there is no fetch). Index `[0]`
-/// is the primary; `[1..]` become read-only secondary snapshots.
+/// The wire shape the front sends per row: a `repo` path, an optional
+/// `base_branch` (default `HEAD`, the LOCAL ref — there is no fetch), and an
+/// optional `read_only` opt-in (default `false` ⇒ writable, ADR-0047). Index
+/// `[0]` is the primary; `[1..]` become secondary snapshots (writable unless
+/// `read_only`). This input is shared by create, `PATCH /runs/{id}/repos`
+/// (`add`) and the trigger `target_repos` blob — one field covers every write
+/// surface.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct TargetRepoInput {
     repo: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     base_branch: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    read_only: bool,
+}
+
+/// serde `skip_serializing_if` helper (ADR-0047): a writable pin serialises
+/// without a `read_only` key, byte-identical to a pre-flag input.
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// Body of `PATCH /runs/{run_id}/repos` — the mid-run edit of a Run's read-only
@@ -7535,6 +7547,22 @@ async fn create_run_inner(
 
     let run_id = event_log::generate_run_id();
 
+    // #417: freeze the run's fork point NOW, from the same local `source_ref` that
+    // `create_worktree` will cut the run branch from below, so a later HEAD move in the
+    // shared checkout can never displace the LOC/diff base and sweep in phantom line
+    // counts. `rev_parse_verified` resolves the LOCAL ref (no fetch, `^{commit}`-verified),
+    // mirroring `resolve_secondary_pins` — and, like it, resolving BEFORE `append_event`
+    // keeps the current event ordering (no reorder around `create_worktree`). A resolve
+    // failure is non-fatal: it degrades to the `source_branch`/`HEAD` fallback ladder at
+    // read time (`run_diff_base`) and must never block run creation.
+    let fork_sha = match crate::worktree_ops::rev_parse_verified(&run_repo_root, source_ref) {
+        Ok(sha) => Some(sha),
+        Err(e) => {
+            warn!("could not resolve fork_sha for run {run_id} from {source_ref}: {e}");
+            None
+        }
+    };
+
     // #410 CHOKEPOINT: resolve the effective sandbox mode ONCE, here, where the JSON,
     // multipart, and trigger-fire create paths converge — just before the mode is
     // frozen into `RunStarted`. `req.sandbox` already carries either the explicit
@@ -7692,6 +7720,13 @@ async fn create_run_inner(
     }
     if let Some(ref branch) = effective_source_branch {
         run_payload["source_branch"] = serde_json::json!(branch);
+    }
+    // #417: FREEZE the resolved fork point into `RunStarted`, next to `source_branch`.
+    // Written whenever the local ref resolved (every new Run in practice); a resolve
+    // failure leaves it absent → the read-side `run_diff_base` ladder recovers via
+    // `source_branch`, then `HEAD`. Absent key on replay → `None` (back-compat).
+    if let Some(ref fs) = fork_sha {
+        run_payload["fork_sha"] = serde_json::json!(fs);
     }
     // #551 (ADR-0046): FREEZE the Run's harness choice into `RunStarted`, the same
     // immutability posture as `sandbox` above — editing the pipeline or the instance
@@ -9973,15 +10008,19 @@ async fn run_diff(
         }
     };
 
-    if event_log::project(&events).is_none() {
-        return (StatusCode::NOT_FOUND, "run not found").into_response();
-    }
+    let run_state = match event_log::project(&events) {
+        Some(s) => s,
+        None => return (StatusCode::NOT_FOUND, "run not found").into_response(),
+    };
 
     let pipeline_branch = format!("pdo/run-{run_id}");
-    // Three-dot (merge-base = fork point) so main's advance after the fork does
-    // not surface as phantom deletions; `:(exclude).pdo/` drops the blackboard
-    // artefacts. Mirrors compute_run_loc (see lib.rs ~10985). #376.
-    let range = format!("HEAD...{pipeline_branch}");
+    // #417: base on the Run's frozen fork point (`run_diff_base`: `fork_sha` → recorded
+    // `source_branch` → `HEAD`), NOT the shared checkout's wandering HEAD — otherwise a
+    // checkout parked on a divergent branch sweeps in phantom files. Three-dot (merge-base
+    // = fork point) so main's advance after the fork does not surface as phantom deletions;
+    // `:(exclude).pdo/` drops the blackboard artefacts. Mirrors compute_run_loc. #376/#417.
+    let base = run_diff_base(&run_state);
+    let range = format!("{base}...{pipeline_branch}");
     let output = match std::process::Command::new("git")
         .args(["diff", &range, "--", ".", ":(exclude).pdo/"])
         .current_dir(&state.repo_root)
@@ -11887,6 +11926,14 @@ fn secondary_repos_dirtied_refusal(
     run_state: &event_log::RunState,
 ) -> Option<completion_refusal::CompletionRefusal> {
     for pin in &run_state.target_repos {
+        // ADR-0047: the guard is now conditional. A writable secondary (the
+        // default, `read_only == false`) is *meant* to be modified/committed —
+        // its dirty tracked tree is not a refusal. Only a read-only opt-in still
+        // enforces read-only-context semantics. This `continue` is the single
+        // switch that turns "writing is refused" into "writing is offered".
+        if !pin.read_only {
+            continue;
+        }
         let snapshot = secondary_snapshot_path(repo_root, run_id, &pin.alias);
         if !snapshot.exists() {
             continue;
@@ -13934,6 +13981,11 @@ fn resolve_one_secondary_pin(
         alias,
         sha,
         base_branch: base.map(str::to_string),
+        // ADR-0047: the opt-in read-only flag flows straight from the input.
+        // Both construction paths (create via `resolve_secondary_pins`, mid-run
+        // edit via `patch_run_repos`) route through here, so the flag can never
+        // diverge between the two surfaces.
+        read_only: input.read_only,
     })
 }
 
@@ -14586,16 +14638,38 @@ fn parse_numstat(stdout: &str) -> event_log::LocStat {
     }
 }
 
-/// Lines changed for a Run, from `git diff --numstat HEAD...pdo/run-<id>` with
+/// The base ref for a Run's "what changed" diff (#417): the frozen fork SHA, else the
+/// recorded source branch (legacy runs — the 3-dot merge-base still recovers the fork
+/// point), else `HEAD` (baseless legacy runs — today's behaviour, kept byte-identical).
+/// Uniform 3-dot at the call sites: because `pdo/run-<id>` is cut from `fork_sha` and only
+/// gains commits on top, `merge-base(fork_sha, run) == fork_sha`, so the same range form is
+/// correct for all three tiers and never re-introduces the wandering-HEAD defect for a run
+/// that recorded a base. NB: this is the Run's fork point, NOT the per-node
+/// `NodeStarted.base_sha` (sub-worktree ← pipeline branch, ADR-0036).
+fn run_diff_base(run_state: &event_log::RunState) -> &str {
+    run_state
+        .fork_sha
+        .as_deref()
+        .or(run_state.source_branch.as_deref())
+        .unwrap_or("HEAD")
+}
+
+/// Lines changed for a Run, from `git diff --numstat <base>...pdo/run-<id>` with
 /// `.pdo/` excluded (issue #100). Returns `None` when the diff is uncomputable
 /// (git missing, not a repo, run branch gone after cleanup) so the UI renders
 /// "—"; a successful but empty diff returns `Some({0, 0, 0})` → UI "0".
 ///
-/// Uses a **three-dot** range so the base is the merge-base (the run's fork
-/// point): the count stays correct even as `main` advances past the fork
-/// (two-dot would drift and report later main commits as deletions).
-fn compute_run_loc(repo_root: &std::path::Path, run_id: &str) -> Option<event_log::LocStat> {
-    let range = format!("HEAD...pdo/run-{run_id}");
+/// `base_ref` is the Run's stable fork point (`run_diff_base`, #417), not the shared
+/// checkout's `HEAD`. Uses a **three-dot** range so the base is the merge-base (the
+/// run's fork point): the count stays correct even as `main` advances past the fork
+/// (two-dot would drift and report later main commits as deletions), AND a checkout
+/// parked on a divergent branch can no longer displace it (#417).
+fn compute_run_loc(
+    repo_root: &std::path::Path,
+    run_id: &str,
+    base_ref: &str,
+) -> Option<event_log::LocStat> {
+    let range = format!("{base_ref}...pdo/run-{run_id}");
     let output = std::process::Command::new("git")
         // `:(exclude).pdo/` is a literal pathspec argv element (no shell). `.pdo/`
         // is gitignored here, but the exclusion is defensive for external target
@@ -14624,7 +14698,11 @@ fn augment_run_state_from_disk(
     // LOC is independent of the run YAML: the run branch lives in `repo_root`,
     // not the run dir, so a missing/unparseable YAML must not suppress an
     // otherwise-valid LOC. Compute it before the YAML early-return below.
-    run_state.loc = compute_run_loc(repo_root, &run_state.run_id);
+    // #417: base the diff on the Run's frozen fork point (`run_diff_base`), not the
+    // shared checkout's wandering HEAD. Resolve the base into an owned `String` first so
+    // the immutable borrow of `run_state` ends before the mutable assignment to `.loc`.
+    let base = run_diff_base(run_state).to_string();
+    run_state.loc = compute_run_loc(repo_root, &run_state.run_id, &base);
     // Estimated cost (#272), likewise independent of the run YAML: it reads the
     // Claude Code transcripts under `projects_root` (the #408 seam — the staged
     // home while a sandboxed Run is live, `~/.claude/projects/` otherwise), not
@@ -16410,6 +16488,97 @@ mod tests {
                 "timed out waiting for run {run_id} to reach {want:?}"
             );
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+
+    /// ADR-0047: `secondary_repos_dirtied_refusal` now skips writable secondaries
+    /// (`read_only == false`, the default) and only trips on a read-only opt-in
+    /// with a dirty tracked tree. This is the switch that turns "writing refused"
+    /// into "writing offered" — the A/B control of the whole feature.
+    #[test]
+    fn secondary_dirtied_guard_only_trips_on_read_only_pins() {
+        use crate::worktree_ops::{create_secondary_snapshot, secondary_snapshot_path};
+
+        fn git(dir: &std::path::Path, args: &[&str]) {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?} failed");
+        }
+        fn init_repo_with_tracked_file(dir: &std::path::Path) -> String {
+            std::fs::create_dir_all(dir).unwrap();
+            git(dir, &["init", "-b", "main"]);
+            git(dir, &["config", "user.email", "t@t"]);
+            git(dir, &["config", "user.name", "t"]);
+            std::fs::write(dir.join("F.txt"), "v1\n").unwrap();
+            git(dir, &["add", "-A"]);
+            git(dir, &["commit", "-m", "init"]);
+            let out = std::process::Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(dir)
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("primary"); // acts as repo_root
+        std::fs::create_dir_all(&primary).unwrap();
+        let run_id = "guard-run";
+
+        // Two secondaries: snapshot each, then dirty a TRACKED file in both.
+        let ro = tmp.path().join("ro");
+        let rw = tmp.path().join("rw");
+        let ro_sha = init_repo_with_tracked_file(&ro);
+        let rw_sha = init_repo_with_tracked_file(&rw);
+        let ro_snap = secondary_snapshot_path(&primary, run_id, "ro");
+        let rw_snap = secondary_snapshot_path(&primary, run_id, "rw");
+        create_secondary_snapshot(&ro, &ro_snap, &ro_sha).unwrap();
+        create_secondary_snapshot(&rw, &rw_snap, &rw_sha).unwrap();
+        std::fs::write(ro_snap.join("F.txt"), "tampered\n").unwrap();
+        std::fs::write(rw_snap.join("F.txt"), "tampered\n").unwrap();
+
+        let pin =
+            |repo: &std::path::Path, alias: &str, sha: &str, read_only: bool| event_log::RepoPin {
+                repo: repo.to_string_lossy().to_string(),
+                alias: alias.to_string(),
+                sha: sha.to_string(),
+                base_branch: None,
+                read_only,
+            };
+        let mut state = event_log::RunState::new(run_id.to_string(), "p".to_string());
+
+        // A writable secondary, dirtied, is tolerated → no refusal.
+        state.target_repos = vec![pin(&rw, "rw", &rw_sha, false)];
+        assert!(
+            secondary_repos_dirtied_refusal(&primary, run_id, &state).is_none(),
+            "a writable secondary with a dirty tracked tree must NOT be refused"
+        );
+
+        // A read-only secondary, dirtied, still trips the guard.
+        state.target_repos = vec![pin(&ro, "ro", &ro_sha, true)];
+        match secondary_repos_dirtied_refusal(&primary, run_id, &state) {
+            Some(completion_refusal::CompletionRefusal::SecondaryRepoDirtied { alias, .. }) => {
+                assert_eq!(alias, "ro");
+            }
+            other => panic!("expected SecondaryRepoDirtied for a read-only pin, got {other:?}"),
+        }
+
+        // Mixed list: the writable one is skipped, the read-only one is caught.
+        state.target_repos = vec![
+            pin(&rw, "rw", &rw_sha, false),
+            pin(&ro, "ro", &ro_sha, true),
+        ];
+        match secondary_repos_dirtied_refusal(&primary, run_id, &state) {
+            Some(completion_refusal::CompletionRefusal::SecondaryRepoDirtied { alias, .. }) => {
+                assert_eq!(
+                    alias, "ro",
+                    "must skip the writable pin and catch the read-only one"
+                );
+            }
+            other => panic!("expected the read-only pin to be refused, got {other:?}"),
         }
     }
 
@@ -19539,7 +19708,9 @@ mod tests {
         git(&["commit", "-m", "run changes"]);
         git(&["checkout", &default_branch]);
 
-        let loc = compute_run_loc(repo, run_id).expect("branch present -> Some");
+        // Tier-3 legacy path: no fork_sha/source_branch recorded, so the base is "HEAD".
+        // This test never parks HEAD off the fork line, so the behaviour is unchanged (#417).
+        let loc = compute_run_loc(repo, run_id, "HEAD").expect("branch present -> Some");
         assert_eq!(
             loc,
             event_log::LocStat {
@@ -19555,7 +19726,7 @@ mod tests {
         std::fs::write(repo.join("other.txt"), "x\ny\n").unwrap();
         git(&["add", "other.txt"]);
         git(&["commit", "-m", "advance main"]);
-        let loc_after = compute_run_loc(repo, run_id).expect("still Some");
+        let loc_after = compute_run_loc(repo, run_id, "HEAD").expect("still Some");
         assert_eq!(
             loc_after, loc,
             "three-dot base stays at the fork point as HEAD advances"
@@ -19564,7 +19735,7 @@ mod tests {
         // Branch gone (cleanup) -> None -> UI renders "—" (not "0").
         git(&["branch", "-D", &branch]);
         assert!(
-            compute_run_loc(repo, run_id).is_none(),
+            compute_run_loc(repo, run_id, "HEAD").is_none(),
             "missing run branch -> None"
         );
     }
@@ -19584,12 +19755,98 @@ mod tests {
             .unwrap();
         assert!(out.status.success());
         assert_eq!(
-            compute_run_loc(repo, run_id).expect("branch present -> Some"),
+            compute_run_loc(repo, run_id, "HEAD").expect("branch present -> Some"),
             event_log::LocStat {
                 insertions: 0,
                 deletions: 0,
                 files_changed: 0,
             }
+        );
+    }
+
+    #[test]
+    fn compute_run_loc_ignores_parked_checkout_and_uses_run_source_branch() {
+        // #417 regression: the shared checkout is parked on a divergent branch that
+        // forks BEFORE the run's fork point. The pre-fix `HEAD...` range collapsed the
+        // merge-base onto the common ancestor and swept in every commit the fork branch
+        // gained since (the phantom). Basing the diff on the Run's own fork point
+        // (`default_branch`, standing in for the frozen `fork_sha`) must report ONLY the
+        // run's own 1-line change, regardless of where HEAD is parked.
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo); // c0 = "initial" (README.md) on the default branch
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(repo)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            out
+        };
+
+        // `init_test_repo` is a bare `git init` → recover the default branch name.
+        let default_branch =
+            String::from_utf8_lossy(&git(&["rev-parse", "--abbrev-ref", "HEAD"]).stdout)
+                .trim()
+                .to_string();
+
+        // A divergent branch off c0 with its own commit — the head the operator parks on.
+        git(&["checkout", "-b", "integration/prd-403-sandbox"]);
+        std::fs::write(repo.join("sandbox.txt"), "sandbox\n").unwrap();
+        git(&["add", "sandbox.txt"]);
+        git(&["commit", "-m", "parked: unrelated work"]);
+
+        // Advance the default branch two commits PAST the fork — this is the phantom
+        // payload the buggy merge-base would sweep in.
+        git(&["checkout", &default_branch]);
+        std::fs::write(repo.join("file_a.txt"), "a1\na2\na3\n").unwrap();
+        git(&["add", "file_a.txt"]);
+        git(&["commit", "-m", "main: +3 in file_a"]);
+        std::fs::write(repo.join("file_b.txt"), "b1\nb2\n").unwrap();
+        git(&["add", "file_b.txt"]);
+        git(&["commit", "-m", "main: +2 in file_b"]); // <- the run's fork point
+
+        // Cut the run branch from the default-branch tip and add ONE real line.
+        let run_id = "loc-parked-fork";
+        let branch = format!("pdo/run-{run_id}");
+        git(&["checkout", "-b", &branch]);
+        std::fs::write(repo.join("run_only.txt"), "the only real change\n").unwrap();
+        git(&["add", "run_only.txt"]);
+        git(&["commit", "-m", "run change"]);
+
+        // PARK the checkout on the divergent branch (the exact #417 / #451 condition).
+        git(&["checkout", "integration/prd-403-sandbox"]);
+
+        // Based on the run's fork point, ONLY run_only.txt counts — never file_a/file_b.
+        // Under the pre-fix `HEAD...` the parked checkout would inflate this to {6,0,3}.
+        assert_eq!(
+            compute_run_loc(repo, run_id, &default_branch).expect("branch present -> Some"),
+            event_log::LocStat {
+                insertions: 1,
+                deletions: 0,
+                files_changed: 1,
+            },
+            "parked divergent HEAD must not displace the fork-point base"
+        );
+
+        // Doc-only variant: a run cut at the fork tip with NO commit changed nothing.
+        // With HEAD still parked on the divergent branch, the honest answer is {0,0,0}
+        // (the triage's "even doc-only, zero files" case), not the phantom.
+        let doc_run = "loc-parked-doc-only";
+        git(&["branch", &format!("pdo/run-{doc_run}"), &default_branch]);
+        assert_eq!(
+            compute_run_loc(repo, doc_run, &default_branch).expect("branch present -> Some"),
+            event_log::LocStat {
+                insertions: 0,
+                deletions: 0,
+                files_changed: 0,
+            },
+            "a doc-only run reads 0, not the parked-checkout phantom"
         );
     }
 
@@ -26409,6 +26666,122 @@ edges: []
         assert!(
             !body.contains("advanced_on_main"),
             "diff must not contain main's post-fork content as a removed line: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_diff_ignores_parked_checkout_via_frozen_fork_sha() {
+        // #417 (layer-2 mirror of the layer-3a `run_diff_range` test): with a `fork_sha`
+        // frozen in `RunStarted`, `GET /runs/<id>/diff` must base on the fork point even
+        // when the shared checkout's HEAD is parked on a divergent branch that forks
+        // BEFORE it. RED under the old `HEAD...` range (the divergent branch's pre-fork
+        // files render as a phantom); GREEN with `run_diff_base`.
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+
+        let git = |dir: &std::path::Path, args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            out
+        };
+        let default_branch =
+            String::from_utf8_lossy(&git(repo, &["rev-parse", "--abbrev-ref", "HEAD"]).stdout)
+                .trim()
+                .to_string();
+
+        // Divergent branch off c0 with a phantom-carrying commit; then advance the
+        // default branch past the fork.
+        git(repo, &["checkout", "-b", "wip/parked"]);
+        std::fs::write(repo.join("phantom.rs"), "fn phantom() {}\n").unwrap();
+        git(repo, &["add", "phantom.rs"]);
+        git(repo, &["commit", "-m", "parked: unrelated work"]);
+        git(repo, &["checkout", &default_branch]);
+        std::fs::write(repo.join("main_advance.rs"), "fn advanced_on_main() {}\n").unwrap();
+        git(repo, &["add", "main_advance.rs"]);
+        git(repo, &["commit", "-m", "advance main after divergence"]);
+
+        // Freeze the fork point = current default-branch tip.
+        let fork_sha =
+            String::from_utf8_lossy(&git(repo, &["rev-parse", "HEAD"]).stdout)
+                .trim()
+                .to_string();
+
+        let run_id = "diff-parked-fork";
+        let state = test_state_with_dir(repo).await;
+        // Seed a RunStarted carrying the frozen `fork_sha` (the fix's mechanism), plus a
+        // node so the projection is realistic.
+        let run_started = event_log::Event {
+            id: None,
+            run_id: run_id.into(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::RunStarted,
+            node_id: None,
+            iter: None,
+            payload: Some(serde_json::json!({
+                "pipeline_name": "test-pipe",
+                "input": "test",
+                "fork_sha": fork_sha,
+                "node_defs": [
+                    { "id": "impl-1", "node_type": "code-mutating", "inputs": [], "outputs": [] }
+                ],
+                "edges": []
+            })),
+        };
+        append_event(&state, &run_started).await.unwrap();
+
+        // Cut the run branch/worktree from the fork point.
+        let wt_dir = repo.join(".pdo/runs").join(run_id).join("worktree");
+        let pipeline_branch = format!("pdo/run-{run_id}");
+        create_worktree(repo, &wt_dir, &pipeline_branch, &default_branch).unwrap();
+
+        // The run's only real change.
+        std::fs::write(wt_dir.join("run_file.rs"), "fn run_work() {}\n").unwrap();
+        git(&wt_dir, &["add", "run_file.rs"]);
+        git(&wt_dir, &["commit", "-m", "run work"]);
+
+        // PARK the shared checkout on the divergent branch (the #417 / #451 condition).
+        git(repo, &["checkout", "wip/parked"]);
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/runs/{run_id}/diff"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = String::from_utf8(
+            axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+
+        assert!(
+            body.contains("run_file.rs") && body.contains("fn run_work()"),
+            "diff must contain the run's own change: {body}"
+        );
+        // The phantom: the parked branch's pre-fork file. RED under `HEAD...`.
+        assert!(
+            !body.contains("phantom.rs"),
+            "parked divergent HEAD must not add a phantom file to the diff: {body}"
+        );
+        assert!(
+            !body.contains("main_advance.rs"),
+            "main's post-fork file must not appear either (three-dot base): {body}"
         );
     }
 

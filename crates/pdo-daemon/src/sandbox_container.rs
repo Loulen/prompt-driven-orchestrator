@@ -200,6 +200,14 @@ pub(crate) struct ContainerSpec<'a> {
     /// change rien pour ses nœuds suivants — c'est l'AC3 de #468, et c'est garanti deux
     /// fois (par le gel du payload ET par Docker).
     pub env: &'a BTreeMap<String, String>,
+    /// `.git` hôte de chaque secondaire **modifiable** (ADR-0047), monté rw à
+    /// chemin **identique** (`-v <g>:<g>:rw`, invariant D3). Le store d'objets
+    /// d'un snapshot secondaire vit sous `<secondary>/.git`, hors `repo_root` :
+    /// sans ce mount, `git status`/`commit` échouent en sandbox. `:rw` obligatoire
+    /// (`:ro` casse l'index — EROFS). Queue **variable** posée après
+    /// [`ContainerSpec::extra_mounts`] et **avant** l'image ; vide ⇒ argv
+    /// byte-identique (secondaire read-only, mono-repo, ou aucun secondaire).
+    pub writable_secondary_gitdirs: &'a [std::path::PathBuf],
 }
 
 // -- builders purs (golden-testés) -------------------------------------------
@@ -322,6 +330,14 @@ pub(crate) fn create_args(run_id: &str, spec: &ContainerSpec) -> Vec<String> {
             mount.source.display(),
             mount.target.display()
         ));
+    }
+    // Queue variable (ADR-0047) : le `.git` de chaque secondaire MODIFIABLE, monté
+    // rw à chemin identique (host == conteneur, invariant D3). Après la queue #432
+    // et avant l'image (tout ce qui suit l'image devient la commande). Vide ⇒ argv
+    // byte-identique — un secondaire read-only n'en gagne aucun.
+    for gitdir in spec.writable_secondary_gitdirs {
+        args.push("-v".to_string());
+        args.push(format!("{g}:{g}:rw", g = gitdir.display()));
     }
     // Image, puis la commande dormante.
     args.push(spec.image_ref.to_string());
@@ -897,6 +913,9 @@ mod tests {
         extras: Vec<crate::sandbox_staging::StagedMount>,
         /// Queue variable (#468). Vide par défaut, pour la même raison.
         env: BTreeMap<String, String>,
+        /// Queue variable (ADR-0047). Vide par défaut — un Run sans secondaire
+        /// modifiable rend un argv byte-identique.
+        writable_gitdirs: Vec<PathBuf>,
     }
 
     impl Fixtures {
@@ -911,6 +930,7 @@ mod tests {
                 image: "pdo-sandbox:h-abc123".to_string(),
                 extras: Vec::new(),
                 env: BTreeMap::new(),
+                writable_gitdirs: Vec::new(),
             }
         }
 
@@ -933,6 +953,11 @@ mod tests {
             self
         }
 
+        fn with_writable_gitdirs(mut self, dirs: &[&str]) -> Self {
+            self.writable_gitdirs = dirs.iter().map(PathBuf::from).collect();
+            self
+        }
+
         fn spec(&self) -> ContainerSpec<'_> {
             ContainerSpec {
                 image_ref: &self.image,
@@ -947,6 +972,7 @@ mod tests {
                 daemon_port: 6172,
                 extra_mounts: &self.extras,
                 env: &self.env,
+                writable_secondary_gitdirs: &self.writable_gitdirs,
             }
         }
     }
@@ -1141,6 +1167,58 @@ mod tests {
             .unwrap();
         assert_eq!(&one[image_at..], &create_argv_suffix()[..]);
         assert_eq!(one[image_at - 2], "-v");
+    }
+
+    // -- 1a-bis. create_args × secondaires modifiables (ADR-0047) -------------
+
+    /// Un secondaire modifiable ⇒ un `-v <g>:<g>:rw` (chemin identique host==conteneur),
+    /// inséré entre les `-v` fixes/extras et l'image. Un read-only n'en gagne aucun (il
+    /// n'entre jamais dans `writable_secondary_gitdirs`, cf. `context_from_state`).
+    #[test]
+    fn create_args_golden_with_writable_secondary_gitdir() {
+        let fx = Fixtures::sample().with_writable_gitdirs(&["/work/sdk/.git"]);
+        let mut expected = create_argv_fixed();
+        expected.extend(strings(&["-v", "/work/sdk/.git:/work/sdk/.git:rw"]));
+        expected.extend(create_argv_suffix());
+        assert_eq!(create_args("r1", &fx.spec()), expected);
+    }
+
+    /// Aucun secondaire modifiable ⇒ argv byte-identique (la propriété qui garantit
+    /// qu'un Run mono-repo ou tout-read-only n'est pas touché par ADR-0047).
+    #[test]
+    fn create_args_without_writable_gitdirs_is_byte_identical() {
+        let fx = Fixtures::sample().with_writable_gitdirs(&[]);
+        let mut expected = create_argv_fixed();
+        expected.extend(create_argv_suffix());
+        assert_eq!(create_args("r1", &fx.spec()), expected);
+    }
+
+    /// Ordre des deux queues variables : les mounts d'exception `$HOME` (#432) d'abord,
+    /// puis les `.git` modifiables (ADR-0047), puis l'image. Deux `.git` → deux entrées.
+    #[test]
+    fn writable_gitdirs_follow_extras_and_precede_the_image() {
+        let fx = Fixtures::sample()
+            .with_extras(&[".gitconfig"])
+            .with_writable_gitdirs(&["/work/a/.git", "/work/b/.git"]);
+        let mut expected = create_argv_fixed();
+        expected.extend(strings(&[
+            "-v",
+            "/sb/r1/home/.gitconfig:/home/u/.gitconfig:rw",
+            "-v",
+            "/work/a/.git:/work/a/.git:rw",
+            "-v",
+            "/work/b/.git:/work/b/.git:rw",
+        ]));
+        expected.extend(create_argv_suffix());
+        let got = create_args("r1", &fx.spec());
+        assert_eq!(got, expected);
+        // Structurel : chaque `.git` précède l'image, et coûte exactement 2 args.
+        let image_at = got
+            .iter()
+            .position(|a| a == "pdo-sandbox:h-abc123")
+            .unwrap();
+        assert_eq!(&got[image_at..], &create_argv_suffix()[..]);
+        assert_eq!(got[image_at - 2], "-v");
     }
 
     // -- 1b. create_args × env du profil (#468) -------------------------------

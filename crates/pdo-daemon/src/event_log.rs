@@ -637,6 +637,23 @@ pub struct RepoPin {
     /// for provenance / UI display; the SHA is what is authoritative.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_branch: Option<String>,
+    /// Opt-in read-only flag (ADR-0047). `false` (the default) means the
+    /// secondary is **writable**: the agent may modify/commit/deliver it and the
+    /// completion guard tolerates a dirty tracked tree. `true` restores the
+    /// ADR-0042 behaviour — the snapshot is read-only context and writing a
+    /// tracked file trips `secondary_repo_dirtied` (409).
+    ///
+    /// Polarity: `#[serde(default)]` reads an absent key as `false`, so a
+    /// historical pin (written before this flag existed) is treated as writable.
+    /// This is intentional and safe — see ADR-0047 decision 2.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub read_only: bool,
+}
+
+/// serde `skip_serializing_if` helper: a `read_only == false` pin serialises
+/// byte-identically to a pre-ADR-0047 pin (no `read_only` key).
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -784,6 +801,15 @@ pub struct RunState {
     pub sandbox_prep: Option<SandboxPrepState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_branch: Option<String>,
+    /// The commit `pdo/run-<id>` was cut from at Run start — the run's fork point,
+    /// FROZEN here from the `RunStarted` payload (#417), same immutability posture as
+    /// `source_branch`/`harness`/`RepoPin.sha`. The stable 3-dot base for the LOC stat
+    /// and the Run diff, so a shared checkout whose HEAD later wanders can no longer
+    /// displace the merge-base and inflate the count. `None` ⇒ a pre-#417 Run (payload
+    /// omits the key) → fall back to `source_branch`, then `HEAD`. NB: distinct from the
+    /// per-node `NodeStarted.base_sha` (sub-worktree ← pipeline branch, ADR-0036).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fork_sha: Option<String>,
     /// The harness chosen at Run creation (#551, ADR-0046), **frozen** here from the
     /// `RunStarted` payload — the middle tier of the precedence chain
     /// `nœud → Run → Projet → instance → plancher (claude)`. Immutable, exactly like
@@ -862,6 +888,7 @@ impl RunState {
             sandbox_image_raw_error: None,
             sandbox_prep: None,
             source_branch: None,
+            fork_sha: None,
             harness: None,
             triggered_by: None,
             pipeline_id: None,
@@ -1312,6 +1339,13 @@ fn apply_run_event(state: &mut RunState, event: &Event) {
                 }
                 if let Some(sb) = payload.get("source_branch").and_then(|v| v.as_str()) {
                     state.source_branch = Some(sb.to_string());
+                }
+                // #417: the FROZEN fork point, projected the same way as `source_branch`.
+                // The create chokepoint writes this key for every new Run (a resolvable
+                // `source_ref`); an absent key (every pre-#417 Run) leaves `None`, and the
+                // LOC/diff base then falls back to `source_branch`, then `HEAD`.
+                if let Some(fs) = payload.get("fork_sha").and_then(|v| v.as_str()) {
+                    state.fork_sha = Some(fs.to_string());
                 }
                 // #551 (ADR-0046): the FROZEN Run harness, projected the same way as
                 // `source_branch`. The create chokepoint only writes this key for a
@@ -4725,6 +4759,11 @@ mod tests {
         assert_eq!(state.target_repos[0].alias, "secondary");
         assert_eq!(state.target_repos[0].sha, "deadbeef");
         assert_eq!(state.target_repos[0].base_branch.as_deref(), Some("main"));
+        // ADR-0047: a payload without `read_only` projects `false` (writable).
+        assert!(
+            !state.target_repos[0].read_only,
+            "an absent read_only key must read as writable (ADR-0047 decision 2)"
+        );
 
         // Legacy payload (no key) → empty, mono-repo.
         let legacy = vec![make_event_with_payload(
@@ -4741,6 +4780,77 @@ mod tests {
             serde_json::json!({ "pipeline_name": "p", "target_repos": "not-an-array" }),
         )];
         assert!(project(&malformed).unwrap().target_repos.is_empty());
+    }
+
+    /// ADR-0047: the `read_only` opt-in projects through both `RunStarted` and
+    /// `RunReposEdited`, defaults to `false` when the key is absent, and a writable
+    /// pin serialises byte-identically to a pre-flag pin (no `read_only` key).
+    #[test]
+    fn read_only_flag_projects_defaults_false_and_skips_when_writable() {
+        // Explicit `read_only: true` via RunStarted → projected true.
+        let started = vec![make_event_with_payload(
+            EventKind::RunStarted,
+            None,
+            serde_json::json!({
+                "pipeline_name": "p",
+                "target_repo": "/repos/primary",
+                "target_repos": [
+                    { "repo": "/repos/ro", "alias": "ro", "sha": "aaaa", "read_only": true },
+                    { "repo": "/repos/rw", "alias": "rw", "sha": "bbbb" }
+                ],
+            }),
+        )];
+        let state = project(&started).unwrap();
+        assert_eq!(state.target_repos.len(), 2);
+        assert!(
+            state.target_repos[0].read_only,
+            "explicit true projects true"
+        );
+        assert!(
+            !state.target_repos[1].read_only,
+            "absent key projects writable"
+        );
+
+        // `RunReposEdited` carries the flag too.
+        let mut edited = started.clone();
+        edited.push(make_event_with_payload(
+            EventKind::RunReposEdited,
+            None,
+            serde_json::json!({
+                "target_repos": [
+                    { "repo": "/repos/rw", "alias": "rw", "sha": "bbbb", "read_only": true }
+                ]
+            }),
+        ));
+        let state = project(&edited).unwrap();
+        assert_eq!(state.target_repos.len(), 1);
+        assert!(
+            state.target_repos[0].read_only,
+            "RunReposEdited must project read_only"
+        );
+
+        // serde skip: a writable pin round-trips without a `read_only` key, byte-
+        // identical to a pre-ADR-0047 pin; a read-only pin carries the key.
+        let writable = RepoPin {
+            repo: "/r".into(),
+            alias: "r".into(),
+            sha: "c".into(),
+            base_branch: None,
+            read_only: false,
+        };
+        let json = serde_json::to_value(&writable).unwrap();
+        assert!(
+            json.get("read_only").is_none(),
+            "a writable pin must not serialise a read_only key"
+        );
+        let read_only = RepoPin {
+            read_only: true,
+            ..writable.clone()
+        };
+        assert_eq!(
+            serde_json::to_value(&read_only).unwrap().get("read_only"),
+            Some(&serde_json::Value::Bool(true))
+        );
     }
 
     /// #551 (ADR-0046): the `RunStarted.harness` freeze projects into

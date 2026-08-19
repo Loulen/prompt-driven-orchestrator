@@ -254,6 +254,45 @@ pub(crate) fn spawn_superfluous(state: &RunState, node_id: &str, iter: i64) -> O
     None
 }
 
+/// Head-of-handler precondition for a **retry** (`node_retry`, #487).
+///
+/// `node_retry` must call this as its FIRST gesture — before it stops the node and
+/// before its two `invalidate_nodes`. A refusal that lands any later leaves the
+/// self-invalidation committed (`NodeInvalidated` is not a lifecycle transition, so
+/// the guard never refuses it — `validate_transition`'s `_ => Allow` arm), and once
+/// appended the node is gone from the projection with no replacement: the
+/// "`pending` forever" freeze the production incident reproduced (#496).
+///
+/// The predicate is run-liveness **alone** (`run_accepts_lifecycle`), NOT a
+/// synthetic `NodeStarted` probe. Retry legitimately re-spawns a `Running` node (it
+/// stops it first) and a `Completed` node (it advances to `iter+1`), both of which
+/// [`validate_start`] refuses (`ConcurrentIterationLive` / `IterationAlreadyCompleted`).
+/// That is the exact trap #489 flagged for #487: the synthetic probe is the right
+/// one for `restart_node` (a same-iter re-spawn) and the wrong one here. So this
+/// asks only the one question a retry shares with every other spawn — is the Run
+/// live? — and lets the handler resolve concurrency itself.
+///
+/// Returns the typed refusal (whose `Display` is the same "resume the run first"
+/// prose the `append_event` backstop emits) when the Run is terminal/paused, else
+/// `None`. `iter` is the iteration the retry would spawn (`current + 1`); it feeds
+/// the refusal template only, the predicate ignores it.
+pub(crate) fn retry_run_precondition(
+    state: &RunState,
+    node_id: &str,
+    iter: i64,
+) -> Option<RejectReason> {
+    if run_accepts_lifecycle(&state.status) {
+        return None;
+    }
+    Some(RejectReason::RunNotLive {
+        run_id: state.run_id.clone(),
+        status: state.status.clone(),
+        node_id: node_id.to_string(),
+        iter,
+        kind: EventKind::NodeStarted,
+    })
+}
+
 fn validate_completion(state: &RunState, event: &Event) -> Verdict {
     let Some(node_id) = event.node_id.as_deref() else {
         return Verdict::reject(RejectReason::MissingNodeId {
@@ -918,6 +957,60 @@ mod tests {
         assert!(spawn_superfluous(&state, "worker", 1).is_some());
         // And an out-of-range iteration is not a lap.
         assert!(spawn_superfluous(&state, "worker", 3).is_some());
+    }
+
+    // --- retry_run_precondition (#487) ---
+
+    #[test]
+    fn retry_precondition_refuses_a_terminal_run_with_resume_prose() {
+        // The production incident (#496): Play on a node of a Failed run. The
+        // predicate must refuse, and the prose must be the guard's own
+        // "resume the run first" (ADR-0035 body reuses it verbatim).
+        let state = state_from(&[
+            ev(EventKind::RunStarted, None, None),
+            ev(EventKind::NodeStarted, Some("worker"), Some(1)),
+            ev(EventKind::RunFailed, None, None),
+        ]);
+        let reason =
+            retry_run_precondition(&state, "worker", 2).expect("a Failed run must refuse a retry");
+        assert!(matches!(reason, RejectReason::RunNotLive { .. }));
+        assert!(reason.to_string().contains("resume the run first"));
+    }
+
+    #[test]
+    fn retry_precondition_allows_a_running_node_on_a_live_run() {
+        // The non-regression the synthetic-`NodeStarted` probe would break: a
+        // still-`Running` node on a live Run. The predicate is run-liveness alone,
+        // so it says nothing about the live iteration — the handler stops it first.
+        let state = state_from(&[
+            ev(EventKind::RunStarted, None, None),
+            ev(EventKind::NodeStarted, Some("worker"), Some(1)),
+        ]);
+        assert!(retry_run_precondition(&state, "worker", 2).is_none());
+    }
+
+    #[test]
+    fn retry_precondition_allows_a_completed_node_on_a_live_run() {
+        // The other case a synthetic probe would break: retrying a `Completed` node
+        // (the canvas offers it) advances to `iter+1`; run-liveness alone allows it.
+        let state = state_from(&[
+            ev(EventKind::RunStarted, None, None),
+            ev(EventKind::NodeStarted, Some("worker"), Some(1)),
+            ev(EventKind::NodeCompleted, Some("worker"), Some(1)),
+        ]);
+        assert!(retry_run_precondition(&state, "worker", 2).is_none());
+    }
+
+    #[test]
+    fn retry_precondition_refuses_a_paused_run() {
+        // `run_accepts_lifecycle` admits only Running/AwaitingUser, so a Paused run
+        // is refused too — "resume the run first", not an implicit resume (ADR-0009).
+        let state = state_from(&[
+            ev(EventKind::RunStarted, None, None),
+            ev(EventKind::NodeStarted, Some("worker"), Some(1)),
+            ev(EventKind::RunPaused, None, None),
+        ]);
+        assert!(retry_run_precondition(&state, "worker", 2).is_some());
     }
 
     // --- non-lifecycle kinds and missing state ---

@@ -879,6 +879,39 @@ describe("NodeDetailPanel", () => {
       expect(screen.queryByTestId("terminal-minimized")).not.toBeInTheDocument();
       expect(screen.getByTestId("tmux-terminal")).toBeInTheDocument();
     });
+
+    it("renders the daemon's refusal when Retry is rejected (#487)", async () => {
+      // The whole point of the frontend slice: a swallowed 409 rendered as
+      // nothing. A refused Retry must show the daemon's "resume the run first".
+      retryNodePreviewMock.mockResolvedValue({
+        downstream: [],
+        affected_count: 0,
+        with_artifacts: [],
+      });
+      retryNodeMock.mockRejectedValueOnce(
+        new Error(
+          "run r is Failed: no scheduling on a non-running run — resume the run first",
+        ),
+      );
+
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "failed" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+
+      expect(screen.queryByTestId("action-verdict")).not.toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("play-retry-btn"));
+      });
+
+      const verdict = screen.getByTestId("action-verdict");
+      expect(verdict).toBeInTheDocument();
+      expect(verdict).toHaveAttribute("data-action", "retry");
+      expect(verdict).toHaveTextContent("Retry refused");
+      expect(verdict).toHaveTextContent("resume the run first");
+    });
   });
 
   describe("Stale banner with Stop/Retry (issue #123)", () => {

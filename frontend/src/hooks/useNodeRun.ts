@@ -41,6 +41,20 @@ export type MarkVerdict =
   | MarkNodeDoneOutcome
   | { kind: "error"; message: string };
 
+/**
+ * What the last Retry/Play or Start click produced when it was REFUSED (#487
+ * §"Sans le volet frontend, le correctif est invisible").
+ *
+ * Both handlers used to swallow their error in an empty `catch {}`: the daemon's
+ * `409` — "resume the run first" for a terminal Run, "session cap reached" for a
+ * force-spawn — arrived and rendered as nothing, so the operator clicked and saw no
+ * change at all. This is the verdict the panel now renders at the gesture, exactly
+ * as `markVerdict` does for Mark complete (#490). Success needs no tenant here (the
+ * node flips to `running` and the terminal re-shows), so `null` is the resting
+ * state; only a refusal writes one.
+ */
+export type ActionVerdict = { action: "retry" | "start"; message: string };
+
 export interface UseNodeRunOptions {
   isArchived?: boolean;
   /**
@@ -94,6 +108,9 @@ export function useNodeRun(
   const [retryConfirm, setRetryConfirm] = useState<{
     affectedCount: number;
   } | null>(null);
+  // #487: the refusal of the last Retry/Play or Start click, rendered at the
+  // gesture. `null` while nothing was refused.
+  const [actionVerdict, setActionVerdict] = useState<ActionVerdict | null>(null);
 
   const interval = pollInterval(node.status);
   const isStaleIter = selectedIter !== node.iter;
@@ -173,6 +190,10 @@ export function useNodeRun(
   }, [runId, node.node_id]);
 
   const retry = useCallback(async () => {
+    // #487: a fresh attempt clears the previous refusal, then either writes a new
+    // one or resolves silently. The daemon's `409` ("resume the run first") is no
+    // longer swallowed — it becomes the rendered verdict below.
+    setActionVerdict(null);
     try {
       const preview = await retryNodePreview(runId, node.node_id);
       if (preview.affected_count > 0) {
@@ -183,18 +204,25 @@ export function useNodeRun(
       // Session revives (status → running once refreshRun lands the NodeStarted
       // event); re-show the terminal beside the details rather than full-frame.
       onRetryStarted?.();
-    } catch {
-      // best-effort
+    } catch (e) {
+      setActionVerdict({
+        action: "retry",
+        message: e instanceof Error ? e.message : String(e),
+      });
     }
   }, [runId, node.node_id, onRetryStarted]);
 
   const confirmRetry = useCallback(async () => {
     setRetryConfirm(null);
+    setActionVerdict(null);
     try {
       await retryNode(runId, node.node_id);
       onRetryStarted?.();
-    } catch {
-      // best-effort
+    } catch (e) {
+      setActionVerdict({
+        action: "retry",
+        message: e instanceof Error ? e.message : String(e),
+      });
     }
   }, [runId, node.node_id, onRetryStarted]);
 
@@ -203,13 +231,18 @@ export function useNodeRun(
   }, []);
 
   // #204: force-spawn a pending node out of dependency order. The daemon owns
-  // the run-status gate (a non-spawnable run returns 409), so a click on a
-  // pending node in a terminal run just no-ops with a caught error.
+  // the run-status gate (a non-spawnable run returns 409). #487: that 409 —
+  // swallowed before, so a click on a pending node in a terminal run looked like
+  // it did nothing — is now surfaced as a rendered verdict, like Retry.
   const start = useCallback(async () => {
+    setActionVerdict(null);
     try {
       await startNode(runId, node.node_id);
-    } catch {
-      // best-effort
+    } catch (e) {
+      setActionVerdict({
+        action: "start",
+        message: e instanceof Error ? e.message : String(e),
+      });
     }
   }, [runId, node.node_id]);
 
@@ -250,6 +283,7 @@ export function useNodeRun(
     inputs,
     outputs,
     markVerdict,
+    actionVerdict,
     retryConfirm,
     stop,
     retry,

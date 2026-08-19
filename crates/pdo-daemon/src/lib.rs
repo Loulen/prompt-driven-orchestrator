@@ -26086,13 +26086,15 @@ edges: []
         // No local `feature-remote-only`, so BOTH tracking refs survive — two
         // remotes may point at different SHAs; merging them would lie.
         assert!(
-            branches.iter().any(|b| b.name == "origin/feature-remote-only"
-                && b.kind == BranchKind::Remote),
+            branches
+                .iter()
+                .any(|b| b.name == "origin/feature-remote-only" && b.kind == BranchKind::Remote),
             "origin twin must be listed: {branches:?}"
         );
         assert!(
-            branches.iter().any(|b| b.name == "upstream/feature-remote-only"
-                && b.kind == BranchKind::Remote),
+            branches
+                .iter()
+                .any(|b| b.name == "upstream/feature-remote-only" && b.kind == BranchKind::Remote),
             "upstream twin must be listed: {branches:?}"
         );
     }
@@ -26102,9 +26104,7 @@ edges: []
         let (_origin, work) = init_repo_with_remote();
         let branches = list_branches(work.path()).unwrap();
         let first_remote = branches.iter().position(|b| b.kind == BranchKind::Remote);
-        let last_local = branches
-            .iter()
-            .rposition(|b| b.kind == BranchKind::Local);
+        let last_local = branches.iter().rposition(|b| b.kind == BranchKind::Local);
         // Both partitions are non-empty here (local main + remote feature), so a
         // strict last-local < first-remote proves the ordering, not luck.
         let (Some(fr), Some(ll)) = (first_remote, last_local) else {
@@ -26119,7 +26119,10 @@ edges: []
         // The remote-only branch has no local counterpart — this was the 400 the
         // change fixes.
         let result = validate_source_branch(work.path(), "origin/feature-remote-only");
-        assert!(result.is_ok(), "remote-tracking ref must validate: {result:?}");
+        assert!(
+            result.is_ok(),
+            "remote-tracking ref must validate: {result:?}"
+        );
     }
 
     #[test]
@@ -26127,7 +26130,10 @@ edges: []
         let (_origin, work) = init_repo_with_remote();
         let err = validate_source_branch(work.path(), "origin/nope").unwrap_err();
         assert!(err.contains("does not exist"), "message was: {err}");
-        assert!(err.contains("origin/nope"), "message must name the ref: {err}");
+        assert!(
+            err.contains("origin/nope"),
+            "message must name the ref: {err}"
+        );
     }
 
     #[test]

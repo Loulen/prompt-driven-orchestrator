@@ -506,9 +506,18 @@ async fn list_branches_endpoint_returns_remote_branches_with_kind() {
     );
 
     // origin/main (twin of local main) is deduped; the symref never appears.
-    assert!(kind_of("origin/main").is_none(), "dedup failed: {branches:?}");
-    assert!(kind_of("origin/HEAD").is_none(), "symref leaked: {branches:?}");
-    assert!(kind_of("origin").is_none(), "bare origin leaked: {branches:?}");
+    assert!(
+        kind_of("origin/main").is_none(),
+        "dedup failed: {branches:?}"
+    );
+    assert!(
+        kind_of("origin/HEAD").is_none(),
+        "symref leaked: {branches:?}"
+    );
+    assert!(
+        kind_of("origin").is_none(),
+        "bare origin leaked: {branches:?}"
+    );
 
     // Every local precedes every remote.
     let first_remote = branches
@@ -630,7 +639,10 @@ async fn create_run_rejects_unknown_remote_branch() {
     let json: serde_json::Value = resp.json().await.unwrap();
     let err = json["error"].as_str().unwrap_or_default();
     assert!(err.contains("does not exist"), "message was: {err}");
-    assert!(err.contains("origin/nope"), "message must name the ref: {err}");
+    assert!(
+        err.contains("origin/nope"),
+        "message must name the ref: {err}"
+    );
 }
 
 #[tokio::test]

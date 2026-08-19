@@ -75,6 +75,50 @@ fn git_create_branch(repo: &std::path::Path, branch: &str) -> anyhow::Result<()>
     Ok(())
 }
 
+/// Stage a `work` clone (at `work`) of a bare origin (at `origin`) carrying a
+/// **remote-only** branch and the dedup case — all over a filesystem path, zero
+/// network (#571). After this, `work` holds: local `main` + `local-branch`;
+/// remote-tracking `origin/main` (twin of local `main` → deduped) and
+/// `origin/feature-remote-only` (remote-only → must surface). Mirrors the FP
+/// staging so the layer-3a and layer-5 fixtures stay in step.
+fn stage_remote_repo(origin: &std::path::Path, work: &std::path::Path) -> anyhow::Result<()> {
+    let run = |dir: &std::path::Path, args: &[&str]| -> anyhow::Result<()> {
+        let out = Command::new("git").args(args).current_dir(dir).output()?;
+        if !out.status.success() {
+            anyhow::bail!(
+                "git {} in {} failed: {}",
+                args.join(" "),
+                dir.display(),
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        Ok(())
+    };
+    run(origin, &["init", "--bare", "-b", "main"])?;
+    run(
+        work,
+        &["clone", origin.to_str().unwrap(), work.to_str().unwrap()],
+    )?;
+    run(work, &["config", "user.email", "test@test.com"])?;
+    run(work, &["config", "user.name", "Test"])?;
+    std::fs::write(work.join("README.md"), "hi")?;
+    run(work, &["add", "."])?;
+    run(work, &["commit", "-m", "init"])?;
+    run(work, &["push", "-u", "origin", "main"])?;
+    run(work, &["checkout", "-b", "feature-remote-only"])?;
+    std::fs::write(work.join("x.txt"), "x")?;
+    run(work, &["add", "."])?;
+    run(work, &["commit", "-m", "feat"])?;
+    run(work, &["push", "-u", "origin", "feature-remote-only"])?;
+    run(work, &["checkout", "main"])?;
+    // Drop the local branch: `feature-remote-only` now exists ONLY as a tracking ref.
+    run(work, &["branch", "-D", "feature-remote-only"])?;
+    run(work, &["checkout", "-b", "local-branch"])?;
+    run(work, &["commit", "-m", "empty", "--allow-empty"])?;
+    run(work, &["checkout", "main"])?;
+    Ok(())
+}
+
 fn seed_daemon_repo(repo: &std::path::Path) -> anyhow::Result<()> {
     let pipelines_dir = repo.join(".pdo").join("pipelines");
     std::fs::create_dir_all(&pipelines_dir)?;
@@ -410,10 +454,183 @@ async fn list_branches_endpoint_returns_branches() {
         .unwrap();
 
     assert_eq!(resp.status(), 200);
-    let branches: Vec<String> = resp.json().await.unwrap();
-    assert!(branches.contains(&"main".to_string()));
-    assert!(branches.contains(&"dev".to_string()));
-    assert!(branches.contains(&"staging".to_string()));
+    // The payload is `[{name, kind}]` now (#571), not a flat `string[]`.
+    let branches: Vec<serde_json::Value> = resp.json().await.unwrap();
+    let named = |n: &str| {
+        branches
+            .iter()
+            .find(|b| b["name"].as_str() == Some(n))
+            .unwrap_or_else(|| panic!("branch {n} missing from {branches:?}"))
+    };
+    assert_eq!(named("main")["kind"].as_str(), Some("local"));
+    assert_eq!(named("dev")["kind"].as_str(), Some("local"));
+    assert_eq!(named("staging")["kind"].as_str(), Some("local"));
+}
+
+#[tokio::test]
+async fn list_branches_endpoint_returns_remote_branches_with_kind() {
+    let origin = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    stage_remote_repo(origin.path(), work.path()).unwrap();
+
+    let daemon = TestDaemon::spawn(seed_daemon_repo).await.unwrap();
+
+    let resp = reqwest::Client::new()
+        .get(format!("{}/repos/branches", daemon.url()))
+        .query(&[("path", work.path().to_str().unwrap())])
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let branches: Vec<serde_json::Value> = resp.json().await.unwrap();
+
+    let kind_of = |n: &str| -> Option<String> {
+        branches
+            .iter()
+            .find(|b| b["name"].as_str() == Some(n))
+            .map(|b| b["kind"].as_str().unwrap_or_default().to_string())
+    };
+
+    // Locals surface as local; the remote-only branch surfaces as remote.
+    assert_eq!(kind_of("main").as_deref(), Some("local"), "{branches:?}");
+    assert_eq!(
+        kind_of("local-branch").as_deref(),
+        Some("local"),
+        "{branches:?}"
+    );
+    assert_eq!(
+        kind_of("origin/feature-remote-only").as_deref(),
+        Some("remote"),
+        "{branches:?}"
+    );
+
+    // origin/main (twin of local main) is deduped; the symref never appears.
+    assert!(kind_of("origin/main").is_none(), "dedup failed: {branches:?}");
+    assert!(kind_of("origin/HEAD").is_none(), "symref leaked: {branches:?}");
+    assert!(kind_of("origin").is_none(), "bare origin leaked: {branches:?}");
+
+    // Every local precedes every remote.
+    let first_remote = branches
+        .iter()
+        .position(|b| b["kind"].as_str() == Some("remote"));
+    let last_local = branches
+        .iter()
+        .rposition(|b| b["kind"].as_str() == Some("local"));
+    assert!(
+        matches!((first_remote, last_local), (Some(fr), Some(ll)) if ll < fr),
+        "locals must precede remotes: {branches:?}"
+    );
+}
+
+/// The load-bearing test of #571 (ADR-0004: no AC closed without a layer ≥ 3
+/// test). A Run cut from a branch that exists ONLY as a remote-tracking ref must
+/// succeed — this was the 400 bug — with the worktree branched from that ref and
+/// NO local branch materialised, and NO fetch.
+#[tokio::test]
+async fn create_run_from_a_remote_only_branch_creates_the_worktree() {
+    let origin = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    stage_remote_repo(origin.path(), work.path()).unwrap();
+
+    let daemon = TestDaemon::spawn(seed_daemon_repo).await.unwrap();
+
+    let body = serde_json::json!({
+        "pipeline": PIPELINE_NAME,
+        "input": "test input",
+        "target_repo": work.path().to_str().unwrap(),
+        "source_branch": "origin/feature-remote-only",
+    });
+    let resp = reqwest::Client::new()
+        .post(format!("{}/runs", daemon.url()))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        201,
+        "a Run from a remote-only branch must be accepted"
+    );
+    let run_id = resp.json::<serde_json::Value>().await.unwrap()["run_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // The worktree was cut from origin/feature-remote-only: its tip is that ref's tip.
+    let worktree = work
+        .path()
+        .join(".pdo")
+        .join("runs")
+        .join(&run_id)
+        .join("worktree");
+    assert!(worktree.exists(), "worktree must exist");
+    let head = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&worktree)
+        .output()
+        .unwrap();
+    let ref_tip = Command::new("git")
+        .args(["rev-parse", "origin/feature-remote-only"])
+        .current_dir(work.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&head.stdout).trim(),
+        String::from_utf8_lossy(&ref_tip.stdout).trim(),
+        "worktree HEAD must equal the remote-tracking ref's tip"
+    );
+
+    // NO local branch `feature-remote-only` was materialised in the target repo.
+    let local = Command::new("git")
+        .args(["branch", "--list", "feature-remote-only"])
+        .current_dir(work.path())
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&local.stdout).trim().is_empty(),
+        "no local branch may be created from a remote-only source"
+    );
+
+    // The source_branch is stored verbatim, prefix and all.
+    let run_state: serde_json::Value = reqwest::get(format!("{}/runs/{}", daemon.url(), run_id))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        run_state["source_branch"].as_str(),
+        Some("origin/feature-remote-only")
+    );
+}
+
+#[tokio::test]
+async fn create_run_rejects_unknown_remote_branch() {
+    let origin = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    stage_remote_repo(origin.path(), work.path()).unwrap();
+
+    let daemon = TestDaemon::spawn(seed_daemon_repo).await.unwrap();
+
+    let body = serde_json::json!({
+        "pipeline": PIPELINE_NAME,
+        "input": "test input",
+        "target_repo": work.path().to_str().unwrap(),
+        "source_branch": "origin/nope",
+    });
+    let resp = reqwest::Client::new()
+        .post(format!("{}/runs", daemon.url()))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 400);
+    let json: serde_json::Value = resp.json().await.unwrap();
+    let err = json["error"].as_str().unwrap_or_default();
+    assert!(err.contains("does not exist"), "message was: {err}");
+    assert!(err.contains("origin/nope"), "message must name the ref: {err}");
 }
 
 #[tokio::test]

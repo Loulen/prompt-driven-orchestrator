@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { GitBranch, X } from "lucide-react";
 import { validateRepo, listBranches } from "../api";
+import { pickDefaultBranch } from "../lib/branchSelect";
+import type { BranchRef } from "../types";
 import RepoCombobox from "./RepoCombobox";
 
 /** One read-only secondary repo line of the multi-repo create modal (#465,
@@ -37,7 +39,7 @@ export default function SecondaryRepoRow({
 }: Props) {
   const [validating, setValidating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [branches, setBranches] = useState<string[]>([]);
+  const [branches, setBranches] = useState<BranchRef[]>([]);
   const [branchesLoading, setBranchesLoading] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
@@ -75,14 +77,14 @@ export default function SecondaryRepoRow({
           if (cancelled) return;
           setBranches(branchList);
           // Seed the base branch when the held value is not one THIS repo has
-          // (mirror of the primary's #454 membership test). Default HEAD → prefer
-          // main/master, else the first branch.
-          if (branchList.length > 0 && !branchList.includes(repo.baseBranch)) {
-            const main =
-              branchList.find((b) => b === "main") ??
-              branchList.find((b) => b === "master") ??
-              branchList[0];
-            onChange(index, { baseBranch: main });
+          // (mirror of the primary's #454 membership test, now on `name`). The
+          // default is locality-aware (#571): never a remote while a local exists.
+          if (
+            branchList.length > 0 &&
+            !branchList.some((b) => b.name === repo.baseBranch)
+          ) {
+            const def = pickDefaultBranch(branchList);
+            if (def) onChange(index, { baseBranch: def });
           }
         } catch {
           if (!cancelled) setBranches([]);
@@ -150,11 +152,29 @@ export default function SecondaryRepoRow({
           {!branchesLoading && branches.length === 0 && (
             <option value="">Loading...</option>
           )}
-          {branches.map((b) => (
-            <option key={b} value={b}>
-              {b}
-            </option>
-          ))}
+          {/* #571: Local / Remote groups, mirroring the primary select. */}
+          {branches.some((b) => b.kind === "local") && (
+            <optgroup label="Local">
+              {branches
+                .filter((b) => b.kind === "local")
+                .map((b) => (
+                  <option key={`local-${b.name}`} value={b.name}>
+                    {b.name}
+                  </option>
+                ))}
+            </optgroup>
+          )}
+          {branches.some((b) => b.kind === "remote") && (
+            <optgroup label="Remote">
+              {branches
+                .filter((b) => b.kind === "remote")
+                .map((b) => (
+                  <option key={`remote-${b.name}`} value={b.name}>
+                    {b.name}
+                  </option>
+                ))}
+            </optgroup>
+          )}
         </select>
       )}
     </div>

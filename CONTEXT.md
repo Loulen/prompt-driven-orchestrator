@@ -433,7 +433,8 @@ Section **Diff** repliable du panneau d'info (#116, #376) — distincte de la st
 
 Trois commandes agissent sur le **Run entier** — `pause_run`, `resume_run`, `retry_all` — à ne pas confondre avec le niveau **nœud** (boutons Start/Stop/Retry du canvas, et commandes du manager).
 
-- `retry_node` (UI) et `restart_node` (manager) ne sont **pas** synonymes : seul `retry_node` invalide l'aval ; `restart_node` re-spawne le seul nœud. `stop_node` (UI) laisse le nœud `stopped` ; `kill_node` (manager) le marque `failed`.
+- `retry_node` (UI) et `restart_node` (manager) ne sont **pas** synonymes : seul `retry_node` invalide l'aval (et se ré-itère à `iter+1`, table-rase) ; `restart_node` re-spawne le seul nœud au **même `iter`**. `stop_node` (UI) laisse le nœud `stopped` ; `kill_node` (manager) le marque `failed`.
+- **Les deux surfaces de spawn par nœud refusent en `409` sur un Run non vivant** (#487) : `retry_node` comme `force_spawn_node` (bouton Start) répondent « resume the run first » plutôt que de spawner sur un Run terminal/pausé — un bouton de nœud ne flippe jamais le `RunStatus` (ADR-0009), le levier Run-level reste `resume_run`. Le refus prend la forme ADR-0035 §3 (`error` = slug, `recoverable`, prose dans `message`, plus `session_killed`), et `retry_node` route désormais son (re)spawn par la primitive de référence `spawn_node` (addendum #236 d'ADR-0009), qui porte garde/ cap/ sandbox et rend un `SpawnOutcome` véridique — fini le `200 {"ok":true}` inconditionnel. La sonde de refus est le **premier geste** du handler, avant le stop et l'invalidation, pour ne laisser **aucun** effet de bord (sinon l'auto-invalidation gèle le nœud en `pending`).
 - **Pause / Resume** : `pause_run` fait passer un Run vivant en `Paused` (aucun nouveau spawn, l'horloge continue). `resume_run` est **dual-purpose** : sur un Run `Halted`/`Failed` il **relance** depuis l'état courant. C'est le seul levier qui ré-ouvre un Run failed ; il ne réanime jamais un `completed`.
 - **Retry-all** *(terme canonique)* : sur un Run terminal, archive l'original puis crée un Run **neuf** avec les mêmes paramètres — sans référence de filiation, indiscernable d'un lancement manuel. _Éviter_ : « retry » tout court (réservé au niveau nœud), « relancer le même Run » (le run-id change).
 
@@ -558,7 +559,9 @@ Exposées comme `POST /runs/<id>/commands` :
 | `inject_artifact` | Pose un artefact à la main dans le Blackboard |
 | `cleanup_run` | Supprime branches, worktrees, artefacts (archive d'abord — ADR-0020) |
 | `rename_run` | Donne au Run un nom descriptif |
-| `start_node` | Spawne un NodeRun immédiatement, hors ordre de dépendance (force-spawn) |
+| `start_node` | Spawne un NodeRun immédiatement, hors ordre de dépendance (force-spawn). Refus `409` sur un Run non vivant / au cap / sandbox non prête → forme ADR-0035 §3 |
+
+> La route UI jumelle `POST /runs/<id>/nodes/<node>/retry` (bouton Retry/Play) n'est **pas** une commande `/commands`, mais partage la même discipline de refus (#487) : sonde de tête « resume the run first » (`409`), puis (re)spawn par `spawn_node` avec un `SpawnOutcome` véridique — cf. § *Contrôles de Run*. Sa résurrection sœur `GET …/pane` d'une session morte passe elle aussi désormais par la porte d'admission et laisse une trace `NodeStarted` (#487 §3) — un clic ne contourne plus le cap de sessions.
 
 L'effet de la plupart des commandes est l'**append d'un événement**. Trois font davantage — `inject_artifact` écrit un fichier, `cleanup_run` démonte du disque, `retry_all` archive et **crée un Run neuf** : rejouer l'event log ne défait aucune des trois.
 

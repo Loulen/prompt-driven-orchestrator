@@ -81,12 +81,25 @@ fn git_init_with_commit(repo: &std::path::Path) -> anyhow::Result<()> {
 }
 
 async fn create_run(daemon_url: String, target_repo: String) -> Option<String> {
+    create_run_on_branch(daemon_url, target_repo, None).await
+}
+
+async fn create_run_on_branch(
+    daemon_url: String,
+    target_repo: String,
+    source_branch: Option<&str>,
+) -> Option<String> {
     // #470: the target repo is required at the create boundary (ADR-0033).
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "pipeline": PIPELINE_NAME,
         "input": "go",
         "target_repo": target_repo,
     });
+    // #417: naming the source branch makes the daemon freeze `fork_sha` from that exact
+    // local ref at creation — the fork point the diff base must anchor on.
+    if let Some(branch) = source_branch {
+        body["source_branch"] = serde_json::json!(branch);
+    }
     let resp = reqwest::Client::new()
         .post(format!("{daemon_url}/runs"))
         .json(&body)
@@ -159,5 +172,89 @@ async fn run_diff_uses_three_dot_and_excludes_pdo_over_real_daemon() {
     assert!(
         !body.contains("artifact.txt"),
         "blackboard excluded: {body}"
+    );
+}
+
+#[tokio::test]
+async fn run_diff_ignores_parked_checkout_over_real_daemon() {
+    // #417 (layer-3a): the whole bug, end-to-end. The shared checkout is parked on a
+    // branch that diverges BEFORE the Run's fork point, so the pre-fix `HEAD...` range
+    // collapses the merge-base onto the common ancestor and sweeps in every commit `main`
+    // gained since. With `fork_sha` frozen at creation, `GET /runs/<id>/diff` anchors on
+    // the fork point and shows ONLY the Run's own change. RED under the old code.
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let repo = daemon.repo_root().to_path_buf();
+
+    let git = |dir: &std::path::Path, args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        out
+    };
+
+    // c0 (the seed "init" commit) is the common ancestor. Branch the operator's parked
+    // head off it BEFORE advancing main, so its merge-base with the Run is c0.
+    let c0 = String::from_utf8_lossy(&git(&repo, &["rev-parse", "HEAD"]).stdout)
+        .trim()
+        .to_string();
+    git(&repo, &["branch", "wip/parked", &c0]);
+
+    // Advance main two commits PAST c0 — the phantom payload the buggy merge-base sweeps in.
+    std::fs::write(repo.join("file_a.rs"), "fn a() {}\n").unwrap();
+    git(&repo, &["add", "file_a.rs"]);
+    git(&repo, &["commit", "-m", "main: +file_a"]);
+    std::fs::write(repo.join("file_b.rs"), "fn b() {}\n").unwrap();
+    git(&repo, &["add", "file_b.rs"]);
+    git(&repo, &["commit", "-m", "main: +file_b"]); // main tip = the Run's fork point
+
+    // Create the Run forked from `main` (freezes fork_sha = current main tip).
+    let run_id = create_run_on_branch(daemon.url(), daemon.target_repo(), Some("main"))
+        .await
+        .expect("run created");
+
+    let wt_dir = repo.join(".pdo/runs").join(&run_id).join("worktree");
+    for _ in 0..100 {
+        if wt_dir.exists() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(
+        wt_dir.exists(),
+        "pipeline worktree should exist for {run_id}"
+    );
+
+    // The Run's only real change, on the run branch (via the daemon-created worktree).
+    std::fs::write(wt_dir.join("run_file.rs"), "fn run_work() {}\n").unwrap();
+    git(&wt_dir, &["add", "run_file.rs"]);
+    git(&wt_dir, &["commit", "-m", "run work"]);
+
+    // PARK the shared checkout on the divergent branch — the exact #417 / #451 condition.
+    git(&repo, &["checkout", "wip/parked"]);
+
+    let body = reqwest::Client::new()
+        .get(format!("{}/runs/{run_id}/diff", daemon.url()))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    assert!(
+        body.contains("run_file.rs") && body.contains("fn run_work()"),
+        "diff must contain the Run's own change: {body}"
+    );
+    // The phantom under `HEAD...`: main's commits since c0, swept in by the parked HEAD.
+    assert!(
+        !body.contains("file_a.rs") && !body.contains("file_b.rs"),
+        "parked divergent HEAD must not sweep in main's pre-fork files: {body}"
     );
 }

@@ -300,14 +300,16 @@ fn proc_pids() -> Vec<u32> {
         .collect()
 }
 
-/// Count live `tmux attach` clients that are children of `me` and whose command
+/// PIDs of live `tmux attach` clients that are children of `me` and whose command
 /// line mentions `session_name`. The session name is unique per test, so this
 /// never collides with a sibling `#[test]` running in the same binary. A client
 /// that was spawned but never reaped shows up here (pre-#495 it stays ALIVE,
 /// because the reader task keeps a dup of the master fd open, so no SIGHUP ever
-/// reaches it).
+/// reaches it). Returning the PIDs (not a count) lets the caller pin the exact
+/// child it forged and track *that* PID across the reap, instead of a
+/// process-wide zombie tally shared with sibling tests.
 #[cfg(target_os = "linux")]
-fn attach_children(me: u32, session_name: &str) -> usize {
+fn attach_child_pids(me: u32, session_name: &str) -> Vec<u32> {
     proc_pids()
         .into_iter()
         .filter(|&pid| match read_proc_stat(pid) {
@@ -318,24 +320,26 @@ fn attach_children(me: u32, session_name: &str) -> usize {
             }
             _ => false,
         })
-        .count()
+        .collect()
 }
 
-/// Count zombie (`<defunct>`) `tmux` children of `me`. Zombies carry no cmdline
-/// so they can't be filtered by session name — the caller measures the delta
-/// against a baseline captured before acting (sibling tests in the same binary
-/// share this process, cf. reaper test traps).
+/// Of `pids` (captured while the clients were alive and name-matched), the ones
+/// that are STILL our `tmux` children — paired with their process state. A fully
+/// reaped child has left `/proc` (the parent `wait()`ed it) and so is absent
+/// here; a live orphan reports its run/sleep state; a `<defunct>` child reports
+/// `'Z'`. `read_proc_stat` reads comm/state even for zombies (whose cmdline is
+/// empty), so this works after close when a name filter no longer would. The
+/// `ppid == me && comm ~ "tmux"` guard rejects a recycled PID that the OS handed
+/// to some unrelated process after the reap — this measurement is scoped to
+/// THIS test's own children, never a sibling's.
 #[cfg(target_os = "linux")]
-fn tmux_zombies(me: u32) -> usize {
-    proc_pids()
-        .into_iter()
-        .filter(|&pid| {
-            matches!(
-                read_proc_stat(pid),
-                Some((comm, 'Z', ppid)) if ppid == me && comm.contains("tmux")
-            )
+fn surviving_children(me: u32, pids: &[u32]) -> Vec<(u32, char)> {
+    pids.iter()
+        .filter_map(|&pid| match read_proc_stat(pid) {
+            Some((comm, state, ppid)) if ppid == me && comm.contains("tmux") => Some((pid, state)),
+            _ => None,
         })
-        .count()
+        .collect()
 }
 
 /// Layer 3a (#495): after the PTY WebSocket closes, the daemon must reap the
@@ -345,8 +349,17 @@ fn tmux_zombies(me: u32) -> usize {
 /// The daemon runs in-process (`serve_with_config`), so the client it forks is
 /// a child of THIS test process and is observable via `/proc`. Pre-fix the
 /// client stays ALIVE after close (task 1 keeps a dup of the master fd, so no
-/// SIGHUP reaches it), and `attach_children` never returns to 0 — the poll
-/// below times out and the test fails. That is the negative control.
+/// SIGHUP reaches it), and its PID never leaves `/proc` — the poll below times
+/// out and the test fails. That is the negative control.
+///
+/// Both assertions are scoped to the exact child PID(s) this test forged,
+/// captured while the client is still alive. An earlier version tallied *all*
+/// `<defunct>` tmux children of the shared test-process PID against a baseline;
+/// because every `#[test]` in this binary runs in that one process, a sibling
+/// test's transient zombie could land inside this test's measurement window and
+/// trip the assertion — a false failure under the full parallel workspace run,
+/// aggravated once #564 added sibling PTY tests here. Pinning the specific PID
+/// removes that cross-test race without serialising the test.
 ///
 /// Linux-only: the assertion reads `/proc`. On other platforms the test is
 /// compiled out (there is no CI target for them).
@@ -370,9 +383,6 @@ async fn pty_ws_reaps_tmux_child_on_close() {
     create_tmux_session_with_cat(&socket, session_name);
 
     let me = std::process::id();
-    // Zombies are shared across sibling `#[test]`s and can't be name-filtered,
-    // so assert on the delta from a pre-action baseline, not an absolute count.
-    let baseline_zombies = tmux_zombies(me);
 
     let ws_url = format!("ws://{}/sessions/{}/pty", daemon.addr, session_name);
     let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url)
@@ -381,13 +391,19 @@ async fn pty_ws_reaps_tmux_child_on_close() {
 
     // Wait for the attach client to actually come up before acting — this is
     // both a positive control (proves the /proc probe sees the child) and a
-    // guard against measuring the reap before the child even exists.
+    // guard against measuring the reap before the child even exists. Capture the
+    // exact PID(s) now, while the client is alive and its cmdline still carries
+    // the (unique) session name; after close a zombie's cmdline is empty, so the
+    // name filter no longer applies and only this pinned PID lets us tell OUR
+    // child apart from a sibling test's.
     let up_deadline = tokio::time::Instant::now() + Duration::from_secs(3);
-    while attach_children(me, session_name) == 0 && tokio::time::Instant::now() < up_deadline {
+    let mut child_pids = attach_child_pids(me, session_name);
+    while child_pids.is_empty() && tokio::time::Instant::now() < up_deadline {
         tokio::time::sleep(Duration::from_millis(50)).await;
+        child_pids = attach_child_pids(me, session_name);
     }
     assert!(
-        attach_children(me, session_name) >= 1,
+        !child_pids.is_empty(),
         "tmux attach client never appeared as a child of the test process"
     );
 
@@ -399,26 +415,35 @@ async fn pty_ws_reaps_tmux_child_on_close() {
     tokio::time::sleep(Duration::from_millis(100)).await;
     let _ = ws.close(None).await;
 
-    // The reap runs asynchronously after the bridge's `select!` returns; poll.
+    // The reap runs asynchronously after the bridge's `select!` returns; poll
+    // until every child PID we forged has left `/proc` (parent `wait()`ed it).
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    let mut live = attach_children(me, session_name);
-    let mut zombies = tmux_zombies(me);
-    while tokio::time::Instant::now() < deadline && (live > 0 || zombies > baseline_zombies) {
+    while tokio::time::Instant::now() < deadline && !surviving_children(me, &child_pids).is_empty()
+    {
         tokio::time::sleep(Duration::from_millis(100)).await;
-        live = attach_children(me, session_name);
-        zombies = tmux_zombies(me);
     }
 
     // Clean up before asserting so a failure can't leak the session.
     kill_tmux_session(&socket, session_name);
 
-    assert_eq!(
-        live, 0,
-        "PTY bridge leaked a live `tmux attach` client after WS close (#495)"
+    // Classify whatever is left of OUR children only — scoped to `child_pids`,
+    // never a process-wide count. A survivor in run/sleep state is a leaked live
+    // orphan; one in `'Z'` is a leaked `<defunct>` zombie. Both must be empty.
+    let survivors = surviving_children(me, &child_pids);
+    let live: Vec<_> = survivors
+        .iter()
+        .filter(|(_, state)| *state != 'Z')
+        .collect();
+    let zombies: Vec<_> = survivors
+        .iter()
+        .filter(|(_, state)| *state == 'Z')
+        .collect();
+    assert!(
+        live.is_empty(),
+        "PTY bridge leaked a live `tmux attach` client after WS close (#495): {live:?}"
     );
     assert!(
-        zombies <= baseline_zombies,
-        "PTY bridge leaked a `<defunct>` tmux zombie after WS close (#495): \
-         {zombies} > baseline {baseline_zombies}"
+        zombies.is_empty(),
+        "PTY bridge leaked a `<defunct>` tmux zombie after WS close (#495): {zombies:?}"
     );
 }

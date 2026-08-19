@@ -109,13 +109,21 @@ pub(crate) fn get(name: &str) -> Option<LibraryEntry> {
     let dir = library_dir()?;
     let slug = slugify(name);
     let path = dir.join(format!("{slug}.yaml"));
-    let contents = std::fs::read_to_string(&path).ok()?;
-    let entry: LibraryEntry = serde_yaml::from_str(&contents).ok()?;
-    if entry.name == name {
-        Some(entry)
-    } else {
-        find_by_name(&dir, name)
+    // Fast path: the direct slug file — but only when it exists, parses, AND
+    // actually names this entry. Any miss falls through to a full scan by name,
+    // keeping `get` consistent with `list`/`find_by_name`. A slug collision can
+    // legitimately park this entry under a `-N` suffix, and an absent or
+    // unparseable slug file (e.g. a 0-byte remnant of an interrupted or
+    // out-of-disk write) must not shadow an entry that still lives on disk —
+    // otherwise `list` surfaces it while `get`/instantiate 404 on the same name.
+    if let Ok(contents) = std::fs::read_to_string(&path) {
+        if let Ok(entry) = serde_yaml::from_str::<LibraryEntry>(&contents) {
+            if entry.name == name {
+                return Some(entry);
+            }
+        }
     }
+    find_by_name(&dir, name)
 }
 
 fn find_by_name(dir: &Path, name: &str) -> Option<LibraryEntry> {
@@ -1140,6 +1148,44 @@ mod tests {
             save(&entry2).unwrap();
             // beta.yaml is taken by "Beta Original", so "Beta" goes to beta-2.yaml
             assert!(dir.join("beta-2.yaml").exists());
+        });
+    }
+
+    #[test]
+    fn get_scans_past_unparseable_slug_file() {
+        // Regression: a 0-byte (or otherwise unparseable) file squatting the
+        // direct slug path — the remnant of an interrupted or out-of-disk write —
+        // must not shadow an entry that still lives under a collision `-N` slug.
+        // `get` must agree with `list`: before this, `get`/instantiate 404'd on a
+        // name `list` happily returned (root cause of a flaky `library_node_ports`).
+        with_temp_home(|| {
+            let dir = library_dir().unwrap();
+            std::fs::create_dir_all(&dir).unwrap();
+
+            // The real entry, parked at the collision slug.
+            let entry = LibraryEntry {
+                name: "Typed Reviewer".to_string(),
+                node_type: pipeline::NodeType::DocOnly,
+                inputs: vec![],
+                outputs: vec![],
+                interactive: false,
+                model: None,
+                effort: None,
+                max_iter: None,
+                branches: None,
+                prompt: "hi".to_string(),
+            };
+            std::fs::write(
+                dir.join("typed-reviewer-2.yaml"),
+                serde_yaml::to_string(&entry).unwrap(),
+            )
+            .unwrap();
+            // A poison 0-byte file at the direct slug path.
+            std::fs::write(dir.join("typed-reviewer.yaml"), "").unwrap();
+
+            let got = get("Typed Reviewer").expect("get must scan past the poison file");
+            assert_eq!(got.name, "Typed Reviewer");
+            assert_eq!(got.prompt, "hi");
         });
     }
 

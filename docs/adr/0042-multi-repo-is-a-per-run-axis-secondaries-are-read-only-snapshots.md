@@ -2,7 +2,17 @@
 
 ## Statut
 
-Accepté — #465 slices 1 & 2.
+Accepté — #465 slices 1 & 2. **Partiellement révisé par ADR-0047 (#565)** : les secondaires
+sont désormais **modifiables par défaut**, le read-only devient un **opt-in par dépôt**. Les
+décisions 1, 3 (axe par-Run, aucune livraison/merge-back côté PDO) et 5 (liste mutable,
+visibilité au spawn) restent vraies ; la décision 2 (« read-only ») et la décision 4 (garde
+inconditionnelle) sont amendées ci-dessous, et les différés « écriture / git in-sandbox » sont
+levés par ADR-0047.
+
+> Note historique : ce fichier a d'abord affirmé « les secondaires sont des snapshots read-only ».
+> Ce n'est plus le défaut depuis #565 — voir ADR-0047 pour le raisonnement (PDO ne livre jamais
+> lui-même ; c'est le nœud `Ship It` qui ship chaque dépôt, donc rendre un secondaire modifiable
+> ne rouvre **pas** le merge-back multi-repo rejeté en décision 3).
 
 > Numéro posé sur la branche de base (1.12.0), où le max d'ADR sur disque est 0039 ;
 > 0040/0041 sont réservés (disputés par #512/#509/#507). À **renuméroter au next-free
@@ -21,16 +31,20 @@ target branch par dépôt.
    (`RunStarted.target_repos`), jamais dans le YAML de pipeline. `target_repos[0]` = le **primaire**
    et conserve la sémantique de `target_repo` (ADR-0033 inchangée) ; il n'est PAS matérialisé comme
    un `RepoPin` (il reste dans `target_repo`), seuls les `[1..]` le sont.
-2. Les dépôts **secondaires** sont **read-only** : snapshots `git worktree add --detach <sha>` sous
+2. Les dépôts **secondaires** sont matérialisés en snapshots `git worktree add --detach <sha>` sous
    `<primaire>/.pdo/runs/<id>/repos/<alias>/`, le SHA étant résolu au démarrage par
    `git rev-parse --verify <base_branch>` **sans fetch** (base = ref locale ; défaut = `HEAD`
-   local).
+   local). **~~Read-only.~~ Amendé par ADR-0047 : modifiables par défaut, read-only devient un
+   opt-in par dépôt** (flag `read_only` sur `RepoPin`, défaut `false`). La mécanique de snapshot
+   ci-dessus est inchangée ; seul le droit d'écriture change.
 3. Un Run multi-repo n'écrit et ne merge **que** le primaire. Le merge-back atomique multi-repo est
    **rejeté** (rouvrirait #489/#490/#503 : base_sha scalaire, commit-tree 2 parents mono-repo).
-4. L'écriture dans un secondaire est refusée en **409 `secondary_repo_dirtied`** (fichiers *suivis*
-   seulement ; untracked toléré), via `worktree_has_tracked_changes`, à l'edge de complétion. Le
-   refus est **non terminal** (le nœud reste vivant : revert du fichier suivi puis re-complétion
-   passent) ; il n'est **pas** dans `transition_guard` (pur/IO-free).
+4. **Amendé par ADR-0047 :** la garde **409 `secondary_repo_dirtied`** ne s'applique désormais
+   qu'aux secondaires **read-only** (`read_only == true`). Un secondaire modifiable est exempté (la
+   boucle `continue`). Là où elle s'applique, la garde est inchangée : fichiers *suivis* seulement
+   (untracked toléré), via `worktree_has_tracked_changes`, à l'edge de complétion ; refus **non
+   terminal** (le nœud reste vivant : revert puis re-complétion passent) ; **pas** dans
+   `transition_guard` (pur/IO-free).
 5. **La liste de secondaires d'un Run est mutable en cours de Run** (slice 2). `PATCH
    /runs/{id}/repos` (`{ add, remove }`) ajoute/retire des secondaires read-only sur un Run **vivant**
    ; le primaire reste immuable (pas d'alias ⇒ inatteignable par `remove` ; un `add` égal au primaire
@@ -54,9 +68,10 @@ target branch par dépôt.
   `PDO_SECONDARY_REPOS` (`alias=abspath`) — parce que les sous-worktrees n'héritent pas des fichiers
   nichés sous le run worktree (`.pdo/` est gitignored). Le chemin est identique host/sandbox
   (invariant D3).
-- Le sandbox ne gagne aucun mount en slice 1 (secondaires déjà sous `repo_root`, monté rw à chemin
-  identique). Le git in-sandbox sur un secondaire est hors-slice (exigerait de monter le `.git` du
-  secondaire ; `:ro` casse `git status`/l'index — EROFS).
+- Le sandbox ne gagnait aucun mount en slice 1 (secondaires déjà sous `repo_root`, monté rw à chemin
+  identique). **Amendé par ADR-0047 :** un secondaire **modifiable** gagne un mount `<secondary>/.git`
+  en **rw** à chemin identique (le `:ro` casserait `git status`/l'index — EROFS), pour que `git`
+  fonctionne in-sandbox sur ce dépôt. Un secondaire read-only n'en gagne toujours aucun.
 - `cleanup_run` démonte chaque secondaire par **`git worktree remove --force` + `git worktree
   prune`** depuis le dépôt secondaire (la registration `--detach` vit hors `repo_root`), sinon
   registration dangling — classe #498. Depuis la slice 2 il est **piloté par le disque** : il balaie
@@ -76,9 +91,11 @@ target branch par dépôt.
 - La validation par-secondaire (chemin absolu + git, self-référence, doublon, `rev-parse --verify`,
   alias) est **un seul helper** (`resolve_one_secondary_pin`) partagé par le chokepoint de création
   **et** `patch_run_repos`, pour que les deux surfaces ne divergent pas (classe #509).
-- Restent **différés** (slices ultérieures) : l'écriture / MR dans un secondaire (retomberait dans le
-  merge-back multi-repo rejeté), le `git` in-sandbox sur un secondaire, et le sélecteur `repo:` par
-  nœud.
+- ~~Restent différés : l'écriture / MR dans un secondaire, le `git` in-sandbox sur un secondaire~~ →
+  **levés par ADR-0047** (#565). Ils ne rouvrent **pas** le merge-back multi-repo rejeté en
+  décision 3 : PDO ne livre jamais lui-même — c'est le nœud `Ship It` (agent, ADR-0036) qui ouvre
+  la PR / merge, dépôt par dépôt, exactement comme pour le primaire. Reste différé : le sélecteur
+  `repo:` par nœud.
 
 ## Alternatives écartées
 

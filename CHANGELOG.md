@@ -10,7 +10,7 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## 1.28.0
+## 1.30.0
 
 **Changement de comportement observable (durcissement sécurité).** Le contrôle d'`Origin`
 WebSocket s'étend au second endpoint : `/ws` (le flux d'événements du dashboard) **vérifie
@@ -28,6 +28,34 @@ sur domaine public (cf. README, *Behind a reverse proxy*). Env-only et jamais r�
 `vite.config.ts`), donc `make dev` fonctionne sans configuration. Pour un front dev servi sur un
 port non standard, poser `PDO_ALLOWED_WS_ORIGINS=http://localhost:<port>`. Bonus : ce même correctif
 répare le terminal PTY, cassé en dev Vite depuis toujours (même cause d'`Origin`).
+
+## 1.29.0
+
+Rien de cassant, aucune migration. Les **branches remote entrent dans la sélection de branche
+source** du formulaire de nouveau Run (#571). `list_branches` liste désormais les réfs de suivi
+(`git for-each-ref refs/remotes`) en plus des locales ; l'endpoint `GET /repos/branches` renvoie un
+tableau `{name, kind}` (`local` | `remote`), locales d'abord. La note de version qui ne se déduit pas
+du titre : la branche source choisie est **stockée verbatim** (une remote reste `origin/xxx`), le
+worktree est **coupé directement sur la réf de suivi sans `git fetch`** ni matérialisation d'une
+branche locale, la **jumelle locale d'une remote est dédupliquée**, le symref `origin/HEAD` est filtré,
+et le défaut proposé n'est **jamais une remote** tant qu'une locale existe. Une réf source inconnue
+est rejetée en 400 (nommant branche et dépôt), jamais un Run à moitié né.
+
+## 1.28.0
+
+Rien de cassant, aucune migration (payload d'event schemaless, blob JSON de trigger — le champ
+voyage tel quel). Les **dépôts secondaires d'un Run multi-repo sont modifiables par défaut** ;
+`read-only` devient une **case à cocher opt-in par dépôt** (#565, ADR-0047 révisant ADR-0042). Un
+flag `read_only: bool` (défaut `false`) sur `RepoPin`/`TargetRepoInput` (`#[serde(default)]` +
+`skip_serializing_if` ⇒ un pin historique se relit *modifiable*, byte-identique sur le fil). La garde
+`secondary_repo_dirtied` (409) ne se déclenche plus que sur un secondaire **coché read-only** ; un
+secondaire modifiable voit son `.git` monté **rw** en sandbox (`-v <g>:<g>:rw`, chemin identique) pour
+que `git` y fonctionne, et son préambule l'invite à écrire/committer/livrer (env
+`PDO_WRITABLE_SECONDARY_REPOS`). **PDO ne livre toujours rien lui-même** : la livraison reste le fait
+de l'agent (`Ship It`, `gh pr create` / `git merge`), par dépôt et indépendamment — aucun merge-back
+multi-repo n'est réintroduit. Limite assumée : un secondaire rendu modifiable **mid-run** n'a son
+`.git` monté qu'après recréation du conteneur (mount figé à la création, cohérent avec la visibilité
+au spawn).
 
 ## 1.27.0
 
@@ -108,7 +136,6 @@ jamais un réutilisé) **puis** `RunFailed`, et rend `SpawnOutcome::Failed`. Eff
 ADR-0037 §1/§3) : `restart_node` répond **`500 {"error":"spawn_failed","recoverable":false,"run_failed":true}`**
 au lieu de `200 {"spawned":[…]}` ; les routes `resume`/`pause` comptent le nœud en **`noop`** (avec sa
 raison) au lieu de le déclarer `spawned`. Ferme la « Limite acceptée » homonyme d'ADR-0037.
-
 
 ## 1.25.0
 

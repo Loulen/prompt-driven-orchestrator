@@ -146,6 +146,7 @@ function RepositoriesSection({
         {
           repo: draft.path.trim(),
           base_branch: draft.baseBranch || undefined,
+          read_only: draft.readOnly,
         },
       ],
     });
@@ -183,8 +184,9 @@ function RepositoriesSection({
         </span>
       </div>
 
-      {/* Existing read-only secondaries — locked display + a remove button. Their
-          SHA is frozen at add, so there is nothing to edit here but their presence. */}
+      {/* Existing secondaries — locked display + a remove button, with a badge
+          for the writable/read-only mode (ADR-0047). Their SHA is frozen at add,
+          so there is nothing to edit here but their presence. */}
       {secondaries.map((pin) => (
         <div
           key={pin.alias}
@@ -203,11 +205,15 @@ function RepositoriesSection({
               {pin.base_branch ?? "HEAD"} · {pin.sha.slice(0, 8)}
             </span>
           </div>
+          {/* ADR-0047: the badge reflects the per-repo opt-in. A writable
+              secondary (the default) gets a discreet WRITABLE badge; only an
+              opted-in read-only pin shows READ-ONLY. */}
           <span
             className="rounded bg-bg-4 px-1.5 py-0.5 font-medium text-fg-3"
             style={{ fontSize: "9.5px" }}
+            data-testid={`secondary-repo-mode-${pin.alias}`}
           >
-            READ-ONLY
+            {pin.read_only ? "READ-ONLY" : "WRITABLE"}
           </span>
           {editable && (
             <button
@@ -251,7 +257,9 @@ function RepositoriesSection({
       {editable && draft === null && (
         <button
           type="button"
-          onClick={() => setDraft({ path: "", baseBranch: "", valid: null })}
+          onClick={() =>
+            setDraft({ path: "", baseBranch: "", valid: null, readOnly: false })
+          }
           disabled={busy}
           className="flex items-center gap-1 self-start rounded-md border border-dashed border-line-strong bg-transparent px-2.5 py-1.5 font-medium text-fg-3 transition-colors hover:border-acc hover:text-acc disabled:opacity-40"
           style={{ fontSize: "11.5px" }}

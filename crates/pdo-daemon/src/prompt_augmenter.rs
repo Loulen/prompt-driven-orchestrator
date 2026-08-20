@@ -29,14 +29,20 @@ pub(crate) struct ForEachContext {
     pub total: i64,
 }
 
-/// A read-only secondary repo made visible to a node (#465, ADR-0042), already
+/// A secondary repo made visible to a node (#465, ADR-0042/0047), already
 /// resolved to its **absolute snapshot path** so this pure module never touches
 /// the run-dir path math. The absolute path is identical on host and in the
 /// sandbox (invariant D3), so the same string is valid from either.
+///
+/// `read_only` is the ADR-0047 opt-in: `false` (the default) means the node may
+/// modify/commit/deliver the repo; `true` restores read-only-context semantics.
+/// The preamble branches on it, and the writable subset is exposed to scripts as
+/// `PDO_WRITABLE_SECONDARY_REPOS`.
 pub(crate) struct SecondaryRepoContext {
     pub alias: String,
     pub abs_path: String,
     pub sha: String,
+    pub read_only: bool,
 }
 
 /// Build the per-node secondary-repo view from the Run's frozen pins (#465).
@@ -58,6 +64,7 @@ pub(crate) fn secondary_repo_contexts(
                 .to_string_lossy()
                 .to_string(),
             sha: pin.sha.clone(),
+            read_only: pin.read_only,
         })
         .collect()
 }
@@ -97,11 +104,13 @@ pub(crate) struct AugmentContext<'a> {
     /// failed iterations are quarantined, and no raw `iter-*` glob is ever
     /// handed to an agent or script.
     pub repeated_iters: HashMap<String, Vec<i64>>,
-    /// Read-only secondary repos visible to this node (#465, ADR-0042), each with
-    /// its absolute snapshot path and pinned SHA. Empty for a mono-repo Run. The
-    /// nodes reach these ONLY by absolute path (their sub-worktrees do not inherit
-    /// the snapshot files), so `build_preamble` prints the paths and
-    /// `build_script_env` exposes them as `PDO_SECONDARY_REPOS`.
+    /// Secondary repos visible to this node (#465, ADR-0042/0047), each with its
+    /// absolute snapshot path, pinned SHA and `read_only` opt-in. Empty for a
+    /// mono-repo Run. The nodes reach these ONLY by absolute path (their
+    /// sub-worktrees do not inherit the snapshot files), so `build_preamble`
+    /// prints the paths (branching read-only vs writable) and `build_script_env`
+    /// exposes them as `PDO_SECONDARY_REPOS` (all) plus
+    /// `PDO_WRITABLE_SECONDARY_REPOS` (the writable subset).
     pub secondary_repos: Vec<SecondaryRepoContext>,
     /// The sub-worktree already existed on the right branch and was reused **in
     /// place** at `restart_node` (#489): a prior agent's uncommitted work is still
@@ -311,10 +320,10 @@ pub(crate) fn build_script_env(ctx: &AugmentContext<'_>) -> Vec<(String, String)
         ));
     }
 
-    // #465 (ADR-0042): read-only secondary repos as `alias=abspath` lines,
-    // `\n`-separated (same convention as a `repeated` input). Only set when there is
-    // at least one, so a mono-repo script's env is byte-identical to pre-#465. A
-    // script reads them with `readarray -t repos <<< "$PDO_SECONDARY_REPOS"`.
+    // #465 (ADR-0042): secondary repos as `alias=abspath` lines, `\n`-separated
+    // (same convention as a `repeated` input). Only set when there is at least
+    // one, so a mono-repo script's env is byte-identical to pre-#465. A script
+    // reads them with `readarray -t repos <<< "$PDO_SECONDARY_REPOS"`.
     if !ctx.secondary_repos.is_empty() {
         let value = ctx
             .secondary_repos
@@ -323,6 +332,22 @@ pub(crate) fn build_script_env(ctx: &AugmentContext<'_>) -> Vec<(String, String)
             .collect::<Vec<_>>()
             .join("\n");
         env.push(("PDO_SECONDARY_REPOS".to_string(), value));
+
+        // ADR-0047: the writable subset, same `alias=abspath` format. A delivery
+        // script (e.g. the `Ship It` node) iterates this to know which secondaries
+        // it may commit + deliver, without having to re-derive read-only. Only set
+        // when non-empty — an all-read-only Run (or a mono-repo one) leaves it
+        // unset, so `${PDO_WRITABLE_SECONDARY_REPOS:-}` is the safe read.
+        let writable = ctx
+            .secondary_repos
+            .iter()
+            .filter(|s| !s.read_only)
+            .map(|s| format!("{}={}", s.alias, s.abs_path))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !writable.is_empty() {
+            env.push(("PDO_WRITABLE_SECONDARY_REPOS".to_string(), writable));
+        }
     }
 
     // HashMap iteration order is non-deterministic; sort so the emitted script
@@ -555,26 +580,57 @@ pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
         preamble.push('\n');
     }
 
-    // #465 (ADR-0042): read-only secondary repositories. Injected by ABSOLUTE path
+    // #465 (ADR-0042/0047): secondary repositories. Injected by ABSOLUTE path
     // because a node's sub-worktree does not inherit the snapshot files (they are
     // siblings under the run dir; `.pdo/` is gitignored). The path is identical on
-    // host and in the sandbox (invariant D3). Read-only by convention: writing to a
-    // tracked file trips the `secondary_repo_dirtied` guard (409).
+    // host and in the sandbox (invariant D3). A secondary is **writable by
+    // default** (ADR-0047): the node may modify/commit/deliver it. A `read_only`
+    // opt-in restores read-only-context semantics — writing a tracked file there
+    // trips the `secondary_repo_dirtied` guard (409).
     if !ctx.secondary_repos.is_empty() {
-        preamble.push_str("## Secondary repositories (read-only)\n\n");
+        let (writable, read_only): (Vec<_>, Vec<_>) =
+            ctx.secondary_repos.iter().partition(|s| !s.read_only);
+
+        preamble.push_str("## Secondary repositories\n\n");
         preamble.push_str(
-            "These repositories are associated with this Run as **read-only context** \
-             (#465). Read their files by **absolute path** (your sub-worktree does not \
-             contain them). Each is pinned to a fixed commit — do **not** modify, commit \
-             in, or open MRs against them; writing to a tracked file will be refused.\n\n",
+            "These repositories are associated with this Run (#465). Read and reach them \
+             by **absolute path** — your sub-worktree does not contain them. Each is a \
+             worktree pinned to a fixed commit.\n\n",
         );
-        for sec in &ctx.secondary_repos {
-            preamble.push_str(&format!(
-                "- `{}` (pinned @ `{}`): `{}`\n",
-                sec.alias, sec.sha, sec.abs_path
-            ));
+
+        if !writable.is_empty() {
+            preamble.push_str(
+                "**Writable** (ADR-0047) — you **MAY** modify, commit, and deliver these \
+                 repositories. `git` works inside them (their `.git` is mounted rw in the \
+                 sandbox). PDO does **not** deliver them for you: do it yourself from the \
+                 repository's own directory (e.g. `git checkout -b …`, commit, then \
+                 `gh pr create` / `git push`), exactly as you would the primary. \
+                 Uncommitted changes are lost when the Run is torn down. Their \
+                 absolute paths are listed below.\n\n",
+            );
+            for sec in &writable {
+                preamble.push_str(&format!(
+                    "- `{}` (writable, pinned @ `{}`): `{}`\n",
+                    sec.alias, sec.sha, sec.abs_path
+                ));
+            }
+            preamble.push('\n');
         }
-        preamble.push('\n');
+
+        if !read_only.is_empty() {
+            preamble.push_str(
+                "**Read-only** — these are read-only **context** only. Do **not** modify, \
+                 commit in, or open MRs against them; writing to a tracked file will be \
+                 refused (`secondary_repo_dirtied`, 409).\n\n",
+            );
+            for sec in &read_only {
+                preamble.push_str(&format!(
+                    "- `{}` (read-only, pinned @ `{}`): `{}`\n",
+                    sec.alias, sec.sha, sec.abs_path
+                ));
+            }
+            preamble.push('\n');
+        }
     }
 
     // Source code edits (only for nodes that get a per-iteration sub-worktree)
@@ -1011,6 +1067,81 @@ mod tests {
             reused_sub_worktree: false,
             interrupted_git_ops: &[],
         }
+    }
+
+    /// ADR-0047: the secondary preamble branches per pin. A writable secondary is
+    /// invited to write/commit/deliver and never labelled read-only; a read-only
+    /// one keeps the "do not modify" wording. The section title no longer lies
+    /// ("(read-only)" is gone from the header).
+    #[test]
+    fn secondary_preamble_branches_writable_vs_read_only() {
+        let pipeline = sample_pipeline();
+        let node = &pipeline.nodes[0];
+        let vars = HashMap::new();
+        let mut ctx = sample_ctx(&pipeline, node, &vars);
+        ctx.secondary_repos = vec![
+            SecondaryRepoContext {
+                alias: "sdk".into(),
+                abs_path: "/work/sdk".into(),
+                sha: "aaaa1111".into(),
+                read_only: false,
+            },
+            SecondaryRepoContext {
+                alias: "ref".into(),
+                abs_path: "/work/ref".into(),
+                sha: "bbbb2222".into(),
+                read_only: true,
+            },
+        ];
+
+        let preamble = build_preamble(&ctx);
+        // The header no longer claims a global read-only mode.
+        assert!(preamble.contains("## Secondary repositories\n"));
+        assert!(!preamble.contains("## Secondary repositories (read-only)"));
+        // The writable one is invited to deliver; the read-only one is fenced off.
+        assert!(preamble.contains("`sdk` (writable"));
+        assert!(preamble.contains("MAY** modify, commit, and deliver"));
+        assert!(preamble.contains("`ref` (read-only"));
+        assert!(preamble.contains("Do **not** modify"));
+
+        // Env: every secondary in PDO_SECONDARY_REPOS, only the writable one in
+        // PDO_WRITABLE_SECONDARY_REPOS.
+        let env: HashMap<String, String> = build_script_env(&ctx).into_iter().collect();
+        assert_eq!(
+            env.get("PDO_SECONDARY_REPOS").map(String::as_str),
+            Some("sdk=/work/sdk\nref=/work/ref")
+        );
+        assert_eq!(
+            env.get("PDO_WRITABLE_SECONDARY_REPOS").map(String::as_str),
+            Some("sdk=/work/sdk")
+        );
+    }
+
+    /// ADR-0047: an all-read-only Run behaves like the pre-feature read-only mode —
+    /// no writable section, no `PDO_WRITABLE_SECONDARY_REPOS` var at all.
+    #[test]
+    fn all_read_only_secondaries_emit_no_writable_env() {
+        let pipeline = sample_pipeline();
+        let node = &pipeline.nodes[0];
+        let vars = HashMap::new();
+        let mut ctx = sample_ctx(&pipeline, node, &vars);
+        ctx.secondary_repos = vec![SecondaryRepoContext {
+            alias: "ref".into(),
+            abs_path: "/work/ref".into(),
+            sha: "bbbb2222".into(),
+            read_only: true,
+        }];
+
+        let preamble = build_preamble(&ctx);
+        assert!(!preamble.contains("MAY** modify"));
+        assert!(preamble.contains("`ref` (read-only"));
+
+        let env: HashMap<String, String> = build_script_env(&ctx).into_iter().collect();
+        assert!(env.contains_key("PDO_SECONDARY_REPOS"));
+        assert!(
+            !env.contains_key("PDO_WRITABLE_SECONDARY_REPOS"),
+            "no writable secondary ⇒ the writable env var must be unset"
+        );
     }
 
     #[test]

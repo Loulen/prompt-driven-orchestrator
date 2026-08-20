@@ -46,6 +46,7 @@ mod pty_bridge;
 mod reap_policy;
 pub(crate) mod repo_edit_refusal;
 pub(crate) mod restart_verdict;
+pub(crate) mod retry_verdict;
 mod run_advance;
 mod run_command;
 mod run_cost;
@@ -497,16 +498,28 @@ struct CreateRunRequest {
     auto_name: Option<bool>,
 }
 
-/// One repo line of a multi-repo create request (#465, ADR-0042).
+/// One repo line of a multi-repo create request (#465, ADR-0042/0047).
 ///
-/// The wire shape the front sends per row: a `repo` path plus an optional
-/// `base_branch` (default `HEAD`, the LOCAL ref — there is no fetch). Index `[0]`
-/// is the primary; `[1..]` become read-only secondary snapshots.
+/// The wire shape the front sends per row: a `repo` path, an optional
+/// `base_branch` (default `HEAD`, the LOCAL ref — there is no fetch), and an
+/// optional `read_only` opt-in (default `false` ⇒ writable, ADR-0047). Index
+/// `[0]` is the primary; `[1..]` become secondary snapshots (writable unless
+/// `read_only`). This input is shared by create, `PATCH /runs/{id}/repos`
+/// (`add`) and the trigger `target_repos` blob — one field covers every write
+/// surface.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct TargetRepoInput {
     repo: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     base_branch: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    read_only: bool,
+}
+
+/// serde `skip_serializing_if` helper (ADR-0047): a writable pin serialises
+/// without a `read_only` key, byte-identical to a pre-flag input.
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// Body of `PATCH /runs/{run_id}/repos` — the mid-run edit of a Run's read-only
@@ -7620,6 +7633,22 @@ async fn create_run_inner(
 
     let run_id = event_log::generate_run_id();
 
+    // #417: freeze the run's fork point NOW, from the same local `source_ref` that
+    // `create_worktree` will cut the run branch from below, so a later HEAD move in the
+    // shared checkout can never displace the LOC/diff base and sweep in phantom line
+    // counts. `rev_parse_verified` resolves the LOCAL ref (no fetch, `^{commit}`-verified),
+    // mirroring `resolve_secondary_pins` — and, like it, resolving BEFORE `append_event`
+    // keeps the current event ordering (no reorder around `create_worktree`). A resolve
+    // failure is non-fatal: it degrades to the `source_branch`/`HEAD` fallback ladder at
+    // read time (`run_diff_base`) and must never block run creation.
+    let fork_sha = match crate::worktree_ops::rev_parse_verified(&run_repo_root, source_ref) {
+        Ok(sha) => Some(sha),
+        Err(e) => {
+            warn!("could not resolve fork_sha for run {run_id} from {source_ref}: {e}");
+            None
+        }
+    };
+
     // #410 CHOKEPOINT: resolve the effective sandbox mode ONCE, here, where the JSON,
     // multipart, and trigger-fire create paths converge — just before the mode is
     // frozen into `RunStarted`. `req.sandbox` already carries either the explicit
@@ -7777,6 +7806,13 @@ async fn create_run_inner(
     }
     if let Some(ref branch) = effective_source_branch {
         run_payload["source_branch"] = serde_json::json!(branch);
+    }
+    // #417: FREEZE the resolved fork point into `RunStarted`, next to `source_branch`.
+    // Written whenever the local ref resolved (every new Run in practice); a resolve
+    // failure leaves it absent → the read-side `run_diff_base` ladder recovers via
+    // `source_branch`, then `HEAD`. Absent key on replay → `None` (back-compat).
+    if let Some(ref fs) = fork_sha {
+        run_payload["fork_sha"] = serde_json::json!(fs);
     }
     // #551 (ADR-0046): FREEZE the Run's harness choice into `RunStarted`, the same
     // immutability posture as `sandbox` above — editing the pipeline or the instance
@@ -10058,15 +10094,19 @@ async fn run_diff(
         }
     };
 
-    if event_log::project(&events).is_none() {
-        return (StatusCode::NOT_FOUND, "run not found").into_response();
-    }
+    let run_state = match event_log::project(&events) {
+        Some(s) => s,
+        None => return (StatusCode::NOT_FOUND, "run not found").into_response(),
+    };
 
     let pipeline_branch = format!("pdo/run-{run_id}");
-    // Three-dot (merge-base = fork point) so main's advance after the fork does
-    // not surface as phantom deletions; `:(exclude).pdo/` drops the blackboard
-    // artefacts. Mirrors compute_run_loc (see lib.rs ~10985). #376.
-    let range = format!("HEAD...{pipeline_branch}");
+    // #417: base on the Run's frozen fork point (`run_diff_base`: `fork_sha` → recorded
+    // `source_branch` → `HEAD`), NOT the shared checkout's wandering HEAD — otherwise a
+    // checkout parked on a divergent branch sweeps in phantom files. Three-dot (merge-base
+    // = fork point) so main's advance after the fork does not surface as phantom deletions;
+    // `:(exclude).pdo/` drops the blackboard artefacts. Mirrors compute_run_loc. #376/#417.
+    let base = run_diff_base(&run_state);
+    let range = format!("{base}...{pipeline_branch}");
     let output = match std::process::Command::new("git")
         .args(["diff", &range, "--", ".", ":(exclude).pdo/"])
         .current_dir(&state.repo_root)
@@ -11146,6 +11186,87 @@ async fn node_pane(
             // the `Stop` hook. A `script` node returned early above, so this tail is
             // an agent by construction.
             let inject_hook = stored_autocomplete_turn_end(&state.db).await;
+
+            // #487 §3 — a resurrection IS a (re)spawn, so it must pass the
+            // admission gate and leave a `NodeStarted` trace, exactly as `spawn_node`
+            // does. Before this, a click on a dead pane relaunched a live `claude`
+            // session that (1) consumed a slot the session cap (#77/#78) never
+            // granted — the cap bypassed by a click — and (2) left NO event in the
+            // log, so the orphan sweep (#485) would later read the very session it
+            // resurrected as an orphan and kill it. Hold the admission lock across
+            // the check-and-reserve (count → append), then drop it before the tmux
+            // relaunch, exactly as `spawn_node` orders it.
+            let admission_guard = state.admission_lock.lock().await;
+            let cap = admission::configured_cap_with(stored_session_cap(&state.db).await);
+            // Exclude this node's own slot (#489-C): the dead iteration still projects
+            // `Running`, so a Run-blind count would refuse to resume it against itself
+            // at the cap.
+            let live = count_global_live_sessions_excluding(
+                &state.db,
+                Some(admission::SlotExclusion {
+                    run_id: &run_id,
+                    node_id: &node_id,
+                    iter,
+                }),
+            )
+            .await;
+            if !admission::can_admit(live, cap) {
+                drop(admission_guard);
+                info!(
+                    "node_pane: refusing to resurrect {node_id} iter {iter} in {run_id} \
+                     — session cap reached ({live}/{cap})"
+                );
+                return Json(PaneResponse {
+                    content: format!(
+                        "Session cannot be resumed: session cap reached ({live}/{cap})"
+                    ),
+                    session_name,
+                    resumed: false,
+                    stale: false,
+                    source: "unavailable",
+                })
+                .into_response();
+            }
+
+            // The trace. Faithful to the ORIGINAL launch (its `session_id` / `harness`
+            // / `effort` / `base_sha`) so the resumed session is not stranded on the
+            // next resume. The guard also enforces run-liveness on this append — a
+            // dead session on a TERMINAL Run is NOT resurrected (the append is
+            // refused), consistent with the head probe #487 put on `node_retry`.
+            let resurrection_started = event_log::Event {
+                id: None,
+                run_id: run_id.clone(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeStarted,
+                node_id: Some(node_id.clone()),
+                iter: Some(iter),
+                payload: find_launch_node_started_payload(&events, &node_id, iter),
+            };
+            if let Err(e) = append_event(&state, &resurrection_started).await {
+                // Guard refused (e.g. the Run is terminal) or the log is closed: do
+                // NOT resurrect a session the event log has no room for — that is the
+                // rogue-session bug #487 exists to close. Serve the snapshot or an
+                // honest "unavailable" instead.
+                drop(admission_guard);
+                warn!("node_pane: not resurrecting {node_id} iter {iter} in {run_id}: {e}");
+                let snapshot_path = pane_snapshot_path(&repo_root, &run_id, &node_id, iter);
+                let (content, source) = match std::fs::read_to_string(&snapshot_path) {
+                    Ok(c) => (c, "snapshot"),
+                    Err(_) => ("Session no longer available".to_string(), "unavailable"),
+                };
+                return Json(PaneResponse {
+                    content,
+                    session_name,
+                    resumed: false,
+                    stale: false,
+                    source,
+                })
+                .into_response();
+            }
+            // Reservation recorded; release the slot lock before the (slower) relaunch,
+            // exactly as `spawn_node` drops it after the `NodeStarted` append.
+            drop(admission_guard);
+
             if let Err(e) = tmux_session_manager::resume(
                 &session_name,
                 &working_dir,
@@ -11270,6 +11391,30 @@ fn find_launch_harness(events: &[event_log::Event], node_id: &str, iter: i64) ->
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
+}
+
+/// The **latest** `NodeStarted` payload for `(node_id, iter)`, cloned whole (#487
+/// §3). The `/pane` resurrection appends a fresh `NodeStarted` to leave a
+/// log trace; reusing the original payload keeps the resurrected session's
+/// `session_id` / `harness` / `effort` / `base_sha` intact, so the resume seam, the
+/// orphan sweep and cost read the same facts they did at launch — a bare re-marker
+/// with an empty payload would strand the transcript id on the next resume. `None`
+/// (no prior `NodeStarted`, or it carried no payload) appends a payload-less marker,
+/// which is still a legal same-iter restart the guard accepts.
+fn find_launch_node_started_payload(
+    events: &[event_log::Event],
+    node_id: &str,
+    iter: i64,
+) -> Option<serde_json::Value> {
+    events
+        .iter()
+        .rev()
+        .find(|e| {
+            e.kind == event_log::EventKind::NodeStarted
+                && e.node_id.as_deref() == Some(node_id)
+                && e.iter == Some(iter)
+        })
+        .and_then(|e| e.payload.clone())
 }
 
 fn find_node_type<'a>(run_state: &'a event_log::RunState, node_id: &str) -> Option<&'a str> {
@@ -11972,6 +12117,14 @@ fn secondary_repos_dirtied_refusal(
     run_state: &event_log::RunState,
 ) -> Option<completion_refusal::CompletionRefusal> {
     for pin in &run_state.target_repos {
+        // ADR-0047: the guard is now conditional. A writable secondary (the
+        // default, `read_only == false`) is *meant* to be modified/committed —
+        // its dirty tracked tree is not a refusal. Only a read-only opt-in still
+        // enforces read-only-context semantics. This `continue` is the single
+        // switch that turns "writing is refused" into "writing is offered".
+        if !pin.read_only {
+            continue;
+        }
         let snapshot = secondary_snapshot_path(repo_root, run_id, &pin.alias);
         if !snapshot.exists() {
             continue;
@@ -12909,6 +13062,35 @@ async fn node_stop(
     (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
 }
 
+/// Retry / Play (`POST /runs/{id}/nodes/{node}/retry`, the canvas Retry button).
+///
+/// #487 — this handler used to carry **none** of the guarantees a spawn
+/// carries. On a terminal Run a click spawned an orphan `claude` session, leaked a
+/// sub-worktree + branch, invalidated the node out of the projection with nothing
+/// to replace it (frozen `pending` for ever, #496), appended **zero** events, and
+/// answered a lying `200 {"ok":true}`. Three fixes, in order:
+///
+/// 1. **Head probe** ([`transition_guard::retry_run_precondition`]) — the FIRST
+///    gesture, before the stop and before the two `invalidate_nodes`. It is
+///    load-bearing that it is first: `NodeInvalidated` is not a lifecycle transition
+///    (the guard never refuses it), so a probe placed any later would leave the
+///    self-invalidation committed — the exact freeze above. Run-liveness ALONE, not
+///    a synthetic `NodeStarted` (#489's trap: retry re-spawns a Running/Completed
+///    node, both of which `validate_start` refuses). Plus the #445 sandbox
+///    precondition, also pre-side-effect. A refused Run is a `409`, "resume the run
+///    first" — never an implicit resume (ADR-0009 forbids a node button flipping
+///    `RunStatus`).
+/// 2. **Route the (re)spawn through [`node_spawn::spawn_node`]** — the reference
+///    primitive (addendum #236 to ADR-0009) — instead of the legacy
+///    `node_primitives::start_node`, so the transition guard, the sandbox
+///    precondition, the atomic admission cap, and the #279 orphan-reap-on-abort all
+///    come for free. The head probe above does NOT replace it — it is what makes the
+///    common refusal a clean `409` with zero side effects rather than a race lost
+///    deeper in.
+/// 3. **Map the [`node_spawn::SpawnOutcome`] truthfully** ([`retry_verdict`]) —
+///    `Spawned` / `Waiting` / `Refused` / `Broken` — instead of the unconditional
+///    `200`. The success body keeps the historical `{iter, invalidated}` root
+///    contract the canvas reads.
 async fn node_retry(
     State(state): State<Arc<AppState>>,
     AxumPath((run_id, node_id)): AxumPath<(String, String)>,
@@ -12930,7 +13112,45 @@ async fn node_retry(
         }
     };
 
+    // Captured BEFORE any invalidation so the retry lands on `current + 1`, not on a
+    // reset-to-1 iteration (the #498 branch-collision trap): the self-invalidation
+    // below removes the node from the projection, so re-deriving the iter afterwards
+    // would read 1.
     let current_iter = run_state.nodes.get(&node_id).map(|ns| ns.iter).unwrap_or(1);
+    let next_iter = current_iter + 1;
+
+    // ── HEAD PROBE 1 (#487): run-liveness. The FIRST gesture — a refusal here leaves
+    //    ZERO side effects (nothing stopped, nothing invalidated). See the doc above
+    //    for why this must precede the invalidations, and why the predicate is
+    //    run-liveness alone rather than a synthetic `NodeStarted`.
+    if let Some(reason) = transition_guard::retry_run_precondition(&run_state, &node_id, next_iter)
+    {
+        let refusal = retry_verdict::RetryRefusal::RetryRejected {
+            message: reason.to_string(),
+            session_killed: false,
+        };
+        info!(
+            "node_retry refused for {node_id} in run {run_id}: {}",
+            refusal.reason()
+        );
+        return retry_verdict::retry_response(&retry_verdict::RetryVerdict::Refused(refusal));
+    }
+
+    // ── HEAD PROBE 2 (#445): the sandbox precondition, also before any side effect —
+    //    a not-`ready` container would make the spawn `docker exec` into a name that
+    //    does not exist yet. Carried again inside `spawn_node` (belt and braces,
+    //    exactly as `force_spawn_node` states it here and `spawn_node` re-checks it).
+    if let Some(reason) = run_state.sandbox_spawn_block() {
+        let refusal = retry_verdict::RetryRefusal::SandboxPrepNotReady {
+            message: reason,
+            session_killed: false,
+        };
+        info!(
+            "node_retry deferred for {node_id} in run {run_id}: {}",
+            refusal.reason()
+        );
+        return retry_verdict::retry_response(&retry_verdict::RetryVerdict::Refused(refusal));
+    }
 
     let repo_root = effective_repo_root(&state, &run_state);
     let pipeline_path = {
@@ -12949,22 +13169,38 @@ async fn node_retry(
     };
     let pipeline_def = parse_result.pipeline;
 
+    // ── HEAD PROBE 3: the target must be in the Run's pipeline snapshot — `spawn_node`
+    //    needs the `NodeDef`. Also pre-side-effect, so an unknown id is a clean 400
+    //    (mirrors `restart_node`'s `NodeNotFound`), never a session killed for nothing.
+    let Some(node) = pipeline_def.nodes.iter().find(|n| n.id == node_id).cloned() else {
+        let refusal = retry_verdict::RetryRefusal::NodeNotFound {
+            node_id: node_id.clone(),
+        };
+        info!("node_retry refused in run {run_id}: {}", refusal.reason());
+        return retry_verdict::retry_response(&retry_verdict::RetryVerdict::Refused(refusal));
+    };
+
     let worktree_dir = worktree_dir_for_run(&repo_root, &run_id);
     let artifacts_dir = worktree_dir.join(".pdo").join("artifacts");
 
-    if let Some(ns) = run_state.nodes.get(&node_id) {
-        if ns.status == event_log::NodeStatus::Running {
-            let stop_params = node_primitives::StopNodeParams {
-                run_id: &run_id,
-                node_id: &node_id,
-                iter: current_iter,
-                tmux_socket: &state.tmux_socket(),
-            };
-            let stop_result = node_primitives::stop_node(&stop_params);
-            for ev in &stop_result.events {
-                if let Err(e) = append_event(&state, ev).await {
-                    error!("failed to append stop event: {e}");
-                }
+    // ── FROM HERE ON THERE ARE SIDE EFFECTS ── (the Run is provably live, the sandbox
+    //    is ready, and the target exists) ──────────────────────────────────────────
+
+    if run_state
+        .nodes
+        .get(&node_id)
+        .is_some_and(|ns| ns.status == event_log::NodeStatus::Running)
+    {
+        let stop_params = node_primitives::StopNodeParams {
+            run_id: &run_id,
+            node_id: &node_id,
+            iter: current_iter,
+            tmux_socket: &state.tmux_socket(),
+        };
+        let stop_result = node_primitives::stop_node(&stop_params);
+        for ev in &stop_result.events {
+            if let Err(e) = append_event(&state, ev).await {
+                error!("failed to append stop event: {e}");
             }
         }
     }
@@ -12985,7 +13221,7 @@ async fn node_retry(
         }
     }
 
-    // Invalidate self separately so its state resets for the re-start below
+    // Invalidate self separately so its state resets for the re-spawn below.
     let self_inv = node_primitives::InvalidateNodesParams {
         run_id: &run_id,
         node_ids: std::slice::from_ref(&node_id),
@@ -12998,92 +13234,94 @@ async fn node_retry(
         }
     }
 
-    // Reload so start_node sees the invalidated state
+    // Reload so the spawn's own re-projection + `resolve_run_variables` see the
+    // invalidated state. (`spawn_node` re-projects internally for its guard/cap; we
+    // still need fresh events for the resolved variables it consumes.)
     let events = match load_events(&state.db, &run_id).await {
         Ok(e) => e,
         Err(e) => {
             return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
         }
     };
-    let run_state = match event_log::project(&events) {
-        Some(s) => s,
-        None => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "projection failed after invalidation",
-            )
-                .into_response();
-        }
-    };
     let resolved_vars = resolve_run_variables(&pipeline_def, &events);
 
-    let next_iter = current_iter + 1;
-    let start_params = node_primitives::StartNodeParams {
-        run_id: &run_id,
-        node_id: &node_id,
-        iter: next_iter,
-        overrides: None,
+    // Route the (re)spawn through the reference primitive. Every guarantee
+    // `force_spawn_node` re-codes by hand (guard, sandbox, atomic cap, orphan reap)
+    // is carried here — see the doc above and the addendum #236 to ADR-0009.
+    let spawn_ctx = node_spawn::SpawnContext {
         pipeline: &pipeline_def,
-        run_state: &run_state,
-        artifacts_dir: &artifacts_dir,
-        worktree_dir: &worktree_dir,
-        repo_root: &repo_root,
+        run_id: &run_id,
         pipeline_path: &pipeline_path,
+        worktree_dir: &worktree_dir,
+        artifacts_dir: &artifacts_dir,
         resolved_vars: &resolved_vars,
-        daemon_port: state.port,
-        tmux_cmd_override: state.tmux_cmd_override.as_deref(),
-        docker_cmd_override: state.docker_cmd_override.as_deref(),
-        // #347: retry honours the instance default like the live scheduler path.
-        default_model: stored_default_model(&state.db).await,
-        // #550/ADR-0046: retry resolves the harness axis fresh, like model.
-        default_harness: stored_default_harness(&state.db).await,
-        default_harness_models: stored_default_harness_models(&state.db).await,
-        // #552/ADR-0046: retry resolves the Projet tier fresh too, from the Run's
-        // primary (effective) repo — a secondary never sways it (ADR-0042).
-        project_harness: project_store::harness_for_path(&state.db, &repo_root.to_string_lossy())
-            .await
-            .ok()
-            .flatten(),
-        // #433 / ADR-0043: retry re-arms the `Stop` hook per the current setting,
-        // like the live scheduler path — not the value at the original spawn.
-        inject_hook: stored_autocomplete_turn_end(&state.db).await,
+        repo_root: &repo_root,
     };
-
-    let start_result = node_primitives::start_node(&start_params);
-    for ev in &start_result.events {
-        if let Err(e) = append_event(&state, ev).await {
-            error!("failed to append start event: {e}");
-        }
-    }
-
-    // #485 / ADR-0038: reserve, THEN spawn — see the same pair in
-    // `force_spawn_node`. Retry is the *more* exposed of the two paths: it appends
-    // `NodeInvalidated` for the node itself, whose applier does an unconditional
-    // `nodes.remove(node_id)`, so the reaper's lookup found no entry at **every**
-    // iteration during the old spawn-then-append window, not just on a node with
-    // no history.
-    if let Some(spawn) = &start_result.spawn {
-        if let Err(e) = spawn.execute() {
-            error!("failed to spawn tmux session: {e}");
-        }
-    }
+    let outcome = node_spawn::spawn_node(
+        node_spawn::SpawnDeps::from_state(&state),
+        &spawn_ctx,
+        &node,
+        next_iter,
+    )
+    .await;
 
     let mut invalidated: Vec<String> = downstream;
     invalidated.sort();
 
-    info!(
-        "node_retry: retried {node_id} iter {next_iter} in run {run_id}, invalidated {} downstream nodes",
-        invalidated.len()
-    );
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "ok": true,
-            "iter": next_iter,
-            "invalidated": invalidated,
-        })),
-    )
-        .into_response()
+    let verdict = match outcome {
+        node_spawn::SpawnOutcome::Spawned {
+            reused_sub_worktree,
+            base_sha,
+            interrupted_git_ops,
+        } => retry_verdict::RetryVerdict::Spawned {
+            node_id: node_id.clone(),
+            iter: next_iter,
+            invalidated,
+            reused_sub_worktree,
+            base_sha,
+            interrupted_git_ops,
+        },
+        // A `NodeWaiting` was appended and it flipped the node to `Waiting`;
+        // `retry_waiting_nodes` genuinely re-drives it. 2xx, and NOT a noop
+        // (ADR-0037 §2) — the same truth `restart_node` tells.
+        node_spawn::SpawnOutcome::Throttled => retry_verdict::RetryVerdict::Waiting {
+            reason: format!(
+                "node {node_id} iter {next_iter} is queued behind the session cap: it will \
+                 spawn when a slot frees — do not re-issue"
+            ),
+            invalidated,
+        },
+        // Both of these are races: the head probes passed, then `spawn_node`
+        // re-evaluated against a fresher projection. A running node was stopped +
+        // invalidated first, hence `session_killed`.
+        node_spawn::SpawnOutcome::Deferred { reason } => {
+            retry_verdict::RetryVerdict::Refused(retry_verdict::RetryRefusal::SandboxPrepNotReady {
+                message: reason,
+                session_killed: true,
+            })
+        }
+        node_spawn::SpawnOutcome::Refused { reason } => {
+            retry_verdict::RetryVerdict::Refused(retry_verdict::RetryRefusal::RetryRejected {
+                message: reason,
+                session_killed: true,
+            })
+        }
+        // A panne, not a verdict → 500. `run_failed` is re-PROJECTED, never guessed
+        // (the producers of `Failed` disagree on whether `RunFailed` is on the log),
+        // and a 500 routes the CLI toward `pdo fail` — bad advice if it already is.
+        node_spawn::SpawnOutcome::Failed { reason } => {
+            let run_failed = reload_run_state(&state, &run_id)
+                .await
+                .is_some_and(|(_, s)| s.status == event_log::RunStatus::Failed);
+            retry_verdict::RetryVerdict::Broken {
+                message: reason,
+                run_failed,
+            }
+        }
+    };
+
+    info!("node_retry: {node_id} iter {next_iter} in run {run_id} -> {verdict:?}");
+    retry_verdict::retry_response(&verdict)
 }
 
 async fn node_retry_preview(
@@ -14036,6 +14274,11 @@ fn resolve_one_secondary_pin(
         alias,
         sha,
         base_branch: base.map(str::to_string),
+        // ADR-0047: the opt-in read-only flag flows straight from the input.
+        // Both construction paths (create via `resolve_secondary_pins`, mid-run
+        // edit via `patch_run_repos`) route through here, so the flag can never
+        // diverge between the two surfaces.
+        read_only: input.read_only,
     })
 }
 
@@ -14688,16 +14931,38 @@ fn parse_numstat(stdout: &str) -> event_log::LocStat {
     }
 }
 
-/// Lines changed for a Run, from `git diff --numstat HEAD...pdo/run-<id>` with
+/// The base ref for a Run's "what changed" diff (#417): the frozen fork SHA, else the
+/// recorded source branch (legacy runs — the 3-dot merge-base still recovers the fork
+/// point), else `HEAD` (baseless legacy runs — today's behaviour, kept byte-identical).
+/// Uniform 3-dot at the call sites: because `pdo/run-<id>` is cut from `fork_sha` and only
+/// gains commits on top, `merge-base(fork_sha, run) == fork_sha`, so the same range form is
+/// correct for all three tiers and never re-introduces the wandering-HEAD defect for a run
+/// that recorded a base. NB: this is the Run's fork point, NOT the per-node
+/// `NodeStarted.base_sha` (sub-worktree ← pipeline branch, ADR-0036).
+fn run_diff_base(run_state: &event_log::RunState) -> &str {
+    run_state
+        .fork_sha
+        .as_deref()
+        .or(run_state.source_branch.as_deref())
+        .unwrap_or("HEAD")
+}
+
+/// Lines changed for a Run, from `git diff --numstat <base>...pdo/run-<id>` with
 /// `.pdo/` excluded (issue #100). Returns `None` when the diff is uncomputable
 /// (git missing, not a repo, run branch gone after cleanup) so the UI renders
 /// "—"; a successful but empty diff returns `Some({0, 0, 0})` → UI "0".
 ///
-/// Uses a **three-dot** range so the base is the merge-base (the run's fork
-/// point): the count stays correct even as `main` advances past the fork
-/// (two-dot would drift and report later main commits as deletions).
-fn compute_run_loc(repo_root: &std::path::Path, run_id: &str) -> Option<event_log::LocStat> {
-    let range = format!("HEAD...pdo/run-{run_id}");
+/// `base_ref` is the Run's stable fork point (`run_diff_base`, #417), not the shared
+/// checkout's `HEAD`. Uses a **three-dot** range so the base is the merge-base (the
+/// run's fork point): the count stays correct even as `main` advances past the fork
+/// (two-dot would drift and report later main commits as deletions), AND a checkout
+/// parked on a divergent branch can no longer displace it (#417).
+fn compute_run_loc(
+    repo_root: &std::path::Path,
+    run_id: &str,
+    base_ref: &str,
+) -> Option<event_log::LocStat> {
+    let range = format!("{base_ref}...pdo/run-{run_id}");
     let output = std::process::Command::new("git")
         // `:(exclude).pdo/` is a literal pathspec argv element (no shell). `.pdo/`
         // is gitignored here, but the exclusion is defensive for external target
@@ -14726,7 +14991,11 @@ fn augment_run_state_from_disk(
     // LOC is independent of the run YAML: the run branch lives in `repo_root`,
     // not the run dir, so a missing/unparseable YAML must not suppress an
     // otherwise-valid LOC. Compute it before the YAML early-return below.
-    run_state.loc = compute_run_loc(repo_root, &run_state.run_id);
+    // #417: base the diff on the Run's frozen fork point (`run_diff_base`), not the
+    // shared checkout's wandering HEAD. Resolve the base into an owned `String` first so
+    // the immutable borrow of `run_state` ends before the mutable assignment to `.loc`.
+    let base = run_diff_base(run_state).to_string();
+    run_state.loc = compute_run_loc(repo_root, &run_state.run_id, &base);
     // Estimated cost (#272), likewise independent of the run YAML: it reads the
     // Claude Code transcripts under `projects_root` (the #408 seam — the staged
     // home while a sandboxed Run is live, `~/.claude/projects/` otherwise), not
@@ -16514,6 +16783,97 @@ mod tests {
                 "timed out waiting for run {run_id} to reach {want:?}"
             );
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+
+    /// ADR-0047: `secondary_repos_dirtied_refusal` now skips writable secondaries
+    /// (`read_only == false`, the default) and only trips on a read-only opt-in
+    /// with a dirty tracked tree. This is the switch that turns "writing refused"
+    /// into "writing offered" — the A/B control of the whole feature.
+    #[test]
+    fn secondary_dirtied_guard_only_trips_on_read_only_pins() {
+        use crate::worktree_ops::{create_secondary_snapshot, secondary_snapshot_path};
+
+        fn git(dir: &std::path::Path, args: &[&str]) {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?} failed");
+        }
+        fn init_repo_with_tracked_file(dir: &std::path::Path) -> String {
+            std::fs::create_dir_all(dir).unwrap();
+            git(dir, &["init", "-b", "main"]);
+            git(dir, &["config", "user.email", "t@t"]);
+            git(dir, &["config", "user.name", "t"]);
+            std::fs::write(dir.join("F.txt"), "v1\n").unwrap();
+            git(dir, &["add", "-A"]);
+            git(dir, &["commit", "-m", "init"]);
+            let out = std::process::Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(dir)
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("primary"); // acts as repo_root
+        std::fs::create_dir_all(&primary).unwrap();
+        let run_id = "guard-run";
+
+        // Two secondaries: snapshot each, then dirty a TRACKED file in both.
+        let ro = tmp.path().join("ro");
+        let rw = tmp.path().join("rw");
+        let ro_sha = init_repo_with_tracked_file(&ro);
+        let rw_sha = init_repo_with_tracked_file(&rw);
+        let ro_snap = secondary_snapshot_path(&primary, run_id, "ro");
+        let rw_snap = secondary_snapshot_path(&primary, run_id, "rw");
+        create_secondary_snapshot(&ro, &ro_snap, &ro_sha).unwrap();
+        create_secondary_snapshot(&rw, &rw_snap, &rw_sha).unwrap();
+        std::fs::write(ro_snap.join("F.txt"), "tampered\n").unwrap();
+        std::fs::write(rw_snap.join("F.txt"), "tampered\n").unwrap();
+
+        let pin =
+            |repo: &std::path::Path, alias: &str, sha: &str, read_only: bool| event_log::RepoPin {
+                repo: repo.to_string_lossy().to_string(),
+                alias: alias.to_string(),
+                sha: sha.to_string(),
+                base_branch: None,
+                read_only,
+            };
+        let mut state = event_log::RunState::new(run_id.to_string(), "p".to_string());
+
+        // A writable secondary, dirtied, is tolerated → no refusal.
+        state.target_repos = vec![pin(&rw, "rw", &rw_sha, false)];
+        assert!(
+            secondary_repos_dirtied_refusal(&primary, run_id, &state).is_none(),
+            "a writable secondary with a dirty tracked tree must NOT be refused"
+        );
+
+        // A read-only secondary, dirtied, still trips the guard.
+        state.target_repos = vec![pin(&ro, "ro", &ro_sha, true)];
+        match secondary_repos_dirtied_refusal(&primary, run_id, &state) {
+            Some(completion_refusal::CompletionRefusal::SecondaryRepoDirtied { alias, .. }) => {
+                assert_eq!(alias, "ro");
+            }
+            other => panic!("expected SecondaryRepoDirtied for a read-only pin, got {other:?}"),
+        }
+
+        // Mixed list: the writable one is skipped, the read-only one is caught.
+        state.target_repos = vec![
+            pin(&rw, "rw", &rw_sha, false),
+            pin(&ro, "ro", &ro_sha, true),
+        ];
+        match secondary_repos_dirtied_refusal(&primary, run_id, &state) {
+            Some(completion_refusal::CompletionRefusal::SecondaryRepoDirtied { alias, .. }) => {
+                assert_eq!(
+                    alias, "ro",
+                    "must skip the writable pin and catch the read-only one"
+                );
+            }
+            other => panic!("expected the read-only pin to be refused, got {other:?}"),
         }
     }
 
@@ -19643,7 +20003,9 @@ mod tests {
         git(&["commit", "-m", "run changes"]);
         git(&["checkout", &default_branch]);
 
-        let loc = compute_run_loc(repo, run_id).expect("branch present -> Some");
+        // Tier-3 legacy path: no fork_sha/source_branch recorded, so the base is "HEAD".
+        // This test never parks HEAD off the fork line, so the behaviour is unchanged (#417).
+        let loc = compute_run_loc(repo, run_id, "HEAD").expect("branch present -> Some");
         assert_eq!(
             loc,
             event_log::LocStat {
@@ -19659,7 +20021,7 @@ mod tests {
         std::fs::write(repo.join("other.txt"), "x\ny\n").unwrap();
         git(&["add", "other.txt"]);
         git(&["commit", "-m", "advance main"]);
-        let loc_after = compute_run_loc(repo, run_id).expect("still Some");
+        let loc_after = compute_run_loc(repo, run_id, "HEAD").expect("still Some");
         assert_eq!(
             loc_after, loc,
             "three-dot base stays at the fork point as HEAD advances"
@@ -19668,7 +20030,7 @@ mod tests {
         // Branch gone (cleanup) -> None -> UI renders "—" (not "0").
         git(&["branch", "-D", &branch]);
         assert!(
-            compute_run_loc(repo, run_id).is_none(),
+            compute_run_loc(repo, run_id, "HEAD").is_none(),
             "missing run branch -> None"
         );
     }
@@ -19688,12 +20050,98 @@ mod tests {
             .unwrap();
         assert!(out.status.success());
         assert_eq!(
-            compute_run_loc(repo, run_id).expect("branch present -> Some"),
+            compute_run_loc(repo, run_id, "HEAD").expect("branch present -> Some"),
             event_log::LocStat {
                 insertions: 0,
                 deletions: 0,
                 files_changed: 0,
             }
+        );
+    }
+
+    #[test]
+    fn compute_run_loc_ignores_parked_checkout_and_uses_run_source_branch() {
+        // #417 regression: the shared checkout is parked on a divergent branch that
+        // forks BEFORE the run's fork point. The pre-fix `HEAD...` range collapsed the
+        // merge-base onto the common ancestor and swept in every commit the fork branch
+        // gained since (the phantom). Basing the diff on the Run's own fork point
+        // (`default_branch`, standing in for the frozen `fork_sha`) must report ONLY the
+        // run's own 1-line change, regardless of where HEAD is parked.
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo); // c0 = "initial" (README.md) on the default branch
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(repo)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            out
+        };
+
+        // `init_test_repo` is a bare `git init` → recover the default branch name.
+        let default_branch =
+            String::from_utf8_lossy(&git(&["rev-parse", "--abbrev-ref", "HEAD"]).stdout)
+                .trim()
+                .to_string();
+
+        // A divergent branch off c0 with its own commit — the head the operator parks on.
+        git(&["checkout", "-b", "integration/prd-403-sandbox"]);
+        std::fs::write(repo.join("sandbox.txt"), "sandbox\n").unwrap();
+        git(&["add", "sandbox.txt"]);
+        git(&["commit", "-m", "parked: unrelated work"]);
+
+        // Advance the default branch two commits PAST the fork — this is the phantom
+        // payload the buggy merge-base would sweep in.
+        git(&["checkout", &default_branch]);
+        std::fs::write(repo.join("file_a.txt"), "a1\na2\na3\n").unwrap();
+        git(&["add", "file_a.txt"]);
+        git(&["commit", "-m", "main: +3 in file_a"]);
+        std::fs::write(repo.join("file_b.txt"), "b1\nb2\n").unwrap();
+        git(&["add", "file_b.txt"]);
+        git(&["commit", "-m", "main: +2 in file_b"]); // <- the run's fork point
+
+        // Cut the run branch from the default-branch tip and add ONE real line.
+        let run_id = "loc-parked-fork";
+        let branch = format!("pdo/run-{run_id}");
+        git(&["checkout", "-b", &branch]);
+        std::fs::write(repo.join("run_only.txt"), "the only real change\n").unwrap();
+        git(&["add", "run_only.txt"]);
+        git(&["commit", "-m", "run change"]);
+
+        // PARK the checkout on the divergent branch (the exact #417 / #451 condition).
+        git(&["checkout", "integration/prd-403-sandbox"]);
+
+        // Based on the run's fork point, ONLY run_only.txt counts — never file_a/file_b.
+        // Under the pre-fix `HEAD...` the parked checkout would inflate this to {6,0,3}.
+        assert_eq!(
+            compute_run_loc(repo, run_id, &default_branch).expect("branch present -> Some"),
+            event_log::LocStat {
+                insertions: 1,
+                deletions: 0,
+                files_changed: 1,
+            },
+            "parked divergent HEAD must not displace the fork-point base"
+        );
+
+        // Doc-only variant: a run cut at the fork tip with NO commit changed nothing.
+        // With HEAD still parked on the divergent branch, the honest answer is {0,0,0}
+        // (the triage's "even doc-only, zero files" case), not the phantom.
+        let doc_run = "loc-parked-doc-only";
+        git(&["branch", &format!("pdo/run-{doc_run}"), &default_branch]);
+        assert_eq!(
+            compute_run_loc(repo, doc_run, &default_branch).expect("branch present -> Some"),
+            event_log::LocStat {
+                insertions: 0,
+                deletions: 0,
+                files_changed: 0,
+            },
+            "a doc-only run reads 0, not the parked-checkout phantom"
         );
     }
 
@@ -26520,6 +26968,121 @@ edges: []
     }
 
     #[tokio::test]
+    async fn run_diff_ignores_parked_checkout_via_frozen_fork_sha() {
+        // #417 (layer-2 mirror of the layer-3a `run_diff_range` test): with a `fork_sha`
+        // frozen in `RunStarted`, `GET /runs/<id>/diff` must base on the fork point even
+        // when the shared checkout's HEAD is parked on a divergent branch that forks
+        // BEFORE it. RED under the old `HEAD...` range (the divergent branch's pre-fork
+        // files render as a phantom); GREEN with `run_diff_base`.
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+
+        let git = |dir: &std::path::Path, args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            out
+        };
+        let default_branch =
+            String::from_utf8_lossy(&git(repo, &["rev-parse", "--abbrev-ref", "HEAD"]).stdout)
+                .trim()
+                .to_string();
+
+        // Divergent branch off c0 with a phantom-carrying commit; then advance the
+        // default branch past the fork.
+        git(repo, &["checkout", "-b", "wip/parked"]);
+        std::fs::write(repo.join("phantom.rs"), "fn phantom() {}\n").unwrap();
+        git(repo, &["add", "phantom.rs"]);
+        git(repo, &["commit", "-m", "parked: unrelated work"]);
+        git(repo, &["checkout", &default_branch]);
+        std::fs::write(repo.join("main_advance.rs"), "fn advanced_on_main() {}\n").unwrap();
+        git(repo, &["add", "main_advance.rs"]);
+        git(repo, &["commit", "-m", "advance main after divergence"]);
+
+        // Freeze the fork point = current default-branch tip.
+        let fork_sha = String::from_utf8_lossy(&git(repo, &["rev-parse", "HEAD"]).stdout)
+            .trim()
+            .to_string();
+
+        let run_id = "diff-parked-fork";
+        let state = test_state_with_dir(repo).await;
+        // Seed a RunStarted carrying the frozen `fork_sha` (the fix's mechanism), plus a
+        // node so the projection is realistic.
+        let run_started = event_log::Event {
+            id: None,
+            run_id: run_id.into(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::RunStarted,
+            node_id: None,
+            iter: None,
+            payload: Some(serde_json::json!({
+                "pipeline_name": "test-pipe",
+                "input": "test",
+                "fork_sha": fork_sha,
+                "node_defs": [
+                    { "id": "impl-1", "node_type": "code-mutating", "inputs": [], "outputs": [] }
+                ],
+                "edges": []
+            })),
+        };
+        append_event(&state, &run_started).await.unwrap();
+
+        // Cut the run branch/worktree from the fork point.
+        let wt_dir = repo.join(".pdo/runs").join(run_id).join("worktree");
+        let pipeline_branch = format!("pdo/run-{run_id}");
+        create_worktree(repo, &wt_dir, &pipeline_branch, &default_branch).unwrap();
+
+        // The run's only real change.
+        std::fs::write(wt_dir.join("run_file.rs"), "fn run_work() {}\n").unwrap();
+        git(&wt_dir, &["add", "run_file.rs"]);
+        git(&wt_dir, &["commit", "-m", "run work"]);
+
+        // PARK the shared checkout on the divergent branch (the #417 / #451 condition).
+        git(repo, &["checkout", "wip/parked"]);
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/runs/{run_id}/diff"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = String::from_utf8(
+            axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+
+        assert!(
+            body.contains("run_file.rs") && body.contains("fn run_work()"),
+            "diff must contain the run's own change: {body}"
+        );
+        // The phantom: the parked branch's pre-fork file. RED under `HEAD...`.
+        assert!(
+            !body.contains("phantom.rs"),
+            "parked divergent HEAD must not add a phantom file to the diff: {body}"
+        );
+        assert!(
+            !body.contains("main_advance.rs"),
+            "main's post-fork file must not appear either (three-dot base): {body}"
+        );
+    }
+
+    #[tokio::test]
     async fn run_diff_excludes_pdo_artifacts() {
         // #376: `:(exclude).pdo/` keeps the blackboard out of the diff. RED under
         // the current no-pathspec two-dot call.
@@ -28628,6 +29191,258 @@ edges:
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["ok"], true);
         assert_eq!(json["iter"], 2);
+    }
+
+    /// A one-node (`worker`) pipeline written where both the run-scoped and the
+    /// library resolver look, for the retry handler's `parse_pipeline`.
+    fn write_retry_pipeline(repo_root: &std::path::Path) {
+        let pipeline_yaml = "\
+name: test-pipe
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: worker
+    name: Worker
+    type: doc-only
+    inputs:
+      - name: task
+    outputs:
+      - name: code
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: worker, port: task }
+  - source: { node: worker, port: code }
+    target: { node: end, port: result }
+";
+        let pipelines_dir = repo_root.join(".pdo").join("pipelines");
+        std::fs::create_dir_all(&pipelines_dir).unwrap();
+        std::fs::write(pipelines_dir.join("test-pipe.yaml"), pipeline_yaml).unwrap();
+    }
+
+    #[tokio::test]
+    async fn node_retry_on_terminal_run_refuses_with_zero_side_effects() {
+        // #487 — the production incident (#496). Play on a node of a
+        // Failed Run must refuse 409 "resume the run first" as the FIRST gesture:
+        // no NodeInvalidated (the frozen-`pending` trap), no new NodeStarted, no
+        // session — the criterion is *absence of side effect*, not just the status.
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+        write_retry_pipeline(repo_root);
+        let state = test_state_with_dir(repo_root).await;
+        let run_id = "retry-terminal";
+        std::fs::create_dir_all(
+            worktree_dir_for_run(repo_root, run_id)
+                .join(".pdo")
+                .join("artifacts"),
+        )
+        .unwrap();
+
+        seed_run_for_node_control(&state, run_id, "test-pipe").await;
+        seed_node_started(&state, run_id, "worker", 1).await;
+        seed_run_terminal(&state, run_id, event_log::EventKind::RunFailed).await;
+
+        let before = load_events(&state.db, run_id).await.unwrap();
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/nodes/worker/retry"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Not a 2xx — and specifically the ADR-0035 refusal shape.
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "retry_refused");
+        assert_eq!(json["recoverable"], true);
+        assert_eq!(json["session_killed"], false);
+        assert!(
+            json["message"]
+                .as_str()
+                .unwrap()
+                .contains("resume the run first"),
+            "the guard prose must land in `message`: {json}"
+        );
+
+        // Zero side effects: NOTHING was appended by the refused retry.
+        let after = load_events(&state.db, run_id).await.unwrap();
+        assert_eq!(
+            after.len(),
+            before.len(),
+            "a refused retry must append no event at all"
+        );
+        assert!(
+            !after
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::NodeInvalidated),
+            "a refused retry must not invalidate the node (the frozen-`pending` trap)"
+        );
+        assert!(
+            !after
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::NodeStarted && e.iter == Some(2)),
+            "a refused retry must not start iter 2 (no orphan session)"
+        );
+    }
+
+    #[tokio::test]
+    async fn node_retry_on_live_run_with_failed_node_spawns_truthfully() {
+        // Non-regression (#487): retry of a `failed` node on a still-live Run is
+        // unchanged in spirit — it re-spawns at iter+1 — and now reports a TRUTHFUL
+        // Spawned verdict (the historical `{iter, invalidated}` root plus `spawned`).
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+        write_retry_pipeline(repo_root);
+        let state = test_state_with_dir(repo_root).await;
+        let run_id = "retry-failed-live";
+        std::fs::create_dir_all(
+            worktree_dir_for_run(repo_root, run_id)
+                .join(".pdo")
+                .join("artifacts"),
+        )
+        .unwrap();
+
+        seed_run_for_node_control(&state, run_id, "test-pipe").await;
+        seed_node_started(&state, run_id, "worker", 1).await;
+        // Fail the iteration, then resume the Run so it stays live with a failed
+        // node — exactly the state the operator retries from (session died, #485).
+        append_event(
+            &state,
+            &seed_event(
+                run_id,
+                event_log::EventKind::NodeFailed,
+                Some("worker"),
+                Some(1),
+                None,
+            ),
+        )
+        .await
+        .unwrap();
+        append_event(
+            &state,
+            &seed_event(run_id, event_log::EventKind::RunResumed, None, None, None),
+        )
+        .await
+        .unwrap();
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/nodes/worker/retry"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["ok"], true);
+        assert_eq!(json["iter"], 2, "retry advances to iter+1");
+        assert_eq!(
+            json["spawned"][0]["node_id"], "worker",
+            "the truthful verdict names what was spawned"
+        );
+
+        // The reservation is durable: a NodeStarted for iter 2 is on the log.
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::NodeStarted
+                    && e.node_id.as_deref() == Some("worker")
+                    && e.iter == Some(2)),
+            "a spawned retry must append NodeStarted for the new iteration"
+        );
+    }
+
+    #[tokio::test]
+    async fn pane_resurrection_refused_at_session_cap() {
+        // #487 §3 — a click on a dead pane must not bypass the session cap
+        // (#77/#78). At the cap the resurrection is declined and reserves NOTHING:
+        // no NodeStarted, so it never overshoots the bound a spawn would respect.
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+        let state = test_state_with_dir(repo_root).await;
+        saturate_session_cap(&state).await;
+
+        let run_id = "pane-cap";
+        seed_run_for_node_control(&state, run_id, "test-pipe").await;
+        seed_node_started(&state, run_id, "worker", 1).await;
+        // The resurrection branch is only reached when the node's working dir still
+        // exists (a doc-only node's dir is the run's pipeline worktree).
+        std::fs::create_dir_all(worktree_dir_for_run(repo_root, run_id)).unwrap();
+
+        let started_before = load_events(&state.db, run_id)
+            .await
+            .unwrap()
+            .iter()
+            .filter(|e| {
+                e.kind == event_log::EventKind::NodeStarted
+                    && e.node_id.as_deref() == Some("worker")
+            })
+            .count();
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/runs/{run_id}/nodes/worker/pane?iter=1"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            json["source"], "unavailable",
+            "a resurrection blocked by the cap serves no live session: {json}"
+        );
+        assert!(
+            json["content"].as_str().unwrap().contains("session cap"),
+            "the operator is told why: {json}"
+        );
+
+        let started_after = load_events(&state.db, run_id)
+            .await
+            .unwrap()
+            .iter()
+            .filter(|e| {
+                e.kind == event_log::EventKind::NodeStarted
+                    && e.node_id.as_deref() == Some("worker")
+            })
+            .count();
+        assert_eq!(
+            started_after, started_before,
+            "a resurrection refused at the cap must reserve nothing (no NodeStarted)"
+        );
     }
 
     #[tokio::test]

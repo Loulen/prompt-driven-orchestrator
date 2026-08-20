@@ -246,6 +246,7 @@ export default function NodeDetailPanel({
     inputs,
     outputs,
     markVerdict,
+    actionVerdict,
     retryConfirm,
     stop,
     retry,
@@ -364,6 +365,23 @@ export default function NodeDetailPanel({
             </button>
           )}
           <RetryPlayButton status={node.status} onClick={retry} />
+        </div>
+      )}
+
+      {/* #487: the refusal of a Retry/Play or Start click, rendered AT the gesture.
+          Before this the daemon's 409 ("resume the run first" / "session cap
+          reached") was swallowed, so the click looked like it did nothing. */}
+      {!isArchived && actionVerdict && (
+        <div
+          className="flex items-start gap-2 border-b border-st-failed/30 bg-st-failed/10 px-3 py-2"
+          data-testid="action-verdict"
+          data-action={actionVerdict.action}
+        >
+          <AlertCircle size={14} className="mt-0.5 shrink-0 text-st-failed" />
+          <span className="text-st-failed" style={{ fontSize: "11.5px", fontWeight: 500 }}>
+            {actionVerdict.action === "retry" ? "Retry refused" : "Start refused"} —{" "}
+            {actionVerdict.message}
+          </span>
         </div>
       )}
 

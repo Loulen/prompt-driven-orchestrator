@@ -23,6 +23,8 @@ import type {
 } from "../types";
 import ModelPicker from "./ModelPicker";
 import SessionCounter from "./SessionCounter";
+import HarnessSelect from "./HarnessSelect";
+import { harnessCatalog } from "../lib/harness";
 
 interface Props {
   open: boolean;
@@ -555,17 +557,15 @@ function SettingsForm({
           <label className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
             Default harness
           </label>
-          <select
+          <HarnessSelect
             value={defaultHarness}
-            onChange={(e) => setDefaultHarness(e.target.value)}
+            onChange={setDefaultHarness}
+            catalog={harnessCatalog(settings.harness_descriptors)}
+            inheritLabel="Default (claude floor)"
             data-testid="setting-default-harness-select"
             className="rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg"
             style={{ fontSize: "11px" }}
-          >
-            <option value="">Default (claude floor)</option>
-            <option value="claude">claude</option>
-            <option value="opencode">opencode</option>
-          </select>
+          />
           <div className="text-fg-4" style={{ fontSize: "10.5px" }}>
             Every new node runs on this harness unless it pins its own. "Default"
             leaves it to the <span className="font-mono">claude</span> floor.

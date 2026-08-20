@@ -7,6 +7,8 @@ import {
   removeProjectMember,
   updateProject,
 } from "../api";
+import HarnessSelect from "./HarnessSelect";
+import { useHarnessCatalog } from "../hooks/useHarnessCatalog";
 
 /**
  * The group-header pencil (#552, ADR-0046): name a Projet (or rename an existing
@@ -21,10 +23,6 @@ import {
  * Membership is compared **verbatim** (ADR-0033): the candidate list is the exact
  * effective-repo paths the surrounding list groups by, never canonicalised.
  */
-
-/** The harnesses PDO ships (ADR-0045). A disk-declared tier is #553; until then
- *  the picker offers the embedded floor plus "no harness". */
-const HARNESS_OPTIONS = ["claude", "opencode"] as const;
 
 export default function ProjectEditModal({
   initialProject,
@@ -55,6 +53,9 @@ export default function ProjectEditModal({
   );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // #586: the harness options, dynamic from `/settings` (floor ∪ descriptors,
+  // each installed/not). The modal holds no settings of its own, so it fetches.
+  const harnessCatalog = useHarnessCatalog();
 
   // path → name of the Projet that OWNS it, excluding the one being edited. A
   // candidate owned elsewhere cannot be attached here (AC: at most one Projet).
@@ -173,20 +174,15 @@ export default function ProjectEditModal({
         <label className="mb-1 block text-fg-3" style={{ fontSize: "11px" }}>
           Harness
         </label>
-        <select
+        <HarnessSelect
           value={harness}
-          onChange={(e) => setHarness(e.target.value)}
+          onChange={setHarness}
+          catalog={harnessCatalog}
+          inheritLabel="No harness (inherit)"
           data-testid="project-harness-select"
           className="mb-3 w-full rounded border border-line-strong bg-bg-3 px-2 py-1.5 text-fg outline-none focus:border-acc"
           style={{ fontSize: "11px" }}
-        >
-          <option value="">No harness (inherit)</option>
-          {HARNESS_OPTIONS.map((h) => (
-            <option key={h} value={h}>
-              {h}
-            </option>
-          ))}
-        </select>
+        />
 
         <label className="mb-1 block text-fg-3" style={{ fontSize: "11px" }}>
           Member repositories

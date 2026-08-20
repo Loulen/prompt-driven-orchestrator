@@ -7,7 +7,9 @@ import OutputPortCard from "./OutputPortCard";
 import PooledInputRow from "./PooledInputRow";
 import ModelPicker from "./ModelPicker";
 import EffortPicker from "./EffortPicker";
-import { KNOWN_HARNESSES, harnessHasEffort, resolveEditorHarness } from "../lib/harness";
+import { harnessHasEffort, resolveEditorHarness } from "../lib/harness";
+import HarnessSelect from "./HarnessSelect";
+import { useHarnessCatalog } from "../hooks/useHarnessCatalog";
 import DestroyLoopModal from "./DestroyLoopModal";
 import { derivePooledInputs } from "../lib/derivePooledInputs";
 import { regionsDestroyedByEdgeRemoval } from "../lib/loopRegions";
@@ -72,6 +74,9 @@ export default function NodeInspector({
     : null;
   const promptContent = node ? (tab!.prompts[node.id] ?? "") : "";
   const syncState = useLibraryState(node, promptContent, libraryEntries);
+  // #586: the harness pin's options, dynamic from `/settings` (floor ∪ descriptors,
+  // each installed/not). Called before the early return so the hook order is stable.
+  const harnessCatalog = useHarnessCatalog();
 
   if (!tab || !node) return null;
 
@@ -222,46 +227,26 @@ export default function NodeInspector({
           </div>
         </Tooltip>
 
-        {/* Harness (#550/ADR-0046): the program that runs this node's agent. The
-            pin both selects the harness and shields it from coarser tiers; the
+        {/* Harness (#550/#586, ADR-0046): the program that runs this node's agent.
+            The pin both selects the harness and shields it from coarser tiers; the
             RESOLVED harness (pin, else the `claude` floor here in the editor) is
             what the model/effort below apply to and what greys the effort picker.
-            Hidden for a script node — it launches no agent (ADR-0017). */}
+            The options are dynamic (#586): the floor ∪ the disk descriptor tier,
+            each greyed if its binary is not installed. `""` = "Default" (no pin);
+            a concrete name pins it. Hidden for a script node — it launches no
+            agent (ADR-0017). */}
         {!isScript && (
           <Field label="Harness">
-            <div
-              role="radiogroup"
-              aria-label="Harness"
-              className="flex gap-1"
-              data-testid="node-harness"
-              data-resolved={resolvedHarness}
-            >
-              {[
-                { id: null as string | null, label: "Default", slug: "default" },
-                ...KNOWN_HARNESSES.map((h) => ({ id: h as string, label: h, slug: h })),
-              ].map((o) => {
-                const selected = (node.pin_harness ?? null) === o.id;
-                return (
-                  <button
-                    key={o.slug}
-                    type="button"
-                    role="radio"
-                    aria-checked={selected}
-                    data-testid={`node-harness-option-${o.slug}`}
-                    onClick={() => handleField("pin_harness", o.id)}
-                    className={`flex-1 cursor-pointer rounded border px-2 py-1 font-medium transition-colors ${
-                      selected
-                        ? o.id == null
-                          ? "border-fg-4 bg-bg-3 text-fg"
-                          : "border-acc bg-acc-bg text-acc"
-                        : "border-line-strong bg-bg-3 text-fg-4 hover:text-fg-3"
-                    }`}
-                    style={{ fontSize: "10px" }}
-                  >
-                    {o.label}
-                  </button>
-                );
-              })}
+            <div data-testid="node-harness" data-resolved={resolvedHarness}>
+              <HarnessSelect
+                data-testid="node-harness-select"
+                value={node.pin_harness ?? ""}
+                onChange={(v) => handleField("pin_harness", v === "" ? null : v)}
+                catalog={harnessCatalog}
+                inheritLabel="Default (claude floor)"
+                className="w-full cursor-pointer rounded border border-line-strong bg-bg-3 px-2 py-1 font-medium text-fg outline-none focus:border-acc"
+                style={{ fontSize: "10px" }}
+              />
             </div>
             <p className="mt-1 text-fg-4" style={{ fontSize: "9.5px" }}>
               Resolved: <span data-testid="node-harness-resolved">{resolvedHarness}</span>

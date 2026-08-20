@@ -1722,7 +1722,7 @@ mod tests {
 
     #[test]
     fn round_trip_simple_bugfix_holds_invariants() {
-        let src = include_str!("../../../.claude/workflows/simple-bugfix.js");
+        let src = include_str!("testdata/workflows/simple-bugfix.js");
         let (result, parsed) = import_and_parse(src, "simple-bugfix");
 
         // Exactly one Start + one End.
@@ -2027,7 +2027,7 @@ mod tests {
 
     #[test]
     fn sandcastle_tdd_imports_without_panic() {
-        let src = include_str!("../../../.claude/workflows/sandcastle-tdd.js");
+        let src = include_str!("testdata/workflows/sandcastle-tdd.js");
         let result = import_workflow_js(src, "sandcastle-tdd")
             .expect("even a mostly-placeholder workflow must import without crashing");
         // It must produce a parseable draft…

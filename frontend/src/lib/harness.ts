@@ -6,15 +6,53 @@
 // the fold between the node's per-harness `harnesses` map and the single
 // `model`/`effort` view the existing pickers edit.
 
-import type { NodeDef } from "../types";
+import type { HarnessDescriptorsView, NodeDef } from "../types";
 
 /** The floor of the precedence chain — a node with no pin runs on `claude`. */
 export const HARNESS_FLOOR = "claude";
 
-/** The harnesses PDO ships embedded (ADR-0045). The pin selector offers these
- *  plus "Default" (follow the tier above). A user-declared disk harness (#553)
- *  would extend this; not in this slice. */
-export const KNOWN_HARNESSES = ["claude", "opencode"] as const;
+/** One harness as the picker offers it (#586): its name and whether its binary is
+ *  installed (an uninstalled harness renders greyed and non-selectable). */
+export interface HarnessOption {
+  name: string;
+  installed: boolean;
+}
+
+/** The picker's two sections (#586): the embedded floor, and the disk-declared
+ *  tier. Names only — no capability pills (ADR of #586: directions B/C/D dropped). */
+export interface HarnessCatalog {
+  builtin: HarnessOption[];
+  descriptors: HarnessOption[];
+}
+
+/** The floor the picker shows before `GET /settings` answers, or against a daemon
+ *  that predates #586: the embedded harnesses, assumed installed. This is NOT the
+ *  picker's source of truth (that is `view.harnesses`) — it is the transient
+ *  fallback so the control is never empty while settings load. */
+const FLOOR_CATALOG: HarnessCatalog = {
+  builtin: [
+    { name: "claude", installed: true },
+    { name: "opencode", installed: true },
+  ],
+  descriptors: [],
+};
+
+/** Split `GET /settings → harness_descriptors` into the picker's two sections
+ *  (#586). `source` decides the section; refused descriptors never resolve, so
+ *  they are already absent from `harnesses`. Falls back to the embedded floor when
+ *  the view (or its `harnesses` field) is missing — a still-loading fetch or a
+ *  daemon predating #586. */
+export function harnessCatalog(
+  view: HarnessDescriptorsView | null | undefined,
+): HarnessCatalog {
+  if (!view?.harnesses) return FLOOR_CATALOG;
+  const catalog: HarnessCatalog = { builtin: [], descriptors: [] };
+  for (const h of view.harnesses) {
+    const section = h.source === "descriptor" ? catalog.descriptors : catalog.builtin;
+    section.push({ name: h.name, installed: h.installed });
+  }
+  return catalog;
+}
 
 /** Client mirror of the descriptor's `{effort}` hole (ADR-0045): `opencode` has
  *  no launch-time effort axis, so its effort picker is greyed. An unknown harness

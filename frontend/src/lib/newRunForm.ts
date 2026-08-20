@@ -6,7 +6,7 @@ import type {
 } from "../api";
 import type { InstanceSettings, PipelineListEntry, SandboxProfileRef } from "../types";
 import { presetToCron, type CronPresetId } from "../cronPresets";
-import { HARNESS_FLOOR, KNOWN_HARNESSES } from "./harness";
+import { HARNESS_FLOOR, harnessCatalog, type HarnessCatalog } from "./harness";
 
 /**
  * The New Run / Trigger form's pure logic (#359), lifted out of `NewRunModal.tsx`.
@@ -298,8 +298,9 @@ export function sandboxState({
 
 /** Everything the harness selector derives from `settings` + the selected value (#551, ADR-0046). */
 export interface HarnessState {
-  /** The harnesses the pin selector offers (the embedded floor, ADR-0045). */
-  knownHarnesses: readonly string[];
+  /** The harnesses the selector offers, split into Built-in / From-descriptors
+   *  sections with per-harness install state (#586, dynamic from `/settings`). */
+  catalog: HarnessCatalog;
   /**
    * The instance default harness, used to **label** the inherit option — never to seed
    * the value (the #452 trap: a prefilled field freezes a stale value the user never
@@ -338,7 +339,10 @@ export function harnessState({
     : null;
   const effectiveHarness = harness === "" ? instanceDefaultHarness : harness;
   return {
-    knownHarnesses: KNOWN_HARNESSES,
+    // #586: the picker's options are now dynamic — the floor merged with the disk
+    // descriptor tier, each tagged installed/not. `harnessCatalog` falls back to
+    // the embedded floor while settings are unknown, so the control is never empty.
+    catalog: harnessCatalog(settings?.harness_descriptors ?? null),
     instanceDefaultHarness,
     effectiveHarness,
   };

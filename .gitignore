@@ -13,11 +13,6 @@ Cargo.lock.*
 .vscode/
 *.swp
 
-# Sandcastle local state
-.sandcastle/logs/
-.sandcastle/worktrees/
-.sandcastle/.env
-
 # PDO local state — runtime DB, per-run worktrees, library, prompt
 # snapshots. All per-user; never committed — EXCEPT the builtin seed
 # pipelines below, which build.rs embeds via include_str!; they must be in

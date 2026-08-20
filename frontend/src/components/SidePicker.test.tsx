@@ -10,6 +10,8 @@ vi.mock("../api", () => ({
   saveToLibrary: vi.fn(),
   deleteFromLibrary: vi.fn(),
   instantiateFromLibrary: vi.fn(),
+  // #586: NodeInspector's harness picker fetches /settings for its options.
+  fetchSettings: vi.fn().mockResolvedValue({ harness_descriptors: null }),
 }));
 
 describe("SidePicker", () => {

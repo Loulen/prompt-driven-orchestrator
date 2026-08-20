@@ -208,6 +208,40 @@ pub struct RejectedDescriptor {
     pub why: String,
 }
 
+/// Where a resolved harness came from — the embedded floor, or the disk tier
+/// (#586). The picker splits its two sections on this fact; it is a name-based
+/// judgement (`claude`/`opencode` are the floor), so a disk *override* of a floor
+/// name stays `Builtin` — the picker still lists it under "Built-in", which is
+/// what the design shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HarnessSource {
+    Builtin,
+    Descriptor,
+}
+
+impl HarnessSource {
+    /// The wire token `GET /settings` surfaces (`builtin` | `descriptor`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HarnessSource::Builtin => "builtin",
+            HarnessSource::Descriptor => "descriptor",
+        }
+    }
+}
+
+/// One resolved harness as the picker needs it (#586): its name, its provenance,
+/// and the binary PDO probes at spawn. The binary is exposed — not an `installed`
+/// bool — because whether it resolves on `$PATH` is decided by the caller
+/// (`tmux_session_manager::binary_available`, which alone reads the environment);
+/// this pure module never touches `$PATH`, the same discipline it keeps for
+/// `$HOME`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HarnessListing {
+    pub name: String,
+    pub source: HarnessSource,
+    pub binary: String,
+}
+
 /// The result of parsing the on-disk descriptor tier. Pure: text in; the parsed
 /// descriptors and any refusals out. An unparseable document yields
 /// `unparseable: Some(err)` and NO descriptors — never an `Err`, because a bad
@@ -389,6 +423,31 @@ impl HarnessRegistry {
     /// any novel disk harness). The `GET /settings` "which harnesses exist" view.
     pub fn names(&self) -> Vec<String> {
         self.descriptors.iter().map(|d| d.name.clone()).collect()
+    }
+
+    /// Each resolved harness with its provenance and probe binary, in resolution
+    /// order (#586). `source` is `Builtin` for the embedded floor names
+    /// (`claude`/`opencode`), `Descriptor` for a disk-declared harness — the split
+    /// the picker renders as two sections. `installed` is NOT decided here: the
+    /// caller pairs each `binary` with `tmux_session_manager::binary_available`, so
+    /// this module stays pure (no `$PATH`). Refused rows never enter
+    /// `self.descriptors`, so they are already absent — a refused key resolves to
+    /// the floor, which is what appears.
+    pub fn listing(&self) -> Vec<HarnessListing> {
+        let builtin: std::collections::HashSet<String> =
+            embedded_floor().into_iter().map(|d| d.name).collect();
+        self.descriptors
+            .iter()
+            .map(|d| HarnessListing {
+                name: d.name.clone(),
+                source: if builtin.contains(&d.name) {
+                    HarnessSource::Builtin
+                } else {
+                    HarnessSource::Descriptor
+                },
+                binary: d.binary.clone(),
+            })
+            .collect()
     }
 
     /// The disk descriptors the registry refused — each inert, its key on the
@@ -679,6 +738,77 @@ mod tests {
         assert_eq!(reg.rejected()[0].name, "claude");
         let d = reg.diagnostic().unwrap();
         assert!(d.contains("`claude`") && d.contains("falling through"));
+    }
+
+    #[test]
+    fn listing_tags_the_floor_builtin_and_a_disk_harness_descriptor() {
+        // #586: the picker's two sections. A novel disk harness is `Descriptor`;
+        // the embedded floor stays `Builtin`. The probe binary rides along so the
+        // caller can decide `installed` without this module reading `$PATH`.
+        let home = tempfile::tempdir().unwrap();
+        let path = HarnessRegistry::descriptors_path(home.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "harnesses:\n  pi:\n    binary: pi-runner\n    launch: [\"exec\", \"pi-runner\"]\n",
+        )
+        .unwrap();
+
+        let reg = HarnessRegistry::load(home.path());
+        let listing = reg.listing();
+
+        let claude = listing.iter().find(|h| h.name == CLAUDE).unwrap();
+        assert_eq!(claude.source, HarnessSource::Builtin);
+        assert_eq!(claude.binary, "claude");
+
+        let opencode = listing.iter().find(|h| h.name == OPENCODE).unwrap();
+        assert_eq!(opencode.source, HarnessSource::Builtin);
+
+        let pi = listing.iter().find(|h| h.name == "pi").unwrap();
+        assert_eq!(pi.source, HarnessSource::Descriptor);
+        assert_eq!(
+            pi.binary, "pi-runner",
+            "the probe binary is exposed by name"
+        );
+
+        assert_eq!(HarnessSource::Builtin.as_str(), "builtin");
+        assert_eq!(HarnessSource::Descriptor.as_str(), "descriptor");
+    }
+
+    #[test]
+    fn listing_keeps_a_disk_override_of_a_floor_name_builtin() {
+        // A disk `claude:` override still lists under "Built-in" (name-based), so
+        // the picker's Built-in section always carries claude/opencode — what the
+        // design shows — while the override's own binary is what is probed.
+        let home = tempfile::tempdir().unwrap();
+        let path = HarnessRegistry::descriptors_path(home.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "harnesses:\n  claude:\n    binary: my-claude\n    launch: [\"exec\", \"my-claude\"]\n",
+        )
+        .unwrap();
+
+        let reg = HarnessRegistry::load(home.path());
+        let claude = reg
+            .listing()
+            .into_iter()
+            .find(|h| h.name == CLAUDE)
+            .unwrap();
+        assert_eq!(claude.source, HarnessSource::Builtin);
+        assert_eq!(
+            claude.binary, "my-claude",
+            "the override's binary is probed"
+        );
+    }
+
+    #[test]
+    fn builtin_listing_is_the_floor_as_builtin() {
+        let listing = HarnessRegistry::builtin().listing();
+        assert_eq!(listing.len(), 2);
+        assert!(listing.iter().all(|h| h.source == HarnessSource::Builtin));
+        assert_eq!(listing[0].name, CLAUDE);
+        assert_eq!(listing[1].name, OPENCODE);
     }
 
     #[test]

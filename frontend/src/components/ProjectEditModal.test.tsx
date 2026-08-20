@@ -19,6 +19,21 @@ vi.mock("../api", () => {
     updateProject: (id: string, req: unknown) => updateProject(id, req),
     addProjectMember: (id: string, path: string) => addProjectMember(id, path),
     removeProjectMember: (id: string, path: string) => removeProjectMember(id, path),
+    // #586: the harness select fetches /settings for its dynamic options. Resolve
+    // it with the embedded floor so claude/opencode are offered.
+    fetchSettings: () =>
+      Promise.resolve({
+        harness_descriptors: {
+          path: null,
+          names: ["claude", "opencode"],
+          harnesses: [
+            { name: "claude", source: "builtin", installed: true },
+            { name: "opencode", source: "builtin", installed: true },
+          ],
+          rejected: [],
+          reason: null,
+        },
+      }),
   };
 });
 

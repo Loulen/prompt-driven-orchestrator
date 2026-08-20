@@ -8710,12 +8710,31 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
     // resolves (floor merged with disk), so a user learns their declared harness
     // "appeared"; `reason` carries the SAME string the loader logs. The path is
     // ALWAYS reported so the user knows where to write — nothing is ever seeded.
+    // #586: each resolved harness carries its provenance (`source`) and whether its
+    // binary resolves on `$PATH` (`installed`). The registry is pure — it yields the
+    // name/source/binary; `binary_available` (the same probe the spawn seam runs)
+    // decides `installed` here, beside the environment, so the picker greys a
+    // harness that would only fail-fast at launch.
+    let harness_list_json = |registry: &harness_registry::HarnessRegistry| {
+        registry
+            .listing()
+            .iter()
+            .map(|h| {
+                serde_json::json!({
+                    "name": h.name,
+                    "source": h.source.as_str(),
+                    "installed": tmux_session_manager::binary_available(&h.binary),
+                })
+            })
+            .collect::<Vec<_>>()
+    };
     let harness_descriptors_view = match &host_home_path {
         Some(home) => {
             let registry = harness_registry::HarnessRegistry::load(home);
             serde_json::json!({
                 "path": harness_registry::HarnessRegistry::descriptors_path(home).to_string_lossy(),
                 "names": registry.names(),
+                "harnesses": harness_list_json(&registry),
                 "rejected": registry
                     .rejected()
                     .iter()
@@ -8724,13 +8743,17 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
                 "reason": registry.diagnostic(),
             })
         }
-        None => serde_json::json!({
-            "path": null,
-            "names": harness_registry::HarnessRegistry::builtin().names(),
-            "rejected": [],
-            "reason": "HOME is unset, so the descriptor file has no resolvable path — \
-                       only the harnesses compiled into the binary apply",
-        }),
+        None => {
+            let registry = harness_registry::HarnessRegistry::builtin();
+            serde_json::json!({
+                "path": null,
+                "names": registry.names(),
+                "harnesses": harness_list_json(&registry),
+                "rejected": [],
+                "reason": "HOME is unset, so the descriptor file has no resolvable path — \
+                           only the harnesses compiled into the binary apply",
+            })
+        }
     };
 
     Ok(serde_json::json!({
@@ -30698,6 +30721,51 @@ edges:
         for kept in ["default_sandbox", "sandbox_profiles", "sandbox_docker"] {
             assert!(view.get(kept).is_some(), "`{kept}` must stay: {view}");
         }
+    }
+
+    #[tokio::test]
+    async fn settings_view_lists_harnesses_with_source_and_installed() {
+        // #586 AC#1: `GET /settings → harness_descriptors` carries, per resolved
+        // harness, `name` + `source` (builtin|descriptor) + `installed` (bool) — the
+        // shape the two-section, grey-if-uninstalled picker reads. The embedded floor
+        // (claude/opencode) always resolves as `builtin`; disk-declared harnesses (if
+        // any on this host) ride as `descriptor`. `installed` reads the real `$PATH`,
+        // so we assert its TYPE, never a value — the picker only greys on it. `rejected`
+        // is preserved alongside (AC: kept for an eventual display).
+        let state = test_state().await;
+        let view = get_settings_json(&state).await;
+
+        let harnesses = view["harness_descriptors"]["harnesses"]
+            .as_array()
+            .expect("harness_descriptors.harnesses must be an array");
+        assert!(
+            !harnesses.is_empty(),
+            "the floor alone makes this non-empty"
+        );
+
+        for h in harnesses {
+            assert!(h["name"].is_string(), "each harness carries a name: {h}");
+            let source = h["source"].as_str().expect("source is a string");
+            assert!(
+                source == "builtin" || source == "descriptor",
+                "source is builtin|descriptor, got {source:?}"
+            );
+            assert!(h["installed"].is_boolean(), "installed is a bool: {h}");
+        }
+
+        // The embedded floor always resolves, always as `builtin`.
+        for floor in ["claude", "opencode"] {
+            let entry = harnesses
+                .iter()
+                .find(|h| h["name"] == floor)
+                .unwrap_or_else(|| panic!("floor harness `{floor}` must appear: {view}"));
+            assert_eq!(entry["source"], "builtin", "`{floor}` is built-in");
+        }
+
+        assert!(
+            view["harness_descriptors"]["rejected"].is_array(),
+            "rejected stays an array: {view}"
+        );
     }
 
     #[tokio::test]

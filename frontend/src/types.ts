@@ -341,10 +341,29 @@ export interface HarnessDescriptorsView {
   path: string | null;
   /** The harnesses the registry resolves (floor ∪ disk), in resolution order. */
   names: string[];
+  /**
+   * Each resolved harness enriched for the picker (#586): its provenance and
+   * whether its binary resolves on the daemon's `$PATH`. Drives the two-section,
+   * grey-if-uninstalled picker. Optional so a daemon predating #586 still
+   * typechecks (the picker then falls back to the embedded floor); in production
+   * the SPA is embedded, so it is always present.
+   */
+  harnesses?: HarnessListItem[];
   /** Descriptors the disk tier refused — each inert, its key on the floor. */
   rejected: { name: string; why: string }[];
   /** Advisory: an inert file or refused descriptor, named. `null` when all is well. */
   reason: string | null;
+}
+
+/** One resolved harness, as `GET /settings → harness_descriptors.harnesses`
+ *  discloses it (#586). */
+export interface HarnessListItem {
+  name: string;
+  /** `builtin` = the embedded floor (claude/opencode); `descriptor` = the disk tier. */
+  source: "builtin" | "descriptor";
+  /** Whether the harness's binary resolves on the daemon's `$PATH`. `false` greys
+   *  the row and blocks selection — a spawn would fail fast (ADR-0037). */
+  installed: boolean;
 }
 
 /** `GET /settings` → `price_table` (#427). */

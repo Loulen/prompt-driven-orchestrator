@@ -11,6 +11,7 @@ import SecondaryRepoRow, {
   type SecondaryRepo,
 } from "./SecondaryRepoRow";
 import GuardTestResult from "./GuardTestResult";
+import HarnessSelect from "./HarnessSelect";
 import { CRON_PRESETS, cronToPreset, parseDailyTime, type CronPresetId } from "../cronPresets";
 import { useLaunchTargets } from "../hooks/useLaunchTargets";
 import { useRepoValidation } from "../hooks/useRepoValidation";
@@ -526,10 +527,11 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     [settings, sandbox, mode],
   );
 
-  // #551/#452: the harness selector's derived state — the known harnesses and the
-  // inherited default's NAME (a label, never a seed). Memoized like `sandboxState` so its
-  // destructured fields are stable. Pure over (settings, harness).
-  const { knownHarnesses, instanceDefaultHarness } = useMemo(
+  // #551/#452/#586: the harness selector's derived state — the dynamic catalog
+  // (floor ∪ descriptors, each installed/not) and the inherited default's NAME (a
+  // label, never a seed). Memoized like `sandboxState` so its destructured fields
+  // are stable. Pure over (settings, harness).
+  const { catalog: harnessCatalog, instanceDefaultHarness } = useMemo(
     () => newRunForm.harnessState({ settings, harness }),
     [settings, harness],
   );
@@ -1212,25 +1214,20 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
               >
                 Harness
               </label>
-              <select
+              <HarnessSelect
                 id="harness-select"
                 data-testid="harness-select"
                 value={harness}
-                onChange={(e) => setHarness(e.target.value)}
+                onChange={setHarness}
+                catalog={harnessCatalog}
+                inheritLabel={
+                  mode === "run" && instanceDefaultHarness
+                    ? `Use instance default (${instanceDefaultHarness})`
+                    : "Use instance default"
+                }
                 className="w-full rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5 font-mono text-fg transition-colors focus:border-acc focus:outline-none disabled:opacity-40"
                 style={{ fontSize: "12px" }}
-              >
-                <option value="">
-                  {mode === "run" && instanceDefaultHarness
-                    ? `Use instance default (${instanceDefaultHarness})`
-                    : "Use instance default"}
-                </option>
-                {knownHarnesses.map((h) => (
-                  <option key={h} value={h}>
-                    {h}
-                  </option>
-                ))}
-              </select>
+              />
               <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
                 {mode === "trigger"
                   ? "Every fired Run launches on this harness. Nodes that pin their own harness ignore it."

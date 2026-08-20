@@ -490,10 +490,40 @@ describe("harnessState (#551/#452)", () => {
     expect(state.effectiveHarness).toBe("opencode");
   });
 
-  it("offers the embedded harnesses", () => {
-    expect(harnessState({ settings: settings(), harness: "" }).knownHarnesses).toEqual([
-      "claude",
-      "opencode",
+  it("offers the embedded floor when settings carry no descriptor view", () => {
+    // No harness_descriptors on the fixture → the floor fallback: claude/opencode,
+    // both built-in, both assumed installed. The picker is never empty.
+    const { catalog } = harnessState({ settings: settings(), harness: "" });
+    expect(catalog.builtin.map((h) => h.name)).toEqual(["claude", "opencode"]);
+    expect(catalog.descriptors).toEqual([]);
+  });
+
+  it("splits the dynamic harness list into built-in and descriptor sections (#586)", () => {
+    // The picker's two sections come from `source`; `installed` greys a row.
+    const { catalog } = harnessState({
+      settings: settings({
+        harness_descriptors: {
+          path: "/home/user/.pdo/harnesses/descriptors.yaml",
+          names: ["claude", "opencode", "pi", "aider"],
+          harnesses: [
+            { name: "claude", source: "builtin", installed: true },
+            { name: "opencode", source: "builtin", installed: false },
+            { name: "pi", source: "descriptor", installed: true },
+            { name: "aider", source: "descriptor", installed: false },
+          ],
+          rejected: [],
+          reason: null,
+        },
+      }),
+      harness: "",
+    });
+    expect(catalog.builtin).toEqual([
+      { name: "claude", installed: true },
+      { name: "opencode", installed: false },
+    ]);
+    expect(catalog.descriptors).toEqual([
+      { name: "pi", installed: true },
+      { name: "aider", installed: false },
     ]);
   });
 });

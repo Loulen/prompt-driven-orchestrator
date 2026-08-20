@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import NodeInspector from "./NodeInspector";
 import type { LibraryEntry } from "../api";
-import { saveToLibrary, deleteFromLibrary } from "../api";
+import { saveToLibrary, deleteFromLibrary, fetchSettings } from "../api";
 import { useEditStore } from "../stores/editStore";
 import { TooltipProvider } from "./ui/tooltip";
 
@@ -17,6 +17,20 @@ function renderInspector(props: Parameters<typeof NodeInspector>[0]) {
 
 vi.mock("../api", () => ({
   fetchLibrary: vi.fn().mockResolvedValue([]),
+  // #586: the harness pin picker now fetches /settings for its dynamic option
+  // list. Resolve it with the embedded floor so the picker offers claude/opencode.
+  fetchSettings: vi.fn().mockResolvedValue({
+    harness_descriptors: {
+      path: null,
+      names: ["claude", "opencode"],
+      harnesses: [
+        { name: "claude", source: "builtin", installed: true },
+        { name: "opencode", source: "builtin", installed: true },
+      ],
+      rejected: [],
+      reason: null,
+    },
+  }),
   saveToLibrary: vi.fn().mockResolvedValue({}),
   deleteFromLibrary: vi.fn().mockResolvedValue(undefined),
   instantiateFromLibrary: vi.fn().mockResolvedValue({
@@ -550,9 +564,18 @@ describe("NodeInspector — harness axis (#550, ADR-0046)", () => {
   it("pinning a harness writes pin_harness onto the node", async () => {
     seedNode({});
     renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
-    await userEvent.click(screen.getByTestId("node-harness-option-opencode"));
+    // #586: the pin is now a single sectioned <select>; opencode is offered even
+    // before /settings answers (the embedded-floor fallback), so no wait is needed.
+    fireEvent.change(screen.getByTestId("node-harness-select"), {
+      target: { value: "opencode" },
+    });
     const node = useEditStore.getState().openTabs[0].pipeline.nodes[0];
     expect(node.pin_harness).toBe("opencode");
+    // A green fetch settles the dynamic catalog; flush it inside act so the
+    // trailing setState doesn't leak past the test.
+    await waitFor(() =>
+      expect(vi.mocked(fetchSettings)).toHaveBeenCalled(),
+    );
   });
 
   it("hides the harness selector for a script node", () => {

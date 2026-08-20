@@ -1,4 +1,4 @@
-import { Plus, GitMerge, Info, Undo2, Redo2, SquareTerminal, Box, StickyNote, FilePlus, FolderGit2 } from "lucide-react";
+import { Plus, GitMerge, Info, Undo2, Redo2, SquareTerminal, Box, StickyNote, FilePlus, FolderGit2, Bot } from "lucide-react";
 import type { NodeType } from "../types";
 import type { LibraryEntry } from "../api";
 import { Tooltip } from "./ui/tooltip";
@@ -21,6 +21,13 @@ interface Props {
   getDropPosition?: () => { x: number; y: number };
   infoOpen?: boolean;
   onToggleInfo?: () => void;
+  // #302 / ADR-0048: the "agent" glyph beside `(i)`. Opens the Pipeline info
+  // panel focused on the Assistant tab (the library authoring copilot). Only
+  // wired for a library *template* canvas (`assistantAvailable`) — on a run
+  // canvas the same access path leads to the Manager tab instead.
+  assistantAvailable?: boolean;
+  assistantActive?: boolean;
+  onOpenAssistant?: () => void;
   // #465 slice 2 (F1): on a live run the App auto-snaps the selection to the
   // running node, so the Run-info / Repositories sidebar (mounted when nothing
   // is selected) is otherwise unreachable. This toggle opens it explicitly. Only
@@ -34,7 +41,7 @@ interface Props {
   readOnly?: boolean;
 }
 
-export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, libraryEntries, onLibraryDelete, getDropPosition, infoOpen, onToggleInfo, showRunInfo = false, runInfoActive = false, onToggleRunInfo, readOnly = false }: Props) {
+export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, libraryEntries, onLibraryDelete, getDropPosition, infoOpen, onToggleInfo, assistantAvailable = false, assistantActive = false, onOpenAssistant, showRunInfo = false, runInfoActive = false, onToggleRunInfo, readOnly = false }: Props) {
   // Read undo/redo straight from the store (ADR-0014 / #226): they have no
   // component-local dependency, unlike the prop-drilled add/merge callbacks, so
   // the point-of-use selector idiom is the right fit. `canUndo`/`canRedo` are
@@ -188,24 +195,47 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
         </>
       )}
 
-      {onToggleInfo && (
+      {(onToggleInfo || (assistantAvailable && onOpenAssistant)) && (
         <>
-          {/* #315: no leading separator when the info button is the sole control. */}
+          {/* #315: no leading separator when the info group is the sole control. */}
           {!readOnly && !showRunInfo && <span className="mx-0.5 h-4 w-px bg-line" />}
 
-          <Tooltip content="Pipeline info">
-            <button
-              data-testid="toolbar-info"
-              onClick={onToggleInfo}
-              className={`grid h-7 w-7 cursor-pointer place-items-center rounded transition-colors ${
-                infoOpen
-                  ? "bg-acc text-bg-0"
-                  : "text-fg-3 hover:bg-bg-4 hover:text-fg active:bg-acc active:text-bg-0"
-              }`}
-            >
-              <Info size={14} />
-            </button>
-          </Tooltip>
+          {/* #302 / ADR-0048: the "agent" glyph, immediately left of `(i)`, both
+              opening the same Pipeline info panel — the Bot jumps straight to the
+              Assistant tab. Grouped with `(i)`, so no separator between them. */}
+          {assistantAvailable && onOpenAssistant && (
+            <Tooltip content="Pipeline assistant">
+              <button
+                data-testid="toolbar-assistant"
+                aria-label="Pipeline assistant"
+                aria-pressed={assistantActive}
+                onClick={onOpenAssistant}
+                className={`grid h-7 w-7 cursor-pointer place-items-center rounded transition-colors ${
+                  assistantActive
+                    ? "bg-acc text-bg-0"
+                    : "text-fg-3 hover:bg-bg-4 hover:text-fg active:bg-acc active:text-bg-0"
+                }`}
+              >
+                <Bot size={14} />
+              </button>
+            </Tooltip>
+          )}
+
+          {onToggleInfo && (
+            <Tooltip content="Pipeline info">
+              <button
+                data-testid="toolbar-info"
+                onClick={onToggleInfo}
+                className={`grid h-7 w-7 cursor-pointer place-items-center rounded transition-colors ${
+                  infoOpen
+                    ? "bg-acc text-bg-0"
+                    : "text-fg-3 hover:bg-bg-4 hover:text-fg active:bg-acc active:text-bg-0"
+                }`}
+              >
+                <Info size={14} />
+              </button>
+            </Tooltip>
+          )}
         </>
       )}
     </div>

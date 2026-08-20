@@ -10,6 +10,22 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.31.0
+
+Rien de cassant, aucune migration. **Assistant IA d'authoring des templates de bibliothèque**
+(#302, ADR-0048). Un glyphe Bot « Pipeline assistant » apparaît dans la barre d'outils du canvas
+**uniquement sur un template de bibliothèque** (jamais sur un Run) ; il ouvre un onglet **Assistant**
+qui attache une session `claude` amorcée, streamée dans le terminal embarqué.
+
+Notes de version qui ne se déduisent pas du titre : la session s'ouvre avec pour **cwd le dossier
+des templates** (`.pdo/library/pipelines`), pas la pipeline courante — c'est délibéré (ADR-0048),
+les templates voisins servent d'exemples few-shot et le canvas↔fichier est réconcilié par le store
+disk-first à la sauvegarde. Conséquence assumée : ouvert sur une pipeline de travail sans jumelle en
+bibliothèque, l'assistant décrit un dossier vide (job d'authoring *from scratch*). Cycle de vie
+**create-on-open / reap-on-leave** : la session est créée au premier affichage de l'onglet et
+**récoltée dès qu'on le quitte** (changement d'onglet ou fermeture du panneau) ; la ré-ouverture
+ré-attache la même session (create-if-absent).
+
 ## 1.30.0
 
 **Changement de comportement observable (durcissement sécurité).** Le contrôle d'`Origin`

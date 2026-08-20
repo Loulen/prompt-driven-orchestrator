@@ -1,9 +1,10 @@
 import { useState, useMemo, useRef, useEffect } from "react";
-import { Info, Terminal, X, FileText, Code, Box, Loader } from "lucide-react";
+import { Info, Terminal, X, FileText, Code, Box, Loader, Bot } from "lucide-react";
 import { SectionHead } from "./InspectorPrimitives";
 import TmuxTerminal from "./TmuxTerminal";
 import DiffSection from "./DiffSection";
 import type { LibraryPipelineEntry } from "../api";
+import { openLibraryAssistant, closeLibraryAssistant } from "../api";
 import type { RunState, PipelineDef } from "../types";
 import { isLiveRun } from "../types";
 import { formatDuration, useRunDuration } from "../lib/runDuration";
@@ -11,7 +12,7 @@ import { formatEstCost } from "../lib/costLabel";
 import { serializePipeline } from "../lib/serializePipeline";
 import { highlightYaml } from "./yamlHighlight";
 
-export type TabId = "info" | "manager" | "yaml";
+export type TabId = "info" | "manager" | "yaml" | "assistant";
 
 function StatRow({
   label,
@@ -42,6 +43,13 @@ interface Props {
   onClose: () => void;
   initialTab?: TabId;
   scrollToLine?: number;
+  /** Library pipeline id the Assistant tab authors (#302 / ADR-0048). Present
+   *  only for a library template tab (not a live Run); `null`/absent hides the
+   *  Assistant tab. `PipelineDef` has no id, so it is threaded from the edit tab. */
+  assistantId?: string | null;
+  /** Scope of `assistantId` (`repo` | `user` | `library`) — selects the pipelines
+   *  directory the assistant is spawned in. */
+  assistantScope?: string;
 }
 
 const STATUS_DOT: Record<string, string> = {
@@ -62,6 +70,8 @@ export default function PipelineInfoPanel({
   onClose,
   initialTab,
   scrollToLine,
+  assistantId,
+  assistantScope,
 }: Props) {
   const pipelineName = run?.pipeline_name ?? pipeline?.name ?? "Untitled";
   const variables = pipeline?.variables ?? {};
@@ -69,12 +79,21 @@ export default function PipelineInfoPanel({
   const managerSession = run ? `pdo-mgr-${run.run_id}` : null;
 
   const hasManager = !!managerSession;
+  // #302: the Assistant is the mirror of the Manager — it exists only for a
+  // library *template* (no live Run) with a resolvable pipeline id. Manager and
+  // Assistant are therefore never both shown.
+  const hasAssistant = !run && !!assistantId;
   const [activeTab, setActiveTab] = useState<TabId>(initialTab ?? "info");
-  const resolvedTab = activeTab === "manager" && !hasManager ? "info" : activeTab;
+  const resolvedTab =
+    (activeTab === "manager" && !hasManager) ||
+    (activeTab === "assistant" && !hasAssistant)
+      ? "info"
+      : activeTab;
 
   const tabs: { id: TabId; label: string; icon: typeof Info; show: boolean }[] = [
     { id: "info", label: "Info", icon: FileText, show: true },
     { id: "manager", label: "Manager", icon: Terminal, show: hasManager },
+    { id: "assistant", label: "Assistant", icon: Bot, show: hasAssistant },
     { id: "yaml", label: "YAML", icon: Code, show: true },
   ];
 
@@ -129,6 +148,7 @@ export default function PipelineInfoPanel({
           pipeline={pipeline}
           pipelineName={pipelineName}
           variables={variableEntries}
+          hasAssistant={hasAssistant}
         />
       )}
 
@@ -157,10 +177,98 @@ export default function PipelineInfoPanel({
         </div>
       )}
 
+      {resolvedTab === "assistant" && hasAssistant && assistantId && (
+        // Key on id+scope so switching the authored pipeline remounts with fresh
+        // state (and reaps the old session via the unmount cleanup).
+        <AssistantTab
+          key={`${assistantId}:${assistantScope ?? ""}`}
+          pipelineId={assistantId}
+          scope={assistantScope}
+        />
+      )}
+
       {resolvedTab === "yaml" && (
         <YamlTab pipeline={pipeline} scrollToLine={scrollToLine} />
       )}
     </aside>
+  );
+}
+
+/**
+ * The Assistant tab body (#302 / ADR-0048): an inline `claude` REPL that authors
+ * the library template. Lifecycle = **create on open, reap on leave** (owner's
+ * ask): mounting ensures the `pdo-libassist-<id>` tmux session exists, unmounting
+ * (switching tab, closing the panel, or switching pipeline) reaps it. React
+ * unmounts this component in every one of those cases because it is rendered only
+ * while the Assistant tab is the resolved tab.
+ */
+function AssistantTab({
+  pipelineId,
+  scope,
+}: {
+  pipelineId: string;
+  scope?: string;
+}) {
+  const [session, setSession] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    // This subtree is remounted (keyed on id+scope) whenever the target changes,
+    // so the effect only needs to ensure-on-mount and reap-on-unmount — no
+    // in-effect state reset (which would trip react-hooks/set-state-in-effect).
+    let cancelled = false;
+    openLibraryAssistant(pipelineId, scope)
+      .then((r) => {
+        if (!cancelled) setSession(r.session);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+      });
+    return () => {
+      cancelled = true;
+      // Reap on leave — best-effort; reaping an absent session is a no-op.
+      void closeLibraryAssistant(pipelineId).catch(() => {});
+    };
+  }, [pipelineId, scope]);
+
+  return (
+    <div
+      className="flex min-h-0 flex-1 flex-col"
+      style={{ fontSize: "11.5px" }}
+      data-testid="assistant-tab"
+    >
+      <div className="flex items-center gap-2 border-b border-line px-3 py-2">
+        <Bot size={14} className="text-fg-3" />
+        <span className="text-fg-2" style={{ fontSize: "11px" }}>
+          Pipeline Assistant
+        </span>
+        {session && (
+          <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
+            {session}
+          </span>
+        )}
+      </div>
+      {error ? (
+        <div
+          className="flex flex-1 items-center justify-center px-4 text-center text-st-failed"
+          style={{ fontSize: "11.5px" }}
+          data-testid="assistant-error"
+        >
+          Failed to start the assistant: {error}
+        </div>
+      ) : session ? (
+        <TmuxTerminal session={session} expanded status="running" />
+      ) : (
+        <div
+          className="flex flex-1 items-center justify-center gap-2 text-fg-4"
+          style={{ fontSize: "11.5px" }}
+          data-testid="assistant-loading"
+        >
+          <Loader size={14} className="animate-spin" />
+          Starting the assistant…
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -169,11 +277,13 @@ function InfoTab({
   pipeline,
   pipelineName,
   variables,
+  hasAssistant,
 }: {
   run: RunState | null;
   pipeline: PipelineDef | null;
   pipelineName: string;
   variables: [string, { default: unknown }][];
+  hasAssistant: boolean;
 }) {
   const durationMs = useRunDuration(run?.started_at, run?.completed_at, run?.status);
   const durationLabel = formatDuration(durationMs);
@@ -338,8 +448,9 @@ function InfoTab({
           >
             <Info size={14} className="shrink-0" />
             <span>
-              No active run. The Manager tab becomes available while a Run is in
-              progress.
+              {hasAssistant
+                ? "This is a template. Use the Assistant tab to author it in natural language; the Manager tab becomes available while a Run is in progress."
+                : "No active run. The Manager tab becomes available while a Run is in progress."}
             </span>
           </div>
         )}

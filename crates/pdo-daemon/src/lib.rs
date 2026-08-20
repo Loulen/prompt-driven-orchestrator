@@ -4108,6 +4108,15 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/sessions/{session_id}/attach", post(session_attach))
         .route("/sessions/{run_id}/manager/attach", post(manager_attach))
         .route("/sessions/{run_id}/shell", post(open_run_shell))
+        // #302 / ADR-0048 — library pipeline authoring assistant. `POST` is
+        // create-if-absent (spawn the `claude` REPL in the pipelines dir and
+        // return its session name to attach via the PTY bridge); `DELETE` reaps it
+        // on tab-leave. Under the already-proxied `/sessions` prefix, so no vite
+        // proxy edit (#345).
+        .route(
+            "/sessions/{pipeline_id}/libassist",
+            post(open_library_assistant).delete(close_library_assistant),
+        )
         .route("/library", get(list_library))
         .route("/library", post(save_to_library))
         // #345 — parse a single node's YAML into a canvas-instantiable spec.
@@ -10889,6 +10898,9 @@ async fn run_orphan_sweep(state: &AppState, socket: &str, ttl: Duration) -> Resu
         let info = match &parsed {
             // Unparseable name: no lookup at all, exactly as before.
             None => None,
+            // #302: a library assistant owns no Run — there is nothing to project.
+            // `decide_one` keeps it unconditionally, so skip the lookup entirely.
+            Some(tmux_session_manager::ParsedSession::LibAssist { .. }) => None,
             Some(p) => {
                 let (run_id, node_id) = match p {
                     tmux_session_manager::ParsedSession::Manager { run_id } => {
@@ -10900,6 +10912,8 @@ async fn run_orphan_sweep(state: &AppState, socket: &str, ttl: Duration) -> Resu
                     tmux_session_manager::ParsedSession::NodeRun {
                         run_id, node_id, ..
                     } => (run_id.as_str(), node_id.as_str()),
+                    // Handled by the arm above; unreachable here.
+                    tmux_session_manager::ParsedSession::LibAssist { .. } => unreachable!(),
                 };
                 if !projected.contains_key(run_id) {
                     let events = load_events(&state.db, run_id).await?;
@@ -13609,6 +13623,181 @@ async fn open_run_shell(
             }
         }
     }
+}
+
+/// Response of `POST /sessions/{pipeline_id}/libassist` (#302 / ADR-0048).
+///
+/// Same shape as [`ShellResponse`]: `created` distinguishes a freshly-spawned
+/// assistant from a re-attach of the existing one (create-if-absent). The client
+/// attaches to `session` via the existing `WS /sessions/<session>/pty` bridge.
+#[derive(Serialize)]
+struct LibassistResponse {
+    ok: bool,
+    session: String,
+    created: bool,
+}
+
+/// Open (or re-attach) the library pipeline authoring assistant for `pipeline_id`
+/// (#302 / ADR-0048).
+///
+/// Create-if-absent, one assistant per pipeline id (`pdo-libassist-<id>`), a
+/// `claude` REPL whose cwd is the library pipelines directory for `?scope=`
+/// (default `user`). Unlike the run shell there is no run to gate on: the assistant
+/// acts before/outside any Run. Its system prompt is primed with the pipeline-YAML
+/// format and the library endpoints (owner's ask). The session persists across a
+/// PTY/tab close (`claude` does not exit on EOF) and is reaped by the sibling
+/// `DELETE` handler on tab-leave.
+async fn open_library_assistant(
+    State(state): State<Arc<AppState>>,
+    AxumPath(pipeline_id): AxumPath<String>,
+    Query(scope_q): Query<ScopeQuery>,
+) -> Response {
+    let scope_str = scope_q.scope.as_deref().unwrap_or("user");
+    let Some(scope) = library_store::pipelines::Scope::parse(scope_str) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": format!("unknown scope: {scope_str}") })),
+        )
+            .into_response();
+    };
+    let Some(cwd) = library_store::pipelines::scope_dir(&state.repo_root, scope) else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "HOME not set — no library pipelines directory" })),
+        )
+            .into_response();
+    };
+    // The assistant's cwd must exist for `tmux new-session -c` to succeed. A fresh
+    // user library has no `pipelines/` dir until the first save; create it so the
+    // assistant can author the very first template.
+    if let Err(e) = std::fs::create_dir_all(&cwd) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("failed to create pipelines dir: {e}") })),
+        )
+            .into_response();
+    }
+
+    let session = tmux_session_manager::libassist_session_name(&pipeline_id);
+    let socket = state.tmux_socket();
+
+    // Create-if-absent, race-free (create-then-verify-on-failure), mirroring
+    // `open_run_shell`.
+    if tmux_session_manager::session_exists(&socket, &session) {
+        return (
+            StatusCode::OK,
+            Json(LibassistResponse {
+                ok: true,
+                session,
+                created: false,
+            }),
+        )
+            .into_response();
+    }
+
+    // Never sandboxed: authoring is design-time work on the host.
+    let daemon_url = sandbox_container::daemon_url(state.port, false);
+    let static_prompt = std::fs::read_to_string(
+        state
+            .repo_root
+            .join("prompts")
+            .join("builtin")
+            .join("library-assistant.md"),
+    )
+    .unwrap_or_default();
+    let full_prompt =
+        prompt_augmenter::build_library_assistant_prompt(&pipeline_id, &daemon_url, &static_prompt);
+
+    // Infra harness (no Run harness to follow): instance default, else the `claude`
+    // floor — mirror of the manager/merge-resolver resolution.
+    let default_harness = stored_default_harness(&state.db).await;
+    let harness_name = harness_resolver::resolve_infra_harness(None, default_harness.as_deref());
+    let harness = harness_registry::resolve(&harness_name).unwrap_or_else(|| {
+        warn!(
+            "library assistant for '{pipeline_id}': unknown harness '{harness_name}' — \
+             launching on the claude floor"
+        );
+        harness_registry::claude()
+    });
+
+    // Keep the primer OUT of the user-facing pipelines dir: write it to a sibling
+    // `.libassist/<id>.md` under the library root (the parent of `pipelines/`).
+    let prompt_path = cwd
+        .parent()
+        .unwrap_or(&cwd)
+        .join(".libassist")
+        .join(format!("{pipeline_id}.md"));
+
+    match tmux_session_manager::spawn_libassist(
+        &session,
+        &pipeline_id,
+        &full_prompt,
+        &cwd,
+        &prompt_path,
+        state.port,
+        &harness,
+        state.tmux_cmd_override.as_deref(),
+    ) {
+        Ok(()) => {
+            info!("Opened library assistant {session} in {}", cwd.display());
+            (
+                StatusCode::OK,
+                Json(LibassistResponse {
+                    ok: true,
+                    session,
+                    created: true,
+                }),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            if tmux_session_manager::session_exists(&socket, &session) {
+                // A concurrent POST won the race — re-attach, not an error.
+                (
+                    StatusCode::OK,
+                    Json(LibassistResponse {
+                        ok: true,
+                        session,
+                        created: false,
+                    }),
+                )
+                    .into_response()
+            } else {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error": format!("failed to open library assistant: {e}")
+                    })),
+                )
+                    .into_response()
+            }
+        }
+    }
+}
+
+/// Reap the library pipeline authoring assistant for `pipeline_id` (#302 /
+/// ADR-0048).
+///
+/// The assistant's lifecycle is create-on-open / reap-on-leave: the frontend fires
+/// this when the user leaves the Assistant tab (owner's ask). Best-effort — killing
+/// an absent session is a no-op, so a double-leave or a race is harmless. `reaped`
+/// tells the client whether a session was actually there.
+async fn close_library_assistant(
+    State(state): State<Arc<AppState>>,
+    AxumPath(pipeline_id): AxumPath<String>,
+) -> Response {
+    let session = tmux_session_manager::libassist_session_name(&pipeline_id);
+    let socket = state.tmux_socket();
+    let existed = tmux_session_manager::session_exists(&socket, &session);
+    tmux_session_manager::kill(&socket, &session);
+    if existed {
+        info!("Reaped library assistant {session}");
+    }
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "ok": true, "reaped": existed })),
+    )
+        .into_response()
 }
 
 fn detect_terminal() -> String {
@@ -21588,7 +21777,11 @@ edges:
         let state = test_state_with_dir(repo.path()).await;
         let app = build_router(state);
 
-        let content = include_str!("../../../.claude/workflows/simple-bugfix.js");
+        // A minimal inline workflow (the retired `.claude/workflows/*.js` fixtures
+        // are gone — #549). The `workflow_importer` unit tests cover every
+        // translation idiom against inline sources; here we only need the endpoint
+        // to accept a valid workflow and write the draft.
+        let content = r#"agent(`Fix the failing test.`, { label: 'implement' })"#;
         let body = serde_json::json!({
             "filename": "simple-bugfix.js",
             "content": content,

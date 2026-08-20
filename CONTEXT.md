@@ -619,6 +619,7 @@ Chaque NodeRun = **une session tmux détachée** créée par le daemon, contenan
 - NodeRun : `pdo-<run-id>-<node-id>-iter-<N>`.
 - Manager : `pdo-mgr-<run-id>`.
 - Shell de run : `pdo-shell-<run-id>`.
+- Assistant de bibliothèque : `pdo-libassist-<pipeline-id>`.
 
 Les sessions sont invisibles par défaut, survivent au crash de l'UI ou du daemon (récupération au redémarrage).
 
@@ -627,6 +628,12 @@ Les sessions sont invisibles par défaut, survivent au crash de l'UI ou du daemo
 **Shell de run** *(terme)* : un **bash interactif ad-hoc** (pas une REPL Claude Code) spawné à la demande dans `pdo-shell-<run-id>`, cwd = worktree pipeline. Sert à inspecter/déboguer un Run post-mortem. _Éviter_ : « session » tout court (= NodeRun), « manager » (= REPL conversationnelle), « terminal » (= le pont d'attache).
 
 Visible uniquement sur les Runs terminaux non-archivés dont le worktree existe (*reapable*). **Un seul shell par Run**, create-if-absent, persistant (sans TTL), tué par `cleanup_run`. Exempt du cap. `resume_run` le tue best-effort avant de ré-armer le scheduler (un writer concurrent casserait le merge). Détails → ADR-0021.
+
+### Assistant de bibliothèque — copilote d'authoring (ADR-0048)
+
+**Assistant de bibliothèque** *(terme, #302)* : une **REPL `claude`** design-time spawnée à la demande dans `pdo-libassist-<pipeline-id>`, cwd = le dossier des templates du scope (`~/.pdo/library/pipelines/` ou `<repo>/.pdo/library/pipelines/`). L'utilisateur **décrit** un changement en langage naturel ; l'agent produit/édite le YAML (+ `<id>.prompts/`), montre un diff, et **écrit au save** via `POST /library/pipelines` (validation `POST /nodes/parse`). _Éviter_ : « manager » (= REPL attachée à un **Run**, `POST /runs/<id>/commands`) — l'assistant n'est attaché à **aucun Run** et n'émet **aucune** commande ; son seul effet est d'écrire un fichier template.
+
+Keyé sur la **pipeline** (pas un Run). Cycle de vie **create-on-open / reap-on-leave** : spawné à l'ouverture de l'onglet **Assistant**, reapé (`DELETE /sessions/<id>/libassist`) dès qu'on quitte l'onglet. `claude` ne sort pas sur EOF, donc la session survit à une coupure WS ; la fermeture est explicite. **Jamais reapé par le sweep** (pas de Run à keyer — `parse_session_name` connaît le préfixe `libassist-`, `decide_one` le garde toujours) et **sans TTL**. Exempt du cap. Prompt système primé (format YAML + endpoints). Détails → ADR-0048.
 
 ### Cap de sessions concurrentes (admission control)
 
@@ -747,7 +754,7 @@ PDO est un **atelier de production de code** ; la conception de pipelines est un
 
 ### Toolbar — bouton info pipeline
 
-L'icône `i` ouvre un panneau **info pipeline** : nom, statut, variables, bouton favoriter. Si la pipeline tourne, le terminal manager y prend la place dominante. Realtime via WebSocket : chaque événement de l'event log push une update vers l'UI.
+L'icône `i` ouvre un panneau **info pipeline** : nom, statut, variables, bouton favoriter. Si la pipeline tourne, le terminal manager y prend la place dominante ; sur une **template** de bibliothèque, un onglet **Assistant** héberge le copilote d'authoring (ADR-0048), et un glyphe « agent » dans la toolbar y saute directement (côté run, le même chemin mène au Manager — #302). Realtime via WebSocket : chaque événement de l'event log push une update vers l'UI.
 
 ### Workflow utilisateur typique
 

@@ -998,6 +998,60 @@ pub(crate) fn build_manager_prompt(
     format!("{preamble}{role_prompt}")
 }
 
+/// Runtime preamble for the library pipeline authoring assistant (#302 /
+/// ADR-0048).
+///
+/// Prepended to the static role prompt (`prompts/builtin/library-assistant.md`),
+/// it pins the pipeline id being authored, the daemon base URL, and the two
+/// endpoints the assistant drives — `POST /nodes/parse` (validate) and
+/// `POST /library/pipelines` (persist) — with `curl` examples. Same discipline as
+/// the manager: we own the session prompt, so we document the endpoints in plain
+/// text rather than shipping a custom MCP. The **write-on-save** rule (F2 of the
+/// issue triage: show a diff, write only on the user's OK — never on every edit)
+/// is stated here so it holds even if the static role file is trimmed.
+pub(crate) fn build_library_assistant_preamble(pipeline_id: &str, daemon_url: &str) -> String {
+    format!(
+        r#"# Pipeline Assistant Runtime Preamble
+
+You are authoring the library pipeline template **`{pipeline_id}`** in natural
+language, on the user's behalf. Your working directory is the library pipelines
+folder. The template lives at `{pipeline_id}.yaml`; each node's prompt lives at
+`{pipeline_id}.prompts/<node-id>.md`. Read the sibling `*.yaml` files in this
+folder for real, in-house examples of the format.
+
+- Daemon base URL: `{daemon_url}`
+- List every template: `curl {daemon_url}/library/pipelines`
+- Validate a single node's YAML before you save: `curl -X POST {daemon_url}/nodes/parse -H 'Content-Type: application/json' -d '{{"yaml":"<node yaml>"}}'`
+- Persist the whole template (writes `{pipeline_id}.yaml` **and** its `.prompts/` dir): `curl -X POST {daemon_url}/library/pipelines -H 'Content-Type: application/json' -d '{{"id":"{pipeline_id}","name":"<display name>","yaml":"<full pipeline yaml>","prompts":{{"<node-id>":"<prompt markdown>"}}}}'`
+
+## Write on save, never on every edit
+
+Do **not** touch files as you reason. When the user asks for a change: describe
+what you will change, **show a diff**, and write **only after the user says OK**.
+Validate node YAML via `POST /nodes/parse` first; then persist the full template
+via `POST /library/pipelines` (keep `id` = `{pipeline_id}` so it saves in place).
+The canvas re-reads the template the moment you save — so save the whole file at
+once, never a half-edited one.
+
+You drive no Run and issue no run commands: your only durable effect is the YAML
+the user reviews. Read first, propose second, write last.
+
+"#
+    )
+}
+
+/// Assemble the full library-assistant launch prompt: runtime preamble + the
+/// static role prompt (the pipeline-YAML format guide). Mirror of
+/// [`build_manager_prompt`].
+pub(crate) fn build_library_assistant_prompt(
+    pipeline_id: &str,
+    daemon_url: &str,
+    role_prompt: &str,
+) -> String {
+    let preamble = build_library_assistant_preamble(pipeline_id, daemon_url);
+    format!("{preamble}{role_prompt}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

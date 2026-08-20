@@ -451,6 +451,38 @@ export function openRunShell(
   );
 }
 
+/**
+ * Open (or re-attach) the library pipeline authoring assistant for `pipelineId`
+ * (#302 / ADR-0048). Create-if-absent; returns the `pdo-libassist-<id>` tmux
+ * session name to attach to via the existing `WS /sessions/<session>/pty` bridge.
+ * `scope` selects the pipelines directory (`repo` vs `user`/`library`).
+ */
+export function openLibraryAssistant(
+  pipelineId: string,
+  scope?: string,
+): Promise<{ session: string; created: boolean }> {
+  return request<{ session: string; created: boolean }>(
+    "POST",
+    `/sessions/${encodeURIComponent(pipelineId)}/libassist`,
+    { query: { scope }, label: "open assistant" },
+  );
+}
+
+/**
+ * Reap the library authoring assistant for `pipelineId` (#302 / ADR-0048). The
+ * assistant is create-on-open / reap-on-leave, so the UI calls this when the user
+ * leaves the Assistant tab. Best-effort: reaping an absent session is a no-op.
+ */
+export function closeLibraryAssistant(
+  pipelineId: string,
+): Promise<{ ok: boolean; reaped: boolean }> {
+  return request<{ ok: boolean; reaped: boolean }>(
+    "DELETE",
+    `/sessions/${encodeURIComponent(pipelineId)}/libassist`,
+    { label: "close assistant" },
+  );
+}
+
 export interface PaneResponse {
   content: string;
   session_name: string;

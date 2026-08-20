@@ -646,6 +646,18 @@ pub fn shell_session_name(run_id: &str) -> String {
     format!("pdo-shell-{run_id}")
 }
 
+/// Session naming convention for a library pipeline authoring assistant
+/// (#302 / ADR-0048).
+///
+/// One fixed name per pipeline id so `POST /sessions/{id}/libassist` is
+/// create-if-absent (a second open re-attaches the same session). Parsed back out
+/// by [`parse_session_name`] via the `libassist-` prefix branch, mirroring
+/// `shell-` / `mgr-` — otherwise the orphan sweep would read it as an
+/// unrecognised name and kill it on the next pass.
+pub fn libassist_session_name(pipeline_id: &str) -> String {
+    format!("pdo-libassist-{pipeline_id}")
+}
+
 /// Spawn a detached tmux session for a NodeRun.
 ///
 /// `tmux_cmd_override` (per-daemon config, `AppState.tmux_cmd_override`)
@@ -762,6 +774,80 @@ pub fn spawn_shell(
     enable_mouse(&socket, session_name);
 
     info!("Spawned run shell tmux session: {session_name}");
+    Ok(())
+}
+
+/// Spawn a detached tmux session running the library pipeline authoring assistant
+/// (#302 / ADR-0048) — a `claude` REPL whose cwd is the library pipelines
+/// directory.
+///
+/// Mirror of [`spawn`]'s agent launch (an `Agent` tail, not the `bash -i` of
+/// [`spawn_shell`]), but keyed on a pipeline id instead of a Run: it drives no
+/// Run and emits no `run_command`; its whole effect is writing `<id>.yaml`
+/// (+ `<id>.prompts/`) in `working_dir` via the library endpoints. Like the
+/// manager it launches `claude "$(cat <primer>)"`; `claude` does **not** exit on
+/// EOF (unlike `bash -i`), so the session survives a PTY-bridge/tab close — the
+/// assistant is reaped **explicitly** on tab-leave (`DELETE /sessions/{id}/libassist`,
+/// ADR-0048), never by the EOF that would end a run shell. The primer is written
+/// to `prompt_path`, kept **out** of `working_dir` so the user-facing pipelines
+/// directory stays clean. Honours `tmux_cmd_override` (the test seam) exactly as
+/// the agent tail does. Never sandboxed: authoring is design-time work on the host.
+// Every argument is an irreducible input to the spawn (identity, working context,
+// primer path, launch selector); a struct would only move the list — same
+// rationale as `spawn` / `spawn_shell` / `build_tmux_script`.
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_libassist(
+    session_name: &str,
+    pipeline_id: &str,
+    prompt: &str,
+    working_dir: &Path,
+    prompt_path: &Path,
+    daemon_port: u16,
+    harness: &crate::harness_registry::HarnessDescriptor,
+    tmux_cmd_override: Option<&str>,
+) -> Result<()> {
+    if let Some(parent) = prompt_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(prompt_path, prompt)?;
+
+    let script = build_tmux_script(
+        // The env-wrap poses `PDO_RUN_ID=<pipeline_id>` / `PDO_NODE_ID=__libassist__`
+        // (harmless — the assistant never self-signals via `pdo complete`); the
+        // load-bearing export is `PDO_DAEMON_URL`, so a `curl` of the library
+        // endpoints in the assistant's own preamble resolves.
+        pipeline_id,
+        "__libassist__",
+        0,
+        daemon_port,
+        prompt_path,
+        tmux_cmd_override,
+        SessionTail::Agent {
+            harness,
+            model: None,
+            effort: None,
+            session_id: None,
+        },
+        None, // never sandboxed
+        None, // no turn-end Stop hook — the assistant never calls `pdo complete`
+    );
+    let socket = tmux_socket_name(daemon_port);
+
+    let output = tmux(&socket)
+        .args(["new-session", "-d", "-s", session_name, "-c"])
+        .arg(working_dir)
+        .arg(&script)
+        .output()
+        .context("failed to run tmux new-session (libassist)")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("tmux new-session (libassist) failed: {stderr}");
+    }
+
+    enable_mouse(&socket, session_name);
+
+    info!("Spawned library assistant tmux session: {session_name}");
     Ok(())
 }
 
@@ -929,6 +1015,12 @@ pub enum ParsedSession {
     Shell {
         run_id: String,
     },
+    /// Library pipeline authoring assistant `pdo-libassist-<pipeline_id>`
+    /// (#302 / ADR-0048). Owns no Run — reaped explicitly on tab-leave, kept by
+    /// the orphan sweep.
+    LibAssist {
+        pipeline_id: String,
+    },
 }
 
 /// Parse a session name like `pdo-<run_id>-<node_id>-iter-<N>` or
@@ -952,6 +1044,19 @@ pub fn parse_session_name(name: &str) -> Option<ParsedSession> {
         if !run_id.is_empty() {
             return Some(ParsedSession::Shell {
                 run_id: run_id.to_string(),
+            });
+        }
+        return None;
+    }
+
+    // #302: `pdo-libassist-<pipeline_id>` — parsed BEFORE the `-iter-` split, like
+    // `shell-` / `mgr-`. A pipeline id has no `-iter-` suffix, so without this
+    // branch the name would fall through to the split, return None, and be killed
+    // as "unrecognised" by the orphan sweep on the next pass.
+    if let Some(pipeline_id) = rest.strip_prefix("libassist-") {
+        if !pipeline_id.is_empty() {
+            return Some(ParsedSession::LibAssist {
+                pipeline_id: pipeline_id.to_string(),
             });
         }
         return None;
@@ -1400,6 +1505,14 @@ fn decide_one(
             }),
             _ => SweepVerdict::Keep,
         },
+        // #302 / ADR-0048: a library authoring assistant has no owning Run, so
+        // there is nothing to key an absence/archived verdict on. It is reaped
+        // **explicitly** on tab-leave (`DELETE /sessions/<id>/libassist`), never by
+        // the sweep, and has no TTL (an interactive REPL must not be yanked from a
+        // user who stepped away — same reasoning as the shell/manager arms). Always
+        // keep: a reopen re-attaches this same session, a leave kills it. `info` is
+        // always `None` for this variant (the sweep caller does no run lookup).
+        ParsedSession::LibAssist { .. } => SweepVerdict::Keep,
         ParsedSession::NodeRun {
             run_id,
             node_id,
@@ -1549,11 +1662,26 @@ mod tests {
     }
 
     #[test]
+    fn parse_libassist_session() {
+        // #302: `pdo-libassist-<pipeline_id>` parses to a LibAssist variant. The
+        // pipeline id is a file-stem slug (no `-iter-` suffix, may contain dashes).
+        let name = "pdo-libassist-feature-with-review";
+        let parsed = parse_session_name(name).unwrap();
+        assert_eq!(
+            parsed,
+            ParsedSession::LibAssist {
+                pipeline_id: "feature-with-review".into(),
+            }
+        );
+    }
+
+    #[test]
     fn parse_garbage_returns_none() {
         assert!(parse_session_name("foo-bar").is_none());
         assert!(parse_session_name("pdo-").is_none());
         assert!(parse_session_name("pdo-mgr-").is_none());
         assert!(parse_session_name("pdo-shell-").is_none());
+        assert!(parse_session_name("pdo-libassist-").is_none());
     }
 
     /// Formatters and parser pinned as a **round trip**, not independently
@@ -1583,6 +1711,14 @@ mod tests {
             parse_session_name(&shell_session_name(run_id)),
             Some(ParsedSession::Shell {
                 run_id: run_id.into()
+            })
+        );
+        // #302: the libassist formatter must round-trip too — else the sweep reaps
+        // it as unrecognised within 60 s (the exact failure this test exists for).
+        assert_eq!(
+            parse_session_name(&libassist_session_name("feature-with-review")),
+            Some(ParsedSession::LibAssist {
+                pipeline_id: "feature-with-review".into()
             })
         );
     }
@@ -1691,6 +1827,34 @@ mod tests {
         assert_eq!(
             verdict(&[input(&shell_session_name(RID), None)], now),
             SweepVerdict::Kill(KillReason::ShellRunAbsent { run_id: RID.into() })
+        );
+    }
+
+    /// #302 / ADR-0048: a library assistant is **always kept** by the sweep,
+    /// whatever `info` says. It owns no Run, so there is no absence/archived/TTL
+    /// verdict that could apply — it is reaped only by the explicit
+    /// `DELETE /sessions/<id>/libassist` on tab-leave. Pinned as hard as a kill so
+    /// a future refactor cannot silently start reaping it (the exact bug the
+    /// `libassist-` parse branch exists to prevent).
+    #[test]
+    fn library_assistant_is_always_kept() {
+        let now = at("2026-07-31T15:32:19Z");
+        let name = libassist_session_name("feature-with-review");
+        // No owner (info = None) — the shell/manager arms would kill on this.
+        assert_eq!(verdict(&[input(&name, None)], now), SweepVerdict::Keep);
+        // Even a (nonsensical) archived owner does not flip it.
+        assert_eq!(
+            verdict(
+                &[input(
+                    &name,
+                    Some(NodeRunInfo {
+                        completed_at: Some(at("2000-01-01T00:00:00Z")),
+                        is_archived: true,
+                    })
+                )],
+                now
+            ),
+            SweepVerdict::Keep
         );
     }
 

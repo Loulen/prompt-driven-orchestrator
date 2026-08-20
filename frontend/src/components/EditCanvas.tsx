@@ -247,10 +247,14 @@ interface EditCanvasProps {
   infoOpen?: boolean;
   onToggleInfo?: () => void;
   onCloseInfo?: () => void;
+  // #302 / ADR-0048: open the info panel on the Assistant tab, and whether it is
+  // the panel's current view (Bot pressed state). Wired only for template canvases.
+  assistantActive?: boolean;
+  onOpenAssistant?: () => void;
   runState?: RunState | null;
 }
 
-function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, onLibraryPipelinesChanged, infoOpen, onToggleInfo, onCloseInfo, runState }: EditCanvasProps) {
+function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, onLibraryPipelinesChanged, infoOpen, onToggleInfo, onCloseInfo, assistantActive, onOpenAssistant, runState }: EditCanvasProps) {
   const openTabs = useEditStore((s) => s.openTabs);
   const activeTabId = useEditStore((s) => s.activeTabId);
   const setSelection = useEditStore((s) => s.setSelection);
@@ -691,6 +695,12 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
         getDropPosition={computeDropPosition}
         infoOpen={infoOpen}
         onToggleInfo={onToggleInfo}
+        // #302 / ADR-0048: the Assistant is a template-only affordance — a
+        // library template tab has no `runId`. On a run canvas the Bot is absent;
+        // the Manager tab is reached via `(i)` there.
+        assistantAvailable={tab != null && tab.runId == null}
+        assistantActive={assistantActive}
+        onOpenAssistant={onOpenAssistant}
         showRunInfo={showRunInfo}
         runInfoActive={runInfoActive}
         onToggleRunInfo={toggleRunInfo}

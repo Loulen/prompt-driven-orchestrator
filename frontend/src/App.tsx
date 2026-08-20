@@ -241,6 +241,12 @@ export default function App() {
   const isEditingRun = editTab?.scope === "run";
   const hasEditTab = editTab != null;
 
+  // #302 / ADR-0048: the Assistant authors a library *template*, so it targets the
+  // active edit tab's pipeline id + scope — never a run. `null` on a run tab hides
+  // the Assistant tab (the Manager tab covers a run instead).
+  const assistantId = editTab && !isEditingRun ? editTab.id : null;
+  const assistantScope = editTab?.scope;
+
   // #315: an archived run is read-only — its worktree (and `pipeline.yaml`) is
   // gone, so any save would PUT into a 404. `isArchived` tracks the *selected*
   // run (drives the NodeDetailPanel + the archived aside below). The edit
@@ -402,6 +408,16 @@ export default function App() {
 
   const handleCloseInfo = useCallback(() => {
     setInfoPanelOpen(false);
+  }, []);
+
+  // #302 / ADR-0048: the toolbar Bot glyph opens the info panel focused on the
+  // Assistant tab (the library authoring copilot). Same shape as `handleViewYaml`:
+  // set the initial tab, then open. The panel is keyed on `infoPanelInitialTab`,
+  // so this remounts it at the Assistant tab.
+  const handleOpenAssistant = useCallback(() => {
+    setInfoPanelInitialTab("assistant");
+    setInfoPanelScrollToLine(undefined);
+    setInfoPanelOpen(true);
   }, []);
 
   useEffect(() => {
@@ -670,6 +686,8 @@ export default function App() {
                   infoOpen={infoPanelOpen}
                   onToggleInfo={handleToggleInfo}
                   onCloseInfo={handleCloseInfo}
+                  assistantActive={infoPanelOpen && infoPanelInitialTab === "assistant"}
+                  onOpenAssistant={handleOpenAssistant}
                   runState={selectedRun}
                 />
               </div>
@@ -701,6 +719,8 @@ export default function App() {
                 onClose={handleCloseInfo}
                 initialTab={infoPanelInitialTab}
                 scrollToLine={infoPanelScrollToLine}
+                assistantId={assistantId}
+                assistantScope={assistantScope}
               />
             ) : paneOwner === "editTab" ? (
               <>

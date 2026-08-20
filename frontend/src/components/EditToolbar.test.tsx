@@ -219,6 +219,55 @@ describe("EditToolbar", () => {
       for (const b of buttons) expect(b).toHaveAccessibleName(/\S/);
     });
   });
+
+  // #302 / ADR-0048: the "agent" glyph beside `(i)`, shown only on a library
+  // template canvas — the mirror of the run-info toggle above.
+  describe("assistant toggle (#302)", () => {
+    it("is absent on a canvas that is not a template (default)", () => {
+      renderToolbar({ onToggleInfo: vi.fn() });
+      expect(screen.queryByTestId("toolbar-assistant")).toBeNull();
+    });
+
+    it("stays absent when available but no handler is wired", () => {
+      renderToolbar({ assistantAvailable: true });
+      expect(screen.queryByTestId("toolbar-assistant")).toBeNull();
+    });
+
+    it("renders named, unpressed at rest, and opens on click", () => {
+      const onOpenAssistant = vi.fn();
+      renderToolbar({ assistantAvailable: true, onOpenAssistant });
+      const btn = screen.getByTestId("toolbar-assistant");
+      expect(btn).toHaveAccessibleName("Pipeline assistant");
+      expect(btn).toHaveAttribute("aria-pressed", "false");
+      fireEvent.click(btn);
+      expect(onOpenAssistant).toHaveBeenCalledTimes(1);
+    });
+
+    it("reflects the pressed state while the Assistant tab is the panel view", () => {
+      renderToolbar({
+        assistantAvailable: true,
+        onOpenAssistant: vi.fn(),
+        assistantActive: true,
+      });
+      expect(screen.getByTestId("toolbar-assistant")).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+    });
+
+    it("adds exactly one more named button beside Pipeline info", () => {
+      renderToolbar({
+        assistantAvailable: true,
+        onOpenAssistant: vi.fn(),
+        onToggleInfo: vi.fn(),
+      });
+      const buttons = [
+        ...screen.getByTestId("edit-toolbar").querySelectorAll("button"),
+      ];
+      expect(buttons).toHaveLength(8); // 7 core + assistant
+      for (const b of buttons) expect(b).toHaveAccessibleName(/\S/);
+    });
+  });
 });
 
 describe("EditToolbar undo/redo buttons (ADR-0014 / #226)", () => {

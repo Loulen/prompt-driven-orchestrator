@@ -434,7 +434,9 @@ pub(crate) mod pipelines {
         repo_root.join(".pdo").join("library").join("pipelines")
     }
 
-    fn scope_dir(repo_root: &Path, scope: Scope) -> Option<PathBuf> {
+    /// The on-disk pipelines directory for a scope — the cwd a library authoring
+    /// assistant (#302 / ADR-0048) is spawned in, and where `save` writes.
+    pub(crate) fn scope_dir(repo_root: &Path, scope: Scope) -> Option<PathBuf> {
         match scope {
             Scope::Repo => Some(repo_pipelines_dir(repo_root)),
             Scope::User | Scope::Library => user_pipelines_dir(),

@@ -1,7 +1,7 @@
-import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { RunState } from "../types";
+import type { RunState, PipelineDef } from "../types";
 
 // The badge/banner live in the InfoTab header, above DiffSection. Mock the heavy
 // children (network-fetching diff, tmux terminal) so the test stays focused on the
@@ -9,7 +9,20 @@ import type { RunState } from "../types";
 vi.mock("./DiffSection", () => ({ default: () => null }));
 vi.mock("./TmuxTerminal", () => ({ default: () => null }));
 
+// #302 / ADR-0048: the Assistant tab drives create-if-absent / reap-on-leave
+// against the daemon. Mock those two api helpers so the tests can assert the
+// lifecycle without a network or a tmux session.
+const { openLibraryAssistant, closeLibraryAssistant } = vi.hoisted(() => ({
+  openLibraryAssistant: vi.fn(),
+  closeLibraryAssistant: vi.fn(),
+}));
+vi.mock("../api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../api")>();
+  return { ...actual, openLibraryAssistant, closeLibraryAssistant };
+});
+
 import PipelineInfoPanel from "./PipelineInfoPanel";
+import type { TabId } from "./PipelineInfoPanel";
 
 function makeRun(overrides: Partial<RunState> = {}): RunState {
   return {
@@ -100,5 +113,107 @@ describe("PipelineInfoPanel — accessible names (#397)", () => {
     );
     await userEvent.click(screen.getByRole("button", { name: "Close pipeline info" }));
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+// #302 / ADR-0048: the Assistant tab is the mirror of the Manager tab — shown
+// only for a library *template* (no live Run) with a resolvable pipeline id.
+describe("PipelineInfoPanel — Assistant tab (#302)", () => {
+  function makePipeline(overrides: Partial<PipelineDef> = {}): PipelineDef {
+    return {
+      name: "feature-with-review",
+      version: "1.0",
+      variables: {},
+      nodes: [],
+      edges: [],
+      ...overrides,
+    };
+  }
+
+  function renderTemplatePanel(
+    props: {
+      assistantId?: string | null;
+      assistantScope?: string;
+      initialTab?: TabId;
+      run?: RunState | null;
+    } = {},
+  ) {
+    // Honour an explicit `assistantId: null` (a template without a resolvable id)
+    // rather than coalescing it back to the default.
+    const assistantId = "assistantId" in props ? props.assistantId : "feature-with-review";
+    return render(
+      <PipelineInfoPanel
+        run={props.run ?? null}
+        pipeline={makePipeline()}
+        libraryPipelines={[]}
+        onLibraryChanged={() => {}}
+        onClose={() => {}}
+        initialTab={props.initialTab}
+        assistantId={assistantId}
+        assistantScope={props.assistantScope ?? "user"}
+      />,
+    );
+  }
+
+  beforeEach(() => {
+    openLibraryAssistant.mockReset();
+    closeLibraryAssistant.mockReset();
+    openLibraryAssistant.mockResolvedValue({
+      session: "pdo-libassist-feature-with-review",
+      created: true,
+    });
+    closeLibraryAssistant.mockResolvedValue({ ok: true, reaped: true });
+  });
+
+  it("shows the Assistant tab (not Manager) for a library template", () => {
+    renderTemplatePanel();
+    expect(screen.getByTestId("info-tab-assistant")).toBeInTheDocument();
+    // Manager is a run-only tab — absent for a template.
+    expect(screen.queryByTestId("info-tab-manager")).not.toBeInTheDocument();
+  });
+
+  it("hides the Assistant tab on a live run (Manager takes its place)", () => {
+    // Even with an id supplied, the `!run` gate hides the Assistant on a run.
+    renderTemplatePanel({ run: makeRun(), assistantId: "feature-with-review" });
+    expect(screen.queryByTestId("info-tab-assistant")).not.toBeInTheDocument();
+    expect(screen.getByTestId("info-tab-manager")).toBeInTheDocument();
+  });
+
+  it("hides the Assistant tab when no pipeline id is resolvable", () => {
+    renderTemplatePanel({ assistantId: null });
+    expect(screen.queryByTestId("info-tab-assistant")).not.toBeInTheDocument();
+  });
+
+  it("ensures the session on open and reaps it on leave", async () => {
+    const { unmount } = renderTemplatePanel({ initialTab: "assistant" });
+
+    // Create-on-open: mounting the Assistant tab ensures the session.
+    await waitFor(() =>
+      expect(openLibraryAssistant).toHaveBeenCalledWith(
+        "feature-with-review",
+        "user",
+      ),
+    );
+    // The resolved session name surfaces in the tab header.
+    expect(
+      await screen.findByText("pdo-libassist-feature-with-review"),
+    ).toBeInTheDocument();
+
+    // Reap-on-leave: unmounting (tab switch / panel close / pipeline switch all
+    // unmount this subtree) kills the session.
+    unmount();
+    expect(closeLibraryAssistant).toHaveBeenCalledWith("feature-with-review");
+  });
+
+  it("switching to the Assistant tab starts the session", async () => {
+    renderTemplatePanel();
+    expect(openLibraryAssistant).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByTestId("info-tab-assistant"));
+    await waitFor(() =>
+      expect(openLibraryAssistant).toHaveBeenCalledWith(
+        "feature-with-review",
+        "user",
+      ),
+    );
   });
 });

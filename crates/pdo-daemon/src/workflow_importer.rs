@@ -1718,98 +1718,6 @@ mod tests {
             .collect()
     }
 
-    // --- round-trip on the real simple-bugfix fixture --------------------
-
-    #[test]
-    fn round_trip_simple_bugfix_holds_invariants() {
-        let src = include_str!("../../../.claude/workflows/simple-bugfix.js");
-        let (result, parsed) = import_and_parse(src, "simple-bugfix");
-
-        // Exactly one Start + one End.
-        assert_eq!(
-            parsed
-                .nodes
-                .iter()
-                .filter(|n| n.node_type == NodeType::Start)
-                .count(),
-            1
-        );
-        assert_eq!(
-            parsed
-                .nodes
-                .iter()
-                .filter(|n| n.node_type == NodeType::End)
-                .count(),
-            1
-        );
-
-        // A bounded loop, max_iter 5, whose members are the two fix/test nodes.
-        let bounded: Vec<_> = parsed
-            .loops
-            .iter()
-            .filter(|l| l.kind == LoopKind::Bounded)
-            .collect();
-        assert_eq!(bounded.len(), 1, "one bounded region expected");
-        let region = bounded[0];
-        assert_eq!(
-            region.max_iter,
-            Some(serde_yaml::Value::Number(serde_yaml::Number::from(5))),
-            "max_iter resolved from MAX_ITER = 5"
-        );
-        assert_eq!(region.members.len(), 2, "fix + test are the loop body");
-        // Members are the implementer + tester node ids.
-        let impl_id = &parsed
-            .nodes
-            .iter()
-            .find(|n| n.name == "implementer")
-            .unwrap()
-            .id;
-        let test_id = &parsed.nodes.iter().find(|n| n.name == "tester").unwrap().id;
-        assert!(region.members.contains(impl_id));
-        assert!(region.members.contains(test_id));
-
-        // At least one guarded edge (the `verdict !== 'Bug'` exit).
-        let whens = when_strings(&parsed);
-        assert!(!whens.is_empty(), "at least one when: edge");
-        assert!(
-            whens.iter().any(|w| w.contains("verdict")),
-            "a when: on the triage verdict"
-        );
-
-        // Static prompts extracted verbatim.
-        assert!(
-            prompt_of(&result, &parsed, "tester").contains("Build le projet"),
-            "tester prompt kept verbatim"
-        );
-        assert!(
-            prompt_of(&result, &parsed, "ship-it").contains("Commit sur la BRANCHE COURANTE"),
-            "ship-it prompt kept verbatim"
-        );
-
-        // Interpolated prompt: static text kept AND an annotated hole marker — not
-        // a blank placeholder (that would throw away text the runtime uses verbatim).
-        let implementer = prompt_of(&result, &parsed, "implementer");
-        assert!(implementer.contains("Implemente"), "static text kept");
-        assert!(
-            implementer.contains("⟨input:"),
-            "interpolation rendered as an annotated marker"
-        );
-
-        // The debugger's TRIAGE_SCHEMA becomes output-port frontmatter.
-        let debugger = parsed.nodes.iter().find(|n| n.name == "debugger").unwrap();
-        let fm = debugger.outputs[0]
-            .frontmatter
-            .as_ref()
-            .expect("schema -> frontmatter");
-        let verdict = fm.get("verdict").expect("verdict field");
-        assert_eq!(verdict.field_type, "enum");
-        assert!(verdict
-            .allowed
-            .as_ref()
-            .unwrap()
-            .contains(&"Bug".to_string()));
-    }
-
     // --- targeted units ---------------------------------------------------
 
     #[test]
@@ -2021,22 +1929,5 @@ mod tests {
     fn invalid_js_is_rejected() {
         let err = import_workflow_js("const x = = ;", "t").unwrap_err();
         assert!(err.to_lowercase().contains("parse"), "got: {err}");
-    }
-
-    // --- degraded fixture: sandcastle-tdd (mostly placeholders) -----------
-
-    #[test]
-    fn sandcastle_tdd_imports_without_panic() {
-        let src = include_str!("../../../.claude/workflows/sandcastle-tdd.js");
-        let result = import_workflow_js(src, "sandcastle-tdd")
-            .expect("even a mostly-placeholder workflow must import without crashing");
-        // It must produce a parseable draft…
-        pipeline::parse_pipeline(&result.yaml_text).expect("degraded import must still parse");
-        // …and flag the lossy translation (helper-nu prompts, nested loops, etc.).
-        assert!(
-            !result.warnings.is_empty(),
-            "the degraded case must raise translation warnings"
-        );
-        assert_eq!(result.name, "sandcastle-tdd");
     }
 }

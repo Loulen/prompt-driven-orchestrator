@@ -13,4 +13,4 @@ Single-context repo: one `CONTEXT.md` at the repo root (business glossary), deci
 
 ## Authoring rules (for grilling sessions)
 
-The formats live in the skill: [`CONTEXT-FORMAT.md`](../../.claude/skills/grill-with-docs/CONTEXT-FORMAT.md) (glossary-not-spec, no changelog, prune as you go) and [`ADR-FORMAT.md`](../../.claude/skills/grill-with-docs/ADR-FORMAT.md) (what stays out, how to amend, size smell). One-line version: CONTEXT.md = vocabulary + intent (pointer to the ADR for the contract) · ADR = decision + why + the measurements that killed the alternatives · implementation plans = the issue/PR · history = git.
+The formats live in the `domain-modeling` skill: [`CONTEXT-FORMAT.md`](../../.agents/skills/domain-modeling/CONTEXT-FORMAT.md) (glossary-not-spec, no changelog, prune as you go) and [`ADR-FORMAT.md`](../../.agents/skills/domain-modeling/ADR-FORMAT.md) (what stays out, how to amend, size smell). One-line version: CONTEXT.md = vocabulary + intent (pointer to the ADR for the contract) · ADR = decision + why + the measurements that killed the alternatives · implementation plans = the issue/PR · history = git.

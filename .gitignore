@@ -47,6 +47,7 @@ design-prompts/
 # Throwaway UI prototypes — local-only dev scaffolding, wired via the
 # main.tsx prototype gate (/?prototype=…). Never shared.
 frontend/src/prototype/
+frontend/design/*
 
 # Reproduction / debugging screenshots dropped at the repo root
 /*.png

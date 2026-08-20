@@ -30,7 +30,7 @@ use crate::worktree_ops::worktree_dir_for_run;
 use crate::{
     append_event, check_output_validation_with_retry, cleanup_run, completion_head_gate,
     completion_refusal, create_run_core, effective_repo_root, event_log, force_spawn_node,
-    load_events, loop_region, mark_sandbox_prep_ready, pipeline, reap_node_session,
+    load_events, load_projected, loop_region, mark_sandbox_prep_ready, pipeline, reap_node_session,
     reload_run_state, resolve_completed_frontmatter, resolve_pipeline_path,
     resolve_run_pipeline_path, resolve_run_variables, resolve_source_frontmatter, restart_verdict,
     retry_waiting_nodes, run_advance, run_is_forgotten, run_scoped_pipeline_path, sandbox_run,
@@ -322,58 +322,6 @@ pub(crate) async fn run_command(
 /// the `Response` is lossless by construction: the wire contract cannot see
 /// this refactor. See the #236 addendum to ADR-0009.
 ///
-/// Load a Run's events and project its state, or hand back the `Response` the
-/// caller must return: `500 text/plain` on a DB failure, `404 text/plain` when
-/// the projection is `None`.
-///
-/// `None` means one of two things, both "there is no such Run": an empty log,
-/// or a log carrying no `RunStarted` — an invalid fragment, e.g. an event
-/// appended after a forget (`event_log.rs:986`, #328). Either way `404` is the
-/// right answer; a Run that exists always has its `RunStarted` first.
-///
-/// `Box<Response>` rather than `Response`: `size_of::<Response>()` is 128, which
-/// is exactly the `clippy::result_large_err` threshold, and CI runs
-/// `-D warnings`. There is not one `Result<_, Response>` in this crate — see
-/// the same note on `completion_head_gate` in `lib.rs`.
-///
-/// **Opt-in per arm, never hoisted to the top of `dispatch`.** Four call sites
-/// deliberately do NOT route here, and folding them in would change behaviour
-/// silently:
-///   * `mark_node_done` and the `restart_node` guard probe both want an
-///     `Option<RunState>`, because their guard maps `None -> Allow` on purpose;
-///   * `inject_artifact` degrades to `state.repo_root` and never answers 4xx or
-///     5xx — it is the one arm designed to work BEFORE the Run exists;
-///   * the two `reload_run_state` sandbox probes treat `Err` and `None` alike,
-///     as "no container to kill".
-///
-/// A global preamble would flip `inject_artifact`, `rename_run`, `kill_node`
-/// and `mark_node_done` from `200`-with-side-effects to `404`-with-none, and
-/// turn `start_node`'s `404` from JSON into text — six regressions no test
-/// outside this module's characterization net would catch.
-///
-/// Do NOT absorb the 410 tombstone check either: ADR-0024 §3 places that gate
-/// at exactly two boundaries, and every GET reaching here would silently go
-/// from `404` to `410`.
-async fn load_projected(
-    state: &AppState,
-    run_id: &str,
-) -> Result<(Vec<event_log::Event>, event_log::RunState), Box<Response>> {
-    let events = match load_events(&state.db, run_id).await {
-        Ok(e) => e,
-        Err(e) => {
-            return Err(Box::new(
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response(),
-            ))
-        }
-    };
-    match event_log::project(&events) {
-        Some(run_state) => Ok((events, run_state)),
-        None => Err(Box::new(
-            (StatusCode::NOT_FOUND, "run not found").into_response(),
-        )),
-    }
-}
-
 /// `dispatch` is a DRIVER, not a leaf primitive: it reaches twenty-three root
 /// items across five subsystems (sqlite, tmux, docker, worktrees, Run
 /// creation). The house idiom for a driver is the whole `AppState`

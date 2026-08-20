@@ -6674,6 +6674,70 @@ async fn reload_run_state(
     reload_run_state_with(&state.db, run_id).await
 }
 
+/// Load a Run's events and project its state, or hand back the `Response` the
+/// caller must return: `500 text/plain` on a DB failure, `404 text/plain` when
+/// the projection is `None`.
+///
+/// The 404-preserving half of the pair it sits next to. `reload_run_state_with`
+/// (just above) collapses both failure modes into an `Option` — logging the
+/// `Err` and dropping the Err/None distinction — because its callers only ask
+/// "is there state to advance?". This one keeps `Err` and `None` apart and maps
+/// each to its own status, because its callers are HTTP surfaces that owe the
+/// client a code. Do NOT rewrite either as a wrapper of the other: the merge
+/// would throw away exactly the information each keeps for its own callers.
+///
+/// `None` means one of two things, both "there is no such Run": an empty log,
+/// or a log carrying no `RunStarted` — an invalid fragment, e.g. an event
+/// appended after a forget (`event_log.rs`, #328). Either way `404` is the
+/// right answer; a Run that exists always has its `RunStarted` first.
+///
+/// `Box<Response>` rather than `Response`: `size_of::<Response>()` is 128, which
+/// is exactly the `clippy::result_large_err` threshold, and CI runs
+/// `-D warnings`. There is not one `Result<_, Response>` in this crate — see
+/// the same note on `completion_head_gate`.
+///
+/// **Opt-in per call site, never a global preamble.** The load-and-project
+/// blocks that deliberately do NOT route here — folding them in would change a
+/// wire contract silently:
+///   * in `run_command.rs`: `mark_node_done` and the `restart_node` guard probe
+///     both want the raw `Option<RunState>`, because their guard maps
+///     `None -> Allow` on purpose; `inject_artifact` degrades to
+///     `state.repo_root` and never answers 4xx/5xx (the one arm designed to work
+///     BEFORE the Run exists); the two `reload_run_state` sandbox probes treat
+///     `Err` and `None` alike, as "no container to kill";
+///   * here in `lib.rs`, the quasi-twins that answer a DIFFERENT wire shape: the
+///     `404`-in-JSON surfaces (`save_run_pipeline`, `force_spawn_node`,
+///     `node_stop`, `node_retry`, `node_retry_preview`); `node_retry`'s second
+///     projection (`None -> 500 "projection failed after invalidation"`);
+///     `get_run_pipeline` (`None` tolerated, different 404 message);
+///     `get_run_events` (never projects — an unknown run is `200 []`); `get_run`
+///     and `run_diff` (same contract, different syntactic shape); and the
+///     `list_*` / `delete_pipeline` filter loops that project in bulk.
+///
+/// Do NOT absorb the `410` tombstone check either: ADR-0024 §3 places that gate
+/// at exactly three boundaries — `run_command`, `node_done`, and
+/// `PATCH /runs/{id}/repos` (#465) — and folding it in would silently flip every
+/// GET reaching here from `404` to `410`.
+async fn load_projected(
+    state: &AppState,
+    run_id: &str,
+) -> Result<(Vec<event_log::Event>, event_log::RunState), Box<Response>> {
+    let events = match load_events(&state.db, run_id).await {
+        Ok(e) => e,
+        Err(e) => {
+            return Err(Box::new(
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response(),
+            ))
+        }
+    };
+    match event_log::project(&events) {
+        Some(run_state) => Ok((events, run_state)),
+        None => Err(Box::new(
+            (StatusCode::NOT_FOUND, "run not found").into_response(),
+        )),
+    }
+}
+
 /// Thin shim over the single-pass advancement tick now owned by
 /// [`run_advance::advance_run`] (#235). Kept under its original name so the many
 /// call sites (node-done, mark-node-done, pipeline-modification, run start) need
@@ -10174,16 +10238,9 @@ async fn node_diff(
     State(state): State<Arc<AppState>>,
     AxumPath((run_id, node_id)): AxumPath<(String, String)>,
 ) -> Response {
-    let events = match load_events(&state.db, &run_id).await {
-        Ok(e) => e,
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
-        }
-    };
-
-    let run_state = match event_log::project(&events) {
-        Some(s) => s,
-        None => return (StatusCode::NOT_FOUND, "run not found").into_response(),
+    let (_, run_state) = match load_projected(&state, &run_id).await {
+        Ok(t) => t,
+        Err(resp) => return *resp,
     };
 
     let node = match run_state.nodes.get(&node_id) {
@@ -11063,18 +11120,9 @@ async fn node_pane(
 ) -> Response {
     let iter = query.iter;
 
-    let events = match load_events(&state.db, &run_id).await {
-        Ok(e) => e,
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
-        }
-    };
-
-    let run_state = match event_log::project(&events) {
-        Some(s) => s,
-        None => {
-            return (StatusCode::NOT_FOUND, "run not found").into_response();
-        }
+    let (events, run_state) = match load_projected(&state, &run_id).await {
+        Ok(t) => t,
+        Err(resp) => return *resp,
     };
 
     let node_state = match run_state.nodes.get(&node_id) {
@@ -11469,18 +11517,9 @@ async fn node_prompt(
 ) -> Response {
     let iter = query.iter;
 
-    let events = match load_events(&state.db, &run_id).await {
-        Ok(e) => e,
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
-        }
-    };
-
-    let run_state = match event_log::project(&events) {
-        Some(s) => s,
-        None => {
-            return (StatusCode::NOT_FOUND, "run not found").into_response();
-        }
+    let (_, run_state) = match load_projected(&state, &run_id).await {
+        Ok(t) => t,
+        Err(resp) => return *resp,
     };
 
     if !run_state.nodes.contains_key(&node_id) {
@@ -11517,18 +11556,9 @@ async fn node_io(
 ) -> Response {
     let iter = query.iter;
 
-    let events = match load_events(&state.db, &run_id).await {
-        Ok(e) => e,
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
-        }
-    };
-
-    let run_state = match event_log::project(&events) {
-        Some(s) => s,
-        None => {
-            return (StatusCode::NOT_FOUND, "run not found").into_response();
-        }
+    let (_, run_state) = match load_projected(&state, &run_id).await {
+        Ok(t) => t,
+        Err(resp) => return *resp,
     };
 
     if !run_state.nodes.contains_key(&node_id)
@@ -11577,18 +11607,9 @@ async fn artifact(
     AxumPath(run_id): AxumPath<String>,
     Query(query): Query<ArtifactQuery>,
 ) -> Response {
-    let events = match load_events(&state.db, &run_id).await {
-        Ok(e) => e,
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
-        }
-    };
-
-    let run_state = match event_log::project(&events) {
-        Some(s) => s,
-        None => {
-            return (StatusCode::NOT_FOUND, "run not found").into_response();
-        }
+    let (_, run_state) = match load_projected(&state, &run_id).await {
+        Ok(t) => t,
+        Err(resp) => return *resp,
     };
 
     // #315: serve from the durable store for an archived run (worktree gone),
@@ -12686,18 +12707,9 @@ async fn node_skip(
 ) -> Response {
     let iter = req.iter.unwrap_or(1);
 
-    let events = match load_events(&state.db, &run_id).await {
-        Ok(e) => e,
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
-        }
-    };
-
-    let pre_run_state = match event_log::project(&events) {
-        Some(s) => s,
-        None => {
-            return (StatusCode::NOT_FOUND, "run not found").into_response();
-        }
+    let (_, pre_run_state) = match load_projected(&state, &run_id).await {
+        Ok(t) => t,
+        Err(resp) => return *resp,
     };
 
     // Same guard as a completion (#212, #354): the skip terminalizes the node as
@@ -13523,17 +13535,9 @@ async fn open_run_shell(
     State(state): State<Arc<AppState>>,
     AxumPath(run_id): AxumPath<String>,
 ) -> Response {
-    let events = match load_events(&state.db, &run_id).await {
-        Ok(e) => e,
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
-        }
-    };
-    let run_state = match event_log::project(&events) {
-        Some(s) => s,
-        None => {
-            return (StatusCode::NOT_FOUND, "run not found").into_response();
-        }
+    let (_, run_state) = match load_projected(&state, &run_id).await {
+        Ok(t) => t,
+        Err(resp) => return *resp,
     };
 
     // Server-side eligibility gate = "Reapable run" (terminal ∧ non-archived ∧
@@ -13927,18 +13931,9 @@ fn spawn_terminal_attach(terminal: &str, socket: &str, session_name: &str) -> Re
 }
 
 async fn cleanup_run(state: &AppState, run_id: &str) -> Response {
-    let events = match load_events(&state.db, run_id).await {
-        Ok(e) => e,
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
-        }
-    };
-
-    let run_state = match event_log::project(&events) {
-        Some(s) => s,
-        None => {
-            return (StatusCode::NOT_FOUND, "run not found").into_response();
-        }
+    let (_, run_state) = match load_projected(state, run_id).await {
+        Ok(t) => t,
+        Err(resp) => return *resp,
     };
 
     if run_state.status == event_log::RunStatus::Archived {
@@ -14128,18 +14123,9 @@ async fn forget_run(
     State(state): State<Arc<AppState>>,
     AxumPath(run_id): AxumPath<String>,
 ) -> Response {
-    let events = match load_events(&state.db, &run_id).await {
-        Ok(e) => e,
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
-        }
-    };
-
-    let run_state = match event_log::project(&events) {
-        Some(s) => s,
-        None => {
-            return (StatusCode::NOT_FOUND, "run not found").into_response();
-        }
+    let (_, run_state) = match load_projected(&state, &run_id).await {
+        Ok(t) => t,
+        Err(resp) => return *resp,
     };
 
     if run_state.status != event_log::RunStatus::Archived {
@@ -17189,6 +17175,29 @@ mod tests {
             run_state.nodes["worker"].status,
             event_log::NodeStatus::Failed
         );
+    }
+
+    #[tokio::test]
+    async fn node_skip_returns_404_for_nonexistent_run() {
+        // #493: pin the 404 BEFORE routing `node_skip` through `load_projected`.
+        // The body is mandatory (`NodeSkipRequest.reason` has no default): without
+        // it the response would be a 422 Json rejection, not the 404 under test.
+        let state = test_state().await;
+        let app = build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/runs/no-such-run/nodes/selector/skip")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"reason": "no eligible issue"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

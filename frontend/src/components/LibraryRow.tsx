@@ -1,5 +1,7 @@
+import type { MouseEvent } from "react";
 import { Copy, Star, Trash2 } from "lucide-react";
 import type { PipelineScope } from "../types";
+import SelectControl from "./SelectControl";
 
 const SCOPE_BADGE: Record<PipelineScope, { label: string; cls: string }> = {
   repo: { label: "repo", cls: "border-acc text-acc" },
@@ -32,6 +34,15 @@ interface Props {
   onDelete: () => void;
   deleteTitle: string;
   testId?: string;
+  /**
+   * Multi-select (#577). When `onToggleSelect` is provided the row grows a
+   * leading select control (a hollow ring on hover, a green check when
+   * `checked`) and a `checked` row gets the green left-bar + acc tint — the
+   * "selected ≠ open" second channel. Absent ⇒ no select affordance (rows in
+   * tests / non-selectable contexts stay byte-for-byte as before).
+   */
+  checked?: boolean;
+  onToggleSelect?: (e: MouseEvent) => void;
 }
 
 /**
@@ -54,11 +65,20 @@ export default function LibraryRow({
   onDelete,
   deleteTitle,
   testId,
+  checked = false,
+  onToggleSelect,
 }: Props) {
   const badge = SCOPE_BADGE[scope];
 
   const body = (
     <>
+      {onToggleSelect && (
+        <SelectControl
+          selected={checked}
+          label={checked ? `Deselect ${name}` : `Select ${name}`}
+          onSelect={onToggleSelect}
+        />
+      )}
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
           {starred && (
@@ -118,8 +138,12 @@ export default function LibraryRow({
     return (
       <button
         onClick={onOpen}
-        className={`group flex w-full cursor-pointer items-center gap-2 border-b border-line-soft px-3 py-2 text-left transition-colors ${
-          selected ? "bg-bg-3 text-fg" : "text-fg-2 hover:bg-bg-3/50"
+        className={`group flex w-full cursor-pointer items-center gap-2 border-b border-l-2 border-line-soft px-3 py-2 text-left transition-colors ${
+          checked
+            ? "border-l-acc bg-acc-bg text-fg"
+            : selected
+              ? "border-l-transparent bg-bg-3 text-fg"
+              : "border-l-transparent text-fg-2 hover:bg-bg-3/50"
         }`}
         style={{ fontSize: "11.5px" }}
         data-testid={testId}
@@ -131,7 +155,9 @@ export default function LibraryRow({
 
   return (
     <div
-      className="group flex w-full items-center gap-2 border-b border-line-soft px-3 py-2 text-left text-fg-2 transition-colors hover:bg-bg-3/50"
+      className={`group flex w-full items-center gap-2 border-b border-l-2 border-line-soft px-3 py-2 text-left text-fg-2 transition-colors ${
+        checked ? "border-l-acc bg-acc-bg" : "border-l-transparent hover:bg-bg-3/50"
+      }`}
       style={{ fontSize: "11.5px" }}
       data-testid={testId}
     >

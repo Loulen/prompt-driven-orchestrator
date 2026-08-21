@@ -1,11 +1,17 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { AlertCircle, PauseCircle, Pencil, Play, Plus, Power, Trash2, Zap } from "lucide-react";
 import type { Trigger, Project } from "../types";
 import { deleteTrigger, updateTrigger } from "../api";
 import { humanizeCron } from "../cronPresets";
 import { groupByProject, repoGroupLabel, type ProjectRef } from "../lib/groupByRepo";
 import { projectLookup } from "../lib/projectLookup";
+import { useSelectionStore } from "../stores/selectionStore";
+import { handleSelectionKeydown } from "../lib/selectionKeys";
+import { type BulkItem, type BulkOutcome } from "../lib/bulk";
 import ProjectEditModal from "./ProjectEditModal";
+import SelectControl from "./SelectControl";
+import BulkActionBar from "./BulkActionBar";
+import BulkActionModal from "./BulkActionModal";
 
 interface Props {
   triggers: Trigger[];
@@ -47,11 +53,31 @@ function outcomeDot(outcome: string | null | undefined): string {
   }
 }
 
+/** The `border-*` sibling of {@link outcomeDot} — the dot "goes hollow" in its
+ *  own colour on hover (#577). */
+function outcomeRing(outcome: string | null | undefined): string {
+  switch (outcome) {
+    case "fired":
+      return "border-st-done";
+    case "error":
+      return "border-st-failed";
+    case "skipped-overlap":
+    case "guard-exit-nonzero":
+      return "border-st-paused";
+    case "guard-error":
+      return "border-st-blocked";
+    default:
+      return "border-st-archived";
+  }
+}
+
 function lastOutcomeTooltip(t: Trigger): string {
   if (!t.last_outcome) return "never fired";
   const when = t.last_fired_at ?? "—";
   return `last run: ${when}, result: ${t.last_outcome}`;
 }
+
+type TriggerBulkKind = "enable" | "disable" | "delete";
 
 export default function TriggersListPanel({
   triggers,
@@ -72,6 +98,18 @@ export default function TriggersListPanel({
     name: string;
     memberPaths: string[];
   } | null>(null);
+
+  // #577 — multi-select state lives in the shared per-tab store; a pending bulk
+  // action is local (drives the confirm/progress modal).
+  const selectedIds = useSelectionStore((s) => s.triggers);
+  const toggle = useSelectionStore((s) => s.toggle);
+  const selectRange = useSelectionStore((s) => s.selectRange);
+  const selectVisible = useSelectionStore((s) => s.selectVisible);
+  const selectGroup = useSelectionStore((s) => s.selectGroup);
+  const deselect = useSelectionStore((s) => s.deselect);
+  const clearSel = useSelectionStore((s) => s.clear);
+  const selSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const [pending, setPending] = useState<TriggerBulkKind | null>(null);
 
   async function handleDelete(triggerId: string) {
     try {
@@ -98,24 +136,58 @@ export default function TriggersListPanel({
     .map((t) => t.target_repo)
     .filter((r): r is string => !!r);
 
+  // #552 — verbatim `path → Projet` lookup and the candidate repos the pencil can
+  // attach (the distinct effective repos across the Triggers list).
+  const projectOf = useMemo<(path: string) => ProjectRef | null>(
+    () => projectLookup(projects),
+    [projects],
+  );
+  const availableRepos = useMemo(() => {
+    const set = new Set<string>();
+    for (const t of triggers) if (t.effective_repo) set.add(t.effective_repo);
+    return [...set];
+  }, [triggers]);
+
+  // Group the Triggers list by Projet (#552), falling back to the #258 per-path
+  // grouping when nothing is named; `null` ⇒ the flat list.
+  const triggerGroups = groupByProject(triggers, (t) => t.effective_repo, projectOf);
+
+  // Visible order (post-grouping) — the basis for shift-range and select-all.
+  const orderedIds =
+    triggerGroups === null
+      ? triggers.map((t) => t.id)
+      : triggerGroups.flatMap((g) => g.items.map((t) => t.id));
+
   // One trigger row, rendered identically flat or grouped by repo (#258).
   function renderTriggerRow(t: Trigger) {
     const isSelected = t.id === selectedTriggerId;
+    const rowSelected = selSet.has(t.id);
     const dot = outcomeDot(t.last_outcome);
     return (
       <button
         key={t.id}
         onClick={() => onSelectTrigger(t.id)}
-        className={`group flex w-full cursor-pointer items-center gap-2 border-b border-line-soft px-3 py-2 text-left transition-colors ${
-          isSelected ? "bg-bg-3 text-fg" : "text-fg-2 hover:bg-bg-3/50"
+        className={`group flex w-full cursor-pointer items-center gap-2 border-b border-l-2 border-line-soft px-3 py-2 text-left transition-colors ${
+          rowSelected
+            ? "border-l-acc bg-acc-bg text-fg"
+            : isSelected
+              ? "border-l-transparent bg-bg-3 text-fg"
+              : "border-l-transparent text-fg-2 hover:bg-bg-3/50"
         } ${t.enabled ? "" : "opacity-60"}`}
         style={{ fontSize: "11.5px" }}
         data-testid="trigger-row"
       >
-        <span
-          className={`h-2 w-2 shrink-0 rounded-full ${dot}`}
-          title={lastOutcomeTooltip(t)}
-          data-testid="trigger-status-dot"
+        <SelectControl
+          selected={rowSelected}
+          dotClass={dot}
+          ringClass={outcomeRing(t.last_outcome)}
+          dotTitle={lastOutcomeTooltip(t)}
+          dotTestId="trigger-status-dot"
+          label={rowSelected ? `Deselect ${t.name}` : `Select ${t.name}`}
+          onSelect={(e) => {
+            if (e.shiftKey) selectRange("triggers", t.id, orderedIds);
+            else toggle("triggers", t.id);
+          }}
         />
         <div className="min-w-0 flex-1">
           <div className="truncate font-medium">{t.name}</div>
@@ -207,22 +279,6 @@ export default function TriggersListPanel({
     );
   }
 
-  // #552 — verbatim `path → Projet` lookup and the candidate repos the pencil can
-  // attach (the distinct effective repos across the Triggers list).
-  const projectOf = useMemo<(path: string) => ProjectRef | null>(
-    () => projectLookup(projects),
-    [projects],
-  );
-  const availableRepos = useMemo(() => {
-    const set = new Set<string>();
-    for (const t of triggers) if (t.effective_repo) set.add(t.effective_repo);
-    return [...set];
-  }, [triggers]);
-
-  // Group the Triggers list by Projet (#552), falling back to the #258 per-path
-  // grouping when nothing is named; `null` ⇒ the flat list.
-  const triggerGroups = groupByProject(triggers, (t) => t.effective_repo, projectOf);
-
   const openProjectEditor = (group: {
     kind: "project" | "path";
     key: string;
@@ -245,6 +301,37 @@ export default function TriggersListPanel({
       });
     }
   };
+
+  // The group-header "select all in this repo" control (#577).
+  function renderGroupSelectAll(group: { items: Trigger[]; label: string }) {
+    const groupIds = group.items.map((t) => t.id);
+    const groupSelected = groupIds.length > 0 && groupIds.every((id) => selSet.has(id));
+    return (
+      <SelectControl
+        selected={groupSelected}
+        label={`Select all in ${group.label}`}
+        onSelect={() => selectGroup("triggers", groupIds)}
+        testId="trigger-group-select-all"
+      />
+    );
+  }
+
+  // #577 — bulk-action wiring. Each action targets the subset of the selection it
+  // is valid for; the bar disables an action whose subset is empty.
+  const selectedTriggers = triggers.filter((t) => selSet.has(t.id));
+  const asItem = (t: Trigger): BulkItem => ({ id: t.id, label: t.name });
+  const enableItems = selectedTriggers.filter((t) => !t.enabled).map(asItem);
+  const disableItems = selectedTriggers.filter((t) => t.enabled).map(asItem);
+  const deleteItems = selectedTriggers.map(asItem);
+
+  const handleSettled = useCallback(
+    (o: BulkOutcome) => {
+      deselect("triggers", o.succeeded.map((r) => r.id));
+      onTriggersChanged();
+    },
+    [deselect, onTriggersChanged],
+  );
+  const closeBulk = () => setPending(null);
 
   return (
     <div className="flex h-full flex-col" data-testid="triggers-list-panel">
@@ -327,7 +414,22 @@ export default function TriggersListPanel({
           </button>
         </div>
       ) : (
-        <div className="flex-1 overflow-y-auto">
+        <div
+          className="flex-1 overflow-y-auto outline-none"
+          tabIndex={-1}
+          onKeyDown={(e) =>
+            handleSelectionKeydown(e, {
+              tab: "triggers",
+              visibleIds: orderedIds,
+              hasSelection: selectedIds.length > 0,
+              selectVisible,
+              clear: clearSel,
+              onBulkDelete: () => {
+                if (selectedIds.length > 0) setPending("delete");
+              },
+            })
+          }
+        >
           {triggerGroups === null
             ? triggers.map(renderTriggerRow)
             : triggerGroups.map((group) => (
@@ -337,10 +439,11 @@ export default function TriggersListPanel({
                   data-project={group.kind === "project" ? "true" : "false"}
                 >
                   <div
-                    className="group/hdr flex h-[22px] shrink-0 items-center gap-1 border-b border-line-soft bg-bg-3/40 px-3 font-medium text-fg-3"
+                    className="group group/hdr flex h-[22px] shrink-0 items-center gap-1 border-b border-line-soft bg-bg-3/40 px-3 font-medium text-fg-3"
                     style={{ fontSize: "10px" }}
                     title={group.title}
                   >
+                    {renderGroupSelectAll(group)}
                     <span className="truncate" data-testid="trigger-repo-label">
                       {group.label}
                     </span>
@@ -359,6 +462,77 @@ export default function TriggersListPanel({
                 </div>
               ))}
         </div>
+      )}
+
+      {/* #577 — floating bulk-action bar for the Triggers tab. */}
+      {selectedIds.length > 0 && (
+        <BulkActionBar
+          count={selectedIds.length}
+          actions={[
+            {
+              key: "enable",
+              label: "Enable",
+              icon: <Power size={13} />,
+              disabled: enableItems.length === 0,
+              onClick: () => setPending("enable"),
+            },
+            {
+              key: "disable",
+              label: "Disable",
+              icon: <Power size={13} />,
+              disabled: disableItems.length === 0,
+              onClick: () => setPending("disable"),
+            },
+            {
+              key: "delete",
+              label: "Delete",
+              icon: <Trash2 size={13} />,
+              destructive: true,
+              onClick: () => setPending("delete"),
+            },
+          ]}
+          onClear={() => clearSel("triggers")}
+        />
+      )}
+
+      {pending === "enable" && (
+        <BulkActionModal
+          skipConfirm
+          runningLabel="Enabling"
+          title=""
+          description=""
+          confirmLabel="Enable"
+          items={enableItems}
+          run={(id) => updateTrigger(id, { enabled: true }).then(() => {})}
+          onClose={closeBulk}
+          onSettled={handleSettled}
+        />
+      )}
+      {pending === "disable" && (
+        <BulkActionModal
+          skipConfirm
+          runningLabel="Disabling"
+          title=""
+          description=""
+          confirmLabel="Disable"
+          items={disableItems}
+          run={(id) => updateTrigger(id, { enabled: false }).then(() => {})}
+          onClose={closeBulk}
+          onSettled={handleSettled}
+        />
+      )}
+      {pending === "delete" && (
+        <BulkActionModal
+          destructive
+          runningLabel="Deleting"
+          title={`Delete ${deleteItems.length} trigger${deleteItems.length === 1 ? "" : "s"}?`}
+          description="This permanently deletes the selected triggers and their schedules. This can't be undone."
+          confirmLabel="Delete"
+          items={deleteItems}
+          run={(id) => deleteTrigger(id)}
+          onClose={closeBulk}
+          onSettled={handleSettled}
+        />
       )}
 
       {projectEditor && (

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, within } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import TriggersListPanel from "./TriggersListPanel";
 import type { Trigger } from "../types";
 
@@ -239,5 +239,43 @@ describe("TriggersListPanel global pause (#348)", () => {
       within(row).queryByTestId("triggers-pause-switch"),
     ).not.toBeInTheDocument();
     expect(container).toBeTruthy();
+  });
+});
+
+// #577 — multi-select + bulk actions on the Triggers list.
+describe("TriggersListPanel multi-select (#577)", () => {
+  it("reveals the bar and bulk-deletes the selected triggers on confirm", async () => {
+    renderPanel([trigger({ id: "t1", name: "A" }), trigger({ id: "t2", name: "B" })]);
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select A" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select B" }));
+    expect(screen.getByTestId("bulk-count")).toHaveTextContent("2 selected");
+
+    fireEvent.click(screen.getByTestId("bulk-action-delete"));
+    expect(screen.getByText("Delete 2 triggers?")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("bulk-confirm"));
+
+    await waitFor(() => expect(deleteTrigger).toHaveBeenCalledTimes(2));
+    expect(deleteTrigger).toHaveBeenCalledWith("t1");
+    expect(deleteTrigger).toHaveBeenCalledWith("t2");
+  });
+
+  it("bulk-enables only the disabled triggers in the selection", async () => {
+    renderPanel([
+      trigger({ id: "t1", name: "A", enabled: true }),
+      trigger({ id: "t2", name: "B", enabled: false }),
+    ]);
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select A" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select B" }));
+    fireEvent.click(screen.getByTestId("bulk-action-enable"));
+
+    await waitFor(() => expect(updateTrigger).toHaveBeenCalledWith("t2", { enabled: true }));
+    expect(updateTrigger).toHaveBeenCalledTimes(1); // t1 already enabled → skipped
+  });
+
+  it("disables Enable when every selected trigger is already enabled", () => {
+    renderPanel([trigger({ id: "t1", name: "A", enabled: true })]);
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select A" }));
+    expect(screen.getByTestId("bulk-action-enable")).toBeDisabled();
+    expect(screen.getByTestId("bulk-action-disable")).not.toBeDisabled();
   });
 });

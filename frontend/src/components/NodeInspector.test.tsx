@@ -562,13 +562,13 @@ describe("NodeInspector — harness axis (#550, ADR-0046)", () => {
   });
 
   it("pinning a harness writes pin_harness onto the node", async () => {
+    const user = userEvent.setup();
     seedNode({});
     renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
-    // #586: the pin is now a single sectioned <select>; opencode is offered even
-    // before /settings answers (the embedded-floor fallback), so no wait is needed.
-    fireEvent.change(screen.getByTestId("node-harness-select"), {
-      target: { value: "opencode" },
-    });
+    // #586: the pin is a custom sectioned dropdown; opencode is offered even before
+    // /settings answers (the embedded-floor fallback). Open it and pick opencode.
+    await user.click(screen.getByTestId("node-harness-select"));
+    await user.click(await screen.findByTestId("node-harness-select-option-opencode"));
     const node = useEditStore.getState().openTabs[0].pipeline.nodes[0];
     expect(node.pin_harness).toBe("opencode");
     // A green fetch settles the dynamic catalog; flush it inside act so the

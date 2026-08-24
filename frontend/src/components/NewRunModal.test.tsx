@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import NewRunModal from "./NewRunModal";
 import { useEditStore } from "../stores/editStore";
 import type { BranchRef, InstanceSettings, PipelineListEntry, Trigger } from "../types";
@@ -2475,9 +2476,9 @@ describe("NewRunModal — harness selector (#551)", () => {
   }
 
   /** #452 for the harness axis: the run selector NAMES the instance default on the inherit
-   *  option; it never copies it into the field. Assert on the OPTION TEXT and the presence
-   *  of the concrete options — never on `select.value` for the "names it" claim (a value
-   *  assertion cannot fail here — the memory of #347/#452). */
+   *  option; it never copies it into the field. Assert on the OPTION TEXT (the muted hint)
+   *  and the presence of the concrete options — never that a concrete value was seeded (the
+   *  memory of #347/#452). #586: the picker is a custom sectioned dropdown, so open it. */
   it("names the instance default on the inherit option without seeding the field", async () => {
     vi.mocked(fetchSettings).mockResolvedValue(
       harnessSettings({
@@ -2485,31 +2486,30 @@ describe("NewRunModal — harness selector (#551)", () => {
       }),
     );
     vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: "repo" })]);
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     renderModal();
-    const select = (await screen.findByTestId("harness-select")) as HTMLSelectElement;
-    await waitFor(() => {
-      expect(Array.from(select.options).find((o) => o.value === "")).toHaveTextContent(
-        "Use instance default (opencode)",
-      );
-    });
-    // The field asserts nothing of its own — the inherit sentinel, not the copied value.
-    expect(select.value).toBe("");
-    // The embedded harnesses are offered as concrete options.
-    const values = Array.from(select.options).map((o) => o.value);
-    expect(values).toContain("claude");
-    expect(values).toContain("opencode");
+    // The closed trigger shows the inherit label — never the copied default value.
+    const trigger = await screen.findByTestId("harness-select");
+    expect(trigger).toHaveTextContent("Use instance default");
+    // Open it: the inherit row names what "" resolves to (the muted hint), and the
+    // embedded harnesses are offered as concrete options.
+    await user.click(trigger);
+    const inherit = await screen.findByTestId("harness-select-option-inherit");
+    await waitFor(() => expect(inherit).toHaveTextContent("opencode"));
+    expect(inherit).toHaveTextContent("Use instance default");
+    expect(screen.getByTestId("harness-select-option-claude")).toBeInTheDocument();
+    expect(screen.getByTestId("harness-select-option-opencode")).toBeInTheDocument();
   });
 
   it("names the claude floor when the instance sets no default", async () => {
     vi.mocked(fetchSettings).mockResolvedValue(harnessSettings());
     vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: "repo" })]);
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     renderModal();
-    const select = (await screen.findByTestId("harness-select")) as HTMLSelectElement;
-    await waitFor(() => {
-      expect(Array.from(select.options).find((o) => o.value === "")).toHaveTextContent(
-        "Use instance default (claude)",
-      );
-    });
+    await user.click(await screen.findByTestId("harness-select"));
+    const inherit = await screen.findByTestId("harness-select-option-inherit");
+    await waitFor(() => expect(inherit).toHaveTextContent("claude"));
+    expect(inherit).toHaveTextContent("Use instance default");
   });
 
   it("passes the chosen harness to createRun", async () => {
@@ -2520,11 +2520,13 @@ describe("NewRunModal — harness selector (#551)", () => {
     renderModal();
     await enterValidRepo();
 
-    const select = (await screen.findByTestId("harness-select")) as HTMLSelectElement;
-    await waitFor(() => expect(Array.from(select.options).some((o) => o.value === "opencode")).toBe(true));
-    fireEvent.change(select, { target: { value: "opencode" } });
-
+    // #586: open the custom dropdown and pick opencode (real timers keep userEvent
+    // simple; repo validation above already ran under fake timers).
     vi.useRealTimers();
+    const user = userEvent.setup();
+    await user.click(await screen.findByTestId("harness-select"));
+    await user.click(await screen.findByTestId("harness-select-option-opencode"));
+
     await waitFor(() => expect(screen.getByRole("button", { name: /launch/i })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: /launch/i }));
 
@@ -2540,7 +2542,7 @@ describe("NewRunModal — harness selector (#551)", () => {
     ]);
     renderModal();
     await enterValidRepo();
-    // Leave the harness selector on "" (inherit).
+    // Leave the harness selector on "" (inherit) — never open it.
     await screen.findByTestId("harness-select");
 
     vi.useRealTimers();
@@ -2581,18 +2583,20 @@ describe("NewRunModal — harness selector (#551)", () => {
         openIntent={{ kind: "edit-trigger", trigger }} />,
     );
 
-    const select = (await screen.findByTestId("harness-select")) as HTMLSelectElement;
-    await waitFor(() => expect(select.value).toBe("opencode"));
-    // Trigger mode exposes the inherit option.
-    expect(Array.from(select.options).some((o) => o.value === "")).toBe(true);
+    // #586: the closed trigger shows the Trigger's pinned harness by name.
+    const harnessTrigger = await screen.findByTestId("harness-select");
+    await waitFor(() => expect(harnessTrigger).toHaveTextContent("opencode"));
 
     // Repo validation must resolve so Save is enabled.
     await vi.advanceTimersByTimeAsync(500);
     await waitFor(() => expect(validateRepo).toHaveBeenCalledWith("/home/user/project"));
 
-    // Reset to "use instance default" → the PATCH must clear it (null).
-    fireEvent.change(select, { target: { value: "" } });
+    // Reset to "use instance default" → the PATCH must clear it (null). Trigger mode
+    // exposes the inherit option; open the dropdown and pick it.
     vi.useRealTimers();
+    const user = userEvent.setup();
+    await user.click(harnessTrigger);
+    await user.click(await screen.findByTestId("harness-select-option-inherit"));
     await waitFor(() => expect(screen.getByTestId("save-trigger-button")).toBeEnabled());
     fireEvent.click(screen.getByTestId("save-trigger-button"));
 

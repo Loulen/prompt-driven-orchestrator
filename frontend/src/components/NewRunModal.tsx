@@ -1220,10 +1220,11 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
                 value={harness}
                 onChange={setHarness}
                 catalog={harnessCatalog}
-                inheritLabel={
+                inheritLabel="Use instance default"
+                inheritHint={
                   mode === "run" && instanceDefaultHarness
-                    ? `Use instance default (${instanceDefaultHarness})`
-                    : "Use instance default"
+                    ? instanceDefaultHarness
+                    : undefined
                 }
                 className="w-full rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5 font-mono text-fg transition-colors focus:border-acc focus:outline-none disabled:opacity-40"
                 style={{ fontSize: "12px" }}

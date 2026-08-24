@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import ProjectEditModal from "./ProjectEditModal";
 import { ApiError } from "../api";
 import type { Project } from "../types";
@@ -99,18 +100,21 @@ describe("ProjectEditModal", () => {
   });
 
   it("creates a project, sets its harness, and attaches the checked members on save", async () => {
+    const user = userEvent.setup();
     createProject.mockResolvedValue({ id: "p9", name: "front", harness: null, members: [] });
     updateProject.mockResolvedValue({});
     addProjectMember.mockResolvedValue({});
     const { onSaved, onClose } = renderModal();
 
-    // Attach the second repo too, and pose a harness on the Projet.
+    // Attach the second repo too, and pose a harness on the Projet (#586: a custom
+    // sectioned dropdown — open it and pick opencode).
     fireEvent.click(
       within(memberRow("/repos/back")).getByTestId("project-member-checkbox"),
     );
-    fireEvent.change(screen.getByTestId("project-harness-select"), {
-      target: { value: "opencode" },
-    });
+    await user.click(screen.getByTestId("project-harness-select"));
+    await user.click(
+      await screen.findByTestId("project-harness-select-option-opencode"),
+    );
     fireEvent.click(screen.getByTestId("project-edit-save"));
 
     await waitFor(() => expect(onSaved).toHaveBeenCalled());

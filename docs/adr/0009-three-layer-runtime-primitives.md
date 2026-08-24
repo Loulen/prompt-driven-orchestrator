@@ -1,5 +1,11 @@
 # Trois couches de primitives runtime : resolver, mutations, commandes
 
+> **Amendé par ADR-0049 (spec résilience, 2026-08-24).** Une commande de reprise **humaine**
+> (Couche 3) peut **ré-ouvrir un run terminal** via une re-projection sûre — un geste explicite
+> (`reopen_run`, ou une commande ciblée qui l'embarque), jamais une initiative du runtime. Le
+> principe tient : un **bouton de nœud** ne réanime pas un run de lui-même ; c'est l'action de
+> reprise **de l'humain** qui ré-ouvre, et le runtime ne flippe jamais le `RunStatus` seul.
+
 Le daemon exposait des commandes (`resume_run`, `restart_node`, `mark_node_done`, `kill_node`) qui mélangent requête sur le graphe, mutation d'état et décision de scheduling dans un même appel. Le scheduler, le manager et l'UI partagent ces commandes, mais aucun ne peut agir avec plus de granularité que ce qu'elles offrent. Le manager (agent Claude Code conversationnel) ne peut pas inspecter le graphe, choisir un sous-ensemble de nœuds à invalider, puis agir — il est forcé de passer par des commandes opaques.
 
 **Décision : l'API runtime est structurée en trois couches explicites.**

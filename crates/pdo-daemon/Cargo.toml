@@ -6,7 +6,7 @@ license.workspace = true
 description.workspace = true
 repository.workspace = true
 homepage.workspace = true
-# App, pas une lib : jamais de cargo publish (release-plz + hygiène crates.io).
+# App, pas une lib : jamais de cargo publish (hygiène crates.io).
 publish = false
 
 # `publish = false` masque le package aux yeux de dist (il n'empaquette que le

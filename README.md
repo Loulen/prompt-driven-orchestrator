@@ -14,41 +14,45 @@ You design pipelines on a visual canvas and run them on a deterministic runtime 
 
 ## Install
 
-```bash
-curl -fsSL https://github.com/Loulen/prompt-driven-orchestrator/releases/latest/download/install.sh | bash
-```
-
-This downloads the latest release binary for your platform (Linux/macOS, x86_64/ARM64), verifies the SHA256 checksum, and installs to `~/.local/bin/pdo`.
-
-To install a specific version:
+Homebrew (macOS and Linux):
 
 ```bash
-PDO_VERSION=v0.1.0 curl -fsSL https://github.com/Loulen/prompt-driven-orchestrator/releases/latest/download/install.sh | bash
+brew install Loulen/tap/pdo
 ```
+
+Or the install script (Linux and macOS, x86_64 and ARM64):
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/Loulen/prompt-driven-orchestrator/releases/latest/download/pdo-daemon-installer.sh | sh
+```
+
+Both install a checksum-verified `pdo` binary and put it on your `PATH`. Update with `brew upgrade pdo` or by re-running the script. Pin a version by replacing `latest` with a tag, e.g. `.../releases/download/v1.31.2/pdo-daemon-installer.sh`.
 
 ### Runtime requirements
 
-The install script fetches only the `pdo` binary. The daemon shells out to a couple of tools on the host at runtime — install them yourself (they are **not** bundled, and their absence surfaces only when a node tries to run):
+The binary embeds the whole web UI. The daemon shells out to two tools you install separately:
 
-- **tmux** — every node and run shell is a tmux session on the host. Required, always, whatever harness you use.
-- **git** — each node's work is isolated in a git worktree. Required.
-
-Each node runs its agent through a **harness**, which is your choice, not a fixed dependency. PDO ships descriptors for `claude` (default) and `opencode`, and the set is pluggable ([ADR-0045](docs/adr/0045-un-harnais-se-declare-par-un-template-d-argv-les-capacites-remplissent-les-trous.md)). PDO neither bundles nor requires any specific harness: installing the harness and **its** own dependencies is up to you — e.g. for Claude Code, the `claude` CLI, plus Node.js >= 22 for MCP servers and ripgrep for search.
-
-Then start the daemon:
+- **tmux.** Every node and run shell is a tmux session.
+- **git.** Each node runs in its own git worktree.
 
 ```bash
-pdo daemon
+brew install tmux git   # or your system package manager
 ```
 
-Open `http://localhost:5172` in your browser.
+Each node drives its agent through a harness of your choice. PDO ships descriptors for `claude` (default) and `opencode`, and the set is pluggable ([ADR-0045](docs/adr/0045-un-harnais-se-declare-par-un-template-d-argv-les-capacites-remplissent-les-trous.md)). You install the harness and its own dependencies. For Claude Code that means the `claude` CLI, Node.js >= 22 for MCP servers, and ripgrep.
 
-For **unattended Triggers** (the daemon starts at boot and survives logout, instead of dying when you close your session), install it as a persistent service:
+Start the daemon:
 
 ```bash
-pdo service install          # systemd --user unit (Linux) / launchd LaunchAgent (macOS)
-pdo service install --dry-run # preview the unit + commands, change nothing
-pdo service status            # inspect the installed service
+pdo daemon                 # http://localhost:5172
+```
+
+To run it at boot and survive logout, install it as a service (this works as-is after a Homebrew install):
+
+```bash
+pdo service install        # add --port to change 5172, --dry-run to preview
+pdo service status
+pdo service uninstall
 ```
 
 ### Behind a reverse proxy

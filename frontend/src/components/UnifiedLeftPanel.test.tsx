@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import UnifiedLeftPanel from "./UnifiedLeftPanel";
 import type { PipelineListEntry, RunListEntry, Trigger } from "../types";
 import type { LibraryPipelineEntry } from "../api";
-import { deleteLibraryPipeline, deletePipeline, duplicateLibraryPipeline, fetchPipelines, openRunShell, pauseRun, renameRun, resumeRun, retryAll } from "../api";
+import { cleanupRun, deleteLibraryPipeline, deletePipeline, duplicateLibraryPipeline, fetchPipelines, openRunShell, pauseRun, renameRun, resumeRun, retryAll } from "../api";
 import { useEditStore } from "../stores/editStore";
 
 const mockRenameRun = vi.mocked(renameRun);
@@ -17,6 +17,7 @@ const mockOpenRunShell = vi.mocked(openRunShell);
 const mockPauseRun = vi.mocked(pauseRun);
 const mockResumeRun = vi.mocked(resumeRun);
 const mockRetryAll = vi.mocked(retryAll);
+const mockCleanupRun = vi.mocked(cleanupRun);
 
 vi.mock("../api", () => ({
   cleanupRun: vi.fn().mockResolvedValue(undefined),
@@ -1367,5 +1368,195 @@ describe("UnifiedLeftPanel run filters (#336)", () => {
     await user.click(await screen.findByTestId("run-filter-option-__none__"));
     const labels = screen.getAllByTestId("run-display-label").map((el) => el.textContent);
     expect(labels).toEqual(["Nameless"]);
+  });
+});
+
+// #577 — multi-select + bulk actions on the Runs list.
+describe("UnifiedLeftPanel run multi-select (#577)", () => {
+  const twoRuns: RunListEntry[] = [
+    { run_id: "r1", pipeline_name: "p", status: "completed", started_at: null, name: "Run One", effective_repo: "/repo/a" },
+    { run_id: "r2", pipeline_name: "p", status: "running", started_at: null, name: "Run Two", effective_repo: "/repo/a" },
+  ];
+
+  beforeEach(() => {
+    // clearAllMocks (outer beforeEach) resets calls but keeps implementations;
+    // reset the fire-and-forget bulk runners so each test starts fresh.
+    mockCleanupRun.mockReset();
+    mockCleanupRun.mockResolvedValue(undefined);
+    mockPauseRun.mockReset();
+    mockPauseRun.mockResolvedValue(undefined);
+    mockRetryAll.mockReset();
+    mockRetryAll.mockResolvedValue({ run_id: "offspring" });
+  });
+
+  it("reveals the floating bar and count when a run's select control is clicked", () => {
+    renderPanel({ runs: twoRuns });
+    expect(screen.queryByTestId("bulk-action-bar")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Run One" }));
+    expect(screen.getByTestId("bulk-action-bar")).toBeInTheDocument();
+    expect(screen.getByTestId("bulk-count")).toHaveTextContent("1 selected");
+  });
+
+  it("selects on the dot but still opens on the row body", () => {
+    const onSelectRun = vi.fn();
+    render(
+      <UnifiedLeftPanel
+        runs={twoRuns}
+        selectedRunId={null}
+        onSelectRun={onSelectRun}
+        onNewRun={noop}
+        libraryPipelines={[]}
+        onLibraryPipelinesChanged={noop}
+      />,
+    );
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Run One" }));
+    expect(onSelectRun).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText("Run One"));
+    expect(onSelectRun).toHaveBeenCalledWith("r1");
+  });
+
+  it("warns that running runs will stop and cleans up every selected run on confirm", async () => {
+    renderPanel({ runs: twoRuns });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Run One" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Run Two" }));
+    expect(screen.getByTestId("bulk-count")).toHaveTextContent("2 selected");
+    expect(screen.getByTestId("bulk-note")).toHaveTextContent("1 running will stop");
+
+    fireEvent.click(screen.getByTestId("bulk-action-cleanup"));
+    expect(screen.getByText("Cleanup 2 runs?")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("bulk-confirm"));
+
+    await waitFor(() => expect(mockCleanupRun).toHaveBeenCalledTimes(2));
+    expect(mockCleanupRun).toHaveBeenCalledWith("r1");
+    expect(mockCleanupRun).toHaveBeenCalledWith("r2");
+    // full success ⇒ selection cleared, bar gone
+    await waitFor(() => expect(screen.queryByTestId("bulk-action-bar")).not.toBeInTheDocument());
+  });
+
+  it("disables Pause when no selected run is live", () => {
+    renderPanel({ runs: twoRuns });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Run One" })); // completed
+    expect(screen.getByTestId("bulk-action-pause")).toBeDisabled();
+    expect(screen.getByTestId("bulk-action-retry")).not.toBeDisabled();
+    expect(screen.getByTestId("bulk-action-cleanup")).not.toBeDisabled();
+  });
+
+  it("pauses only the live selection immediately (no confirm)", async () => {
+    renderPanel({ runs: twoRuns });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Run Two" })); // running
+    fireEvent.click(screen.getByTestId("bulk-action-pause"));
+    await waitFor(() => expect(mockPauseRun).toHaveBeenCalledWith("r2"));
+    expect(mockPauseRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps failed runs selected and surfaces the reason on a partial cleanup", async () => {
+    mockCleanupRun.mockImplementation(async (id: string) => {
+      if (id === "r2") throw new Error("worktree busy");
+    });
+    renderPanel({ runs: twoRuns });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Run One" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Run Two" }));
+    fireEvent.click(screen.getByTestId("bulk-action-cleanup"));
+    fireEvent.click(screen.getByTestId("bulk-confirm"));
+
+    const failures = await screen.findByTestId("bulk-failures");
+    expect(failures).toHaveTextContent("worktree busy");
+    fireEvent.click(screen.getByTestId("bulk-result-close"));
+    // r1 succeeded → deselected; r2 failed → stays selected
+    expect(screen.getByTestId("bulk-count")).toHaveTextContent("1 selected");
+  });
+
+  it("leaves a count badge on the Runs tab after switching away", () => {
+    renderPanel({ runs: twoRuns, triggers: [] });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Run One" }));
+    // active tab shows no badge (the floating bar carries the count instead)
+    expect(screen.queryByTestId("tab-badge-runs")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Library" }));
+    expect(screen.getByTestId("tab-badge-runs")).toHaveTextContent("1");
+  });
+
+  it("Ctrl-A selects every visible run and Escape clears", () => {
+    renderPanel({ runs: twoRuns });
+    fireEvent.keyDown(screen.getByText("Run One"), { key: "a", ctrlKey: true });
+    expect(screen.getByTestId("bulk-count")).toHaveTextContent("2 selected");
+    fireEvent.keyDown(screen.getByText("Run One"), { key: "Escape" });
+    expect(screen.queryByTestId("bulk-action-bar")).not.toBeInTheDocument();
+  });
+
+  it("Delete opens the cleanup confirm for the current selection", () => {
+    renderPanel({ runs: twoRuns });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Run One" }));
+    fireEvent.keyDown(screen.getByText("Run One"), { key: "Delete" });
+    expect(screen.getByText("Cleanup 1 run?")).toBeInTheDocument();
+  });
+
+  it("group-header select-all toggles the whole repo group", () => {
+    const runs: RunListEntry[] = [
+      { run_id: "a1", pipeline_name: "p", status: "completed", started_at: null, name: "Alpha One", effective_repo: "/repo/alpha" },
+      { run_id: "a2", pipeline_name: "p", status: "completed", started_at: null, name: "Alpha Two", effective_repo: "/repo/alpha" },
+      { run_id: "b1", pipeline_name: "p", status: "completed", started_at: null, name: "Beta One", effective_repo: "/repo/beta" },
+    ];
+    renderPanel({ runs });
+    const groupControls = screen.getAllByTestId("run-group-select-all");
+    expect(groupControls).toHaveLength(2);
+    fireEvent.click(groupControls[0]); // alpha (alphabetical)
+    expect(screen.getByTestId("bulk-count")).toHaveTextContent("2 selected");
+  });
+});
+
+// #577 — multi-select + bulk actions on the Library list.
+describe("UnifiedLeftPanel library multi-select (#577)", () => {
+  const repoPipe: PipelineListEntry = {
+    id: "pipe1",
+    name: "Pipe One",
+    scope: "repo",
+    path: "/x/pipe1.yaml",
+    node_count: 1,
+    modified: null,
+    variables: {},
+  };
+  const libOnly: LibraryPipelineEntry = {
+    id: "fixture",
+    name: "fixture",
+    scope: "user",
+    node_count: 2,
+    modified: null,
+    yaml: "name: fixture\n",
+    pipeline: { name: "fixture", version: "1.0", variables: {}, nodes: [], edges: [] },
+    prompts: {},
+  };
+
+  it("bulk-deletes a selected working pipeline through its scoped seam", async () => {
+    mockFetchPipelines.mockResolvedValueOnce([repoPipe]);
+    renderPanel();
+    fireEvent.click(screen.getByRole("tab", { name: "Library" }));
+    await screen.findByText("Pipe One");
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Pipe One" }));
+    expect(screen.getByTestId("bulk-action-bar")).toBeInTheDocument();
+    // a repo pipeline is not duplicable
+    expect(screen.getByTestId("bulk-action-duplicate")).toBeDisabled();
+
+    fireEvent.click(screen.getByTestId("bulk-action-delete"));
+    expect(screen.getByText("Delete 1 pipeline?")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("bulk-confirm"));
+    await waitFor(() => expect(mockDeletePipeline).toHaveBeenCalledWith("pipe1", "repo"));
+  });
+
+  it("bulk-duplicates selected library-only entries", async () => {
+    render(
+      <UnifiedLeftPanel
+        runs={[]}
+        selectedRunId={null}
+        onSelectRun={noop}
+        onNewRun={noop}
+        libraryPipelines={[libOnly]}
+        onLibraryPipelinesChanged={noop}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Library" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select fixture" }));
+    fireEvent.click(screen.getByTestId("bulk-action-duplicate"));
+    await waitFor(() => expect(mockDuplicateLibraryPipeline).toHaveBeenCalledWith("fixture"));
   });
 });

@@ -815,7 +815,7 @@ Choix et pourquoi → ADR-0003. Daemon **Rust** (Tokio, Axum, SQLite/sqlx, `noti
 
 ### Distribution
 
-Binaires pré-buildés sur GitHub Releases + `install.sh`. Plus tard : Homebrew, AUR ; wrapper Tauri en v2.
+Binaires pré-buildés sur GitHub Releases, packaging piloté par **`dist`** (ex-cargo-dist) : installeur shell (`curl … pdo-installer.sh | sh`) + **formule Homebrew** (tap `Loulen/homebrew-tap`, `brew install Loulen/tap/pdo`). Le job GHCR des images sandbox est sorti dans son propre workflow (`sandbox-image.yml`), découplé de la release binaire. Plus tard : AUR ; auto-update in-app (report volontaire) ; wrapper Tauri en v2.
 
 ### Service unit persistant (ADR-0019)
 

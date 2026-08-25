@@ -3,6 +3,18 @@ name = "pdo-daemon"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+# App, pas une lib : jamais de cargo publish (release-plz + hygiène crates.io).
+publish = false
+
+# `publish = false` masque le package aux yeux de dist (il n'empaquette que le
+# publiable par défaut) -> « nothing to Release ». `dist = true` le réintègre
+# explicitement : on veut le distribuer (Homebrew + installeur) SANS le publier
+# sur crates.io. Les deux flags sont complémentaires, pas contradictoires.
+[package.metadata.dist]
+dist = true
 
 [lib]
 name = "pdo_daemon"

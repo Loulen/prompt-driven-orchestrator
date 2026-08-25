@@ -1,0 +1,61 @@
+name: Release-plz
+
+# Ritualise la release (Release-PR groupée). À chaque merge sur main :
+#  - le job `release-plz-pr` ouvre/maintient une PR de release (bump semver depuis
+#    les conventional commits + CHANGELOG) ;
+#  - merger cette Release PR bumpe la version sur main -> le job `release-plz-release`
+#    crée et POUSSE le tag `vX.Y.Z`, ce qui déclenche le workflow `dist` (release.yml)
+#    -> build + release GitHub + mise à jour de la formule Homebrew.
+#
+# Division du travail avec dist (cf. release-plz.toml) : release-plz ne fait QUE
+# bump + tag + CHANGELOG (git_release_enable = false) ; c'est dist qui crée la
+# release GitHub et publie les artefacts + la formule.
+#
+# TOKEN — point critique : release-plz pousse le tag avec le PAT RELEASE_PLZ_TOKEN,
+# PAS le GITHUB_TOKEN par défaut. Un tag poussé par le bot github-actions ne
+# déclenche AUCUN workflow (garde anti-boucle de GitHub) : dist ne partirait jamais,
+# release silencieusement absente. Le même PAT peut servir HOMEBREW_TAP_TOKEN.
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  release-plz-release:
+    name: Release-plz release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: release-plz/action@v0.5
+        with:
+          command: release
+        env:
+          # PAT (pas GITHUB_TOKEN) pour que le push du tag déclenche dist.
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+
+  release-plz-pr:
+    name: Release-plz PR
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    concurrency:
+      group: release-plz-pr-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: release-plz/action@v0.5
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}

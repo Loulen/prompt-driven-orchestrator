@@ -1,0 +1,18 @@
+# Étapes injectées par `dist` dans le job build-local-artifacts, juste après le
+# checkout et AVANT `dist build`. Raison : le build.rs de pdo-daemon lance
+# `npm run build` pendant `cargo build` (le frontend est embarqué via rust-embed),
+# donc node_modules doit exister sur chaque runner (Linux et macOS, toutes arches ;
+# les assets front sont indépendants de la cible, un seul `npm ci` par runner suffit).
+# Chemin déclaré dans Cargo.toml : github-build-setup = "../build-setup.yml".
+- name: Set up Node.js
+  uses: actions/setup-node@v4
+  with:
+    node-version: "22"
+    cache: npm
+    cache-dependency-path: frontend/package-lock.json
+# `cd frontend && ...` plutôt que `working-directory: frontend` : dist re-sérialise
+# les steps injectés via son propre modèle et DROPPE `working-directory` (vérifié sur
+# dist 0.32). Sans le cd, `npm ci` tournerait à la racine (qui a son propre package.json
+# puppeteer/tsx) et build.rs ne trouverait pas frontend/node_modules.
+- name: Install frontend deps (build.rs runs `npm run build` during cargo build)
+  run: cd frontend && npm ci

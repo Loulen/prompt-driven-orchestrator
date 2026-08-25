@@ -1,12 +1,17 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, FileUp, Pause, Pencil, Play, Plus, RotateCcw, SquareTerminal, Trash2, Zap } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, ChevronRight, Copy, FileUp, Pause, Pencil, Play, Plus, RotateCcw, SquareTerminal, Trash2, Zap } from "lucide-react";
 import { isLiveRun, isTerminalRun, type RunListEntry, type RunStatus, type PipelineListEntry, type PipelineScope, type Trigger, type Project } from "../types";
 import type { LibraryPipelineEntry } from "../api";
 import { cleanupRun, createPipeline, deleteLibraryPipeline, duplicateLibraryPipeline, forgetRun, importWorkflow, openRunShell, pauseRun, renameRun, resumeRun, retryAll } from "../api";
 import { useEditStore } from "../stores/editStore";
+import { useSelectionStore } from "../stores/selectionStore";
+import { handleSelectionKeydown } from "../lib/selectionKeys";
+import { type BulkItem, type BulkOutcome } from "../lib/bulk";
 import { groupByProject, type ProjectRef } from "../lib/groupByRepo";
 import { projectLookup } from "../lib/projectLookup";
 import { cascadableTwin, isStarred, libraryOnly } from "../lib/libraryTwins";
+import BulkActionBar from "./BulkActionBar";
+import BulkActionModal from "./BulkActionModal";
 import CleanupConfirmModal from "./CleanupConfirmModal";
 import ConfirmDeleteModal from "./ConfirmDeleteModal";
 import ForgetRunModal from "./ForgetRunModal";
@@ -15,20 +20,24 @@ import ProjectEditModal from "./ProjectEditModal";
 import RunFilters from "./RunFilters";
 import { EMPTY_RUN_FILTER, runMatchesFilter } from "./runFilter";
 import RunShellModal from "./RunShellModal";
+import SelectControl from "./SelectControl";
 import TriggersListPanel from "./TriggersListPanel";
 
 type LeftTab = "runs" | "triggers" | "library";
 
-const STATUS_STYLES: Record<RunStatus, { dot: string }> = {
-  running: { dot: "bg-st-running" },
-  awaiting_user: { dot: "bg-st-await" },
-  completed: { dot: "bg-st-done" },
-  failed: { dot: "bg-st-failed" },
-  skipped: { dot: "bg-st-skipped" },
-  halted: { dot: "bg-st-blocked" },
-  paused: { dot: "bg-st-paused" },
-  archived: { dot: "bg-st-archived" },
+const STATUS_STYLES: Record<RunStatus, { dot: string; ring: string }> = {
+  running: { dot: "bg-st-running", ring: "border-st-running" },
+  awaiting_user: { dot: "bg-st-await", ring: "border-st-await" },
+  completed: { dot: "bg-st-done", ring: "border-st-done" },
+  failed: { dot: "bg-st-failed", ring: "border-st-failed" },
+  skipped: { dot: "bg-st-skipped", ring: "border-st-skipped" },
+  halted: { dot: "bg-st-blocked", ring: "border-st-blocked" },
+  paused: { dot: "bg-st-paused", ring: "border-st-paused" },
+  archived: { dot: "bg-st-archived", ring: "border-st-archived" },
 };
+
+/** Runs whose bulk-Retry is valid (mirror of the per-row `canRetryAll`). */
+const RETRYABLE: readonly RunStatus[] = ["completed", "failed", "halted", "skipped"];
 
 interface Props {
   runs: RunListEntry[];
@@ -102,6 +111,22 @@ export default function UnifiedLeftPanel({
   const openPipeline = useEditStore((s) => s.openPipeline);
   const removePipeline = useEditStore((s) => s.removePipeline);
   const activeTabId = useEditStore((s) => s.activeTabId);
+
+  // #577 — multi-select. The per-tab sets live in the shared store (so a tab's
+  // count survives a switch as its badge); the pending bulk action is local.
+  const runSelIds = useSelectionStore((s) => s.runs);
+  const librarySelIds = useSelectionStore((s) => s.library);
+  const triggerSelCount = useSelectionStore((s) => s.triggers.length);
+  const toggleSel = useSelectionStore((s) => s.toggle);
+  const selectRange = useSelectionStore((s) => s.selectRange);
+  const selectVisible = useSelectionStore((s) => s.selectVisible);
+  const selectGroup = useSelectionStore((s) => s.selectGroup);
+  const deselect = useSelectionStore((s) => s.deselect);
+  const clearSel = useSelectionStore((s) => s.clear);
+  const runSel = useMemo(() => new Set(runSelIds), [runSelIds]);
+  const librarySel = useMemo(() => new Set(librarySelIds), [librarySelIds]);
+  const [runBulkKind, setRunBulkKind] = useState<"cleanup" | "retry" | "pause" | null>(null);
+  const [libBulkKind, setLibBulkKind] = useState<"delete" | "duplicate" | null>(null);
 
   const [showNewModal, setShowNewModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
@@ -246,6 +271,7 @@ export default function UnifiedLeftPanel({
   // repo (#258). Extracted so both code paths share the exact same markup.
   function renderRunRow(run: RunListEntry) {
     const isSelected = run.run_id === selectedRunId;
+    const rowSelected = runSel.has(run.run_id);
     // A stalled run (no node running/waiting, nothing schedulable; #180) is
     // surfaced amber and steady, overriding its still-`running` canonical
     // status — "never a silent stall". `stalled` is derived per read by the
@@ -253,6 +279,9 @@ export default function UnifiedLeftPanel({
     const dot = run.stalled
       ? "bg-st-stale"
       : (STATUS_STYLES[run.status] ?? STATUS_STYLES.running).dot;
+    const ring = run.stalled
+      ? "border-st-stale"
+      : (STATUS_STYLES[run.status] ?? STATUS_STYLES.running).ring;
     const isArchived = run.status === "archived";
     const canCleanup = !isArchived;
     const isRenaming = renamingRunId === run.run_id;
@@ -272,22 +301,30 @@ export default function UnifiedLeftPanel({
       <button
         key={run.run_id}
         onClick={() => onSelectRun(run.run_id)}
-        className={`group flex w-full cursor-pointer items-center gap-2 border-b border-line-soft px-3 py-2 text-left transition-colors ${
-          isSelected
-            ? "bg-bg-3 text-fg"
-            : "text-fg-2 hover:bg-bg-3/50"
+        className={`group flex w-full cursor-pointer items-center gap-2 border-b border-l-2 border-line-soft px-3 py-2 text-left transition-colors ${
+          rowSelected
+            ? "border-l-acc bg-acc-bg text-fg"
+            : isSelected
+              ? "border-l-transparent bg-bg-3 text-fg"
+              : "border-l-transparent text-fg-2 hover:bg-bg-3/50"
         } ${isArchived ? "opacity-60" : ""}`}
         style={{ fontSize: "11.5px" }}
       >
-        <span
-          className={`h-2 w-2 shrink-0 rounded-full ${dot} ${
-            run.status === "running" && !run.stalled ? "animate-pulse" : ""
-          }`}
-          // #503: the dot was the entire failure signal, with no text anywhere
-          // behind it — a Run that had actually shipped read the same as one
-          // that had not.
-          title={run.failure_reason ?? undefined}
-          data-testid="run-status-dot"
+        {/* #577 — the status dot doubles as the select control: it goes hollow on
+            hover and becomes a green check when selected. #503: the resting dot
+            still carries the failure reason so a red Run has something to say. */}
+        <SelectControl
+          selected={rowSelected}
+          dotClass={dot}
+          ringClass={ring}
+          pulse={run.status === "running" && !run.stalled}
+          dotTitle={run.failure_reason ?? undefined}
+          dotTestId="run-status-dot"
+          label={rowSelected ? `Deselect ${run.name || run.run_id}` : `Select ${run.name || run.run_id}`}
+          onSelect={(e) => {
+            if (e.shiftKey) selectRange("runs", run.run_id, visibleRunIds);
+            else toggleSel("runs", run.run_id);
+          }}
         />
         <div className="min-w-0 flex-1">
           {isRenaming ? (
@@ -503,6 +540,69 @@ export default function UnifiedLeftPanel({
   // per-path grouping when nothing is named; `null` ⇒ the flat list.
   const runGroups = groupByProject(activeRuns, (r) => r.effective_repo, projectOf);
 
+  // #577 — Runs multi-select derivations. `visibleRunIds` is the flattened visible
+  // order (grouped active list, then the archived section only when expanded) —
+  // the basis for a shift-range and for select-all-visible.
+  const visibleRunIds = [
+    ...(runGroups === null ? activeRuns : runGroups.flatMap((g) => g.items)).map((r) => r.run_id),
+    ...(archivedOpen ? archivedRuns.map((r) => r.run_id) : []),
+  ];
+  const selectedRuns = filteredRuns.filter((r) => runSel.has(r.run_id));
+  const asRunItem = (r: RunListEntry): BulkItem => ({ id: r.run_id, label: r.name || r.run_id });
+  // Each bulk action targets the subset of the selection it is valid for (mirror
+  // of the per-row gates); an action whose subset is empty is disabled.
+  const cleanupItems = selectedRuns.filter((r) => r.status !== "archived").map(asRunItem);
+  const retryItems = selectedRuns.filter((r) => RETRYABLE.includes(r.status)).map(asRunItem);
+  const pauseItems = selectedRuns
+    .filter((r) => r.status === "running" || r.status === "awaiting_user")
+    .map(asRunItem);
+  // Live runs the cleanup would stop (running/awaiting/paused) — the bar's caveat.
+  const runningWillStop = selectedRuns.filter((r) => isLiveRun(r.status)).length;
+  const handleRunsSettled = useCallback(
+    (o: BulkOutcome) => deselect("runs", o.succeeded.map((r) => r.id)),
+    [deselect],
+  );
+
+  // #577 — Library multi-select. The two Library lists (openable /pipelines rows
+  // and passive library-only rows) delete through different seams, so each row
+  // registers its own `del`/`dup` keyed by the SAME id its React key uses. Bulk
+  // then just dispatches per selected id — no re-deriving which list it came from.
+  const libraryOnlyEntries = libraryOnly(libraryPipelines, pipelines);
+  interface LibTarget { selId: string; name: string; del: () => Promise<void>; dup?: () => Promise<void>; }
+  const libTargets: LibTarget[] = [
+    ...pipelines.map((p) => ({
+      selId: `${p.scope}-${p.id}`,
+      name: p.name,
+      del: () => removePipeline(p.id, p.scope),
+      // Duplicate is a library operation — offered only on a library-scoped row
+      // (same rule as the per-row Copy affordance, #224/#273).
+      dup: p.scope === "library" ? () => duplicateLibraryPipeline(p.id).then(() => {}) : undefined,
+    })),
+    ...libraryOnlyEntries.map((lp) => ({
+      selId: `lib-only-${lp.scope}-${lp.id}`,
+      name: lp.name,
+      del: () => deleteLibraryPipeline(lp.id),
+      dup: () => duplicateLibraryPipeline(lp.id).then(() => {}),
+    })),
+  ];
+  const libTargetById = new Map(libTargets.map((t) => [t.selId, t]));
+  const libVisibleIds = libTargets.map((t) => t.selId);
+  const selectedLibTargets = libTargets.filter((t) => librarySel.has(t.selId));
+  const libDeleteItems: BulkItem[] = selectedLibTargets.map((t) => ({ id: t.selId, label: t.name }));
+  const libDupItems: BulkItem[] = selectedLibTargets
+    .filter((t) => t.dup)
+    .map((t) => ({ id: t.selId, label: t.name }));
+  const handleLibrarySettled = useCallback(
+    (o: BulkOutcome) => {
+      deselect("library", o.succeeded.map((r) => r.id));
+      // Refresh BOTH pipeline lists on every bulk op (delete / duplicate), the
+      // same pair the single-item paths refresh (#227/#371).
+      void loadPipelines();
+      onLibraryPipelinesChanged();
+    },
+    [deselect, loadPipelines, onLibraryPipelinesChanged],
+  );
+
   // Open the pencil on a group header: an existing Projet pre-fills its record;
   // a derived path group pre-fills the label + its own path as the sole member.
   const openProjectEditor = (group: {
@@ -533,6 +633,13 @@ export default function UnifiedLeftPanel({
     { id: "triggers", label: "Triggers" },
     { id: "library", label: "Library" },
   ];
+  // #577 — per-tab selection counts, for the badge left on the tab you switch away
+  // from (so an in-flight selection is never silently lost).
+  const selCounts: Record<LeftTab, number> = {
+    runs: runSelIds.length,
+    triggers: triggerSelCount,
+    library: librarySelIds.length,
+  };
 
   return (
     <aside className="flex h-full flex-col bg-bg-2">
@@ -544,7 +651,7 @@ export default function UnifiedLeftPanel({
             role="tab"
             aria-selected={activeTab === tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`flex-1 cursor-pointer border-b-2 font-medium transition-colors ${
+            className={`flex flex-1 cursor-pointer items-center justify-center gap-1.5 border-b-2 font-medium transition-colors ${
               activeTab === tab.id
                 ? "border-acc text-fg"
                 : "border-transparent text-fg-4 hover:text-fg-2"
@@ -552,6 +659,16 @@ export default function UnifiedLeftPanel({
             style={{ fontSize: "11.5px" }}
           >
             {tab.label}
+            {/* #577 — count badge left on a NON-active tab with a live selection. */}
+            {activeTab !== tab.id && selCounts[tab.id] > 0 && (
+              <span
+                data-testid={`tab-badge-${tab.id}`}
+                className="rounded-full bg-acc px-1.5 font-semibold text-[#04140d]"
+                style={{ fontSize: "9px" }}
+              >
+                {selCounts[tab.id]}
+              </span>
+            )}
           </button>
         ))}
       </div>
@@ -581,7 +698,22 @@ export default function UnifiedLeftPanel({
             onChange={setRunFilter}
           />
         )}
-        <div className="flex-1 overflow-y-auto">
+        <div
+          className="flex-1 overflow-y-auto outline-none"
+          tabIndex={-1}
+          onKeyDown={(e) =>
+            handleSelectionKeydown(e, {
+              tab: "runs",
+              visibleIds: visibleRunIds,
+              hasSelection: runSelIds.length > 0,
+              selectVisible,
+              clear: clearSel,
+              onBulkDelete: () => {
+                if (cleanupItems.length > 0) setRunBulkKind("cleanup");
+              },
+            })
+          }
+        >
           {runs.length === 0 && (
             <div
               className="px-3 py-4 text-center text-fg-4"
@@ -615,10 +747,20 @@ export default function UnifiedLeftPanel({
                   data-project={group.kind === "project" ? "true" : "false"}
                 >
                   <div
-                    className="group/hdr flex h-[22px] shrink-0 items-center gap-1 border-b border-line-soft bg-bg-3/40 px-3 font-medium text-fg-3"
+                    className="group group/hdr flex h-[22px] shrink-0 items-center gap-1 border-b border-line-soft bg-bg-3/40 px-3 font-medium text-fg-3"
                     style={{ fontSize: "10px" }}
                     title={group.title}
                   >
+                    {/* #577 — "select all in this repo" (reveals on header hover). */}
+                    <SelectControl
+                      selected={
+                        group.items.length > 0 &&
+                        group.items.every((r) => runSel.has(r.run_id))
+                      }
+                      label={`Select all in ${group.label}`}
+                      onSelect={() => selectGroup("runs", group.items.map((r) => r.run_id))}
+                      testId="run-group-select-all"
+                    />
                     <span className="truncate" data-testid="run-repo-label">
                       {group.label}
                     </span>
@@ -658,6 +800,87 @@ export default function UnifiedLeftPanel({
             </div>
           )}
         </div>
+
+        {/* #577 — floating bulk-action bar for the Runs tab. */}
+        {runSelIds.length > 0 && (
+          <BulkActionBar
+            count={runSelIds.length}
+            note={runningWillStop > 0 ? `${runningWillStop} running will stop` : null}
+            actions={[
+              {
+                key: "cleanup",
+                label: "Cleanup",
+                icon: <Trash2 size={13} />,
+                destructive: true,
+                disabled: cleanupItems.length === 0,
+                onClick: () => setRunBulkKind("cleanup"),
+              },
+              {
+                key: "retry",
+                label: "Retry",
+                icon: <RotateCcw size={13} />,
+                disabled: retryItems.length === 0,
+                onClick: () => setRunBulkKind("retry"),
+              },
+              {
+                key: "pause",
+                label: "Pause",
+                icon: <Pause size={13} />,
+                disabled: pauseItems.length === 0,
+                onClick: () => setRunBulkKind("pause"),
+              },
+            ]}
+            onClear={() => clearSel("runs")}
+          />
+        )}
+        {runBulkKind === "cleanup" && (
+          <BulkActionModal
+            destructive
+            runningLabel="Cleaning up"
+            title={`Cleanup ${cleanupItems.length} run${cleanupItems.length === 1 ? "" : "s"}?`}
+            description={
+              <>
+                This removes the selected runs' worktrees from disk and archives them.
+                {runningWillStop > 0
+                  ? ` ${runningWillStop} running run${runningWillStop === 1 ? "" : "s"} will be stopped first.`
+                  : ""}{" "}
+                Completed outputs are kept — each run stays viewable (read-only). This can't be
+                undone.
+              </>
+            }
+            confirmLabel="Cleanup"
+            items={cleanupItems}
+            run={(id) => cleanupRun(id)}
+            onClose={() => setRunBulkKind(null)}
+            onSettled={handleRunsSettled}
+          />
+        )}
+        {runBulkKind === "retry" && (
+          <BulkActionModal
+            destructive
+            runningLabel="Retrying"
+            title={`Retry ${retryItems.length} run${retryItems.length === 1 ? "" : "s"}?`}
+            description="This archives each selected run and starts a fresh run of the same pipeline. The archived runs stay viewable (read-only)."
+            confirmLabel="Retry all"
+            items={retryItems}
+            run={(id) => retryAll(id).then(() => {})}
+            onClose={() => setRunBulkKind(null)}
+            onSettled={handleRunsSettled}
+          />
+        )}
+        {runBulkKind === "pause" && (
+          <BulkActionModal
+            skipConfirm
+            runningLabel="Pausing"
+            title=""
+            description=""
+            confirmLabel="Pause"
+            items={pauseItems}
+            run={(id) => pauseRun(id)}
+            onClose={() => setRunBulkKind(null)}
+            onSettled={handleRunsSettled}
+          />
+        )}
         </div>
       )}
 
@@ -705,7 +928,22 @@ export default function UnifiedLeftPanel({
         </button>
       </div>
 
-        <div className="flex-1 overflow-y-auto">
+        <div
+          className="flex-1 overflow-y-auto outline-none"
+          tabIndex={-1}
+          onKeyDown={(e) =>
+            handleSelectionKeydown(e, {
+              tab: "library",
+              visibleIds: libVisibleIds,
+              hasSelection: librarySelIds.length > 0,
+              selectVisible,
+              clear: clearSel,
+              onBulkDelete: () => {
+                if (libDeleteItems.length > 0) setLibBulkKind("delete");
+              },
+            })
+          }
+        >
           {pipelines.length === 0 && libraryPipelines.length === 0 && (
             <div
               className="px-3 py-4 text-center text-fg-4"
@@ -720,6 +958,12 @@ export default function UnifiedLeftPanel({
               name={p.name}
               scope={p.scope}
               nodeCount={p.node_count}
+              checked={librarySel.has(`${p.scope}-${p.id}`)}
+              onToggleSelect={(e) => {
+                const selId = `${p.scope}-${p.id}`;
+                if (e.shiftKey) selectRange("library", selId, libVisibleIds);
+                else toggleSel("library", selId);
+              }}
               // A pipeline counts as "starred" when a library entry exists with
               // the same name. This is the visible link the user expects when
               // they click the canvas star: their pipeline gets a star badge
@@ -747,12 +991,18 @@ export default function UnifiedLeftPanel({
               entry in the sidebar, matching the user's mental model that
               starred == in the library. No `onOpen`: there is no working
               pipeline behind them to open. */}
-          {libraryOnly(libraryPipelines, pipelines).map((lp) => (
+          {libraryOnlyEntries.map((lp) => (
             <LibraryRow
               key={`lib-only-${lp.scope}-${lp.id}`}
               name={lp.name}
               scope={lp.scope}
               nodeCount={lp.node_count}
+              checked={librarySel.has(`lib-only-${lp.scope}-${lp.id}`)}
+              onToggleSelect={(e) => {
+                const selId = `lib-only-${lp.scope}-${lp.id}`;
+                if (e.shiftKey) selectRange("library", selId, libVisibleIds);
+                else toggleSel("library", selId);
+              }}
               // Unconditional: these rows come straight out of the library.
               starred
               showDuplicate
@@ -770,6 +1020,56 @@ export default function UnifiedLeftPanel({
             />
           ))}
         </div>
+
+        {/* #577 — floating bulk-action bar for the Library tab. */}
+        {librarySelIds.length > 0 && (
+          <BulkActionBar
+            count={librarySelIds.length}
+            actions={[
+              {
+                key: "delete",
+                label: "Delete",
+                icon: <Trash2 size={13} />,
+                destructive: true,
+                onClick: () => setLibBulkKind("delete"),
+              },
+              {
+                key: "duplicate",
+                label: "Duplicate",
+                icon: <Copy size={13} />,
+                disabled: libDupItems.length === 0,
+                onClick: () => setLibBulkKind("duplicate"),
+              },
+            ]}
+            onClear={() => clearSel("library")}
+          />
+        )}
+        {libBulkKind === "delete" && (
+          <BulkActionModal
+            destructive
+            runningLabel="Deleting"
+            title={`Delete ${libDeleteItems.length} pipeline${libDeleteItems.length === 1 ? "" : "s"}?`}
+            description="This permanently removes the selected pipelines' files (YAML + prompts) from disk. This can't be undone."
+            confirmLabel="Delete"
+            items={libDeleteItems}
+            run={(selId) => libTargetById.get(selId)!.del()}
+            onClose={() => setLibBulkKind(null)}
+            onSettled={handleLibrarySettled}
+          />
+        )}
+        {libBulkKind === "duplicate" && (
+          <BulkActionModal
+            skipConfirm
+            runningLabel="Duplicating"
+            title=""
+            description=""
+            confirmLabel="Duplicate"
+            items={libDupItems}
+            run={(selId) => libTargetById.get(selId)!.dup!()}
+            onClose={() => setLibBulkKind(null)}
+            onSettled={handleLibrarySettled}
+          />
+        )}
         </div>
       )}
 

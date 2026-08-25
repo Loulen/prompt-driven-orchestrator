@@ -15,7 +15,7 @@ cd "$(git rev-parse --show-toplevel)"
 #   auto_fail.rs (#598), retry_verdict.rs and restart_verdict.rs — a distinct pure
 #   concern, not drift. 64 previously admitted auto_fail.rs on the same rationale.
 BASELINES='
-frontend/src/components 146
+frontend/src/components 152
 crates/pdo-daemon/src 65
 '
 

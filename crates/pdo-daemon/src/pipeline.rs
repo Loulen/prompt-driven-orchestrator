@@ -159,6 +159,13 @@ pub(crate) struct NodeDef {
     /// (`pipeline_semantics`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub harnesses: BTreeMap<String, crate::harness_resolver::HarnessEntry>,
+    /// Optional `auto_fail` preference for this node (ADR-0049): the **finest**
+    /// tier of [`crate::auto_fail::resolve_auto_fail`] (`node → Run → Projet →
+    /// instance`). `Some(true)`/`Some(false)` overrides every coarser tier for a
+    /// node's own `pdo fail`; `None` (absent) makes the node defer to the Run /
+    /// Projet / instance. Semantic, not layout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_fail: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -2533,6 +2540,7 @@ nodes:
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            auto_fail: None,
         };
         let yaml = serde_yaml::to_string(&node).unwrap();
         assert!(yaml.contains("type: script"), "serializes to kebab: {yaml}");

@@ -264,8 +264,10 @@ async fn double_invalid_frontmatter_fails_node() {
         "---\nverdict: MAYBE\nscore: 8\n---\nStill not sure",
     );
 
-    // The retry is spent: `recoverable: false` — `NodeFailed` + `RunFailed` are
-    // already appended, so an agent reading this must NOT chain `pdo fail`.
+    // The retry is spent: `recoverable: false`. ADR-0049: the node is
+    // `Interrupted` (parking the run `AwaitingUser`), not `Failed` — a validation
+    // miss is a runtime give-up, never a business failure. An agent reading this
+    // must still NOT chain `pdo fail`.
     let resp2 = mark_node_done(&daemon, &run_id, "reviewer", 1).await;
     assert_eq!(resp2.status(), reqwest::StatusCode::CONFLICT);
     let body2: serde_json::Value = resp2.json().await.unwrap();
@@ -275,8 +277,11 @@ async fn double_invalid_frontmatter_fails_node() {
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     let state = get_run_state(&daemon, &run_id).await;
     let reviewer = &state["nodes"]["reviewer"];
-    assert_eq!(reviewer["status"], "failed");
-    assert_eq!(reviewer["failure_reason"], "output validation failed");
+    assert_eq!(reviewer["status"], "interrupted");
+    assert!(reviewer["failure_reason"]
+        .as_str()
+        .unwrap()
+        .contains("output validation after retry"));
     let violations = reviewer["frontmatter_violations"].as_array().unwrap();
     assert_eq!(violations.len(), 1);
     assert_eq!(violations[0]["field"], "verdict");

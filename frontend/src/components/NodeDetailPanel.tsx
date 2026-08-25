@@ -39,6 +39,7 @@ const STATUS_LABELS: Record<NodeStatus, string> = {
   failed: "Failed",
   stopped: "Stopped",
   stale: "Stale",
+  interrupted: "Interrupted",
 };
 
 interface Props {
@@ -869,6 +870,7 @@ const STATUS_DOTS: Record<NodeStatus, string> = {
   failed: "bg-st-failed",
   stopped: "bg-st-stopped",
   stale: "bg-st-stale",
+  interrupted: "bg-st-interrupted",
 };
 
 function IterSelector({
@@ -1193,6 +1195,10 @@ function terminalPlaceholder(node: NodeState): string {
       return `Stopped: ${node.failure_reason ?? "user stopped"}`;
     case "stale":
       return "Agent idle — outputs incomplete";
+    case "interrupted":
+      // #598 / ADR-0049: the session died on an infra incident, the work is
+      // presumed intact — Reopen/Retry re-drives it.
+      return `Interrupted: ${node.failure_reason ?? "session died — reopen or retry"}`;
     case "running":
       return "Connecting...";
     case "awaiting_user":

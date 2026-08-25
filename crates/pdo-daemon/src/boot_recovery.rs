@@ -94,11 +94,11 @@ pub(crate) async fn run_boot_recovery(state: &AppState) {
                 .collect();
             for (node_id, iter, node_status) in &dangling {
                 let session = tmux_session_manager::node_session_name(run_id, node_id, *iter);
-                let fail = event_log::Event {
+                let interrupted = event_log::Event {
                     id: None,
                     run_id: run_id.clone(),
                     ts: event_log::now_iso(),
-                    kind: event_log::EventKind::NodeFailed,
+                    kind: event_log::EventKind::NodeInterrupted,
                     node_id: Some(node_id.clone()),
                     iter: Some(*iter),
                     payload: Some(serde_json::json!({
@@ -110,10 +110,12 @@ pub(crate) async fn run_boot_recovery(state: &AppState) {
                         )
                     })),
                 };
-                // Through the guard: idempotent across reboots. validate_fail
-                // returns NoOp once the iteration is already terminal, so a
-                // second pass appends nothing.
-                if let Err(e) = append_event(state, &fail).await {
+                // Through the guard: idempotent across reboots. validate_interrupt
+                // returns NoOp once the iteration is already terminal/interrupted,
+                // so a second pass appends nothing. The run is terminal, so this
+                // only frees the phantom session-holding slot — `finalize` does not
+                // lift a terminal run to AwaitingUser.
+                if let Err(e) = append_event(state, &interrupted).await {
                     error!(
                         "Boot recovery: failed to reconcile dangling {node_id} iter {iter} \
                          in terminal run {run_id}: {e}"
@@ -121,7 +123,7 @@ pub(crate) async fn run_boot_recovery(state: &AppState) {
                 } else {
                     warn!(
                         "Boot recovery: node {node_id} iter {iter} in terminal run {run_id} \
-                         left session-holding ({node_status:?}) — marked Failed"
+                         left session-holding ({node_status:?}) — marked Interrupted"
                     );
                 }
             }
@@ -213,28 +215,31 @@ pub(crate) async fn run_boot_recovery(state: &AppState) {
 
         for (node_id, iter) in &orphaned {
             let session = tmux_session_manager::node_session_name(run_id, node_id, *iter);
-            let fail = event_log::Event {
+            let interrupted = event_log::Event {
                 id: None,
                 run_id: run_id.clone(),
                 ts: event_log::now_iso(),
-                kind: event_log::EventKind::NodeFailed,
+                kind: event_log::EventKind::NodeInterrupted,
                 node_id: Some(node_id.clone()),
                 iter: Some(*iter),
                 payload: Some(serde_json::json!({
                     "reason": format!(
-                        "boot_recovery: tmux session {session} no longer exists \
-                         (node was Running across a daemon restart)"
+                        "session_died: tmux session {session} no longer exists \
+                         (daemon restarted while the node held a session)"
                     )
                 })),
             };
-            // Through the guard: if the node turned terminal organically before
-            // this pass, the failure is dropped as a no-op.
-            if let Err(e) = append_event(state, &fail).await {
-                error!("Boot recovery: failed to fail orphaned {node_id} iter {iter}: {e}");
+            // Since résilience (ADR-0049) a node lost across a daemon restart is
+            // `Interrupted`, not `Failed`: "la session est morte, pas le travail".
+            // The run parks `AwaitingUser` with this reason (derived in
+            // `finalize`), never `Failed`. Through the guard: if the node turned
+            // terminal organically before this pass, the interrupt is a no-op.
+            if let Err(e) = append_event(state, &interrupted).await {
+                error!("Boot recovery: failed to interrupt orphaned {node_id} iter {iter}: {e}");
             } else {
                 warn!(
                     "Boot recovery: node {node_id} iter {iter} in run {run_id} \
-                     orphaned (session {session} gone) — marked Failed"
+                     orphaned (session {session} gone) — marked Interrupted"
                 );
             }
         }

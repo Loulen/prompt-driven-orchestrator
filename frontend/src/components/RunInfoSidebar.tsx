@@ -61,6 +61,20 @@ export default function RunInfoSidebar({
             <div className="mt-0.5 break-words">{run.failure_reason}</div>
           </div>
         )}
+        {/* #598 / ADR-0049: an incident-parked run is `awaiting_user` with an
+            `awaiting_reason` — distinct from an interactive wait (no reason) and
+            from a terminal failure (`failure_reason`). Surface it so the operator
+            sees WHY the run parked and can Reopen/Retry it. */}
+        {run.awaiting_reason && (
+          <div
+            className="mt-2 rounded border border-st-await/30 bg-st-await-bg px-2 py-1.5 text-fg-2"
+            style={{ fontSize: "10.5px" }}
+            data-testid="run-awaiting-reason"
+          >
+            <div className="font-medium text-st-await">Interrupted · awaiting you</div>
+            <div className="mt-0.5 break-words">{run.awaiting_reason}</div>
+          </div>
+        )}
         <div
           className="mt-2 rounded border border-line-strong bg-bg-3 px-2 py-1.5 text-fg-3"
           style={{ fontSize: "10.5px" }}

@@ -284,8 +284,16 @@ pub(crate) async fn spawn_node(
             .unwrap_or(true);
         if body_empty {
             let reason = format!("script node {} has an empty body", node.id);
-            fail_spawn_before_start(deps, spawn_ctx.repo_root, run_id, &node.id, None, &reason)
-                .await;
+            interrupt_spawn_before_start(
+                deps,
+                spawn_ctx.repo_root,
+                run_id,
+                &node.id,
+                iter,
+                None,
+                &reason,
+            )
+            .await;
             return SpawnOutcome::Failed { reason };
         }
     }
@@ -487,23 +495,38 @@ pub(crate) async fn spawn_node(
                 interrupted_git_ops = ensured.entry_state.interrupted_git_ops().to_vec();
                 // #489-B: `Some(...)` ONLY when this spawn created the worktree.
                 // On a reuse, any later abort in the panic-isolated span would send
-                // `fail_spawn_before_start` into `reap_orphan_sub_worktree`, and
+                // `interrupt_spawn_before_start` into `reap_orphan_sub_worktree`, and
                 // `worktree remove --force` succeeds on a dirty tree — it would
                 // destroy exactly the work the restart exists to save. Gated, the
-                // abort path appends `RunFailed` and destroys nothing: the Run goes
-                // terminal with the work intact, `resume_run` reopens it and the next
-                // classification answers `Reusable`. #279's invariant ("an aborted
-                // spawn leaves no orphan") is untouched — it only ever covered what
-                // the spawn itself created.
+                // abort path appends `NodeInterrupted` and destroys nothing: the Run
+                // parks `AwaitingUser` with the work intact (ADR-0049), a reopen/retry
+                // re-drives it and the next classification answers `Reusable`. #279's
+                // invariant ("an aborted spawn leaves no orphan") is untouched — it
+                // only ever covered what the spawn itself created.
                 if ensured.created {
                     orphan_to_reap = Some((sub_wt_dir.clone(), sub_branch));
                 }
             }
             Err(e) => {
-                error!("failed to ensure sub-worktree for {}: {e:#}", node.id);
-                return SpawnOutcome::Failed {
-                    reason: format!("failed to ensure sub-worktree for {}: {e:#}", node.id),
-                };
+                // #498 / ADR-0050 §1: a surviving `pdo/sub-*` branch (or another
+                // git collision) made `worktree add -b` fail. Before résilience
+                // this only `error!`-logged and returned `Failed` — no event, so
+                // the run stayed frozen `running` and only journalctl knew why.
+                // Now it names the node in a `NodeInterrupted`, parking the run
+                // `AwaitingUser`; on the next reopen/retry `ensure_sub_worktree`
+                // reaps the survivor (Recyclable) and the spawn succeeds (FP #3).
+                let reason = format!("failed to ensure sub-worktree for {}: {e:#}", node.id);
+                interrupt_spawn_before_start(
+                    deps,
+                    spawn_ctx.repo_root,
+                    run_id,
+                    &node.id,
+                    iter,
+                    None,
+                    &reason,
+                )
+                .await;
+                return SpawnOutcome::Failed { reason };
             }
         }
         sub_wt_dir
@@ -749,11 +772,12 @@ pub(crate) async fn spawn_node(
         Ok(Ok(pair)) => pair,
         Ok(Err(e)) => {
             let reason = format!("spawn of node {} aborted before start: {e}", node.id);
-            fail_spawn_before_start(
+            interrupt_spawn_before_start(
                 deps,
                 spawn_ctx.repo_root,
                 run_id,
                 &node.id,
+                iter,
                 orphan_to_reap.as_ref(),
                 &reason,
             )
@@ -766,11 +790,12 @@ pub(crate) async fn spawn_node(
                 node.id,
                 panic_payload_message(panic.as_ref())
             );
-            fail_spawn_before_start(
+            interrupt_spawn_before_start(
                 deps,
                 spawn_ctx.repo_root,
                 run_id,
                 &node.id,
+                iter,
                 orphan_to_reap.as_ref(),
                 &reason,
             )
@@ -849,7 +874,7 @@ pub(crate) async fn spawn_node(
             "failed to spawn tmux session {session_name} for node {}: {e}",
             node.id
         );
-        fail_spawn_after_start(
+        interrupt_spawn_after_start(
             deps,
             spawn_ctx.repo_root,
             run_id,
@@ -884,20 +909,25 @@ pub(crate) async fn spawn_node(
     }
 }
 
-/// Fail a run loud when a node spawn aborts *before* `NodeStarted` is appended
-/// (#279, Layer 1). Reaps any orphaned sub-worktree + branch the spawn created,
-/// then appends a visible cause.
+/// Interrupt a run when a node spawn aborts *before* `NodeStarted` is appended
+/// (#279 / #498, ADR-0050 §1). Reaps any orphaned sub-worktree + branch the
+/// spawn created, then appends a visible cause naming the node.
 ///
-/// The cause is `RunFailed`, **not** `NodeFailed`: the node has no
-/// `NodeStarted`, so `transition_guard::validate_fail` treats a `NodeFailed`
-/// for it as a guard no-op (a failure for an iteration "that was never started")
-/// — the run would stay `Running` and the fix would be defeated. `RunFailed` is
-/// un-guarded and reliably moves the run terminal.
-async fn fail_spawn_before_start(
+/// Since résilience (ADR-0049) the cause is `NodeInterrupted`, **not**
+/// `RunFailed`: a spawn abort is an infra incident, not a business failure, so
+/// the runtime never terminalises the run. The guard's `validate_interrupt`
+/// admits a `NodeInterrupted` even for an iteration that never opened a
+/// `NodeStarted` row, so the projection materialises the node `Interrupted` and
+/// [`finalize`](crate::event_log) parks the run `AwaitingUser` with this reason
+/// — visible, recoverable, never frozen `running` (the #498 trap). This is why
+/// the pre-résilience code had to reach for the un-guarded `RunFailed`: a
+/// `NodeFailed` on a never-started node was a guard no-op.
+async fn interrupt_spawn_before_start(
     deps: SpawnDeps<'_>,
     repo_root: &std::path::Path,
     run_id: &str,
     node_id: &str,
+    iter: i64,
     orphan: Option<&(PathBuf, String)>,
     reason: &str,
 ) {
@@ -905,34 +935,32 @@ async fn fail_spawn_before_start(
     if let Some((sub_worktree_dir, sub_branch)) = orphan {
         reap_orphan_sub_worktree(repo_root, sub_worktree_dir, sub_branch);
     }
-    let run_failed = event_log::Event {
+    let interrupted = event_log::Event {
         id: None,
         run_id: run_id.to_string(),
         ts: event_log::now_iso(),
-        kind: event_log::EventKind::RunFailed,
-        node_id: None,
-        iter: None,
-        payload: Some(serde_json::json!({ "reason": reason })),
+        kind: event_log::EventKind::NodeInterrupted,
+        node_id: Some(node_id.to_string()),
+        iter: Some(iter),
+        payload: Some(serde_json::json!({ "reason": reason, "source": "spawn" })),
     };
-    if let Err(e) = append_event_with(deps.db, deps.event_tx, &run_failed).await {
-        error!("Run {run_id}: failed to append RunFailed after spawn abort: {e}");
+    if let Err(e) = append_event_with(deps.db, deps.event_tx, &interrupted).await {
+        error!("Run {run_id}: failed to append NodeInterrupted after spawn abort: {e}");
     }
 }
 
-/// Fail a run loud when a node spawn aborts *after* `NodeStarted` is appended
-/// (#508). Unlike [`fail_spawn_before_start`], the iteration is already
-/// `Running`, so a `NodeFailed` is a legal transition
-/// (`transition_guard::validate_fail` → `Allow`) and IS appended: it moves the
-/// *node* terminal, closing the window where the liveness sweep would rewrite it
-/// `Failed` with a false `session_died` cause and where `GET …/pane` /
-/// boot_recovery could re-drive a `Running` node that has no session.
-/// `RunFailed` then moves the *run* terminal (the sole event that sets
-/// `state.status = Failed`). The reap is gated on `orphan` (Some iff THIS spawn
-/// created the sub-worktree — a reuse must destroy nothing; ADR-0037 §6). The
-/// order (node-terminal → reap → run-terminal) mirrors the #488 "terminal event
-/// first, reap second" convention; it is not required by the guard
-/// (`validate_fail` ignores run status).
-async fn fail_spawn_after_start(
+/// Interrupt a run when a node spawn aborts *after* `NodeStarted` is appended
+/// (#508). The iteration is already `Running`, so a `NodeInterrupted` is a legal
+/// transition and IS appended: it moves the *node* to `Interrupted` (non
+/// terminal, ADR-0049), closing the window where the liveness sweep would
+/// rewrite it `Failed` with a false `session_died` cause and where `GET …/pane`
+/// / boot_recovery could re-drive a `Running` node that has no session. The run
+/// then parks `AwaitingUser` (derived in [`finalize`](crate::event_log)), never
+/// `RunFailed`. The reap is gated on `orphan` (Some iff THIS spawn created the
+/// sub-worktree — a reuse must destroy nothing; ADR-0037 §6). The order
+/// (node-interrupt → reap) mirrors the #488 "terminal event first, reap second"
+/// convention.
+async fn interrupt_spawn_after_start(
     deps: SpawnDeps<'_>,
     repo_root: &std::path::Path,
     run_id: &str,
@@ -943,37 +971,23 @@ async fn fail_spawn_after_start(
 ) {
     error!("Run {run_id}: node {node_id} spawn failed after NodeStarted — {reason}");
 
-    // 1) Node terminal (legal: the iteration is `Running` after `NodeStarted`).
-    let node_failed = event_log::Event {
+    // 1) Node interrupted (legal: the iteration is `Running` after `NodeStarted`).
+    let interrupted = event_log::Event {
         id: None,
         run_id: run_id.to_string(),
         ts: event_log::now_iso(),
-        kind: event_log::EventKind::NodeFailed,
+        kind: event_log::EventKind::NodeInterrupted,
         node_id: Some(node_id.to_string()),
         iter: Some(iter),
         payload: Some(serde_json::json!({ "reason": reason, "source": "spawn" })),
     };
-    if let Err(e) = append_event_with(deps.db, deps.event_tx, &node_failed).await {
-        error!("Run {run_id}: failed to append NodeFailed after spawn failure: {e}");
+    if let Err(e) = append_event_with(deps.db, deps.event_tx, &interrupted).await {
+        error!("Run {run_id}: failed to append NodeInterrupted after spawn failure: {e}");
     }
 
     // 2) Reap ONLY what this spawn created (gated; ADR-0037 §6 — a reuse loses
-    //    nothing).
+    //    nothing). The run parks `AwaitingUser` via projection; no run event.
     if let Some((sub_worktree_dir, sub_branch)) = orphan {
         reap_orphan_sub_worktree(repo_root, sub_worktree_dir, sub_branch);
-    }
-
-    // 3) Run terminal (the sole event that sets `state.status = Failed`).
-    let run_failed = event_log::Event {
-        id: None,
-        run_id: run_id.to_string(),
-        ts: event_log::now_iso(),
-        kind: event_log::EventKind::RunFailed,
-        node_id: None,
-        iter: None,
-        payload: Some(serde_json::json!({ "reason": reason })),
-    };
-    if let Err(e) = append_event_with(deps.db, deps.event_tx, &run_failed).await {
-        error!("Run {run_id}: failed to append RunFailed after spawn failure: {e}");
     }
 }

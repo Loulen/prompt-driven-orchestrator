@@ -359,3 +359,57 @@ describe("EditToolbar undo/redo buttons (ADR-0014 / #226)", () => {
     expect(undoSpy).not.toHaveBeenCalled();
   });
 });
+
+// --- #598 / ADR-0049: the finished-run action group (Variant A) --------------
+
+describe("EditToolbar finished-run group (#598)", () => {
+  function renderToolbar(props: Partial<ComponentProps<typeof EditToolbar>> = {}) {
+    return render(
+      <TooltipProvider>
+        <EditToolbar
+          onAddNode={vi.fn()}
+          onAddNote={vi.fn()}
+          onAddNodeFromYaml={vi.fn()}
+          libraryEntries={[]}
+          onLibraryDelete={vi.fn()}
+          {...props}
+        />
+      </TooltipProvider>,
+    );
+  }
+
+  it("hides the finished-run group on a live run", () => {
+    renderToolbar({ finishedRun: false, onReopen: vi.fn() });
+    expect(screen.queryByTestId("toolbar-reopen")).toBeNull();
+    expect(screen.queryByTestId("toolbar-retry-all")).toBeNull();
+    expect(screen.queryByTestId("toolbar-open-shell")).toBeNull();
+  });
+
+  it("shows Reopen/Retry-all/Open-shell on a terminal non-archived run and wires each", () => {
+    const onReopen = vi.fn();
+    const onRetryAll = vi.fn();
+    const onOpenShell = vi.fn();
+    renderToolbar({ finishedRun: true, onReopen, onRetryAll, onOpenShell });
+
+    const reopen = screen.getByTestId("toolbar-reopen");
+    const retry = screen.getByTestId("toolbar-retry-all");
+    const shell = screen.getByTestId("toolbar-open-shell");
+    expect(reopen).toBeInTheDocument();
+    expect(retry).toBeInTheDocument();
+    expect(shell).toBeInTheDocument();
+
+    fireEvent.click(reopen);
+    fireEvent.click(retry);
+    fireEvent.click(shell);
+    expect(onReopen).toHaveBeenCalledTimes(1);
+    expect(onRetryAll).toHaveBeenCalledTimes(1);
+    expect(onOpenShell).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders only the buttons whose handlers are provided", () => {
+    renderToolbar({ finishedRun: true, onReopen: vi.fn() });
+    expect(screen.getByTestId("toolbar-reopen")).toBeInTheDocument();
+    expect(screen.queryByTestId("toolbar-retry-all")).toBeNull();
+    expect(screen.queryByTestId("toolbar-open-shell")).toBeNull();
+  });
+});

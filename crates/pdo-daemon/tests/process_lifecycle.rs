@@ -218,13 +218,14 @@ async fn dead_session_marks_node_failed_with_session_cause() {
     let (status, reason) = node_state(&daemon.url(), &run_id, NODE_ID).await;
     assert_eq!(
         status.as_deref(),
-        Some("failed"),
-        "node with a dead session must be marked Failed within one detector cycle"
+        Some("interrupted"),
+        "node with a dead session must be marked Interrupted (ADR-0049: infra \
+         death is not a business failure) within one detector cycle"
     );
-    let reason = reason.expect("failed node must carry a cause");
+    let reason = reason.expect("interrupted node must carry a cause");
     assert!(
         reason.contains(&session),
-        "failure cause {reason:?} must name the dead session {session:?}"
+        "interrupt cause {reason:?} must name the dead session {session:?}"
     );
 }
 
@@ -314,16 +315,17 @@ async fn run_with_no_live_node_and_nothing_schedulable_is_reconciled_terminal() 
     let (node_status, _) = node_state(&daemon.url(), &run_id, NODE_ID).await;
     assert_eq!(
         node_status.as_deref(),
-        Some("failed"),
-        "the node with the dead session must be Failed"
+        Some("interrupted"),
+        "the node with the dead session must be Interrupted (ADR-0049)"
     );
 
     let status = run_status(&daemon.url(), &run_id).await;
     assert_eq!(
         status.as_deref(),
-        Some("failed"),
-        "a run with no live node and nothing schedulable must be reconciled \
-         terminal, not left Running forever (silent stall)"
+        Some("awaiting_user"),
+        "a run with no live node and nothing schedulable must be reconciled to a \
+         recoverable AwaitingUser park (ADR-0049), not left Running forever \
+         (silent stall) and never auto-Failed"
     );
 }
 
@@ -359,16 +361,17 @@ async fn boot_recovery_reconciles_a_run_level_stall() {
     let (node_status, _) = node_state(&daemon.url(), &run_id, NODE_ID).await;
     assert_eq!(
         node_status.as_deref(),
-        Some("failed"),
-        "the orphaned node must be Failed at boot"
+        Some("interrupted"),
+        "the orphaned node must be Interrupted at boot (ADR-0049)"
     );
 
     let status = run_status(&daemon.url(), &run_id).await;
     assert_eq!(
         status.as_deref(),
-        Some("failed"),
-        "a run wedged behind a boot-failed node must be reconciled terminal at \
-         boot, not left Running forever"
+        Some("awaiting_user"),
+        "a run wedged behind a boot-interrupted node must be reconciled to a \
+         recoverable AwaitingUser park at boot, not left Running forever and \
+         never auto-Failed (ADR-0049)"
     );
 }
 
@@ -404,8 +407,8 @@ async fn boot_recovery_fails_orphaned_running_node() {
     let (status, reason) = node_state(&daemon.url(), &run_id, NODE_ID).await;
     assert_eq!(
         status.as_deref(),
-        Some("failed"),
-        "an orphaned Running node must be reconciled to Failed at boot"
+        Some("interrupted"),
+        "an orphaned Running node must be reconciled to Interrupted at boot (ADR-0049)"
     );
     let reason = reason.expect("recovered node must carry a cause");
     assert!(
@@ -786,18 +789,19 @@ async fn a_panicking_stale_sweep_is_isolated_and_the_next_sweep_recovers() {
     );
 
     // Sweep 2 recovers (poison disarmed itself) and does real detection: the
-    // dead-session node is now Failed with a cause naming the dead session.
+    // dead-session node is now Interrupted (ADR-0049) with a cause naming the
+    // dead session.
     daemon.run_stale_detection_tick().await;
     let (status, reason) = node_state(&daemon.url(), &run_id, NODE_ID).await;
     assert_eq!(
         status.as_deref(),
-        Some("failed"),
-        "the sweep must recover after a contained panic and detect the dead session"
+        Some("interrupted"),
+        "the sweep must recover after a contained panic and interrupt the dead session"
     );
-    let reason = reason.expect("failed node must carry a cause");
+    let reason = reason.expect("interrupted node must carry a cause");
     assert!(
         reason.contains(&session),
-        "failure cause {reason:?} must name the dead session {session:?}"
+        "interrupt cause {reason:?} must name the dead session {session:?}"
     );
 }
 

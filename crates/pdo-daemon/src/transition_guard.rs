@@ -101,6 +101,7 @@ impl std::fmt::Display for RejectReason {
                     EventKind::NodeCompleted | EventKind::NodeAutoCompleted => "completion",
                     EventKind::NodeStarted | EventKind::NodeWaiting => "start",
                     EventKind::NodeFailed => "fail",
+                    EventKind::NodeInterrupted => "interrupt",
                     EventKind::NodeStale => "stale",
                     // The guard only builds MissingNodeId for the six kinds
                     // above; defensive.
@@ -195,6 +196,7 @@ pub(crate) fn validate_transition(state: Option<&RunState>, event: &Event) -> Ve
         EventKind::NodeStarted | EventKind::NodeWaiting => validate_start(state, event),
         EventKind::NodeStale => validate_stale(state, event),
         EventKind::NodeFailed => validate_fail(state, event),
+        EventKind::NodeInterrupted => validate_interrupt(state, event),
         _ => Verdict::Allow,
     }
 }
@@ -397,6 +399,58 @@ fn validate_fail(state: &RunState, event: &Event) -> Verdict {
         None => Verdict::noop(format!(
             "node {node_id} iter {iter} has no started iteration: failure ignored"
         )),
+        _ => Verdict::Allow,
+    }
+}
+
+/// Validate a `NodeInterrupted` — an infra incident on a node (ADR-0049),
+/// emitted by the liveness sweep, boot recovery, or a spawn-abort.
+///
+/// Two differences from [`validate_fail`], both load-bearing:
+///
+/// 1. A **never-started** iteration is **allowed**, not a no-op: a spawn that
+///    aborts *before* `NodeStarted` (ADR-0050 §1 — e.g. a surviving `pdo/sub-*`
+///    branch collides on `git worktree add -b`) still names its node, and the
+///    projection materialises it `Interrupted` so the run parks visibly. This is
+///    the exact case `validate_fail` drops as "never started", which is why the
+///    before-start abort had to emit `RunFailed` before résilience.
+/// 2. The run-liveness gate is **not** applied: an interrupt lands on a run that
+///    is still `Running`, and a race that lets it arrive just after a terminal
+///    event should be dropped as a duplicate rather than resurrect the run — the
+///    already-terminal iteration arm below covers that.
+///
+/// A late interrupt for an iteration that reached a terminal state organically
+/// (or was already interrupted) is a no-op, never an overwrite.
+fn validate_interrupt(state: &RunState, event: &Event) -> Verdict {
+    let Some(node_id) = event.node_id.as_deref() else {
+        return Verdict::reject(RejectReason::MissingNodeId {
+            kind: event.kind.clone(),
+        });
+    };
+    let iter = event.iter.unwrap_or(1);
+
+    match iteration_status(state, node_id, iter) {
+        Some(NodeStatus::Completed)
+        | Some(NodeStatus::Failed)
+        | Some(NodeStatus::Stopped)
+        | Some(NodeStatus::Stale)
+        | Some(NodeStatus::Interrupted) => Verdict::noop(format!(
+            "node {node_id} iter {iter} is already terminal: interrupt ignored"
+        )),
+        // `None` (never started, or a node materialised by a prior before-start
+        // interrupt with no iteration row): a fresh interrupt is allowed unless
+        // the node itself is already interrupted — a re-interrupt of the same
+        // never-started node is a no-op.
+        None if state
+            .nodes
+            .get(node_id)
+            .is_some_and(|n| n.status == NodeStatus::Interrupted) =>
+        {
+            Verdict::noop(format!(
+                "node {node_id} is already interrupted: interrupt ignored"
+            ))
+        }
+        // Running / AwaitingUser / never-started — the incident is allowed.
         _ => Verdict::Allow,
     }
 }
@@ -816,6 +870,52 @@ mod tests {
             &ev(EventKind::NodeFailed, Some("ghost"), Some(1)),
         );
         assert_noop(verdict);
+    }
+
+    // --- NodeInterrupted (ADR-0049/0050) --------------------------------------
+
+    #[test]
+    fn interrupt_on_running_iteration_is_allowed() {
+        // Session death / after-start spawn abort on a live iteration.
+        let state = state_from(&[
+            ev(EventKind::RunStarted, None, None),
+            ev(EventKind::NodeStarted, Some("worker"), Some(1)),
+        ]);
+        assert_eq!(
+            validate_transition(
+                Some(&state),
+                &ev(EventKind::NodeInterrupted, Some("worker"), Some(1))
+            ),
+            Verdict::Allow
+        );
+    }
+
+    #[test]
+    fn interrupt_on_never_started_iteration_is_allowed() {
+        // ADR-0050 §1: a spawn abort BEFORE NodeStarted must still name its node —
+        // unlike NodeFailed, the guard ALLOWS it so the projection can materialise
+        // the interrupted node and park the run visibly.
+        let state = state_from(&[ev(EventKind::RunStarted, None, None)]);
+        assert_eq!(
+            validate_transition(
+                Some(&state),
+                &ev(EventKind::NodeInterrupted, Some("ghost"), Some(1))
+            ),
+            Verdict::Allow
+        );
+    }
+
+    #[test]
+    fn interrupt_on_completed_iteration_is_noop() {
+        let state = state_from(&[
+            ev(EventKind::RunStarted, None, None),
+            ev(EventKind::NodeStarted, Some("worker"), Some(1)),
+            ev(EventKind::NodeCompleted, Some("worker"), Some(1)),
+        ]);
+        assert_noop(validate_transition(
+            Some(&state),
+            &ev(EventKind::NodeInterrupted, Some("worker"), Some(1)),
+        ));
     }
 
     // --- spawn_superfluous (scheduler-side dedup) ---

@@ -1071,6 +1071,21 @@ export function resumeRun(runId: string): Promise<void> {
 }
 
 /**
+ * The global re-open (#598 / ADR-0049): "re-project + drive the new". Surfaced by
+ * the Play button in the run-level toolbar. Lifts a terminal (or incident-parked)
+ * run back to `running` by a safe re-projection — satisfied `(node, iter)` are
+ * frozen (never re-spawned, anti-#221), only the unsatisfied work runs. Distinct
+ * from `retryAll` (which archives and forks a NEW run with a different id).
+ */
+export function reopenRun(runId: string): Promise<void> {
+  return request<void>(
+    "POST",
+    `/runs/${encodeURIComponent(runId)}/commands`,
+    { body: { kind: "reopen_run" }, responseMode: "void", label: "reopen_run" },
+  );
+}
+
+/**
  * Route a loop region by id from the Pipeline Manager (ADR-0011 / #152): end it
  * (fire its completion) so a region blocked "exhausted — unrouted" leaves the
  * region and the run proceeds. The daemon resumes the run as part of the command.

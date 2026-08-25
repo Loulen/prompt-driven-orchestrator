@@ -689,6 +689,7 @@ export default function App() {
                   assistantActive={infoPanelOpen && infoPanelInitialTab === "assistant"}
                   onOpenAssistant={handleOpenAssistant}
                   runState={selectedRun}
+                  onSelectRun={handleSelectRun}
                 />
               </div>
             ) : (

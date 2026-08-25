@@ -149,20 +149,22 @@ async fn spawn_panic_reaps_orphan_and_fails_run_loud() {
         .to_string();
 
     // The entry spawn runs synchronously in the create-run handler, so the
-    // panic has already been caught, the orphan reaped, and RunFailed appended.
+    // panic has already been caught, the orphan reaped, and (ADR-0049) the run
+    // parked `AwaitingUser` via a `NodeInterrupted` — never `RunFailed`.
     // Poll a short window to absorb any async slack.
-    let mut failed = false;
+    let mut parked = false;
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     while std::time::Instant::now() < deadline {
-        if run_status(&daemon, &run_id).await.as_deref() == Some("failed") {
-            failed = true;
+        if run_status(&daemon, &run_id).await.as_deref() == Some("awaiting_user") {
+            parked = true;
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     assert!(
-        failed,
-        "run must be Failed loud after the spawn panic, not wedged Running with no live node"
+        parked,
+        "run must park AwaitingUser loud after the spawn panic, not wedged Running \
+         with no live node and never auto-Failed (ADR-0049)"
     );
 
     // Layer 1's reap: the orphaned sub-worktree dir and its branch are gone.
@@ -191,14 +193,21 @@ async fn spawn_panic_reaps_orphan_and_fails_run_loud() {
             .any(|e| e["kind"] == "node_started" && e["node_id"] == NODE_ID),
         "no NodeStarted may exist for a spawn that aborted before start"
     );
-    // The failure is recorded as RunFailed (NOT NodeFailed, which the transition
-    // guard would no-op for a node with no NodeStarted, leaving the run Running).
+    // ADR-0049/0050: the abort is recorded as a `NodeInterrupted` naming the node
+    // (the guard admits it even with no NodeStarted), which parks the run
+    // `AwaitingUser`. The runtime never appends `RunFailed`, and never a
+    // `NodeFailed` (infra death is Interrupted, not a business failure).
     assert!(
-        evs.iter().any(|e| e["kind"] == "run_failed"),
-        "the spawn abort must surface as a RunFailed"
+        evs.iter()
+            .any(|e| e["kind"] == "node_interrupted" && e["node_id"] == NODE_ID),
+        "the spawn abort must surface as a NodeInterrupted naming the node"
+    );
+    assert!(
+        !evs.iter().any(|e| e["kind"] == "run_failed"),
+        "the runtime never fails the run on a spawn abort (ADR-0049)"
     );
     assert!(
         !evs.iter().any(|e| e["kind"] == "node_failed"),
-        "the abort must NOT be a NodeFailed (it would no-op and wedge the run)"
+        "the abort must NOT be a NodeFailed (infra death is Interrupted)"
     );
 }

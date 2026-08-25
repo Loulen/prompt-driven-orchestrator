@@ -541,14 +541,16 @@ async fn a_spawn_that_fails_is_a_500_that_says_the_run_failed() {
         body["message"].as_str().unwrap().contains("empty body"),
         "{body}"
     );
-    // `fail_spawn_before_start` appended `RunFailed`, so the caller must NOT be
-    // told to go and `pdo fail` on top of it.
-    assert_eq!(body["run_failed"], true, "{body}");
-    assert_eq!(body["recoverable"], false, "{body}");
+    // ADR-0049: `interrupt_spawn_before_start` parks the run `AwaitingUser` (via
+    // `NodeInterrupted`), it never fails it — so `run_failed` re-projects to
+    // `false` and the situation is recoverable (fix the body, reopen). The 500
+    // still says the spawn is a panne, but the run is not dead.
+    assert_eq!(body["run_failed"], false, "{body}");
+    assert_eq!(body["recoverable"], true, "{body}");
     assert_eq!(body["session_killed"], true, "{body}");
 
-    wait_until("the run to be failed", || async {
-        get_run(&daemon, &run_id).await["status"] == "failed"
+    wait_until("the run to park awaiting-user", || async {
+        get_run(&daemon, &run_id).await["status"] == "awaiting_user"
     })
     .await;
 

@@ -119,6 +119,11 @@ pub(crate) enum ActionOutcome {
     Completed,
     /// `RunHalted` was emitted — the driver must stop dispatching and return.
     Halted { message: String },
+    /// `RunInterrupted` was emitted for an `unrouted` convergence (ADR-0049) —
+    /// the run is parked `AwaitingUser`, not terminal. The driver stops
+    /// dispatching this pass (there is nothing left to route), exactly like
+    /// `Halted`; a human reopens or routes it.
+    Interrupted { message: String },
 }
 
 /// Interpret ONE [`SchedulerAction`]. A linear sequence of Layer-2 primitives
@@ -166,6 +171,21 @@ pub(crate) async fn interpret(
             )
             .await;
             ActionOutcome::Halted {
+                message: message.clone(),
+            }
+        }
+        SchedulerAction::Interrupt { message } => {
+            // ADR-0049: `unrouted` parks the run `AwaitingUser`, never terminal.
+            // `RunInterrupted` carries the diagnostic under `reason` (the shape
+            // `run_event_reason` reads into `awaiting_reason`).
+            emit_run_event(
+                state,
+                run_id,
+                event_log::EventKind::RunInterrupted,
+                Some(serde_json::json!({ "reason": message })),
+            )
+            .await;
+            ActionOutcome::Interrupted {
                 message: message.clone(),
             }
         }

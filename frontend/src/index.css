@@ -65,6 +65,10 @@
   --color-st-stopped-bg: rgba(156, 163, 175, 0.14);
   --color-st-stale: #d97706;
   --color-st-stale-bg: rgba(217, 119, 6, 0.14);
+  /* Interrupted (#598 / ADR-0049): an infra incident, recoverable — a warm amber
+     distinct from failed (red). "La session est morte, pas le travail." */
+  --color-st-interrupted: #f59e0b;
+  --color-st-interrupted-bg: rgba(245, 158, 11, 0.14);
   --color-st-paused: #f97316;
   --color-st-paused-bg: rgba(249, 115, 22, 0.14);
   --color-st-pending: #4b5563;

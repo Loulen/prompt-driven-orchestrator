@@ -42,6 +42,13 @@ pub(crate) struct Project {
     /// resolver seam (the `Some("")` trap of #347).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness: Option<String>,
+    /// The `auto_fail` preference this Projet carries (ADR-0049), or `None` when
+    /// it states none — the **project** tier of
+    /// [`crate::auto_fail::resolve_auto_fail`]. `Some(true)`/`Some(false)` is a
+    /// stored decision; `None` makes the tier transparent (fall through to the
+    /// instance default). No env/default tier of its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_fail: Option<bool>,
     /// Member repository paths, compared **verbatim** (ADR-0033). Ordered by
     /// attach time (the `rowid` of `project_members`).
     #[serde(default)]
@@ -76,11 +83,27 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             id         TEXT PRIMARY KEY,
             name       TEXT NOT NULL,
             harness    TEXT,
+            auto_fail  INTEGER,
             created_at TEXT NOT NULL
         )",
     )
     .execute(db)
     .await?;
+
+    // Additive migration for pre-résilience databases: the `auto_fail` column is
+    // absent on `projects` tables created before ADR-0049 (#552 shipped without
+    // it). Guarded `ADD COLUMN` — NULLABLE so an existing Projet states no
+    // preference and the tier stays transparent.
+    let has_auto_fail =
+        sqlx::query("SELECT 1 FROM pragma_table_info('projects') WHERE name = 'auto_fail'")
+            .fetch_optional(db)
+            .await?
+            .is_some();
+    if !has_auto_fail {
+        sqlx::query("ALTER TABLE projects ADD COLUMN auto_fail INTEGER")
+            .execute(db)
+            .await?;
+    }
 
     // `path` is the PRIMARY KEY: at-most-one-Projet-per-path is a schema
     // invariant. `project_id` is indexed for the members-of lookup. No FK
@@ -119,6 +142,7 @@ fn row_to_project(row: &sqlx::sqlite::SqliteRow, members: Vec<String>) -> Projec
         harness: row
             .get::<Option<String>, _>("harness")
             .filter(|s| !s.is_empty()),
+        auto_fail: row.get::<Option<i64>, _>("auto_fail").map(|v| v != 0),
         members,
     }
 }
@@ -149,6 +173,7 @@ pub(crate) async fn create(db: &SqlitePool, name: &str) -> Result<Project, sqlx:
         id,
         name: name.to_string(),
         harness: None,
+        auto_fail: None,
         members: Vec::new(),
     })
 }
@@ -207,6 +232,35 @@ pub(crate) async fn set_harness(
         .execute(db)
         .await?;
     Ok(res.rows_affected() > 0)
+}
+
+/// Set (or clear, with `None`) the `auto_fail` preference a Projet carries
+/// (ADR-0049). `Some(true)` stores `1`, `Some(false)` stores `0`, `None` clears
+/// it back to "states no preference" (SQL `NULL`). Returns `true` iff a row was
+/// updated.
+pub(crate) async fn set_auto_fail(
+    db: &SqlitePool,
+    id: &str,
+    auto_fail: Option<bool>,
+) -> Result<bool, sqlx::Error> {
+    let stored: Option<i64> = auto_fail.map(|v| if v { 1 } else { 0 });
+    let res = sqlx::query("UPDATE projects SET auto_fail = ? WHERE id = ?")
+        .bind(stored)
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+/// Resolve the `auto_fail` preference a `path` inherits from its Projet, for the
+/// `project` tier of [`crate::auto_fail::resolve_auto_fail`]. `None` ⇒ the path
+/// is in no Projet, or its Projet states no preference — the tier is transparent
+/// either way.
+pub(crate) async fn auto_fail_for_path(
+    db: &SqlitePool,
+    path: &str,
+) -> Result<Option<bool>, sqlx::Error> {
+    Ok(owner_of(db, path).await?.and_then(|p| p.auto_fail))
 }
 
 /// The Projet that currently owns `path`, if any. Read-then-decide basis for the

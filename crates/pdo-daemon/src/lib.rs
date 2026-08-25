@@ -8488,13 +8488,21 @@ async fn spawn_manager_session(
     let default_harness = stored_default_harness(&state.db).await;
     let manager_harness_name =
         harness_resolver::resolve_infra_harness(run_harness.as_deref(), default_harness.as_deref());
-    let manager_harness = harness_registry::resolve(&manager_harness_name).unwrap_or_else(|| {
-        warn!(
-            "manager for run {run_id}: unknown harness '{manager_harness_name}' — \
-             launching the manager on the claude floor (the first node spawn fails fast)"
-        );
-        harness_registry::claude()
-    });
+    // #614 (correctif 3): resolve against the DISK TIER, so "this Run runs on X" is
+    // true even when X is a user-declared harness — the manager follows the Run's
+    // frozen harness through the same registry the node spawns resolve against.
+    let harness_home_root = sandbox_run::sandbox_home_roots(state)
+        .map(|(home, _)| home)
+        .unwrap_or_default();
+    let manager_harness = harness_registry::HarnessRegistry::load(&harness_home_root)
+        .resolve(&manager_harness_name)
+        .unwrap_or_else(|| {
+            warn!(
+                "manager for run {run_id}: unknown harness '{manager_harness_name}' — \
+                 launching the manager on the claude floor (the first node spawn fails fast)"
+            );
+            harness_registry::claude()
+        });
     if let Err(e) = tmux_session_manager::spawn(
         &session_name,
         &full_prompt,
@@ -9498,6 +9506,27 @@ async fn put_settings(
         // no silent default) (#410/#432). Same shared gate as the Trigger surfaces.
         if let Err(msg) = validate_sandbox_ref(&state.db, s).await {
             return bad(&msg);
+        }
+    }
+    if let Some(h) = req.default_harness.as_deref() {
+        // #614 (correctif 10): "" = clear sentinel (accepted); anything else must
+        // RESOLVE against the registry (embedded floor merged with the disk tier),
+        // exactly as the default sandbox must above. A default harness that resolves
+        // to nothing would break EVERY subsequent spawn that falls through to it —
+        // so it is refused at registration, fail-fast, never a silent broken default.
+        if !h.is_empty() {
+            let home_root = sandbox_run::sandbox_home_roots(&state)
+                .map(|(home, _)| home)
+                .unwrap_or_default();
+            let registry = harness_registry::HarnessRegistry::load(&home_root);
+            if registry.resolve(h).is_none() {
+                return bad(&format!(
+                    "unknown default harness `{h}`: it resolves to no embedded or declared \
+                     harness — a default that does not resolve would break every spawn that \
+                     falls through to it. Known harnesses: {}",
+                    registry.names().join(", ")
+                ));
+            }
         }
     }
 
@@ -11327,6 +11356,13 @@ pub(crate) enum ReattachOutcome {
     /// ADR-0045). The optimal path is unavailable — the caller falls back
     /// (`recover_node` → restart-with-artifacts, AC #9 / `node_pane` → snapshot).
     CannotResume,
+    /// The harness FROZEN at spawn no longer resolves — its embedded name was
+    /// dropped, or its disk descriptor was removed/renamed (#614, correctif 2).
+    /// PDO **refuses** rather than relaunch `claude` in this node's worktree: a
+    /// silent fallback would run a different agent than the one the node was
+    /// started on, corrupting its transcript and its cost attribution. The caller
+    /// surfaces the refusal, naming the missing harness.
+    FrozenHarnessGone { harness: String },
     /// The session cap refused the re-attach (a re-attach IS a (re)spawn, #487 §3).
     CapReached { live: usize, cap: usize },
     /// The `NodeStarted` resurrection trace was refused (e.g. a terminal Run) — do
@@ -11382,16 +11418,28 @@ pub(crate) async fn reattach_node_session(
     let launch_effort = find_launch_effort(events, node_id, iter);
     let launch_session_id = find_launch_session_id(events, node_id, iter);
     // #550/#553/ADR-0046: re-pose the harness FROZEN at spawn, resolved against the
-    // embedded floor MERGED with the disk descriptor tier; any failure falls back
-    // to the `claude` floor, byte-identical to the legacy resume.
+    // embedded floor MERGED with the disk descriptor tier. #614 (correctif 2): a
+    // name that WAS frozen but no longer resolves REFUSES — never a silent `claude`
+    // relaunch, which would run a different agent in this node's worktree. A row
+    // with NO frozen harness (pre-#550, a legacy resume) keeps the `claude` floor,
+    // byte-identical to the legacy resume.
     let launch_harness = find_launch_harness(events, node_id, iter);
     let harness_home_root = sandbox_run::sandbox_home_roots(state)
         .map(|(home, _)| home)
         .unwrap_or_default();
-    let descriptor = launch_harness
-        .as_deref()
-        .and_then(|name| harness_registry::HarnessRegistry::load(&harness_home_root).resolve(name))
-        .unwrap_or_else(harness_registry::claude);
+    let descriptor = match launch_harness.as_deref() {
+        Some(name) => {
+            match harness_registry::HarnessRegistry::load(&harness_home_root).resolve(name) {
+                Some(d) => d,
+                None => {
+                    return ReattachOutcome::FrozenHarnessGone {
+                        harness: name.to_string(),
+                    }
+                }
+            }
+        }
+        None => harness_registry::claude(),
+    };
     // AC #9 / ADR-0045: a harness with no resume tail cannot be re-attached.
     if !descriptor.can_resume() {
         return ReattachOutcome::CannotResume;
@@ -11570,6 +11618,26 @@ async fn node_pane(
                     resumed: false,
                     stale: false,
                     source,
+                })
+                .into_response();
+            }
+            // #614 (correctif 2): the frozen harness no longer resolves — refuse,
+            // naming it, rather than relaunch `claude` in this node's worktree.
+            ReattachOutcome::FrozenHarnessGone { harness } => {
+                warn!(
+                    "node_pane: refusing to resurrect {node_id} iter {iter} in {run_id} — its \
+                     frozen harness '{harness}' no longer resolves (embedded name dropped or disk \
+                     descriptor removed); not relaunching claude in its place"
+                );
+                return Json(PaneResponse {
+                    content: format!(
+                        "Session cannot be resumed: this node's harness '{harness}' no longer \
+                         resolves. Restore its descriptor, or retry the node to start fresh."
+                    ),
+                    session_name,
+                    resumed: false,
+                    stale: false,
+                    source: "unavailable",
                 })
                 .into_response();
             }
@@ -11966,13 +12034,19 @@ async fn spawn_merge_resolver(
     let default_harness = stored_default_harness(&state.db).await;
     let resolver_harness_name =
         harness_resolver::resolve_infra_harness(run_harness.as_deref(), default_harness.as_deref());
-    let resolver_harness = harness_registry::resolve(&resolver_harness_name).unwrap_or_else(|| {
-        warn!(
-            "merge resolver for run {run_id}: unknown harness '{resolver_harness_name}' — \
-             launching on the claude floor"
-        );
-        harness_registry::claude()
-    });
+    // #614 (correctif 3): resolve against the DISK TIER, like the manager.
+    let resolver_home_root = sandbox_run::sandbox_home_roots(state)
+        .map(|(home, _)| home)
+        .unwrap_or_default();
+    let resolver_harness = harness_registry::HarnessRegistry::load(&resolver_home_root)
+        .resolve(&resolver_harness_name)
+        .unwrap_or_else(|| {
+            warn!(
+                "merge resolver for run {run_id}: unknown harness '{resolver_harness_name}' — \
+                 launching on the claude floor"
+            );
+            harness_registry::claude()
+        });
     if let Err(e) = tmux_session_manager::spawn(
         &session_name,
         &prompt,
@@ -13369,6 +13443,17 @@ async fn force_spawn_node(
         .map(|ov| materialize_override_inputs(&artifacts_dir, node_id, iter, ov))
         .filter(|m| !m.is_empty());
 
+    // #614 (correctif 4): resolve the winning harness against the DISK TIER, so a
+    // manual force-spawn / Start reaches a user-declared harness exactly like the
+    // scheduler's `spawn_node` does — these commands stop being reserved to
+    // embedded harnesses. Bound before `params` so the borrow outlives `start_node`.
+    // Absent HOME degrades to the embedded floor (`load` returns the floor when the
+    // file is unreadable).
+    let harness_home_root = sandbox_run::sandbox_home_roots(state)
+        .map(|(home, _)| home)
+        .unwrap_or_default();
+    let harness_registry = harness_registry::HarnessRegistry::load(&harness_home_root);
+
     let params = node_primitives::StartNodeParams {
         run_id,
         node_id,
@@ -13403,6 +13488,8 @@ async fn force_spawn_node(
         // auto-completion fresh so a force-spawned node arms the `Stop` hook when
         // the setting is on, instead of silently missing it on this seam alone.
         inject_hook: stored_autocomplete_turn_end(&state.db).await,
+        // #614 (correctif 4): honour the disk tier on this manual seam too.
+        harness_registry: Some(&harness_registry),
     };
 
     // D5 (#204): admission cap as an atomic check-and-reserve. Hold the lock
@@ -14202,13 +14289,19 @@ async fn open_library_assistant(
     // floor — mirror of the manager/merge-resolver resolution.
     let default_harness = stored_default_harness(&state.db).await;
     let harness_name = harness_resolver::resolve_infra_harness(None, default_harness.as_deref());
-    let harness = harness_registry::resolve(&harness_name).unwrap_or_else(|| {
-        warn!(
-            "library assistant for '{pipeline_id}': unknown harness '{harness_name}' — \
-             launching on the claude floor"
-        );
-        harness_registry::claude()
-    });
+    // #614 (correctif 3): resolve against the DISK TIER, like the manager/resolver.
+    let libassist_home_root = sandbox_run::sandbox_home_roots(&state)
+        .map(|(home, _)| home)
+        .unwrap_or_default();
+    let harness = harness_registry::HarnessRegistry::load(&libassist_home_root)
+        .resolve(&harness_name)
+        .unwrap_or_else(|| {
+            warn!(
+                "library assistant for '{pipeline_id}': unknown harness '{harness_name}' — \
+                 launching on the claude floor"
+            );
+            harness_registry::claude()
+        });
 
     // Keep the primer OUT of the user-facing pipelines dir: write it to a sibling
     // `.libassist/<id>.md` under the library root (the parent of `pipelines/`).
@@ -31601,8 +31694,9 @@ edges:
             assert!(h["installed"].is_boolean(), "installed is a bool: {h}");
         }
 
-        // The embedded floor always resolves, always as `builtin`.
-        for floor in ["claude", "opencode"] {
+        // The embedded floor always resolves, always as `builtin` — copilot is the
+        // third arm (#614), listed under "Built-in" like the other two.
+        for floor in ["claude", "opencode", "copilot"] {
             let entry = harnesses
                 .iter()
                 .find(|h| h["name"] == floor)

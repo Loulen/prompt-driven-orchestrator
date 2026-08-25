@@ -444,8 +444,12 @@ pub(crate) async fn spawn_node(
         if deps.tmux_cmd_override.is_none() && !tmux_session_manager::binary_available(&d.binary) {
             return SpawnOutcome::Failed {
                 reason: format!(
-                    "node {}: harness '{}' binary '{}' not found on PATH",
-                    node.id, d.name, d.binary
+                    "node {}: harness '{}' binary '{}' not found in PATH {} \
+                     (ADR-0055: the user's interactive PATH, not the service's)",
+                    node.id,
+                    d.name,
+                    d.binary,
+                    tmux_session_manager::harness_probe_path()
                 ),
             };
         }

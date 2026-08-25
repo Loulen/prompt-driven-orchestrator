@@ -74,6 +74,14 @@ pub(crate) struct StartNodeParams<'a> {
     /// keeps a manual force-spawn honouring the instance default — the same
     /// silent-bug class the `default_model` comment warns about (#347).
     pub inject_hook: bool,
+    /// The harness registry to resolve the winning harness name against (#614,
+    /// correctif 4). `Some` ⇒ the **disk tier** is honoured (embedded floor merged
+    /// with `~/.pdo/harnesses/descriptors.yaml`), so a force-spawn / Start-button
+    /// relaunch reaches a user-declared harness exactly like the scheduler's
+    /// `spawn_node` does — these commands stop being reserved to embedded harnesses.
+    /// `None` ⇒ the embedded floor only (the DB-less test default, and the pre-#614
+    /// behaviour). Borrowed: the async caller loads it once and passes a ref.
+    pub harness_registry: Option<&'a harness_registry::HarnessRegistry>,
 }
 
 /// Everything needed to launch the node's tmux session, once its reservation has
@@ -421,21 +429,31 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
     };
     let harness_descriptor = match &resolved_harness {
         None => None,
-        Some(r) => match harness_registry::resolve(&r.harness) {
-            Some(d) => Some(d),
-            None => {
-                return StartNodeResult {
-                    outcome: PrimitiveOutcome::Rejected {
-                        reason: format!(
-                            "node '{}': unknown harness '{}'",
-                            params.node_id, r.harness
-                        ),
-                    },
-                    events: vec![],
-                    spawn: None,
-                };
+        // #614 (correctif 4): resolve the name against the disk tier when the
+        // caller supplied a loaded registry (force-spawn / Start), else the
+        // embedded floor (the DB-less default). Either way, an unresolvable name is
+        // a rejection that names it — never a silent claude fallback.
+        Some(r) => {
+            let resolved = match params.harness_registry {
+                Some(reg) => reg.resolve(&r.harness),
+                None => harness_registry::resolve(&r.harness),
+            };
+            match resolved {
+                Some(d) => Some(d),
+                None => {
+                    return StartNodeResult {
+                        outcome: PrimitiveOutcome::Rejected {
+                            reason: format!(
+                                "node '{}': unknown harness '{}'",
+                                params.node_id, r.harness
+                            ),
+                        },
+                        events: vec![],
+                        spawn: None,
+                    };
+                }
             }
-        },
+        }
     };
     // AC #10: a missing harness binary is a spawn that cannot happen — reject
     // (never a 2xx), naming the harness. Skipped under the test seam.
@@ -445,8 +463,14 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
             return StartNodeResult {
                 outcome: PrimitiveOutcome::Rejected {
                     reason: format!(
-                        "node '{}': harness '{}' binary '{}' not found on PATH",
-                        params.node_id, d.name, d.binary
+                        "node '{}': harness '{}' binary '{}' not found in PATH {} \
+                         (ADR-0055: the user's interactive PATH, not the service's) — \
+                         install it or check the name; this is not \"not installed\" unless \
+                         the binary is truly absent from that PATH",
+                        params.node_id,
+                        d.name,
+                        d.binary,
+                        tmux_session_manager::harness_probe_path()
                     ),
                 },
                 events: vec![],
@@ -1102,6 +1126,7 @@ mod tests {
             default_harness_models: Default::default(),
             project_harness: None,
             inject_hook: false,
+            harness_registry: None,
         };
 
         let result = start_node(&params);
@@ -1145,6 +1170,7 @@ mod tests {
             default_harness_models: Default::default(),
             project_harness: None,
             inject_hook: false,
+            harness_registry: None,
         };
 
         let result = start_node(&params);
@@ -1194,6 +1220,7 @@ mod tests {
             default_harness_models: Default::default(),
             project_harness: None,
             inject_hook: true,
+            harness_registry: None,
         };
         let result = start_node(&params);
         assert_eq!(result.outcome, PrimitiveOutcome::Executed);
@@ -1248,6 +1275,7 @@ mod tests {
             default_harness_models: Default::default(),
             project_harness: None,
             inject_hook: true,
+            harness_registry: None,
         };
         let result = start_node(&params);
         assert_eq!(result.outcome, PrimitiveOutcome::Executed);
@@ -1314,6 +1342,7 @@ mod tests {
             default_harness_models: Default::default(),
             project_harness: None,
             inject_hook: false,
+            harness_registry: None,
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -1376,6 +1405,7 @@ mod tests {
             default_harness_models: Default::default(),
             project_harness: None,
             inject_hook: false,
+            harness_registry: None,
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -1435,6 +1465,7 @@ mod tests {
             default_harness_models: Default::default(),
             project_harness: None,
             inject_hook: false,
+            harness_registry: None,
         };
         let input_paths = resolve_inputs(&params, node);
         assert_eq!(
@@ -1544,6 +1575,7 @@ mod tests {
             default_harness_models: Default::default(),
             project_harness: None,
             inject_hook: false,
+            harness_registry: None,
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -1616,6 +1648,7 @@ mod tests {
             default_harness_models: Default::default(),
             project_harness: None,
             inject_hook: false,
+            harness_registry: None,
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -1711,6 +1744,7 @@ mod tests {
             default_harness_models: Default::default(),
             project_harness: None,
             inject_hook: false,
+            harness_registry: None,
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -1779,6 +1813,7 @@ mod tests {
             default_harness_models: Default::default(),
             project_harness: None,
             inject_hook: false,
+            harness_registry: None,
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -1847,6 +1882,7 @@ mod tests {
             default_harness_models: Default::default(),
             project_harness: None,
             inject_hook: false,
+            harness_registry: None,
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -2111,6 +2147,7 @@ mod tests {
             default_harness_models: Default::default(),
             project_harness: None,
             inject_hook: false,
+            harness_registry: None,
         };
 
         let result = start_node(&params);

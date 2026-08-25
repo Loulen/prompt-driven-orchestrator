@@ -3,7 +3,7 @@
 //! Carved out of `lib.rs` as a pure move: this module holds the HTTP handler,
 //! the post-command re-evaluation it drives, and the two pipeline helpers only
 //! that re-evaluation uses. Nothing here changed in the move — the wire
-//! contract of the thirteen accepted `kind`s is identical, byte for byte.
+//! contract of the fourteen accepted `kind`s is identical, byte for byte.
 //!
 //! Layer 3 in ADR-0009 terms, and the one the Pipeline Manager drives. Its
 //! sibling surface is the per-node route family
@@ -68,7 +68,7 @@ pub(crate) struct RunCommandRequest {
 /// before an arm ever sees it: no arm re-validates presence, applies a default,
 /// or re-inspects a path.
 ///
-/// Thirteen accepted `kind`s, twelve variants — `bump_region` and `end_region`
+/// Fourteen accepted `kind`s, thirteen variants — `bump_region` and `end_region`
 /// share one, because they share their whole I/O tail.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RunCommand {
@@ -104,6 +104,14 @@ enum RunCommand {
         iter: i64,
     },
     RestartNode {
+        node_id: String,
+        iter: i64,
+    },
+    /// Recover an `Interrupted` node (#599, ADR-0049 §3). The mechanism is chosen
+    /// off the node's **frozen** harness: re-attach the existing session in place
+    /// when it `can_resume()` (ADR-0045), else fall back **automatically** to
+    /// restart-with-artifacts. See [`crate::recovery`].
+    RecoverNode {
         node_id: String,
         iter: i64,
     },
@@ -174,6 +182,7 @@ impl RunCommand {
             RunCommand::ReopenRun => "reopen_run",
             RunCommand::KillNode { .. } => "kill_node",
             RunCommand::RestartNode { .. } => "restart_node",
+            RunCommand::RecoverNode { .. } => "recover_node",
             RunCommand::StartNode { .. } => "start_node",
             RunCommand::InjectArtifact { .. } => "inject_artifact",
             RunCommand::RenameRun { .. } => "rename_run",
@@ -257,6 +266,10 @@ fn parse_run_command(req: RunCommandRequest) -> Result<RunCommand, CommandParseE
             node_id: required(req.node_id, "node_id", "restart_node")?,
             iter: req.iter.unwrap_or(1),
         }),
+        "recover_node" => Ok(RunCommand::RecoverNode {
+            node_id: required(req.node_id, "node_id", "recover_node")?,
+            iter: req.iter.unwrap_or(1),
+        }),
         "start_node" => Ok(RunCommand::StartNode {
             node_id: required(req.node_id, "node_id", "start_node")?,
         }),
@@ -281,6 +294,96 @@ fn parse_run_command(req: RunCommandRequest) -> Result<RunCommand, CommandParseE
         "cleanup_run" => Ok(RunCommand::CleanupRun),
         "retry_all" => Ok(RunCommand::RetryAll),
         other => Err(CommandParseError(format!("unknown command: {other}"))),
+    }
+}
+
+/// A `recover_node` refusal, in the transversal shape ADR-0035 §3 fixed for this
+/// surface (`error` = slug, `recoverable`, prose in `message`) plus the chosen
+/// `mechanism`. `409`, because the optimal path could not run against the node's
+/// current state — never a `2xx` that would pretend a re-attach happened.
+fn recover_conflict(
+    mechanism: crate::recovery::RecoveryMechanism,
+    slug: &str,
+    message: &str,
+) -> Response {
+    (
+        StatusCode::CONFLICT,
+        Json(serde_json::json!({
+            "error": slug,
+            "recoverable": true,
+            "mechanism": mechanism.as_str(),
+            "message": message,
+        })),
+    )
+        .into_response()
+}
+
+/// Render a re-attach [`crate::ReattachOutcome`] as the `recover_node` response.
+/// Only reached on the [`crate::recovery::RecoveryMechanism::Reattach`] branch —
+/// the restart-with-artifacts branch forwards `restart_node`'s own response.
+fn recover_response(
+    mechanism: crate::recovery::RecoveryMechanism,
+    run_id: &str,
+    node_id: &str,
+    iter: i64,
+    outcome: crate::ReattachOutcome,
+) -> Response {
+    use crate::ReattachOutcome;
+    match outcome {
+        ReattachOutcome::Resumed => {
+            info!("recover_node: re-attached {node_id} iter {iter} in run {run_id}");
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "ok": true,
+                    "mechanism": mechanism.as_str(),
+                    // Same vocabulary as the loop-command responses (ADR-0025): a
+                    // list of pairs, not a bare boolean.
+                    "reattached": [{ "node_id": node_id, "iter": iter }],
+                })),
+            )
+                .into_response()
+        }
+        // A re-attach IS a (re)spawn (#487 §3): the cap can queue it. A `2xx`, and
+        // not a no-op — the caller must not re-issue.
+        ReattachOutcome::CapReached { live, cap } => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "ok": true,
+                "waiting": true,
+                "mechanism": mechanism.as_str(),
+                "reason": format!(
+                    "session cap reached ({live}/{cap}): the re-attach of {node_id} iter {iter} \
+                     is queued — do not re-issue"
+                ),
+            })),
+        )
+            .into_response(),
+        // The optimal path could not run. Honest `409`s, never a silent success.
+        // `CannotResume` is unreachable here (this branch was chosen because the
+        // harness CAN resume) but is mapped for exhaustiveness.
+        ReattachOutcome::ScriptNode => recover_conflict(
+            mechanism,
+            "script_not_resumable",
+            "a script node runs deterministic bash, not an LLM session — it cannot be \
+             re-attached (#248, ADR-0017)",
+        ),
+        ReattachOutcome::WorkingDirMissing => recover_conflict(
+            mechanism,
+            "worktree_missing",
+            "the node's working directory is gone — nothing to re-enter",
+        ),
+        ReattachOutcome::CannotResume => recover_conflict(
+            mechanism,
+            "harness_cannot_resume",
+            "the frozen harness declares no resume tail (ADR-0045)",
+        ),
+        ReattachOutcome::TraceRefused { error } => {
+            recover_conflict(mechanism, "reattach_refused", &error)
+        }
+        ReattachOutcome::ResumeFailed { error } => {
+            recover_conflict(mechanism, "reattach_failed", &error)
+        }
     }
 }
 
@@ -1252,6 +1355,117 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             info!("restart_node: node {node_id} iter {iter} in run {run_id} -> {verdict:?}");
             restart_verdict::restart_response(&verdict)
         }
+        RunCommand::RecoverNode { node_id, iter } => {
+            // #599 / ADR-0049 §3 — recover an `Interrupted` node. The mechanism is
+            // chosen off the node's FROZEN harness (#550/#553, never the YAML's
+            // now): re-attach the existing session in place when it `can_resume()`
+            // (ADR-0045), else fall back AUTOMATICALLY to restart-with-artifacts.
+            // The fallback is not a second human decision — it is the harness-
+            // agnostic default whenever the optimal path is unavailable.
+            let events = match load_events(&state.db, &run_id).await {
+                Ok(e) => e,
+                Err(e) => {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}"))
+                        .into_response();
+                }
+            };
+            let Some(run_state) = event_log::project(&events) else {
+                return (StatusCode::NOT_FOUND, "run not found").into_response();
+            };
+            // Resolve the frozen harness against the embedded floor merged with the
+            // disk descriptor tier; any failure (pre-#550 row, unknown name,
+            // unresolved home) falls back to the `claude` floor — which `can_resume`.
+            let harness_home_root = sandbox_run::sandbox_home_roots(&state)
+                .map(|(home, _)| home)
+                .unwrap_or_default();
+            let descriptor = crate::find_launch_harness(&events, &node_id, iter)
+                .as_deref()
+                .and_then(|name| {
+                    crate::harness_registry::HarnessRegistry::load(&harness_home_root).resolve(name)
+                })
+                .unwrap_or_else(crate::harness_registry::claude);
+            let mechanism = crate::recovery::choose_recovery(descriptor.can_resume());
+
+            // Audit the intent, naming the mechanism so the automatic fallback is
+            // legible in the log (parity with the other arms' `CommandIssued`).
+            let cmd_event = event_log::Event {
+                id: None,
+                run_id: run_id.clone(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::CommandIssued,
+                node_id: Some(node_id.clone()),
+                iter: Some(iter),
+                payload: Some(serde_json::json!({
+                    "command": "recover_node",
+                    "node_id": node_id,
+                    "iter": iter,
+                    "mechanism": mechanism.as_str(),
+                })),
+            };
+            if let Err(e) = append_event(&state, &cmd_event).await {
+                error!("failed to append recover_node command event: {e}");
+            }
+
+            match mechanism {
+                crate::recovery::RecoveryMechanism::RestartWithArtifacts => {
+                    // The harness-agnostic default / automatic fallback: a fresh
+                    // agent handed the partial artifacts as input, via the proven
+                    // restart-with-artifacts path — which reuses the sub-worktree in
+                    // place and never overwrites the partial work (#489 / #599 AC1).
+                    // Boxed because `dispatch` recurses here.
+                    info!(
+                        "recover_node: {node_id} iter {iter} in {run_id} -> \
+                         restart_with_artifacts (harness cannot resume)"
+                    );
+                    Box::pin(dispatch(
+                        state,
+                        run_id,
+                        RunCommand::RestartNode { node_id, iter },
+                    ))
+                    .await
+                }
+                crate::recovery::RecoveryMechanism::Reattach => {
+                    // The optimal path: re-attach the SAME session in place
+                    // (`claude --continue`), without re-driving the run. Re-open a
+                    // parked/terminal Run first (AC7 parity with restart_node) so
+                    // the resurrection `NodeStarted` append is accepted.
+                    let run_state =
+                        match crate::embed_reopen_for_targeted_command(&state, &run_id, run_state)
+                            .await
+                        {
+                            Ok(s) => s,
+                            Err(e) => {
+                                return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}"))
+                                    .into_response();
+                            }
+                        };
+                    // Re-read the log after the possible reopen so the resurrection
+                    // trace is faithful to the freshest state.
+                    let events = match load_events(&state.db, &run_id).await {
+                        Ok(e) => e,
+                        Err(e) => {
+                            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}"))
+                                .into_response();
+                        }
+                    };
+                    let repo_root = effective_repo_root(&state, &run_state);
+                    let session_name =
+                        tmux_session_manager::node_session_name(&run_id, &node_id, iter);
+                    let outcome = crate::reattach_node_session(
+                        &state,
+                        &events,
+                        &run_state,
+                        &repo_root,
+                        &run_id,
+                        &node_id,
+                        iter,
+                        &session_name,
+                    )
+                    .await;
+                    recover_response(mechanism, &run_id, &node_id, iter, outcome)
+                }
+            }
+        }
         RunCommand::StartNode { node_id } => {
             // Force-spawn a node out of dependency order (#204). The manager
             // twin of the UI Start button: both funnel through `force_spawn_node`,
@@ -1977,8 +2191,8 @@ mod tests {
     }
 
     #[test]
-    fn parse_accepts_the_thirteen_kinds() {
-        let cases: [(serde_json::Value, RunCommand); 13] = [
+    fn parse_accepts_the_fourteen_kinds() {
+        let cases: [(serde_json::Value, RunCommand); 14] = [
             (
                 serde_json::json!({ "kind": "mark_node_done", "node_id": "n1", "iter": 3 }),
                 RunCommand::MarkNodeDone {
@@ -2025,6 +2239,13 @@ mod tests {
             (
                 serde_json::json!({ "kind": "restart_node", "node_id": "n1", "iter": 7 }),
                 RunCommand::RestartNode {
+                    node_id: "n1".into(),
+                    iter: 7,
+                },
+            ),
+            (
+                serde_json::json!({ "kind": "recover_node", "node_id": "n1", "iter": 7 }),
+                RunCommand::RecoverNode {
                     node_id: "n1".into(),
                     iter: 7,
                 },

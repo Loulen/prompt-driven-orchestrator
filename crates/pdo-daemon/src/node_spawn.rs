@@ -654,6 +654,13 @@ pub(crate) async fn spawn_node(
             }
         };
 
+        // #599 AC1 (ADR-0049): the partial output an interrupted attempt at THIS
+        // node left on disk for this iteration. On a same-iter re-spawn
+        // (restart-with-artifacts) it is never wiped, so it is surfaced to the
+        // fresh agent as input to build on. Empty on a first spawn.
+        let partial_outputs =
+            prompt_augmenter::surviving_partial_outputs(node, spawn_ctx.artifacts_dir, iter);
+
         let aug_ctx = prompt_augmenter::AugmentContext {
             pipeline: spawn_ctx.pipeline,
             node,
@@ -679,6 +686,7 @@ pub(crate) async fn spawn_node(
             // awaited, so the borrow is already released — see G7 in the plan.
             reused_sub_worktree,
             interrupted_git_ops: &interrupted_git_ops,
+            partial_outputs: &partial_outputs,
         };
 
         let full_prompt = prompt_augmenter::build_full_prompt(&aug_ctx, &role_prompt);

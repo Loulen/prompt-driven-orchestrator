@@ -691,7 +691,15 @@ pub fn spawn(
     // prompt (gitignored under `.pdo/`, resolves identically host and container).
     // Callers pass `false` for `script`/manager/merge-resolver sessions; the tail
     // selector in `build_tmux_script` is the belt-and-suspenders guard.
-    let settings_path = if inject_hook {
+    //
+    // #613/ADR-0051 (correctif 8): write the claude-format settings file ONLY for a
+    // harness that actually has a `{settings}` hole to fill. A node on a harness
+    // with none (`opencode`) would never reference the file — writing it beside the
+    // prompt was the one place "absence is supplied, not said" leaked. Now the
+    // absence is honoured: no hole, no file.
+    let harness_takes_settings =
+        matches!(&tail, SessionTail::Agent { harness, .. } if harness.has_settings_hole());
+    let settings_path = if inject_hook && harness_takes_settings {
         let p = prompt_dir.join(format!("{node_id}-iter-{iter}.settings.json"));
         std::fs::write(&p, STOP_HOOK_SETTINGS_JSON)?;
         Some(p)
@@ -882,7 +890,10 @@ pub fn resume(
     // reference it. `create_dir_all` covers the rare case where the prompt dir was
     // pruned since spawn. `false` (setting off, or a `script` node) ⇒ no file, and
     // `build_resume_script` emits a byte-identical `--continue` tail.
-    let settings_path = if inject_hook {
+    //
+    // #613/ADR-0051 (correctif 8): as at spawn, only a harness with a `{settings}`
+    // hole gets the file — a resumed `opencode` node writes none.
+    let settings_path = if inject_hook && descriptor.has_settings_hole() {
         let prompt_dir = working_dir.join(".pdo").join("prompts");
         std::fs::create_dir_all(&prompt_dir)?;
         let p = prompt_dir.join(format!("{node_id}-iter-{iter}.settings.json"));
@@ -2411,6 +2422,71 @@ mod tests {
         assert_eq!(
             v["hooks"]["Stop"][0]["hooks"][0]["type"].as_str(),
             Some("command")
+        );
+    }
+
+    /// Drive the real `spawn` with a benign tail and report whether it dropped the
+    /// turn-end settings file beside the prompt. Kills the ephemeral tmux server on
+    /// its own socket afterwards. `port` isolates the socket from sibling tests.
+    fn spawn_and_check_settings_file(
+        port: u16,
+        harness: &crate::harness_registry::HarnessDescriptor,
+    ) -> bool {
+        let wd = tempfile::tempdir().unwrap();
+        let session = node_session_name("run-c8", "n", 1);
+        // The tail runs `true` (exits at once); we only assert on the file the write
+        // gate controls, which is written before tmux is ever touched.
+        let _ = spawn(
+            &session,
+            "prompt body",
+            wd.path(),
+            "run-c8",
+            "n",
+            1,
+            port,
+            Some("true"),
+            SessionTail::Agent {
+                harness,
+                model: None,
+                effort: None,
+                session_id: None,
+            },
+            None,
+            true, // inject_hook ON — the setting is enabled
+        );
+        let settings = wd
+            .path()
+            .join(".pdo")
+            .join("prompts")
+            .join("n-iter-1.settings.json");
+        let present = settings.is_file();
+        // Tear down the ephemeral server (ignore errors — the `true` tail may have
+        // already ended the only session, leaving no server to kill).
+        let _ = std::process::Command::new("tmux")
+            .args(["-L", &tmux_socket_name(port), "kill-server"])
+            .output();
+        present
+    }
+
+    #[test]
+    fn spawn_writes_the_settings_file_for_a_harness_with_a_settings_hole() {
+        // #613 (correctif 8) control: `claude` HAS a `{settings}` hole, so with the
+        // setting on PDO writes the Stop-hook file beside the prompt, as always.
+        assert!(
+            spawn_and_check_settings_file(58231, &crate::harness_registry::claude()),
+            "claude must still get its turn-end settings file"
+        );
+    }
+
+    #[test]
+    fn spawn_writes_no_settings_file_for_a_harness_without_a_settings_hole() {
+        // #613 (correctif 8): `opencode` has NO `{settings}` hole, so even with
+        // turn-end auto-completion enabled PDO writes it no claude-format settings
+        // file — the absence is honoured, not supplied. This was the one place the
+        // discipline was broken.
+        assert!(
+            !spawn_and_check_settings_file(58232, &crate::harness_registry::opencode()),
+            "opencode must get no settings file — it has no settings hole"
         );
     }
 

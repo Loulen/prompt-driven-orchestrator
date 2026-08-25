@@ -10786,6 +10786,11 @@ struct SweepNodeProbes<'a> {
     /// transcript by identity (`<uuid>.jsonl`); `None` (a pre-#473 row / a script
     /// node) ⇒ the legacy newest-mtime fallback.
     session_id: Option<&'a str>,
+    /// #613/ADR-0051: the node's frozen-at-spawn harness. Transcript resolution
+    /// dispatches on it — `claude`'s `<uuid>.jsonl` / newest-mtime for `claude`,
+    /// nothing for a harness whose store PDO cannot map — so this adapter never
+    /// hardcodes claude's resolution for a foreign harness.
+    harness: &'a str,
     pipeline_path: &'a Path,
     artifacts_dir: &'a Path,
     run_id: &'a str,
@@ -10800,19 +10805,19 @@ impl stale_detector::NodeProbes for SweepNodeProbes<'_> {
     }
 
     fn transcript_tail(&self) -> Option<stale_detector::TranscriptTail> {
-        // #473: resolve by pinned session identity when we have one — this node's
-        // own `<uuid>.jsonl`, never the newest `.jsonl` in a cwd shared with the
-        // manager / sibling non-CM nodes. A pre-#473 node (no recorded id) falls
-        // back to the legacy newest-mtime resolution.
-        let resolved = match self.session_id {
-            Some(sid) => {
-                stale_detector::session_jsonl_by_id(self.projects_root, self.working_dir, sid)
-            }
-            None => stale_detector::find_session_jsonl(self.projects_root, self.working_dir),
-        };
-        resolved
-            .as_deref()
-            .and_then(stale_detector::read_transcript_tail)
+        // #613/ADR-0051: dispatch transcript resolution to the resolved harness's
+        // implementation. `claude` resolves by pinned session identity (this node's
+        // own `<uuid>.jsonl`, #473) or the legacy newest-mtime fallback; a
+        // data-declared harness resolves `None` and no tail is read. The byte-read
+        // of the resolved path is generic (`read_transcript_tail`).
+        harness_probes::resolve_transcript(
+            self.harness,
+            self.projects_root,
+            self.working_dir,
+            self.session_id,
+        )
+        .as_deref()
+        .and_then(stale_detector::read_transcript_tail)
     }
 
     fn outputs_valid(&self) -> bool {
@@ -10964,32 +10969,28 @@ async fn run_stale_detection(state: &Arc<AppState>) {
             // usage-limit-dedup pipeline lives in `assess_node`, with all tmux +
             // filesystem I/O injected via this adapter. The sweep only appends
             // the returned events and runs the reap/spawn side effects below.
+            // #553/#613: the node's FROZEN-at-spawn harness (ADR-0046), never the
+            // current YAML. `None` (a script node, a pre-#550 row) is the `claude`
+            // floor. Every capability — transcript resolution, turn-end, usage-limit
+            // — dispatches on this name (ADR-0051): `claude`'s implementation for
+            // `claude`, a data-declared harness's own (or nothing) otherwise. So the
+            // sweep never reads another harness's store with claude's parser.
+            let node_harness = find_launch_harness(&events, node_id, *iter)
+                .unwrap_or_else(|| harness_registry::CLAUDE.to_string());
+
             let probes = SweepNodeProbes {
                 socket: &socket,
                 session_name: &session_name,
                 working_dir: &working_dir,
                 projects_root: &projects_root,
                 session_id: launch_session_id.as_deref(),
+                harness: &node_harness,
                 pipeline_path: &pipeline_path,
                 artifacts_dir: &artifacts_dir,
                 run_id,
                 node_id,
                 iter: *iter,
                 running: &running,
-            };
-
-            // #553: gate the turn-end and usage-limit probes on the node's
-            // FROZEN-at-spawn harness (ADR-0046), never the current YAML. `None`
-            // (a script node, a pre-#550 row) is the `claude` floor, which has both
-            // capabilities — so the sweep is byte-identical to pre-#553 there. A
-            // node on a harness without them runs neither probe: no auto-completion
-            // on an invented heuristic, no capture for another harness's menu.
-            let node_harness = find_launch_harness(&events, node_id, *iter)
-                .unwrap_or_else(|| harness_registry::CLAUDE.to_string());
-            let hc = harness_probes::capabilities(&node_harness);
-            let caps = stale_detector::HarnessCapabilities {
-                turn_end: hc.turn_end,
-                usage_limit: hc.usage_limit,
             };
 
             let assessment = stale_detector::assess_node(
@@ -11000,7 +11001,7 @@ async fn run_stale_detection(state: &Arc<AppState>) {
                 *iter,
                 now,
                 autocomplete_turn_end,
-                caps,
+                &node_harness,
             );
 
             if assessment.blocked_on_limit {

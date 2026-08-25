@@ -20,14 +20,37 @@
 //! carry a catch-all arm. Here it costs nothing — an unknown name simply does not
 //! match, and the caller reads "absent" off the `None`.
 //!
+//! ## A capability is a **dispatch point**, not a presence guard (ADR-0051)
+//!
+//! Each capability is the site where the **implementation of the resolved harness
+//! is chosen** — not a boolean the caller reads before running `claude`'s function
+//! anyway. So the trait carries **behaviour**, not only markers: the sweep asks
+//! [`HarnessProbes::classify_turn_ended`] / [`HarnessProbes::detect_usage_limit`] /
+//! [`HarnessProbes::resolve_transcript`], and gets *this harness's* answer. The
+//! claude-proper functions (transcript resolution, the turn-state parser, the
+//! usage-limit anchors) are `claude`'s implementation of these methods — no longer
+//! reachable from a generic consumer, which holds a `&dyn HarnessProbes` and never
+//! names them. A harness that declares an implementation gets **its** behaviour;
+//! the regression ADR-0051 exists to kill (declare a variant, silently read
+//! claude's paths) is now impossible.
+//!
+//! [`resolved`] is **total** — every name resolves to a `&'static dyn HarnessProbes`
+//! ([`ClaudeProbes`] for `claude`, [`NullProbes`] for a data-declared harness) — so
+//! there is always a dispatch, and "absent" is a **method returning `None`/`false`**,
+//! distinguishable from a missing dispatch (ADR-0051 §2).
+//!
 //! ## What "absent is said, never supplied" buys each caller
 //! - **cost** ([`crate::run_cost`]): a harness with no [`HarnessProbes::cost_source`]
 //!   contributes "—" **and a reason naming it**, never `$0`, never a silent
 //!   `partial` — the same vein as `unpriced_models` (#425).
 //! - **turn-end / usage-limit** ([`crate::stale_detector`]): the two sweep probes
-//!   are **gated** on [`HarnessProbes::turn_end_substrate`] /
-//!   [`HarnessProbes::usage_limit_anchor`]. Absent ⇒ the probe does not run, and
-//!   no node is ever auto-completed on an invented heuristic.
+//!   dispatch through [`turn_ended`] / [`usage_limit_shown`], gated on
+//!   [`HarnessProbes::turn_end_substrate`] / [`HarnessProbes::usage_limit_anchor`].
+//!   Absent ⇒ the probe does not run, and no node is ever auto-completed on an
+//!   invented heuristic, nor its pane matched against another harness's menu.
+//! - **turn-end setting** ([`crate::node_spawn`]): enabling turn-end completion on a
+//!   harness with no substrate is **said once** ([`turn_end_absence_note`]) rather
+//!   than being a silent no-op.
 //! - **sandbox** ([`crate::node_spawn`]): a sandboxed Run on a harness with no
 //!   [`HarnessProbes::staging_floor`] is **said once, visibly** — it holds only by
 //!   the user's image and the profile's `$HOME` exceptions, without the plancher's
@@ -37,6 +60,7 @@
 //! launch** (a launch is data — the argv template of [`crate::harness_registry`]).
 
 use crate::harness_registry;
+use std::path::{Path, PathBuf};
 
 /// A harness's cost source — how PDO turns a live Run into a dollar figure.
 ///
@@ -132,6 +156,47 @@ pub(crate) trait HarnessProbes: Sync {
     fn staging_floor(&self) -> Option<StagingFloor> {
         None
     }
+
+    // --- the behaviour behind the markers (ADR-0051 dispatch points) ---------
+    //
+    // These are the methods a generic consumer actually calls. The default is
+    // "absent" — a data-declared harness ([`NullProbes`]) resolves no transcript,
+    // never constates an end of turn, never matches a usage-limit menu — so a
+    // caller that dispatches through [`resolved`] can never reach `claude`'s
+    // implementation for a harness that did not declare it.
+
+    /// Resolve this node's transcript file on disk, or `None`.
+    ///
+    /// Gated by [`Self::transcript_resolution`] being present; the default (a
+    /// harness whose store PDO cannot map) returns `None`, so a cost or turn-end
+    /// read finds no file and the consumer treats it as "no signal". `claude`
+    /// resolves by pinned session id (`<uuid>.jsonl`), else newest-mtime.
+    fn resolve_transcript(
+        &self,
+        _projects_root: &Path,
+        _working_dir: &Path,
+        _session_id: Option<&str>,
+    ) -> Option<PathBuf> {
+        None
+    }
+
+    /// Whether the transcript `tail` shows this harness's end-of-turn signature.
+    ///
+    /// The default is `false` (no substrate ⇒ never a constated end of turn). This
+    /// is the parser that must be **this harness's own**: reading `claude`'s JSONL
+    /// turn-state on another harness's store is exactly the ADR-0051 regression.
+    fn classify_turn_ended(&self, _tail: &str) -> bool {
+        false
+    }
+
+    /// Whether the captured `pane` shows this harness's usage-limit menu.
+    ///
+    /// The default is `false` (no anchor ⇒ the wording is proper to another
+    /// harness, so a generic consumer never matches it). `claude` matches its
+    /// interactive "stop and wait for limit to reset" menu.
+    fn detect_usage_limit(&self, _pane: &str) -> bool {
+        false
+    }
 }
 
 /// The `claude` capabilities — all five, exactly as they are today. This slice is
@@ -155,11 +220,107 @@ impl HarnessProbes for ClaudeProbes {
     fn staging_floor(&self) -> Option<StagingFloor> {
         Some(StagingFloor::ClaudeDotClaude)
     }
+
+    /// `claude`'s transcript resolution: by the pinned session id when the node
+    /// recorded one (`<uuid>.jsonl` — this node's own transcript, #473), else the
+    /// legacy newest-mtime pick for a pre-#473 row. This is the sole reachable
+    /// caller of [`crate::stale_detector::session_jsonl_by_id`] /
+    /// [`crate::stale_detector::find_session_jsonl`] from outside the sweep — they
+    /// are `claude`'s implementation now, not a generic transcript resolver.
+    fn resolve_transcript(
+        &self,
+        projects_root: &Path,
+        working_dir: &Path,
+        session_id: Option<&str>,
+    ) -> Option<PathBuf> {
+        match session_id {
+            Some(sid) => {
+                crate::stale_detector::session_jsonl_by_id(projects_root, working_dir, sid)
+            }
+            None => crate::stale_detector::find_session_jsonl(projects_root, working_dir),
+        }
+    }
+
+    /// `claude`'s end-of-turn parser: the JSONL turn-state tail classifier
+    /// ([`crate::stale_detector::parse_turn_state`]) answering `TurnEnded`.
+    fn classify_turn_ended(&self, tail: &str) -> bool {
+        crate::stale_detector::parse_turn_state(tail) == crate::stale_detector::TurnState::TurnEnded
+    }
+
+    /// `claude`'s usage-limit matcher over a pane capture
+    /// ([`crate::stale_detector::detect_usage_limit`]).
+    fn detect_usage_limit(&self, pane: &str) -> bool {
+        crate::stale_detector::detect_usage_limit(pane)
+    }
 }
 
 /// The single `claude` instance handed out by [`probes_for`]. Zero-sized, so this
 /// `static` costs nothing and needs no lazy init.
 static CLAUDE_PROBES: ClaudeProbes = ClaudeProbes;
+
+/// The capabilities of a **data-declared** harness (a user's disk descriptor, or
+/// `opencode` in v1): every method inherits the trait's "absent" default. This is
+/// the dispatch target that makes ADR-0051 §2 hold — a harness PDO carries no code
+/// for still resolves to *something*, and that something answers "absent" on every
+/// capability rather than routing to `claude`'s implementation.
+struct NullProbes;
+impl HarnessProbes for NullProbes {}
+
+/// The single all-absent instance handed out by [`resolved`] for any harness with
+/// no code. Zero-sized, like [`CLAUDE_PROBES`].
+static NULL_PROBES: NullProbes = NullProbes;
+
+/// The dispatch target for `harness` — **total**: `claude` gets [`ClaudeProbes`],
+/// every other name (a data-declared harness) gets [`NullProbes`]. Never `None`:
+/// there is always a dispatch, and absence is a method answering `None`/`false`,
+/// not a missing implementation (ADR-0051 §2). This is what a generic consumer
+/// holds instead of naming a claude-proper function.
+pub(crate) fn resolved(harness: &str) -> &'static dyn HarnessProbes {
+    match probes_for(harness) {
+        Some(p) => p,
+        None => &NULL_PROBES,
+    }
+}
+
+/// Resolve `harness`'s transcript file, dispatched to its implementation (ADR-0051).
+/// A data-declared harness resolves `None` — never `claude`'s `<uuid>.jsonl` path.
+pub(crate) fn resolve_transcript(
+    harness: &str,
+    projects_root: &Path,
+    working_dir: &Path,
+    session_id: Option<&str>,
+) -> Option<PathBuf> {
+    resolved(harness).resolve_transcript(projects_root, working_dir, session_id)
+}
+
+/// Whether `harness` constates an end of turn from this transcript `tail`,
+/// dispatched to its implementation (ADR-0051). A harness with no substrate
+/// answers `false` — never `claude`'s JSONL parser on a foreign store.
+pub(crate) fn turn_ended(harness: &str, tail: &str) -> bool {
+    resolved(harness).classify_turn_ended(tail)
+}
+
+/// Whether `harness`'s usage-limit menu is showing in this `pane`, dispatched to
+/// its implementation (ADR-0051). A harness with no anchor answers `false`.
+pub(crate) fn usage_limit_shown(harness: &str, pane: &str) -> bool {
+    resolved(harness).detect_usage_limit(pane)
+}
+
+/// The one-time note for a node whose harness has **no turn-end substrate** while
+/// turn-end auto-completion is enabled (ADR-0051 / correctif AC #7). `Some(msg)`
+/// when the setting cannot be honoured for `harness`, `None` for a harness that
+/// has the substrate (`claude`). Pure and testable, the twin of
+/// [`staging_floor_absence_note`]: the setting stops being a silent no-op.
+pub(crate) fn turn_end_absence_note(harness: &str) -> Option<String> {
+    if capabilities(harness).turn_end {
+        return None;
+    }
+    Some(format!(
+        "turn-end auto-completion is enabled but harness `{harness}` has no end-of-turn substrate \
+         (#613, ADR-0051) — this node will not be auto-completed on turn end; complete it by \
+         signalling `pdo complete` or leave it attached"
+    ))
+}
 
 /// The capabilities of `harness`, or `None` for a harness PDO carries no code for.
 ///
@@ -309,6 +470,129 @@ mod tests {
             assert_eq!(capabilities(name), Capabilities::NONE, "{name}");
             assert!(!can_cost(name), "{name} cannot be costed");
         }
+    }
+
+    // --- ADR-0051: a capability is a dispatch point ------------------------------
+
+    /// A fictional harness that **declares its own implementation** of three
+    /// capabilities. It is the negative image of `claude`: it resolves a transcript
+    /// to a fixed sentinel path, calls a turn ended on a marker `claude` would never
+    /// emit, and matches its own usage-limit wording. If dispatch ever fell back to
+    /// `claude` for a declared harness, every assertion below would flip.
+    struct TestProbes;
+    impl HarnessProbes for TestProbes {
+        fn transcript_resolution(&self) -> Option<TranscriptResolution> {
+            Some(TranscriptResolution::ClaudeJsonl) // marker present ⇒ capability declared
+        }
+        fn turn_end_substrate(&self) -> Option<TurnEndSubstrate> {
+            Some(TurnEndSubstrate::ClaudeTranscript)
+        }
+        fn resolve_transcript(
+            &self,
+            _projects_root: &Path,
+            _working_dir: &Path,
+            _session_id: Option<&str>,
+        ) -> Option<PathBuf> {
+            Some(PathBuf::from("/test-harness/own-transcript.log"))
+        }
+        fn classify_turn_ended(&self, tail: &str) -> bool {
+            tail == "TEST-HARNESS-DONE"
+        }
+        fn detect_usage_limit(&self, pane: &str) -> bool {
+            pane.contains("test-harness rate limit")
+        }
+    }
+
+    #[test]
+    fn a_declared_implementation_gets_its_own_behaviour_not_claudes() {
+        // AC #4, the regression this ticket makes impossible: a harness that
+        // declares an implementation is dispatched to ITS behaviour, never claude's.
+        let t = TestProbes;
+
+        // Its turn-end parser fires on ITS marker and rejects what claude would
+        // accept (a real `assistant`-terminated JSONL tail).
+        assert!(t.classify_turn_ended("TEST-HARNESS-DONE"));
+        let claude = probes_for(CLAUDE).unwrap();
+        // The claude parser would NOT call this tail ended (not valid JSONL), and
+        // the test harness's own parser is what runs — the two disagree, which is
+        // the whole point.
+        assert!(!claude.classify_turn_ended("TEST-HARNESS-DONE"));
+
+        // Its transcript resolves to its own path, not a `<uuid>.jsonl` under the
+        // claude projects root.
+        let p = t
+            .resolve_transcript(Path::new("/proj"), Path::new("/wd"), Some("abc"))
+            .unwrap();
+        assert_eq!(p, PathBuf::from("/test-harness/own-transcript.log"));
+
+        // Its usage-limit anchor is its own wording; claude's menu text does not
+        // match it and vice-versa.
+        assert!(t.detect_usage_limit("test-harness rate limit reached"));
+        assert!(!t.detect_usage_limit("Stop and wait for limit to reset"));
+    }
+
+    #[test]
+    fn a_data_declared_harness_dispatches_to_absent_never_to_claude() {
+        // AC #1/#4: the generic by-name dispatch for a harness PDO carries no code
+        // for resolves to "absent" on every behaviour — it must NOT reach claude's
+        // implementation. This is the path a liveness sweep takes.
+        for name in [OPENCODE, "pi", "not-a-harness"] {
+            assert!(
+                resolve_transcript(name, Path::new("/proj"), Path::new("/wd"), Some("abc")).is_none(),
+                "{name}: no transcript resolution leaks from claude"
+            );
+            // A tail claude WOULD call ended is not enough — a data-declared harness
+            // answers `false`, so no node on it is ever auto-completed.
+            assert!(
+                !turn_ended(name, FIXTURE_CLAUDE_TURN_ENDED),
+                "{name}: no turn-end via claude's parser"
+            );
+            assert!(
+                !usage_limit_shown(name, "Stop and wait for limit to reset"),
+                "{name}: no usage-limit match via claude's anchor"
+            );
+        }
+    }
+
+    #[test]
+    fn claude_dispatches_to_its_own_behaviour() {
+        // The control: `claude`'s by-name dispatch DOES run its parser/anchor — this
+        // slice is a dispatch refactor, not a behaviour change (AC #5).
+        assert!(turn_ended(CLAUDE, FIXTURE_CLAUDE_TURN_ENDED));
+        assert!(usage_limit_shown(
+            CLAUDE,
+            "❯ 1. Stop and wait for limit to reset"
+        ));
+    }
+
+    #[test]
+    fn resolved_is_total_and_absence_is_a_value_not_a_missing_dispatch() {
+        // ADR-0051 §2: every name resolves to *some* dispatch; "absent" is a method
+        // answering None/false on that dispatch, distinguishable from claude's.
+        assert!(resolved(CLAUDE).cost_source().is_some());
+        assert!(resolved(OPENCODE).cost_source().is_none());
+        assert!(resolved("never-seen").turn_end_substrate().is_none());
+    }
+
+    /// A minimal, valid claude JSONL tail whose last substantial record is an
+    /// `assistant` message with no pending `tool_use` — the one shape
+    /// [`crate::stale_detector::parse_turn_state`] calls `TurnEnded`.
+    const FIXTURE_CLAUDE_TURN_ENDED: &str = concat!(
+        r#"{"type":"user","message":{"role":"user","content":"hi"}}"#,
+        "\n",
+        r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}"#,
+        "\n"
+    );
+
+    #[test]
+    fn turn_end_absence_note_fires_only_for_a_harness_without_the_substrate() {
+        // AC #7: enabling turn-end completion on a substrate-less harness is said,
+        // not a silent no-op. `claude` has the substrate → no note.
+        assert_eq!(turn_end_absence_note(CLAUDE), None);
+        let note = turn_end_absence_note("pi").expect("a note for a substrate-less harness");
+        assert!(note.contains("`pi`"));
+        assert!(note.contains("no end-of-turn substrate"));
+        assert!(note.contains("not be auto-completed"));
     }
 
     #[test]

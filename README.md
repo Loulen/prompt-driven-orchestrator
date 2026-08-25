@@ -14,21 +14,29 @@ You design pipelines on a visual canvas and run them on a deterministic runtime 
 
 ## Install
 
+**Homebrew** (macOS + Linux) — upgrade later with `brew upgrade pdo`:
+
 ```bash
-curl -fsSL https://github.com/Loulen/prompt-driven-orchestrator/releases/latest/download/install.sh | bash
+brew install Loulen/tap/pdo
 ```
 
-This downloads the latest release binary for your platform (Linux/macOS, x86_64/ARM64), verifies the SHA256 checksum, and installs to `~/.local/bin/pdo`.
-
-To install a specific version:
+**Or the install script** (Linux/macOS, x86_64/ARM64):
 
 ```bash
-PDO_VERSION=v0.1.0 curl -fsSL https://github.com/Loulen/prompt-driven-orchestrator/releases/latest/download/install.sh | bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/Loulen/prompt-driven-orchestrator/releases/latest/download/pdo-daemon-installer.sh | sh
+```
+
+Both fetch the prebuilt binary for your platform, verify its checksum, and install `pdo` to `~/.local/bin`.
+
+To install a specific version, use that release's installer:
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/Loulen/prompt-driven-orchestrator/releases/download/v1.31.2/pdo-daemon-installer.sh | sh
 ```
 
 ### Runtime requirements
 
-The install script fetches only the `pdo` binary. The daemon shells out to a couple of tools on the host at runtime — install them yourself (they are **not** bundled, and their absence surfaces only when a node tries to run):
+The installer fetches only the `pdo` binary. The daemon shells out to a couple of tools on the host at runtime — install them yourself (they are **not** bundled, and their absence surfaces only when a node tries to run):
 
 - **tmux** — every node and run shell is a tmux session on the host. Required, always, whatever harness you use.
 - **git** — each node's work is isolated in a git worktree. Required.

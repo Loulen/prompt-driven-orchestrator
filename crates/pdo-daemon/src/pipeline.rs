@@ -114,6 +114,15 @@ pub(crate) struct Port {
     pub when: Option<serde_yaml::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// `required: true` marks an **input** port whose artifact must arrive for the
+    /// node to run (ADR-0011 / #589 / #600). When every edge feeding a required
+    /// port is structurally dead — its producing branch was not taken (either/or) —
+    /// the reachability sweep **auto-skips** the node with a reason rather than
+    /// leaving it to hang forever waiting on an input that can never come. Absent
+    /// (the default) leaves the node subject only to the whole-node deadness rule
+    /// (every incoming edge dead). Semantic (drives auto-skip), not layout.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub required: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -640,6 +649,7 @@ pub(crate) fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
                         frontmatter: None,
                         when: None,
                         description: None,
+                        required: false,
                     });
                 }
             }
@@ -2533,6 +2543,7 @@ nodes:
                 frontmatter: None,
                 when: None,
                 description: None,
+                required: false,
             }],
             interactive: false,
             view: None,

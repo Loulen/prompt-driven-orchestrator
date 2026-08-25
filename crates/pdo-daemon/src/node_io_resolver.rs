@@ -339,6 +339,7 @@ mod tests {
                         frontmatter: None,
                         when: None,
                         description: None,
+                        required: false,
                     }],
                     outputs: vec![Port {
                         name: "plan".into(),
@@ -348,6 +349,7 @@ mod tests {
                         frontmatter: None,
                         when: None,
                         description: None,
+                        required: false,
                     }],
                     interactive: false,
                     view: None,
@@ -369,6 +371,7 @@ mod tests {
                         frontmatter: None,
                         when: None,
                         description: None,
+                        required: false,
                     }],
                     outputs: vec![Port {
                         name: "summary".into(),
@@ -378,6 +381,7 @@ mod tests {
                         frontmatter: None,
                         when: None,
                         description: None,
+                        required: false,
                     }],
                     interactive: false,
                     view: None,
@@ -533,6 +537,7 @@ mod tests {
                         frontmatter: None,
                         when: None,
                         description: None,
+                        required: false,
                     }],
                     interactive: false,
                     view: None,
@@ -554,6 +559,7 @@ mod tests {
                         frontmatter: None,
                         when: None,
                         description: None,
+                        required: false,
                     }],
                     outputs: vec![Port {
                         name: "code".into(),
@@ -563,6 +569,7 @@ mod tests {
                         frontmatter: None,
                         when: None,
                         description: None,
+                        required: false,
                     }],
                     interactive: false,
                     view: None,
@@ -723,6 +730,7 @@ mod tests {
                         frontmatter: None,
                         when: None,
                         description: None,
+                        required: false,
                     }],
                     interactive: false,
                     view: None,
@@ -745,6 +753,7 @@ mod tests {
                         frontmatter: None,
                         when: None,
                         description: None,
+                        required: false,
                     }],
                     interactive: false,
                     view: None,
@@ -766,6 +775,7 @@ mod tests {
                         frontmatter: None,
                         when: None,
                         description: None,
+                        required: false,
                     }],
                     outputs: vec![],
                     interactive: false,
@@ -857,6 +867,7 @@ mod tests {
                         frontmatter: None,
                         when: None,
                         description: None,
+                        required: false,
                     }],
                     interactive: false,
                     view: None,
@@ -938,6 +949,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    required: false,
                 }]
             } else {
                 vec![]
@@ -1021,6 +1033,7 @@ mod tests {
                         frontmatter: None,
                         when: None,
                         description: None,
+                        required: false,
                     }]
                 })
                 .unwrap_or_default(),
@@ -1108,6 +1121,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    required: false,
                 }],
                 interactive: false,
                 view: None,

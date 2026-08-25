@@ -518,6 +518,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    required: false,
                 })
                 .collect(),
             outputs: outputs
@@ -530,6 +531,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    required: false,
                 })
                 .collect(),
             interactive: false,

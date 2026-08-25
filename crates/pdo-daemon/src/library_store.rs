@@ -1054,6 +1054,7 @@ mod tests {
                 frontmatter: None,
                 when: None,
                 description: None,
+                required: false,
             }],
             outputs: vec![pipeline::Port {
                 name: "out".to_string(),
@@ -1063,6 +1064,7 @@ mod tests {
                 frontmatter: None,
                 when: None,
                 description: None,
+                required: false,
             }],
             interactive: false,
             view: None,
@@ -1240,6 +1242,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    required: false,
                 },
                 pipeline::Port {
                     name: "reviews".to_string(),
@@ -1249,6 +1252,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    required: false,
                 },
             ],
             outputs: vec![pipeline::Port {
@@ -1269,6 +1273,7 @@ mod tests {
                     m
                 }),
                 description: None,
+                required: false,
             }],
             interactive: true,
             max_iter: Some(5),
@@ -1715,6 +1720,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    required: false,
                 },
                 pipeline::Port {
                     name: "reviews".to_string(),
@@ -1724,6 +1730,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    required: false,
                 },
             ],
             outputs: vec![pipeline::Port {
@@ -1765,6 +1772,7 @@ mod tests {
                     m
                 })),
                 description: None,
+                required: false,
             }],
             interactive: true,
             max_iter: Some(5),
@@ -1805,6 +1813,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    required: false,
                 }],
                 outputs: vec![pipeline::Port {
                     name: "result".to_string(),
@@ -1824,6 +1833,7 @@ mod tests {
                     }),
                     when: None,
                     description: None,
+                    required: false,
                 }],
                 interactive: false,
                 max_iter: None,

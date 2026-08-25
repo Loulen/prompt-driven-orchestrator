@@ -13051,7 +13051,42 @@ async fn node_start(
     State(state): State<Arc<AppState>>,
     AxumPath((run_id, node_id)): AxumPath<(String, String)>,
 ) -> Response {
-    force_spawn_node(&state, &run_id, &node_id).await
+    force_spawn_node(&state, &run_id, &node_id, None).await
+}
+
+/// Writes each per-port inline-content override to an artifact under the node's
+/// iteration dir and returns the port-keyed `PathBuf` map `start_node` consumes
+/// (#486 / #600). This is what lets a `start_node`/`skip_node` supply a **dummy
+/// input** (or a skipped node's default output) without the upstream having
+/// produced: the resolver reads these paths in place of the edge-resolved ones. A
+/// per-port write failure is skipped with a `warn!` (sharp tool, ADR-0001) rather
+/// than failing the whole spawn.
+fn materialize_override_inputs(
+    artifacts_dir: &std::path::Path,
+    node_id: &str,
+    iter: i64,
+    overrides: &HashMap<String, String>,
+) -> HashMap<String, std::path::PathBuf> {
+    let mut out = HashMap::new();
+    for (port, content) in overrides {
+        let dir = artifacts_dir
+            .join(node_id)
+            .join(format!("iter-{iter}"))
+            .join("__override__")
+            .join(port);
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            warn!("failed to create override dir for {node_id}.{port}: {e}");
+            continue;
+        }
+        let path = dir.join("output.md");
+        match std::fs::write(&path, content) {
+            Ok(()) => {
+                out.insert(port.clone(), path);
+            }
+            Err(e) => warn!("failed to write override artifact for {node_id}.{port}: {e}"),
+        }
+    }
+    out
 }
 
 /// Force-spawn a node now, without waiting for its upstream producers to
@@ -13081,7 +13116,12 @@ async fn node_start(
 ///    is held across the spawn + append so the check-and-reserve is atomic, as
 ///    `spawn_node` does. Force-spawn fails fast rather than queueing to
 ///    `waiting` — "start now" must not silently defer.
-async fn force_spawn_node(state: &Arc<AppState>, run_id: &str, node_id: &str) -> Response {
+async fn force_spawn_node(
+    state: &Arc<AppState>,
+    run_id: &str,
+    node_id: &str,
+    overrides: Option<&HashMap<String, String>>,
+) -> Response {
     let events = match load_events(&state.db, run_id).await {
         Ok(e) => e,
         Err(e) => {
@@ -13192,11 +13232,18 @@ async fn force_spawn_node(state: &Arc<AppState>, run_id: &str, node_id: &str) ->
     let artifacts_dir = worktree_dir.join(".pdo").join("artifacts");
     let resolved_vars = resolve_run_variables(&pipeline_def, &events);
 
+    // #486 / #600: materialize any operator-supplied per-port overrides into
+    // artifacts and hand `start_node` the resolved paths, so the node runs on the
+    // dummy input(s) even though its upstream never produced.
+    let override_paths = overrides
+        .map(|ov| materialize_override_inputs(&artifacts_dir, node_id, iter, ov))
+        .filter(|m| !m.is_empty());
+
     let params = node_primitives::StartNodeParams {
         run_id,
         node_id,
         iter,
-        overrides: None,
+        overrides: override_paths,
         pipeline: &pipeline_def,
         run_state: &run_state,
         artifacts_dir: &artifacts_dir,

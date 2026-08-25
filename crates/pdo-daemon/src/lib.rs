@@ -45,6 +45,7 @@ mod project_store;
 mod prompt_augmenter;
 mod pty_bridge;
 mod reap_policy;
+pub(crate) mod recovery;
 pub(crate) mod repo_edit_refusal;
 pub(crate) mod restart_verdict;
 pub(crate) mod retry_verdict;
@@ -11197,6 +11198,154 @@ struct PaneResponse {
     source: &'static str,
 }
 
+/// The outcome of an in-place session **re-attach** — ADR-0049 §3 recovery
+/// mechanism (a): resume the SAME agent session in the node's existing
+/// sub-worktree on the harness's resume tail (`claude --continue`), without
+/// re-driving the run. Shared by the pane endpoint ([`node_pane`]) and the
+/// `recover_node` command (#599): the two renderings differ (a `PaneResponse`
+/// vs a recovery verdict) but the resume mechanics — script exclusion, the
+/// `can_resume()` gate (ADR-0045), the admission reservation and the
+/// resurrection `NodeStarted` trace (#487 §3) — must not.
+pub(crate) enum ReattachOutcome {
+    /// A `script` node is deterministic bash, never an LLM session — not
+    /// re-attachable (#248 / ADR-0017).
+    ScriptNode,
+    /// The node's working directory is gone; nothing to re-enter.
+    WorkingDirMissing,
+    /// The frozen harness declares no resume tail (`can_resume() == false`,
+    /// ADR-0045). The optimal path is unavailable — the caller falls back
+    /// (`recover_node` → restart-with-artifacts, AC #9 / `node_pane` → snapshot).
+    CannotResume,
+    /// The session cap refused the re-attach (a re-attach IS a (re)spawn, #487 §3).
+    CapReached { live: usize, cap: usize },
+    /// The `NodeStarted` resurrection trace was refused (e.g. a terminal Run) — do
+    /// NOT launch a session the event log has no room for (#487).
+    TraceRefused { error: String },
+    /// `tmux_session_manager::resume` itself failed.
+    ResumeFailed { error: String },
+    /// The session was re-launched on its resume tail. The caller captures/reports.
+    Resumed,
+}
+
+/// Re-attach a node's dead-but-non-terminal session in place (ADR-0049 §3(a)).
+///
+/// Pure of the *response* shape: it performs the resume mechanics and returns a
+/// [`ReattachOutcome`] the caller renders. The gates below are the ones #487 §3
+/// established for resurrection — the session cap and a `NodeStarted` trace — and
+/// the `can_resume()` gate ADR-0045 requires. The caller must have already ruled
+/// out a live/terminal iteration; this is only reached for the latest,
+/// non-terminal, non-pending iteration.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn reattach_node_session(
+    state: &AppState,
+    events: &[event_log::Event],
+    run_state: &event_log::RunState,
+    repo_root: &std::path::Path,
+    run_id: &str,
+    node_id: &str,
+    iter: i64,
+    session_name: &str,
+) -> ReattachOutcome {
+    let node_type = find_node_type(run_state, node_id).unwrap_or("doc-only");
+    // #248 / ADR-0017: never resume a `script` node via `claude --continue`.
+    if node_type == "script" {
+        return ReattachOutcome::ScriptNode;
+    }
+
+    let working_dir =
+        tmux_session_manager::working_dir_for_node(repo_root, run_id, node_id, iter, node_type);
+    if !working_dir.exists() {
+        return ReattachOutcome::WorkingDirMissing;
+    }
+
+    // #407: a resumed sandboxed session re-enters its container (6th tail path).
+    let sandbox_wrap = (!run_state.sandbox.is_off()).then(|| tmux_session_manager::SandboxWrap {
+        docker_bin: state.docker_cmd_override.as_deref().unwrap_or("docker"),
+        uid: sandbox_container::host_uid(),
+        gid: sandbox_container::host_gid(),
+        marker: session_name,
+        workdir: &working_dir,
+    });
+    // #424: a resume restores the model but loses the effort level — re-pose the
+    // level the node was LAUNCHED with. #473: resume by the pinned session id.
+    let launch_effort = find_launch_effort(events, node_id, iter);
+    let launch_session_id = find_launch_session_id(events, node_id, iter);
+    // #550/#553/ADR-0046: re-pose the harness FROZEN at spawn, resolved against the
+    // embedded floor MERGED with the disk descriptor tier; any failure falls back
+    // to the `claude` floor, byte-identical to the legacy resume.
+    let launch_harness = find_launch_harness(events, node_id, iter);
+    let harness_home_root = sandbox_run::sandbox_home_roots(state)
+        .map(|(home, _)| home)
+        .unwrap_or_default();
+    let descriptor = launch_harness
+        .as_deref()
+        .and_then(|name| harness_registry::HarnessRegistry::load(&harness_home_root).resolve(name))
+        .unwrap_or_else(harness_registry::claude);
+    // AC #9 / ADR-0045: a harness with no resume tail cannot be re-attached.
+    if !descriptor.can_resume() {
+        return ReattachOutcome::CannotResume;
+    }
+    // #433 / ADR-0043 (D7): re-resolve turn-end auto-completion FRESH.
+    let inject_hook = stored_autocomplete_turn_end(&state.db).await;
+
+    // #487 §3 — a resurrection IS a (re)spawn: pass the admission gate and leave a
+    // `NodeStarted` trace, holding the lock across check-and-reserve then dropping
+    // it before the (slower) tmux relaunch, exactly as `spawn_node` orders it.
+    let admission_guard = state.admission_lock.lock().await;
+    let cap = admission::configured_cap_with(stored_session_cap(&state.db).await);
+    let live = count_global_live_sessions_excluding(
+        &state.db,
+        Some(admission::SlotExclusion {
+            run_id,
+            node_id,
+            iter,
+        }),
+    )
+    .await;
+    if !admission::can_admit(live, cap) {
+        drop(admission_guard);
+        return ReattachOutcome::CapReached { live, cap };
+    }
+    let resurrection_started = event_log::Event {
+        id: None,
+        run_id: run_id.to_string(),
+        ts: event_log::now_iso(),
+        kind: event_log::EventKind::NodeStarted,
+        node_id: Some(node_id.to_string()),
+        iter: Some(iter),
+        payload: find_launch_node_started_payload(events, node_id, iter),
+    };
+    if let Err(e) = append_event(state, &resurrection_started).await {
+        // The guard also enforces run-liveness on this append; a refusal means the
+        // event log has no room for this session — do not launch it (#487).
+        drop(admission_guard);
+        return ReattachOutcome::TraceRefused {
+            error: e.to_string(),
+        };
+    }
+    drop(admission_guard);
+
+    if let Err(e) = tmux_session_manager::resume(
+        session_name,
+        &working_dir,
+        run_id,
+        node_id,
+        iter,
+        state.port,
+        &descriptor,
+        launch_effort.as_deref(),
+        launch_session_id.as_deref(),
+        state.tmux_cmd_override.as_deref(),
+        sandbox_wrap.as_ref(),
+        inject_hook,
+    ) {
+        return ReattachOutcome::ResumeFailed {
+            error: e.to_string(),
+        };
+    }
+    ReattachOutcome::Resumed
+}
+
 async fn node_pane(
     State(state): State<Arc<AppState>>,
     AxumPath((run_id, node_id)): AxumPath<(String, String)>,
@@ -11265,82 +11414,32 @@ async fn node_pane(
     }
 
     if is_latest_iter && !iter_is_terminal && node_state.status != event_log::NodeStatus::Pending {
-        let node_type = find_node_type(&run_state, &node_id).unwrap_or("doc-only");
-
-        // #248 / ADR-0017: never resume a `script` node via `claude --continue`.
-        // A script runs deterministic bash, not an LLM; `resume` would launch a
-        // full Claude session in the run's shared worktree — the opposite of the
-        // contract. A dead-but-non-terminal script session can't be "continued";
-        // serve its last snapshot if we have one, else mark it unavailable.
-        if node_type == "script" {
+        // The resume mechanics (#248 script exclusion, the `can_resume()` gate, the
+        // #487 §3 admission reservation and resurrection trace) live in the shared
+        // `reattach_node_session` — the `recover_node` command drives the same seam
+        // (#599). This handler only renders the outcome as a `PaneResponse`.
+        let snapshot_or = |msg: &str| -> (String, &'static str) {
             let snapshot_path = pane_snapshot_path(&repo_root, &run_id, &node_id, iter);
-            let (content, source) = match std::fs::read_to_string(&snapshot_path) {
+            match std::fs::read_to_string(&snapshot_path) {
                 Ok(c) => (c, "snapshot"),
-                Err(_) => (
-                    "Script session no longer available".to_string(),
-                    "unavailable",
-                ),
-            };
-            return Json(PaneResponse {
-                content,
-                session_name,
-                resumed: false,
-                stale: false,
-                source,
-            })
-            .into_response();
-        }
-
-        let working_dir = tmux_session_manager::working_dir_for_node(
-            &repo_root, &run_id, &node_id, iter, node_type,
-        );
-
-        if working_dir.exists() {
-            // #407: a resumed sandboxed session re-enters its container (6th tail
-            // path). Marker = the session name; workdir = the node's working dir.
-            let sandbox_wrap =
-                (!run_state.sandbox.is_off()).then(|| tmux_session_manager::SandboxWrap {
-                    docker_bin: state.docker_cmd_override.as_deref().unwrap_or("docker"),
-                    uid: sandbox_container::host_uid(),
-                    gid: sandbox_container::host_gid(),
-                    marker: &session_name,
-                    workdir: &working_dir,
-                });
-            // #424: a resume restores the model but loses the effort level
-            // (measured on claude 2.1.220, and the transcript carries nothing to
-            // read back), so re-pose the level the node was LAUNCHED with.
-            let launch_effort = find_launch_effort(&events, &node_id, iter);
-            // #473: resume by the pinned session id — `--resume <uuid>`, this node's
-            // own transcript. A pre-#473 row (no id) falls back to a bare
-            // `--continue`, which is the very collision this issue fixes.
-            let launch_session_id = find_launch_session_id(&events, &node_id, iter);
-            // #550/ADR-0046: re-pose the harness FROZEN at spawn — never the YAML's
-            // now. A pre-#550 row (no key) or an unknown harness falls back to the
-            // `claude` floor, byte-identical to the legacy resume.
-            let launch_harness = find_launch_harness(&events, &node_id, iter);
-            // #553: resolve the frozen harness against the embedded floor MERGED
-            // with the disk descriptor tier, so a user-declared harness resumes
-            // like the built-in ones. The registry reads a root we hand it (never
-            // `$HOME`); a resolution failure, a pre-#550 row, or an unresolved home
-            // all fall back to the `claude` floor — byte-identical to the legacy
-            // resume.
-            let harness_home_root = sandbox_run::sandbox_home_roots(&state)
-                .map(|(home, _)| home)
-                .unwrap_or_default();
-            let descriptor = launch_harness
-                .as_deref()
-                .and_then(|name| {
-                    harness_registry::HarnessRegistry::load(&harness_home_root).resolve(name)
-                })
-                .unwrap_or_else(harness_registry::claude);
-            // AC #9: a harness with no resume mechanism serves its last pane
-            // snapshot (the same branch as a `script` node), never a resume error.
-            if !descriptor.can_resume() {
-                let snapshot_path = pane_snapshot_path(&repo_root, &run_id, &node_id, iter);
-                let (content, source) = match std::fs::read_to_string(&snapshot_path) {
-                    Ok(c) => (c, "snapshot"),
-                    Err(_) => ("Session no longer available".to_string(), "unavailable"),
-                };
+                Err(_) => (msg.to_string(), "unavailable"),
+            }
+        };
+        let outcome = reattach_node_session(
+            &state,
+            &events,
+            &run_state,
+            &repo_root,
+            &run_id,
+            &node_id,
+            iter,
+            &session_name,
+        )
+        .await;
+        match outcome {
+            // #248 / ADR-0017: a script session can't be "continued" — snapshot it.
+            ReattachOutcome::ScriptNode => {
+                let (content, source) = snapshot_or("Script session no longer available");
                 return Json(PaneResponse {
                     content,
                     session_name,
@@ -11350,37 +11449,32 @@ async fn node_pane(
                 })
                 .into_response();
             }
-            // #433 / ADR-0043 (D7): re-resolve turn-end auto-completion FRESH — it
-            // may have toggled since spawn — so a resurrected session re-carries
-            // the `Stop` hook. A `script` node returned early above, so this tail is
-            // an agent by construction.
-            let inject_hook = stored_autocomplete_turn_end(&state.db).await;
-
-            // #487 §3 — a resurrection IS a (re)spawn, so it must pass the
-            // admission gate and leave a `NodeStarted` trace, exactly as `spawn_node`
-            // does. Before this, a click on a dead pane relaunched a live `claude`
-            // session that (1) consumed a slot the session cap (#77/#78) never
-            // granted — the cap bypassed by a click — and (2) left NO event in the
-            // log, so the orphan sweep (#485) would later read the very session it
-            // resurrected as an orphan and kill it. Hold the admission lock across
-            // the check-and-reserve (count → append), then drop it before the tmux
-            // relaunch, exactly as `spawn_node` orders it.
-            let admission_guard = state.admission_lock.lock().await;
-            let cap = admission::configured_cap_with(stored_session_cap(&state.db).await);
-            // Exclude this node's own slot (#489-C): the dead iteration still projects
-            // `Running`, so a Run-blind count would refuse to resume it against itself
-            // at the cap.
-            let live = count_global_live_sessions_excluding(
-                &state.db,
-                Some(admission::SlotExclusion {
-                    run_id: &run_id,
-                    node_id: &node_id,
-                    iter,
-                }),
-            )
-            .await;
-            if !admission::can_admit(live, cap) {
-                drop(admission_guard);
+            // AC #9: a harness with no resume mechanism serves its snapshot, never a
+            // resume error (the same branch as a `script` node).
+            ReattachOutcome::CannotResume => {
+                let (content, source) = snapshot_or("Session no longer available");
+                return Json(PaneResponse {
+                    content,
+                    session_name,
+                    resumed: false,
+                    stale: false,
+                    source,
+                })
+                .into_response();
+            }
+            ReattachOutcome::TraceRefused { error } => {
+                warn!("node_pane: not resurrecting {node_id} iter {iter} in {run_id}: {error}");
+                let (content, source) = snapshot_or("Session no longer available");
+                return Json(PaneResponse {
+                    content,
+                    session_name,
+                    resumed: false,
+                    stale: false,
+                    source,
+                })
+                .into_response();
+            }
+            ReattachOutcome::CapReached { live, cap } => {
                 info!(
                     "node_pane: refusing to resurrect {node_id} iter {iter} in {run_id} \
                      — session cap reached ({live}/{cap})"
@@ -11396,61 +11490,8 @@ async fn node_pane(
                 })
                 .into_response();
             }
-
-            // The trace. Faithful to the ORIGINAL launch (its `session_id` / `harness`
-            // / `effort` / `base_sha`) so the resumed session is not stranded on the
-            // next resume. The guard also enforces run-liveness on this append — a
-            // dead session on a TERMINAL Run is NOT resurrected (the append is
-            // refused), consistent with the head probe #487 put on `node_retry`.
-            let resurrection_started = event_log::Event {
-                id: None,
-                run_id: run_id.clone(),
-                ts: event_log::now_iso(),
-                kind: event_log::EventKind::NodeStarted,
-                node_id: Some(node_id.clone()),
-                iter: Some(iter),
-                payload: find_launch_node_started_payload(&events, &node_id, iter),
-            };
-            if let Err(e) = append_event(&state, &resurrection_started).await {
-                // Guard refused (e.g. the Run is terminal) or the log is closed: do
-                // NOT resurrect a session the event log has no room for — that is the
-                // rogue-session bug #487 exists to close. Serve the snapshot or an
-                // honest "unavailable" instead.
-                drop(admission_guard);
-                warn!("node_pane: not resurrecting {node_id} iter {iter} in {run_id}: {e}");
-                let snapshot_path = pane_snapshot_path(&repo_root, &run_id, &node_id, iter);
-                let (content, source) = match std::fs::read_to_string(&snapshot_path) {
-                    Ok(c) => (c, "snapshot"),
-                    Err(_) => ("Session no longer available".to_string(), "unavailable"),
-                };
-                return Json(PaneResponse {
-                    content,
-                    session_name,
-                    resumed: false,
-                    stale: false,
-                    source,
-                })
-                .into_response();
-            }
-            // Reservation recorded; release the slot lock before the (slower) relaunch,
-            // exactly as `spawn_node` drops it after the `NodeStarted` append.
-            drop(admission_guard);
-
-            if let Err(e) = tmux_session_manager::resume(
-                &session_name,
-                &working_dir,
-                &run_id,
-                &node_id,
-                iter,
-                state.port,
-                &descriptor,
-                launch_effort.as_deref(),
-                launch_session_id.as_deref(),
-                state.tmux_cmd_override.as_deref(),
-                sandbox_wrap.as_ref(),
-                inject_hook,
-            ) {
-                warn!("Failed to resume session {session_name}: {e}");
+            ReattachOutcome::ResumeFailed { error } => {
+                warn!("Failed to resume session {session_name}: {error}");
                 return Json(PaneResponse {
                     content: "Session no longer available".to_string(),
                     session_name,
@@ -11460,21 +11501,23 @@ async fn node_pane(
                 })
                 .into_response();
             }
-
-            // Give the resumed session a moment to initialize
-            tokio::time::sleep(Duration::from_millis(500)).await;
-
-            let content = tmux_session_manager::capture(&socket, &session_name)
-                .unwrap_or_else(|| "Connecting...".to_string());
-
-            return Json(PaneResponse {
-                content,
-                session_name,
-                resumed: true,
-                stale: false,
-                source: "resumed",
-            })
-            .into_response();
+            // Working dir gone → fall through to the placeholder below (stale reads
+            // `!is_latest_iter`, i.e. `false` here — the pre-#599 behaviour).
+            ReattachOutcome::WorkingDirMissing => {}
+            ReattachOutcome::Resumed => {
+                // Give the resumed session a moment to initialize.
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                let content = tmux_session_manager::capture(&socket, &session_name)
+                    .unwrap_or_else(|| "Connecting...".to_string());
+                return Json(PaneResponse {
+                    content,
+                    session_name,
+                    resumed: true,
+                    stale: false,
+                    source: "resumed",
+                })
+                .into_response();
+            }
         }
     }
 

@@ -344,6 +344,11 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         // recycles, never reuses. No interrupted-op notice is routed.
         reused_sub_worktree: false,
         interrupted_git_ops: &[],
+        // #599 AC1: this path only ever runs for an iteration that was NOT started
+        // before (`has_node_started_event` returned `AlreadyDone` otherwise), so no
+        // partial output can survive here — the restart-with-artifacts section is a
+        // re-spawn concern, handled in `node_spawn`.
+        partial_outputs: &[],
     };
 
     let full_prompt = crate::prompt_augmenter::build_full_prompt(&aug_ctx, &role_prompt);

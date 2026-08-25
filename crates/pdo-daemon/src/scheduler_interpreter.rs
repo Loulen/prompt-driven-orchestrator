@@ -174,15 +174,20 @@ pub(crate) async fn interpret(
                 message: message.clone(),
             }
         }
-        SchedulerAction::Interrupt { message } => {
+        SchedulerAction::Interrupt {
+            reason_code,
+            message,
+        } => {
             // ADR-0049: `unrouted` parks the run `AwaitingUser`, never terminal.
-            // `RunInterrupted` carries the diagnostic under `reason` (the shape
-            // `run_event_reason` reads into `awaiting_reason`).
+            // `RunInterrupted` carries the diagnostic as a machine `reason_code`
+            // AND human `reason` (#601), the shape `run_event_reason` /
+            // `run_event_reason_code` read into `awaiting_reason` /
+            // `awaiting_reason_code`.
             emit_run_event(
                 state,
                 run_id,
                 event_log::EventKind::RunInterrupted,
-                Some(serde_json::json!({ "reason": message })),
+                Some(event_log::interrupt_payload(reason_code, message)),
             )
             .await;
             ActionOutcome::Interrupted {

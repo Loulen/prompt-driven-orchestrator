@@ -735,6 +735,18 @@ pub struct RunState {
     /// awaiting causes stay distinguishable from the run state alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub awaiting_reason: Option<String>,
+    /// The **machine** slug companion of [`awaiting_reason`] (#601): a stable
+    /// snake_case code (`session_died`, `run_stalled`, `unrouted`,
+    /// `region_exhausted`, `spawn_aborted`, `boot_recovery`, a completion-refusal
+    /// slug, …) the manager and UI branch on, next to the human sentence — the
+    /// same slug+prose contract as a refusal body (ADR-0035). Projected from a
+    /// `RunInterrupted` event's `reason_code` payload key, or derived in
+    /// [`finalize`] from an `Interrupted` node's `<code>: <prose>` reason prefix
+    /// (so historical logs without the explicit key still carry a code). Cleared
+    /// with [`awaiting_reason`] on resume / reopen. Every non-advancement thus
+    /// carries a reason that is machine-branchable, not only prose to grep.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub awaiting_reason_code: Option<String>,
     pub nodes: HashMap<String, NodeState>,
     #[serde(default)]
     pub edges: Vec<EdgeInfo>,
@@ -932,6 +944,7 @@ impl RunState {
             completed_at: None,
             failure_reason: None,
             awaiting_reason: None,
+            awaiting_reason_code: None,
             nodes: HashMap::new(),
             edges: Vec::new(),
             node_defs: Vec::new(),
@@ -1090,6 +1103,83 @@ impl RunState {
             )),
         }
     }
+
+    /// The ids of every **open** (not-`done`) region on this Run, across ALL
+    /// region-state kinds (#601). Exhaustive by construction via
+    /// [`RegionStateKind`]: an open region of any kind is the Pipeline Manager's
+    /// domain, never a fail-fast run-level stall — so `run_stall_reason` can defer
+    /// to a *total* predicate here instead of a hand-written per-map disjunction
+    /// that a new region kind could silently escape (the #453 class, where each
+    /// new region type reopened a frozen run reported `stalled = false`).
+    pub(crate) fn open_region_ids(&self) -> Vec<String> {
+        RegionStateKind::ALL
+            .iter()
+            .flat_map(|k| k.open_ids(self))
+            .collect()
+    }
+
+    /// Whether any region of any kind is currently open (#601). See
+    /// [`open_region_ids`](RunState::open_region_ids).
+    pub(crate) fn has_open_region(&self) -> bool {
+        !self.open_region_ids().is_empty()
+    }
+}
+
+/// Every projected region-state map on a [`RunState`] that carries an "open"
+/// (not-yet-`done`) lifecycle (#601). The point of this enum is a **compile-time
+/// exhaustiveness anchor**: the `match` in [`RegionStateKind::open_ids`] has no
+/// wildcard arm, so adding a new region-state map to `RunState` means adding a
+/// variant here — and every consumer that iterates [`RegionStateKind::ALL`]
+/// (notably `run_stall_reason`'s open-region defer) then covers it automatically.
+/// This is the ADR-0035/0037 discipline ("l'invariant remplace l'énumération —
+/// ajouter une variante ne compile plus") applied to region openness, closing the
+/// #453 class where a new region kind fell through to a silent `stalled = false`.
+///
+/// `switch_states` is deliberately **absent**: a switch is a routing *record*
+/// (`SwitchState` has no `done` flag and no open/close lifecycle), not a region
+/// that can hold a run open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RegionStateKind {
+    Loop,
+    ForEach,
+    Collection,
+}
+
+impl RegionStateKind {
+    /// Every variant. A new variant added to the enum must be added here too; the
+    /// `region_state_kind_all_is_total` test asserts this list is complete, and
+    /// [`open_ids`](Self::open_ids)'s wildcard-free `match` fails to compile until
+    /// the variant is classified.
+    pub(crate) const ALL: [RegionStateKind; 3] = [
+        RegionStateKind::Loop,
+        RegionStateKind::ForEach,
+        RegionStateKind::Collection,
+    ];
+
+    /// The ids of the currently-open (not `done`) regions of this kind. Exhaustive
+    /// `match`, NO wildcard — the compile-time anchor of #601.
+    fn open_ids<'a>(self, run: &'a RunState) -> Box<dyn Iterator<Item = String> + 'a> {
+        match self {
+            RegionStateKind::Loop => Box::new(
+                run.loop_states
+                    .values()
+                    .filter(|s| !s.done)
+                    .map(|s| s.loop_node_id.clone()),
+            ),
+            RegionStateKind::ForEach => Box::new(
+                run.foreach_states
+                    .values()
+                    .filter(|s| !s.done)
+                    .map(|s| s.foreach_node_id.clone()),
+            ),
+            RegionStateKind::Collection => Box::new(
+                run.collection_states
+                    .values()
+                    .filter(|s| !s.done)
+                    .map(|s| s.region_id.clone()),
+            ),
+        }
+    }
 }
 
 fn entry_node_ids(edges: &[EdgeInfo], node_defs: &[NodeDefInfo]) -> Vec<String> {
@@ -1243,6 +1333,55 @@ fn run_event_reason(event: &Event) -> Option<String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(String::from)
+}
+
+/// Build the payload of a park / give-up event carrying BOTH a machine reason
+/// code and human prose (#601) — the state model's slug+prose contract, mirror
+/// of a refusal body (ADR-0035: `error` slug + `message` prose). `code` is a
+/// stable `snake_case` slug the manager/UI branch on; `reason` is the human
+/// sentence (which, by convention, itself opens with `<code>: …` so a reader
+/// with only the prose still sees the machine token). Used by every producer of
+/// `RunInterrupted` so no non-advancement is prose-only on the wire.
+pub(crate) fn interrupt_payload(code: &str, reason: impl Into<String>) -> serde_json::Value {
+    serde_json::json!({ "reason_code": code, "reason": reason.into() })
+}
+
+/// Extract the machine slug a park/give-up prose reason is prefixed with (#601).
+/// By convention every interrupt reason reads `"<slug>: <prose>"` (e.g.
+/// `"session_died: tmux session … gone"`); the slug is the machine-branchable
+/// code, the whole string stays the human sentence. Returns the slug when the
+/// head before the first `": "` is a non-empty `snake_case` token (lowercase,
+/// digits, `_`) and prose follows — else `None` (an un-prefixed legacy reason
+/// carries no derivable code).
+pub(crate) fn parse_reason_code(reason: &str) -> Option<String> {
+    let (head, rest) = reason.split_once(": ")?;
+    let looks_slug = !head.is_empty()
+        && !rest.trim().is_empty()
+        && head
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+    looks_slug.then(|| head.to_string())
+}
+
+/// The machine `reason_code` of a `RunInterrupted` event (#601): the explicit
+/// `payload["reason_code"]` when present (authoritative), else parsed from the
+/// prose reason's `<code>:` prefix (so historical logs written before the key
+/// existed still surface a code). Mirrors [`run_event_reason`]'s emptiness
+/// handling.
+fn run_event_reason_code(event: &Event) -> Option<String> {
+    let explicit = event
+        .payload
+        .as_ref()
+        .and_then(|p| p.get("reason_code"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    explicit.or_else(|| {
+        run_event_reason(event)
+            .as_deref()
+            .and_then(parse_reason_code)
+    })
 }
 
 fn apply_run_event(state: &mut RunState, event: &Event) {
@@ -1540,6 +1679,7 @@ fn apply_run_event(state: &mut RunState, event: &Event) {
             // An incident park (ADR-0049) clears the same way: a resumed Run is
             // no longer waiting on that incident.
             state.awaiting_reason = None;
+            state.awaiting_reason_code = None;
         }
         // The runtime gave up on driving the run forward for a non-deliberate
         // reason (ADR-0049): park it `AwaitingUser` with the reason, NEVER
@@ -1552,6 +1692,7 @@ fn apply_run_event(state: &mut RunState, event: &Event) {
             if state.status.is_live() {
                 state.status = RunStatus::AwaitingUser;
                 state.awaiting_reason = run_event_reason(event);
+                state.awaiting_reason_code = run_event_reason_code(event);
             }
         }
         EventKind::RunRenamed => {
@@ -2268,6 +2409,7 @@ fn apply_command_event(state: &mut RunState, event: &Event) {
             state.completed_at = None;
             state.failure_reason = None;
             state.awaiting_reason = None;
+            state.awaiting_reason_code = None;
             // Re-drive the interrupted work (ADR-0049 default: restart with the
             // partial artefacts, which persist in the sub-worktree). Drop each
             // `Interrupted` node from the projection — exactly like
@@ -2353,6 +2495,11 @@ fn finalize(state: &mut RunState) {
             .min_by(|a, b| a.0.cmp(b.0))
         {
             state.awaiting_reason = node.failure_reason.clone();
+            // #601: carry the machine slug too, derived from the node reason's
+            // `<code>: <prose>` prefix (`session_died`, `spawn_aborted`,
+            // `boot_recovery`, …). A node-level interrupt has no run-level
+            // `reason_code` payload to read, so the prose prefix is the source.
+            state.awaiting_reason_code = node.failure_reason.as_deref().and_then(parse_reason_code);
         }
     }
 }
@@ -3424,6 +3571,180 @@ mod tests {
         .unwrap();
         assert_eq!(completed.status, RunStatus::Completed);
         assert!(completed.awaiting_reason.is_none());
+    }
+
+    // --- #601: machine reason code (slug) alongside the prose ------------------
+
+    #[test]
+    fn run_interrupted_carries_the_explicit_reason_code() {
+        // A run-level give-up now writes reason_code + reason; both project.
+        let state = project(&[
+            make_event(EventKind::RunStarted, None, None),
+            make_event_with_payload(
+                EventKind::RunInterrupted,
+                None,
+                interrupt_payload("unrouted", "unrouted: no live branch reaches End"),
+            ),
+        ])
+        .unwrap();
+        assert_eq!(state.status, RunStatus::AwaitingUser);
+        assert_eq!(state.awaiting_reason_code.as_deref(), Some("unrouted"));
+        assert_eq!(
+            state.awaiting_reason.as_deref(),
+            Some("unrouted: no live branch reaches End")
+        );
+    }
+
+    #[test]
+    fn run_interrupted_derives_the_code_from_a_legacy_prose_prefix() {
+        // A historical log without the explicit reason_code key still surfaces a
+        // machine code, parsed from the `<slug>: <prose>` prefix.
+        let state = project(&[
+            make_event(EventKind::RunStarted, None, None),
+            make_event_with_payload(
+                EventKind::RunInterrupted,
+                None,
+                serde_json::json!({ "reason": "run_stalled: nothing schedulable" }),
+            ),
+        ])
+        .unwrap();
+        assert_eq!(state.awaiting_reason_code.as_deref(), Some("run_stalled"));
+    }
+
+    #[test]
+    fn node_interrupt_lifts_a_machine_code_from_its_reason_prefix() {
+        // finalize derives awaiting_reason_code from an interrupted node's
+        // `<slug>: <prose>` reason — a node-level interrupt has no run-level
+        // reason_code payload to read.
+        let state = project(&[
+            make_event(EventKind::RunStarted, None, None),
+            make_event(EventKind::NodeStarted, Some("worker"), Some(1)),
+            interrupt_event("worker", 1, "session_died: tmux gone"),
+        ])
+        .unwrap();
+        assert_eq!(state.awaiting_reason_code.as_deref(), Some("session_died"));
+    }
+
+    #[test]
+    fn interactive_wait_has_no_reason_code() {
+        // An interactive AwaitingUser (a node asking its user) carries no incident
+        // reason and thus no code — the two awaiting causes stay distinguishable.
+        let state = project(&[
+            make_event(EventKind::RunStarted, None, None),
+            make_event(EventKind::NodeStarted, Some("ask"), Some(1)),
+            make_event(EventKind::NodeAwaitingUser, Some("ask"), Some(1)),
+        ])
+        .unwrap();
+        assert_eq!(state.status, RunStatus::AwaitingUser);
+        assert!(state.awaiting_reason.is_none());
+        assert!(state.awaiting_reason_code.is_none());
+    }
+
+    #[test]
+    fn reopen_clears_the_reason_code() {
+        let reopen = Event {
+            id: None,
+            run_id: "run-1".into(),
+            ts: "2026-01-01T00:00:00.000Z".into(),
+            kind: EventKind::CommandIssued,
+            node_id: None,
+            iter: None,
+            payload: Some(serde_json::json!({ "command": "reopen_run" })),
+        };
+        let state = project(&[
+            make_event(EventKind::RunStarted, None, None),
+            make_event_with_payload(
+                EventKind::RunInterrupted,
+                None,
+                interrupt_payload("run_stalled", "run_stalled: nothing schedulable"),
+            ),
+            reopen,
+        ])
+        .unwrap();
+        assert_eq!(state.status, RunStatus::Running);
+        assert!(state.awaiting_reason.is_none());
+        assert!(state.awaiting_reason_code.is_none());
+    }
+
+    #[test]
+    fn parse_reason_code_only_accepts_a_snake_case_prefix() {
+        assert_eq!(
+            parse_reason_code("session_died: gone").as_deref(),
+            Some("session_died")
+        );
+        assert_eq!(
+            parse_reason_code("region_exhausted: x").as_deref(),
+            Some("region_exhausted")
+        );
+        // A prose sentence whose head is not a slug carries no code.
+        assert!(parse_reason_code("exhausted — unrouted: region r").is_none());
+        assert!(parse_reason_code("no colon here").is_none());
+        assert!(parse_reason_code("Capitalized: x").is_none());
+        assert!(parse_reason_code("slug: ").is_none());
+    }
+
+    // --- #601: run_stall_reason exhaustive over region kinds -------------------
+
+    #[test]
+    fn region_state_kind_all_is_total() {
+        // ALL must list every variant. A new region kind added to the enum makes
+        // this match fail to compile until it is added here (and thus to the
+        // open-region defer of run_stall_reason).
+        for kind in RegionStateKind::ALL {
+            match kind {
+                RegionStateKind::Loop | RegionStateKind::ForEach | RegionStateKind::Collection => {}
+            }
+        }
+        assert_eq!(RegionStateKind::ALL.len(), 3);
+    }
+
+    #[test]
+    fn has_open_region_counts_every_kind() {
+        // Each region-state map, in isolation, is seen by has_open_region /
+        // open_region_ids — the #453 exhaustiveness guarantee.
+        let mut loops = RunState::new("r".into(), "p".into());
+        loops.loop_states.insert(
+            "L".into(),
+            LoopState {
+                loop_node_id: "L".into(),
+                current_iter: 1,
+                max_iter: 3,
+                break_received: false,
+                done: false,
+            },
+        );
+        assert!(loops.has_open_region());
+        assert_eq!(loops.open_region_ids(), vec!["L".to_string()]);
+
+        let mut fe = RunState::new("r".into(), "p".into());
+        fe.foreach_states.insert(
+            "F".into(),
+            ForEachState {
+                foreach_node_id: "F".into(),
+                total_items: 2,
+                break_received: false,
+                done: false,
+            },
+        );
+        assert!(fe.has_open_region());
+
+        let mut coll = RunState::new("r".into(), "p".into());
+        coll.collection_states.insert(
+            "C".into(),
+            CollectionState {
+                region_id: "C".into(),
+                total_items: 2,
+                done: false,
+                entry: "m".into(),
+                members: vec!["m".into()],
+            },
+        );
+        assert!(coll.has_open_region());
+
+        // A done region does not hold the run open.
+        coll.collection_states.get_mut("C").unwrap().done = true;
+        assert!(!coll.has_open_region());
+        assert!(coll.open_region_ids().is_empty());
     }
 
     #[test]

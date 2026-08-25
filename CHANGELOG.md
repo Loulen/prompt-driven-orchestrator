@@ -10,6 +10,43 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.33.0
+
+**Résilience des runs — observabilité & véracité de l'état** (#601, lot 4/4 de la spec #596 ;
+ADR-0025/0035/0037/0038/0049/0050). Aucune migration : le nouveau champ d'état est additif
+(`skip_serializing_if`), les logs historiques restent lisibles (le code machine se dérive du préfixe
+de prose quand il manque).
+
+L'état d'un run devient **auto-diagnostiquable** : la raison de tout non-avancement vit dans l'état,
+la détection de stall est exhaustive par construction, et les entrées d'API disent la vérité.
+
+Changements de comportement (non cassants sur les lecteurs de payload historiques, mais visibles des
+clients d'API) :
+
+- **Raison machine + prose sur tout non-avancement.** Un park / give-up / `Interrupted` / `unrouted`
+  porte désormais un **`awaiting_reason_code`** (slug stable : `session_died`, `spawn_aborted`,
+  `boot_recovery`, `run_stalled`, `unrouted`, `region_exhausted`, `region_ended_unrouted`,
+  `merge_conflict`, `merge_resolution_failed`, `merge_resolver_spawn_failed`,
+  `script_validation_failed`, `frontmatter_retry_exhausted`, `doc_violated_code_immutability`,
+  `agent_fail_awaiting`) **à côté** de la prose `awaiting_reason` — même contrat slug+prose qu'un
+  refus (ADR-0035). Exposé sur `GET /runs/:id` **et** `GET /runs` (l'entrée de liste porte enfin
+  `awaiting_reason`), lu par le manager (préambule) et l'UI. Plus besoin de `journalctl`.
+- **`run_stall_reason` exhaustif par construction.** L'attente sur région ouverte passe par un
+  `match` sans joker sur `RegionStateKind` (loop / foreach / collection) : un futur type de région
+  ne peut plus rouvrir un run figé en `stalled=false` (fin de la classe #453).
+- **`loop_states` non ambigu.** Une région bornée a une entrée dès le **lap 1** (comme le nœud
+  `Loop` legacy) : « pas d'entrée » signifie « pas de boucle », plus « premier tour » (amende la
+  mise en garde ADR-0025 §4, répercutée dans le préambule manager).
+- **`POST /runs` : champ inconnu → `400` nommant le champ**, avant tout effet (JSON *et* multipart).
+  Fin du succès silencieux qui jetait un champ mal orthographié (ex. `target_repos`). Doctrine
+  ADR-0033 (validation à l'écriture), volontairement plus étroite que l'ignorance des champs de
+  *config* d'ADR-0015 #471 (validation explicite, pas de `deny_unknown_fields`).
+- **Corps d'erreur de `/commands` normalisés en JSON** (#491) — plus de `text/plain` avalé par le
+  `.catch(() => null)` du front (`load_projected`, échecs d'append, sondes `restart_node`,
+  `cleanup_run`). `{ "error": … }` partout.
+- **Commande valide mais sans effet → `200 {noop, reason}` honnête** (déjà porté par le socle via la
+  porte de complétion partagée ; couvre `skip` d'un nœud déjà terminal).
+
 ## 1.32.0
 
 **Résilience des runs — socle « retomber sur ses pattes »** (#598, ADR-0049/0050, ADR-0032/0009/0036

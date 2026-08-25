@@ -26,6 +26,10 @@ pub(crate) enum SchedulerAction {
     /// routes it (e.g. from the Pipeline Manager) or reopens. Distinct from
     /// [`SchedulerAction::Halt`], which stays a deliberate terminal halt.
     Interrupt {
+        /// Stable machine slug (#601): the `reason_code` the park event carries
+        /// alongside the prose, so the manager/UI branch on a code instead of
+        /// string-matching the sentence (e.g. `unrouted`, `region_exhausted`).
+        reason_code: String,
         message: String,
     },
     Complete,
@@ -458,6 +462,40 @@ pub(crate) fn evaluate_outgoing_edges_full(
                         target_id,
                         resolved_vars,
                     ) {
+                        // #601: a bounded region gets a `loop_states` entry from
+                        // lap 1. This edge enters the region from outside (source
+                        // is not a member, target is), so it is the region's first
+                        // lap; emit `LoopIterStarted{region, 1}` in the same batch
+                        // that spawns the entry, so "no loop_states entry" means
+                        // "no loop" and never "first lap" (ADR-0025 §4). Purely
+                        // additive to the generic spawn, guarded by the absent
+                        // loop state so re-processing this producer never
+                        // double-seeds. A member→member forward edge (source is a
+                        // member) is not an entry and is skipped by the helper.
+                        if let Some(region) = crate::loop_region::bounded_region_entered_by_edge(
+                            pipeline,
+                            completed_node_id,
+                            target_id,
+                        ) {
+                            if !run_state.loop_states.contains_key(region.id.as_str())
+                                && !actions.iter().any(|a| {
+                                    matches!(
+                                        a,
+                                        SchedulerAction::LoopIterStarted { loop_node_id, .. }
+                                            if loop_node_id == &region.id
+                                    )
+                                })
+                            {
+                                actions.push(SchedulerAction::LoopIterStarted {
+                                    loop_node_id: region.id.clone(),
+                                    iter: 1,
+                                    max_iter: crate::loop_region::resolve_region_max_iter(
+                                        region,
+                                        resolved_vars,
+                                    ),
+                                });
+                            }
+                        }
                         actions.push(SchedulerAction::Spawn {
                             node_id: target_id.clone(),
                             iter: next_iter,
@@ -506,6 +544,7 @@ pub(crate) fn evaluate_outgoing_edges_full(
             );
             if end_dead {
                 actions.push(SchedulerAction::Interrupt {
+                    reason_code: "unrouted".to_string(),
                     message: "unrouted: conditional routing suppressed every path to End \
                          (no live branch reaches End)"
                         .to_string(),
@@ -606,22 +645,31 @@ fn handle_region_reentry(
                     }
                 }
                 crate::loop_region::ExhaustionOutcome::Unrouted => {
-                    let message = if ended {
-                        format!(
-                            "ended — unrouted: bounded region '{}' was closed by end_region \
-                             at iter {current_iter} but no exit edge matched (route it from \
-                             the Pipeline Manager)",
-                            region.id
+                    let (reason_code, message) = if ended {
+                        (
+                            "region_ended_unrouted",
+                            format!(
+                                "ended — unrouted: bounded region '{}' was closed by end_region \
+                                 at iter {current_iter} but no exit edge matched (route it from \
+                                 the Pipeline Manager)",
+                                region.id
+                            ),
                         )
                     } else {
-                        format!(
-                            "exhausted — unrouted: bounded region '{}' reached max_iter \
-                             {max_iter} with the continuation condition still true and no \
-                             matching exit edge (route it from the Pipeline Manager)",
-                            region.id
+                        (
+                            "region_exhausted",
+                            format!(
+                                "exhausted — unrouted: bounded region '{}' reached max_iter \
+                                 {max_iter} with the continuation condition still true and no \
+                                 matching exit edge (route it from the Pipeline Manager)",
+                                region.id
+                            ),
                         )
                     };
-                    actions.push(SchedulerAction::Interrupt { message });
+                    actions.push(SchedulerAction::Interrupt {
+                        reason_code: reason_code.to_string(),
+                        message,
+                    });
                 }
             }
         }
@@ -4729,7 +4777,7 @@ loops:
             "must not re-enter past max_iter, got {actions:?}"
         );
         let halt = actions.iter().find_map(|a| match a {
-            SchedulerAction::Interrupt { message } => Some(message.clone()),
+            SchedulerAction::Interrupt { message, .. } => Some(message.clone()),
             _ => None,
         });
         let Some(halt) = halt else {
@@ -5194,6 +5242,99 @@ loops:
                 .iter()
                 .any(|a| matches!(a, SchedulerAction::Halt { .. })),
             "entering a bounded loop must not halt, got {actions:?}"
+        );
+    }
+
+    #[test]
+    fn bounded_region_gets_a_loop_state_from_lap_one() {
+        // #601: entering a bounded region from outside emits LoopIterStarted{1} in
+        // the same batch that spawns the entry, so `loop_states` carries an entry
+        // from lap 1 — "no entry" then means "no loop", never "first lap"
+        // (ADR-0025 §4). The legacy `Loop` node already had this via
+        // `seed_pending_loops`; the region path did not.
+        let pipeline = external_entry_into_loop_pipeline(3);
+        let mut state = empty_run_state();
+        state.nodes.insert("dbg".into(), completed_node("dbg"));
+
+        let mut dbg_fm = HashMap::new();
+        dbg_fm.insert(
+            "verdict".to_string(),
+            serde_yaml::Value::String("Bug".to_string()),
+        );
+        let mut by_node = HashMap::new();
+        by_node.insert("dbg".to_string(), dbg_fm.clone());
+
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "dbg",
+            &HashMap::new(),
+            &dbg_fm,
+            &by_node,
+        );
+
+        assert!(
+            actions.contains(&SchedulerAction::LoopIterStarted {
+                loop_node_id: "fix_loop".into(),
+                iter: 1,
+                max_iter: 3,
+            }),
+            "entering a bounded region must seed loop_states at lap 1, got {actions:?}"
+        );
+        // Ordered before the entry spawn, so a driver applies the loop event first.
+        let li = actions
+            .iter()
+            .position(|a| matches!(a, SchedulerAction::LoopIterStarted { .. }));
+        let sp = actions
+            .iter()
+            .position(|a| matches!(a, SchedulerAction::Spawn { node_id, .. } if node_id == "impl"));
+        assert!(
+            li < sp,
+            "LoopIterStarted must precede the entry Spawn: {actions:?}"
+        );
+    }
+
+    #[test]
+    fn bounded_region_lap_one_seed_is_idempotent_once_the_state_exists() {
+        // Re-evaluating the producer once the region already has a loop_states
+        // entry must NOT emit a second LoopIterStarted{1} — the seed is guarded on
+        // the absent key.
+        let pipeline = external_entry_into_loop_pipeline(3);
+        let mut state = empty_run_state();
+        state.nodes.insert("dbg".into(), completed_node("dbg"));
+        state.loop_states.insert(
+            "fix_loop".into(),
+            crate::event_log::LoopState {
+                loop_node_id: "fix_loop".into(),
+                current_iter: 1,
+                max_iter: 3,
+                break_received: false,
+                done: false,
+            },
+        );
+
+        let mut dbg_fm = HashMap::new();
+        dbg_fm.insert(
+            "verdict".to_string(),
+            serde_yaml::Value::String("Bug".to_string()),
+        );
+        let mut by_node = HashMap::new();
+        by_node.insert("dbg".to_string(), dbg_fm.clone());
+
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "dbg",
+            &HashMap::new(),
+            &dbg_fm,
+            &by_node,
+        );
+
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, SchedulerAction::LoopIterStarted { .. })),
+            "no re-seed when loop_states already carries the region, got {actions:?}"
         );
     }
 

@@ -856,6 +856,30 @@ You manage **run `{run_id}`**.
 - Node IO: `curl {daemon_url}/runs/{run_id}/nodes/<node-id>/io?iter=<N>`
 - Artifact: `curl '{daemon_url}/runs/{run_id}/artifact?path=<relative-path>'`
 
+## Why a run is not advancing — read the reason, never `journalctl`
+
+The runtime never fails a run on its own initiative (ADR-0049): any non-advancement — an
+infra incident (`Interrupted` node), a runtime give-up (stall, output-validation refusal,
+merge conflict), or an `unrouted` region/convergence — parks the run `awaiting_user` and
+records **why** in the run state itself. You never need the daemon's logs to know the cause.
+
+On `curl {daemon_url}/runs/{run_id}` a parked run carries:
+
+- **`awaiting_reason_code`** — a stable machine slug you branch on: `session_died`,
+  `spawn_aborted`, `boot_recovery` (an infra incident on a node); `run_stalled` (nothing
+  schedulable); `unrouted` / `region_exhausted` / `region_ended_unrouted` (routing left no
+  live path — route it with `end_region`/`bump_region` or the exit edge); `merge_conflict`,
+  `merge_resolution_failed`, `script_validation_failed`, `frontmatter_retry_exhausted`,
+  `doc_violated_code_immutability` (a completion give-up); `agent_fail_awaiting` (an agent
+  `pdo fail` awaiting your confirmation).
+- **`awaiting_reason`** — the same cause in prose, for the human.
+
+`awaiting_reason_code` **absent** on an `awaiting_user` run means the wait is *interactive*
+(a node is asking its user a question), not an incident — leave it be. Per node, an
+interrupted node carries the same cause in `nodes.<id>.failure_reason`. Recover with the
+lever the code points to (`restart_node`, `bump_region`/`end_region`, a fix + reopen); the
+targeted commands re-open the run themselves.
+
 ## Available commands
 
 All commands are issued via `POST {daemon_url}/runs/{run_id}/commands` with a JSON body.
@@ -870,7 +894,7 @@ curl -X POST {daemon_url}/runs/{run_id}/commands \
   -d '{{"kind":"bump_region","region_id":"<region-id>","additional_iter":<N>}}'
 ```
 
-**Finding the `region_id`:** it is a key of `loop_states` in `curl {daemon_url}/runs/{run_id}` (the `loop_node_id` of `loop_iter_started` events). Caveat: a region still on its first lap has **no** `loop_states` entry yet — read the pipeline definition's `loops:` block in that case. An unknown `region_id` is rejected with 400 before anything is recorded.
+**Finding the `region_id`:** it is a key of `loop_states` in `curl {daemon_url}/runs/{run_id}` (the `loop_node_id` of `loop_iter_started` events). A bounded region has a `loop_states` entry **from lap 1** (#601), so "no entry" means "no such loop", not "first lap" — an absent key is a genuine miss to read the pipeline definition's `loops:` block for, not a first-lap blind spot. An unknown `region_id` is rejected with 400 before anything is recorded.
 
 The response tells you what actually happened: `{{"ok":true,"spawned":[…]}}` when nodes were re-launched, or `{{"ok":true,"noop":true,"reason":"…"}}` when nothing was eligible yet (e.g. the region's current iteration is still running — the extra laps then apply when it finishes).
 

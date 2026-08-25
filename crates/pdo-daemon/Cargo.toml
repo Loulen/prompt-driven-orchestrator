@@ -6,6 +6,8 @@ license.workspace = true
 description.workspace = true
 repository.workspace = true
 homepage.workspace = true
+# App, pas une lib : jamais de cargo publish (release-plz + hygiène crates.io).
+publish = false
 
 [lib]
 name = "pdo_daemon"

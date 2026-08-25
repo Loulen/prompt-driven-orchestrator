@@ -6,6 +6,9 @@ members = ["crates/pdo-daemon"]
 edition = "2021"
 version = "1.31.2"
 license = "MIT"
+description = "Prompt-Driven Orchestrator — a local daemon that runs and supervises agentic coding pipelines"
+repository = "https://github.com/Loulen/prompt-driven-orchestrator"
+homepage = "https://github.com/Loulen/prompt-driven-orchestrator"
 
 [workspace.dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -40,3 +43,33 @@ pretty_assertions = "1"
 insta = { version = "1", features = ["yaml"] }
 tempfile = "3"
 sha2 = "0.10"
+
+# --- Release packaging (dist / ex-cargo-dist) -------------------------------
+# `dist` génère .github/workflows/release.yml à partir de cette config (voir
+# `dist generate`). Cutover depuis le release.yml fait main : le job GHCR sandbox,
+# additif et sans `needs:`, a été extrait dans .github/workflows/sandbox-image.yml
+# (même trigger `push: tags v*`) pour survivre à la régénération.
+[workspace.metadata.dist]
+cargo-dist-version = "0.32.0"
+ci = "github"
+# Pas de Windows (couplage systemd/launchd) : shell + Homebrew suffisent pour un
+# public dev Linux+macOS. Le curl|sh de dist remplace l'ancien install.sh fait main.
+installers = ["shell", "homebrew"]
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
+  "x86_64-apple-darwin",
+  "aarch64-apple-darwin",
+]
+# Tap public préexistant ; le job `homebrew` y pousse la formule via le secret
+# HOMEBREW_TAP_TOKEN (PAT scope repo) à définir sur le repo source.
+tap = "Loulen/homebrew-tap"
+publish-jobs = ["homebrew"]
+# Étapes injectées AVANT `dist build` : Node + `npm ci` dans frontend/, car le
+# build.rs de pdo-daemon lance `npm run build` pendant `cargo build` (rust-embed).
+github-build-setup = "../build-setup.yml"
+# Parité avec l'unité systemd/launchd (`pdo service install` lit current_exe) et
+# avec l'ancien install.sh : binaire dans ~/.local/bin.
+install-path = "~/.local/bin"
+# Les PR ne construisent que le plan ; rien ne publie hors tag `v*`.
+pr-run-mode = "plan"

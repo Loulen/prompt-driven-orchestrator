@@ -3,6 +3,9 @@ name = "pdo-daemon"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [lib]
 name = "pdo_daemon"

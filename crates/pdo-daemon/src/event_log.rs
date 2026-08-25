@@ -754,6 +754,26 @@ pub struct RunState {
     pub collection_states: HashMap<String, CollectionState>,
     #[serde(default)]
     pub switch_states: HashMap<String, SwitchState>,
+    /// Live loop-region cap overrides folded from `set_region_max_iter` commands
+    /// (ADR-0011 / #600), keyed by region id. An **absolute** cap (last-write-wins),
+    /// consulted by the scheduler in place of the region's declared `max_iter` —
+    /// **uniformly for a literal and a `$var` cap** (FP #1), so an operator can grant
+    /// a stuck bounded region more laps in flight without editing the YAML or
+    /// restarting. Folded from the append-only log, so the raised cap survives a
+    /// `reopen_run` re-projection. Empty for every run that never set one (serialized
+    /// byte-identically), which is every historical run.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub region_max_iter_overrides: HashMap<String, i64>,
+    /// Forced routes folded from `force_route` commands (ADR-0011 / #600), keyed by
+    /// **source** — a node id OR a region id — mapping to the target node id. The
+    /// scheduler spawns the target (or completes, if it is `End`) when the source
+    /// completes, **short-circuiting the source's `when:` edges** — the lever for a
+    /// run wedged `unrouted` because a non-`PASS` verdict reaches no live branch
+    /// (FP #3). Folded from the log, so the forced exit is **not re-decided** by
+    /// `when:` on the next lap or after a reopen (FP #8). Empty (and byte-identical)
+    /// for every run that never forced one.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub forced_routes: HashMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_repo: Option<String>,
     /// Secondary repositories associated with this Run in **read-only** (#465,
@@ -942,6 +962,8 @@ impl RunState {
             foreach_states: HashMap::new(),
             collection_states: HashMap::new(),
             switch_states: HashMap::new(),
+            region_max_iter_overrides: HashMap::new(),
+            forced_routes: HashMap::new(),
             target_repo: None,
             target_repos: Vec::new(),
             sandbox: SandboxMode::Off,
@@ -1691,6 +1713,41 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
         }
         EventKind::NodeCompleted | EventKind::NodeAutoCompleted => {
             if let Some(ref node_id) = event.node_id {
+                // #600: a **skip** (`skip_node` / reachability auto-skip) can
+                // complete a node that never started — that is the whole point of
+                // skipping a node stuck waiting on an input that never came. Create
+                // it directly as `Completed`, with no transient session-less
+                // `Running` window for the liveness sweep to flag; it then counts as
+                // satisfied for re-projection (a reopen never re-spawns it, FP #4).
+                let is_skip = event
+                    .payload
+                    .as_ref()
+                    .and_then(|p| p.get("skipped"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                if is_skip && !state.nodes.contains_key(node_id) {
+                    let iter = event.iter.unwrap_or(1);
+                    state.nodes.insert(
+                        node_id.clone(),
+                        NodeState {
+                            node_id: node_id.clone(),
+                            status: NodeStatus::Completed,
+                            iter,
+                            started_at: Some(event.ts.clone()),
+                            completed_at: Some(event.ts.clone()),
+                            failure_reason: None,
+                            iterations: vec![IterationInfo {
+                                iter,
+                                status: NodeStatus::Completed,
+                                started_at: Some(event.ts.clone()),
+                                completed_at: Some(event.ts.clone()),
+                            }],
+                            frontmatter_retries: 0,
+                            frontmatter_violations: Vec::new(),
+                            missing_outputs: Vec::new(),
+                        },
+                    );
+                }
                 if let Some(node) = state.nodes.get_mut(node_id) {
                     node.status = NodeStatus::Completed;
                     node.completed_at = Some(event.ts.clone());
@@ -2303,6 +2360,43 @@ fn apply_command_event(state: &mut RunState, event: &Event) {
                         done: false,
                     })
                     .done = true;
+            }
+        }
+        // #600 / ADR-0011: `set_region_max_iter` raises a bounded region's cap in
+        // flight. Absolute and last-write-wins (unlike `bump_region`, which is
+        // additive) — the operator names the total number of laps they want, not a
+        // delta. The scheduler reads this override in place of the region's declared
+        // `max_iter`, so it lifts a literal cap and a `$var` cap the same way. A
+        // non-positive cap is ignored (a region is never made zero-lap by a stray
+        // command); the source of truth stays the append-only log, so the raise
+        // holds across a reopen re-projection.
+        if cmd == Some("set_region_max_iter") {
+            if let (Some(region_id), Some(n)) = (
+                payload.get("region_id").and_then(|v| v.as_str()),
+                payload.get("max_iter").and_then(|v| v.as_i64()),
+            ) {
+                if n > 0 {
+                    state
+                        .region_max_iter_overrides
+                        .insert(region_id.to_string(), n);
+                }
+            }
+        }
+        // #600 / ADR-0011: `force_route` records an explicit exit from a node or a
+        // region to a target, short-circuiting the source's `when:` edges. Folded
+        // per source (last-write-wins) so the effect is deterministic on every
+        // re-projection — the forced route is NOT re-decided by `when:` on the next
+        // lap or after a reopen (FP #8). Both endpoints are validated against the
+        // pipeline snapshot before the command is appended (the handler), so the
+        // projection trusts the payload.
+        if cmd == Some("force_route") {
+            if let (Some(from), Some(target)) = (
+                payload.get("from").and_then(|v| v.as_str()),
+                payload.get("target").and_then(|v| v.as_str()),
+            ) {
+                state
+                    .forced_routes
+                    .insert(from.to_string(), target.to_string());
             }
         }
     }
@@ -6816,6 +6910,99 @@ mod tests {
             ),
         );
         assert!(state.loop_states["R"].done);
+    }
+
+    #[test]
+    fn set_region_max_iter_folds_an_absolute_override_last_write_wins() {
+        // #600: `set_region_max_iter` is absolute and last-write-wins (unlike the
+        // additive `bump_region`), keyed by region id.
+        let mut state = RunState::new("r".into(), String::new());
+        apply_command_event(
+            &mut state,
+            &make_event_with_payload(
+                EventKind::CommandIssued,
+                None,
+                serde_json::json!({ "command": "set_region_max_iter", "region_id": "R", "max_iter": 8 }),
+            ),
+        );
+        assert_eq!(state.region_max_iter_overrides.get("R"), Some(&8));
+        apply_command_event(
+            &mut state,
+            &make_event_with_payload(
+                EventKind::CommandIssued,
+                None,
+                serde_json::json!({ "command": "set_region_max_iter", "region_id": "R", "max_iter": 3 }),
+            ),
+        );
+        assert_eq!(
+            state.region_max_iter_overrides.get("R"),
+            Some(&3),
+            "last write wins, not accumulated"
+        );
+    }
+
+    #[test]
+    fn set_region_max_iter_ignores_a_non_positive_cap() {
+        let mut state = RunState::new("r".into(), String::new());
+        apply_command_event(
+            &mut state,
+            &make_event_with_payload(
+                EventKind::CommandIssued,
+                None,
+                serde_json::json!({ "command": "set_region_max_iter", "region_id": "R", "max_iter": 0 }),
+            ),
+        );
+        assert!(state.region_max_iter_overrides.is_empty());
+    }
+
+    #[test]
+    fn force_route_folds_a_forced_target_keyed_by_source() {
+        // #600: a `force_route` is keyed by its source (node OR region id) → target.
+        let mut state = RunState::new("r".into(), String::new());
+        apply_command_event(
+            &mut state,
+            &make_event_with_payload(
+                EventKind::CommandIssued,
+                None,
+                serde_json::json!({ "command": "force_route", "from": "rev", "target": "end" }),
+            ),
+        );
+        assert_eq!(state.forced_routes.get("rev"), Some(&"end".to_string()));
+    }
+
+    #[test]
+    fn a_skip_completion_creates_a_never_started_node_as_completed() {
+        // #600: skipping a node that never started (stuck waiting on an unreachable
+        // input) marks it satisfied — the applier creates it directly as Completed,
+        // never a session-less Running window.
+        let mut state = RunState::new("r".into(), String::new());
+        apply_node_event(
+            &mut state,
+            &make_event_with_payload(
+                EventKind::NodeCompleted,
+                Some("orphan"),
+                serde_json::json!({ "skipped": true, "reason": "unreachable" }),
+            ),
+        );
+        assert_eq!(state.nodes["orphan"].status, NodeStatus::Completed);
+        assert_eq!(state.nodes["orphan"].iterations.len(), 1);
+        assert_eq!(
+            state.nodes["orphan"].iterations[0].status,
+            NodeStatus::Completed
+        );
+    }
+
+    #[test]
+    fn a_plain_completion_of_a_never_started_node_is_a_projection_noop() {
+        // Without the skip marker, a stray NodeCompleted for an absent node stays a
+        // no-op (the transition guard rejects it upstream; this proves the applier
+        // does not silently materialise phantom Completed nodes).
+        let mut state = RunState::new("r".into(), String::new());
+        apply_node_event(
+            &mut state,
+            &make_event(EventKind::NodeCompleted, Some("ghost"), Some(1)),
+        );
+        assert!(!state.nodes.contains_key("ghost"));
     }
 
     #[test]

@@ -616,16 +616,21 @@ fn resolve_inputs(
     }
 
     let mut input_paths = HashMap::new();
+
+    // #486 / #600: overrides win over any edge resolution AND cover **emergent**
+    // input ports. A `DocOnly`/`CodeMutating`/`Script` node declares no `inputs`
+    // (its inputs are derived from incoming edges), so keying overrides only off
+    // `node.inputs` would silently drop an operator's dummy input on exactly those
+    // nodes. Insert every override first — the declared-port loop below then fills
+    // the rest without clobbering a port an override already set.
+    if let Some(ov) = params.overrides.as_ref() {
+        for (port, path) in ov {
+            input_paths.insert(port.clone(), path.to_string_lossy().to_string());
+        }
+    }
+
     for input_port in &node.inputs {
-        if let Some(override_path) = params
-            .overrides
-            .as_ref()
-            .and_then(|o| o.get(&input_port.name))
-        {
-            input_paths.insert(
-                input_port.name.clone(),
-                override_path.to_string_lossy().to_string(),
-            );
+        if input_paths.contains_key(&input_port.name) {
             continue;
         }
 
@@ -823,6 +828,65 @@ pub(crate) fn inject_outputs(params: &InjectOutputsParams<'_>) -> InjectOutputsR
 }
 
 // ---------------------------------------------------------------------------
+// skip outputs (#600)
+// ---------------------------------------------------------------------------
+
+/// Deposits a *skipped* node's outputs so a downstream resolver finds a concrete
+/// (if empty) artifact rather than a missing file that reads as "not produced"
+/// (#600). The port set is every declared output port plus every distinct source
+/// port the node's outgoing edges read; a node with neither still gets a single
+/// default `output` port. Each port is written empty by default, or with the
+/// operator's per-port `overrides` content.
+///
+/// Shared by the `skip_node` command (operator skip local) and the reachability
+/// auto-skip (a structurally-unreachable node), so both deposit outputs the same
+/// way. Returns the written port names, or the first write error.
+pub(crate) fn write_skip_outputs(
+    pipeline: &PipelineDef,
+    node_id: &str,
+    iter: i64,
+    overrides: &HashMap<String, String>,
+    artifacts_dir: &Path,
+) -> Result<Vec<String>, String> {
+    let mut ports: Vec<String> = Vec::new();
+    if let Some(node) = pipeline.nodes.iter().find(|n| n.id == node_id) {
+        for out in &node.outputs {
+            if !ports.contains(&out.name) {
+                ports.push(out.name.clone());
+            }
+        }
+    }
+    for e in pipeline.edges.iter().filter(|e| e.source.node == node_id) {
+        if !ports.contains(&e.source.port) {
+            ports.push(e.source.port.clone());
+        }
+    }
+    if ports.is_empty() {
+        ports.push("output".to_string());
+    }
+
+    let artifacts: HashMap<String, String> = ports
+        .iter()
+        .map(|port| {
+            (
+                port.clone(),
+                overrides.get(port).cloned().unwrap_or_default(),
+            )
+        })
+        .collect();
+    let inject = inject_outputs(&InjectOutputsParams {
+        node_id,
+        iter,
+        artifacts: &artifacts,
+        artifacts_dir,
+    });
+    match inject.outcome {
+        PrimitiveOutcome::Rejected { reason } => Err(reason),
+        _ => Ok(ports),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -849,6 +913,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    required: false,
                 })
                 .collect(),
             outputs: outputs
@@ -861,6 +926,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    required: false,
                 })
                 .collect(),
             interactive: false,
@@ -886,6 +952,7 @@ mod tests {
                 frontmatter: None,
                 when: None,
                 description: None,
+                required: false,
             }],
             outputs: vec![Port {
                 name: "out".into(),
@@ -895,6 +962,7 @@ mod tests {
                 frontmatter: None,
                 when: None,
                 description: None,
+                required: false,
             }],
             interactive: false,
             view: None,
@@ -1310,6 +1378,126 @@ mod tests {
             input_paths.get("plan").unwrap(),
             &override_path.to_string_lossy().to_string()
         );
+    }
+
+    #[test]
+    fn override_applies_to_an_emergent_input_port() {
+        // #486 / #600: a DocOnly/CodeMutating node declares NO input ports (its
+        // inputs are emergent from edges), so an override keyed on the edge's target
+        // port must still attach — otherwise the operator's dummy input is silently
+        // dropped on exactly those nodes.
+        let pipeline = PipelineDef {
+            name: "test".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("up", NodeType::DocOnly, &["task"], &["code"]),
+                // `impl` declares no inputs — the `code` input is emergent.
+                make_node("impl", NodeType::DocOnly, &[], &["out"]),
+            ],
+            edges: vec![make_edge("up", "code", "impl", "code")],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+        };
+        let run_state = empty_run_state();
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts_dir = tmp.path().join("artifacts");
+        std::fs::create_dir_all(&artifacts_dir).unwrap();
+        let override_path = tmp.path().join("dummy.md");
+        std::fs::write(&override_path, "# dummy code").unwrap();
+        let mut overrides = HashMap::new();
+        overrides.insert("code".to_string(), override_path.clone());
+
+        let node = pipeline.nodes.iter().find(|n| n.id == "impl").unwrap();
+        let params = StartNodeParams {
+            run_id: "run-1",
+            node_id: "impl",
+            iter: 1,
+            overrides: Some(overrides),
+            pipeline: &pipeline,
+            run_state: &run_state,
+            artifacts_dir: &artifacts_dir,
+            worktree_dir: tmp.path(),
+            repo_root: tmp.path(),
+            pipeline_path: &tmp.path().join("pipeline.yaml"),
+            resolved_vars: &HashMap::new(),
+            daemon_port: 5172,
+            tmux_cmd_override: Some("exec true"),
+            docker_cmd_override: None,
+            default_model: None,
+            default_harness: None,
+            default_harness_models: Default::default(),
+            project_harness: None,
+            inject_hook: false,
+        };
+        let input_paths = resolve_inputs(&params, node);
+        assert_eq!(
+            input_paths.get("code").unwrap(),
+            &override_path.to_string_lossy().to_string(),
+            "override attaches to the emergent `code` port"
+        );
+    }
+
+    #[test]
+    fn write_skip_outputs_deposits_empty_declared_and_edge_ports() {
+        // #600: a skipped node deposits an artifact for every declared output port
+        // and every distinct source port its outgoing edges read, empty by default,
+        // so a downstream resolver finds a concrete file.
+        let pipeline = PipelineDef {
+            name: "test".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("skipme", NodeType::DocOnly, &["task"], &["decl_out"]),
+                make_node("down", NodeType::DocOnly, &["edge_out"], &["z"]),
+            ],
+            // The outgoing edge reads a DIFFERENT source port than the declared one.
+            edges: vec![make_edge("skipme", "edge_out", "down", "edge_out")],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts_dir = tmp.path().join("artifacts");
+        std::fs::create_dir_all(&artifacts_dir).unwrap();
+
+        let ports = write_skip_outputs(&pipeline, "skipme", 1, &HashMap::new(), &artifacts_dir)
+            .expect("write ok");
+        assert!(ports.contains(&"decl_out".to_string()));
+        assert!(ports.contains(&"edge_out".to_string()));
+        for port in ["decl_out", "edge_out"] {
+            let p = blackboard::artifact_path(&artifacts_dir, "skipme", 1, port);
+            assert!(p.exists(), "empty artifact written for port {port}");
+            assert_eq!(std::fs::read_to_string(&p).unwrap(), "");
+        }
+    }
+
+    #[test]
+    fn write_skip_outputs_uses_override_content_and_a_default_port() {
+        // A node with no declared outputs and no edges still gets a single default
+        // `output` port; an override supplies its content.
+        let pipeline = PipelineDef {
+            name: "test".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![make_node("lonely", NodeType::DocOnly, &["task"], &[])],
+            edges: vec![],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts_dir = tmp.path().join("artifacts");
+        std::fs::create_dir_all(&artifacts_dir).unwrap();
+        let mut overrides = HashMap::new();
+        overrides.insert("output".to_string(), "provided".to_string());
+
+        let ports =
+            write_skip_outputs(&pipeline, "lonely", 1, &overrides, &artifacts_dir).expect("ok");
+        assert_eq!(ports, vec!["output".to_string()]);
+        let p = blackboard::artifact_path(&artifacts_dir, "lonely", 1, "output");
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "provided");
     }
 
     #[test]

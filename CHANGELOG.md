@@ -10,6 +10,44 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.33.0
+
+**Résilience des runs — lot 3/4 : débloquer un run coincé sans désamorçage** (#600, spec #596,
+ADR-0011/0025/0038/0049, Sharp tool ADR-0001). Aucune migration, données historiques lisibles :
+les nouveaux champs de projection (`region_max_iter_overrides`, `forced_routes`) se déduisent du log
+append-only et sont **absents du fil** tant qu'aucune commande ne les pose (runs existants sérialisés
+à l'identique) ; le port `required:` et le marqueur `skipped:` sont eux aussi rétro-compatibles.
+
+De nouvelles primitives de pilotage, toutes exposées sur `POST /runs/:id/commands` (l'humain force,
+PDO obéit — Sharp tool) :
+
+- **`set_region_max_iter(region_id, max_iter)`** — relève le plafond d'une région bornée **en vol**,
+  valeur **absolue** (≠ le delta de `bump_region`), **uniforme** pour un cap littéral et un cap `$var`.
+  Le scheduler lit l'override (folded depuis le log) à la place du `max_iter` déclaré, donc la région
+  repart pour N tours sans éditer le YAML ni redémarrer, et l'effet tient après une ré-ouverture.
+- **`force_route(from, target)`** — sortie explicite d'un **node** ou d'une **région** vers une cible,
+  qui **court-circuite les `when:`** des edges. Le lever d'un run bloqué `unrouted` (verdict non-`PASS`,
+  CI verte, MR mergeable) : `force_route <reviewer> -> End` fait atteindre Finalize sans amender le
+  verdict à la main sur tous les iters. Folded depuis le log ⇒ **non re-décidé** par les `when:` au
+  tour suivant ni après une ré-ouverture.
+- **`skip_node(node_id, [iter], [overrides])`** — **skip local** : marque un node satisfait avec un
+  **output vide par défaut** (surchargeable par port via `overrides`), le run **continue** (jamais de
+  `RunSkipped` qui tuerait tout, contrairement à `pdo skip`/#245). Compté satisfait pour la
+  re-projection : une ré-ouverture ne le re-spawn pas.
+- **`overrides` sur `start_node`** (#486) — lance un node avec un **input factice** par port (contenu
+  inline, écrit en artefact), sans attendre l'upstream. Couvre aussi les ports **émergents** (nodes
+  `doc-only`/`code-mutating`/`script` sans `inputs:` déclarés).
+
+Et deux comportements du moteur :
+
+- **Atteignabilité + auto-skip** (#589) — un input `required:` (nouveau champ de port) **structurellement
+  inatteignable** (branche either/or non prise) fait **auto-skip** le node avec une **raison** dans
+  l'event, au lieu de le laisser pendre ; l'aval avance sur l'output vide. Balayage borné (`advance_run`),
+  qui cascade proprement (skip d'un node ⇒ ré-évaluation d'un either/or aval).
+- **Diagnostic `unrouted` enrichi** (AC4) — la raison portée dans `awaiting_reason` **liste les edges
+  candidats**, leur garde (`when:`/`else`), s'ils ont firé, et **la valeur réellement lue** pour chaque
+  champ testé (`verdict=minor_changes` …). Lisible depuis l'état du run, sans `journalctl`.
+
 ## 1.32.0
 
 **Résilience des runs — socle « retomber sur ses pattes »** (#598, ADR-0049/0050, ADR-0032/0009/0036

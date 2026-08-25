@@ -2,8 +2,9 @@
 //!
 //! Carved out of `lib.rs` as a pure move: this module holds the HTTP handler,
 //! the post-command re-evaluation it drives, and the two pipeline helpers only
-//! that re-evaluation uses. Nothing here changed in the move — the wire
-//! contract of the thirteen accepted `kind`s is identical, byte for byte.
+//! that re-evaluation uses. The wire contract of the accepted `kind`s is stable;
+//! #600 added `set_region_max_iter`, `force_route` and `skip_node` (the run
+//! resilience levers) alongside the original set.
 //!
 //! Layer 3 in ADR-0009 terms, and the one the Pipeline Manager drives. Its
 //! sibling surface is the per-node route family
@@ -51,10 +52,31 @@ pub(crate) struct RunCommandRequest {
     iter: Option<i64>,
     #[serde(default)]
     additional_iter: Option<i64>,
-    /// Identifies the loop region a `bump_region` / `end_region` command targets
-    /// (ADR-0011 / #152 — the Pipeline Manager routes a region by id).
+    /// Identifies the loop region a `bump_region` / `end_region` /
+    /// `set_region_max_iter` command targets (ADR-0011 / #152 / #600 — the Pipeline
+    /// Manager routes a region by id).
     #[serde(default)]
     region_id: Option<String>,
+    /// The absolute iteration cap of a `set_region_max_iter` command (#600). Unlike
+    /// `additional_iter` (a `bump_region` delta), this is the total number of laps
+    /// the region should now allow.
+    #[serde(default)]
+    max_iter: Option<i64>,
+    /// The **source** of a `force_route` command (#600): a node id OR a region id
+    /// whose `when:` edges are short-circuited. Distinct from `node_id`/`region_id`
+    /// so a `force_route` can name either kind without overloading their meaning.
+    #[serde(default)]
+    from: Option<String>,
+    /// The **target** node a `force_route` exits to (#600).
+    #[serde(default)]
+    target: Option<String>,
+    /// Per-input-port override paths/contents for a `start_node` (#486) or the
+    /// default outputs of a `skip_node` (#600). Keyed by port name; each value is
+    /// **inline content** written to that port's artifact before the node runs (a
+    /// dummy input, or a skipped node's empty-by-default output). An operator can
+    /// thus drive a node without its upstream having produced.
+    #[serde(default)]
+    overrides: Option<HashMap<String, String>>,
     #[serde(default)]
     path: Option<String>,
     #[serde(default)]
@@ -68,8 +90,9 @@ pub(crate) struct RunCommandRequest {
 /// before an arm ever sees it: no arm re-validates presence, applies a default,
 /// or re-inspects a path.
 ///
-/// Thirteen accepted `kind`s, twelve variants — `bump_region` and `end_region`
-/// share one, because they share their whole I/O tail.
+/// The accepted `kind`s, one variant each — except `bump_region`/`end_region`,
+/// which share [`RunCommand::Region`] because they share their whole I/O tail.
+/// #600 added `SetRegionMaxIter`, `ForceRoute` and `SkipNode` (run resilience).
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RunCommand {
     MarkNodeDone {
@@ -88,6 +111,34 @@ enum RunCommand {
     Region {
         region_id: String,
         action: RegionAction,
+    },
+    /// `set_region_max_iter` (#600 / ADR-0011): raise a bounded region's iteration
+    /// cap **in flight**, absolute (not a delta). Re-projected without a restart —
+    /// the scheduler reads the folded override in place of the declared `max_iter`,
+    /// uniformly for a literal and a `$var` cap (FP #1).
+    SetRegionMaxIter {
+        region_id: String,
+        max_iter: i64,
+    },
+    /// `force_route` (#600 / ADR-0011): declare an explicit exit from a node or a
+    /// region to a target, short-circuiting the source's `when:` edges. `from` is a
+    /// node id OR a region id; `target` is a node id (or the `End` node, which
+    /// completes the run). The lever for a run wedged `unrouted` (FP #3); folded from
+    /// the log so it is not re-decided after a reopen (FP #8).
+    ForceRoute {
+        from: String,
+        target: String,
+    },
+    /// `skip_node` (#600 / ADR-0049): **skip a node locally** — mark it satisfied
+    /// with an empty output by default (overridable per port), WITHOUT terminating
+    /// the run. Distinct from `pdo skip` (`RunSkipped`, a run-level no-op, #245): the
+    /// run **continues**, downstream advances on the empty/overridden output, and the
+    /// skipped node counts as satisfied for re-projection (a reopen never re-spawns
+    /// it, FP #4).
+    SkipNode {
+        node_id: String,
+        iter: i64,
+        overrides: Option<HashMap<String, String>>,
     },
     PauseRun,
     ResumeRun,
@@ -109,9 +160,11 @@ enum RunCommand {
     },
     /// `req.iter` is dropped at parse time — `force_spawn_node` derives the
     /// iteration itself (#204), and letting the manager pin one would fight
-    /// that derivation.
+    /// that derivation. `overrides` (#486) supplies per-port input content so the
+    /// node runs on a dummy input without its upstream having produced.
     StartNode {
         node_id: String,
+        overrides: Option<HashMap<String, String>>,
     },
     /// `path` stays a `String`, not a `PathBuf`: it is echoed verbatim into the
     /// `CommandIssued` payload and the `info!`. Already proven relative and
@@ -136,7 +189,7 @@ enum RegionAction {
     End,
 }
 
-/// Rejected at parse time. Every one of the fourteen current rejection sites
+/// Rejected at parse time. Every current rejection site
 /// answers `400` + `Json({"error": …})`, so the status is not carried here —
 /// add it the day one of them stops being a 400.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -169,6 +222,9 @@ impl RunCommand {
                 action: RegionAction::End,
                 ..
             } => "end_region",
+            RunCommand::SetRegionMaxIter { .. } => "set_region_max_iter",
+            RunCommand::ForceRoute { .. } => "force_route",
+            RunCommand::SkipNode { .. } => "skip_node",
             RunCommand::PauseRun => "pause_run",
             RunCommand::ResumeRun => "resume_run",
             RunCommand::ReopenRun => "reopen_run",
@@ -184,7 +240,7 @@ impl RunCommand {
 }
 
 /// Turn the wire shape into a validated command. **Pure** — no DB, no
-/// filesystem, no clock — which is the whole point: every one of the fourteen
+/// filesystem, no clock — which is the whole point: every one of the
 /// rejections below used to be reachable only through a live daemon.
 ///
 /// Two orderings are behaviour, not style, and both are pinned by tests:
@@ -197,7 +253,7 @@ impl RunCommand {
 /// answers `"unknown command"` rather than a field complaint.
 ///
 /// Deliberately NOT derived from the wire with `#[serde(tag = "kind")]`: that
-/// would turn these fourteen messages into axum's `422` + serde prose in
+/// would turn these messages into axum's `422` + serde prose in
 /// text/plain.
 fn parse_run_command(req: RunCommandRequest) -> Result<RunCommand, CommandParseError> {
     fn required(
@@ -246,6 +302,34 @@ fn parse_run_command(req: RunCommandRequest) -> Result<RunCommand, CommandParseE
             };
             Ok(RunCommand::Region { region_id, action })
         }
+        "set_region_max_iter" => {
+            // `region_id` first (mirrors the region commands), then the cap. A
+            // non-positive cap is rejected here, before any event: a region is
+            // never made zero-lap by a stray command.
+            let region_id = required(req.region_id, "region_id", "set_region_max_iter")?;
+            let max_iter = req.max_iter.ok_or_else(|| {
+                CommandParseError("max_iter required for set_region_max_iter".into())
+            })?;
+            if max_iter <= 0 {
+                return Err(CommandParseError("max_iter must be positive".to_string()));
+            }
+            Ok(RunCommand::SetRegionMaxIter {
+                region_id,
+                max_iter,
+            })
+        }
+        "force_route" => {
+            // `from` (a node OR region id) before `target`: `{"kind":"force_route"}`
+            // alone must complain about the source, not the destination.
+            let from = required(req.from, "from", "force_route")?;
+            let target = required(req.target, "target", "force_route")?;
+            Ok(RunCommand::ForceRoute { from, target })
+        }
+        "skip_node" => Ok(RunCommand::SkipNode {
+            node_id: required(req.node_id, "node_id", "skip_node")?,
+            iter: req.iter.unwrap_or(1),
+            overrides: req.overrides,
+        }),
         "pause_run" => Ok(RunCommand::PauseRun),
         "resume_run" => Ok(RunCommand::ResumeRun),
         "reopen_run" => Ok(RunCommand::ReopenRun),
@@ -259,6 +343,7 @@ fn parse_run_command(req: RunCommandRequest) -> Result<RunCommand, CommandParseE
         }),
         "start_node" => Ok(RunCommand::StartNode {
             node_id: required(req.node_id, "node_id", "start_node")?,
+            overrides: req.overrides,
         }),
         "inject_artifact" => {
             let path = required(req.path, "path", "inject_artifact")?;
@@ -658,6 +743,330 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
 
             info!("{kind_str}: region {region_id} in run {run_id}");
             (StatusCode::OK, Json(summary.into_response_body())).into_response()
+        }
+        // #600 / ADR-0011: raise a bounded region's iteration cap in flight. Same
+        // shape as the region routing arm — validate the region against the run's
+        // snapshot, append the `CommandIssued` (folded into
+        // `region_max_iter_overrides`), lift a parked run, and re-evaluate so the
+        // region runs the extra laps without a restart (FP #1).
+        RunCommand::SetRegionMaxIter {
+            region_id,
+            max_iter,
+        } => {
+            let (_, run_state) = match load_projected(&state, &run_id).await {
+                Ok(v) => v,
+                Err(resp) => return *resp,
+            };
+            let repo_root = effective_repo_root(&state, &run_state);
+            let pipeline_path =
+                resolve_run_pipeline_path(&repo_root, &run_id, &run_state.pipeline_name);
+            if let Some(pipeline) = std::fs::read_to_string(&pipeline_path)
+                .ok()
+                .and_then(|yaml| pipeline::parse_pipeline(&yaml).ok())
+                .map(|p| p.pipeline)
+            {
+                if !pipeline.loops.iter().any(|r| r.id == region_id) {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({
+                            "error": format!("region '{region_id}' not found in pipeline")
+                        })),
+                    )
+                        .into_response();
+                }
+            } else {
+                warn!("set_region_max_iter: pipeline snapshot unreadable for run {run_id}; skipping region validation");
+            }
+
+            let cmd_event = event_log::Event {
+                id: None,
+                run_id: run_id.clone(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::CommandIssued,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({
+                    "command": "set_region_max_iter",
+                    "region_id": region_id,
+                    "max_iter": max_iter,
+                })),
+            };
+            if let Err(e) = append_event(&state, &cmd_event).await {
+                return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+            }
+
+            // Lift a parked run so the raised cap re-drives the region now (mirrors
+            // the region routing arm). An interactive `AwaitingUser` is left alone.
+            let needs_reopen = matches!(
+                run_state.status,
+                event_log::RunStatus::Halted | event_log::RunStatus::Failed
+            ) || (run_state.status == event_log::RunStatus::AwaitingUser
+                && run_state.awaiting_reason.is_some());
+            if needs_reopen {
+                let resume_event = event_log::Event {
+                    id: None,
+                    run_id: run_id.clone(),
+                    ts: event_log::now_iso(),
+                    kind: event_log::EventKind::CommandIssued,
+                    node_id: None,
+                    iter: None,
+                    payload: Some(serde_json::json!({ "command": "resume_run" })),
+                };
+                if let Err(e) = append_event(&state, &resume_event).await {
+                    error!("failed to append resume_run after set_region_max_iter: {e}");
+                }
+            }
+
+            let summary = re_evaluate_after_command(&state, &run_id).await;
+            info!("set_region_max_iter: region {region_id} -> {max_iter} in run {run_id}");
+            (StatusCode::OK, Json(summary.into_response_body())).into_response()
+        }
+        // #600 / ADR-0011: force an explicit exit from a node or a region,
+        // short-circuiting the source's `when:` edges. Validate BOTH endpoints
+        // against the snapshot (a bad route must leave no trace), append the
+        // `CommandIssued` (folded into `forced_routes`), lift a parked run, and
+        // re-evaluate so the forced target spawns (FP #3).
+        RunCommand::ForceRoute { from, target } => {
+            let (_, run_state) = match load_projected(&state, &run_id).await {
+                Ok(v) => v,
+                Err(resp) => return *resp,
+            };
+            let repo_root = effective_repo_root(&state, &run_state);
+            let pipeline_path =
+                resolve_run_pipeline_path(&repo_root, &run_id, &run_state.pipeline_name);
+            if let Some(pipeline) = std::fs::read_to_string(&pipeline_path)
+                .ok()
+                .and_then(|yaml| pipeline::parse_pipeline(&yaml).ok())
+                .map(|p| p.pipeline)
+            {
+                let from_ok = pipeline.nodes.iter().any(|n| n.id == from)
+                    || pipeline.loops.iter().any(|r| r.id == from);
+                if !from_ok {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({
+                            "error": format!("force_route source '{from}' is neither a node nor a region in the pipeline")
+                        })),
+                    )
+                        .into_response();
+                }
+                if !pipeline.nodes.iter().any(|n| n.id == target) {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({
+                            "error": format!("force_route target '{target}' is not a node in the pipeline")
+                        })),
+                    )
+                        .into_response();
+                }
+            } else {
+                warn!("force_route: pipeline snapshot unreadable for run {run_id}; skipping endpoint validation");
+            }
+
+            let cmd_event = event_log::Event {
+                id: None,
+                run_id: run_id.clone(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::CommandIssued,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({
+                    "command": "force_route",
+                    "from": from,
+                    "target": target,
+                })),
+            };
+            if let Err(e) = append_event(&state, &cmd_event).await {
+                return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+            }
+
+            let needs_reopen = matches!(
+                run_state.status,
+                event_log::RunStatus::Halted | event_log::RunStatus::Failed
+            ) || (run_state.status == event_log::RunStatus::AwaitingUser
+                && run_state.awaiting_reason.is_some());
+            if needs_reopen {
+                let resume_event = event_log::Event {
+                    id: None,
+                    run_id: run_id.clone(),
+                    ts: event_log::now_iso(),
+                    kind: event_log::EventKind::CommandIssued,
+                    node_id: None,
+                    iter: None,
+                    payload: Some(serde_json::json!({ "command": "resume_run" })),
+                };
+                if let Err(e) = append_event(&state, &resume_event).await {
+                    error!("failed to append resume_run after force_route: {e}");
+                }
+            }
+
+            let summary = re_evaluate_after_command(&state, &run_id).await;
+            info!("force_route: {from} -> {target} in run {run_id}");
+            (StatusCode::OK, Json(summary.into_response_body())).into_response()
+        }
+        // #600 / ADR-0049: skip a node LOCALLY — mark it satisfied with an empty
+        // output (overridable per port), the run continues. Distinct from
+        // `pdo skip` / `node_skip` (`RunSkipped`, run-level no-op): here NO
+        // `RunSkipped` is appended, downstream advances on the skipped node's
+        // empty/overridden output, and the node counts as satisfied so a reopen
+        // never re-spawns it (FP #4, #7).
+        RunCommand::SkipNode {
+            node_id,
+            iter,
+            overrides,
+        } => {
+            let events = match load_events(&state.db, &run_id).await {
+                Ok(e) => e,
+                Err(e) => {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}"))
+                        .into_response();
+                }
+            };
+            let run_state = event_log::project(&events);
+
+            // Embed the re-open (AC7 / ADR-0049): skipping a node on a terminal /
+            // incident-parked run lifts it first, so the skip lands on a live run
+            // and the completion gate does not refuse with "resume first".
+            let run_state = match run_state {
+                Some(rs) => {
+                    match crate::embed_reopen_for_targeted_command(&state, &run_id, rs).await {
+                        Ok(s) => Some(s),
+                        Err(e) => {
+                            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}"))
+                                .into_response();
+                        }
+                    }
+                }
+                None => None,
+            };
+
+            // Same completion head-gate as `mark_node_done`/`node_skip`: a duplicate
+            // skip (or a skip on a genuinely terminal run) is rejected/no-op'd, never
+            // double-appended.
+            if let Some(stop) = completion_head_gate(
+                run_advance::evaluate_skip_completion_head(
+                    run_state.as_ref(),
+                    &run_id,
+                    &node_id,
+                    iter,
+                ),
+                "skip_node",
+                &run_id,
+                &node_id,
+                iter,
+            ) {
+                return stop.into_response();
+            }
+
+            let empty_run_state = event_log::RunState::new(run_id.clone(), String::new());
+            let rs_ref = run_state.as_ref().unwrap_or(&empty_run_state);
+            let repo_root = effective_repo_root(&state, rs_ref);
+            let pipeline_path =
+                resolve_run_pipeline_path(&repo_root, &run_id, &rs_ref.pipeline_name);
+            let worktree_dir = worktree_dir_for_run(&repo_root, &run_id);
+            let artifacts_dir = worktree_dir.join(".pdo").join("artifacts");
+
+            // Write the skipped node's outputs (empty by default, or the operator's
+            // per-port override content) via the shared helper, so the downstream
+            // resolver finds a real (if empty) artifact instead of a missing file
+            // that would read as "not produced". An unreadable snapshot means we
+            // cannot know the node's ports; deposit a single default `output`.
+            let overrides = overrides.unwrap_or_default();
+            let write_result = match std::fs::read_to_string(&pipeline_path)
+                .ok()
+                .and_then(|yaml| pipeline::parse_pipeline(&yaml).ok())
+                .map(|p| p.pipeline)
+            {
+                Some(p) => crate::node_primitives::write_skip_outputs(
+                    &p,
+                    &node_id,
+                    iter,
+                    &overrides,
+                    &artifacts_dir,
+                ),
+                None => {
+                    let one: HashMap<String, String> = [(
+                        "output".to_string(),
+                        overrides.get("output").cloned().unwrap_or_default(),
+                    )]
+                    .into_iter()
+                    .collect();
+                    crate::node_primitives::inject_outputs(
+                        &crate::node_primitives::InjectOutputsParams {
+                            node_id: &node_id,
+                            iter,
+                            artifacts: &one,
+                            artifacts_dir: &artifacts_dir,
+                        },
+                    );
+                    Ok(vec!["output".to_string()])
+                }
+            };
+            if let Err(reason) = write_result {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": reason })),
+                )
+                    .into_response();
+            }
+
+            // Mark the node satisfied. Deliberately NO output validation and NO
+            // sub-worktree merge (there is nothing to validate or merge — the whole
+            // point is an empty/dummy output), and — unlike `node_skip` — NO
+            // `RunSkipped`: the run stays live.
+            let node_completed = event_log::Event {
+                id: None,
+                run_id: run_id.clone(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeCompleted,
+                node_id: Some(node_id.clone()),
+                iter: Some(iter),
+                payload: Some(serde_json::json!({
+                    "source": "skip_node",
+                    "skipped": true,
+                    "reason": "skipped locally by operator",
+                    "override_ports": overrides.keys().cloned().collect::<Vec<_>>(),
+                })),
+            };
+            if let Err(e) = append_event(&state, &node_completed).await {
+                return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+            }
+
+            let cmd_event = event_log::Event {
+                id: None,
+                run_id: run_id.clone(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::CommandIssued,
+                node_id: Some(node_id.clone()),
+                iter: Some(iter),
+                payload: Some(serde_json::json!({
+                    "command": "skip_node",
+                    "node_id": node_id,
+                    "iter": iter,
+                })),
+            };
+            if let Err(e) = append_event(&state, &cmd_event).await {
+                error!("failed to append skip_node command event: {e}");
+            }
+
+            // Drive the run forward on the skipped node's (empty) output — same
+            // post-completion tail as `mark_node_done`, flag=false (a skipped node
+            // is never interactive).
+            run_advance::complete_node(
+                &state,
+                &run_id,
+                &node_id,
+                run_advance::CompletionOrder::SweepFirst,
+                false,
+            )
+            .await;
+
+            info!("skip_node: node {node_id} iter {iter} skipped locally in run {run_id}");
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "ok": true, "skipped": true })),
+            )
+                .into_response()
         }
         RunCommand::PauseRun => {
             let (_, run_state) = match load_projected(&state, &run_id).await {
@@ -1252,16 +1661,18 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             info!("restart_node: node {node_id} iter {iter} in run {run_id} -> {verdict:?}");
             restart_verdict::restart_response(&verdict)
         }
-        RunCommand::StartNode { node_id } => {
+        RunCommand::StartNode { node_id, overrides } => {
             // Force-spawn a node out of dependency order (#204). The manager
             // twin of the UI Start button: both funnel through `force_spawn_node`,
             // which derives the iteration and owns the run-status (D4) and
             // admission-cap (D5) guards. The wire `iter` is deliberately dropped
             // at parse time — letting the manager pin an iter would fight that
-            // derivation.
+            // derivation. #486: `overrides` supplies per-port dummy inputs so the
+            // node runs without its upstream having produced.
 
             // Audit the manager's intent before acting, mirroring the other
-            // command arms' `CommandIssued` parity event.
+            // command arms' `CommandIssued` parity event. Only the override port
+            // names are logged (not their content, which lands in artifacts).
             let cmd_event = event_log::Event {
                 id: None,
                 run_id: run_id.clone(),
@@ -1272,13 +1683,16 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 payload: Some(serde_json::json!({
                     "command": "start_node",
                     "node_id": node_id,
+                    "override_ports": overrides
+                        .as_ref()
+                        .map(|o| o.keys().cloned().collect::<Vec<_>>()),
                 })),
             };
             if let Err(e) = append_event(&state, &cmd_event).await {
                 error!("failed to append start_node command event: {e}");
             }
 
-            force_spawn_node(&state, &run_id, &node_id).await
+            force_spawn_node(&state, &run_id, &node_id, overrides.as_ref()).await
         }
         RunCommand::InjectArtifact { path, content } => {
             // `path` is already proven relative and `..`-free by the parse.
@@ -1957,7 +2371,7 @@ mod tests {
 
     // --- #236: the pure parse ---
     //
-    // Fourteen wire shapes in, fourteen verdicts out, no HTTP and no daemon.
+    // Wire shapes in, verdicts out, no HTTP and no daemon.
     // Before this slice none of these messages was reachable from a test at
     // all — which is precisely the argument #236 makes. `#[test]`, not
     // `#[tokio::test]`: `CommandParseError` is `PartialEq`, so no response body
@@ -1974,6 +2388,122 @@ mod tests {
 
     fn reject(json: serde_json::Value) -> String {
         parse(json).expect_err("expected a rejection").0
+    }
+
+    // ── #600: set_region_max_iter / force_route / skip_node ──────────────────
+
+    #[test]
+    fn set_region_max_iter_parses_region_and_cap() {
+        assert_eq!(
+            parse(
+                serde_json::json!({ "kind": "set_region_max_iter", "region_id": "R", "max_iter": 8 })
+            ),
+            Ok(RunCommand::SetRegionMaxIter {
+                region_id: "R".into(),
+                max_iter: 8
+            })
+        );
+    }
+
+    #[test]
+    fn set_region_max_iter_reports_region_before_cap() {
+        // `{"kind":"set_region_max_iter"}` alone complains about the region first.
+        assert_eq!(
+            reject(serde_json::json!({ "kind": "set_region_max_iter" })),
+            "region_id required for set_region_max_iter"
+        );
+        assert_eq!(
+            reject(serde_json::json!({ "kind": "set_region_max_iter", "region_id": "R" })),
+            "max_iter required for set_region_max_iter"
+        );
+        assert_eq!(
+            reject(
+                serde_json::json!({ "kind": "set_region_max_iter", "region_id": "R", "max_iter": 0 })
+            ),
+            "max_iter must be positive"
+        );
+    }
+
+    #[test]
+    fn force_route_parses_from_and_target() {
+        assert_eq!(
+            parse(serde_json::json!({ "kind": "force_route", "from": "rev", "target": "end" })),
+            Ok(RunCommand::ForceRoute {
+                from: "rev".into(),
+                target: "end".into()
+            })
+        );
+    }
+
+    #[test]
+    fn force_route_reports_source_before_target() {
+        assert_eq!(
+            reject(serde_json::json!({ "kind": "force_route" })),
+            "from required for force_route"
+        );
+        assert_eq!(
+            reject(serde_json::json!({ "kind": "force_route", "from": "rev" })),
+            "target required for force_route"
+        );
+    }
+
+    #[test]
+    fn skip_node_parses_with_default_iter_and_overrides() {
+        assert_eq!(
+            parse(serde_json::json!({ "kind": "skip_node", "node_id": "n1" })),
+            Ok(RunCommand::SkipNode {
+                node_id: "n1".into(),
+                iter: 1,
+                overrides: None
+            })
+        );
+        let with_ov = parse(serde_json::json!({
+            "kind": "skip_node",
+            "node_id": "n1",
+            "iter": 2,
+            "overrides": { "out": "hello" }
+        }))
+        .expect("valid");
+        match with_ov {
+            RunCommand::SkipNode {
+                node_id,
+                iter,
+                overrides: Some(ov),
+            } => {
+                assert_eq!(node_id, "n1");
+                assert_eq!(iter, 2);
+                assert_eq!(ov.get("out"), Some(&"hello".to_string()));
+            }
+            other => panic!("unexpected parse: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn skip_node_requires_a_node_id() {
+        assert_eq!(
+            reject(serde_json::json!({ "kind": "skip_node" })),
+            "node_id required for skip_node"
+        );
+    }
+
+    #[test]
+    fn start_node_carries_overrides() {
+        let cmd = parse(serde_json::json!({
+            "kind": "start_node",
+            "node_id": "n1",
+            "overrides": { "task": "dummy" }
+        }))
+        .expect("valid");
+        match cmd {
+            RunCommand::StartNode {
+                node_id,
+                overrides: Some(ov),
+            } => {
+                assert_eq!(node_id, "n1");
+                assert_eq!(ov.get("task"), Some(&"dummy".to_string()));
+            }
+            other => panic!("unexpected parse: {other:?}"),
+        }
     }
 
     #[test]
@@ -2033,6 +2563,7 @@ mod tests {
                 serde_json::json!({ "kind": "start_node", "node_id": "n1" }),
                 RunCommand::StartNode {
                     node_id: "n1".into(),
+                    overrides: None,
                 },
             ),
             (
@@ -2187,7 +2718,8 @@ mod tests {
         assert_eq!(
             parse(serde_json::json!({ "kind": "start_node", "node_id": "n1", "iter": 99 })),
             Ok(RunCommand::StartNode {
-                node_id: "n1".into()
+                node_id: "n1".into(),
+                overrides: None,
             })
         );
     }
@@ -2406,6 +2938,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    required: false,
                 }],
                 outputs: vec![Port {
                     name: "pass".into(),
@@ -2415,6 +2948,7 @@ mod tests {
                     frontmatter: None,
                     when: Some(serde_yaml::from_str("iter: { lt: \"$max_iter_review\" }").unwrap()),
                     description: None,
+                    required: false,
                 }],
                 interactive: false,
                 view: None,
@@ -2468,6 +3002,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    required: false,
                 }],
                 outputs: vec![],
                 interactive: false,

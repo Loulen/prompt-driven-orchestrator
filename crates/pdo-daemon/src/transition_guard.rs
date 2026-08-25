@@ -325,11 +325,33 @@ fn validate_completion(state: &RunState, event: &Event) -> Verdict {
             iter,
             status: other,
         }),
-        None => Verdict::reject(RejectReason::IterationNeverStarted {
-            node_id: node_id.to_string(),
-            iter,
-        }),
+        None => {
+            // #600: a **skip** (`skip_node` / reachability auto-skip) legitimately
+            // completes a node that never started — it marks a node stuck waiting
+            // on an unreachable input as satisfied so the run does not hang. Any
+            // other completion of a never-started iteration stays a reject.
+            if is_skip_completion(event) {
+                Verdict::Allow
+            } else {
+                Verdict::reject(RejectReason::IterationNeverStarted {
+                    node_id: node_id.to_string(),
+                    iter,
+                })
+            }
+        }
     }
+}
+
+/// True when a `NodeCompleted` event carries the `skipped: true` marker of a local
+/// skip (`skip_node`) or a reachability auto-skip (#600). Such a completion is
+/// allowed even for a node that never started.
+fn is_skip_completion(event: &Event) -> bool {
+    event
+        .payload
+        .as_ref()
+        .and_then(|p| p.get("skipped"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
 }
 
 fn validate_start(state: &RunState, event: &Event) -> Verdict {
@@ -560,6 +582,27 @@ mod tests {
             &ev(EventKind::NodeCompleted, Some("ghost"), Some(1)),
         );
         assert_reject(verdict, "never started");
+    }
+
+    #[test]
+    fn skip_completion_of_never_started_iteration_is_allowed() {
+        // #600: a `skip_node` / auto-skip completion carries `skipped: true` and is
+        // allowed to satisfy a node that never started (stuck on an unreachable
+        // input) — the one exception to "a completion needs a start".
+        let state = state_from(&[ev(EventKind::RunStarted, None, None)]);
+        let mut skip = ev(EventKind::NodeCompleted, Some("orphan"), Some(1));
+        skip.payload = Some(serde_json::json!({ "skipped": true }));
+        assert_eq!(validate_transition(Some(&state), &skip), Verdict::Allow);
+    }
+
+    #[test]
+    fn skip_completion_of_an_already_completed_iteration_still_noops() {
+        // The skip exception only relaxes the never-started case; a duplicate skip
+        // on an already-satisfied node is still the idempotent no-op.
+        let mut done = ev(EventKind::NodeCompleted, Some("orphan"), Some(1));
+        done.payload = Some(serde_json::json!({ "skipped": true }));
+        let state = state_from(&[ev(EventKind::RunStarted, None, None), done.clone()]);
+        assert_noop(validate_transition(Some(&state), &done));
     }
 
     #[test]

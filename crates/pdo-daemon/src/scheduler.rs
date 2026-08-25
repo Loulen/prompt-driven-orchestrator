@@ -235,6 +235,31 @@ pub(crate) fn evaluate_outgoing_edges_full(
         .map(|n| n.iter)
         .unwrap_or(1);
 
+    // #600 / ADR-0011: a `force_route` on this node short-circuits its `when:`
+    // edges entirely. The operator has declared the exit, so the scheduler spawns
+    // the target (or completes the run, if the target is `End`) and skips both the
+    // conditional routing below AND the `unrouted` detection — the whole point is
+    // to unstick a run wedged because a non-`PASS` verdict reached no live branch
+    // (FP #3). The route is folded from the log, so it re-decides identically on
+    // the next lap and after a reopen (FP #8). A forced route to a non-existent
+    // target is impossible: the handler validates both endpoints before appending.
+    if let Some(target) = run_state.forced_routes.get(completed_node_id) {
+        let end_node_id = pipeline
+            .nodes
+            .iter()
+            .find(|n| n.node_type == NodeType::End)
+            .map(|n| n.id.as_str());
+        if end_node_id == Some(target.as_str()) {
+            actions.push(SchedulerAction::Complete);
+        } else {
+            actions.push(SchedulerAction::Spawn {
+                node_id: target.clone(),
+                iter: 1,
+            });
+        }
+        return actions;
+    }
+
     let completed_node = pipeline.nodes.iter().find(|n| n.id == completed_node_id);
     let is_switch = completed_node.is_some_and(|n| n.node_type == NodeType::Switch);
 
@@ -505,10 +530,25 @@ pub(crate) fn evaluate_outgoing_edges_full(
                 &mut visiting,
             );
             if end_dead {
+                // AC4 (#600): don't just say "unrouted" — list this producer's
+                // candidate edges, each guard, whether it fired, and the value
+                // actually read for the fields it tests, so the operator sees why
+                // no branch reached End and where to `force_route`.
+                let candidates = describe_candidate_edges(
+                    pipeline,
+                    completed_node_id,
+                    source_iter,
+                    &fired_indices,
+                    frontmatter_fields,
+                );
                 actions.push(SchedulerAction::Interrupt {
-                    message: "unrouted: conditional routing suppressed every path to End \
-                         (no live branch reaches End)"
-                        .to_string(),
+                    message: format!(
+                        "unrouted: node '{completed_node_id}' (iter {source_iter}) completed \
+                         but conditional routing suppressed every path to End (no live branch \
+                         reaches End). Candidate edges:\n{candidates}\n\
+                         Route it explicitly with force_route (source '{completed_node_id}' \
+                         -> a target), or adjust the verdict the edges read."
+                    ),
                 });
             }
         }
@@ -533,6 +573,26 @@ pub(crate) fn evaluate_outgoing_edges_full(
 ///
 /// The region's live counter is read from `run_state.loop_states[region.id]`,
 /// defaulting to lap 1 before any iteration event has been projected.
+/// The bounded region's **effective** iteration cap: the live
+/// `set_region_max_iter` override (ADR-0011 / #600) if the operator raised it in
+/// flight, else the region's declared `max_iter` resolved from the pipeline
+/// (literal or `$var`, [`crate::loop_region::resolve_region_max_iter`]). Reading
+/// the override off `run_state` — folded from the append-only log — is what makes
+/// the raise **uniform** across a literal and a `$var` cap (FP #1) and durable
+/// across a reopen re-projection: the scheduler never re-reads the YAML for the
+/// bound once an override exists.
+pub(crate) fn effective_region_max_iter(
+    run_state: &RunState,
+    region: &crate::pipeline::LoopRegion,
+    resolved_vars: &HashMap<String, serde_yaml::Value>,
+) -> i64 {
+    run_state
+        .region_max_iter_overrides
+        .get(region.id.as_str())
+        .copied()
+        .unwrap_or_else(|| crate::loop_region::resolve_region_max_iter(region, resolved_vars))
+}
+
 fn handle_region_reentry(
     pipeline: &PipelineDef,
     run_state: &RunState,
@@ -543,12 +603,16 @@ fn handle_region_reentry(
 ) -> Vec<SchedulerAction> {
     let mut actions = Vec::new();
 
-    let max_iter = crate::loop_region::resolve_region_max_iter(region, resolved_vars);
+    let max_iter = effective_region_max_iter(run_state, region, resolved_vars);
     let region_loop_state = run_state.loop_states.get(region.id.as_str());
     let current_iter = region_loop_state.map(|ls| ls.current_iter).unwrap_or(1);
     // #199: an ended region (`end_region` projected as `done`) never starts
     // another lap — it routes its exit at the current iter, like exhaustion.
-    let ended = region_loop_state.is_some_and(|ls| ls.done);
+    // #600: a `force_route` on the region is likewise a request to exit NOW — the
+    // operator has named the region's exit, so the region stops looping and routes
+    // there instead of running out its (possibly just-raised) cap.
+    let forced_region_route = run_state.forced_routes.get(region.id.as_str()).cloned();
+    let ended = region_loop_state.is_some_and(|ls| ls.done) || forced_region_route.is_some();
 
     let runtime = crate::loop_region::RegionRuntime {
         current_iter,
@@ -581,6 +645,26 @@ fn handle_region_reentry(
             });
         }
         crate::loop_region::LapDecision::Exhausted => {
+            // #600: a `force_route` on the region overrides the `when:`-based
+            // exhaustion routing — spawn the forced target (or complete, if it is
+            // `End`), never the "exhausted — unrouted" park. This is the region
+            // twin of the node-scoped force route in `evaluate_outgoing_edges_full`.
+            if let Some(target) = forced_region_route {
+                let end_node_id = pipeline
+                    .nodes
+                    .iter()
+                    .find(|n| n.node_type == NodeType::End)
+                    .map(|n| n.id.clone());
+                if end_node_id.as_deref() == Some(target.as_str()) {
+                    actions.push(SchedulerAction::Complete);
+                } else {
+                    actions.push(SchedulerAction::Spawn {
+                        node_id: target,
+                        iter: 1,
+                    });
+                }
+                return actions;
+            }
             match crate::loop_region::exhaustion_outcome(
                 pipeline,
                 region,
@@ -606,21 +690,37 @@ fn handle_region_reentry(
                     }
                 }
                 crate::loop_region::ExhaustionOutcome::Unrouted => {
-                    let message = if ended {
+                    // AC4 (#600): enrich the region-exhaustion diagnostic with the
+                    // exit-edge candidates evaluated at the exhausted lap. Only the
+                    // just-completed member's frontmatter is in scope, so read values
+                    // are shown where the guard reads one of its fields.
+                    let exit_edges = describe_region_exit_edges(
+                        pipeline,
+                        region,
+                        current_iter,
+                        frontmatter_fields,
+                        resolved_vars,
+                    );
+                    let head = if ended {
                         format!(
                             "ended — unrouted: bounded region '{}' was closed by end_region \
-                             at iter {current_iter} but no exit edge matched (route it from \
-                             the Pipeline Manager)",
+                             at iter {current_iter} but no exit edge matched",
                             region.id
                         )
                     } else {
                         format!(
                             "exhausted — unrouted: bounded region '{}' reached max_iter \
                              {max_iter} with the continuation condition still true and no \
-                             matching exit edge (route it from the Pipeline Manager)",
+                             matching exit edge",
                             region.id
                         )
                     };
+                    let message = format!(
+                        "{head}. Exit edges:\n{exit_edges}\n\
+                         Raise the cap with set_region_max_iter, or route the exit with \
+                         force_route (source '{}' -> a target).",
+                        region.id
+                    );
                     actions.push(SchedulerAction::Interrupt { message });
                 }
             }
@@ -666,7 +766,11 @@ fn forward_spawn_iter(
 
     let member_region = crate::loop_region::bounded_region_for_member(pipeline, target_id);
     if let Some(region) = member_region {
-        let max = crate::loop_region::resolve_region_max_iter(region, resolved_vars);
+        // #600: honour a live `set_region_max_iter` raise here too, or a member
+        // forward-spawn would still be capped at the YAML bound after the operator
+        // lifted it — the region head would re-enter but its body node would refuse
+        // the new lap.
+        let max = effective_region_max_iter(run_state, region, resolved_vars);
         if proposed > max {
             return None;
         }
@@ -1080,6 +1184,186 @@ fn check_all_upstream_completed(
 /// yet decided), the node is NOT dead and the convergence keeps waiting. A node
 /// already present in `run_state` (spawned at any status) is by definition not
 /// dead. A node with no incoming edges is a root and is likewise never dead.
+/// Renders a `serde_yaml` scalar as a short, human-readable token for the
+/// `unrouted` diagnostic — a bare string/number/bool, or a compact YAML flow for a
+/// mapping/sequence. Keeps the enriched message readable without dumping multi-line
+/// YAML into a run's `awaiting_reason`.
+fn yaml_token(v: &serde_yaml::Value) -> String {
+    match v {
+        serde_yaml::Value::Null => "null".to_string(),
+        serde_yaml::Value::Bool(b) => b.to_string(),
+        serde_yaml::Value::Number(n) => n.to_string(),
+        serde_yaml::Value::String(s) => s.clone(),
+        other => serde_yaml::to_string(other)
+            .unwrap_or_default()
+            .trim()
+            .replace('\n', " "),
+    }
+}
+
+/// The field names a `when:` clause reads (its mapping keys, `any:` flattened one
+/// level). Used to name, in the `unrouted` diagnostic, exactly which fields the
+/// operator should look at — and what value was actually read for each.
+fn when_fields(when: &serde_yaml::Value) -> Vec<String> {
+    let mut fields = Vec::new();
+    if let Some(map) = when.as_mapping() {
+        for (k, v) in map {
+            let Some(key) = k.as_str() else { continue };
+            if key == "any" {
+                if let Some(seq) = v.as_sequence() {
+                    for sub in seq {
+                        for f in when_fields(sub) {
+                            if !fields.contains(&f) {
+                                fields.push(f);
+                            }
+                        }
+                    }
+                }
+            } else if !fields.contains(&key.to_string()) {
+                fields.push(key.to_string());
+            }
+        }
+    }
+    fields
+}
+
+/// Builds the enriched `unrouted` diagnostic for a completed node whose outgoing
+/// edges routed nowhere (ADR-0011 / #600, AC4): one line per candidate edge naming
+/// its target, its `when:`/`else` guard, whether it fired, and — crucially — the
+/// **value actually read** for each field the guard tests. This is what lets an
+/// operator see *why* no branch is live ("verdict=minor_changes, the edge wanted
+/// verdict in [PASS]") from the run state alone, without reading the daemon log.
+fn describe_candidate_edges(
+    pipeline: &PipelineDef,
+    source_node_id: &str,
+    source_iter: i64,
+    fired_indices: &HashSet<usize>,
+    frontmatter_fields: &HashMap<String, serde_yaml::Value>,
+) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for (idx, edge) in pipeline.edges.iter().enumerate() {
+        if edge.source.node != source_node_id {
+            continue;
+        }
+        let guard = if edge.is_else {
+            "else".to_string()
+        } else if let Some(when) = &edge.when {
+            format!("when {}", yaml_token(when))
+        } else {
+            "(unconditional)".to_string()
+        };
+        let fired = fired_indices.contains(&idx);
+        // Name the read value for each field the guard tests, so the mismatch is
+        // legible ("read verdict=minor_changes"). `iter` reads the source's lap.
+        let reads: Vec<String> = edge
+            .when
+            .as_ref()
+            .map(when_fields)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|f| {
+                if f == "iter" {
+                    format!("iter={source_iter}")
+                } else {
+                    match frontmatter_fields.get(&f) {
+                        Some(v) => format!("{f}={}", yaml_token(v)),
+                        None => format!("{f}=<absent>"),
+                    }
+                }
+            })
+            .collect();
+        let read_note = if reads.is_empty() {
+            String::new()
+        } else {
+            format!(" (read {})", reads.join(", "))
+        };
+        lines.push(format!(
+            "  - {}.{} -> {}  {}  => {}{}",
+            edge.source.node,
+            edge.source.port,
+            edge.target.node,
+            guard,
+            if fired { "FIRED" } else { "not fired" },
+            read_note,
+        ));
+    }
+    if lines.is_empty() {
+        format!("  (node '{source_node_id}' has no outgoing edges)")
+    } else {
+        lines.join("\n")
+    }
+}
+
+/// Builds the enriched exit-edge listing for an exhausted/ended bounded region
+/// (ADR-0011 / #600, AC4): one line per member→non-member edge with its guard,
+/// whether it fires at the exhausted lap (evaluated against the just-completed
+/// member's frontmatter, as [`crate::loop_region::exhaustion_outcome`] does), and
+/// the value read for each guard field. Names why the region has no live exit.
+fn describe_region_exit_edges(
+    pipeline: &PipelineDef,
+    region: &crate::pipeline::LoopRegion,
+    current_iter: i64,
+    frontmatter_fields: &HashMap<String, serde_yaml::Value>,
+    resolved_vars: &HashMap<String, serde_yaml::Value>,
+) -> String {
+    let member_set: HashSet<&str> = region.members.iter().map(String::as_str).collect();
+    let mut lines: Vec<String> = Vec::new();
+    for edge in &pipeline.edges {
+        if !member_set.contains(edge.source.node.as_str())
+            || member_set.contains(edge.target.node.as_str())
+        {
+            continue;
+        }
+        let guard = if edge.is_else {
+            "else".to_string()
+        } else if let Some(when) = &edge.when {
+            format!("when {}", yaml_token(when))
+        } else {
+            "(unconditional)".to_string()
+        };
+        let single = [edge];
+        let fired =
+            !edge_router::fired_edges(&single, frontmatter_fields, resolved_vars, current_iter)
+                .is_empty();
+        let reads: Vec<String> = edge
+            .when
+            .as_ref()
+            .map(when_fields)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|f| {
+                if f == "iter" {
+                    format!("iter={current_iter}")
+                } else {
+                    match frontmatter_fields.get(&f) {
+                        Some(v) => format!("{f}={}", yaml_token(v)),
+                        None => format!("{f}=<absent>"),
+                    }
+                }
+            })
+            .collect();
+        let read_note = if reads.is_empty() {
+            String::new()
+        } else {
+            format!(" (read {})", reads.join(", "))
+        };
+        lines.push(format!(
+            "  - {}.{} -> {}  {}  => {}{}",
+            edge.source.node,
+            edge.source.port,
+            edge.target.node,
+            guard,
+            if fired { "FIRED" } else { "not fired" },
+            read_note,
+        ));
+    }
+    if lines.is_empty() {
+        "  (region has no member->non-member exit edge)".to_string()
+    } else {
+        lines.join("\n")
+    }
+}
+
 fn is_node_dead(
     pipeline: &PipelineDef,
     run_state: &RunState,
@@ -1112,55 +1396,176 @@ fn is_node_dead(
 
     // The node is dead iff EVERY incoming edge is dead.
     let dead = incoming.iter().all(|edge| {
-        let src = edge.source.node.as_str();
-        let producer = pipeline.nodes.iter().find(|n| n.id == src);
-        let producer_completed = run_state
-            .nodes
-            .get(src)
-            .is_some_and(|n| n.status == NodeStatus::Completed);
-
-        if producer_completed {
-            // The producer has run: this edge is dead only if it did NOT fire.
-            // Recompute the firing set from the producer's recorded frontmatter.
-            // Switch producers route by port; we conservatively treat their
-            // edges as live (Switch is being retired by ADR-0011 and is not part
-            // of the conditional-edge convergence path).
-            let is_switch = producer.is_some_and(|n| n.node_type == NodeType::Switch);
-            if is_switch {
-                return false; // live: keep waiting
-            }
-            let source_iter = run_state.nodes.get(src).map(|n| n.iter).unwrap_or(1);
-            let empty = HashMap::new();
-            let fm = frontmatter_by_node.get(src).unwrap_or(&empty);
-            let outgoing: Vec<&crate::pipeline::EdgeDef> = pipeline
-                .edges
-                .iter()
-                .filter(|e| e.source.node == src)
-                .collect();
-            let fired = edge_router::fired_edges(&outgoing, fm, vars, source_iter);
-            let this_edge_fired = fired.iter().any(|f| std::ptr::eq(*f, *edge));
-            // Dead iff this edge did not fire.
-            !this_edge_fired
-        } else if run_state.nodes.contains_key(src) {
-            // Producer spawned but not completed (running / awaiting / failed):
-            // outcome not yet decided — edge is still live.
-            false
-        } else {
-            // Producer never spawned: this edge is dead only if the producer is
-            // itself dead (recurse).
-            is_node_dead(
-                pipeline,
-                run_state,
-                src,
-                frontmatter_by_node,
-                vars,
-                visiting,
-            )
-        }
+        edge_is_dead(
+            pipeline,
+            run_state,
+            edge,
+            frontmatter_by_node,
+            vars,
+            visiting,
+        )
     });
 
     visiting.remove(node_id);
     dead
+}
+
+/// Is a single incoming `edge` **dead** — permanently unable to deliver its
+/// artifact (ADR-0011)? Factored out of [`is_node_dead`] so the reachability
+/// auto-skip (#600 / #589) can reason per required-input port, not only per whole
+/// node. An edge is dead when its producer completed and the edge did not fire, or
+/// when the producer never ran and is itself dead (recursion, cycle-guarded by
+/// `visiting`). A producer still running (outcome undecided) or a Switch producer
+/// (retired, routes by port) keeps the edge live — we keep waiting rather than
+/// skip.
+fn edge_is_dead(
+    pipeline: &PipelineDef,
+    run_state: &RunState,
+    edge: &crate::pipeline::EdgeDef,
+    frontmatter_by_node: &HashMap<String, HashMap<String, serde_yaml::Value>>,
+    vars: &HashMap<String, serde_yaml::Value>,
+    visiting: &mut HashSet<String>,
+) -> bool {
+    let src = edge.source.node.as_str();
+    let producer = pipeline.nodes.iter().find(|n| n.id == src);
+    let producer_completed = run_state
+        .nodes
+        .get(src)
+        .is_some_and(|n| n.status == NodeStatus::Completed);
+
+    if producer_completed {
+        // The producer has run: this edge is dead only if it did NOT fire.
+        // Recompute the firing set from the producer's recorded frontmatter.
+        // Switch producers route by port; we conservatively treat their
+        // edges as live (Switch is being retired by ADR-0011 and is not part
+        // of the conditional-edge convergence path).
+        let is_switch = producer.is_some_and(|n| n.node_type == NodeType::Switch);
+        if is_switch {
+            return false; // live: keep waiting
+        }
+        let source_iter = run_state.nodes.get(src).map(|n| n.iter).unwrap_or(1);
+        let empty = HashMap::new();
+        let fm = frontmatter_by_node.get(src).unwrap_or(&empty);
+        let outgoing: Vec<&crate::pipeline::EdgeDef> = pipeline
+            .edges
+            .iter()
+            .filter(|e| e.source.node == src)
+            .collect();
+        let fired = edge_router::fired_edges(&outgoing, fm, vars, source_iter);
+        let this_edge_fired = fired.iter().any(|f| std::ptr::eq(*f, edge));
+        // Dead iff this edge did not fire.
+        !this_edge_fired
+    } else if run_state.nodes.contains_key(src) {
+        // Producer spawned but not completed (running / awaiting / failed):
+        // outcome not yet decided — edge is still live.
+        false
+    } else {
+        // Producer never spawned: this edge is dead only if the producer is
+        // itself dead (recurse).
+        is_node_dead(
+            pipeline,
+            run_state,
+            src,
+            frontmatter_by_node,
+            vars,
+            visiting,
+        )
+    }
+}
+
+/// Nodes that are **structurally unreachable** and must be auto-skipped so the run
+/// does not hang waiting on an input that can never arrive (ADR-0011 / #589 / #600,
+/// AC7). Returns `(node_id, reason)` — the reason lands in the skip event so the
+/// operator sees *why* the node was skipped (ADR-0049 observability).
+///
+/// A never-started node qualifies when either:
+///   (a) **every** incoming edge is dead — its producing branch was not taken
+///       (an either/or where the other branch fired), so nothing will ever spawn
+///       it; or
+///   (b) it declares a `required: true` input port and **every** edge feeding that
+///       port is dead — a required input that will never come, even if the node has
+///       other live inputs.
+///
+/// `Start`/`End` and the structural `Loop`/`Switch`/`Merge` routers are never
+/// auto-skipped here: `End`-unreachability is the `unrouted` convergence path, and a
+/// `Merge` keeps its ADR-0006 **edge-centred barrier** (a mix of live/dead branches
+/// fires on the live ones; an all-dead `Merge` renders `End` unreachable and parks
+/// `unrouted`). Auto-skip is for a plain producer node whose required input arrives
+/// only on a branch that was not taken — exactly the FP #6 either/or hang.
+pub(crate) fn unreachable_nodes(
+    pipeline: &PipelineDef,
+    run_state: &RunState,
+    frontmatter_by_node: &HashMap<String, HashMap<String, serde_yaml::Value>>,
+    vars: &HashMap<String, serde_yaml::Value>,
+) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for node in &pipeline.nodes {
+        // Only never-started, non-structural producer nodes are candidates.
+        if run_state.nodes.contains_key(node.id.as_str()) {
+            continue;
+        }
+        if matches!(
+            node.node_type,
+            NodeType::Start | NodeType::End | NodeType::Loop | NodeType::Switch | NodeType::Merge
+        ) {
+            continue;
+        }
+        let has_incoming = pipeline.edges.iter().any(|e| e.target.node == node.id);
+        if !has_incoming {
+            continue; // an entry point is never structurally dead
+        }
+
+        // Rule (a): the whole node is dead (every incoming edge dead).
+        let mut visiting = HashSet::new();
+        if is_node_dead(
+            pipeline,
+            run_state,
+            &node.id,
+            frontmatter_by_node,
+            vars,
+            &mut visiting,
+        ) {
+            out.push((
+                node.id.clone(),
+                format!(
+                    "structurally unreachable: every incoming edge to '{}' is dead \
+                     (its producing branch was not taken)",
+                    node.id
+                ),
+            ));
+            continue;
+        }
+
+        // Rule (b): a declared `required` input port whose feeding edges are ALL
+        // dead. Only meaningful for a node with declared input ports (a structural
+        // node); an emergent-input node declares none and is covered by rule (a).
+        for port in node.inputs.iter().filter(|p| p.required) {
+            let feeders: Vec<&crate::pipeline::EdgeDef> = pipeline
+                .edges
+                .iter()
+                .filter(|e| e.target.node == node.id && e.target.port == port.name)
+                .collect();
+            if feeders.is_empty() {
+                continue;
+            }
+            let all_dead = feeders.iter().all(|edge| {
+                let mut v = HashSet::new();
+                edge_is_dead(pipeline, run_state, edge, frontmatter_by_node, vars, &mut v)
+            });
+            if all_dead {
+                out.push((
+                    node.id.clone(),
+                    format!(
+                        "required input '{}' of '{}' is unreachable: every edge feeding it \
+                         is dead (its producing branch was not taken)",
+                        port.name, node.id
+                    ),
+                ));
+                break;
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -1187,6 +1592,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    required: false,
                 })
                 .collect(),
             outputs: outputs
@@ -1199,6 +1605,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    required: false,
                 })
                 .collect(),
             interactive: false,
@@ -1224,6 +1631,7 @@ mod tests {
                 frontmatter: None,
                 when: None,
                 description: None,
+                required: false,
             }],
             outputs: vec![],
             interactive: false,
@@ -2510,6 +2918,7 @@ mod tests {
                 frontmatter: None,
                 when: None,
                 description: None,
+                required: false,
             }],
             outputs: branch_outputs,
             interactive: false,
@@ -2531,6 +2940,7 @@ mod tests {
             frontmatter: None,
             when: Some(serde_yaml::from_str(when_yaml).unwrap()),
             description: None,
+            required: false,
         }
     }
 
@@ -2543,6 +2953,7 @@ mod tests {
             frontmatter: None,
             when: None,
             description: None,
+            required: false,
         }
     }
 
@@ -3208,6 +3619,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    required: false,
                 },
                 Port {
                     name: "break".into(),
@@ -3217,6 +3629,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    required: false,
                 },
             ],
             outputs: vec![
@@ -3228,6 +3641,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    required: false,
                 },
                 Port {
                     name: "done".into(),
@@ -3237,6 +3651,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    required: false,
                 },
             ],
             interactive: false,
@@ -3766,6 +4181,7 @@ mod tests {
                 frontmatter: None,
                 when: None,
                 description: None,
+                required: false,
             }],
             interactive: false,
             view: None,
@@ -5222,6 +5638,258 @@ loops:
                 iter: 1,
             }),
             "impl completing must forward to spawn tst@1, got {actions:?}"
+        );
+    }
+
+    // ── #600: live region cap override, force_route, reachability auto-skip ────
+
+    fn region(id: &str, members: &[&str], max_iter: i64) -> crate::pipeline::LoopRegion {
+        crate::pipeline::LoopRegion {
+            id: id.into(),
+            kind: crate::pipeline::LoopKind::Bounded,
+            members: members.iter().map(|m| (*m).into()).collect(),
+            max_iter: Some(serde_yaml::Value::Number(max_iter.into())),
+            over: None,
+        }
+    }
+
+    #[test]
+    fn effective_region_max_iter_prefers_the_live_override() {
+        // #600 / FP #1: a `set_region_max_iter` override replaces the declared cap
+        // — uniformly, here over a literal 3.
+        let r = region("R", &["impl", "rev"], 3);
+        let mut rs = empty_run_state();
+        assert_eq!(effective_region_max_iter(&rs, &r, &HashMap::new()), 3);
+        rs.region_max_iter_overrides.insert("R".into(), 9);
+        assert_eq!(
+            effective_region_max_iter(&rs, &r, &HashMap::new()),
+            9,
+            "the live override wins over the declared literal cap"
+        );
+    }
+
+    #[test]
+    fn effective_region_max_iter_override_beats_a_var_cap_too() {
+        // FP #1 "uniforme littéral et $var": the override replaces a `$var` cap the
+        // same way, without touching the variable.
+        let mut r = region("R", &["w"], 5);
+        r.max_iter = Some(serde_yaml::Value::String("$laps".into()));
+        let mut vars = HashMap::new();
+        vars.insert("laps".to_string(), serde_yaml::Value::Number(4.into()));
+        let mut rs = empty_run_state();
+        assert_eq!(effective_region_max_iter(&rs, &r, &vars), 4);
+        rs.region_max_iter_overrides.insert("R".into(), 12);
+        assert_eq!(effective_region_max_iter(&rs, &r, &vars), 12);
+    }
+
+    #[test]
+    fn force_route_to_end_completes_the_run() {
+        // #600 / FP #3: a `force_route` on a completed node short-circuits its
+        // `when:` edges — routed to End, it completes the run.
+        let pipeline = PipelineDef {
+            name: "fr".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("start", &[], &["user_prompt"]),
+                make_node("rev", &["code"], &["review"]),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_edge("start", "user_prompt", "rev", "code"),
+                // A `when: verdict in [PASS]` exit that would NOT fire on this verdict.
+                make_cond_edge(
+                    "rev",
+                    "review",
+                    "end",
+                    "result",
+                    Some("verdict: {in: [PASS]}"),
+                    false,
+                ),
+            ],
+            loops: vec![],
+            notes: Vec::new(),
+            prompt_required: true,
+        };
+        let mut rs = empty_run_state();
+        rs.nodes.insert("rev".into(), completed_node("rev"));
+        rs.forced_routes.insert("rev".into(), "end".into());
+        // verdict is minor_changes — the `when:` would suppress every path, but the
+        // forced route ignores it.
+        let mut fields = HashMap::new();
+        fields.insert(
+            "verdict".to_string(),
+            serde_yaml::Value::String("minor_changes".into()),
+        );
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &rs,
+            "rev",
+            &HashMap::new(),
+            &fields,
+            &HashMap::new(),
+        );
+        assert_eq!(
+            actions,
+            vec![SchedulerAction::Complete],
+            "force_route rev -> end completes the run despite the unmatched when:"
+        );
+    }
+
+    #[test]
+    fn force_route_to_a_node_spawns_it() {
+        let pipeline = PipelineDef {
+            name: "fr".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("rev", &["code"], &["review"]),
+                make_node("finalize", &["review"], &["done"]),
+                make_end_node(),
+            ],
+            edges: vec![make_cond_edge(
+                "rev",
+                "review",
+                "end",
+                "result",
+                Some("verdict: {in: [PASS]}"),
+                false,
+            )],
+            loops: vec![],
+            notes: Vec::new(),
+            prompt_required: true,
+        };
+        let mut rs = empty_run_state();
+        rs.nodes.insert("rev".into(), completed_node("rev"));
+        rs.forced_routes.insert("rev".into(), "finalize".into());
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &rs,
+            "rev",
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+        assert_eq!(
+            actions,
+            vec![SchedulerAction::Spawn {
+                node_id: "finalize".into(),
+                iter: 1
+            }]
+        );
+    }
+
+    /// start -> A; A -> B when x; A -> C else. A completed with x true → C is the
+    /// not-taken branch and is structurally unreachable.
+    fn either_or_pipeline() -> PipelineDef {
+        PipelineDef {
+            name: "eo".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("start", &[], &["user_prompt"]),
+                make_node("a", &["task"], &["v"]),
+                make_node("b", &["v"], &["out"]),
+                make_node("c", &["v"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("start", "user_prompt", "a", "task"),
+                make_cond_edge("a", "v", "b", "v", Some("verdict: {in: [X]}"), false),
+                make_cond_edge("a", "v", "c", "v", None, true),
+            ],
+            loops: vec![],
+            notes: Vec::new(),
+            prompt_required: true,
+        }
+    }
+
+    #[test]
+    fn unreachable_nodes_auto_skips_the_not_taken_branch() {
+        // #600 / #589 / FP #6: A fired A->B (verdict X), so A->C is dead and C can
+        // never spawn — it is returned for auto-skip, while B (edge fired) is not.
+        let pipeline = either_or_pipeline();
+        let mut rs = empty_run_state();
+        rs.nodes.insert("a".into(), completed_node("a"));
+        let mut fm_by_node = HashMap::new();
+        let mut a_fm = HashMap::new();
+        a_fm.insert("verdict".to_string(), serde_yaml::Value::String("X".into()));
+        fm_by_node.insert("a".to_string(), a_fm);
+
+        let skips = unreachable_nodes(&pipeline, &rs, &fm_by_node, &HashMap::new());
+        let ids: Vec<&str> = skips.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(ids, vec!["c"], "only the not-taken branch C is unreachable");
+        assert!(
+            skips[0].1.contains("unreachable"),
+            "reason names the unreachability: {}",
+            skips[0].1
+        );
+    }
+
+    #[test]
+    fn unreachable_nodes_leaves_a_still_undecided_branch_alone() {
+        // Before A completes, neither branch is dead (the outcome is undecided), so
+        // nothing is auto-skipped — the sweep is conservative.
+        let pipeline = either_or_pipeline();
+        let rs = empty_run_state(); // A not completed
+        let skips = unreachable_nodes(&pipeline, &rs, &HashMap::new(), &HashMap::new());
+        assert!(skips.is_empty());
+    }
+
+    #[test]
+    fn unrouted_message_lists_candidate_edges_and_read_values() {
+        // #600 / AC4: the enriched diagnostic names the producer's candidate edges,
+        // their guard, whether each fired, and the value actually read.
+        let pipeline = PipelineDef {
+            name: "u".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![make_node("rev", &["code"], &["review"]), make_end_node()],
+            edges: vec![make_cond_edge(
+                "rev",
+                "review",
+                "end",
+                "result",
+                Some("verdict: {in: [PASS]}"),
+                false,
+            )],
+            loops: vec![],
+            notes: Vec::new(),
+            prompt_required: true,
+        };
+        let mut rs = empty_run_state();
+        rs.nodes.insert("rev".into(), completed_node("rev"));
+        let mut fields = HashMap::new();
+        fields.insert(
+            "verdict".to_string(),
+            serde_yaml::Value::String("minor_changes".into()),
+        );
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &rs,
+            "rev",
+            &HashMap::new(),
+            &fields,
+            &HashMap::new(),
+        );
+        let msg = match actions.as_slice() {
+            [SchedulerAction::Interrupt { message }] => message.clone(),
+            other => panic!("expected a single Interrupt, got {other:?}"),
+        };
+        assert!(
+            msg.contains("rev.review -> end"),
+            "names the candidate edge: {msg}"
+        );
+        assert!(
+            msg.contains("not fired"),
+            "says the edge did not fire: {msg}"
+        );
+        assert!(
+            msg.contains("verdict=minor_changes"),
+            "names the value actually read: {msg}"
+        );
+        assert!(
+            msg.contains("force_route"),
+            "points at the recovery lever: {msg}"
         );
     }
 }

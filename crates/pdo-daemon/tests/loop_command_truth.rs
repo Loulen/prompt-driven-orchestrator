@@ -512,9 +512,11 @@ async fn bump_region_that_actually_reschedules_reports_the_spawn() {
         assert_eq!(status, 200, "mark_node_done for {node_id}: {body}");
     }
 
-    // The region is now exhausted with nowhere to route: the run halts.
-    wait_until("the run to halt exhausted-unrouted", || async {
-        run_status(&url, &run_id).await == "halted"
+    // The region is now exhausted with nowhere to route: since résilience
+    // (ADR-0049) an `unrouted` convergence parks the run `AwaitingUser` (a human
+    // routes it), instead of the pre-résilience terminal `halted`.
+    wait_until("the run to park awaiting-user (exhausted-unrouted)", || async {
+        run_status(&url, &run_id).await == "awaiting_user"
     })
     .await;
 

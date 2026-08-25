@@ -328,10 +328,13 @@ async fn node_fail_emits_run_failed_over_dropped_connection() {
     )
     .await;
 
-    // Pre-#304 the `RunFailed` append lived past the reap in the cancelled
-    // future: the node was Failed but the run stayed `running` forever.
-    wait_for_event(&daemon, &run_id, "run_failed", |e| {
-        e["kind"] == "run_failed"
+    // Pre-#304 the run-terminal append lived past the reap in the cancelled
+    // future: the node was terminal but the run stayed `running` forever. Since
+    // ADR-0049 a default agent `pdo fail` parks the run `AwaitingUser` via
+    // `RunInterrupted` (not `RunFailed`) — the detached-tail survival is what this
+    // test pins, and that append is now `run_interrupted`.
+    wait_for_event(&daemon, &run_id, "run_interrupted", |e| {
+        e["kind"] == "run_interrupted"
     })
     .await;
 }

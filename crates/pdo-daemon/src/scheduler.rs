@@ -13,7 +13,19 @@ pub(crate) enum SchedulerAction {
         node_id: String,
         iter: i64,
     },
+    /// A **deliberate** halt: an edge to `End` carried a `reason:` (a `when:`
+    /// gate message telling the run to stop here). Terminal-but-resumable
+    /// (`RunHalted`) — the pipeline author's decision, not a runtime give-up.
     Halt {
+        message: String,
+    },
+    /// An **`unrouted`** convergence (ADR-0049): conditional routing suppressed
+    /// every path to `End`, or a bounded region exhausted with no matching exit
+    /// edge. The runtime cannot drive the run forward but did not fail it — it
+    /// parks `AwaitingUser` (`RunInterrupted`) with the diagnostic, so a human
+    /// routes it (e.g. from the Pipeline Manager) or reopens. Distinct from
+    /// [`SchedulerAction::Halt`], which stays a deliberate terminal halt.
+    Interrupt {
         message: String,
     },
     Complete,
@@ -493,7 +505,7 @@ pub(crate) fn evaluate_outgoing_edges_full(
                 &mut visiting,
             );
             if end_dead {
-                actions.push(SchedulerAction::Halt {
+                actions.push(SchedulerAction::Interrupt {
                     message: "unrouted: conditional routing suppressed every path to End \
                          (no live branch reaches End)"
                         .to_string(),
@@ -609,7 +621,7 @@ fn handle_region_reentry(
                             region.id
                         )
                     };
-                    actions.push(SchedulerAction::Halt { message });
+                    actions.push(SchedulerAction::Interrupt { message });
                 }
             }
         }
@@ -1195,6 +1207,7 @@ mod tests {
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            auto_fail: None,
         }
     }
 
@@ -1219,6 +1232,7 @@ mod tests {
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            auto_fail: None,
         }
     }
 
@@ -2402,7 +2416,7 @@ mod tests {
         assert!(
             actions
                 .iter()
-                .any(|a| matches!(a, SchedulerAction::Halt { .. })),
+                .any(|a| matches!(a, SchedulerAction::Interrupt { .. })),
             "a death cascade rendering End unreachable must halt explicitly, \
              never stall silently: {actions:?}"
         );
@@ -2504,6 +2518,7 @@ mod tests {
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            auto_fail: None,
         }
     }
 
@@ -3232,6 +3247,7 @@ mod tests {
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            auto_fail: None,
         }
     }
 
@@ -3757,6 +3773,7 @@ mod tests {
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            auto_fail: None,
         }
     }
 
@@ -4712,11 +4729,11 @@ loops:
             "must not re-enter past max_iter, got {actions:?}"
         );
         let halt = actions.iter().find_map(|a| match a {
-            SchedulerAction::Halt { message } => Some(message.clone()),
+            SchedulerAction::Interrupt { message } => Some(message.clone()),
             _ => None,
         });
         let Some(halt) = halt else {
-            panic!("expected an exhausted-unrouted halt, got {actions:?}");
+            panic!("expected an exhausted-unrouted interrupt, got {actions:?}");
         };
         assert!(
             halt.contains("exhausted") && halt.contains("unrouted"),
@@ -4966,8 +4983,8 @@ loops:
         assert!(
             actions
                 .iter()
-                .any(|a| matches!(a, SchedulerAction::Halt { .. })),
-            "ended with no matching exit edge: explicit halt, never a silent \
+                .any(|a| matches!(a, SchedulerAction::Interrupt { .. })),
+            "ended with no matching exit edge: explicit interrupt, never a silent \
              stall, got {actions:?}"
         );
     }

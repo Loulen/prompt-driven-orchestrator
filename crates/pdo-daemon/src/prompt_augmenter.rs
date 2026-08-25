@@ -1090,6 +1090,7 @@ mod tests {
                 over: None,
                 pin_harness: None,
                 harnesses: Default::default(),
+                auto_fail: None,
             }],
             edges: vec![],
             loops: Vec::new(),
@@ -1308,6 +1309,7 @@ mod tests {
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            auto_fail: None,
         });
         pipeline.edges.push(EdgeDef {
             source: EdgeEndpoint {
@@ -1445,6 +1447,7 @@ mod tests {
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            auto_fail: None,
         });
         pipeline.edges.push(EdgeDef {
             source: EdgeEndpoint {
@@ -1505,6 +1508,7 @@ mod tests {
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            auto_fail: None,
         });
 
         let node = &pipeline.nodes[1]; // implementer
@@ -1537,6 +1541,7 @@ mod tests {
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            auto_fail: None,
         });
         pipeline.edges.push(EdgeDef {
             source: EdgeEndpoint {
@@ -1583,6 +1588,7 @@ mod tests {
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            auto_fail: None,
         });
         pipeline.edges.push(EdgeDef {
             source: EdgeEndpoint {
@@ -1733,6 +1739,7 @@ mod tests {
                     over: None,
                     pin_harness: None,
                     harnesses: Default::default(),
+                    auto_fail: None,
                 },
                 NodeDef {
                     id: "researcher".into(),
@@ -1754,6 +1761,7 @@ mod tests {
                     over: None,
                     pin_harness: None,
                     harnesses: Default::default(),
+                    auto_fail: None,
                 },
                 NodeDef {
                     id: "implementer".into(),
@@ -1794,6 +1802,7 @@ mod tests {
                     over: None,
                     pin_harness: None,
                     harnesses: Default::default(),
+                    auto_fail: None,
                 },
             ],
             edges: vec![
@@ -1903,6 +1912,7 @@ mod tests {
                 over: None,
                 pin_harness: None,
                 harnesses: Default::default(),
+                auto_fail: None,
             }],
             edges: vec![],
             loops: Vec::new(),
@@ -2162,6 +2172,7 @@ mod tests {
                 over: None,
                 pin_harness: None,
                 harnesses: Default::default(),
+                auto_fail: None,
             }],
             edges: vec![],
             loops: Vec::new(),
@@ -2213,6 +2224,7 @@ mod tests {
                 over: None,
                 pin_harness: None,
                 harnesses: Default::default(),
+                auto_fail: None,
             }],
             edges: vec![],
             loops: Vec::new(),
@@ -2259,6 +2271,7 @@ mod tests {
                 over: None,
                 pin_harness: None,
                 harnesses: Default::default(),
+                auto_fail: None,
             }],
             edges: vec![],
             loops: Vec::new(),

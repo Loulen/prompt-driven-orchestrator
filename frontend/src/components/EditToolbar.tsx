@@ -1,4 +1,4 @@
-import { Plus, GitMerge, Info, Undo2, Redo2, SquareTerminal, Box, StickyNote, FilePlus, FolderGit2, Bot } from "lucide-react";
+import { Plus, GitMerge, Info, Undo2, Redo2, SquareTerminal, Box, StickyNote, FilePlus, FolderGit2, Bot, Play, RotateCcw, Terminal } from "lucide-react";
 import type { NodeType } from "../types";
 import type { LibraryEntry } from "../api";
 import { Tooltip } from "./ui/tooltip";
@@ -39,9 +39,20 @@ interface Props {
   // (add node/note, library insert, merge/script, undo/redo). Only the
   // Pipeline-info button survives so the archived pipeline stays inspectable.
   readOnly?: boolean;
+  // #598 / ADR-0049: the "finished-run" action group — the three ways to
+  // continue a TERMINAL, non-archived run, contextual to the run on screen.
+  // Shown only when `finishedRun` is true (terminal ∧ !archived). Variant A
+  // (icon cluster): Reopen (Play, accent — re-project & drive), Retry-all
+  // (RotateCcw — archive & fresh run, gated by its confirm modal) and Open shell
+  // (Terminal — a bash in the worktree). Absent on a live run, where these
+  // actions have no meaning.
+  finishedRun?: boolean;
+  onReopen?: () => void;
+  onRetryAll?: () => void;
+  onOpenShell?: () => void;
 }
 
-export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, libraryEntries, onLibraryDelete, getDropPosition, infoOpen, onToggleInfo, assistantAvailable = false, assistantActive = false, onOpenAssistant, showRunInfo = false, runInfoActive = false, onToggleRunInfo, readOnly = false }: Props) {
+export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, libraryEntries, onLibraryDelete, getDropPosition, infoOpen, onToggleInfo, assistantAvailable = false, assistantActive = false, onOpenAssistant, showRunInfo = false, runInfoActive = false, onToggleRunInfo, readOnly = false, finishedRun = false, onReopen, onRetryAll, onOpenShell }: Props) {
   // Read undo/redo straight from the store (ADR-0014 / #226): they have no
   // component-local dependency, unlike the prop-drilled add/merge callbacks, so
   // the point-of-use selector idiom is the right fit. `canUndo`/`canRedo` are
@@ -167,6 +178,54 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
               <Redo2 size={14} />
             </button>
           </Tooltip>
+        </>
+      )}
+
+      {/* #598 / ADR-0049: the finished-run action group (Variant A). Contextual
+          to a TERMINAL, non-archived run — the three ways to continue it. Placed
+          between the history group and the view group, in its own cluster. */}
+      {finishedRun && (
+        <>
+          <span className="mx-0.5 h-4 w-px bg-line" />
+
+          {onReopen && (
+            <Tooltip content="Reopen — re-project & drive">
+              <button
+                data-testid="toolbar-reopen"
+                aria-label="Reopen run"
+                onClick={onReopen}
+                className="grid h-7 w-7 cursor-pointer place-items-center rounded text-acc transition-colors hover:bg-bg-4 active:bg-acc active:text-bg-0"
+              >
+                <Play size={14} />
+              </button>
+            </Tooltip>
+          )}
+
+          {onRetryAll && (
+            <Tooltip content="Retry all — archive & fresh run">
+              <button
+                data-testid="toolbar-retry-all"
+                aria-label="Retry all"
+                onClick={onRetryAll}
+                className="grid h-7 w-7 cursor-pointer place-items-center rounded text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg active:bg-acc active:text-bg-0"
+              >
+                <RotateCcw size={14} />
+              </button>
+            </Tooltip>
+          )}
+
+          {onOpenShell && (
+            <Tooltip content="Open shell in worktree">
+              <button
+                data-testid="toolbar-open-shell"
+                aria-label="Open shell in worktree"
+                onClick={onOpenShell}
+                className="grid h-7 w-7 cursor-pointer place-items-center rounded text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg active:bg-acc active:text-bg-0"
+              >
+                <Terminal size={14} />
+              </button>
+            </Tooltip>
+          )}
         </>
       )}
 

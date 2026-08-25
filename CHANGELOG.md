@@ -10,6 +10,38 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.32.0
+
+**Résilience des runs — socle « retomber sur ses pattes »** (#598, ADR-0049/0050, ADR-0032/0009/0036
+amendés). Aucune migration, données historiques lisibles (log append-only, `resume_run` reste projeté).
+
+Changement de comportement, non cassant sur le fil : **le runtime ne déclare plus jamais forfait de
+lui-même**. Un incident infra (mort de session, boot recovery, spawn-abort) met le node en
+`Interrupted` (nouveau statut de node, **non terminal**, distinct de `Failed`) et le run en
+`AwaitingUser` avec une **raison** (`awaiting_reason`), jamais `RunFailed`. Les give-up runtime
+(stall run-level, refus de validation d'output, conflit de merge, `unrouted`) parkent de même en
+`AwaitingUser`. `Failed` ne provient plus que d'un `pdo fail` **délibéré** d'un agent (opt-in
+`auto_fail`) ou d'un abandon humain.
+
+Notes qui ne se déduisent pas du titre :
+
+- **`auto_fail`** — opt-in résolu `nœud < Run < Projet < instance` (défaut décoché) : décoché, un
+  `pdo fail` d'agent parke le run pour confirmation humaine ; coché, il termine direct en `Failed`.
+  Ne concerne QUE le `pdo fail` d'agent ; tout give-up runtime parke quoi qu'il arrive. Colonnes
+  `auto_fail` ajoutées (idempotent) à `instance_config` et `projects` ; clé gelée dans `RunStarted`
+  et lisible par nœud (`auto_fail:` YAML). Env `PDO_AUTO_FAIL`.
+- **Ré-ouverture** — `terminal ≠ verrouillé`. `reopen_run` (bouton **Play** de la toolbar de niveau
+  Run) re-projette n'importe quel run terminal (`Completed`/`Skipped`/`Failed`/`Halted`) vers
+  `Running` : les `(node, iter)` satisfaits restent gelés (jamais re-spawnés, anti-#221), seul le
+  travail non satisfait repart. Les commandes ciblées (retry/restart/start/mark-complete/inject)
+  **embarquent** leur propre ré-ouverture — plus de « resume the run first », plus de course de
+  re-fail. Le label terminal précédent reste dans l'event log.
+- **Spawn idempotent** — un `SpawnOutcome::Failed`/abort sur le chemin scheduler appende désormais un
+  événement `NodeInterrupted` nommant le node + la cause (fin du run figé `running` de #498) ; le
+  reap d'un worktree/branche survivant reste porté par `ensure_sub_worktree`.
+- Front : statut de node `interrupted` (ambre), raison d'interruption dans la sidebar du run, groupe
+  d'actions « run terminé » (Reopen · Retry-all · Open shell) dans la toolbar du canvas (Variante A).
+
 ## 1.31.0
 
 Rien de cassant, aucune migration. **Assistant IA d'authoring des templates de bibliothèque**

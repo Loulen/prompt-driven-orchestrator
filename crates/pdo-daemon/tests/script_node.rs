@@ -347,30 +347,28 @@ async fn script_node_missing_declared_output_fails_fast() {
         .unwrap();
 
     let run_id = start_run(&daemon, PIPELINE_NAME).await;
-    let run = wait_for_node_status(&daemon, &run_id, NODE_ID, "failed").await;
+    // ADR-0049: a missing declared output is a runtime give-up, so the node is
+    // `Interrupted` (parking the run `AwaitingUser`), NOT `Failed`. It still
+    // fails FAST — no strand behind a 409, no live agent to nudge.
+    let run = wait_for_node_status(&daemon, &run_id, NODE_ID, "interrupted").await;
     assert_eq!(
-        run["nodes"][NODE_ID]["status"], "failed",
-        "missing declared output must fail-fast; run was: {run}"
+        run["nodes"][NODE_ID]["status"], "interrupted",
+        "missing declared output must interrupt fast; run was: {run}"
     );
 
-    // #490: the projection now carries WHICH port was missing. Before this issue the
-    // daemon computed it, nested it under `payload.detail`, and nothing read it — so
-    // the red banner rendered an empty list.
+    // #490: the projection carries WHICH port was missing — the interrupt reducer
+    // reads the same nested evidence a `NodeFailed` would, so the red banner is
+    // not an empty list.
     assert_eq!(
         run["nodes"][NODE_ID]["missing_outputs"],
         serde_json::json!(["out"]),
-        "the failure must say which port is missing; run was: {run}"
+        "the interrupt must say which port is missing; run was: {run}"
     );
 
-    // #490 / ADR-0035 §4 — THE regression the fix itself could introduce.
-    //
-    // Making the refusal a `409` woke up the tail's `pdo complete || pdo fail` (dead
-    // code while every refusal answered `200`). Without the `-ne 4` test in the tail,
-    // this run would now hold TWO `run_failed` events: the daemon's own fail-fast,
-    // then a second one from the tail carrying the false reason "output validation
-    // failed after script success". `NodeFailed` is absorbed by the transition guard;
-    // `RunFailed` is NOT guarded, which is what makes the count the load-bearing
-    // assertion.
+    // #490 / ADR-0035 §4 / ADR-0049 — THE regression the fix must not introduce.
+    // The refusal is a `409` (exit 4), so the tail's `pdo complete || pdo fail`
+    // (guarded by `-ne 4`) must NOT run `pdo fail` and double the verdict. And the
+    // runtime NEVER appends `RunFailed` on a validation miss (ADR-0049).
     //
     // Let any doubled append land before counting — a passing count measured too
     // early would be a false green.
@@ -382,27 +380,31 @@ async fn script_node_missing_declared_output_fails_fast() {
             .json()
             .await
             .unwrap();
-    let run_failed: Vec<&serde_json::Value> = events
+    assert!(
+        !events.iter().any(|e| e["kind"] == "run_failed"),
+        "the runtime never fails the run on a validation miss (ADR-0049). events={events:#?}"
+    );
+    let interrupts: Vec<&serde_json::Value> = events
         .iter()
-        .filter(|e| e["kind"] == "run_failed")
+        .filter(|e| e["kind"] == "node_interrupted" && e["node_id"] == NODE_ID)
         .collect();
     assert_eq!(
-        run_failed.len(),
+        interrupts.len(),
         1,
-        "exactly one run_failed; the tail must not double the daemon's verdict. events={events:#?}"
+        "exactly one node_interrupted; the tail must not double the daemon's \
+         verdict. events={events:#?}"
     );
-    let reason = run_failed[0]["payload"]["reason"].as_str().unwrap_or("");
+    let reason = interrupts[0]["payload"]["reason"].as_str().unwrap_or("");
     assert!(
         reason.contains("failed output validation"),
         "the surviving reason must be the daemon's fail-fast one, got {reason:?}"
     );
-    assert!(
-        !reason.contains("after script success"),
-        "that reason is the tail's, and it is false: {reason:?}"
-    );
-    let node_failed = events.iter().filter(|e| e["kind"] == "node_failed").count();
-    assert_eq!(
-        node_failed, 1,
-        "exactly one node_failed too. events={events:#?}"
-    );
+    // The run parks AwaitingUser, never Failed.
+    let run: serde_json::Value = reqwest::get(format!("{}/runs/{run_id}", daemon.url()))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(run["status"], "awaiting_user", "run must park, not fail: {run}");
 }

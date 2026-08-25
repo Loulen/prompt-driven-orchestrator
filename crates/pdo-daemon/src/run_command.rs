@@ -91,6 +91,14 @@ enum RunCommand {
     },
     PauseRun,
     ResumeRun,
+    /// The global re-open (ADR-0049, AC8): "re-project + drive the new". Surfaced
+    /// by the Play button in the run-level toolbar. Lifts ANY terminal Run
+    /// (`Completed`/`Skipped`/`Failed`/`Halted`) — and an incident-parked
+    /// `AwaitingUser` — back to `Running` by a safe re-projection that freezes the
+    /// satisfied `(node, iter)` (the scheduler's dedup refuses to re-spawn them,
+    /// anti-#221) and re-drives only the unsatisfied work. Distinct from
+    /// [`RunCommand::RetryAll`] (which archives and forks a NEW run).
+    ReopenRun,
     KillNode {
         node_id: String,
         iter: i64,
@@ -163,6 +171,7 @@ impl RunCommand {
             } => "end_region",
             RunCommand::PauseRun => "pause_run",
             RunCommand::ResumeRun => "resume_run",
+            RunCommand::ReopenRun => "reopen_run",
             RunCommand::KillNode { .. } => "kill_node",
             RunCommand::RestartNode { .. } => "restart_node",
             RunCommand::StartNode { .. } => "start_node",
@@ -239,6 +248,7 @@ fn parse_run_command(req: RunCommandRequest) -> Result<RunCommand, CommandParseE
         }
         "pause_run" => Ok(RunCommand::PauseRun),
         "resume_run" => Ok(RunCommand::ResumeRun),
+        "reopen_run" => Ok(RunCommand::ReopenRun),
         "kill_node" => Ok(RunCommand::KillNode {
             node_id: required(req.node_id, "node_id", "kill_node")?,
             iter: req.iter.unwrap_or(1),
@@ -354,6 +364,22 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 }
             };
             let run_state = event_log::project(&events);
+
+            // AC7 / ADR-0049: completing a node on a terminal (or incident-parked)
+            // Run embeds the re-open — the human's `mark_node_done` re-opens the
+            // Run atomically so the completion lands on a live Run instead of the
+            // guard's "resume the run first" 409.
+            let run_state = match run_state {
+                Some(rs) => match crate::embed_reopen_for_targeted_command(&state, &run_id, rs).await
+                {
+                    Ok(s) => Some(s),
+                    Err(e) => {
+                        return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}"))
+                            .into_response();
+                    }
+                },
+                None => None,
+            };
 
             // Transition guard (#212, #354): validate the completion against the
             // projected state BEFORE any side effect (output validation, append,
@@ -601,11 +627,18 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
             }
 
-            // Continue the run: an exhausted-unrouted region halts the run, so
-            // lift the Halt/Failed back to Running before re-evaluating.
-            if run_state.status == event_log::RunStatus::Halted
-                || run_state.status == event_log::RunStatus::Failed
-            {
+            // Continue the run: an exhausted-unrouted region parks the run
+            // (`AwaitingUser` on an incident since ADR-0049, or the historical
+            // terminal `Halted`/`Failed`), so lift it back to `Running` before
+            // re-evaluating. A targeted command embeds its own re-open (AC7). An
+            // interactive `AwaitingUser` (no incident reason) is left alone —
+            // routing a region never overrides a node's genuine user wait.
+            let needs_reopen = matches!(
+                run_state.status,
+                event_log::RunStatus::Halted | event_log::RunStatus::Failed
+            ) || (run_state.status == event_log::RunStatus::AwaitingUser
+                && run_state.awaiting_reason.is_some());
+            if needs_reopen {
                 let resume_event = event_log::Event {
                     id: None,
                     run_id: run_id.clone(),
@@ -752,6 +785,88 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             info!("resume_run: run {run_id}");
             (StatusCode::OK, Json(summary.into_response_body())).into_response()
         }
+        RunCommand::ReopenRun => {
+            let (_, run_state) = match load_projected(&state, &run_id).await {
+                Ok(v) => v,
+                Err(resp) => return *resp,
+            };
+
+            // Re-openable = any terminal Run, or an incident-parked `AwaitingUser`
+            // (ADR-0049). An interactive `AwaitingUser` (a node genuinely waiting
+            // on its user) and a cleanly `Running`/`Paused` Run are NOT re-opened
+            // here — reopen never overrides a node's user wait, and a live Run
+            // needs no re-projection. Refuse those loudly (ADR-0035 §3 shape).
+            let reopenable = run_state.status.is_terminal()
+                && run_state.status != event_log::RunStatus::Archived
+                || (run_state.status == event_log::RunStatus::AwaitingUser
+                    && run_state.awaiting_reason.is_some());
+            if !reopenable {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({
+                        "error": "not_reopenable",
+                        "message": format!(
+                            "run {run_id} is {:?}: reopen_run only re-opens a terminal \
+                             or incident-parked run",
+                            run_state.status
+                        ),
+                    })),
+                )
+                    .into_response();
+            }
+
+            // The re-open gesture: the projection lifts the Run to `Running`,
+            // freezes satisfied `(node, iter)` and drops interrupted nodes so they
+            // re-drive (anti-#221, ADR-0049). The terminal label stays in the log.
+            let cmd_event = event_log::Event {
+                id: None,
+                run_id: run_id.clone(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::CommandIssued,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({ "command": "reopen_run" })),
+            };
+            if let Err(e) = append_event(&state, &cmd_event).await {
+                return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+            }
+
+            // #316: kill any open shell before the re-drive re-arms the merge.
+            tmux_session_manager::kill(
+                &state.tmux_socket(),
+                &tmux_session_manager::shell_session_name(&run_id),
+            );
+
+            // #408 D5: re-arm a sandboxed Run's container before the scheduler
+            // `docker exec`s into it (same guard as `resume_run`).
+            if !run_state.sandbox.is_off() {
+                let prep = match sandbox_run::context_from_state(&state, &run_state).await {
+                    Ok(ctx) => tokio::task::spawn_blocking(move || sandbox_run::ensure_ready(&ctx))
+                        .await
+                        .unwrap_or_else(|je| {
+                            Err(anyhow::anyhow!("sandbox ensure_ready panicked: {je}"))
+                        }),
+                    Err(e) => Err(e),
+                };
+                if let Err(e) = prep {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({
+                            "error": format!("sandbox container unavailable: {e:#}")
+                        })),
+                    )
+                        .into_response();
+                }
+                if run_state.sandbox_spawn_block().is_some() {
+                    mark_sandbox_prep_ready(&state, &run_id).await;
+                }
+            }
+
+            let summary = re_evaluate_after_command(&state, &run_id).await;
+
+            info!("reopen_run: run {run_id}");
+            (StatusCode::OK, Json(summary.into_response_body())).into_response()
+        }
         RunCommand::KillNode { node_id, iter } => {
             // READ-ONLY, and BEFORE any append: one projection yields both the
             // `repo_root` the snapshot goes under (#470 / ADR-0033 — a Run may
@@ -869,6 +984,20 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 }
             };
             let projected = event_log::project(&events);
+            // AC7 / ADR-0049: a restart on a terminal (or incident-parked) Run
+            // re-opens it atomically (the human's own re-open gesture) before the
+            // guard below sees it — no "resume then restart without a GET" race.
+            let projected = match projected {
+                Some(rs) => match crate::embed_reopen_for_targeted_command(&state, &run_id, rs).await
+                {
+                    Ok(s) => Some(s),
+                    Err(e) => {
+                        return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}"))
+                            .into_response();
+                    }
+                },
+                None => None,
+            };
             let restart_probe = event_log::Event {
                 id: None,
                 run_id: run_id.clone(),
@@ -1202,6 +1331,26 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
             }
 
+            // AC7 / ADR-0049: injecting the artifact a parked node was waiting on
+            // embeds the re-open — if the Run is terminal (or incident-parked),
+            // re-open it and re-drive so the freshly-provided output unblocks the
+            // downstream in one round-trip. A live Run is left to its own tick.
+            if let Some((_, run_state)) = reload_run_state(&state, &run_id).await {
+                let needs_reopen = (run_state.status.is_terminal()
+                    && run_state.status != event_log::RunStatus::Archived)
+                    || (run_state.status == event_log::RunStatus::AwaitingUser
+                        && run_state.awaiting_reason.is_some());
+                if needs_reopen {
+                    if let Err(e) =
+                        crate::embed_reopen_for_targeted_command(&state, &run_id, run_state).await
+                    {
+                        return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}"))
+                            .into_response();
+                    }
+                    re_evaluate_after_command(&state, &run_id).await;
+                }
+            }
+
             info!("inject_artifact: {path} in run {run_id}");
             (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
         }
@@ -1349,6 +1498,11 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 // named. Not carried from the original (no such field is projected from
                 // RunStarted) — same reasoning as the `sandbox_entries` note above.
                 auto_name: Some(true),
+                // ADR-0049: reproduce the original Run's `auto_fail` choice, like
+                // `harness` — `None` (stated none) forwards as `None`, so the retry
+                // resolves through the project / instance tiers exactly as the
+                // original did.
+                auto_fail: run_state.auto_fail,
             };
             let new_run_resp = create_run_core(&state, new_run_req, Vec::new()).await;
 
@@ -1364,6 +1518,9 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
 enum ReEvalTerminal {
     Completed,
     Halted(String),
+    /// An `unrouted` convergence parked the run `AwaitingUser` (ADR-0049) — not
+    /// terminal, but the re-evaluation had nothing left to dispatch this pass.
+    Interrupted(String),
 }
 
 /// The real effect of a post-command re-evaluation (ADR-0025 / #327): which
@@ -1410,6 +1567,9 @@ impl ReEvalSummary {
         let reason = match &self.terminal {
             Some(ReEvalTerminal::Completed) => "run completed".to_string(),
             Some(ReEvalTerminal::Halted(msg)) => format!("run halted: {msg}"),
+            Some(ReEvalTerminal::Interrupted(msg)) => {
+                format!("run interrupted (awaiting user): {msg}")
+            }
             None => {
                 if self.skipped.is_empty() {
                     "no eligible spawn".to_string()
@@ -1601,6 +1761,10 @@ async fn re_evaluate_after_command_inner(state: &AppState, run_id: &str) -> ReEv
                     summary.terminal = Some(ReEvalTerminal::Halted(message));
                     return summary;
                 }
+                ActionOutcome::Interrupted { message } => {
+                    summary.terminal = Some(ReEvalTerminal::Interrupted(message));
+                    return summary;
+                }
             }
         }
     }
@@ -1676,6 +1840,10 @@ async fn re_evaluate_after_command_inner(state: &AppState, run_id: &str) -> ReEv
                     summary.terminal = Some(ReEvalTerminal::Halted(message));
                     return summary;
                 }
+                ActionOutcome::Interrupted { message } => {
+                    summary.terminal = Some(ReEvalTerminal::Interrupted(message));
+                    return summary;
+                }
             }
         }
     }
@@ -1719,6 +1887,10 @@ async fn re_evaluate_after_command_inner(state: &AppState, run_id: &str) -> ReEv
                 }
                 ActionOutcome::Halted { message } => {
                     summary.terminal = Some(ReEvalTerminal::Halted(message));
+                    return summary;
+                }
+                ActionOutcome::Interrupted { message } => {
+                    summary.terminal = Some(ReEvalTerminal::Interrupted(message));
                     return summary;
                 }
             }
@@ -2248,6 +2420,7 @@ mod tests {
                 over: None,
                 pin_harness: None,
                 harnesses: Default::default(),
+                auto_fail: None,
             }],
             edges: vec![EdgeDef {
                 source: EdgeEndpoint {
@@ -2301,6 +2474,7 @@ mod tests {
                 over: None,
                 pin_harness: None,
                 harnesses: Default::default(),
+                auto_fail: None,
             }],
             edges: vec![EdgeDef {
                 source: EdgeEndpoint {

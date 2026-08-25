@@ -1,5 +1,5 @@
 export type RunStatus = "running" | "awaiting_user" | "completed" | "failed" | "skipped" | "halted" | "paused" | "archived";
-export type NodeStatus = "pending" | "running" | "awaiting_user" | "completed" | "failed" | "stopped" | "stale";
+export type NodeStatus = "pending" | "running" | "awaiting_user" | "completed" | "failed" | "stopped" | "stale" | "interrupted";
 
 export function isLiveRun(status: RunStatus): boolean {
   return status === "running" || status === "awaiting_user" || status === "paused";
@@ -729,6 +729,15 @@ export interface RunState {
    * the whole failure signal a user got was a red dot in the Runs list.
    */
   failure_reason?: string | null;
+  /**
+   * Why the Run is parked `awaiting_user` on an INCIDENT (ADR-0049) — a session
+   * death, boot recovery, spawn abort, run-level stall, output-validation miss,
+   * merge conflict or `unrouted` convergence. Distinct from the interactive
+   * `awaiting_user` wait of a node asking its user a question, which carries no
+   * `awaiting_reason`. Cleared by a resume/reopen. Present only while the Run is
+   * `awaiting_user` on an incident.
+   */
+  awaiting_reason?: string | null;
   nodes: Record<string, NodeState>;
   edges: EdgeInfo[];
   node_defs: NodeDefInfo[];

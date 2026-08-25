@@ -5,6 +5,7 @@
 
 pub mod admission;
 mod audit_log;
+mod auto_fail;
 mod blackboard;
 mod boot_recovery;
 pub(crate) mod completion_refusal;
@@ -496,6 +497,13 @@ struct CreateRunRequest {
     /// default — see [`prompt_augmenter::default_auto_name_with`].
     #[serde(default)]
     auto_name: Option<bool>,
+    /// The Run's `auto_fail` preference (ADR-0049) — the `run` tier of `node →
+    /// Run → Projet → instance`. `Option<bool>`: `None` (omitted) means the Run
+    /// states no preference, so a node `pdo fail` resolves through the project /
+    /// instance tiers. Frozen into `RunStarted` at the create chokepoint (same
+    /// immutability as `harness`). A Trigger fire folds its stored value in here.
+    #[serde(default)]
+    auto_fail: Option<bool>,
 }
 
 /// One repo line of a multi-repo create request (#465, ADR-0042/0047).
@@ -607,6 +615,11 @@ struct PatchProjectRequest {
     name: Option<String>,
     #[serde(default, deserialize_with = "deserialize_double_option")]
     harness: Option<Option<String>>,
+    /// The Projet's `auto_fail` (ADR-0049) — same double-`Option` shape as
+    /// `harness`: **absent** leaves it untouched, `null` clears it (states no
+    /// preference), a bool sets it.
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    auto_fail: Option<Option<bool>>,
 }
 
 /// Body of `POST` / `DELETE /projects/{id}/members` — one member path, compared
@@ -4360,6 +4373,14 @@ async fn patch_project(
             return project_list_error();
         }
     }
+    // Same double-`Option` semantics as `harness` (ADR-0049): `Some(None)` clears
+    // the preference, `Some(Some(b))` sets it.
+    if let Some(auto_fail) = req.auto_fail {
+        if let Err(e) = project_store::set_auto_fail(&state.db, &project_id, auto_fail).await {
+            error!("failed to set auto_fail on project {project_id}: {e}");
+            return project_list_error();
+        }
+    }
     match project_store::get(&state.db, &project_id).await {
         Ok(Some(p)) => {
             let _ = state.pipeline_tx.send(serde_json::json!({
@@ -4584,6 +4605,7 @@ pub(crate) async fn append_event_with(
             | event_log::EventKind::NodeAutoCompleted
             | event_log::EventKind::NodeStale
             | event_log::EventKind::NodeFailed
+            | event_log::EventKind::NodeInterrupted
     ) {
         let events = load_events(db, &event.run_id).await?;
         let run_state = event_log::project(&events);
@@ -5352,6 +5374,11 @@ async fn fire_one_trigger(
                 // fire with `auto_name=false` keeps a stable per-id name and the manager
                 // is never told to rename — covers cron AND manual fire in one line.
                 auto_name: Some(trigger.auto_name),
+                // ADR-0049: there is no separate Trigger tier for `auto_fail`
+                // (node → Run → Projet → instance). A trigger fire states no
+                // run-level preference, so a node `pdo fail` resolves through the
+                // project / instance tiers.
+                auto_fail: None,
             };
             let record = match create_run_inner(state, req, Vec::new()).await {
                 Ok(run_id) => trigger_store::FireRecord {
@@ -6548,7 +6575,9 @@ pub(crate) async fn handle_node_completion(
         .await
         {
             // INV-4: a terminal action unwinds the WHOLE driver, not just this loop.
-            ActionOutcome::Completed | ActionOutcome::Halted { .. } => return,
+            ActionOutcome::Completed
+            | ActionOutcome::Halted { .. }
+            | ActionOutcome::Interrupted { .. } => return,
             // Fire-and-forget: the spawn outcome is dropped. `SpawnSkipped` is
             // unreachable under `InternalOnly` (`admit_spawn` always admits).
             ActionOutcome::Spawned { .. }
@@ -6604,7 +6633,9 @@ pub(crate) async fn handle_node_completion(
             )
             .await
             {
-                ActionOutcome::Completed | ActionOutcome::Halted { .. } => return,
+                ActionOutcome::Completed
+            | ActionOutcome::Halted { .. }
+            | ActionOutcome::Interrupted { .. } => return,
                 ActionOutcome::Spawned { .. }
                 | ActionOutcome::Progressed
                 | ActionOutcome::SpawnSkipped { .. } => {}
@@ -6634,7 +6665,9 @@ pub(crate) async fn handle_node_completion(
             )
             .await
             {
-                ActionOutcome::Completed | ActionOutcome::Halted { .. } => return,
+                ActionOutcome::Completed
+            | ActionOutcome::Halted { .. }
+            | ActionOutcome::Interrupted { .. } => return,
                 ActionOutcome::Spawned { .. }
                 | ActionOutcome::Progressed
                 | ActionOutcome::SpawnSkipped { .. } => {}
@@ -6853,12 +6886,15 @@ fn max_event_age_secs(events: &[event_log::Event]) -> Option<i64> {
 /// Reconcile a run that is silently stalled at the **run level** (#214): no
 /// live node, nothing the scheduler can spawn, yet still `Running`. Loads the
 /// pipeline and the real scheduler outputs, runs [`run_stall_reason`], and on a
-/// stall appends a `RunFailed` with the run-level cause. A no-op for runs that
-/// can still make progress (or are already terminal).
+/// stall appends a `RunInterrupted` with the run-level cause — parking the run
+/// `AwaitingUser`, **never `RunFailed`** (ADR-0049: the runtime never declares
+/// forfeit of its own initiative). A no-op for runs that can still make progress
+/// (or are already terminal).
 ///
 /// Called from the periodic stale sweep and from boot recovery — the two paths
 /// where a run can be observed wedged after a node turned terminal with no
-/// downstream to drive (a Failed/Stale entry, a crash before downstream spawn).
+/// downstream to drive (an Interrupted/Failed/Stale entry, a crash before
+/// downstream spawn).
 async fn reconcile_run_level_stall(state: &AppState, run_id: &str) {
     let Some((events, run_state)) = reload_run_state(state, run_id).await else {
         return;
@@ -6892,21 +6928,22 @@ async fn reconcile_run_level_stall(state: &AppState, run_id: &str) {
         return;
     };
 
-    let run_failed = event_log::Event {
+    let run_interrupted = event_log::Event {
         id: None,
         run_id: run_id.to_string(),
         ts: event_log::now_iso(),
-        kind: event_log::EventKind::RunFailed,
+        kind: event_log::EventKind::RunInterrupted,
         node_id: None,
         iter: None,
         payload: Some(serde_json::json!({ "reason": reason })),
     };
-    // Through the guard: if the run turned terminal organically since the
-    // snapshot above, the failure is dropped as a no-op.
-    if let Err(e) = append_event(state, &run_failed).await {
-        error!("reconcile_run_level_stall: failed to fail run {run_id}: {e}");
+    // `RunInterrupted` is inert on an already-terminal run (its reducer gates on
+    // `is_live`), so a run that finished organically since the snapshot above is
+    // left untouched.
+    if let Err(e) = append_event(state, &run_interrupted).await {
+        error!("reconcile_run_level_stall: failed to park run {run_id}: {e}");
     } else {
-        warn!("Run {run_id} reconciled to Failed — {reason}");
+        warn!("Run {run_id} reconciled to AwaitingUser (interrupted) — {reason}");
         // Freed slots: re-drive throttled `waiting` nodes in other runs (#159).
         retry_waiting_nodes(state).await;
     }
@@ -7255,6 +7292,10 @@ async fn parse_multipart_create_run(
     // that path too. `None` when the field is absent — the chokepoint then resolves
     // back-compat by the presence of `name`.
     let mut auto_name: Option<bool> = None;
+    // ADR-0049: an explicit `auto_fail` may ride the multipart create. `None`
+    // when absent — the chokepoint freezes nothing and the Run defers to the
+    // project / instance tiers.
+    let mut auto_fail: Option<bool> = None;
     let mut images = Vec::new();
 
     while let Ok(Some(field)) = multipart.next_field().await {
@@ -7371,6 +7412,16 @@ async fn parse_multipart_create_run(
                     auto_name = stale_detector::parse_bool_setting(&v);
                 }
             }
+            "auto_fail" => {
+                // ADR-0049: an explicit `auto_fail` flag off the multipart form.
+                let v = field
+                    .text()
+                    .await
+                    .map_err(|e| format!("bad field auto_fail: {e}"))?;
+                if !v.is_empty() {
+                    auto_fail = stale_detector::parse_bool_setting(&v);
+                }
+            }
             "images" => {
                 let raw_filename = field.file_name().unwrap_or("image.png").to_string();
                 let data = field
@@ -7409,6 +7460,8 @@ async fn parse_multipart_create_run(
         harness,
         // #338: the explicit auto-naming choice threaded off the multipart form.
         auto_name,
+        // ADR-0049: the explicit auto_fail choice threaded off the multipart form.
+        auto_fail,
     };
     Ok((req, images))
 }
@@ -7904,6 +7957,13 @@ async fn create_run_inner(
         .filter(|s| !s.is_empty())
     {
         run_payload["harness"] = serde_json::json!(h);
+    }
+    // ADR-0049: FREEZE the Run's `auto_fail` choice into `RunStarted`, same
+    // immutability posture as `harness`. Written ONLY when the Run states a
+    // preference, so a Run that states none keeps its payload byte-identical
+    // (absent key → `None` → resolve through the project / instance tiers).
+    if let Some(af) = req.auto_fail {
+        run_payload["auto_fail"] = serde_json::json!(af);
     }
     // Auto-naming autonomy decision (#338, ADR-0015). Resolved ONCE here, at the
     // same chokepoint as the sandbox default, and read FRESH from the DB so a
@@ -8693,6 +8753,27 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
         "default"
     };
 
+    // --- auto_fail default (bool ; built-in default `false`) (ADR-0049) ---
+    // Same discipline as `autocomplete_turn_end`: `effective` comes from the SAME
+    // resolver `resolve_run_auto_fail` consumes for the instance tier, so the
+    // disclosed default cannot drift from what a node `pdo fail` actually gets.
+    let af_stored = cfg.auto_fail.map(|v| v != 0);
+    let af_env = std::env::var(instance_config::AUTO_FAIL_ENV).ok().map(|s| {
+        let t = s.trim();
+        t.eq_ignore_ascii_case("1")
+            || t.eq_ignore_ascii_case("true")
+            || t.eq_ignore_ascii_case("yes")
+            || t.eq_ignore_ascii_case("on")
+    });
+    let af_effective = instance_config::resolve_instance_auto_fail(cfg.auto_fail);
+    let af_source = if af_stored.is_some() {
+        "stored"
+    } else if af_env.is_some() {
+        "env"
+    } else {
+        "default"
+    };
+
     // --- advisory Docker availability probe (#410) ---
     // Folded into `GET /settings` (NOT a settings_field: no stored/env/default tier)
     // so the modal learns the default AND whether Docker can run a sandbox in ONE
@@ -8873,6 +8954,9 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
             dan_env,
             prompt_augmenter::DEFAULT_AUTO_NAME_DEFAULT,
         ),
+        // ADR-0049: the global tier of `auto_fail`. Default `false` — an agent
+        // `pdo fail` parks the run for a human to confirm.
+        "auto_fail": settings_field_bool(af_effective, af_source, af_stored, af_env, false),
         "updated_at": cfg.updated_at,
     }))
 }
@@ -11773,18 +11857,19 @@ async fn spawn_merge_resolver(
             })),
         };
         let _ = append_event(state, &fail_event).await;
-        let run_failed = event_log::Event {
+        // ADR-0049: park `AwaitingUser`, never `RunFailed`.
+        let run_interrupted = event_log::Event {
             id: None,
             run_id: run_id.to_string(),
             ts: event_log::now_iso(),
-            kind: event_log::EventKind::RunFailed,
+            kind: event_log::EventKind::RunInterrupted,
             node_id: None,
             iter: None,
             payload: Some(serde_json::json!({
                 "reason": "merge resolver spawn failed"
             })),
         };
-        let _ = append_event(state, &run_failed).await;
+        let _ = append_event(state, &run_interrupted).await;
 
         return completion_refusal::CompletionRefusal::MergeResolverFailed {
             reason: format!("failed to spawn resolver session: {e}"),
@@ -11824,18 +11909,19 @@ async fn handle_merge_resolver_done(
         };
         let _ = append_event(state, &fail_event).await;
 
-        let run_failed = event_log::Event {
+        // ADR-0049: park `AwaitingUser`, never `RunFailed`.
+        let run_interrupted = event_log::Event {
             id: None,
             run_id: run_id.to_string(),
             ts: event_log::now_iso(),
-            kind: event_log::EventKind::RunFailed,
+            kind: event_log::EventKind::RunInterrupted,
             node_id: None,
             iter: None,
             payload: Some(serde_json::json!({
                 "reason": format!("merge resolution failed: {reason}")
             })),
         };
-        let _ = append_event(state, &run_failed).await;
+        let _ = append_event(state, &run_interrupted).await;
 
         warn!("Merge resolver failed for run {run_id}: {reason}");
         // #490 / ADR-0035: `409` with the slug, not the historical `200`. The
@@ -12400,31 +12486,24 @@ async fn complete_node_iteration(
                     };
                     let _ = append_event(state, &conflict_event).await;
 
-                    // #503 AC5: the node is dead — its agent's `pdo complete` just
-                    // failed terminally and the run is about to be `failed`. Without
-                    // this the node stayed projected `running` for ever, with a live
-                    // tmux session and a UI offering Stop/Retry on it.
-                    let node_failed = event_log::Event {
+                    // #503 AC5 / ADR-0049: the node's `pdo complete` just failed on
+                    // a merge conflict — a runtime give-up, NOT a business failure.
+                    // Mark the node `Interrupted` (not `Failed`): the run parks
+                    // `AwaitingUser` with the reason (derived in `finalize`), never
+                    // `RunFailed`. This still closes the window where the node stayed
+                    // projected `running` for ever with a live session and a UI
+                    // offering Stop/Retry; the worktree with the conflicting work is
+                    // preserved for the human to resolve and reopen.
+                    let node_interrupted = event_log::Event {
                         id: None,
                         run_id: run_id.clone(),
                         ts: event_log::now_iso(),
-                        kind: event_log::EventKind::NodeFailed,
+                        kind: event_log::EventKind::NodeInterrupted,
                         node_id: Some(node_id.clone()),
                         iter: Some(iter),
                         payload: Some(serde_json::json!({ "reason": reason })),
                     };
-                    let _ = append_event(state, &node_failed).await;
-
-                    let run_failed = event_log::Event {
-                        id: None,
-                        run_id: run_id.clone(),
-                        ts: event_log::now_iso(),
-                        kind: event_log::EventKind::RunFailed,
-                        node_id: None,
-                        iter: None,
-                        payload: Some(serde_json::json!({ "reason": reason })),
-                    };
-                    let _ = append_event(state, &run_failed).await;
+                    let _ = append_event(state, &node_interrupted).await;
 
                     warn!("Merge conflict for node {node_id} in run {run_id}: {reason}");
                     reap_dead_node_after_run_failure(
@@ -12477,35 +12556,29 @@ async fn complete_node_iteration(
         // clean tree and passes) is documented in ADR-0017.
         Some("doc-only") | Some("script") => match worktree_has_tracked_changes(&worktree_dir) {
             Ok(true) => {
-                let fail_event = event_log::Event {
+                // ADR-0049: a completion refusal is a runtime give-up, not a
+                // deliberate failure — `Interrupted`, never `Failed`. The run
+                // parks `AwaitingUser` (derived in `finalize`) so the human can
+                // fix the tracked-file violation and reopen.
+                let interrupt_event = event_log::Event {
                     id: None,
                     run_id: run_id.clone(),
                     ts: event_log::now_iso(),
-                    kind: event_log::EventKind::NodeFailed,
+                    kind: event_log::EventKind::NodeInterrupted,
                     node_id: Some(node_id.clone()),
                     iter: Some(iter),
                     payload: Some(serde_json::json!({
-                        "reason": "doc_violated_code_immutability"
+                        "reason": format!(
+                            "doc-only node {node_id} violated code immutability \
+                             (modified tracked files)"
+                        )
                     })),
                 };
-                let _ = append_event(state, &fail_event).await;
-
-                let run_failed = event_log::Event {
-                    id: None,
-                    run_id: run_id.clone(),
-                    ts: event_log::now_iso(),
-                    kind: event_log::EventKind::RunFailed,
-                    node_id: None,
-                    iter: None,
-                    payload: Some(serde_json::json!({
-                        "reason": format!("doc-only node {node_id} violated code immutability")
-                    })),
-                };
-                let _ = append_event(state, &run_failed).await;
+                let _ = append_event(state, &interrupt_event).await;
 
                 warn!("Doc-only node {node_id} modified tracked files in run {run_id}");
-                // Same leak as the merge-conflict path (#503 AC5): this refusal kills
-                // the Run, so the node's session has nothing left to do.
+                // Same leak as the merge-conflict path (#503 AC5): this refusal
+                // parks the Run, so the node's session has nothing left to do.
                 reap_dead_node_after_run_failure(
                     state,
                     &repo_root,
@@ -12621,12 +12694,125 @@ async fn complete_node_iteration(
     CompletionAttempt::Completed
 }
 
+/// Resolve a node's effective `auto_fail` (ADR-0049) — gather all four tiers and
+/// hand them to the pure [`auto_fail::resolve_auto_fail`].
+///
+/// - **node**: the node's `auto_fail:` in the run's (live-snapshot) pipeline;
+/// - **run**: the frozen `RunState::auto_fail`;
+/// - **project**: the Projet owning the run's primary repo (verbatim path);
+/// - **instance**: `stored → env → false`.
+///
+/// Best-effort per tier: a tier that cannot be read (pipeline unparsable, DB
+/// error) is treated as "states no preference" (`None`) / the floor, so the
+/// resolution never fails the request — it only decides whether an agent
+/// `pdo fail` terminalises or parks.
+async fn resolve_run_auto_fail(
+    state: &AppState,
+    run_state: &event_log::RunState,
+    node_id: &str,
+) -> bool {
+    let repo_root = effective_repo_root(state, run_state);
+
+    // node tier: parse the run-scoped pipeline and read this node's `auto_fail`.
+    let node = {
+        let pipeline_path =
+            resolve_run_pipeline_path(&repo_root, &run_state.run_id, &run_state.pipeline_name);
+        std::fs::read_to_string(&pipeline_path)
+            .ok()
+            .and_then(|yaml| pipeline::parse_pipeline(&yaml).ok())
+            .and_then(|parsed| {
+                parsed
+                    .pipeline
+                    .nodes
+                    .iter()
+                    .find(|n| n.id == node_id)
+                    .and_then(|n| n.auto_fail)
+            })
+    };
+
+    // project tier: the Projet owning the run's primary repo (compared verbatim,
+    // like the harness tier). Falls back to the daemon repo root when the run
+    // carries no explicit target (ADR-0033 read-side resolution).
+    let primary_repo = run_state
+        .target_repo
+        .clone()
+        .unwrap_or_else(|| state.repo_root.to_string_lossy().to_string());
+    let project = project_store::auto_fail_for_path(&state.db, &primary_repo)
+        .await
+        .unwrap_or(None);
+
+    // instance tier: stored → env → false.
+    let instance = instance_config::get(&state.db)
+        .await
+        .map(|c| instance_config::resolve_instance_auto_fail(c.auto_fail))
+        .unwrap_or(false);
+
+    auto_fail::resolve_auto_fail(&auto_fail::AutoFailTiers {
+        node,
+        run: run_state.auto_fail,
+        project,
+        instance,
+    })
+}
+
+/// Embed a re-open in a **targeted** human command (AC7 / ADR-0049): retry /
+/// restart / start / complete / inject on a terminal (or incident-parked) Run
+/// re-open it **atomically** — one round-trip, no "resume then act" race, no
+/// re-fail window. This is the human's own gesture re-opening the Run (ADR-0009
+/// amended: a node button never reopens *of the runtime's initiative*, but the
+/// human's targeted command may embed the reopen).
+///
+/// If the Run needs re-opening (terminal & non-archived, or `AwaitingUser` on an
+/// incident), it appends the same `reopen_run` `CommandIssued` the global reopen
+/// uses — lifting the Run to `Running`, freezing satisfied `(node, iter)` and
+/// dropping interrupted nodes so they re-drive (anti-#221) — then returns the
+/// **re-projected** state so the caller's own guard runs against a live Run.
+/// Otherwise (already live, or `Archived`) it returns the state unchanged and the
+/// caller's guard decides. Returns `Err` only on a DB failure.
+pub(crate) async fn embed_reopen_for_targeted_command(
+    state: &AppState,
+    run_id: &str,
+    run_state: event_log::RunState,
+) -> Result<event_log::RunState> {
+    let needs_reopen = (run_state.status.is_terminal()
+        && run_state.status != event_log::RunStatus::Archived)
+        || (run_state.status == event_log::RunStatus::AwaitingUser
+            && run_state.awaiting_reason.is_some());
+    if !needs_reopen {
+        return Ok(run_state);
+    }
+    let cmd_event = event_log::Event {
+        id: None,
+        run_id: run_id.to_string(),
+        ts: event_log::now_iso(),
+        kind: event_log::EventKind::CommandIssued,
+        node_id: None,
+        iter: None,
+        payload: Some(serde_json::json!({ "command": "reopen_run" })),
+    };
+    append_event(state, &cmd_event).await?;
+    let events = load_events(&state.db, run_id).await?;
+    Ok(event_log::project(&events).unwrap_or(run_state))
+}
+
 async fn node_fail(
     State(state): State<Arc<AppState>>,
     AxumPath((run_id, node_id)): AxumPath<(String, String)>,
     Json(req): Json<NodeFailRequest>,
 ) -> Response {
     let iter = req.iter.unwrap_or(1);
+
+    // ADR-0049 / AC5: resolve `auto_fail` (node → Run → Projet → instance)
+    // BEFORE the terminal append, so the tail knows whether this deliberate
+    // agent `pdo fail` terminalises the run (`RunFailed`) or parks it
+    // `AwaitingUser` (`RunInterrupted`) for a human to confirm. The NodeFailed
+    // itself is unconditional — the agent's own iteration genuinely failed.
+    let auto_fail_run = match reload_run_state(&state, &run_id).await {
+        Some((_, rs)) => resolve_run_auto_fail(&state, &rs, &node_id).await,
+        // No projected state (run not found / forgotten): default to the safe
+        // park behaviour; the terminal append below is a no-op anyway.
+        None => false,
+    };
 
     let event = event_log::Event {
         id: None,
@@ -12670,25 +12856,45 @@ async fn node_fail(
             tail_sandbox,
         );
 
-        // Mark the run as failed
-        let run_failed = event_log::Event {
-            id: None,
-            run_id: tail_run.clone(),
-            ts: event_log::now_iso(),
-            kind: event_log::EventKind::RunFailed,
-            node_id: None,
-            iter: None,
-            payload: Some(serde_json::json!({ "reason": reason })),
+        // ADR-0049 / AC5: an agent `pdo fail` terminalises the run to `Failed`
+        // ONLY when `auto_fail` is opted in (node → Run → Projet → instance).
+        // Otherwise it parks the run `AwaitingUser` (`RunInterrupted`), the
+        // human confirms the failure. Only the agent `pdo fail` honours this
+        // opt-in — every runtime give-up parks regardless.
+        let run_event = if auto_fail_run {
+            event_log::Event {
+                id: None,
+                run_id: tail_run.clone(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::RunFailed,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({ "reason": reason })),
+            }
+        } else {
+            event_log::Event {
+                id: None,
+                run_id: tail_run.clone(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::RunInterrupted,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({
+                    "reason": format!("agent pdo fail (awaiting confirmation): {reason}")
+                })),
+            }
         };
-        if let Err(e) = append_event(&tail_state, &run_failed).await {
-            error!("failed to append run_failed: {e}");
+        if let Err(e) = append_event(&tail_state, &run_event).await {
+            error!("failed to append run terminal/park event: {e}");
         }
 
-        // The run failed: its other NodeRun sessions will be reaped, freeing slots.
-        // Re-drive throttled `waiting` nodes in other runs (#159).
+        // Whether failed or parked, the node's session was reaped, freeing a
+        // slot. Re-drive throttled `waiting` nodes in other runs (#159).
         retry_waiting_nodes(&tail_state).await;
 
-        info!("Node {tail_node} failed in run {tail_run}");
+        info!(
+            "Node {tail_node} failed in run {tail_run} (auto_fail={auto_fail_run})"
+        );
     });
     (StatusCode::OK, "ok").into_response()
 }
@@ -12850,6 +13056,15 @@ async fn force_spawn_node(state: &Arc<AppState>, run_id: &str, node_id: &str) ->
             )
                 .into_response();
         }
+    };
+
+    // AC7 / ADR-0049: a Start on a terminal (or incident-parked) Run re-opens it
+    // atomically — the same human-gesture re-open the global `reopen_run` uses —
+    // so the button drives the Run instead of the pre-résilience "resume first"
+    // refusal. Runs before the guards below so they see a live Run.
+    let run_state = match embed_reopen_for_targeted_command(state, run_id, run_state).await {
+        Ok(s) => s,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response(),
     };
 
     if let Some(ns) = run_state.nodes.get(node_id) {
@@ -13161,12 +13376,22 @@ async fn node_retry(
         }
     };
 
-    // Captured BEFORE any invalidation so the retry lands on `current + 1`, not on a
-    // reset-to-1 iteration (the #498 branch-collision trap): the self-invalidation
-    // below removes the node from the projection, so re-deriving the iter afterwards
+    // Captured BEFORE any invalidation OR re-open so the retry lands on
+    // `current + 1`, not on a reset-to-1 iteration (the #498 branch-collision
+    // trap): both the self-invalidation below and the re-open's interrupted-node
+    // drop remove the node from the projection, so re-deriving the iter afterwards
     // would read 1.
     let current_iter = run_state.nodes.get(&node_id).map(|ns| ns.iter).unwrap_or(1);
     let next_iter = current_iter + 1;
+
+    // ── AC7 / ADR-0049: embed the re-open. A retry on a terminal (or
+    //    incident-parked) Run re-opens it atomically here, BEFORE the liveness
+    //    probe below sees it — replacing the pre-résilience "resume the run first"
+    //    409. The human's retry IS the re-open gesture (ADR-0009 amended).
+    let run_state = match embed_reopen_for_targeted_command(&state, &run_id, run_state).await {
+        Ok(s) => s,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response(),
+    };
 
     // ── HEAD PROBE 1 (#487): run-liveness. The FIRST gesture — a refusal here leaves
     //    ZERO side effects (nothing stopped, nothing invalidated). See the doc above
@@ -15387,34 +15612,25 @@ async fn check_output_validation_with_retry(
                 serde_json::json!({ "kind": "frontmatter_mismatch", "violations": details })
             }
         };
-        let fail_event = event_log::Event {
+        // ADR-0049 / AC11: a real output-validation miss is a runtime give-up,
+        // not a business failure — `Interrupted`, never `Failed`. The run parks
+        // `AwaitingUser` with the diagnostic (derived in `finalize`), so a human
+        // can supply the missing output and reopen.
+        let interrupt_event = event_log::Event {
             id: None,
             run_id: run_id.to_string(),
             ts: event_log::now_iso(),
-            kind: event_log::EventKind::NodeFailed,
+            kind: event_log::EventKind::NodeInterrupted,
             node_id: Some(node_id.to_string()),
             iter: Some(iter),
             payload: Some(serde_json::json!({
-                "reason": "script output validation failed",
+                "reason": format!("script node {node_id} failed output validation at iter {iter}"),
                 "detail": detail,
             })),
         };
-        let _ = append_event(state, &fail_event).await;
+        let _ = append_event(state, &interrupt_event).await;
 
-        let run_failed = event_log::Event {
-            id: None,
-            run_id: run_id.to_string(),
-            ts: event_log::now_iso(),
-            kind: event_log::EventKind::RunFailed,
-            node_id: None,
-            iter: None,
-            payload: Some(serde_json::json!({
-                "reason": format!("script node {node_id} failed output validation")
-            })),
-        };
-        let _ = append_event(state, &run_failed).await;
-
-        warn!("script node {node_id} failed output validation in run {run_id} — fail-fast");
+        warn!("script node {node_id} failed output validation in run {run_id} — interrupted");
         return Some(completion_refusal::CompletionRefusal::ScriptValidationFailed { detail });
     }
 
@@ -15441,32 +15657,24 @@ async fn check_output_validation_with_retry(
                 .collect();
 
             if retries >= 1 {
-                let fail_event = event_log::Event {
+                // ADR-0049: the corrective loop is exhausted, but a validation
+                // miss is a runtime give-up — `Interrupted`, never `Failed`. The
+                // run parks `AwaitingUser` (derived in `finalize`).
+                let interrupt_event = event_log::Event {
                     id: None,
                     run_id: run_id.to_string(),
                     ts: event_log::now_iso(),
-                    kind: event_log::EventKind::NodeFailed,
+                    kind: event_log::EventKind::NodeInterrupted,
                     node_id: Some(node_id.to_string()),
                     iter: Some(iter),
                     payload: Some(serde_json::json!({
-                        "reason": "output validation failed",
+                        "reason": format!(
+                            "node {node_id} failed output validation after retry at iter {iter}"
+                        ),
                         "violations": violation_details,
                     })),
                 };
-                let _ = append_event(state, &fail_event).await;
-
-                let run_failed = event_log::Event {
-                    id: None,
-                    run_id: run_id.to_string(),
-                    ts: event_log::now_iso(),
-                    kind: event_log::EventKind::RunFailed,
-                    node_id: None,
-                    iter: None,
-                    payload: Some(serde_json::json!({
-                        "reason": format!("node {node_id} failed output validation after retry")
-                    })),
-                };
-                let _ = append_event(state, &run_failed).await;
+                let _ = append_event(state, &interrupt_event).await;
 
                 warn!("Node {node_id} failed output validation after retry in run {run_id}");
                 Some(
@@ -17169,7 +17377,62 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::OK);
 
-        // The RunFailed append lives in the detached tail (#304) — poll.
+        // ADR-0049 / AC5: with `auto_fail` unset (the default), an agent `pdo fail`
+        // parks the run `AwaitingUser` for a human to confirm — NOT `Failed`. The
+        // node itself is `Failed` (the agent deliberately failed its iteration).
+        // The run-level park append lives in the detached tail (#304) — poll.
+        let run_state = wait_run_status(&state, run_id, event_log::RunStatus::AwaitingUser).await;
+        assert_eq!(
+            run_state.nodes["worker"].status,
+            event_log::NodeStatus::Failed
+        );
+        assert!(
+            run_state.awaiting_reason.is_some(),
+            "the park carries the fail reason as the awaiting reason"
+        );
+    }
+
+    #[tokio::test]
+    async fn node_fail_with_run_auto_fail_terminalises_directly() {
+        // AC5: with `auto_fail` opted in at the Run tier, an agent `pdo fail`
+        // terminalises the run to `Failed` directly (no human confirmation).
+        let state = test_state().await;
+        let run_id = "test-autofail-run";
+        let run_started = event_log::Event {
+            id: None,
+            run_id: run_id.into(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::RunStarted,
+            node_id: None,
+            iter: None,
+            payload: Some(serde_json::json!({ "pipeline_name": "test", "auto_fail": true })),
+        };
+        append_event(&state, &run_started).await.unwrap();
+        let node_started = event_log::Event {
+            id: None,
+            run_id: run_id.into(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::NodeStarted,
+            node_id: Some("worker".into()),
+            iter: Some(1),
+            payload: None,
+        };
+        append_event(&state, &node_started).await.unwrap();
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/nodes/worker/fail"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"reason": "something broke"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
         let run_state = wait_run_status(&state, run_id, event_log::RunStatus::Failed).await;
         assert_eq!(
             run_state.nodes["worker"].status,
@@ -19347,6 +19610,7 @@ mod tests {
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            auto_fail: None,
         }
     }
 
@@ -20003,15 +20267,16 @@ mod tests {
             "precondition: the run is idle past the grace window"
         );
 
-        // The periodic reconcile path must now fail the run loud.
+        // The periodic reconcile path must now park the run loud (ADR-0049:
+        // AwaitingUser, never RunFailed).
         reconcile_run_level_stall(&state, run_id).await;
 
         let events = load_events(&state.db, run_id).await.unwrap();
-        let run_failed = events
+        let run_interrupted = events
             .iter()
-            .find(|e| e.kind == event_log::EventKind::RunFailed)
-            .expect("reconcile must append a RunFailed for the wedged run (#279)");
-        let reason = run_failed
+            .find(|e| e.kind == event_log::EventKind::RunInterrupted)
+            .expect("reconcile must append a RunInterrupted for the wedged run (#279)");
+        let reason = run_interrupted
             .payload
             .as_ref()
             .and_then(|p| p.get("reason"))
@@ -20019,13 +20284,21 @@ mod tests {
             .unwrap_or_default();
         assert!(
             reason.contains("#279): b"),
-            "RunFailed cause {reason:?} must name the undriven node `b` and reference #279"
+            "the park cause {reason:?} must name the undriven node `b` and reference #279"
         );
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::RunFailed),
+            "the runtime never fails a stalled run of its own initiative (ADR-0049)"
+        );
+        let projected = event_log::project(&events).unwrap();
         assert_eq!(
-            event_log::project(&events).unwrap().status,
-            event_log::RunStatus::Failed,
-            "the run must be terminal (Failed), not wedged Running"
+            projected.status,
+            event_log::RunStatus::AwaitingUser,
+            "the run must park AwaitingUser, not wedge Running and not fail"
         );
+        assert_eq!(projected.awaiting_reason.as_deref(), Some(reason));
     }
 
     #[tokio::test]
@@ -23750,9 +24023,11 @@ edges:
     }
 
     #[tokio::test]
-    async fn mark_node_done_accepts_failed_node_with_outputs_after_resume() {
-        // #212: a Failed run accepts no lifecycle event — the recovery flow is
-        // resume_run first, then mark_node_done on the (hand-fixed) failed iter.
+    async fn mark_node_done_on_failed_node_embeds_reopen_and_completes() {
+        // AC7 / ADR-0049 (amends #212): a human `mark_node_done` on a Failed Run
+        // (its failed iter hand-fixed with the required outputs) now EMBEDS the
+        // re-open — one atomic command completes the node instead of the
+        // pre-résilience "resume_run first, then mark" two-step.
         let tmp = tempfile::tempdir().unwrap();
         let pipe_name = "failed-rescue";
         write_pipeline_with_outputs(tmp.path(), pipe_name);
@@ -23774,53 +24049,8 @@ edges:
         std::fs::create_dir_all(&report_dir).unwrap();
         std::fs::write(report_dir.join("output.md"), "# Report\nAll good.").unwrap();
 
-        // While the run is Failed, mark_node_done is rejected with a readable
-        // cause (#197 family: no lifecycle event on a non-running run).
-        let resp = build_router(state.clone())
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/runs/{run_id}/commands"))
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        r#"{"kind": "mark_node_done", "node_id": "worker", "iter": 1}"#,
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::CONFLICT);
-        let body: serde_json::Value = serde_json::from_slice(
-            &axum::body::to_bytes(resp.into_body(), usize::MAX)
-                .await
-                .unwrap(),
-        )
-        .unwrap();
-        // #490 / ADR-0035 §3: `error` is the stable slug, the guard's prose moved
-        // to `message`. That split is the whole point — reading `error` as prose is
-        // what let the client mistake every 409 on this path for `missing_outputs`.
-        assert_eq!(body["error"], "completion_rejected");
-        assert_eq!(body["recoverable"], false);
-        assert!(
-            body["message"].as_str().unwrap().contains("resume"),
-            "rejection should point at resume_run, got {body}"
-        );
-
-        // resume_run lifts the failure...
-        let resp = build_router(state.clone())
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/runs/{run_id}/commands"))
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"kind": "resume_run"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-
-        // ...then the failed iteration is markable.
+        // A SINGLE mark_node_done on the Failed run: it embeds the re-open and
+        // completes the (hand-fixed) failed iteration atomically.
         let resp = build_router(state.clone())
             .oneshot(
                 Request::builder()
@@ -23837,11 +24067,109 @@ edges:
         assert_eq!(resp.status(), StatusCode::OK);
 
         let events = load_events(&state.db, run_id).await.unwrap();
+        // The embedded re-open is in the log, and the previous terminal label is
+        // preserved (AC12).
+        assert!(
+            events.iter().any(|e| e.kind == event_log::EventKind::CommandIssued
+                && e.payload.as_ref().and_then(|p| p.get("command"))
+                    == Some(&serde_json::json!("reopen_run"))),
+            "the mark_node_done must embed a reopen_run CommandIssued"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::RunFailed),
+            "the previous terminal label stays in the log (AC12)"
+        );
         let run_state = event_log::project(&events).unwrap();
         assert_eq!(
             run_state.nodes["worker"].status,
             event_log::NodeStatus::Completed
         );
+    }
+
+    #[tokio::test]
+    async fn reopen_run_lifts_a_terminal_run_and_preserves_the_label() {
+        // AC6/AC8/FP#8: the global reopen_run command lifts a terminal (Completed
+        // here) run back to Running, and the previous terminal label stays in the
+        // event log. Completed nodes are never re-spawned (anti-#221).
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "test-pipe");
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_id = "reopen-completed";
+        seed_run_for_node_control(&state, run_id, "test-pipe").await;
+        seed_node_started(&state, run_id, "worker", 1).await;
+        append_event(
+            &state,
+            &seed_event(
+                run_id,
+                event_log::EventKind::NodeCompleted,
+                Some("worker"),
+                Some(1),
+                None,
+            ),
+        )
+        .await
+        .unwrap();
+        seed_run_terminal(&state, run_id, event_log::EventKind::RunCompleted).await;
+
+        let resp = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/commands"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"kind": "reopen_run"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        let state_after = event_log::project(&events).unwrap();
+        assert_eq!(state_after.status, event_log::RunStatus::Running);
+        // The terminal label is preserved (AC12).
+        assert!(events
+            .iter()
+            .any(|e| e.kind == event_log::EventKind::RunCompleted));
+        // The satisfied node stays Completed — never re-spawned (anti-#221).
+        assert_eq!(
+            state_after.nodes["worker"].status,
+            event_log::NodeStatus::Completed
+        );
+    }
+
+    #[tokio::test]
+    async fn reopen_run_refuses_a_live_run() {
+        // reopen_run is for terminal / incident-parked runs; a cleanly Running run
+        // needs no re-projection and is refused (not_reopenable).
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "test-pipe");
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_id = "reopen-live";
+        seed_run_for_node_control(&state, run_id, "test-pipe").await;
+        seed_node_started(&state, run_id, "worker", 1).await;
+
+        let resp = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/commands"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"kind": "reopen_run"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["error"], "not_reopenable");
     }
 
     // --- Transition guard wiring (#212, closes #195 #196 #197 #198 #201) ---
@@ -23934,10 +24262,15 @@ edges:
 
         boot_recovery::run_boot_recovery(&state).await;
 
-        // After recovery: worker is reconciled to Failed with an explanatory
-        // reason, and no terminal run carries a session-holding node.
+        // After recovery: worker is reconciled to Interrupted (ADR-0049: a
+        // session lost to a daemon restart is an infra incident, not a failure)
+        // with an explanatory reason, and no terminal run carries a
+        // session-holding node.
         let after = event_log::project(&load_events(&state.db, run_id).await.unwrap()).unwrap();
-        assert_eq!(after.nodes["worker"].status, event_log::NodeStatus::Failed);
+        assert_eq!(
+            after.nodes["worker"].status,
+            event_log::NodeStatus::Interrupted
+        );
         let reason = after.nodes["worker"]
             .failure_reason
             .as_deref()
@@ -23958,16 +24291,19 @@ edges:
         );
 
         // Idempotency: a second pass (e.g. another reboot) appends no duplicate
-        // NodeFailed — validate_fail returns NoOp on the already-terminal iter.
+        // NodeInterrupted — validate_interrupt returns NoOp on the already-interrupted iter.
         boot_recovery::run_boot_recovery(&state).await;
         let events = load_events(&state.db, run_id).await.unwrap();
         assert_eq!(
-            count_events(&events, event_log::EventKind::NodeFailed, "worker"),
+            count_events(&events, event_log::EventKind::NodeInterrupted, "worker"),
             1,
-            "boot recovery must be idempotent: exactly one NodeFailed for worker"
+            "boot recovery must be idempotent: exactly one NodeInterrupted for worker"
         );
         let again = event_log::project(&events).unwrap();
-        assert_eq!(again.nodes["worker"].status, event_log::NodeStatus::Failed);
+        assert_eq!(
+            again.nodes["worker"].status,
+            event_log::NodeStatus::Interrupted
+        );
     }
 
     #[tokio::test]
@@ -28263,13 +28599,11 @@ edges: []
     }
 
     #[tokio::test]
-    async fn force_spawn_on_terminal_run_is_rejected_without_orphan_session() {
-        // D4 (#204) orphan-session regression: force-spawning on a terminal run
-        // must be rejected with 409 BEFORE the tmux session is spawned. Pre-fix
-        // the primitive spawned first and the handler returned 200 while the
-        // NodeStarted append was silently rejected — an orphan session + lying
-        // 200. We assert the 409 (only the pre-spawn guard produces it) and that
-        // no NodeStarted event ever landed.
+    async fn force_spawn_on_terminal_run_embeds_reopen() {
+        // AC7 / ADR-0049 (amends #204/#487): the UI Start button on a terminal Run
+        // now EMBEDS the re-open — the human's gesture re-opens the Run atomically
+        // and drives the node, instead of the pre-résilience 409. The re-open is
+        // the human's, never the runtime's (ADR-0009 amended).
         let tmp = tempfile::tempdir().unwrap();
         write_test_pipeline(tmp.path(), "test-pipe");
         let state = test_state_with_dir(tmp.path()).await;
@@ -28278,7 +28612,7 @@ edges: []
         seed_run_terminal(&state, run_id, event_log::EventKind::RunCompleted).await;
 
         let app = build_router(state.clone());
-        let resp = app
+        let _ = app
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -28288,14 +28622,28 @@ edges: []
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::CONFLICT);
 
+        // Regardless of whether the real tmux spawn succeeds in the test env, the
+        // re-open gesture is embedded and the Run is live again — the previous
+        // terminal `RunCompleted` label is preserved (AC12).
         let events = load_events(&state.db, run_id).await.unwrap();
         assert!(
-            !events
+            events.iter().any(|e| e.kind == event_log::EventKind::CommandIssued
+                && e.payload.as_ref().and_then(|p| p.get("command"))
+                    == Some(&serde_json::json!("reopen_run"))),
+            "the Start must embed a reopen_run CommandIssued on a terminal run"
+        );
+        assert!(
+            events
                 .iter()
-                .any(|e| e.kind == event_log::EventKind::NodeStarted),
-            "no NodeStarted may be appended when force-spawn is rejected on a terminal run"
+                .any(|e| e.kind == event_log::EventKind::RunCompleted),
+            "the previous terminal label stays in the log (AC12)"
+        );
+        let projected = event_log::project(&events).unwrap();
+        assert!(
+            projected.status.is_live(),
+            "the Run is live again after the embedded re-open, got {:?}",
+            projected.status
         );
     }
 
@@ -28381,6 +28729,7 @@ edges: []
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            auto_fail: None,
         };
         let pipeline = pipeline::PipelineDef {
             name: "spawn-unit".into(),
@@ -28519,11 +28868,20 @@ edges: []
         );
 
         let events = load_events(&state.db, run_id).await.unwrap();
+        // ADR-0049/0050: a spawn abort before start surfaces as a
+        // `NodeInterrupted` naming the node (never `RunFailed`), which parks the
+        // run `AwaitingUser` — visible and recoverable, never frozen `running`.
         assert!(
-            events
+            events.iter().any(|e| e.kind
+                == event_log::EventKind::NodeInterrupted
+                && e.node_id.as_deref() == Some("worker")),
+            "the spawn abort must surface as a NodeInterrupted naming the node"
+        );
+        assert!(
+            !events
                 .iter()
                 .any(|e| e.kind == event_log::EventKind::RunFailed),
-            "the spawn abort must surface as a RunFailed"
+            "the runtime never fails the run on a spawn abort (ADR-0049)"
         );
         assert!(
             !events
@@ -28536,8 +28894,12 @@ edges: []
             !events
                 .iter()
                 .any(|e| e.kind == event_log::EventKind::NodeFailed),
-            "the abort must NOT be a NodeFailed (it would no-op and wedge the run)"
+            "the abort must NOT be a NodeFailed (infra death is Interrupted, ADR-0049)"
         );
+        // The run projects `AwaitingUser` with the incident reason.
+        let rs = event_log::project(&events).unwrap();
+        assert_eq!(rs.status, event_log::RunStatus::AwaitingUser);
+        assert!(rs.awaiting_reason.is_some());
     }
 
     /// #508 hermetic seam: make `tmux_session_manager::spawn` fail at its very
@@ -28636,42 +28998,37 @@ edges: []
                     && e.node_id.as_deref() == Some("worker")),
             "the after-start path keeps its NodeStarted (the reservation was durable)"
         );
-        // ...and BOTH terminal events follow it.
+        // ...and the node is interrupted (ADR-0049: an infra spawn failure is
+        // `NodeInterrupted`, not `NodeFailed`), never a `RunFailed`.
         assert!(
-            events
-                .iter()
-                .any(|e| e.kind == event_log::EventKind::NodeFailed
-                    && e.node_id.as_deref() == Some("worker")),
-            "a failed tmux spawn on a Running iteration must append NodeFailed"
+            events.iter().any(|e| e.kind
+                == event_log::EventKind::NodeInterrupted
+                && e.node_id.as_deref() == Some("worker")),
+            "a failed tmux spawn on a Running iteration must append NodeInterrupted"
         );
         assert!(
-            events
+            !events
                 .iter()
                 .any(|e| e.kind == event_log::EventKind::RunFailed),
-            "a failed tmux spawn must move the run terminal with RunFailed"
+            "the runtime never fails the run on a tmux spawn failure (ADR-0049)"
         );
 
         let (_, run_state) = reload_run_state(&state, run_id).await.unwrap();
         assert_eq!(
             run_state.status,
-            event_log::RunStatus::Failed,
-            "RunFailed must project a terminal Failed run state"
+            event_log::RunStatus::AwaitingUser,
+            "an interrupted node parks the run AwaitingUser (ADR-0049)"
         );
 
-        for kind in [
-            event_log::EventKind::NodeFailed,
-            event_log::EventKind::RunFailed,
-        ] {
-            let reason = event_reason(&state, run_id, kind.clone()).await;
-            assert!(
-                reason.contains("failed to spawn tmux session"),
-                "{kind:?} cause must name the tmux spawn failure, got {reason:?}"
-            );
-            assert!(
-                !reason.contains("session_died"),
-                "{kind:?} cause must NOT be the false session_died, got {reason:?}"
-            );
-        }
+        let reason = event_reason(&state, run_id, event_log::EventKind::NodeInterrupted).await;
+        assert!(
+            reason.contains("failed to spawn tmux session"),
+            "the interrupt cause must name the tmux spawn failure, got {reason:?}"
+        );
+        assert!(
+            !reason.contains("session_died"),
+            "the interrupt cause must NOT be the false session_died, got {reason:?}"
+        );
     }
 
     /// #508 (fresh sub-worktree → reap): a code-mutating node whose fresh
@@ -28743,24 +29100,23 @@ edges: []
             "the after-start path keeps its NodeStarted"
         );
         assert!(
-            events
-                .iter()
-                .any(|e| e.kind == event_log::EventKind::NodeFailed
-                    && e.node_id.as_deref() == Some("worker")),
-            "a failed tmux spawn on a Running iteration must append NodeFailed"
+            events.iter().any(|e| e.kind
+                == event_log::EventKind::NodeInterrupted
+                && e.node_id.as_deref() == Some("worker")),
+            "a failed tmux spawn on a Running iteration must append NodeInterrupted"
         );
         assert!(
-            events
+            !events
                 .iter()
                 .any(|e| e.kind == event_log::EventKind::RunFailed),
-            "a failed tmux spawn must move the run terminal with RunFailed"
+            "the runtime never fails the run on a tmux spawn failure (ADR-0049)"
         );
         let (_, run_state) = reload_run_state(&state, run_id).await.unwrap();
-        assert_eq!(run_state.status, event_log::RunStatus::Failed);
-        let reason = event_reason(&state, run_id, event_log::EventKind::RunFailed).await;
+        assert_eq!(run_state.status, event_log::RunStatus::AwaitingUser);
+        let reason = event_reason(&state, run_id, event_log::EventKind::NodeInterrupted).await;
         assert!(
             reason.contains("failed to spawn tmux session") && !reason.contains("session_died"),
-            "RunFailed cause must be the true tmux spawn failure, got {reason:?}"
+            "interrupt cause must be the true tmux spawn failure, got {reason:?}"
         );
     }
 
@@ -28815,23 +29171,22 @@ edges: []
             "a failed tmux spawn must return Failed, got {outcome:?}"
         );
 
-        // The run is still failed loud...
+        // The run parks AwaitingUser loud (ADR-0049)...
         let events = load_events(&state.db, run_id).await.unwrap();
         assert!(
-            events
-                .iter()
-                .any(|e| e.kind == event_log::EventKind::NodeFailed
-                    && e.node_id.as_deref() == Some("worker")),
-            "a failed tmux spawn on a Running iteration must append NodeFailed"
+            events.iter().any(|e| e.kind
+                == event_log::EventKind::NodeInterrupted
+                && e.node_id.as_deref() == Some("worker")),
+            "a failed tmux spawn on a Running iteration must append NodeInterrupted"
         );
         assert!(
-            events
+            !events
                 .iter()
                 .any(|e| e.kind == event_log::EventKind::RunFailed),
-            "a failed tmux spawn must move the run terminal with RunFailed"
+            "the runtime never fails the run on a tmux spawn failure (ADR-0049)"
         );
         let (_, run_state) = reload_run_state(&state, run_id).await.unwrap();
-        assert_eq!(run_state.status, event_log::RunStatus::Failed);
+        assert_eq!(run_state.status, event_log::RunStatus::AwaitingUser);
 
         // ...but the REUSED sub-worktree and its branch are UNTOUCHED (the whole
         // point of the gate: a reuse loses nothing).
@@ -29453,11 +29808,13 @@ edges:
     }
 
     #[tokio::test]
-    async fn node_retry_on_terminal_run_refuses_with_zero_side_effects() {
-        // #487 — the production incident (#496). Play on a node of a
-        // Failed Run must refuse 409 "resume the run first" as the FIRST gesture:
-        // no NodeInvalidated (the frozen-`pending` trap), no new NodeStarted, no
-        // session — the criterion is *absence of side effect*, not just the status.
+    async fn node_retry_on_terminal_run_embeds_reopen() {
+        // AC7 / ADR-0049 (amends #487): Play/Retry on a node of a terminal (here
+        // `Failed`) Run now EMBEDS the re-open — the human's own gesture re-opens
+        // the Run atomically and re-drives the node, instead of the pre-résilience
+        // 409 "resume the run first". A node button still never re-opens of the
+        // runtime's own initiative (ADR-0009 amended); the human's retry is the
+        // re-open.
         let tmp = tempfile::tempdir().unwrap();
         let repo_root = tmp.path();
         write_retry_pipeline(repo_root);
@@ -29474,8 +29831,6 @@ edges:
         seed_node_started(&state, run_id, "worker", 1).await;
         seed_run_terminal(&state, run_id, event_log::EventKind::RunFailed).await;
 
-        let before = load_events(&state.db, run_id).await.unwrap();
-
         let app = build_router(state.clone());
         let resp = app
             .oneshot(
@@ -29488,41 +29843,39 @@ edges:
             .await
             .unwrap();
 
-        // Not a 2xx — and specifically the ADR-0035 refusal shape.
-        assert_eq!(resp.status(), StatusCode::CONFLICT);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["error"], "retry_refused");
-        assert_eq!(json["recoverable"], true);
-        assert_eq!(json["session_killed"], false);
+        // A 2xx — the retry was accepted, not refused.
         assert!(
-            json["message"]
-                .as_str()
-                .unwrap()
-                .contains("resume the run first"),
-            "the guard prose must land in `message`: {json}"
+            resp.status().is_success(),
+            "retry must embed the re-open and succeed, got {}",
+            resp.status()
         );
 
-        // Zero side effects: NOTHING was appended by the refused retry.
+        // The re-open gesture is in the log, the Run is live again, and the node
+        // re-spawned at iter 2. The terminal `RunFailed` label is preserved.
         let after = load_events(&state.db, run_id).await.unwrap();
-        assert_eq!(
-            after.len(),
-            before.len(),
-            "a refused retry must append no event at all"
+        assert!(
+            after.iter().any(|e| e.kind == event_log::EventKind::CommandIssued
+                && e.payload.as_ref().and_then(|p| p.get("command"))
+                    == Some(&serde_json::json!("reopen_run"))),
+            "the retry must embed a reopen_run CommandIssued"
         );
         assert!(
-            !after
+            after
                 .iter()
-                .any(|e| e.kind == event_log::EventKind::NodeInvalidated),
-            "a refused retry must not invalidate the node (the frozen-`pending` trap)"
+                .any(|e| e.kind == event_log::EventKind::RunFailed),
+            "the previous terminal label stays in the event log (AC12)"
         );
         assert!(
-            !after
+            after
                 .iter()
                 .any(|e| e.kind == event_log::EventKind::NodeStarted && e.iter == Some(2)),
-            "a refused retry must not start iter 2 (no orphan session)"
+            "the retry re-spawned the node at iter 2 after the embedded re-open"
+        );
+        let projected = event_log::project(&after).unwrap();
+        assert!(
+            projected.status.is_live(),
+            "the Run is live again after the embedded re-open, got {:?}",
+            projected.status
         );
     }
 
@@ -31319,21 +31672,30 @@ edges:
         assert_eq!(body["detail"]["kind"], "missing_outputs");
         assert_eq!(body["detail"]["missing"], serde_json::json!(["out"]));
 
-        // And the terminal events really are already recorded — which is what makes
-        // `recoverable: false` and exit code `4` true rather than decorative.
+        // ADR-0049: the node is interrupted (an output miss is a give-up, not a
+        // failure) and the run parks AwaitingUser — never RunFailed. The refusal
+        // is still non-recoverable (the script agent is gone), so exit code 4
+        // stays meaningful.
         let events = load_events(&state.db, run_id).await.unwrap();
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::RunFailed),
+            "the runtime never fails the run on an output-validation miss (ADR-0049)"
+        );
         assert_eq!(
             events
                 .iter()
-                .filter(|e| e.kind == event_log::EventKind::RunFailed)
+                .filter(|e| e.kind == event_log::EventKind::NodeInterrupted)
                 .count(),
             1
         );
 
-        // The projection now carries the missing port, so the red banner is no
+        // The projection still carries the missing port, so the red banner is no
         // longer a list of nothing.
         let projected = event_log::project(&events).unwrap();
         assert_eq!(projected.nodes["worker"].missing_outputs, vec!["out"]);
+        assert_eq!(projected.status, event_log::RunStatus::AwaitingUser);
     }
 
     /// The first frontmatter mismatch, on **both** routes. Nothing terminal is
@@ -31421,15 +31783,25 @@ edges:
         assert_eq!(body["recoverable"], false);
 
         let events = load_events(&state.db, run_id).await.unwrap();
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::RunFailed),
+            "the runtime never fails the run on a validation miss (ADR-0049)"
+        );
         let projected = event_log::project(&events).unwrap();
+        // ADR-0049: an exhausted validation retry interrupts the node (parking the
+        // run AwaitingUser), it never fails it.
         assert_eq!(
             projected.nodes["worker"].status,
-            event_log::NodeStatus::Failed
+            event_log::NodeStatus::Interrupted
         );
-        assert_eq!(
-            projected.nodes["worker"].failure_reason.as_deref(),
-            Some("output validation failed")
-        );
+        assert_eq!(projected.status, event_log::RunStatus::AwaitingUser);
+        assert!(projected.nodes["worker"]
+            .failure_reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("output validation after retry"));
     }
 
     /// New coverage: no test reached the doc-only immutability arm before #490. It
@@ -31492,13 +31864,26 @@ edges:
             .unwrap()
             .contains("code immutability"));
 
+        // ADR-0049: the refusal parks the run (NodeInterrupted → AwaitingUser),
+        // it never fails it.
         let events = load_events(&state.db, run_id).await.unwrap();
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::RunFailed),
+            "the runtime never fails the run on a completion refusal (ADR-0049)"
+        );
         assert_eq!(
             events
                 .iter()
-                .filter(|e| e.kind == event_log::EventKind::RunFailed)
+                .filter(|e| e.kind == event_log::EventKind::NodeInterrupted
+                    && e.node_id.as_deref() == Some("worker"))
                 .count(),
             1
+        );
+        assert_eq!(
+            event_log::project(&events).unwrap().status,
+            event_log::RunStatus::AwaitingUser
         );
 
         // Route asymmetry, asserted rather than assumed (ADR-0035, accepted limit):
@@ -31633,16 +32018,24 @@ edges:
             );
         }
 
-        // #503 AC5: the node must not stay projected `running` on a dead Run.
+        // #503 AC5 / ADR-0049: the node must not stay projected `running`, but a
+        // merge conflict is a runtime give-up → the node is `Interrupted` and the
+        // run parks `AwaitingUser`, never `Failed`.
         let projected = event_log::project(&events).unwrap();
-        assert_eq!(projected.status, event_log::RunStatus::Failed);
+        assert_eq!(projected.status, event_log::RunStatus::AwaitingUser);
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::RunFailed),
+            "the runtime never fails the run on a merge conflict (ADR-0049)"
+        );
         assert_eq!(
             projected.nodes["impl_b"].status,
-            event_log::NodeStatus::Failed,
-            "the node whose merge-back failed must be Failed, not Running"
+            event_log::NodeStatus::Interrupted,
+            "the node whose merge-back conflicted must be Interrupted, not Running/Failed"
         );
-        // …and the Run must say why, in one field a UI can render.
-        let run_reason = projected.failure_reason.expect("a run failure reason");
+        // …and the Run must say why, in the awaiting-reason field a UI can render.
+        let run_reason = projected.awaiting_reason.expect("an awaiting reason");
         assert!(
             run_reason.contains("merge conflict on impl_b") && run_reason.contains("1 conflicting"),
             "the run's reason must name the node and the blast radius; got {run_reason:?}"

@@ -149,10 +149,16 @@ fn seed_plain(
 
 async fn start_run(daemon: &TestDaemon, pipeline: &str) -> String {
     // #470: the target repo is required at the create boundary (ADR-0033).
+    // ADR-0049: the fail fixture's script wrapper calls `pdo fail`, which now
+    // parks the run `AwaitingUser` by default (a human confirms). This suite
+    // needs a genuinely *terminal* `Failed` run for the shell-eligibility gate,
+    // so it opts into `auto_fail` — the script's `pdo fail` then terminalises
+    // directly. Harmless for the live pipeline (no `pdo fail` is ever called).
     let body = serde_json::json!({
         "pipeline": pipeline,
         "input": "hello",
         "target_repo": daemon.target_repo(),
+        "auto_fail": true,
     });
     let resp = reqwest::Client::new()
         .post(format!("{}/runs", daemon.url()))

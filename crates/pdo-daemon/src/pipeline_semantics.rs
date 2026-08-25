@@ -152,6 +152,12 @@ struct NodeProjection<'a> {
     /// it, so it is absent from `SEMANTIC_FIELDS.node`; it is still a behavioural
     /// field on the parse surface, hence semantic here.
     over: Option<&'a str>,
+    /// Per-node `auto_fail` (ADR-0049). Semantic: it changes whether an agent
+    /// `pdo fail` terminalises the run. `skip_serializing_if` keeps every
+    /// pipeline that states no preference byte-identical to its pre-résilience
+    /// content hash (absent key), so this field flags drift only when set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    auto_fail: Option<bool>,
     inputs: Vec<PortProjection<'a>>,
     outputs: Vec<PortProjection<'a>>,
 }
@@ -170,6 +176,7 @@ impl<'a> NodeProjection<'a> {
             over,
             pin_harness,
             harnesses,
+            auto_fail,
         } = node;
         let _layout = view; // LAYOUT_FIELDS["node"]
         Self {
@@ -181,6 +188,7 @@ impl<'a> NodeProjection<'a> {
             harnesses,
             max_iter: max_iter.as_ref().map(canon_yaml),
             over: over.as_deref(),
+            auto_fail: *auto_fail,
             inputs: inputs.iter().map(PortProjection::of).collect(),
             outputs: outputs.iter().map(PortProjection::of).collect(),
         }

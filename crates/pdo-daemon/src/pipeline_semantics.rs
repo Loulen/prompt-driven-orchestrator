@@ -207,6 +207,9 @@ struct PortProjection<'a> {
     when: Option<serde_json::Value>,
     /// Not emitted by the frontend serializer, but authored text — semantic here.
     description: Option<&'a str>,
+    /// Behavioural (#600): a `required` input drives the reachability auto-skip, so
+    /// two ports that differ only on it are semantically distinct.
+    required: bool,
 }
 
 impl<'a> PortProjection<'a> {
@@ -219,6 +222,7 @@ impl<'a> PortProjection<'a> {
             frontmatter,
             when,
             description,
+            required,
         } = port;
         Self {
             name,
@@ -230,6 +234,7 @@ impl<'a> PortProjection<'a> {
                 .map(|m| m.iter().map(|(k, v)| (k.as_str(), v)).collect()),
             when: when.as_ref().map(canon_yaml),
             description: description.as_deref(),
+            required: *required,
         }
     }
 }

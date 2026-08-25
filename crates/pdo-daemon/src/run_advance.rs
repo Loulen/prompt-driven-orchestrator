@@ -54,7 +54,8 @@ use crate::transition_guard;
 use crate::worktree_ops::worktree_dir_for_run;
 use crate::{
     append_event, effective_repo_root, handle_node_completion, load_events,
-    resolve_run_pipeline_path, resolve_run_variables, retry_waiting_nodes, AppState,
+    resolve_completed_frontmatter, resolve_run_pipeline_path, resolve_run_variables,
+    retry_waiting_nodes, AppState,
 };
 
 /// Advance one Run by a single tick: spawn whatever the scheduler says is ready
@@ -65,6 +66,13 @@ use crate::{
 /// body the inline `spawn_ready_after_event` used to carry; every former call
 /// site reaches it (directly or through the `spawn_ready_after_event` shim).
 pub(crate) async fn advance_run(state: &AppState, run_id: &str) {
+    // #600 / #589: before the readiness sweep, auto-skip any node that has become
+    // structurally unreachable (its required input arrives only on an either/or
+    // branch that was not taken). Otherwise it would sit forever, and the run would
+    // never reach "all expected nodes done". The sweep marks such nodes satisfied
+    // (empty output) and drives their downstream, so `l'aval continue`.
+    sweep_auto_skips(state, run_id).await;
+
     let events = match load_events(&state.db, run_id).await {
         Ok(e) => e,
         Err(e) => {
@@ -145,6 +153,114 @@ pub(crate) async fn advance_run(state: &AppState, run_id: &str) {
         ready.len(),
         loop_seed_actions.len()
     );
+}
+
+/// Auto-skip every node that has become **structurally unreachable** — its
+/// producing branch was not taken, so nothing will ever spawn it (ADR-0011 / #589 /
+/// #600, AC7). Each skipped node is marked satisfied with an empty output (so a
+/// downstream resolver finds a concrete artifact, not a missing file) and its edges
+/// are fired, so the run advances instead of hanging on a node that can never run.
+///
+/// Iterative and bounded: skipping one node can render a downstream either/or dead
+/// in turn, so it loops until a pass finds nothing new, capped at the node count so
+/// a pathological graph can never spin. A no-op on a run that is not live, and on
+/// the overwhelming-majority run with no unreachable node (the scan is a cheap
+/// graph walk).
+async fn sweep_auto_skips(state: &AppState, run_id: &str) {
+    let mut passes = 0usize;
+    loop {
+        let events = match load_events(&state.db, run_id).await {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        let Some(run_state) = event_log::project(&events) else {
+            return;
+        };
+        if run_state.status != event_log::RunStatus::Running
+            && run_state.status != event_log::RunStatus::AwaitingUser
+        {
+            return;
+        }
+
+        let repo_root = effective_repo_root(state, &run_state);
+        let pipeline_path = resolve_run_pipeline_path(&repo_root, run_id, &run_state.pipeline_name);
+        let Ok(yaml) = std::fs::read_to_string(&pipeline_path) else {
+            return;
+        };
+        let Ok(parse_result) = pipeline::parse_pipeline(&yaml) else {
+            return;
+        };
+        let pipeline = parse_result.pipeline;
+
+        // Bound: at most one skip per node over the whole sweep.
+        if passes > pipeline.nodes.len() {
+            return;
+        }
+        passes += 1;
+
+        let resolved_vars = resolve_run_variables(&pipeline, &events);
+        let worktree_dir = worktree_dir_for_run(&repo_root, run_id);
+        let artifacts_dir = worktree_dir.join(".pdo").join("artifacts");
+        let frontmatter_by_node =
+            resolve_completed_frontmatter(&pipeline, &run_state, &artifacts_dir);
+
+        let skips = scheduler::unreachable_nodes(
+            &pipeline,
+            &run_state,
+            &frontmatter_by_node,
+            &resolved_vars,
+        );
+        if skips.is_empty() {
+            return;
+        }
+
+        let no_overrides = std::collections::HashMap::new();
+        let mut skipped_ids = Vec::new();
+        for (node_id, reason) in &skips {
+            // A structurally-unreachable node never started, so it skips at iter 1.
+            let iter = 1;
+            if let Err(e) = crate::node_primitives::write_skip_outputs(
+                &pipeline,
+                node_id,
+                iter,
+                &no_overrides,
+                &artifacts_dir,
+            ) {
+                error!("auto-skip: failed to write outputs for {node_id} in {run_id}: {e}");
+                continue;
+            }
+            let event = event_log::Event {
+                id: None,
+                run_id: run_id.to_string(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeCompleted,
+                node_id: Some(node_id.clone()),
+                iter: Some(iter),
+                payload: Some(serde_json::json!({
+                    "source": "auto_skip_unreachable",
+                    "skipped": true,
+                    "reason": reason,
+                })),
+            };
+            match append_event(state, &event).await {
+                Ok(()) => {
+                    info!("auto-skip: node {node_id} in run {run_id} unreachable — {reason}");
+                    skipped_ids.push(node_id.clone());
+                }
+                Err(e) => error!("auto-skip: failed to append skip for {node_id}: {e}"),
+            }
+        }
+
+        if skipped_ids.is_empty() {
+            return;
+        }
+        // Fire each skipped node's edges so its downstream advances on the empty
+        // output (`l'aval continue`). `fire_edges` re-projects internally, so the
+        // next loop pass sees the updated state and can skip a newly-dead node.
+        for node_id in &skipped_ids {
+            fire_edges(state, run_id, node_id).await;
+        }
+    }
 }
 
 /// Spawn each node in `ready_set` (in the order given) through [`spawn_node`].
@@ -345,6 +461,35 @@ pub(crate) fn evaluate_completion_head(
     }
 }
 
+/// The completion head for a **local skip** (`skip_node`, #600): identical to
+/// [`evaluate_completion_head`] but the guard probe carries the `skipped: true`
+/// marker, so a node that never started is `Allow`ed (a skip legitimately satisfies
+/// a node stuck waiting on an unreachable input) while a genuine duplicate skip
+/// still no-ops and a terminal run still rejects.
+pub(crate) fn evaluate_skip_completion_head(
+    run_state: Option<&event_log::RunState>,
+    run_id: &str,
+    node_id: &str,
+    iter: i64,
+) -> CompletionHead {
+    let probe = event_log::Event {
+        id: None,
+        run_id: run_id.to_string(),
+        ts: String::new(),
+        kind: event_log::EventKind::NodeCompleted,
+        node_id: Some(node_id.to_string()),
+        iter: Some(iter),
+        payload: Some(serde_json::json!({ "skipped": true })),
+    };
+    match transition_guard::validate_transition(run_state, &probe) {
+        transition_guard::Verdict::Reject { reason } => CompletionHead::Reject {
+            reason: reason.to_string(),
+        },
+        transition_guard::Verdict::NoOp { reason } => CompletionHead::NoOp { reason },
+        transition_guard::Verdict::Allow => CompletionHead::Allow,
+    }
+}
+
 /// Reload + re-project, then fire the just-completed producer's outgoing edges
 /// via [`handle_node_completion`].
 ///
@@ -463,6 +608,7 @@ mod tests {
                 frontmatter: None,
                 when: None,
                 description: None,
+                required: false,
             }],
             outputs: vec![Port {
                 name: "out".into(),
@@ -472,6 +618,7 @@ mod tests {
                 frontmatter: None,
                 when: None,
                 description: None,
+                required: false,
             }],
             interactive: false,
             view: None,

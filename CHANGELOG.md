@@ -10,7 +10,7 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## 1.33.0
+## 1.35.0
 
 **Résilience des runs — observabilité & véracité de l'état** (#601, lot 4/4 de la spec #596 ;
 ADR-0025/0035/0037/0038/0049/0050). Aucune migration : le nouveau champ d'état est additif
@@ -46,6 +46,77 @@ clients d'API) :
   `cleanup_run`). `{ "error": … }` partout.
 - **Commande valide mais sans effet → `200 {noop, reason}` honnête** (déjà porté par le socle via la
   porte de complétion partagée ; couvre `skip` d'un nœud déjà terminal).
+
+## 1.34.0
+
+**Résilience des runs — lot 3/4 : débloquer un run coincé sans désamorçage** (#600, spec #596,
+ADR-0011/0025/0038/0049, Sharp tool ADR-0001). Aucune migration, données historiques lisibles :
+les nouveaux champs de projection (`region_max_iter_overrides`, `forced_routes`) se déduisent du log
+append-only et sont **absents du fil** tant qu'aucune commande ne les pose (runs existants sérialisés
+à l'identique) ; le port `required:` et le marqueur `skipped:` sont eux aussi rétro-compatibles.
+
+De nouvelles primitives de pilotage, toutes exposées sur `POST /runs/:id/commands` (l'humain force,
+PDO obéit — Sharp tool) :
+
+- **`set_region_max_iter(region_id, max_iter)`** — relève le plafond d'une région bornée **en vol**,
+  valeur **absolue** (≠ le delta de `bump_region`), **uniforme** pour un cap littéral et un cap `$var`.
+  Le scheduler lit l'override (folded depuis le log) à la place du `max_iter` déclaré, donc la région
+  repart pour N tours sans éditer le YAML ni redémarrer, et l'effet tient après une ré-ouverture.
+- **`force_route(from, target)`** — sortie explicite d'un **node** ou d'une **région** vers une cible,
+  qui **court-circuite les `when:`** des edges. Le lever d'un run bloqué `unrouted` (verdict non-`PASS`,
+  CI verte, MR mergeable) : `force_route <reviewer> -> End` fait atteindre Finalize sans amender le
+  verdict à la main sur tous les iters. Folded depuis le log ⇒ **non re-décidé** par les `when:` au
+  tour suivant ni après une ré-ouverture.
+- **`skip_node(node_id, [iter], [overrides])`** — **skip local** : marque un node satisfait avec un
+  **output vide par défaut** (surchargeable par port via `overrides`), le run **continue** (jamais de
+  `RunSkipped` qui tuerait tout, contrairement à `pdo skip`/#245). Compté satisfait pour la
+  re-projection : une ré-ouverture ne le re-spawn pas.
+- **`overrides` sur `start_node`** (#486) — lance un node avec un **input factice** par port (contenu
+  inline, écrit en artefact), sans attendre l'upstream. Couvre aussi les ports **émergents** (nodes
+  `doc-only`/`code-mutating`/`script` sans `inputs:` déclarés).
+
+Et deux comportements du moteur :
+
+- **Atteignabilité + auto-skip** (#589) — un input `required:` (nouveau champ de port) **structurellement
+  inatteignable** (branche either/or non prise) fait **auto-skip** le node avec une **raison** dans
+  l'event, au lieu de le laisser pendre ; l'aval avance sur l'output vide. Balayage borné (`advance_run`),
+  qui cascade proprement (skip d'un node ⇒ ré-évaluation d'un either/or aval).
+- **Diagnostic `unrouted` enrichi** (AC4) — la raison portée dans `awaiting_reason` **liste les edges
+  candidats**, leur garde (`when:`/`else`), s'ils ont firé, et **la valeur réellement lue** pour chaque
+  champ testé (`verdict=minor_changes` …). Lisible depuis l'état du run, sans `journalctl`.
+## 1.33.0
+
+**Résilience des runs — récupérer un node `Interrupted` & sous-worktree résilient à l'environnement**
+(#599, lot 2/4 de #596, ADR-0049/0050/0045/0036). Aucune migration, données historiques lisibles
+(log append-only ; un Run pré-#599 se ré-attache ou restart comme avant).
+
+Récupération d'un node `Interrupted` par deux mécanismes, déclenchés à la main (ADR-0049 §3) :
+
+- **Ré-attache de session** (optimal) — nouvelle commande **`recover_node`** : reprend la **même**
+  session dans le sous-worktree existant (`claude --continue`), sans relancer le run.
+  **Conditionnée à une capacité déclarée du harnais** (`HarnessDescriptor::can_resume()`, ADR-0045) —
+  la mécanique de reprise (exclusion `script`, réservation d'admission #487 §3, trace `NodeStarted`)
+  est désormais partagée avec `GET …/pane` (`reattach_node_session`).
+- **Repli automatique** — si le harnais ne sait pas reprendre, `recover_node` retombe **tout seul**
+  sur le **restart-avec-artefacts** (décision pure `recovery::choose_recovery`) : un agent frais
+  reçoit les artefacts partiels du node en **input**, jamais réécrits par-dessus. Le préambule du
+  spawn expose la sortie partielle survivante (`## Partial output from an interrupted attempt`) —
+  elle n'est jamais wipe sur un re-spawn de même itération.
+
+Sous-worktree résilient à ce que l'agent a fait à son git (Sharp tool, ADR-0001) :
+
+- **`classify_sub_worktree`** : un worktree à **notre propre chemin** sur une branche nommée
+  ≠ `pdo/sub-*` (l'agent a fait `git checkout -b feature/…`) est désormais **`Reusable`**, plus
+  `Occupied`. `Occupied` reste réservé à « la branche est checkoutée dans un **autre** worktree
+  vivant » (ADR-0050 §3).
+- **Merge-back suit le HEAD réel** du sous-worktree (`node_tip`), plus le **nom** `pdo/sub-*`
+  (ADR-0036 amendé) : le travail commité sur `feature/…` entre dans la branche pipeline au lieu
+  d'être perdu par un « Already up to date » silencieux.
+
+Déjà couverts par le socle #598/#489/#516, confirmés ici : le reap d'une branche `pdo/sub-*`
+survivante avant recréation (fin de #498), et l'**inventaire** d'une opération git interrompue
+(`index.lock`, `MERGE_HEAD`, `rebase-merge/`) dans la réponse du restart **et** le préambule du
+re-spawn — jamais supprimée en aveugle (#516).
 
 ## 1.32.0
 

@@ -531,13 +531,16 @@ pub fn detection_events(
     iter: i64,
 ) -> Vec<event_log::Event> {
     // The session-died cause names the dead tmux session (#213 AC1) so the
-    // failure is self-explanatory in the UI/log.
+    // incident is self-explanatory in the UI/log. Since résilience (ADR-0049)
+    // this is a `NodeInterrupted`, not a `NodeFailed`: "la session est morte,
+    // pas le travail" — the run parks `AwaitingUser` (derived in `finalize`),
+    // never `Failed`, and a human resumes or restarts it.
     let (kind, reason) = match detection {
         Detection::Ok | Detection::TurnEnded => return vec![],
         Detection::SessionDied => {
             let session = crate::tmux_session_manager::node_session_name(run_id, node_id, iter);
             (
-                EventKind::NodeFailed,
+                EventKind::NodeInterrupted,
                 format!("session_died: tmux session {session} no longer exists"),
             )
         }
@@ -1252,7 +1255,9 @@ mod tests {
     fn events_session_died() {
         let events = detection_events(&Detection::SessionDied, "run1", "node1", 1);
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].kind, EventKind::NodeFailed);
+        // ADR-0049: session death is an infra incident → `NodeInterrupted`, not
+        // `NodeFailed`.
+        assert_eq!(events[0].kind, EventKind::NodeInterrupted);
         assert_eq!(events[0].node_id.as_deref(), Some("node1"));
         let payload = events[0].payload.as_ref().unwrap();
         // #213 AC1: the failure cause must name the dead tmux session so an
@@ -1747,7 +1752,8 @@ SwapFree:         204800 kB
         let a = assess(&probes, true);
         assert_eq!(a.detection, Detection::SessionDied);
         assert_eq!(a.events.len(), 1);
-        assert_eq!(a.events[0].kind, EventKind::NodeFailed);
+        // ADR-0049: session death → `NodeInterrupted`, not `NodeFailed`.
+        assert_eq!(a.events[0].kind, EventKind::NodeInterrupted);
         // #234: diagnostics folded into the failure payload AND surfaced for the
         // sweep's structured log.
         assert_eq!(

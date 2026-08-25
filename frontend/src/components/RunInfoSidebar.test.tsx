@@ -97,6 +97,32 @@ describe("RunInfoSidebar", () => {
     expect(screen.queryByTestId("run-failure-reason")).toBeNull();
   });
 
+  // #601 / ADR-0049: an incident-parked run (awaiting_user with a reason) states
+  // WHY it is parked, without the operator reading journalctl.
+  it("states why an incident-parked run is awaiting the user", () => {
+    render(
+      <RunInfoSidebar
+        run={
+          {
+            ...makeRun("awaiting_user"),
+            awaiting_reason: "session_died: tmux session … no longer exists",
+            awaiting_reason_code: "session_died",
+          } as unknown as RunState
+        }
+      />,
+    );
+    const box = screen.getByTestId("run-awaiting-reason");
+    expect(box.textContent).toContain("Interrupted");
+    expect(box.textContent).toContain("no longer exists");
+  });
+
+  it("shows no awaiting box for an interactive wait (no reason)", () => {
+    // An interactive awaiting_user (a node asking its user) carries no incident
+    // reason, so the box must not appear — the two awaiting causes stay distinct.
+    render(<RunInfoSidebar run={makeRun("awaiting_user")} />);
+    expect(screen.queryByTestId("run-awaiting-reason")).toBeNull();
+  });
+
   // #551 (ADR-0046): the frozen Run harness is visible in the panel.
   it("shows the Run's frozen harness when it named one", () => {
     render(

@@ -2453,6 +2453,7 @@ edges:
                 frontmatter: None,
                 when: None,
                 description: None,
+                required: false,
             }],
             outputs: vec![Port {
                 name: "out".into(),
@@ -2462,6 +2463,7 @@ edges:
                 frontmatter: None,
                 when: None,
                 description: None,
+                required: false,
             }],
             interactive: false,
             view: None,
@@ -2469,6 +2471,7 @@ edges:
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            auto_fail: None,
         }
     }
 
@@ -2485,6 +2488,7 @@ edges:
                 frontmatter: None,
                 when: None,
                 description: None,
+                required: false,
             }],
             outputs: vec![Port {
                 name: "merged".into(),
@@ -2494,6 +2498,7 @@ edges:
                 frontmatter: None,
                 when: None,
                 description: None,
+                required: false,
             }],
             interactive: false,
             view: None,
@@ -2501,6 +2506,7 @@ edges:
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            auto_fail: None,
         }
     }
 
@@ -2517,6 +2523,7 @@ edges:
                 frontmatter: None,
                 when: None,
                 description: None,
+                required: false,
             }],
             outputs: vec![Port {
                 name: "out".into(),
@@ -2526,6 +2533,7 @@ edges:
                 frontmatter: None,
                 when: None,
                 description: None,
+                required: false,
             }],
             interactive: false,
             view: None,
@@ -2533,6 +2541,7 @@ edges:
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            auto_fail: None,
         }
     }
 

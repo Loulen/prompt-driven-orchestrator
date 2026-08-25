@@ -353,12 +353,21 @@ pub(crate) fn classify_sub_worktree(
                         sub_worktree_dir.display()
                     ),
                 },
-                // A live worktree on a DIFFERENT named branch. Not ours to reap.
-                Some(other) => SubWorktreeState::Occupied {
-                    detail: format!(
-                        "worktree at {} is checked out on {other}, not {want_ref}",
-                        sub_worktree_dir.display()
-                    ),
+                // A live worktree at OUR path on a DIFFERENT named branch — the
+                // agent ran `git checkout -b feature/…` following a project
+                // git-flow (ADR-0050 §3 / #599). This IS the node's work, so it is
+                // `Reusable`, never `Occupied`: PDO encaisses the agent's git
+                // (Sharp tool, ADR-0001) rather than refusing it. `Occupied` is
+                // reserved for a branch checked out in ANOTHER live worktree
+                // (handled at the top of this function). The merge-back follows the
+                // real HEAD (`node_tip`), not the `pdo/sub-*` name, so the commits
+                // on `feature/…` still land (ADR-0036 amended). `base_moved` is read
+                // against the worktree's actual HEAD here, since that — not the
+                // stale `pdo/sub-*` ref — is what carries the work.
+                Some(_other) => SubWorktreeState::Reusable {
+                    has_work: has_any_change(sub_worktree_dir),
+                    base_moved: !head_descends_from_base(sub_worktree_dir, base_branch),
+                    interrupted_git_ops: interrupted_git_ops_in(sub_worktree_dir),
                 },
             }
         }
@@ -400,6 +409,19 @@ fn base_is_ancestor(repo_root: &std::path::Path, base_branch: &str, sub_ref: &st
     std::process::Command::new("git")
         .args(["merge-base", "--is-ancestor", base_branch, sub_ref])
         .current_dir(repo_root)
+        .output()
+        .is_ok_and(|out| out.status.success())
+}
+
+/// Is the sub-worktree's **actual HEAD** still a descendant of the cut base?
+///
+/// Run inside the worktree so `HEAD` peels to whatever branch the agent switched
+/// it onto (`feature/…`), not the stale `pdo/sub-*` ref. `base_branch` resolves in
+/// a linked worktree — it shares the repo's refs (#599 / ADR-0050 §3).
+fn head_descends_from_base(sub_worktree_dir: &std::path::Path, base_branch: &str) -> bool {
+    std::process::Command::new("git")
+        .args(["merge-base", "--is-ancestor", base_branch, "HEAD"])
+        .current_dir(sub_worktree_dir)
         .output()
         .is_ok_and(|out| out.status.success())
 }
@@ -683,8 +705,17 @@ pub(crate) fn commit_and_merge_sub_worktree_inner(
     let pipeline_tip = rev_parse(pipeline_worktree_dir, "HEAD")?;
     let node_tip = rev_parse(sub_worktree_dir, "HEAD")?;
 
+    // #599 / ADR-0036 (amended): merge the sub-worktree's **real HEAD**
+    // (`node_tip`), NOT the `pdo/sub-*` branch name. When the agent switched its
+    // worktree onto a `feature/…` branch (a project git-flow — ADR-0050 §3), its
+    // commits live on `feature/…` while `pdo/sub-*` stayed behind at the cut base;
+    // merging by name brought that stale tip back ("Already up to date") and
+    // dropped the node's work in silence. `node_tip` is what the adoption/conflict
+    // logic already keys on, so this keeps the two consistent. On the ordinary case
+    // (agent stayed on `pdo/sub-*`) `node_tip` is that branch's tip, so this is
+    // byte-for-byte the old behaviour.
     let output = std::process::Command::new("git")
-        .args(["merge", sub_branch, "--no-edit"])
+        .args(["merge", &node_tip, "--no-edit"])
         .current_dir(pipeline_worktree_dir)
         .output()
         .context("git merge failed")?;
@@ -2142,6 +2173,112 @@ mod tests {
             panic!("expected Occupied, got {state:?}");
         };
         assert!(detail.contains("borrowed"), "{detail}");
+    }
+
+    /// **#599 / ADR-0050 §3.** The agent ran `git checkout -b feature/…` in its
+    /// own sub-worktree, following a project git-flow. The worktree is at OUR
+    /// path, so it is the node's work — `Reusable`, never `Occupied`. Classifying
+    /// it `Occupied` would strand a restart on `sub_worktree_occupied`, refusing
+    /// the agent's own git (the opposite of the Sharp-tool posture, ADR-0001).
+    #[test]
+    fn classify_reuses_a_worktree_the_agent_switched_to_a_feature_branch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (repo, base) = repo_with_pipeline_branch(&tmp, "cls-feature");
+        let dir = sub_worktree_path(&repo, "cls-feature", "impl-1", 1);
+        let branch = sub_worktree_branch("cls-feature", "impl-1", 1);
+        create_sub_worktree(&repo, &dir, &branch, &base).unwrap();
+
+        // The agent branches its own feature off the cut.
+        let out = std::process::Command::new("git")
+            .args(["checkout", "-b", "feature/x"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+
+        let state = classify_sub_worktree(&repo, &dir, &branch, &base);
+        assert!(
+            matches!(state, SubWorktreeState::Reusable { .. }),
+            "a worktree at our path on a feature branch is Reusable, not Occupied; got {state:?}"
+        );
+
+        // Work in flight is still seen (untracked scratch counts).
+        std::fs::write(dir.join("scratch.txt"), "in flight\n").unwrap();
+        let dirty = classify_sub_worktree(&repo, &dir, &branch, &base);
+        assert!(matches!(
+            dirty,
+            SubWorktreeState::Reusable { has_work: true, .. }
+        ));
+
+        // …and `ensure_sub_worktree` reuses it in place, creating nothing and
+        // destroying nothing — the whole point of not calling it `Occupied`.
+        let ensured = ensure_sub_worktree(&repo, &dir, &branch, &base, Some("deadbeef")).unwrap();
+        assert!(
+            !ensured.created,
+            "a feature-branch worktree is reused, not re-cut"
+        );
+        assert!(
+            dir.join("scratch.txt").exists(),
+            "the agent's work must survive"
+        );
+    }
+
+    /// **#599 / ADR-0036 (amended).** The merge-back follows the sub-worktree's
+    /// real HEAD, so work the agent committed on a `feature/…` branch lands in the
+    /// pipeline branch — merging by the `pdo/sub-*` name instead would bring back
+    /// the stale tip ("Already up to date") and drop the work in silence.
+    #[test]
+    fn merge_back_follows_head_when_the_agent_switched_to_a_feature_branch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+
+        let run_id = "test-feature-merge";
+        let wt_dir = repo.join(".pdo/runs").join(run_id).join("worktree");
+        let pipeline_branch = format!("pdo/run-{run_id}");
+        create_worktree(repo, &wt_dir, &pipeline_branch, "HEAD").unwrap();
+
+        let sub_wt = sub_worktree_path(repo, run_id, "impl-1", 1);
+        let sub_branch = sub_worktree_branch(run_id, "impl-1", 1);
+        create_sub_worktree(repo, &sub_wt, &sub_branch, &pipeline_branch).unwrap();
+
+        // The agent branches off and works on feature/x; pdo/sub-* stays behind.
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&sub_wt)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        git(&["checkout", "-b", "feature/x"]);
+        std::fs::write(sub_wt.join("delivered.rs"), "pub fn delivered() {}\n").unwrap();
+
+        let result =
+            commit_and_merge_sub_worktree(&sub_wt, &wt_dir, &sub_branch, "impl-1", 1).unwrap();
+        assert!(matches!(result, MergeResult::Success), "got {result:?}");
+        assert!(
+            wt_dir.join("delivered.rs").exists(),
+            "work committed on feature/x must reach the pipeline worktree — no silent \
+             'Already up to date'"
+        );
+
+        // The fixture really did leave the pdo/sub-* ref behind, or the test would
+        // pass for the wrong reason (merging the name would have worked too).
+        let stale_name_tip = rev_parse(repo, &sub_branch).unwrap();
+        let real_head = rev_parse(&sub_wt, "HEAD").unwrap();
+        assert_ne!(
+            stale_name_tip, real_head,
+            "pdo/sub-* must stay behind feature/x, or this tests nothing"
+        );
     }
 
     /// A non-empty directory git never registered. `worktree add` fails 128 there,

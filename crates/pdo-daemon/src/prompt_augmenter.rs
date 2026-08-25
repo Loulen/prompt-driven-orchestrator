@@ -124,6 +124,13 @@ pub(crate) struct AugmentContext<'a> {
     /// is also moved into `SpawnOutcome::Spawned`. `build_preamble` routes a
     /// differentiated notice from its contents; empty means no notice.
     pub interrupted_git_ops: &'a [String],
+    /// The partial output a previous, INTERRUPTED attempt at this node left on
+    /// disk for this iteration (#599 AC1, ADR-0049). A same-iter re-spawn
+    /// (restart-with-artifacts) never wipes it, so `build_preamble` surfaces it as
+    /// input to build on — never a target to clobber. Borrowed: the owning `Vec`
+    /// is computed by the daemon ([`surviving_partial_outputs`]), so
+    /// `build_preamble` stays pure. Empty on a first spawn and on a clean restart.
+    pub partial_outputs: &'a [std::path::PathBuf],
 }
 
 pub(crate) fn discover_input_images(artifacts_dir: &Path) -> Vec<String> {
@@ -201,40 +208,70 @@ pub(crate) fn resolve_input_paths(ctx: &AugmentContext<'_>) -> Vec<InputResoluti
     inputs
 }
 
+/// The on-disk path a single output port declares, for one iteration. The single
+/// source of truth for output-port path math (shared by [`resolve_output_paths`]
+/// and [`surviving_partial_outputs`]).
+fn output_port_path(
+    node_id: &str,
+    artifacts_dir: &Path,
+    iter: i64,
+    port: &crate::pipeline::Port,
+) -> PathBuf {
+    match port.port_type {
+        PortType::Image | PortType::ImageList => {
+            crate::blackboard::port_dir(artifacts_dir, node_id, iter, &port.name)
+        }
+        PortType::Markdown => {
+            crate::blackboard::artifact_path(artifacts_dir, node_id, iter, &port.name)
+        }
+        // #333: an html port's declared path is its `output.html` file (parallel
+        // to markdown's `output.md`), not the port dir.
+        PortType::Html => {
+            crate::blackboard::artifact_path_html(artifacts_dir, node_id, iter, &port.name)
+        }
+    }
+}
+
 pub(crate) fn resolve_output_paths(ctx: &AugmentContext<'_>) -> Vec<OutputDeclaration> {
     ctx.node
         .outputs
         .iter()
-        .map(|port| {
-            let path = match port.port_type {
-                PortType::Image | PortType::ImageList => crate::blackboard::port_dir(
-                    ctx.artifacts_dir,
-                    &ctx.node.id,
-                    ctx.iter,
-                    &port.name,
-                ),
-                PortType::Markdown => crate::blackboard::artifact_path(
-                    ctx.artifacts_dir,
-                    &ctx.node.id,
-                    ctx.iter,
-                    &port.name,
-                ),
-                // #333: an html port's declared path is its `output.html` file
-                // (parallel to markdown's `output.md`), not the port dir.
-                PortType::Html => crate::blackboard::artifact_path_html(
-                    ctx.artifacts_dir,
-                    &ctx.node.id,
-                    ctx.iter,
-                    &port.name,
-                ),
-            };
-            OutputDeclaration {
-                port_name: port.name.clone(),
-                path,
-                port_type: port.port_type,
-            }
+        .map(|port| OutputDeclaration {
+            port_name: port.name.clone(),
+            path: output_port_path(&ctx.node.id, ctx.artifacts_dir, ctx.iter, port),
+            port_type: port.port_type,
         })
         .collect()
+}
+
+/// The subset of a node's declared output paths that ALREADY hold content on disk
+/// for `iter` — the partial output an interrupted attempt left behind (#599 AC1,
+/// ADR-0049). A same-iter re-spawn (`restart_node` / `recover_node` fallback)
+/// never wipes this output, so the fresh agent must be shown it and told to build
+/// on it, never to clobber it blindly. Empty on a first spawn.
+///
+/// I/O (existence probes), so it is computed by the daemon and fed to
+/// [`AugmentContext::partial_outputs`] — `build_preamble` itself stays pure.
+pub(crate) fn surviving_partial_outputs(
+    node: &NodeDef,
+    artifacts_dir: &Path,
+    iter: i64,
+) -> Vec<PathBuf> {
+    node.outputs
+        .iter()
+        .map(|port| output_port_path(&node.id, artifacts_dir, iter, port))
+        .filter(|path| path_holds_content(path))
+        .collect()
+}
+
+/// Does `path` hold real output? A file with non-whitespace bytes, or a directory
+/// with at least one entry (an image/html port dir). A missing path, or an empty
+/// file/dir, is "no partial output" — the ordinary first-spawn state.
+fn path_holds_content(path: &Path) -> bool {
+    if path.is_dir() {
+        return std::fs::read_dir(path).is_ok_and(|mut e| e.next().is_some());
+    }
+    std::fs::read_to_string(path).is_ok_and(|s| !s.trim().is_empty())
 }
 
 /// Sanitize a port / variable name into an env-var suffix: ASCII-upper-cased,
@@ -580,6 +617,25 @@ pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
         preamble.push('\n');
     }
 
+    // #599 (ADR-0049 AC1): the partial output an INTERRUPTED attempt left behind.
+    // A same-iter re-spawn (restart-with-artifacts) never wipes it, so surface it
+    // to the fresh agent as input-to-build-on — explicitly NOT a target to
+    // clobber. Empty on a first spawn, so this section only appears on a recovery.
+    if !ctx.partial_outputs.is_empty() {
+        preamble.push_str("## Partial output from an interrupted attempt\n\n");
+        preamble.push_str(
+            "A previous attempt at THIS node was interrupted (an infra incident, not a \
+             failure — ADR-0049) and its partial output survived on disk. It is provided \
+             here as **input**: read it first and continue from it. Do **not** blindly \
+             overwrite it or start from scratch — keeping this work is the whole point of \
+             the restart.\n\n",
+        );
+        for path in ctx.partial_outputs {
+            preamble.push_str(&format!("- read `{}`\n", path.display()));
+        }
+        preamble.push('\n');
+    }
+
     // #465 (ADR-0042/0047): secondary repositories. Injected by ABSOLUTE path
     // because a node's sub-worktree does not inherit the snapshot files (they are
     // siblings under the run dir; `.pdo/` is gitignored). The path is identical on
@@ -856,6 +912,30 @@ You manage **run `{run_id}`**.
 - Node IO: `curl {daemon_url}/runs/{run_id}/nodes/<node-id>/io?iter=<N>`
 - Artifact: `curl '{daemon_url}/runs/{run_id}/artifact?path=<relative-path>'`
 
+## Why a run is not advancing — read the reason, never `journalctl`
+
+The runtime never fails a run on its own initiative (ADR-0049): any non-advancement — an
+infra incident (`Interrupted` node), a runtime give-up (stall, output-validation refusal,
+merge conflict), or an `unrouted` region/convergence — parks the run `awaiting_user` and
+records **why** in the run state itself. You never need the daemon's logs to know the cause.
+
+On `curl {daemon_url}/runs/{run_id}` a parked run carries:
+
+- **`awaiting_reason_code`** — a stable machine slug you branch on: `session_died`,
+  `spawn_aborted`, `boot_recovery` (an infra incident on a node); `run_stalled` (nothing
+  schedulable); `unrouted` / `region_exhausted` / `region_ended_unrouted` (routing left no
+  live path — route it with `end_region`/`bump_region` or the exit edge); `merge_conflict`,
+  `merge_resolution_failed`, `script_validation_failed`, `frontmatter_retry_exhausted`,
+  `doc_violated_code_immutability` (a completion give-up); `agent_fail_awaiting` (an agent
+  `pdo fail` awaiting your confirmation).
+- **`awaiting_reason`** — the same cause in prose, for the human.
+
+`awaiting_reason_code` **absent** on an `awaiting_user` run means the wait is *interactive*
+(a node is asking its user a question), not an incident — leave it be. Per node, an
+interrupted node carries the same cause in `nodes.<id>.failure_reason`. Recover with the
+lever the code points to (`restart_node`, `bump_region`/`end_region`, a fix + reopen); the
+targeted commands re-open the run themselves.
+
 ## Available commands
 
 All commands are issued via `POST {daemon_url}/runs/{run_id}/commands` with a JSON body.
@@ -870,7 +950,7 @@ curl -X POST {daemon_url}/runs/{run_id}/commands \
   -d '{{"kind":"bump_region","region_id":"<region-id>","additional_iter":<N>}}'
 ```
 
-**Finding the `region_id`:** it is a key of `loop_states` in `curl {daemon_url}/runs/{run_id}` (the `loop_node_id` of `loop_iter_started` events). Caveat: a region still on its first lap has **no** `loop_states` entry yet — read the pipeline definition's `loops:` block in that case. An unknown `region_id` is rejected with 400 before anything is recorded.
+**Finding the `region_id`:** it is a key of `loop_states` in `curl {daemon_url}/runs/{run_id}` (the `loop_node_id` of `loop_iter_started` events). A bounded region has a `loop_states` entry **from lap 1** (#601), so "no entry" means "no such loop", not "first lap" — an absent key is a genuine miss to read the pipeline definition's `loops:` block for, not a first-lap blind spot. An unknown `region_id` is rejected with 400 before anything is recorded.
 
 The response tells you what actually happened: `{{"ok":true,"spawned":[…]}}` when nodes were re-launched, or `{{"ok":true,"noop":true,"reason":"…"}}` when nothing was eligible yet (e.g. the region's current iteration is still running — the extra laps then apply when it finishes).
 
@@ -1074,6 +1154,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    required: false,
                 }],
                 outputs: vec![Port {
                     name: "plan".into(),
@@ -1083,6 +1164,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    required: false,
                 }],
                 interactive: false,
                 view: None,
@@ -1090,6 +1172,7 @@ mod tests {
                 over: None,
                 pin_harness: None,
                 harnesses: Default::default(),
+                auto_fail: None,
             }],
             edges: vec![],
             loops: Vec::new(),
@@ -1120,6 +1203,7 @@ mod tests {
             secondary_repos: Vec::new(),
             reused_sub_worktree: false,
             interrupted_git_ops: &[],
+            partial_outputs: &[],
         }
     }
 
@@ -1231,6 +1315,56 @@ mod tests {
         );
     }
 
+    /// #599 AC1: a written output artifact is detected as surviving partial work;
+    /// a missing or empty one is not — that is the ordinary first-spawn state.
+    #[test]
+    fn surviving_partial_outputs_sees_written_work_and_ignores_empty() {
+        let pipeline = sample_pipeline();
+        let node = &pipeline.nodes[0]; // planner → markdown output `plan`
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path();
+
+        // Nothing written yet → no partial output (first spawn).
+        assert!(surviving_partial_outputs(node, artifacts, 1).is_empty());
+
+        // A prior attempt wrote its output.md.
+        let out = artifacts.join("planner/iter-1/plan/output.md");
+        std::fs::create_dir_all(out.parent().unwrap()).unwrap();
+        std::fs::write(&out, "partial work\n").unwrap();
+        assert_eq!(surviving_partial_outputs(node, artifacts, 1), vec![out]);
+
+        // An empty file is not partial work.
+        let empty = artifacts.join("planner/iter-2/plan/output.md");
+        std::fs::create_dir_all(empty.parent().unwrap()).unwrap();
+        std::fs::write(&empty, "   \n").unwrap();
+        assert!(surviving_partial_outputs(node, artifacts, 2).is_empty());
+    }
+
+    /// #599 AC1: when partial output survives, the preamble surfaces it as input to
+    /// build on and tells the fresh agent NOT to overwrite it. Absent otherwise.
+    #[test]
+    fn partial_output_section_is_rendered_only_when_partial_output_survives() {
+        let pipeline = sample_pipeline();
+        let node = &pipeline.nodes[0];
+        let vars = HashMap::new();
+
+        // No partial output → no section.
+        let clean = build_preamble(&sample_ctx(&pipeline, node, &vars));
+        assert!(!clean.contains("Partial output from an interrupted attempt"));
+
+        // Partial output present → the section, the path, and the do-not-overwrite.
+        let paths = vec![PathBuf::from(
+            "/repo/.pdo/artifacts/planner/iter-1/plan/output.md",
+        )];
+        let mut ctx = sample_ctx(&pipeline, node, &vars);
+        ctx.partial_outputs = &paths;
+        let preamble = build_preamble(&ctx);
+        assert!(preamble.contains("## Partial output from an interrupted attempt"));
+        assert!(preamble.contains("planner/iter-1/plan/output.md"));
+        assert!(preamble.contains("**not**"));
+        assert!(preamble.contains("**input**"));
+    }
+
     #[test]
     fn script_env_catalogue_is_built_from_the_same_resolution() {
         // #248: a script node's I/O arrives as PDO_* env vars derived from the
@@ -1308,6 +1442,7 @@ mod tests {
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            auto_fail: None,
         });
         pipeline.edges.push(EdgeDef {
             source: EdgeEndpoint {
@@ -1429,6 +1564,7 @@ mod tests {
                 frontmatter: None,
                 when: None,
                 description: None,
+                required: false,
             }],
             outputs: vec![Port {
                 name: "summary".into(),
@@ -1438,6 +1574,7 @@ mod tests {
                 frontmatter: None,
                 when: None,
                 description: None,
+                required: false,
             }],
             interactive: false,
             view: None,
@@ -1445,6 +1582,7 @@ mod tests {
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            auto_fail: None,
         });
         pipeline.edges.push(EdgeDef {
             source: EdgeEndpoint {
@@ -1505,6 +1643,7 @@ mod tests {
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            auto_fail: None,
         });
 
         let node = &pipeline.nodes[1]; // implementer
@@ -1537,6 +1676,7 @@ mod tests {
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            auto_fail: None,
         });
         pipeline.edges.push(EdgeDef {
             source: EdgeEndpoint {
@@ -1583,6 +1723,7 @@ mod tests {
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            auto_fail: None,
         });
         pipeline.edges.push(EdgeDef {
             source: EdgeEndpoint {
@@ -1726,6 +1867,7 @@ mod tests {
                         frontmatter: None,
                         when: None,
                         description: None,
+                        required: false,
                     }],
                     interactive: false,
                     view: None,
@@ -1733,6 +1875,7 @@ mod tests {
                     over: None,
                     pin_harness: None,
                     harnesses: Default::default(),
+                    auto_fail: None,
                 },
                 NodeDef {
                     id: "researcher".into(),
@@ -1747,6 +1890,7 @@ mod tests {
                         frontmatter: None,
                         when: None,
                         description: None,
+                        required: false,
                     }],
                     interactive: false,
                     view: None,
@@ -1754,6 +1898,7 @@ mod tests {
                     over: None,
                     pin_harness: None,
                     harnesses: Default::default(),
+                    auto_fail: None,
                 },
                 NodeDef {
                     id: "implementer".into(),
@@ -1768,6 +1913,7 @@ mod tests {
                             frontmatter: None,
                             when: None,
                             description: None,
+                            required: false,
                         },
                         Port {
                             name: "context".into(),
@@ -1777,6 +1923,7 @@ mod tests {
                             frontmatter: None,
                             when: None,
                             description: None,
+                            required: false,
                         },
                     ],
                     outputs: vec![Port {
@@ -1787,6 +1934,7 @@ mod tests {
                         frontmatter: None,
                         when: None,
                         description: None,
+                        required: false,
                     }],
                     interactive: false,
                     view: None,
@@ -1794,6 +1942,7 @@ mod tests {
                     over: None,
                     pin_harness: None,
                     harnesses: Default::default(),
+                    auto_fail: None,
                 },
             ],
             edges: vec![
@@ -1877,6 +2026,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    required: false,
                 }],
                 outputs: vec![Port {
                     name: "review".into(),
@@ -1896,6 +2046,7 @@ mod tests {
                     ),
                     when: None,
                     description: None,
+                    required: false,
                 }],
                 interactive: false,
                 view: None,
@@ -1903,6 +2054,7 @@ mod tests {
                 over: None,
                 pin_harness: None,
                 harnesses: Default::default(),
+                auto_fail: None,
             }],
             edges: vec![],
             loops: Vec::new(),
@@ -2155,6 +2307,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    required: false,
                 }],
                 interactive: false,
                 view: None,
@@ -2162,6 +2315,7 @@ mod tests {
                 over: None,
                 pin_harness: None,
                 harnesses: Default::default(),
+                auto_fail: None,
             }],
             edges: vec![],
             loops: Vec::new(),
@@ -2206,6 +2360,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    required: false,
                 }],
                 interactive: false,
                 view: None,
@@ -2213,6 +2368,7 @@ mod tests {
                 over: None,
                 pin_harness: None,
                 harnesses: Default::default(),
+                auto_fail: None,
             }],
             edges: vec![],
             loops: Vec::new(),
@@ -2252,6 +2408,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    required: false,
                 }],
                 interactive: false,
                 view: None,
@@ -2259,6 +2416,7 @@ mod tests {
                 over: None,
                 pin_harness: None,
                 harnesses: Default::default(),
+                auto_fail: None,
             }],
             edges: vec![],
             loops: Vec::new(),

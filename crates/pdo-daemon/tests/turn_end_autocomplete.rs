@@ -446,8 +446,9 @@ async fn session_death_is_still_detected() {
         node_status(&daemon.url(), &run_id, NODE_ID)
             .await
             .as_deref(),
-        Some("failed"),
-        "a dead session is still the one verdict of death"
+        Some("interrupted"),
+        "a dead session is still the one verdict of death — but ADR-0049 makes it \
+         `Interrupted` (recoverable), not `Failed`"
     );
     let resp = reqwest::Client::new()
         .get(format!("{}/runs/{run_id}/events", daemon.url()))
@@ -457,7 +458,7 @@ async fn session_death_is_still_detected() {
     let events: Vec<serde_json::Value> = resp.json().await.unwrap();
     let reason = events
         .iter()
-        .find(|e| e["kind"] == "node_failed")
+        .find(|e| e["kind"] == "node_interrupted")
         .and_then(|e| e["payload"]["reason"].as_str())
         .unwrap_or_default()
         .to_string();

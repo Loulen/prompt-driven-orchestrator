@@ -308,6 +308,28 @@ pub(crate) fn bounded_region_reentered_by_edge<'a>(
     })
 }
 
+/// The bounded region a fired `source -> target` edge ENTERS from outside
+/// (#601): `target` is a member, `source` is not. Distinct from
+/// [`bounded_region_reentered_by_edge`] (a member→entry back-edge). The scheduler
+/// uses this to give a bounded region a `loop_states` entry from lap 1 — the
+/// legacy `Loop` node already seeds lap 1 via `seed_pending_loops`, but a region
+/// entered as an ordinary node only gained a loop state on its first *re-entry*
+/// (lap 2+), leaving "region on lap 1" indistinguishable from "no loop at all"
+/// (the caveat ADR-0025 §4 recorded). Mirrors
+/// [`collection_region_entered_by_edge`]. Returns the first matching `bounded`
+/// region.
+pub(crate) fn bounded_region_entered_by_edge<'a>(
+    pipeline: &'a PipelineDef,
+    source: &str,
+    target: &str,
+) -> Option<&'a LoopRegion> {
+    pipeline.loops.iter().find(|r| {
+        r.kind == LoopKind::Bounded
+            && r.members.iter().any(|m| m == target)
+            && !r.members.iter().any(|m| m == source)
+    })
+}
+
 /// The outcome of an exhausted bounded region (ADR-0011 / #148).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ExhaustionOutcome {
@@ -518,6 +540,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    required: false,
                 })
                 .collect(),
             outputs: outputs
@@ -530,6 +553,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    required: false,
                 })
                 .collect(),
             interactive: false,
@@ -538,6 +562,7 @@ mod tests {
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            auto_fail: None,
         }
     }
 

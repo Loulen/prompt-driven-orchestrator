@@ -368,8 +368,11 @@ async fn a_panic_on_a_reused_sub_worktree_destroys_nothing() {
         "a caught spawn panic is a panne, not a success: {body}"
     );
     assert_eq!(body["error"], "spawn_failed", "{body}");
-    assert_eq!(body["run_failed"], true, "{body}");
-    assert_eq!(body["recoverable"], false, "{body}");
+    // ADR-0049: the abort parks the run `AwaitingUser` (via `NodeInterrupted`),
+    // it never fails it — so `run_failed` re-projects to `false` and the
+    // situation is recoverable (reopen re-drives the reused work).
+    assert_eq!(body["run_failed"], false, "{body}");
+    assert_eq!(body["recoverable"], true, "{body}");
     assert_eq!(body["session_killed"], true, "{body}");
 
     // And the whole point: the worktree, its branch and its work are all still here.

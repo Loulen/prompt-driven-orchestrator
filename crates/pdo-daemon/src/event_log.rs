@@ -62,6 +62,19 @@ pub enum EventKind {
     NodeAwaitingUser,
     NodeCompleted,
     NodeFailed,
+    /// An **infra** incident killed the node's session — session death, boot
+    /// recovery, or a spawn-abort on the scheduler path (ADR-0049 / ADR-0050).
+    /// Projects [`NodeStatus::Interrupted`] (non terminal, distinct from
+    /// `NodeFailed`), which lifts the run to `AwaitingUser` with the incident
+    /// reason in [`finalize`]. The runtime **never** turns this into `Failed`;
+    /// only a deliberate `pdo fail` or a human abandon does.
+    ///
+    /// Unlike `NodeFailed`, the guard (`validate_interrupt`) admits it even for
+    /// an iteration that never opened a `NodeStarted` row — a spawn that aborts
+    /// *before* start still names its node and cause (ADR-0050 §1), and the
+    /// projection materialises the node so the incident is visible. Wire form:
+    /// `"node_interrupted"`.
+    NodeInterrupted,
     MergeConflictDetected,
     /// A merge-back conflicted and was resolved **in the node's favour** instead of
     /// failing the Run (#503, ADR-0036): the node's branch had stopped being a
@@ -120,6 +133,17 @@ pub enum EventKind {
     PipelineModified,
     RunCompleted,
     RunFailed,
+    /// The runtime **gave up** on driving the run forward for a reason that is
+    /// **not** a deliberate failure — a run-level stall, an output-validation
+    /// refusal, a merge conflict, or an `unrouted` convergence (ADR-0049). It
+    /// parks the run **`AwaitingUser`** with the reason carried in
+    /// [`RunState::awaiting_reason`], **never `RunFailed`**: a human confirms,
+    /// reopens, or drives it out. **Non terminal** — it never sets
+    /// `completed_at`, and it is inert on an already-terminal run (#221: an
+    /// active give-up must not un-terminalize a run that genuinely finished).
+    /// The run-level twin of [`NodeInterrupted`], for the give-up cases that
+    /// name no single node to interrupt. Wire form: `"run_interrupted"`.
+    RunInterrupted,
     /// Graceful no-op (#245): the run fired but there was legitimately nothing
     /// to do (e.g. an auto-issue selector found its eligible pool emptied
     /// between guard-eval and node-run). A distinct terminal status from
@@ -403,6 +427,15 @@ pub enum NodeStatus {
     Failed,
     Stopped,
     Stale,
+    /// The node's session died on an **infra** incident (session death, boot
+    /// recovery, spawn-abort) — "la session est morte, pas le travail"
+    /// (ADR-0049). **Non terminal** and distinct from `Failed`: the work on
+    /// disk is presumed intact, the run parks `AwaitingUser` (never `Failed`),
+    /// and a human recovers it (resume-in-worktree or restart-with-artefacts).
+    /// Holds no session and cannot progress on its own — a human gesture is
+    /// required to reach `Running` again. `Failed` stays reserved for a
+    /// deliberate `pdo fail` or a human abandon.
+    Interrupted,
 }
 
 impl NodeStatus {
@@ -411,6 +444,8 @@ impl NodeStatus {
     /// `{Running, AwaitingUser}` (an interactive node keeps its tmux session
     /// attachable indefinitely). EXCLUDES `Waiting`: a throttled node is ready
     /// to run but has *not* spawned a session yet, so it holds no slot (#159).
+    /// EXCLUDES `Interrupted`: an infra incident killed the session (ADR-0049),
+    /// so a slot it once held is already freed.
     pub fn holds_session(&self) -> bool {
         matches!(self, NodeStatus::Running | NodeStatus::AwaitingUser)
     }
@@ -422,12 +457,22 @@ impl NodeStatus {
     /// the load-bearing difference from [`holds_session`](Self::holds_session),
     /// which excludes `Waiting`. Collapsing the two would falsely declare a
     /// throttled-but-healthy run stalled (CONTEXT.md, § Réconciliation au
-    /// niveau Run).
+    /// niveau Run). EXCLUDES `Interrupted`: an interrupted node needs a human to
+    /// resume/restart it, so it does NOT keep the run schedulable — instead the
+    /// run parks `AwaitingUser`, derived in [`finalize`].
     pub fn can_progress(&self) -> bool {
         matches!(
             self,
             NodeStatus::Running | NodeStatus::Waiting | NodeStatus::AwaitingUser
         )
+    }
+
+    /// Whether a node in this status was **interrupted by an infra incident**
+    /// (ADR-0049) — the one node status that lifts a `Running` run to
+    /// `AwaitingUser` with a reason (see [`finalize`]), distinct from the
+    /// interactive `AwaitingUser` wait.
+    pub fn is_interrupted(&self) -> bool {
+        matches!(self, NodeStatus::Interrupted)
     }
 }
 
@@ -680,6 +725,28 @@ pub struct RunState {
     /// last time's cause.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure_reason: Option<String>,
+    /// Why the Run is parked **`AwaitingUser` on an incident** (ADR-0049),
+    /// distinct from the interactive `AwaitingUser` wait of a node that asked
+    /// its user a question. Set by a `RunInterrupted` event (run-level give-up)
+    /// or derived in [`finalize`] from an `Interrupted` node's reason; cleared
+    /// by `RunResumed` and by a `reopen_run`/`resume_run` command — a run being
+    /// driven again must not still show last time's incident. `None` for an
+    /// interactive wait (that node's own reason lives on the node), so the two
+    /// awaiting causes stay distinguishable from the run state alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub awaiting_reason: Option<String>,
+    /// The **machine** slug companion of [`awaiting_reason`] (#601): a stable
+    /// snake_case code (`session_died`, `run_stalled`, `unrouted`,
+    /// `region_exhausted`, `spawn_aborted`, `boot_recovery`, a completion-refusal
+    /// slug, …) the manager and UI branch on, next to the human sentence — the
+    /// same slug+prose contract as a refusal body (ADR-0035). Projected from a
+    /// `RunInterrupted` event's `reason_code` payload key, or derived in
+    /// [`finalize`] from an `Interrupted` node's `<code>: <prose>` reason prefix
+    /// (so historical logs without the explicit key still carry a code). Cleared
+    /// with [`awaiting_reason`] on resume / reopen. Every non-advancement thus
+    /// carries a reason that is machine-branchable, not only prose to grep.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub awaiting_reason_code: Option<String>,
     pub nodes: HashMap<String, NodeState>,
     #[serde(default)]
     pub edges: Vec<EdgeInfo>,
@@ -699,6 +766,26 @@ pub struct RunState {
     pub collection_states: HashMap<String, CollectionState>,
     #[serde(default)]
     pub switch_states: HashMap<String, SwitchState>,
+    /// Live loop-region cap overrides folded from `set_region_max_iter` commands
+    /// (ADR-0011 / #600), keyed by region id. An **absolute** cap (last-write-wins),
+    /// consulted by the scheduler in place of the region's declared `max_iter` —
+    /// **uniformly for a literal and a `$var` cap** (FP #1), so an operator can grant
+    /// a stuck bounded region more laps in flight without editing the YAML or
+    /// restarting. Folded from the append-only log, so the raised cap survives a
+    /// `reopen_run` re-projection. Empty for every run that never set one (serialized
+    /// byte-identically), which is every historical run.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub region_max_iter_overrides: HashMap<String, i64>,
+    /// Forced routes folded from `force_route` commands (ADR-0011 / #600), keyed by
+    /// **source** — a node id OR a region id — mapping to the target node id. The
+    /// scheduler spawns the target (or completes, if it is `End`) when the source
+    /// completes, **short-circuiting the source's `when:` edges** — the lever for a
+    /// run wedged `unrouted` because a non-`PASS` verdict reaches no live branch
+    /// (FP #3). Folded from the log, so the forced exit is **not re-decided** by
+    /// `when:` on the next lap or after a reopen (FP #8). Empty (and byte-identical)
+    /// for every run that never forced one.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub forced_routes: HashMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_repo: Option<String>,
     /// Secondary repositories associated with this Run in **read-only** (#465,
@@ -825,6 +912,15 @@ pub struct RunState {
     /// and by the infra sessions (Pipeline Manager, merge resolver).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness: Option<String>,
+    /// The Run's `auto_fail` preference (ADR-0049), **frozen** here from the
+    /// `RunStarted` payload — the **run** tier of
+    /// [`crate::auto_fail::resolve_auto_fail`] (`node → Run → Projet →
+    /// instance`). `None` ⇒ the Run stated no preference (every historical Run,
+    /// and any Run created without an explicit choice — the payload omits the
+    /// key), so a node `pdo fail` resolves through the project/instance tiers.
+    /// Immutable, like [`RunState::harness`]: set once at create, never mutated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_fail: Option<bool>,
     /// Provenance: the id of the Trigger that created this Run, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub triggered_by: Option<String>,
@@ -867,6 +963,8 @@ impl RunState {
             started_at: None,
             completed_at: None,
             failure_reason: None,
+            awaiting_reason: None,
+            awaiting_reason_code: None,
             nodes: HashMap::new(),
             edges: Vec::new(),
             node_defs: Vec::new(),
@@ -877,6 +975,8 @@ impl RunState {
             foreach_states: HashMap::new(),
             collection_states: HashMap::new(),
             switch_states: HashMap::new(),
+            region_max_iter_overrides: HashMap::new(),
+            forced_routes: HashMap::new(),
             target_repo: None,
             target_repos: Vec::new(),
             sandbox: SandboxMode::Off,
@@ -890,6 +990,7 @@ impl RunState {
             source_branch: None,
             fork_sha: None,
             harness: None,
+            auto_fail: None,
             triggered_by: None,
             pipeline_id: None,
             sessions_spawned: 0,
@@ -1024,6 +1125,83 @@ impl RunState {
             )),
         }
     }
+
+    /// The ids of every **open** (not-`done`) region on this Run, across ALL
+    /// region-state kinds (#601). Exhaustive by construction via
+    /// [`RegionStateKind`]: an open region of any kind is the Pipeline Manager's
+    /// domain, never a fail-fast run-level stall — so `run_stall_reason` can defer
+    /// to a *total* predicate here instead of a hand-written per-map disjunction
+    /// that a new region kind could silently escape (the #453 class, where each
+    /// new region type reopened a frozen run reported `stalled = false`).
+    pub(crate) fn open_region_ids(&self) -> Vec<String> {
+        RegionStateKind::ALL
+            .iter()
+            .flat_map(|k| k.open_ids(self))
+            .collect()
+    }
+
+    /// Whether any region of any kind is currently open (#601). See
+    /// [`open_region_ids`](RunState::open_region_ids).
+    pub(crate) fn has_open_region(&self) -> bool {
+        !self.open_region_ids().is_empty()
+    }
+}
+
+/// Every projected region-state map on a [`RunState`] that carries an "open"
+/// (not-yet-`done`) lifecycle (#601). The point of this enum is a **compile-time
+/// exhaustiveness anchor**: the `match` in [`RegionStateKind::open_ids`] has no
+/// wildcard arm, so adding a new region-state map to `RunState` means adding a
+/// variant here — and every consumer that iterates [`RegionStateKind::ALL`]
+/// (notably `run_stall_reason`'s open-region defer) then covers it automatically.
+/// This is the ADR-0035/0037 discipline ("l'invariant remplace l'énumération —
+/// ajouter une variante ne compile plus") applied to region openness, closing the
+/// #453 class where a new region kind fell through to a silent `stalled = false`.
+///
+/// `switch_states` is deliberately **absent**: a switch is a routing *record*
+/// (`SwitchState` has no `done` flag and no open/close lifecycle), not a region
+/// that can hold a run open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RegionStateKind {
+    Loop,
+    ForEach,
+    Collection,
+}
+
+impl RegionStateKind {
+    /// Every variant. A new variant added to the enum must be added here too; the
+    /// `region_state_kind_all_is_total` test asserts this list is complete, and
+    /// [`open_ids`](Self::open_ids)'s wildcard-free `match` fails to compile until
+    /// the variant is classified.
+    pub(crate) const ALL: [RegionStateKind; 3] = [
+        RegionStateKind::Loop,
+        RegionStateKind::ForEach,
+        RegionStateKind::Collection,
+    ];
+
+    /// The ids of the currently-open (not `done`) regions of this kind. Exhaustive
+    /// `match`, NO wildcard — the compile-time anchor of #601.
+    fn open_ids<'a>(self, run: &'a RunState) -> Box<dyn Iterator<Item = String> + 'a> {
+        match self {
+            RegionStateKind::Loop => Box::new(
+                run.loop_states
+                    .values()
+                    .filter(|s| !s.done)
+                    .map(|s| s.loop_node_id.clone()),
+            ),
+            RegionStateKind::ForEach => Box::new(
+                run.foreach_states
+                    .values()
+                    .filter(|s| !s.done)
+                    .map(|s| s.foreach_node_id.clone()),
+            ),
+            RegionStateKind::Collection => Box::new(
+                run.collection_states
+                    .values()
+                    .filter(|s| !s.done)
+                    .map(|s| s.region_id.clone()),
+            ),
+        }
+    }
 }
 
 fn entry_node_ids(edges: &[EdgeInfo], node_defs: &[NodeDefInfo]) -> Vec<String> {
@@ -1087,6 +1265,7 @@ pub(crate) fn project(events: &[Event]) -> Option<RunState> {
             | EventKind::RunRenamed
             | EventKind::RunReposEdited
             | EventKind::RunArchived
+            | EventKind::RunInterrupted
             | EventKind::SandboxPrepStarted
             | EventKind::SandboxPrepReady => apply_run_event(&mut state, event),
 
@@ -1096,6 +1275,7 @@ pub(crate) fn project(events: &[Event]) -> Option<RunState> {
             | EventKind::NodeAutoCompleted
             | EventKind::NodeAwaitingUser
             | EventKind::NodeFailed
+            | EventKind::NodeInterrupted
             | EventKind::NodeStopped
             | EventKind::NodeStale
             | EventKind::NodeInvalidated
@@ -1175,6 +1355,55 @@ fn run_event_reason(event: &Event) -> Option<String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(String::from)
+}
+
+/// Build the payload of a park / give-up event carrying BOTH a machine reason
+/// code and human prose (#601) — the state model's slug+prose contract, mirror
+/// of a refusal body (ADR-0035: `error` slug + `message` prose). `code` is a
+/// stable `snake_case` slug the manager/UI branch on; `reason` is the human
+/// sentence (which, by convention, itself opens with `<code>: …` so a reader
+/// with only the prose still sees the machine token). Used by every producer of
+/// `RunInterrupted` so no non-advancement is prose-only on the wire.
+pub(crate) fn interrupt_payload(code: &str, reason: impl Into<String>) -> serde_json::Value {
+    serde_json::json!({ "reason_code": code, "reason": reason.into() })
+}
+
+/// Extract the machine slug a park/give-up prose reason is prefixed with (#601).
+/// By convention every interrupt reason reads `"<slug>: <prose>"` (e.g.
+/// `"session_died: tmux session … gone"`); the slug is the machine-branchable
+/// code, the whole string stays the human sentence. Returns the slug when the
+/// head before the first `": "` is a non-empty `snake_case` token (lowercase,
+/// digits, `_`) and prose follows — else `None` (an un-prefixed legacy reason
+/// carries no derivable code).
+pub(crate) fn parse_reason_code(reason: &str) -> Option<String> {
+    let (head, rest) = reason.split_once(": ")?;
+    let looks_slug = !head.is_empty()
+        && !rest.trim().is_empty()
+        && head
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+    looks_slug.then(|| head.to_string())
+}
+
+/// The machine `reason_code` of a `RunInterrupted` event (#601): the explicit
+/// `payload["reason_code"]` when present (authoritative), else parsed from the
+/// prose reason's `<code>:` prefix (so historical logs written before the key
+/// existed still surface a code). Mirrors [`run_event_reason`]'s emptiness
+/// handling.
+fn run_event_reason_code(event: &Event) -> Option<String> {
+    let explicit = event
+        .payload
+        .as_ref()
+        .and_then(|p| p.get("reason_code"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    explicit.or_else(|| {
+        run_event_reason(event)
+            .as_deref()
+            .and_then(parse_reason_code)
+    })
 }
 
 fn apply_run_event(state: &mut RunState, event: &Event) {
@@ -1359,6 +1588,11 @@ fn apply_run_event(state: &mut RunState, event: &Event) {
                         state.harness = Some(h.to_string());
                     }
                 }
+                // ADR-0049: the Run's frozen `auto_fail` tier. Absent key ⇒ `None`
+                // (the Run stated no preference — every historical Run).
+                if let Some(af) = payload.get("auto_fail").and_then(|v| v.as_bool()) {
+                    state.auto_fail = Some(af);
+                }
                 if let Some(tb) = payload.get("triggered_by").and_then(|v| v.as_str()) {
                     state.triggered_by = Some(tb.to_string());
                 }
@@ -1464,6 +1698,24 @@ fn apply_run_event(state: &mut RunState, event: &Event) {
             // A Run being driven again must not still display last time's cause
             // (#503) — same rule `NodeStarted` applies to `NodeState::failure_reason`.
             state.failure_reason = None;
+            // An incident park (ADR-0049) clears the same way: a resumed Run is
+            // no longer waiting on that incident.
+            state.awaiting_reason = None;
+            state.awaiting_reason_code = None;
+        }
+        // The runtime gave up on driving the run forward for a non-deliberate
+        // reason (ADR-0049): park it `AwaitingUser` with the reason, NEVER
+        // `Failed`, and never set `completed_at` (it is not terminal). Inert on
+        // an already-terminal run (#221): an active give-up racing a genuine
+        // completion must not un-terminalize it. A live run (Running /
+        // AwaitingUser / Paused) parks; a Paused run parks too so an operator
+        // sees why it will not resume clean.
+        EventKind::RunInterrupted => {
+            if state.status.is_live() {
+                state.status = RunStatus::AwaitingUser;
+                state.awaiting_reason = run_event_reason(event);
+                state.awaiting_reason_code = run_event_reason_code(event);
+            }
         }
         EventKind::RunRenamed => {
             if let Some(ref payload) = event.payload {
@@ -1602,6 +1854,41 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
         }
         EventKind::NodeCompleted | EventKind::NodeAutoCompleted => {
             if let Some(ref node_id) = event.node_id {
+                // #600: a **skip** (`skip_node` / reachability auto-skip) can
+                // complete a node that never started — that is the whole point of
+                // skipping a node stuck waiting on an input that never came. Create
+                // it directly as `Completed`, with no transient session-less
+                // `Running` window for the liveness sweep to flag; it then counts as
+                // satisfied for re-projection (a reopen never re-spawns it, FP #4).
+                let is_skip = event
+                    .payload
+                    .as_ref()
+                    .and_then(|p| p.get("skipped"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                if is_skip && !state.nodes.contains_key(node_id) {
+                    let iter = event.iter.unwrap_or(1);
+                    state.nodes.insert(
+                        node_id.clone(),
+                        NodeState {
+                            node_id: node_id.clone(),
+                            status: NodeStatus::Completed,
+                            iter,
+                            started_at: Some(event.ts.clone()),
+                            completed_at: Some(event.ts.clone()),
+                            failure_reason: None,
+                            iterations: vec![IterationInfo {
+                                iter,
+                                status: NodeStatus::Completed,
+                                started_at: Some(event.ts.clone()),
+                                completed_at: Some(event.ts.clone()),
+                            }],
+                            frontmatter_retries: 0,
+                            frontmatter_violations: Vec::new(),
+                            missing_outputs: Vec::new(),
+                        },
+                    );
+                }
                 if let Some(node) = state.nodes.get_mut(node_id) {
                     node.status = NodeStatus::Completed;
                     node.completed_at = Some(event.ts.clone());
@@ -1676,6 +1963,73 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                         it.status = NodeStatus::Failed;
                         it.completed_at = Some(event.ts.clone());
                     }
+                }
+            }
+        }
+        EventKind::NodeInterrupted => {
+            // An infra incident (ADR-0049). Unlike `NodeFailed` this must be
+            // visible even when the spawn aborted BEFORE `NodeStarted` opened an
+            // iteration (ADR-0050 §1: a spawn abort names its node), so the node
+            // is materialised if absent — with no iteration row, which is the
+            // honest shape of "the session never started".
+            if let Some(ref node_id) = event.node_id {
+                let iter = event.iter.unwrap_or(1);
+                let reason = event
+                    .payload
+                    .as_ref()
+                    .and_then(|p| p.get("reason"))
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
+                let node = state
+                    .nodes
+                    .entry(node_id.clone())
+                    .or_insert_with(|| NodeState {
+                        node_id: node_id.clone(),
+                        status: NodeStatus::Interrupted,
+                        iter,
+                        started_at: None,
+                        completed_at: None,
+                        failure_reason: None,
+                        iterations: Vec::new(),
+                        frontmatter_retries: 0,
+                        frontmatter_violations: Vec::new(),
+                        missing_outputs: Vec::new(),
+                    });
+                // Node-level status derives from the LATEST iteration, mirroring
+                // the `NodeFailed` #196/#212 guard: interrupting an older iter
+                // must not mislabel a node whose newer iteration is still live.
+                if iter >= node.iter {
+                    node.status = NodeStatus::Interrupted;
+                    node.iter = iter;
+                    node.failure_reason = reason;
+                    // Not a green completion: leave `completed_at` untouched.
+                    // Carry the same validation evidence a `NodeFailed` would
+                    // (#490): an output-validation interrupt should render the red
+                    // banner with the missing ports / frontmatter violations, not
+                    // an empty list. Both shapes read, exactly like `NodeFailed`.
+                    if let Some(ref payload) = event.payload {
+                        let detail = payload.get("detail");
+                        if let Some(arr) = payload
+                            .get("violations")
+                            .or_else(|| detail.and_then(|d| d.get("violations")))
+                            .and_then(|v| v.as_array())
+                        {
+                            node.frontmatter_violations = arr.clone();
+                        }
+                        if let Some(arr) = payload
+                            .get("missing")
+                            .or_else(|| detail.and_then(|d| d.get("missing")))
+                            .and_then(|v| v.as_array())
+                        {
+                            node.missing_outputs = arr
+                                .iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect();
+                        }
+                    }
+                }
+                if let Some(it) = node.iterations.iter_mut().find(|i| i.iter == iter) {
+                    it.status = NodeStatus::Interrupted;
                 }
             }
         }
@@ -2083,11 +2437,49 @@ fn apply_pipeline_event(_state: &mut RunState, event: &Event) {
 fn apply_command_event(state: &mut RunState, event: &Event) {
     if let Some(ref payload) = event.payload {
         let cmd = payload.get("command").and_then(|v| v.as_str());
-        if cmd == Some("resume_run")
-            && (state.status == RunStatus::Halted || state.status == RunStatus::Failed)
+        // Re-opening a terminal Run (ADR-0049 / ADR-0032 amended): `terminal ≠
+        // locked`. A human gesture — the global `reopen_run` (Play button), or a
+        // targeted command that embeds its own re-open — lifts ANY terminal Run
+        // back to `Running` by a safe re-projection: the satisfied `(node, iter)`
+        // stay `Completed` (the scheduler's dedup refuses to re-spawn them,
+        // anti-#221), only the unsatisfied work runs. `resume_run` is the
+        // historical name of the same gesture, kept so every replayed log still
+        // re-opens (append-only). Both clear the previous terminal/incident
+        // reason — a Run being driven again must not still show last time's
+        // cause (#503) — while the terminal *label* stays in the event log.
+        //
+        // The set now includes `Completed`/`Skipped` (a finished Run can pick up
+        // a newly-added node, FP #6) — the pre-résilience code lifted only
+        // `Halted`/`Failed`. An `AwaitingUser` incident park is also lifted
+        // clean here.
+        if matches!(cmd, Some("reopen_run") | Some("resume_run"))
+            && matches!(
+                state.status,
+                RunStatus::Halted
+                    | RunStatus::Failed
+                    | RunStatus::Completed
+                    | RunStatus::Skipped
+                    | RunStatus::AwaitingUser
+            )
         {
             state.status = RunStatus::Running;
             state.completed_at = None;
+            state.failure_reason = None;
+            state.awaiting_reason = None;
+            state.awaiting_reason_code = None;
+            // Re-drive the interrupted work (ADR-0049 default: restart with the
+            // partial artefacts, which persist in the sub-worktree). Drop each
+            // `Interrupted` node from the projection — exactly like
+            // `NodeInvalidated` — so the scheduler re-spawns it fresh (its
+            // sub-worktree is reused, feeding the partial work) instead of
+            // leaving it parked; without this, [`finalize`] would re-derive
+            // `AwaitingUser` from the still-interrupted node and the re-open
+            // would not stick. The satisfied `Completed` nodes are untouched, so
+            // the scheduler never re-spawns them (anti-#221). The event log keeps
+            // every `NodeInterrupted` — this only rewinds the *projection*.
+            state
+                .nodes
+                .retain(|_, n| n.status != NodeStatus::Interrupted);
         }
         // #199: `end_region` CLOSES the region — the projection
         // marks its loop state done so the scheduler's region
@@ -2112,6 +2504,43 @@ fn apply_command_event(state: &mut RunState, event: &Event) {
                     .done = true;
             }
         }
+        // #600 / ADR-0011: `set_region_max_iter` raises a bounded region's cap in
+        // flight. Absolute and last-write-wins (unlike `bump_region`, which is
+        // additive) — the operator names the total number of laps they want, not a
+        // delta. The scheduler reads this override in place of the region's declared
+        // `max_iter`, so it lifts a literal cap and a `$var` cap the same way. A
+        // non-positive cap is ignored (a region is never made zero-lap by a stray
+        // command); the source of truth stays the append-only log, so the raise
+        // holds across a reopen re-projection.
+        if cmd == Some("set_region_max_iter") {
+            if let (Some(region_id), Some(n)) = (
+                payload.get("region_id").and_then(|v| v.as_str()),
+                payload.get("max_iter").and_then(|v| v.as_i64()),
+            ) {
+                if n > 0 {
+                    state
+                        .region_max_iter_overrides
+                        .insert(region_id.to_string(), n);
+                }
+            }
+        }
+        // #600 / ADR-0011: `force_route` records an explicit exit from a node or a
+        // region to a target, short-circuiting the source's `when:` edges. Folded
+        // per source (last-write-wins) so the effect is deterministic on every
+        // re-projection — the forced route is NOT re-decided by `when:` on the next
+        // lap or after a reopen (FP #8). Both endpoints are validated against the
+        // pipeline snapshot before the command is appended (the handler), so the
+        // projection trusts the payload.
+        if cmd == Some("force_route") {
+            if let (Some(from), Some(target)) = (
+                payload.get("from").and_then(|v| v.as_str()),
+                payload.get("target").and_then(|v| v.as_str()),
+            ) {
+                state
+                    .forced_routes
+                    .insert(from.to_string(), target.to_string());
+            }
+        }
     }
 }
 
@@ -2132,14 +2561,40 @@ fn finalize(state: &mut RunState) {
         }
     }
 
-    // Derive run-level awaiting_user from node states
+    // Derive run-level awaiting_user from node states. Two causes, one status
+    // (ADR-0049): an *interactive* node genuinely waiting on its user, OR an
+    // *interrupted* node whose infra incident parked the run. Both lift a
+    // `Running` run to `AwaitingUser`; only the incident carries an
+    // `awaiting_reason`, which keeps the two distinguishable from the run state
+    // alone.
     if state.status == RunStatus::Running
         && state
             .nodes
             .values()
-            .any(|n| n.status == NodeStatus::AwaitingUser)
+            .any(|n| n.status == NodeStatus::AwaitingUser || n.status == NodeStatus::Interrupted)
     {
         state.status = RunStatus::AwaitingUser;
+    }
+
+    // Surface the incident reason when the park is caused by an interrupted node
+    // and no run-level `RunInterrupted` already set one. An interactive-only
+    // wait leaves `awaiting_reason` `None` (its prompt is the node's business,
+    // not an incident). Deterministic pick — the lowest node id — so replay is
+    // stable when several nodes interrupted.
+    if state.status == RunStatus::AwaitingUser && state.awaiting_reason.is_none() {
+        if let Some((_, node)) = state
+            .nodes
+            .iter()
+            .filter(|(_, n)| n.status == NodeStatus::Interrupted)
+            .min_by(|a, b| a.0.cmp(b.0))
+        {
+            state.awaiting_reason = node.failure_reason.clone();
+            // #601: carry the machine slug too, derived from the node reason's
+            // `<code>: <prose>` prefix (`session_died`, `spawn_aborted`,
+            // `boot_recovery`, …). A node-level interrupt has no run-level
+            // `reason_code` payload to read, so the prose prefix is the source.
+            state.awaiting_reason_code = node.failure_reason.as_deref().and_then(parse_reason_code);
+        }
     }
 }
 
@@ -3127,6 +3582,324 @@ mod tests {
             "a green node must not carry the violations of the attempt it recovered from"
         );
         assert!(node.missing_outputs.is_empty());
+    }
+
+    // --- résilience: Interrupted / RunInterrupted / reopen (ADR-0049/0050) ------
+
+    fn interrupt_event(node_id: &str, iter: i64, reason: &str) -> Event {
+        Event {
+            id: None,
+            run_id: "run-1".into(),
+            ts: "2026-01-01T00:00:00.000Z".into(),
+            kind: EventKind::NodeInterrupted,
+            node_id: Some(node_id.into()),
+            iter: Some(iter),
+            payload: Some(serde_json::json!({ "reason": reason })),
+        }
+    }
+
+    #[test]
+    fn node_interrupt_parks_the_run_awaiting_user_with_the_reason() {
+        // ADR-0049: session death → NodeInterrupted → finalize lifts a Running run
+        // to AwaitingUser, carrying the incident reason distinctly.
+        let state = project(&[
+            make_event(EventKind::RunStarted, None, None),
+            make_event(EventKind::NodeStarted, Some("worker"), Some(1)),
+            interrupt_event("worker", 1, "session_died: tmux gone"),
+        ])
+        .unwrap();
+        assert_eq!(state.status, RunStatus::AwaitingUser);
+        assert_eq!(state.nodes["worker"].status, NodeStatus::Interrupted);
+        assert_eq!(
+            state.awaiting_reason.as_deref(),
+            Some("session_died: tmux gone")
+        );
+        // Distinct from an interactive wait: that carries no awaiting_reason.
+        assert!(state.failure_reason.is_none());
+    }
+
+    #[test]
+    fn node_interrupt_before_start_materialises_the_node() {
+        // ADR-0050 §1: a spawn abort BEFORE NodeStarted still names its node; the
+        // projection materialises it Interrupted (no iteration row) so the run
+        // parks visibly instead of freezing `running`.
+        let state = project(&[
+            make_event(EventKind::RunStarted, None, None),
+            interrupt_event("worker", 1, "failed to ensure sub-worktree"),
+        ])
+        .unwrap();
+        assert_eq!(state.status, RunStatus::AwaitingUser);
+        assert_eq!(state.nodes["worker"].status, NodeStatus::Interrupted);
+        assert!(state.nodes["worker"].iterations.is_empty());
+    }
+
+    #[test]
+    fn run_interrupted_parks_a_live_run_and_is_inert_on_a_terminal_one() {
+        // A run-level give-up (stall / unrouted / merge) parks AwaitingUser…
+        let parked = project(&[
+            make_event(EventKind::RunStarted, None, None),
+            make_event_with_payload(
+                EventKind::RunInterrupted,
+                None,
+                serde_json::json!({ "reason": "run_stalled: nothing schedulable" }),
+            ),
+        ])
+        .unwrap();
+        assert_eq!(parked.status, RunStatus::AwaitingUser);
+        assert_eq!(
+            parked.awaiting_reason.as_deref(),
+            Some("run_stalled: nothing schedulable")
+        );
+
+        // …but a RunInterrupted racing a genuine completion must NOT un-terminalize
+        // it (#221): inert on an already-terminal run.
+        let completed = project(&[
+            make_event(EventKind::RunStarted, None, None),
+            make_event(EventKind::RunCompleted, None, None),
+            make_event_with_payload(
+                EventKind::RunInterrupted,
+                None,
+                serde_json::json!({ "reason": "late" }),
+            ),
+        ])
+        .unwrap();
+        assert_eq!(completed.status, RunStatus::Completed);
+        assert!(completed.awaiting_reason.is_none());
+    }
+
+    // --- #601: machine reason code (slug) alongside the prose ------------------
+
+    #[test]
+    fn run_interrupted_carries_the_explicit_reason_code() {
+        // A run-level give-up now writes reason_code + reason; both project.
+        let state = project(&[
+            make_event(EventKind::RunStarted, None, None),
+            make_event_with_payload(
+                EventKind::RunInterrupted,
+                None,
+                interrupt_payload("unrouted", "unrouted: no live branch reaches End"),
+            ),
+        ])
+        .unwrap();
+        assert_eq!(state.status, RunStatus::AwaitingUser);
+        assert_eq!(state.awaiting_reason_code.as_deref(), Some("unrouted"));
+        assert_eq!(
+            state.awaiting_reason.as_deref(),
+            Some("unrouted: no live branch reaches End")
+        );
+    }
+
+    #[test]
+    fn run_interrupted_derives_the_code_from_a_legacy_prose_prefix() {
+        // A historical log without the explicit reason_code key still surfaces a
+        // machine code, parsed from the `<slug>: <prose>` prefix.
+        let state = project(&[
+            make_event(EventKind::RunStarted, None, None),
+            make_event_with_payload(
+                EventKind::RunInterrupted,
+                None,
+                serde_json::json!({ "reason": "run_stalled: nothing schedulable" }),
+            ),
+        ])
+        .unwrap();
+        assert_eq!(state.awaiting_reason_code.as_deref(), Some("run_stalled"));
+    }
+
+    #[test]
+    fn node_interrupt_lifts_a_machine_code_from_its_reason_prefix() {
+        // finalize derives awaiting_reason_code from an interrupted node's
+        // `<slug>: <prose>` reason — a node-level interrupt has no run-level
+        // reason_code payload to read.
+        let state = project(&[
+            make_event(EventKind::RunStarted, None, None),
+            make_event(EventKind::NodeStarted, Some("worker"), Some(1)),
+            interrupt_event("worker", 1, "session_died: tmux gone"),
+        ])
+        .unwrap();
+        assert_eq!(state.awaiting_reason_code.as_deref(), Some("session_died"));
+    }
+
+    #[test]
+    fn interactive_wait_has_no_reason_code() {
+        // An interactive AwaitingUser (a node asking its user) carries no incident
+        // reason and thus no code — the two awaiting causes stay distinguishable.
+        let state = project(&[
+            make_event(EventKind::RunStarted, None, None),
+            make_event(EventKind::NodeStarted, Some("ask"), Some(1)),
+            make_event(EventKind::NodeAwaitingUser, Some("ask"), Some(1)),
+        ])
+        .unwrap();
+        assert_eq!(state.status, RunStatus::AwaitingUser);
+        assert!(state.awaiting_reason.is_none());
+        assert!(state.awaiting_reason_code.is_none());
+    }
+
+    #[test]
+    fn reopen_clears_the_reason_code() {
+        let reopen = Event {
+            id: None,
+            run_id: "run-1".into(),
+            ts: "2026-01-01T00:00:00.000Z".into(),
+            kind: EventKind::CommandIssued,
+            node_id: None,
+            iter: None,
+            payload: Some(serde_json::json!({ "command": "reopen_run" })),
+        };
+        let state = project(&[
+            make_event(EventKind::RunStarted, None, None),
+            make_event_with_payload(
+                EventKind::RunInterrupted,
+                None,
+                interrupt_payload("run_stalled", "run_stalled: nothing schedulable"),
+            ),
+            reopen,
+        ])
+        .unwrap();
+        assert_eq!(state.status, RunStatus::Running);
+        assert!(state.awaiting_reason.is_none());
+        assert!(state.awaiting_reason_code.is_none());
+    }
+
+    #[test]
+    fn parse_reason_code_only_accepts_a_snake_case_prefix() {
+        assert_eq!(
+            parse_reason_code("session_died: gone").as_deref(),
+            Some("session_died")
+        );
+        assert_eq!(
+            parse_reason_code("region_exhausted: x").as_deref(),
+            Some("region_exhausted")
+        );
+        // A prose sentence whose head is not a slug carries no code.
+        assert!(parse_reason_code("exhausted — unrouted: region r").is_none());
+        assert!(parse_reason_code("no colon here").is_none());
+        assert!(parse_reason_code("Capitalized: x").is_none());
+        assert!(parse_reason_code("slug: ").is_none());
+    }
+
+    // --- #601: run_stall_reason exhaustive over region kinds -------------------
+
+    #[test]
+    fn region_state_kind_all_is_total() {
+        // ALL must list every variant. A new region kind added to the enum makes
+        // this match fail to compile until it is added here (and thus to the
+        // open-region defer of run_stall_reason).
+        for kind in RegionStateKind::ALL {
+            match kind {
+                RegionStateKind::Loop | RegionStateKind::ForEach | RegionStateKind::Collection => {}
+            }
+        }
+        assert_eq!(RegionStateKind::ALL.len(), 3);
+    }
+
+    #[test]
+    fn has_open_region_counts_every_kind() {
+        // Each region-state map, in isolation, is seen by has_open_region /
+        // open_region_ids — the #453 exhaustiveness guarantee.
+        let mut loops = RunState::new("r".into(), "p".into());
+        loops.loop_states.insert(
+            "L".into(),
+            LoopState {
+                loop_node_id: "L".into(),
+                current_iter: 1,
+                max_iter: 3,
+                break_received: false,
+                done: false,
+            },
+        );
+        assert!(loops.has_open_region());
+        assert_eq!(loops.open_region_ids(), vec!["L".to_string()]);
+
+        let mut fe = RunState::new("r".into(), "p".into());
+        fe.foreach_states.insert(
+            "F".into(),
+            ForEachState {
+                foreach_node_id: "F".into(),
+                total_items: 2,
+                break_received: false,
+                done: false,
+            },
+        );
+        assert!(fe.has_open_region());
+
+        let mut coll = RunState::new("r".into(), "p".into());
+        coll.collection_states.insert(
+            "C".into(),
+            CollectionState {
+                region_id: "C".into(),
+                total_items: 2,
+                done: false,
+                entry: "m".into(),
+                members: vec!["m".into()],
+            },
+        );
+        assert!(coll.has_open_region());
+
+        // A done region does not hold the run open.
+        coll.collection_states.get_mut("C").unwrap().done = true;
+        assert!(!coll.has_open_region());
+        assert!(coll.open_region_ids().is_empty());
+    }
+
+    #[test]
+    fn reopen_lifts_a_terminal_run_and_re_drives_interrupted_nodes() {
+        // AC6/AC8/FP#8: reopen a terminal run → Running, satisfied nodes stay
+        // Completed (never re-spawned, anti-#221), interrupted nodes are dropped so
+        // they re-drive; the terminal label stays in the log.
+        let reopen = Event {
+            id: None,
+            run_id: "run-1".into(),
+            ts: "2026-01-01T00:00:00.000Z".into(),
+            kind: EventKind::CommandIssued,
+            node_id: None,
+            iter: None,
+            payload: Some(serde_json::json!({ "command": "reopen_run" })),
+        };
+        let state = project(&[
+            make_event(EventKind::RunStarted, None, None),
+            make_event(EventKind::NodeStarted, Some("done"), Some(1)),
+            make_event(EventKind::NodeCompleted, Some("done"), Some(1)),
+            make_event(EventKind::NodeStarted, Some("hurt"), Some(1)),
+            interrupt_event("hurt", 1, "session_died"),
+            make_event_with_payload(
+                EventKind::RunFailed,
+                None,
+                serde_json::json!({ "reason": "human abandon" }),
+            ),
+            reopen,
+        ])
+        .unwrap();
+        assert_eq!(state.status, RunStatus::Running);
+        assert_eq!(state.nodes["done"].status, NodeStatus::Completed);
+        assert!(
+            !state.nodes.contains_key("hurt"),
+            "the interrupted node is dropped so the scheduler re-drives it fresh"
+        );
+        assert!(state.failure_reason.is_none() && state.awaiting_reason.is_none());
+    }
+
+    #[test]
+    fn legacy_resume_run_command_still_reopens_a_completed_run() {
+        // Back-compat: the historical `resume_run` command string re-opens exactly
+        // like `reopen_run` (append-only log: every replayed run must still lift).
+        let resume = Event {
+            id: None,
+            run_id: "run-1".into(),
+            ts: "2026-01-01T00:00:00.000Z".into(),
+            kind: EventKind::CommandIssued,
+            node_id: None,
+            iter: None,
+            payload: Some(serde_json::json!({ "command": "resume_run" })),
+        };
+        let state = project(&[
+            make_event(EventKind::RunStarted, None, None),
+            make_event(EventKind::NodeStarted, Some("a"), Some(1)),
+            make_event(EventKind::NodeCompleted, Some("a"), Some(1)),
+            make_event(EventKind::RunCompleted, None, None),
+            resume,
+        ])
+        .unwrap();
+        assert_eq!(state.status, RunStatus::Running);
     }
 
     #[test]
@@ -5459,6 +6232,7 @@ mod tests {
             Failed,
             Stopped,
             Stale,
+            Interrupted,
         ];
         for s in &all {
             match s {
@@ -5476,7 +6250,10 @@ mod tests {
                         "Waiting CAN progress (it spawns once a slot frees)"
                     );
                 }
-                Pending | Completed | Failed | Stopped | Stale => {
+                // `Interrupted` (ADR-0049): holds no session and cannot progress
+                // on its own — a human resumes/restarts it, so it parks the run
+                // `AwaitingUser` rather than keeping it schedulable.
+                Pending | Completed | Failed | Stopped | Stale | Interrupted => {
                     assert!(!s.holds_session(), "{s:?} holds no session");
                     assert!(!s.can_progress(), "{s:?} cannot drive the run forward");
                 }
@@ -6454,6 +7231,99 @@ mod tests {
             ),
         );
         assert!(state.loop_states["R"].done);
+    }
+
+    #[test]
+    fn set_region_max_iter_folds_an_absolute_override_last_write_wins() {
+        // #600: `set_region_max_iter` is absolute and last-write-wins (unlike the
+        // additive `bump_region`), keyed by region id.
+        let mut state = RunState::new("r".into(), String::new());
+        apply_command_event(
+            &mut state,
+            &make_event_with_payload(
+                EventKind::CommandIssued,
+                None,
+                serde_json::json!({ "command": "set_region_max_iter", "region_id": "R", "max_iter": 8 }),
+            ),
+        );
+        assert_eq!(state.region_max_iter_overrides.get("R"), Some(&8));
+        apply_command_event(
+            &mut state,
+            &make_event_with_payload(
+                EventKind::CommandIssued,
+                None,
+                serde_json::json!({ "command": "set_region_max_iter", "region_id": "R", "max_iter": 3 }),
+            ),
+        );
+        assert_eq!(
+            state.region_max_iter_overrides.get("R"),
+            Some(&3),
+            "last write wins, not accumulated"
+        );
+    }
+
+    #[test]
+    fn set_region_max_iter_ignores_a_non_positive_cap() {
+        let mut state = RunState::new("r".into(), String::new());
+        apply_command_event(
+            &mut state,
+            &make_event_with_payload(
+                EventKind::CommandIssued,
+                None,
+                serde_json::json!({ "command": "set_region_max_iter", "region_id": "R", "max_iter": 0 }),
+            ),
+        );
+        assert!(state.region_max_iter_overrides.is_empty());
+    }
+
+    #[test]
+    fn force_route_folds_a_forced_target_keyed_by_source() {
+        // #600: a `force_route` is keyed by its source (node OR region id) → target.
+        let mut state = RunState::new("r".into(), String::new());
+        apply_command_event(
+            &mut state,
+            &make_event_with_payload(
+                EventKind::CommandIssued,
+                None,
+                serde_json::json!({ "command": "force_route", "from": "rev", "target": "end" }),
+            ),
+        );
+        assert_eq!(state.forced_routes.get("rev"), Some(&"end".to_string()));
+    }
+
+    #[test]
+    fn a_skip_completion_creates_a_never_started_node_as_completed() {
+        // #600: skipping a node that never started (stuck waiting on an unreachable
+        // input) marks it satisfied — the applier creates it directly as Completed,
+        // never a session-less Running window.
+        let mut state = RunState::new("r".into(), String::new());
+        apply_node_event(
+            &mut state,
+            &make_event_with_payload(
+                EventKind::NodeCompleted,
+                Some("orphan"),
+                serde_json::json!({ "skipped": true, "reason": "unreachable" }),
+            ),
+        );
+        assert_eq!(state.nodes["orphan"].status, NodeStatus::Completed);
+        assert_eq!(state.nodes["orphan"].iterations.len(), 1);
+        assert_eq!(
+            state.nodes["orphan"].iterations[0].status,
+            NodeStatus::Completed
+        );
+    }
+
+    #[test]
+    fn a_plain_completion_of_a_never_started_node_is_a_projection_noop() {
+        // Without the skip marker, a stray NodeCompleted for an absent node stays a
+        // no-op (the transition guard rejects it upstream; this proves the applier
+        // does not silently materialise phantom Completed nodes).
+        let mut state = RunState::new("r".into(), String::new());
+        apply_node_event(
+            &mut state,
+            &make_event(EventKind::NodeCompleted, Some("ghost"), Some(1)),
+        );
+        assert!(!state.nodes.contains_key("ghost"));
     }
 
     #[test]

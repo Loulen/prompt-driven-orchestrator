@@ -25,6 +25,13 @@
 > **cwd**. Or un nœud ni `code-mutating` ni `merge` tourne dans le worktree du Run, qui est **aussi** le
 > cwd de la session manager — un seul dossier, plusieurs transcripts, la sonde prenait le dernier touché
 > (souvent celui du manager). Voir « Résolution du transcript » ci-dessous.
+>
+> **Amendé par ADR-0049 et ADR-0050 (spec résilience, 2026-08-24).** Le §1 tient pour la
+> *détection* (la mort de session reste le seul verdict de liveness), mais sa **conséquence
+> change** : un incident infra (mort de session, boot recovery, spawn-abort) ne produit plus
+> `NodeFailed → RunFailed` mais un `Interrupted` non terminal (ADR-0049), et un spawn avorté côté
+> scheduler appende désormais un événement au lieu de figer le run `running` (ADR-0050). Voir aussi
+> l'amendement du §3 ci-dessous : un état terminal n'est plus un verrou.
 
 Trois décisions durables, arbitrées sur deux réponses du owner : *on veut détecter Mort, pas un seuil
 qui ne serait pas robuste* ; *un faux positif ne doit pas coûter un Run*.
@@ -163,10 +170,13 @@ producteur. La décision est écrite ici pour qu'on ne « finisse pas le travail
 - **Aucun rattrapage.** `validate_completion` n'est **pas** déverrouillé pour `Stale` : les nœuds
   `Stale` historiques restent irrécupérables, et le bouton « Mark complete » rendu pour eux continue de
   cliquer dans le vide. Le Run `20260729-074716-047c2cb` et le travail de #466 sont abandonnés côté PDO
-  (`RunResumed` ne relève que `Paused → Running`, donc un Run `Failed` n'est de toute façon pas
-  reprenable).
-- **Pas de reprise d'un Run `Failed`** : ça retirerait à `Failed` son caractère terminal. Feature à part
-  entière, issue et grilling séparés si elle est voulue.
+  (à l'époque `RunResumed` ne relevait que `Paused → Running` ; la reprise d'un `Failed` est
+  désormais possible — ADR-0049 — mais ne réhabilite pas pour autant les nœuds `Stale` historiques).
+- **Reprise d'un Run terminal : désormais possible (ADR-0049).** La spec résilience lève cet
+  interdit — un état terminal n'est plus un verrou (ré-ouverture par re-projection sûre, y compris
+  `Completed`/`Skipped`), et un incident infra ne fait plus `RunFailed` mais `Interrupted →
+  AwaitingUser`. `Failed` ne vient plus que d'un `pdo fail` délibéré d'un agent ou d'un abandon
+  humain.
 - **Pas de sonde d'arbre de processus, pas de seuil ajusté, pas de seuil par nœud.**
 - **Le point ambre de #180 ne s'allumera plus jamais.** `event_log::is_stalled` ne teste que
   `NodeStatus::Stale` ; sans producteur, il est constamment faux. C'est une **suppression de

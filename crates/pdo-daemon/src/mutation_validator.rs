@@ -35,6 +35,7 @@ pub(crate) fn validate_run_mutation(
                 event_log::NodeStatus::AwaitingUser => "awaiting_user",
                 event_log::NodeStatus::Stopped => "stopped",
                 event_log::NodeStatus::Stale => "stale",
+                event_log::NodeStatus::Interrupted => "interrupted",
                 event_log::NodeStatus::Pending => unreachable!(),
             };
             rejections.push(MutationRejection {
@@ -215,6 +216,7 @@ mod tests {
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            auto_fail: None,
         }
     }
 
@@ -233,6 +235,7 @@ mod tests {
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            auto_fail: None,
         }
     }
 

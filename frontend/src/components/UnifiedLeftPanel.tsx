@@ -1350,7 +1350,7 @@ function ImportWorkflowModal({
 /// #110 — confirm dialog for the one destructive run-level control. Retry-all
 /// archives the current run and starts a fresh run of the same pipeline, so it
 /// gets a confirm gate (Pause/Resume don't — they're cheap and reversible).
-function RetryAllConfirmModal({
+export function RetryAllConfirmModal({
   onConfirm,
   onCancel,
 }: {

@@ -204,12 +204,12 @@ async fn boot_recovery_redrives_a_waiting_node_after_freeing_a_slot() {
     // The boot-recovery pass the daemon runs at startup.
     daemon.run_boot_recovery_tick().await;
 
-    // Run A: the orphan is Failed; the sibling and the Run itself stay live — so
-    // the run-level stall reconciliation never fires for Run A.
+    // Run A: the orphan is Interrupted (ADR-0049); the sibling and the Run itself
+    // stay live — so the run-level stall reconciliation never fires for Run A.
     assert_eq!(
         node_status(&daemon, &run_a, "leaf1").await.as_deref(),
-        Some("failed"),
-        "the orphaned node must be Failed at boot"
+        Some("interrupted"),
+        "the orphaned node must be Interrupted at boot (ADR-0049)"
     );
     assert_eq!(
         node_status(&daemon, &run_a, "leader").await.as_deref(),

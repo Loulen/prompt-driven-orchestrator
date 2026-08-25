@@ -16,8 +16,11 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import type { LoopKind, NodeDef, NodeStatus, NodeType, PortBrief, PortSide, RunState } from "../types";
-import { isNodeActiveRun } from "../types";
+import { isNodeActiveRun, isTerminalRun } from "../types";
 import type { LibraryEntry, LibraryPipelineEntry } from "../api";
+import { openRunShell, reopenRun, retryAll } from "../api";
+import RunShellModal from "./RunShellModal";
+import { RetryAllConfirmModal } from "./UnifiedLeftPanel";
 import { buildLoopRegionNodes, buildNoteNodes, deriveEditEdges, deriveEditNodes, edgeIndexFromId } from "./editNodeDerivation";
 import { useEditStore } from "../stores/editStore";
 import { generateNodeId } from "../lib/nanoid";
@@ -252,9 +255,12 @@ interface EditCanvasProps {
   assistantActive?: boolean;
   onOpenAssistant?: () => void;
   runState?: RunState | null;
+  // #598 / ADR-0049: navigate to another run (used after Retry-all forks a fresh
+  // run). Threaded from App so the canvas toolbar's Retry-all lands on the new run.
+  onSelectRun?: (runId: string) => void;
 }
 
-function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, onLibraryPipelinesChanged, infoOpen, onToggleInfo, onCloseInfo, assistantActive, onOpenAssistant, runState }: EditCanvasProps) {
+function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, onLibraryPipelinesChanged, infoOpen, onToggleInfo, onCloseInfo, assistantActive, onOpenAssistant, runState, onSelectRun }: EditCanvasProps) {
   const openTabs = useEditStore((s) => s.openTabs);
   const activeTabId = useEditStore((s) => s.activeTabId);
   const setSelection = useEditStore((s) => s.setSelection);
@@ -329,6 +335,53 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
   const showRunInfo =
     activeRunState != null && isNodeActiveRun(activeRunState.status);
   const runInfoActive = selection.kind === "run";
+
+  // #598 / ADR-0049: the finished-run action group is contextual to a TERMINAL,
+  // non-archived run (`isTerminalRun` INCLUDES `archived`, so exclude it — an
+  // archived run has no worktree to reopen or shell into). Absent on a live run.
+  const finishedRun =
+    activeRunState != null &&
+    isTerminalRun(activeRunState.status) &&
+    activeRunState.status !== "archived";
+
+  // Ad-hoc bash shell opened on the terminal run from the toolbar (#316/#598).
+  const [shellSession, setShellSession] = useState<string | null>(null);
+  // Retry-all confirm gate (destructive: archive + fresh run).
+  const [confirmRetryAll, setConfirmRetryAll] = useState(false);
+
+  const handleReopen = useCallback(async () => {
+    if (!activeRunState) return;
+    // Optimistic: the daemon re-projects to `running` and broadcasts events; the
+    // App's SSE subscription refreshes the run state, so the group disappears on
+    // its own. No modal (contrast with Retry-all) — one click, one round-trip.
+    try {
+      await reopenRun(activeRunState.run_id);
+    } catch {
+      // The daemon gate may 409 (e.g. a live run raced terminal); nothing
+      // actionable here — the run state refresh will reconcile the UI.
+    }
+  }, [activeRunState]);
+
+  const handleRetryAll = useCallback(async () => {
+    if (!activeRunState) return;
+    setConfirmRetryAll(false);
+    try {
+      const { run_id } = await retryAll(activeRunState.run_id);
+      onSelectRun?.(run_id);
+    } catch {
+      // Silent — mirrors the left-panel Retry-all.
+    }
+  }, [activeRunState, onSelectRun]);
+
+  const handleOpenShell = useCallback(async () => {
+    if (!activeRunState) return;
+    try {
+      const { session } = await openRunShell(activeRunState.run_id);
+      setShellSession(session);
+    } catch {
+      // The server gate may 409 if the worktree vanished out-of-band.
+    }
+  }, [activeRunState]);
   const toggleRunInfo = useCallback(() => {
     setSelection(
       selection.kind === "run"
@@ -705,6 +758,10 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
         runInfoActive={runInfoActive}
         onToggleRunInfo={toggleRunInfo}
         readOnly={readOnly}
+        finishedRun={finishedRun}
+        onReopen={handleReopen}
+        onRetryAll={() => setConfirmRetryAll(true)}
+        onOpenShell={handleOpenShell}
       />
       {pipeline && tab && (
         <div
@@ -860,6 +917,21 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
         <AddNodeFromYamlModal
           getDropPosition={computeDropPosition}
           onClose={() => setAddFromYamlOpen(false)}
+        />
+      )}
+
+      {/* #598 / ADR-0049: the finished-run group's Open-shell and Retry-all
+          modals, reusing the exact components the left-panel row uses. */}
+      {shellSession && (
+        <RunShellModal
+          session={shellSession}
+          onClose={() => setShellSession(null)}
+        />
+      )}
+      {confirmRetryAll && (
+        <RetryAllConfirmModal
+          onConfirm={handleRetryAll}
+          onCancel={() => setConfirmRetryAll(false)}
         />
       )}
     </div>

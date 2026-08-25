@@ -8,6 +8,7 @@ export const STATUS_BORDER: Record<NodeStatus, string> = {
   failed: "border-st-failed",
   stopped: "border-st-stopped",
   stale: "border-st-stale",
+  interrupted: "border-st-interrupted",
 };
 
 export const STATUS_BG: Record<NodeStatus, string> = {
@@ -18,6 +19,7 @@ export const STATUS_BG: Record<NodeStatus, string> = {
   failed: "bg-st-failed-bg",
   stopped: "bg-st-stopped-bg",
   stale: "bg-st-stale-bg",
+  interrupted: "bg-st-interrupted-bg",
 };
 
 export const STATUS_DOT: Record<NodeStatus, string> = {
@@ -28,6 +30,7 @@ export const STATUS_DOT: Record<NodeStatus, string> = {
   failed: "bg-st-failed",
   stopped: "bg-st-stopped",
   stale: "bg-st-stale",
+  interrupted: "bg-st-interrupted",
 };
 
 export const SELECTION_RING_STYLE = {

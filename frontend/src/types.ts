@@ -1,5 +1,5 @@
 export type RunStatus = "running" | "awaiting_user" | "completed" | "failed" | "skipped" | "halted" | "paused" | "archived";
-export type NodeStatus = "pending" | "running" | "awaiting_user" | "completed" | "failed" | "stopped" | "stale";
+export type NodeStatus = "pending" | "running" | "awaiting_user" | "completed" | "failed" | "stopped" | "stale" | "interrupted";
 
 export function isLiveRun(status: RunStatus): boolean {
   return status === "running" || status === "awaiting_user" || status === "paused";
@@ -466,6 +466,14 @@ export interface RunListEntry {
    * failure signal in this list was a coloured dot with no text behind it.
    */
   failure_reason?: string | null;
+  /**
+   * Why the Run is parked `awaiting_user` on an **incident** (ADR-0049), prose +
+   * a machine slug (#601). Present on the list entry so the manager cockpit shows
+   * *why* a run is parked without opening the detail. Absent on a green/live Run
+   * or an interactive wait (which carries no incident reason).
+   */
+  awaiting_reason?: string | null;
+  awaiting_reason_code?: string | null;
   name?: string | null;
   /** Provenance: the id of the Trigger that created this Run, if any (#160). */
   triggered_by?: string | null;
@@ -729,6 +737,23 @@ export interface RunState {
    * the whole failure signal a user got was a red dot in the Runs list.
    */
   failure_reason?: string | null;
+  /**
+   * Why the Run is parked `awaiting_user` on an INCIDENT (ADR-0049) — a session
+   * death, boot recovery, spawn abort, run-level stall, output-validation miss,
+   * merge conflict or `unrouted` convergence. Distinct from the interactive
+   * `awaiting_user` wait of a node asking its user a question, which carries no
+   * `awaiting_reason`. Cleared by a resume/reopen. Present only while the Run is
+   * `awaiting_user` on an incident.
+   */
+  awaiting_reason?: string | null;
+  /**
+   * The machine slug companion of {@link awaiting_reason} (#601): a stable
+   * snake_case code (`session_died`, `run_stalled`, `unrouted`,
+   * `region_exhausted`, `spawn_aborted`, `merge_conflict`, …) to branch on —
+   * next to the human prose, the same slug+prose contract as a refusal body
+   * (ADR-0035). Absent for an interactive wait.
+   */
+  awaiting_reason_code?: string | null;
   nodes: Record<string, NodeState>;
   edges: EdgeInfo[];
   node_defs: NodeDefInfo[];

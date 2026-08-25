@@ -514,6 +514,7 @@ impl Importer {
             frontmatter: None,
             when: None,
             description: None,
+            required: false,
         };
         out_port.frontmatter = frontmatter;
 
@@ -543,6 +544,7 @@ impl Importer {
             over: None,
             pin_harness: None,
             harnesses,
+            auto_fail: None,
         };
         self.nodes.push(node);
         self.prompts.insert(id.clone(), prompt_body);
@@ -923,6 +925,7 @@ fn plain_port(name: &str) -> Port {
         frontmatter: None,
         when: None,
         description: None,
+        required: false,
     }
 }
 
@@ -939,6 +942,7 @@ fn start_node() -> NodeDef {
         over: None,
         pin_harness: None,
         harnesses: Default::default(),
+        auto_fail: None,
     }
 }
 
@@ -958,6 +962,7 @@ fn end_node(agent_count: usize) -> NodeDef {
         over: None,
         pin_harness: None,
         harnesses: Default::default(),
+        auto_fail: None,
     }
 }
 

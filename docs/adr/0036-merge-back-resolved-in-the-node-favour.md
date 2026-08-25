@@ -11,6 +11,13 @@
 >
 > **Amendé par ADR-0037 (#489)** : une réutilisation de sous-worktree ne coupe rien, donc elle
 > **reporte** le `base_sha` d'origine de l'itération au lieu d'en dériver un nouveau.
+>
+> **Amendé par la spec résilience (2026-08-24, ADR-0050).** Le merge-back **suit le HEAD réel** du
+> sous-worktree (`node_tip`, déjà lu avant le merge), pas le **nom** de branche `pdo/sub-*` : quand
+> l'agent a basculé son worktree sur `feature/*` en suivant un git-flow projet, ses commits vivent
+> sur `feature/*` alors que `pdo/sub-*` est resté en arrière — merger par nom ramenait l'ancien tip
+> (« Already up to date ») et **perdait silencieusement** le travail. PDO encaisse le git de
+> l'agent au lieu de le lui interdire (Sharp tool).
 
 ## Contexte
 

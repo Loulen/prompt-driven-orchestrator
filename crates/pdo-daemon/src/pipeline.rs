@@ -114,6 +114,15 @@ pub(crate) struct Port {
     pub when: Option<serde_yaml::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// `required: true` marks an **input** port whose artifact must arrive for the
+    /// node to run (ADR-0011 / #589 / #600). When every edge feeding a required
+    /// port is structurally dead — its producing branch was not taken (either/or) —
+    /// the reachability sweep **auto-skips** the node with a reason rather than
+    /// leaving it to hang forever waiting on an input that can never come. Absent
+    /// (the default) leaves the node subject only to the whole-node deadness rule
+    /// (every incoming edge dead). Semantic (drives auto-skip), not layout.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub required: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -159,6 +168,13 @@ pub(crate) struct NodeDef {
     /// (`pipeline_semantics`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub harnesses: BTreeMap<String, crate::harness_resolver::HarnessEntry>,
+    /// Optional `auto_fail` preference for this node (ADR-0049): the **finest**
+    /// tier of [`crate::auto_fail::resolve_auto_fail`] (`node → Run → Projet →
+    /// instance`). `Some(true)`/`Some(false)` overrides every coarser tier for a
+    /// node's own `pdo fail`; `None` (absent) makes the node defer to the Run /
+    /// Projet / instance. Semantic, not layout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_fail: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -633,6 +649,7 @@ pub(crate) fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
                         frontmatter: None,
                         when: None,
                         description: None,
+                        required: false,
                     });
                 }
             }
@@ -2526,6 +2543,7 @@ nodes:
                 frontmatter: None,
                 when: None,
                 description: None,
+                required: false,
             }],
             interactive: false,
             view: None,
@@ -2533,6 +2551,7 @@ nodes:
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            auto_fail: None,
         };
         let yaml = serde_yaml::to_string(&node).unwrap();
         assert!(yaml.contains("type: script"), "serializes to kebab: {yaml}");

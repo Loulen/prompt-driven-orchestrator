@@ -387,12 +387,37 @@ async fn pdo_complete_exits_3_on_a_recoverable_refusal() {
 }
 
 /// Exit `4` — refused, and the runtime has already ruled. Driving the node failed
-/// drives the whole run terminal, so the completion guard answers "resume the run
+/// **with `auto_fail` opted in** drives the whole run terminal (ADR-0049: a plain
+/// `pdo fail` now parks the run `AwaitingUser` for a human to confirm, so it is no
+/// longer a terminal refusal), so the completion guard answers "resume the run
 /// first": the refusal that, before #490, answered `200` and printed
 /// "marked complete." on a dead run.
 #[tokio::test]
 async fn pdo_complete_exits_4_on_a_terminal_refusal() {
-    let (daemon, run_id) = daemon_with_run().await;
+    let daemon = TestDaemon::spawn_with_override(seed, Some("true".to_string()))
+        .await
+        .unwrap();
+    // ADR-0049 / AC5: `auto_fail: true` makes the agent `pdo fail` terminalise
+    // the run to `Failed` directly, reproducing the pre-résilience terminal state
+    // this exit-code contract needs.
+    let body = serde_json::json!({
+        "pipeline": PIPELINE_NAME,
+        "input": "hello",
+        "target_repo": daemon.target_repo(),
+        "auto_fail": true,
+    });
+    let resp = reqwest::Client::new()
+        .post(format!("{}/runs", daemon.url()))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let run_id = resp.json::<serde_json::Value>().await.unwrap()["run_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    tokio::time::sleep(Duration::from_millis(300)).await;
     write_output_artifact(&daemon, &run_id, "# Output\nDone.");
 
     let resp = reqwest::Client::new()

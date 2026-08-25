@@ -339,6 +339,7 @@ mod tests {
                         frontmatter: None,
                         when: None,
                         description: None,
+                        required: false,
                     }],
                     outputs: vec![Port {
                         name: "plan".into(),
@@ -348,6 +349,7 @@ mod tests {
                         frontmatter: None,
                         when: None,
                         description: None,
+                        required: false,
                     }],
                     interactive: false,
                     view: None,
@@ -355,6 +357,7 @@ mod tests {
                     over: None,
                     pin_harness: None,
                     harnesses: Default::default(),
+                    auto_fail: None,
                 },
                 NodeDef {
                     id: "implementer".into(),
@@ -368,6 +371,7 @@ mod tests {
                         frontmatter: None,
                         when: None,
                         description: None,
+                        required: false,
                     }],
                     outputs: vec![Port {
                         name: "summary".into(),
@@ -377,6 +381,7 @@ mod tests {
                         frontmatter: None,
                         when: None,
                         description: None,
+                        required: false,
                     }],
                     interactive: false,
                     view: None,
@@ -384,6 +389,7 @@ mod tests {
                     over: None,
                     pin_harness: None,
                     harnesses: Default::default(),
+                    auto_fail: None,
                 },
             ],
             edges: vec![EdgeDef {
@@ -531,6 +537,7 @@ mod tests {
                         frontmatter: None,
                         when: None,
                         description: None,
+                        required: false,
                     }],
                     interactive: false,
                     view: None,
@@ -538,6 +545,7 @@ mod tests {
                     over: None,
                     pin_harness: None,
                     harnesses: Default::default(),
+                    auto_fail: None,
                 },
                 NodeDef {
                     id: "implementer".into(),
@@ -551,6 +559,7 @@ mod tests {
                         frontmatter: None,
                         when: None,
                         description: None,
+                        required: false,
                     }],
                     outputs: vec![Port {
                         name: "code".into(),
@@ -560,6 +569,7 @@ mod tests {
                         frontmatter: None,
                         when: None,
                         description: None,
+                        required: false,
                     }],
                     interactive: false,
                     view: None,
@@ -567,6 +577,7 @@ mod tests {
                     over: None,
                     pin_harness: None,
                     harnesses: Default::default(),
+                    auto_fail: None,
                 },
             ],
             edges: vec![EdgeDef {
@@ -719,6 +730,7 @@ mod tests {
                         frontmatter: None,
                         when: None,
                         description: None,
+                        required: false,
                     }],
                     interactive: false,
                     view: None,
@@ -726,6 +738,7 @@ mod tests {
                     over: None,
                     pin_harness: None,
                     harnesses: Default::default(),
+                    auto_fail: None,
                 },
                 NodeDef {
                     id: "b".into(),
@@ -740,6 +753,7 @@ mod tests {
                         frontmatter: None,
                         when: None,
                         description: None,
+                        required: false,
                     }],
                     interactive: false,
                     view: None,
@@ -747,6 +761,7 @@ mod tests {
                     over: None,
                     pin_harness: None,
                     harnesses: Default::default(),
+                    auto_fail: None,
                 },
                 NodeDef {
                     id: "merger".into(),
@@ -760,6 +775,7 @@ mod tests {
                         frontmatter: None,
                         when: None,
                         description: None,
+                        required: false,
                     }],
                     outputs: vec![],
                     interactive: false,
@@ -768,6 +784,7 @@ mod tests {
                     over: None,
                     pin_harness: None,
                     harnesses: Default::default(),
+                    auto_fail: None,
                 },
             ],
             edges: vec![
@@ -850,6 +867,7 @@ mod tests {
                         frontmatter: None,
                         when: None,
                         description: None,
+                        required: false,
                     }],
                     interactive: false,
                     view: None,
@@ -857,6 +875,7 @@ mod tests {
                     over: None,
                     pin_harness: None,
                     harnesses: Default::default(),
+                    auto_fail: None,
                 },
                 NodeDef {
                     id: "implementer".into(),
@@ -871,6 +890,7 @@ mod tests {
                     over: None,
                     pin_harness: None,
                     harnesses: Default::default(),
+                    auto_fail: None,
                 },
             ],
             edges: vec![EdgeDef {
@@ -929,6 +949,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    required: false,
                 }]
             } else {
                 vec![]
@@ -939,6 +960,7 @@ mod tests {
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            auto_fail: None,
         };
         let mk_edge = |src: &str| EdgeDef {
             source: EdgeEndpoint {
@@ -1011,6 +1033,7 @@ mod tests {
                         frontmatter: None,
                         when: None,
                         description: None,
+                        required: false,
                     }]
                 })
                 .unwrap_or_default(),
@@ -1020,6 +1043,7 @@ mod tests {
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            auto_fail: None,
         };
         let mk_edge = |src: &str, port: &str| EdgeDef {
             source: EdgeEndpoint {
@@ -1097,6 +1121,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    required: false,
                 }],
                 interactive: false,
                 view: None,
@@ -1104,6 +1129,7 @@ mod tests {
                 over: None,
                 pin_harness: None,
                 harnesses: Default::default(),
+                auto_fail: None,
             }],
             edges: Vec::new(),
             loops: Vec::new(),

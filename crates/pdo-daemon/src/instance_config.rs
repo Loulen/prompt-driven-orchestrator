@@ -89,6 +89,18 @@ pub(crate) struct InstanceConfig {
     /// column (`trigger_store::variables` idiom).
     #[serde(default)]
     pub default_harness_model: std::collections::BTreeMap<String, String>,
+    /// Stored instance-wide `auto_fail` default as `0`/`1`, or `None` when unset
+    /// (ADR-0049). The **global** (coarsest) tier of the `node → Run → Projet →
+    /// instance` precedence resolved by [`crate::auto_fail::resolve_auto_fail`].
+    /// Checked, an agent's `pdo fail` terminalises the run directly to `Failed`;
+    /// unset/`0`, it parks the run `AwaitingUser` for a human to confirm. `None`
+    /// falls through to the env seam ([`AUTO_FAIL_ENV`]) then the built-in default
+    /// (`false`).
+    ///
+    /// `Option<i64>` and not `Option<bool>` for the same reason as
+    /// [`Self::autocomplete_turn_end`]: `NULL` makes the `stored → env → default`
+    /// fall-through work; a stored `0` is a decision that beats the env.
+    pub auto_fail: Option<i64>,
     /// RFC3339-millis UTC timestamp of the last write (or the seed).
     pub updated_at: String,
 }
@@ -135,6 +147,10 @@ pub(crate) struct UpdateInstanceConfig {
     /// replaces the stored map wholesale; an empty map clears it. `None` leaves it
     /// untouched.
     pub default_harness_model: Option<std::collections::BTreeMap<String, String>>,
+    /// Set the instance-wide `auto_fail` default (ADR-0049): `Some(true)` stores
+    /// `1`, `Some(false)` stores `0`, `None` leaves it untouched. Same set-only,
+    /// `0`-not-`NULL` discipline as [`Self::autocomplete_turn_end`].
+    pub auto_fail: Option<bool>,
 }
 
 impl UpdateInstanceConfig {
@@ -148,6 +164,7 @@ impl UpdateInstanceConfig {
             && self.default_auto_name.is_none()
             && self.default_harness.is_none()
             && self.default_harness_model.is_none()
+            && self.auto_fail.is_none()
     }
 }
 
@@ -171,6 +188,7 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             default_auto_name  INTEGER,
             default_harness    TEXT,
             default_harness_model TEXT,
+            auto_fail          INTEGER,
             updated_at         TEXT NOT NULL
         )",
     )
@@ -294,6 +312,21 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
+    // Additive migration for pre-résilience databases: the `auto_fail` column is
+    // absent on tables created before ADR-0049. Same guarded `ADD COLUMN` idiom —
+    // NULLABLE so an existing install falls through env → the built-in default
+    // (`false`: an agent `pdo fail` parks the run, the human confirms).
+    let has_auto_fail =
+        sqlx::query("SELECT 1 FROM pragma_table_info('instance_config') WHERE name = 'auto_fail'")
+            .fetch_optional(db)
+            .await?
+            .is_some();
+    if !has_auto_fail {
+        sqlx::query("ALTER TABLE instance_config ADD COLUMN auto_fail INTEGER")
+            .execute(db)
+            .await?;
+    }
+
     Ok(())
 }
 
@@ -314,6 +347,7 @@ fn row_to_config(row: &sqlx::sqlite::SqliteRow) -> InstanceConfig {
             .get::<Option<String>, _>("default_harness_model")
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default(),
+        auto_fail: row.get("auto_fail"),
         updated_at: row.get("updated_at"),
     }
 }
@@ -368,6 +402,9 @@ pub(crate) async fn update(
     if edit.default_harness_model.is_some() {
         sets.push("default_harness_model = ?");
     }
+    if edit.auto_fail.is_some() {
+        sets.push("auto_fail = ?");
+    }
     // Always bump the write timestamp on a real edit.
     sets.push("updated_at = ?");
 
@@ -417,6 +454,11 @@ pub(crate) async fn update(
         // decision). Serialisation cannot fail for a String→String map.
         query = query.bind(serde_json::to_string(&v).unwrap_or_else(|_| "{}".to_string()));
     }
+    if let Some(v) = edit.auto_fail {
+        // 0/1, never NULL: unchecking must persist a stored `0` that beats a
+        // `PDO_AUTO_FAIL=1`, not fall through to it (ADR-0049).
+        query = query.bind(if v { 1_i64 } else { 0_i64 });
+    }
     query = query.bind(crate::event_log::now_iso());
     query.execute(db).await?;
 
@@ -452,6 +494,32 @@ pub(crate) async fn set_triggers_paused(db: &SqlitePool, paused: bool) -> Result
         .execute(db)
         .await?;
     Ok(())
+}
+
+/// Env seam for the instance-wide `auto_fail` default (ADR-0049 / ADR-0015).
+/// Read only inside [`resolve_instance_auto_fail`], the `stored → env → default`
+/// precedence — never elsewhere. Any of `1`/`true`/`yes`/`on` (case-insensitive)
+/// is truthy; anything else (incl. unset) is falsey.
+pub(crate) const AUTO_FAIL_ENV: &str = "PDO_AUTO_FAIL";
+
+/// The instance (global) tier of `auto_fail`, `stored → env → default(false)`
+/// (ADR-0049). `stored` is the `auto_fail` column value (`Some(0/1)` a stored
+/// decision, `None` unset). Pure over its `stored` arg; reads the env only when
+/// `stored` is `None`, so a stored `0` beats a `PDO_AUTO_FAIL=1`.
+pub(crate) fn resolve_instance_auto_fail(stored: Option<i64>) -> bool {
+    match stored {
+        Some(v) => v != 0,
+        None => std::env::var(AUTO_FAIL_ENV)
+            .ok()
+            .map(|s| {
+                let t = s.trim();
+                t.eq_ignore_ascii_case("1")
+                    || t.eq_ignore_ascii_case("true")
+                    || t.eq_ignore_ascii_case("yes")
+                    || t.eq_ignore_ascii_case("on")
+            })
+            .unwrap_or(false),
+    }
 }
 
 /// The two columns #471 retired: `image_source` (#411) and `dockerfile_path` (#431). A staging

@@ -351,6 +351,108 @@ async fn end_region_unknown_region_is_400() {
     );
 }
 
+// #600: set_region_max_iter / force_route validate against the run snapshot
+// BEFORE any append — a rejected command leaves no trace (ADR-0025 truth).
+
+#[tokio::test]
+async fn set_region_max_iter_unknown_region_is_400_and_leaves_no_trace() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon, LOOP_PIPELINE_NAME).await;
+
+    let (status, body) = post_command(
+        &daemon.url(),
+        &run_id,
+        serde_json::json!({ "kind": "set_region_max_iter", "region_id": "ghost", "max_iter": 9 }),
+    )
+    .await;
+
+    assert_eq!(status, 400, "unknown region must be rejected, got {body}");
+    assert_eq!(body["error"], "region 'ghost' not found in pipeline");
+    assert!(
+        command_events(&daemon.url(), &run_id, "set_region_max_iter")
+            .await
+            .is_empty(),
+        "rejected set_region_max_iter must not append a CommandIssued"
+    );
+}
+
+#[tokio::test]
+async fn set_region_max_iter_on_a_known_region_appends_the_command() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon, LOOP_PIPELINE_NAME).await;
+
+    let (status, body) = post_command(
+        &daemon.url(),
+        &run_id,
+        serde_json::json!({ "kind": "set_region_max_iter", "region_id": "review_loop", "max_iter": 9 }),
+    )
+    .await;
+
+    assert_eq!(status, 200, "known region accepted, got {body}");
+    assert!(
+        !command_events(&daemon.url(), &run_id, "set_region_max_iter")
+            .await
+            .is_empty(),
+        "an accepted set_region_max_iter appends its CommandIssued"
+    );
+}
+
+#[tokio::test]
+async fn force_route_unknown_source_is_400_and_leaves_no_trace() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon, LOOP_PIPELINE_NAME).await;
+
+    let (status, body) = post_command(
+        &daemon.url(),
+        &run_id,
+        serde_json::json!({ "kind": "force_route", "from": "ghost", "target": "end" }),
+    )
+    .await;
+
+    assert_eq!(status, 400, "unknown source must be rejected, got {body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("neither a node nor a region"),
+        "error names the bad source: {body}"
+    );
+    assert!(
+        command_events(&daemon.url(), &run_id, "force_route")
+            .await
+            .is_empty(),
+        "rejected force_route must not append a CommandIssued"
+    );
+}
+
+#[tokio::test]
+async fn force_route_unknown_target_is_400() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon, LOOP_PIPELINE_NAME).await;
+
+    let (status, body) = post_command(
+        &daemon.url(),
+        &run_id,
+        serde_json::json!({ "kind": "force_route", "from": "worker", "target": "ghost" }),
+    )
+    .await;
+
+    assert_eq!(status, 400, "unknown target must be rejected, got {body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("not a node"),
+        "error names the bad target: {body}"
+    );
+    assert!(
+        command_events(&daemon.url(), &run_id, "force_route")
+            .await
+            .is_empty(),
+        "rejected force_route must not append a CommandIssued"
+    );
+}
+
 #[tokio::test]
 async fn bump_region_with_live_iteration_is_noop_with_reason() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
@@ -512,10 +614,13 @@ async fn bump_region_that_actually_reschedules_reports_the_spawn() {
         assert_eq!(status, 200, "mark_node_done for {node_id}: {body}");
     }
 
-    // The region is now exhausted with nowhere to route: the run halts.
-    wait_until("the run to halt exhausted-unrouted", || async {
-        run_status(&url, &run_id).await == "halted"
-    })
+    // The region is now exhausted with nowhere to route: since résilience
+    // (ADR-0049) an `unrouted` convergence parks the run `AwaitingUser` (a human
+    // routes it), instead of the pre-résilience terminal `halted`.
+    wait_until(
+        "the run to park awaiting-user (exhausted-unrouted)",
+        || async { run_status(&url, &run_id).await == "awaiting_user" },
+    )
     .await;
 
     let before = started_pairs(&url, &run_id).await;

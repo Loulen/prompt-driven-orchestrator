@@ -309,6 +309,7 @@ mod tests {
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            auto_fail: None,
         }
     }
 
@@ -321,6 +322,7 @@ mod tests {
             frontmatter: None,
             when: None,
             description: None,
+            required: false,
         }
     }
 
@@ -333,6 +335,7 @@ mod tests {
             frontmatter: None,
             when: None,
             description: None,
+            required: false,
         }
     }
 
@@ -345,6 +348,7 @@ mod tests {
             frontmatter: Some(schema),
             when: None,
             description: None,
+            required: false,
         }
     }
 
@@ -699,6 +703,7 @@ mod tests {
             frontmatter: None,
             when: None,
             description: None,
+            required: false,
         }
     }
 
@@ -711,6 +716,7 @@ mod tests {
             frontmatter: None,
             when: None,
             description: None,
+            required: false,
         }
     }
 
@@ -830,6 +836,7 @@ mod tests {
             frontmatter: None,
             when: None,
             description: None,
+            required: false,
         }
     }
 

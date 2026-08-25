@@ -370,14 +370,15 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             // Run atomically so the completion lands on a live Run instead of the
             // guard's "resume the run first" 409.
             let run_state = match run_state {
-                Some(rs) => match crate::embed_reopen_for_targeted_command(&state, &run_id, rs).await
-                {
-                    Ok(s) => Some(s),
-                    Err(e) => {
-                        return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}"))
-                            .into_response();
+                Some(rs) => {
+                    match crate::embed_reopen_for_targeted_command(&state, &run_id, rs).await {
+                        Ok(s) => Some(s),
+                        Err(e) => {
+                            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}"))
+                                .into_response();
+                        }
                     }
-                },
+                }
                 None => None,
             };
 
@@ -988,14 +989,15 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             // re-opens it atomically (the human's own re-open gesture) before the
             // guard below sees it — no "resume then restart without a GET" race.
             let projected = match projected {
-                Some(rs) => match crate::embed_reopen_for_targeted_command(&state, &run_id, rs).await
-                {
-                    Ok(s) => Some(s),
-                    Err(e) => {
-                        return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}"))
-                            .into_response();
+                Some(rs) => {
+                    match crate::embed_reopen_for_targeted_command(&state, &run_id, rs).await {
+                        Ok(s) => Some(s),
+                        Err(e) => {
+                            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}"))
+                                .into_response();
+                        }
                     }
-                },
+                }
                 None => None,
             };
             let restart_probe = event_log::Event {

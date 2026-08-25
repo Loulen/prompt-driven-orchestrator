@@ -515,9 +515,10 @@ async fn bump_region_that_actually_reschedules_reports_the_spawn() {
     // The region is now exhausted with nowhere to route: since résilience
     // (ADR-0049) an `unrouted` convergence parks the run `AwaitingUser` (a human
     // routes it), instead of the pre-résilience terminal `halted`.
-    wait_until("the run to park awaiting-user (exhausted-unrouted)", || async {
-        run_status(&url, &run_id).await == "awaiting_user"
-    })
+    wait_until(
+        "the run to park awaiting-user (exhausted-unrouted)",
+        || async { run_status(&url, &run_id).await == "awaiting_user" },
+    )
     .await;
 
     let before = started_pairs(&url, &run_id).await;

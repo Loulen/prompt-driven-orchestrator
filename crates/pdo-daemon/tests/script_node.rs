@@ -406,5 +406,8 @@ async fn script_node_missing_declared_output_fails_fast() {
         .json()
         .await
         .unwrap();
-    assert_eq!(run["status"], "awaiting_user", "run must park, not fail: {run}");
+    assert_eq!(
+        run["status"], "awaiting_user",
+        "run must park, not fail: {run}"
+    );
 }

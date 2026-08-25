@@ -6634,8 +6634,8 @@ pub(crate) async fn handle_node_completion(
             .await
             {
                 ActionOutcome::Completed
-            | ActionOutcome::Halted { .. }
-            | ActionOutcome::Interrupted { .. } => return,
+                | ActionOutcome::Halted { .. }
+                | ActionOutcome::Interrupted { .. } => return,
                 ActionOutcome::Spawned { .. }
                 | ActionOutcome::Progressed
                 | ActionOutcome::SpawnSkipped { .. } => {}
@@ -6666,8 +6666,8 @@ pub(crate) async fn handle_node_completion(
             .await
             {
                 ActionOutcome::Completed
-            | ActionOutcome::Halted { .. }
-            | ActionOutcome::Interrupted { .. } => return,
+                | ActionOutcome::Halted { .. }
+                | ActionOutcome::Interrupted { .. } => return,
                 ActionOutcome::Spawned { .. }
                 | ActionOutcome::Progressed
                 | ActionOutcome::SpawnSkipped { .. } => {}
@@ -12892,9 +12892,7 @@ async fn node_fail(
         // slot. Re-drive throttled `waiting` nodes in other runs (#159).
         retry_waiting_nodes(&tail_state).await;
 
-        info!(
-            "Node {tail_node} failed in run {tail_run} (auto_fail={auto_fail_run})"
-        );
+        info!("Node {tail_node} failed in run {tail_run} (auto_fail={auto_fail_run})");
     });
     (StatusCode::OK, "ok").into_response()
 }
@@ -13064,7 +13062,9 @@ async fn force_spawn_node(state: &Arc<AppState>, run_id: &str, node_id: &str) ->
     // refusal. Runs before the guards below so they see a live Run.
     let run_state = match embed_reopen_for_targeted_command(state, run_id, run_state).await {
         Ok(s) => s,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response(),
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response()
+        }
     };
 
     if let Some(ns) = run_state.nodes.get(node_id) {
@@ -13390,7 +13390,9 @@ async fn node_retry(
     //    409. The human's retry IS the re-open gesture (ADR-0009 amended).
     let run_state = match embed_reopen_for_targeted_command(&state, &run_id, run_state).await {
         Ok(s) => s,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response(),
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response()
+        }
     };
 
     // ── HEAD PROBE 1 (#487): run-liveness. The FIRST gesture — a refusal here leaves
@@ -24070,9 +24072,11 @@ edges:
         // The embedded re-open is in the log, and the previous terminal label is
         // preserved (AC12).
         assert!(
-            events.iter().any(|e| e.kind == event_log::EventKind::CommandIssued
-                && e.payload.as_ref().and_then(|p| p.get("command"))
-                    == Some(&serde_json::json!("reopen_run"))),
+            events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::CommandIssued
+                    && e.payload.as_ref().and_then(|p| p.get("command"))
+                        == Some(&serde_json::json!("reopen_run"))),
             "the mark_node_done must embed a reopen_run CommandIssued"
         );
         assert!(
@@ -28628,9 +28632,11 @@ edges: []
         // terminal `RunCompleted` label is preserved (AC12).
         let events = load_events(&state.db, run_id).await.unwrap();
         assert!(
-            events.iter().any(|e| e.kind == event_log::EventKind::CommandIssued
-                && e.payload.as_ref().and_then(|p| p.get("command"))
-                    == Some(&serde_json::json!("reopen_run"))),
+            events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::CommandIssued
+                    && e.payload.as_ref().and_then(|p| p.get("command"))
+                        == Some(&serde_json::json!("reopen_run"))),
             "the Start must embed a reopen_run CommandIssued on a terminal run"
         );
         assert!(
@@ -28872,9 +28878,10 @@ edges: []
         // `NodeInterrupted` naming the node (never `RunFailed`), which parks the
         // run `AwaitingUser` — visible and recoverable, never frozen `running`.
         assert!(
-            events.iter().any(|e| e.kind
-                == event_log::EventKind::NodeInterrupted
-                && e.node_id.as_deref() == Some("worker")),
+            events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::NodeInterrupted
+                    && e.node_id.as_deref() == Some("worker")),
             "the spawn abort must surface as a NodeInterrupted naming the node"
         );
         assert!(
@@ -29001,9 +29008,10 @@ edges: []
         // ...and the node is interrupted (ADR-0049: an infra spawn failure is
         // `NodeInterrupted`, not `NodeFailed`), never a `RunFailed`.
         assert!(
-            events.iter().any(|e| e.kind
-                == event_log::EventKind::NodeInterrupted
-                && e.node_id.as_deref() == Some("worker")),
+            events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::NodeInterrupted
+                    && e.node_id.as_deref() == Some("worker")),
             "a failed tmux spawn on a Running iteration must append NodeInterrupted"
         );
         assert!(
@@ -29100,9 +29108,10 @@ edges: []
             "the after-start path keeps its NodeStarted"
         );
         assert!(
-            events.iter().any(|e| e.kind
-                == event_log::EventKind::NodeInterrupted
-                && e.node_id.as_deref() == Some("worker")),
+            events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::NodeInterrupted
+                    && e.node_id.as_deref() == Some("worker")),
             "a failed tmux spawn on a Running iteration must append NodeInterrupted"
         );
         assert!(
@@ -29174,9 +29183,10 @@ edges: []
         // The run parks AwaitingUser loud (ADR-0049)...
         let events = load_events(&state.db, run_id).await.unwrap();
         assert!(
-            events.iter().any(|e| e.kind
-                == event_log::EventKind::NodeInterrupted
-                && e.node_id.as_deref() == Some("worker")),
+            events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::NodeInterrupted
+                    && e.node_id.as_deref() == Some("worker")),
             "a failed tmux spawn on a Running iteration must append NodeInterrupted"
         );
         assert!(
@@ -29854,9 +29864,11 @@ edges:
         // re-spawned at iter 2. The terminal `RunFailed` label is preserved.
         let after = load_events(&state.db, run_id).await.unwrap();
         assert!(
-            after.iter().any(|e| e.kind == event_log::EventKind::CommandIssued
-                && e.payload.as_ref().and_then(|p| p.get("command"))
-                    == Some(&serde_json::json!("reopen_run"))),
+            after
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::CommandIssued
+                    && e.payload.as_ref().and_then(|p| p.get("command"))
+                        == Some(&serde_json::json!("reopen_run"))),
             "the retry must embed a reopen_run CommandIssued"
         );
         assert!(

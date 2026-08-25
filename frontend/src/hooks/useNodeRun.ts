@@ -19,11 +19,12 @@ function pollInterval(status: NodeStatus): number | null {
     case "awaiting_user":
     case "stale":
       return 1000;
+    // #598 / ADR-0049: an interrupted node is settled but recoverable — poll it
+    // at the slow terminal cadence (like the other terminal states) so the UI
+    // updates when a human reopens/retries it.
     case "completed":
     case "failed":
     case "stopped":
-    // #598 / ADR-0049: an interrupted node is settled but recoverable — poll at
-    // the slow terminal cadence so the UI updates when a human reopens/retries it.
     case "interrupted":
       return 5000;
     case "pending":

@@ -2332,9 +2332,10 @@ fn finalize(state: &mut RunState) {
     // `awaiting_reason`, which keeps the two distinguishable from the run state
     // alone.
     if state.status == RunStatus::Running
-        && state.nodes.values().any(|n| {
-            n.status == NodeStatus::AwaitingUser || n.status == NodeStatus::Interrupted
-        })
+        && state
+            .nodes
+            .values()
+            .any(|n| n.status == NodeStatus::AwaitingUser || n.status == NodeStatus::Interrupted)
     {
         state.status = RunStatus::AwaitingUser;
     }
@@ -3368,7 +3369,10 @@ mod tests {
         .unwrap();
         assert_eq!(state.status, RunStatus::AwaitingUser);
         assert_eq!(state.nodes["worker"].status, NodeStatus::Interrupted);
-        assert_eq!(state.awaiting_reason.as_deref(), Some("session_died: tmux gone"));
+        assert_eq!(
+            state.awaiting_reason.as_deref(),
+            Some("session_died: tmux gone")
+        );
         // Distinct from an interactive wait: that carries no awaiting_reason.
         assert!(state.failure_reason.is_none());
     }

@@ -441,11 +441,10 @@ fn validate_interrupt(state: &RunState, event: &Event) -> Verdict {
         // interrupt with no iteration row): a fresh interrupt is allowed unless
         // the node itself is already interrupted — a re-interrupt of the same
         // never-started node is a no-op.
-        None
-            if state
-                .nodes
-                .get(node_id)
-                .is_some_and(|n| n.status == NodeStatus::Interrupted) =>
+        None if state
+            .nodes
+            .get(node_id)
+            .is_some_and(|n| n.status == NodeStatus::Interrupted) =>
         {
             Verdict::noop(format!(
                 "node {node_id} is already interrupted: interrupt ignored"

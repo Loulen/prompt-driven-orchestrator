@@ -7,9 +7,15 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 # <directory>  <max direct tracked files>
+# frontend/src/components: 146 reconciles a preexisting drift (the tree already
+#   held 146 direct files before #598; the baseline had lagged at 144). Ratchet
+#   down when the flat list is genuinely tidied.
+# crates/pdo-daemon/src: 64 admits auto_fail.rs (#598), a pure `auto_fail`
+#   resolver that mirrors its standalone-module siblings harness_resolver.rs,
+#   run_cost.rs and transition_guard.rs — a distinct pure concern, not drift.
 BASELINES='
-frontend/src/components 144
-crates/pdo-daemon/src 63
+frontend/src/components 146
+crates/pdo-daemon/src 64
 '
 
 fail=0

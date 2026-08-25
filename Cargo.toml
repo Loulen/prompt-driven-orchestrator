@@ -78,3 +78,11 @@ github-build-setup = "../build-setup.yml"
 install-path = "~/.local/bin"
 # Les PR ne construisent que le plan ; rien ne publie hors tag `v*`.
 pr-run-mode = "plan"
+
+# Profil de build utilisé par `dist build` (`cargo build --profile dist`). Requis :
+# sans lui, la release échoue avec « error: profile `dist` is not defined ». Normalement
+# posé par `dist init` ; ici la config a été écrite à la main. Standard dist : hérite de
+# `release` (ce que l'ancien install.sh shippait) + thin LTO.
+[profile.dist]
+inherits = "release"
+lto = "thin"

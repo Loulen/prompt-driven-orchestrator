@@ -26,7 +26,7 @@ brew install Loulen/tap/pdo
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/Loulen/prompt-driven-orchestrator/releases/latest/download/pdo-daemon-installer.sh | sh
 ```
 
-Both fetch the prebuilt binary for your platform, verify its checksum, and install `pdo` to `~/.local/bin`.
+Both fetch the prebuilt binary for your platform, verify its checksum, and put `pdo` on your `PATH`: the script installs to `~/.local/bin`, Homebrew into its own prefix (`$(brew --prefix)/bin`).
 
 To install a specific version, use that release's installer:
 
@@ -41,6 +41,8 @@ The installer fetches only the `pdo` binary. The daemon shells out to a couple o
 - **tmux** — every node and run shell is a tmux session on the host. Required, always, whatever harness you use.
 - **git** — each node's work is isolated in a git worktree. Required.
 
+With Homebrew: `brew install tmux git` (or use your system package manager). Homebrew installs `pdo` only — never its runtime tools.
+
 Each node runs its agent through a **harness**, which is your choice, not a fixed dependency. PDO ships descriptors for `claude` (default) and `opencode`, and the set is pluggable ([ADR-0045](docs/adr/0045-un-harnais-se-declare-par-un-template-d-argv-les-capacites-remplissent-les-trous.md)). PDO neither bundles nor requires any specific harness: installing the harness and **its** own dependencies is up to you — e.g. for Claude Code, the `claude` CLI, plus Node.js >= 22 for MCP servers and ripgrep for search.
 
 Then start the daemon:
@@ -54,9 +56,21 @@ Open `http://localhost:5172` in your browser.
 For **unattended Triggers** (the daemon starts at boot and survives logout, instead of dying when you close your session), install it as a persistent service:
 
 ```bash
-pdo service install          # systemd --user unit (Linux) / launchd LaunchAgent (macOS)
-pdo service install --dry-run # preview the unit + commands, change nothing
-pdo service status            # inspect the installed service
+pdo service install             # install + enable + start (works as-is after a Homebrew install)
+pdo service install --port 6160 # custom port (default 5172)
+pdo service install --dry-run   # preview the unit + commands, change nothing
+pdo service status              # inspect the installed service
+pdo service uninstall           # stop, disable, and remove the unit
+```
+
+The unit's `ExecStart` points at the `pdo` you installed from (resolved at install time), so it works whatever the install path. On Linux it runs `loginctl enable-linger`, so the daemon survives logout and starts at boot; a port-conflict guard refuses to install over a non-PDO process already on the port.
+
+From a clean machine to an orchestrator running at boot:
+
+```bash
+brew install Loulen/tap/pdo
+brew install tmux git
+pdo service install
 ```
 
 ### Behind a reverse proxy

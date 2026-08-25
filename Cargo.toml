@@ -65,6 +65,11 @@ targets = [
 # HOMEBREW_TAP_TOKEN (PAT scope repo) à définir sur le repo source.
 tap = "Loulen/homebrew-tap"
 publish-jobs = ["homebrew"]
+# Nom de la formule = `pdo` (pas le nom de package `pdo-daemon`) -> `brew install
+# Loulen/tap/pdo`. Sans ça, dist dérive tout du package et publierait `pdo-daemon.rb`.
+# (L'installeur shell reste `pdo-daemon-installer.sh` : renommer AUSSI ça imposerait
+# de renommer le package Cargo — chantier à part.)
+formula = "pdo"
 # Étapes injectées AVANT `dist build` : Node + `npm ci` dans frontend/, car le
 # build.rs de pdo-daemon lance `npm run build` pendant `cargo build` (rust-embed).
 github-build-setup = "../build-setup.yml"

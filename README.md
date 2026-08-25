@@ -23,7 +23,7 @@ brew install Loulen/tap/pdo
 **Or the install script** (Linux/macOS, x86_64/ARM64):
 
 ```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/Loulen/prompt-driven-orchestrator/releases/latest/download/pdo-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/Loulen/prompt-driven-orchestrator/releases/latest/download/pdo-daemon-installer.sh | sh
 ```
 
 Both fetch the prebuilt binary for your platform, verify its checksum, and install `pdo` to `~/.local/bin`.
@@ -31,7 +31,7 @@ Both fetch the prebuilt binary for your platform, verify its checksum, and insta
 To install a specific version, use that release's installer:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/Loulen/prompt-driven-orchestrator/releases/download/v1.31.2/pdo-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/Loulen/prompt-driven-orchestrator/releases/download/v1.31.2/pdo-daemon-installer.sh | sh
 ```
 
 ### Runtime requirements

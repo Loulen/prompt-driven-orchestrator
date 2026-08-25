@@ -538,7 +538,8 @@ mod tests {
         // implementation. This is the path a liveness sweep takes.
         for name in [OPENCODE, "pi", "not-a-harness"] {
             assert!(
-                resolve_transcript(name, Path::new("/proj"), Path::new("/wd"), Some("abc")).is_none(),
+                resolve_transcript(name, Path::new("/proj"), Path::new("/wd"), Some("abc"))
+                    .is_none(),
                 "{name}: no transcript resolution leaks from claude"
             );
             // A tail claude WOULD call ended is not enough — a data-declared harness

@@ -490,7 +490,11 @@ pub(crate) async fn run_command(
         }
         Ok(false) => {}
         Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("error: {e}") })),
+            )
+                .into_response();
         }
     }
 
@@ -547,7 +551,10 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             let events = match load_events(&state.db, &run_id).await {
                 Ok(e) => e,
                 Err(e) => {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}"))
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({ "error": format!("error: {e}") })),
+                    )
                         .into_response();
                 }
             };
@@ -562,7 +569,10 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                     match crate::embed_reopen_for_targeted_command(&state, &run_id, rs).await {
                         Ok(s) => Some(s),
                         Err(e) => {
-                            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}"))
+                            return (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(serde_json::json!({ "error": format!("error: {e}") })),
+                            )
                                 .into_response();
                         }
                     }
@@ -627,7 +637,11 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             };
 
             if let Err(e) = append_event(&state, &event).await {
-                return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": format!("error: {e}") })),
+                )
+                    .into_response();
             }
 
             let cmd_event = event_log::Event {
@@ -729,7 +743,11 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 })),
             };
             if let Err(e) = append_event(&state, &cmd_event).await {
-                return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": format!("error: {e}") })),
+                )
+                    .into_response();
             }
 
             if run_state.status == event_log::RunStatus::Halted
@@ -813,7 +831,11 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 payload: Some(payload),
             };
             if let Err(e) = append_event(&state, &cmd_event).await {
-                return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": format!("error: {e}") })),
+                )
+                    .into_response();
             }
 
             // Continue the run: an exhausted-unrouted region parks the run
@@ -1200,7 +1222,11 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 payload: None,
             };
             if let Err(e) = append_event(&state, &pause_event).await {
-                return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": format!("error: {e}") })),
+                )
+                    .into_response();
             }
 
             info!("pause_run: run {run_id}");
@@ -1224,7 +1250,10 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                         payload: None,
                     };
                     if let Err(e) = append_event(&state, &resume_event).await {
-                        return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}"))
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::json!({ "error": format!("error: {e}") })),
+                        )
                             .into_response();
                     }
                 }
@@ -1239,7 +1268,10 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                         payload: Some(serde_json::json!({ "command": "resume_run" })),
                     };
                     if let Err(e) = append_event(&state, &cmd_event).await {
-                        return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}"))
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::json!({ "error": format!("error: {e}") })),
+                        )
                             .into_response();
                     }
                 }
@@ -1341,7 +1373,11 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 payload: Some(serde_json::json!({ "command": "reopen_run" })),
             };
             if let Err(e) = append_event(&state, &cmd_event).await {
-                return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": format!("error: {e}") })),
+                )
+                    .into_response();
             }
 
             // #316: kill any open shell before the re-drive re-arms the merge.
@@ -1417,7 +1453,11 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 })),
             };
             if let Err(e) = append_event(&state, &fail_event).await {
-                return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": format!("error: {e}") })),
+                )
+                    .into_response();
             }
 
             // #488 / #205 — replaces the bare `tmux kill` + `kill_session_best_effort`
@@ -1492,7 +1532,10 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             let events = match load_events(&state.db, &run_id).await {
                 Ok(e) => e,
                 Err(e) => {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}"))
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({ "error": format!("error: {e}") })),
+                    )
                         .into_response();
                 }
             };
@@ -1505,7 +1548,10 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                     match crate::embed_reopen_for_targeted_command(&state, &run_id, rs).await {
                         Ok(s) => Some(s),
                         Err(e) => {
-                            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}"))
+                            return (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(serde_json::json!({ "error": format!("error: {e}") })),
+                            )
                                 .into_response();
                         }
                     }
@@ -1563,27 +1609,38 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
 
             // ── PRE-KILL PROBE 2: does the Run exist at all? ──────────────────────
             //
-            // `404 text/plain`, and now WITHOUT a trace. Pre-#489 this same 404 was
-            // answered after the kill and after the `CommandIssued` append. Body and
-            // content-type are untouched: normalising them is #491's scope.
+            // `404`, and now WITHOUT a trace. Pre-#489 this same 404 was answered
+            // after the kill and after the `CommandIssued` append. #491/#601: body
+            // normalised to JSON so the front can read it.
             let Some(run_state) = projected else {
-                return (StatusCode::NOT_FOUND, "run not found").into_response();
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({ "error": "run not found" })),
+                )
+                    .into_response();
             };
 
             // ── PRE-KILL PROBE 3: the Run's pipeline SNAPSHOT ─────────────────────
             //
             // `resolve_run_pipeline_path`, the same snapshot-first helper
             // `extend_cycle` uses (ADR-0025 §2: the source of truth is the Run's
-            // pipeline snapshot, not the library). Both `500 text/plain` bodies are
-            // unchanged — only their position moved, above the kill.
+            // pipeline snapshot, not the library). #491/#601: both `500` bodies are
+            // JSON now.
             let repo_root = effective_repo_root(&state, &run_state);
             let pipeline_path =
                 resolve_run_pipeline_path(&repo_root, &run_id, &run_state.pipeline_name);
             let Ok(yaml) = std::fs::read_to_string(&pipeline_path) else {
-                return (StatusCode::INTERNAL_SERVER_ERROR, "cannot read pipeline").into_response();
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": "cannot read pipeline" })),
+                )
+                    .into_response();
             };
             let Ok(parse_result) = pipeline::parse_pipeline(&yaml) else {
-                return (StatusCode::INTERNAL_SERVER_ERROR, "cannot parse pipeline")
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": "cannot parse pipeline" })),
+                )
                     .into_response();
             };
             let pipeline = parse_result.pipeline;
@@ -1958,7 +2015,11 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 })),
             };
             if let Err(e) = append_event(&state, &cmd_event).await {
-                return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": format!("error: {e}") })),
+                )
+                    .into_response();
             }
 
             // AC7 / ADR-0049: injecting the artifact a parked node was waiting on
@@ -1974,7 +2035,10 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                     if let Err(e) =
                         crate::embed_reopen_for_targeted_command(&state, &run_id, run_state).await
                     {
-                        return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}"))
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::json!({ "error": format!("error: {e}") })),
+                        )
                             .into_response();
                     }
                     re_evaluate_after_command(&state, &run_id).await;
@@ -1995,7 +2059,11 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 payload: Some(serde_json::json!({ "name": new_name })),
             };
             if let Err(e) = append_event(&state, &rename_event).await {
-                return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": format!("error: {e}") })),
+                )
+                    .into_response();
             }
 
             info!("rename_run: run {run_id} renamed to {:?}", new_name);

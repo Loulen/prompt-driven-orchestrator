@@ -950,7 +950,14 @@ async fn interrupt_spawn_before_start(
         kind: event_log::EventKind::NodeInterrupted,
         node_id: Some(node_id.to_string()),
         iter: Some(iter),
-        payload: Some(serde_json::json!({ "reason": reason, "source": "spawn" })),
+        // #601: prefix the machine slug so the node reason is `<code>: <prose>`
+        // and [`finalize`](crate::event_log) derives `awaiting_reason_code`
+        // (`spawn_aborted`). `source: "spawn"` is retained for existing readers.
+        payload: Some(serde_json::json!({
+            "reason": format!("spawn_aborted: {reason}"),
+            "reason_code": "spawn_aborted",
+            "source": "spawn",
+        })),
     };
     if let Err(e) = append_event_with(deps.db, deps.event_tx, &interrupted).await {
         error!("Run {run_id}: failed to append NodeInterrupted after spawn abort: {e}");
@@ -987,7 +994,12 @@ async fn interrupt_spawn_after_start(
         kind: event_log::EventKind::NodeInterrupted,
         node_id: Some(node_id.to_string()),
         iter: Some(iter),
-        payload: Some(serde_json::json!({ "reason": reason, "source": "spawn" })),
+        // #601: machine slug prefix, as in `interrupt_spawn_before_start`.
+        payload: Some(serde_json::json!({
+            "reason": format!("spawn_aborted: {reason}"),
+            "reason_code": "spawn_aborted",
+            "source": "spawn",
+        })),
     };
     if let Err(e) = append_event_with(deps.db, deps.event_tx, &interrupted).await {
         error!("Run {run_id}: failed to append NodeInterrupted after spawn failure: {e}");

@@ -507,6 +507,63 @@ struct CreateRunRequest {
     auto_fail: Option<bool>,
 }
 
+/// The top-level keys `POST /runs` accepts, kept in lock-step with
+/// [`CreateRunRequest`] (the test `create_run_known_fields_cover_the_struct` pins
+/// that a payload of exactly these keys deserializes clean, so a new field can't
+/// be added to the struct without being allowed here).
+///
+/// #601 — at this **write boundary** an unknown field is a client mistake we
+/// surface (`400` naming it, before any effect), not a key silently dropped: the
+/// symptom the issue names is a `target_repos` thrown away in silence, launching
+/// the run mono-repo. This is the same doctrine as ADR-0033's required
+/// `target_repo`, and deliberately **narrower** than the crate-wide "ignore
+/// unknown fields" convention (ADR-0015 #471) — that convention governs
+/// forward-compatible *config documents* read by an older binary, a different
+/// concern from an API request a client just typed. Hence explicit validation
+/// here rather than a blanket `#[serde(deny_unknown_fields)]`, which the crate
+/// deliberately never uses and whose generic serde message is less actionable.
+const CREATE_RUN_FIELDS: &[&str] = &[
+    "pipeline",
+    "input",
+    "variables",
+    "pipeline_id",
+    "target_repo",
+    "target_repos",
+    "source_branch",
+    "name",
+    "triggered_by",
+    "sandbox",
+    "harness",
+    "auto_name",
+    "auto_fail",
+];
+
+/// Reject a `POST /runs` JSON body carrying a top-level key the API does not know
+/// (#601): `Err((400, {error}))` naming the first unknown field and listing the
+/// accepted set. A non-object body is left for the typed deserialize to reject
+/// (its `invalid JSON` message is already actionable).
+fn reject_unknown_create_run_fields(
+    body: &serde_json::Value,
+) -> Result<(), (StatusCode, serde_json::Value)> {
+    let Some(obj) = body.as_object() else {
+        return Ok(());
+    };
+    for key in obj.keys() {
+        if !CREATE_RUN_FIELDS.contains(&key.as_str()) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                serde_json::json!({
+                    "error": format!(
+                        "unknown field `{key}` in POST /runs body; accepted fields: {}",
+                        CREATE_RUN_FIELDS.join(", ")
+                    )
+                }),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// One repo line of a multi-repo create request (#465, ADR-0042/0047).
 ///
 /// The wire shape the front sends per row: a `repo` path, an optional
@@ -569,6 +626,15 @@ struct RunListEntry {
     /// was a coloured dot with no text anywhere behind it.
     #[serde(skip_serializing_if = "Option::is_none")]
     failure_reason: Option<String>,
+    /// Why the Run is parked `AwaitingUser` on an **incident** (ADR-0049), and its
+    /// machine slug (#601). Carried on the *list* entry for the same reason as
+    /// `failure_reason`: a manager watching the cockpit list must see *why* a run
+    /// is parked without opening the detail (FP #1). `None` for an interactive
+    /// wait (that carries no incident reason).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    awaiting_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    awaiting_reason_code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<String>,
     /// Provenance: the Trigger that created this Run, if any.
@@ -6759,15 +6825,25 @@ async fn load_projected(
     let events = match load_events(&state.db, run_id).await {
         Ok(e) => e,
         Err(e) => {
+            // #491/#601: error bodies are JSON, so a front `.catch(() => null)`
+            // on `resp.json()` can read the reason instead of swallowing text.
             return Err(Box::new(
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response(),
-            ))
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": format!("error: {e}") })),
+                )
+                    .into_response(),
+            ));
         }
     };
     match event_log::project(&events) {
         Some(run_state) => Ok((events, run_state)),
         None => Err(Box::new(
-            (StatusCode::NOT_FOUND, "run not found").into_response(),
+            (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "run not found" })),
+            )
+                .into_response(),
         )),
     }
 }
@@ -6936,7 +7012,9 @@ async fn reconcile_run_level_stall(state: &AppState, run_id: &str) {
         kind: event_log::EventKind::RunInterrupted,
         node_id: None,
         iter: None,
-        payload: Some(serde_json::json!({ "reason": reason })),
+        // #601: `run_stalled` machine slug + prose (the prose already opens with
+        // `run_stalled:`, so the two agree). Every non-advancement carries a code.
+        payload: Some(event_log::interrupt_payload("run_stalled", reason.clone())),
     };
     // `RunInterrupted` is inert on an already-terminal run (its reducer gates on
     // `is_live`), so a run that finished organically since the snapshot above is
@@ -7097,15 +7175,22 @@ fn run_stall_reason(
         return None;
     }
 
-    // An open (not-`done`) loop/foreach region is the Pipeline Manager's domain:
+    // An open (not-`done`) region of ANY kind is the Pipeline Manager's domain:
     // an exhausted-unrouted region is surfaced as a Halt to be routed by id
     // (manager-unstick-loop), not a fail-fast stall. Never auto-fail under one —
     // that would steal the manager's recovery path. (Our event-driven Halt is
     // not re-derivable from the cold projection here, so we defer rather than
     // risk a false RunFailed on a routable region.)
-    let open_region = run_state.loop_states.values().any(|ls| !ls.done)
-        || run_state.foreach_states.values().any(|fs| !fs.done);
-    if open_region {
+    //
+    // #601 — **exhaustive by construction**: this defers on `has_open_region`,
+    // which iterates every `RegionStateKind` (loop / foreach / collection). A new
+    // region-state map added to `RunState` becomes a new variant that
+    // `RegionStateKind::open_ids` must classify or fail to compile, so a future
+    // region kind can never silently fall through to the blocker scan below and
+    // reopen the #453 frozen-run-as-`stalled=false` hole. The collection *wedge*
+    // (laps that never started) is deliberately caught above with its own idle
+    // grace — this defer only covers a region still making legitimate progress.
+    if run_state.has_open_region() {
         return None;
     }
 
@@ -7439,7 +7524,15 @@ async fn parse_multipart_create_run(
                     data: data.to_vec(),
                 });
             }
-            _ => {}
+            // #601: an unknown form field is a client mistake, named — not
+            // silently dropped (the symmetric fix to the JSON path). `images` is
+            // the multipart-only field; the rest mirror `CREATE_RUN_FIELDS`.
+            other => {
+                return Err(format!(
+                    "unknown field `{other}` in POST /runs multipart body; accepted fields: {}, images",
+                    CREATE_RUN_FIELDS.join(", ")
+                ));
+            }
         }
     }
 
@@ -7507,7 +7600,23 @@ async fn create_run(State(state): State<Arc<AppState>>, req: axum::extract::Requ
                     .into_response();
             }
         };
-        let parsed: CreateRunRequest = match serde_json::from_slice(&body) {
+        // #601: parse to a Value first so an unknown top-level field is a named
+        // `400` (before any effect), not a silently-dropped key. Then deserialize
+        // the validated object into the typed request.
+        let value: serde_json::Value = match serde_json::from_slice(&body) {
+            Ok(v) => v,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": format!("invalid JSON: {e}") })),
+                )
+                    .into_response();
+            }
+        };
+        if let Err((status, err)) = reject_unknown_create_run_fields(&value) {
+            return (status, Json(err)).into_response();
+        }
+        let parsed: CreateRunRequest = match serde_json::from_value(value) {
             Ok(r) => r,
             Err(e) => {
                 return (
@@ -10033,6 +10142,8 @@ async fn list_runs(State(state): State<Arc<AppState>>) -> Response {
                 stalled,
                 started_at: run_state.started_at,
                 failure_reason: run_state.failure_reason,
+                awaiting_reason: run_state.awaiting_reason,
+                awaiting_reason_code: run_state.awaiting_reason_code,
                 name: run_state.name,
                 triggered_by: run_state.triggered_by,
                 effective_repo,
@@ -11908,9 +12019,10 @@ async fn spawn_merge_resolver(
             kind: event_log::EventKind::RunInterrupted,
             node_id: None,
             iter: None,
-            payload: Some(serde_json::json!({
-                "reason": "merge resolver spawn failed"
-            })),
+            payload: Some(event_log::interrupt_payload(
+                "merge_resolver_spawn_failed",
+                "merge_resolver_spawn_failed: merge resolver spawn failed",
+            )),
         };
         let _ = append_event(state, &run_interrupted).await;
 
@@ -11960,9 +12072,10 @@ async fn handle_merge_resolver_done(
             kind: event_log::EventKind::RunInterrupted,
             node_id: None,
             iter: None,
-            payload: Some(serde_json::json!({
-                "reason": format!("merge resolution failed: {reason}")
-            })),
+            payload: Some(event_log::interrupt_payload(
+                "merge_resolution_failed",
+                format!("merge_resolution_failed: {reason}"),
+            )),
         };
         let _ = append_event(state, &run_interrupted).await;
 
@@ -12544,7 +12657,12 @@ async fn complete_node_iteration(
                         kind: event_log::EventKind::NodeInterrupted,
                         node_id: Some(node_id.clone()),
                         iter: Some(iter),
-                        payload: Some(serde_json::json!({ "reason": reason })),
+                        // #601: prefix the refusal slug so `finalize` derives
+                        // `awaiting_reason_code = merge_conflict` from the node.
+                        payload: Some(serde_json::json!({
+                            "reason": format!("merge_conflict: {reason}"),
+                            "reason_code": "merge_conflict",
+                        })),
                     };
                     let _ = append_event(state, &node_interrupted).await;
 
@@ -12612,9 +12730,10 @@ async fn complete_node_iteration(
                     iter: Some(iter),
                     payload: Some(serde_json::json!({
                         "reason": format!(
-                            "doc-only node {node_id} violated code immutability \
-                             (modified tracked files)"
-                        )
+                            "doc_violated_code_immutability: doc-only node {node_id} \
+                             violated code immutability (modified tracked files)"
+                        ),
+                        "reason_code": "doc_violated_code_immutability",
                     })),
                 };
                 let _ = append_event(state, &interrupt_event).await;
@@ -12922,9 +13041,12 @@ async fn node_fail(
                 kind: event_log::EventKind::RunInterrupted,
                 node_id: None,
                 iter: None,
-                payload: Some(serde_json::json!({
-                    "reason": format!("agent pdo fail (awaiting confirmation): {reason}")
-                })),
+                payload: Some(event_log::interrupt_payload(
+                    "agent_fail_awaiting",
+                    format!(
+                        "agent_fail_awaiting: agent pdo fail (awaiting confirmation): {reason}"
+                    ),
+                )),
             }
         };
         if let Err(e) = append_event(&tail_state, &run_event).await {
@@ -13221,10 +13343,18 @@ async fn force_spawn_node(
         }
     };
     let Ok(yaml) = std::fs::read_to_string(&pipeline_path) else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "cannot read pipeline").into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "cannot read pipeline" })),
+        )
+            .into_response();
     };
     let Ok(parse_result) = pipeline::parse_pipeline(&yaml) else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "cannot parse pipeline").into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "cannot parse pipeline" })),
+        )
+            .into_response();
     };
     let pipeline_def = parse_result.pipeline;
 
@@ -13528,10 +13658,18 @@ async fn node_retry(
         }
     };
     let Ok(yaml) = std::fs::read_to_string(&pipeline_path) else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "cannot read pipeline").into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "cannot read pipeline" })),
+        )
+            .into_response();
     };
     let Ok(parse_result) = pipeline::parse_pipeline(&yaml) else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "cannot parse pipeline").into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "cannot parse pipeline" })),
+        )
+            .into_response();
     };
     let pipeline_def = parse_result.pipeline;
 
@@ -13721,10 +13859,18 @@ async fn node_retry_preview(
         }
     };
     let Ok(yaml) = std::fs::read_to_string(&pipeline_path) else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "cannot read pipeline").into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "cannot read pipeline" })),
+        )
+            .into_response();
     };
     let Ok(parse_result) = pipeline::parse_pipeline(&yaml) else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "cannot parse pipeline").into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "cannot parse pipeline" })),
+        )
+            .into_response();
     };
     let pipeline_def = parse_result.pipeline;
 
@@ -14254,7 +14400,12 @@ async fn cleanup_run(state: &AppState, run_id: &str) -> Response {
     };
 
     if run_state.status == event_log::RunStatus::Archived {
-        return (StatusCode::CONFLICT, "run is already archived").into_response();
+        // #491/#601: JSON body so the front reads the reason (was text/plain).
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": "run is already archived" })),
+        )
+            .into_response();
     }
 
     let socket = state.tmux_socket();
@@ -15716,7 +15867,11 @@ async fn check_output_validation_with_retry(
             node_id: Some(node_id.to_string()),
             iter: Some(iter),
             payload: Some(serde_json::json!({
-                "reason": format!("script node {node_id} failed output validation at iter {iter}"),
+                "reason": format!(
+                    "script_validation_failed: script node {node_id} failed output \
+                     validation at iter {iter}"
+                ),
+                "reason_code": "script_validation_failed",
                 "detail": detail,
             })),
         };
@@ -15761,8 +15916,10 @@ async fn check_output_validation_with_retry(
                     iter: Some(iter),
                     payload: Some(serde_json::json!({
                         "reason": format!(
-                            "node {node_id} failed output validation after retry at iter {iter}"
+                            "frontmatter_retry_exhausted: node {node_id} failed output \
+                             validation after retry at iter {iter}"
                         ),
+                        "reason_code": "frontmatter_retry_exhausted",
                         "violations": violation_details,
                     })),
                 };
@@ -17615,6 +17772,85 @@ mod tests {
                 .any(|e| e.kind == event_log::EventKind::RunFailed),
             "graceful no-op must not append a RunFailed event"
         );
+    }
+
+    #[tokio::test]
+    async fn node_skip_on_an_already_completed_node_is_an_honest_noop() {
+        // #601 FP #6: a valid command with no effect answers `200 {noop, reason}`,
+        // never a false success. Skipping a node whose iteration is already
+        // terminal (Completed) while the run is still live routes through the same
+        // completion head gate as `pdo complete`, which returns a legal-duplicate
+        // NoOp — honest, and it appends nothing new.
+        let state = test_state().await;
+        let run_id = "skip-noop";
+        for ev in [
+            (
+                event_log::EventKind::RunStarted,
+                None,
+                None,
+                Some(serde_json::json!({ "pipeline_name": "test" })),
+            ),
+            (
+                event_log::EventKind::NodeStarted,
+                Some("worker"),
+                Some(1),
+                None,
+            ),
+            (
+                event_log::EventKind::NodeCompleted,
+                Some("worker"),
+                Some(1),
+                None,
+            ),
+        ] {
+            append_event(
+                &state,
+                &event_log::Event {
+                    id: None,
+                    run_id: run_id.into(),
+                    ts: event_log::now_iso(),
+                    kind: ev.0,
+                    node_id: ev.1.map(String::from),
+                    iter: ev.2,
+                    payload: ev.3,
+                },
+            )
+            .await
+            .unwrap();
+        }
+
+        let before = load_events(&state.db, run_id).await.unwrap().len();
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/runs/skip-noop/nodes/worker/skip")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"reason":"already done"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let json: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            json["noop"],
+            serde_json::json!(true),
+            "must be an honest noop: {json}"
+        );
+        assert!(
+            json["reason"].as_str().is_some_and(|r| !r.is_empty()),
+            "the noop must carry a reason: {json}"
+        );
+        // Honest = no new event appended (never a false success that writes state).
+        let after = load_events(&state.db, run_id).await.unwrap().len();
+        assert_eq!(before, after, "a noop must append nothing");
     }
 
     #[tokio::test]
@@ -25806,22 +26042,24 @@ edges:
     }
 
     const JSON_CT: &str = "application/json";
-    const TEXT_CT: &str = "text/plain; charset=utf-8";
+    // #491/#601: every `/commands` error body is JSON now — no text/plain constant
+    // remains, which is itself the invariant (a text body would need re-introducing
+    // the constant, a visible diff).
 
     #[tokio::test]
     async fn every_kind_status_and_content_type_on_an_unstarted_run() {
         // THE test of the net. Against a run with an empty event log, this
-        // surface answers in three incompatible ways, and nothing pinned it:
+        // surface answers in two shapes, and nothing pinned it:
         //   * four kinds answer 200 and APPEND — they are designed to work
         //     before the run exists (`inject_artifact` writes the file the run
         //     has not yet produced; `rename_run` appends blind);
-        //   * eight answer 404 text/plain "run not found";
-        //   * `start_node` alone answers 404 as JSON, because it delegates to
-        //     `force_spawn_node`.
+        //   * the rest answer 404 — and since #491/#601 they ALL answer JSON
+        //     `{"error":"run not found"}` (previously eight were text/plain and
+        //     only `start_node` was JSON; the front's `resp.json().catch()` swallowed
+        //     the text ones — that split is closed, every `/commands` error is JSON).
         // Hoisting the `load_events -> project` preamble to the top of the
         // handler — the single most tempting move in this refactor — flips the
-        // first group to 404 and the content-type of the third. Both would be
-        // silent: no other test in the repo looks.
+        // first group to 404. That would be silent: no other test in the repo looks.
         //
         // One run_id per row: the 200 rows APPEND, so a shared id would let row
         // N poison row N+1's projection.
@@ -25840,36 +26078,36 @@ edges:
             (
                 r#"{"kind":"extend_cycle","node_id":"n1","additional_iter":1}"#,
                 StatusCode::NOT_FOUND,
-                TEXT_CT,
-                "run not found",
+                JSON_CT,
+                r#"{"error":"run not found"}"#,
                 false,
             ),
             (
                 r#"{"kind":"bump_region","region_id":"r1","additional_iter":1}"#,
                 StatusCode::NOT_FOUND,
-                TEXT_CT,
-                "run not found",
+                JSON_CT,
+                r#"{"error":"run not found"}"#,
                 false,
             ),
             (
                 r#"{"kind":"end_region","region_id":"r1"}"#,
                 StatusCode::NOT_FOUND,
-                TEXT_CT,
-                "run not found",
+                JSON_CT,
+                r#"{"error":"run not found"}"#,
                 false,
             ),
             (
                 r#"{"kind":"pause_run"}"#,
                 StatusCode::NOT_FOUND,
-                TEXT_CT,
-                "run not found",
+                JSON_CT,
+                r#"{"error":"run not found"}"#,
                 false,
             ),
             (
                 r#"{"kind":"resume_run"}"#,
                 StatusCode::NOT_FOUND,
-                TEXT_CT,
-                "run not found",
+                JSON_CT,
+                r#"{"error":"run not found"}"#,
                 false,
             ),
             (
@@ -25879,7 +26117,7 @@ edges:
                 r#"{"ok":true}"#,
                 true,
             ),
-            // 404 text, and since #489 WITHOUT A TRACE. Until then this arm killed
+            // 404, and since #489 WITHOUT A TRACE. Until then this arm killed
             // the (absent) tmux session and appended its `CommandIssued` BEFORE
             // re-projecting, so the "run not found" it answered arrived after two
             // side effects. The `false` in the last column IS the fix: ADR-0037 §3
@@ -25887,15 +26125,14 @@ edges:
             // knowable refusal — this one included — is raised ahead of both.
             // (`project` still returns `None` here because the log carries no
             // `RunStarted`, #328 / `event_log.rs`, not because it is empty.)
+            // Body is JSON since #491/#601.
             (
                 r#"{"kind":"restart_node","node_id":"n1"}"#,
                 StatusCode::NOT_FOUND,
-                TEXT_CT,
-                "run not found",
+                JSON_CT,
+                r#"{"error":"run not found"}"#,
                 false,
             ),
-            // The lone JSON 404 on this surface — it comes from
-            // `force_spawn_node`, not from the arm.
             (
                 r#"{"kind":"start_node","node_id":"n1"}"#,
                 StatusCode::NOT_FOUND,
@@ -25920,15 +26157,15 @@ edges:
             (
                 r#"{"kind":"cleanup_run"}"#,
                 StatusCode::NOT_FOUND,
-                TEXT_CT,
-                "run not found",
+                JSON_CT,
+                r#"{"error":"run not found"}"#,
                 false,
             ),
             (
                 r#"{"kind":"retry_all"}"#,
                 StatusCode::NOT_FOUND,
-                TEXT_CT,
-                "run not found",
+                JSON_CT,
+                r#"{"error":"run not found"}"#,
                 false,
             ),
             (
@@ -26010,13 +26247,13 @@ edges:
     }
 
     #[tokio::test]
-    async fn cleanup_run_error_bodies_are_text_not_json() {
-        // `cleanup_run` is a pure passthrough to a delegate, so its two error
-        // bodies are text/plain while every sibling error on this surface is
-        // JSON. The 200/409 split is an operator contract (the disk janitor
-        // recipe reads it as "reclaimed / already archived"); the content-type
-        // is what a "let's normalise the error bodies" refactor would silently
-        // flip.
+    async fn cleanup_run_error_bodies_are_json() {
+        // #491/#601: `cleanup_run`'s error bodies are JSON like every sibling on
+        // this surface — the front's `resp.json().catch()` reads them instead of
+        // swallowing text/plain. The 200/409/404 status split is unchanged (it is
+        // an operator contract the disk-janitor recipe reads as "reclaimed /
+        // already archived / gone"); only the wire shape of the two error bodies
+        // moved from text to JSON.
         let state = test_state().await;
         let run_id = "cleanup-bodies";
         seed_completed_run(&state, run_id).await;
@@ -26030,14 +26267,22 @@ edges:
         let (status, ct, body) = command_triplet(&state, run_id, r#"{"kind":"cleanup_run"}"#).await;
         assert_eq!(
             (status, ct.as_str(), body.as_str()),
-            (StatusCode::CONFLICT, TEXT_CT, "run is already archived")
+            (
+                StatusCode::CONFLICT,
+                JSON_CT,
+                r#"{"error":"run is already archived"}"#
+            )
         );
 
         let (status, ct, body) =
             command_triplet(&state, "no-such-run", r#"{"kind":"cleanup_run"}"#).await;
         assert_eq!(
             (status, ct.as_str(), body.as_str()),
-            (StatusCode::NOT_FOUND, TEXT_CT, "run not found")
+            (
+                StatusCode::NOT_FOUND,
+                JSON_CT,
+                r#"{"error":"run not found"}"#
+            )
         );
     }
 
@@ -30955,6 +31200,145 @@ edges:
             r#"{"pipeline": "some-pipe", "input": "do the thing"}"#,
         )
         .await;
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn create_run_with_unknown_field_is_400_naming_it() {
+        // #601: an unknown top-level field is a named `400`, never silently dropped
+        // (the symptom the issue cites is a `target_repos` typo thrown away, launching
+        // the run mono-repo). The check runs before any effect: no Run is created.
+        let _home = FakeHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "some-pipe");
+        init_test_repo(tmp.path());
+        let repo = tmp.path().to_string_lossy().into_owned();
+        let state = test_state_with_dir(tmp.path()).await;
+
+        let app = build_router(state.clone());
+        let body = format!(
+            r#"{{"pipeline":"some-pipe","input":"x","target_repo":"{repo}","target_repoz":[]}}"#
+        );
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/runs")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let json: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let error = json["error"].as_str().unwrap_or_default();
+        assert!(
+            error.contains("target_repoz"),
+            "the error must name the unknown field; got: {error}"
+        );
+        assert_no_run_and_no_worktree(&state).await;
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn create_run_with_unknown_field_multipart_is_400() {
+        // The symmetric fix on the multipart (browser) path: an unrecognised form
+        // field is named, not silently ignored by the old `_ => {}` arm.
+        let _home = FakeHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "some-pipe");
+        init_test_repo(tmp.path());
+        let state = test_state_with_dir(tmp.path()).await;
+
+        const BOUNDARY: &str = "----pdoTestBoundary601";
+        let mut body = String::new();
+        for (name, value) in [("pipeline", "some-pipe"), ("input", "x"), ("bogus", "v")] {
+            body.push_str(&format!("--{BOUNDARY}\r\n"));
+            body.push_str(&format!(
+                "Content-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
+            ));
+        }
+        body.push_str(&format!("--{BOUNDARY}--\r\n"));
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/runs")
+                    .header(
+                        "content-type",
+                        format!("multipart/form-data; boundary={BOUNDARY}"),
+                    )
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let json: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            json["error"].as_str().unwrap_or_default().contains("bogus"),
+            "the multipart error must name the unknown field; got: {json}"
+        );
+        assert_no_run_and_no_worktree(&state).await;
+    }
+
+    #[test]
+    fn create_run_known_fields_cover_the_struct() {
+        // Guards the allow-list against drift: a payload carrying EXACTLY the
+        // accepted keys must pass the unknown-field gate AND deserialize into the
+        // typed request. A field added to `CreateRunRequest` but not to
+        // `CREATE_RUN_FIELDS` would be rejected by the gate at runtime; one added
+        // to the list but not the struct would be a dead entry. Values are
+        // type-appropriate (`#[serde(default)]` only fills an ABSENT key, so a
+        // present `null` on a `Vec`/`HashMap` field would fail — hence `{}`/`[]`).
+        let value = serde_json::json!({
+            "pipeline": "p",
+            "input": "i",
+            "variables": {},
+            "pipeline_id": null,
+            "target_repo": null,
+            "target_repos": [],
+            "source_branch": null,
+            "name": null,
+            "triggered_by": null,
+            "sandbox": null,
+            "harness": null,
+            "auto_name": null,
+            "auto_fail": null,
+        });
+        // The payload's keys are exactly the allow-list (pins the lock-step).
+        let keys: std::collections::BTreeSet<String> =
+            value.as_object().unwrap().keys().cloned().collect();
+        let allowed: std::collections::BTreeSet<String> =
+            CREATE_RUN_FIELDS.iter().map(|s| s.to_string()).collect();
+        assert_eq!(
+            keys, allowed,
+            "the test payload must list exactly CREATE_RUN_FIELDS"
+        );
+
+        assert!(
+            reject_unknown_create_run_fields(&value).is_ok(),
+            "every listed field must be accepted by the gate"
+        );
+        let parsed: Result<CreateRunRequest, _> = serde_json::from_value(value);
+        assert!(
+            parsed.is_ok(),
+            "the accepted field set must deserialize into CreateRunRequest: {:?}",
+            parsed.err()
+        );
     }
 
     #[tokio::test]

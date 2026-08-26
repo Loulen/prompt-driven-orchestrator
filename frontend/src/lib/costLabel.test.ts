@@ -3,6 +3,8 @@ import {
   costPrecision,
   formatEstCost,
   formatBucketCost,
+  COST_ESTIMATE_NOTE,
+  COST_REPORTED_NOTE,
 } from "./costLabel";
 
 describe("costPrecision", () => {
@@ -74,6 +76,49 @@ describe("formatEstCost (single run, #272)", () => {
     expect(c.title).toMatch(/harnesses .* have no cost source/);
     // Not framed as a lower bound — there is no figure at all.
     expect(c.title).not.toContain("claude-fable-5");
+  });
+
+  it("ventilates a mixed Run by harness, summable but said per harness (#615)", () => {
+    const c = formatEstCost(7.0, false, [], [], [
+      { harness: "claude", usd: 5.0, form: "derived", partial: false, unpriced_models: [] },
+      { harness: "copilot", usd: 2.0, form: "reported", partial: false, unpriced_models: [] },
+    ]);
+    // The total stays summable.
+    expect(c.text).toBe("~$7.00");
+    // Breakdown carries both slices, each with its form.
+    expect(c.ventilation).toEqual([
+      { harness: "claude", text: "~$5.00", form: "derived" },
+      { harness: "copilot", text: "~$2.00", form: "reported" },
+    ]);
+    // The Claude-Code estimate wording appears only under the derived slice…
+    expect(c.title).toMatch(/via `claude` \(derived\)/);
+    expect(c.title).toContain(COST_ESTIMATE_NOTE);
+    // …and the reported slice is framed as reported, not as an estimate.
+    expect(c.title).toMatch(/via `copilot` \(reported\)/);
+    expect(c.title).toContain(COST_REPORTED_NOTE);
+  });
+
+  it("does not label a pure-copilot Run as a Claude-Code estimate (#615)", () => {
+    const c = formatEstCost(1.0, false, [], [], [
+      { harness: "copilot", usd: 1.0, form: "reported", partial: false, unpriced_models: [] },
+    ]);
+    expect(c.text).toBe("~$1.00");
+    // The AC: "estimate from Claude Code transcripts" shows ONLY under a derived
+    // cost — a reported copilot figure must not carry it.
+    expect(c.title).not.toContain(COST_ESTIMATE_NOTE);
+    expect(c.title).toContain(COST_REPORTED_NOTE);
+    expect(c.dagger).toBe(false);
+  });
+
+  it("daggers a mixed Run only when a DERIVED slice is a lower bound (#615)", () => {
+    const c = formatEstCost(7.0, true, ["claude-opus-6"], [], [
+      { harness: "claude", usd: 5.0, form: "derived", partial: true, unpriced_models: ["claude-opus-6"] },
+      { harness: "copilot", usd: 2.0, form: "reported", partial: false, unpriced_models: [] },
+    ]);
+    expect(c.dagger).toBe(true);
+    expect(c.title).toContain("claude-opus-6");
+    // The reported slice never contributes an unpriced-model name.
+    expect(c.title).toMatch(/via `copilot` \(reported\)/);
   });
 });
 

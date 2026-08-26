@@ -413,11 +413,25 @@ function InfoTab({
                     // #553: "—" + reason when a node ran on a harness with no cost
                     // source (e.g. opencode) — never a misleading $0.
                     run.cost.uncosted_harnesses ?? [],
+                    // #615: ventilate a mixed Run's total by harness.
+                    run.cost.by_harness ?? [],
                   );
+                  // Show the per-harness breakdown only when it says more than the
+                  // total already does (a genuinely mixed Run, ≥2 slices).
+                  const ventilated = (c.ventilation ?? []).length > 1;
                   return (
-                    <span className="flex items-center gap-1" title={c.title}>
-                      {c.text}
-                      {c.dagger && <span className="text-st-await">†</span>}
+                    <span className="flex flex-col items-end gap-0.5" title={c.title}>
+                      <span className="flex items-center gap-1">
+                        {c.text}
+                        {c.dagger && <span className="text-st-await">†</span>}
+                      </span>
+                      {ventilated && (
+                        <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
+                          {c.ventilation!
+                            .map((v) => `${v.text} via ${v.harness}`)
+                            .join(" · ")}
+                        </span>
+                      )}
                     </span>
                   );
                 })()

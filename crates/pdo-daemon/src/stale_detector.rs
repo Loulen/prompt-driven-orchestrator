@@ -703,7 +703,18 @@ pub fn assess_node(
 
     if detection == Detection::SessionDied {
         let mut events = detection_events(&detection, run_id, node_id, iter);
-        let diag = probes.session_death_diagnostics();
+        let mut diag = probes.session_death_diagnostics();
+        // #615/ADR-0052: a harness that exits 0 on a hard failure (`copilot`) leaves
+        // the verdict in its journal, not its exit code. Only such a harness pays a
+        // tail read on death (gated on `exit_code_is_verdict` being false) — so
+        // `claude`, whose death is its own signal, keeps short-circuiting every
+        // probe. When the tail trails on a hard error, name it in the death
+        // diagnostics, so the `NodeFailed` payload says WHY, not just "session died".
+        if !crate::harness_probes::exit_code_is_verdict(harness) && diag.harness_error.is_none() {
+            diag.harness_error = probes
+                .transcript_tail()
+                .and_then(|tail| crate::harness_probes::hard_error(harness, &tail.text));
+        }
         attach_diagnostics(&mut events, &diag);
         return Assessment {
             detection,
@@ -792,6 +803,13 @@ pub struct SessionDeathDiagnostics {
     /// session-dead in this sweep. A non-zero count points at a server-wide
     /// collapse (multiple runs dying ~ms apart) rather than an isolated death.
     pub correlated_deaths: usize,
+    /// The **hard error** the node's harness journal carries (#615, ADR-0052), if
+    /// any. Set for a harness that **exits 0 on a hard failure** (`copilot`): the
+    /// exit code is not a verdict, so PDO reads the failure off the journal and
+    /// names it here, in the `NodeFailed` payload, instead of reporting only the
+    /// symptom ("session died"). `None` for `claude` (whose death is its own
+    /// signal) and for any harness whose journal shows no trailing error.
+    pub harness_error: Option<String>,
 }
 
 impl SessionDeathDiagnostics {
@@ -804,6 +822,7 @@ impl SessionDeathDiagnostics {
             "mem_available_kb": self.mem_available_kb,
             "swap_free_kb": self.swap_free_kb,
             "correlated_deaths": self.correlated_deaths,
+            "harness_error": self.harness_error,
         })
     }
 }
@@ -1286,12 +1305,17 @@ mod tests {
             mem_available_kb: Some(123),
             swap_free_kb: Some(456),
             correlated_deaths: 2,
+            harness_error: Some("model failure after retries".to_string()),
         };
         let json = diag.to_json();
         assert_eq!(json["tmux_server_alive"], serde_json::json!(false));
         assert_eq!(json["mem_available_kb"], serde_json::json!(123));
         assert_eq!(json["swap_free_kb"], serde_json::json!(456));
         assert_eq!(json["correlated_deaths"], serde_json::json!(2));
+        assert_eq!(
+            json["harness_error"],
+            serde_json::json!("model failure after retries")
+        );
     }
 
     #[test]
@@ -1313,6 +1337,7 @@ mod tests {
             mem_available_kb: Some(2048),
             swap_free_kb: Some(0),
             correlated_deaths: 1,
+            harness_error: None,
         };
         attach_diagnostics(&mut events, &diag);
 
@@ -1755,7 +1780,7 @@ SwapFree:         204800 kB
     #[test]
     fn assess_dead_session_probes_no_transcript() {
         // Death short-circuits everything: no tail read, no outputs validation,
-        // no pane capture.
+        // no pane capture. `claude`'s exit IS its verdict, so no journal is read.
         let probes = FakeProbes {
             session_alive: false,
             ..FakeProbes::finished_turn()
@@ -1763,6 +1788,73 @@ SwapFree:         204800 kB
         assert_eq!(assess(&probes, true).detection, Detection::SessionDied);
         assert_eq!(probes.tail_calls.get(), 0);
         assert_eq!(probes.validate_calls.get(), 0);
+    }
+
+    // --- #615: copilot's journal is the verdict, not its exit code (ADR-0052) ---
+
+    const COPILOT_HARD_ERROR: &str = concat!(
+        r#"{"type":"assistant.turn_start","data":{"turnId":"0"}}"#,
+        "\n",
+        r#"{"type":"session.error","data":{"errorType":"query","message":"Failed to get response from the AI model; retried 5 times"}}"#,
+        "\n"
+    );
+    const COPILOT_TURN_ENDED: &str = concat!(
+        r#"{"type":"assistant.turn_start","data":{"turnId":"0"}}"#,
+        "\n",
+        r#"{"type":"assistant.turn_end","data":{"turnId":"0"}}"#,
+        "\n"
+    );
+
+    #[test]
+    fn assess_dead_copilot_session_names_the_journal_error() {
+        // AC (#615): a hard error the harness EXITED 0 on is recognised from the
+        // journal, not the exit code. The session died; PDO reads the tail copilot
+        // left and names the failure in the diagnostics.
+        let probes = FakeProbes {
+            session_alive: false,
+            ..FakeProbes::with_tail(COPILOT_HARD_ERROR, Duration::from_secs(1), false)
+        };
+        let a = assess_harness(&probes, true, crate::harness_registry::COPILOT);
+        assert_eq!(a.detection, Detection::SessionDied);
+        let err = a
+            .session_death_diagnostics
+            .as_ref()
+            .unwrap()
+            .harness_error
+            .as_deref()
+            .expect("the journal error is named");
+        assert!(err.contains("Failed to get response from the AI model"));
+        // And it rides in the NodeInterrupted payload alongside the symptom.
+        assert_eq!(
+            a.events[0].payload.as_ref().unwrap()["diagnostics"]["harness_error"],
+            serde_json::json!(err)
+        );
+    }
+
+    #[test]
+    fn assess_copilot_errored_turn_is_not_auto_completed() {
+        // A copilot node whose journal trails on a hard error must NOT be auto-
+        // completed as a finished turn — even with the setting on and outputs valid.
+        let probes = FakeProbes::with_tail(
+            COPILOT_HARD_ERROR,
+            TURN_END_QUIET_PERIOD + Duration::from_secs(5),
+            true,
+        );
+        let a = assess_harness(&probes, true, crate::harness_registry::COPILOT);
+        assert_ne!(a.detection, Detection::TurnEnded, "an errored turn is not ended");
+    }
+
+    #[test]
+    fn assess_copilot_finished_turn_is_auto_completed() {
+        // The positive control: a real copilot turn-end (its own event shape) with
+        // valid outputs auto-completes — dispatched to copilot's journal parser.
+        let probes = FakeProbes::with_tail(
+            COPILOT_TURN_ENDED,
+            TURN_END_QUIET_PERIOD + Duration::from_secs(5),
+            true,
+        );
+        let a = assess_harness(&probes, true, crate::harness_registry::COPILOT);
+        assert_eq!(a.detection, Detection::TurnEnded);
     }
 
     // --- setting OFF: the default path is one liveness probe (#469 §4, AC8) ---

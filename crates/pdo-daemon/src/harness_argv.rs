@@ -232,17 +232,21 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // #614: the `copilot` launch/resume tails, byte for byte — every hole full
-    // and every hole empty (AC "tous trous pleins et tous trous vides"). The tail
-    // is what a resident tmux pane runs; goldens pin it so a flag typo is a red
-    // test, never a broken launch discovered only against a live binary.
+    // #614/#615: the `copilot` launch/resume tails, byte for byte — every hole full
+    // and every hole empty (AC "tous trous pleins et tous trous vides"). The launch
+    // enters interactive mode with the prompt auto-executed (`-i {prompt}`, #615
+    // iter-2), so the harness stays resident: copilot refuses a *positional* prompt
+    // (the slot is for subcommands) and `-i` is how a prompt rides interactive mode.
+    // Goldens pin it so a flag typo — or a regression back to the positional launch
+    // that hung the node — is a red test, never a broken launch discovered only
+    // against a live binary.
     // -----------------------------------------------------------------------
 
     #[test]
     fn copilot_launch_no_holes_uses_the_automatic_selector_and_no_session_pin() {
         // A node with no model / session id: `--model` and `--session-id` drop, so
         // copilot launches on its automatic model selector (AC), fully autonomous,
-        // question tool off, resident after the turn.
+        // question tool off, resident after the turn, prompt auto-executed by `-i`.
         let d = harness_registry::resolve("copilot").unwrap();
         let holes = Holes {
             prompt: prompt_hole("/tmp/p.md"),
@@ -250,7 +254,7 @@ mod tests {
         };
         assert_eq!(
             render(&d.launch, &holes),
-            "exec copilot --allow-all --no-ask-user \"$(cat '/tmp/p.md')\""
+            "exec copilot --allow-all --no-ask-user -i \"$(cat '/tmp/p.md')\""
         );
     }
 
@@ -270,7 +274,7 @@ mod tests {
         assert_eq!(
             render(&d.launch, &holes),
             "exec copilot --allow-all --no-ask-user --model 'gpt-5.2' --session-id 'abc-123' \
-             \"$(cat '/tmp/p.md')\""
+             -i \"$(cat '/tmp/p.md')\""
         );
     }
 
@@ -284,7 +288,7 @@ mod tests {
         };
         assert_eq!(
             render(&d.launch, &holes),
-            "exec copilot --allow-all --no-ask-user --model 'gpt-5.2' \"$(cat '/tmp/p.md')\""
+            "exec copilot --allow-all --no-ask-user --model 'gpt-5.2' -i \"$(cat '/tmp/p.md')\""
         );
     }
 

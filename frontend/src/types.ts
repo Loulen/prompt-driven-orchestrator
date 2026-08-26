@@ -829,13 +829,30 @@ export interface RunState {
    * summable, so the UI shows "—" with a reason naming them, never a `$0` and
    * never a mute lower-bound — a categorically different state from `partial`
    * (which still shows a figure). Empty on every all-`claude` Run.
+   *
+   * `by_harness` (#615, ADR-0052): the total ventilated by harness — "X via
+   * `copilot`, Y via `claude`". `usd` is their sum; each slice carries its `form`
+   * (a `derived` claude estimate vs a `reported` copilot figure), so the UI frames
+   * *only* a derived slice as a Claude-Code estimate and never labels a reported
+   * one as one. Absent/empty on a pre-#615 Run or one with no costable session.
    */
   cost?: {
     usd: number;
     partial: boolean;
     unpriced_models: string[];
     uncosted_harnesses?: string[];
+    by_harness?: HarnessCost[];
   } | null;
+}
+
+/** One harness's slice of a Run's cost (#615, ADR-0052 §3). Additive in dollars,
+ *  tagged with its `form` so a reported figure is never mislabelled an estimate. */
+export interface HarnessCost {
+  harness: string;
+  usd: number;
+  form: "derived" | "reported";
+  partial: boolean;
+  unpriced_models: string[];
 }
 
 export interface DaemonEvent {

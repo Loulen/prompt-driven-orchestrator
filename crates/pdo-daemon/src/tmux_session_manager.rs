@@ -1336,11 +1336,11 @@ pub(crate) fn probe_version(binary: &str) -> Option<String> {
     probe_version_on(binary, &harness_probe_path())
 }
 
-/// The offered catalogue of `binary`, read by running `<binary> --help` on the
-/// harness probe `PATH` and parsing it (#616, ADR-0053 §1). A binary that can't be
-/// run, times out, or enumerates nothing yields [`harness_catalogue::Catalogue::default`]
-/// — the free-text fallback. Executes the binary; see [`probe_version`] for why
-/// that is safe here and not in [`binary_available`].
+/// The offered catalogue of `binary`, read from the harness probe `PATH` (#616/#629,
+/// ADR-0053 §1, ADR-0056). A binary that can't be run, times out, or enumerates
+/// nothing anywhere yields [`harness_catalogue::Catalogue::default`] — the free-text
+/// fallback. Executes the binary; see [`probe_version`] for why that is safe here and
+/// not in [`binary_available`].
 pub(crate) fn probe_catalogue(binary: &str) -> crate::harness_catalogue::Catalogue {
     probe_catalogue_on(binary, &harness_probe_path())
 }
@@ -1355,12 +1355,50 @@ pub(crate) fn probe_version_on(binary: &str, path: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-/// [`probe_catalogue`] with an explicit `PATH` — the testable core.
+/// [`probe_catalogue`] with an explicit `PATH` — the testable core, and where #629's
+/// three sources (ADR-0056) are actually run.
+///
+/// `--help` is run **first, always**: it is universal, it is one of the three sources,
+/// and — the reason it leads — it is where a CLI **declares its subcommands**. Only the
+/// richer sources a binary advertises are then run. That gate is not politeness, it is
+/// the correctness of the whole ladder. Measured: `claude` has no `completion` and no
+/// `help` subcommand, and treats either as a *prompt* — `claude completion bash` opens
+/// a session and idles until the probe's timeout kills it. Walking the ladder blind
+/// would spend two five-second timeouts on every claude re-probe, one of them inside a
+/// `/settings` response.
+///
+/// The **preference** order of ADR-0056 is independent of the run order: an answer from
+/// the generated completion script outranks one from the settings prose, which outranks
+/// `--help`'s own — per axis, so copilot's models can come from one source and its
+/// effort stops from another. `--help` folds in last precisely because it is the
+/// lowest-preference source, not because it ran first.
+///
+/// Cost, measured on the three first-party harnesses: `claude` one subprocess (as
+/// before #629), `copilot` two, `opencode` two — never a hang, never an error. A binary
+/// that answers no `--help` at all yields the free-text fallback without any subcommand
+/// being guessed at.
 pub(crate) fn probe_catalogue_on(binary: &str, path: &str) -> crate::harness_catalogue::Catalogue {
-    match run_probe(binary, &["--help"], path) {
-        Some(help) => crate::harness_catalogue::parse_help(&help),
-        None => crate::harness_catalogue::Catalogue::default(),
+    use crate::harness_catalogue as cat;
+    let Some(help) = run_probe(binary, &["--help"], path) else {
+        return cat::Catalogue::default();
+    };
+    let mut catalogue = cat::Catalogue::default();
+
+    // Preference 1: the generated completion script.
+    if cat::advertises_subcommand(&help, "completion") {
+        if let Some(script) = run_probe(binary, &["completion", "bash"], path) {
+            catalogue.fill_missing_from(cat::parse_completion_script(&script));
+        }
     }
+    // Preference 2: the settings help topic, if an axis is still unanswered.
+    if !catalogue.is_complete() && cat::advertises_subcommand(&help, "help") {
+        if let Some(topic) = run_probe(binary, &["help", "config"], path) {
+            catalogue.fill_missing_from(cat::parse_settings_prose(&topic));
+        }
+    }
+    // Preference 3: what `--help` itself enumerates.
+    catalogue.fill_missing_from(cat::parse_help(&help));
+    catalogue
 }
 
 /// Run `<binary> <args>` with `PATH=path`, capturing stdout+stderr (a CLI may print
@@ -1371,9 +1409,16 @@ pub(crate) fn probe_catalogue_on(binary: &str, path: &str) -> crate::harness_cat
 ///
 /// The timeout is a poll-and-kill loop rather than a blocking `output()` so a
 /// wedged child (blocked on stdin, a broken install) is reaped instead of hanging
-/// the caller's `spawn_blocking` worker forever. `--help`/`--version` output fits a
-/// pipe buffer, so reading after exit never blocks.
+/// the caller's `spawn_blocking` worker forever.
+///
+/// Both pipes are **drained on their own threads while the child runs** (#629). The
+/// obvious shape — wait for exit, then read — deadlocks on any source that outprints
+/// the OS pipe buffer: the child blocks in `write`, never exits, and the probe reports
+/// a timeout for a binary that answered perfectly. Measured: copilot's completion
+/// script is 71 KB against a 64 KB Linux pipe buffer, so the source ADR-0056 prefers
+/// is exactly the one that hit it.
 fn run_probe(binary: &str, args: &[&str], path: &str) -> Option<String> {
+    use std::io::Read;
     if binary.is_empty() {
         return None;
     }
@@ -1388,6 +1433,20 @@ fn run_probe(binary: &str, args: &[&str], path: &str) -> Option<String> {
         .spawn()
         .ok()?;
 
+    fn drain<R: Read + Send + 'static>(
+        pipe: Option<R>,
+    ) -> Option<std::thread::JoinHandle<Vec<u8>>> {
+        pipe.map(|mut p| {
+            std::thread::spawn(move || {
+                let mut buf = Vec::new();
+                let _ = p.read_to_end(&mut buf);
+                buf
+            })
+        })
+    }
+    let out_reader = drain(child.stdout.take());
+    let err_reader = drain(child.stderr.take());
+
     let start = Instant::now();
     loop {
         match child.try_wait() {
@@ -1396,6 +1455,10 @@ fn run_probe(binary: &str, args: &[&str], path: &str) -> Option<String> {
                 if start.elapsed() > CATALOGUE_PROBE_TIMEOUT {
                     let _ = child.kill();
                     let _ = child.wait();
+                    // Leave the readers detached rather than joining them: a killed
+                    // child whose grandchild still holds the pipe would never EOF, and
+                    // a probe must not be able to block on that. Partial output is not
+                    // a catalogue anyway — a timeout is "no answer".
                     return None;
                 }
                 std::thread::sleep(Duration::from_millis(20));
@@ -1403,11 +1466,16 @@ fn run_probe(binary: &str, args: &[&str], path: &str) -> Option<String> {
             Err(_) => return None,
         }
     }
-    let output = child.wait_with_output().ok()?;
-    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
-    if !output.stderr.is_empty() {
+    // The child exited, so both pipes are at EOF and the readers join immediately.
+    let joined = |r: Option<std::thread::JoinHandle<Vec<u8>>>| {
+        r.and_then(|h| h.join().ok()).unwrap_or_default()
+    };
+    let (stdout, stderr) = (joined(out_reader), joined(err_reader));
+
+    let mut text = String::from_utf8_lossy(&stdout).into_owned();
+    if !stderr.is_empty() {
         text.push('\n');
-        text.push_str(&String::from_utf8_lossy(&output.stderr));
+        text.push_str(&String::from_utf8_lossy(&stderr));
     }
     (!text.trim().is_empty()).then_some(text)
 }
@@ -2298,13 +2366,34 @@ mod tests {
     /// `--help` and `version` on `--version`. Returns the dir's `PATH` string.
     #[cfg(unix)]
     fn fake_harness_binary(dir: &std::path::Path, name: &str, help: &str, version: &str) -> String {
+        fake_harness_binary_with(dir, name, version, &[("--help", help)])
+    }
+
+    /// #629: write an executable fake binary that answers `--version` and any set of
+    /// `(argv-head, stdout)` pairs — one per catalogue source under test. Returns the
+    /// dir's `PATH` string. An argv the fixture does not declare falls through to a
+    /// usage error on stderr, exactly as a real CLI answers a subcommand it lacks.
+    ///
+    /// Self-contained: `printf` is a `/bin/sh` builtin, so the script runs even though
+    /// `run_probe` sets `PATH` to just this dir (no `cat`/`echo` binary). That
+    /// restricted PATH mirrors nothing in production — there the probe PATH is a full
+    /// union (ADR-0055) — it only keeps the fixture honest.
+    #[cfg(unix)]
+    fn fake_harness_binary_with(
+        dir: &std::path::Path,
+        name: &str,
+        version: &str,
+        sources: &[(&str, &str)],
+    ) -> String {
         use std::os::unix::fs::PermissionsExt;
-        // Self-contained: `printf` is a `/bin/sh` builtin, so the script runs even
-        // though `run_probe` sets `PATH` to just this dir (no `cat`/`echo` binary).
-        // That restricted PATH mirrors nothing in production — there the probe PATH
-        // is a full union (ADR-0055) — it only keeps the fixture honest.
+        // Match on the whole argv (`"$*"`), so a two-word source (`completion bash`,
+        // `help config`) is as expressible as a flag.
+        let arms: String = sources
+            .iter()
+            .map(|(argv, out)| format!("  '{argv}') printf '%s' '{out}';;\n"))
+            .collect();
         let script = format!(
-            "#!/bin/sh\ncase \"$1\" in\n  --version) printf '%s\\n' '{version}';;\n  --help) printf '%s' '{help}';;\nesac\n"
+            "#!/bin/sh\ncase \"$*\" in\n  '--version') printf '%s\\n' '{version}';;\n{arms}  *) printf 'error: unknown command\\n' >&2; exit 1;;\nesac\n"
         );
         let bin = dir.join(name);
         std::fs::write(&bin, script).unwrap();
@@ -2330,6 +2419,155 @@ mod tests {
         let cat = probe_catalogue_on("fake-harness", &path);
         assert_eq!(cat.models, vec!["gpt-5", "gpt-5-codex", "o4-mini"]);
         assert_eq!(cat.efforts, vec!["low", "medium", "high"]);
+    }
+
+    /// The `Commands:` block a fake binary prints so the probe is allowed to ask it
+    /// for the richer sources (#629, ADR-0056). Without it, the gate — correctly —
+    /// never runs `completion` / `help`.
+    const DECLARES_BOTH_SUBCOMMANDS: &str =
+        "Commands:\n  completion <shell>  Generate a shell completion script\n  help [topic]  Display help information\n";
+
+    /// #629, ADR-0056: the completion script is preferred over the settings topic and
+    /// over `--help`. The fixture makes the three sources disagree on purpose — only
+    /// the completion script's answer may survive.
+    #[cfg(unix)]
+    #[test]
+    fn the_generated_completion_script_outranks_the_prose_sources() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = fake_harness_binary_with(
+            dir.path(),
+            "ladder-harness",
+            "ladder-harness 2.0",
+            &[
+                (
+                    "completion bash",
+                    "        --model)\n            COMPREPLY=( $(compgen -W \"auto from-completion\" -- \"$cur\") )\n            ;;\n        --effort|--reasoning-effort)\n            COMPREPLY=( $(compgen -W \"low max\" -- \"$cur\") )\n            ;;\n",
+                ),
+                ("help config", "  `model`: the model.\n    - \"from-settings\"\n"),
+                (
+                    "--help",
+                    &format!(
+                        "  --model <m> [from-help|other]\n  --effort <e> One of: a, b\n{DECLARES_BOTH_SUBCOMMANDS}"
+                    ),
+                ),
+            ],
+        );
+        let cat = probe_catalogue_on("ladder-harness", &path);
+        assert_eq!(cat.models, vec!["auto", "from-completion"]);
+        assert_eq!(cat.efforts, vec!["low", "max"]);
+    }
+
+    /// #629: a source larger than the OS pipe buffer is read in full, not timed out.
+    /// The blind spot the fixtures had: every fake help was a few hundred bytes, so
+    /// nobody noticed the probe waited for exit *before* reading. Measured on the real
+    /// binary, `copilot completion bash` prints 71 KB against a 64 KB pipe — the child
+    /// blocked in `write`, never exited, and the source ADR-0056 *prefers* was the one
+    /// silently reported as a timeout.
+    #[cfg(unix)]
+    #[test]
+    fn a_source_bigger_than_the_pipe_buffer_is_read_whole() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("chatty-harness");
+        // ~200 KB of padding, then the enumeration — so the list only parses if the
+        // whole stream was drained. `yes`-style loops need an external binary, and the
+        // probe's PATH holds only this dir; a `while` over a doubling string is a
+        // builtin-only way to print a lot.
+        std::fs::write(
+            &bin,
+            "#!/bin/sh\ncase \"$*\" in\n  '--version') printf 'chatty 1.0\\n';;\n  '--help')\n    pad=0123456789abcdef\n    i=0\n    while [ $i -lt 14 ]; do pad=\"$pad$pad\"; i=$((i+1)); done\n    printf '%s\\n' \"$pad\"\n    printf '  --model <m> [big|list]\\n  --effort <e> One of: low, high\\n'\n    ;;\nesac\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = dir.path().to_string_lossy().into_owned();
+
+        let raw =
+            run_probe("chatty-harness", &["--help"], &path).expect("a big answer is an answer");
+        assert!(raw.len() > 200_000, "the fixture must exceed a pipe buffer");
+        let cat = probe_catalogue_on("chatty-harness", &path);
+        assert_eq!(cat.models, vec!["big", "list"]);
+        assert_eq!(cat.efforts, vec!["low", "high"]);
+    }
+
+    /// #629, ADR-0056: a binary that declares neither subcommand is never asked for
+    /// them. The fixture makes both **hang** — the measured `claude` hazard, where
+    /// `claude completion bash` is read as a prompt and idles to the probe timeout.
+    /// The probe must come back with `--help`'s own answer, promptly.
+    #[cfg(unix)]
+    #[test]
+    fn an_unadvertised_subcommand_is_never_run() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        // Its own script rather than `fake_harness_binary_with`: the point of the
+        // fixture is the catch-all, which must **hang** instead of erroring out. Its
+        // `--help` declares no `Commands:` block, so nothing is advertised.
+        let bin = dir.path().join("prompt-harness");
+        std::fs::write(
+            &bin,
+            "#!/bin/sh\ncase \"$*\" in\n  '--version') printf 'prompt-harness 3.0\\n';;\n  '--help') printf '%s' 'Usage: prompt-harness [prompt]\n  --model <m> [only|from-help]\n  --effort <e> One of: low, high\n';;\n  *) sleep 30;;\nesac\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = dir.path().to_string_lossy().into_owned();
+
+        let started = Instant::now();
+        let cat = probe_catalogue_on("prompt-harness", &path);
+        assert!(
+            started.elapsed() < CATALOGUE_PROBE_TIMEOUT,
+            "an unadvertised subcommand must not be run at all, let alone timed out"
+        );
+        assert_eq!(cat.models, vec!["only", "from-help"]);
+        assert_eq!(cat.efforts, vec!["low", "high"]);
+    }
+
+    /// #629: the copilot shape as measured on 1.0.80 minus its completion script (an
+    /// older release, or a generator that stops emitting choices) — models from
+    /// `help config`, efforts from `--help`, each axis owned by the first source that
+    /// answers for it.
+    #[cfg(unix)]
+    #[test]
+    fn each_axis_falls_through_to_the_next_source_independently() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = fake_harness_binary_with(
+            dir.path(),
+            "split-harness",
+            "split-harness 1.0.80",
+            &[
+                (
+                    "help config",
+                    "  `model`: AI model to use.\n    - \"claude-opus-5\"\n    - \"gpt-5.5\"\n\n  `contextTier`: tier.\n",
+                ),
+                (
+                    "--help",
+                    &format!(
+                        "  --model <model>  Set the AI model to use (use 'auto')\n  --effort <level> Set the effort (choices: \"none\", \"max\")\n{DECLARES_BOTH_SUBCOMMANDS}"
+                    ),
+                ),
+            ],
+        );
+        let cat = probe_catalogue_on("split-harness", &path);
+        assert_eq!(cat.models, vec!["claude-opus-5", "gpt-5.5"]);
+        assert_eq!(cat.efforts, vec!["none", "max"]);
+    }
+
+    /// #629: a binary that enumerates nothing on any of the three sources still yields
+    /// an empty catalogue — the free-text fallback — and never an error. This is the
+    /// measured `opencode` shape: a bare `provider/model` placeholder, no completion
+    /// choices, no settings topic.
+    #[cfg(unix)]
+    #[test]
+    fn a_binary_that_enumerates_nowhere_is_still_the_free_text_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = fake_harness_binary_with(
+            dir.path(),
+            "bare-harness",
+            "bare-harness 0.1",
+            &[("--help", "  --model <provider/model>  Model to use\n")],
+        );
+        assert_eq!(
+            probe_catalogue_on("bare-harness", &path),
+            crate::harness_catalogue::Catalogue::default()
+        );
     }
 
     /// #616: a binary that can't be resolved on the injected `PATH` yields no

@@ -333,6 +333,17 @@ pub(crate) fn transcripts_root(
     }
 }
 
+/// The `copilot` session-state store root — `<home_root>/.copilot/session-state/`,
+/// where each session's event journal lives at `<session-id>/events.jsonl` (#615).
+///
+/// Always the **host** home, unlike [`transcripts_root`]: `copilot` declares **no
+/// staging floor** (ADR-0031 / #615), so a sandboxed Run has no staged copilot home
+/// to mirror — the journal is read where the harness wrote it. Path math only; this
+/// module never reads `$HOME` (the caller injects `home_root`).
+pub(crate) fn copilot_store_root(home_root: &Path) -> PathBuf {
+    home_root.join(".copilot").join("session-state")
+}
+
 /// Merge a Run's staged transcripts back to `~/.claude/projects/` at its terminal
 /// transition (#408), so cost + stale-detection see them at the standard encoded
 /// dirname once the staging is eventually purged. No-op for `off`.

@@ -73,8 +73,15 @@ use std::path::{Path, PathBuf};
 pub(crate) enum CostSource {
     /// PDO derives the cost itself: per-message token usage in the harness's
     /// transcript × the resolved price table (ADR-0034), as [`crate::run_cost`]
-    /// already does for `claude`.
+    /// already does for `claude`. A **derived** cost (ADR-0052 §1).
     DerivedFromTranscript,
+    /// The harness counts its own cost, in its own billing unit, and PDO converts
+    /// it by a **published constant** — never the price table (ADR-0052 §2). A
+    /// **reported** cost: it cannot produce an `unpriced_models` signal, and it does
+    /// not re-derive from tokens (which would double-count the cache). `copilot`'s:
+    /// the `totalNanoAiu` its event journal reports, × [`crate::copilot_journal`]'s
+    /// constant.
+    ReportedByConstant,
 }
 
 /// How PDO resolves a harness's transcript on disk.
@@ -88,6 +95,11 @@ pub(crate) enum TranscriptResolution {
     /// Claude Code's `<projects_root>/<encoded-cwd>/<session-id>.jsonl` (#473),
     /// newest-mtime for a pre-#473 row.
     ClaudeJsonl,
+    /// GitHub Copilot's `<store>/<session-id>/events.jsonl` (#615) — indexed by the
+    /// **session identity PDO imposed** at launch, with **no** working-directory
+    /// encoding, so two nodes sharing a worktree have distinct journals structurally
+    /// (the #473 collision has no equivalent here).
+    CopilotEventsJsonl,
 }
 
 /// The substrate PDO reads to constate an end of turn (#469 §2, ADR-0043).
@@ -99,6 +111,10 @@ pub(crate) enum TurnEndSubstrate {
     /// The Claude Code JSONL transcript tail, classified by
     /// [`crate::stale_detector::parse_turn_state`].
     ClaudeTranscript,
+    /// GitHub Copilot's event journal, whose explicit `assistant.turn_end` event is
+    /// classified by [`crate::copilot_journal::turn_ended`] (#615). Depends on no
+    /// instance setting and writes nothing into the user's config.
+    CopilotEventJournal,
 }
 
 /// A harness's on-screen usage-limit menu — the anchor PDO matches in a pane
@@ -197,6 +213,29 @@ pub(crate) trait HarnessProbes: Sync {
     fn detect_usage_limit(&self, _pane: &str) -> bool {
         false
     }
+
+    /// Whether this harness's **process exit is a verdict** on the turn's success.
+    ///
+    /// Default `true`: for `claude` (and a data-declared harness), the session
+    /// dying IS the failure signal (ADR-0032), so a consumer need not read the
+    /// journal to explain a death. `copilot` overrides it to `false`: it **exits 0
+    /// on a hard model failure** (ADR-0052), so the exit is not a verdict and the
+    /// journal must be consulted ([`Self::classify_hard_error`]). Gates that read,
+    /// so a harness whose death speaks for itself pays no journal I/O on death.
+    fn exit_code_is_verdict(&self) -> bool {
+        true
+    }
+
+    /// The **hard error** this harness's transcript `tail` carries, if any — a
+    /// failure the harness's *exit code* cannot report (#615, ADR-0052). The
+    /// default is `None` (a harness whose store PDO cannot map, or one whose exit
+    /// code IS its verdict). `copilot` overrides it: it **exits 0 on a hard model
+    /// failure**, so the exit code is not a verdict; the journal's `session.error`
+    /// is. A generic consumer reads this to say the failure *as such* rather than
+    /// off a code that lies.
+    fn classify_hard_error(&self, _tail: &str) -> Option<String> {
+        None
+    }
 }
 
 /// The `claude` capabilities — all five, exactly as they are today. This slice is
@@ -258,6 +297,80 @@ impl HarnessProbes for ClaudeProbes {
 /// `static` costs nothing and needs no lazy init.
 static CLAUDE_PROBES: ClaudeProbes = ClaudeProbes;
 
+/// The `copilot` capabilities (#615, ADR-0051/0052) — **three** present (a
+/// reported cost, a transcript resolution, an end-of-turn substrate), **two**
+/// declared absent with their motive:
+///
+/// - the **usage-limit menu anchor** is absent: it is an informational probe whose
+///   own documentation admits the textual anchor drifts each version, and it
+///   triggers no recovery (ADR-0012) — a second harness declaring it absent
+///   degrades nothing actionable (ADR-0051 §"Limites");
+/// - the **staging floor** is absent: configuring a harness is a documented
+///   prerequisite, not PDO code (ADR-0031 / CONTEXT.md § "Harnais agentique").
+///
+/// The three present capabilities dispatch to `copilot`'s own implementation — its
+/// event journal, never `claude`'s cwd-keyed JSONL store.
+struct CopilotProbes;
+
+impl HarnessProbes for CopilotProbes {
+    /// A **reported** cost (ADR-0052): the harness counts itself, PDO converts by a
+    /// published constant. Distinct from `claude`'s derived cost — never through the
+    /// price table.
+    fn cost_source(&self) -> Option<CostSource> {
+        Some(CostSource::ReportedByConstant)
+    }
+    fn transcript_resolution(&self) -> Option<TranscriptResolution> {
+        Some(TranscriptResolution::CopilotEventsJsonl)
+    }
+    fn turn_end_substrate(&self) -> Option<TurnEndSubstrate> {
+        Some(TurnEndSubstrate::CopilotEventJournal)
+    }
+    // usage_limit_anchor / staging_floor stay `None` — declared absent (see above).
+
+    /// `copilot`'s transcript resolution: the session's event journal, at
+    /// `<store>/<session-id>/events.jsonl` — by the **session identity PDO
+    /// imposed**, ignoring the working directory (#615). Without a pinned session id
+    /// there is no journal to resolve (`copilot` never blind-continues, so a live
+    /// node always has one), so this returns `None`.
+    fn resolve_transcript(
+        &self,
+        store_root: &Path,
+        _working_dir: &Path,
+        session_id: Option<&str>,
+    ) -> Option<PathBuf> {
+        let sid = session_id?;
+        if sid.is_empty() {
+            return None;
+        }
+        Some(store_root.join(sid).join("events.jsonl"))
+    }
+
+    /// `copilot`'s end-of-turn parser: the event journal's explicit
+    /// `assistant.turn_end`, classified by [`crate::copilot_journal::turn_ended`].
+    /// A journal trailing on a `session.error` (a hard failure the harness exits 0
+    /// on) is **not** a finished turn, so an errored node is never auto-completed.
+    fn classify_turn_ended(&self, tail: &str) -> bool {
+        crate::copilot_journal::turn_ended(tail)
+    }
+    // detect_usage_limit stays the trait default (`false`) — no anchor.
+
+    /// `copilot` exits 0 on a hard model failure (ADR-0052), so its exit is not a
+    /// verdict — the journal is.
+    fn exit_code_is_verdict(&self) -> bool {
+        false
+    }
+
+    /// `copilot`'s hard-error recognition: the journal's trailing `session.error`
+    /// ([`crate::copilot_journal::hard_error`]). This is the signal the harness's
+    /// exit code (zero) cannot give.
+    fn classify_hard_error(&self, tail: &str) -> Option<String> {
+        crate::copilot_journal::hard_error(tail)
+    }
+}
+
+/// The single `copilot` instance handed out by [`probes_for`]. Zero-sized.
+static COPILOT_PROBES: CopilotProbes = CopilotProbes;
+
 /// The capabilities of a **data-declared** harness (a user's disk descriptor, or
 /// `opencode` in v1): every method inherits the trait's "absent" default. This is
 /// the dispatch target that makes ADR-0051 §2 hold — a harness PDO carries no code
@@ -306,6 +419,22 @@ pub(crate) fn usage_limit_shown(harness: &str, pane: &str) -> bool {
     resolved(harness).detect_usage_limit(pane)
 }
 
+/// The hard error `harness`'s transcript `tail` carries, dispatched to its
+/// implementation (#615, ADR-0052). A harness whose exit code IS its verdict (or
+/// one PDO carries no code for) answers `None`; `copilot` answers with its
+/// journal's trailing `session.error`, because it exits 0 on a hard failure.
+pub(crate) fn hard_error(harness: &str, tail: &str) -> Option<String> {
+    resolved(harness).classify_hard_error(tail)
+}
+
+/// Whether `harness`'s process exit is a verdict on the turn (ADR-0032) — `true`
+/// for `claude`, `false` for `copilot` (which exits 0 on a hard failure, ADR-0052).
+/// A death consumer gates its journal read on the negation, so a harness whose
+/// death speaks for itself pays no extra I/O.
+pub(crate) fn exit_code_is_verdict(harness: &str) -> bool {
+    resolved(harness).exit_code_is_verdict()
+}
+
 /// The one-time note for a node whose harness has **no turn-end substrate** while
 /// turn-end auto-completion is enabled (ADR-0051 / correctif AC #7). `Some(msg)`
 /// when the setting cannot be honoured for `harness`, `None` for a harness that
@@ -332,6 +461,9 @@ pub(crate) fn turn_end_absence_note(harness: &str) -> Option<String> {
 pub(crate) fn probes_for(harness: &str) -> Option<&'static dyn HarnessProbes> {
     match harness {
         harness_registry::CLAUDE => Some(&CLAUDE_PROBES),
+        // #615: `copilot`'s three capabilities (reported cost, transcript, turn-end)
+        // — the second first-party harness. Its two others are declared absent.
+        harness_registry::COPILOT => Some(&COPILOT_PROBES),
         // `opencode` (resident but un-instrumented in v1) and every data-declared
         // harness: no capability. A launch is data; a capability is code (ADR-0045).
         _ => None,
@@ -405,7 +537,7 @@ pub(crate) fn staging_floor_absence_note(harness: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::harness_registry::{CLAUDE, OPENCODE};
+    use crate::harness_registry::{CLAUDE, COPILOT, OPENCODE};
 
     /// A struct that overrides nothing: the demonstration that **every trait
     /// method defaults to "absent"**. This is the shape of a harness declared in
@@ -458,6 +590,73 @@ mod tests {
             }
         );
         assert!(can_cost(CLAUDE));
+    }
+
+    #[test]
+    fn copilot_has_its_three_capabilities_and_declares_two_absent() {
+        // #615: copilot is instrumented on three capabilities (reported cost,
+        // transcript, turn-end) and declares two absent (usage-limit, staging).
+        let p = probes_for(COPILOT).expect("copilot has probes");
+        assert_eq!(p.cost_source(), Some(CostSource::ReportedByConstant));
+        assert_eq!(
+            p.transcript_resolution(),
+            Some(TranscriptResolution::CopilotEventsJsonl)
+        );
+        assert_eq!(
+            p.turn_end_substrate(),
+            Some(TurnEndSubstrate::CopilotEventJournal)
+        );
+        // Declared absent, with their motive (see `CopilotProbes` doc).
+        assert!(p.usage_limit_anchor().is_none(), "usage-limit declared absent");
+        assert!(p.staging_floor().is_none(), "staging floor declared absent");
+
+        assert_eq!(
+            capabilities(COPILOT),
+            Capabilities {
+                cost: true,
+                transcript: true,
+                turn_end: true,
+                usage_limit: false,
+                staging: false,
+            }
+        );
+        // A reported cost is still a cost PDO can produce (source + a resolvable
+        // journal), so a copilot Run is costable — never "—" for lack of a source.
+        assert!(can_cost(COPILOT));
+    }
+
+    #[test]
+    fn copilot_resolves_its_journal_by_session_identity_ignoring_cwd() {
+        // #615 AC: resolved from the imposed session identity, no cwd encoding — so
+        // two nodes sharing a worktree get distinct journals.
+        let p = probes_for(COPILOT).unwrap();
+        let a = p
+            .resolve_transcript(Path::new("/store"), Path::new("/shared/wt"), Some("sid-a"))
+            .unwrap();
+        let b = p
+            .resolve_transcript(Path::new("/store"), Path::new("/shared/wt"), Some("sid-b"))
+            .unwrap();
+        assert_eq!(a, PathBuf::from("/store/sid-a/events.jsonl"));
+        assert_eq!(b, PathBuf::from("/store/sid-b/events.jsonl"));
+        assert_ne!(a, b, "distinct sessions ⇒ distinct journals, same worktree");
+        // No pinned identity ⇒ no journal (copilot never blind-continues).
+        assert!(p
+            .resolve_transcript(Path::new("/store"), Path::new("/wt"), None)
+            .is_none());
+    }
+
+    #[test]
+    fn copilot_turn_end_dispatches_to_its_journal_parser_not_claudes() {
+        // A copilot journal tail (its own event shape) is called ended by copilot's
+        // parser and NOT by claude's JSONL parser, and vice-versa.
+        let copilot_tail =
+            "{\"type\":\"assistant.turn_start\",\"data\":{}}\n{\"type\":\"assistant.turn_end\",\"data\":{}}\n";
+        assert!(turn_ended(COPILOT, copilot_tail));
+        assert!(!turn_ended(CLAUDE, copilot_tail), "not claude's JSONL shape");
+        // A trailing hard error is not a finished turn (harness exits 0 on it).
+        let errored =
+            "{\"type\":\"assistant.turn_start\",\"data\":{}}\n{\"type\":\"session.error\",\"data\":{\"message\":\"boom\"}}\n";
+        assert!(!turn_ended(COPILOT, errored));
     }
 
     #[test]

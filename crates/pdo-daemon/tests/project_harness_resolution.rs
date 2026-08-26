@@ -14,9 +14,7 @@
 //!
 //! Nothing is seeded: every Projet here is materialised via `POST /projects`.
 
-mod common;
-
-use common::TestDaemon;
+use crate::common::TestDaemon;
 
 const PIPELINE_NAME: &str = "proj-harness-test";
 const PIPELINE_YAML: &str = r#"name: proj-harness-test

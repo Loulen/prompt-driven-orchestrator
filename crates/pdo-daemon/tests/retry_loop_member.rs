@@ -13,12 +13,10 @@
 //! Both are driven against a real daemon over a review-loop pipeline (`impl -> rev`
 //! with a `rev -> impl` else back-edge, auto-covered by a bounded region).
 
-mod common;
-
 use std::process::Command;
 use std::time::Duration;
 
-use common::TestDaemon;
+use crate::common::TestDaemon;
 
 const PIPELINE_NAME: &str = "retry-loop-test";
 

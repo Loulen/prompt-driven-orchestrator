@@ -2,9 +2,7 @@
 //! that an HTTP client can reach it. Future bug-driven tests (#17, #18, etc.)
 //! build on this same harness.
 
-mod common;
-
-use common::TestDaemon;
+use crate::common::TestDaemon;
 use futures_util::StreamExt;
 
 #[tokio::test]

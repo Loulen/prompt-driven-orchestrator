@@ -2,9 +2,7 @@
 //! can be loaded, saved via PUT, and re-loaded without errors or structural drift.
 //! Refs #75.
 
-mod common;
-
-use common::TestDaemon;
+use crate::common::TestDaemon;
 
 fn seed_pipeline_files(repo: &std::path::Path) -> anyhow::Result<()> {
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

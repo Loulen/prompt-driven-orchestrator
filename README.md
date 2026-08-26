@@ -92,8 +92,8 @@ See [CONTEXT.md](CONTEXT.md) for the full domain model.
 
 ```bash
 cd frontend
-npm install
-npm run dev
+pnpm install
+pnpm run dev
 ```
 
 The Vite dev server starts on `http://localhost:5173` and proxies `/ws`, `/sessions` and the REST routes to the daemon at `127.0.0.1:5172`. The two WebSocket proxies set `rewriteWsOrigin: true` so the daemon's Origin check (see *Behind a reverse proxy*) accepts the dev server — without it the dashboard and terminal would 403 in `make dev`.
@@ -111,7 +111,7 @@ The daemon binds `0.0.0.0:5172` by default and serves the real embedded UI (the 
 ### Production build
 
 ```bash
-cd frontend && npm run build && cd ..
+cd frontend && pnpm run build && cd ..
 cargo build --release -p pdo-daemon
 ```
 
@@ -131,10 +131,10 @@ cargo run -p pdo-daemon -- --help
 | Test Rust           | `cargo test --workspace`                             |
 | Lint Rust           | `cargo clippy --workspace --all-targets -- -D warnings` |
 | Format Rust         | `cargo fmt --all --check`                            |
-| Type-check frontend | `cd frontend && npm run typecheck`                   |
-| Test frontend       | `cd frontend && npm run test`                        |
-| Lint frontend       | `cd frontend && npm run lint`                        |
-| Build frontend      | `cd frontend && npm run build`                       |
+| Type-check frontend | `cd frontend && pnpm run typecheck`                   |
+| Test frontend       | `cd frontend && pnpm run test`                        |
+| Lint frontend       | `cd frontend && pnpm run lint`                        |
+| Build frontend      | `cd frontend && pnpm run build`                       |
 
 ## Architecture
 

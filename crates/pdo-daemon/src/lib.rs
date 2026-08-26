@@ -16174,7 +16174,7 @@ const DEV_PLACEHOLDER: &str = r#"<!DOCTYPE html>
 <body style="background:#0f1115;color:#e6e8eb;font-family:sans-serif;display:grid;place-items:center;height:100vh;margin:0">
 <div style="text-align:center">
 <h1>PDO daemon running</h1>
-<p>In dev mode, run the Vite frontend separately:<br><code>cd frontend && npm run dev</code></p>
+<p>In dev mode, run the Vite frontend separately:<br><code>cd frontend && pnpm run dev</code></p>
 </div>
 </body>
 </html>"#;

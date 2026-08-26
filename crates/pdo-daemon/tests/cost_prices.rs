@@ -22,9 +22,7 @@
 //!      a fresh home, a manual override reported `manual`, a fetched family
 //!      `fetched`, no `<synthetic>` — the read view beside the "Sync costs" button.
 
-mod common;
-
-use common::TestDaemon;
+use crate::common::TestDaemon;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::Command;

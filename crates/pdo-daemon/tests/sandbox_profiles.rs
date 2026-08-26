@@ -47,15 +47,12 @@
 //!  18. the write-time refusals: a relative path, a path that does not exist, an unknown `kind`,
 //!      a ref starting with `-`.
 
-mod common;
-
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Once;
 use std::time::{Duration, Instant};
 
-use common::TestDaemon;
+use crate::common::{ensure_pdo_on_path, TestDaemon};
 use tempfile::TempDir;
 
 const NODE_ID: &str = "notify";
@@ -86,16 +83,6 @@ edges:
   - source: { node: notify, port: out }
     target: { node: end, port: result }
 "#;
-
-fn ensure_pdo_on_path() {
-    static INIT: Once = Once::new();
-    INIT.call_once(|| {
-        let bin = Path::new(env!("CARGO_BIN_EXE_pdo"));
-        let dir = bin.parent().expect("pdo binary has a parent dir");
-        let existing = std::env::var("PATH").unwrap_or_default();
-        std::env::set_var("PATH", format!("{}:{}", dir.display(), existing));
-    });
-}
 
 fn git_init_with_commit(repo: &Path) -> anyhow::Result<()> {
     let run = |args: &[&str]| -> anyhow::Result<()> {

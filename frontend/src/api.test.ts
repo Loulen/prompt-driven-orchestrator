@@ -302,7 +302,7 @@ describe("browseFs wire contract", () => {
 
 // #490 / ADR-0035 — `markNodeDone` had ZERO tests before this issue, and it is the
 // only place a refusal can still fail silently: vitest does not run in CI (the
-// frontend job is `npm ci` / typecheck / lint / build), so this file is guarded by
+// frontend job is install / typecheck / lint / build), so this file is guarded by
 // `make test` alone. One case per branch of the outcome union.
 describe("markNodeDone outcome union (#490)", () => {
   /** A stub whose body is NOT valid JSON — the shape `POST …/done` answers on success. */

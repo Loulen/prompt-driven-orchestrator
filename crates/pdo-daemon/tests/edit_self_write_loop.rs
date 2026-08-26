@@ -2,11 +2,9 @@
 //! longer broadcasts `pipeline_changed` for writes the daemon performed itself
 //! (PUT /pipelines/:id), but still broadcasts for external writes.
 
-mod common;
-
 use std::time::Duration;
 
-use common::{ws_text, TestDaemon};
+use crate::common::{ws_text, TestDaemon};
 use futures_util::{SinkExt, StreamExt};
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::protocol::Message;

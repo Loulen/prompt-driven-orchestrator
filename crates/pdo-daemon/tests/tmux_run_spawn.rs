@@ -7,11 +7,9 @@
 //! test box doesn't actually need claude on PATH and no process-global env is
 //! mutated (#181).
 
-mod common;
-
 use std::time::Duration;
 
-use common::TestDaemon;
+use crate::common::TestDaemon;
 use pdo_daemon::build_tmux_script;
 use pdo_daemon::tmux_session_manager::SessionTail;
 

@@ -12,9 +12,7 @@
 //! assertable here (the harness runs `sleep`, not `claude`); the preamble wording
 //! is covered by the pure tests in `prompt_augmenter`.
 
-mod common;
-
-use common::TestDaemon;
+use crate::common::TestDaemon;
 
 const PIPELINE_NAME: &str = "naming-test";
 const NODE_ID: &str = "worker";

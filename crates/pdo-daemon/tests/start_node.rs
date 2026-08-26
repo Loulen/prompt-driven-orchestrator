@@ -4,9 +4,7 @@
 //! then asserts that GET /runs/{run_id} returns a RunState with start_node populated
 //! and that GET /runs/{run_id}/artifact?path=_input/output.md returns the input content.
 
-mod common;
-
-use common::TestDaemon;
+use crate::common::TestDaemon;
 
 const PIPELINE_NAME: &str = "start-node-test";
 const PIPELINE_YAML: &str = r#"name: start-node-test

@@ -10,11 +10,9 @@
 //!    Failed with a cause at boot.
 //! 4. Atomic admission: concurrent spawns never exceed the session cap.
 
-mod common;
-
 use std::time::Duration;
 
-use common::TestDaemon;
+use crate::common::TestDaemon;
 use pdo_daemon::tmux_session_manager;
 
 const PIPELINE_NAME: &str = "lifecycle-c";

@@ -5,9 +5,7 @@
 //! missing Rust field would let the note live on disk yet vanish from the UI on
 //! reload (the D2 failure mode).
 
-mod common;
-
-use common::TestDaemon;
+use crate::common::TestDaemon;
 
 const NOTE_MARKER: &str = "NOTE-307 — bounded loop volontairement limité à 3";
 

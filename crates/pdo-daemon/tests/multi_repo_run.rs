@@ -6,11 +6,9 @@
 //! - Run artifacts live under <target_repo>/.pdo/runs/<run-id>/
 //! - GET /repos/branches returns branches for a given repo path
 
-mod common;
-
 use std::process::Command;
 
-use common::TestDaemon;
+use crate::common::TestDaemon;
 
 const PIPELINE_NAME: &str = "multi-repo-test";
 const PIPELINE_YAML: &str = r#"name: multi-repo-test

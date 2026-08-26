@@ -13,13 +13,10 @@
 //! `start→…→end` completed run flips lazily ~30 s — a failed run is prompt). The
 //! script wrapper calls bare `pdo fail`, so the built `pdo` must be on PATH.
 
-mod common;
-
 use std::process::Command;
-use std::sync::Once;
 use std::time::Duration;
 
-use common::TestDaemon;
+use crate::common::{ensure_pdo_on_path, TestDaemon};
 use tokio_tungstenite::tungstenite::protocol::Message as WsMessage;
 
 const FAIL_PIPELINE: &str = "shell-fail";
@@ -82,16 +79,6 @@ edges:
   - source: { node: worker, port: out }
     target: { node: end, port: result }
 "#;
-
-fn ensure_pdo_on_path() {
-    static INIT: Once = Once::new();
-    INIT.call_once(|| {
-        let bin = std::path::Path::new(env!("CARGO_BIN_EXE_pdo"));
-        let dir = bin.parent().expect("pdo binary has a parent dir");
-        let existing = std::env::var("PATH").unwrap_or_default();
-        std::env::set_var("PATH", format!("{}:{}", dir.display(), existing));
-    });
-}
 
 fn git_init_with_commit(repo: &std::path::Path) -> anyhow::Result<()> {
     let run = |args: &[&str]| -> anyhow::Result<()> {

@@ -22,7 +22,7 @@
 
 /* Module-local, deliberately NOT exported: a component file that also exports a
    constant breaks the `react-refresh/only-export-components` lint rule, which IS
-   gating (`npm run lint` in CI). Same shape as ModelPicker's `ALIASES`; the tests
+   gating (`pnpm run lint` in CI). Same shape as ModelPicker's `ALIASES`; the tests
    spell the list out, exactly as ModelPicker.test.tsx does. */
 const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
 

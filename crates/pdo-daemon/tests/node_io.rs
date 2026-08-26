@@ -4,9 +4,7 @@
 //! then asserts the GET /runs/{run_id}/nodes/{node_id}/io and
 //! GET /runs/{run_id}/artifact endpoints return expected data.
 
-mod common;
-
-use common::TestDaemon;
+use crate::common::TestDaemon;
 
 const PIPELINE_NAME: &str = "io-test";
 const PIPELINE_YAML: &str = r#"name: io-test

@@ -6,11 +6,9 @@
 //! produces a `pipeline_changed` event on the WebSocket bus with the correct
 //! `pipeline_id`, regardless of how many times the file is modified.
 
-mod common;
-
 use std::time::Duration;
 
-use common::{ws_text, TestDaemon};
+use crate::common::{ws_text, TestDaemon};
 use futures_util::StreamExt;
 use tokio::time::timeout;
 

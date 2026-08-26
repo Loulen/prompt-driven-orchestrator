@@ -248,7 +248,12 @@ pub(crate) fn spawn_superfluous(state: &RunState, node_id: &str, iter: i64) -> O
             ));
         }
     }
-    if iteration_status(state, node_id, iter) == Some(NodeStatus::Completed) {
+    // #620: a `Skipped` iteration is as settled as a `Completed` one — never
+    // re-spawn either.
+    if matches!(
+        iteration_status(state, node_id, iter),
+        Some(NodeStatus::Completed) | Some(NodeStatus::Skipped)
+    ) {
         return Some(format!(
             "node {node_id} iter {iter} already completed: nothing to spawn"
         ));
@@ -314,7 +319,9 @@ fn validate_completion(state: &RunState, event: &Event) -> Verdict {
     }
 
     match iteration_status(state, node_id, iter) {
-        Some(NodeStatus::Completed) => Verdict::noop(format!(
+        // #620: a `Skipped` iter is a settled completion too — a duplicate
+        // completion (skip or otherwise) landing on it is a no-op, not a reject.
+        Some(NodeStatus::Completed) | Some(NodeStatus::Skipped) => Verdict::noop(format!(
             "node {node_id} iter {iter} is already completed: duplicate completion ignored"
         )),
         Some(NodeStatus::Running) | Some(NodeStatus::AwaitingUser) | Some(NodeStatus::Failed) => {
@@ -385,7 +392,12 @@ fn validate_start(state: &RunState, event: &Event) -> Verdict {
         // Same iter: legal restart/promotion of the live iteration.
     }
 
-    if iteration_status(state, node_id, iter) == Some(NodeStatus::Completed) {
+    // #620: refuse a restart of a `Skipped` iter exactly as of a `Completed` one —
+    // both are settled and must not be re-spawned.
+    if matches!(
+        iteration_status(state, node_id, iter),
+        Some(NodeStatus::Completed) | Some(NodeStatus::Skipped)
+    ) {
         return Verdict::reject(RejectReason::IterationAlreadyCompleted {
             node_id: node_id.to_string(),
             iter,
@@ -413,6 +425,7 @@ fn validate_fail(state: &RunState, event: &Event) -> Verdict {
 
     match iteration_status(state, node_id, iter) {
         Some(NodeStatus::Completed)
+        | Some(NodeStatus::Skipped)
         | Some(NodeStatus::Failed)
         | Some(NodeStatus::Stopped)
         | Some(NodeStatus::Stale) => Verdict::noop(format!(
@@ -453,6 +466,7 @@ fn validate_interrupt(state: &RunState, event: &Event) -> Verdict {
 
     match iteration_status(state, node_id, iter) {
         Some(NodeStatus::Completed)
+        | Some(NodeStatus::Skipped)
         | Some(NodeStatus::Failed)
         | Some(NodeStatus::Stopped)
         | Some(NodeStatus::Stale)
@@ -487,6 +501,7 @@ fn validate_stale(state: &RunState, event: &Event) -> Verdict {
 
     match iteration_status(state, node_id, iter) {
         Some(NodeStatus::Completed)
+        | Some(NodeStatus::Skipped)
         | Some(NodeStatus::Failed)
         | Some(NodeStatus::Stopped)
         | Some(NodeStatus::Stale) => Verdict::noop(format!(

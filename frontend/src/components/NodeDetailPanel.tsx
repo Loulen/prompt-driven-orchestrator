@@ -36,6 +36,7 @@ const STATUS_LABELS: Record<NodeStatus, string> = {
   running: "Running",
   awaiting_user: "Awaiting User",
   completed: "Completed",
+  skipped: "Skipped",
   failed: "Failed",
   stopped: "Stopped",
   stale: "Stale",
@@ -178,20 +179,22 @@ function MarkCompleteVerdict({ verdict }: { verdict: MarkVerdict }) {
 }
 
 // The session is settled — the tmux session is gone, so the terminal WebSocket
-// would attach to a dead session. `{completed, failed, stopped, interrupted}` is
-// exactly the "settled" tier of `pollInterval` (5s). `interrupted` belongs here
-// (#598 / ADR-0049): its tmux session is *definitively* dead (that death is what
-// produced the status), so attaching would only spam "can't find session" — open
-// minimized and prioritise the Outputs, exactly like the other settled states.
-// A Retry revives the session and flips back to split (`onRetryStarted`). `stale`
-// is EXCLUDED unless archived: its tmux session is typically still alive and
-// recovery happens *inside* the terminal (nudge / Stop / Retry). An archived run
-// overrides everything (its worktree + session are torn down). An unknown future
-// status falls on the non-terminated (live) side.
+// would attach to a dead session. `{completed, skipped, failed, stopped,
+// interrupted}` is exactly the "settled" tier of `pollInterval` (5s). A `skipped`
+// node never held a session at all (#620); `interrupted` belongs here too (#598 /
+// ADR-0049): its tmux session is *definitively* dead (that death is what produced
+// the status), so attaching would only spam "can't find session" — open minimized
+// and prioritise the Outputs, exactly like the other settled states. A Retry
+// revives the session and flips back to split (`onRetryStarted`). `stale` is
+// EXCLUDED unless archived: its tmux session is typically still alive and recovery
+// happens *inside* the terminal (nudge / Stop / Retry). An archived run overrides
+// everything (its worktree + session are torn down). An unknown future status
+// falls on the non-terminated (live) side.
 function nodeSessionEnded(status: NodeStatus, isArchived?: boolean): boolean {
   if (isArchived) return true;
   return (
     status === "completed" ||
+    status === "skipped" ||
     status === "failed" ||
     status === "stopped" ||
     status === "interrupted"
@@ -500,6 +503,21 @@ export default function NodeDetailPanel({
               Reopen
             </button>
           )}
+        </div>
+      )}
+
+      {/* Skipped banner (#620) — a structurally-unreachable node the resilience
+          sweep pruned. Slate, not green: it never ran, its branch was not taken.
+          The reason reads at node level (skip_reason), lifted from the skip event. */}
+      {node.status === "skipped" && (
+        <div className="flex items-center gap-2 border-b border-st-skipped/30 bg-st-skipped-bg px-3 py-2">
+          <AlertCircle size={14} className="shrink-0 text-st-skipped" />
+          <span
+            className="text-st-skipped"
+            style={{ fontSize: "11.5px", fontWeight: 500 }}
+          >
+            Skipped{node.skip_reason ? ` — ${node.skip_reason}` : " — branch not taken"}
+          </span>
         </div>
       )}
 
@@ -927,6 +945,7 @@ const STATUS_DOTS: Record<NodeStatus, string> = {
   running: "bg-st-running",
   awaiting_user: "bg-st-await",
   completed: "bg-st-done",
+  skipped: "bg-st-skipped",
   failed: "bg-st-failed",
   stopped: "bg-st-stopped",
   stale: "bg-st-stale",
@@ -1249,6 +1268,9 @@ function terminalPlaceholder(node: NodeState): string {
       return "en attente d’activation";
     case "completed":
       return "Session ended.";
+    case "skipped":
+      // #620: never ran — its producing branch was not taken.
+      return `Skipped: ${node.skip_reason ?? "branch not taken"}`;
     case "failed":
       return `Failed: ${node.failure_reason ?? "unknown reason"}`;
     case "stopped":

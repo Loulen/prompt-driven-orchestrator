@@ -303,6 +303,7 @@ mod tests {
             started_at: None,
             completed_at: None,
             failure_reason: None,
+            skip_reason: None,
             iterations: iters
                 .iter()
                 .map(|(iter, status)| IterationInfo {

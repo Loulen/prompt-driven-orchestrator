@@ -414,6 +414,7 @@ pub(crate) fn evaluate_outgoing_edges_full(
                 run_state,
                 region,
                 target_id,
+                source_iter,
                 frontmatter_fields,
                 resolved_vars,
             ));
@@ -637,6 +638,7 @@ fn handle_region_reentry(
     run_state: &RunState,
     region: &crate::pipeline::LoopRegion,
     entry_id: &str,
+    source_iter: i64,
     frontmatter_fields: &HashMap<String, serde_yaml::Value>,
     resolved_vars: &HashMap<String, serde_yaml::Value>,
 ) -> Vec<SchedulerAction> {
@@ -652,6 +654,25 @@ fn handle_region_reentry(
     // there instead of running out its (possibly just-raised) cap.
     let forced_region_route = run_state.forced_routes.get(region.id.as_str()).cloned();
     let ended = region_loop_state.is_some_and(|ls| ls.done) || forced_region_route.is_some();
+
+    // #626: a bounded region's back-edge advances the loop by ONE lap per
+    // completing member. In steady state exactly one member completes per pass,
+    // so the region counter sits at that member's own lap (`current_iter ==
+    // source_iter`) and the back-edge advances to the next. `reopen_run`,
+    // however, re-fires the outgoing edges of *every* settled-complete member in
+    // a single pass (`re_evaluate_after_command_inner`). When the two sides of a
+    // two-member loop are at different laps — the head already re-entered a later
+    // lap while the tail is a lap behind — the tail's back-edge represents a lap
+    // advance the region ALREADY took (`current_iter > source_iter`). Re-firing it
+    // spawns the entry a lap ahead of the frontier, forking the loop into two
+    // concurrent branches over the same worktree (the double-spawn of #626). The
+    // stale re-entry is inert: the frontier member's forward edge drives the sole
+    // legitimate resume. An `ended`/force-routed region still routes its exit —
+    // that is terminal routing, not a lap advance — so the guard scopes to the
+    // plain NextLap path only.
+    if !ended && forced_region_route.is_none() && current_iter > source_iter {
+        return actions;
+    }
 
     let runtime = crate::loop_region::RegionRuntime {
         current_iter,
@@ -823,6 +844,26 @@ fn forward_spawn_iter(
         let max = effective_region_max_iter(run_state, region, resolved_vars);
         if proposed > max {
             return None;
+        }
+
+        // #626: a member→member forward edge inside a bounded region carries the
+        // source's output to the next member of the SAME lap — the target belongs
+        // one lap behind the source and this edge lifts it to the source's lap. At
+        // `reopen_run`, `re_evaluate_after_command_inner` re-fires every completed
+        // member's edges in one pass; if the target has already caught up to (or
+        // passed) the source's lap, this forward edge would re-spawn it a lap
+        // ahead of where the source's output feeds — the sibling of the #626
+        // double-spawn on the forward side. Fire only while the target is
+        // genuinely a lap behind the source it consumes from.
+        if region.members.iter().any(|m| m == source_id) {
+            let source_iter = run_state.nodes.get(source_id).map(|n| n.iter).unwrap_or(1);
+            if run_state
+                .nodes
+                .get(target_id)
+                .is_some_and(|ts| ts.iter >= source_iter)
+            {
+                return None;
+            }
         }
     }
 
@@ -5202,6 +5243,101 @@ loops:
                 .iter()
                 .any(|a| matches!(a, SchedulerAction::Halt { .. })),
             "must not halt at lap 1, got {actions:?}"
+        );
+    }
+
+    // ── #626: reopen of a bounded loop must not double-spawn both members ─────
+    //
+    // `re_evaluate_after_command_inner` re-fires the outgoing edges of EVERY
+    // settled-complete member in a single pass. The three tests below drive that
+    // exact sequence (evaluate each completed member, collect all spawns) and
+    // assert the loop resumes at ONE alternation point, never two branches racing
+    // over the same worktree.
+
+    /// Re-fire every settled-complete member's edges, as the reopen re-drive does.
+    fn reopen_spawns(pipeline: &PipelineDef, state: &RunState) -> Vec<(String, i64)> {
+        let by_node = fail_fm();
+        let mut spawns = Vec::new();
+        let mut members: Vec<&str> = pipeline.loops[0].members.iter().map(|m| m.as_str()).collect();
+        members.sort_unstable(); // deterministic order, independent of HashMap iteration
+        for member in members {
+            if !state
+                .nodes
+                .get(member)
+                .is_some_and(|n| n.status.is_settled_complete())
+            {
+                continue;
+            }
+            let fm = by_node.get(member).cloned().unwrap_or_default();
+            for action in evaluate_outgoing_edges_full(pipeline, state, member, &HashMap::new(), &fm, &by_node) {
+                if let SchedulerAction::Spawn { node_id, iter } = action {
+                    spawns.push((node_id, iter));
+                }
+            }
+        }
+        spawns
+    }
+
+    #[test]
+    fn reopen_bounded_loop_head_ahead_resumes_one_spawn() {
+        // The observed #626 state: the head (`impl`) completed iter 2 — its output
+        // never consumed — while the tail (`rev`) is a lap behind at iter 1 (FAIL,
+        // back-edge armed); region counter at lap 2. Reopen must spawn ONLY
+        // `rev` iter 2 (consume the head's un-read output); the tail's back-edge is
+        // stale (lap 2 already taken → `impl` iter 2 exists) and must not re-enter
+        // `impl` at iter 3.
+        let pipeline = migrated_review_loop_pipeline(5);
+        let mut state = empty_run_state();
+        state.nodes.insert("start".into(), completed_node_iter("start", 1));
+        state.nodes.insert("impl".into(), completed_node_iter("impl", 2));
+        state.nodes.insert("rev".into(), completed_node_iter("rev", 1));
+        state.loop_states.insert(
+            "review_loop".into(),
+            crate::event_log::LoopState {
+                loop_node_id: "review_loop".into(),
+                current_iter: 2,
+                max_iter: 5,
+                break_received: false,
+                done: false,
+            },
+        );
+
+        let spawns = reopen_spawns(&pipeline, &state);
+        assert_eq!(
+            spawns,
+            vec![("rev".to_string(), 2)],
+            "reopen must resume at one point (rev iter 2), not double-spawn, got {spawns:?}"
+        );
+    }
+
+    #[test]
+    fn reopen_bounded_loop_tail_at_head_lap_resumes_one_spawn() {
+        // Symmetric #626 state: both members completed at the SAME lap (impl iter 1,
+        // rev iter 1 FAIL), region counter at lap 1, and the run went terminal
+        // before the back-edge advanced. Reopen must re-enter ONLY `impl` iter 2
+        // (the tail's FAIL drives the next lap); the head's forward edge is stale
+        // (`rev` already ran at the head's lap) and must not re-spawn `rev` iter 2.
+        let pipeline = migrated_review_loop_pipeline(5);
+        let mut state = empty_run_state();
+        state.nodes.insert("start".into(), completed_node_iter("start", 1));
+        state.nodes.insert("impl".into(), completed_node_iter("impl", 1));
+        state.nodes.insert("rev".into(), completed_node_iter("rev", 1));
+        state.loop_states.insert(
+            "review_loop".into(),
+            crate::event_log::LoopState {
+                loop_node_id: "review_loop".into(),
+                current_iter: 1,
+                max_iter: 5,
+                break_received: false,
+                done: false,
+            },
+        );
+
+        let spawns = reopen_spawns(&pipeline, &state);
+        assert_eq!(
+            spawns,
+            vec![("impl".to_string(), 2)],
+            "reopen must re-enter one point (impl iter 2), not double-spawn, got {spawns:?}"
         );
     }
 

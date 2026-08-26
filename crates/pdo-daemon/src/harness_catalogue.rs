@@ -17,18 +17,36 @@
 //! environment. The two responsibilities meet in [`crate::lib`]'s settings view and
 //! the boot probe.
 //!
+//! ## Three sources, machine-generated first (#629, ADR-0056)
+//!
+//! A binary does not always print its enumeration where a `--help` reader looks.
+//! Measured on `copilot` 1.0.80: `--help` enumerates the effort stops but describes
+//! `--model` in prose, while the ids live in two other places. So the module exposes
+//! **three readers**, which the runner tries in preference order:
+//!
+//! 1. [`parse_completion_script`] — the shell-completion script (`<bin> completion
+//!    bash`). Machine-**generated** from the CLI's own declared choices, so it is the
+//!    most stable of the three and the one ADR-0056 prefers.
+//! 2. [`parse_settings_prose`] — the settings help topic (`<bin> help config`), where
+//!    a CLI documents each setting and bullets its allowed values.
+//! 3. [`parse_help`] — the `--help` reader of #616.
+//!
+//! Each axis (models, efforts) takes the **highest-preference source that offers one**
+//! — see [`Catalogue::fill_missing_from`]. The two richer sources are only *run*
+//! against a binary whose `--help` declares them ([`advertises_subcommand`]); the
+//! runner's doc says why that gate is load-bearing.
+//!
 //! ## Best-effort, never a contract (ADR-0053 §Limites)
 //!
-//! A binary's `--help` is generated prose, not an API. The parser scans it for the
-//! enumerations a CLI conventionally prints beside `--model` / `--effort`
-//! (`[a|b|c]`, `<a|b|c>`, `Choices: a, b, c`, `One of: …`). It can go **blind** to a
-//! release that reworks its help — and that is fine: an empty catalogue degrades to
+//! None of the three is an API: `--help` and `help config` are prose, a completion
+//! script is generated bash. Every reader is best-effort and can go **blind** to a
+//! release that reworks its output — and that is fine: an empty catalogue degrades to
 //! the free-text field, the path that cannot break. The catalogue is a **commodity**
 //! (a convenience for the picker), the free-text escape hatch is the guarantee.
 //!
-//! A harness whose binary prints no enumeration (measured: `opencode` takes a bare
-//! `provider/model` with no list) yields an empty catalogue — a **declared absence**,
-//! rendered as the free-text field, exactly like a missing effort axis.
+//! A harness whose binary prints no enumeration anywhere (measured: `opencode` takes
+//! a bare `provider/model` with no list) yields an empty catalogue — a **declared
+//! absence**, rendered as the free-text field, exactly like a missing effort axis.
 
 /// The offered catalogue for one harness: the model ids and effort levels its
 /// installed binary enumerates, in first-seen order, de-duplicated. Empty on either
@@ -53,6 +71,30 @@ impl Catalogue {
     /// (or vice-versa) is folded in by the caller — see the settings view.
     pub(crate) fn has_effort_axis(&self) -> bool {
         !self.efforts.is_empty()
+    }
+
+    /// Fold a lower-preference source into this one, **per axis** (#629, ADR-0056).
+    /// An axis this catalogue already offers is kept; an axis it lacks is taken from
+    /// `other`. Axis-wise and not whole-catalogue, because the sources disagree about
+    /// what they cover: copilot's completion script carries both axes, its
+    /// `help config` only models, its `--help` only efforts.
+    ///
+    /// The caller folds in **preference order**, so "already offered" means "answered
+    /// by a source that outranks this one" — not "answered by whichever ran first".
+    pub(crate) fn fill_missing_from(&mut self, other: Catalogue) {
+        if self.models.is_empty() {
+            self.models = other.models;
+        }
+        if self.efforts.is_empty() {
+            self.efforts = other.efforts;
+        }
+    }
+
+    /// Whether both axes are filled — the runner's short-circuit: with models *and*
+    /// efforts already answered, a lower-preference source has nothing left to
+    /// contribute and its subprocess is not spent.
+    pub(crate) fn is_complete(&self) -> bool {
+        !self.models.is_empty() && !self.efforts.is_empty()
     }
 }
 
@@ -91,8 +133,7 @@ pub(crate) fn parse_help(help: &str) -> Catalogue {
 fn extract_choices(help: &str, flags: &[&str]) -> Vec<String> {
     for flag in flags {
         if let Some(after) = find_flag_token(help, flag) {
-            let window = &help[after..(after + WINDOW).min(help.len())];
-            let choices = extract_enum(window);
+            let choices = extract_enum(window_from(help, after, WINDOW));
             if !choices.is_empty() {
                 return choices;
             }
@@ -101,27 +142,66 @@ fn extract_choices(help: &str, flags: &[&str]) -> Vec<String> {
     Vec::new()
 }
 
+/// The `len`-byte window of `text` starting at `from`, **snapped down to a char
+/// boundary** at both ends. Help text is not ASCII (copilot's prints an em dash), so
+/// a naive `&text[a..a + len]` can slice mid-codepoint and panic — inside the
+/// `/settings` handler, on a machine whose only sin is having that binary installed.
+/// Truncating the window one character early is the harmless failure here.
+fn window_from(text: &str, from: usize, len: usize) -> &str {
+    let start = floor_boundary(text, from);
+    let end = floor_boundary(text, start.saturating_add(len).min(text.len()));
+    &text[start..end]
+}
+
+/// The largest byte index `<= i` that is a char boundary of `text` (`i` clamped into
+/// range first).
+fn floor_boundary(text: &str, i: usize) -> usize {
+    let mut i = i.min(text.len());
+    while i > 0 && !text.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
 /// Find `flag` as a **whole token** in `help` and return the byte index just past
-/// it. "Whole token" means it is not the tail of a longer word: it starts at the
-/// string head or after a separator, and ends at a separator or an argument opener
-/// (`=`, `<`, `[`). This keeps `--model` from matching inside `--model-family` and
-/// lands the scan window exactly on the flag's argument/description.
+/// its first occurrence. See [`flag_token_positions`].
 fn find_flag_token(help: &str, flag: &str) -> Option<usize> {
-    let bytes = help.as_bytes();
+    flag_token_positions(help, flag).into_iter().next()
+}
+
+/// Every byte index just past a **whole-token** occurrence of `flag` in `text`, in
+/// order. "Whole token" means it is not the tail of a longer word: it starts at the
+/// string head or after a separator, and ends at a separator, an argument opener
+/// (`=`, `<`, `[`) or a shell-`case` pattern terminator (`)`, `|`). This keeps
+/// `--model` from matching inside `--model-family` and lands the scan window exactly
+/// on the flag's argument/description — or, in a completion script, on its case arm.
+///
+/// All positions, not just the first: a completion script names every flag twice
+/// over (once in a flat "all flags" word list, once as a case arm), and only the
+/// case arm carries the choices.
+fn flag_token_positions(text: &str, flag: &str) -> Vec<usize> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
     let mut from = 0;
-    while let Some(rel) = help[from..].find(flag) {
+    while let Some(rel) = text[from..].find(flag) {
         let idx = from + rel;
         let end = idx + flag.len();
         let before_ok = idx == 0
-            || matches!(bytes[idx - 1], b' ' | b'\t' | b'\n' | b',' | b'(' | b'|' | b'/');
-        let after_ok = end >= help.len()
-            || matches!(bytes[end], b' ' | b'\t' | b'=' | b'<' | b'[' | b'\n' | b',');
+            || matches!(
+                bytes[idx - 1],
+                b' ' | b'\t' | b'\n' | b',' | b'(' | b'|' | b'/'
+            );
+        let after_ok = end >= text.len()
+            || matches!(
+                bytes[end],
+                b' ' | b'\t' | b'=' | b'<' | b'[' | b'\n' | b',' | b')' | b'|'
+            );
         if before_ok && after_ok {
-            return Some(end);
+            out.push(end);
         }
         from = end;
     }
-    None
+    out
 }
 
 /// Read the first enumeration in `window`: a bracketed pipe list (`[a|b|c]` /
@@ -229,6 +309,212 @@ fn split_tokens(s: &str, seps: &[char]) -> Vec<String> {
         }
     }
     out
+}
+
+/// Whether `help` (a binary's `--help`) declares a subcommand called `name` (#629,
+/// ADR-0056). PURE; the runner uses it to decide which of the richer sources it may
+/// run at all.
+///
+/// This gate is load-bearing, not cosmetic. A CLI that has no such subcommand does not
+/// necessarily *refuse* it: measured, `claude completion bash` is read as a **prompt**
+/// and opens a session that idles until the probe timeout kills it. Running a
+/// subcommand a binary never advertised is how a catalogue probe turns into a
+/// five-second stall inside a `/settings` response.
+///
+/// A command list is one command per line, either bare (`  completion <shell>`) or
+/// prefixed with the binary name (`  opencode completion   generate …`) — so the test
+/// is "the line's first or second word is exactly `name`". Deliberately loose: a false
+/// positive costs one bounded probe that finds nothing, a false negative costs the
+/// catalogue.
+pub(crate) fn advertises_subcommand(help: &str, name: &str) -> bool {
+    help.lines().any(|line| {
+        let mut words = line.split_whitespace();
+        let (first, second) = (words.next(), words.next());
+        first == Some(name) || second == Some(name)
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Source 1 — the generated shell-completion script (#629, ADR-0056)
+// ---------------------------------------------------------------------------
+
+/// Backstop bound on one case arm's body, for a generator that ends its arms some
+/// way other than `;;` / `esac`. The `compgen -W` list *itself* may be far longer
+/// (copilot's is ~700 chars); this bounds only where we look for the `-W`.
+const COMPGEN_WINDOW: usize = 200;
+
+/// Parse a bash **completion script** (`<bin> completion bash`) into its offered
+/// catalogue (#629, ADR-0056). Machine-generated from the CLI's own declared choices
+/// — the preferred source, because unlike help prose it exists to be read by a
+/// program.
+///
+/// The shape every generator emits is a `case` on the previous word:
+///
+/// ```text
+///     --model)
+///         COMPREPLY=( $(compgen -W 'auto gpt-5.5 claude-opus-5' -- "$cur") )
+///         ;;
+///     --effort|--reasoning-effort)
+///         COMPREPLY=( $(compgen -W 'none low high' -- "$cur") )
+/// ```
+///
+/// A binary with no `completion` subcommand, or one whose script declares no choices
+/// for these flags, yields [`Catalogue::default`] and the runner falls through to the
+/// next source.
+pub(crate) fn parse_completion_script(script: &str) -> Catalogue {
+    Catalogue {
+        models: completion_words(script, &["--model", "-m"]),
+        efforts: completion_words(script, &["--effort", "--reasoning-effort"]),
+    }
+}
+
+/// The `compgen -W` word list declared for the first of `flags` that appears as a
+/// `case` **pattern** in `script`. A flag mentioned anywhere else (the flat list of
+/// every flag name, a comment) is skipped: only an occurrence immediately followed by
+/// `)` or `|` is a pattern.
+fn completion_words(script: &str, flags: &[&str]) -> Vec<String> {
+    for flag in flags {
+        for end in flag_token_positions(script, flag) {
+            let rest = &script[end..];
+            if !rest.starts_with(')') && !rest.starts_with('|') {
+                continue;
+            }
+            let words = compgen_word_list(rest);
+            if !words.is_empty() {
+                return words;
+            }
+        }
+    }
+    Vec::new()
+}
+
+/// Read the first `-W '<words>'` (or `-W "<words>"`) list in `rest`, whitespace
+/// separated. The `-W` must sit inside **this case arm** — the search stops at the
+/// arm's `;;` (or at `esac`, or at [`COMPGEN_WINDOW`] for a generator that uses
+/// neither), so an arm that completes filenames yields nothing instead of borrowing
+/// the next arm's list. The quoted list itself is read to its closing quote however
+/// long it runs.
+fn compgen_word_list(rest: &str) -> Vec<String> {
+    let arm_end = [rest.find(";;"), rest.find("esac"), Some(COMPGEN_WINDOW)]
+        .into_iter()
+        .flatten()
+        .min()
+        .unwrap_or(COMPGEN_WINDOW);
+    let Some(rel) = window_from(rest, 0, arm_end).find("-W") else {
+        return Vec::new();
+    };
+    let after = rest[rel + "-W".len()..].trim_start();
+    let Some(quote) = after.chars().next().filter(|c| *c == '\'' || *c == '"') else {
+        return Vec::new();
+    };
+    let inner = &after[quote.len_utf8()..];
+    let Some(close) = inner.find(quote) else {
+        return Vec::new();
+    };
+    split_tokens(&inner[..close], &[' ', '\t', '\n'])
+}
+
+// ---------------------------------------------------------------------------
+// Source 2 — the settings help topic (#629, ADR-0056)
+// ---------------------------------------------------------------------------
+
+/// How many lines past a settings key we read its bullet list before giving up — a
+/// generous ceiling on one setting's block (copilot's `model` bullets 27 ids).
+const SETTINGS_BLOCK_LINES: usize = 120;
+
+/// Parse a CLI's **settings help topic** (`<bin> help config`) into its offered
+/// catalogue (#629, ADR-0056). This is where copilot 1.0.80 actually enumerates its
+/// models — its `--help` describes `--model` in prose only, so the #616 reader saw
+/// nothing and copilot was served the "no catalogue" fallback while a catalogue
+/// existed (#629).
+///
+/// The shape read is a settings key followed by a bullet list of its allowed values:
+///
+/// ```text
+///   `model`: AI model to use; can be changed with /model or --model.
+///     - "claude-opus-5"
+///     - "gpt-5.5"
+/// ```
+///
+/// Prose, not a contract: an unexpected layout yields [`Catalogue::default`] and the
+/// runner falls through.
+pub(crate) fn parse_settings_prose(text: &str) -> Catalogue {
+    Catalogue {
+        models: settings_values(text, &["model"]),
+        efforts: settings_values(text, &["effort", "effortLevel", "reasoningEffort"]),
+    }
+}
+
+/// The bullet-listed values of the first of `keys` that appears as a settings key
+/// line in `text`. Key matching is exact on the un-quoted name, so `model` does not
+/// match `subagents.agents.<name>.model` or `contextTier`.
+fn settings_values(text: &str, keys: &[&str]) -> Vec<String> {
+    let lines: Vec<&str> = text.lines().collect();
+    for key in keys {
+        for (i, line) in lines.iter().enumerate() {
+            if !is_settings_key_line(line, key) {
+                continue;
+            }
+            let values = bullet_values(&lines[i + 1..]);
+            if !values.is_empty() {
+                return values;
+            }
+        }
+    }
+    Vec::new()
+}
+
+/// Whether `line` declares the setting `key` — `` `key`: … ``, `"key": …`, or a bare
+/// `key: …`, at any indent. The decorating backticks/quotes are stripped before the
+/// comparison, so the same reader serves a CLI that quotes its keys and one that
+/// does not.
+fn is_settings_key_line(line: &str, key: &str) -> bool {
+    let stripped: String = line.chars().filter(|c| *c != '`' && *c != '"').collect();
+    let trimmed = stripped.trim_start();
+    trimmed
+        .strip_prefix(key)
+        .is_some_and(|rest| rest.starts_with(':'))
+}
+
+/// Collect the values bulleted under a settings key. Lines before the first bullet
+/// are description continuation and are skipped; once bullets start, the first blank
+/// or non-bullet line ends the block, so a following key's list is never absorbed.
+fn bullet_values(lines: &[&str]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in lines.iter().take(SETTINGS_BLOCK_LINES) {
+        let trimmed = line.trim();
+        let bullet = trimmed
+            .strip_prefix("- ")
+            .or_else(|| trimmed.strip_prefix("* "));
+        match bullet {
+            Some(rest) => {
+                if let Some(tok) = bullet_value(rest) {
+                    if !out.contains(&tok) {
+                        out.push(tok);
+                    }
+                }
+            }
+            None if out.is_empty() => continue,
+            None => break,
+        }
+    }
+    out
+}
+
+/// The value a bullet declares: the quoted token when it opens with a quote or a
+/// backtick (`- "gpt-5.5": the fast one` ⇒ `gpt-5.5`), else its first whitespace-
+/// delimited word. `None` when that is prose rather than an id — which is how a
+/// descriptive bullet under some *other* key contributes nothing.
+fn bullet_value(rest: &str) -> Option<String> {
+    let rest = rest.trim_start();
+    let quote = rest.chars().next()?;
+    let tok = if matches!(quote, '"' | '\'' | '`') {
+        let inner = &rest[quote.len_utf8()..];
+        &inner[..inner.find(quote)?]
+    } else {
+        rest.split_whitespace().next()?
+    };
+    is_plausible_value(tok).then(|| tok.to_string())
 }
 
 /// Whether `tok` looks like a model/effort id rather than prose: 1..=60 chars, made
@@ -386,5 +672,281 @@ Options:
             parse_help(help).models,
             vec!["openrouter/foo", "anthropic/claude-3.5", "x_y"]
         );
+    }
+
+    #[test]
+    fn a_multibyte_help_does_not_slice_mid_codepoint() {
+        // copilot's help prints an em dash. A fixed-byte window that lands inside one
+        // used to panic — inside the `/settings` handler, on any machine with that
+        // binary installed. Pad so the em dash straddles the WINDOW boundary from the
+        // flag, then walk every offset around it.
+        for pad in 0..8 {
+            let help = format!(
+                "  --model <m>{}{}\n  Choices: a, b\n",
+                " ".repeat(WINDOW - 4 + pad),
+                "— an em dash".repeat(4)
+            );
+            let _ = parse_help(&help); // must not panic
+        }
+    }
+
+    // -- The subcommand gate (#629, ADR-0056) ------------------------------------
+
+    #[test]
+    fn a_command_list_is_read_bare_or_binary_prefixed() {
+        // copilot's shape: bare command names under `Commands:`.
+        let copilot = "Commands:\n  completion <shell>   Generate a shell completion script\n  help [topic]         Display help information\n";
+        assert!(advertises_subcommand(copilot, "completion"));
+        assert!(advertises_subcommand(copilot, "help"));
+        // opencode's shape: each command line repeats the binary name.
+        let opencode = "Commands:\n  opencode completion    generate shell completion script\n  opencode models        list all available models\n";
+        assert!(advertises_subcommand(opencode, "completion"));
+        assert!(
+            !advertises_subcommand(opencode, "help"),
+            "opencode declares no `help` subcommand"
+        );
+    }
+
+    #[test]
+    fn a_binary_that_declares_neither_is_never_asked_for_them() {
+        // claude's verbatim shape, abridged. It has no `completion` and no `help`
+        // subcommand — and reads either as a PROMPT, opening a session that idles to
+        // the probe timeout. This assertion is what keeps a claude re-probe at one
+        // subprocess instead of one plus two five-second stalls.
+        let claude = "\
+Usage: claude [options] [command] [prompt]
+
+Options:
+  -h, --help                            Display help for command
+  --model <model>                       Model for the session
+
+Commands:
+  mcp                                   Configure and manage MCP servers
+  plugin|plugins                        Manage Claude Code plugins
+  update|upgrade                        Check for updates and install if
+                                        available
+";
+        assert!(!advertises_subcommand(claude, "completion"));
+        assert!(
+            !advertises_subcommand(claude, "help"),
+            "`-h, --help` in the options list is not a `help` subcommand"
+        );
+    }
+
+    // -- Source 1: the generated completion script (#629, ADR-0056) ---------------
+
+    /// The verbatim shape of `copilot completion bash` 1.0.80: a `case` on the
+    /// previous word, one arm per value-taking flag, choices in a `compgen -W` list.
+    /// Abridged to five model ids; the structure is what is under test.
+    const COPILOT_COMPLETION: &str = r#"
+    local ___copilot_required='--add-dir --agent --context --effort --model --env'
+    case "$prev" in
+        --model)
+            COMPREPLY=( $(compgen -W 'auto claude-opus-5 claude-sonnet-4.5 gpt-5.5 kimi-k2.7-code' -- "$cur") )
+            return 0
+            ;;
+        --effort|--reasoning-effort)
+            COMPREPLY=( $(compgen -W 'none minimal low medium high xhigh max' -- "$cur") )
+            return 0
+            ;;
+        --context)
+            COMPREPLY=( $(compgen -W 'default long_context' -- "$cur") )
+            return 0
+            ;;
+    esac
+    ___copilot_flags='--acp --add-dir --agent --effort --model --version'
+"#;
+
+    #[test]
+    fn a_completion_script_yields_both_axes() {
+        // AC #1/#2: the machine-generated source carries the model ids `--help` only
+        // describes in prose — including `auto`, copilot's automatic selector, which
+        // the settings prose does not list.
+        let cat = parse_completion_script(COPILOT_COMPLETION);
+        assert_eq!(
+            cat.models,
+            vec![
+                "auto",
+                "claude-opus-5",
+                "claude-sonnet-4.5",
+                "gpt-5.5",
+                "kimi-k2.7-code"
+            ]
+        );
+        assert_eq!(
+            cat.efforts,
+            vec!["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+            "an aliased case arm (`--effort|--reasoning-effort`) is still a pattern"
+        );
+    }
+
+    #[test]
+    fn a_flag_named_outside_a_case_arm_is_not_a_choice_list() {
+        // `--model` is named twice more in the script (the required-args list, the
+        // all-flags list). Only the arm — the occurrence followed by `)` or `|` —
+        // declares choices; harvesting from a flat list would offer flag names as
+        // model ids.
+        let cat = parse_completion_script(COPILOT_COMPLETION);
+        assert!(
+            !cat.models.iter().any(|m| m.starts_with("--")),
+            "flag names must never leak into the catalogue: {:?}",
+            cat.models
+        );
+    }
+
+    #[test]
+    fn an_arm_without_a_word_list_never_borrows_a_later_ones() {
+        // A flag whose arm completes filenames rather than a fixed set has no offer;
+        // the reader must not walk on to the next arm's `-W`.
+        let script = "\
+    case \"$prev\" in
+        --model)
+            _filedir
+            return 0
+            ;;
+        --context)
+            COMPREPLY=( $(compgen -W 'default long_context' -- \"$cur\") )
+            ;;
+    esac
+";
+        assert!(
+            parse_completion_script(script).models.is_empty(),
+            "no word list on the arm ⇒ no offer, not the neighbour's"
+        );
+    }
+
+    #[test]
+    fn a_script_with_no_such_flag_is_an_empty_catalogue() {
+        // What a binary with no `completion` subcommand prints (a usage error), and
+        // what a completion script that declares no model choices yields: nothing, so
+        // the runner falls through to the next source.
+        assert_eq!(
+            parse_completion_script("error: unknown command 'completion'"),
+            Catalogue::default()
+        );
+        assert_eq!(parse_completion_script(""), Catalogue::default());
+    }
+
+    #[test]
+    fn a_double_quoted_word_list_reads_the_same() {
+        let script =
+            "        --model)\n  COMPREPLY=( $(compgen -W \"opus sonnet\" -- \"$cur\") )\n";
+        assert_eq!(
+            parse_completion_script(script).models,
+            vec!["opus", "sonnet"]
+        );
+    }
+
+    // -- Source 2: the settings help topic (#629, ADR-0056) ----------------------
+
+    /// The verbatim shape of `copilot help config` 1.0.80: settings keys in
+    /// backticks, allowed values bulleted and quoted underneath. Abridged.
+    const COPILOT_HELP_CONFIG: &str = r#"Configuration Settings:
+
+  `logLevel`: log level for CLI; defaults to "default". Set to "all" for debug logging.
+
+  `model`: AI model to use for Copilot CLI; can be changed with /model command or --model flag option.
+    - "claude-sonnet-5"
+    - "claude-opus-4.8-fast"
+    - "gpt-5.6-sol"
+    - "gemini-3.1-pro-preview"
+    - "kimi-k2.7-code"
+
+  `contextTier`: context window tier for tiered-pricing models (e.g., "default" or "long_context").
+    - Can also be set with --context flag (overrides persisted setting)
+
+  `subagents.agents.<agent-name>`: per-subagent model, effortLevel, and contextTier selection.
+    - Each field can be set to "inherit" to use the parent session's effective value
+"#;
+
+    #[test]
+    fn the_settings_topic_yields_the_model_ids_the_help_only_describes() {
+        // The motivating measurement of #629: copilot's `--help` says "use 'auto' to
+        // let Copilot pick" and enumerates nothing, while `help config` bullets every
+        // valid id. #616 read only `--help` and concluded copilot had no catalogue.
+        let cat = parse_settings_prose(COPILOT_HELP_CONFIG);
+        assert_eq!(
+            cat.models,
+            vec![
+                "claude-sonnet-5",
+                "claude-opus-4.8-fast",
+                "gpt-5.6-sol",
+                "gemini-3.1-pro-preview",
+                "kimi-k2.7-code"
+            ]
+        );
+        // This topic documents no effort setting ⇒ a declared absence on that axis,
+        // which the runner then fills from the next source.
+        assert!(cat.efforts.is_empty());
+    }
+
+    #[test]
+    fn a_settings_block_stops_at_its_own_end() {
+        // The `contextTier` bullet ("Can also be set with --context flag") sits right
+        // after the model list. Absorbing it would offer prose as a model id.
+        let cat = parse_settings_prose(COPILOT_HELP_CONFIG);
+        assert!(
+            !cat.models.iter().any(|m| m.contains("--context")),
+            "the next key's bullets are not this key's values: {:?}",
+            cat.models
+        );
+        assert_eq!(cat.models.len(), 5, "exactly the bulleted ids");
+    }
+
+    #[test]
+    fn a_key_matches_whole_not_as_a_suffix_or_prefix() {
+        // `contextTier` must not answer for `model`, and the dotted per-subagent key
+        // that merely *mentions* model in its prose must not either.
+        let text = "  `modelFamily`: pick a family.\n    - \"anthropic\"\n\n  `model`: the model.\n    - \"opus\"\n";
+        assert_eq!(parse_settings_prose(text).models, vec!["opus"]);
+    }
+
+    #[test]
+    fn an_unquoted_bullet_list_reads_its_first_word() {
+        // Not every CLI quotes its values; a bare bullet with a trailing gloss still
+        // yields the id, and a prose bullet yields nothing.
+        let text = "  effort: reasoning effort.\n    - low — cheapest\n    - high — slowest\n";
+        assert_eq!(parse_settings_prose(text).efforts, vec!["low", "high"]);
+    }
+
+    #[test]
+    fn a_settings_topic_with_no_keys_is_an_empty_catalogue() {
+        assert_eq!(
+            parse_settings_prose("error: unknown help topic 'config'"),
+            Catalogue::default()
+        );
+    }
+
+    // -- The per-axis fold across sources (#629, ADR-0056) -----------------------
+
+    #[test]
+    fn each_axis_is_owned_by_the_first_source_that_offers_it() {
+        // The copilot case with an older binary: models come from the settings topic,
+        // efforts from `--help`, and neither overwrites an axis already answered.
+        let mut cat = parse_settings_prose(COPILOT_HELP_CONFIG);
+        assert!(!cat.is_complete(), "models only ⇒ the walk continues");
+        cat.fill_missing_from(parse_help(
+            "  --model <m> Set the AI model (use 'auto')\n  --effort <e> (choices: \"low\", \"high\")\n",
+        ));
+        assert_eq!(
+            cat.models.first().map(String::as_str),
+            Some("claude-sonnet-5")
+        );
+        assert_eq!(cat.efforts, vec!["low", "high"]);
+        assert!(cat.is_complete(), "both axes answered ⇒ the walk stops");
+    }
+
+    #[test]
+    fn a_filled_axis_is_never_overwritten_by_a_later_source() {
+        let mut cat = Catalogue {
+            models: vec!["preferred".into()],
+            efforts: Vec::new(),
+        };
+        cat.fill_missing_from(Catalogue {
+            models: vec!["fallback".into()],
+            efforts: vec!["low".into()],
+        });
+        assert_eq!(cat.models, vec!["preferred"]);
+        assert_eq!(cat.efforts, vec!["low"]);
     }
 }

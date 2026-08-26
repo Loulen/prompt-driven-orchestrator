@@ -680,6 +680,35 @@ describe("NodeDetailPanel", () => {
       expect(screen.getByText(/user killed it/)).toBeInTheDocument();
     });
 
+    it("renders Skipped label and greyed banner with the prune reason (#620)", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel
+            node={makeNode({
+              status: "skipped",
+              skip_reason: "required input never arrived — branch not taken",
+            })}
+            runId="run-1"
+          />
+        </TooltipProvider>,
+      );
+      // The header label distinguishes it from a green "Completed" node…
+      expect(screen.getByText("Skipped")).toBeInTheDocument();
+      // …and the banner carries *why* it was pruned, at node level.
+      expect(
+        screen.getByText(/required input never arrived — branch not taken/),
+      ).toBeInTheDocument();
+    });
+
+    it("skipped banner falls back to a default reason when none is given", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "skipped" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+      expect(screen.getByText(/Skipped — branch not taken/)).toBeInTheDocument();
+    });
+
     it("renders Stale label in header and stale banner", () => {
       render(
         <TooltipProvider>

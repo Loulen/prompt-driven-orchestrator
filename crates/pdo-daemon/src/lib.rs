@@ -7315,7 +7315,10 @@ fn resolve_completed_frontmatter(
 ) -> HashMap<String, HashMap<String, serde_yaml::Value>> {
     let mut by_node = HashMap::new();
     for (node_id, node_state) in &run_state.nodes {
-        if node_state.status != event_log::NodeStatus::Completed {
+        // #620: a `Skipped` node counts as a settled producer here too — it wrote
+        // an (empty) artifact, so it resolves to empty frontmatter exactly as it
+        // did when a skip projected `Completed`.
+        if !node_state.status.is_settled_complete() {
             continue;
         }
         let fm = resolve_source_frontmatter(pipeline, node_id, node_state.iter, artifacts_dir);
@@ -11504,6 +11507,7 @@ async fn node_pane(
             matches!(
                 i.status,
                 event_log::NodeStatus::Completed
+                    | event_log::NodeStatus::Skipped
                     | event_log::NodeStatus::Failed
                     | event_log::NodeStatus::Stopped
                     | event_log::NodeStatus::Stale
@@ -19923,6 +19927,7 @@ mod tests {
                 started_at: None,
                 completed_at: None,
                 failure_reason: None,
+                skip_reason: None,
                 iterations: Vec::new(),
                 frontmatter_retries: 0,
                 frontmatter_violations: Vec::new(),
@@ -20136,6 +20141,7 @@ mod tests {
                 started_at: None,
                 completed_at: None,
                 failure_reason: None,
+                skip_reason: None,
                 iterations: Vec::new(),
                 frontmatter_retries: 0,
                 frontmatter_violations: Vec::new(),
@@ -20189,6 +20195,7 @@ mod tests {
                 started_at: None,
                 completed_at: None,
                 failure_reason: None,
+                skip_reason: None,
                 iterations: Vec::new(),
                 frontmatter_retries: 0,
                 frontmatter_violations: Vec::new(),
@@ -20207,6 +20214,7 @@ mod tests {
                 started_at: None,
                 completed_at: None,
                 failure_reason: None,
+                skip_reason: None,
                 iterations: Vec::new(),
                 frontmatter_retries: 0,
                 frontmatter_violations: Vec::new(),
@@ -20432,6 +20440,7 @@ mod tests {
                     started_at: None,
                     completed_at: None,
                     failure_reason: None,
+                    skip_reason: None,
                     iterations: (1..=iters)
                         .map(|iter| event_log::IterationInfo {
                             iter,

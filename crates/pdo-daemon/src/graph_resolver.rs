@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::event_log::{NodeStatus, RunState};
+use crate::event_log::RunState;
 use crate::pipeline::{NodeType, PipelineDef};
 
 /// Returns the IDs of nodes that are ready to be spawned: all upstream
@@ -84,7 +84,7 @@ pub(crate) fn ready_nodes(pipeline: &PipelineDef, run_state: &RunState) -> Vec<S
             run_state
                 .nodes
                 .get(*src)
-                .is_some_and(|n| n.status == NodeStatus::Completed)
+                .is_some_and(|n| n.status.is_settled_complete())
         });
         if all_completed {
             ready.push(node.id.clone());
@@ -379,7 +379,7 @@ pub(crate) fn nodes_remaining(pipeline: &PipelineDef, run_state: &RunState) -> u
             !run_state
                 .nodes
                 .get(&n.id)
-                .is_some_and(|ns| ns.status == NodeStatus::Completed)
+                .is_some_and(|ns| ns.status.is_settled_complete())
         })
         .count()
 }
@@ -387,7 +387,7 @@ pub(crate) fn nodes_remaining(pipeline: &PipelineDef, run_state: &RunState) -> u
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event_log::NodeState;
+    use crate::event_log::{NodeState, NodeStatus};
     use crate::pipeline::{EdgeDef, EdgeEndpoint, NodeDef, NodeType, Port, PortType};
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
@@ -562,6 +562,7 @@ mod tests {
             started_at: Some("t0".into()),
             completed_at: Some("t1".into()),
             failure_reason: None,
+            skip_reason: None,
             iterations: Vec::new(),
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
@@ -577,6 +578,7 @@ mod tests {
             started_at: Some("t0".into()),
             completed_at: None,
             failure_reason: None,
+            skip_reason: None,
             iterations: Vec::new(),
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),

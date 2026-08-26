@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::condition;
 use crate::edge_router;
-use crate::event_log::{NodeStatus, RunState};
+use crate::event_log::RunState;
 use crate::graph_resolver;
 use crate::pipeline::{NodeType, PipelineDef};
 use crate::switch_router;
@@ -153,7 +153,7 @@ pub(crate) fn seed_pending_loops(
             run_state
                 .nodes
                 .get(src.as_str())
-                .is_some_and(|ns| ns.status == NodeStatus::Completed)
+                .is_some_and(|ns| ns.status.is_settled_complete())
         });
         if !any_satisfied {
             continue;
@@ -958,7 +958,7 @@ pub(crate) fn evaluate_loop_body_completion(
         run_state
             .nodes
             .get(node_id)
-            .is_some_and(|n| n.status == NodeStatus::Completed && n.iter >= current_iter)
+            .is_some_and(|n| n.status.is_settled_complete() && n.iter >= current_iter)
     });
 
     if !all_body_done {
@@ -1100,7 +1100,7 @@ pub(crate) fn evaluate_collection_barrier(
                 run_state.nodes.get(member.as_str()).is_some_and(|n| {
                     n.iterations
                         .iter()
-                        .any(|it| it.iter == *i && it.status == NodeStatus::Completed)
+                        .any(|it| it.iter == *i && it.status.is_settled_complete())
                 })
             })
         })
@@ -1199,7 +1199,7 @@ fn check_all_upstream_completed(
         if run_state
             .nodes
             .get(*src)
-            .is_some_and(|n| n.status == NodeStatus::Completed)
+            .is_some_and(|n| n.status.is_settled_complete())
         {
             return true;
         }
@@ -1518,10 +1518,15 @@ fn edge_is_dead(
 ) -> bool {
     let src = edge.source.node.as_str();
     let producer = pipeline.nodes.iter().find(|n| n.id == src);
+    // #620: a **skipped** producer counts as completed here. It wrote an empty
+    // output and its (non-firing) edges must still be evaluated for deadness — if
+    // it did not count, control would fall to the "spawned but not completed" arm
+    // and wrongly keep every one of its edges live, hanging any downstream join /
+    // `End` on a producer that will never run.
     let producer_completed = run_state
         .nodes
         .get(src)
-        .is_some_and(|n| n.status == NodeStatus::Completed);
+        .is_some_and(|n| n.status.is_settled_complete());
 
     if producer_completed {
         // The producer has run: this edge is dead only if it did NOT fire.
@@ -1671,7 +1676,7 @@ pub(crate) fn unreachable_nodes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event_log::NodeState;
+    use crate::event_log::{NodeState, NodeStatus};
     use crate::graph_resolver::ready_nodes;
     use crate::pipeline::{EdgeDef, EdgeEndpoint, NodeDef, NodeType, Port, PortType};
     use pretty_assertions::assert_eq;
@@ -1817,6 +1822,7 @@ mod tests {
             started_at: Some("t0".into()),
             completed_at: Some("t1".into()),
             failure_reason: None,
+            skip_reason: None,
             iterations: Vec::new(),
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
@@ -1832,6 +1838,7 @@ mod tests {
             started_at: Some("t0".into()),
             completed_at: Some("t1".into()),
             failure_reason: None,
+            skip_reason: None,
             iterations: Vec::new(),
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
@@ -1847,6 +1854,7 @@ mod tests {
             started_at: Some("t0".into()),
             completed_at: None,
             failure_reason: None,
+            skip_reason: None,
             iterations: Vec::new(),
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),

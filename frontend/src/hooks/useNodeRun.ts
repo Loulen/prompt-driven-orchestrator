@@ -23,6 +23,7 @@ function pollInterval(status: NodeStatus): number | null {
     // at the slow terminal cadence (like the other terminal states) so the UI
     // updates when a human reopens/retries it.
     case "completed":
+    case "skipped":
     case "failed":
     case "stopped":
     case "interrupted":

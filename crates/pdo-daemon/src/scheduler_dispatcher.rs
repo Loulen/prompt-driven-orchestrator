@@ -16,7 +16,9 @@ pub(crate) fn compute_ready_to_spawn(
         .into_iter()
         .filter(|node_id| match run_state.nodes.get(node_id) {
             None => true,
-            Some(n) => n.status == NodeStatus::Completed,
+            // #620: a `Skipped` node is settled just like `Completed` — treat it
+            // identically for re-spawn eligibility.
+            Some(n) => n.status.is_settled_complete(),
         })
         .map(|node_id| ReadySpawn { node_id, iter: 1 })
         .collect()
@@ -122,6 +124,7 @@ mod tests {
             started_at: Some("t0".into()),
             completed_at: None,
             failure_reason: None,
+            skip_reason: None,
             iterations: Vec::new(),
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
@@ -137,6 +140,7 @@ mod tests {
             started_at: None,
             completed_at: None,
             failure_reason: None,
+            skip_reason: None,
             iterations: Vec::new(),
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
@@ -177,6 +181,7 @@ mod tests {
             started_at: Some("t0".into()),
             completed_at: Some("t1".into()),
             failure_reason: None,
+            skip_reason: None,
             iterations: Vec::new(),
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),

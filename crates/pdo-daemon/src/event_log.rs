@@ -424,6 +424,18 @@ pub enum NodeStatus {
     Running,
     AwaitingUser,
     Completed,
+    /// The node was **auto-skipped** as structurally unreachable (#620): its
+    /// producing branch was not taken, so nothing would ever spawn it, and the
+    /// resilience sweep pruned it with an empty output rather than let the run
+    /// hang. **Terminal and satisfied**, exactly like `Completed` for every
+    /// scheduling gate (run-completion, re-spawn refusal, upstream-completion /
+    /// reachability) — see [`NodeStatus::is_settled_complete`]. It is a distinct
+    /// variant ONLY so the UI can grey it out and show *why* it was pruned,
+    /// instead of the green "done" cadre a real success wears (a pruned branch
+    /// must not read as a branch that ran). The node never held a session, so it
+    /// carries no transient `Running` window. Projected from a `NodeCompleted`
+    /// carrying `skipped: true` (`sweep_auto_skips` / `skip_node`).
+    Skipped,
     Failed,
     Stopped,
     Stale,
@@ -474,6 +486,24 @@ impl NodeStatus {
     pub fn is_interrupted(&self) -> bool {
         matches!(self, NodeStatus::Interrupted)
     }
+
+    /// Whether this status is a **terminal, satisfied completion** — the node has
+    /// discharged its obligation and every scheduling gate should treat it as done:
+    /// run-completion (`all_nodes_completed`), re-spawn/reopen refusal
+    /// (`transition_guard`), upstream-completion / reachability
+    /// (`check_all_upstream_completed`, `edge_is_dead`, loop/collection barriers).
+    ///
+    /// `{Completed, Skipped}` (#620). A `Skipped` node never ran — its branch was
+    /// not taken and the resilience sweep pruned it with an empty output — but it is
+    /// as *settled* as a `Completed` one and must satisfy the same gates, or the run
+    /// would hang waiting on a node that can never spawn. The two differ ONLY in
+    /// display (green "done" vs greyed "skipped"); every semantic predicate that
+    /// asks "is this node done?" answers yes for both. EXCLUDES the error-ish
+    /// terminals (`Failed`/`Stopped`/`Stale`/`Interrupted`), which the
+    /// stall / fail-fast / incident paths own.
+    pub fn is_settled_complete(&self) -> bool {
+        matches!(self, NodeStatus::Completed | NodeStatus::Skipped)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -492,6 +522,14 @@ pub struct NodeState {
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
     pub failure_reason: Option<String>,
+    /// Why the node was **auto-skipped** as structurally unreachable (#620),
+    /// lifted from the skip event's `reason` payload so it reads at node level and
+    /// not only in the log. Present only when `status == Skipped`; a skip is NOT a
+    /// failure, so it stays out of `failure_reason` (which the UI paints red).
+    /// Absent on every other status — `skip_serializing_if` keeps the wire shape
+    /// byte-identical for a non-skipped node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skip_reason: Option<String>,
     #[serde(default)]
     pub iterations: Vec<IterationInfo>,
     #[serde(default)]
@@ -1007,23 +1045,26 @@ impl RunState {
         self.nodes.get(node_id).map(|n| &n.status)
     }
 
-    /// The latest `Completed` iteration of `node_id`, if any (#210).
+    /// The latest **settled-complete** iteration of `node_id`, if any (#210).
     ///
-    /// History-max over `Completed` iterations (failed/stopped iters are
+    /// History-max over `Completed`/`Skipped` iterations (failed/stopped iters are
     /// quarantined — their artifacts stay on disk but are never resolvable as
-    /// inputs), falling back to the head `iter` when the head status is
-    /// `Completed` but no per-iteration history exists (legacy states). This is
-    /// the single home for the rule formerly duplicated as a free fn in
-    /// `input_resolution`.
+    /// inputs), falling back to the head `iter` when the head status is settled
+    /// but no per-iteration history exists (legacy states). This is the single
+    /// home for the rule formerly duplicated as a free fn in `input_resolution`.
+    ///
+    /// `Skipped` counts (#620): the auto-skip writes an empty output precisely so a
+    /// downstream resolver finds a concrete artifact, so a pruned producer's lap is
+    /// resolvable exactly as it was when a skip projected `Completed`.
     pub fn latest_completed_iter(&self, node_id: &str) -> Option<i64> {
         let node = self.nodes.get(node_id)?;
         let from_history = node
             .iterations
             .iter()
-            .filter(|it| it.status == NodeStatus::Completed)
+            .filter(|it| it.status.is_settled_complete())
             .map(|it| it.iter)
             .max();
-        from_history.or_else(|| (node.status == NodeStatus::Completed).then_some(node.iter))
+        from_history.or_else(|| node.status.is_settled_complete().then_some(node.iter))
     }
 
     /// All `Completed` iterations of `node_id`, ascending (#353).
@@ -1050,27 +1091,31 @@ impl RunState {
         let from_history: Vec<i64> = node
             .iterations
             .iter()
-            .filter(|it| it.status == NodeStatus::Completed)
+            .filter(|it| it.status.is_settled_complete())
             .map(|it| it.iter)
             .collect();
         if !from_history.is_empty() {
             return from_history;
         }
-        if node.status == NodeStatus::Completed {
+        if node.status.is_settled_complete() {
             vec![node.iter]
         } else {
             Vec::new()
         }
     }
 
-    /// True iff `node_ids` is non-empty AND every id resolves to a node whose
-    /// status is `Completed`.
+    /// True iff `node_ids` is non-empty AND every id resolves to a node that is a
+    /// **settled completion** — `Completed` or `Skipped`
+    /// ([`NodeStatus::is_settled_complete`]).
     ///
-    /// Completed-only: `Failed`/`Stopped`/`Stale`/`Skipped` do NOT count (those
-    /// are handled by the stall / fail-fast paths). A never-spawned id (no
-    /// `NodeState`) counts as not-done. An empty set yields `false`, NOT
-    /// vacuous-true: a run with no expected nodes is not "all done" (preserving
-    /// the original `!is_empty()` guard).
+    /// `Skipped` counts (#620): an auto-skipped node discharged its obligation with
+    /// an empty output, so a run whose only "unfinished" node is a pruned one MUST
+    /// still be able to reach `RunCompleted` — leaving it out would hang the run
+    /// forever. The error-ish terminals (`Failed`/`Stopped`/`Stale`/`Interrupted`)
+    /// do NOT count — those are owned by the stall / fail-fast / incident paths. A
+    /// never-spawned id (no `NodeState`) counts as not-done. An empty set yields
+    /// `false`, NOT vacuous-true: a run with no expected nodes is not "all done"
+    /// (preserving the original `!is_empty()` guard).
     ///
     /// The authoritative node set is the caller's (`pipeline.nodes` at the
     /// completion/stall sites, the runtime `expected_node_ids` at the
@@ -1079,7 +1124,7 @@ impl RunState {
         !node_ids.is_empty()
             && node_ids
                 .iter()
-                .all(|id| self.node_status(id) == Some(&NodeStatus::Completed))
+                .all(|id| self.node_status(id).is_some_and(|s| s.is_settled_complete()))
     }
 
     /// Why this Run is **not schedulable yet** because its sandbox is still being
@@ -1798,6 +1843,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                         started_at: None,
                         completed_at: None,
                         failure_reason: None,
+                        skip_reason: None,
                         iterations: Vec::new(),
                         frontmatter_retries: 0,
                         frontmatter_violations: Vec::new(),
@@ -1831,6 +1877,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                         started_at: Some(event.ts.clone()),
                         completed_at: None,
                         failure_reason: None,
+                        skip_reason: None,
                         iterations: Vec::new(),
                         frontmatter_retries: 0,
                         frontmatter_violations: Vec::new(),
@@ -1857,29 +1904,58 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                 // #600: a **skip** (`skip_node` / reachability auto-skip) can
                 // complete a node that never started — that is the whole point of
                 // skipping a node stuck waiting on an input that never came. Create
-                // it directly as `Completed`, with no transient session-less
-                // `Running` window for the liveness sweep to flag; it then counts as
-                // satisfied for re-projection (a reopen never re-spawns it, FP #4).
+                // it directly as terminal, with no transient session-less `Running`
+                // window for the liveness sweep to flag; it then counts as satisfied
+                // for re-projection (a reopen never re-spawns it, FP #4).
                 let is_skip = event
                     .payload
                     .as_ref()
                     .and_then(|p| p.get("skipped"))
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
-                if is_skip && !state.nodes.contains_key(node_id) {
+                // #620: a skip of a node that **never started** projects as
+                // `NodeStatus::Skipped`, NOT `Completed`, so the canvas greys the
+                // pruned node instead of dressing it in the green "done" cadre a real
+                // success wears. The discriminator is "never ran", not the skip
+                // source: the reachability auto-skip prunes a never-started node (→
+                // Skipped, greyed with its reason), whereas a graceful `skip_node`
+                // (#245) skips a node that DID start and reach a decision (→ stays
+                // Completed; the run, not the node, carries the "nothing to do"
+                // signal). `Skipped` is terminal and satisfies every scheduling gate
+                // exactly like `Completed` (`is_settled_complete`); only the display
+                // differs. The prune `reason` is lifted onto `skip_reason` so it reads
+                // at node level, not only in the event log.
+                let never_started_skip = is_skip && !state.nodes.contains_key(node_id);
+                let done_status = if never_started_skip {
+                    NodeStatus::Skipped
+                } else {
+                    NodeStatus::Completed
+                };
+                let skip_reason = if never_started_skip {
+                    event
+                        .payload
+                        .as_ref()
+                        .and_then(|p| p.get("reason"))
+                        .and_then(|v| v.as_str())
+                        .map(String::from)
+                } else {
+                    None
+                };
+                if never_started_skip {
                     let iter = event.iter.unwrap_or(1);
                     state.nodes.insert(
                         node_id.clone(),
                         NodeState {
                             node_id: node_id.clone(),
-                            status: NodeStatus::Completed,
+                            status: done_status.clone(),
                             iter,
                             started_at: Some(event.ts.clone()),
                             completed_at: Some(event.ts.clone()),
                             failure_reason: None,
+                            skip_reason: skip_reason.clone(),
                             iterations: vec![IterationInfo {
                                 iter,
-                                status: NodeStatus::Completed,
+                                status: done_status.clone(),
                                 started_at: Some(event.ts.clone()),
                                 completed_at: Some(event.ts.clone()),
                             }],
@@ -1890,11 +1966,14 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                     );
                 }
                 if let Some(node) = state.nodes.get_mut(node_id) {
-                    node.status = NodeStatus::Completed;
+                    node.status = done_status.clone();
                     node.completed_at = Some(event.ts.clone());
+                    if never_started_skip {
+                        node.skip_reason = skip_reason.clone();
+                    }
                     let iter = event.iter.unwrap_or(node.iter);
                     if let Some(it) = node.iterations.iter_mut().find(|i| i.iter == iter) {
-                        it.status = NodeStatus::Completed;
+                        it.status = done_status.clone();
                         it.completed_at = Some(event.ts.clone());
                     }
                 }
@@ -1990,6 +2069,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                         started_at: None,
                         completed_at: None,
                         failure_reason: None,
+                        skip_reason: None,
                         iterations: Vec::new(),
                         frontmatter_retries: 0,
                         frontmatter_violations: Vec::new(),
@@ -2113,6 +2193,7 @@ fn apply_switch_event(state: &mut RunState, event: &Event) {
                     started_at: Some(event.ts.clone()),
                     completed_at: Some(event.ts.clone()),
                     failure_reason: None,
+                    skip_reason: None,
                     iterations: Vec::new(),
                     frontmatter_retries: 0,
                     frontmatter_violations: Vec::new(),
@@ -6197,6 +6278,7 @@ mod tests {
             started_at: None,
             completed_at: None,
             failure_reason: None,
+            skip_reason: None,
             iterations: iters
                 .iter()
                 .map(|(i, s)| IterationInfo {
@@ -6229,6 +6311,7 @@ mod tests {
             Running,
             AwaitingUser,
             Completed,
+            Skipped,
             Failed,
             Stopped,
             Stale,
@@ -6253,7 +6336,7 @@ mod tests {
                 // `Interrupted` (ADR-0049): holds no session and cannot progress
                 // on its own — a human resumes/restarts it, so it parks the run
                 // `AwaitingUser` rather than keeping it schedulable.
-                Pending | Completed | Failed | Stopped | Stale | Interrupted => {
+                Pending | Completed | Skipped | Failed | Stopped | Stale | Interrupted => {
                     assert!(!s.holds_session(), "{s:?} holds no session");
                     assert!(!s.can_progress(), "{s:?} cannot drive the run forward");
                 }
@@ -7292,10 +7375,12 @@ mod tests {
     }
 
     #[test]
-    fn a_skip_completion_creates_a_never_started_node_as_completed() {
-        // #600: skipping a node that never started (stuck waiting on an unreachable
-        // input) marks it satisfied — the applier creates it directly as Completed,
-        // never a session-less Running window.
+    fn a_skip_completion_creates_a_never_started_node_as_skipped() {
+        // #600/#620: skipping a node that never started (pruned as structurally
+        // unreachable) marks it satisfied — the applier creates it directly as
+        // terminal, never a session-less Running window. #620: the status is
+        // `Skipped` (not `Completed`), so the canvas greys the pruned node, and the
+        // prune `reason` is lifted onto `skip_reason` at node level.
         let mut state = RunState::new("r".into(), String::new());
         apply_node_event(
             &mut state,
@@ -7305,11 +7390,22 @@ mod tests {
                 serde_json::json!({ "skipped": true, "reason": "unreachable" }),
             ),
         );
-        assert_eq!(state.nodes["orphan"].status, NodeStatus::Completed);
+        assert_eq!(state.nodes["orphan"].status, NodeStatus::Skipped);
+        assert_eq!(
+            state.nodes["orphan"].skip_reason.as_deref(),
+            Some("unreachable"),
+            "the prune reason reads at node level"
+        );
         assert_eq!(state.nodes["orphan"].iterations.len(), 1);
         assert_eq!(
             state.nodes["orphan"].iterations[0].status,
-            NodeStatus::Completed
+            NodeStatus::Skipped
+        );
+        // A `Skipped` node is a settled completion — it satisfies the run-completion
+        // gate exactly like `Completed`, so the run can still terminate.
+        assert!(
+            state.all_nodes_completed(&["orphan".into()]),
+            "a pruned node counts as done for run completion"
         );
     }
 

@@ -113,7 +113,10 @@ fn find_flag_token(help: &str, flag: &str) -> Option<usize> {
         let idx = from + rel;
         let end = idx + flag.len();
         let before_ok = idx == 0
-            || matches!(bytes[idx - 1], b' ' | b'\t' | b'\n' | b',' | b'(' | b'|' | b'/');
+            || matches!(
+                bytes[idx - 1],
+                b' ' | b'\t' | b'\n' | b',' | b'(' | b'|' | b'/'
+            );
         let after_ok = end >= help.len()
             || matches!(bytes[end], b' ' | b'\t' | b'=' | b'<' | b'[' | b'\n' | b',');
         if before_ok && after_ok {
@@ -300,8 +303,7 @@ Options:
     fn seven_effort_stops_including_ones_claude_has_no_name_for() {
         // AC #4: a harness may enumerate more effort stops than claude — the picker
         // renders whatever the binary offers, not a curated five.
-        let help =
-            "  --effort <level>   [default|min|low|medium|high|max|ultra]\n";
+        let help = "  --effort <level>   [default|min|low|medium|high|max|ultra]\n";
         let cat = parse_help(help);
         assert_eq!(
             cat.efforts,
@@ -330,7 +332,10 @@ Options:
         );
         assert!(cat.has_effort_axis());
         // `--model` enumerates nothing (just `use 'auto'`) ⇒ free-text fallback.
-        assert!(cat.models.is_empty(), "no model enumeration ⇒ declared absence");
+        assert!(
+            cat.models.is_empty(),
+            "no model enumeration ⇒ declared absence"
+        );
     }
 
     #[test]
@@ -355,7 +360,11 @@ Options:
   --model <model>        Choices: sonnet, opus
 ";
         let cat = parse_help(help);
-        assert_eq!(cat.models, vec!["sonnet", "opus"], "matched the real --model");
+        assert_eq!(
+            cat.models,
+            vec!["sonnet", "opus"],
+            "matched the real --model"
+        );
     }
 
     #[test]

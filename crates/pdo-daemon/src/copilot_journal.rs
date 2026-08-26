@@ -226,7 +226,9 @@ mod tests {
         let cp1 = r#"{"type":"session.usage_checkpoint","data":{"totalNanoAiu":1000000000}}"#;
         let cp2 = r#"{"type":"session.usage_checkpoint","data":{"totalNanoAiu":5000000000}}"#;
         let journal = format!("{TURN_START}\n{TURN_END}\n{cp1}\n{TURN_START}\n{TURN_END}\n{cp2}\n");
-        assert!((reported_cost_usd(&journal).unwrap() - nano_aiu_to_usd(5_000_000_000)).abs() < 1e-12);
+        assert!(
+            (reported_cost_usd(&journal).unwrap() - nano_aiu_to_usd(5_000_000_000)).abs() < 1e-12
+        );
     }
 
     // --- end of turn ---
@@ -235,8 +237,12 @@ mod tests {
     fn turn_end_is_the_last_turn_marker() {
         // A finished turn, whether or not usage/shutdown trail it.
         assert!(turn_ended(&format!("{TURN_START}\n{TURN_END}\n")));
-        assert!(turn_ended(&format!("{TURN_START}\n{TURN_END}\n{CHECKPOINT}\n")));
-        assert!(turn_ended(&format!("{TURN_START}\n{TURN_END}\n{CHECKPOINT}\n{SHUTDOWN}\n")));
+        assert!(turn_ended(&format!(
+            "{TURN_START}\n{TURN_END}\n{CHECKPOINT}\n"
+        )));
+        assert!(turn_ended(&format!(
+            "{TURN_START}\n{TURN_END}\n{CHECKPOINT}\n{SHUTDOWN}\n"
+        )));
     }
 
     #[test]
@@ -253,7 +259,10 @@ mod tests {
         // The measured hazard (#615): a hard error the harness exits 0 on. A prior
         // successful turn-end must NOT make this read as finished.
         let journal = format!("{TURN_START}\n{TURN_END}\n{TURN_START}\n{HARD_ERR}\n");
-        assert!(!turn_ended(&journal), "an errored turn is not a finished turn");
+        assert!(
+            !turn_ended(&journal),
+            "an errored turn is not a finished turn"
+        );
     }
 
     // --- hard error ---

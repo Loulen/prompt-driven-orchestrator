@@ -1349,14 +1349,14 @@ pub(crate) fn probe_catalogue(binary: &str) -> crate::harness_catalogue::Catalog
 /// at a tempdir holding a fake binary, no ambient shell).
 pub(crate) fn probe_version_on(binary: &str, path: &str) -> Option<String> {
     let out = run_probe(binary, &["--version"], path)?;
-    out.lines().next().map(|l| l.trim().to_string()).filter(|s| !s.is_empty())
+    out.lines()
+        .next()
+        .map(|l| l.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 /// [`probe_catalogue`] with an explicit `PATH` — the testable core.
-pub(crate) fn probe_catalogue_on(
-    binary: &str,
-    path: &str,
-) -> crate::harness_catalogue::Catalogue {
+pub(crate) fn probe_catalogue_on(binary: &str, path: &str) -> crate::harness_catalogue::Catalogue {
     match run_probe(binary, &["--help"], path) {
         Some(help) => crate::harness_catalogue::parse_help(&help),
         None => crate::harness_catalogue::Catalogue::default(),
@@ -2319,7 +2319,8 @@ mod tests {
     #[test]
     fn probe_reads_version_and_catalogue_from_the_binary() {
         let dir = tempfile::tempdir().unwrap();
-        let help = "  --model <m>  [gpt-5|gpt-5-codex|o4-mini]\n  --effort <e>  One of: low, medium, high";
+        let help =
+            "  --model <m>  [gpt-5|gpt-5-codex|o4-mini]\n  --effort <e>  One of: low, medium, high";
         let path = fake_harness_binary(dir.path(), "fake-harness", help, "fake-harness 1.402");
 
         assert_eq!(

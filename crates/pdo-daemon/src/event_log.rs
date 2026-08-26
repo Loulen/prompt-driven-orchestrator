@@ -1844,7 +1844,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                     .nodes
                     .entry(node_id.clone())
                     .or_insert_with(|| NodeState {
-            harness: None,
+                        harness: None,
                         node_id: node_id.clone(),
                         status: NodeStatus::Waiting,
                         iter,
@@ -1878,7 +1878,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                     .nodes
                     .entry(node_id.clone())
                     .or_insert_with(|| NodeState {
-            harness: None,
+                        harness: None,
                         node_id: node_id.clone(),
                         status: NodeStatus::Running,
                         iter,
@@ -1938,7 +1938,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                     state.nodes.insert(
                         node_id.clone(),
                         NodeState {
-            harness: None,
+                            harness: None,
                             node_id: node_id.clone(),
                             status: NodeStatus::Completed,
                             iter,
@@ -2052,7 +2052,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                     .nodes
                     .entry(node_id.clone())
                     .or_insert_with(|| NodeState {
-            harness: None,
+                        harness: None,
                         node_id: node_id.clone(),
                         status: NodeStatus::Interrupted,
                         iter,
@@ -2176,7 +2176,7 @@ fn apply_switch_event(state: &mut RunState, event: &Event) {
                 .nodes
                 .entry(node_id.to_string())
                 .or_insert_with(|| NodeState {
-            harness: None,
+                    harness: None,
                     node_id: node_id.to_string(),
                     status: NodeStatus::Completed,
                     iter,
@@ -3376,7 +3376,10 @@ mod tests {
             missing_outputs: vec![],
         };
         assert!(
-            serde_json::to_value(&bare).unwrap().get("harness").is_none(),
+            serde_json::to_value(&bare)
+                .unwrap()
+                .get("harness")
+                .is_none(),
             "an absent harness is skipped from the wire"
         );
     }

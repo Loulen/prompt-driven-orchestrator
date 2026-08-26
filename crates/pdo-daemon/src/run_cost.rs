@@ -1205,7 +1205,10 @@ mod tests {
         assert_eq!(cost.usd, 0.0);
         assert!(!cost.partial, "not a lower bound — it is unavailable");
         assert!(cost.unpriced_models.is_empty());
-        assert!(cost.by_harness.is_empty(), "unavailable ⇒ nothing to ventilate");
+        assert!(
+            cost.by_harness.is_empty(),
+            "unavailable ⇒ nothing to ventilate"
+        );
         // The offender is NAMED (the frontend builds the "— because opencode has no
         // cost source" sentence from this, the same way it names `unpriced_models`).
         assert_eq!(cost.uncosted_harnesses, vec!["opencode".to_string()]);
@@ -1231,8 +1234,9 @@ mod tests {
     fn seed_copilot_journal(copilot_root: &Path, session_id: &str, nano_aiu: u64) {
         let dir = copilot_root.join(session_id);
         std::fs::create_dir_all(&dir).unwrap();
-        let checkpoint =
-            format!(r#"{{"type":"session.usage_checkpoint","data":{{"totalNanoAiu":{nano_aiu}}}}}"#);
+        let checkpoint = format!(
+            r#"{{"type":"session.usage_checkpoint","data":{{"totalNanoAiu":{nano_aiu}}}}}"#
+        );
         std::fs::write(
             dir.join("events.jsonl"),
             format!(
@@ -1262,9 +1266,15 @@ mod tests {
         );
         let events = vec![node_started("n", Some("claude")), node_started("s", None)];
 
-        let honest =
-            run_cost_or_absence(&events, &projects, &copilot, repo.path(), run_id, &builtin())
-                .unwrap();
+        let honest = run_cost_or_absence(
+            &events,
+            &projects,
+            &copilot,
+            repo.path(),
+            run_id,
+            &builtin(),
+        )
+        .unwrap();
         assert!(honest.uncosted_harnesses.is_empty());
         assert!((honest.usd - 5.0).abs() < 1e-9);
         // Ventilated: one derived slice, on `claude`, carrying the whole figure.
@@ -1297,9 +1307,15 @@ mod tests {
             node_started_sid("p", "copilot", "sid-cop"),
         ];
 
-        let cost =
-            run_cost_or_absence(&events, &projects, &copilot, repo.path(), run_id, &builtin())
-                .unwrap();
+        let cost = run_cost_or_absence(
+            &events,
+            &projects,
+            &copilot,
+            repo.path(),
+            run_id,
+            &builtin(),
+        )
+        .unwrap();
         // Summable total = $5 (claude) + $2 (copilot).
         assert!((cost.usd - 7.0).abs() < 1e-9, "usd = {}", cost.usd);
         assert!(cost.uncosted_harnesses.is_empty());
@@ -1314,7 +1330,10 @@ mod tests {
         assert_eq!(cop.form, CostForm::Reported);
         assert!((cop.usd - 2.0).abs() < 1e-9);
         assert!(!cop.partial, "a reported slice is never a lower bound");
-        assert!(cop.unpriced_models.is_empty(), "reported ⇒ no unpriced model");
+        assert!(
+            cop.unpriced_models.is_empty(),
+            "reported ⇒ no unpriced model"
+        );
     }
 
     #[test]
@@ -1329,9 +1348,15 @@ mod tests {
         seed_copilot_journal(&copilot, "sid-live", 100_000_000_000); // $1.00
         let events = vec![node_started_sid("p", "copilot", "sid-live")];
 
-        let cost =
-            run_cost_or_absence(&events, &projects, &copilot, repo.path(), "cop-run", &builtin())
-                .expect("a copilot reading yields Some, even with no claude transcript");
+        let cost = run_cost_or_absence(
+            &events,
+            &projects,
+            &copilot,
+            repo.path(),
+            "cop-run",
+            &builtin(),
+        )
+        .expect("a copilot reading yields Some, even with no claude transcript");
         assert!((cost.usd - 1.0).abs() < 1e-9);
         assert_eq!(cost.by_harness.len(), 1);
         assert_eq!(cost.by_harness[0].harness, "copilot");

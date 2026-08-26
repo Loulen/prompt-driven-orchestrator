@@ -26,6 +26,7 @@ mod harness_catalogue;
 mod harness_probes;
 pub mod harness_registry;
 mod harness_resolver;
+pub mod harness_support;
 mod input_resolution;
 mod instance_config;
 mod library_store;
@@ -235,6 +236,35 @@ pub enum Commands {
     Service {
         #[command(subcommand)]
         action: ServiceAction,
+    },
+    /// Print the documentation PDO generates from its own code (#617).
+    Docs {
+        #[command(subcommand)]
+        action: DocsAction,
+    },
+}
+
+/// Actions for `pdo docs` (#617). A blocking one-shot like `Migrate` — pure
+/// rendering plus, for `--write`, one file rewrite. No daemon, no tokio.
+#[derive(Subcommand, Debug)]
+pub enum DocsAction {
+    /// The harness support matrix — which capability each harness has, what is
+    /// absent and why, and the last validated version of each binary.
+    ///
+    /// Rendered from the capability declaration in `harness_probes.rs`, which is
+    /// its only source of truth. With no flag it prints the block; `--check` fails
+    /// (exit 1) if the block committed in the target file has drifted from what the
+    /// code declares, and `--write` puts it back.
+    SupportTable {
+        /// Fail if the block in the target file has drifted from the code.
+        #[arg(long)]
+        check: bool,
+        /// Rewrite the block in the target file from the code.
+        #[arg(long, conflicts_with = "check")]
+        write: bool,
+        /// The file carrying the generated block, between its two markers.
+        #[arg(long, default_value = "README.md")]
+        file: std::path::PathBuf,
     },
 }
 
@@ -1062,6 +1092,55 @@ pub fn run_skip(reason: String) -> Result<()> {
         let body = resp.text().unwrap_or_default();
         anyhow::bail!("daemon returned {status}: {body}");
     }
+    Ok(())
+}
+
+/// One-shot `pdo docs` (#617): render the documentation PDO generates from its own
+/// code, and — with `--check` — refuse a committed copy that has drifted from it.
+///
+/// Blocking, no tokio, no daemon: the support matrix is a pure function of the
+/// capability declaration ([`harness_support::render`]), so this is rendering plus
+/// at most one file rewrite. `--check` is what `make check` runs, which is what
+/// makes "the table cannot lie" true by construction rather than by discipline.
+pub fn run_docs(action: DocsAction) -> Result<()> {
+    let DocsAction::SupportTable { check, write, file } = action;
+    let block = harness_support::render();
+
+    if !check && !write {
+        print!("{block}");
+        return Ok(());
+    }
+
+    let document = std::fs::read_to_string(&file)
+        .with_context(|| format!("failed to read {}", file.display()))?;
+
+    if check {
+        return match harness_support::check(&document) {
+            Ok(()) => {
+                eprintln!(
+                    "ok: {} carries the generated harness support table.",
+                    file.display()
+                );
+                Ok(())
+            }
+            // `bail!` rather than a bespoke exit code: `make check` only needs
+            // non-zero, and the message is where the value is (it names the drift).
+            Err(why) => anyhow::bail!("{}: {why}", file.display()),
+        };
+    }
+
+    let updated = harness_support::splice(&document, &block)
+        .map_err(|why| anyhow::anyhow!("{}: {why}", file.display()))?;
+    if updated == document {
+        eprintln!("unchanged: {} was already current.", file.display());
+        return Ok(());
+    }
+    std::fs::write(&file, &updated)
+        .with_context(|| format!("failed to write {}", file.display()))?;
+    eprintln!(
+        "wrote: {} — harness support table regenerated.",
+        file.display()
+    );
     Ok(())
 }
 
@@ -8806,9 +8885,10 @@ async fn catalogue_for(
 
     // First probe or a changed version ⇒ re-read and parse the catalogue.
     let bin = binary.to_string();
-    let catalogue = tokio::task::spawn_blocking(move || tmux_session_manager::probe_catalogue(&bin))
-        .await
-        .unwrap_or_default();
+    let catalogue =
+        tokio::task::spawn_blocking(move || tmux_session_manager::probe_catalogue(&bin))
+            .await
+            .unwrap_or_default();
     let cached = harness_catalogue::CachedCatalogue { version, catalogue };
     guard.insert(harness.to_string(), (Instant::now(), cached.clone()));
     cached
@@ -20149,7 +20229,7 @@ mod tests {
         rs.nodes.insert(
             node_id.into(),
             event_log::NodeState {
-            harness: None,
+                harness: None,
                 node_id: node_id.into(),
                 status,
                 iter,
@@ -20363,7 +20443,7 @@ mod tests {
         run_state.nodes.insert(
             "a".into(),
             event_log::NodeState {
-            harness: None,
+                harness: None,
                 node_id: "a".into(),
                 status: event_log::NodeStatus::Completed,
                 iter: 2,
@@ -20417,7 +20497,7 @@ mod tests {
         run_state.nodes.insert(
             "a".into(),
             event_log::NodeState {
-            harness: None,
+                harness: None,
                 node_id: "a".into(),
                 status: event_log::NodeStatus::Stale,
                 iter: 1,
@@ -20436,7 +20516,7 @@ mod tests {
         run_state.nodes.insert(
             "b".into(),
             event_log::NodeState {
-            harness: None,
+                harness: None,
                 node_id: "b".into(),
                 status: event_log::NodeStatus::Waiting,
                 iter: 1,
@@ -20662,7 +20742,7 @@ mod tests {
             rs.nodes.insert(
                 node_id.into(),
                 event_log::NodeState {
-            harness: None,
+                    harness: None,
                     node_id: node_id.into(),
                     status: event_log::NodeStatus::Completed,
                     iter: iters,

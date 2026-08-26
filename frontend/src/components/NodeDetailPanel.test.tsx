@@ -731,6 +731,88 @@ describe("NodeDetailPanel", () => {
     });
   });
 
+  // #598 / ADR-0049: an interrupted node (session died on an infra incident) must
+  // offer a way back — before this it was a dead end (no Play, no Reopen, no Mark
+  // complete), the exact bug reported for an interactive node with a lost session.
+  describe("Interrupted node recovery (#598)", () => {
+    const interrupted = () =>
+      makeNode({ status: "interrupted", failure_reason: "session died — reopen or retry" });
+
+    it("renders the Interrupted label and banner", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={interrupted()} runId="run-1" />
+        </TooltipProvider>,
+      );
+      expect(screen.getByText("Interrupted")).toBeInTheDocument();
+      expect(screen.getByTestId("interrupted-banner")).toBeInTheDocument();
+      expect(screen.getByText(/session died/i)).toBeInTheDocument();
+    });
+
+    it("offers a Play button in the node controls", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={interrupted()} runId="run-1" />
+        </TooltipProvider>,
+      );
+      expect(screen.getByTestId("play-retry-btn")).toHaveTextContent("Play");
+    });
+
+    it("Play re-drives the node via retryNode (daemon embeds the reopen)", async () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={interrupted()} runId="run-1" />
+        </TooltipProvider>,
+      );
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("play-retry-btn"));
+      });
+      expect(retryNodeMock).toHaveBeenCalledWith("run-1", "test-node");
+    });
+
+    it("the banner Reopen button also re-drives the node", async () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={interrupted()} runId="run-1" />
+        </TooltipProvider>,
+      );
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("interrupted-reopen-btn"));
+      });
+      expect(retryNodeMock).toHaveBeenCalledWith("run-1", "test-node");
+    });
+
+    it("keeps Mark complete reachable (accept the artifacts as they are)", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={interrupted()} runId="run-1" />
+        </TooltipProvider>,
+      );
+      expect(screen.getByTestId("mark-complete-btn")).toBeInTheDocument();
+    });
+
+    it("opens minimized — the dead session is never attached", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={interrupted()} runId="run-1" />
+        </TooltipProvider>,
+      );
+      expect(screen.getByTestId("terminal-minimized")).toBeInTheDocument();
+      expect(screen.queryByTestId("tmux-terminal")).not.toBeInTheDocument();
+    });
+
+    it("hides the recovery affordances for an archived run", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={interrupted()} runId="run-1" isArchived />
+        </TooltipProvider>,
+      );
+      expect(screen.queryByTestId("node-controls")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("interrupted-reopen-btn")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("mark-complete-btn")).not.toBeInTheDocument();
+    });
+  });
+
   describe("Terminated-node default layout (#346)", () => {
     it("defaults a completed node to a minimized terminal with Outputs visible", () => {
       render(

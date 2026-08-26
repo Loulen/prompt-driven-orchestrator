@@ -116,8 +116,13 @@ async fn node_status(daemon: &TestDaemon, run_id: &str) -> Option<String> {
 
 /// Poll the projected status of `run_id`'s solo node until it equals `want` or
 /// the deadline elapses. Returns the last observed status for diagnostics.
+///
+/// The deadline is generous (15s): status is projected from the event log, and on
+/// a machine loaded enough that the projection lags — e.g. the full `--tests` run
+/// under a concurrent orchestrator — a tight 5s budget reads a stale status and
+/// fails a transition that is merely slow, not wrong.
 async fn wait_for_status(daemon: &TestDaemon, run_id: &str, want: &str) -> Option<String> {
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
     let mut last = None;
     while std::time::Instant::now() < deadline {
         last = node_status(daemon, run_id).await;

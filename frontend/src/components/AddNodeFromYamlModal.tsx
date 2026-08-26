@@ -3,6 +3,7 @@ import type { NodeDef, NodeType } from "../types";
 import { parseNodeYaml, libraryPortToPortDef } from "../api";
 import { useEditStore } from "../stores/editStore";
 import { generateNodeId } from "../lib/nanoid";
+import { foldHarnessOntoNode } from "../lib/harness";
 
 /**
  * Add a node to the canvas from YAML (#345): paste a node definition OR upload a
@@ -52,18 +53,26 @@ export default function AddNodeFromYamlModal({
       // (snapshots undo in one step), then the prompt sidecar. Cast covers the
       // legacy `switch`/`loop` the TS union omits (soft-warned by the daemon).
       const newId = generateNodeId();
-      const node: NodeDef = {
+      // #616 (correctif 7): carry the pinned harness and per-harness map, then fold
+      // the resolved harness's entry onto the flat model/effort view — so an
+      // imported node keeps its pin and every harness's settings instead of
+      // re-homing them onto `claude`.
+      const node: NodeDef = foldHarnessOntoNode({
         id: newId,
         name: result.spec.name,
         type: result.spec.type as NodeType,
         inputs: result.spec.inputs.map((p) => libraryPortToPortDef(p, "left")),
         outputs: result.spec.outputs.map((p) => libraryPortToPortDef(p, "right")),
         interactive: result.spec.interactive,
+        pin_harness: result.spec.pin_harness ?? null,
+        harnesses: result.spec.harnesses ?? undefined,
+        // Fallback flat values (a legacy library/export with no `harnesses` map);
+        // `foldHarnessOntoNode` overwrites these when the map carries the resolved
+        // harness's entry.
         model: result.spec.model ?? null,
-        // #424: carry the parsed effort level onto the new node.
         effort: result.spec.effort ?? null,
         view: getDropPosition(),
-      };
+      });
       addNode(node);
       updatePrompt(newId, result.prompt);
       setSelection({ kind: "node", id: newId });

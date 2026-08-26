@@ -93,6 +93,30 @@ function sample(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
     harness_descriptors: {
       path: "/home/user/.pdo/harnesses/descriptors.yaml",
       names: ["claude", "opencode"],
+      // #616/ADR-0053: the served catalogue. claude offers models (so the
+      // instance default-model picker is a dropdown) + an effort axis; opencode
+      // offers a model but no effort axis. The per-harness default-model rows are
+      // derived from THIS list.
+      harnesses: [
+        {
+          name: "claude",
+          source: "builtin",
+          installed: true,
+          models: ["sonnet", "opus", "haiku", "opusplan"],
+          efforts: ["low", "medium", "high", "xhigh", "max"],
+          has_effort: true,
+          version: "claude 1.0",
+        },
+        {
+          name: "opencode",
+          source: "builtin",
+          installed: true,
+          models: ["openrouter/foo"],
+          efforts: [],
+          has_effort: false,
+          version: "opencode 1.18",
+        },
+      ],
       rejected: [],
       reason: null,
     },
@@ -449,6 +473,38 @@ describe("SettingsModal", () => {
     // Only the model changed; the numeric knobs were left at their effective values.
     expect(updateSettingsMock).toHaveBeenCalledWith({ default_model: "opus" });
     await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it("preserves a harness's stored default when saving an edit to another (#616 correctif 1)", async () => {
+    const user = userEvent.setup();
+    // `copilot` has a stored default but no row in this modal (not in the served
+    // list). The old code sent a two-field block that wiped it; the fix sends the
+    // whole edited map, so copilot survives.
+    fetchSettingsMock.mockResolvedValue(
+      sample({
+        default_harness_model: {
+          effective: { claude: "opus", copilot: "gpt-5-codex" },
+          stored: { claude: "opus", copilot: "gpt-5-codex" },
+        },
+      }),
+    );
+    updateSettingsMock.mockResolvedValue(sample());
+    render(<SettingsModal open onClose={() => {}} />);
+
+    // Edit claude's per-harness default model, leaving copilot's untouched.
+    const claudeInput = await screen.findByTestId("setting-default-model-claude");
+    await user.clear(claudeInput);
+    await user.type(claudeInput, "sonnet");
+    fireEvent.click(screen.getByTestId("settings-save"));
+
+    await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
+    // The whole map is sent — claude's edit AND copilot's untouched stored default,
+    // which the old two-field block would have dropped.
+    const patch = updateSettingsMock.mock.calls[0][0];
+    expect(patch.default_harness_model).toEqual({
+      claude: "sonnet",
+      copilot: "gpt-5-codex",
+    });
   });
 
   it("clears the default model via the '' sentinel when set back to Default (#347)", async () => {

@@ -203,6 +203,7 @@ mod tests {
     fn node_with_iterations(id: &str, iters: &[(i64, NodeStatus)]) -> NodeState {
         let (head_iter, head_status) = iters.last().cloned().unwrap_or((1, NodeStatus::Pending));
         NodeState {
+            harness: None,
             node_id: id.to_string(),
             status: head_status,
             iter: head_iter,

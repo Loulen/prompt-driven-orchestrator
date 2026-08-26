@@ -20,34 +20,35 @@
    arrow keys — deliberate: no choice control in this codebase has them (the
    three `role="tablist"` strips are click-only too). One a11y pass, not here. */
 
-/* Module-local, deliberately NOT exported: a component file that also exports a
-   constant breaks the `react-refresh/only-export-components` lint rule, which IS
-   gating (`npm run lint` in CI). Same shape as ModelPicker's `ALIASES`; the tests
-   spell the list out, exactly as ModelPicker.test.tsx does. */
-const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
-
 export default function EffortPicker({
   value,
   onChange,
+  efforts,
   testid,
   disabled = false,
 }: {
   value: string | null;
   onChange: (v: string | null) => void;
+  /* #616/ADR-0053: the effort levels the resolved harness's binary offers, SERVED
+     by the daemon — the segments are rendered from THIS list, no hard-coded scale.
+     A harness may enumerate more stops than claude (copilot's seven, AC #4) or
+     fewer; the picker renders whatever the binary offers. Empty ⇒ no offer, and the
+     picker is typically also `disabled` (no effort axis). */
+  efforts: string[];
   testid: string; // "node-effort" | "merge-effort"
-  /* #550/ADR-0046: greyed when the resolved harness has no launch-time effort
-     axis (`opencode`). An absence DECLARED by the descriptor's shape, not a
-     default — so the control is disabled, not hidden. Assert on the `disabled`
+  /* #550/ADR-0046, #616: greyed when the resolved harness has no effort axis — a
+     SERVED fact now (`has_effort`), not a client map. An absence declared by the
+     binary, so the control is disabled, not hidden. Assert on the `disabled`
      attribute, never `.value` (a `.value` assertion cannot fail — a known trap). */
   disabled?: boolean;
 }) {
   const set = value != null && value !== "";
-  const known = set && (EFFORT_LEVELS as readonly string[]).includes(value);
+  const known = set && efforts.includes(value);
   const options: { id: string | null; label: string; slug: string }[] = [
     { id: null, label: "Default", slug: "default" },
-    ...EFFORT_LEVELS.map((l) => ({ id: l as string, label: l, slug: l })),
-    // Pass-through segment: only present when the node carries a value the
-    // curated set does not know. Clicking it is a no-op re-selection.
+    ...efforts.map((l) => ({ id: l, label: l, slug: l })),
+    // Pass-through segment: only present when the node carries a value the served
+    // set does not know. Clicking it is a no-op re-selection.
     ...(set && !known ? [{ id: value, label: value, slug: "passthrough" }] : []),
   ];
 

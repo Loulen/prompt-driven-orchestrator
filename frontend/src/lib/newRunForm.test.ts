@@ -517,13 +517,17 @@ describe("harnessState (#551/#452)", () => {
       }),
       harness: "",
     });
+    // #616: each option now also carries the served offer; these entries served
+    // none, so the offer defaults (empty catalogues, hasEffort=true when
+    // `has_effort` is absent, no version).
+    const off = { models: [], efforts: [], hasEffort: true, version: null };
     expect(catalog.builtin).toEqual([
-      { name: "claude", installed: true },
-      { name: "opencode", installed: false },
+      { name: "claude", installed: true, ...off },
+      { name: "opencode", installed: false, ...off },
     ]);
     expect(catalog.descriptors).toEqual([
-      { name: "pi", installed: true },
-      { name: "aider", installed: false },
+      { name: "pi", installed: true, ...off },
+      { name: "aider", installed: false, ...off },
     ]);
   });
 });

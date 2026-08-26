@@ -1031,6 +1031,7 @@ mod tests {
 
     fn running_node(id: &str, iter: i64) -> NodeState {
         NodeState {
+            harness: None,
             node_id: id.into(),
             status: NodeStatus::Running,
             iter,
@@ -1051,6 +1052,7 @@ mod tests {
 
     fn completed_node(id: &str, iter: i64) -> NodeState {
         NodeState {
+            harness: None,
             node_id: id.into(),
             status: NodeStatus::Completed,
             iter,
@@ -1071,6 +1073,7 @@ mod tests {
 
     fn pending_node(id: &str) -> NodeState {
         NodeState {
+            harness: None,
             node_id: id.into(),
             status: NodeStatus::Pending,
             iter: 1,
@@ -1663,6 +1666,7 @@ mod tests {
     fn completed_node_iters(id: &str, iters: &[(i64, NodeStatus)]) -> NodeState {
         let (head_iter, head_status) = iters.last().cloned().unwrap_or((1, NodeStatus::Pending));
         NodeState {
+            harness: None,
             node_id: id.into(),
             status: head_status,
             iter: head_iter,

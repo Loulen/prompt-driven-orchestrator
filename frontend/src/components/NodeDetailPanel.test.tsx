@@ -102,6 +102,19 @@ function makeNode(overrides?: Partial<NodeState>): NodeState {
   };
 }
 
+  describe("frozen harness (#616)", () => {
+    it("shows the node's frozen harness next to the id when present", () => {
+      render(<NodeDetailPanel node={makeNode({ harness: "copilot" })} runId="run-1" />);
+      const chip = screen.getByTestId("node-frozen-harness");
+      expect(chip).toHaveTextContent("copilot");
+    });
+
+    it("shows no harness chip when the node never froze one (a pure skip / pre-#616)", () => {
+      render(<NodeDetailPanel node={makeNode({ status: "completed", harness: undefined })} runId="run-1" />);
+      expect(screen.queryByTestId("node-frozen-harness")).toBeNull();
+    });
+  });
+
 describe("NodeDetailPanel", () => {
   beforeEach(() => {
     fetchPromptMock.mockClear();

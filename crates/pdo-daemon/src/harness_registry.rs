@@ -214,8 +214,22 @@ pub fn opencode() -> HarnessDescriptor {
 /// identity), and an end-of-turn substrate (the journal's `assistant.turn_end`) —
 /// and declares the other two (usage-limit anchor, staging floor) absent.
 ///
-/// The launch uses copilot's **interactive** mode (resident after the turn —
-/// ADR-0045 §3, the non-interactive `-p` exits at turn end and is ineligible):
+/// The launch uses copilot's **interactive** mode with the prompt auto-executed
+/// (`-i {prompt}`), so the harness is **resident after the turn** — an attachable
+/// session the user can take over, PDO's core contract (CONTEXT.md § "Harnais
+/// agentique", ADR-0012). The non-interactive `-p` is deliberately *not* used: it
+/// exits at turn end, making the harness ineligible (a session death indistinguishable
+/// from a failure, ADR-0032). This is the #615-iter-2 correction of the launch that
+/// originally shipped a **positional** prompt (`"{prompt}"`): copilot 1.0.80 reserves
+/// the positional slot for **subcommands**, so a positional prompt is refused
+/// (`error: too many arguments`) and the node hangs `running` forever — the way to
+/// enter interactive mode *with* a prompt is `-i`, measured on the installed binary.
+/// Interactive mode writes the `events.jsonl` journal PDO resolves by session
+/// identity (the transcript, the `assistant.turn_end` substrate, the
+/// `session.usage_checkpoint` reported cost) — the three capabilities
+/// [`crate::harness_probes`] declares for copilot. `exit_code_is_verdict = false`
+/// reads naturally here: a resident harness never hands PDO an exit code to read as a
+/// verdict, so the journal is the signal. The tokens:
 /// - `--allow-all` grants full autonomy — no tool, path or URL permission dialog
 ///   (AC "aucun dialogue de permission d'outil, de chemin ou d'URL");
 /// - `--no-ask-user` disables the question tool, so the node never stalls asking;
@@ -225,7 +239,14 @@ pub fn opencode() -> HarnessDescriptor {
 /// - `--session-id {session_id}` pins the session identity at launch (measured on
 ///   the installed binary — the caller-provided id the SDK documents, requested
 ///   for the CLI in github/copilot-cli#167), so resume re-enters **this** node's
-///   session by identity, never a blind `--continue` (AC).
+///   session by identity, never a blind `--continue` (AC);
+/// - `-i {prompt}` enters interactive mode and auto-executes the augmented prompt.
+///
+/// **Prerequisite (not PDO code):** interactive copilot gates a first turn behind a
+/// one-time "trust this folder" dialog (`-p` bypasses it, interactive does not).
+/// Trust **cascades** to subdirectories, so trusting the target repo root once covers
+/// every node sub-worktree beneath it — the "dossier de travail approuvé" prerequisite
+/// (CONTEXT.md § "Harnais agentique"), documented like auth, never staged by PDO.
 ///
 /// `COPILOT_AUTO_UPDATE=false` freezes the binary: PDO decides when the target
 /// moves, not the provider (AC).
@@ -240,7 +261,7 @@ pub fn copilot() -> HarnessDescriptor {
             "--no-ask-user",
             "--model {model}",
             "--session-id {session_id}",
-            "{prompt}",
+            "-i {prompt}",
         ]
         .iter()
         .map(|s| s.to_string())

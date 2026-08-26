@@ -22,11 +22,9 @@
 //! `PDO_SESSION_CAP`: that env var is process-global and would race every sibling
 //! test. Stored beats env, so this is hermetic even under a runner that exports one.
 
-mod common;
-
 use std::time::Duration;
 
-use common::TestDaemon;
+use crate::common::TestDaemon;
 use pdo_daemon::tmux_session_manager;
 
 const PIPELINE_NAME: &str = "starve";

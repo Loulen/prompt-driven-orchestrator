@@ -7,6 +7,7 @@
 
 use std::net::SocketAddr;
 use std::path::Path;
+use std::sync::{Mutex, MutexGuard};
 
 use anyhow::Result;
 use pdo_daemon::{serve_with_config, DaemonConfig, DaemonHandle};
@@ -639,4 +640,116 @@ pub fn ws_text(msg: &Message) -> Option<&str> {
         Message::Text(s) => Some(s.as_str()),
         _ => None,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Process-global env vars: shared serial guards
+// ---------------------------------------------------------------------------
+//
+// The whole `tests/` tree now compiles into ONE binary (`tests/it.rs`), so
+// `cargo test` runs every test as a thread in a single process. Env vars that
+// used to be safe because "this file is the only one that touches it, and each
+// file is its own process" are no longer safe: two files setting the same var
+// now overlap, and the first to finish unsets it under the other.
+//
+// The locks live here, not in a test file, precisely so that tests in *any*
+// file contend on the same mutex. Same shape as the `SERIAL` mutex
+// `tmux_lifecycle.rs` already uses for `PDO_REAPER_*`, just hoisted to a place
+// both sides of a cross-file collision can reach.
+//
+// `EnvVarGuard` restores on `Drop`, so a panicking test still puts the previous
+// value back and still releases the lock — a manual `remove_var` at the end of
+// the test body does neither.
+
+/// Serialises `PDO_SESSION_CAP` between `session_cap_admission.rs` and
+/// `admission_concurrency.rs` — both set it, to different values, and both
+/// assert on the cap they set.
+static SESSION_CAP_LOCK: Mutex<()> = Mutex::new(());
+
+/// Serialises `PDO_GUARD_TIMEOUT_MS` between `guard_dry_run_timeout.rs` and
+/// `trigger_scheduler.rs`.
+static GUARD_TIMEOUT_LOCK: Mutex<()> = Mutex::new(());
+
+/// Holds a contended env var at a chosen value, and holds the lock that makes
+/// that exclusive, for as long as the guard is alive.
+///
+/// `Drop` restores the previous value (or unsets it if there was none) *before*
+/// releasing the lock — the `_lock` field is declared last, so it is dropped
+/// last. Bind it to a named local (`let _cap = …`), never to `_`: `let _ = …`
+/// drops it immediately and the protection evaporates.
+pub struct EnvVarGuard {
+    key: &'static str,
+    previous: Option<String>,
+    // Dropped after the `Drop` impl below has restored `key`.
+    _lock: MutexGuard<'static, ()>,
+}
+
+impl EnvVarGuard {
+    /// Take `lock`, then snapshot and overwrite `key`.
+    ///
+    /// The snapshot is taken *after* the lock is held. Reading it earlier is the
+    /// bug this replaces: a test that snapshotted first could observe a value a
+    /// concurrent test had just set, and then "restore" that foreign value
+    /// permanently once the other test had already removed it.
+    fn acquire(lock: &'static Mutex<()>, key: &'static str, value: &str) -> Self {
+        // Poisoning is tolerated on purpose: one panicking test must not cascade
+        // into false failures in every other test that wants this var.
+        let _lock = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let previous = std::env::var(key).ok();
+        std::env::set_var(key, value);
+        Self {
+            key,
+            previous,
+            _lock,
+        }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match self.previous.take() {
+            Some(v) => std::env::set_var(self.key, v),
+            None => std::env::remove_var(self.key),
+        }
+    }
+}
+
+/// Set `PDO_SESSION_CAP` for the lifetime of the returned guard, excluding any
+/// other test that also wants it.
+#[must_use = "the cap is restored as soon as the guard is dropped"]
+pub fn lock_session_cap(value: impl AsRef<str>) -> EnvVarGuard {
+    EnvVarGuard::acquire(
+        &SESSION_CAP_LOCK,
+        pdo_daemon::admission::SESSION_CAP_ENV,
+        value.as_ref(),
+    )
+}
+
+/// Set `PDO_GUARD_TIMEOUT_MS` for the lifetime of the returned guard, excluding
+/// any other test that also wants it.
+#[must_use = "the timeout override is restored as soon as the guard is dropped"]
+pub fn lock_guard_timeout_ms(value: impl AsRef<str>) -> EnvVarGuard {
+    EnvVarGuard::acquire(
+        &GUARD_TIMEOUT_LOCK,
+        pdo_daemon::GUARD_TIMEOUT_MS_OVERRIDE_ENV,
+        value.as_ref(),
+    )
+}
+
+/// Prepend the directory holding the freshly built `pdo` binary to `PATH`, once
+/// per process.
+///
+/// Five test files used to keep a `static INIT: Once` of their own for this. In
+/// one binary those are five distinct `Once`s, so all five still fire and all
+/// five read-modify-write `PATH` concurrently. They all prepend the same
+/// directory, so the outcome was fine either way — one shared `Once` just
+/// removes the need to work that out.
+pub fn ensure_pdo_on_path() {
+    static INIT: std::sync::Once = std::sync::Once::new();
+    INIT.call_once(|| {
+        let bin = Path::new(env!("CARGO_BIN_EXE_pdo"));
+        let dir = bin.parent().expect("pdo binary has a parent dir");
+        let existing = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var("PATH", format!("{}:{}", dir.display(), existing));
+    });
 }

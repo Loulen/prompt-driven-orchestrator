@@ -3,11 +3,9 @@
 //! Substitutes Claude with `bash -c 'cat'` inside a tmux session, opens
 //! `WS /sessions/<id>/pty`, sends bytes, and asserts roundtrip echo.
 
-mod common;
-
 use std::time::Duration;
 
-use common::TestDaemon;
+use crate::common::TestDaemon;
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::protocol::Message;
 

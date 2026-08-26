@@ -1,18 +1,30 @@
 # Étapes injectées par `dist` dans le job build-local-artifacts, juste après le
 # checkout et AVANT `dist build`. Raison : le build.rs de pdo-daemon lance
-# `npm run build` pendant `cargo build` (le frontend est embarqué via rust-embed),
+# `pnpm run build` pendant `cargo build` (le frontend est embarqué via rust-embed),
 # donc node_modules doit exister sur chaque runner (Linux et macOS, toutes arches ;
-# les assets front sont indépendants de la cible, un seul `npm ci` par runner suffit).
+# les assets front sont indépendants de la cible, un seul install par runner suffit).
 # Chemin déclaré dans Cargo.toml : github-build-setup = "../build-setup.yml".
+#
+# CE FICHIER EST LA SOURCE, PAS release.yml. Le prochain `dist generate` réécrit
+# .github/workflows/release.yml à partir d'ici : patcher release.yml seul se perd
+# au régénération suivante.
+#
+# ORDRE : `Set up pnpm` AVANT `setup-node`. `cache: pnpm` fait shell-out à
+# `pnpm store path` pour trouver le répertoire de cache, donc pnpm doit déjà être
+# sur le PATH quand setup-node tourne. Inverser les deux casse le cache en silence.
+- name: Set up pnpm
+  uses: pnpm/action-setup@v4
+  with:
+    version: 10
 - name: Set up Node.js
   uses: actions/setup-node@v4
   with:
     node-version: "22"
-    cache: npm
-    cache-dependency-path: frontend/package-lock.json
+    cache: pnpm
+    cache-dependency-path: frontend/pnpm-lock.yaml
 # `cd frontend && ...` plutôt que `working-directory: frontend` : dist re-sérialise
 # les steps injectés via son propre modèle et DROPPE `working-directory` (vérifié sur
-# dist 0.32). Sans le cd, `npm ci` tournerait à la racine (qui a son propre package.json
-# puppeteer/tsx) et build.rs ne trouverait pas frontend/node_modules.
-- name: Install frontend deps (build.rs runs `npm run build` during cargo build)
-  run: cd frontend && npm ci
+# dist 0.32). Sans le cd, l'install tournerait à la racine (qui a son propre
+# package.json puppeteer/tsx) et build.rs ne trouverait pas frontend/node_modules.
+- name: Install frontend deps (build.rs runs `pnpm run build` during cargo build)
+  run: cd frontend && pnpm install --frozen-lockfile

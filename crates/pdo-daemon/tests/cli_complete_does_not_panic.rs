@@ -19,12 +19,10 @@
 //! claude does inside the tmux session) and assert clean exit codes against a
 //! live TestDaemon.
 
-mod common;
-
 use std::process::Command;
 use std::time::Duration;
 
-use common::TestDaemon;
+use crate::common::TestDaemon;
 
 const PIPELINE_NAME: &str = "cli-cycle";
 const NODE_ID: &str = "solo";

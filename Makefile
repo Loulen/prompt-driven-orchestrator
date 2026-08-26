@@ -15,8 +15,8 @@ PDO_BIN       ?= $(HOME)/.local/bin/pdo
 help:
 	@echo "Targets:"
 	@echo "  make dev     Run dev daemon (port $(PORT)) + Vite (port $(VITE_PORT)) for chrome-MCP testing"
-	@echo "  make build   cargo build + npm run build (frontend embedded into daemon)"
-	@echo "  make test    cargo test + vitest"
+	@echo "  make build   cargo build + pnpm run build (frontend embedded into daemon)"
+	@echo "  make test    cargo nextest + doctests + vitest"
 	@echo "  make check   cargo check + tsc --noEmit"
 	@echo "  make lint    cargo clippy + eslint"
 	@echo "  make fmt     cargo fmt"
@@ -30,29 +30,36 @@ help:
 	@echo "  make service-restart  systemctl --user restart pdo"
 	@echo "  make service-logs     journalctl --user -u pdo -f"
 
+# No `--` before `--port`: npm swallowed it, pnpm forwards it verbatim to the
+# script, and `vite -- --port 5174` silently falls back to vite's own 5173.
 dev:
 	@mkdir -p $(SANDBOX)
 	@cargo build
 	@trap 'kill 0' EXIT INT TERM; \
 	  (cd $(SANDBOX) && PDO_PORT=$(PORT) $(CURDIR)/target/debug/pdo daemon) & \
-	  (cd frontend && PDO_PORT=$(PORT) npm run dev -- --port $(VITE_PORT)) & \
+	  (cd frontend && PDO_PORT=$(PORT) pnpm run dev --port $(VITE_PORT)) & \
 	  wait
 
 build:
-	cd frontend && npm run build
+	cd frontend && pnpm run build
 	cargo build
 
+# nextest : un process par test (isolation retrouvée depuis que les 50 binaires de
+# tests sont fusionnés en un seul, cf. crates/pdo-daemon/tests/it.rs) et un pool
+# global au lieu d'un pool par binaire. nextest NE LANCE PAS les doctests, d'où la
+# ligne `--doc` séparée : la retirer ferait disparaître leur couverture en silence.
 test:
-	cargo test --workspace
-	cd frontend && npm test
+	cargo nextest run --workspace
+	cargo test --workspace --doc
+	cd frontend && pnpm test
 
 check:
 	cargo check --workspace
-	cd frontend && npm run typecheck
+	cd frontend && pnpm run typecheck
 
 lint:
 	cargo clippy --workspace --all-targets -- -D warnings
-	cd frontend && npm run lint
+	cd frontend && pnpm run lint
 
 fmt:
 	cargo fmt --all
@@ -62,17 +69,23 @@ clean:
 	rm -rf frontend/dist
 
 # ---- installed global daemon ----
+# `install` / `update` build the PRODUCTION daemon in $(PDO_PROD_DIR): pnpm must
+# be on the PATH of the shell running make (nvm, corepack or a package manager),
+# same as node already had to be. `pnpm install --frozen-lockfile` is the `npm ci`
+# equivalent: it refuses to touch pnpm-lock.yaml. On the first update after the
+# npm -> pnpm switch, the pull brings pnpm-lock.yaml in before the install runs,
+# and pnpm relinks the clone's existing node_modules onto its store.
 
 install:
 	@test -d $(PDO_PROD_DIR)/.git || git clone $(REPO_URL) $(PDO_PROD_DIR)
-	cd $(PDO_PROD_DIR)/frontend && npm ci
+	cd $(PDO_PROD_DIR)/frontend && pnpm install --frozen-lockfile
 	cd $(PDO_PROD_DIR) && cargo build --release
 	install -m755 $(PDO_PROD_DIR)/target/release/pdo $(PDO_BIN)
 	@$(PDO_BIN) --version
 
 update:
 	cd $(PDO_PROD_DIR) && git fetch origin && git checkout main && git pull --ff-only
-	cd $(PDO_PROD_DIR)/frontend && npm ci
+	cd $(PDO_PROD_DIR)/frontend && pnpm install --frozen-lockfile
 	cd $(PDO_PROD_DIR) && cargo build --release
 	install -m755 $(PDO_PROD_DIR)/target/release/pdo $(PDO_BIN)
 	systemctl --user restart pdo

@@ -2,9 +2,7 @@
 //! when clauses, repeated flag, side) → GET /library → assert every field
 //! round-trips through the daemon and on-disk YAML.  Regression test for #71.
 
-mod common;
-
-use common::TestDaemon;
+use crate::common::TestDaemon;
 
 #[tokio::test]
 async fn library_node_preserves_all_port_fields() {

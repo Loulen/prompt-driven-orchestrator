@@ -4,11 +4,9 @@
 //! the event log), and the 200 body reports the re-scheduling's real effect
 //! (`{ok,spawned:[…]}` or `{ok,noop:true,reason}`), never a blind `{ok:true}`.
 
-mod common;
-
 use std::process::Command;
 
-use common::TestDaemon;
+use crate::common::TestDaemon;
 
 const LOOP_PIPELINE_NAME: &str = "loop-truth-test";
 const LOOP_PIPELINE_YAML: &str = r#"name: loop-truth-test

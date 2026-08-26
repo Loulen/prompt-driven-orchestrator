@@ -12,9 +12,7 @@
 //! calls `pdo complete` → the run branch is never merged and stays a clean fork
 //! of the seed commit for the duration.
 
-mod common;
-
-use common::TestDaemon;
+use crate::common::TestDaemon;
 
 // --- cribbed from crates/pdo-daemon/tests/admission_concurrency.rs ---
 

@@ -11,11 +11,9 @@
 //! entry-node spawn (the first and only `spawn_node` call) consume it. No tmux
 //! is required: the panic fires before the session spawn.
 
-mod common;
-
 use std::time::Duration;
 
-use common::TestDaemon;
+use crate::common::TestDaemon;
 
 const PIPELINE_NAME: &str = "spawn-abort";
 const NODE_ID: &str = "worker";

@@ -13,11 +13,9 @@
 //! records carry a null target, and this file is what pins that they stay
 //! readable and bucketed forever.
 
-mod common;
-
 use std::process::Command;
 
-use common::TestDaemon;
+use crate::common::TestDaemon;
 
 const PIPELINE_NAME: &str = "by-repo-test";
 // `prompt_required: false` so a cron-only trigger with no input template is

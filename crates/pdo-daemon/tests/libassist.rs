@@ -11,9 +11,7 @@
 //! hermetic, no `$HOME` dependency, and no pipeline file needs to pre-exist
 //! (create-if-absent creates the directory).
 
-mod common;
-
-use common::TestDaemon;
+use crate::common::TestDaemon;
 
 const PIPELINE_ID: &str = "feature-with-review";
 

@@ -19,11 +19,9 @@
 //! router tests poll the handler future to completion regardless of any client,
 //! so the cancellation bug is invisible there.
 
-mod common;
-
 use std::time::Duration;
 
-use common::TestDaemon;
+use crate::common::TestDaemon;
 use tokio::io::AsyncWriteExt;
 
 const PIPELINE_NAME: &str = "detach-tail";

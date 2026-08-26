@@ -3,12 +3,10 @@
 //! prompts into `<run-id>/pipeline.yaml`. The watcher emits `pipeline_modified`
 //! events when the run-scoped copy is edited externally.
 
-mod common;
-
 use std::process::Command;
 use std::time::Duration;
 
-use common::{ws_text, TestDaemon};
+use crate::common::{ws_text, TestDaemon};
 use futures_util::StreamExt;
 use tokio::time::timeout;
 

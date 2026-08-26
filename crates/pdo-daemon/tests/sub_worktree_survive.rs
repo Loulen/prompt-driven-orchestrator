@@ -10,9 +10,7 @@
 //! work**. That is the regression the whole issue is about, and this pipeline
 //! already has the only node class that can see it (`code-mutating`).
 
-mod common;
-
-use common::TestDaemon;
+use crate::common::TestDaemon;
 
 const PIPELINE_NAME: &str = "cm-survive-test";
 const NODE_ID: &str = "impl-1";

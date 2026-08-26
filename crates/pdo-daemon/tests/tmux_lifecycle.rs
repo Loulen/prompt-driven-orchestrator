@@ -5,12 +5,10 @@
 //! 2. Orphan sweep at boot kills pre-existing stale pdo-* sessions.
 //! 3. Dead-session re-spawn: kill a session, hit /pane, assert fresh session.
 
-mod common;
-
 use std::sync::Mutex;
 use std::time::Duration;
 
-use common::TestDaemon;
+use crate::common::TestDaemon;
 use pdo_daemon::tmux_session_manager;
 
 /// Tests in this file mutate process-wide env vars (PDO_REAPER_*_SECS) and assert

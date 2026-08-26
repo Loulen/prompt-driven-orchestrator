@@ -1460,6 +1460,44 @@ fn is_node_dead(
     dead
 }
 
+/// True when `src` is a member of a bounded loop region that is **still
+/// iterating** at its just-completed lap `source_iter` (#620). "Still iterating"
+/// means a re-entry (back) edge from `src` fired this lap *and* the region has
+/// not reached its effective `max_iter` — so the loop will run at least one more
+/// lap, on which `src` completes again and its guarded exit edges can still fire.
+///
+/// This is what [`edge_is_dead`] consults before pruning a member's exit edge: an
+/// exit that did not fire on lap N of a live loop is **not** permanently dead
+/// (unlike a plain either/or branch), because lap N+1 can make it fire. Only once
+/// the loop **exits** (no back-edge fired this lap — the loop is leaving) or
+/// **exhausts** (`source_iter >= max_iter`) is that exit settled and normal
+/// edge-death reasoning correct. Without this guard the resilience sweep confused
+/// "not yet reached" with "unreachable", auto-skipped a node hanging off a live
+/// loop's exit, and completed the run with a lap still in flight (#620).
+fn bounded_loop_still_iterating(
+    pipeline: &PipelineDef,
+    run_state: &RunState,
+    src: &str,
+    source_iter: i64,
+    fired: &[&crate::pipeline::EdgeDef],
+    vars: &HashMap<String, serde_yaml::Value>,
+) -> bool {
+    let Some(region) = crate::loop_region::bounded_region_for_member(pipeline, src) else {
+        return false;
+    };
+    // Exhausted: `handle_region_reentry` owns the exit at this lap (route or park
+    // "exhausted — unrouted"); no future lap will re-fire the edge.
+    let max_iter = effective_region_max_iter(run_state, region, vars);
+    if source_iter >= max_iter {
+        return false;
+    }
+    // A re-entry (member → region entry) edge fired this lap ⇒ the loop re-enters.
+    fired.iter().any(|e| {
+        crate::loop_region::bounded_region_reentered_by_edge(pipeline, src, &e.target.node)
+            .is_some()
+    })
+}
+
 /// Is a single incoming `edge` **dead** — permanently unable to deliver its
 /// artifact (ADR-0011)? Factored out of [`is_node_dead`] so the reachability
 /// auto-skip (#600 / #589) can reason per required-input port, not only per whole
@@ -1467,7 +1505,9 @@ fn is_node_dead(
 /// when the producer never ran and is itself dead (recursion, cycle-guarded by
 /// `visiting`). A producer still running (outcome undecided) or a Switch producer
 /// (retired, routes by port) keeps the edge live — we keep waiting rather than
-/// skip.
+/// skip. A producer that is a **live bounded-loop member** likewise keeps its
+/// non-firing exit edge live (#620): the loop can still fire it on a later lap —
+/// see [`bounded_loop_still_iterating`].
 fn edge_is_dead(
     pipeline: &PipelineDef,
     run_state: &RunState,
@@ -1503,8 +1543,18 @@ fn edge_is_dead(
             .collect();
         let fired = edge_router::fired_edges(&outgoing, fm, vars, source_iter);
         let this_edge_fired = fired.iter().any(|f| std::ptr::eq(*f, edge));
-        // Dead iff this edge did not fire.
-        !this_edge_fired
+        if this_edge_fired {
+            return false; // live: the edge fired
+        }
+        // #620: an exit that did not fire on this lap of a still-iterating bounded
+        // loop is NOT dead — a later lap can still make it fire. Keep it live so a
+        // node hanging off the loop's exit is never auto-skipped mid-flight and the
+        // run is not completed with a lap in flight.
+        if bounded_loop_still_iterating(pipeline, run_state, src, source_iter, &fired, vars) {
+            return false;
+        }
+        // Dead: this edge did not fire and the loop (if any) has settled.
+        true
     } else if run_state.nodes.contains_key(src) {
         // Producer spawned but not completed (running / awaiting / failed):
         // outcome not yet decided — edge is still live.
@@ -6033,6 +6083,159 @@ loops:
         assert!(
             msg.contains("force_route"),
             "points at the recovery lever: {msg}"
+        );
+    }
+
+    // ── #620: a not-yet-reached node off a LIVE bounded loop is not "unreachable" ──
+    //
+    // The `simple-bugfix` shape: a bounded loop `{implementer, tester}` whose
+    // reviewer either passes (exit `tester -> ship` when Verdict == Pass) or fails
+    // (else back-edge `tester -> implementer`, another lap). `ship` hangs off the
+    // loop's exit. When lap 1 fails, the loop re-enters — `ship` is simply not
+    // reached YET, NOT structurally unreachable. The resilience sweep must leave it
+    // alone; auto-skipping it (empty output) completed the run with a lap in flight.
+
+    /// start -> implementer; implementer -> tester; tester -> ship WHEN Verdict in
+    /// [Pass] (loop exit); tester -> implementer ELSE (back-edge). One bounded
+    /// region `{implementer, tester}`, entry `implementer`.
+    fn review_loop_with_ship(max_iter: i64) -> PipelineDef {
+        PipelineDef {
+            name: "simple-bugfix".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("start", &[], &["user_prompt"]),
+                make_node("implementer", &["task", "review"], &["code"]),
+                make_node("tester", &["code"], &["review"]),
+                make_node("ship", &["review"], &["out"]),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_edge("start", "user_prompt", "implementer", "task"),
+                make_edge("implementer", "code", "tester", "code"),
+                make_cond_edge(
+                    "tester",
+                    "review",
+                    "ship",
+                    "review",
+                    Some("Verdict: {in: [Pass]}"),
+                    false,
+                ),
+                make_cond_edge("tester", "review", "implementer", "task", None, true),
+                make_edge("ship", "out", "end", "result"),
+            ],
+            loops: vec![region("review_loop", &["implementer", "tester"], max_iter)],
+            notes: Vec::new(),
+            prompt_required: true,
+        }
+    }
+
+    fn tester_verdict(v: &str) -> HashMap<String, HashMap<String, serde_yaml::Value>> {
+        let mut fm_by_node = HashMap::new();
+        let mut fm = HashMap::new();
+        fm.insert(
+            "Verdict".to_string(),
+            serde_yaml::Value::String(v.into()),
+        );
+        fm_by_node.insert("tester".to_string(), fm);
+        fm_by_node
+    }
+
+    #[test]
+    fn live_loop_exit_target_is_not_auto_skipped() {
+        // #620 core: lap 1 fails, so `tester -> implementer` (else) fires and the
+        // loop re-enters. `ship` (off the unfired `Verdict == Pass` exit) is
+        // not-yet-reached, NOT unreachable — the sweep must return it empty-handed.
+        let pipeline = review_loop_with_ship(5);
+        let mut rs = empty_run_state();
+        rs.nodes
+            .insert("implementer".into(), completed_node_iter("implementer", 1));
+        rs.nodes
+            .insert("tester".into(), completed_node_iter("tester", 1));
+
+        let skips = unreachable_nodes(&pipeline, &rs, &tester_verdict("Fail"), &HashMap::new());
+        assert!(
+            skips.is_empty(),
+            "a node off a live loop's exit is not-yet-reached, never auto-skipped: {skips:?}"
+        );
+    }
+
+    #[test]
+    fn live_loop_end_is_not_dead_so_the_run_does_not_complete_early() {
+        // The completion-guard twin of the above: while the loop iterates, `End`
+        // (reachable only through `ship`, past the unfired loop exit) must not read
+        // as dead — otherwise the unrouted-convergence path would misfire and the
+        // run could finish with a lap still running.
+        let pipeline = review_loop_with_ship(5);
+        let mut rs = empty_run_state();
+        rs.nodes
+            .insert("implementer".into(), completed_node_iter("implementer", 1));
+        rs.nodes
+            .insert("tester".into(), completed_node_iter("tester", 1));
+
+        let mut visiting = HashSet::new();
+        let end_dead = is_node_dead(
+            &pipeline,
+            &rs,
+            "end",
+            &tester_verdict("Fail"),
+            &HashMap::new(),
+            &mut visiting,
+        );
+        assert!(!end_dead, "End stays live while the bounded loop iterates");
+    }
+
+    #[test]
+    fn dead_sibling_exit_is_still_auto_skipped_on_a_clean_loop_exit() {
+        // The loop EXITS this lap (Verdict == Pass fires `tester -> ship`, no
+        // back-edge fires), so a genuinely not-taken sibling exit is settled and
+        // must still be pruned — otherwise the run would hang waiting on a node
+        // that can never spawn. Here `abort` (a `Verdict == Reject` sibling exit)
+        // is that dead branch; `ship` (the taken exit) is left alone.
+        let mut pipeline = review_loop_with_ship(5);
+        pipeline.nodes.push(make_node("abort", &["review"], &["out"]));
+        pipeline.edges.push(make_cond_edge(
+            "tester",
+            "review",
+            "abort",
+            "review",
+            Some("Verdict: {in: [Reject]}"),
+            false,
+        ));
+        let mut rs = empty_run_state();
+        rs.nodes
+            .insert("implementer".into(), completed_node_iter("implementer", 3));
+        rs.nodes
+            .insert("tester".into(), completed_node_iter("tester", 3));
+
+        let skips = unreachable_nodes(&pipeline, &rs, &tester_verdict("Pass"), &HashMap::new());
+        let ids: Vec<&str> = skips.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["abort"],
+            "only the not-taken sibling exit is unreachable once the loop exits"
+        );
+    }
+
+    #[test]
+    fn exhausted_loop_exit_target_is_auto_skipped() {
+        // At `max_iter` with the exit still unfired (Verdict never passed), the
+        // region is exhausted: `handle_region_reentry` owns the terminal routing,
+        // and the exit is genuinely settled. `ship` is then unreachable and the
+        // sweep may prune it — the `iter < max_iter` half of the #620 guard.
+        let pipeline = review_loop_with_ship(3);
+        let mut rs = empty_run_state();
+        rs.nodes
+            .insert("implementer".into(), completed_node_iter("implementer", 3));
+        rs.nodes
+            .insert("tester".into(), completed_node_iter("tester", 3));
+
+        let skips = unreachable_nodes(&pipeline, &rs, &tester_verdict("Fail"), &HashMap::new());
+        let ids: Vec<&str> = skips.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["ship"],
+            "an exhausted loop's unfired exit is settled — its target is unreachable"
         );
     }
 }

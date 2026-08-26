@@ -123,8 +123,10 @@ pub(crate) struct StartNodeSpawn {
 enum StartNodeTail {
     Agent {
         /// #550: the resolved harness descriptor (owned; `execute` borrows it into
-        /// [`tmux_session_manager::SessionTail::Agent`]).
-        harness: harness_registry::HarnessDescriptor,
+        /// [`tmux_session_manager::SessionTail::Agent`]). Boxed (#614) so the wide
+        /// descriptor — grown by the resume fields — does not bloat every
+        /// `StartNodeTail` (`clippy::large_enum_variant`).
+        harness: Box<harness_registry::HarnessDescriptor>,
         model: Option<String>,
         effort: Option<String>,
         /// #473: the pinned Claude Code session id (owned mirror of
@@ -163,7 +165,7 @@ impl StartNodeSpawn {
                 effort,
                 session_id,
             } => tmux_session_manager::SessionTail::Agent {
-                harness,
+                harness: harness.as_ref(),
                 model: model.as_deref(),
                 effort: effort.as_deref(),
                 session_id: session_id.as_deref(),
@@ -495,9 +497,11 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         }
     } else {
         StartNodeTail::Agent {
-            harness: harness_descriptor
-                .clone()
-                .expect("a non-script node resolved a harness descriptor"),
+            harness: Box::new(
+                harness_descriptor
+                    .clone()
+                    .expect("a non-script node resolved a harness descriptor"),
+            ),
             model: resolved_model.clone(),
             effort: resolved_effort.clone(),
             session_id: session_id.clone(),

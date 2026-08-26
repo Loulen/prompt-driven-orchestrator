@@ -227,10 +227,16 @@ pub fn copilot() -> HarnessDescriptor {
         .iter()
         .map(|s| s.to_string())
         .collect(),
-        resume: ["exec", "copilot", "--allow-all", "--no-ask-user", "{resume}"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect(),
+        resume: [
+            "exec",
+            "copilot",
+            "--allow-all",
+            "--no-ask-user",
+            "{resume}",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect(),
         // Resume is by identity (`--resume '<id>'`) or not at all: `resume_blind`
         // is empty, so a resume with no recorded id renders no resume flag rather
         // than a blind continue (AC "jamais par un continue aveugle").

@@ -5258,7 +5258,11 @@ loops:
     fn reopen_spawns(pipeline: &PipelineDef, state: &RunState) -> Vec<(String, i64)> {
         let by_node = fail_fm();
         let mut spawns = Vec::new();
-        let mut members: Vec<&str> = pipeline.loops[0].members.iter().map(|m| m.as_str()).collect();
+        let mut members: Vec<&str> = pipeline.loops[0]
+            .members
+            .iter()
+            .map(|m| m.as_str())
+            .collect();
         members.sort_unstable(); // deterministic order, independent of HashMap iteration
         for member in members {
             if !state
@@ -5269,7 +5273,14 @@ loops:
                 continue;
             }
             let fm = by_node.get(member).cloned().unwrap_or_default();
-            for action in evaluate_outgoing_edges_full(pipeline, state, member, &HashMap::new(), &fm, &by_node) {
+            for action in evaluate_outgoing_edges_full(
+                pipeline,
+                state,
+                member,
+                &HashMap::new(),
+                &fm,
+                &by_node,
+            ) {
                 if let SchedulerAction::Spawn { node_id, iter } = action {
                     spawns.push((node_id, iter));
                 }
@@ -5288,9 +5299,15 @@ loops:
         // `impl` at iter 3.
         let pipeline = migrated_review_loop_pipeline(5);
         let mut state = empty_run_state();
-        state.nodes.insert("start".into(), completed_node_iter("start", 1));
-        state.nodes.insert("impl".into(), completed_node_iter("impl", 2));
-        state.nodes.insert("rev".into(), completed_node_iter("rev", 1));
+        state
+            .nodes
+            .insert("start".into(), completed_node_iter("start", 1));
+        state
+            .nodes
+            .insert("impl".into(), completed_node_iter("impl", 2));
+        state
+            .nodes
+            .insert("rev".into(), completed_node_iter("rev", 1));
         state.loop_states.insert(
             "review_loop".into(),
             crate::event_log::LoopState {
@@ -5319,9 +5336,15 @@ loops:
         // (`rev` already ran at the head's lap) and must not re-spawn `rev` iter 2.
         let pipeline = migrated_review_loop_pipeline(5);
         let mut state = empty_run_state();
-        state.nodes.insert("start".into(), completed_node_iter("start", 1));
-        state.nodes.insert("impl".into(), completed_node_iter("impl", 1));
-        state.nodes.insert("rev".into(), completed_node_iter("rev", 1));
+        state
+            .nodes
+            .insert("start".into(), completed_node_iter("start", 1));
+        state
+            .nodes
+            .insert("impl".into(), completed_node_iter("impl", 1));
+        state
+            .nodes
+            .insert("rev".into(), completed_node_iter("rev", 1));
         state.loop_states.insert(
             "review_loop".into(),
             crate::event_log::LoopState {

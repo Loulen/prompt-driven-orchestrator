@@ -1079,39 +1079,67 @@ pub(crate) fn build_manager_prompt(
 }
 
 /// Runtime preamble for the library pipeline authoring assistant (#302 /
-/// ADR-0048).
+/// ADR-0048, reshaped by #594 / ADR-0051).
 ///
 /// Prepended to the static role prompt (`prompts/builtin/library-assistant.md`),
-/// it pins the pipeline id being authored, the daemon base URL, and the two
-/// endpoints the assistant drives — `POST /nodes/parse` (validate) and
-/// `POST /library/pipelines` (persist) — with `curl` examples. Same discipline as
-/// the manager: we own the session prompt, so we document the endpoints in plain
-/// text rather than shipping a custom MCP. The **write-on-save** rule (F2 of the
-/// issue triage: show a diff, write only on the user's OK — never on every edit)
-/// is stated here so it holds even if the static role file is trimmed.
-pub(crate) fn build_library_assistant_preamble(pipeline_id: &str, daemon_url: &str) -> String {
+/// it gives the daemon base URL and the endpoints the assistant drives —
+/// `GET /sessions/libassist/focus` (which template is open), `POST /nodes/parse`
+/// (validate) and `POST /library/pipelines` (persist) — with `curl` examples. Same
+/// discipline as the manager: we own the session prompt, so we document the
+/// endpoints in plain text rather than shipping a custom MCP. The
+/// **write-on-save** rule (F2 of the issue triage: show a diff, write only on the
+/// user's OK — never on every edit) is stated here so it holds even if the static
+/// role file is trimmed.
+///
+/// **It names no pipeline.** One assistant serves every template now, so a
+/// pipeline id frozen at spawn time would be wrong from the second template
+/// onwards. Which one is open arrives per message via the `UserPromptSubmit` hook;
+/// the instruction to fetch it is kept here in plain text because that hook only
+/// exists on a harness exposing `--settings` (ADR-0051 §3).
+pub(crate) fn build_library_assistant_preamble(daemon_url: &str) -> String {
     format!(
         r#"# Pipeline Assistant Runtime Preamble
 
-You are authoring the library pipeline template **`{pipeline_id}`** in natural
-language, on the user's behalf. Your working directory is the library pipelines
-folder. The template lives at `{pipeline_id}.yaml`; each node's prompt lives at
-`{pipeline_id}.prompts/<node-id>.md`. Read the sibling `*.yaml` files in this
-folder for real, in-house examples of the format.
+You author PDO pipeline templates in natural language, on the user's behalf. You
+are **one shared assistant for the whole daemon**: the user switches between
+templates without restarting you, so the template you work on changes over time
+and your conversation history does not.
+
+## Which pipeline is open
+
+A line beginning `PDO — pipeline actuellement ouverte` is injected into your
+context at **every** user message. It names the pipeline id, its scope, and the
+**absolute path** of its YAML file. Work on that file, at that path — never on a
+sibling you guessed from the working directory.
+
+If that line is missing (some harnesses cannot inject it), fetch the same fact
+yourself **before acting**: `curl -s {daemon_url}/sessions/libassist/focus`. If it
+answers no pipeline, ask the user which one — do not pick one.
+
+Your working directory is the repo's templates folder; read the `*.yaml` files in
+it for real, in-house examples of the format. It is a source of examples, **not**
+the location of the file you are editing: that is the absolute path the focus
+gives you, and it may live in another folder entirely.
 
 - Daemon base URL: `{daemon_url}`
+- Which pipeline is open: `curl -s {daemon_url}/sessions/libassist/focus`
 - List every template: `curl {daemon_url}/library/pipelines`
 - Validate a single node's YAML before you save: `curl -X POST {daemon_url}/nodes/parse -H 'Content-Type: application/json' -d '{{"yaml":"<node yaml>"}}'`
-- Persist the whole template (writes `{pipeline_id}.yaml` **and** its `.prompts/` dir): `curl -X POST {daemon_url}/library/pipelines -H 'Content-Type: application/json' -d '{{"id":"{pipeline_id}","name":"<display name>","yaml":"<full pipeline yaml>","prompts":{{"<node-id>":"<prompt markdown>"}}}}'`
+- Persist the whole template: `curl -X POST {daemon_url}/library/pipelines -H 'Content-Type: application/json' -d '{{"id":"<pipeline id>","name":"<display name>","scope":"<scope from the focus>","yaml":"<full pipeline yaml>","prompts":{{"<node-id>":"<prompt markdown>"}}}}'`
+
+**Always pass `scope`, set to the scope the focus gave you.** Without it the
+daemon writes into the `repo` store: a `user` or `library` template saved with no
+scope is silently **moved** out of the store it came from, leaving a duplicate
+behind and a canvas pointing at a file that no longer changes.
 
 ## Write on save, never on every edit
 
 Do **not** touch files as you reason. When the user asks for a change: describe
 what you will change, **show a diff**, and write **only after the user says OK**.
 Validate node YAML via `POST /nodes/parse` first; then persist the full template
-via `POST /library/pipelines` (keep `id` = `{pipeline_id}` so it saves in place).
-The canvas re-reads the template the moment you save — so save the whole file at
-once, never a half-edited one.
+via `POST /library/pipelines`, keeping `id` and `scope` as the focus gave them so
+it saves in place. The canvas re-reads the template the moment you save — so save
+the whole file at once, never a half-edited one.
 
 You drive no Run and issue no run commands: your only durable effect is the YAML
 the user reviews. Read first, propose second, write last.
@@ -1123,12 +1151,8 @@ the user reviews. Read first, propose second, write last.
 /// Assemble the full library-assistant launch prompt: runtime preamble + the
 /// static role prompt (the pipeline-YAML format guide). Mirror of
 /// [`build_manager_prompt`].
-pub(crate) fn build_library_assistant_prompt(
-    pipeline_id: &str,
-    daemon_url: &str,
-    role_prompt: &str,
-) -> String {
-    let preamble = build_library_assistant_preamble(pipeline_id, daemon_url);
+pub(crate) fn build_library_assistant_prompt(daemon_url: &str, role_prompt: &str) -> String {
+    let preamble = build_library_assistant_preamble(daemon_url);
     format!("{preamble}{role_prompt}")
 }
 

@@ -8,6 +8,7 @@ import { useLibraryPipelines } from "./hooks/useLibraryPipelines";
 import { fetchRuns, fetchRun, fetchTriggers, fetchProjects, fetchSessions, fetchTriggersHealth, pauseTriggers } from "./api";
 import { pickLatestLiveNode } from "./lib/pickLatestLiveNode";
 import { useRightPaneRouter } from "./hooks/useRightPaneRouter";
+import { useLibassistLifecycle } from "./hooks/useLibassistLifecycle";
 import type { RunListEntry, RunState, Trigger, Project, DaemonStatus } from "./types";
 import { shouldAutoSnapToLiveNode } from "./lib/autoSnap";
 import SessionCounter from "./components/SessionCounter";
@@ -246,6 +247,13 @@ export default function App() {
   // the Assistant tab (the Manager tab covers a run instead).
   const assistantId = editTab && !isEditingRun ? editTab.id : null;
   const assistantScope = editTab?.scope;
+
+  // #594 / ADR-0051: the assistant's whole lifecycle hangs here, on "is a template
+  // edit view open", and not down in the Assistant tab. This is the right altitude
+  // for it: the tab unmounts on every panel close (#385), the user does not stop
+  // editing when it does, and a lifecycle keyed on the tab is what made the
+  // assistant lose its conversation on each round trip between two templates.
+  useLibassistLifecycle(assistantId, assistantScope);
 
   // #315: an archived run is read-only — its worktree (and `pipeline.yaml`) is
   // gone, so any save would PUT into a 404. `isArchived` tracks the *selected*
@@ -721,7 +729,6 @@ export default function App() {
                 initialTab={infoPanelInitialTab}
                 scrollToLine={infoPanelScrollToLine}
                 assistantId={assistantId}
-                assistantScope={assistantScope}
               />
             ) : paneOwner === "editTab" ? (
               <>

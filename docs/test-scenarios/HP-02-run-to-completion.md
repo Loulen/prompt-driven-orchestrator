@@ -103,9 +103,9 @@ Features validated while crossing the run screens (grafted from retired per-issu
     harness it **resolves** to. On the `opencode` node, also set a **model** through the picker's
     `Custom…` escape hatch — a `provider/model` slug that supports tool use (e.g.
     `openrouter/anthropic/claude-haiku-4.5`). **This is not optional**, and the notes say why. On the
-    `copilot` node, open the model and effort pickers and **leave them alone**: what they offer comes
-    from the installed binary (ADR-0053), and reading them is the cheapest proof the served catalogue
-    reached the UI.
+    `copilot` node, read the **effort** picker and **leave it alone**: its stops come from the
+    installed binary (ADR-0053), and reading them is the cheapest proof the served catalogue reached
+    the UI. Its **model** control is a free-text field, not a list — see the checks.
 15. Open **New Run** on it. Set the Run's **Harness** field to **`claude`** and sandbox to **`off`**,
     then Launch. Setting the Run tier to `claude` is what turns the other two pins into a real proof:
     they must still run `opencode` and `copilot` *against* the tier above them. All three nodes start,
@@ -116,10 +116,12 @@ Features validated while crossing the run screens (grafted from retired per-issu
     ends the node goes **completed on its own** — nobody typed `pdo complete`, and no one attached.
     Then open the Run **Info panel**: the estimated cost is **ventilated by harness**, saying how many
     dollars came through `copilot` and how many through `claude`, and naming `opencode` as the reason
-    the total is not a total. Finally **attach** to the finished `copilot` node from the web terminal:
-    the session is still alive (resident), and what is on screen is **this node's own conversation** —
-    its turn, its prompt — not a fresh session. That identity is the same one PDO would resume by (see
-    the probes below).
+    the total is not a total. Finally open the finished node's **pane**: PDO serves the snapshot it
+    froze on the way out, and what is on it is **this node's own conversation** — its prompt, its turn,
+    its `❯` prompt back and waiting — not a fresh session and not a shell that exited. The session
+    itself is gone by then, reaped on the terminal transition; that is the one-live-iteration
+    invariant, not a defect. The identity that conversation ran under is the one PDO would resume by
+    (see the probes below).
 
 ## Checks
 
@@ -168,18 +170,28 @@ Features validated while crossing the run screens (grafted from retired per-issu
 - The **effort picker is greyed on the `opencode` node** and live on the `claude` one. That is the
   descriptor's missing `{effort}` hole surfacing on screen (ADR-0045): an absence *declared*, not a
   defect, and the cheapest visible proof that the resolved harness reached the UI at all.
-- The **model and effort pickers on the `copilot` node offer `copilot`'s own vocabulary**, not
-  Anthropic aliases — the catalogue is deduced from the installed binary and served (ADR-0053, #616).
-  Anthropic aliases on a `copilot` node mean the served catalogue did not reach the picker.
-- **Est. cost reads "—" and names `opencode`** — never `$0`, and never the other two nodes' dollars on
-  their own. A Run that launched a node on a harness with no cost source is not honestly summable, so
-  the whole amount goes (#553, the `unpriced_models` vein of #425). A number reappearing there is the
-  regression, and it is the one that would otherwise pass for a plausible total.
-- **The cost is ventilated by harness even while it is unavailable as a total**: the panel says what
-  came through `claude` (derived from tokens) and what came through `copilot` (reported by the harness
-  and converted by a constant, ADR-0052) — two forms, said apart, never summed into one opaque figure.
-  A `copilot` slice that arrives via the price table (or shows up as an `unpriced_models` signal) is
-  the regression: a reported cost never consults it.
+- The **effort picker on the `copilot` node offers `copilot`'s own vocabulary** — its seven stops,
+  `none · minimal · low · medium · high · xhigh · max`, deduced from the installed binary and served
+  (ADR-0053, #616). Anthropic's five stops there mean the served catalogue did not reach the picker.
+  The **model** control is a **free-text field**: copilot 1.0.80 prints no model enumeration in
+  `--help`, so the daemon serves no catalogue and the picker degrades as designed (#616 design panel
+  05). That is a declared absence with an open ticket (#629, which reads the list out of
+  `copilot help config`) — not a finding. What *is* a finding is Anthropic aliases showing up there:
+  it would mean the `claude` catalogue leaked onto another harness.
+- **Est. cost reads "—" and names `opencode`** — never `$0`, and never the other two nodes' dollars
+  passed off as the Run's. A Run that launched a node on a harness with no cost source is not honestly
+  summable, so the **total** goes (#553, the `unpriced_models` vein of #425). A figure reappearing in
+  the total's place is the regression, and it is the one that would otherwise pass for a plausible
+  total. (The per-harness slices below it are a different thing: they are labelled by harness and
+  never add up to anything.)
+- **The cost is ventilated by harness even while it is unavailable as a total**: under the "—", the
+  panel says what came through `claude` (derived from tokens) and what came through `copilot`
+  (reported by the harness and converted by a constant, ADR-0052) — two forms, said apart, never
+  summed into one opaque figure. What `opencode` withholds is the **sum**, not the knowledge
+  (ADR-0052 §3): a bare "—" with no breakdown on a trio Run is the regression, and it is the one that
+  makes the whole feature unobservable in the journey built to observe it (#617 FP). A `copilot`
+  slice that arrives via the price table (or shows up as an `unpriced_models` signal) is the other
+  regression: a reported cost never consults it.
 - No pane sits on an interactive dialog: `--auto` is `opencode`'s bypass flag and `--allow-all
   --no-ask-user` is `copilot`'s, so a permission prompt on either is a finding. A **trust dialog** on
   the `copilot` pane is *not* a product finding — it is the unmet prerequisite from the preconditions
@@ -241,6 +253,11 @@ Harness three-way pin, read-only probes:
   working-directory encoding. That is what makes the ventilated cost attributable to *this* node and a
   resume re-enter *this* conversation. Two nodes sharing a worktree would still get distinct journals;
   a journal path derived from the working directory is the finding.
+- **The finished `copilot` node serves a pane snapshot, not a live session.** `GET …/pane` on the
+  terminal iteration answers with `source: "snapshot"` and the conversation that ran there; the tmux
+  session named for run/node/iter is **gone** (reaped on the terminal transition, every harness). A
+  live session outliving a terminal node is the finding — it breaks the one-live-iteration invariant
+  — and so is an empty/`unavailable` pane, which would mean the snapshot was never frozen.
 - The `copilot` node's completion is **automatic and says so**: its completion event reads as
   runtime-initiated on turn end, not as an agent-typed `pdo complete`. A journal whose tail is a
   `session.error` must **not** have completed the node — `copilot` exits 0 on a hard model failure, so
@@ -332,10 +349,12 @@ Harness three-way pin, read-only probes:
   nor complete, and simply sat there resident. Nothing in PDO is at fault and nothing warns: a model id
   is meaningless outside its harness, so `opencode` needs an explicit `provider/model`.
 - **The model picker follows the resolved harness since #616, and an empty offer is the correct
-  answer for `opencode`.** Catalogues are deduced from the installed binary and served (ADR-0053);
-  `opencode` enumerates nothing beside `--model`, so its picker degrades to the free-text field and
-  `Custom…` remains the path. Anthropic aliases (`sonnet` / `opus` / `haiku`) appearing on an
-  `opencode` or `copilot` node is now a **finding**, not the known state it used to be.
+  answer for both `opencode` and — today — `copilot`.** Catalogues are deduced from the installed
+  binary and served (ADR-0053); neither binary enumerates models beside `--model` in `--help`, so both
+  pickers degrade to the free-text field and `Custom…` remains the path. For `copilot` that is
+  temporary: #629 reads the 26 ids out of `copilot help config`. Until it lands, an empty model offer
+  there is work in flight, not a defect. Anthropic aliases (`sonnet` / `opus` / `haiku`) appearing on
+  an `opencode` or `copilot` node is a **finding**, not the known state it used to be.
 - **`opencode`'s residency is conditional, and its exit reads as a session death.** It is resident
   after a *completed* turn (that is its ADR-0045 eligibility), but after the hard provider error above
   it exited on its own a couple of minutes later, which surfaced as `session_died` and reconciled the
@@ -356,5 +375,13 @@ Harness three-way pin, read-only probes:
   folder?". Approve the repo root once (it cascades) and rerun — see the preconditions.
 - **Do not kill the `copilot` session to watch it resume.** Interrupt-and-recover is adversity, and
   adversity is not a Happy Path (see the inventory's note): the resume-by-identity contract is
-  asserted here through the pinned `--session-id`, the journal path keyed by it, and the attached
-  session showing this node's own conversation. The interrupted path is covered at layer 3.
+  asserted here through the pinned `--session-id`, the journal path keyed by it, and the pane showing
+  this node's own conversation. The interrupted path is covered at layer 3.
+- **Residency is read while the node runs, or off the snapshot afterwards — never by attaching to a
+  finished node.** PDO reaps a node's tmux session the moment it goes terminal, for every harness:
+  that is the one-live-iteration invariant, and it is why a live attach on a completed node reads
+  `can't find session` (the #617 FP spent a step discovering this). What survives is the pane
+  **snapshot** frozen just before the kill, which `GET …/pane` serves flagged `snapshot` for any
+  terminal iteration. So: while the node runs, the distinction that matters is a live `❯` prompt with
+  the turn finished (resident, `-i`) versus a pane that exited (one-shot, `-p` — ineligible under
+  ADR-0032); afterwards, the snapshot carries the same evidence, minus the liveness.

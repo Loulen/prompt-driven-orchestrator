@@ -22,10 +22,12 @@ vi.mock("../api", () => ({
   fetchSettings: vi.fn().mockResolvedValue({
     harness_descriptors: {
       path: null,
-      names: ["claude", "opencode"],
+      names: ["claude", "opencode", "copilot"],
       // #616/ADR-0053: the served catalogue drives the model/effort pickers and the
       // effort greying. claude offers models + efforts (effort axis present);
-      // opencode offers a model list but no effort axis (greyed).
+      // opencode offers a model list but no effort axis (greyed); copilot offers
+      // efforts but NO model catalogue yet (#629), so its model control is the
+      // free-text field — the shape the #617 FP caught leaking a value.
       harnesses: [
         {
           name: "claude",
@@ -44,6 +46,15 @@ vi.mock("../api", () => ({
           efforts: [],
           has_effort: false,
           version: "opencode 1.18",
+        },
+        {
+          name: "copilot",
+          source: "builtin",
+          installed: true,
+          models: [],
+          efforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+          has_effort: true,
+          version: "copilot 1.0.80",
         },
       ],
       rejected: [],
@@ -612,5 +623,87 @@ describe("NodeInspector — harness axis (#550, ADR-0046)", () => {
     seedNode({ type: "script" });
     renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
     expect(screen.queryByTestId("node-harness")).toBeNull();
+  });
+});
+
+// #617 FP finding 3: the inspector is ONE component reused as the selection moves,
+// so a picker holding its own state can show — and then WRITE — the previously
+// selected node's model. That is an `opencode` slug landing on a `copilot` node,
+// which is exactly what "a model means nothing outside its harness" (#550/ADR-0046)
+// forbids. The journey below is the one the FP walked.
+describe("NodeInspector — the model field does not follow the selection (#617)", () => {
+  function seedTwoNodes() {
+    const base = {
+      type: "doc-only" as const,
+      interactive: false,
+      inputs: [],
+      outputs: [{ name: "out", repeated: false, side: "right" as const }],
+      view: { x: 0, y: 0 },
+    };
+    useEditStore.setState({
+      openTabs: [
+        {
+          id: "p1",
+          scope: "repo",
+          pipeline: {
+            name: "p1",
+            version: "1.0",
+            variables: {},
+            nodes: [
+              // Pinned to a harness with no served model catalogue so BOTH nodes
+              // render the free-text control — the shape that carried the value.
+              {
+                ...base,
+                id: "opc",
+                name: "opencode-ish",
+                pin_harness: "copilot",
+                model: "openrouter/anthropic/claude-haiku-4.5",
+              },
+              { ...base, id: "cop", name: "copilot", pin_harness: "copilot" },
+            ],
+            edges: [],
+          },
+          prompts: { opc: "a", cop: "b" },
+          diagnostics: [],
+          dirty: false,
+          externalDirty: false,
+        },
+      ],
+      activeTabId: "p1",
+      selection: { kind: "node", id: "opc" },
+    });
+  }
+
+  it("shows nothing on a node that carries no model, whatever was selected before", async () => {
+    seedTwoNodes();
+    const { rerender } = renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    const field = async () => (await screen.findByTestId("node-model-input")) as HTMLInputElement;
+    expect((await field()).value).toBe("openrouter/anthropic/claude-haiku-4.5");
+
+    useEditStore.setState({ selection: { kind: "node", id: "cop" } });
+    rerender(
+      <TooltipProvider>
+        <NodeInspector libraryEntries={[]} onLibraryChanged={() => {}} />
+      </TooltipProvider>,
+    );
+
+    expect((await field()).value).toBe("");
+  });
+
+  it("a focus-and-blur on the second node writes no model onto it", async () => {
+    const user = userEvent.setup();
+    seedTwoNodes();
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    await screen.findByTestId("node-model-input");
+
+    useEditStore.setState({ selection: { kind: "node", id: "cop" } });
+    await user.click(await screen.findByTestId("node-model-input"));
+    await user.click(screen.getByTestId("node-harness-resolved")); // click away
+
+    const cop = useEditStore.getState().openTabs[0].pipeline.nodes[1];
+    expect(cop.model ?? null).toBeNull();
+    // …and the tab is not dirtied by a field the user only looked at.
+    expect(useEditStore.getState().openTabs[0].dirty).toBe(false);
   });
 });

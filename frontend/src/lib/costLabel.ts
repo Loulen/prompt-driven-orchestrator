@@ -44,6 +44,16 @@ function ventilationSentence(h: HarnessCost): string {
   return `${amount} (derived). ${COST_ESTIMATE_NOTE}${lb}`;
 }
 
+/** One harness slice as the row renders it: its dollar text at adaptive precision,
+ *  tagged with its form so the row never relabels a reported figure an estimate. */
+function ventilationSlice(h: HarnessCost): CostVentilationSlice {
+  return {
+    harness: h.harness,
+    text: `~$${h.usd.toFixed(costPrecision(h.usd))}`,
+    form: h.form,
+  };
+}
+
 /** Generic lower-bound clause, used only when the excluded model's name is not
  *  available (matches `/lower bound/i`). The named form (#425) is preferred. */
 export const COST_LOWER_BOUND_NOTE = " Lower bound: an unpriced model was excluded.";
@@ -88,7 +98,8 @@ export interface CostLabel {
   /** Full tooltip string. */
   title: string;
   /** Per-harness breakdown to render beside the total (#615), when the Run is
-   *  ventilated (mixed harness, or a single non-claude harness). Empty otherwise. */
+   *  ventilated (mixed harness, or a single non-claude harness). Present under an
+   *  **unavailable** total too (#617 FP): the refusal is to sum, not to say. */
   ventilation?: CostVentilationSlice[];
 }
 
@@ -101,6 +112,8 @@ export interface CostLabel {
  * harness** — the tooltip says each slice with its own form (a derived claude
  * estimate vs a reported copilot figure), and `ventilation` carries the breakdown
  * for the row to render. Absent/empty ⇒ the pre-#615 single-figure behaviour.
+ * A ventilated Run whose total is unavailable (`uncostedHarnesses` non-empty)
+ * renders "—" **and** its slices: the two facts are independent.
  */
 export function formatEstCost(
   usd: number,
@@ -114,11 +127,32 @@ export function formatEstCost(
   // never a mute dagger (that would read as "priced, lower bound", which this is
   // not). This branch takes precedence over `partial`, since "unavailable" is a
   // stronger statement than "incomplete".
+  //
+  // #617 FP: what goes is the TOTAL, not the breakdown. The slices the daemon
+  // could still compute ride along and are rendered beside the "—" — a mixed Run
+  // says what came through `claude` and what came through `copilot` while refusing
+  // to add them (ADR-0052 §3). Suppressing them made the one Run built to observe
+  // ventilation the one Run that could not show any.
   if (uncostedHarnesses.length > 0) {
+    if (byHarness.length === 0) {
+      return {
+        text: "—",
+        dagger: false,
+        title: COST_ESTIMATE_NOTE + uncostedClause(uncostedHarnesses),
+      };
+    }
     return {
       text: "—",
+      // No figure to qualify: the dagger marks a shown amount as a lower bound,
+      // and there is none. A slice that is one says so in its own sentence.
       dagger: false,
-      title: COST_ESTIMATE_NOTE + uncostedClause(uncostedHarnesses),
+      // The reason leads; each slice then frames itself. No blanket Claude-Code
+      // estimate note here — a `copilot` slice is not one, and there is no total
+      // for it to describe (the AC of #615, held under an absent total too).
+      title: `${uncostedClause(uncostedHarnesses).trim()} ${byHarness
+        .map(ventilationSentence)
+        .join(" ")}`,
+      ventilation: byHarness.map(ventilationSlice),
     };
   }
 
@@ -135,11 +169,7 @@ export function formatEstCost(
       text,
       dagger,
       title,
-      ventilation: byHarness.map((h) => ({
-        harness: h.harness,
-        text: `~$${h.usd.toFixed(costPrecision(h.usd))}`,
-        form: h.form,
-      })),
+      ventilation: byHarness.map(ventilationSlice),
     };
   }
 

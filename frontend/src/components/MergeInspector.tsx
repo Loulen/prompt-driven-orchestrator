@@ -80,6 +80,7 @@ export default function MergeInspector() {
             onChange={(v) => updateNode(node.id, { model: v })}
             models={harnessOption?.models ?? []}
             testid="merge-model"
+            subject={node.id}
           />
         </Field>
         {/* Effort (#424, #616): a merge node IS a regular NodeDef routed through

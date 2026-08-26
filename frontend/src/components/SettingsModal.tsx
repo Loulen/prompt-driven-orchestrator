@@ -555,6 +555,8 @@ function SettingsForm({
                 ?.models ?? []
             }
             testid="default-model"
+            /* One instance-wide default, not one per node — a constant subject. */
+            subject="instance-default"
           />
           <div className="text-fg-4" style={{ fontSize: "10.5px" }}>
             The model every work node launches with unless it sets its own. "Default"

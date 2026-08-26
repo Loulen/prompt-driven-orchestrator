@@ -232,6 +232,103 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // #614: the `copilot` launch/resume tails, byte for byte — every hole full
+    // and every hole empty (AC "tous trous pleins et tous trous vides"). The tail
+    // is what a resident tmux pane runs; goldens pin it so a flag typo is a red
+    // test, never a broken launch discovered only against a live binary.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn copilot_launch_no_holes_uses_the_automatic_selector_and_no_session_pin() {
+        // A node with no model / session id: `--model` and `--session-id` drop, so
+        // copilot launches on its automatic model selector (AC), fully autonomous,
+        // question tool off, resident after the turn.
+        let d = harness_registry::resolve("copilot").unwrap();
+        let holes = Holes {
+            prompt: prompt_hole("/tmp/p.md"),
+            ..Default::default()
+        };
+        assert_eq!(
+            render(&d.launch, &holes),
+            "exec copilot --allow-all --no-ask-user \"$(cat '/tmp/p.md')\""
+        );
+    }
+
+    #[test]
+    fn copilot_launch_fills_every_hole() {
+        // Every hole present: model pins the selector, session id pins identity.
+        // `--effort` has no place in copilot's template, so an effort value never
+        // leaks a token (copilot has no launch-time effort axis).
+        let d = harness_registry::resolve("copilot").unwrap();
+        let holes = Holes {
+            prompt: prompt_hole("/tmp/p.md"),
+            model: "'gpt-5.2'".to_string(),
+            session_id: "'abc-123'".to_string(),
+            effort: "'high'".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            render(&d.launch, &holes),
+            "exec copilot --allow-all --no-ask-user --model 'gpt-5.2' --session-id 'abc-123' \
+             \"$(cat '/tmp/p.md')\""
+        );
+    }
+
+    #[test]
+    fn copilot_launch_model_only_still_pins_no_session() {
+        let d = harness_registry::resolve("copilot").unwrap();
+        let holes = Holes {
+            prompt: prompt_hole("/tmp/p.md"),
+            model: "'gpt-5.2'".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            render(&d.launch, &holes),
+            "exec copilot --allow-all --no-ask-user --model 'gpt-5.2' \"$(cat '/tmp/p.md')\""
+        );
+    }
+
+    #[test]
+    fn copilot_resume_by_identity() {
+        // The resume seam fills `{resume}` with `--resume '<id>'` (its verb is the
+        // descriptor's `resume_by_id`), so copilot re-enters THIS node's session.
+        let d = harness_registry::resolve("copilot").unwrap();
+        let holes = Holes {
+            resume: "--resume 'abc-123'".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            render(&d.resume, &holes),
+            "exec copilot --allow-all --no-ask-user --resume 'abc-123'"
+        );
+    }
+
+    #[test]
+    fn copilot_resume_with_no_identity_renders_no_resume_flag() {
+        // copilot's `resume_blind` is empty, so a resume with no recorded id leaves
+        // the `{resume}` hole empty and the token drops — never a blind `--continue`
+        // (AC "jamais par un continue aveugle").
+        let d = harness_registry::resolve("copilot").unwrap();
+        assert_eq!(
+            render(&d.resume, &Holes::default()),
+            "exec copilot --allow-all --no-ask-user"
+        );
+    }
+
+    #[test]
+    fn opencode_resume_stays_a_blind_continue_byte_for_byte() {
+        // The #614 verb-as-property refactor keeps opencode's resume byte-identical:
+        // `resume_blind` fills `{resume}` with `--continue` (opencode cannot pin an
+        // identity, so it only ever blind-continues).
+        let d = harness_registry::resolve("opencode").unwrap();
+        let holes = Holes {
+            resume: "--continue".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(render(&d.resume, &holes), "exec opencode --auto --continue");
+    }
+
+    // -----------------------------------------------------------------------
     // The rendering rule itself, independent of any descriptor.
     // -----------------------------------------------------------------------
 

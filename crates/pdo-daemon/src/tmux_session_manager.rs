@@ -5,6 +5,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -562,16 +563,20 @@ fn build_resume_script(
     sandbox: Option<&SandboxWrap<'_>>,
     settings_path: Option<&Path>,
 ) -> String {
-    // #473/ADR-0045: the resume *selector* is the one thing the pure hole-drop
-    // rule cannot express (emit `--continue` precisely *when* the id is empty), so
-    // it is computed here — "reprendre par identité ou en aveugle" stays in code.
-    // `--resume <uuid>` targets THIS node's transcript by identity; a row with no
-    // recorded id (pre-#473, or a harness like `opencode` that can't pin one)
-    // falls back to blind `--continue`. Both delivered harnesses blind-continue
-    // with `--continue`.
+    // #473/#614: the resume *selector* is the one thing the pure hole-drop rule
+    // cannot express (emit the blind verb precisely *when* the id is empty), so it
+    // is computed here — but the VERBS are now the descriptor's property, not
+    // constants (#614). `<resume_by_id> '<uuid>'` targets THIS node's transcript by
+    // identity; a row with no recorded id (pre-#473, or a harness like `opencode`
+    // that can't pin one) falls back to the harness's blind verb. A harness that
+    // declares neither (an empty `resume_by_id`/`resume_blind` for the case at
+    // hand) renders no resume flag: `copilot` resumes by identity or not at all,
+    // never a blind continue (AC).
     let resume_selector = match session_id {
-        Some(s) if !s.is_empty() => format!("--resume {}", sh_single_quote(s)),
-        _ => "--continue".to_string(),
+        Some(s) if !s.is_empty() && !descriptor.resume_by_id.is_empty() => {
+            format!("{} {}", descriptor.resume_by_id, sh_single_quote(s))
+        }
+        _ => descriptor.resume_blind.clone(),
     };
     let quote_opt = |v: Option<&str>| {
         v.filter(|s| !s.is_empty())
@@ -1213,12 +1218,93 @@ pub fn default_harness_with(stored: Option<String>) -> Option<String> {
         .or_else(env_default_harness)
 }
 
-/// Whether `binary` resolves on the current `PATH` — the fail-fast spawn check
-/// (#550, AC #10). A name with a `/` is checked directly; a bare name is searched
-/// across `$PATH`. **Never executes** the binary (a probe run could hang a
-/// resident harness), and lives here (not in the pure `harness_registry`) because
-/// it reads `$PATH`. A missing binary makes the spawn fail *before* any session
-/// or start event exists (ADR-0037).
+/// The `PATH` the daemon searches for harness binaries (ADR-0055).
+///
+/// A daemon launched as a service inherits the **unit's** `PATH`, which misses the
+/// entries a package manager (Homebrew, nvm, a user prefix) adds only to an
+/// **interactive** shell — so a harness the user installed and can run by hand is
+/// invisible to the service, and the spawn fails saying an installed binary does
+/// not exist. This resolves the binary in the `PATH` the user has *when they type
+/// the command*: the interactive shell's `PATH`, unioned with the process `PATH`
+/// so nothing the service already saw is lost. Measured (ADR-0055): a *login*
+/// shell does not suffice — package managers add their paths from the
+/// **interactive** rc files — so the probe sources an interactive shell (`-i`).
+///
+/// Resolved **once** and cached for the daemon's lifetime: the cost of sourcing
+/// the user's shell config is paid at the first probe, not per spawn, and a `PATH`
+/// the user changes afterwards is seen only on the next daemon start (ADR-0055
+/// limits, same freshness contract as the model catalogue, ADR-0053). The env
+/// override `PDO_HARNESS_PROBE_PATH` short-circuits the shell probe (ops / tests).
+pub fn harness_probe_path() -> String {
+    static PROBE_PATH: OnceLock<String> = OnceLock::new();
+    PROBE_PATH.get_or_init(resolve_harness_probe_path).clone()
+}
+
+/// Compute the probe `PATH` (uncached): the interactive shell's `PATH` unioned
+/// with the process `PATH`. See [`harness_probe_path`].
+fn resolve_harness_probe_path() -> String {
+    // An explicit override wins outright — the deterministic seam a test or an
+    // operator uses instead of the ambient shell.
+    if let Some(p) = std::env::var_os("PDO_HARNESS_PROBE_PATH") {
+        if !p.is_empty() {
+            return p.to_string_lossy().into_owned();
+        }
+    }
+    let process_path = std::env::var_os("PATH")
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    match interactive_path_via_shell() {
+        Some(interactive) => union_paths(&interactive, &process_path),
+        None => process_path,
+    }
+}
+
+/// The user's `PATH` as an **interactive** shell reports it, or `None` when the
+/// probe fails (no `$SHELL`, the shell errors, empty output). Runs `$SHELL -i -c`
+/// so the interactive rc files — where version and package managers add their
+/// paths — are sourced (a *login* shell, `-l`, is not enough; ADR-0055).
+fn interactive_path_via_shell() -> Option<String> {
+    let shell = std::env::var_os("SHELL").filter(|s| !s.is_empty())?;
+    // `printf` with no trailing newline, stdout only — job-control chatter an
+    // interactive shell may emit goes to stderr and is ignored.
+    let output = std::process::Command::new(&shell)
+        .arg("-i")
+        .arg("-c")
+        .arg(r#"printf '%s' "$PATH""#)
+        .output()
+        .ok()?;
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!path.is_empty()).then_some(path)
+}
+
+/// Union two `PATH` strings, `first` taking precedence, dropping duplicates and
+/// empty entries while preserving order. Pure — the testable core of the ADR-0055
+/// merge.
+fn union_paths(first: &str, second: &str) -> String {
+    let mut seen = std::collections::HashSet::new();
+    let joined: Vec<String> = std::env::split_paths(first)
+        .chain(std::env::split_paths(second))
+        .filter(|p| !p.as_os_str().is_empty())
+        .filter(|p| seen.insert(p.clone()))
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    joined.join(":")
+}
+
+/// Whether `binary` resolves in `path`. Pure — the testable core of the probe.
+fn path_contains_binary(path: &str, binary: &str) -> bool {
+    std::env::split_paths(path).any(|dir| dir.join(binary).is_file())
+}
+
+/// Whether `binary` resolves on the harness probe `PATH` — the fail-fast spawn
+/// check (#550, AC #10). A name with a `/` is checked directly; a bare name is
+/// searched across [`harness_probe_path`] (the user's interactive `PATH`, ADR-0055
+/// — **not** the service's inherited one). **Never executes** the binary (a probe
+/// run could hang a resident harness), and lives here (not in the pure
+/// `harness_registry`) because it reads the environment. A missing binary makes
+/// the spawn fail *before* any session or start event exists (ADR-0037); the
+/// caller's diagnostic names [`harness_probe_path`] so "not found" cannot read as
+/// "not installed".
 pub fn binary_available(binary: &str) -> bool {
     if binary.is_empty() {
         return false;
@@ -1226,10 +1312,7 @@ pub fn binary_available(binary: &str) -> bool {
     if binary.contains('/') {
         return Path::new(binary).is_file();
     }
-    match std::env::var_os("PATH") {
-        Some(path) => std::env::split_paths(&path).any(|dir| dir.join(binary).is_file()),
-        None => false,
-    }
+    path_contains_binary(&harness_probe_path(), binary)
 }
 
 /// Resolve the model a work node launches with: the node's own `model:`
@@ -2093,9 +2176,10 @@ mod tests {
         assert_eq!(decisions[2].verdict, SweepVerdict::Keep);
     }
 
-    /// #550/AC #10: the fail-fast PATH probe. A bare name absent from `$PATH` is
-    /// unavailable; an empty name is never available; a slash-path is checked as a
-    /// file directly. `sh` is on every CI box, so it stands in for "installed".
+    /// #550/AC #10: the fail-fast PATH probe. A bare name absent from the probe
+    /// `PATH` is unavailable; an empty name is never available; a slash-path is
+    /// checked as a file directly. `sh` is on every CI box (and the process `PATH`
+    /// is unioned into the probe path, ADR-0055), so it stands in for "installed".
     #[test]
     fn binary_available_probes_path_without_executing() {
         assert!(!binary_available(""), "empty name is never available");
@@ -2111,6 +2195,40 @@ mod tests {
             !binary_available("/no/such/absolute/path/binary"),
             "a missing slash-path is unavailable"
         );
+    }
+
+    /// ADR-0055: the pure core of the probe `PATH` search — a directory that holds
+    /// the binary makes it resolvable; one that does not, does not.
+    #[test]
+    fn path_contains_binary_searches_each_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("my-harness");
+        std::fs::write(&bin, b"#!/bin/sh\n").unwrap();
+        let path = format!("/nonexistent-a:{}:/nonexistent-b", dir.path().display());
+        assert!(path_contains_binary(&path, "my-harness"));
+        assert!(!path_contains_binary(&path, "absent-harness"));
+        assert!(
+            !path_contains_binary("/nonexistent-a:/nonexistent-b", "my-harness"),
+            "no entry holds it"
+        );
+    }
+
+    /// ADR-0055: the user's interactive `PATH` is unioned with the process one,
+    /// first wins, duplicates and empty entries dropped, order preserved — so the
+    /// package-manager prefix the service never inherited becomes searchable
+    /// without losing any entry the service already had.
+    #[test]
+    fn union_paths_merges_first_precedence_dedup_order_preserved() {
+        assert_eq!(
+            union_paths("/opt/homebrew/bin:/usr/bin", "/usr/bin:/bin"),
+            "/opt/homebrew/bin:/usr/bin:/bin"
+        );
+        // Empty operands collapse cleanly.
+        assert_eq!(union_paths("", "/usr/bin:/bin"), "/usr/bin:/bin");
+        assert_eq!(union_paths("/usr/bin", ""), "/usr/bin");
+        assert_eq!(union_paths("", ""), "");
+        // A stray empty entry ("::") never becomes a "search the cwd" hole.
+        assert_eq!(union_paths("/a::/b", "/b"), "/a:/b");
     }
 
     #[test]
@@ -3386,6 +3504,52 @@ mod tests {
         );
         // Effort is still re-posed after the resume flag (#424).
         assert!(wrapped.contains("--effort"), "{wrapped}");
+    }
+
+    #[test]
+    fn build_resume_script_takes_the_resume_verb_from_the_descriptor() {
+        // #614: the resume verb is the descriptor's property, not a seam constant.
+        // copilot resumes by identity with ITS `--resume`, and — because its
+        // `resume_blind` is empty — a resume with no id renders NO resume flag,
+        // never a blind `--continue`.
+        let sid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let by_id = build_resume_script(
+            "r1",
+            "solo",
+            1,
+            6172,
+            &crate::harness_registry::copilot(),
+            None,
+            Some(sid),
+            None,
+            None,
+            None,
+        );
+        assert!(
+            by_id.contains(&format!(r"--resume '\''{sid}'\''")),
+            "copilot resumes by identity with its own --resume verb: {by_id}"
+        );
+        assert!(
+            !by_id.contains("--continue"),
+            "copilot never blind-continues: {by_id}"
+        );
+
+        let no_id = build_resume_script(
+            "r1",
+            "solo",
+            1,
+            6172,
+            &crate::harness_registry::copilot(),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        assert!(
+            !no_id.contains("--resume") && !no_id.contains("--continue"),
+            "with no identity copilot renders no resume flag at all (AC): {no_id}"
+        );
     }
 
     #[test]

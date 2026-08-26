@@ -178,16 +178,23 @@ function MarkCompleteVerdict({ verdict }: { verdict: MarkVerdict }) {
 }
 
 // The session is settled — the tmux session is gone, so the terminal WebSocket
-// would attach to a dead session. `{completed, failed, stopped}` is exactly the
-// "settled" tier of `pollInterval` (5s). `stale` is EXCLUDED unless archived:
-// its tmux session is typically still alive and recovery happens *inside* the
-// terminal (nudge / Stop / Retry). An archived run overrides everything (its
-// worktree + session are torn down). An unknown future status falls on the
-// non-terminated (live) side.
+// would attach to a dead session. `{completed, failed, stopped, interrupted}` is
+// exactly the "settled" tier of `pollInterval` (5s). `interrupted` belongs here
+// (#598 / ADR-0049): its tmux session is *definitively* dead (that death is what
+// produced the status), so attaching would only spam "can't find session" — open
+// minimized and prioritise the Outputs, exactly like the other settled states.
+// A Retry revives the session and flips back to split (`onRetryStarted`). `stale`
+// is EXCLUDED unless archived: its tmux session is typically still alive and
+// recovery happens *inside* the terminal (nudge / Stop / Retry). An archived run
+// overrides everything (its worktree + session are torn down). An unknown future
+// status falls on the non-terminated (live) side.
 function nodeSessionEnded(status: NodeStatus, isArchived?: boolean): boolean {
   if (isArchived) return true;
   return (
-    status === "completed" || status === "failed" || status === "stopped"
+    status === "completed" ||
+    status === "failed" ||
+    status === "stopped" ||
+    status === "interrupted"
   );
 }
 
@@ -460,6 +467,42 @@ export default function NodeDetailPanel({
         </div>
       )}
 
+      {/* Interrupted banner — #598 / ADR-0049. An infra incident killed the
+          session (tmux gone, daemon restart, spawn-abort); the work on disk is
+          presumed intact and the run is parked, not failed. The one action that
+          matters here is Reopen: it re-drives the interrupted node (the daemon
+          reopens the run atomically on the node retry). Before this the state
+          was a dead end — the placeholder promised "reopen or retry" but no
+          button delivered it. Mirrors the `stale` banner's shape; the Reopen
+          button shares the toolbar Play's `retry` handler (revives the session,
+          flips the terminal back to split). */}
+      {node.status === "interrupted" && (
+        <div
+          className="flex items-center gap-2 border-b border-st-interrupted/30 bg-st-interrupted-bg px-3 py-2"
+          data-testid="interrupted-banner"
+        >
+          <AlertCircle size={14} className="shrink-0 text-st-interrupted" />
+          <span
+            className="flex-1 text-st-interrupted"
+            style={{ fontSize: "11.5px", fontWeight: 500 }}
+          >
+            Session died{node.failure_reason ? ` — ${node.failure_reason}` : ""} — the
+            work is presumed intact
+          </span>
+          {!isArchived && (
+            <button
+              data-testid="interrupted-reopen-btn"
+              onClick={retry}
+              className="flex cursor-pointer items-center gap-1 rounded border border-st-interrupted/40 bg-st-interrupted/10 px-1.5 py-0.5 text-st-interrupted transition-colors hover:bg-st-interrupted/20"
+              style={{ fontSize: "10.5px", fontWeight: 500 }}
+            >
+              <RotateCcw size={10} />
+              Reopen
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Frontmatter retry pending banner (amber) */}
       {node.status === "running" && (node.frontmatter_retries ?? 0) > 0 && (
         <div
@@ -581,7 +624,13 @@ export default function NodeDetailPanel({
           >
             {/* Actions */}
             <div className="flex flex-col gap-1.5 px-3 py-2">
-              {(node.status === "awaiting_user" || node.status === "running" || node.status === "failed" || node.status === "stale") && !isArchived && (
+              {/* `interrupted` is included (#598 / ADR-0049): an interrupted
+                  interactive node parks the run `awaiting_user`, so the "take the
+                  artifacts as they are" escape must stay reachable — the daemon
+                  embeds the run reopen on `mark_node_done` too, and the output
+                  guard rejects gracefully (rendered at the gesture) if the work
+                  is genuinely incomplete. */}
+              {(node.status === "awaiting_user" || node.status === "running" || node.status === "failed" || node.status === "stale" || node.status === "interrupted") && !isArchived && (
                 <>
                   <button
                     onClick={markComplete}
@@ -800,7 +849,18 @@ function RetryPlayButton({
     );
   }
 
-  if (status === "failed" || status === "stopped" || status === "stale") {
+  // #598 / ADR-0049: `interrupted` joins the "Play" set. The node-level retry
+  // re-drives the interrupted work — the daemon embeds the run reopen atomically
+  // (`node_retry` → `embed_reopen_for_targeted_command`), so the click that used
+  // to hit "resume the run first" now just works. Without this the panel offered
+  // no way out of an interrupted node (issue: an interactive node with a dead
+  // session had no resume affordance).
+  if (
+    status === "failed" ||
+    status === "stopped" ||
+    status === "stale" ||
+    status === "interrupted"
+  ) {
     return (
       <button
         data-testid="play-retry-btn"

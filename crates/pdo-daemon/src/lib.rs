@@ -13596,13 +13596,14 @@ async fn node_retry(
         }
     };
 
-    // Captured BEFORE any invalidation OR re-open so the retry lands on
-    // `current + 1`, not on a reset-to-1 iteration (the #498 branch-collision
-    // trap): both the self-invalidation below and the re-open's interrupted-node
-    // drop remove the node from the projection, so re-deriving the iter afterwards
-    // would read 1.
+    // Captured BEFORE any invalidation OR re-open so the retry's target iteration
+    // is derived from the live lap, not a reset-to-1 iteration (the #498
+    // branch-collision trap): both the self-invalidation below and the re-open's
+    // interrupted-node drop remove the node from the projection, so re-deriving the
+    // iter afterwards would read 1. The loop-aware choice between "re-run the same
+    // lap" and "advance to the next iteration" is made once the pipeline is parsed
+    // (`next_iter`, below); here we only need the pre-invalidation lap index.
     let current_iter = run_state.nodes.get(&node_id).map(|ns| ns.iter).unwrap_or(1);
-    let next_iter = current_iter + 1;
 
     // ── AC7 / ADR-0049: embed the re-open. A retry on a terminal (or
     //    incident-parked) Run re-opens it atomically here, BEFORE the liveness
@@ -13618,8 +13619,11 @@ async fn node_retry(
     // ── HEAD PROBE 1 (#487): run-liveness. The FIRST gesture — a refusal here leaves
     //    ZERO side effects (nothing stopped, nothing invalidated). See the doc above
     //    for why this must precede the invalidations, and why the predicate is
-    //    run-liveness alone rather than a synthetic `NodeStarted`.
-    if let Some(reason) = transition_guard::retry_run_precondition(&run_state, &node_id, next_iter)
+    //    run-liveness alone rather than a synthetic `NodeStarted`. The iter passed
+    //    here feeds the refusal template only (the predicate ignores it, and a refusal
+    //    means nothing spawns), so the pre-parse `current_iter + 1` is fine.
+    if let Some(reason) =
+        transition_guard::retry_run_precondition(&run_state, &node_id, current_iter + 1)
     {
         let refusal = retry_verdict::RetryRefusal::RetryRejected {
             message: reason.to_string(),
@@ -13709,9 +13713,26 @@ async fn node_retry(
         }
     }
 
-    let downstream: Vec<String> = graph_resolver::downstream_subgraph(&pipeline_def, &node_id)
-        .into_iter()
-        .collect();
+    // Retry is loop-aware. A node's `iter` inside a bounded region IS the lap
+    // index, so the recipe splits (see CONTEXT.md "Contrôles de Run"):
+    //  ① iteration — a region member re-runs the SAME lap (`current_iter`), never
+    //     `current_iter + 1`; bumping it would forge a phantom lap and drag the
+    //     region toward its `max_iter`. A plain node still advances to `iter + 1`.
+    //  ② invalidation — the downstream walk skips the region's re-entry (back)
+    //     edges, so it resets only the lap's forward slice (and what genuinely
+    //     leaves the loop), never an earlier member of the same lap whose output
+    //     is already validated.
+    let next_iter = if loop_region::bounded_region_for_member(&pipeline_def, &node_id).is_some() {
+        current_iter
+    } else {
+        current_iter + 1
+    };
+
+    let excluded_edges = loop_region::bounded_reentry_edges(&pipeline_def);
+    let downstream: Vec<String> =
+        graph_resolver::downstream_subgraph_excluding(&pipeline_def, &node_id, &excluded_edges)
+            .into_iter()
+            .collect();
 
     let inv_params = node_primitives::InvalidateNodesParams {
         run_id: &run_id,
@@ -13877,9 +13898,14 @@ async fn node_retry_preview(
     let worktree_dir = worktree_dir_for_run(&repo_root, &run_id);
     let artifacts_dir = worktree_dir.join(".pdo").join("artifacts");
 
-    let mut downstream: Vec<String> = graph_resolver::downstream_subgraph(&pipeline_def, &node_id)
-        .into_iter()
-        .collect();
+    // Mirror `node_retry`'s loop-aware invalidation: the preview must promise
+    // exactly what the retry will reset — the lap's forward slice, not an earlier
+    // same-lap member reached through a region's back-edge.
+    let excluded_edges = loop_region::bounded_reentry_edges(&pipeline_def);
+    let mut downstream: Vec<String> =
+        graph_resolver::downstream_subgraph_excluding(&pipeline_def, &node_id, &excluded_edges)
+            .into_iter()
+            .collect();
     downstream.sort();
 
     let with_artifacts: Vec<&String> = downstream

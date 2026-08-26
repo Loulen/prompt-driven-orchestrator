@@ -5,7 +5,9 @@
 //! coordination sur #487 est explicite là-dessus — les variantes de `RestartVerdict`
 //! sont adossées à la surface *restart* (`SubWorktreeOccupied`, la sonde même-`iter`,
 //! le `session_killed` d'un kill pré-spawn), et *retry* est un autre geste (table-rase :
-//! `stop` + `invalidate_nodes` + spawn à `iter+1`). L'invariant clonable n'est donc pas
+//! `stop` + `invalidate_nodes` + re-spawn — à `iter+1` pour un nœud simple, au **même
+//! `iter`** pour un membre de boucle bornée, dont l'`iter` EST l'index de lap).
+//! L'invariant clonable n'est donc pas
 //! le type mais celui que #489 a épinglé : **un spawn demandé qui n'a pas eu lieu ne se
 //! projette jamais en `2xx`** — une projection totale, variante par variante.
 //!
@@ -23,8 +25,9 @@ use axum::{http::StatusCode, response::IntoResponse, response::Response, Json};
 /// Le verdict d'un `node_retry`. Une variante par sortie observable du handler.
 #[derive(Debug, Clone)]
 pub(crate) enum RetryVerdict {
-    /// Le nœud a été re-spawné à `iter+1` : un `NodeStarted` est au log et une session
-    /// tmux a été lancée (via la primitive de référence `node_spawn::spawn_node`).
+    /// Le nœud a été re-spawné (à `iter+1` pour un nœud simple, au même `iter` pour un
+    /// membre de boucle bornée) : un `NodeStarted` est au log et une session tmux a été
+    /// lancée (via la primitive de référence `node_spawn::spawn_node`).
     Spawned {
         node_id: String,
         iter: i64,

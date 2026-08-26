@@ -218,10 +218,25 @@ async fn run_status(daemon: &TestDaemon, run_id: &str) -> Option<String> {
 ///
 /// Returns on timeout rather than panicking, so the caller's assertion still
 /// produces its own (more specific) message.
-async fn wait_for_marker(path: &std::path::Path, needle: &str) -> String {
+///
+/// Beyond the empty-file race above, there is a *second* one on the write side:
+/// `send-keys` fires the `echo` into the pane, but a freshly opened (or just
+/// respawned) interactive bash may not have reached its input read loop yet. On a
+/// loaded machine the keystrokes are dropped before bash consumes them — the
+/// command never runs, and polling content forever reads nothing. So re-send the
+/// command each iteration: it is `echo … > file`, idempotent, so a later send
+/// lands the instant bash is ready, and the marker's final content is unchanged.
+async fn wait_for_marker(
+    socket: &str,
+    session: &str,
+    command: &str,
+    path: &std::path::Path,
+    needle: &str,
+) -> String {
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     let mut last = String::new();
     while std::time::Instant::now() < deadline {
+        pdo_daemon::tmux_session_manager::send_keys(socket, session, command);
         last = std::fs::read_to_string(path).unwrap_or_default();
         if last.contains(needle) {
             break;
@@ -362,30 +377,34 @@ async fn shell_runs_real_bash_in_pipeline_worktree() {
 
     // A real bash — not the `sleep 600` test override — in the pipeline worktree.
     // Prove cwd + writability, and that the env-safety export is inherited.
-    pdo_daemon::tmux_session_manager::send_keys(
-        &socket,
-        &session,
-        "echo PDO_OK > fp316-marker.txt",
-    );
-    pdo_daemon::tmux_session_manager::send_keys(
-        &socket,
-        &session,
-        "echo \"$CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC\" > env-marker.txt",
-    );
-
     let worktree = worktree_path(&daemon, &run_id);
     let marker = worktree.join("fp316-marker.txt");
     let env_marker = worktree.join("env-marker.txt");
 
     // Poll for the side effect (interactive bash + send-keys is async), on the
-    // CONTENT rather than on the file existing — see `wait_for_marker`.
-    let got = wait_for_marker(&marker, "PDO_OK").await;
+    // CONTENT rather than on the file existing, re-sending the (idempotent) echo
+    // until bash is ready to run it — see `wait_for_marker`.
+    let got = wait_for_marker(
+        &socket,
+        &session,
+        "echo PDO_OK > fp316-marker.txt",
+        &marker,
+        "PDO_OK",
+    )
+    .await;
     assert!(
         got.contains("PDO_OK"),
         "marker at {} must hold PDO_OK — proves cwd = worktree and real bash; got {got:?}",
         marker.display()
     );
-    let env_got = wait_for_marker(&env_marker, "1").await;
+    let env_got = wait_for_marker(
+        &socket,
+        &session,
+        "echo \"$CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC\" > env-marker.txt",
+        &env_marker,
+        "1",
+    )
+    .await;
     assert_eq!(
         env_got.trim(),
         "1",
@@ -744,14 +763,17 @@ async fn shell_survives_eof_and_exit() {
     );
 
     // ...and a fresh, usable bash must have taken its place: prove it by writing
-    // a marker from the respawned shell into the pipeline worktree.
-    pdo_daemon::tmux_session_manager::send_keys(
+    // a marker from the respawned shell into the pipeline worktree. Re-send the
+    // (idempotent) echo until the respawned bash is ready — see `wait_for_marker`.
+    let marker = worktree_path(&daemon, &run_id).join("respawn-marker.txt");
+    let got = wait_for_marker(
         &socket,
         &session,
         "echo RESPAWN_OK > respawn-marker.txt",
-    );
-    let marker = worktree_path(&daemon, &run_id).join("respawn-marker.txt");
-    let got = wait_for_marker(&marker, "RESPAWN_OK").await;
+        &marker,
+        "RESPAWN_OK",
+    )
+    .await;
     assert!(
         got.contains("RESPAWN_OK"),
         "respawned shell must be usable — marker at {} never held RESPAWN_OK; got {got:?}",

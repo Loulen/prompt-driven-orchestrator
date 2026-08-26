@@ -85,6 +85,22 @@ impl HarnessDescriptor {
         !self.resume.is_empty()
     }
 
+    /// Whether the templates carry a `{settings}` hole — i.e. this harness accepts
+    /// an injected settings file (the turn-end `Stop` hook substrate, #433/ADR-0043).
+    ///
+    /// #613/ADR-0051 (correctif 8): PDO writes the claude-format settings file
+    /// **only** for a harness that has this hole. `opencode` has none (its template
+    /// carries no `{settings}` token), so a node on it gets no stray settings file
+    /// beside its prompt — "the absence is said, never supplied". Checks both
+    /// templates so a harness that resumes but does not launch with settings (or the
+    /// reverse) is still handled at the matching seam.
+    pub fn has_settings_hole(&self) -> bool {
+        self.launch
+            .iter()
+            .chain(self.resume.iter())
+            .any(|t| t.contains("{settings}"))
+    }
+
     /// Whether the LAUNCH template pins a session identity (`{session_id}`).
     ///
     /// `opencode` cannot (measured: launching with a fresh id answers "Session not
@@ -660,6 +676,10 @@ mod tests {
         assert!(d.pins_session_id(), "claude pins --session-id");
         assert!(d.has_effort_hole(), "claude has an effort axis");
         assert!(d.can_resume(), "claude resumes by --resume/--continue");
+        assert!(
+            d.has_settings_hole(),
+            "claude accepts an injected settings file (the Stop-hook substrate)"
+        );
     }
 
     #[test]
@@ -675,6 +695,10 @@ mod tests {
         );
         assert!(d.can_resume(), "opencode blind-continues");
         assert!(d.env.is_empty(), "opencode carries no CCR env");
+        assert!(
+            !d.has_settings_hole(),
+            "opencode has no settings hole — PDO writes it no settings file (#613)"
+        );
     }
 
     #[test]

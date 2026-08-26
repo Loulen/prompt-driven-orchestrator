@@ -116,6 +116,29 @@ fn warn_missing_staging_floor_once(run_id: &str, harness: &str) {
     }
 }
 
+/// #613 / ADR-0051 (AC #7): say ONCE per `(run, harness)` that turn-end
+/// auto-completion is enabled but the node's harness has no end-of-turn substrate,
+/// so the setting cannot be honoured for it. The message is the pure
+/// [`crate::harness_probes::turn_end_absence_note`] (unit-tested there); the
+/// process-static dedup keeps a busy scheduler from repeating it. A no-op for
+/// `claude` (which has the substrate) and whenever the setting is off. Without this
+/// the setting was a **silent** no-op on a substrate-less harness — the very thing
+/// this ticket removes.
+fn warn_turn_end_unsupported_once(run_id: &str, harness: &str) {
+    use std::collections::HashSet;
+    use std::sync::Mutex;
+    static SAID: Mutex<Option<HashSet<(String, String)>>> = Mutex::new(None);
+
+    let Some(note) = crate::harness_probes::turn_end_absence_note(harness) else {
+        return; // the harness has a turn-end substrate (claude) — nothing to say
+    };
+    let mut guard = SAID.lock().unwrap_or_else(|e| e.into_inner());
+    let said = guard.get_or_insert_with(HashSet::new);
+    if said.insert((run_id.to_string(), harness.to_string())) {
+        warn!("run {run_id}: {note}");
+    }
+}
+
 /// A collection-region member (ADR-0011 / #269) reads its OWN deposited item:
 /// the fan-out deposits `_item.md` under the entry's artifact dir, one per
 /// lap — there is no separate driver node like the retired ForEach.
@@ -860,6 +883,15 @@ pub(crate) async fn spawn_node(
     // tail, no `claude`). Resolved here, at the spawn edge, so a `PUT /settings`
     // takes effect on the next node with no daemon restart.
     let inject_hook = !is_script && stored_autocomplete_turn_end(deps.db).await;
+    // #613/ADR-0051 (AC #7): the setting is on but this harness has no end-of-turn
+    // substrate ⇒ it will not auto-complete. Say the absence once rather than let
+    // the setting be a silent no-op. `claude` (and a `script` node, which never
+    // arms the hook) say nothing.
+    if inject_hook {
+        if let Some(r) = &resolved_harness {
+            warn_turn_end_unsupported_once(run_id, &r.harness);
+        }
+    }
     if let Err(e) = tmux_session_manager::spawn(
         &session_name,
         spawn_prompt,

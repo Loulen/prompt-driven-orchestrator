@@ -116,12 +116,14 @@ Features validated while crossing the run screens (grafted from retired per-issu
     ends the node goes **completed on its own** — nobody typed `pdo complete`, and no one attached.
     Then open the Run **Info panel**: the estimated cost is **ventilated by harness**, saying how many
     dollars came through `copilot` and how many through `claude`, and naming `opencode` as the reason
-    the total is not a total. Finally open the finished node's **pane**: PDO serves the snapshot it
-    froze on the way out, and what is on it is **this node's own conversation** — its prompt, its turn,
-    its `❯` prompt back and waiting — not a fresh session and not a shell that exited. The session
-    itself is gone by then, reaped on the terminal transition; that is the one-live-iteration
-    invariant, not a defect. The identity that conversation ran under is the one PDO would resume by
-    (see the probes below).
+    the total is not a total. Finally open the finished node's **pane in the browser** — the terminal
+    inset of its detail panel, restored from the folded bar. It shows the snapshot PDO froze on the way
+    out, labelled as one (`snapshot · session reaped`, and no detach button, because there is nothing
+    left to attach to). What is on it is **this node's own conversation** — its prompt, its turn, its
+    `❯` prompt back and waiting — not a fresh session and not a shell that exited. The session itself
+    is gone by then, reaped on the terminal transition; that is the one-live-iteration invariant, not a
+    defect. The identity that conversation ran under is the one PDO would resume by (see the probes
+    below).
 
 ## Checks
 
@@ -167,9 +169,14 @@ Features validated while crossing the run screens (grafted from retired per-issu
 - Saving writes the pin as the node's own `pin_harness`, and the custom model under the **resolved
   harness's key** (`harnesses: { opencode: { model: … } }`), not as a flat `model:` — the per-harness
   map of #550, since a model means nothing outside a harness.
-- The **effort picker is greyed on the `opencode` node** and live on the `claude` one. That is the
-  descriptor's missing `{effort}` hole surfacing on screen (ADR-0045): an absence *declared*, not a
-  defect, and the cheapest visible proof that the resolved harness reached the UI at all.
+- The **effort picker is greyed on the `opencode` node**, and on the `claude` one it is live **and
+  offers `claude`'s five stops** (`low · medium · high · xhigh · max`), with its model picker offering
+  the aliases the binary names (`fable`, `opus`, `sonnet`). That contrast is the descriptor's missing
+  `{effort}` hole surfacing on screen (ADR-0045) — an absence *declared*, not a defect — and the
+  cheapest visible proof that the resolved harness reached the UI at all. A `claude` picker that is
+  enabled but offers only "Default" is a **finding**: it means the catalogue reader went blind on
+  `claude`'s help (which prints its stops in a bare parenthesis and its aliases in quoted prose,
+  neither of them a `Choices:` list), and both axes fell back to free text.
 - The **effort picker on the `copilot` node offers `copilot`'s own vocabulary** — its seven stops,
   `none · minimal · low · medium · high · xhigh · max`, deduced from the installed binary and served
   (ADR-0053, #616). Anthropic's five stops there mean the served catalogue did not reach the picker.
@@ -196,6 +203,10 @@ Features validated while crossing the run screens (grafted from retired per-issu
   --no-ask-user` is `copilot`'s, so a permission prompt on either is a finding. A **trust dialog** on
   the `copilot` pane is *not* a product finding — it is the unmet prerequisite from the preconditions
   (README § Prerequisites); approve the repo root once and rerun.
+- **The finished node's terminal shows its frozen pane, in the browser.** Restore the folded terminal
+  bar on a completed node: the inset renders the snapshot, says it is one, and offers no detach. Raw
+  tmux error text (`can't find session: pdo-…`) under a `disconnected` badge is a **finding** — it
+  means the panel attached a socket to a session that was reaped, which is the state #617 closed.
 - **The `copilot` node completes without anyone completing it.** It has the end-of-turn substrate
   (its journal's `assistant.turn_end`, ADR-0051), so it is the first harness other than `claude` to
   auto-complete. A `copilot` node still `running` after its pane has visibly finished is a finding,
@@ -257,7 +268,10 @@ Harness three-way pin, read-only probes:
   terminal iteration answers with `source: "snapshot"` and the conversation that ran there; the tmux
   session named for run/node/iter is **gone** (reaped on the terminal transition, every harness). A
   live session outliving a terminal node is the finding — it breaks the one-live-iteration invariant
-  — and so is an empty/`unavailable` pane, which would mean the snapshot was never frozen.
+  — and so is an empty/`unavailable` pane, which would mean the snapshot was never frozen. This probe
+  **confirms** the UI step above; it does not stand in for it. A terminal panel showing `disconnected`
+  over tmux's `can't find session:` while this endpoint answers `snapshot` is the #617 finding: the
+  data reaching the daemon and stopping there.
 - The `copilot` node's completion is **automatic and says so**: its completion event reads as
   runtime-initiated on turn end, not as an agent-typed `pdo complete`. A journal whose tail is a
   `session.error` must **not** have completed the node — `copilot` exits 0 on a hard model failure, so
@@ -353,8 +367,10 @@ Harness three-way pin, read-only probes:
   binary and served (ADR-0053); neither binary enumerates models beside `--model` in `--help`, so both
   pickers degrade to the free-text field and `Custom…` remains the path. For `copilot` that is
   temporary: #629 reads the 26 ids out of `copilot help config`. Until it lands, an empty model offer
-  there is work in flight, not a defect. Anthropic aliases (`sonnet` / `opus` / `haiku`) appearing on
-  an `opencode` or `copilot` node is a **finding**, not the known state it used to be.
+  there is work in flight, not a defect. Anthropic aliases (`fable` / `opus` / `sonnet`) appearing on
+  an `opencode` or `copilot` node is a **finding**, not the known state it used to be — and the
+  `copilot` case is the sharp one, since its blurb *does* quote a single id (`'auto'`). One quoted id
+  is a sentinel, not a catalogue; two make a list.
 - **`opencode`'s residency is conditional, and its exit reads as a session death.** It is resident
   after a *completed* turn (that is its ADR-0045 eligibility), but after the hard provider error above
   it exited on its own a couple of minutes later, which surfaced as `session_died` and reconciled the

@@ -21,7 +21,8 @@
 //!
 //! A binary's `--help` is generated prose, not an API. The parser scans it for the
 //! enumerations a CLI conventionally prints beside `--model` / `--effort`
-//! (`[a|b|c]`, `<a|b|c>`, `Choices: a, b, c`, `One of: …`). It can go **blind** to a
+//! (`[a|b|c]`, `<a|b|c>`, `Choices: a, b, c`, `One of: …`, a bare parenthesised
+//! `(a, b, c)`, a run of quoted ids `'a', 'b', 'c'`). It can go **blind** to a
 //! release that reworks its help — and that is fine: an empty catalogue degrades to
 //! the free-text field, the path that cannot break. The catalogue is a **commodity**
 //! (a convenience for the picker), the free-text escape hatch is the guarantee.
@@ -68,10 +69,17 @@ pub(crate) struct CachedCatalogue {
     pub(crate) catalogue: Catalogue,
 }
 
-/// How far past a `--model` / `--effort` flag token we scan for its enumeration —
-/// one option's blurb, generously. Bounded so a later, unrelated option's list is
-/// never harvested onto the wrong flag.
-const WINDOW: usize = 400;
+/// Hard cap on how far past a `--model` / `--effort` flag token we scan. The real
+/// bound is [`option_block`] — the next option line — so this only keeps a help text
+/// with no option structure at all (one long paragraph) from being scanned whole.
+/// Generous on purpose: `claude` spells its `--model` offer over five wrapped lines.
+const WINDOW: usize = 800;
+
+/// Left margin, in columns, at or below which a line starting with `-` opens a **new
+/// option** rather than continuing the current one. Every CLI in play prints its
+/// options at column 2..=6 and wraps their descriptions far to the right (column 40),
+/// so this separates the two without parsing the layout.
+const OPTION_INDENT: usize = 8;
 
 /// Parse a binary's `--help` text into its offered catalogue. PURE and
 /// harness-agnostic: every CLI in play spells the flags `--model` / `--effort`, and
@@ -91,14 +99,57 @@ pub(crate) fn parse_help(help: &str) -> Catalogue {
 fn extract_choices(help: &str, flags: &[&str]) -> Vec<String> {
     for flag in flags {
         if let Some(after) = find_flag_token(help, flag) {
-            let window = &help[after..(after + WINDOW).min(help.len())];
-            let choices = extract_enum(window);
+            let choices = extract_enum(option_block(help, after));
             if !choices.is_empty() {
                 return choices;
             }
         }
     }
     Vec::new()
+}
+
+/// The scan window for a flag found at byte `from`: **its own option block** —
+/// everything from just past the flag token to the start of the next option line —
+/// capped at [`WINDOW`].
+///
+/// The cap alone is not a bound: `claude` and `copilot` wrap descriptions over four
+/// or five 80-column lines, so 400 characters routinely spill into the *next* two
+/// options. That is how `copilot`'s `--model` (which enumerates nothing) would
+/// harvest `--mouse`'s `(on|off)` and offer "on" and "off" as models. Ending the
+/// window at the next option line keeps every reader inside the blurb that belongs
+/// to the flag, which is the only place an enumeration for it can legitimately sit.
+fn option_block(help: &str, from: usize) -> &str {
+    let end = floor_char_boundary(help, (from + WINDOW).min(help.len()));
+    let capped = &help[from..end];
+    let mut offset = 0;
+    for line in capped.split_inclusive('\n') {
+        // The first line is the flag's own — its leading text is the flag itself,
+        // so the "new option" test would always fire on it.
+        if offset > 0 && opens_a_new_option(line) {
+            return &capped[..offset];
+        }
+        offset += line.len();
+    }
+    capped
+}
+
+/// Whether `line` opens a new option: a `-` at or left of [`OPTION_INDENT`]. A
+/// wrapped description line either does not start with `-` or sits far to the right.
+fn opens_a_new_option(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.starts_with('-') && line.len() - trimmed.len() <= OPTION_INDENT
+}
+
+/// The largest char boundary `<= idx`. `--help` is prose and may carry an em dash;
+/// slicing a byte offset straight into it would panic in the daemon's probe path.
+fn floor_char_boundary(s: &str, mut idx: usize) -> usize {
+    if idx >= s.len() {
+        return s.len();
+    }
+    while !s.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    idx
 }
 
 /// Find `flag` as a **whole token** in `help` and return the byte index just past
@@ -127,24 +178,24 @@ fn find_flag_token(help: &str, flag: &str) -> Option<usize> {
     None
 }
 
-/// Read the first enumeration in `window`: a bracketed pipe list (`[a|b|c]` /
-/// `<a|b|c>`) or a keyword list (`Choices: a, b, c`). Whichever appears first wins,
-/// so a `<model>` placeholder immediately followed by `Choices: …` still resolves.
+/// Read the first enumeration in `window`, whichever convention spells it: a
+/// bracketed pipe list (`[a|b|c]` / `<a|b|c>`), a keyword list (`Choices: a, b, c`),
+/// a bare parenthesised list (`(low, medium, high)`), or a run of quoted ids
+/// (`'fable', 'opus', 'sonnet'`). The **earliest** match wins, so a `<model>`
+/// placeholder immediately followed by `Choices: …` still resolves, and a prose
+/// parenthetical that precedes the real list never displaces it.
 fn extract_enum(window: &str) -> Vec<String> {
-    let bracket = bracketed_pipe_list(window);
-    let keyword = keyword_list(window);
-    match (bracket, keyword) {
-        (Some((bi, bv)), Some((ki, kv))) => {
-            if bi <= ki {
-                bv
-            } else {
-                kv
-            }
-        }
-        (Some((_, bv)), None) => bv,
-        (None, Some((_, kv))) => kv,
-        (None, None) => Vec::new(),
-    }
+    [
+        bracketed_pipe_list(window),
+        keyword_list(window),
+        parenthesised_list(window),
+        quoted_id_run(window),
+    ]
+    .into_iter()
+    .flatten()
+    .min_by_key(|(idx, _)| *idx)
+    .map(|(_, tokens)| tokens)
+    .unwrap_or_default()
 }
 
 /// The first `[…]`/`<…>` group in `window` whose inner text is a pipe-separated
@@ -184,6 +235,11 @@ fn bracketed_pipe_list(window: &str) -> Option<(usize, Vec<String>)> {
 /// `window`, comma- or pipe-separated. Returns the keyword's start offset and the
 /// parsed tokens.
 ///
+/// The words a CLI puts in front of an enumeration. Shared with
+/// [`parenthesised_list`], which stands aside whenever one of these opens the group
+/// — the keyword reader is the one that knows how to bound a wrapped list.
+const KEYS: &[&str] = &["choices:", "one of:", "values:", "allowed:", "supported:"];
+
 /// A flat list ends at its line (`Choices: a, b, c`). But a CLI may **wrap** a long
 /// enumeration across continuation lines *inside a parenthesis* — copilot 1.0.80
 /// prints `… (choices:\n "none", "minimal",\n … "max")`. When the keyword sits inside
@@ -191,7 +247,6 @@ fn bracketed_pipe_list(window: &str) -> Option<(usize, Vec<String>)> {
 /// values are not truncated at the first newline. Stopping at the line there would
 /// yield an empty axis and silently drop copilot's seven effort stops (#616 FP).
 fn keyword_list(window: &str) -> Option<(usize, Vec<String>)> {
-    const KEYS: &[&str] = &["choices:", "one of:", "values:", "allowed:", "supported:"];
     let lower = window.to_ascii_lowercase();
     let mut best: Option<(usize, Vec<String>)> = None;
     for key in KEYS {
@@ -215,6 +270,90 @@ fn keyword_list(window: &str) -> Option<(usize, Vec<String>)> {
         }
     }
     best
+}
+
+/// The first `(…)` group in `window` whose inner text is a comma- or pipe-separated
+/// list of ≥2 plausible tokens, with **no** introducing keyword — `claude`'s form:
+///
+/// ```text
+///   --effort <level>   Effort level for the current session
+///                      (low, medium, high, xhigh, max)
+/// ```
+///
+/// Prose parentheticals are not a hazard: the plausibility filter drops anything
+/// carrying a space, so `(can be used multiple times)` and `(only works with
+/// --print)` yield nothing and the scan moves on to the next group. Groups are
+/// tried in order, so a `(e.g. …)` aside before the real list does not end the hunt.
+///
+/// A group opened by a [`KEYS`] word (`(choices: "none", "minimal", …)`) is **left
+/// to** [`keyword_list`]: reading it here would splice the keyword onto the first
+/// value and silently drop it — which is how copilot's `none` stop went missing.
+fn parenthesised_list(window: &str) -> Option<(usize, Vec<String>)> {
+    let mut from = 0;
+    while let Some(rel_open) = window[from..].find('(') {
+        let open = from + rel_open;
+        // An unclosed `(` ends the hunt: there is no group to read.
+        let close = open + 1 + window[open + 1..].find(')')?;
+        let inner = &window[open + 1..close];
+        let introduced = {
+            let lower = inner.to_ascii_lowercase();
+            KEYS.iter().any(|k| lower.contains(k))
+        };
+        if !introduced {
+            let tokens = split_tokens(inner, &[',', '|']);
+            if tokens.len() >= 2 {
+                return Some((open, tokens));
+            }
+        }
+        from = close + 1;
+    }
+    None
+}
+
+/// A run of ≥2 distinct quoted ids in `window` — `claude`'s `--model` form, where
+/// the offer is spelled as prose around quoted aliases:
+///
+/// ```text
+///   --model <model>   Model for the current session. Provide an alias for the
+///                     latest model (e.g. 'fable', 'opus', or 'sonnet') or a
+///                     model's full name (e.g. 'claude-fable-5').
+/// ```
+///
+/// Reading the prose as a list is what the two structured readers cannot do here:
+/// the commas sit between quoted ids *and* the word "or", so splitting the
+/// parenthetical yields one usable token, not three. Quoting is the signal — the
+/// binary marks each id, and an unquoted word is never harvested. Returns the offset
+/// of the first quoted id, so an enumeration spelled earlier in the block still wins.
+/// Requiring two distinct ids keeps a lone `use 'auto' to …` (copilot 1.0.80) an
+/// absence, which is what the picker must keep degrading on.
+fn quoted_id_run(window: &str) -> Option<(usize, Vec<String>)> {
+    let mut tokens: Vec<String> = Vec::new();
+    let mut first: Option<usize> = None;
+    let mut rest = window;
+    let mut base = 0;
+    while let Some(rel_open) = rest.find(['\'', '"']) {
+        let quote = rest.as_bytes()[rel_open];
+        let inner_start = rel_open + 1;
+        let Some(rel_close) = rest[inner_start..].find(quote as char) else {
+            break;
+        };
+        let close = inner_start + rel_close;
+        let tok = &rest[inner_start..close];
+        if is_plausible_value(tok) {
+            if first.is_none() {
+                first = Some(base + rel_open);
+            }
+            if !tokens.iter().any(|e| e == tok) {
+                tokens.push(tok.to_string());
+            }
+        }
+        base += close + 1;
+        rest = &rest[close + 1..];
+    }
+    match (first, tokens.len()) {
+        (Some(idx), n) if n >= 2 => Some((idx, tokens)),
+        _ => None,
+    }
 }
 
 /// Split `s` on any of `seps`, keep only plausible flag values, de-duplicate
@@ -386,6 +525,115 @@ Options:
         let help = "  --model <m>   Choices: the default model, or something else\n";
         // "the default model" and "or something else" carry spaces ⇒ rejected whole.
         assert!(parse_help(help).models.is_empty());
+    }
+
+    #[test]
+    fn claudes_two_forms_are_read_verbatim_from_its_help() {
+        // #617 FP finding 2: `claude --help` prints neither a bracketed list nor a
+        // `Choices:` keyword — its effort stops sit in a bare parenthesis on the
+        // wrapped line, and its model aliases are quoted inside prose. Both axes came
+        // back empty, so BOTH pickers degraded to free text on a `claude` node while
+        // the binary was plainly enumerating. Verbatim from claude 2.x.
+        let help = "\
+  --debug                               Enable debug mode
+  --effort <level>                      Effort level for the current session
+                                        (low, medium, high, xhigh, max)
+  --environment <environment_id>        Create a new cloud session that runs on
+                                        the given self-hosted environment
+  --model <model>                       Model for the current session. Provide
+                                        an alias for the latest model (e.g.
+                                        'fable', 'opus', or 'sonnet') or a
+                                        model's full name (e.g.
+                                        'claude-fable-5').
+  -n, --name <name>                     Set a display name for this session
+                                        (shown in the prompt box, /resume
+                                        picker, and terminal title)
+";
+        let cat = parse_help(help);
+        assert_eq!(
+            cat.efforts,
+            vec!["low", "medium", "high", "xhigh", "max"],
+            "the parenthesised effort stops must be read"
+        );
+        assert!(cat.has_effort_axis());
+        assert_eq!(
+            cat.models,
+            vec!["fable", "opus", "sonnet"],
+            "the quoted aliases, and nothing the prose merely mentions"
+        );
+    }
+
+    #[test]
+    fn a_neighbouring_options_list_is_not_harvested_onto_a_flag_that_enumerates_none() {
+        // The regression the option-block bound exists to kill: copilot's `--model`
+        // enumerates nothing, and two lines below it `--mouse` prints `(on|off)`.
+        // Scanning a flat character window would offer "on" and "off" as MODELS —
+        // worse than the empty catalogue, because it looks like an answer. Verbatim
+        // from copilot 1.0.80.
+        let help = "\
+  --model <model>                       Set the AI model to use (use 'auto' to
+                                        let Copilot pick automatically)
+  --mouse[=value]                       Enable mouse support in alt screen mode
+                                        (on|off)
+  -n, --name <name>                     Set a name for the new session
+";
+        let cat = parse_help(help);
+        assert!(
+            cat.models.is_empty(),
+            "copilot declares no model offer; the neighbour's (on|off) is not one"
+        );
+    }
+
+    #[test]
+    fn a_bare_parenthesised_list_is_an_enumeration_prose_is_not() {
+        // The parenthesised reader must fire on a list and stay silent on prose —
+        // the plausibility filter is what separates them, so `(can be used multiple
+        // times)` and `(only works with --print)` yield nothing.
+        let listed = "  --effort <level>   Reasoning effort (none, low, high)\n";
+        assert_eq!(parse_help(listed).efforts, vec!["none", "low", "high"]);
+
+        let prose = "\
+  --model <model>    The model to use (can be used multiple times, only works
+                     with --print)
+";
+        assert!(
+            parse_help(prose).models.is_empty(),
+            "a prose parenthetical is not an offer"
+        );
+    }
+
+    #[test]
+    fn a_single_quoted_id_stays_an_absence() {
+        // copilot 1.0.80's `--model` quotes exactly one id (`'auto'`), which is a
+        // sentinel, not a catalogue. One quoted id ⇒ free-text field (#629's ticket
+        // stands): two is the threshold that makes a run a list.
+        let help = "  --model <model>   Set the AI model to use (use 'auto' to let it pick)\n";
+        assert!(parse_help(help).models.is_empty());
+    }
+
+    #[test]
+    fn a_prose_apostrophe_never_becomes_a_model_id() {
+        // `model's` puts a stray quote between the real ids. The span it pairs with
+        // carries spaces, so the plausibility filter drops it — the ids around it
+        // survive untouched.
+        let help = "  --model <m>   Provide 'opus' or 'sonnet', or the model's full name\n";
+        assert_eq!(parse_help(help).models, vec!["opus", "sonnet"]);
+    }
+
+    #[test]
+    fn an_em_dash_in_the_blurb_does_not_panic_the_scan() {
+        // `--help` is prose and carries non-ASCII (copilot's header has an em dash).
+        // Slicing a raw byte offset into it is a panic waiting on a description long
+        // enough to reach the cap — in the daemon's boot probe.
+        let mut prefix = String::from("  --model <m>   Choices: opus, sonnet\n");
+        // Byte offset just past the `--model` token — where the scan window opens.
+        let from = "  --model".len();
+        // Pad so the cap lands on an em dash's *second* byte, which is no boundary.
+        while (from + WINDOW - prefix.len()) % 3 != 1 {
+            prefix.push(' ');
+        }
+        let help = format!("{prefix}{}", "—".repeat(400));
+        assert_eq!(parse_help(&help).models, vec!["opus", "sonnet"]);
     }
 
     #[test]

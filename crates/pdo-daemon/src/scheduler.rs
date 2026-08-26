@@ -6141,10 +6141,7 @@ loops:
     fn tester_verdict(v: &str) -> HashMap<String, HashMap<String, serde_yaml::Value>> {
         let mut fm_by_node = HashMap::new();
         let mut fm = HashMap::new();
-        fm.insert(
-            "Verdict".to_string(),
-            serde_yaml::Value::String(v.into()),
-        );
+        fm.insert("Verdict".to_string(), serde_yaml::Value::String(v.into()));
         fm_by_node.insert("tester".to_string(), fm);
         fm_by_node
     }
@@ -6201,7 +6198,9 @@ loops:
         // that can never spawn. Here `abort` (a `Verdict == Reject` sibling exit)
         // is that dead branch; `ship` (the taken exit) is left alone.
         let mut pipeline = review_loop_with_ship(5);
-        pipeline.nodes.push(make_node("abort", &["review"], &["out"]));
+        pipeline
+            .nodes
+            .push(make_node("abort", &["review"], &["out"]));
         pipeline.edges.push(make_cond_edge(
             "tester",
             "review",

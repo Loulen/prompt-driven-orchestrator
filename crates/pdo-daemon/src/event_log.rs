@@ -1122,9 +1122,10 @@ impl RunState {
     /// node-done sites) — `RunState` owns neither, so it receives the ids.
     pub fn all_nodes_completed(&self, node_ids: &[String]) -> bool {
         !node_ids.is_empty()
-            && node_ids
-                .iter()
-                .all(|id| self.node_status(id).is_some_and(|s| s.is_settled_complete()))
+            && node_ids.iter().all(|id| {
+                self.node_status(id)
+                    .is_some_and(|s| s.is_settled_complete())
+            })
     }
 
     /// Why this Run is **not schedulable yet** because its sandbox is still being

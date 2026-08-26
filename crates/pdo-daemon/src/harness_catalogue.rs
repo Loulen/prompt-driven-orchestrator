@@ -178,8 +178,15 @@ fn bracketed_pipe_list(window: &str) -> Option<(usize, Vec<String>)> {
 }
 
 /// The first `Choices:` / `One of:` / `Values:` / `Allowed:` / `Supported:` list in
-/// `window`, comma- or pipe-separated, read to end of line. Returns the keyword's
-/// start offset and the parsed tokens.
+/// `window`, comma- or pipe-separated. Returns the keyword's start offset and the
+/// parsed tokens.
+///
+/// A flat list ends at its line (`Choices: a, b, c`). But a CLI may **wrap** a long
+/// enumeration across continuation lines *inside a parenthesis* — copilot 1.0.80
+/// prints `… (choices:\n "none", "minimal",\n … "max")`. When the keyword sits inside
+/// an unclosed `(`, the list is read to the matching `)` instead, so the wrapped
+/// values are not truncated at the first newline. Stopping at the line there would
+/// yield an empty axis and silently drop copilot's seven effort stops (#616 FP).
 fn keyword_list(window: &str) -> Option<(usize, Vec<String>)> {
     const KEYS: &[&str] = &["choices:", "one of:", "values:", "allowed:", "supported:"];
     let lower = window.to_ascii_lowercase();
@@ -187,11 +194,17 @@ fn keyword_list(window: &str) -> Option<(usize, Vec<String>)> {
     for key in KEYS {
         if let Some(idx) = lower.find(key) {
             let start = idx + key.len();
-            let line_end = window[start..]
-                .find('\n')
+            // Is the keyword inside an unclosed parenthesis? Then the enumeration may
+            // wrap across lines; read to the closing `)`. Otherwise it is a flat list
+            // that ends at its line.
+            let before = &window[..idx];
+            let inside_paren = before.matches('(').count() > before.matches(')').count();
+            let bound = if inside_paren { ')' } else { '\n' };
+            let seg_end = window[start..]
+                .find(bound)
                 .map(|r| start + r)
                 .unwrap_or(window.len());
-            let segment = &window[start..line_end];
+            let segment = &window[start..seg_end];
             let tokens = split_tokens(segment, &[',', '|']);
             if tokens.len() >= 2 && best.as_ref().is_none_or(|(bi, _)| idx < *bi) {
                 best = Some((idx, tokens));
@@ -294,6 +307,43 @@ Options:
             cat.efforts,
             vec!["default", "min", "low", "medium", "high", "max", "ultra"]
         );
+    }
+
+    #[test]
+    fn wrapped_parenthesised_choices_read_across_continuation_lines() {
+        // copilot 1.0.80 verbatim: the effort keyword sits at end of line, inside an
+        // unclosed `(`, and its values wrap onto continuation lines with quotes. The
+        // reader must follow to the closing `)` — stopping at the first newline gave
+        // an empty axis and dropped all seven stops (#616 FP, the motivating bug).
+        let help = "\
+  --effort, --reasoning-effort <level>  Set the reasoning effort level (choices:
+                                        \"none\", \"minimal\", \"low\", \"medium\",
+                                        \"high\", \"xhigh\", \"max\")
+  --model <model>                       Set the AI model to use (use 'auto' to
+                                        let Copilot pick automatically)
+";
+        let cat = parse_help(help);
+        assert_eq!(
+            cat.efforts,
+            vec!["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+            "the seven wrapped effort stops must all be read"
+        );
+        assert!(cat.has_effort_axis());
+        // `--model` enumerates nothing (just `use 'auto'`) ⇒ free-text fallback.
+        assert!(cat.models.is_empty(), "no model enumeration ⇒ declared absence");
+    }
+
+    #[test]
+    fn a_flat_line_list_still_stops_at_its_line() {
+        // The paren branch must not leak: a flat `Choices:` list ends at its line, so
+        // a following flag's own list is never harvested onto this one.
+        let help = "\
+  --model <model>    Choices: sonnet, opus, haiku
+  --effort <level>   One of: low, medium, high
+";
+        let cat = parse_help(help);
+        assert_eq!(cat.models, vec!["sonnet", "opus", "haiku"]);
+        assert_eq!(cat.efforts, vec!["low", "medium", "high"]);
     }
 
     #[test]

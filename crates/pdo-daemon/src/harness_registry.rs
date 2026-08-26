@@ -208,9 +208,11 @@ pub fn opencode() -> HarnessDescriptor {
 /// descriptor: the picker's provenance is decided by name, so a `copilot` declared
 /// on disk would read "From descriptors" and contradict the support table.
 ///
-/// **This slice makes copilot launchable / attachable / resumable — no
-/// capability** (cost, turn-end, transcript land later, ADR-0051). So, like
-/// `opencode`, it is embedded but returns `None` from [`crate::harness_probes`].
+/// **Instrumented since #615** (ADR-0051/0052): `copilot` declares three
+/// capabilities in [`crate::harness_probes`] — a **reported** cost (converted by a
+/// published constant), a transcript resolution (its event journal, by session
+/// identity), and an end-of-turn substrate (the journal's `assistant.turn_end`) —
+/// and declares the other two (usage-limit anchor, staging floor) absent.
 ///
 /// The launch uses copilot's **interactive** mode (resident after the turn —
 /// ADR-0045 §3, the non-interactive `-p` exits at turn end and is ineligible):

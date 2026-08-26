@@ -11,6 +11,7 @@ mod boot_recovery;
 pub(crate) mod completion_refusal;
 #[allow(dead_code)]
 mod condition;
+mod copilot_journal;
 #[allow(dead_code)]
 mod cron_schedule;
 mod edge_router;
@@ -10375,10 +10376,14 @@ async fn get_run(
             // HOST home — prices are an instance concept), while transcripts come
             // from `projects_root` (the #408 seam, which moves for a sandboxed Run).
             let prices = price_table::PriceTable::load(&home_root);
+            // #615: the copilot reported-cost slice reads its session journals from
+            // the host `.copilot/session-state/` (copilot has no staging floor).
+            let copilot_root = sandbox_run::copilot_store_root(&home_root);
             augment_run_state_from_disk(
                 &mut run_state,
                 &events,
                 &projects_root,
+                &copilot_root,
                 &repo_root,
                 &prices,
             );
@@ -10792,6 +10797,9 @@ fn gather_session_death_diagnostics(
         mem_available_kb,
         swap_free_kb,
         correlated_deaths,
+        // #615: filled by `assess_node` after this impure gather, from the harness's
+        // journal (this function does the tmux/proc reads only).
+        harness_error: None,
     }
 }
 
@@ -10975,6 +10983,10 @@ async fn run_stale_detection(state: &Arc<AppState>) {
             &home_root,
             &sandbox_root,
         );
+        // #615: copilot resolves its transcript from its own session-state store
+        // (host `.copilot/session-state/`, no staging floor), not claude's projects
+        // root. Picked per node below by the frozen harness.
+        let copilot_root = sandbox_run::copilot_store_root(&home_root);
 
         let running = stale_detector::running_nodes(&run_state);
         for (node_id, iter) in &running {
@@ -11007,11 +11019,20 @@ async fn run_stale_detection(state: &Arc<AppState>) {
             let node_harness = find_launch_harness(&events, node_id, *iter)
                 .unwrap_or_else(|| harness_registry::CLAUDE.to_string());
 
+            // #615: the transcript store root is the resolved harness's own —
+            // copilot's session-state store, else claude's projects root. The
+            // per-harness `resolve_transcript` (ADR-0051) joins the right leaf.
+            let node_store_root: &Path = if node_harness == harness_registry::COPILOT {
+                &copilot_root
+            } else {
+                &projects_root
+            };
+
             let probes = SweepNodeProbes {
                 socket: &socket,
                 session_name: &session_name,
                 working_dir: &working_dir,
-                projects_root: &projects_root,
+                projects_root: node_store_root,
                 session_id: launch_session_id.as_deref(),
                 harness: &node_harness,
                 pipeline_path: &pipeline_path,
@@ -15745,6 +15766,7 @@ fn augment_run_state_from_disk(
     run_state: &mut event_log::RunState,
     events: &[event_log::Event],
     projects_root: &std::path::Path,
+    copilot_root: &std::path::Path,
     repo_root: &std::path::Path,
     prices: &price_table::PriceTable,
 ) {
@@ -15765,8 +15787,14 @@ fn augment_run_state_from_disk(
     // `CostStat` (never `$0`); otherwise it is exactly `compute_run_cost`. Needs the
     // raw events for the frozen-at-spawn harnesses (`RunState` alone does not carry
     // them per node).
-    run_state.cost =
-        run_cost::run_cost_or_absence(events, projects_root, repo_root, &run_state.run_id, prices);
+    run_state.cost = run_cost::run_cost_or_absence(
+        events,
+        projects_root,
+        copilot_root,
+        repo_root,
+        &run_state.run_id,
+        prices,
+    );
 
     let yaml_path = run_scoped_pipeline_path(repo_root, &run_state.run_id);
     let Ok(yaml) = std::fs::read_to_string(&yaml_path) else {

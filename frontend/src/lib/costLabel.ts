@@ -7,6 +7,8 @@
 // The vocabulary lives here ONCE so the per-run row and the charts stay
 // byte-identical.
 
+import type { HarnessCost } from "../types";
+
 /** Adaptive precision: sub-dollar estimates show 4 decimals, else 2 (#272). */
 export function costPrecision(usd: number): number {
   return usd < 1 ? 4 : 2;
@@ -15,6 +17,32 @@ export function costPrecision(usd: number): number {
 /** Base note framing any cost figure as an estimate (matches `/estimate/i`). */
 export const COST_ESTIMATE_NOTE =
   "Estimate from local Claude Code token usage × public list prices — not an invoice.";
+
+/**
+ * Note framing a **reported** cost slice (#615, ADR-0052): the harness counted it
+ * in its own billing unit and PDO converted it by a published constant. Deliberately
+ * NOT the Claude-Code estimate wording — a reported figure is not one, and the AC is
+ * that "estimate from Claude Code transcripts" shows only under a cost that is one.
+ */
+export const COST_REPORTED_NOTE =
+  "Reported by the harness in its own billing unit, converted by a published constant — not re-derived from tokens.";
+
+/** A per-harness slice ready to render (#615): its harness, dollar text, and form. */
+export interface CostVentilationSlice {
+  harness: string;
+  text: string;
+  form: "derived" | "reported";
+}
+
+/** The `via` sentence for a harness slice, form-aware — the Claude-Code estimate
+ *  wording appears only under a derived slice, never a reported one. */
+function ventilationSentence(h: HarnessCost): string {
+  const amount = `~$${h.usd.toFixed(costPrecision(h.usd))} via \`${h.harness}\``;
+  if (h.form === "reported") return `${amount} (reported). ${COST_REPORTED_NOTE}`;
+  const lb =
+    h.partial ? lowerBoundClause(h.unpriced_models) : "";
+  return `${amount} (derived). ${COST_ESTIMATE_NOTE}${lb}`;
+}
 
 /** Generic lower-bound clause, used only when the excluded model's name is not
  *  available (matches `/lower bound/i`). The named form (#425) is preferred. */
@@ -59,18 +87,27 @@ export interface CostLabel {
   dagger: boolean;
   /** Full tooltip string. */
   title: string;
+  /** Per-harness breakdown to render beside the total (#615), when the Run is
+   *  ventilated (mixed harness, or a single non-claude harness). Empty otherwise. */
+  ventilation?: CostVentilationSlice[];
 }
 
 /**
  * Format a single run's estimated cost (#272): `~$X` at adaptive precision, with
  * a `†` marker and a "lower bound" note when the estimate excluded an unpriced
  * model — naming which model(s) when known (#425).
+ *
+ * `byHarness` (#615, ADR-0052): when present, the total is **ventilated by
+ * harness** — the tooltip says each slice with its own form (a derived claude
+ * estimate vs a reported copilot figure), and `ventilation` carries the breakdown
+ * for the row to render. Absent/empty ⇒ the pre-#615 single-figure behaviour.
  */
 export function formatEstCost(
   usd: number,
   partial: boolean,
   unpricedModels: string[] = [],
   uncostedHarnesses: string[] = [],
+  byHarness: HarnessCost[] = [],
 ): CostLabel {
   // #553: a harness with no cost source makes the Run's cost not honestly
   // summable — show "—" with a reason naming the harness, never a $ figure and
@@ -84,8 +121,30 @@ export function formatEstCost(
       title: COST_ESTIMATE_NOTE + uncostedClause(uncostedHarnesses),
     };
   }
+
+  const text = `~$${usd.toFixed(costPrecision(usd))}`;
+
+  // #615: a ventilated Run (mixed, or a single non-claude harness) says itself per
+  // harness. The dagger reflects any DERIVED slice that is a lower bound; a reported
+  // slice never contributes one. The tooltip names each slice with its own form, so
+  // the Claude-Code estimate wording appears only under a derived slice.
+  if (byHarness.length > 0) {
+    const dagger = byHarness.some((h) => h.form === "derived" && h.partial);
+    const title = byHarness.map(ventilationSentence).join(" ");
+    return {
+      text,
+      dagger,
+      title,
+      ventilation: byHarness.map((h) => ({
+        harness: h.harness,
+        text: `~$${h.usd.toFixed(costPrecision(h.usd))}`,
+        form: h.form,
+      })),
+    };
+  }
+
   return {
-    text: `~$${usd.toFixed(costPrecision(usd))}`,
+    text,
     dagger: partial,
     title: COST_ESTIMATE_NOTE + (partial ? lowerBoundClause(unpricedModels) : ""),
   };

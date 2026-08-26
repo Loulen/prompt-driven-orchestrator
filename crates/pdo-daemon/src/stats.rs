@@ -309,6 +309,12 @@ impl CostAcc {
     fn add(&mut self, cost: &Option<CostStat>) {
         self.runs += 1;
         match cost {
+            // #615 (*correctif 5*): a Run whose cost is **unavailable** (a node ran
+            // on a harness with no cost source, e.g. opencode) is excluded from the
+            // dollar sum exactly like a no-transcript Run — never folded in as a
+            // silent $0. The Run line shows "—"; the aggregate excludes it too, so
+            // the two never disagree.
+            Some(c) if !c.uncosted_harnesses.is_empty() => self.null_count += 1,
             Some(c) => {
                 self.usd += c.usd;
                 if c.partial {
@@ -512,9 +518,46 @@ pub(crate) async fn stats_cost(
             });
         let projects_root =
             crate::sandbox_run::transcripts_root(sandboxed, &run_id, &home_root, &sandbox_root);
+        // #615: the copilot reported-cost slice reads its journals from the host
+        // `.copilot/session-state/` (copilot has no staging floor).
+        let copilot_root = crate::sandbox_run::copilot_store_root(&home_root);
 
-        let cost =
-            crate::run_cost::compute_run_cost_cached(&projects_root, &repo_root, &run_id, &prices);
+        // *correctif 5*: fold the Run's cost through the SAME honest, ventilated path
+        // as the Run line (`run_cost_or_absence_cached`), not the raw claude aggregate
+        // — so a mixed Run never reads "—" on one surface and a figure on the other.
+        // That path needs the frozen-at-spawn harnesses and the copilot session ids,
+        // which live in the Run's `node_started` events. Cheap: id/iter/payload only.
+        let node_started = sqlx::query_as::<_, (Option<String>, Option<i64>, Option<String>)>(
+            "SELECT node_id, iter, payload FROM events \
+             WHERE run_id = ? AND kind = 'node_started'",
+        )
+        .bind(&run_id)
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
+        let events: Vec<crate::event_log::Event> = node_started
+            .into_iter()
+            .map(|(node_id, iter, payload)| crate::event_log::Event {
+                id: None,
+                run_id: run_id.clone(),
+                ts: String::new(),
+                kind: crate::event_log::EventKind::NodeStarted,
+                node_id,
+                iter,
+                payload: payload
+                    .as_deref()
+                    .and_then(|p| serde_json::from_str(p).ok()),
+            })
+            .collect();
+
+        let cost = crate::run_cost::run_cost_or_absence_cached(
+            &events,
+            &projects_root,
+            &copilot_root,
+            &repo_root,
+            &run_id,
+            &prices,
+        );
         cost_rows.push(CostRow {
             bucket,
             pipeline,
@@ -777,6 +820,7 @@ mod tests {
                     partial: false,
                     unpriced_models: vec![],
                     uncosted_harnesses: vec![],
+                    by_harness: vec![],
                 }),
             },
             CostRow {
@@ -788,6 +832,7 @@ mod tests {
                     partial: true,
                     unpriced_models: vec!["claude-sonnet-5".into()],
                     uncosted_harnesses: vec![],
+                    by_harness: vec![],
                 }),
             },
             CostRow {
@@ -864,6 +909,7 @@ mod tests {
                     partial: true,
                     unpriced_models: vec!["claude-sonnet-5".into(), "claude-fable-5".into()],
                     uncosted_harnesses: vec![],
+                    by_harness: vec![],
                 }),
             },
             CostRow {
@@ -875,6 +921,7 @@ mod tests {
                     partial: true,
                     unpriced_models: vec!["claude-fable-5".into(), "claude-opus-5".into()],
                     uncosted_harnesses: vec![],
+                    by_harness: vec![],
                 }),
             },
         ];

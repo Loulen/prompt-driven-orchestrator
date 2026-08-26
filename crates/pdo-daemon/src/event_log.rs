@@ -654,6 +654,51 @@ pub struct CostStat {
     /// meant before this field existed.
     #[serde(default)]
     pub uncosted_harnesses: Vec<String>,
+    /// The Run's cost **ventilated by harness** (#615, ADR-0052 §3). A mixed Run's
+    /// total stays summable in dollars, but it *says* itself per harness — "X via
+    /// `copilot`, Y via `claude`" — because the two halves have neither the same
+    /// nature (reported vs derived) nor the same precision. One entry per harness
+    /// that contributed a cost, in name order. Empty on a Run with no costable
+    /// session (so `usd` is 0 and there is nothing to ventilate), and — for
+    /// backward compatibility — absent on a pre-#615 serialized `CostStat`, which
+    /// the surfaces render exactly as they did before (a single derived figure).
+    #[serde(default)]
+    pub by_harness: Vec<HarnessCost>,
+}
+
+/// Which of the two legitimate cost forms a per-harness slice is (ADR-0052 §1) —
+/// so a surface can say *only under a derived figure* that it is an estimate from
+/// Claude Code transcripts, and never under a reported one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CostForm {
+    /// PDO re-derived it from tokens × the price table (`claude`). An estimate.
+    Derived,
+    /// The harness counted it and PDO converted by a published constant
+    /// (`copilot`). Not re-derived from tokens (ADR-0052 §2).
+    Reported,
+}
+
+/// One harness's slice of a Run's cost (#615, ADR-0052 §3). Additive with the
+/// others in dollars (`CostStat.usd` is their sum), but tagged with its `form` so
+/// the surface never mislabels a reported figure as a Claude-Code estimate.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HarnessCost {
+    /// The harness name (`claude`, `copilot`).
+    pub harness: String,
+    /// This harness's cost in USD.
+    pub usd: f64,
+    /// Derived or reported (drives the honesty label).
+    pub form: CostForm,
+    /// True when this (derived) slice excluded an unpriced model — a lower bound.
+    /// Always `false` for a reported slice (it never consults the price table, so
+    /// it can never be a lower bound). Empty `unpriced_models` ⟺ `!partial`.
+    #[serde(default)]
+    pub partial: bool,
+    /// The unpriced model family keys of this (derived) slice; always empty for a
+    /// reported one.
+    #[serde(default)]
+    pub unpriced_models: Vec<String>,
 }
 
 /// A secondary repository pinned to a Run (#465, ADR-0042).

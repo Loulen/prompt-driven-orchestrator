@@ -194,6 +194,26 @@ pub(crate) fn reentry_edge_indices(pipeline: &PipelineDef, region: &LoopRegion) 
         .collect()
 }
 
+/// The global indices (into `pipeline.edges`) of every **bounded** region's
+/// re-entry (back) edges — the member → region-entry edges that request another
+/// lap. Aggregates [`reentry_edge_indices`] across all bounded regions.
+///
+/// The retry-invalidation walk excludes these so it never steps backward into an
+/// earlier member of the *same* lap: from a member, the back-edge leads to the
+/// region entry and, through it, to every earlier member of the running lap —
+/// already-validated work that must survive a retry (only the forward slice,
+/// in-lap and beyond the exit, is genuinely downstream). Following the back-edge
+/// is a no-op for a retry that starts at or above the entry (the entry is reached
+/// forward regardless), so this exclusion is always safe to apply.
+pub(crate) fn bounded_reentry_edges(pipeline: &PipelineDef) -> std::collections::HashSet<usize> {
+    pipeline
+        .loops
+        .iter()
+        .filter(|r| r.kind == LoopKind::Bounded)
+        .flat_map(|r| reentry_edge_indices(pipeline, r))
+        .collect()
+}
+
 /// True when a bounded region's members still close a cycle under the
 /// pipeline's *current* edges (ADR-0011 / #150). A region "closes a cycle" when
 /// `detect_cycles` finds a cycle whose members are all members of the region —
@@ -665,6 +685,24 @@ mod tests {
             resolve_lap(&pipeline, &region, &runtime, 1),
             LapDecision::Exhausted
         );
+    }
+
+    #[test]
+    fn bounded_reentry_edges_collects_back_edges_of_declared_regions() {
+        // The retry-invalidation exclusion set: every bounded region's back-edge.
+        // The bare review loop has one (rev -> impl, index 2); a collection region
+        // contributes none (no topological back-edge).
+        let (mut pipeline, region) = review_loop();
+        pipeline.loops = vec![region];
+        let excluded = bounded_reentry_edges(&pipeline);
+        assert_eq!(excluded, std::collections::HashSet::from([2usize]));
+    }
+
+    #[test]
+    fn bounded_reentry_edges_is_empty_without_a_bounded_region() {
+        // No `loops:` entry (region not yet materialized) → nothing to exclude.
+        let (pipeline, _region) = review_loop();
+        assert!(bounded_reentry_edges(&pipeline).is_empty());
     }
 
     #[test]

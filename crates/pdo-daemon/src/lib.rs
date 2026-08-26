@@ -8761,6 +8761,24 @@ async fn docker_probe_cached(state: &AppState) -> sandbox_image::DockerProbe {
 /// per harness per window.
 const CATALOGUE_VERSION_TTL: Duration = Duration::from_secs(60);
 
+/// Env var that overrides [`CATALOGUE_VERSION_TTL`], in milliseconds. Exists so a
+/// test can prove the re-probe-on-version-change contract (ADR-0053 §3) in
+/// milliseconds instead of waiting out the production minute; ops may also shorten it
+/// on a machine whose harnesses auto-update aggressively. An unparseable value is
+/// ignored — a typo must not disable the cache.
+pub const CATALOGUE_VERSION_TTL_MS_ENV: &str = "PDO_CATALOGUE_VERSION_TTL_MS";
+
+/// The effective version re-check window: [`CATALOGUE_VERSION_TTL_MS_ENV`] if it
+/// parses, else [`CATALOGUE_VERSION_TTL`]. Read per call (not cached in a `OnceLock`)
+/// so a test that sets the var after the daemon booted still sees it.
+fn catalogue_version_ttl() -> Duration {
+    std::env::var(CATALOGUE_VERSION_TTL_MS_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(CATALOGUE_VERSION_TTL)
+}
+
 /// Return `harness`'s offered catalogue (models + efforts + the version they were
 /// read from), from the cache when fresh, else by (re)probing `binary` (#616,
 /// ADR-0053 §3). The freshness protocol, per harness:
@@ -8783,7 +8801,7 @@ async fn catalogue_for(
 ) -> harness_catalogue::CachedCatalogue {
     let mut guard = state.harness_catalogue_cache.lock().await;
     if let Some((at, cached)) = guard.get(harness) {
-        if at.elapsed() < CATALOGUE_VERSION_TTL {
+        if at.elapsed() < catalogue_version_ttl() {
             return cached.clone();
         }
     }

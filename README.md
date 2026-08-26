@@ -39,7 +39,7 @@ The binary embeds the whole web UI. The daemon shells out to two tools you insta
 brew install tmux git   # or your system package manager
 ```
 
-Each node drives its agent through a harness of your choice. PDO ships descriptors for `claude` (default) and `opencode`, and the set is pluggable ([ADR-0045](docs/adr/0045-un-harnais-se-declare-par-un-template-d-argv-les-capacites-remplissent-les-trous.md)). You install the harness and its own dependencies. For Claude Code that means the `claude` CLI, Node.js >= 22 for MCP servers, and ripgrep.
+Each node drives its agent through a harness of your choice. PDO ships descriptors for `claude` (the default), `opencode` and `copilot`, and the set is pluggable ([ADR-0045](docs/adr/0045-un-harnais-se-declare-par-un-template-d-argv-les-capacites-remplissent-les-trous.md)). You install the harness and its own dependencies. For Claude Code that means the `claude` CLI, Node.js >= 22 for MCP servers, and ripgrep. What each harness can and cannot do is in [Support](#support); what you have to set up yourself is in [Prerequisites](#prerequisites).
 
 Start the daemon:
 
@@ -66,6 +66,49 @@ PDO_ALLOWED_WS_ORIGINS="https://pdo.example.tld,https://pdo.internal:8443" pdo d
 ```
 
 Set it in the service unit (`pdo service install` runs `pdo daemon` for you; add the variable to that unit's environment). Nothing changes on the client: the UI derives its WebSocket URL from `window.location`, so `wss://` behind TLS already works. This only restores the origin guard for your domain — it adds **neither auth nor TLS**; the proxy must carry authentication. The "Mono-user, local" posture is unchanged.
+
+## Support
+
+<!-- support-table:begin -->
+<!-- Generated from crates/pdo-daemon/src/harness_probes.rs. Do not edit by hand: run `make support-table`. `make check` fails if this block has drifted. -->
+
+PDO ships these harnesses compiled in. **Launching, attaching, resuming and completing a node work on every one of them.** Everything *beyond* launching is a **capability**, written harness by harness — and a harness that lacks one says so rather than quietly doing nothing.
+
+| Capability | What PDO does with it | `claude` 2.1.246 | `opencode` 1.18.18 | `copilot` 1.0.80 |
+| --- | --- | --- | --- | --- |
+| **Cost** | Turn a Run into a dollar figure. Absent ⇒ the Run's cost reads "—" and names the harness, never `$0` | ✅ derived — per-message token usage × the price table | ❌ | ✅ reported — the harness's own billing unit × a published constant |
+| **Transcript** | Find the session's transcript on disk — what cost and end-of-turn read | ✅ the JSONL transcript, keyed by working directory | ❌ | ✅ the event journal, keyed by the session identity PDO imposed |
+| **End of turn** | Complete a node by itself when its turn ends. Absent ⇒ the agent runs `pdo complete`, or you do | ✅ an injected `Stop` hook, plus the transcript tail as the sweep's fallback | ❌ | ✅ the journal's explicit `assistant.turn_end` event |
+| **Usage-limit menu** | Notice a session parked on the harness's usage-limit menu (informational, no recovery) | ✅ the interactive "wait for limit to reset" menu, matched in a pane capture | ❌ | ❌ |
+| **Sandbox staging floor** | Hold a sandboxed session's staged home — credentials, settings, pre-granted trust | ✅ a staged `.claude` home — credentials, org managed settings, pre-granted trust | ❌ | ❌ |
+
+The version beside each harness is the **last validated** one — the build PDO's knowledge of that harness was measured against. It is a documented bound, not a guard: PDO launches on whatever version you have installed and says nothing about the difference. It is written down because the same harness can sit on one machine twice, months apart, with different event schemas and different model lists — and an inventory taken against the wrong install is worse than no inventory.
+
+Why a capability is absent:
+
+| Harness | Capability | Why |
+| --- | --- | --- |
+| `opencode` | Cost | It writes its own per-message cost into a SQLite in four buckets that do not map onto `claude`'s. A cost is code, never a declared mini-language (ADR-0045), and nobody has written that code yet. |
+| `opencode` | Transcript | It migrated its sessions into a SQLite and left months of dead JSON on disk. A store is not a contract, so PDO declares no resolution rather than read zeros off stale files. |
+| `opencode` | End of turn | It exposes no end-of-turn signal PDO can read: its argv template carries no `{settings}` hole for a `Stop` hook, and it has no transcript for a sweep to tail (see above). |
+| `opencode` | Usage-limit menu | The menu wording is `claude`'s. Matching another harness's pane against it would invent a state, and the probe triggers no recovery anyway (ADR-0012). |
+| `opencode` | Sandbox staging floor | Configuring a harness is a documented prerequisite, not PDO code. A sandboxed Run on it holds by your image and the profile's `$HOME` exceptions, and PDO says so once, visibly. |
+| `copilot` | Usage-limit menu | The menu wording is `claude`'s, its own documentation admits the textual anchor drifts each release, and the probe triggers no recovery (ADR-0012). Declaring it absent degrades nothing actionable. |
+| `copilot` | Sandbox staging floor | Configuring a harness is a documented prerequisite, not PDO code (ADR-0031). A sandboxed Run on it holds by your image and the profile's `$HOME` exceptions, and PDO says so once, visibly. |
+
+A harness **you** declare in `~/.pdo/harnesses/descriptors.yaml` carries no code, so it is absent on all five — it still launches, attaches, resumes, and completes when its agent runs `pdo complete`. That is a legitimate way to run a harness, not a broken one.
+
+<!-- support-table:end -->
+
+## Prerequisites
+
+PDO neither embeds nor installs a harness, and it does not configure one for you. Three things are yours to set up. None of them is code PDO could write on your behalf, and none of them is a bug when it is missing — but each one turns into a node that goes nowhere, so they are worth naming.
+
+**Authentication.** Log each harness in yourself, the way its own documentation says. PDO launches the binary and inherits whatever session you already have — it never handles your credentials. **Outside a sandboxed Run, PDO does not stage any harness's home**: sessions load your `~/.claude`, your MCP servers, your `copilot` config, verbatim. Inside a sandbox it stages a home only for a harness that declares a staging floor (see [Support](#support)); for the others, a sandboxed Run holds by your image and the profile's `$HOME` exceptions, and PDO says so once rather than pretending.
+
+**An approved working directory.** A harness may gate its first turn behind a one-time "do you trust this folder?" dialog, and **the autonomy flags do not cover it**. Measured on `copilot`: `--allow-all` and `--no-ask-user` remove every tool, path and URL permission prompt, and the trust dialog still blocks interactive mode — the node sits there alive and mute, which is the least readable failure there is. The fix is one approval, not a flag: **trust cascades to subdirectories**, so trusting your target repository's root once covers every node sub-worktree PDO creates beneath it, for every Run, forever. Do it once, by hand, before the first Run on a new repo.
+
+**An installed version.** The [Support](#support) table names the **last validated version** of each harness. PDO does not read your installed version, does not compare it, and will not refuse to launch on a different one — it is a bound you can read, not a guard that runs. Worth checking which build you actually have before trusting a row: half of a first `copilot` inventory was taken against a second, months-old install of the same harness sitting on the same machine.
 
 ## Design principles
 

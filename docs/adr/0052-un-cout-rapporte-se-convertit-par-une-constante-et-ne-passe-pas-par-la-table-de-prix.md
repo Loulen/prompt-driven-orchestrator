@@ -56,6 +56,13 @@ Le total reste sommable en dollars, mais il se **dit** par harnais : « X via `c
 `claude` ». C'est ce qui rend un Run mixte lisible au lieu de le rendre incalculable, tout en
 gardant visible que les deux moitiés n'ont pas la même nature ni la même précision.
 
+**Un total indisponible n'efface pas la ventilation.** Quand un nœud tourne sur un harnais sans
+source de coût (ADR-0045/#553), c'est la **somme** qui est refusée, pas la connaissance : les
+tranches que PDO sait calculer se disent quand même, sous le « — » et sa raison. La première
+implémentation court-circuitait avant de les calculer, ce qui rendait la ventilation invisible
+précisément dans le Run qui mélange trois harnais — le seul construit pour l'observer (FP #617). Une
+tranche n'est pas une fraction de total : elle vaut par elle-même, avec sa forme.
+
 ### 4. Pas de conversion de devise
 
 Le chiffre reste en dollars. Convertir demanderait un taux de change, donc une source réseau sur un

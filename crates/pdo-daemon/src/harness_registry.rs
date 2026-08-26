@@ -118,6 +118,37 @@ pub const OPENCODE: &str = "opencode";
 /// The `copilot` harness name — PDO's second first-party harness (#614).
 pub const COPILOT: &str = "copilot";
 
+/// The `claude` build PDO's capabilities were last measured against.
+pub const CLAUDE_VALIDATED_VERSION: &str = "2.1.246";
+/// The `opencode` build PDO's descriptor was last measured against — the release
+/// ADR-0045 records: no launch-time effort axis, no pinnable session identity, and
+/// a session store PDO deliberately declares no resolution for.
+pub const OPENCODE_VALIDATED_VERSION: &str = "1.18.18";
+/// The `copilot` build PDO's capabilities were last measured against — the release
+/// #615 measured the `-i` interactive launch, the event journal's `assistant.turn_end`,
+/// and the `session.usage_checkpoint` reported cost on.
+pub const COPILOT_VALIDATED_VERSION: &str = "1.0.80";
+
+/// The **last validated version** of `name`'s binary — the release PDO's knowledge
+/// of that harness was measured against (#617). `None` for a data-declared harness:
+/// PDO carries no code for it, so it has validated nothing.
+///
+/// This is a **documented bound, not a guard**. PDO does not read the installed
+/// version here and never refuses to launch on a different one (#612 put version
+/// gating out of scope). It exists because the same harness can be installed twice
+/// on one machine, months apart, with different event schemas — and an inventory
+/// taken on the wrong install is worse than no inventory. The published support
+/// table ([`crate::harness_support`]) names it beside each harness's capabilities so
+/// a reader knows *which* binary the row describes.
+pub fn validated_version(name: &str) -> Option<&'static str> {
+    match name {
+        CLAUDE => Some(CLAUDE_VALIDATED_VERSION),
+        OPENCODE => Some(OPENCODE_VALIDATED_VERSION),
+        COPILOT => Some(COPILOT_VALIDATED_VERSION),
+        _ => None,
+    }
+}
+
 /// The `claude` descriptor: the legacy launch, expressed as data.
 ///
 /// The launch template reproduces the pre-#550 `build_agent_tail` **byte for
@@ -763,6 +794,21 @@ mod tests {
                 d.name
             );
         }
+    }
+
+    #[test]
+    fn every_embedded_harness_names_a_validated_version() {
+        // #617: the support table names the binary each row describes. A harness on
+        // the floor with no validated version would publish a row about nothing —
+        // so the floor and the version table are kept in step by this test rather
+        // than by memory.
+        for d in embedded_floor() {
+            let v = validated_version(&d.name)
+                .unwrap_or_else(|| panic!("{} must name a validated version", d.name));
+            assert!(!v.trim().is_empty(), "{} version must not be blank", d.name);
+        }
+        // A data-declared harness has validated nothing.
+        assert_eq!(validated_version("my-custom-harness"), None);
     }
 
     #[test]

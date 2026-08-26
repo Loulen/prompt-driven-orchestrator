@@ -1841,7 +1841,11 @@ SwapFree:         204800 kB
             true,
         );
         let a = assess_harness(&probes, true, crate::harness_registry::COPILOT);
-        assert_ne!(a.detection, Detection::TurnEnded, "an errored turn is not ended");
+        assert_ne!(
+            a.detection,
+            Detection::TurnEnded,
+            "an errored turn is not ended"
+        );
     }
 
     #[test]

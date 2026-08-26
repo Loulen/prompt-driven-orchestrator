@@ -225,4 +225,50 @@ describe("PipelineInfoPanel — Stats block (#100)", () => {
     expect(title).toMatch(/cost unavailable/i);
     expect(title).toContain("opencode");
   });
+
+  it("still ventilates by harness under an unavailable total (#617 FP)", () => {
+    // The HP-02 trio: the total goes because of `opencode`, the breakdown stays.
+    renderPanel(
+      makeRun({
+        cost: {
+          usd: 0,
+          partial: false,
+          unpriced_models: [],
+          uncosted_harnesses: ["opencode"],
+          by_harness: [
+            { harness: "claude", usd: 0.342386, form: "derived", partial: false, unpriced_models: [] },
+            { harness: "copilot", usd: 0.1005058, form: "reported", partial: false, unpriced_models: [] },
+          ],
+        },
+      }),
+    );
+    const cost = screen.getByTestId("stat-cost");
+    expect(cost).toHaveTextContent("—");
+    expect(cost).toHaveTextContent("~$0.3424 via claude");
+    expect(cost).toHaveTextContent("~$0.1005 via copilot");
+    // The breakdown is beside the "—", not standing in for it: no dagger, and the
+    // tooltip still says why there is no total.
+    expect(cost).not.toHaveTextContent("†");
+    const title = cost.querySelector("[title]")?.getAttribute("title") ?? "";
+    expect(title).toMatch(/cost unavailable/i);
+  });
+
+  it("shows a single slice beside an unavailable total, where a summable one hides it", () => {
+    // The ">1 slice" rule exists so a breakdown never repeats the total. When the
+    // total is withheld, even one slice says something it cannot.
+    renderPanel(
+      makeRun({
+        cost: {
+          usd: 0,
+          partial: false,
+          unpriced_models: [],
+          uncosted_harnesses: ["opencode"],
+          by_harness: [
+            { harness: "claude", usd: 1.5, form: "derived", partial: false, unpriced_models: [] },
+          ],
+        },
+      }),
+    );
+    expect(screen.getByTestId("stat-cost")).toHaveTextContent("~$1.50 via claude");
+  });
 });

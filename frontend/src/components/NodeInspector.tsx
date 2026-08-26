@@ -270,6 +270,10 @@ export default function NodeInspector({
               onChange={(v) => handleField("model", v)}
               models={harnessOption?.models ?? []}
               testid="node-model"
+              /* #617 FP: the inspector is one component reused across selections,
+                 so the picker must know WHOSE model it edits — else the previous
+                 node's value stays on screen and a blur commits it here. */
+              subject={node.id}
             />
           </Field>
         )}

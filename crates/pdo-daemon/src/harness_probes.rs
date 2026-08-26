@@ -84,6 +84,23 @@ pub(crate) enum CostSource {
     ReportedByConstant,
 }
 
+impl CostSource {
+    /// How this source reads in the published support table
+    /// ([`crate::harness_support`]) — the mechanism named, not a bare tick. The
+    /// label lives on the variant so the table can never describe a mechanism the
+    /// code no longer dispatches to.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            CostSource::DerivedFromTranscript => {
+                "derived — per-message token usage × the price table"
+            }
+            CostSource::ReportedByConstant => {
+                "reported — the harness's own billing unit × a published constant"
+            }
+        }
+    }
+}
+
 /// How PDO resolves a harness's transcript on disk.
 ///
 /// A cost or a turn-end read needs to find the right file first; a harness whose
@@ -102,6 +119,19 @@ pub(crate) enum TranscriptResolution {
     CopilotEventsJsonl,
 }
 
+impl TranscriptResolution {
+    /// How this resolution reads in the published support table. See
+    /// [`CostSource::label`] for why the label sits on the variant.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            TranscriptResolution::ClaudeJsonl => "the JSONL transcript, keyed by working directory",
+            TranscriptResolution::CopilotEventsJsonl => {
+                "the event journal, keyed by the session identity PDO imposed"
+            }
+        }
+    }
+}
+
 /// The substrate PDO reads to constate an end of turn (#469 §2, ADR-0043).
 ///
 /// Absent ⇒ the turn-end auto-completion probe never runs for this harness, so no
@@ -115,6 +145,21 @@ pub(crate) enum TurnEndSubstrate {
     /// classified by [`crate::copilot_journal::turn_ended`] (#615). Depends on no
     /// instance setting and writes nothing into the user's config.
     CopilotEventJournal,
+}
+
+impl TurnEndSubstrate {
+    /// How this substrate reads in the published support table. See
+    /// [`CostSource::label`] for why the label sits on the variant.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            TurnEndSubstrate::ClaudeTranscript => {
+                "an injected `Stop` hook, plus the transcript tail as the sweep's fallback"
+            }
+            TurnEndSubstrate::CopilotEventJournal => {
+                "the journal's explicit `assistant.turn_end` event"
+            }
+        }
+    }
 }
 
 /// A harness's on-screen usage-limit menu — the anchor PDO matches in a pane
@@ -131,6 +176,18 @@ pub(crate) enum UsageLimitAnchor {
     ClaudePaneMenu,
 }
 
+impl UsageLimitAnchor {
+    /// How this anchor reads in the published support table. See
+    /// [`CostSource::label`] for why the label sits on the variant.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            UsageLimitAnchor::ClaudePaneMenu => {
+                "the interactive \"wait for limit to reset\" menu, matched in a pane capture"
+            }
+        }
+    }
+}
+
 /// The sandbox staging floor a harness guarantees (ADR-0031).
 ///
 /// Absent ⇒ a sandboxed Run on this harness holds only by the user's image and
@@ -141,6 +198,18 @@ pub(crate) enum StagingFloor {
     /// The `.claude` staged home: valid credentials, org managed settings, bypass
     /// permissions accepted, trust pre-granted to the Run root, empty `projects/`.
     ClaudeDotClaude,
+}
+
+impl StagingFloor {
+    /// How this floor reads in the published support table. See
+    /// [`CostSource::label`] for why the label sits on the variant.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            StagingFloor::ClaudeDotClaude => {
+                "a staged `.claude` home — credentials, org managed settings, pre-granted trust"
+            }
+        }
+    }
 }
 
 /// The capabilities of one harness. **Every method defaults to "absent"**
@@ -607,7 +676,10 @@ mod tests {
             Some(TurnEndSubstrate::CopilotEventJournal)
         );
         // Declared absent, with their motive (see `CopilotProbes` doc).
-        assert!(p.usage_limit_anchor().is_none(), "usage-limit declared absent");
+        assert!(
+            p.usage_limit_anchor().is_none(),
+            "usage-limit declared absent"
+        );
         assert!(p.staging_floor().is_none(), "staging floor declared absent");
 
         assert_eq!(
@@ -652,7 +724,10 @@ mod tests {
         let copilot_tail =
             "{\"type\":\"assistant.turn_start\",\"data\":{}}\n{\"type\":\"assistant.turn_end\",\"data\":{}}\n";
         assert!(turn_ended(COPILOT, copilot_tail));
-        assert!(!turn_ended(CLAUDE, copilot_tail), "not claude's JSONL shape");
+        assert!(
+            !turn_ended(CLAUDE, copilot_tail),
+            "not claude's JSONL shape"
+        );
         // A trailing hard error is not a finished turn (harness exits 0 on it).
         let errored =
             "{\"type\":\"assistant.turn_start\",\"data\":{}}\n{\"type\":\"session.error\",\"data\":{\"message\":\"boom\"}}\n";

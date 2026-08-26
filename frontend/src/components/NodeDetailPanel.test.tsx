@@ -44,11 +44,12 @@ vi.mock("../api", () => ({
   artifactUrl: (runId: string, path: string) => `/runs/${runId}/artifact?path=${encodeURIComponent(path)}`,
 }));
 
-function MockTmuxTerminal({ session, expanded, onExpand, status }: {
+function MockTmuxTerminal({ session, expanded, onExpand, status, paneSource }: {
   session: string;
   expanded?: boolean;
   onExpand?: () => void;
   status?: string;
+  paneSource?: { runId: string; nodeId: string; iter: number };
 }) {
   useEffect(() => {
     tmuxMountCount.current += 1;
@@ -57,7 +58,13 @@ function MockTmuxTerminal({ session, expanded, onExpand, status }: {
     };
   }, []);
   return (
-    <div data-testid="tmux-terminal" data-session={session} data-expanded={expanded} data-status={status}>
+    <div
+      data-testid="tmux-terminal"
+      data-session={session}
+      data-expanded={expanded}
+      data-status={status}
+      data-pane-source={paneSource ? JSON.stringify(paneSource) : undefined}
+    >
       <button data-testid="term-expand" onClick={onExpand}>expand</button>
     </div>
   );
@@ -564,10 +571,10 @@ describe("NodeDetailPanel", () => {
       expect(document.querySelector(".terminal-pane")).toBeNull();
     });
 
-    it("does not import or use fetchPane", () => {
-      // The mock for ../api no longer includes fetchPane — if the component
-      // tried to call it, it would throw. This test verifies the import
-      // was removed successfully.
+    it("does not read the pane itself", () => {
+      // The mock for ../api includes no `fetchPane` — if this panel called it, it
+      // would throw. The pane is read one layer down, by the terminal that will
+      // display it (#617), never polled into a preview here.
       render(
         <TooltipProvider>
           <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
@@ -575,6 +582,63 @@ describe("NodeDetailPanel", () => {
       );
       // Just verify it renders without error
       expect(screen.getByTestId("tmux-terminal")).toBeInTheDocument();
+    });
+  });
+
+  // #617: the finished node's frozen pane. The panel's job is to name WHICH
+  // iteration is on screen and what state it is in; the terminal decides between
+  // attaching and reading the snapshot.
+  describe("pane source handed to the terminal", () => {
+    it("names the run, the node and the selected iteration", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel
+            node={makeNode({ status: "completed", node_id: "cop", iter: 2 })}
+            runId="run-1"
+          />
+        </TooltipProvider>,
+      );
+      // A settled node opens minimized (#346) — restore it to mount the terminal.
+      fireEvent.click(screen.getByTestId("term-restore"));
+      expect(
+        screen.getByTestId("tmux-terminal").getAttribute("data-pane-source"),
+      ).toBe(JSON.stringify({ runId: "run-1", nodeId: "cop", iter: 2 }));
+    });
+
+    it("reports the ITERATION's status, not the node's rollup", async () => {
+      // A node running iteration 2 while the selector sits on iteration 1: that
+      // older session was reaped long ago. Handing the terminal "running" would
+      // send it to attach to a name tmux no longer knows.
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel
+            node={makeNode({
+              status: "running",
+              node_id: "cop",
+              iter: 2,
+              iterations: [
+                { iter: 1, status: "completed", started_at: null, completed_at: null },
+                { iter: 2, status: "running", started_at: null, completed_at: null },
+              ],
+            })}
+            runId="run-1"
+          />
+        </TooltipProvider>,
+      );
+      await act(async () => {});
+      expect(
+        screen.getByTestId("tmux-terminal").getAttribute("data-status"),
+      ).toBe("running");
+
+      fireEvent.click(screen.getByText(/iter 2/));
+      fireEvent.click(await screen.findByTestId("iter-option-1"));
+      await act(async () => {});
+
+      const term = screen.getByTestId("tmux-terminal");
+      expect(term.getAttribute("data-status")).toBe("completed");
+      expect(term.getAttribute("data-pane-source")).toBe(
+        JSON.stringify({ runId: "run-1", nodeId: "cop", iter: 1 }),
+      );
     });
   });
 

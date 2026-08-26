@@ -11,7 +11,10 @@
 //! unpriced model). [`run_cost_or_absence`] pairs the two into one summable dollar
 //! total that *says* itself per harness (`CostStat::by_harness`): "X via `copilot`,
 //! Y via `claude`". A harness with no cost source at all (`opencode`) still makes
-//! the whole aggregate "—" with a reason (never `$0`), as before.
+//! the whole aggregate "—" with a reason (never `$0`), as before — but only the
+//! **total** goes: the per-harness slices are computed and carried alongside the
+//! absence, so a Run mixing `opencode` with instrumented harnesses still says where
+//! its known dollars came from (#617 FP, ADR-0052 §3).
 //!
 //! Since #427 that table is **injected** too, as a [`crate::price_table::PriceTable`]
 //! resolved by the caller at the request edge (`manual → fetched → embedded`, see
@@ -346,26 +349,46 @@ fn ventilate(
 /// A Run whose cost is **unavailable** because a node ran on a harness with no cost
 /// source (a data-declared harness, e.g. `opencode`) — "—" with a reason, never a
 /// `$0`. Shared by the uncached and cached honest paths.
-fn cost_unavailable(uncosted: Vec<String>) -> CostStat {
+///
+/// `slices` are the per-harness costs PDO could still compute for the Run's *other*
+/// nodes. They **survive** the unavailable total (ADR-0052 §3): what is refused is
+/// the sum, not the knowledge. Suppressing them was the #617 FP finding — the trio
+/// Run built to observe ventilation was the one Run that could not show any.
+fn cost_unavailable(uncosted: Vec<String>, slices: Vec<HarnessCost>) -> CostStat {
     CostStat {
+        // Not a total, and never rendered as one: `uncosted_harnesses` non-empty is
+        // what makes every surface print "—". The slices say themselves; this field
+        // stays 0.0 rather than half a sum, which would read as a total.
         usd: 0.0,
         // NOT `partial`: `partial` means "priced, but a lower bound" and still
         // shows a dollar figure. This is a categorically different state — the
         // aggregate is unavailable, not merely incomplete — so it stays out of
         // the `partial ⟺ !unpriced_models.is_empty()` invariant (both empty).
+        // A slice keeps its own `partial`; the Run-level one is about the total.
         partial: false,
         unpriced_models: Vec::new(),
         uncosted_harnesses: uncosted,
-        by_harness: Vec::new(),
+        by_harness: slices,
     }
 }
 
+/// The per-harness slices of a Run whose total is unavailable: [`ventilate`]'s
+/// breakdown, or empty when nothing in the Run was costable at all.
+fn slices_or_empty(ventilated: Option<CostStat>) -> Vec<HarnessCost> {
+    ventilated.map(|c| c.by_harness).unwrap_or_default()
+}
+
 /// The Run's cost, **honest about harnesses without a cost source** (#553) and
-/// **ventilated by harness** (#615). If any node ran on a harness PDO cannot cost
-/// (a data-declared harness — `copilot` is costed, so it is NOT one), the aggregate
-/// is not honestly summable and this returns a "—"-with-reason `CostStat`.
-/// Otherwise it pairs `claude`'s derived slice ([`compute_run_cost`]) with
-/// `copilot`'s reported one, summed in dollars and said per harness (ADR-0052).
+/// **ventilated by harness** (#615). It pairs `claude`'s derived slice
+/// ([`compute_run_cost`]) with `copilot`'s reported one, summed in dollars and said
+/// per harness (ADR-0052).
+///
+/// If any node ran on a harness PDO cannot cost (a data-declared harness — `copilot`
+/// is costed, so it is NOT one), the **total** is not honestly summable and this
+/// returns a "—"-with-reason `CostStat`. The ventilation still runs: the slices PDO
+/// *can* compute ride along with the absence, so a mixed Run says what came through
+/// `claude` and what came through `copilot` even while refusing to add them
+/// (ADR-0052 §3). Only the sum is withheld.
 ///
 /// `events` is the Run's event-log snapshot (frozen harnesses + copilot session
 /// ids); `claude_root` is the #408 seam's Claude Code `projects/` root; `copilot_root`
@@ -379,11 +402,12 @@ pub(crate) fn run_cost_or_absence(
     prices: &PriceTable,
 ) -> Option<CostStat> {
     let uncosted = uncosted_harnesses(events);
-    if !uncosted.is_empty() {
-        return Some(cost_unavailable(uncosted));
-    }
     let claude = compute_run_cost(claude_root, repo_root, run_id, prices);
-    ventilate(claude, events, copilot_root)
+    let ventilated = ventilate(claude, events, copilot_root);
+    if !uncosted.is_empty() {
+        return Some(cost_unavailable(uncosted, slices_or_empty(ventilated)));
+    }
+    ventilated
 }
 
 /// [`run_cost_or_absence`] on the memoized claude path (*correctif 5*): the Stats
@@ -400,11 +424,12 @@ pub(crate) fn run_cost_or_absence_cached(
     prices: &PriceTable,
 ) -> Option<CostStat> {
     let uncosted = uncosted_harnesses(events);
-    if !uncosted.is_empty() {
-        return Some(cost_unavailable(uncosted));
-    }
     let claude = compute_run_cost_cached(claude_root, repo_root, run_id, prices);
-    ventilate(claude, events, copilot_root)
+    let ventilated = ventilate(claude, events, copilot_root);
+    if !uncosted.is_empty() {
+        return Some(cost_unavailable(uncosted, slices_or_empty(ventilated)));
+    }
+    ventilated
 }
 
 /// Encode an absolute path exactly as Claude Code names its `~/.claude/projects`
@@ -1205,7 +1230,11 @@ mod tests {
         assert_eq!(cost.usd, 0.0);
         assert!(!cost.partial, "not a lower bound — it is unavailable");
         assert!(cost.unpriced_models.is_empty());
-        assert!(cost.by_harness.is_empty(), "unavailable ⇒ nothing to ventilate");
+        assert!(
+            cost.by_harness.is_empty(),
+            "no transcript, no journal ⇒ no slice to say — NOT because the total is \
+             unavailable (see the trio test below)"
+        );
         // The offender is NAMED (the frontend builds the "— because opencode has no
         // cost source" sentence from this, the same way it names `unpriced_models`).
         assert_eq!(cost.uncosted_harnesses, vec!["opencode".to_string()]);
@@ -1231,8 +1260,9 @@ mod tests {
     fn seed_copilot_journal(copilot_root: &Path, session_id: &str, nano_aiu: u64) {
         let dir = copilot_root.join(session_id);
         std::fs::create_dir_all(&dir).unwrap();
-        let checkpoint =
-            format!(r#"{{"type":"session.usage_checkpoint","data":{{"totalNanoAiu":{nano_aiu}}}}}"#);
+        let checkpoint = format!(
+            r#"{{"type":"session.usage_checkpoint","data":{{"totalNanoAiu":{nano_aiu}}}}}"#
+        );
         std::fs::write(
             dir.join("events.jsonl"),
             format!(
@@ -1262,9 +1292,15 @@ mod tests {
         );
         let events = vec![node_started("n", Some("claude")), node_started("s", None)];
 
-        let honest =
-            run_cost_or_absence(&events, &projects, &copilot, repo.path(), run_id, &builtin())
-                .unwrap();
+        let honest = run_cost_or_absence(
+            &events,
+            &projects,
+            &copilot,
+            repo.path(),
+            run_id,
+            &builtin(),
+        )
+        .unwrap();
         assert!(honest.uncosted_harnesses.is_empty());
         assert!((honest.usd - 5.0).abs() < 1e-9);
         // Ventilated: one derived slice, on `claude`, carrying the whole figure.
@@ -1297,9 +1333,15 @@ mod tests {
             node_started_sid("p", "copilot", "sid-cop"),
         ];
 
-        let cost =
-            run_cost_or_absence(&events, &projects, &copilot, repo.path(), run_id, &builtin())
-                .unwrap();
+        let cost = run_cost_or_absence(
+            &events,
+            &projects,
+            &copilot,
+            repo.path(),
+            run_id,
+            &builtin(),
+        )
+        .unwrap();
         // Summable total = $5 (claude) + $2 (copilot).
         assert!((cost.usd - 7.0).abs() < 1e-9, "usd = {}", cost.usd);
         assert!(cost.uncosted_harnesses.is_empty());
@@ -1314,7 +1356,110 @@ mod tests {
         assert_eq!(cop.form, CostForm::Reported);
         assert!((cop.usd - 2.0).abs() < 1e-9);
         assert!(!cop.partial, "a reported slice is never a lower bound");
-        assert!(cop.unpriced_models.is_empty(), "reported ⇒ no unpriced model");
+        assert!(
+            cop.unpriced_models.is_empty(),
+            "reported ⇒ no unpriced model"
+        );
+    }
+
+    #[test]
+    fn an_unavailable_total_still_says_the_slices_it_can_compute() {
+        // #617 FP finding 1: the three-harness Run (claude + opencode + copilot) is
+        // the one built to *observe* ventilation, and it was the only one that could
+        // not show any — the `opencode` short-circuit returned before either slice
+        // was computed. The total is still refused (that is #553), but what came
+        // through `claude` and what came through `copilot` is said (ADR-0052 §3).
+        let home = tempfile::tempdir().unwrap();
+        let projects = home.path().join(".claude").join("projects");
+        let copilot = home.path().join(".copilot").join("session-state");
+        let repo = tempfile::tempdir().unwrap();
+        let run_id = "trio-run";
+        seed_transcript(
+            &projects,
+            repo.path(),
+            run_id,
+            &assistant("m1", "r1", "claude-opus-4-8", 1_000_000, 0), // $5 derived
+        );
+        seed_copilot_journal(&copilot, "sid-cop", 200_000_000_000); // $2 reported
+        let events = vec![
+            node_started("c", Some("claude")),
+            node_started("o", Some("opencode")),
+            node_started_sid("p", "copilot", "sid-cop"),
+        ];
+
+        let cost = run_cost_or_absence(
+            &events,
+            &projects,
+            &copilot,
+            repo.path(),
+            run_id,
+            &builtin(),
+        )
+        .unwrap();
+
+        // The total is still withheld, and still names why.
+        assert_eq!(cost.usd, 0.0, "never half a sum standing in for a total");
+        assert!(!cost.partial);
+        assert!(cost.unpriced_models.is_empty());
+        assert_eq!(cost.uncosted_harnesses, vec!["opencode".to_string()]);
+
+        // …and the two computable slices ride along with the absence.
+        assert_eq!(
+            cost.by_harness.len(),
+            2,
+            "by_harness = {:?}",
+            cost.by_harness
+        );
+        assert_eq!(cost.by_harness[0].harness, "claude");
+        assert_eq!(cost.by_harness[0].form, CostForm::Derived);
+        assert!((cost.by_harness[0].usd - 5.0).abs() < 1e-9);
+        assert_eq!(cost.by_harness[1].harness, "copilot");
+        assert_eq!(cost.by_harness[1].form, CostForm::Reported);
+        assert!((cost.by_harness[1].usd - 2.0).abs() < 1e-9);
+        // `opencode` has no slice at all — an absence is not a $0 slice either.
+        assert!(!cost.by_harness.iter().any(|h| h.harness == "opencode"));
+    }
+
+    #[test]
+    fn the_cached_path_also_says_the_slices_under_an_unavailable_total() {
+        // *Correctif 5* holds under the fix: the Stats aggregate and the Run line
+        // take the same shape, absence included, so a trio Run never ventilates on
+        // one surface and stays mute on the other.
+        let home = tempfile::tempdir().unwrap();
+        let projects = home.path().join(".claude").join("projects");
+        let copilot = home.path().join(".copilot").join("session-state");
+        let repo = tempfile::tempdir().unwrap();
+        let run_id = "trio-run-cached";
+        seed_transcript(
+            &projects,
+            repo.path(),
+            run_id,
+            &assistant("m1", "r1", "claude-opus-4-8", 1_000_000, 0),
+        );
+        seed_copilot_journal(&copilot, "sid-cop-cached", 200_000_000_000);
+        let events = vec![
+            node_started("c", Some("claude")),
+            node_started("o", Some("opencode")),
+            node_started_sid("p", "copilot", "sid-cop-cached"),
+        ];
+
+        let cost = run_cost_or_absence_cached(
+            &events,
+            &projects,
+            &copilot,
+            repo.path(),
+            run_id,
+            &builtin(),
+        )
+        .unwrap();
+        assert_eq!(cost.uncosted_harnesses, vec!["opencode".to_string()]);
+        assert_eq!(
+            cost.by_harness
+                .iter()
+                .map(|h| h.harness.as_str())
+                .collect::<Vec<_>>(),
+            vec!["claude", "copilot"]
+        );
     }
 
     #[test]
@@ -1329,9 +1474,15 @@ mod tests {
         seed_copilot_journal(&copilot, "sid-live", 100_000_000_000); // $1.00
         let events = vec![node_started_sid("p", "copilot", "sid-live")];
 
-        let cost =
-            run_cost_or_absence(&events, &projects, &copilot, repo.path(), "cop-run", &builtin())
-                .expect("a copilot reading yields Some, even with no claude transcript");
+        let cost = run_cost_or_absence(
+            &events,
+            &projects,
+            &copilot,
+            repo.path(),
+            "cop-run",
+            &builtin(),
+        )
+        .expect("a copilot reading yields Some, even with no claude transcript");
         assert!((cost.usd - 1.0).abs() < 1e-9);
         assert_eq!(cost.by_harness.len(), 1);
         assert_eq!(cost.by_harness[0].harness, "copilot");

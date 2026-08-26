@@ -258,7 +258,7 @@ mod tests {
             state.nodes.insert(
                 id.to_string(),
                 event_log::NodeState {
-            harness: None,
+                    harness: None,
                     node_id: id.to_string(),
                     status,
                     iter: 1,

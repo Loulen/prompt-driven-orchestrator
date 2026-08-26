@@ -7,7 +7,7 @@ import OutputPortCard from "./OutputPortCard";
 import PooledInputRow from "./PooledInputRow";
 import ModelPicker from "./ModelPicker";
 import EffortPicker from "./EffortPicker";
-import { harnessHasEffort, resolveEditorHarness } from "../lib/harness";
+import { findHarnessOption, resolveEditorHarness } from "../lib/harness";
 import HarnessSelect from "./HarnessSelect";
 import { useHarnessCatalog } from "../hooks/useHarnessCatalog";
 import DestroyLoopModal from "./DestroyLoopModal";
@@ -94,6 +94,11 @@ export default function NodeInspector({
   // greying. (The daemon re-resolves authoritatively at spawn, with the instance
   // tier the editor does not fetch per-node.)
   const resolvedHarness = resolveEditorHarness(node);
+  // #616/ADR-0053: the served offer for the resolved harness — its model & effort
+  // catalogues and the effort-axis fact. Undefined for a harness the catalogue does
+  // not carry (an unknown pin); the pickers then fall back to free text and the
+  // conservative "has effort" (the daemon re-resolves authoritatively at spawn).
+  const harnessOption = findHarnessOption(harnessCatalog, resolvedHarness);
 
   // #339: delete one contributing edge of a pooled input — the canonical
   // "delete an input" since inputs are emergent (#149/ADR-0011). Last-cycle
@@ -263,6 +268,7 @@ export default function NodeInspector({
             <ModelPicker
               value={node.model ?? null}
               onChange={(v) => handleField("model", v)}
+              models={harnessOption?.models ?? []}
               testid="node-model"
             />
           </Field>
@@ -278,10 +284,11 @@ export default function NodeInspector({
             <EffortPicker
               value={node.effort ?? null}
               onChange={(v) => handleField("effort", v)}
+              efforts={harnessOption?.efforts ?? []}
               testid="node-effort"
-              /* #550/AC #13: greyed when the resolved harness has no launch-time
-                 effort axis (measured: `opencode` has none). */
-              disabled={!harnessHasEffort(resolvedHarness)}
+              /* #616/ADR-0053: greyed off the SERVED effort-axis fact — the daemon
+                 deduces it from the binary, no client-side per-name map. */
+              disabled={!(harnessOption?.hasEffort ?? true)}
             />
           </Field>
         )}

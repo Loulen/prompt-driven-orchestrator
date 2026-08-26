@@ -487,6 +487,13 @@ pub struct IterationInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeState {
     pub node_id: String,
+    /// #616/ADR-0046: the harness this node's session was **frozen** on at spawn,
+    /// read from the `NodeStarted` payload — so the Run view shows, per node, what
+    /// actually ran (the run-level default lives on [`RunState::harness`]). `None`
+    /// for a node that never opened a `NodeStarted` (a pure skip) or a pre-#616
+    /// snapshot; `skip_serializing_if` keeps the wire byte-identical when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<String>,
     pub status: NodeStatus,
     pub iter: i64,
     pub started_at: Option<String>,
@@ -1837,6 +1844,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                     .nodes
                     .entry(node_id.clone())
                     .or_insert_with(|| NodeState {
+            harness: None,
                         node_id: node_id.clone(),
                         status: NodeStatus::Waiting,
                         iter,
@@ -1870,6 +1878,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                     .nodes
                     .entry(node_id.clone())
                     .or_insert_with(|| NodeState {
+            harness: None,
                         node_id: node_id.clone(),
                         status: NodeStatus::Running,
                         iter,
@@ -1894,6 +1903,19 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                 // evidence against it.
                 node.frontmatter_violations = Vec::new();
                 node.missing_outputs = Vec::new();
+                // #616/ADR-0046: freeze the harness this session ran on, from the
+                // `NodeStarted` payload (node_spawn records the resolved harness
+                // there). A re-spawn (retry / resume) re-freezes it; absent payload
+                // (a pre-#616 event) leaves it `None`.
+                if let Some(h) = event
+                    .payload
+                    .as_ref()
+                    .and_then(|p| p.get("harness"))
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                {
+                    node.harness = Some(h.to_string());
+                }
                 upsert_iteration(&mut node.iterations, iteration);
             }
         }
@@ -1916,6 +1938,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                     state.nodes.insert(
                         node_id.clone(),
                         NodeState {
+            harness: None,
                             node_id: node_id.clone(),
                             status: NodeStatus::Completed,
                             iter,
@@ -2029,6 +2052,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                     .nodes
                     .entry(node_id.clone())
                     .or_insert_with(|| NodeState {
+            harness: None,
                         node_id: node_id.clone(),
                         status: NodeStatus::Interrupted,
                         iter,
@@ -2152,6 +2176,7 @@ fn apply_switch_event(state: &mut RunState, event: &Event) {
                 .nodes
                 .entry(node_id.to_string())
                 .or_insert_with(|| NodeState {
+            harness: None,
                     node_id: node_id.to_string(),
                     status: NodeStatus::Completed,
                     iter,
@@ -3302,6 +3327,58 @@ mod tests {
         assert_eq!(state.sandbox_prep, None);
         let value = serde_json::to_value(&state).unwrap();
         assert!(value.get("sandbox_prep").is_none());
+    }
+
+    #[test]
+    fn node_started_freezes_the_harness_onto_the_node_state() {
+        // #616/ADR-0046: the Run view shows, per node, the harness its session was
+        // frozen on — read from the `NodeStarted` payload into `NodeState::harness`.
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "p" }),
+            ),
+            make_event_with_payload(
+                EventKind::NodeStarted,
+                Some("impl"),
+                serde_json::json!({ "harness": "copilot" }),
+            ),
+            make_event_with_payload(
+                EventKind::NodeStarted,
+                Some("review"),
+                serde_json::json!({ "harness": "claude" }),
+            ),
+        ];
+        let state = project(&events).unwrap();
+        assert_eq!(
+            state.nodes["impl"].harness.as_deref(),
+            Some("copilot"),
+            "the node's frozen harness must project"
+        );
+        assert_eq!(state.nodes["review"].harness.as_deref(), Some("claude"));
+
+        // A node that never opened a `NodeStarted` carries no harness, and the field
+        // is skipped from the wire (byte-identical to a pre-#616 snapshot).
+        let value = serde_json::to_value(&state.nodes["impl"]).unwrap();
+        assert_eq!(value["harness"], "copilot");
+        let bare = super::NodeState {
+            harness: None,
+            node_id: "x".into(),
+            status: NodeStatus::Waiting,
+            iter: 1,
+            started_at: None,
+            completed_at: None,
+            failure_reason: None,
+            iterations: vec![],
+            frontmatter_retries: 0,
+            frontmatter_violations: vec![],
+            missing_outputs: vec![],
+        };
+        assert!(
+            serde_json::to_value(&bare).unwrap().get("harness").is_none(),
+            "an absent harness is skipped from the wire"
+        );
     }
 
     // -- #445: the sandbox spawn precondition, decided on the projection alone ----
@@ -6236,6 +6313,7 @@ mod tests {
         iters: &[(i64, NodeStatus)],
     ) -> NodeState {
         NodeState {
+            harness: None,
             node_id: id.to_string(),
             status,
             iter,

@@ -309,6 +309,20 @@ export default function NodeDetailPanel({
           >
             {STATUS_LABELS[node.status] ?? node.status}
           </span>
+          {/* #616/ADR-0046: the harness this node's session was FROZEN on, next to
+              the id — so the Run view shows what actually ran (distinct from the
+              run-level default in the pipeline info panel). Absent for a node that
+              never started (a pure skip) or a pre-#616 daemon. */}
+          {node.harness && (
+            <span
+              data-testid="node-frozen-harness"
+              title="Harness frozen at spawn"
+              className="rounded border border-acc/40 bg-acc/5 px-1.5 py-0.5 font-mono text-acc"
+              style={{ fontSize: "10px" }}
+            >
+              {node.harness}
+            </span>
+          )}
         </div>
         <div className="mt-0.5 font-mono text-fg-4" style={{ fontSize: "9px" }}>
           {node.node_id}

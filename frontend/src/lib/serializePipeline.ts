@@ -262,8 +262,15 @@ function promptToBlockScalar(prompt: string): string {
  *
  * NEVER emits `id` (regenerated on add), `view` (re-centred), edges (they live
  * at pipeline level), or `over` (a region driver, not a node field). Legacy
- * `max_iter` (bounded-loop nodes) is emitted only when present. `model` (#296)
- * and `effort` (#424) are emitted when set so a per-node override round-trips.
+ * `max_iter` (bounded-loop nodes) is emitted only when present.
+ *
+ * #616 (correctif 7): the harness axis round-trips like the pipeline emitter — the
+ * `pin_harness` and the per-harness `harnesses` map, NOT a flat `model:`/`effort:`.
+ * Flat keys re-homed the value onto the RESOLVED harness on reimport, which is
+ * `claude` for an unpinned node — so a node pinned on another harness silently lost
+ * its settings onto claude on the round-trip. Emitting the pin and the map preserves
+ * both. This emitter and `pipelineToYamlObject` must stay in lockstep (see the note
+ * on that function): a harness field added there must be added here too.
  */
 export function exportNodeAsYaml(node: NodeDef, prompt: string): string {
   const obj: Record<string, unknown> = {
@@ -271,8 +278,9 @@ export function exportNodeAsYaml(node: NodeDef, prompt: string): string {
     type: node.type,
   };
   if (node.interactive) obj.interactive = true;
-  if (node.model) obj.model = node.model;
-  if (node.effort) obj.effort = node.effort;
+  if (node.pin_harness) obj.pin_harness = node.pin_harness;
+  const harnesses = foldNodeIntoHarnesses(node);
+  if (harnesses) obj.harnesses = harnesses;
   // Legacy bounded-loop nodes carry a node-level `max_iter` the daemon still
   // requires; regular nodes never set it, so its presence is the signal.
   if (node.max_iter !== undefined && node.max_iter !== null) obj.max_iter = node.max_iter;

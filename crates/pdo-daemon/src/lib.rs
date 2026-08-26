@@ -22,6 +22,7 @@ mod frontmatter_parser;
 mod graph_resolver;
 mod guard_runner;
 mod harness_argv;
+mod harness_catalogue;
 mod harness_probes;
 pub mod harness_registry;
 mod harness_resolver;
@@ -393,6 +394,18 @@ struct AppState {
     /// docker round-trip). The refresh runs under `spawn_blocking` + a short
     /// `timeout`, so a cold Docker daemon never hangs the `/settings` response.
     docker_probe_cache: Arc<tokio::sync::Mutex<Option<(Instant, sandbox_image::DockerProbe)>>>,
+    /// Per-harness offered-catalogue cache (#616, ADR-0053 §3), keyed by harness
+    /// name. Each entry stamps the moment it was last version-checked and the
+    /// [`harness_catalogue::CachedCatalogue`] read (models, efforts, and the version
+    /// they came from). The freshness contract: at most one `--version` re-check per
+    /// harness per [`CATALOGUE_VERSION_TTL`] window, and a full `--help` re-probe
+    /// only when that version has changed — so an auto-updating binary is followed
+    /// without a restart, at a bounded subprocess cost on the `/settings` path.
+    /// Populated eagerly at boot (a sibling of the price refresh) and lazily on the
+    /// first `/settings` fetch. Never persisted: a probe is cheap and the truth is
+    /// on disk, so a restart simply re-reads it.
+    harness_catalogue_cache:
+        Arc<tokio::sync::Mutex<HashMap<String, (Instant, harness_catalogue::CachedCatalogue)>>>,
     /// Serializes price syncs (#427). Unlike `trigger_tick_lock`, which *serializes*
     /// because both triggers (cron and manual) are legitimate and must both land, a
     /// second concurrent price sync brings nothing — so this is taken with
@@ -1913,6 +1926,15 @@ impl DaemonHandle {
         refresh_prices_at_boot(&self.state).await;
     }
 
+    /// Warm the harness-catalogue cache synchronously (#616, ADR-0053 §3). Sibling
+    /// of [`Self::run_price_refresh_tick`]: production spawns this DETACHED at boot,
+    /// so a test drives it here instead of racing the detached task. Same code path
+    /// as boot, so a test can prove "installed harness → catalogue cached, version
+    /// recorded".
+    pub async fn run_catalogue_probe_tick(&self) {
+        probe_harness_catalogues_at_boot(&self.state).await;
+    }
+
     /// Run a single orphan-sweep (reaper) pass synchronously. Lets integration
     /// tests drive session reaping deterministically instead of racing the
     /// ~60 s background interval + process-global TTL env (#316). Resolves the
@@ -2512,6 +2534,7 @@ pub async fn serve_with_config(
         node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         service_health,
         docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
+        harness_catalogue_cache: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         price_sync_lock: tokio::sync::Mutex::new(()),
         price_source_url: config.price_source_url,
         price_refresh_at_boot: config.price_refresh_at_boot,
@@ -2697,6 +2720,21 @@ pub async fn serve_with_config(
         tokio::spawn(async move {
             run_isolated("price refresh", async move {
                 refresh_prices_at_boot(&price_state).await;
+            })
+            .await;
+        });
+    }
+
+    // #616/ADR-0053 §3: warm the harness-catalogue cache at boot, a sibling of the
+    // price refresh and detached for the same reason — probing every installed
+    // harness's `--help`/`--version` must not delay the first `accept()`. The first
+    // `/settings` fetch then answers from warm cache; an auto-update afterwards is
+    // caught by the version re-check behind that fetch.
+    {
+        let catalogue_state = state.clone();
+        tokio::spawn(async move {
+            run_isolated("harness catalogue probe", async move {
+                probe_harness_catalogues_at_boot(&catalogue_state).await;
             })
             .await;
         });
@@ -8715,6 +8753,85 @@ async fn docker_probe_cached(state: &AppState) -> sandbox_image::DockerProbe {
     probe
 }
 
+/// How often a harness binary's **version** is re-checked behind a `/settings`
+/// fetch (#616, ADR-0053 §3). Long enough that a burst of settings reads pays at
+/// most one `--version` subprocess per harness; short enough that an auto-update is
+/// noticed within the minute, no restart. The full `--help` re-probe runs only when
+/// the version actually changed, so the steady-state cost is one cheap `--version`
+/// per harness per window.
+const CATALOGUE_VERSION_TTL: Duration = Duration::from_secs(60);
+
+/// Return `harness`'s offered catalogue (models + efforts + the version they were
+/// read from), from the cache when fresh, else by (re)probing `binary` (#616,
+/// ADR-0053 §3). The freshness protocol, per harness:
+///
+/// 1. A cache entry younger than [`CATALOGUE_VERSION_TTL`] is returned as-is — a
+///    burst of `/settings` reads pays no subprocess at all.
+/// 2. Past the window, `--version` is re-read (off the runtime thread). If it
+///    matches the cached version, the catalogue is still current: restamp and
+///    return it, no `--help` run.
+/// 3. On a first miss or a changed version, `--help` is re-read and parsed, and the
+///    new `{version, catalogue}` cached.
+///
+/// Both subprocess reads run under `spawn_blocking` with the probe's own timeout, so
+/// a wedged binary can never hang the settings response — it degrades to the last
+/// good catalogue (or an empty one), i.e. the free-text fallback.
+async fn catalogue_for(
+    state: &AppState,
+    harness: &str,
+    binary: &str,
+) -> harness_catalogue::CachedCatalogue {
+    let mut guard = state.harness_catalogue_cache.lock().await;
+    if let Some((at, cached)) = guard.get(harness) {
+        if at.elapsed() < CATALOGUE_VERSION_TTL {
+            return cached.clone();
+        }
+    }
+
+    // Past the TTL (or never probed): re-read the version off the runtime thread.
+    let bin = binary.to_string();
+    let version = tokio::task::spawn_blocking(move || tmux_session_manager::probe_version(&bin))
+        .await
+        .ok()
+        .flatten();
+
+    // Version unchanged ⇒ the catalogue is still current; restamp, skip --help.
+    if let Some((_, cached)) = guard.get(harness) {
+        if cached.version == version {
+            let refreshed = cached.clone();
+            guard.insert(harness.to_string(), (Instant::now(), refreshed.clone()));
+            return refreshed;
+        }
+    }
+
+    // First probe or a changed version ⇒ re-read and parse the catalogue.
+    let bin = binary.to_string();
+    let catalogue = tokio::task::spawn_blocking(move || tmux_session_manager::probe_catalogue(&bin))
+        .await
+        .unwrap_or_default();
+    let cached = harness_catalogue::CachedCatalogue { version, catalogue };
+    guard.insert(harness.to_string(), (Instant::now(), cached.clone()));
+    cached
+}
+
+/// Probe every installed harness's catalogue once, populating the cache (#616,
+/// ADR-0053 §3). Wired as a detached boot task (a sibling of the price refresh) so
+/// the first `/settings` fetch answers from warm cache rather than paying the
+/// subprocess cost inline. Reads the registry from the host `$HOME` (the same tier
+/// the settings view resolves); a harness whose binary is absent is skipped — no
+/// probe, an empty offer, the free-text field.
+async fn probe_harness_catalogues_at_boot(state: &Arc<AppState>) {
+    let registry = match sandbox_run::sandbox_home_roots(state).ok().map(|(h, _)| h) {
+        Some(home) => harness_registry::HarnessRegistry::load(&home),
+        None => harness_registry::HarnessRegistry::builtin(),
+    };
+    for listing in registry.listing() {
+        if tmux_session_manager::binary_available(&listing.binary) {
+            let _ = catalogue_for(state, &listing.name, &listing.binary).await;
+        }
+    }
+}
+
 /// Build the `GET /settings` view: per knob, the effective value, the winning
 /// tier, and every tier's raw value (#129, ADR-0015). The `effective` value is
 /// computed by each knob's own resolver, so it can never drift from what the
@@ -8979,45 +9096,62 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
     // name/source/binary; `binary_available` (the same probe the spawn seam runs)
     // decides `installed` here, beside the environment, so the picker greys a
     // harness that would only fail-fast at launch.
-    let harness_list_json = |registry: &harness_registry::HarnessRegistry| {
-        registry
-            .listing()
-            .iter()
-            .map(|h| {
-                serde_json::json!({
-                    "name": h.name,
-                    "source": h.source.as_str(),
-                    "installed": tmux_session_manager::binary_available(&h.binary),
-                })
-            })
-            .collect::<Vec<_>>()
+    // #616/ADR-0053: each entry now also carries the offer deduced from the binary —
+    // its `models`, its `efforts`, the served `has_effort` fact (so the client greys
+    // the effort picker off a served truth, not a hard-coded map), and the `version`
+    // the offer was read at. An uninstalled harness carries an empty offer (no probe)
+    // — the free-text fallback, a declared absence.
+    let registry = match &host_home_path {
+        Some(home) => harness_registry::HarnessRegistry::load(home),
+        None => harness_registry::HarnessRegistry::builtin(),
     };
+    let mut harness_list = Vec::new();
+    for h in registry.listing() {
+        let installed = tmux_session_manager::binary_available(&h.binary);
+        let cached = if installed {
+            catalogue_for(state, &h.name, &h.binary).await
+        } else {
+            harness_catalogue::CachedCatalogue::default()
+        };
+        // The served effort-axis fact: the binary enumerates effort stops, OR the
+        // launch template carries an `{effort}` hole (a harness that takes effort but
+        // prints no list still offers the axis). Either way it is a fact the daemon
+        // owns and serves, replacing the client's hard-coded `HARNESS_HAS_EFFORT`.
+        let has_effort_hole = registry
+            .resolve(&h.name)
+            .map(|d| d.has_effort_hole())
+            .unwrap_or(false);
+        let has_effort = cached.catalogue.has_effort_axis() || has_effort_hole;
+        harness_list.push(serde_json::json!({
+            "name": h.name,
+            "source": h.source.as_str(),
+            "installed": installed,
+            "version": cached.version,
+            "models": cached.catalogue.models,
+            "efforts": cached.catalogue.efforts,
+            "has_effort": has_effort,
+        }));
+    }
     let harness_descriptors_view = match &host_home_path {
-        Some(home) => {
-            let registry = harness_registry::HarnessRegistry::load(home);
-            serde_json::json!({
-                "path": harness_registry::HarnessRegistry::descriptors_path(home).to_string_lossy(),
-                "names": registry.names(),
-                "harnesses": harness_list_json(&registry),
-                "rejected": registry
-                    .rejected()
-                    .iter()
-                    .map(|r| serde_json::json!({ "name": r.name, "why": r.why }))
-                    .collect::<Vec<_>>(),
-                "reason": registry.diagnostic(),
-            })
-        }
-        None => {
-            let registry = harness_registry::HarnessRegistry::builtin();
-            serde_json::json!({
-                "path": null,
-                "names": registry.names(),
-                "harnesses": harness_list_json(&registry),
-                "rejected": [],
-                "reason": "HOME is unset, so the descriptor file has no resolvable path — \
-                           only the harnesses compiled into the binary apply",
-            })
-        }
+        Some(home) => serde_json::json!({
+            "path": harness_registry::HarnessRegistry::descriptors_path(home).to_string_lossy(),
+            "names": registry.names(),
+            "harnesses": harness_list,
+            "rejected": registry
+                .rejected()
+                .iter()
+                .map(|r| serde_json::json!({ "name": r.name, "why": r.why }))
+                .collect::<Vec<_>>(),
+            "reason": registry.diagnostic(),
+        }),
+        None => serde_json::json!({
+            "path": null,
+            "names": registry.names(),
+            "harnesses": harness_list,
+            "rejected": [],
+            "reason": "HOME is unset, so the descriptor file has no resolvable path — \
+                       only the harnesses compiled into the binary apply",
+        }),
     };
 
     Ok(serde_json::json!({
@@ -16769,6 +16903,7 @@ mod tests {
                 persistent: None,
             }),
             docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
+            harness_catalogue_cache: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: None,
             price_refresh_at_boot: false,
@@ -16814,6 +16949,7 @@ mod tests {
             node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             service_health: Arc::new(service_health),
             docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
+            harness_catalogue_cache: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: None,
             price_refresh_at_boot: false,
@@ -20013,6 +20149,7 @@ mod tests {
         rs.nodes.insert(
             node_id.into(),
             event_log::NodeState {
+            harness: None,
                 node_id: node_id.into(),
                 status,
                 iter,
@@ -20226,6 +20363,7 @@ mod tests {
         run_state.nodes.insert(
             "a".into(),
             event_log::NodeState {
+            harness: None,
                 node_id: "a".into(),
                 status: event_log::NodeStatus::Completed,
                 iter: 2,
@@ -20279,6 +20417,7 @@ mod tests {
         run_state.nodes.insert(
             "a".into(),
             event_log::NodeState {
+            harness: None,
                 node_id: "a".into(),
                 status: event_log::NodeStatus::Stale,
                 iter: 1,
@@ -20297,6 +20436,7 @@ mod tests {
         run_state.nodes.insert(
             "b".into(),
             event_log::NodeState {
+            harness: None,
                 node_id: "b".into(),
                 status: event_log::NodeStatus::Waiting,
                 iter: 1,
@@ -20522,6 +20662,7 @@ mod tests {
             rs.nodes.insert(
                 node_id.into(),
                 event_log::NodeState {
+            harness: None,
                     node_id: node_id.into(),
                     status: event_log::NodeStatus::Completed,
                     iter: iters,
@@ -21182,6 +21323,7 @@ mod tests {
                 persistent: None,
             }),
             docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
+            harness_catalogue_cache: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: None,
             price_refresh_at_boot: false,
@@ -27262,6 +27404,7 @@ edges: []
                 persistent: None,
             }),
             docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
+            harness_catalogue_cache: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: None,
             price_refresh_at_boot: false,
@@ -27459,6 +27602,7 @@ edges: []
                 persistent: None,
             }),
             docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
+            harness_catalogue_cache: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: None,
             price_refresh_at_boot: false,
@@ -31721,6 +31865,17 @@ edges:
                 "source is builtin|descriptor, got {source:?}"
             );
             assert!(h["installed"].is_boolean(), "installed is a bool: {h}");
+            // #616/ADR-0053: the offer deduced from the binary rides on each entry —
+            // the model & effort catalogues (arrays, possibly empty = free-text
+            // fallback), the served effort-axis fact (a bool, replacing the client's
+            // hard-coded map), and the probed version (a string or null).
+            assert!(h["models"].is_array(), "models is an array: {h}");
+            assert!(h["efforts"].is_array(), "efforts is an array: {h}");
+            assert!(h["has_effort"].is_boolean(), "has_effort is a bool: {h}");
+            assert!(
+                h["version"].is_string() || h["version"].is_null(),
+                "version is a string or null: {h}"
+            );
         }
 
         // The embedded floor always resolves, always as `builtin` — copilot is the

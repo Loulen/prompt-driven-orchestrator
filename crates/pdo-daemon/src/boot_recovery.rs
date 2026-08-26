@@ -367,6 +367,7 @@ mod tests {
         rs.nodes.insert(
             node_id.into(),
             event_log::NodeState {
+            harness: None,
                 node_id: node_id.into(),
                 status,
                 iter,

@@ -6,7 +6,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use tracing::{info, warn};
@@ -1315,6 +1315,103 @@ pub fn binary_available(binary: &str) -> bool {
     path_contains_binary(&harness_probe_path(), binary)
 }
 
+/// How long a catalogue / version probe is allowed to run before it is killed and
+/// treated as "no answer" (#616). `--help` / `--version` exit immediately on every
+/// harness in play; the cap is a defence against a binary that blocks (a broken
+/// install, a prompt on stdin), so a probe can never wedge the boot task or the
+/// `/settings` response.
+const CATALOGUE_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The version string of `binary`, read by running `<binary> --version` on the
+/// harness probe `PATH` (#616, ADR-0053 §3). `None` when the binary can't be run,
+/// times out, or prints nothing. This is the **freshness key** of the catalogue
+/// cache: a changed version invalidates the cached catalogue and re-probes, so an
+/// auto-updating binary is followed without a daemon restart.
+///
+/// UNLIKE [`binary_available`], this **executes** the binary — deliberately, and
+/// only ever off the resident hot path: at daemon boot, and on a throttled version
+/// re-check behind the `/settings` fetch. `--version` is non-interactive and exits
+/// at once; the timeout is the backstop.
+pub(crate) fn probe_version(binary: &str) -> Option<String> {
+    probe_version_on(binary, &harness_probe_path())
+}
+
+/// The offered catalogue of `binary`, read by running `<binary> --help` on the
+/// harness probe `PATH` and parsing it (#616, ADR-0053 §1). A binary that can't be
+/// run, times out, or enumerates nothing yields [`harness_catalogue::Catalogue::default`]
+/// — the free-text fallback. Executes the binary; see [`probe_version`] for why
+/// that is safe here and not in [`binary_available`].
+pub(crate) fn probe_catalogue(binary: &str) -> crate::harness_catalogue::Catalogue {
+    probe_catalogue_on(binary, &harness_probe_path())
+}
+
+/// [`probe_version`] with an explicit `PATH` — the testable core (a test points it
+/// at a tempdir holding a fake binary, no ambient shell).
+pub(crate) fn probe_version_on(binary: &str, path: &str) -> Option<String> {
+    let out = run_probe(binary, &["--version"], path)?;
+    out.lines().next().map(|l| l.trim().to_string()).filter(|s| !s.is_empty())
+}
+
+/// [`probe_catalogue`] with an explicit `PATH` — the testable core.
+pub(crate) fn probe_catalogue_on(
+    binary: &str,
+    path: &str,
+) -> crate::harness_catalogue::Catalogue {
+    match run_probe(binary, &["--help"], path) {
+        Some(help) => crate::harness_catalogue::parse_help(&help),
+        None => crate::harness_catalogue::Catalogue::default(),
+    }
+}
+
+/// Run `<binary> <args>` with `PATH=path`, capturing stdout+stderr (a CLI may print
+/// its help to either), bounded by [`CATALOGUE_PROBE_TIMEOUT`]. Returns `None` when
+/// the binary can't be spawned, times out, or exits without output. Pure w.r.t. the
+/// daemon's environment — the `PATH` is injected, so this is unit-testable against a
+/// fake binary.
+///
+/// The timeout is a poll-and-kill loop rather than a blocking `output()` so a
+/// wedged child (blocked on stdin, a broken install) is reaped instead of hanging
+/// the caller's `spawn_blocking` worker forever. `--help`/`--version` output fits a
+/// pipe buffer, so reading after exit never blocks.
+fn run_probe(binary: &str, args: &[&str], path: &str) -> Option<String> {
+    if binary.is_empty() {
+        return None;
+    }
+    let mut child = std::process::Command::new(binary)
+        .args(args)
+        .env("PATH", path)
+        // A probe must never inherit an interactive stdin; if a binary asks, it
+        // gets EOF and exits rather than blocking.
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .ok()?;
+
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if start.elapsed() > CATALOGUE_PROBE_TIMEOUT {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(_) => return None,
+        }
+    }
+    let output = child.wait_with_output().ok()?;
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    if !output.stderr.is_empty() {
+        text.push('\n');
+        text.push_str(&String::from_utf8_lossy(&output.stderr));
+    }
+    (!text.trim().is_empty()).then_some(text)
+}
+
 /// Resolve the model a work node launches with: the node's own `model:`
 /// override wins, else the instance `default_effective` (#296/#347). An empty
 /// string on *either* side collapses to the next tier — "" means "unset"
@@ -2194,6 +2291,56 @@ mod tests {
         assert!(
             !binary_available("/no/such/absolute/path/binary"),
             "a missing slash-path is unavailable"
+        );
+    }
+
+    /// #616: write an executable fake binary into `dir` that echoes `stdout` on
+    /// `--help` and `version` on `--version`. Returns the dir's `PATH` string.
+    #[cfg(unix)]
+    fn fake_harness_binary(dir: &std::path::Path, name: &str, help: &str, version: &str) -> String {
+        use std::os::unix::fs::PermissionsExt;
+        // Self-contained: `printf` is a `/bin/sh` builtin, so the script runs even
+        // though `run_probe` sets `PATH` to just this dir (no `cat`/`echo` binary).
+        // That restricted PATH mirrors nothing in production — there the probe PATH
+        // is a full union (ADR-0055) — it only keeps the fixture honest.
+        let script = format!(
+            "#!/bin/sh\ncase \"$1\" in\n  --version) printf '%s\\n' '{version}';;\n  --help) printf '%s' '{help}';;\nesac\n"
+        );
+        let bin = dir.join(name);
+        std::fs::write(&bin, script).unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        dir.to_string_lossy().into_owned()
+    }
+
+    /// #616, ADR-0053 §1/§3: running the resolved binary reads its version and parses
+    /// its offered catalogue. Executed against a fake binary on an injected `PATH`,
+    /// so the test is deterministic and touches no real harness.
+    #[cfg(unix)]
+    #[test]
+    fn probe_reads_version_and_catalogue_from_the_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        let help = "  --model <m>  [gpt-5|gpt-5-codex|o4-mini]\n  --effort <e>  One of: low, medium, high";
+        let path = fake_harness_binary(dir.path(), "fake-harness", help, "fake-harness 1.402");
+
+        assert_eq!(
+            probe_version_on("fake-harness", &path).as_deref(),
+            Some("fake-harness 1.402")
+        );
+        let cat = probe_catalogue_on("fake-harness", &path);
+        assert_eq!(cat.models, vec!["gpt-5", "gpt-5-codex", "o4-mini"]);
+        assert_eq!(cat.efforts, vec!["low", "medium", "high"]);
+    }
+
+    /// #616: a binary that can't be resolved on the injected `PATH` yields no
+    /// version and an empty catalogue — the free-text fallback, never a panic.
+    #[test]
+    fn probe_of_an_absent_binary_is_empty_not_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_string_lossy().into_owned();
+        assert_eq!(probe_version_on("no-such-harness", &path), None);
+        assert_eq!(
+            probe_catalogue_on("no-such-harness", &path),
+            crate::harness_catalogue::Catalogue::default()
         );
     }
 

@@ -11,11 +11,23 @@ import type { HarnessDescriptorsView, NodeDef } from "../types";
 /** The floor of the precedence chain — a node with no pin runs on `claude`. */
 export const HARNESS_FLOOR = "claude";
 
-/** One harness as the picker offers it (#586): its name and whether its binary is
- *  installed (an uninstalled harness renders greyed and non-selectable). */
+/** One harness as the picker offers it (#586, #616): its name, whether its binary
+ *  is installed (an uninstalled harness renders greyed and non-selectable), and the
+ *  offer the daemon deduced from that binary — the model & effort catalogues, the
+ *  served effort-axis fact, and the probed version. The catalogues drive the model
+ *  and effort pickers; `hasEffort` greys the effort picker (no more client-side
+ *  map). Empty catalogues mean the binary enumerates none → free text. */
 export interface HarnessOption {
   name: string;
   installed: boolean;
+  /** Offered model ids, served (ADR-0053). Empty ⇒ free-text model. */
+  models: string[];
+  /** Offered effort levels, served. Empty ⇒ no effort axis. */
+  efforts: string[];
+  /** The served effort-axis fact — whether to grey the effort picker. */
+  hasEffort: boolean;
+  /** The probed binary version the offer was read at, for the provenance line. */
+  version: string | null;
 }
 
 /** The picker's two sections (#586): the embedded floor, and the disk-declared
@@ -31,8 +43,12 @@ export interface HarnessCatalog {
  *  fallback so the control is never empty while settings load. */
 const FLOOR_CATALOG: HarnessCatalog = {
   builtin: [
-    { name: "claude", installed: true },
-    { name: "opencode", installed: true },
+    // The transient pre-fetch floor carries no catalogue — models/efforts arrive
+    // with `GET /settings`. `hasEffort` seeds the two embedded facts so the picker
+    // is not mis-greyed for the split-second before the fetch resolves; the served
+    // value replaces it. Not a source of truth (the daemon re-resolves at spawn).
+    { name: "claude", installed: true, models: [], efforts: [], hasEffort: true, version: null },
+    { name: "opencode", installed: true, models: [], efforts: [], hasEffort: false, version: null },
   ],
   descriptors: [],
 };
@@ -49,22 +65,43 @@ export function harnessCatalog(
   const catalog: HarnessCatalog = { builtin: [], descriptors: [] };
   for (const h of view.harnesses) {
     const section = h.source === "descriptor" ? catalog.descriptors : catalog.builtin;
-    section.push({ name: h.name, installed: h.installed });
+    section.push({
+      name: h.name,
+      installed: h.installed,
+      // #616/ADR-0053: the offer the daemon deduced from the binary. Defaulted for a
+      // daemon predating #616 (no fields served): empty catalogues → free text, and
+      // `has_effort` absent → don't grey (the old conservative default) — never a
+      // client-side per-name map.
+      models: h.models ?? [],
+      efforts: h.efforts ?? [],
+      hasEffort: h.has_effort ?? true,
+      version: h.version ?? null,
+    });
   }
   return catalog;
 }
 
-/** Client mirror of the descriptor's `{effort}` hole (ADR-0045): `opencode` has
- *  no launch-time effort axis, so its effort picker is greyed. An unknown harness
- *  defaults to "has effort" — the conservative choice (don't grey what we can't
- *  see; the daemon still ignores an effort a harness can't honour). */
-const HARNESS_HAS_EFFORT: Record<string, boolean> = {
-  claude: true,
-  opencode: false,
-};
+/** Find a harness's option by name across both sections, or `undefined` for a name
+ *  the catalogue does not carry (an unknown pin — the daemon re-resolves at spawn).
+ *  This is how a surface reads the served offer (models, efforts, effort axis) for
+ *  the harness a node resolves to. */
+export function findHarnessOption(
+  catalog: HarnessCatalog,
+  name: string,
+): HarnessOption | undefined {
+  return (
+    catalog.builtin.find((o) => o.name === name) ??
+    catalog.descriptors.find((o) => o.name === name)
+  );
+}
 
-export function harnessHasEffort(name: string): boolean {
-  return HARNESS_HAS_EFFORT[name] ?? true;
+/** Whether the harness a node resolves to greys its effort picker. Reads the SERVED
+ *  effort-axis fact off the catalogue (ADR-0053), no hard-coded map. An unknown
+ *  harness (absent from the catalogue) defaults to "has effort" — the conservative
+ *  choice: don't grey what we can't see; the daemon ignores an effort a harness
+ *  can't honour anyway. */
+export function harnessHasEffort(catalog: HarnessCatalog, name: string): boolean {
+  return findHarnessOption(catalog, name)?.hasEffort ?? true;
 }
 
 /** The harness an editor node resolves to, with only the tiers a client knows:

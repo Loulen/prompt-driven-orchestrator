@@ -356,7 +356,7 @@ export interface HarnessDescriptorsView {
 }
 
 /** One resolved harness, as `GET /settings → harness_descriptors.harnesses`
- *  discloses it (#586). */
+ *  discloses it (#586, #616). */
 export interface HarnessListItem {
   name: string;
   /** `builtin` = the embedded floor (claude/opencode); `descriptor` = the disk tier. */
@@ -364,6 +364,20 @@ export interface HarnessListItem {
   /** Whether the harness's binary resolves on the daemon's `$PATH`. `false` greys
    *  the row and blocks selection — a spawn would fail fast (ADR-0037). */
   installed: boolean;
+  /** #616/ADR-0053: the model ids the installed binary offers, deduced from it and
+   *  served — the picker renders THESE instead of a hard-coded alias list. Empty ⇒
+   *  the binary enumerates none, so the client falls back to free text (a declared
+   *  absence). Optional so a daemon predating #616 still typechecks. */
+  models?: string[];
+  /** #616/ADR-0053: the effort levels the binary offers. Empty ⇒ no effort axis. */
+  efforts?: string[];
+  /** #616/ADR-0053: the served effort-axis fact — whether this harness has an
+   *  effort axis at all. Drives the effort-picker greying, replacing the client's
+   *  hard-coded map. */
+  has_effort?: boolean;
+  /** #616/ADR-0053: the probed binary version the catalogue was read at, for the
+   *  picker's provenance line. `null` when the binary answered no `--version`. */
+  version?: string | null;
 }
 
 /** `GET /settings` → `price_table` (#427). */
@@ -604,6 +618,14 @@ export interface NodeState {
    * `NodeState` literal in `App.tsx` would otherwise stop compiling.
    */
   missing_outputs?: string[];
+  /**
+   * #616/ADR-0046: the harness this node's session was FROZEN on at spawn, from the
+   * `NodeStarted` payload. Shown per-node in the Run view (next to the id, on
+   * select) so what actually ran is visible — distinct from the run-level default
+   * (`RunState.harness`). Optional: absent for a node that never started (a pure
+   * skip) or a pre-#616 daemon.
+   */
+  harness?: string;
 }
 
 export interface EdgeInfo {

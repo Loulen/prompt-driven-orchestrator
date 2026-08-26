@@ -638,7 +638,7 @@ Chaque NodeRun = **une session tmux détachée** créée par le daemon, contenan
 - NodeRun : `pdo-<run-id>-<node-id>-iter-<N>`.
 - Manager : `pdo-mgr-<run-id>`.
 - Shell de run : `pdo-shell-<run-id>`.
-- Assistant de bibliothèque : `pdo-libassist-<pipeline-id>`.
+- Assistant de bibliothèque : `pdo-libassist-shared` (une seule pour tout le daemon).
 
 Les sessions sont invisibles par défaut, survivent au crash de l'UI ou du daemon (récupération au redémarrage).
 
@@ -648,11 +648,15 @@ Les sessions sont invisibles par défaut, survivent au crash de l'UI ou du daemo
 
 Visible uniquement sur les Runs terminaux non-archivés dont le worktree existe (*reapable*). **Un seul shell par Run**, create-if-absent, persistant (sans TTL), tué par `cleanup_run`. Exempt du cap. `resume_run` le tue best-effort avant de ré-armer le scheduler (un writer concurrent casserait le merge). Détails → ADR-0021.
 
-### Assistant de bibliothèque — copilote d'authoring (ADR-0048)
+### Assistant de bibliothèque — copilote d'authoring (ADR-0048, amendé ADR-0051)
 
-**Assistant de bibliothèque** *(terme, #302)* : une **REPL `claude`** design-time spawnée à la demande dans `pdo-libassist-<pipeline-id>`, cwd = le dossier des templates du scope (`~/.pdo/library/pipelines/` ou `<repo>/.pdo/library/pipelines/`). L'utilisateur **décrit** un changement en langage naturel ; l'agent produit/édite le YAML (+ `<id>.prompts/`), montre un diff, et **écrit au save** via `POST /library/pipelines` (validation `POST /nodes/parse`). _Éviter_ : « manager » (= REPL attachée à un **Run**, `POST /runs/<id>/commands`) — l'assistant n'est attaché à **aucun Run** et n'émet **aucune** commande ; son seul effet est d'écrire un fichier template.
+**Assistant de bibliothèque** *(terme, #302)* : une **REPL `claude`** design-time, **unique pour tout le daemon**, spawnée à la demande dans `pdo-libassist-shared`. L'utilisateur **décrit** un changement en langage naturel ; l'agent produit/édite le YAML (+ `<id>.prompts/`), montre un diff, et **écrit au save** via `POST /library/pipelines` (validation `POST /nodes/parse`). _Éviter_ : « manager » (= REPL attachée à un **Run**, `POST /runs/<id>/commands`) — l'assistant n'est attaché à **aucun Run** et n'émet **aucune** commande ; son seul effet est d'écrire un fichier template.
 
-Keyé sur la **pipeline** (pas un Run). Cycle de vie **create-on-open / reap-on-leave** : spawné à l'ouverture de l'onglet **Assistant**, reapé (`DELETE /sessions/<id>/libassist`) dès qu'on quitte l'onglet. `claude` ne sort pas sur EOF, donc la session survit à une coupure WS ; la fermeture est explicite. **Jamais reapé par le sweep** (pas de Run à keyer — `parse_session_name` connaît le préfixe `libassist-`, `decide_one` le garde toujours) et **sans TTL**. Exempt du cap. Prompt système primé (format YAML + endpoints). Détails → ADR-0048.
+Keyé sur rien (pas un Run, pas une pipeline) : il y en a **un seul**, partagé par toutes les templates, donc son historique survit à un aller-retour entre deux pipelines. Exempt du cap. Prompt système primé (format YAML + endpoints), sans id de pipeline. Détails → ADR-0048, amendé par ADR-0051.
+
+**Focus de l'assistant** *(terme, #594)* : la template que l'UI est en train d'éditer (id + scope), déclarée en continu au daemon et horodatée. Elle sert deux fois : injectée dans le contexte de l'assistant à **chaque message** de l'utilisateur (il se resitue sans qu'on le lui rappelle), et lue par le sweep comme **preuve de présence** de l'humain. _Éviter_ : « pipeline courante » (ambigu avec le Run sélectionné), « session active ».
+
+Cycle de vie : spawné à l'ouverture de l'onglet **Assistant**, reapé quand l'utilisateur quitte **toute** vue d'édition de pipeline — pas quand il quitte l'onglet. Trois garde-fous, dans l'ordre : une session **attachée** n'est jamais tuée ; un **focus frais** n'est jamais tué (on édite, même sans l'onglet affiché) ; sinon le sweep la tue sur une TTL d'inactivité courte. Un reload ou une fermeture d'onglet ne peut donc plus la laisser vivre indéfiniment.
 
 ### Cap de sessions concurrentes (admission control)
 
@@ -773,7 +777,7 @@ PDO est un **atelier de production de code** ; la conception de pipelines est un
 
 ### Toolbar — bouton info pipeline
 
-L'icône `i` ouvre un panneau **info pipeline** : nom, statut, variables, bouton favoriter. Si la pipeline tourne, le terminal manager y prend la place dominante ; sur une **template** de bibliothèque, un onglet **Assistant** héberge le copilote d'authoring (ADR-0048), et un glyphe « agent » dans la toolbar y saute directement (côté run, le même chemin mène au Manager — #302). Realtime via WebSocket : chaque événement de l'event log push une update vers l'UI.
+L'icône `i` ouvre un panneau **info pipeline** : nom, statut, variables, bouton favoriter. Si la pipeline tourne, le terminal manager y prend la place dominante ; sur une **template** de bibliothèque, un onglet **Assistant** héberge le copilote d'authoring (ADR-0048 / ADR-0051), et un glyphe « agent » dans la toolbar y saute directement (côté run, le même chemin mène au Manager — #302). Realtime via WebSocket : chaque événement de l'event log push une update vers l'UI.
 
 ### Workflow utilisateur typique
 

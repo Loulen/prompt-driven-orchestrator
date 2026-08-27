@@ -10,17 +10,14 @@ cd "$(git rev-parse --show-toplevel)"
 # frontend/src/components: 146 reconciles a preexisting drift (the tree already
 #   held 146 direct files before #598; the baseline had lagged at 144). Ratchet
 #   down when the flat list is genuinely tidied.
-# crates/pdo-daemon/src: 68 admits the three pure modules the `copilot` spec
-#   (#612) added, each a distinct concern with its own parser or renderer rather
-#   than drift: copilot_journal.rs (#615, the event-journal reader),
-#   harness_catalogue.rs (#616, the `--help` catalogue parser), and
-#   harness_support.rs (#617, the published capability × harness matrix). They
-#   mirror their standalone-module siblings recovery.rs / auto_fail.rs /
-#   retry_verdict.rs / restart_verdict.rs. 65 previously admitted recovery.rs
-#   (#599) on the same rationale, and 64 auto_fail.rs (#598) before it.
+# crates/pdo-daemon/src: 71 admits three pure Performance modules from #585:
+#   context_peak.rs parses harness telemetry, distribution.rs owns R-7 summary
+#   statistics, and stats_performance.rs aggregates the HTTP response. Keeping
+#   these concerns separate follows the sibling-module rule. 68 previously
+#   admitted the three pure modules from the `copilot` spec (#612).
 BASELINES='
 frontend/src/components 152
-crates/pdo-daemon/src 68
+crates/pdo-daemon/src 71
 '
 
 fail=0

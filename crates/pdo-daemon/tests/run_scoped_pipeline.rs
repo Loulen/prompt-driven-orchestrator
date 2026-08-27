@@ -567,6 +567,10 @@ async fn next_any_pipeline_event(
             if parsed["type"] == "event" {
                 if let Some(event) = parsed.get("event") {
                     if event["kind"] == "pipeline_modified" {
+                        let path = event["payload"]["path"].as_str().unwrap_or_default();
+                        if path.ends_with("/pipeline.yaml") || path.contains("/pipeline.prompts/") {
+                            continue;
+                        }
                         return Some(parsed.clone());
                     }
                 }
@@ -587,15 +591,6 @@ async fn unrelated_md_in_run_worktree_does_not_emit_pipeline_event() {
     let run_id = create_run(&daemon).await;
 
     let mut ws = daemon.connect_ws().await.unwrap();
-    // Drain initial ready + run events
-    let _ = timeout(Duration::from_millis(1500), async {
-        loop {
-            if ws.next().await.is_none() {
-                break;
-            }
-        }
-    })
-    .await;
 
     // Write an unrelated .md directly inside the run directory (which already
     // exists and is watched via inotify). This reproduces the issue #43 bug:

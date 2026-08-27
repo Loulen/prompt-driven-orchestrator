@@ -722,6 +722,24 @@ describe("duplicateNode", () => {
     const uniqueIds = new Set(ids);
     expect(uniqueIds.size).toBe(3);
   });
+
+  it("keeps output instructions on the duplicated node", () => {
+    const original = makeNode({
+      id: "orig1234",
+      outputs: [{
+        name: "review",
+        repeated: false,
+        side: "right",
+        instructions: "Return a concise verdict.",
+      }],
+    });
+    seedTabWithPipeline(makePipeline([original]));
+
+    useEditStore.getState().duplicateNode("orig1234");
+
+    expect(useEditStore.getState().openTabs[0].pipeline.nodes[1].outputs[0].instructions)
+      .toBe("Return a concise verdict.");
+  });
 });
 
 describe("updateNode with name", () => {
@@ -1750,6 +1768,36 @@ describe("undo/redo history (ADR-0014 / #226)", () => {
       expect(hist().past).toHaveLength(1);
       expect(hist().future).toHaveLength(0); // the new edit cleared redo
     });
+  });
+
+  it("undo and redo restore output instructions edited through the inspector seam", () => {
+    const original = makeNode({
+      id: "writer01",
+      outputs: [{
+        name: "result",
+        repeated: false,
+        side: "right",
+        instructions: "Write the original summary.",
+      }],
+    });
+    seedTabWithPipeline(makePipeline([original]));
+
+    useEditStore.getState().updateNode("writer01", {
+      outputs: [{
+        ...original.outputs[0],
+        instructions: "Write the revised summary.",
+      }],
+    });
+    expect(activePipeline().nodes[0].outputs[0].instructions)
+      .toBe("Write the revised summary.");
+
+    useEditStore.getState().undo();
+    expect(activePipeline().nodes[0].outputs[0].instructions)
+      .toBe("Write the original summary.");
+
+    useEditStore.getState().redo();
+    expect(activePipeline().nodes[0].outputs[0].instructions)
+      .toBe("Write the revised summary.");
   });
 
   describe("draw-edge fold (untracked target_side stamp)", () => {

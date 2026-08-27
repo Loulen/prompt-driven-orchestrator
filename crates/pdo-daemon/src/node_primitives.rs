@@ -918,6 +918,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    instructions: None,
                     required: false,
                 })
                 .collect(),
@@ -931,6 +932,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    instructions: None,
                     required: false,
                 })
                 .collect(),
@@ -957,6 +959,7 @@ mod tests {
                 frontmatter: None,
                 when: None,
                 description: None,
+                instructions: None,
                 required: false,
             }],
             outputs: vec![Port {
@@ -967,6 +970,7 @@ mod tests {
                 frontmatter: None,
                 when: None,
                 description: None,
+                instructions: None,
                 required: false,
             }],
             interactive: false,

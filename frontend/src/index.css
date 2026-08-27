@@ -357,6 +357,95 @@ body {
   gap: 8px;
 }
 
+/* Optional expected-content guidance on agentic outputs (#573). */
+.exp {
+  background: var(--color-bg-1);
+  border: 1px solid var(--color-line);
+  border-radius: 6px;
+}
+.exp:hover {
+  background: var(--color-bg-2);
+  border-color: var(--color-line-strong);
+}
+.exp.expanded {
+  background: var(--color-bg-2);
+  border-color: var(--color-acc-border);
+}
+.exp-trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-fg-4);
+  cursor: pointer;
+  text-align: left;
+}
+.exp-trigger:focus-visible {
+  outline: none;
+  border-color: var(--color-acc);
+  box-shadow: 0 0 0 1px var(--color-acc);
+}
+.exp-label {
+  flex: none;
+  color: var(--color-fg-2);
+  font-family: var(--font-sans);
+  font-size: 11px;
+}
+.exp-preview {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--color-fg-3);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.exp-preview.empty {
+  color: var(--color-fg-5);
+  font-family: var(--font-sans);
+}
+.exp-chevron {
+  flex: none;
+  transition: transform 150ms;
+}
+.exp.expanded .exp-chevron {
+  transform: rotate(90deg);
+}
+.exp textarea {
+  display: block;
+  width: calc(100% - 16px);
+  min-height: 54px;
+  max-height: 150px;
+  margin: 0 8px;
+  padding: 6px 8px;
+  resize: none;
+  overflow-y: hidden;
+  border: 1px solid var(--color-line-strong);
+  border-radius: 4px;
+  outline: none;
+  background: var(--color-bg-3);
+  color: var(--color-fg);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.exp textarea:focus {
+  border-color: var(--color-acc);
+}
+.exp-footer {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 8px 6px;
+  color: var(--color-fg-5);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+}
+
 /* Inspector field row — F1 type-driven (refs docs/design/project/winners.css §6) */
 .fld {
   display: flex;

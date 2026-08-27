@@ -52,6 +52,7 @@ mod tests {
                 frontmatter: None,
                 when: None,
                 description: None,
+                instructions: None,
                 required: false,
             }],
             outputs,
@@ -74,6 +75,7 @@ mod tests {
             frontmatter: None,
             when: Some(yaml(when_yaml)),
             description: None,
+            instructions: None,
             required: false,
         }
     }
@@ -87,6 +89,7 @@ mod tests {
             frontmatter: None,
             when: None,
             description: None,
+            instructions: None,
             required: false,
         }
     }

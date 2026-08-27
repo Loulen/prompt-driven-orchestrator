@@ -38,6 +38,7 @@ const INPUT: Complete<PortDef> = {
   frontmatter: FRONTMATTER,
   when: { verdict: "PASS" },
   description: "d",
+  instructions: "i",
 };
 const OUTPUT: Complete<PortDef> = {
   name: "out",
@@ -47,6 +48,7 @@ const OUTPUT: Complete<PortDef> = {
   frontmatter: FRONTMATTER,
   when: { verdict: "PASS" },
   description: "d",
+  instructions: "i",
 };
 const NODE: Complete<NodeDef> = {
   id: "n1",
@@ -139,7 +141,7 @@ describe("serializer field-partition exhaustiveness guard (#355)", () => {
   // maximal, so the set-equality above can't pass on an accidentally-thin fixture.
   it("fixture is maximal at edge/output-port scope", () => {
     expect(sortedKeys(edge)).toHaveLength(7);
-    expect(sortedKeys(output)).toHaveLength(6);
+    expect(sortedKeys(output)).toHaveLength(7);
   });
 });
 

@@ -322,6 +322,7 @@ mod tests {
             frontmatter: None,
             when: None,
             description: None,
+            instructions: None,
             required: false,
         }
     }
@@ -335,6 +336,7 @@ mod tests {
             frontmatter: None,
             when: None,
             description: None,
+            instructions: None,
             required: false,
         }
     }
@@ -348,6 +350,7 @@ mod tests {
             frontmatter: Some(schema),
             when: None,
             description: None,
+            instructions: None,
             required: false,
         }
     }
@@ -703,6 +706,7 @@ mod tests {
             frontmatter: None,
             when: None,
             description: None,
+            instructions: None,
             required: false,
         }
     }
@@ -716,6 +720,7 @@ mod tests {
             frontmatter: None,
             when: None,
             description: None,
+            instructions: None,
             required: false,
         }
     }
@@ -836,6 +841,7 @@ mod tests {
             frontmatter: None,
             when: None,
             description: None,
+            instructions: None,
             required: false,
         }
     }

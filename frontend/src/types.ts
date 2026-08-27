@@ -936,6 +936,7 @@ export interface PortDef {
   frontmatter?: Record<string, FrontmatterFieldDecl> | null;
   when?: Record<string, unknown> | null;
   description?: string | null;
+  instructions?: string | null;
 }
 
 export interface FrontmatterFieldDecl {

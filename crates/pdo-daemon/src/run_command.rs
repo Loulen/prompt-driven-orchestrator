@@ -3229,6 +3229,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    instructions: None,
                     required: false,
                 }],
                 outputs: vec![Port {
@@ -3239,6 +3240,7 @@ mod tests {
                     frontmatter: None,
                     when: Some(serde_yaml::from_str("iter: { lt: \"$max_iter_review\" }").unwrap()),
                     description: None,
+                    instructions: None,
                     required: false,
                 }],
                 interactive: false,
@@ -3293,6 +3295,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    instructions: None,
                     required: false,
                 }],
                 outputs: vec![],

@@ -10,6 +10,14 @@ pub(crate) enum Severity {
     Error,
 }
 
+fn deserialize_optional_non_blank<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<String>::deserialize(deserializer)?;
+    Ok(value.filter(|text| !text.trim().is_empty()))
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct Diagnostic {
     #[allow(dead_code)]
@@ -114,6 +122,12 @@ pub(crate) struct Port {
     pub when: Option<serde_yaml::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_blank",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub instructions: Option<String>,
     /// `required: true` marks an **input** port whose artifact must arrive for the
     /// node to run (ADR-0011 / #589 / #600). When every edge feeding a required
     /// port is structurally dead — its producing branch was not taken (either/or) —
@@ -649,6 +663,7 @@ pub(crate) fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
                         frontmatter: None,
                         when: None,
                         description: None,
+                        instructions: None,
                         required: false,
                     });
                 }
@@ -700,6 +715,24 @@ pub(crate) fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
                 }
             }
             _ => {}
+        }
+    }
+
+    for node in &pipeline.nodes {
+        if !matches!(node.node_type, NodeType::DocOnly | NodeType::CodeMutating) {
+            for port in node
+                .outputs
+                .iter()
+                .filter(|port| port.instructions.is_some())
+            {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Warning,
+                    message: format!(
+                        "deterministic node '{}' preserves instructions on output '{}' but does not inject them because no agent produces that output",
+                        node.id, port.name
+                    ),
+                });
+            }
         }
     }
 
@@ -2543,6 +2576,7 @@ nodes:
                 frontmatter: None,
                 when: None,
                 description: None,
+                instructions: None,
                 required: false,
             }],
             interactive: false,
@@ -4257,6 +4291,25 @@ nodes: []
             result.diagnostics
         );
         assert!(!result.pipeline.prompt_required);
+    }
+
+    #[test]
+    fn deterministic_output_instructions_are_preserved_with_a_non_blocking_diagnostic() {
+        let yaml = VALID_MINIMAL.replace(
+            "      - name: user_prompt",
+            "      - name: user_prompt\n        instructions: Keep this guidance.",
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+
+        assert_eq!(
+            result.pipeline.nodes[0].outputs[0].instructions.as_deref(),
+            Some("Keep this guidance.")
+        );
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Warning
+                && diagnostic.message.contains("deterministic node 'start'")
+                && diagnostic.message.contains("output 'user_prompt'")
+        }));
     }
 
     #[test]

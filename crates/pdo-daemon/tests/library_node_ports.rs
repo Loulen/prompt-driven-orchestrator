@@ -1,5 +1,5 @@
 //! Layer 3a — POST a library node with fully-typed ports (frontmatter schemas,
-//! when clauses, repeated flag, side) → GET /library → assert every field
+//! instructions, when clauses, repeated flag, side) → GET /library → assert every field
 //! round-trips through the daemon and on-disk YAML.  Regression test for #71.
 
 use crate::common::TestDaemon;
@@ -40,7 +40,8 @@ async fn library_node_preserves_all_port_fields() {
                 },
                 "when": {
                     "verdict": { "eq": "PASS" }
-                }
+                },
+                "instructions": "Return a verdict and explain the main risk."
             }
         ],
         "interactive": true,
@@ -106,6 +107,10 @@ async fn library_node_preserves_all_port_fields() {
     let when = &output["when"];
     assert!(!when.is_null(), "when clause should be present");
     assert_eq!(when["verdict"]["eq"], "PASS");
+    assert_eq!(
+        output["instructions"],
+        "Return a verdict and explain the main risk."
+    );
 
     // Assert metadata
     assert_eq!(entry["interactive"], true);
@@ -142,6 +147,10 @@ async fn library_node_preserves_all_port_fields() {
         "instantiated output should have when"
     );
     assert_eq!(inst_output["when"]["verdict"]["eq"], "PASS");
+    assert_eq!(
+        inst_output["instructions"],
+        "Return a verdict and explain the main risk."
+    );
     assert_eq!(spec["model"], "opus");
     assert_eq!(
         spec["effort"], "low",

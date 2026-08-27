@@ -23,6 +23,9 @@ nodes:
       - name: task
     outputs:
       - name: result
+        instructions: |
+          Summarize the implementation.
+          Include remaining risks.
   - id: end
     name: End
     type: end
@@ -134,6 +137,13 @@ async fn prompt_endpoint_returns_augmented_prompt_after_run_creation() {
         body.contains(ROLE_PROMPT.trim()),
         "prompt must contain the role prompt, got: {body}"
     );
+    let output = body.find("`result`: write to").expect("result output path");
+    let instructions = body[output..]
+        .find("Summarize the implementation.")
+        .map(|offset| output + offset)
+        .expect("instructions under result output");
+    assert!(instructions > output);
+    assert!(body.contains("Include remaining risks."));
 
     // Clean up tmux session if it was created
     let session_name = format!("pdo-{run_id}-{NODE_ID}-iter-1");

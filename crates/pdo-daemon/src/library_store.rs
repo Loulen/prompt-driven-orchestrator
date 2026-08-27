@@ -1054,6 +1054,7 @@ mod tests {
                 frontmatter: None,
                 when: None,
                 description: None,
+                instructions: None,
                 required: false,
             }],
             outputs: vec![pipeline::Port {
@@ -1064,6 +1065,7 @@ mod tests {
                 frontmatter: None,
                 when: None,
                 description: None,
+                instructions: None,
                 required: false,
             }],
             interactive: false,
@@ -1242,6 +1244,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    instructions: None,
                     required: false,
                 },
                 pipeline::Port {
@@ -1252,6 +1255,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    instructions: None,
                     required: false,
                 },
             ],
@@ -1273,6 +1277,7 @@ mod tests {
                     m
                 }),
                 description: None,
+                instructions: None,
                 required: false,
             }],
             interactive: true,
@@ -1720,6 +1725,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    instructions: None,
                     required: false,
                 },
                 pipeline::Port {
@@ -1730,6 +1736,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    instructions: None,
                     required: false,
                 },
             ],
@@ -1772,6 +1779,7 @@ mod tests {
                     m
                 })),
                 description: None,
+                instructions: None,
                 required: false,
             }],
             interactive: true,
@@ -1813,6 +1821,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    instructions: None,
                     required: false,
                 }],
                 outputs: vec![pipeline::Port {
@@ -1833,6 +1842,7 @@ mod tests {
                     }),
                     when: None,
                     description: None,
+                    instructions: None,
                     required: false,
                 }],
                 interactive: false,

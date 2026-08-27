@@ -6,7 +6,7 @@ license.workspace = true
 description.workspace = true
 repository.workspace = true
 homepage.workspace = true
-# App, pas une lib : jamais de cargo publish (release-plz + hygiène crates.io).
+# App, pas une lib : jamais de cargo publish (hygiène crates.io).
 publish = false
 # Un seul binaire de test au lieu d'un par fichier de `tests/` : chaque binaire
 # relinke tout le crate (~254 Mo), donc 50 fichiers = 50 links en série et

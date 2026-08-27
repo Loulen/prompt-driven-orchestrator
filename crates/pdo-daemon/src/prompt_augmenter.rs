@@ -1084,7 +1084,7 @@ pub(crate) fn build_manager_prompt(
 /// Prepended to the static role prompt (`prompts/builtin/library-assistant.md`),
 /// it gives the daemon base URL and the endpoints the assistant drives —
 /// `GET /sessions/libassist/focus` (which template is open), `POST /nodes/parse`
-/// (validate) and `POST /library/pipelines` (persist) — with `curl` examples. Same
+/// (validate) and `POST /sessions/libassist/save` (persist) — with `curl` examples. Same
 /// discipline as the manager: we own the session prompt, so we document the
 /// endpoints in plain text rather than shipping a custom MCP. The
 /// **write-on-save** rule (F2 of the issue triage: show a diff, write only on the
@@ -1125,21 +1125,22 @@ gives you, and it may live in another folder entirely.
 - Which pipeline is open: `curl -s {daemon_url}/sessions/libassist/focus`
 - List every template: `curl {daemon_url}/library/pipelines`
 - Validate a single node's YAML before you save: `curl -X POST {daemon_url}/nodes/parse -H 'Content-Type: application/json' -d '{{"yaml":"<node yaml>"}}'`
-- Persist the whole template: `curl -X POST {daemon_url}/library/pipelines -H 'Content-Type: application/json' -d '{{"id":"<pipeline id>","name":"<display name>","scope":"<scope from the focus>","yaml":"<full pipeline yaml>","prompts":{{"<node-id>":"<prompt markdown>"}}}}'`
+- Persist the open template: `curl -X POST {daemon_url}/sessions/libassist/save -H 'Content-Type: application/json' -d '{{"yaml":"<full pipeline yaml>","prompts":{{"<node-id>":"<prompt markdown>"}}}}'`
 
-**Always pass `scope`, set to the scope the focus gave you.** Without it the
-daemon writes into the `repo` store: a `user` or `library` template saved with no
-scope is silently **moved** out of the store it came from, leaving a duplicate
-behind and a canvas pointing at a file that no longer changes.
+**Saving takes no id and no scope.** The daemon writes into the file the focus
+names, because it is the only party that knows where that is. Do **not** save
+through `POST /library/pipelines`: it writes into the *library store*, a different
+tree from the `.pdo/pipelines/` an edit tab opens — you would leave a duplicate
+there, leave the edited file untouched, and report a save that did not happen.
 
 ## Write on save, never on every edit
 
 Do **not** touch files as you reason. When the user asks for a change: describe
 what you will change, **show a diff**, and write **only after the user says OK**.
 Validate node YAML via `POST /nodes/parse` first; then persist the full template
-via `POST /library/pipelines`, keeping `id` and `scope` as the focus gave them so
-it saves in place. The canvas re-reads the template the moment you save — so save
-the whole file at once, never a half-edited one.
+via `POST /sessions/libassist/save`. The canvas re-reads the template the moment
+you save — so send the whole file at once, never a half-edited one, and never
+write it with `Write`/`Edit`/`sed` (the canvas would not hear about it).
 
 You drive no Run and issue no run commands: your only durable effect is the YAML
 the user reviews. Read first, propose second, write last.
@@ -2731,5 +2732,31 @@ mod tests {
         std::fs::create_dir_all(tmp.path()).unwrap();
 
         assert!(!read_start_prompt_present(tmp.path()).unwrap());
+    }
+
+    /// The primer names **one** write path, and names the other as a trap.
+    ///
+    /// On a harness with no `--settings` hole the hook never arms (ADR-0051 §3),
+    /// so this text is the only thing standing between the assistant and the bug
+    /// it used to be instructed into: `POST /library/pipelines` reads `scope` in
+    /// the library store's vocabulary, so a `repo` template saved there became a
+    /// duplicate in another tree while the edited file never moved.
+    #[test]
+    fn library_assistant_preamble_points_the_save_at_the_focus() {
+        let p = build_library_assistant_preamble("http://localhost:1234");
+
+        assert!(
+            p.contains("/sessions/libassist/save"),
+            "the primer names the focus-driven save endpoint:\n{p}"
+        );
+        assert!(
+            !p.contains("-X POST http://localhost:1234/library/pipelines"),
+            "and never offers the library store as a way to save:\n{p}"
+        );
+        assert!(
+            p.contains("Do **not** save\nthrough `POST /library/pipelines`"),
+            "the trap is named outright, so a model that knows the old endpoint is \
+             warned off it:\n{p}"
+        );
     }
 }

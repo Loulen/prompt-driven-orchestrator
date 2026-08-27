@@ -31,9 +31,15 @@ Changements cassants sur l'API HTTP :
   un chemin, que le daemon résout lui-même — et le répète toutes les 20 s tant qu'une vue d'édition
   est ouverte. `GET` sert la même chose en JSON, ou en une phrase avec `?format=text` (la forme que
   le hook `UserPromptSubmit` de l'assistant injecte dans son contexte à chaque message).
+- **Nouveau `POST /sessions/libassist/save`.** Corps `{yaml, prompts}` — **ni id, ni scope** : le
+  daemon écrit dans le fichier que le focus désigne, puis diffuse le `pipeline_changed` qui fait
+  relire le canvas. C'est désormais le **seul** chemin d'écriture de l'assistant ; `POST
+  /library/pipelines` reste celui de la Library de l'UI et n'est plus documenté à l'assistant.
 - **`GET` / `PUT /settings` exposent `libassist_idle_ttl_secs`** (`stored → env
   `PDO_LIBASSIST_IDLE_TTL_SECS` → 120 s), le délai au bout duquel le sweep ramasse un assistant sans
   terminal attaché et sans édition en cours.
+- **`DELETE /sessions/libassist` vide aussi le focus.** Un client qui envoyait `PUT focus: null` puis
+  `DELETE` peut se contenter du `DELETE`.
 
 Changements de comportement visibles :
 
@@ -49,8 +55,12 @@ Changements de comportement visibles :
   bug : un onglet de scope `repo` ou `user` édite un fichier de `.pdo/pipelines/`, où le `<id>.yaml`
   annoncé par le primer n'existait pas. Le chemin réel du fichier édité arrive maintenant par le
   focus, en absolu.
-- **Le save de l'assistant nomme son `scope`.** Sans lui le daemon écrit dans le store `repo` : une
-  template `user` sauvée par l'assistant était **déplacée** silencieusement.
+- **Le save de l'assistant écrit dans le fichier ouvert, point.** Le mot *scope* désigne deux arbres
+  différents — `.pdo/pipelines/` pour un onglet d'édition, `.pdo/library/pipelines/` pour le library
+  store — et faire porter ce mot par l'assistant le faisait écrire un doublon dans le mauvais, laisser
+  le fichier édité intact et annoncer « Sauvé ». L'argument disparaît, la classe de bug avec.
+- **Aller voir un Run ne reape plus l'assistant** tant qu'un onglet de template reste ouvert. « Quitter
+  toute vue d'édition » se lit sur les onglets ouverts, pas sur l'onglet actif.
 
 Dégradation assumée : le hook `UserPromptSubmit` n'existe que sur un harnais dont le gabarit de lancement
 expose `--settings` (le `claude` de la registry ; ni `opencode`, ni `pi`). Ailleurs, la consigne

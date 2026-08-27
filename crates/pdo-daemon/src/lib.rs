@@ -4231,6 +4231,13 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/sessions/libassist/focus",
             axum::routing::put(put_libassist_focus).get(get_libassist_focus),
         )
+        // The assistant's one write path (#594, ADR-0051). Deliberately takes no
+        // id and no scope: the focus already names the file, and every way of
+        // naming it again is a way of naming the wrong one — the word "scope"
+        // means `.pdo/pipelines/` on an edit tab and `.pdo/library/pipelines/` in
+        // the library store, and the assistant cannot tell which is being asked of
+        // it.
+        .route("/sessions/libassist/save", post(save_libassist_focused))
         .route("/library", get(list_library))
         .route("/library", post(save_to_library))
         // #345 — parse a single node's YAML into a canvas-instantiable spec.
@@ -14426,9 +14433,16 @@ async fn open_library_assistant(State(state): State<Arc<AppState>>) -> Response 
 /// It is deliberately **not** the only reap path: a browser reload runs no React
 /// cleanup and so sends no `DELETE` at all, which is what the sweep's idle arm
 /// covers.
+///
+/// **Clears the focus by the same gesture.** "No edit view is open" is the one
+/// fact both carry, and splitting it across two calls made them diverge: the
+/// `pagehide` path can only afford a single `keepalive` request, so it reaped the
+/// session and left the focus behind — `GET …/focus` then named a template nobody
+/// had open, with an age growing without bound.
 async fn close_library_assistant(State(state): State<Arc<AppState>>) -> Response {
     let session = tmux_session_manager::libassist_session_name();
     let socket = state.tmux_socket();
+    set_libassist_focus(&state, None);
     let existed = tmux_session_manager::session_exists(&socket, session);
     tmux_session_manager::kill(&socket, session);
     if existed {
@@ -14603,10 +14617,12 @@ fn libassist_focus_json(
 
 /// The one-line rendering injected into the assistant's context on every message.
 ///
-/// Says the scope explicitly, because the assistant has to echo it back when it
-/// saves: the save endpoint defaults to `repo`, so a `user` template saved without
-/// a `scope` is silently **moved** into the repo store. With one assistant crossing
-/// every scope, that is no longer a corner case.
+/// Names the save endpoint, and names it as the *only* one. The assistant used to
+/// be told to echo the focus scope back to `POST /library/pipelines`, which reads
+/// that word in the library store's vocabulary: a `repo` template "saved" that way
+/// landed in `.pdo/library/pipelines/` as a duplicate while the edited file never
+/// moved, and the assistant announced success. `POST /sessions/libassist/save`
+/// takes no scope at all — the daemon already knows the file.
 fn libassist_focus_text(focus: Option<&LibassistFocus>) -> String {
     match focus {
         None => "PDO — aucune pipeline ouverte dans l'UI pour l'instant. Ne devine pas de \
@@ -14619,13 +14635,161 @@ fn libassist_focus_text(focus: Option<&LibassistFocus>) -> String {
             };
             format!(
                 "PDO — pipeline actuellement ouverte dans l'UI : `{}` (scope `{}`), fichier : {}\n\
-                 Travaille sur celle-là, sans la deviner ni la redemander. Quand tu sauves via \
-                 POST /library/pipelines, passe `\"scope\":\"{}\"` — sans lui le daemon écrit dans \
-                 le store `repo` et déplace la template.\n",
-                f.pipeline_id, f.scope, path, f.scope
+                 Travaille sur celle-là, sans la deviner ni la redemander. Pour écrire, un seul \
+                 endpoint : POST /sessions/libassist/save avec `{{\"yaml\": …, \"prompts\": …}}` — \
+                 il écrit dans CE fichier, sans id ni scope à fournir. N'utilise jamais \
+                 POST /library/pipelines pour sauver la template ouverte : il écrit dans le \
+                 library store, donc à côté du fichier édité.\n",
+                f.pipeline_id, f.scope, path
             )
         }
     }
+}
+
+/// Body of `POST /sessions/libassist/save` (#594 / ADR-0051): the whole template,
+/// and nothing that says *where*.
+#[derive(Deserialize)]
+struct LibassistSaveRequest {
+    yaml: String,
+    #[serde(default)]
+    prompts: HashMap<String, String>,
+}
+
+/// Persist the template the UI has open — **the focus names the target, the
+/// assistant does not** (#594 / ADR-0051).
+///
+/// This endpoint exists because the previous one could not be used correctly. The
+/// assistant was told to save through `POST /library/pipelines`, passing the focus
+/// scope; that endpoint reads `scope` in the *library store's* vocabulary
+/// (`.pdo/library/pipelines/`), while an edit tab's `repo`/`user` mean
+/// `.pdo/pipelines/`. The two words look identical and point at different trees,
+/// so a faithful assistant wrote a duplicate into the wrong store, left the edited
+/// file untouched, and reported success.
+///
+/// Removing the argument removes the class of bug: there is nothing left to get
+/// wrong. The daemon already resolved the absolute path when the UI declared its
+/// focus, and it is the only party that knows both vocabularies.
+///
+/// `409` when no template is open: saving into a guess is exactly what this whole
+/// mechanism exists to prevent.
+async fn save_libassist_focused(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<LibassistSaveRequest>,
+) -> Response {
+    let Some(focus) = read_libassist_focus(&state) else {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "no pipeline template is open in the UI — ask the user which one to \
+                          work on instead of guessing a file"
+            })),
+        )
+            .into_response();
+    };
+
+    // Same gate as `PUT /pipelines/{id}`: a template that does not parse must not
+    // reach disk, where it would break the canvas the user is looking at.
+    let parsed = match pipeline::parse_pipeline(&req.yaml) {
+        Ok(r) => r,
+        Err(e) => {
+            let (message, line) = parse_error_to_structured(&e);
+            let mut body =
+                serde_json::json!({ "error": format!("invalid YAML: {e}"), "message": message });
+            if let Some(l) = line {
+                body["line"] = serde_json::json!(l);
+            }
+            return (StatusCode::BAD_REQUEST, Json(body)).into_response();
+        }
+    };
+
+    let id = focus.pipeline_id.clone();
+    let path = if focus.scope == "library" {
+        // The library store owns its own layout *and* its own scope enum. Read the
+        // entry's current store off disk rather than mapping the edit tab's word
+        // onto it — the mapping is precisely what went wrong before.
+        let store_scope = library_store::pipelines::get_scope(&state.repo_root, &id)
+            .unwrap_or(library_store::pipelines::Scope::User);
+        if let Err(e) = library_store::pipelines::save(
+            &state.repo_root,
+            Some(&id),
+            &parsed.pipeline.name,
+            &req.yaml,
+            &req.prompts,
+            store_scope,
+        ) {
+            let msg = format!("write failed: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": msg.clone(), "message": msg })),
+            )
+                .into_response();
+        }
+        match library_store::pipelines::get_path(&state.repo_root, &id) {
+            Some(p) => p,
+            None => {
+                let msg = "write reported success but the template is not in the library store"
+                    .to_string();
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": msg.clone(), "message": msg })),
+                )
+                    .into_response();
+            }
+        }
+    } else {
+        let path = resolve_pipeline_path_scoped(&state.repo_root, &id, Some(&focus.scope));
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        mark_self_write(&state.recent_writes, &path);
+        if let Err(e) = std::fs::write(&path, &req.yaml) {
+            let msg = format!("write failed: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": msg.clone(), "message": msg })),
+            )
+                .into_response();
+        }
+        for (node_id, content) in &req.prompts {
+            let prompt_path = pipeline::canonical_prompt_path(&path, node_id);
+            if let Some(parent) = prompt_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            mark_self_write(&state.recent_writes, &prompt_path);
+            if let Err(e) = std::fs::write(&prompt_path, content) {
+                warn!("failed to write prompt for {node_id}: {e}");
+            }
+        }
+        path
+    };
+
+    // Announce the write ourselves instead of waiting for the file watcher to
+    // notice. Two reasons, one per scope: the repo/user write is marked as a
+    // self-write (the suppression that stops the UI's own saves from bouncing
+    // back), and the library store is not watched at all. Without this the canvas
+    // would sit on stale YAML until the user reopened the tab — the symptom the
+    // user reads as "it said it saved and nothing happened".
+    let _ = state.pipeline_tx.send(serde_json::json!({
+        "type": "pipeline_changed",
+        "pipeline_id": id,
+        "path": path.to_string_lossy(),
+    }));
+
+    info!(
+        "Library assistant saved template {id} (scope {}) at {}",
+        focus.scope,
+        path.display()
+    );
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "ok": true,
+            "id": id,
+            "scope": focus.scope,
+            "path": path.to_string_lossy(),
+        })),
+    )
+        .into_response()
 }
 
 fn detect_terminal() -> String {

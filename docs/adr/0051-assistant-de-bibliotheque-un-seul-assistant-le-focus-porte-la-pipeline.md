@@ -74,5 +74,22 @@ contredisent pas : ils disent que **l'unité de durée de vie était la mauvaise
 - **Le cwd de l'assistant était faux** pour un onglet de scope `repo` ou `user` (il pointait sur le
   *library store*, où le `<id>.yaml` annoncé par le primer n'existe pas). En sortant la pipeline du
   cwd, le bug disparaît : le focus porte le chemin absolu du fichier réellement ouvert.
-- Le save doit désormais nommer son `scope` explicitement : un assistant unique traverse les scopes,
-  et le défaut côté daemon (`repo`) migrerait silencieusement une template `user`.
+- **Le save de l'assistant ne nomme plus rien** — ni id, ni scope : `POST /sessions/libassist/save`
+  écrit dans le fichier que le focus désigne. La première version demandait à l'assistant de
+  réémettre le scope du focus vers `POST /library/pipelines`, et c'était intenable : cet endpoint lit
+  `scope` dans le vocabulaire du *library store* (`.pdo/library/pipelines/`), pas dans celui d'un
+  onglet d'édition (`.pdo/pipelines/`). Un assistant parfaitement obéissant écrivait donc un doublon
+  dans l'autre arbre, laissait le fichier édité intact, et annonçait « Sauvé » (FP-6 de #594).
+  Supprimer l'argument supprime la classe de bug : le daemon a résolu le chemin absolu au moment où
+  l'UI a déclaré son focus, et il est le seul à connaître les deux vocabulaires. Il diffuse
+  lui-même le `pipeline_changed` qui fait relire le canvas — le watcher de fichiers ne peut pas s'en
+  charger (il ignore ses propres écritures, et ne surveille pas le library store).
+- **Le `DELETE` vide le focus par le même geste.** « Plus aucune vue d'édition ouverte » est le seul
+  fait que les deux portent, et le séparer les faisait diverger : sur `pagehide` on ne peut envoyer
+  qu'une requête `keepalive`, donc la session mourait et le focus restait — `GET …/focus` nommait une
+  template que personne n'avait plus ouverte, d'un âge croissant sans borne.
+- **« Quitter toute vue d'édition » se lit sur les onglets ouverts, pas sur l'onglet actif.** Aller
+  voir un Run pendant qu'une template reste ouverte n'est pas quitter l'édition ; y reaper la session
+  coûterait la conversation, c'est-à-dire exactement le reproche à l'origine de l'issue. Le focus
+  continue alors de nommer la dernière template éditée (l'onglet Assistant n'est de toute façon pas
+  proposé sur un Run), et le heartbeat continue de tourner.

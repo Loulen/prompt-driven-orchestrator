@@ -266,6 +266,32 @@ async fn close_assistant_reaps_the_session() {
     );
 }
 
+/// Leaving is **one** gesture, not two. The `pagehide` path can only afford a
+/// single `keepalive` request, so a focus cleared by a separate call was never
+/// cleared at all there: `GET …/focus` kept naming a template nobody had open,
+/// with an age growing without bound, and a second browser tab would have
+/// inherited it.
+#[tokio::test]
+async fn close_assistant_clears_the_focus() {
+    let daemon = TestDaemon::spawn_nested(|_| Ok(())).await.unwrap();
+    seed_repo_template(&daemon, "alpha");
+    put_focus(
+        &daemon,
+        serde_json::json!({"pipeline_id": "alpha", "scope": "repo"}),
+    )
+    .await;
+
+    delete_assistant(&daemon).await;
+
+    let focus = get_focus(&daemon).await;
+    assert_eq!(
+        focus["pipeline_id"],
+        serde_json::json!(null),
+        "the reap clears the focus by the same gesture"
+    );
+    assert_eq!(focus["age_secs"], serde_json::json!(null));
+}
+
 // ---------------------------------------------------------------------------
 // The focus (#594, ADR-0051 §2)
 // ---------------------------------------------------------------------------
@@ -359,8 +385,11 @@ async fn a_null_pipeline_id_clears_the_focus() {
 }
 
 /// `?format=text` is what the hook injects verbatim into the assistant's context.
-/// It must name the pipeline, the scope, the absolute path — and warn about the
-/// save default, which is the silent `user → repo` migration this issue also fixes.
+/// It must name the pipeline, the scope, the absolute path — and the one endpoint
+/// that writes where the focus points. Naming the save endpoint here is not
+/// decoration: the assistant reads this line before every message, and pointing it
+/// at `POST /library/pipelines` is what made it write a duplicate into the wrong
+/// store while announcing a save.
 #[tokio::test]
 async fn focus_renders_a_plain_line_for_the_hook() {
     let daemon = TestDaemon::spawn_nested(|_| Ok(())).await.unwrap();
@@ -387,7 +416,14 @@ async fn focus_renders_a_plain_line_for_the_hook() {
         text.contains(&*path.to_string_lossy()),
         "names the absolute path: {text}"
     );
-    assert!(text.contains("scope"), "warns about the save scope: {text}");
+    assert!(
+        text.contains("/sessions/libassist/save"),
+        "names the one endpoint that writes where the focus points: {text}"
+    );
+    assert!(
+        text.contains("/library/pipelines"),
+        "and names the endpoint NOT to save through, by name: {text}"
+    );
 }
 
 /// Declaring a focus must never *start* the assistant (ADR-0048 ruled auto-spawn
@@ -499,4 +535,233 @@ async fn the_sweep_keeps_an_attached_assistant_with_no_focus() {
     );
 
     let _ = futures_util::SinkExt::close(&mut ws).await;
+}
+
+// ---------------------------------------------------------------------------
+// The save (#594, ADR-0051) — the assistant's one write path
+// ---------------------------------------------------------------------------
+
+/// A three-node template, valid enough for the parser and different enough from
+/// the seeded one that "did it write?" is unambiguous.
+const SAVED_YAML: &str = r#"name: alpha
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: gamma
+    name: GAMMA
+    type: doc-only
+    inputs:
+      - name: task
+    outputs:
+      - name: result
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: gamma, port: task }
+"#;
+
+async fn post_save(daemon: &TestDaemon, body: serde_json::Value) -> reqwest::Response {
+    reqwest::Client::new()
+        .post(format!("{}/sessions/libassist/save", daemon.url()))
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+}
+
+/// **The FP-6 regression.** The assistant used to persist through
+/// `POST /library/pipelines`, echoing the focus scope back at it — but that
+/// endpoint reads `scope` in the *library store's* vocabulary. A `repo` template
+/// "saved" that way landed in `.pdo/library/pipelines/` as a duplicate, the edited
+/// file never moved, the canvas never changed, and the assistant reported success.
+///
+/// Both halves are asserted, because only the pair is the property: the edited
+/// file changed, **and** no copy appeared in the other store.
+#[tokio::test]
+async fn save_writes_the_focused_template_in_place() {
+    let daemon = TestDaemon::spawn_nested(|_| Ok(())).await.unwrap();
+    let path = seed_repo_template(&daemon, "alpha");
+    put_focus(
+        &daemon,
+        serde_json::json!({"pipeline_id": "alpha", "scope": "repo"}),
+    )
+    .await;
+
+    let resp = post_save(&daemon, serde_json::json!({"yaml": SAVED_YAML})).await;
+    assert_eq!(resp.status(), 200, "saving the open template succeeds");
+    let body = resp.json::<serde_json::Value>().await.unwrap();
+    assert_eq!(body["id"], serde_json::json!("alpha"));
+    assert_eq!(body["scope"], serde_json::json!("repo"));
+    assert_eq!(body["path"], serde_json::json!(path.to_string_lossy()));
+
+    let on_disk = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        on_disk, SAVED_YAML,
+        "the edited file is the one that changed"
+    );
+
+    let library_dir = daemon
+        .repo_root()
+        .join(".pdo")
+        .join("library")
+        .join("pipelines");
+    assert!(
+        !library_dir.join("alpha.yaml").exists(),
+        "no duplicate in the library store — that was the whole bug"
+    );
+}
+
+/// Node prompts ride along the YAML, under the canonical `<id>.prompts/` sibling
+/// the rest of the codebase reads.
+#[tokio::test]
+async fn save_writes_node_prompts_beside_the_template() {
+    let daemon = TestDaemon::spawn_nested(|_| Ok(())).await.unwrap();
+    let path = seed_repo_template(&daemon, "alpha");
+    put_focus(
+        &daemon,
+        serde_json::json!({"pipeline_id": "alpha", "scope": "repo"}),
+    )
+    .await;
+
+    let resp = post_save(
+        &daemon,
+        serde_json::json!({"yaml": SAVED_YAML, "prompts": {"gamma": "You are GAMMA."}}),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+
+    let prompt = path.with_extension("prompts").join("gamma.md");
+    assert_eq!(
+        std::fs::read_to_string(&prompt).unwrap(),
+        "You are GAMMA.",
+        "the node prompt lands next to the template"
+    );
+}
+
+/// A `library`-scoped tab edits the library store, and the save must follow it
+/// there — the symmetric half of the property above. `get_scope` reads the entry's
+/// *current* store off disk rather than mapping the edit tab's word onto the
+/// library enum, which is the mapping that produced the bug in the first place.
+#[tokio::test]
+async fn save_honours_a_library_focus() {
+    let daemon = TestDaemon::spawn_nested(|_| Ok(())).await.unwrap();
+    let library_dir = daemon
+        .repo_root()
+        .join(".pdo")
+        .join("library")
+        .join("pipelines");
+    std::fs::create_dir_all(&library_dir).unwrap();
+    let library_path = library_dir.join("alpha.yaml");
+    std::fs::write(&library_path, "name: seeded\nnodes: []\nedges: []\n").unwrap();
+
+    put_focus(
+        &daemon,
+        serde_json::json!({"pipeline_id": "alpha", "scope": "library"}),
+    )
+    .await;
+
+    let resp = post_save(&daemon, serde_json::json!({"yaml": SAVED_YAML})).await;
+    assert_eq!(resp.status(), 200);
+
+    assert_eq!(
+        std::fs::read_to_string(&library_path).unwrap(),
+        SAVED_YAML,
+        "a library-scoped focus writes into the library store"
+    );
+    assert!(
+        !daemon
+            .repo_root()
+            .join(".pdo")
+            .join("pipelines")
+            .join("alpha.yaml")
+            .exists(),
+        "and does not leak a copy into the repo store"
+    );
+}
+
+/// Saving into a guess is exactly what the focus mechanism exists to prevent, so
+/// "no template open" is a refusal, not a default.
+#[tokio::test]
+async fn save_without_a_focus_is_refused() {
+    let daemon = TestDaemon::spawn_nested(|_| Ok(())).await.unwrap();
+
+    let resp = post_save(&daemon, serde_json::json!({"yaml": SAVED_YAML})).await;
+    assert_eq!(resp.status(), 409, "nothing open ⇒ nothing to save into");
+    let body = resp.json::<serde_json::Value>().await.unwrap();
+    assert!(
+        body["error"].as_str().unwrap().contains("open"),
+        "the refusal says why: {body}"
+    );
+}
+
+/// Same gate as `PUT /pipelines/{id}`: unparseable YAML must not reach the disk
+/// the canvas is reading from.
+#[tokio::test]
+async fn save_rejects_yaml_that_does_not_parse() {
+    let daemon = TestDaemon::spawn_nested(|_| Ok(())).await.unwrap();
+    let path = seed_repo_template(&daemon, "alpha");
+    let before = std::fs::read_to_string(&path).unwrap();
+    put_focus(
+        &daemon,
+        serde_json::json!({"pipeline_id": "alpha", "scope": "repo"}),
+    )
+    .await;
+
+    let resp = post_save(&daemon, serde_json::json!({"yaml": "nodes: [unclosed"})).await;
+    assert_eq!(resp.status(), 400);
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        before,
+        "a rejected save leaves the file alone"
+    );
+}
+
+/// The canvas re-reads on save, and it learns about the write from the daemon —
+/// not from the file watcher, which is suppressed for the daemon's own writes and
+/// does not watch the library store at all. Without this event the user sees the
+/// assistant announce a save and the canvas sit unchanged, which reads exactly
+/// like the bug that is being fixed.
+#[tokio::test]
+async fn save_tells_the_canvas_to_re_read() {
+    use futures_util::StreamExt;
+
+    let daemon = TestDaemon::spawn_nested(|_| Ok(())).await.unwrap();
+    seed_repo_template(&daemon, "alpha");
+    put_focus(
+        &daemon,
+        serde_json::json!({"pipeline_id": "alpha", "scope": "repo"}),
+    )
+    .await;
+
+    let mut ws = daemon.connect_ws().await.unwrap();
+    post_save(&daemon, serde_json::json!({"yaml": SAVED_YAML})).await;
+
+    let found = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let msg = ws.next().await?.ok()?;
+            let text = crate::common::ws_text(&msg)?.to_string();
+            let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+            if value["type"] == serde_json::json!("pipeline_changed")
+                && value["pipeline_id"] == serde_json::json!("alpha")
+            {
+                return Some(value);
+            }
+        }
+    })
+    .await
+    .ok()
+    .flatten();
+
+    assert!(
+        found.is_some(),
+        "the save broadcasts pipeline_changed for the template it wrote"
+    );
 }

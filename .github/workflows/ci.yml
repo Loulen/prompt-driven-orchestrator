@@ -22,21 +22,31 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       # Frontend dist is rebuilt by pdo-daemon's build.rs.
-      # Setup Node + install deps so the build script can call `npm run build`.
+      # Setup Node + install deps so the build script can call `pnpm run build`.
+      # pnpm/action-setup MUST run before setup-node: `cache: pnpm` shells out to
+      # `pnpm store path` to locate the cache, so the binary has to exist first.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
 
-      - run: cd frontend && npm ci
+      - run: cd frontend && pnpm install --frozen-lockfile
 
       - run: cargo check --workspace --all-targets
-      - run: cargo test --workspace
+      - uses: taiki-e/install-action@nextest
+      # nextest ne lance pas les doctests : la ligne `--doc` est obligatoire.
+      - run: cargo nextest run --workspace
+      - run: cargo test --workspace --doc
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo fmt --all --check
 
-      # Layer 4 smoke (ADR 0004). Reuses the binary built by `cargo test`.
+      # Layer 4 smoke (ADR 0004). Reuses the binary built by `cargo nextest`
+      # (les tests référencent env!("CARGO_BIN_EXE_pdo"), donc target/debug/pdo est bâti).
       - run: bash tests/smoke.sh
 
   frontend:
@@ -49,16 +59,20 @@ jobs:
       # flat file list grows past its baseline. See docs/agents/module-layout.md.
       - run: bash scripts/layout-ratchet.sh
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
 
-      - run: cd frontend && npm ci
-      - run: cd frontend && npm run typecheck
-      - run: cd frontend && npm run lint
-      - run: cd frontend && npm run build
+      - run: cd frontend && pnpm install --frozen-lockfile
+      - run: cd frontend && pnpm run typecheck
+      - run: cd frontend && pnpm run lint
+      - run: cd frontend && pnpm run build
 
   e2e:
     name: Frontend E2E (layer 3b)
@@ -71,18 +85,22 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
 
-      - run: cd frontend && npm ci
-      - run: cd frontend && npx playwright install --with-deps chromium
+      - run: cd frontend && pnpm install --frozen-lockfile
+      - run: cd frontend && pnpm exec playwright install --with-deps chromium
 
       # build.rs handles the frontend bundle while building the daemon.
       - run: cargo build -p pdo-daemon
 
-      - run: cd frontend && npm run e2e
+      - run: cd frontend && pnpm run e2e
         env:
           PDO_SKIP_FRONTEND_BUILD: "1"

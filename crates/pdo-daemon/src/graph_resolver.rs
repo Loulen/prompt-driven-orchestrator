@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::event_log::{NodeStatus, RunState};
+use crate::event_log::RunState;
 use crate::pipeline::{NodeType, PipelineDef};
 
 /// Returns the IDs of nodes that are ready to be spawned: all upstream
@@ -84,7 +84,7 @@ pub(crate) fn ready_nodes(pipeline: &PipelineDef, run_state: &RunState) -> Vec<S
             run_state
                 .nodes
                 .get(*src)
-                .is_some_and(|n| n.status == NodeStatus::Completed)
+                .is_some_and(|n| n.status.is_settled_complete())
         });
         if all_completed {
             ready.push(node.id.clone());
@@ -320,13 +320,39 @@ pub(crate) fn region_entry(pipeline: &PipelineDef, members: &[String]) -> Option
 
 /// Returns the set of all nodes transitively reachable from `node_id` by
 /// following outgoing edges. The starting node is NOT included in the result.
+///
+/// The no-exclusions shorthand for [`downstream_subgraph_excluding`]. Production
+/// callers (the retry path) always pass the bounded-region back-edges to exclude,
+/// so this bare form is now exercised only by this module's unit tests — kept as
+/// the documented base case.
+#[allow(dead_code)]
 pub(crate) fn downstream_subgraph(pipeline: &PipelineDef, node_id: &str) -> HashSet<String> {
+    downstream_subgraph_excluding(pipeline, node_id, &HashSet::new())
+}
+
+/// Like [`downstream_subgraph`], but skips the edges whose global index (into
+/// `pipeline.edges`) is in `excluded_edges`. The starting node is NOT included.
+///
+/// The retry path uses this to walk a loop's *forward* slice only: excluding a
+/// bounded region's re-entry (back) edges (see
+/// [`crate::loop_region::bounded_reentry_edges`]) stops the walk from stepping
+/// backward through the entry into an earlier member of the *same lap* — work
+/// that a retry must leave untouched. In an acyclic graph "reachable-from" is
+/// "downstream"; inside a cycle it is not, and this is the correction.
+pub(crate) fn downstream_subgraph_excluding(
+    pipeline: &PipelineDef,
+    node_id: &str,
+    excluded_edges: &HashSet<usize>,
+) -> HashSet<String> {
     let mut visited = HashSet::new();
     visited.insert(node_id.to_string());
     let mut queue = vec![node_id.to_string()];
 
     while let Some(current) = queue.pop() {
-        for edge in &pipeline.edges {
+        for (idx, edge) in pipeline.edges.iter().enumerate() {
+            if excluded_edges.contains(&idx) {
+                continue;
+            }
             if edge.source.node == current {
                 let target = &edge.target.node;
                 if visited.insert(target.clone()) {
@@ -353,7 +379,7 @@ pub(crate) fn nodes_remaining(pipeline: &PipelineDef, run_state: &RunState) -> u
             !run_state
                 .nodes
                 .get(&n.id)
-                .is_some_and(|ns| ns.status == NodeStatus::Completed)
+                .is_some_and(|ns| ns.status.is_settled_complete())
         })
         .count()
 }
@@ -361,7 +387,7 @@ pub(crate) fn nodes_remaining(pipeline: &PipelineDef, run_state: &RunState) -> u
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event_log::NodeState;
+    use crate::event_log::{NodeState, NodeStatus};
     use crate::pipeline::{EdgeDef, EdgeEndpoint, NodeDef, NodeType, Port, PortType};
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
@@ -537,6 +563,7 @@ mod tests {
             started_at: Some("t0".into()),
             completed_at: Some("t1".into()),
             failure_reason: None,
+            skip_reason: None,
             iterations: Vec::new(),
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
@@ -553,6 +580,7 @@ mod tests {
             started_at: Some("t0".into()),
             completed_at: None,
             failure_reason: None,
+            skip_reason: None,
             iterations: Vec::new(),
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
@@ -920,6 +948,73 @@ mod tests {
             .iter()
             .map(|s| s.to_string())
             .collect();
+        assert_eq!(ds, expected);
+    }
+
+    #[test]
+    fn downstream_excluding_stops_at_the_back_edge() {
+        // The retry fix (loop-aware invalidation): a review loop `impl -> rev`
+        // with a back-edge `rev -> impl` and an exit `rev -> end`. The plain walk
+        // from `rev` follows the back-edge into `impl` (a same-lap upstream member
+        // that a retry must NOT reset). Excluding the back-edge's index leaves the
+        // walk with the forward slice only: `end`, never `impl`.
+        let pipeline = make_pipeline(
+            vec![
+                make_node(
+                    "impl",
+                    NodeType::CodeMutating,
+                    &["task", "review"],
+                    &["code"],
+                ),
+                make_node("rev", NodeType::DocOnly, &["code"], &["review"]),
+                make_node("end", NodeType::DocOnly, &["result"], &[]),
+            ],
+            vec![
+                make_edge("impl", "code", "rev", "code"),     // 0
+                make_edge("rev", "review", "impl", "review"), // 1 back-edge
+                make_edge("rev", "review", "end", "result"),  // 2 exit
+            ],
+        );
+
+        // Plain walk: back-edge drags `impl` in.
+        let plain = downstream_subgraph(&pipeline, "rev");
+        assert!(plain.contains("impl"), "plain walk follows the back-edge");
+
+        // Loop-aware walk: exclude the back-edge (index 1).
+        let mut excluded = HashSet::new();
+        excluded.insert(1usize);
+        let ds = downstream_subgraph_excluding(&pipeline, "rev", &excluded);
+        let expected: HashSet<String> = ["end"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(ds, expected, "same-lap upstream `impl` must be spared");
+    }
+
+    #[test]
+    fn downstream_excluding_from_entry_still_covers_the_whole_body() {
+        // Excluding the back-edge must NOT starve a retry of the entry: from
+        // `impl` (the region entry) the forward path reaches `rev` and `end`
+        // regardless — the excluded back-edge only ever pointed back at `impl`.
+        let pipeline = make_pipeline(
+            vec![
+                make_node(
+                    "impl",
+                    NodeType::CodeMutating,
+                    &["task", "review"],
+                    &["code"],
+                ),
+                make_node("rev", NodeType::DocOnly, &["code"], &["review"]),
+                make_node("end", NodeType::DocOnly, &["result"], &[]),
+            ],
+            vec![
+                make_edge("impl", "code", "rev", "code"),     // 0
+                make_edge("rev", "review", "impl", "review"), // 1 back-edge
+                make_edge("rev", "review", "end", "result"),  // 2 exit
+            ],
+        );
+
+        let mut excluded = HashSet::new();
+        excluded.insert(1usize);
+        let ds = downstream_subgraph_excluding(&pipeline, "impl", &excluded);
+        let expected: HashSet<String> = ["rev", "end"].iter().map(|s| s.to_string()).collect();
         assert_eq!(ds, expected);
     }
 

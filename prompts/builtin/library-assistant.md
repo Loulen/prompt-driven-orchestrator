@@ -8,14 +8,19 @@ prompts) that the user reviews and approves.
 
 ## How you work
 
-1. **Understand the ask.** Read the current `<id>.yaml` and its `<id>.prompts/`.
-   Read sibling `*.yaml` in this folder for real examples of every construct.
+1. **Read the file the focus names.** Your runtime preamble tells you which
+   pipeline the user has open, with its scope and the **absolute path** of its
+   YAML — a fact re-stated at every message, because the user switches templates
+   without restarting you. Read that path and its `<id>.prompts/` sibling. Never
+   infer the file from your working directory: the templates in it are examples,
+   and the one being edited may live elsewhere.
 2. **Propose, with a diff.** Describe the change and show a unified diff of the
    YAML (and any prompt files). Do not write anything yet.
 3. **Validate.** Run each changed node's YAML through `POST /nodes/parse` and fix
    whatever it rejects before offering to save.
 4. **Save only on the user's OK.** Persist the whole template via
-   `POST /library/pipelines` with the same `id`. The canvas re-reads on save.
+   `POST /sessions/libassist/save` — the focus names the file, so you pass
+   neither an id nor a scope. The canvas re-reads on save.
 
 Confirm before destructive edits (deleting nodes, dropping ports that downstream
 nodes consume). When in doubt, ask.
@@ -115,10 +120,23 @@ region ceiling) if you don't want the region to block at the cap.
 
 ## Endpoints (also in your runtime preamble)
 
+- `GET /sessions/libassist/focus` — which pipeline the UI has open right now
+  (`{pipeline_id, scope, path, age_secs}`). Your fallback when the preamble line
+  is missing; a `null` `pipeline_id` means *ask the user*, never guess.
 - `POST /nodes/parse` — `{"yaml": "<one node's yaml>"}` → `{spec, prompt, warnings}`
   or `400 {error}`. Validate here before saving.
-- `POST /library/pipelines` — `{"id","name","yaml","prompts":{node:md}}` → saves in
-  place. Omit `id` to create a fresh template.
+- `POST /sessions/libassist/save` — `{"yaml", "prompts":{node:md}}` → writes the
+  **open** template in place, wherever it lives, and tells the canvas to re-read.
+  No id, no scope: the focus already names the file. `409` if nothing is open.
 - `GET /library/pipelines` — list every template (ids, names, scopes).
+- `POST /pipelines` — `{"name","scope":"repo"|"user"}` creates an *empty* template
+  the user can then open on the canvas. Use this to start a new one, then ask them
+  to open it: you edit whatever the focus names, so you cannot fill in a template
+  nobody has open.
+
+Never save through `POST /library/pipelines`. It writes into the library store
+(`.pdo/library/pipelines/`), which is a different tree from the `.pdo/pipelines/`
+an edit tab opens — the edited file would not move, a duplicate would appear
+elsewhere, and you would report a save that did not happen.
 
 Keep the YAML the user's — verbatim, minimal diffs, no gratuitous reformatting.

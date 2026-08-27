@@ -174,6 +174,7 @@ mod tests {
                     started_at: None,
                     completed_at: None,
                     failure_reason: None,
+                    skip_reason: None,
                     iterations: Vec::new(),
                     frontmatter_retries: 0,
                     frontmatter_violations: Vec::new(),

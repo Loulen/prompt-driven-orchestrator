@@ -1,5 +1,5 @@
 export type RunStatus = "running" | "awaiting_user" | "completed" | "failed" | "skipped" | "halted" | "paused" | "archived";
-export type NodeStatus = "pending" | "running" | "awaiting_user" | "completed" | "failed" | "stopped" | "stale" | "interrupted";
+export type NodeStatus = "pending" | "running" | "awaiting_user" | "completed" | "skipped" | "failed" | "stopped" | "stale" | "interrupted";
 
 export function isLiveRun(status: RunStatus): boolean {
   return status === "running" || status === "awaiting_user" || status === "paused";
@@ -609,6 +609,14 @@ export interface NodeState {
   started_at: string | null;
   completed_at: string | null;
   failure_reason: string | null;
+  /**
+   * Why the node was **auto-skipped** as structurally unreachable (#620): its
+   * producing branch was not taken, so nothing would ever spawn it. Present only
+   * when `status === "skipped"`; distinct from `failure_reason` (a skip is not a
+   * failure). Absent on every other status. The projection lifts it out of the
+   * skip event's payload so the reason reads at node level, not only in the log.
+   */
+  skip_reason?: string | null;
   iterations: IterationInfo[];
   frontmatter_retries?: number;
   frontmatter_violations?: FrontmatterViolation[];

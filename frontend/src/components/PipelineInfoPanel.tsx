@@ -4,7 +4,7 @@ import { SectionHead } from "./InspectorPrimitives";
 import TmuxTerminal from "./TmuxTerminal";
 import DiffSection from "./DiffSection";
 import type { LibraryPipelineEntry } from "../api";
-import { openLibraryAssistant, closeLibraryAssistant } from "../api";
+import { openLibraryAssistant } from "../api";
 import type { RunState, PipelineDef } from "../types";
 import { isLiveRun } from "../types";
 import { formatDuration, useRunDuration } from "../lib/runDuration";
@@ -43,13 +43,14 @@ interface Props {
   onClose: () => void;
   initialTab?: TabId;
   scrollToLine?: number;
-  /** Library pipeline id the Assistant tab authors (#302 / ADR-0048). Present
-   *  only for a library template tab (not a live Run); `null`/absent hides the
-   *  Assistant tab. `PipelineDef` has no id, so it is threaded from the edit tab. */
+  /** Library pipeline id of the active edit tab (#302 / ADR-0048). Present only
+   *  for a library template tab (not a live Run); `null`/absent hides the
+   *  Assistant tab. `PipelineDef` has no id, so it is threaded from the edit tab.
+   *
+   *  Since #594 it is a **visibility predicate only** — the panel no longer tells
+   *  the assistant which template to work on (the daemon's focus does), and no
+   *  longer owns its lifecycle (`useLibassistLifecycle`, mounted in `App`). */
   assistantId?: string | null;
-  /** Scope of `assistantId` (`repo` | `user` | `library`) — selects the pipelines
-   *  directory the assistant is spawned in. */
-  assistantScope?: string;
 }
 
 const STATUS_DOT: Record<string, string> = {
@@ -71,7 +72,6 @@ export default function PipelineInfoPanel({
   initialTab,
   scrollToLine,
   assistantId,
-  assistantScope,
 }: Props) {
   const pipelineName = run?.pipeline_name ?? pipeline?.name ?? "Untitled";
   const variables = pipeline?.variables ?? {};
@@ -178,13 +178,10 @@ export default function PipelineInfoPanel({
       )}
 
       {resolvedTab === "assistant" && hasAssistant && assistantId && (
-        // Key on id+scope so switching the authored pipeline remounts with fresh
-        // state (and reaps the old session via the unmount cleanup).
-        <AssistantTab
-          key={`${assistantId}:${assistantScope ?? ""}`}
-          pipelineId={assistantId}
-          scope={assistantScope}
-        />
+        // #594: NOT keyed on the pipeline. One shared assistant means switching
+        // template must keep the same session and the same conversation — a
+        // remount per pipeline is the exact opposite of sharing.
+        <AssistantTab />
       )}
 
       {resolvedTab === "yaml" && (
@@ -195,29 +192,27 @@ export default function PipelineInfoPanel({
 }
 
 /**
- * The Assistant tab body (#302 / ADR-0048): an inline `claude` REPL that authors
- * the library template. Lifecycle = **create on open, reap on leave** (owner's
- * ask): mounting ensures the `pdo-libassist-<id>` tmux session exists, unmounting
- * (switching tab, closing the panel, or switching pipeline) reaps it. React
- * unmounts this component in every one of those cases because it is rendered only
- * while the Assistant tab is the resolved tab.
+ * The Assistant tab body (#302 / ADR-0048, #594 / ADR-0051): an inline `claude`
+ * REPL that authors pipeline templates.
+ *
+ * **It creates, and never reaps.** Mounting still spawns the shared session on
+ * demand, but the unmount cleanup that used to `DELETE` is gone: this component
+ * unmounts whenever the panel closes, and the panel closes by itself on every
+ * edit-tab switch (#385) — so reaping here killed the conversation each time the
+ * user glanced at another template. The reap now lives at App level, keyed on
+ * "no edit view left at all" (`useLibassistLifecycle`), with the daemon's idle
+ * sweep behind it.
+ *
+ * It takes no props for the same reason: which template is being edited is the
+ * daemon's focus, not this component's business.
  */
-function AssistantTab({
-  pipelineId,
-  scope,
-}: {
-  pipelineId: string;
-  scope?: string;
-}) {
+function AssistantTab() {
   const [session, setSession] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    // This subtree is remounted (keyed on id+scope) whenever the target changes,
-    // so the effect only needs to ensure-on-mount and reap-on-unmount — no
-    // in-effect state reset (which would trip react-hooks/set-state-in-effect).
     let cancelled = false;
-    openLibraryAssistant(pipelineId, scope)
+    openLibraryAssistant()
       .then((r) => {
         if (!cancelled) setSession(r.session);
       })
@@ -226,10 +221,8 @@ function AssistantTab({
       });
     return () => {
       cancelled = true;
-      // Reap on leave — best-effort; reaping an absent session is a no-op.
-      void closeLibraryAssistant(pipelineId).catch(() => {});
     };
-  }, [pipelineId, scope]);
+  }, []);
 
   return (
     <div

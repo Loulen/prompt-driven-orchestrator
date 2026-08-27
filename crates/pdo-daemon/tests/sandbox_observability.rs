@@ -19,17 +19,14 @@
 //! `exec true`, which collapses the session before the sweep can read the mtime
 //! (plan #408 P4). So [`write_live_docker`] actually *runs* the exec'd command
 //! (`sleep 600`) via a `sleep`-friendly tail, and the run uses
-//! [`common::TestDaemon::spawn_with_docker_and_tmux_override`] with `exec sleep 600`.
-
-mod common;
+//! [`crate::common::TestDaemon::spawn_with_docker_and_tmux_override`] with `exec sleep 600`.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Once;
 use std::time::{Duration, Instant, SystemTime};
 
-use common::TestDaemon;
+use crate::common::{ensure_pdo_on_path, TestDaemon};
 use pdo_daemon::stale_detector::encode_working_dir;
 use tempfile::TempDir;
 
@@ -65,16 +62,6 @@ edges:
   - source: { node: worker, port: out }
     target: { node: end, port: result }
 "#;
-
-fn ensure_pdo_on_path() {
-    static INIT: Once = Once::new();
-    INIT.call_once(|| {
-        let bin = Path::new(env!("CARGO_BIN_EXE_pdo"));
-        let dir = bin.parent().expect("pdo binary has a parent dir");
-        let existing = std::env::var("PATH").unwrap_or_default();
-        std::env::set_var("PATH", format!("{}:{}", dir.display(), existing));
-    });
-}
 
 fn tmux_available() -> bool {
     Command::new("tmux")

@@ -13,9 +13,7 @@
 //! answer `200`, and the second one did so *after* appending `NodeFailed` +
 //! `RunFailed`. The `200` arms below are the deliberate negative control.
 
-mod common;
-
-use common::TestDaemon;
+use crate::common::TestDaemon;
 
 const PIPELINE_NAME: &str = "fm-validate";
 const PIPELINE_YAML: &str = r#"name: fm-validate

@@ -18,6 +18,9 @@ describe("NodeCard", () => {
     ["running", "border-st-running"],
     ["awaiting_user", "border-st-await"],
     ["completed", "border-st-done"],
+    // #620: a pruned node wears a greyed "skipped" cadre, distinct from the green
+    // "done" one — a short-circuited branch must not read as a branch that ran.
+    ["skipped", "border-st-skipped"],
     ["failed", "border-st-failed"],
     ["stopped", "border-st-stopped"],
     ["stale", "border-st-stale"],

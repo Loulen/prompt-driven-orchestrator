@@ -5,11 +5,9 @@
 //!   - adding a node + edge during a run → 200
 //!   - editing the prompt of a not-yet-spawned node → 200, prompt persisted
 
-mod common;
-
 use std::time::Duration;
 
-use common::TestDaemon;
+use crate::common::TestDaemon;
 
 const PIPELINE_NAME: &str = "mid-run-edit-test";
 const PIPELINE_YAML: &str = r#"name: mid-run-edit-test

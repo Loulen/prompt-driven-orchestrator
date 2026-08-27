@@ -4,9 +4,7 @@
 //!   1. PUT /pipelines with a Switch `when:` referencing an undeclared field → 400
 //!   2. PUT /pipelines with a Switch `when:` referencing a declared field → 200
 
-mod common;
-
-use common::TestDaemon;
+use crate::common::TestDaemon;
 
 const PIPELINE_NAME: &str = "switch-val";
 

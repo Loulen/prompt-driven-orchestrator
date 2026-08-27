@@ -10,9 +10,7 @@
 //! skipped under the command override (an override means the real binary never
 //! runs), and it is unit-tested in `node_spawn` / `node_primitives`.
 
-mod common;
-
-use common::TestDaemon;
+use crate::common::TestDaemon;
 
 const PIPELINE_NAME: &str = "harness-test";
 const PIPELINE_YAML: &str = r#"name: harness-test

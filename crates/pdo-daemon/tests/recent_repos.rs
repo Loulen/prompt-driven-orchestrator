@@ -1,8 +1,6 @@
-mod common;
-
 use std::process::Command;
 
-use common::TestDaemon;
+use crate::common::TestDaemon;
 
 const PIPELINE_NAME: &str = "recent-repos-test";
 const PIPELINE_YAML: &str = r#"name: recent-repos-test

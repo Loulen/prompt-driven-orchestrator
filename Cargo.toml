@@ -70,8 +70,8 @@ publish-jobs = ["homebrew"]
 # (L'installeur shell reste `pdo-daemon-installer.sh` : renommer AUSSI ça imposerait
 # de renommer le package Cargo — chantier à part.)
 formula = "pdo"
-# Étapes injectées AVANT `dist build` : Node + `npm ci` dans frontend/, car le
-# build.rs de pdo-daemon lance `npm run build` pendant `cargo build` (rust-embed).
+# Étapes injectées AVANT `dist build` : Node + `pnpm install` dans frontend/, car le
+# build.rs de pdo-daemon lance `pnpm run build` pendant `cargo build` (rust-embed).
 github-build-setup = "../build-setup.yml"
 # Parité avec l'unité systemd/launchd (`pdo service install` lit current_exe) et
 # avec l'ancien install.sh : binaire dans ~/.local/bin.
@@ -86,3 +86,34 @@ pr-run-mode = "plan"
 [profile.dist]
 inherits = "release"
 lto = "thin"
+
+# --- Profils dev / test (empreinte disque du target) ------------------------
+# Les 50 binaires de tests d’intégration de pdo-daemon liaient chacun
+# libpdo_daemon en statique. Au `debug = 2` par défaut de cargo, un binaire pèse
+# ~254 Mo dont ~202 Mo de sections `.debug_*` (.debug_str 87 Mo, .debug_info
+# 78 Mo, .debug_line 20 Mo) : le debug info EST le target/.
+#
+# `line-tables-only` ne garde que la table de lignes et jette les DIE de types.
+# Concrètement : les backtraces gardent `fichier:ligne` (ce dont on se sert au
+# quotidien), on perd l'inspection de variables au débogueur (ce qu'on ne fait
+# pas ici). Compromis assumé.
+#
+# `incremental = false` : PDO donne à chaque itération de node un worktree neuf,
+# donc un `target/` neuf. Le cache incrémental (2 à 3,6 Go par worktree) est
+# écrit puis jamais relu, c'est du poids mort pur. Le vrai cache inter-worktrees
+# est sccache (voir .cargo/config.toml), qui vit hors de target/.
+# ATTENTION : ce raisonnement S'INVERSE si un CARGO_TARGET_DIR partagé atterrit
+# un jour (issues #518 / #631). Le cache serait alors relu d'une itération sur
+# l'autre et `incremental = true` redeviendrait le bon défaut.
+[profile.dev]
+debug = "line-tables-only"
+incremental = false
+
+# `test` hérite déjà de `dev` chez cargo, donc ce bloc est redondant en l'état.
+# On le pose quand même explicitement : ce sont les binaires de tests qui
+# portent l'essentiel des 202 Mo, et on ne veut pas que le gain dépende d'un
+# héritage implicite qu'un futur `[profile.test]` (ajouté pour tout autre
+# raison) ferait sauter sans bruit.
+[profile.test]
+debug = "line-tables-only"
+incremental = false

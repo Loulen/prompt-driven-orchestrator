@@ -1,6 +1,15 @@
 # Assistant d'authoring de bibliothèque — copilote design-time des templates
 
 > Statut : **accepted** (#302).
+>
+> **Amendé par ADR-0051 (#594).** Les décisions **1** (session keyée sur l'id de la pipeline), **3**
+> (create-on-open / reap-on-leave sur l'onglet) et **4** (jamais reapée par le sweep, sans TTL) ne
+> valent plus : il y a un **seul** assistant par daemon, la pipeline courante arrive par le **focus**
+> à chaque message, et le sweep reprend la main sur la session dès que l'humain n'est plus là. Le
+> reste tient : mécanisme de session (§2), write-on-save (§6), prompt primé sans MCP custom (§5),
+> accès unifié par la toolbar (§7). Un détail de §5/§6 change tout de même : **l'endpoint de
+> persistance** n'est plus `POST /library/pipelines` mais `POST /sessions/libassist/save`, qui écrit
+> dans le fichier que le focus désigne — voir les conséquences d'ADR-0051.
 
 Écrire ou modifier une pipeline **template** se faisait à la main : câbler nodes / edges / prompts
 sur le canvas, ou éditer le YAML. #302 ajoute un **copilote d'authoring** : une session `claude`

@@ -458,6 +458,42 @@ struct AppState {
     /// four localhost defaults are always added on top. See
     /// [`DaemonConfig::allowed_ws_origins`].
     allowed_ws_origins: Vec<String>,
+    /// Which pipeline template the UI currently has open for editing, and when it
+    /// last said so (#594, ADR-0051 §2). `None` = no edit view open.
+    ///
+    /// In memory and process-lifetime on purpose. It is a **presence** signal, not
+    /// a fact about the project: persisting it would resurrect, on the next boot,
+    /// a claim that someone was editing — the exact false-keep this issue exists to
+    /// remove. A restart forgets it, the UI re-declares within 20 s, and in between
+    /// the assistant is a session nobody is attached to, which is precisely what
+    /// the sweep should reap.
+    ///
+    /// Read twice, for two different questions: *what* is open (the assistant's
+    /// per-message context) and *whether anyone is still there* (the sweep's second
+    /// verdict).
+    libassist_focus: Mutex<Option<LibassistFocus>>,
+}
+
+/// The library assistant's focus: the template the UI is editing right now.
+///
+/// The frontend sends `{pipeline_id, scope}` and never a path — the two `scope`
+/// vocabularies do not coincide (an edit tab's `repo`/`user` mean
+/// `.pdo/pipelines/`, while the library store's mean `.pdo/library/pipelines/`),
+/// and letting the client resolve the file is what produced the wrong assistant
+/// cwd this issue also fixes. The daemon resolves the absolute path itself.
+#[derive(Debug, Clone)]
+struct LibassistFocus {
+    pipeline_id: String,
+    /// As the edit tab means it: `repo` | `user` | `library`. Echoed back so the
+    /// assistant saves into the store it read from instead of migrating the
+    /// template (the daemon's save default is `repo`).
+    scope: String,
+    /// Absolute path of the template's YAML, or `None` when the id resolves to no
+    /// file yet — an unsaved template is a legitimate focus, not an error.
+    path: Option<PathBuf>,
+    /// When the UI last declared this focus. Same clock as the sweep's `now`, so
+    /// the age comparison needs no conversion.
+    at: chrono::DateTime<chrono::Utc>,
 }
 
 impl AppState {
@@ -2020,13 +2056,8 @@ impl DaemonHandle {
     /// TTL exactly like the background loop (`stored → env → default`).
     pub async fn run_orphan_sweep_tick(&self) {
         let socket = self.state.tmux_socket();
-        let stored_ttl = instance_config::get(&self.state.db)
-            .await
-            .ok()
-            .and_then(|c| c.reaper_ttl_secs)
-            .map(|n| n as u64);
-        let ttl = tmux_session_manager::reaper_ttl_with(stored_ttl);
-        if let Err(e) = run_orphan_sweep(&self.state, &socket, ttl).await {
+        let ttls = resolve_sweep_ttls(&self.state.db).await;
+        if let Err(e) = run_orphan_sweep(&self.state, &socket, ttls).await {
             warn!("Reaper sweep (test seam) failed: {e}");
         }
     }
@@ -2621,6 +2652,7 @@ pub async fn serve_with_config(
         // consumed by this literal. The boot summary/lint below reads it back off
         // `state`, so no pre-literal clone is needed.
         allowed_ws_origins: config.allowed_ws_origins,
+        libassist_focus: Mutex::new(None),
     });
 
     // The orphan sweep — and every other tmux call this daemon makes —
@@ -2640,13 +2672,8 @@ pub async fn serve_with_config(
              This daemon will not auto-reap any tmux sessions."
         );
     } else {
-        if let Err(e) = run_orphan_sweep(
-            &state,
-            &state.tmux_socket(),
-            tmux_session_manager::reaper_ttl(),
-        )
-        .await
-        {
+        let boot_ttls = resolve_sweep_ttls(&state.db).await;
+        if let Err(e) = run_orphan_sweep(&state, &state.tmux_socket(), boot_ttls).await {
             warn!("Orphan sweep at boot failed: {e}");
         }
 
@@ -2710,23 +2737,18 @@ pub async fn serve_with_config(
             let mut tick = time::interval(interval);
             loop {
                 tick.tick().await;
-                // Resolve the TTL *inside* the loop, not once at boot (#129,
+                // Resolve the TTLs *inside* the loop, not once at boot (#129,
                 // ADR-0015 D5): a `PUT /settings` must take effect on the next
                 // sweep without a restart. The stored value (if any) wins over
-                // `PDO_REAPER_TTL_SECS`, which wins over the default.
-                let stored_ttl = instance_config::get(&reaper_state.db)
-                    .await
-                    .ok()
-                    .and_then(|c| c.reaper_ttl_secs)
-                    .map(|n| n as u64);
-                let ttl = tmux_session_manager::reaper_ttl_with(stored_ttl);
+                // the env var, which wins over the default.
+                let ttls = resolve_sweep_ttls(&reaper_state.db).await;
                 // Panic-isolated like the trigger/stale sweeps (#251 "rule of
                 // three"): a panic in one sweep tick must not silently kill the
                 // reaper loop and leave sessions un-reaped for the daemon's life.
                 let st = reaper_state.clone();
                 let socket = socket.clone();
                 run_isolated("reaper", async move {
-                    if let Err(e) = run_orphan_sweep(&st, &socket, ttl).await {
+                    if let Err(e) = run_orphan_sweep(&st, &socket, ttls).await {
                         warn!("Reaper sweep failed: {e}");
                     }
                 })
@@ -4306,15 +4328,34 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/sessions/{session_id}/attach", post(session_attach))
         .route("/sessions/{run_id}/manager/attach", post(manager_attach))
         .route("/sessions/{run_id}/shell", post(open_run_shell))
-        // #302 / ADR-0048 — library pipeline authoring assistant. `POST` is
-        // create-if-absent (spawn the `claude` REPL in the pipelines dir and
-        // return its session name to attach via the PTY bridge); `DELETE` reaps it
-        // on tab-leave. Under the already-proxied `/sessions` prefix, so no vite
-        // proxy edit (#345).
+        // #302 / ADR-0048, reshaped by #594 / ADR-0051 — the library pipeline
+        // authoring assistant. **No pipeline id in the path any more**: there is
+        // one assistant for the whole daemon. `POST` is create-if-absent (spawn the
+        // `claude` REPL and return its session name to attach via the PTY bridge);
+        // `DELETE` reaps it when the user leaves every edit view.
+        //
+        // A static segment where `/sessions/{session_id}/…` takes a parameter —
+        // the `/runs/reapable` vs `/runs/{run_id}` precedent (above). Both stay
+        // under the already-proxied `/sessions` prefix, so no vite proxy edit (#345).
         .route(
-            "/sessions/{pipeline_id}/libassist",
+            "/sessions/libassist",
             post(open_library_assistant).delete(close_library_assistant),
         )
+        // The assistant's focus (#594, ADR-0051 §2): which template the UI has
+        // open. `PUT` is also the UI's liveness heartbeat — it is what tells the
+        // sweep a human is still editing — and `GET` is what the assistant's
+        // `UserPromptSubmit` hook reads before every message.
+        .route(
+            "/sessions/libassist/focus",
+            axum::routing::put(put_libassist_focus).get(get_libassist_focus),
+        )
+        // The assistant's one write path (#594, ADR-0051). Deliberately takes no
+        // id and no scope: the focus already names the file, and every way of
+        // naming it again is a way of naming the wrong one — the word "scope"
+        // means `.pdo/pipelines/` on an edit tab and `.pdo/library/pipelines/` in
+        // the library store, and the assistant cannot tell which is being asked of
+        // it.
+        .route("/sessions/libassist/save", post(save_libassist_focused))
         .route("/library", get(list_library))
         .route("/library", post(save_to_library))
         // #345 — parse a single node's YAML into a canvas-instantiable spec.
@@ -7433,7 +7474,10 @@ fn resolve_completed_frontmatter(
 ) -> HashMap<String, HashMap<String, serde_yaml::Value>> {
     let mut by_node = HashMap::new();
     for (node_id, node_state) in &run_state.nodes {
-        if node_state.status != event_log::NodeStatus::Completed {
+        // #620: a `Skipped` node counts as a settled producer here too — it wrote
+        // an (empty) artifact, so it resolves to empty frontmatter exactly as it
+        // did when a skip projected `Completed`.
+        if !node_state.status.is_settled_complete() {
             continue;
         }
         let fm = resolve_source_frontmatter(pipeline, node_id, node_state.iter, artifacts_dir);
@@ -8967,6 +9011,22 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
         "default"
     };
 
+    // --- library assistant idle TTL (seconds) (#594, ADR-0051) ---
+    let lat_default = tmux_session_manager::DEFAULT_LIBASSIST_IDLE_TTL.as_secs() as i64;
+    let lat_stored_wins = cfg.libassist_idle_ttl_secs.filter(|&n| n >= 1);
+    let lat_env = tmux_session_manager::env_libassist_idle_ttl_secs().map(|n| n as i64);
+    let lat_effective = tmux_session_manager::libassist_idle_ttl_with(
+        cfg.libassist_idle_ttl_secs.map(|n| n as u64),
+    )
+    .as_secs() as i64;
+    let lat_source = if lat_stored_wins.is_some() {
+        "stored"
+    } else if lat_env.is_some() {
+        "env"
+    } else {
+        "default"
+    };
+
     // --- guard timeout (seconds; the env seam is milliseconds) ---
     let guard_default = guard_runner::GUARD_TIMEOUT_SECS as i64;
     let guard_stored_wins = cfg.guard_timeout_secs.filter(|&n| (1..=600).contains(&n));
@@ -9255,6 +9315,10 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
     Ok(serde_json::json!({
         "session_cap": settings_field(cap_effective, cap_source, cfg.session_cap, cap_env, cap_default),
         "reaper_ttl_secs": settings_field(ttl_effective, ttl_source, cfg.reaper_ttl_secs, ttl_env, ttl_default),
+        // #594: the assistant's own idle TTL. Its own knob and not a reuse of
+        // `reaper_ttl_secs` — that one bounds a completed node's session (1 h),
+        // this one bounds a REPL nobody is using (120 s).
+        "libassist_idle_ttl_secs": settings_field(lat_effective, lat_source, cfg.libassist_idle_ttl_secs, lat_env, lat_default),
         "guard_timeout_secs": settings_field(guard_effective, guard_source, cfg.guard_timeout_secs, guard_env_ms, guard_default),
         "default_model": settings_field_str(dm_effective.as_deref(), dm_source, dm_stored, dm_env.as_deref()),
         // #550/ADR-0046: the harness axis. `default_harness` is a plain
@@ -9726,6 +9790,11 @@ async fn put_settings(
     if let Some(t) = req.reaper_ttl_secs {
         if t < 1 {
             return bad("reaper_ttl_secs must be >= 1");
+        }
+    }
+    if let Some(t) = req.libassist_idle_ttl_secs {
+        if t < 1 {
+            return bad("libassist_idle_ttl_secs must be >= 1");
         }
     }
     if let Some(g) = req.guard_timeout_secs {
@@ -11420,7 +11489,34 @@ async fn run_stale_detection(state: &Arc<AppState>) {
 /// durably appended**. `node_spawn::spawn_node`, `node_primitives::start_node`'s
 /// callers and `spawn_manager_session` all own that half; the reaper is only its
 /// consumer.
-async fn run_orphan_sweep(state: &AppState, socket: &str, ttl: Duration) -> Result<()> {
+/// Resolve both sweep TTLs at their `stored → env → default` precedence (#129,
+/// ADR-0015; #594 for the second one).
+///
+/// The single point all three sweep callers go through — the boot pass, the 60 s
+/// reaper loop, and the test seam — so a stored knob can never take effect on one
+/// path and not another. A DB read that fails degrades to the env/default tiers
+/// rather than aborting the pass: a sweep that does not run reaps nothing at all.
+async fn resolve_sweep_ttls(db: &sqlx::SqlitePool) -> tmux_session_manager::SweepTtls {
+    let cfg = instance_config::get(db).await.ok();
+    tmux_session_manager::SweepTtls {
+        node_run: tmux_session_manager::reaper_ttl_with(
+            cfg.as_ref()
+                .and_then(|c| c.reaper_ttl_secs)
+                .map(|n| n as u64),
+        ),
+        libassist_idle: tmux_session_manager::libassist_idle_ttl_with(
+            cfg.as_ref()
+                .and_then(|c| c.libassist_idle_ttl_secs)
+                .map(|n| n as u64),
+        ),
+    }
+}
+
+async fn run_orphan_sweep(
+    state: &AppState,
+    socket: &str,
+    ttls: tmux_session_manager::SweepTtls,
+) -> Result<()> {
     // (1) EDGE FIRST — the tmux inventory. Sorted into a `Vec` so kill order and
     //     log order are deterministic (`list_pdo_sessions` returns a `HashSet`).
     let mut names: Vec<String> = tmux_session_manager::list_pdo_sessions(socket)
@@ -11449,17 +11545,34 @@ async fn run_orphan_sweep(state: &AppState, socket: &str, ttl: Duration) -> Resu
     //     `load_events` never errors on an unknown run_id (it is a `fetch_all`:
     //     zero rows = `Ok(vec![])` → `project` → `None` → absent → killed, which
     //     is what `reaper_kills_shell_of_absent_run` already pins).
+    // #594: the library assistant's two presence facts, read in this same pass and
+    // against the same `now` as everything else (the one-clock discipline above).
+    // The focus is a cheap in-memory read; `is_attached` is one tmux call, and only
+    // for the assistant — the other arms have an owning Run to judge them by.
+    let focus_at = read_libassist_focus(state).map(|f| f.at);
+
     let mut inputs: Vec<tmux_session_manager::SweepInput> = Vec::with_capacity(names.len());
     let mut projected: HashMap<String, Option<event_log::RunState>> = HashMap::new();
 
     for session_name in names {
         let parsed = tmux_session_manager::parse_session_name(&session_name);
+        let mut attached = false;
+        let mut focus_age = None;
         let info = match &parsed {
             // Unparseable name: no lookup at all, exactly as before.
             None => None,
-            // #302: a library assistant owns no Run — there is nothing to project.
-            // `decide_one` keeps it unconditionally, so skip the lookup entirely.
-            Some(tmux_session_manager::ParsedSession::LibAssist { .. }) => None,
+            // #302/#594: a library assistant owns no Run — there is nothing to
+            // project. It is judged on human presence instead, so fill those two
+            // fields here rather than looking up a run that does not exist.
+            Some(tmux_session_manager::ParsedSession::LibAssist) => {
+                attached = tmux_session_manager::is_attached(socket, &session_name);
+                focus_age = focus_at.map(|at| {
+                    now.signed_duration_since(at)
+                        .to_std()
+                        .unwrap_or(Duration::ZERO)
+                });
+                None
+            }
             Some(p) => {
                 let (run_id, node_id) = match p {
                     tmux_session_manager::ParsedSession::Manager { run_id } => {
@@ -11472,7 +11585,7 @@ async fn run_orphan_sweep(state: &AppState, socket: &str, ttl: Duration) -> Resu
                         run_id, node_id, ..
                     } => (run_id.as_str(), node_id.as_str()),
                     // Handled by the arm above; unreachable here.
-                    tmux_session_manager::ParsedSession::LibAssist { .. } => unreachable!(),
+                    tmux_session_manager::ParsedSession::LibAssist => unreachable!(),
                 };
                 if !projected.contains_key(run_id) {
                     let events = load_events(&state.db, run_id).await?;
@@ -11491,11 +11604,13 @@ async fn run_orphan_sweep(state: &AppState, socket: &str, ttl: Duration) -> Resu
             session_name,
             parsed,
             info,
+            attached,
+            focus_age,
         });
     }
 
     // (4) PURE — no tmux, no DB, no clock inside.
-    let decisions = tmux_session_manager::decide_sweep(&inputs, ttl, now);
+    let decisions = tmux_session_manager::decide_sweep(&inputs, ttls, now);
 
     // (5) EDGE — log + kill. Nothing has been killed before this point, so a DB
     //     error in (3) aborts the pass having reaped nothing: the same
@@ -11806,6 +11921,7 @@ async fn node_pane(
             matches!(
                 i.status,
                 event_log::NodeStatus::Completed
+                    | event_log::NodeStatus::Skipped
                     | event_log::NodeStatus::Failed
                     | event_log::NodeStatus::Stopped
                     | event_log::NodeStatus::Stale
@@ -13937,13 +14053,14 @@ async fn node_retry(
         }
     };
 
-    // Captured BEFORE any invalidation OR re-open so the retry lands on
-    // `current + 1`, not on a reset-to-1 iteration (the #498 branch-collision
-    // trap): both the self-invalidation below and the re-open's interrupted-node
-    // drop remove the node from the projection, so re-deriving the iter afterwards
-    // would read 1.
+    // Captured BEFORE any invalidation OR re-open so the retry's target iteration
+    // is derived from the live lap, not a reset-to-1 iteration (the #498
+    // branch-collision trap): both the self-invalidation below and the re-open's
+    // interrupted-node drop remove the node from the projection, so re-deriving the
+    // iter afterwards would read 1. The loop-aware choice between "re-run the same
+    // lap" and "advance to the next iteration" is made once the pipeline is parsed
+    // (`next_iter`, below); here we only need the pre-invalidation lap index.
     let current_iter = run_state.nodes.get(&node_id).map(|ns| ns.iter).unwrap_or(1);
-    let next_iter = current_iter + 1;
 
     // ── AC7 / ADR-0049: embed the re-open. A retry on a terminal (or
     //    incident-parked) Run re-opens it atomically here, BEFORE the liveness
@@ -13959,8 +14076,11 @@ async fn node_retry(
     // ── HEAD PROBE 1 (#487): run-liveness. The FIRST gesture — a refusal here leaves
     //    ZERO side effects (nothing stopped, nothing invalidated). See the doc above
     //    for why this must precede the invalidations, and why the predicate is
-    //    run-liveness alone rather than a synthetic `NodeStarted`.
-    if let Some(reason) = transition_guard::retry_run_precondition(&run_state, &node_id, next_iter)
+    //    run-liveness alone rather than a synthetic `NodeStarted`. The iter passed
+    //    here feeds the refusal template only (the predicate ignores it, and a refusal
+    //    means nothing spawns), so the pre-parse `current_iter + 1` is fine.
+    if let Some(reason) =
+        transition_guard::retry_run_precondition(&run_state, &node_id, current_iter + 1)
     {
         let refusal = retry_verdict::RetryRefusal::RetryRejected {
             message: reason.to_string(),
@@ -14050,9 +14170,26 @@ async fn node_retry(
         }
     }
 
-    let downstream: Vec<String> = graph_resolver::downstream_subgraph(&pipeline_def, &node_id)
-        .into_iter()
-        .collect();
+    // Retry is loop-aware. A node's `iter` inside a bounded region IS the lap
+    // index, so the recipe splits (see CONTEXT.md "Contrôles de Run"):
+    //  ① iteration — a region member re-runs the SAME lap (`current_iter`), never
+    //     `current_iter + 1`; bumping it would forge a phantom lap and drag the
+    //     region toward its `max_iter`. A plain node still advances to `iter + 1`.
+    //  ② invalidation — the downstream walk skips the region's re-entry (back)
+    //     edges, so it resets only the lap's forward slice (and what genuinely
+    //     leaves the loop), never an earlier member of the same lap whose output
+    //     is already validated.
+    let next_iter = if loop_region::bounded_region_for_member(&pipeline_def, &node_id).is_some() {
+        current_iter
+    } else {
+        current_iter + 1
+    };
+
+    let excluded_edges = loop_region::bounded_reentry_edges(&pipeline_def);
+    let downstream: Vec<String> =
+        graph_resolver::downstream_subgraph_excluding(&pipeline_def, &node_id, &excluded_edges)
+            .into_iter()
+            .collect();
 
     let inv_params = node_primitives::InvalidateNodesParams {
         run_id: &run_id,
@@ -14218,9 +14355,14 @@ async fn node_retry_preview(
     let worktree_dir = worktree_dir_for_run(&repo_root, &run_id);
     let artifacts_dir = worktree_dir.join(".pdo").join("artifacts");
 
-    let mut downstream: Vec<String> = graph_resolver::downstream_subgraph(&pipeline_def, &node_id)
-        .into_iter()
-        .collect();
+    // Mirror `node_retry`'s loop-aware invalidation: the preview must promise
+    // exactly what the retry will reset — the lap's forward slice, not an earlier
+    // same-lap member reached through a region's back-edge.
+    let excluded_edges = loop_region::bounded_reentry_edges(&pipeline_def);
+    let mut downstream: Vec<String> =
+        graph_resolver::downstream_subgraph_excluding(&pipeline_def, &node_id, &excluded_edges)
+            .into_iter()
+            .collect();
     downstream.sort();
 
     let with_artifacts: Vec<&String> = downstream
@@ -14456,7 +14598,7 @@ async fn open_run_shell(
     }
 }
 
-/// Response of `POST /sessions/{pipeline_id}/libassist` (#302 / ADR-0048).
+/// Response of `POST /sessions/libassist` (#302 / ADR-0048, #594 / ADR-0051).
 ///
 /// Same shape as [`ShellResponse`]: `created` distinguishes a freshly-spawned
 /// assistant from a re-attach of the existing one (create-if-absent). The client
@@ -14468,39 +14610,44 @@ struct LibassistResponse {
     created: bool,
 }
 
-/// Open (or re-attach) the library pipeline authoring assistant for `pipeline_id`
-/// (#302 / ADR-0048).
+/// The assistant's cwd: the repo's template directory (#594, ADR-0051 §1).
 ///
-/// Create-if-absent, one assistant per pipeline id (`pdo-libassist-<id>`), a
-/// `claude` REPL whose cwd is the library pipelines directory for `?scope=`
-/// (default `user`). Unlike the run shell there is no run to gate on: the assistant
-/// acts before/outside any Run. Its system prompt is primed with the pipeline-YAML
-/// format and the library endpoints (owner's ask). The session persists across a
-/// PTY/tab close (`claude` does not exit on EOF) and is reaped by the sibling
-/// `DELETE` handler on tab-leave.
-async fn open_library_assistant(
-    State(state): State<Arc<AppState>>,
-    AxumPath(pipeline_id): AxumPath<String>,
-    Query(scope_q): Query<ScopeQuery>,
-) -> Response {
-    let scope_str = scope_q.scope.as_deref().unwrap_or("user");
-    let Some(scope) = library_store::pipelines::Scope::parse(scope_str) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": format!("unknown scope: {scope_str}") })),
-        )
-            .into_response();
-    };
-    let Some(cwd) = library_store::pipelines::scope_dir(&state.repo_root, scope) else {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "HOME not set — no library pipelines directory" })),
-        )
-            .into_response();
-    };
-    // The assistant's cwd must exist for `tmux new-session -c` to succeed. A fresh
-    // user library has no `pipelines/` dir until the first save; create it so the
-    // assistant can author the very first template.
+/// Not the *library store* it used to be. An edit tab of scope `repo` or `user`
+/// edits a file under `.pdo/pipelines/`, while `library_store::pipelines::scope_dir`
+/// answers `.pdo/library/pipelines/` — two different meanings of the word "scope",
+/// which is why the assistant used to be launched in a directory where the file
+/// its primer named did not exist. With one shared session there is no per-open
+/// scope left to honour anyway: the cwd is now a fixed, browsable folder of real
+/// in-house examples, and the file actually being edited arrives by absolute path
+/// through the focus.
+fn libassist_cwd(repo_root: &std::path::Path) -> PathBuf {
+    repo_root.join(".pdo").join("pipelines")
+}
+
+/// Where the assistant's primer and hook settings live: a sibling `.libassist/`
+/// of the cwd, so the user-facing templates directory stays clean.
+fn libassist_state_dir(repo_root: &std::path::Path) -> PathBuf {
+    repo_root.join(".pdo").join(".libassist")
+}
+
+/// Open (or re-attach) the library pipeline authoring assistant (#302 / ADR-0048,
+/// #594 / ADR-0051).
+///
+/// Create-if-absent, **one assistant for the whole daemon** — a `claude` REPL in
+/// the repo's templates directory. Unlike the run shell there is no run to gate
+/// on: the assistant acts before/outside any Run. Its system prompt is primed with
+/// the pipeline-YAML format and the library endpoints, and its `UserPromptSubmit`
+/// hook re-injects the open template on every message, so nothing about *which*
+/// template is being edited is frozen here at spawn time.
+///
+/// The session persists across a PTY/tab close (`claude` does not exit on EOF).
+/// The sibling `DELETE` reaps it when the user leaves every edit view; the orphan
+/// sweep's idle arm is the backstop for the case no `DELETE` can cover (a reload).
+async fn open_library_assistant(State(state): State<Arc<AppState>>) -> Response {
+    let cwd = libassist_cwd(&state.repo_root);
+    // The assistant's cwd must exist for `tmux new-session -c` to succeed. A repo
+    // with no templates yet has no `pipelines/` dir; create it so the assistant can
+    // author the very first one.
     if let Err(e) = std::fs::create_dir_all(&cwd) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -14509,7 +14656,7 @@ async fn open_library_assistant(
             .into_response();
     }
 
-    let session = tmux_session_manager::libassist_session_name(&pipeline_id);
+    let session = tmux_session_manager::libassist_session_name().to_string();
     let socket = state.tmux_socket();
 
     // Create-if-absent, race-free (create-then-verify-on-failure), mirroring
@@ -14536,8 +14683,7 @@ async fn open_library_assistant(
             .join("library-assistant.md"),
     )
     .unwrap_or_default();
-    let full_prompt =
-        prompt_augmenter::build_library_assistant_prompt(&pipeline_id, &daemon_url, &static_prompt);
+    let full_prompt = prompt_augmenter::build_library_assistant_prompt(&daemon_url, &static_prompt);
 
     // Infra harness (no Run harness to follow): instance default, else the `claude`
     // floor — mirror of the manager/merge-resolver resolution.
@@ -14551,23 +14697,32 @@ async fn open_library_assistant(
         .resolve(&harness_name)
         .unwrap_or_else(|| {
             warn!(
-                "library assistant for '{pipeline_id}': unknown harness '{harness_name}' — \
-                 launching on the claude floor"
+                "library assistant: unknown harness '{harness_name}' — launching on the claude floor"
             );
             harness_registry::claude()
         });
+    // ADR-0051 §3: the per-message focus hook rides on `--settings`, a hole only
+    // the `claude` launch template has. On another harness the token is dropped
+    // silently, and the primer's fetch-the-focus instruction becomes the only
+    // mechanism. Say so once, at spawn, rather than letting the degradation be
+    // discovered from an assistant that keeps guessing the wrong template.
+    if !harness.can_inject_hooks() {
+        warn!(
+            "library assistant on harness '{}': its launch template has no {{settings}} hole, \
+             so the UserPromptSubmit focus hook is NOT armed. The assistant will know the open \
+             pipeline only if it follows its primer's instruction to fetch \
+             GET /sessions/libassist/focus before acting (ADR-0051 §3).",
+            harness.name
+        );
+    }
 
-    // Keep the primer OUT of the user-facing pipelines dir: write it to a sibling
-    // `.libassist/<id>.md` under the library root (the parent of `pipelines/`).
-    let prompt_path = cwd
-        .parent()
-        .unwrap_or(&cwd)
-        .join(".libassist")
-        .join(format!("{pipeline_id}.md"));
+    // Keep the primer OUT of the user-facing templates dir: it and the hook
+    // settings live in a sibling `.libassist/`. No id in the name any more —
+    // there is one assistant.
+    let prompt_path = libassist_state_dir(&state.repo_root).join("assistant.md");
 
     match tmux_session_manager::spawn_libassist(
         &session,
-        &pipeline_id,
         &full_prompt,
         &cwd,
         &prompt_path,
@@ -14612,27 +14767,374 @@ async fn open_library_assistant(
     }
 }
 
-/// Reap the library pipeline authoring assistant for `pipeline_id` (#302 /
-/// ADR-0048).
+/// Reap the library pipeline authoring assistant (#302 / ADR-0048, #594 /
+/// ADR-0051).
 ///
-/// The assistant's lifecycle is create-on-open / reap-on-leave: the frontend fires
-/// this when the user leaves the Assistant tab (owner's ask). Best-effort — killing
-/// an absent session is a no-op, so a double-leave or a race is harmless. `reaped`
-/// tells the client whether a session was actually there.
-async fn close_library_assistant(
-    State(state): State<Arc<AppState>>,
-    AxumPath(pipeline_id): AxumPath<String>,
-) -> Response {
-    let session = tmux_session_manager::libassist_session_name(&pipeline_id);
+/// Fired when the user leaves **every** pipeline edit view — not when they leave
+/// the Assistant *tab*, which is what made the assistant unusable: the info panel
+/// closes by itself on each edit-tab switch (#385), so tab-leave reaped the
+/// conversation on every round trip between two templates.
+///
+/// Best-effort — killing an absent session is a no-op, so a double-leave or a race
+/// is harmless. `reaped` tells the client whether a session was actually there.
+/// It is deliberately **not** the only reap path: a browser reload runs no React
+/// cleanup and so sends no `DELETE` at all, which is what the sweep's idle arm
+/// covers.
+///
+/// **Clears the focus by the same gesture.** "No edit view is open" is the one
+/// fact both carry, and splitting it across two calls made them diverge: the
+/// `pagehide` path can only afford a single `keepalive` request, so it reaped the
+/// session and left the focus behind — `GET …/focus` then named a template nobody
+/// had open, with an age growing without bound.
+async fn close_library_assistant(State(state): State<Arc<AppState>>) -> Response {
+    let session = tmux_session_manager::libassist_session_name();
     let socket = state.tmux_socket();
-    let existed = tmux_session_manager::session_exists(&socket, &session);
-    tmux_session_manager::kill(&socket, &session);
+    set_libassist_focus(&state, None);
+    let existed = tmux_session_manager::session_exists(&socket, session);
+    tmux_session_manager::kill(&socket, session);
     if existed {
-        info!("Reaped library assistant {session}");
+        // `kill` swallows tmux's exit code, so corroborate rather than claim: a
+        // "Reaped" line for a session that is still alive would send the next
+        // investigation down the wrong path.
+        if tmux_session_manager::session_exists(&socket, session) {
+            warn!("Failed to reap library assistant {session}: the tmux session is still alive");
+        } else {
+            info!("Reaped library assistant {session}");
+        }
     }
     (
         StatusCode::OK,
         Json(serde_json::json!({ "ok": true, "reaped": existed })),
+    )
+        .into_response()
+}
+
+/// Body of `PUT /sessions/libassist/focus` (#594, ADR-0051 §2).
+#[derive(Deserialize)]
+struct LibassistFocusRequest {
+    /// The template being edited, or `null` to clear the focus (the user left
+    /// every edit view).
+    pipeline_id: Option<String>,
+    /// The edit tab's scope: `repo` | `user` | `library`. Ignored when
+    /// `pipeline_id` is `null`.
+    #[serde(default)]
+    scope: Option<String>,
+}
+
+/// Resolve the absolute YAML path of a focused template — **the daemon's job, not
+/// the client's** (#594, ADR-0051).
+///
+/// The word "scope" means two different things in this codebase: an edit tab's
+/// `repo`/`user` point at `.pdo/pipelines/`, while the library store's
+/// [`library_store::pipelines::Scope`] points at `.pdo/library/pipelines/`. A
+/// frontend that built the path itself would have to know which vocabulary
+/// applies where — and getting that wrong is exactly the bug that gave the
+/// assistant a cwd where the file it was told to read did not exist.
+///
+/// `None` for a template that has no file yet (never saved) and for a path that
+/// does not exist: a legitimate state, not an error.
+fn resolve_focus_path(
+    repo_root: &std::path::Path,
+    pipeline_id: &str,
+    scope: &str,
+) -> Option<PathBuf> {
+    match scope {
+        // The library store has its own layout and its own lookup.
+        "library" => library_store::pipelines::get_path(repo_root, pipeline_id),
+        _ => {
+            let path = resolve_pipeline_path_scoped(repo_root, pipeline_id, Some(scope));
+            path.exists().then_some(path)
+        }
+    }
+}
+
+/// Declare (or clear) which template the UI is editing — and, by the same token,
+/// that a human is still there (#594, ADR-0051 §2).
+///
+/// The UI repeats this every 20 s while an edit view is open. That repetition is
+/// load-bearing twice over: it is how the assistant learns the current template
+/// on the next message, and it is how the orphan sweep knows not to reap a session
+/// out from under someone who is editing with the Assistant tab hidden.
+///
+/// **Never spawns the assistant.** Declaring a focus is not asking for a REPL;
+/// auto-spawn was ruled out by ADR-0048 (too eager, too expensive) and nothing
+/// here revisits it.
+async fn put_libassist_focus(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<LibassistFocusRequest>,
+) -> Response {
+    let Some(pipeline_id) = req.pipeline_id.filter(|id| !id.is_empty()) else {
+        set_libassist_focus(&state, None);
+        return Json(serde_json::json!({ "ok": true, "pipeline_id": null })).into_response();
+    };
+
+    let scope = req.scope.unwrap_or_else(|| "repo".to_string());
+    if !matches!(scope.as_str(), "repo" | "user" | "library") {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": format!("unknown scope: {scope}") })),
+        )
+            .into_response();
+    }
+
+    // An id that resolves to no file is NOT an error: a template can be open in
+    // the canvas and not yet saved. Store the focus with a null path and let the
+    // assistant read the id.
+    let path = resolve_focus_path(&state.repo_root, &pipeline_id, &scope);
+    let focus = LibassistFocus {
+        pipeline_id,
+        scope,
+        path,
+        at: chrono::Utc::now(),
+    };
+    let body = libassist_focus_json(Some(&focus), focus.at);
+    set_libassist_focus(&state, Some(focus));
+    Json(body).into_response()
+}
+
+/// Read the current focus — the endpoint the assistant's `UserPromptSubmit` hook
+/// curls before every message (#594, ADR-0051 §3).
+///
+/// `?format=text` renders one plain sentence instead of JSON. That form exists for
+/// the hook: its stdout is appended verbatim to the turn's context, and asking a
+/// tmux session to have `jq` on its PATH to make JSON readable would be a
+/// dependency we do not control. The daemon owns the wording, which is right — it
+/// owns the vocabulary.
+async fn get_libassist_focus(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<FormatQuery>,
+) -> Response {
+    let now = chrono::Utc::now();
+    let focus = read_libassist_focus(&state);
+    if q.format.as_deref() == Some("text") {
+        return (
+            [(
+                axum::http::header::CONTENT_TYPE,
+                "text/plain; charset=utf-8",
+            )],
+            libassist_focus_text(focus.as_ref()),
+        )
+            .into_response();
+    }
+    Json(libassist_focus_json(focus.as_ref(), now)).into_response()
+}
+
+#[derive(Deserialize)]
+struct FormatQuery {
+    format: Option<String>,
+}
+
+/// Lock-poisoning-tolerant read of the focus, mirroring [`mark_self_write`]: a
+/// panic while holding this lock must not make the assistant permanently
+/// un-reapable.
+fn read_libassist_focus(state: &AppState) -> Option<LibassistFocus> {
+    match state.libassist_focus.lock() {
+        Ok(g) => g.clone(),
+        Err(p) => p.into_inner().clone(),
+    }
+}
+
+fn set_libassist_focus(state: &AppState, focus: Option<LibassistFocus>) {
+    let mut guard = match state.libassist_focus.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    *guard = focus;
+}
+
+fn libassist_focus_json(
+    focus: Option<&LibassistFocus>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> serde_json::Value {
+    match focus {
+        None => serde_json::json!({
+            "pipeline_id": null,
+            "scope": null,
+            "path": null,
+            "age_secs": null,
+        }),
+        Some(f) => serde_json::json!({
+            "pipeline_id": f.pipeline_id,
+            "scope": f.scope,
+            "path": f.path.as_ref().map(|p| p.to_string_lossy()),
+            "age_secs": now.signed_duration_since(f.at).num_seconds().max(0),
+        }),
+    }
+}
+
+/// The one-line rendering injected into the assistant's context on every message.
+///
+/// Names the save endpoint, and names it as the *only* one. The assistant used to
+/// be told to echo the focus scope back to `POST /library/pipelines`, which reads
+/// that word in the library store's vocabulary: a `repo` template "saved" that way
+/// landed in `.pdo/library/pipelines/` as a duplicate while the edited file never
+/// moved, and the assistant announced success. `POST /sessions/libassist/save`
+/// takes no scope at all — the daemon already knows the file.
+fn libassist_focus_text(focus: Option<&LibassistFocus>) -> String {
+    match focus {
+        None => "PDO — aucune pipeline ouverte dans l'UI pour l'instant. Ne devine pas de \
+                 template : demande à l'utilisateur laquelle il veut travailler.\n"
+            .to_string(),
+        Some(f) => {
+            let path = match &f.path {
+                Some(p) => p.to_string_lossy().to_string(),
+                None => "(pas encore de fichier sur le disque — template non sauvée)".to_string(),
+            };
+            format!(
+                "PDO — pipeline actuellement ouverte dans l'UI : `{}` (scope `{}`), fichier : {}\n\
+                 Travaille sur celle-là, sans la deviner ni la redemander. Pour écrire, un seul \
+                 endpoint : POST /sessions/libassist/save avec `{{\"yaml\": …, \"prompts\": …}}` — \
+                 il écrit dans CE fichier, sans id ni scope à fournir. N'utilise jamais \
+                 POST /library/pipelines pour sauver la template ouverte : il écrit dans le \
+                 library store, donc à côté du fichier édité.\n",
+                f.pipeline_id, f.scope, path
+            )
+        }
+    }
+}
+
+/// Body of `POST /sessions/libassist/save` (#594 / ADR-0051): the whole template,
+/// and nothing that says *where*.
+#[derive(Deserialize)]
+struct LibassistSaveRequest {
+    yaml: String,
+    #[serde(default)]
+    prompts: HashMap<String, String>,
+}
+
+/// Persist the template the UI has open — **the focus names the target, the
+/// assistant does not** (#594 / ADR-0051).
+///
+/// This endpoint exists because the previous one could not be used correctly. The
+/// assistant was told to save through `POST /library/pipelines`, passing the focus
+/// scope; that endpoint reads `scope` in the *library store's* vocabulary
+/// (`.pdo/library/pipelines/`), while an edit tab's `repo`/`user` mean
+/// `.pdo/pipelines/`. The two words look identical and point at different trees,
+/// so a faithful assistant wrote a duplicate into the wrong store, left the edited
+/// file untouched, and reported success.
+///
+/// Removing the argument removes the class of bug: there is nothing left to get
+/// wrong. The daemon already resolved the absolute path when the UI declared its
+/// focus, and it is the only party that knows both vocabularies.
+///
+/// `409` when no template is open: saving into a guess is exactly what this whole
+/// mechanism exists to prevent.
+async fn save_libassist_focused(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<LibassistSaveRequest>,
+) -> Response {
+    let Some(focus) = read_libassist_focus(&state) else {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "no pipeline template is open in the UI — ask the user which one to \
+                          work on instead of guessing a file"
+            })),
+        )
+            .into_response();
+    };
+
+    // Same gate as `PUT /pipelines/{id}`: a template that does not parse must not
+    // reach disk, where it would break the canvas the user is looking at.
+    let parsed = match pipeline::parse_pipeline(&req.yaml) {
+        Ok(r) => r,
+        Err(e) => {
+            let (message, line) = parse_error_to_structured(&e);
+            let mut body =
+                serde_json::json!({ "error": format!("invalid YAML: {e}"), "message": message });
+            if let Some(l) = line {
+                body["line"] = serde_json::json!(l);
+            }
+            return (StatusCode::BAD_REQUEST, Json(body)).into_response();
+        }
+    };
+
+    let id = focus.pipeline_id.clone();
+    let path = if focus.scope == "library" {
+        // The library store owns its own layout *and* its own scope enum. Read the
+        // entry's current store off disk rather than mapping the edit tab's word
+        // onto it — the mapping is precisely what went wrong before.
+        let store_scope = library_store::pipelines::get_scope(&state.repo_root, &id)
+            .unwrap_or(library_store::pipelines::Scope::User);
+        if let Err(e) = library_store::pipelines::save(
+            &state.repo_root,
+            Some(&id),
+            &parsed.pipeline.name,
+            &req.yaml,
+            &req.prompts,
+            store_scope,
+        ) {
+            let msg = format!("write failed: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": msg.clone(), "message": msg })),
+            )
+                .into_response();
+        }
+        match library_store::pipelines::get_path(&state.repo_root, &id) {
+            Some(p) => p,
+            None => {
+                let msg = "write reported success but the template is not in the library store"
+                    .to_string();
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": msg.clone(), "message": msg })),
+                )
+                    .into_response();
+            }
+        }
+    } else {
+        let path = resolve_pipeline_path_scoped(&state.repo_root, &id, Some(&focus.scope));
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        mark_self_write(&state.recent_writes, &path);
+        if let Err(e) = std::fs::write(&path, &req.yaml) {
+            let msg = format!("write failed: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": msg.clone(), "message": msg })),
+            )
+                .into_response();
+        }
+        for (node_id, content) in &req.prompts {
+            let prompt_path = pipeline::canonical_prompt_path(&path, node_id);
+            if let Some(parent) = prompt_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            mark_self_write(&state.recent_writes, &prompt_path);
+            if let Err(e) = std::fs::write(&prompt_path, content) {
+                warn!("failed to write prompt for {node_id}: {e}");
+            }
+        }
+        path
+    };
+
+    // Announce the write ourselves instead of waiting for the file watcher to
+    // notice. Two reasons, one per scope: the repo/user write is marked as a
+    // self-write (the suppression that stops the UI's own saves from bouncing
+    // back), and the library store is not watched at all. Without this the canvas
+    // would sit on stale YAML until the user reopened the tab — the symptom the
+    // user reads as "it said it saved and nothing happened".
+    let _ = state.pipeline_tx.send(serde_json::json!({
+        "type": "pipeline_changed",
+        "pipeline_id": id,
+        "path": path.to_string_lossy(),
+    }));
+
+    info!(
+        "Library assistant saved template {id} (scope {}) at {}",
+        focus.scope,
+        path.display()
+    );
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "ok": true,
+            "id": id,
+            "scope": focus.scope,
+            "path": path.to_string_lossy(),
+        })),
     )
         .into_response()
 }
@@ -16498,7 +17000,7 @@ const DEV_PLACEHOLDER: &str = r#"<!DOCTYPE html>
 <body style="background:#0f1115;color:#e6e8eb;font-family:sans-serif;display:grid;place-items:center;height:100vh;margin:0">
 <div style="text-align:center">
 <h1>PDO daemon running</h1>
-<p>In dev mode, run the Vite frontend separately:<br><code>cd frontend && npm run dev</code></p>
+<p>In dev mode, run the Vite frontend separately:<br><code>cd frontend && pnpm run dev</code></p>
 </div>
 </body>
 </html>"#;
@@ -17006,6 +17508,7 @@ mod tests {
             price_source_url: None,
             price_refresh_at_boot: false,
             allowed_ws_origins: Vec::new(),
+            libassist_focus: Mutex::new(None),
         })
     }
 
@@ -17052,6 +17555,7 @@ mod tests {
             price_source_url: None,
             price_refresh_at_boot: false,
             allowed_ws_origins: Vec::new(),
+            libassist_focus: Mutex::new(None),
         })
     }
 
@@ -17509,7 +18013,10 @@ mod tests {
         run_orphan_sweep(
             &state,
             "pdo-test-doctrine-nonexistent",
-            std::time::Duration::ZERO,
+            tmux_session_manager::SweepTtls {
+                node_run: std::time::Duration::ZERO,
+                libassist_idle: std::time::Duration::ZERO,
+            },
         )
         .await
         .unwrap();
@@ -20254,6 +20761,7 @@ mod tests {
                 started_at: None,
                 completed_at: None,
                 failure_reason: None,
+                skip_reason: None,
                 iterations: Vec::new(),
                 frontmatter_retries: 0,
                 frontmatter_violations: Vec::new(),
@@ -20468,6 +20976,7 @@ mod tests {
                 started_at: None,
                 completed_at: None,
                 failure_reason: None,
+                skip_reason: None,
                 iterations: Vec::new(),
                 frontmatter_retries: 0,
                 frontmatter_violations: Vec::new(),
@@ -20522,6 +21031,7 @@ mod tests {
                 started_at: None,
                 completed_at: None,
                 failure_reason: None,
+                skip_reason: None,
                 iterations: Vec::new(),
                 frontmatter_retries: 0,
                 frontmatter_violations: Vec::new(),
@@ -20541,6 +21051,7 @@ mod tests {
                 started_at: None,
                 completed_at: None,
                 failure_reason: None,
+                skip_reason: None,
                 iterations: Vec::new(),
                 frontmatter_retries: 0,
                 frontmatter_violations: Vec::new(),
@@ -20767,6 +21278,7 @@ mod tests {
                     started_at: None,
                     completed_at: None,
                     failure_reason: None,
+                    skip_reason: None,
                     iterations: (1..=iters)
                         .map(|iter| event_log::IterationInfo {
                             iter,
@@ -21426,6 +21938,7 @@ mod tests {
             price_source_url: None,
             price_refresh_at_boot: false,
             allowed_ws_origins: Vec::new(),
+            libassist_focus: Mutex::new(None),
         })
     }
 
@@ -27507,6 +28020,7 @@ edges: []
             price_source_url: None,
             price_refresh_at_boot: false,
             allowed_ws_origins: Vec::new(),
+            libassist_focus: Mutex::new(None),
         });
         let app = build_router(state);
 
@@ -27705,6 +28219,7 @@ edges: []
             price_source_url: None,
             price_refresh_at_boot: false,
             allowed_ws_origins: Vec::new(),
+            libassist_focus: Mutex::new(None),
         });
         let app = build_router(state);
 

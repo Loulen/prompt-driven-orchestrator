@@ -2,9 +2,7 @@
 //! illegal mutations (deleting non-pending nodes) with 409 and auto-syncs
 //! valid edits to the library template via atomic tmp+rename.
 
-mod common;
-
-use common::TestDaemon;
+use crate::common::TestDaemon;
 use std::process::Command;
 
 const PIPELINE_NAME: &str = "mutation-test";

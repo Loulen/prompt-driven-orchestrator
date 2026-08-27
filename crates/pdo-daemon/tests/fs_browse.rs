@@ -14,12 +14,10 @@
 //! to the **content-type**, and the retired `/repos/browse` path is asserted NOT-json
 //! rather than 404 (the fallback never 404s).
 
-mod common;
-
 use std::os::unix::fs::symlink;
 use std::process::Command;
 
-use common::TestDaemon;
+use crate::common::TestDaemon;
 use tempfile::TempDir;
 
 /// Seed a deterministic tree the assertions bind to:

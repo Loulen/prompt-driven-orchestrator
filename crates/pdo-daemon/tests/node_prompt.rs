@@ -4,9 +4,7 @@
 //! GET /runs/{run_id}/nodes/{node_id}/prompt endpoint returns the augmented
 //! prompt containing deterministic ## Inputs and ## Outputs sections.
 
-mod common;
-
-use common::TestDaemon;
+use crate::common::TestDaemon;
 
 const PIPELINE_NAME: &str = "prompt-test";
 const NODE_ID: &str = "worker";

@@ -133,7 +133,6 @@ describe("PipelineInfoPanel — Assistant tab (#302)", () => {
   function renderTemplatePanel(
     props: {
       assistantId?: string | null;
-      assistantScope?: string;
       initialTab?: TabId;
       run?: RunState | null;
     } = {},
@@ -150,7 +149,6 @@ describe("PipelineInfoPanel — Assistant tab (#302)", () => {
         onClose={() => {}}
         initialTab={props.initialTab}
         assistantId={assistantId}
-        assistantScope={props.assistantScope ?? "user"}
       />,
     );
   }
@@ -159,7 +157,7 @@ describe("PipelineInfoPanel — Assistant tab (#302)", () => {
     openLibraryAssistant.mockReset();
     closeLibraryAssistant.mockReset();
     openLibraryAssistant.mockResolvedValue({
-      session: "pdo-libassist-feature-with-review",
+      session: "pdo-libassist-shared",
       created: true,
     });
     closeLibraryAssistant.mockResolvedValue({ ok: true, reaped: true });
@@ -184,36 +182,66 @@ describe("PipelineInfoPanel — Assistant tab (#302)", () => {
     expect(screen.queryByTestId("info-tab-assistant")).not.toBeInTheDocument();
   });
 
-  it("ensures the session on open and reaps it on leave", async () => {
-    const { unmount } = renderTemplatePanel({ initialTab: "assistant" });
+  it("ensures the shared session on open, with no pipeline id", async () => {
+    renderTemplatePanel({ initialTab: "assistant" });
 
-    // Create-on-open: mounting the Assistant tab ensures the session.
-    await waitFor(() =>
-      expect(openLibraryAssistant).toHaveBeenCalledWith(
-        "feature-with-review",
-        "user",
-      ),
-    );
+    // Create-on-open: mounting the Assistant tab ensures the session. No id and
+    // no scope — one assistant serves every template (#594).
+    await waitFor(() => expect(openLibraryAssistant).toHaveBeenCalledWith());
     // The resolved session name surfaces in the tab header.
-    expect(
-      await screen.findByText("pdo-libassist-feature-with-review"),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("pdo-libassist-shared")).toBeInTheDocument();
+  });
 
-    // Reap-on-leave: unmounting (tab switch / panel close / pipeline switch all
-    // unmount this subtree) kills the session.
+  // **The assertion this test used to make, inverted on purpose** (#594). The
+  // panel auto-closes on every edit-tab switch (#385), so a reap in the unmount
+  // cleanup threw the conversation away each time the user looked at another
+  // template. Reaping now lives at App level, keyed on leaving EVERY edit view.
+  it("does NOT reap on unmount — closing the panel is not leaving the editor", async () => {
+    const { unmount } = renderTemplatePanel({ initialTab: "assistant" });
+    await waitFor(() => expect(openLibraryAssistant).toHaveBeenCalled());
+
     unmount();
-    expect(closeLibraryAssistant).toHaveBeenCalledWith("feature-with-review");
+    expect(closeLibraryAssistant).not.toHaveBeenCalled();
   });
 
   it("switching to the Assistant tab starts the session", async () => {
     renderTemplatePanel();
     expect(openLibraryAssistant).not.toHaveBeenCalled();
     await userEvent.click(screen.getByTestId("info-tab-assistant"));
-    await waitFor(() =>
-      expect(openLibraryAssistant).toHaveBeenCalledWith(
-        "feature-with-review",
-        "user",
-      ),
+    await waitFor(() => expect(openLibraryAssistant).toHaveBeenCalledWith());
+  });
+
+  // The sharing property, seen from the UI: changing the edited template must not
+  // remount the tab, because a remount is a fresh `openLibraryAssistant` and a
+  // torn-down terminal. Re-rendering with a different `assistantId` used to change
+  // the subtree's `key`; it no longer does.
+  it("changing the edited template does not restart the assistant", async () => {
+    const { rerender } = render(
+      <PipelineInfoPanel
+        run={null}
+        pipeline={makePipeline()}
+        libraryPipelines={[]}
+        onLibraryChanged={() => {}}
+        onClose={() => {}}
+        initialTab="assistant"
+        assistantId="alpha"
+      />,
     );
+    await waitFor(() => expect(openLibraryAssistant).toHaveBeenCalledTimes(1));
+
+    rerender(
+      <PipelineInfoPanel
+        run={null}
+        pipeline={makePipeline()}
+        libraryPipelines={[]}
+        onLibraryChanged={() => {}}
+        onClose={() => {}}
+        initialTab="assistant"
+        assistantId="beta"
+      />,
+    );
+
+    expect(openLibraryAssistant).toHaveBeenCalledTimes(1);
+    expect(closeLibraryAssistant).not.toHaveBeenCalled();
   });
 });

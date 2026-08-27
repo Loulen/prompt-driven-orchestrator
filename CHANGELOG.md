@@ -10,6 +10,63 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.37.0
+
+**Assistant de bibliothèque : un seul assistant, focus par message, reap par inactivité** (#594 ;
+ADR-0051, qui amende ADR-0048 §1/§3/§4). Aucune migration de données ; la colonne SQLite
+`libassist_idle_ttl_secs` est ajoutée par un `ADD COLUMN` idempotent au boot, comme ses voisines.
+
+L'unité de durée de vie de l'assistant était la mauvaise : un `claude` par pipeline, vivant le temps
+où l'onglet **Assistant** était affiché. Elle devient **l'humain** : un assistant pour tout le
+daemon, qui apprend à chaque message quelle template est ouverte, et qui meurt quand plus personne
+n'édite.
+
+Changements cassants sur l'API HTTP :
+
+- **`POST` / `DELETE /sessions/{pipeline_id}/libassist` → `POST` / `DELETE /sessions/libassist`.**
+  L'id de pipeline disparaît du chemin, et le paramètre `?scope=` avec lui : il n'y a plus qu'une
+  session, `pdo-libassist-shared` au lieu de `pdo-libassist-<id>`. Un client qui appelle l'ancienne
+  route reçoit un 404.
+- **Nouveau `PUT` / `GET /sessions/libassist/focus`.** L'UI y déclare `{pipeline_id, scope}` — jamais
+  un chemin, que le daemon résout lui-même — et le répète toutes les 20 s tant qu'une vue d'édition
+  est ouverte. `GET` sert la même chose en JSON, ou en une phrase avec `?format=text` (la forme que
+  le hook `UserPromptSubmit` de l'assistant injecte dans son contexte à chaque message).
+- **Nouveau `POST /sessions/libassist/save`.** Corps `{yaml, prompts}` — **ni id, ni scope** : le
+  daemon écrit dans le fichier que le focus désigne, puis diffuse le `pipeline_changed` qui fait
+  relire le canvas. C'est désormais le **seul** chemin d'écriture de l'assistant ; `POST
+  /library/pipelines` reste celui de la Library de l'UI et n'est plus documenté à l'assistant.
+- **`GET` / `PUT /settings` exposent `libassist_idle_ttl_secs`** (`stored → env
+  `PDO_LIBASSIST_IDLE_TTL_SECS` → 120 s), le délai au bout duquel le sweep ramasse un assistant sans
+  terminal attaché et sans édition en cours.
+- **`DELETE /sessions/libassist` vide aussi le focus.** Un client qui envoyait `PUT focus: null` puis
+  `DELETE` peut se contenter du `DELETE`.
+
+Changements de comportement visibles :
+
+- **Une seule conversation, partagée par toutes les templates.** Passer d'une pipeline à l'autre ne
+  jette plus l'historique — c'est le gain ; en contrepartie il n'y a plus d'isolation entre deux
+  templates éditées en alternance, et l'assistant se resitue via le focus à chaque message.
+- **Le sweep peut désormais tuer l'assistant** (`LibAssistIdle`), ce qu'ADR-0048 §4 lui interdisait.
+  Trois verdicts dans l'ordre : session attachée → gardée ; focus frais → gardée ; sinon tuée après
+  la TTL d'inactivité. C'est ce filet qui borne enfin le cas réellement cassé — un reload ou une
+  fermeture d'onglet n'envoie aucun `DELETE` (React ne joue pas ses cleanups au déchargement), et la
+  session survivait donc sans borne.
+- **Le cwd de l'assistant devient `<repo>/.pdo/pipelines`** au lieu du *library store*. C'était un
+  bug : un onglet de scope `repo` ou `user` édite un fichier de `.pdo/pipelines/`, où le `<id>.yaml`
+  annoncé par le primer n'existait pas. Le chemin réel du fichier édité arrive maintenant par le
+  focus, en absolu.
+- **Le save de l'assistant écrit dans le fichier ouvert, point.** Le mot *scope* désigne deux arbres
+  différents — `.pdo/pipelines/` pour un onglet d'édition, `.pdo/library/pipelines/` pour le library
+  store — et faire porter ce mot par l'assistant le faisait écrire un doublon dans le mauvais, laisser
+  le fichier édité intact et annoncer « Sauvé ». L'argument disparaît, la classe de bug avec.
+- **Aller voir un Run ne reape plus l'assistant** tant qu'un onglet de template reste ouvert. « Quitter
+  toute vue d'édition » se lit sur les onglets ouverts, pas sur l'onglet actif.
+
+Dégradation assumée : le hook `UserPromptSubmit` n'existe que sur un harnais dont le gabarit de lancement
+expose `--settings` (le `claude` de la registry ; ni `opencode`, ni `pi`). Ailleurs, la consigne
+équivalente du primer — aller lire le focus avant d'agir — est le seul mécanisme, et le daemon le
+dit en `warn!` au spawn.
+
 ## 1.35.0
 
 **Résilience des runs — observabilité & véracité de l'état** (#601, lot 4/4 de la spec #596 ;

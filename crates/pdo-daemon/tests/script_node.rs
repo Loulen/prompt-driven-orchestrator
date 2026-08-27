@@ -13,13 +13,10 @@
 //! server inherits the daemon (= test process) environment at first spawn, so
 //! we prepend `CARGO_BIN_EXE_pdo`'s directory to PATH once before spawning.
 
-mod common;
-
 use std::process::Command;
-use std::sync::Once;
 use std::time::Duration;
 
-use common::TestDaemon;
+use crate::common::{ensure_pdo_on_path, TestDaemon};
 
 const PIPELINE_NAME: &str = "script-cycle";
 const NODE_ID: &str = "notify";
@@ -76,16 +73,6 @@ edges:
   - source: { node: start, port: user_prompt }
     target: { node: end, port: result }
 "#;
-
-fn ensure_pdo_on_path() {
-    static INIT: Once = Once::new();
-    INIT.call_once(|| {
-        let bin = std::path::Path::new(env!("CARGO_BIN_EXE_pdo"));
-        let dir = bin.parent().expect("pdo binary has a parent dir");
-        let existing = std::env::var("PATH").unwrap_or_default();
-        std::env::set_var("PATH", format!("{}:{}", dir.display(), existing));
-    });
-}
 
 fn git_init_with_commit(repo: &std::path::Path) -> anyhow::Result<()> {
     let run = |args: &[&str]| -> anyhow::Result<()> {

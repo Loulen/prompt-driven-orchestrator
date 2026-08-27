@@ -10,16 +10,14 @@
 //! Node *state* (running vs waiting) is projected from the event log, so the
 //! assertions do not depend on a real tmux server being present; the per-daemon
 //! `tmux_cmd_override` (seeded by `TestDaemon::spawn`) just keeps a missing
-//! `claude` binary from polluting logs. Single-test file by design — the session
-//! cap is still set via process-global `set_var(PDO_SESSION_CAP)`, so a
-//! sibling test must not race it.
-
-mod common;
+//! `claude` binary from polluting logs. The session cap is still set via the
+//! process-global `PDO_SESSION_CAP`, and `admission_concurrency.rs` sets it too
+//! — every `tests/*.rs` file compiles into the one `it` binary, so both take
+//! `common::lock_session_cap` rather than racing.
 
 use std::time::Duration;
 
-use common::TestDaemon;
-use pdo_daemon::admission::SESSION_CAP_ENV;
+use crate::common::{lock_session_cap, TestDaemon};
 
 const PIPELINE_NAME: &str = "cap-solo";
 const NODE_ID: &str = "solo";
@@ -136,8 +134,10 @@ async fn wait_for_status(daemon: &TestDaemon, run_id: &str, want: &str) -> Optio
 
 #[tokio::test]
 async fn over_cap_node_waits_then_starts_when_a_slot_frees() {
-    // Cap the whole daemon to a single live NodeRun session.
-    std::env::set_var(SESSION_CAP_ENV, "1");
+    // Cap the whole daemon to a single live NodeRun session. The guard holds the
+    // shared lock for the whole test and restores the previous value on drop —
+    // on a panic too, which a trailing `remove_var` would not.
+    let _cap = lock_session_cap("1");
 
     // `TestDaemon::spawn` seeds a harmless `sleep` override per-daemon, so node
     // sessions stay alive (occupying slots) without needing real `claude`.
@@ -184,6 +184,4 @@ async fn over_cap_node_waits_then_starts_when_a_slot_frees() {
             .args(["-L", &socket, "kill-session", "-t", &session])
             .output();
     }
-
-    std::env::remove_var(SESSION_CAP_ENV);
 }

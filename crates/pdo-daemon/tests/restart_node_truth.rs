@@ -13,11 +13,9 @@
 //!
 //! Layer-3 coverage of `restart_node` before this file: zero.
 
-mod common;
-
 use std::time::Duration;
 
-use common::TestDaemon;
+use crate::common::TestDaemon;
 
 const PIPELINE_NAME: &str = "restart-truth";
 

@@ -1,15 +1,12 @@
 //! Layer 3a integration test for the guard dry-run *timeout* path (#350).
 //!
-//! Isolated in its own binary because it sets the process-global
-//! `PDO_GUARD_TIMEOUT_MS` env var (`guard_runner.rs` reads it via
-//! `std::env::var`); a sibling test mutating or reading it concurrently would
-//! flake. Every `tests/*.rs` file is a separate process, so this file is the one
-//! place that touches that env var. Do NOT add env-insensitive tests here — keep
-//! them in `guard_dry_run.rs`.
+//! Sets the process-global `PDO_GUARD_TIMEOUT_MS` env var (`guard_runner.rs`
+//! reads it via `std::env::var`), which `trigger_scheduler.rs` also sets; a
+//! concurrent mutation would flake. All of `tests/` compiles into the one `it`
+//! binary, so both go through `common::lock_guard_timeout_ms`. Do NOT add
+//! env-insensitive tests here — keep them in `guard_dry_run.rs`.
 
-mod common;
-
-use common::TestDaemon;
+use crate::common::{lock_guard_timeout_ms, TestDaemon};
 
 const PIPELINE_NAME: &str = "auditor";
 const PIPELINE_YAML: &str = r#"name: auditor
@@ -85,8 +82,7 @@ async fn timeout_returns_error_outcome() {
     // Squeeze the guard bound to 200ms so a `sleep 30` overruns fast. The daemon
     // resolves the timeout `stored → env → default` on each request; a fresh
     // daemon has no stored value, so this env override wins.
-    let saved = std::env::var(pdo_daemon::GUARD_TIMEOUT_MS_OVERRIDE_ENV).ok();
-    std::env::set_var(pdo_daemon::GUARD_TIMEOUT_MS_OVERRIDE_ENV, "200");
+    let _timeout = lock_guard_timeout_ms("200");
 
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let resp = reqwest::Client::new()
@@ -115,9 +111,4 @@ async fn timeout_returns_error_outcome() {
         list_runs(&daemon).await.is_empty(),
         "a timed-out dry-run must not create any Run"
     );
-
-    match saved {
-        Some(v) => std::env::set_var(pdo_daemon::GUARD_TIMEOUT_MS_OVERRIDE_ENV, v),
-        None => std::env::remove_var(pdo_daemon::GUARD_TIMEOUT_MS_OVERRIDE_ENV),
-    }
 }

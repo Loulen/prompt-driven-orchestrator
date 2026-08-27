@@ -666,6 +666,7 @@ mod tests {
             started_at: Some("t0".into()),
             completed_at: Some("t1".into()),
             failure_reason: None,
+            skip_reason: None,
             iterations: Vec::new(),
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
@@ -682,6 +683,7 @@ mod tests {
             started_at: Some("t0".into()),
             completed_at: None,
             failure_reason: None,
+            skip_reason: None,
             iterations: Vec::new(),
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
@@ -838,6 +840,7 @@ mod tests {
             started_at: Some("t0".into()),
             completed_at: completed_at.clone(),
             failure_reason: None,
+            skip_reason: None,
             iterations: vec![IterationInfo {
                 iter,
                 status,

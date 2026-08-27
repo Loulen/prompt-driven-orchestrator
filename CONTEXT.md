@@ -464,6 +464,7 @@ Trois commandes agissent sur le **Run entier** — `pause_run`, `resume_run`, `r
 > **Amendé (spec résilience, ADR-0032 amendé / ADR-0049).** Le verrou « refus `409` sur un Run non vivant » est levé : `terminal ≠ verrouillé`, une action de reprise **humaine** ré-ouvre le Run **en un temps** (re-projection sûre), y compris sur un `Completed`/`Skipped`. `resume_run` devient `reopen_run` (levier global « re-projette + drive le nouveau », bouton Play) ; les commandes ciblées embarquent leur ré-ouverture. Voir § *Résilience d'un run*. Les bullets ci-dessous décrivent l'état pré-résilience.
 
 - `retry_node` (UI) et `restart_node` (manager) ne sont **pas** synonymes : seul `retry_node` invalide l'aval (et se ré-itère à `iter+1`, table-rase) ; `restart_node` re-spawne le seul nœud au **même `iter`**. `stop_node` (UI) laisse le nœud `stopped` ; `kill_node` (manager) le marque `failed`.
+  - **`retry_node` est conscient des boucles.** Dans une boucle bornée, l'`iter` d'un membre EST son index de lap, donc la table-rase générique se scinde : (1) un membre se ré-exécute **au même lap** (`current_iter`), pas à `iter+1` — sinon il forge un lap fantôme qui pousse la région vers son `max_iter` ; (2) la marche aval **saute les arêtes de ré-entrée** (member → entrée de région), pour ne réinitialiser que la tranche *avant* du lap et ce qui sort réellement de la boucle, jamais un membre amont du **même lap** déjà validé. Un nœud hors boucle garde la sémantique `iter+1` / aval complet.
 - **Les deux surfaces de spawn par nœud refusent en `409` sur un Run non vivant** (#487) : `retry_node` comme `force_spawn_node` (bouton Start) répondent « resume the run first » plutôt que de spawner sur un Run terminal/pausé — un bouton de nœud ne flippe jamais le `RunStatus` (ADR-0009), le levier Run-level reste `resume_run`. Le refus prend la forme ADR-0035 §3 (`error` = slug, `recoverable`, prose dans `message`, plus `session_killed`), et `retry_node` route désormais son (re)spawn par la primitive de référence `spawn_node` (addendum #236 d'ADR-0009), qui porte garde/ cap/ sandbox et rend un `SpawnOutcome` véridique — fini le `200 {"ok":true}` inconditionnel. La sonde de refus est le **premier geste** du handler, avant le stop et l'invalidation, pour ne laisser **aucun** effet de bord (sinon l'auto-invalidation gèle le nœud en `pending`).
 - **Pause / Resume** : `pause_run` fait passer un Run vivant en `Paused` (aucun nouveau spawn, l'horloge continue). `resume_run` est **dual-purpose** : sur un Run `Halted`/`Failed` il **relance** depuis l'état courant. C'est le seul levier qui ré-ouvre un Run failed ; il ne réanime jamais un `completed`.
 - **Retry-all** *(terme canonique)* : sur un Run terminal, archive l'original puis crée un Run **neuf** avec les mêmes paramètres — sans référence de filiation, indiscernable d'un lancement manuel. _Éviter_ : « retry » tout court (réservé au niveau nœud), « relancer le même Run » (le run-id change).
@@ -645,7 +646,7 @@ Chaque NodeRun = **une session tmux détachée** créée par le daemon, contenan
 - NodeRun : `pdo-<run-id>-<node-id>-iter-<N>`.
 - Manager : `pdo-mgr-<run-id>`.
 - Shell de run : `pdo-shell-<run-id>`.
-- Assistant de bibliothèque : `pdo-libassist-<pipeline-id>`.
+- Assistant de bibliothèque : `pdo-libassist-shared` (une seule pour tout le daemon).
 
 Les sessions sont invisibles par défaut, survivent au crash de l'UI ou du daemon (récupération au redémarrage).
 
@@ -655,11 +656,17 @@ Les sessions sont invisibles par défaut, survivent au crash de l'UI ou du daemo
 
 Visible uniquement sur les Runs terminaux non-archivés dont le worktree existe (*reapable*). **Un seul shell par Run**, create-if-absent, persistant (sans TTL), tué par `cleanup_run`. Exempt du cap. `resume_run` le tue best-effort avant de ré-armer le scheduler (un writer concurrent casserait le merge). Détails → ADR-0021.
 
-### Assistant de bibliothèque — copilote d'authoring (ADR-0048)
+### Assistant de bibliothèque — copilote d'authoring (ADR-0048, amendé ADR-0051)
 
-**Assistant de bibliothèque** *(terme, #302)* : une **REPL `claude`** design-time spawnée à la demande dans `pdo-libassist-<pipeline-id>`, cwd = le dossier des templates du scope (`~/.pdo/library/pipelines/` ou `<repo>/.pdo/library/pipelines/`). L'utilisateur **décrit** un changement en langage naturel ; l'agent produit/édite le YAML (+ `<id>.prompts/`), montre un diff, et **écrit au save** via `POST /library/pipelines` (validation `POST /nodes/parse`). _Éviter_ : « manager » (= REPL attachée à un **Run**, `POST /runs/<id>/commands`) — l'assistant n'est attaché à **aucun Run** et n'émet **aucune** commande ; son seul effet est d'écrire un fichier template.
+**Assistant de bibliothèque** *(terme, #302)* : une **REPL `claude`** design-time, **unique pour tout le daemon**, spawnée à la demande dans `pdo-libassist-shared`. L'utilisateur **décrit** un changement en langage naturel ; l'agent produit/édite le YAML (+ `<id>.prompts/`), montre un diff, et **écrit au save** via `POST /sessions/libassist/save` — sans id ni scope, le focus désignant le fichier (validation `POST /nodes/parse`). _Éviter_ : « manager » (= REPL attachée à un **Run**, `POST /runs/<id>/commands`) — l'assistant n'est attaché à **aucun Run** et n'émet **aucune** commande ; son seul effet est d'écrire un fichier template.
 
-Keyé sur la **pipeline** (pas un Run). Cycle de vie **create-on-open / reap-on-leave** : spawné à l'ouverture de l'onglet **Assistant**, reapé (`DELETE /sessions/<id>/libassist`) dès qu'on quitte l'onglet. `claude` ne sort pas sur EOF, donc la session survit à une coupure WS ; la fermeture est explicite. **Jamais reapé par le sweep** (pas de Run à keyer — `parse_session_name` connaît le préfixe `libassist-`, `decide_one` le garde toujours) et **sans TTL**. Exempt du cap. Prompt système primé (format YAML + endpoints). Détails → ADR-0048.
+Keyé sur rien (pas un Run, pas une pipeline) : il y en a **un seul**, partagé par toutes les templates, donc son historique survit à un aller-retour entre deux pipelines. Exempt du cap. Prompt système primé (format YAML + endpoints), sans id de pipeline. Détails → ADR-0048, amendé par ADR-0051.
+
+**Focus de l'assistant** *(terme, #594)* : la template que l'UI est en train d'éditer (id + scope), déclarée en continu au daemon et horodatée. Elle sert deux fois : injectée dans le contexte de l'assistant à **chaque message** de l'utilisateur (il se resitue sans qu'on le lui rappelle), et lue par le sweep comme **preuve de présence** de l'humain. _Éviter_ : « pipeline courante » (ambigu avec le Run sélectionné), « session active ».
+
+Cycle de vie : spawné à l'ouverture de l'onglet **Assistant**, reapé quand l'utilisateur quitte **toute** vue d'édition de pipeline — au sens strict : quand plus **aucun** onglet de template n'est ouvert, pas quand l'onglet actif cesse d'en être un (aller voir un Run ne coûte pas la conversation). Le reap vide le focus par le même geste. Trois garde-fous, dans l'ordre : une session **attachée** n'est jamais tuée ; un **focus frais** n'est jamais tué (on édite, même sans l'onglet affiché) ; sinon le sweep la tue sur une TTL d'inactivité courte. Un reload ou une fermeture d'onglet ne peut donc plus la laisser vivre indéfiniment.
+
+Le save de l'assistant **ne nomme ni id ni scope** : le daemon écrit dans le fichier que le focus désigne, et diffuse lui-même le `pipeline_changed` qui fait relire le canvas. Le mot *scope* signifie deux choses dans le code — `repo`/`user` sur un onglet d'édition pointent `.pdo/pipelines/`, le même mot dans le *library store* pointe `.pdo/library/pipelines/` — et faire porter ce mot par l'assistant lui faisait écrire un doublon dans le mauvais arbre en annonçant « Sauvé » (FP-6 de #594).
 
 ### Cap de sessions concurrentes (admission control)
 
@@ -781,7 +788,7 @@ PDO est un **atelier de production de code** ; la conception de pipelines est un
 
 ### Toolbar — bouton info pipeline
 
-L'icône `i` ouvre un panneau **info pipeline** : nom, statut, variables, bouton favoriter. Si la pipeline tourne, le terminal manager y prend la place dominante ; sur une **template** de bibliothèque, un onglet **Assistant** héberge le copilote d'authoring (ADR-0048), et un glyphe « agent » dans la toolbar y saute directement (côté run, le même chemin mène au Manager — #302). Realtime via WebSocket : chaque événement de l'event log push une update vers l'UI.
+L'icône `i` ouvre un panneau **info pipeline** : nom, statut, variables, bouton favoriter. Si la pipeline tourne, le terminal manager y prend la place dominante ; sur une **template** de bibliothèque, un onglet **Assistant** héberge le copilote d'authoring (ADR-0048 / ADR-0051), et un glyphe « agent » dans la toolbar y saute directement (côté run, le même chemin mène au Manager — #302). Realtime via WebSocket : chaque événement de l'event log push une update vers l'UI.
 
 ### Workflow utilisateur typique
 

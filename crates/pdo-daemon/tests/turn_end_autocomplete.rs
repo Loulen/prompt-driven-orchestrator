@@ -24,11 +24,9 @@
 //! recipe in the issue — `PDO_TMUX_CMD_OVERRIDE` suppresses the transcript
 //! entirely, so the usual test seam structurally cannot reproduce it.
 
-mod common;
-
 use std::time::{Duration, SystemTime};
 
-use common::TestDaemon;
+use crate::common::TestDaemon;
 use pdo_daemon::stale_detector;
 use pdo_daemon::tmux_session_manager;
 

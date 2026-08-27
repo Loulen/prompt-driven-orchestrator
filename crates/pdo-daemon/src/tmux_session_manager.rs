@@ -128,6 +128,21 @@ pub const DEFAULT_REAPER_TTL: Duration = Duration::from_secs(3600);
 /// Default sweep interval for the reaper background task.
 pub const DEFAULT_REAPER_INTERVAL: Duration = Duration::from_secs(60);
 
+/// Env var that overrides the library assistant's idle TTL (seconds).
+/// Default: 120 (#594, ADR-0051).
+pub const LIBASSIST_IDLE_TTL_SECS_ENV: &str = "PDO_LIBASSIST_IDLE_TTL_SECS";
+
+/// How long the shared library assistant survives with no edit view open and no
+/// terminal attached, before the orphan sweep reaps it (#594, ADR-0051).
+///
+/// Short on purpose, and unrelated to [`DEFAULT_REAPER_TTL`]: that one bounds a
+/// *completed node's* session, which an operator may want to read hours later.
+/// This one bounds a session nobody is looking at and nobody is editing against
+/// — the state a browser reload leaves behind, which before #594 was unbounded.
+/// The UI re-declares its focus every 20 s, so 120 s tolerates a background tab
+/// whose timers Chrome has throttled to ~1/min.
+pub const DEFAULT_LIBASSIST_IDLE_TTL: Duration = Duration::from_secs(120);
+
 // ---------------------------------------------------------------------------
 // Shell helpers
 // ---------------------------------------------------------------------------
@@ -310,6 +325,37 @@ fn wrap_with_env(
 /// PATH (host and container) and the hook inherits the `PDO_*`/`PDO_DAEMON_URL`
 /// exports `wrap_with_env` set, so no env has to be threaded into the JSON.
 pub(crate) const STOP_HOOK_SETTINGS_JSON: &str = r#"{"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"pdo complete --auto; exit 0"}]}]}}"#;
+
+/// The settings injected via `--settings` to arm the library assistant's
+/// `UserPromptSubmit` hook (#594, ADR-0051 §3).
+///
+/// One shared assistant serves every template, so which one is open cannot be
+/// frozen into the primer at spawn time — it has to arrive with *each* message.
+/// This hook fetches the daemon's current focus and prints it; on `exit 0` the
+/// hook's stdout is appended to that turn's context, so the assistant re-learns
+/// the open pipeline before it reads a single file, without depending on the
+/// model remembering to ask.
+///
+/// Three properties of the command are load-bearing:
+/// - **`exit 0`, always.** A `UserPromptSubmit` hook that exits `2` *rejects the
+///   user's message and erases it*. `curl -sf … || true` swallows a daemon that
+///   is down or a focus that is unset, and the trailing `exit 0` swallows
+///   anything else — a silent no-injection is the correct failure mode, a
+///   swallowed prompt is not.
+/// - **No `matcher`.** Unlike `Stop`, this event has no matcher field.
+/// - **`?format=text`.** The endpoint renders the focus as one plain sentence, so
+///   the hook needs no `jq` on the session PATH.
+///
+/// `PDO_DAEMON_URL` is exported into the session by [`wrap_with_env`], so no env
+/// has to be threaded into the JSON. The 10 s timeout sits well under the 30 s
+/// the hook contract allows.
+///
+/// **This only applies on a harness whose launch template has a `{settings}`
+/// hole** — the registry's `claude` does, `opencode` and `pi` do not, and there
+/// the token is dropped silently. On those the primer's equivalent instruction
+/// (fetch the focus before acting) is the only mechanism: degraded, deliberately,
+/// rather than absent (ADR-0051 §3).
+pub(crate) const LIBASSIST_HOOK_SETTINGS_JSON: &str = r#"{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"curl -sf \"$PDO_DAEMON_URL/sessions/libassist/focus?format=text\" || true; exit 0","timeout":10}]}]}}"#;
 
 /// Build the agent tail by rendering the harness descriptor's launch template
 /// through [`crate::harness_argv`] (#550, ADR-0045). The caller shell-quotes each
@@ -651,16 +697,26 @@ pub fn shell_session_name(run_id: &str) -> String {
     format!("pdo-shell-{run_id}")
 }
 
-/// Session naming convention for a library pipeline authoring assistant
-/// (#302 / ADR-0048).
+/// The one library authoring assistant session, for the whole daemon (#594,
+/// ADR-0051 — it replaces the per-pipeline name of #302 / ADR-0048).
 ///
-/// One fixed name per pipeline id so `POST /sessions/{id}/libassist` is
-/// create-if-absent (a second open re-attaches the same session). Parsed back out
-/// by [`parse_session_name`] via the `libassist-` prefix branch, mirroring
-/// `shell-` / `mgr-` — otherwise the orphan sweep would read it as an
-/// unrecognised name and kill it on the next pass.
-pub fn libassist_session_name(pipeline_id: &str) -> String {
-    format!("pdo-libassist-{pipeline_id}")
+/// **The `-shared` suffix is load-bearing, not decoration.** [`parse_session_name`]
+/// strips the `libassist-` prefix and rejects an *empty* remainder, so a bare
+/// `pdo-libassist` would not parse — and an unparseable `pdo-*` name is killed by
+/// the orphan sweep as `UnrecognisedName` within one sweep interval. The suffix is
+/// what keeps the name readable to the parser now that no pipeline id fills that
+/// slot; it also names the property that changed: one session, shared by every
+/// template. Which template is open travels in the daemon's *focus* instead
+/// (`PUT /sessions/libassist/focus`), never in the session name.
+pub const LIBASSIST_SESSION_NAME: &str = "pdo-libassist-shared";
+
+/// Session naming convention for the library pipeline authoring assistant.
+///
+/// One name for the whole daemon, so `POST /sessions/libassist` is
+/// create-if-absent (a second open re-attaches the same session, with its whole
+/// conversation). See [`LIBASSIST_SESSION_NAME`] for why the name is not bare.
+pub fn libassist_session_name() -> &'static str {
+    LIBASSIST_SESSION_NAME
 }
 
 /// Spawn a detached tmux session for a NodeRun.
@@ -790,28 +846,39 @@ pub fn spawn_shell(
     Ok(())
 }
 
+/// The `PDO_RUN_ID` / `PDO_NODE_ID` the assistant's session is env-wrapped with.
+///
+/// A single constant for both since #594: the assistant is one session for the
+/// whole daemon, so there is no pipeline id left to pose as a pseudo-run — and
+/// there never was a Run behind it. Both values are inert (the assistant never
+/// self-signals via `pdo complete`); the load-bearing export is `PDO_DAEMON_URL`.
+const LIBASSIST_ENV_ID: &str = "__libassist__";
+
 /// Spawn a detached tmux session running the library pipeline authoring assistant
-/// (#302 / ADR-0048) — a `claude` REPL whose cwd is the library pipelines
-/// directory.
+/// (#302 / ADR-0048, reshaped by #594 / ADR-0051) — a `claude` REPL whose cwd is
+/// the repo's pipelines directory.
 ///
 /// Mirror of [`spawn`]'s agent launch (an `Agent` tail, not the `bash -i` of
-/// [`spawn_shell`]), but keyed on a pipeline id instead of a Run: it drives no
-/// Run and emits no `run_command`; its whole effect is writing `<id>.yaml`
-/// (+ `<id>.prompts/`) in `working_dir` via the library endpoints. Like the
-/// manager it launches `claude "$(cat <primer>)"`; `claude` does **not** exit on
-/// EOF (unlike `bash -i`), so the session survives a PTY-bridge/tab close — the
-/// assistant is reaped **explicitly** on tab-leave (`DELETE /sessions/{id}/libassist`,
-/// ADR-0048), never by the EOF that would end a run shell. The primer is written
-/// to `prompt_path`, kept **out** of `working_dir` so the user-facing pipelines
-/// directory stays clean. Honours `tmux_cmd_override` (the test seam) exactly as
-/// the agent tail does. Never sandboxed: authoring is design-time work on the host.
+/// [`spawn_shell`]), but owning no Run: it emits no `run_command`; its whole
+/// effect is writing the template YAML the user reviews, via the library
+/// endpoints. Like the manager it launches `claude "$(cat <primer>)"`; `claude`
+/// does **not** exit on EOF (unlike `bash -i`), so the session survives a
+/// PTY-bridge/tab close — which is exactly why it needs the sweep as a backstop
+/// (`decide_one`'s `LibAssist` arm) on top of the explicit `DELETE`.
+///
+/// **There is no pipeline id here any more.** One session serves every template;
+/// the open one arrives per message via the `UserPromptSubmit` hook this function
+/// arms ([`LIBASSIST_HOOK_SETTINGS_JSON`], written as a sibling `settings.json`
+/// of `prompt_path`). The primer is written to `prompt_path`, kept **out** of
+/// `working_dir` so the user-facing pipelines directory stays clean. Honours
+/// `tmux_cmd_override` (the test seam) exactly as the agent tail does. Never
+/// sandboxed: authoring is design-time work on the host.
 // Every argument is an irreducible input to the spawn (identity, working context,
 // primer path, launch selector); a struct would only move the list — same
 // rationale as `spawn` / `spawn_shell` / `build_tmux_script`.
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_libassist(
     session_name: &str,
-    pipeline_id: &str,
     prompt: &str,
     working_dir: &Path,
     prompt_path: &Path,
@@ -824,13 +891,14 @@ pub fn spawn_libassist(
     }
     std::fs::write(prompt_path, prompt)?;
 
+    // The per-message focus hook, beside the primer and with the same lifecycle.
+    // Not the `Stop` hook of #433: the assistant never calls `pdo complete`.
+    let settings_path = prompt_path.with_file_name("settings.json");
+    std::fs::write(&settings_path, LIBASSIST_HOOK_SETTINGS_JSON)?;
+
     let script = build_tmux_script(
-        // The env-wrap poses `PDO_RUN_ID=<pipeline_id>` / `PDO_NODE_ID=__libassist__`
-        // (harmless — the assistant never self-signals via `pdo complete`); the
-        // load-bearing export is `PDO_DAEMON_URL`, so a `curl` of the library
-        // endpoints in the assistant's own preamble resolves.
-        pipeline_id,
-        "__libassist__",
+        LIBASSIST_ENV_ID,
+        LIBASSIST_ENV_ID,
         0,
         daemon_port,
         prompt_path,
@@ -842,7 +910,7 @@ pub fn spawn_libassist(
             session_id: None,
         },
         None, // never sandboxed
-        None, // no turn-end Stop hook — the assistant never calls `pdo complete`
+        Some(&settings_path),
     );
     let socket = tmux_socket_name(daemon_port);
 
@@ -1012,6 +1080,42 @@ pub fn list_pdo_sessions(socket: &str) -> HashSet<String> {
         .collect()
 }
 
+/// Whether `session` currently has at least one attached tmux client (#594,
+/// ADR-0051 §4).
+///
+/// The daemon's PTY bridge runs a **real `tmux attach`** per open terminal and
+/// kills that client when the WebSocket closes, so `#{session_attached}` is an
+/// honest server-side answer to "is a human looking at this right now?" — and it
+/// falls back to `0` within ~250 ms of a reload, a crash, or a tab close, which
+/// no client-side signal manages. It is the sweep's first `Keep` verdict for the
+/// library assistant: never yank a terminal out from under someone.
+///
+/// A separate call rather than a new column on [`list_pdo_sessions`]: that
+/// function's `#{session_name}`-only format has other callers, and only one
+/// session in the inventory needs this fact. Any failure (no such session, tmux
+/// gone, unparseable output) answers `false` — the conservative direction here,
+/// since the two later verdicts still get their say.
+pub fn is_attached(socket: &str, session: &str) -> bool {
+    let output = match tmux(socket)
+        .args([
+            "display-message",
+            "-p",
+            "-t",
+            session,
+            "#{session_attached}",
+        ])
+        .output()
+    {
+        Ok(o) if o.status.success() => o,
+        _ => return false,
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse::<i64>()
+        .map(|n| n > 0)
+        .unwrap_or(false)
+}
+
 // ---------------------------------------------------------------------------
 // Session name parsing
 // ---------------------------------------------------------------------------
@@ -1031,12 +1135,16 @@ pub enum ParsedSession {
     Shell {
         run_id: String,
     },
-    /// Library pipeline authoring assistant `pdo-libassist-<pipeline_id>`
-    /// (#302 / ADR-0048). Owns no Run — reaped explicitly on tab-leave, kept by
-    /// the orphan sweep.
-    LibAssist {
-        pipeline_id: String,
-    },
+    /// The library pipeline authoring assistant [`LIBASSIST_SESSION_NAME`]
+    /// (#302 / ADR-0048, made a singleton by #594 / ADR-0051).
+    ///
+    /// A **unit** variant: it carried a `pipeline_id` while there was one
+    /// assistant per template, and there is now one per daemon. Which template
+    /// is being edited is the daemon's *focus*, not the session's identity —
+    /// putting it back in the name would re-create the per-pipeline session it
+    /// replaced. Owns no Run; reaped by the explicit `DELETE` on leaving every
+    /// edit view, with the sweep's idle arm as the backstop.
+    LibAssist,
 }
 
 /// Parse a session name like `pdo-<run_id>-<node_id>-iter-<N>` or
@@ -1065,15 +1173,17 @@ pub fn parse_session_name(name: &str) -> Option<ParsedSession> {
         return None;
     }
 
-    // #302: `pdo-libassist-<pipeline_id>` — parsed BEFORE the `-iter-` split, like
-    // `shell-` / `mgr-`. A pipeline id has no `-iter-` suffix, so without this
-    // branch the name would fall through to the split, return None, and be killed
-    // as "unrecognised" by the orphan sweep on the next pass.
-    if let Some(pipeline_id) = rest.strip_prefix("libassist-") {
-        if !pipeline_id.is_empty() {
-            return Some(ParsedSession::LibAssist {
-                pipeline_id: pipeline_id.to_string(),
-            });
+    // #302: the library assistant — parsed BEFORE the `-iter-` split, like
+    // `shell-` / `mgr-`. Its name has no `-iter-` suffix, so without this branch
+    // it would fall through to the split, return None, and be killed as
+    // "unrecognised" by the orphan sweep on the next pass.
+    //
+    // The suffix is no longer read (#594: one shared session, [`LIBASSIST_SESSION_NAME`]),
+    // but it must still be **non-empty** — that rejection is precisely why the
+    // singleton is named `pdo-libassist-shared` and not `pdo-libassist`.
+    if let Some(suffix) = rest.strip_prefix("libassist-") {
+        if !suffix.is_empty() {
+            return Some(ParsedSession::LibAssist);
         }
         return None;
     }
@@ -1160,6 +1270,36 @@ pub fn reaper_ttl() -> Duration {
 /// winning tier identically to [`reaper_ttl_with`] (#129, ADR-0015).
 pub fn env_reaper_ttl_secs() -> Option<u64> {
     std::env::var(REAPER_TTL_SECS_ENV)
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+}
+
+/// Resolve the library assistant's idle TTL, `stored → env → default` (#594,
+/// ADR-0051) — the same three tiers, the same `>= 1` floor and the same
+/// read-it-inside-the-loop discipline as [`reaper_ttl_with`].
+///
+/// Kept as its own knob rather than folded into the reaper TTL: they bound
+/// different things (see [`DEFAULT_LIBASSIST_IDLE_TTL`]) and differ by more than
+/// an order of magnitude, so one value could not serve both.
+pub fn libassist_idle_ttl_with(stored_secs: Option<u64>) -> Duration {
+    stored_secs
+        .filter(|&n| n >= 1)
+        .or_else(env_libassist_idle_ttl_secs)
+        .map(Duration::from_secs)
+        .unwrap_or(DEFAULT_LIBASSIST_IDLE_TTL)
+}
+
+/// Read the library assistant's idle TTL from the env alone (`stored = None`).
+pub fn libassist_idle_ttl() -> Duration {
+    libassist_idle_ttl_with(None)
+}
+
+/// The idle TTL (seconds) contributed by [`LIBASSIST_IDLE_TTL_SECS_ENV`] alone,
+/// or `None` when unset or unparseable. Exposed so `GET /settings` can disclose a
+/// shadowed env var and compute the winning tier identically to
+/// [`libassist_idle_ttl_with`].
+pub fn env_libassist_idle_ttl_secs() -> Option<u64> {
+    std::env::var(LIBASSIST_IDLE_TTL_SECS_ENV)
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
 }
@@ -1548,6 +1688,28 @@ pub struct SweepInput {
     /// Its owner's facts, resolved **after** the inventory. `None` = absent from
     /// the event log.
     pub info: Option<NodeRunInfo>,
+    /// Whether a tmux client is attached to this session (#594) — filled from
+    /// [`is_attached`] for [`ParsedSession::LibAssist`] only, `false` elsewhere.
+    /// The other arms have their own owner to key on and never consult it.
+    pub attached: bool,
+    /// How long ago the UI last declared an open edit view (#594) — filled for
+    /// [`ParsedSession::LibAssist`] only. `None` means **never declared**, which
+    /// is what a browser reload leaves behind: it is an idle verdict, not a fresh
+    /// one. Same clock as `now`, resolved by the caller in the same pass.
+    pub focus_age: Option<Duration>,
+}
+
+/// The TTLs the sweep arbitrates on. Named fields rather than two positional
+/// `Duration`s: they differ by an order of magnitude and by *meaning* (a
+/// completed node's session vs a library assistant nobody is using), so swapping
+/// them at a call site would compile and then reap the wrong thing quietly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SweepTtls {
+    /// A completed NodeRun's session, the only pre-#594 TTL. See [`reaper_ttl_with`].
+    pub node_run: Duration,
+    /// The shared library assistant with nobody attached and no fresh focus.
+    /// See [`libassist_idle_ttl_with`].
+    pub libassist_idle: Duration,
 }
 
 /// What the sweep decided about one live session. One per input, `Keep`
@@ -1573,7 +1735,7 @@ pub enum SweepVerdict {
 /// manager/shell), and the stale arm keys off the session name rather than
 /// `run_id`/`node_id`. `journalctl | grep "Orphan sweep: killing session for
 /// absent run"` is how #485 was diagnosed in the first place, so these strings
-/// are a contract — `kill_reason_messages_are_verbatim` pins all eight.
+/// are a contract — `kill_reason_messages_are_verbatim` pins all nine.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KillReason {
     UnrecognisedName {
@@ -1599,11 +1761,23 @@ pub enum KillReason {
         run_id: String,
         node_id: String,
     },
-    /// The **only** TTL arm. Neither Manager (#458) nor Shell (#316) has one —
-    /// do not "unify" them.
+    /// The NodeRun TTL arm. Neither Manager (#458) nor Shell (#316) has one —
+    /// do not "unify" them, and do not unify it with [`Self::LibAssistIdle`]
+    /// either: that one keys on human presence, not on completion.
     NodeRunStale {
         session_name: String,
         age_secs: i64,
+    },
+    /// The library assistant with nobody attached and no fresh focus (#594,
+    /// ADR-0051 §4). Replaces ADR-0048's unconditional `Keep`, which left a
+    /// session leaked by a browser reload alive with **no** upper bound.
+    LibAssistIdle {
+        session_name: String,
+        /// Seconds since the UI last declared an open edit view, or `None` when
+        /// it never declared one — the trace a reload leaves, and the case that
+        /// motivated the arm. Said in the message either way, so the journal
+        /// distinguishes "they walked away" from "the tab is gone".
+        idle_secs: Option<i64>,
     },
 }
 
@@ -1659,6 +1833,22 @@ impl std::fmt::Display for KillReason {
                 f,
                 "Orphan sweep: killing stale session {session_name} (completed {age_secs}s ago)"
             ),
+            KillReason::LibAssistIdle {
+                session_name,
+                idle_secs: Some(secs),
+            } => write!(
+                f,
+                "Orphan sweep: killing idle library assistant {session_name} \
+                 (no edit view for {secs}s)"
+            ),
+            KillReason::LibAssistIdle {
+                session_name,
+                idle_secs: None,
+            } => write!(
+                f,
+                "Orphan sweep: killing idle library assistant {session_name} \
+                 (no edit view ever declared)"
+            ),
         }
     }
 }
@@ -1695,15 +1885,19 @@ pub struct SweepTally {
 
 /// Decide, for every live session, whether it is an orphan — **pure**.
 ///
-/// ADR-0009 layer 1: no tmux, no DB, no clock. `now` and `ttl` are injected so
-/// the TTL arm is deterministic in a test, and every input yields a decision
+/// ADR-0009 layer 1: no tmux, no DB, no clock. `now` and `ttls` are injected so
+/// the TTL arms are deterministic in a test, and every input yields a decision
 /// (`Keep` included) so a test can pin "this session survives" as hard as
 /// "this one dies".
 ///
 /// An orphan is a `pdo-*` session whose owner is:
 /// - archived,
 /// - absent from the event log,
-/// - or a NodeRun that completed more than `ttl` ago (NodeRun only — #316/#458).
+/// - or a NodeRun that completed more than `ttls.node_run` ago (NodeRun only —
+///   #316/#458).
+///
+/// The library assistant owns no Run and is judged on human presence instead
+/// (#594) — see the `LibAssist` arm of [`decide_one`].
 ///
 /// **Correctness precondition, and this function cannot enforce it (#485,
 /// ADR-0038):** `info` must have been resolved from a log read that happened
@@ -1713,21 +1907,21 @@ pub struct SweepTally {
 /// symmetric proof.
 pub fn decide_sweep(
     inputs: &[SweepInput],
-    ttl: Duration,
+    ttls: SweepTtls,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Vec<SweepDecision> {
     inputs
         .iter()
         .map(|input| SweepDecision {
             session_name: input.session_name.clone(),
-            verdict: decide_one(input, ttl, now),
+            verdict: decide_one(input, ttls, now),
         })
         .collect()
 }
 
 fn decide_one(
     input: &SweepInput,
-    ttl: Duration,
+    ttls: SweepTtls,
     now: chrono::DateTime<chrono::Utc>,
 ) -> SweepVerdict {
     let parsed = match &input.parsed {
@@ -1764,14 +1958,37 @@ fn decide_one(
             }),
             _ => SweepVerdict::Keep,
         },
-        // #302 / ADR-0048: a library authoring assistant has no owning Run, so
-        // there is nothing to key an absence/archived verdict on. It is reaped
-        // **explicitly** on tab-leave (`DELETE /sessions/<id>/libassist`), never by
-        // the sweep, and has no TTL (an interactive REPL must not be yanked from a
-        // user who stepped away — same reasoning as the shell/manager arms). Always
-        // keep: a reopen re-attaches this same session, a leave kills it. `info` is
-        // always `None` for this variant (the sweep caller does no run lookup).
-        ParsedSession::LibAssist { .. } => SweepVerdict::Keep,
+        // #594 / ADR-0051 §4 — **this arm used to be an unconditional `Keep`**
+        // (ADR-0048 §4), and that is the bug the issue is really about. The
+        // assistant owns no Run, so absence/archived say nothing about it; the
+        // explicit `DELETE` was therefore the only thing that could ever reap it,
+        // and React does not run effect cleanups when the document unloads. A
+        // reload or a closed tab sent no `DELETE`, so the session lived until the
+        // next open+leave of the *same* pipeline — i.e. potentially forever.
+        //
+        // Three verdicts on human presence, in this order, and the order matters:
+        //   1. attached — someone has a terminal open on it. Never yank that, even
+        //      if the focus is stale (a user reading the pane declares no focus).
+        //   2. fresh focus — an edit view is open (the UI re-declares every 20 s),
+        //      even with the Assistant tab hidden. That is the owner's point 2:
+        //      "do not reap while I am editing". The info panel closes by itself on
+        //      every tab switch (#385), so attachment alone cannot answer this.
+        //   3. otherwise idle — nobody attached, nobody editing. `None` (no focus
+        //      ever declared) belongs here, not in `Keep`: it is exactly the state
+        //      a reload leaves behind.
+        // `info` is always `None` for this variant (the caller does no run lookup).
+        ParsedSession::LibAssist => {
+            if input.attached {
+                return SweepVerdict::Keep;
+            }
+            match input.focus_age {
+                Some(age) if age < ttls.libassist_idle => SweepVerdict::Keep,
+                other => SweepVerdict::Kill(KillReason::LibAssistIdle {
+                    session_name: input.session_name.clone(),
+                    idle_secs: other.map(|a| a.as_secs() as i64),
+                }),
+            }
+        }
         ParsedSession::NodeRun {
             run_id,
             node_id,
@@ -1790,7 +2007,10 @@ fn decide_one(
                 ..
             }) => {
                 let age = now.signed_duration_since(*completed);
-                if age > chrono::Duration::from_std(ttl).unwrap_or(chrono::Duration::hours(1)) {
+                if age
+                    > chrono::Duration::from_std(ttls.node_run)
+                        .unwrap_or(chrono::Duration::hours(1))
+                {
                     SweepVerdict::Kill(KillReason::NodeRunStale {
                         session_name: input.session_name.clone(),
                         age_secs: age.num_seconds(),
@@ -1922,16 +2142,28 @@ mod tests {
 
     #[test]
     fn parse_libassist_session() {
-        // #302: `pdo-libassist-<pipeline_id>` parses to a LibAssist variant. The
-        // pipeline id is a file-stem slug (no `-iter-` suffix, may contain dashes).
-        let name = "pdo-libassist-feature-with-review";
-        let parsed = parse_session_name(name).unwrap();
+        // #594: the shared assistant's name parses to the unit LibAssist variant.
         assert_eq!(
-            parsed,
-            ParsedSession::LibAssist {
-                pipeline_id: "feature-with-review".into(),
-            }
+            parse_session_name(LIBASSIST_SESSION_NAME),
+            Some(ParsedSession::LibAssist)
         );
+        // Pre-#594 per-pipeline names still parse — a daemon upgraded under a live
+        // tmux server must be able to judge (and reap) the sessions it inherits,
+        // not read them as unrecognised.
+        assert_eq!(
+            parse_session_name("pdo-libassist-feature-with-review"),
+            Some(ParsedSession::LibAssist)
+        );
+    }
+
+    /// **The trap the singleton name exists to avoid** (#594). The parser rejects
+    /// an empty suffix, so a bare `pdo-libassist` is unrecognised — and an
+    /// unrecognised `pdo-*` name is killed by the very next sweep. That is why the
+    /// name is `pdo-libassist-shared`; pinned here so nobody "simplifies" it.
+    #[test]
+    fn a_bare_libassist_name_would_not_parse() {
+        assert!(parse_session_name("pdo-libassist").is_none());
+        assert!(parse_session_name("pdo-libassist-").is_none());
     }
 
     #[test]
@@ -1975,10 +2207,8 @@ mod tests {
         // #302: the libassist formatter must round-trip too — else the sweep reaps
         // it as unrecognised within 60 s (the exact failure this test exists for).
         assert_eq!(
-            parse_session_name(&libassist_session_name("feature-with-review")),
-            Some(ParsedSession::LibAssist {
-                pipeline_id: "feature-with-review".into()
-            })
+            parse_session_name(libassist_session_name()),
+            Some(ParsedSession::LibAssist)
         );
     }
 
@@ -2000,11 +2230,15 @@ mod tests {
     }
 
     /// One input, already resolved: the session name plus its owner's facts.
+    /// Detached with no focus — the presence fields only matter to the LibAssist
+    /// arm, which has its own builder below.
     fn input(session_name: &str, info: Option<NodeRunInfo>) -> SweepInput {
         SweepInput {
             session_name: session_name.to_string(),
             parsed: parse_session_name(session_name),
             info,
+            attached: false,
+            focus_age: None,
         }
     }
 
@@ -2015,8 +2249,15 @@ mod tests {
         })
     }
 
+    /// The TTLs used by every sweep unit test: the historical 1 h NodeRun TTL,
+    /// and 120 s of assistant idleness.
+    const TTLS: SweepTtls = SweepTtls {
+        node_run: Duration::from_secs(3600),
+        libassist_idle: Duration::from_secs(120),
+    };
+
     fn verdict(inputs: &[SweepInput], now: chrono::DateTime<chrono::Utc>) -> SweepVerdict {
-        let decisions = decide_sweep(inputs, Duration::from_secs(3600), now);
+        let decisions = decide_sweep(inputs, TTLS, now);
         assert_eq!(decisions.len(), inputs.len(), "one decision per input");
         decisions[0].verdict.clone()
     }
@@ -2089,32 +2330,113 @@ mod tests {
         );
     }
 
-    /// #302 / ADR-0048: a library assistant is **always kept** by the sweep,
-    /// whatever `info` says. It owns no Run, so there is no absence/archived/TTL
-    /// verdict that could apply — it is reaped only by the explicit
-    /// `DELETE /sessions/<id>/libassist` on tab-leave. Pinned as hard as a kill so
-    /// a future refactor cannot silently start reaping it (the exact bug the
-    /// `libassist-` parse branch exists to prevent).
+    /// A library-assistant input: `info` is always `None` (it owns no Run), so
+    /// the only facts are the two presence signals.
+    fn libassist_input(attached: bool, focus_age: Option<Duration>) -> SweepInput {
+        SweepInput {
+            session_name: LIBASSIST_SESSION_NAME.to_string(),
+            parsed: parse_session_name(LIBASSIST_SESSION_NAME),
+            info: None,
+            attached,
+            focus_age,
+        }
+    }
+
+    /// #594 / ADR-0051 §4 — **the successor of `library_assistant_is_always_kept`,
+    /// and it deliberately says the opposite in the last two cases.** That test
+    /// pinned ADR-0048's unconditional `Keep`, which is what let a session leaked
+    /// by a browser reload live with no bound at all. Presence, not the owning
+    /// Run, is now the question; the three verdicts are checked in their order of
+    /// precedence, plus the boundary.
     #[test]
-    fn library_assistant_is_always_kept() {
+    fn library_assistant_is_kept_while_someone_is_there() {
         let now = at("2026-07-31T15:32:19Z");
-        let name = libassist_session_name("feature-with-review");
-        // No owner (info = None) — the shell/manager arms would kill on this.
-        assert_eq!(verdict(&[input(&name, None)], now), SweepVerdict::Keep);
-        // Even a (nonsensical) archived owner does not flip it.
+        let ttl = TTLS.libassist_idle;
+
+        // 1. Attached wins over everything: a stale focus does not kill a session
+        //    someone has a terminal open on.
         assert_eq!(
             verdict(
-                &[input(
-                    &name,
-                    Some(NodeRunInfo {
-                        completed_at: Some(at("2000-01-01T00:00:00Z")),
-                        is_archived: true,
-                    })
-                )],
+                &[libassist_input(true, Some(ttl + Duration::from_secs(60)))],
                 now
             ),
+            SweepVerdict::Keep,
+            "an attached terminal is never yanked"
+        );
+        assert_eq!(
+            verdict(&[libassist_input(true, None)], now),
             SweepVerdict::Keep
         );
+
+        // 2. Detached but the user is editing (the UI re-declared its focus within
+        //    the TTL) — the owner's point 2, and the reason attachment alone is not
+        //    the oracle: the info panel closes on every edit-tab switch (#385).
+        assert_eq!(
+            verdict(
+                &[libassist_input(false, Some(ttl - Duration::from_secs(1)))],
+                now
+            ),
+            SweepVerdict::Keep,
+            "a fresh focus keeps the session even with no terminal attached"
+        );
+    }
+
+    /// The twin, non-negotiable half: without it a "fix" that simply keeps the
+    /// assistant forever passes the test above and restores the unbounded leak.
+    #[test]
+    fn library_assistant_is_killed_once_nobody_is_there() {
+        let now = at("2026-07-31T15:32:19Z");
+        let ttl = TTLS.libassist_idle;
+
+        // Detached, focus expired.
+        assert_eq!(
+            verdict(
+                &[libassist_input(false, Some(ttl + Duration::from_secs(1)))],
+                now
+            ),
+            SweepVerdict::Kill(KillReason::LibAssistIdle {
+                session_name: LIBASSIST_SESSION_NAME.into(),
+                idle_secs: Some(121),
+            })
+        );
+
+        // Detached, focus NEVER declared — the browser-reload case (#594): the
+        // React cleanup never runs on unload, so no `DELETE` is ever sent and the
+        // reloaded page opens no edit tab. `None` must reap, not keep.
+        assert_eq!(
+            verdict(&[libassist_input(false, None)], now),
+            SweepVerdict::Kill(KillReason::LibAssistIdle {
+                session_name: LIBASSIST_SESSION_NAME.into(),
+                idle_secs: None,
+            })
+        );
+    }
+
+    /// The idle boundary is `<`, strictly: `age == ttl` reaps. Opposite of the
+    /// NodeRun arm's `>` (where `age == ttl` keeps) — deliberately, because here
+    /// the freshness claim is what must be proven, not the staleness.
+    #[test]
+    fn libassist_idle_boundary_is_strict() {
+        let now = at("2026-07-31T15:32:19Z");
+        assert_eq!(
+            verdict(&[libassist_input(false, Some(TTLS.libassist_idle))], now),
+            SweepVerdict::Kill(KillReason::LibAssistIdle {
+                session_name: LIBASSIST_SESSION_NAME.into(),
+                idle_secs: Some(120),
+            })
+        );
+    }
+
+    /// An idle assistant is routine housekeeping, not an absence verdict: it must
+    /// stay `info!` and out of the `killed_for_absent_run` gauge, or every reload
+    /// would train the operator to ignore a permanent warning stream.
+    #[test]
+    fn libassist_idle_is_not_an_absence_verdict() {
+        assert!(!KillReason::LibAssistIdle {
+            session_name: LIBASSIST_SESSION_NAME.into(),
+            idle_secs: Some(300),
+        }
+        .is_absence());
     }
 
     /// An unparseable name is killed without consulting `info` at all — the same
@@ -2128,8 +2450,10 @@ mod tests {
                 session_name: "pdo-ceci-nest-pas-un-nom".into(),
                 parsed: None,
                 info: live(),
+                attached: true,
+                focus_age: Some(Duration::ZERO),
             }],
-            Duration::from_secs(3600),
+            TTLS,
             at("2026-07-31T15:32:19Z"),
         );
         assert_eq!(
@@ -2179,16 +2503,21 @@ mod tests {
         });
         let absurd = Duration::from_secs(u64::MAX);
 
+        let ttls = SweepTtls {
+            node_run: absurd,
+            ..TTLS
+        };
+
         // 30 min old, 1 h fallback → Keep.
         let keep = decide_sweep(
             &[input(&name, info.clone())],
-            absurd,
+            ttls,
             at("2026-07-31T12:30:00Z"),
         );
         assert_eq!(keep[0].verdict, SweepVerdict::Keep);
 
         // 2 h old → Kill, so the fallback is 1 h and not "never".
-        let kill = decide_sweep(&[input(&name, info)], absurd, at("2026-07-31T14:00:00Z"));
+        let kill = decide_sweep(&[input(&name, info)], ttls, at("2026-07-31T14:00:00Z"));
         assert!(matches!(
             kill[0].verdict,
             SweepVerdict::Kill(KillReason::NodeRunStale { .. })
@@ -2217,7 +2546,7 @@ mod tests {
         );
     }
 
-    /// The eight kill messages, byte for byte. The whole #485 investigation was a
+    /// The nine kill messages, byte for byte. The whole #485 investigation was a
     /// `journalctl | grep "Orphan sweep: killing session for absent run"`, so
     /// these strings are a contract, not cosmetics. Note the two irregularities a
     /// composed formatter would smooth over: the NodeRun arms have no "node" word,
@@ -2272,6 +2601,27 @@ mod tests {
             "Orphan sweep: killing stale session pdo-20260731-153057-553fcb3-alpha-iter-1 \
              (completed 7200s ago)"
         );
+        // #594 — two renderings, because "they stopped editing 300 s ago" and "no
+        // tab ever declared a focus" are different operator stories. The second is
+        // the reload/close case that had no reap at all before this issue.
+        assert_eq!(
+            KillReason::LibAssistIdle {
+                session_name: LIBASSIST_SESSION_NAME.into(),
+                idle_secs: Some(300),
+            }
+            .to_string(),
+            "Orphan sweep: killing idle library assistant pdo-libassist-shared \
+             (no edit view for 300s)"
+        );
+        assert_eq!(
+            KillReason::LibAssistIdle {
+                session_name: LIBASSIST_SESSION_NAME.into(),
+                idle_secs: None,
+            }
+            .to_string(),
+            "Orphan sweep: killing idle library assistant pdo-libassist-shared \
+             (no edit view ever declared)"
+        );
     }
 
     /// The level split feeding both `apply_sweep`'s `warn!`/`info!` choice and the
@@ -2303,6 +2653,10 @@ mod tests {
                 session_name: "x".into(),
                 age_secs: 1,
             },
+            KillReason::LibAssistIdle {
+                session_name: "x".into(),
+                idle_secs: Some(1),
+            },
         ] {
             assert!(!reason.is_absence(), "{reason} is routine housekeeping");
         }
@@ -2321,7 +2675,7 @@ mod tests {
                 input(&dead_node, None),
                 input(&manager_session_name(RID), live()),
             ],
-            Duration::from_secs(3600),
+            TTLS,
             at("2026-07-31T15:32:19Z"),
         );
 
@@ -3596,6 +3950,61 @@ mod tests {
         std::env::remove_var(REAPER_TTL_SECS_ENV);
         assert_eq!(reaper_ttl_with(None), DEFAULT_REAPER_TTL);
         assert_eq!(reaper_ttl_with(Some(90)), Duration::from_secs(90));
+    }
+
+    #[test]
+    fn libassist_idle_ttl_default_and_from_env() {
+        // One test, same reason as `reaper_ttl_default_and_from_env`: the env var
+        // is process-global, so a second test mutating it would flake.
+        std::env::remove_var(LIBASSIST_IDLE_TTL_SECS_ENV);
+        assert_eq!(libassist_idle_ttl(), DEFAULT_LIBASSIST_IDLE_TTL);
+
+        std::env::set_var(LIBASSIST_IDLE_TTL_SECS_ENV, "45");
+        assert_eq!(libassist_idle_ttl(), Duration::from_secs(45));
+
+        // stored → env → default, and a stored 0 is ignored (a zero TTL would
+        // reap the assistant the instant a heartbeat is a hair late).
+        assert_eq!(
+            libassist_idle_ttl_with(Some(300)),
+            Duration::from_secs(300),
+            "stored wins over env"
+        );
+        assert_eq!(libassist_idle_ttl_with(Some(0)), Duration::from_secs(45));
+        assert_eq!(libassist_idle_ttl_with(None), Duration::from_secs(45));
+
+        std::env::remove_var(LIBASSIST_IDLE_TTL_SECS_ENV);
+        assert_eq!(libassist_idle_ttl_with(None), DEFAULT_LIBASSIST_IDLE_TTL);
+        assert_eq!(libassist_idle_ttl_with(Some(90)), Duration::from_secs(90));
+    }
+
+    /// The hook is armed on the assistant's tail (#594) — the one thing that makes
+    /// the per-message focus injection happen without the model's cooperation. It
+    /// must name `UserPromptSubmit`, carry no `matcher` (this event has none), and
+    /// end in `exit 0` (a `UserPromptSubmit` exiting 2 erases the user's message).
+    #[test]
+    fn libassist_hook_settings_are_a_non_blocking_user_prompt_submit_hook() {
+        let v: serde_json::Value = serde_json::from_str(LIBASSIST_HOOK_SETTINGS_JSON)
+            .expect("the settings file must be valid JSON — claude parses it at launch");
+        let entry = &v["hooks"]["UserPromptSubmit"][0];
+        assert!(
+            entry["matcher"].is_null(),
+            "UserPromptSubmit takes no matcher"
+        );
+        let cmd = entry["hooks"][0]["command"].as_str().unwrap();
+        assert!(
+            cmd.trim_end().ends_with("exit 0"),
+            "the hook must never block a prompt: {cmd}"
+        );
+        assert!(
+            cmd.contains("/sessions/libassist/focus"),
+            "the hook fetches the daemon's focus: {cmd}"
+        );
+    }
+
+    #[test]
+    fn libassist_session_name_format() {
+        // The `-shared` suffix is not cosmetic: see `a_bare_libassist_name_would_not_parse`.
+        assert_eq!(libassist_session_name(), "pdo-libassist-shared");
     }
 
     #[test]

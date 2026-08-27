@@ -316,7 +316,9 @@ where
         if !matches!(node_type, Some("code-mutating") | Some("merge")) {
             continue;
         }
-        if matches!(ns.status, event_log::NodeStatus::Completed) {
+        // #620: a `Skipped` node is settled and never held a sub-branch — exclude
+        // it from merge-recovery exactly as a `Completed` one.
+        if ns.status.is_settled_complete() {
             continue;
         }
         let sub_branch = sub_worktree_branch(run_id, node_id, ns.iter);
@@ -374,6 +376,7 @@ mod tests {
                 started_at: None,
                 completed_at: None,
                 failure_reason: None,
+                skip_reason: None,
                 iterations: Vec::new(),
                 frontmatter_retries: 0,
                 frontmatter_violations: Vec::new(),

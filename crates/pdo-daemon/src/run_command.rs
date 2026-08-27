@@ -2416,11 +2416,13 @@ async fn re_evaluate_after_command_inner(state: &AppState, run_id: &str) -> ReEv
         }
     }
 
-    // Find completed nodes whose outgoing edges might now fire with updated vars
+    // Find settled-complete nodes whose outgoing edges might now fire with updated
+    // vars — a `Skipped` node counts too (#620): its edges must be re-evaluated
+    // exactly as a `Completed` node's.
     let completed_node_ids: Vec<String> = run_state
         .nodes
         .values()
-        .filter(|n| n.status == event_log::NodeStatus::Completed)
+        .filter(|n| n.status.is_settled_complete())
         .map(|n| n.node_id.clone())
         .collect();
 

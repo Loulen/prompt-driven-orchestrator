@@ -5,11 +5,9 @@
 //! the tmux session — same mechanism used by the inline Manager terminal
 //! in the PipelineInfoPanel.
 
-mod common;
-
 use std::time::Duration;
 
-use common::TestDaemon;
+use crate::common::TestDaemon;
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::protocol::Message;
 

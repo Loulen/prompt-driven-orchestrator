@@ -4,11 +4,9 @@
 //! the event log), and the 200 body reports the re-scheduling's real effect
 //! (`{ok,spawned:[…]}` or `{ok,noop:true,reason}`), never a blind `{ok:true}`.
 
-mod common;
-
 use std::process::Command;
 
-use common::TestDaemon;
+use crate::common::TestDaemon;
 
 const LOOP_PIPELINE_NAME: &str = "loop-truth-test";
 const LOOP_PIPELINE_YAML: &str = r#"name: loop-truth-test
@@ -659,10 +657,16 @@ async fn bump_region_that_actually_reschedules_reports_the_spawn() {
         })
         .collect();
     reported.sort();
+    // The bump buys lap 2, and lap 2 restarts at the FRONTIER HEAD alone (#626,
+    // shipped in 1.36.1). This assertion used to expect both members at iter 2 at
+    // once, and that expectation was the bug: re-firing every member of a finished
+    // region forked the loop into two branches racing on one worktree. The
+    // freshness guards now let only `impl` resume; `rev` follows turn by turn when
+    // `impl` completes, exactly as it does on a nominal lap.
     assert_eq!(
         reported,
-        vec![("impl".to_string(), 2), ("rev".to_string(), 2)],
-        "the bump buys lap 2 for the region's members: {body}"
+        vec![("impl".to_string(), 2)],
+        "the bump resumes lap 2 at the region's head, one resume point: {body}"
     );
 
     // Proof obligation inherited from #108: the body may not claim a spawn the

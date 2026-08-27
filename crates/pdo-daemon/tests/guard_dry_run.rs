@@ -10,9 +10,7 @@
 //! because it must set the process-global `PDO_GUARD_TIMEOUT_MS` env var, which
 //! would flake sibling tests sharing this process.
 
-mod common;
-
-use common::TestDaemon;
+use crate::common::TestDaemon;
 
 const PIPELINE_NAME: &str = "auditor";
 const PIPELINE_YAML: &str = r#"name: auditor

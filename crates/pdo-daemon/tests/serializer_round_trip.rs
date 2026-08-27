@@ -2,9 +2,7 @@
 //! can be loaded, saved via PUT, and re-loaded without errors or structural drift.
 //! Refs #75.
 
-mod common;
-
-use common::TestDaemon;
+use crate::common::TestDaemon;
 
 fn seed_pipeline_files(repo: &std::path::Path) -> anyhow::Result<()> {
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -43,15 +41,36 @@ async fn every_pipeline_yaml_round_trips_through_save() {
         .unwrap();
     assert_eq!(resp.status(), 200);
 
-    let pipelines: Vec<serde_json::Value> = resp.json().await.unwrap();
-    assert!(!pipelines.is_empty(), "should find at least one pipeline");
+    let all: Vec<serde_json::Value> = resp.json().await.unwrap();
+
+    // `GET /pipelines` merges every scope, so it also lists whatever lives in the
+    // developer's real `~/.pdo/pipelines` — HOME is not overridden here. Keep only
+    // what this test seeded.
+    //
+    // **This filter is load-bearing, not tidiness.** Without it, the identity
+    // `PUT` below resolved a user-scoped id through the repo-first fallback,
+    // missed it in the tempdir, and wrote the developer's own template file. Two
+    // real consequences: the suite mutated files outside its sandbox on every run,
+    // and the resulting `pipeline_changed` broadcast reached *other* tests'
+    // daemons — which is what made
+    // `run_scoped_pipeline::unrelated_md_in_run_worktree_does_not_emit_pipeline_event`
+    // fail whenever the two ran concurrently. Every request below is scope-pinned
+    // for the same reason.
+    let pipelines: Vec<&serde_json::Value> = all
+        .iter()
+        .filter(|e| e["scope"].as_str() == Some("repo"))
+        .collect();
+    assert!(
+        !pipelines.is_empty(),
+        "should find at least one repo-scoped pipeline (seeded from the repo's .pdo/pipelines), got: {all:?}"
+    );
 
     for entry in &pipelines {
         let id = entry["id"].as_str().unwrap();
 
         // GET the pipeline (skip legacy pipelines that fail validation)
         let resp = client
-            .get(format!("{}/pipelines/{}", daemon.url(), id))
+            .get(format!("{}/pipelines/{}?scope=repo", daemon.url(), id))
             .send()
             .await
             .unwrap();
@@ -64,7 +83,7 @@ async fn every_pipeline_yaml_round_trips_through_save() {
         // PUT it back (identity save)
         let body = serde_json::json!({ "yaml": yaml, "prompts": {} });
         let resp = client
-            .put(format!("{}/pipelines/{}", daemon.url(), id))
+            .put(format!("{}/pipelines/{}?scope=repo", daemon.url(), id))
             .json(&body)
             .send()
             .await
@@ -78,7 +97,7 @@ async fn every_pipeline_yaml_round_trips_through_save() {
 
         // GET again and compare structure
         let resp = client
-            .get(format!("{}/pipelines/{}", daemon.url(), id))
+            .get(format!("{}/pipelines/{}?scope=repo", daemon.url(), id))
             .send()
             .await
             .unwrap();

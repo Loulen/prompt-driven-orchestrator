@@ -10,9 +10,7 @@
 //! recorded (with `triggered_by`) before any session spawn, so assertions hold
 //! whether or not tmux is present.
 
-mod common;
-
-use common::TestDaemon;
+use crate::common::{lock_guard_timeout_ms, TestDaemon};
 
 const PIPELINE_NAME: &str = "auditor";
 const PIPELINE_YAML: &str = r#"name: auditor
@@ -551,8 +549,9 @@ async fn guard_exit_nonzero_skips_without_firing() {
 
 #[tokio::test]
 async fn guard_timeout_records_guard_error_and_skips() {
-    // Shrink the guard timeout so a hung guard times out fast in the test.
-    std::env::set_var(pdo_daemon::GUARD_TIMEOUT_MS_OVERRIDE_ENV, "200");
+    // Shrink the guard timeout so a hung guard times out fast in the test. The
+    // guard also excludes `guard_dry_run_timeout.rs`, which sets the same var.
+    let _timeout = lock_guard_timeout_ms("200");
     let daemon = TestDaemon::spawn(seed).await.unwrap();
 
     // A guard that never returns: the hard timeout classifies it as an error,
@@ -587,8 +586,6 @@ async fn guard_timeout_records_guard_error_and_skips() {
         fires[0]["guard_exit_code"].is_null(),
         "guard-error must not capture an exit code"
     );
-
-    std::env::remove_var(pdo_daemon::GUARD_TIMEOUT_MS_OVERRIDE_ENV);
 }
 
 #[tokio::test]

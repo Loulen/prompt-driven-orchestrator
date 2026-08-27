@@ -9,9 +9,7 @@
 //! we seed events directly into the database via the daemon's REST endpoints
 //! and verify the projection reflects them correctly.
 
-mod common;
-
-use common::TestDaemon;
+use crate::common::TestDaemon;
 
 const PIPELINE_NAME: &str = "multi-iter-test";
 const PIPELINE_YAML: &str = r#"name: multi-iter-test

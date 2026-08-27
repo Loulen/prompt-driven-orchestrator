@@ -268,6 +268,12 @@ describe("StatsCharts — harness drill-down (#638)", () => {
       const user = userEvent.setup();
       render(<StatsCharts tab="cost" overview={null} cost={COST} costError={null} />);
 
+      const navigation = screen.getByTestId("stats-drilldown-navigation");
+      expect(
+        within(navigation).getByRole("combobox", { name: "Cost grouping" }),
+      ).toBeInTheDocument();
+      expect(within(navigation).getByRole("listbox", { name: "Spenders" })).toBeInTheDocument();
+      expect(navigation.nextElementSibling).toBe(screen.getByTestId("stats-drilldown-detail"));
       expect(screen.getByTestId("stats-harness-card-claude")).toHaveTextContent("~$5.00†");
       expect(screen.getByTestId("stats-harness-card-copilot")).toHaveTextContent("$2.00");
       expect(screen.getByTestId("stats-harness-card-opencode")).toHaveTextContent("—");

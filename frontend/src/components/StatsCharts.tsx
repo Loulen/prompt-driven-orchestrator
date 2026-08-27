@@ -198,7 +198,7 @@ function MasterList<T extends { id: string; name: string }>({
     <div
       role="listbox"
       aria-label="Spenders"
-      className="flex min-w-[250px] flex-col gap-1 border-r border-line pr-3"
+      className="flex flex-col gap-1"
       onKeyDown={(event) => {
         if (event.key === "ArrowDown" || event.key === "ArrowUp") {
           event.preventDefault();
@@ -256,12 +256,14 @@ function SessionsTab({ overview }: { overview: StatsOverview }) {
       <HarnessLegend harnesses={overview.session_harnesses} />
       <HarnessBars periods={periods} harnesses={overview.session_harnesses} value="executions" />
       <div className="flex min-h-[220px] gap-4">
-        <MasterList
-          rows={rows}
-          selected={selectedId}
-          valueLabel={(row) => String(row.executions)}
-          onSelect={setSelectedId}
-        />
+        <div className="min-w-[250px] border-r border-line pr-3">
+          <MasterList
+            rows={rows}
+            selected={selectedId}
+            valueLabel={(row) => String(row.executions)}
+            onSelect={setSelectedId}
+          />
+        </div>
         <div className="min-w-0 flex-1">
           <div className="mb-3 text-fg-4" style={{ fontSize: "10.5px" }}>
             Total{selected ? ` / ${selected.name}` : ""}
@@ -559,36 +561,29 @@ function CostTab({
   }
 
   return (
-    <div className="relative flex flex-col gap-4" data-testid="stats-chart-cost">
-      <div className="flex items-center justify-between gap-3">
-        <HarnessLegend harnesses={cost.harnesses} />
-        <select
-          aria-label="Cost grouping"
-          value={axis}
-          onChange={(event) => {
-            setAxis(event.target.value as "pipeline" | "project");
-            setSelectedId(null);
-            setDrilledPipelineId(null);
-          }}
-          className="rounded border border-line bg-bg-3 px-2 py-1 text-fg-2"
-        >
-          <option value="pipeline">By pipeline</option>
-          <option value="project">By project</option>
-        </select>
-      </div>
-      <div className="text-fg" data-testid="stats-selection-headline">
-        {formatCostAmount(aggregate.usd, aggregate.partial, aggregate.estimated)} total
-        {" · "}
-        {formatCostAmount(aggregate.average_usd, aggregate.partial, aggregate.estimated)} per Run
-      </div>
-      <HarnessCards aggregate={aggregate} />
-      {aggregate.unknown > 0 && (
-        <div className="text-st-await" style={{ fontSize: "10.5px" }}>
-          {aggregate.unknown} Run{aggregate.unknown === 1 ? "" : "s"} without computable cost
+    <div className="relative flex min-h-full" data-testid="stats-chart-cost">
+      <aside
+        className="w-[290px] shrink-0 border-r border-line pr-4"
+        data-testid="stats-drilldown-navigation"
+      >
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
+            Ranked by cost
+          </span>
+          <select
+            aria-label="Cost grouping"
+            value={axis}
+            onChange={(event) => {
+              setAxis(event.target.value as "pipeline" | "project");
+              setSelectedId(null);
+              setDrilledPipelineId(null);
+            }}
+            className="rounded border border-line bg-bg-3 px-2 py-1 text-fg-2"
+          >
+            <option value="pipeline">By pipeline</option>
+            <option value="project">By project</option>
+          </select>
         </div>
-      )}
-      <HarnessBars periods={periods} harnesses={cost.harnesses} value="usd" />
-      <div className="flex min-h-[240px] gap-4">
         <MasterList
           rows={rows}
           selected={selectedId}
@@ -598,15 +593,38 @@ function CostTab({
             setDrilledPipelineId(null);
           }}
         />
-        <div className="min-w-0 flex-1">
-          <div
-            className="mb-3 text-fg-4"
-            style={{ fontSize: "10.5px" }}
-            data-testid="stats-cost-breadcrumb"
-          >
-            Total{selected ? ` / ${selected.name}` : ""}
-            {drilledPipeline ? ` / ${drilledPipeline.name}` : ""}
+      </aside>
+
+      <div
+        className="min-w-0 flex-1 pl-5"
+        data-testid="stats-drilldown-detail"
+      >
+        <div
+          className="mb-3 text-fg-4"
+          style={{ fontSize: "10.5px" }}
+          data-testid="stats-cost-breadcrumb"
+        >
+          Total{selected ? ` / ${selected.name}` : ""}
+          {drilledPipeline ? ` / ${drilledPipeline.name}` : ""}
+        </div>
+        <HarnessLegend harnesses={cost.harnesses} />
+        <div className="mt-4 text-fg" data-testid="stats-selection-headline">
+          {formatCostAmount(aggregate.usd, aggregate.partial, aggregate.estimated)} total
+          {" · "}
+          {formatCostAmount(aggregate.average_usd, aggregate.partial, aggregate.estimated)} per Run
+        </div>
+        <div className="mt-4">
+          <HarnessCards aggregate={aggregate} />
+        </div>
+        {aggregate.unknown > 0 && (
+          <div className="mt-4 text-st-await" style={{ fontSize: "10.5px" }}>
+            {aggregate.unknown} Run{aggregate.unknown === 1 ? "" : "s"} without computable cost
           </div>
+        )}
+        <div className="mt-4">
+          <HarnessBars periods={periods} harnesses={cost.harnesses} value="usd" />
+        </div>
+        <div className="mt-4 min-h-[240px]">
           <CostTable
             rows={detailRows}
             harnesses={cost.harnesses}

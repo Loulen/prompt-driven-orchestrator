@@ -276,6 +276,8 @@ Chaque NodeRun voit son prompt construit en deux couches :
 
 Le préambule contient au minimum : les **inputs disponibles** (nom du port + chemin sur disque), les **outputs attendus** (chemin où écrire + schéma de frontmatter requis), les **capacités CLI** (`pdo complete`, `pdo fail --reason` — pas packagées en skills : 100 % systématiques, sans bénéfice de progressive disclosure), l'**itération courante**, et les **variables pipeline résolues**.
 
+**Contenu attendu** *(consigne d'output)* : consigne optionnelle attachée à tout type d'output produit par un node agentique. Injectée dans le préambule pour guider la production, elle n'est pas validée mécaniquement : la présence de l'artefact et sa frontmatter restent les contrats vérifiables. _Éviter_ : « prompt d'output », qui se confond avec le prompt principal du Node.
+
 Conséquence : le designer n'a pas à se soucier dans son prompt de « où écrire / quoi mettre en frontmatter / comment signaler la fin » — c'est imposé par le runtime. Il se concentre sur le *rôle*.
 
 ### Skills et extensions — délégués au harnais

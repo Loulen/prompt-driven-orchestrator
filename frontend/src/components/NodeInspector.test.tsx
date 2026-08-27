@@ -481,6 +481,28 @@ describe("NodeInspector StarButton — library save is independent of pipeline s
     expect(mockSave.mock.calls[0]).toHaveLength(1);
   });
 
+  it("Save to library preserves nonblank output instructions", () => {
+    seedTabWithReviewer(false);
+    const node = useEditStore.getState().openTabs[0].pipeline.nodes[0];
+    node.outputs = [
+      { ...node.outputs[0], instructions: "Return a concise verdict." },
+      { name: "empty", repeated: false, side: "right", instructions: "   " },
+    ];
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    fireEvent.click(screen.getByTitle("Save to library"));
+
+    expect(mockSave.mock.calls[0][0].outputs).toEqual([
+      {
+        name: "out",
+        repeated: false,
+        side: "right",
+        instructions: "Return a concise verdict.",
+      },
+      { name: "empty", repeated: false, side: "right" },
+    ]);
+  });
+
   it("opens the popover when node is already synced with library", () => {
     const synced: LibraryEntry = {
       name: "reviewer",

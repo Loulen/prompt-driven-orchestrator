@@ -348,6 +348,7 @@ export default function NodeInspector({
               onRemove={() => handleRemoveOutput(i)}
               schema={port.frontmatter}
               onSchemaChange={(fm) => handleUpdateOutput(i, { frontmatter: fm ?? null })}
+              allowInstructions={node.type === "doc-only" || node.type === "code-mutating"}
             />
           ))}
         </div>
@@ -461,6 +462,7 @@ function StarButton({
         ...(p.port_type && p.port_type !== "markdown" ? { port_type: p.port_type } : {}),
         ...(p.frontmatter ? { frontmatter: p.frontmatter } : {}),
         ...(p.when ? { when: p.when } : {}),
+        ...(p.instructions?.trim() ? { instructions: p.instructions } : {}),
       })),
       interactive: node.interactive,
       // #296/#345: persist the per-node model so the library is model-aware and

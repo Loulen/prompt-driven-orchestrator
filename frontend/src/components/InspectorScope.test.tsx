@@ -50,5 +50,11 @@ describe("Inspector amber accent scope", () => {
       const inactiveTab = screen.getByTestId("inspector-tab-edit");
       expect(inactiveTab.className).not.toContain("border-acc");
     });
+
+    it("styles expected-content boxes with the inspector accent and bounded editor", () => {
+      expect(indexCss).toMatch(/\.exp\.expanded[\s\S]*border-color:\s*var\(--color-acc-border\)/);
+      expect(indexCss).toMatch(/\.exp textarea[\s\S]*max-height:\s*150px/);
+      expect(indexCss).toMatch(/\.exp-trigger:focus-visible[\s\S]*var\(--color-acc\)/);
+    });
   });
 });

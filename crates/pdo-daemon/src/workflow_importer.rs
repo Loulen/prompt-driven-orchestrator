@@ -514,6 +514,7 @@ impl Importer {
             frontmatter: None,
             when: None,
             description: None,
+            instructions: None,
             required: false,
         };
         out_port.frontmatter = frontmatter;
@@ -925,6 +926,7 @@ fn plain_port(name: &str) -> Port {
         frontmatter: None,
         when: None,
         description: None,
+        instructions: None,
         required: false,
     }
 }

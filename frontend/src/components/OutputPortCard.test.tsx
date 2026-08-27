@@ -149,4 +149,70 @@ describe("OutputPortCard — O3 tab-head card", () => {
     fireEvent.change(screen.getByTestId("port-type-select"), { target: { value: "html" } });
     expect(onUpdate).toHaveBeenCalledWith({ port_type: "html" });
   });
+
+  it("adds, edits, previews, and clears expected content without a separate save", () => {
+    const onUpdate = vi.fn();
+    const { rerender } = render(
+      <OutputPortCard {...baseProps} onUpdate={onUpdate} allowInstructions />,
+      { wrapper: Wrapper },
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add expected content" }));
+    const textarea = screen.getByLabelText("Expected content");
+    fireEvent.change(textarea, { target: { value: "First line\nSecond line" } });
+    expect(onUpdate).toHaveBeenLastCalledWith({ instructions: "First line\nSecond line" });
+
+    rerender(
+      <OutputPortCard
+        {...baseProps}
+        port={{ ...baseProps.port, instructions: "First line\nSecond line" }}
+        onUpdate={onUpdate}
+        allowInstructions
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Edit expected content" })).toHaveTextContent(
+      "First line Second line",
+    );
+
+    fireEvent.change(screen.getByLabelText("Expected content"), { target: { value: "   " } });
+    expect(onUpdate).toHaveBeenLastCalledWith({ instructions: undefined });
+  });
+
+  it("focuses the editor when opened and collapses it with Escape or an outside click", () => {
+    render(
+      <div>
+        <OutputPortCard {...baseProps} allowInstructions />
+        <button type="button">Outside</button>
+      </div>,
+      { wrapper: Wrapper },
+    );
+
+    const trigger = screen.getByRole("button", { name: "Add expected content" });
+    fireEvent.click(trigger);
+    const textarea = screen.getByLabelText("Expected content");
+    expect(textarea).toHaveFocus();
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+
+    fireEvent.keyDown(textarea, { key: "Escape" });
+    expect(screen.queryByLabelText("Expected content")).not.toBeInTheDocument();
+
+    fireEvent.click(trigger);
+    fireEvent.mouseDown(screen.getByRole("button", { name: "Outside" }));
+    expect(screen.queryByLabelText("Expected content")).not.toBeInTheDocument();
+  });
+
+  it("identifies instructions as guidance and caps the auto-growing editor", () => {
+    render(<OutputPortCard {...baseProps} allowInstructions />, { wrapper: Wrapper });
+    fireEvent.click(screen.getByRole("button", { name: "Add expected content" }));
+
+    const textarea = screen.getByLabelText("Expected content");
+    expect(textarea.closest(".exp")).toHaveClass("expanded");
+    expect(screen.getByText("guide l'agent · non vérifié")).toBeInTheDocument();
+    expect(screen.getByText("échap replie")).toBeInTheDocument();
+  });
+
+  it("does not offer expected content on deterministic outputs", () => {
+    render(<OutputPortCard {...baseProps} allowInstructions={false} />, { wrapper: Wrapper });
+    expect(screen.queryByText("Expected content")).not.toBeInTheDocument();
+  });
 });

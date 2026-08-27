@@ -31,11 +31,32 @@ const OVERVIEW: StatsOverview = {
   runs: [{ bucket: "2026-07-30", count: 1 }],
   errors: [],
   sessions: [],
+  session_harnesses: [],
+  sessions_by_period: [],
+  sessions_by_pipeline: [],
   fires_by_pipeline: [],
   triggers_created_runs: { fired: 0, distinct_triggers: 0, enabled_triggers: 0 },
 };
 
-const COST: StatsCost = { by_period: [], by_pipeline: [], by_project: [], resolved: [] };
+const COST: StatsCost = {
+  harnesses: [],
+  total: {
+    usd: null,
+    average_usd: null,
+    estimated: true,
+    partial: false,
+    executions: 0,
+    readable: 0,
+    unknown: 0,
+    unpriced_models: [],
+    missing_reasons: [],
+    harnesses: [],
+  },
+  by_period: [],
+  by_pipeline: [],
+  by_project: [],
+  resolved: [],
+};
 
 function report(overrides: Partial<SyncCostPricesReport> = {}): SyncCostPricesReport {
   return {
@@ -57,6 +78,7 @@ async function openCostTab() {
   const user = userEvent.setup();
   render(<StatsModal open onClose={() => {}} />);
   await user.click(await screen.findByTestId("stats-tab-cost"));
+  await user.click(screen.getByTestId("stats-pricing-trigger"));
   return user;
 }
 
@@ -67,15 +89,16 @@ beforeEach(() => {
 });
 
 describe("StatsModal — price sync (#427, ADR-0034)", () => {
-  it("shows the Sync costs button only on the Cost tab", async () => {
+  it("keeps Sync costs inside the collapsed Pricing details panel", async () => {
     const user = userEvent.setup();
     render(<StatsModal open onClose={() => {}} />);
-    // Default tab is Runs: the table's staleness is not visible there, so neither is
-    // the button.
     expect(await screen.findByTestId("stats-tab-runs")).toBeInTheDocument();
     expect(screen.queryByTestId("stats-sync-prices")).not.toBeInTheDocument();
 
     await user.click(screen.getByTestId("stats-tab-cost"));
+    expect(screen.getByTestId("stats-pricing-trigger")).toBeInTheDocument();
+    expect(screen.queryByTestId("stats-sync-prices")).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("stats-pricing-trigger"));
     expect(screen.getByTestId("stats-sync-prices")).toBeInTheDocument();
   });
 
@@ -90,6 +113,77 @@ describe("StatsModal — price sync (#427, ADR-0034)", () => {
     expect(box).toHaveTextContent("15 price row(s)");
     expect(screen.queryByTestId("stats-sync-noop")).not.toBeInTheDocument();
     expect(screen.queryByTestId("stats-sync-error")).not.toBeInTheDocument();
+  });
+
+  describe("StatsModal — full-screen Stats window (#638)", () => {
+    it("covers the application and exposes the four sections in a side rail", async () => {
+      render(<StatsModal open onClose={() => {}} />);
+
+      expect(await screen.findByTestId("stats-modal")).toHaveClass("h-screen", "w-screen");
+      const rail = screen.getByRole("tablist", { name: "Stats sections" });
+      expect(rail).toHaveClass("flex-col");
+      expect(screen.getAllByRole("tab")).toHaveLength(4);
+      expect(screen.getByRole("group", { name: "Period" })).toBeInTheDocument();
+    });
+
+    it("refreshes visible data without blanking it and advances the computed time", async () => {
+      const user = userEvent.setup();
+      render(<StatsModal open onClose={() => {}} />);
+      await waitFor(() => expect(fetchStatsOverviewMock).toHaveBeenCalledTimes(1));
+      expect(screen.getByTestId("stats-charts-stub")).toBeInTheDocument();
+      const before = screen.getByTestId("stats-computed-at").textContent;
+
+      await user.click(screen.getByTestId("stats-refresh"));
+      await waitFor(() => expect(fetchStatsOverviewMock).toHaveBeenCalledTimes(2));
+      expect(screen.getByTestId("stats-charts-stub")).toBeInTheDocument();
+      expect(screen.getByTestId("stats-computed-at")).toHaveTextContent(/Computed/);
+      expect(before).not.toBeNull();
+    });
+
+    it("closes Pricing details before closing Stats on Escape", async () => {
+      const user = userEvent.setup();
+      const onClose = vi.fn();
+      render(<StatsModal open onClose={onClose} />);
+      await user.click(screen.getByTestId("stats-tab-cost"));
+      await user.click(screen.getByTestId("stats-pricing-trigger"));
+      expect(screen.getByTestId("stats-pricing-details")).toBeInTheDocument();
+
+      await user.keyboard("{Escape}");
+      expect(screen.queryByTestId("stats-pricing-details")).not.toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
+
+      await user.keyboard("{Escape}");
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it("lets an open coverage tooltip consume Escape before Stats", async () => {
+      const user = userEvent.setup();
+      const onClose = vi.fn();
+      const tooltip = document.createElement("div");
+      tooltip.dataset.testid = "tooltip-content";
+      tooltip.dataset.state = "delayed-open";
+      document.body.appendChild(tooltip);
+      render(<StatsModal open onClose={onClose} />);
+
+      await user.keyboard("{Escape}");
+      expect(onClose).not.toHaveBeenCalled();
+      tooltip.remove();
+    });
+
+    it("shows the resolved price table only inside Pricing details", async () => {
+      fetchStatsCostMock.mockResolvedValue({
+        ...COST,
+        resolved: [{ key: "claude-opus-5", tier: "fetched", input: 5, output: 25 }],
+      });
+      const user = userEvent.setup();
+      render(<StatsModal open onClose={() => {}} />);
+      await user.click(screen.getByTestId("stats-tab-cost"));
+      expect(screen.queryByText("claude-opus-5")).not.toBeInTheDocument();
+
+      await user.click(screen.getByTestId("stats-pricing-trigger"));
+      expect(await screen.findByText("claude-opus-5")).toBeInTheDocument();
+      expect(screen.getByText("$5/$25 /MTok")).toBeInTheDocument();
+    });
   });
 
   it("says when the manual tier shadows a fetched price", async () => {

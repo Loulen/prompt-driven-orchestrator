@@ -1,39 +1,43 @@
+import { useMemo, useState } from "react";
 import {
-  BarChart,
   Bar,
-  LineChart,
-  Line,
+  BarChart,
+  CartesianGrid,
+  Legend,
+  ResponsiveContainer,
+  Tooltip as RTooltip,
   XAxis,
   YAxis,
-  Tooltip as RTooltip,
-  Legend,
-  CartesianGrid,
-  ResponsiveContainer,
 } from "recharts";
-import type { StatsOverview, StatsCost, StatsCostBucket, PriceRow } from "../types";
-import { formatBucketCost } from "../lib/costLabel";
-
-// This module is the ONLY importer of `recharts`, so it is code-split via
-// `React.lazy` in StatsModal (the first lazy chunk in the repo) — recharts stays
-// out of the main bundle and loads when the Stats modal first opens.
+import type {
+  StatsCost,
+  StatsCostAggregate,
+  StatsCostEntity,
+  StatsCostPeriod,
+  StatsHarnessCost,
+  StatsOverview,
+  StatsProjectCostEntity,
+  StatsSessionEntity,
+  StatsSessionHarness,
+  StatsSessionPeriod,
+} from "../types";
+import { formatCostAmount } from "../lib/costLabel";
+import { harnessColor } from "../lib/harness";
+import { Tooltip, TooltipProvider } from "./ui/tooltip";
 
 export type StatsTab = "runs" | "sessions" | "triggers" | "cost";
 
-// Palette — reads on the dark UI; deliberately not the brand accent so series
-// stay distinguishable.
-const C = {
+const CHART = {
   runs: "#58a6ff",
   errors: "#f85149",
-  sessions: "#a371f7",
   fires: "#3fb950",
-  cost: "#d29922",
   grid: "#30363d",
   axis: "#8b949e",
 } as const;
 
 const AXIS_PROPS = {
-  stroke: C.axis,
-  tick: { fill: C.axis, fontSize: 10 },
+  stroke: CHART.axis,
+  tick: { fill: CHART.axis, fontSize: 10 },
 } as const;
 
 function ChartFrame({ children }: { children: React.ReactElement }) {
@@ -54,69 +58,261 @@ function EmptyNote({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** Merge two per-bucket count series onto the ordered `buckets` x-axis. */
-function mergeCounts(
-  buckets: string[],
-  a: { bucket: string; count: number }[],
-  b: { bucket: string; count: number }[],
-): { bucket: string; runs: number; errors: number }[] {
-  const am = new Map(a.map((r) => [r.bucket, r.count]));
-  const bm = new Map(b.map((r) => [r.bucket, r.count]));
-  return buckets.map((bucket) => ({
-    bucket,
-    runs: am.get(bucket) ?? 0,
-    errors: bm.get(bucket) ?? 0,
+function HarnessLegend({ harnesses }: { harnesses: string[] }) {
+  return (
+    <div className="flex flex-wrap gap-3 text-fg-3" style={{ fontSize: "10.5px" }}>
+      {harnesses.map((harness) => (
+        <span key={harness} className="flex items-center gap-1.5">
+          <span
+            className="h-2 w-2 rounded-full"
+            style={{ backgroundColor: harnessColor(harness) }}
+            data-testid={`stats-harness-legend-${harness}`}
+          />
+          {harness}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function flattenPeriods(
+  periods: (StatsSessionPeriod | StatsCostPeriod)[],
+  value: "executions" | "usd",
+) {
+  return periods.map((period) => ({
+    bucket: period.bucket,
+    ...Object.fromEntries(
+      period.harnesses.map((harness) => [
+        harness.harness,
+        value === "usd" ? ("usd" in harness ? harness.usd : null) : harness.executions,
+      ]),
+    ),
   }));
+}
+
+function isHarnessCost(
+  metric: StatsSessionHarness | StatsHarnessCost | undefined,
+): metric is StatsHarnessCost {
+  return metric !== undefined && "average_usd" in metric;
+}
+
+function HarnessBars({
+  periods,
+  harnesses,
+  value,
+}: {
+  periods: (StatsSessionPeriod | StatsCostPeriod)[];
+  harnesses: string[];
+  value: "executions" | "usd";
+}) {
+  if (periods.length === 0) return <EmptyNote>No activity in this period.</EmptyNote>;
+  return (
+    <ChartFrame>
+      <BarChart data={flattenPeriods(periods, value)} margin={{ top: 8, right: 8, left: -12 }}>
+        <CartesianGrid stroke={CHART.grid} strokeDasharray="3 3" vertical={false} />
+        <XAxis dataKey="bucket" {...AXIS_PROPS} />
+        <YAxis allowDecimals={value === "usd"} {...AXIS_PROPS} />
+        <RTooltip
+          contentStyle={{ background: "#161b22", border: `1px solid ${CHART.grid}`, fontSize: 11 }}
+          formatter={(raw, name) => {
+            if (raw == null) return ["—", String(name)];
+            const amount = typeof raw === "number" ? raw : Number(raw);
+            const metric = periods
+              .flatMap((period) => period.harnesses)
+              .find((harness) => harness.harness === String(name));
+            const costMetric = isHarnessCost(metric) ? metric : undefined;
+            const label =
+              value === "usd"
+                ? formatCostAmount(
+                    amount,
+                    costMetric?.partial ?? false,
+                    costMetric?.estimated ?? true,
+                  )
+                : amount;
+            return [label, String(name)];
+          }}
+        />
+        <Legend wrapperStyle={{ fontSize: 11 }} />
+        {harnesses.map((harness) => (
+          <Bar
+            key={harness}
+            dataKey={harness}
+            name={harness}
+            stackId="harness"
+            fill={harnessColor(harness)}
+          />
+        ))}
+      </BarChart>
+    </ChartFrame>
+  );
 }
 
 function RunsTab({ overview }: { overview: StatsOverview }) {
   if (overview.buckets.length === 0) return <EmptyNote>No runs in this period.</EmptyNote>;
-  const data = mergeCounts(overview.buckets, overview.runs, overview.errors);
+  const runs = new Map(overview.runs.map((row) => [row.bucket, row.count]));
+  const errors = new Map(overview.errors.map((row) => [row.bucket, row.count]));
+  const data = overview.buckets.map((bucket) => ({
+    bucket,
+    runs: runs.get(bucket) ?? 0,
+    errors: errors.get(bucket) ?? 0,
+  }));
   return (
     <div data-testid="stats-chart-runs">
       <ChartFrame>
-        <BarChart data={data} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
-          <CartesianGrid stroke={C.grid} strokeDasharray="3 3" vertical={false} />
+        <BarChart data={data} margin={{ top: 8, right: 8, left: -18 }}>
+          <CartesianGrid stroke={CHART.grid} strokeDasharray="3 3" vertical={false} />
           <XAxis dataKey="bucket" {...AXIS_PROPS} />
           <YAxis allowDecimals={false} {...AXIS_PROPS} />
           <RTooltip
-            contentStyle={{ background: "#161b22", border: `1px solid ${C.grid}`, fontSize: 11 }}
+            contentStyle={{ background: "#161b22", border: `1px solid ${CHART.grid}`, fontSize: 11 }}
           />
           <Legend wrapperStyle={{ fontSize: 11 }} />
-          <Bar dataKey="runs" name="Runs" fill={C.runs} radius={[2, 2, 0, 0]} />
-          <Bar dataKey="errors" name="Errors (failed)" fill={C.errors} radius={[2, 2, 0, 0]} />
+          <Bar dataKey="runs" name="Runs" fill={CHART.runs} />
+          <Bar dataKey="errors" name="Errors (failed)" fill={CHART.errors} />
         </BarChart>
       </ChartFrame>
     </div>
   );
 }
 
-function SessionsTab({ overview }: { overview: StatsOverview }) {
-  if (overview.buckets.length === 0)
-    return <EmptyNote>No node sessions in this period.</EmptyNote>;
-  const sm = new Map(overview.sessions.map((r) => [r.bucket, r.count]));
-  const data = overview.buckets.map((bucket) => ({ bucket, sessions: sm.get(bucket) ?? 0 }));
+function MasterList<T extends { id: string; name: string }>({
+  rows,
+  selected,
+  valueLabel,
+  onSelect,
+}: {
+  rows: T[];
+  selected: string | null;
+  valueLabel: (row: T) => string;
+  onSelect: (id: string | null) => void;
+}) {
+  const options = [{ id: "__total__", name: "Total" } as T, ...rows];
+  const selectedIndex = Math.max(
+    0,
+    options.findIndex((row) => (selected === null ? row.id === "__total__" : row.id === selected)),
+  );
+  const [focusIndex, setFocusIndex] = useState(selectedIndex);
+  const activeFocusIndex = Math.min(focusIndex, options.length - 1);
+
   return (
-    <div data-testid="stats-chart-sessions">
-      <ChartFrame>
-        <LineChart data={data} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
-          <CartesianGrid stroke={C.grid} strokeDasharray="3 3" vertical={false} />
-          <XAxis dataKey="bucket" {...AXIS_PROPS} />
-          <YAxis allowDecimals={false} {...AXIS_PROPS} />
-          <RTooltip
-            contentStyle={{ background: "#161b22", border: `1px solid ${C.grid}`, fontSize: 11 }}
-          />
-          <Line
-            type="monotone"
-            dataKey="sessions"
-            name="Node sessions started"
-            stroke={C.sessions}
-            strokeWidth={2}
-            dot={{ r: 2 }}
-          />
-        </LineChart>
-      </ChartFrame>
+    <div
+      role="listbox"
+      aria-label="Spenders"
+      className="flex flex-col gap-1"
+      onKeyDown={(event) => {
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          event.preventDefault();
+          const delta = event.key === "ArrowDown" ? 1 : -1;
+          setFocusIndex((activeFocusIndex + delta + options.length) % options.length);
+        } else if (event.key === "Enter") {
+          event.preventDefault();
+          const row = options[activeFocusIndex];
+          onSelect(row.id === "__total__" ? null : row.id);
+        } else if (event.key === "Backspace" || event.key === "ArrowLeft") {
+          event.preventDefault();
+          onSelect(null);
+        }
+      }}
+    >
+      {options.map((row, index) => {
+        const isSelected = row.id === (selected ?? "__total__");
+        return (
+          <button
+            key={row.id}
+            type="button"
+            role="option"
+            aria-selected={isSelected}
+            tabIndex={index === activeFocusIndex ? 0 : -1}
+            onFocus={() => setFocusIndex(index)}
+            onClick={() => onSelect(row.id === "__total__" ? null : row.id)}
+            className={`flex items-center justify-between gap-3 rounded px-2 py-2 text-left ${
+              isSelected ? "bg-bg-5 text-fg" : "text-fg-3 hover:bg-bg-3"
+            }`}
+            style={{ fontSize: "11.5px" }}
+          >
+            <span className="truncate">{row.name}</span>
+            <span className="shrink-0 font-mono text-fg-2">
+              {row.id === "__total__" ? "" : valueLabel(row)}
+            </span>
+          </button>
+        );
+      })}
     </div>
+  );
+}
+
+function SessionsTab({ overview }: { overview: StatsOverview }) {
+  const rows = useMemo(
+    () => [...overview.sessions_by_pipeline].sort((a, b) => b.executions - a.executions),
+    [overview.sessions_by_pipeline],
+  );
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selected = rows.find((row) => row.id === selectedId) ?? null;
+  const periods = selected ? selected.by_period : overview.sessions_by_period;
+  const detailRows = selected?.nodes ?? rows;
+
+  return (
+    <div className="flex flex-col gap-4" data-testid="stats-chart-sessions">
+      <HarnessLegend harnesses={overview.session_harnesses} />
+      <HarnessBars periods={periods} harnesses={overview.session_harnesses} value="executions" />
+      <div className="flex min-h-[220px] gap-4">
+        <div className="min-w-[250px] border-r border-line pr-3">
+          <MasterList
+            rows={rows}
+            selected={selectedId}
+            valueLabel={(row) => String(row.executions)}
+            onSelect={setSelectedId}
+          />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="mb-3 text-fg-4" style={{ fontSize: "10.5px" }}>
+            Total{selected ? ` / ${selected.name}` : ""}
+          </div>
+          <SessionTable rows={detailRows} harnesses={overview.session_harnesses} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SessionTable({ rows, harnesses }: { rows: StatsSessionEntity[]; harnesses: string[] }) {
+  return (
+    <table className="w-full table-fixed text-left" style={{ fontSize: "11px" }}>
+      <thead className="text-fg-4">
+        <tr>
+          <th className="pb-2 font-medium">Name</th>
+          <th className="w-20 pb-2 text-right font-medium">Total</th>
+          {harnesses.map((harness) => (
+            <th key={harness} className="w-24 pb-2 text-right font-medium">
+              <span className="inline-flex items-center gap-1">
+                <span
+                  className="h-2 w-2 rounded-full"
+                  style={{ backgroundColor: harnessColor(harness) }}
+                />
+                {harness}
+              </span>
+            </th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr key={row.id} className="border-t border-line text-fg-2" tabIndex={0}>
+            <td className="py-2 pr-2">{row.name}</td>
+            <td className="py-2 text-right font-mono">{row.executions}</td>
+            {harnesses.map((harness) => (
+              <td
+                key={harness}
+                className="py-2 text-right font-mono"
+                data-harness={harness}
+              >
+                {row.harnesses.find((item) => item.harness === harness)?.executions ?? "—"}
+              </td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
@@ -125,10 +321,7 @@ function TriggersTab({ overview }: { overview: StatsOverview }) {
   return (
     <div data-testid="stats-chart-triggers" className="flex flex-col gap-3">
       <div className="flex flex-wrap gap-2" style={{ fontSize: "11px" }}>
-        <span
-          className="rounded bg-bg-3 px-2 py-1 text-fg-2"
-          data-testid="stats-kpi-created-runs"
-        >
+        <span className="rounded bg-bg-3 px-2 py-1 text-fg-2" data-testid="stats-kpi-created-runs">
           Fires that created a run: <span className="font-mono text-fg">{kpi.fired}</span>
         </span>
         <span className="rounded bg-bg-3 px-2 py-1 text-fg-2" data-testid="stats-kpi-distinct">
@@ -140,17 +333,18 @@ function TriggersTab({ overview }: { overview: StatsOverview }) {
         <EmptyNote>No trigger fires in this period.</EmptyNote>
       ) : (
         <ChartFrame>
-          <BarChart
-            data={overview.fires_by_pipeline}
-            margin={{ top: 8, right: 8, left: -18, bottom: 0 }}
-          >
-            <CartesianGrid stroke={C.grid} strokeDasharray="3 3" vertical={false} />
+          <BarChart data={overview.fires_by_pipeline}>
+            <CartesianGrid stroke={CHART.grid} strokeDasharray="3 3" vertical={false} />
             <XAxis dataKey="pipeline_id" {...AXIS_PROPS} />
             <YAxis allowDecimals={false} {...AXIS_PROPS} />
             <RTooltip
-              contentStyle={{ background: "#161b22", border: `1px solid ${C.grid}`, fontSize: 11 }}
+              contentStyle={{
+                background: "#161b22",
+                border: `1px solid ${CHART.grid}`,
+                fontSize: 11,
+              }}
             />
-            <Bar dataKey="count" name="Fires" fill={C.fires} radius={[2, 2, 0, 0]} />
+            <Bar dataKey="count" name="Fires" fill={CHART.fires} />
           </BarChart>
         </ChartFrame>
       )}
@@ -158,153 +352,287 @@ function TriggersTab({ overview }: { overview: StatsOverview }) {
   );
 }
 
-/** One labelled cost row carrying the honesty vocabulary (`~$` / `†` / `—`). */
-function CostRow({ label, bucket }: { label: string; bucket: StatsCostBucket }) {
-  const c = formatBucketCost(
-    bucket.usd,
-    bucket.partial,
-    bucket.null,
-    bucket.runs,
-    bucket.unpriced_models,
-  );
-  return (
-    <div
-      className="flex items-center justify-between rounded bg-bg-3 px-2 py-1"
-      style={{ fontSize: "10.5px" }}
-      data-testid="stats-cost-row"
-      title={c.title}
-    >
-      <span className="text-fg-3">{label}</span>
-      <span className={`flex items-center gap-1 font-mono ${c.empty ? "text-fg-4" : "text-fg-2"}`}>
-        {c.text}
-        {c.dagger && (
-          <span className="text-st-await" title={c.title}>
-            †
-          </span>
-        )}
-      </span>
-    </div>
-  );
+function coverage(metric: StatsHarnessCost, unit: "Run" | "execution"): string {
+  const parts = [
+    `${metric.readable} readable ${metric.readable === 1 ? "cost" : "costs"} of ${metric.executions} ${
+      metric.executions === 1 ? unit : `${unit}s`
+    }`,
+  ];
+  if (metric.unpriced_models.length) {
+    parts.push(`Lower bound; unpriced: ${metric.unpriced_models.join(", ")}`);
+  }
+  if (metric.missing_reasons.length) parts.push(metric.missing_reasons.join("; "));
+  return parts.join(". ");
 }
 
-function CostSection({
-  title,
-  rows,
-}: {
-  title: string;
-  rows: { label: string; bucket: StatsCostBucket }[];
-}) {
+function HarnessCards({ aggregate }: { aggregate: StatsCostAggregate }) {
   return (
-    <div className="flex flex-col gap-1.5">
-      <h4 className="font-medium text-fg-2" style={{ fontSize: "11px" }}>
-        {title}
-      </h4>
-      {rows.length === 0 ? (
-        <EmptyNote>No runs in this period.</EmptyNote>
-      ) : (
-        <div className="flex flex-col gap-1">
-          {rows.map((r) => (
-            <CostRow key={r.label} label={r.label} bucket={r.bucket} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** The resolved price table (#528): one row per family — the WINNING tier and the
- *  $/MTok actually in force. Reads the same table the fold bills with, so pressing
- *  "Sync costs" (just above) and reading what PDO can price happen in one place.
- *  Defensive `?.` for the same `vite dev` reason as the cost buckets. */
-function ResolvedPrices({ resolved }: { resolved: PriceRow[] | undefined }) {
-  if (!resolved?.length) return null;
-  return (
-    <div className="flex flex-col gap-1.5" data-testid="stats-cost-resolved">
-      <h4 className="font-medium text-fg-2" style={{ fontSize: "11px" }}>
-        What PDO can price
-      </h4>
-      <div className="flex flex-col gap-1">
-        {resolved.map((row) => (
-          <div
-            key={row.key}
-            className="flex items-center justify-between rounded bg-bg-3 px-2 py-1 font-mono text-fg-3"
-            style={{ fontSize: "10.5px" }}
-            data-testid={`price-row-${row.key}`}
-          >
-            <span>{row.key}</span>
-            <span className="flex items-center gap-2">
-              <span
-                className="rounded bg-bg-4 px-1.5 py-0.5 text-fg-4"
-                data-testid={`price-row-tier-${row.key}`}
-              >
-                {row.tier}
-              </span>
-              <span className="text-fg-2">
-                ${row.input}/${row.output} /MTok
-              </span>
-            </span>
+    <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+      {aggregate.harnesses.map((metric) => (
+        <div
+          key={metric.harness}
+          className="rounded-md border border-line bg-bg-3 p-3"
+          data-testid={`stats-harness-card-${metric.harness}`}
+        >
+          <div className="mb-2 flex items-center gap-1.5 text-fg-3" style={{ fontSize: "10.5px" }}>
+            <span
+              className="h-2 w-2 rounded-full"
+              style={{ backgroundColor: harnessColor(metric.harness) }}
+            />
+            {metric.harness}
           </div>
-        ))}
-      </div>
+          <div className="font-mono text-fg" style={{ fontSize: "15px" }}>
+            {formatCostAmount(metric.usd, metric.partial, metric.estimated)}
+          </div>
+          <div className="mt-1 text-fg-4" style={{ fontSize: "10px" }}>
+            {metric.average_usd === null
+              ? "— avg"
+              : `${formatCostAmount(metric.average_usd, metric.partial, metric.estimated)} avg`}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
 
-function CostTab({ cost, error }: { cost: StatsCost | null; error: string | null }) {
-  if (error)
+function CostCell({
+  metric,
+  unit,
+}: {
+  metric: StatsHarnessCost | undefined;
+  unit: "Run" | "execution";
+}) {
+  if (!metric) return <span className="font-mono text-fg-4">—</span>;
+  const detail = coverage(metric, unit);
+  return (
+    <div className="flex flex-col items-end font-mono">
+      <span>{formatCostAmount(metric.usd, metric.partial, metric.estimated)}</span>
+      <Tooltip content={detail} side="top">
+        <button
+          type="button"
+          aria-label={detail}
+          className="text-fg-4 underline decoration-dotted underline-offset-2"
+          style={{ fontSize: "9.5px" }}
+        >
+          {metric.average_usd === null
+            ? "— avg"
+            : `${formatCostAmount(metric.average_usd, metric.partial, metric.estimated)} avg`}
+        </button>
+      </Tooltip>
+    </div>
+  );
+}
+
+function CostTable({
+  rows,
+  harnesses,
+  unit,
+  onOpen,
+}: {
+  rows: StatsCostEntity[];
+  harnesses: string[];
+  unit: "Run" | "execution";
+  onOpen?: (row: StatsCostEntity) => void;
+}) {
+  const sorted = [...rows].sort((a, b) => (b.usd ?? -1) - (a.usd ?? -1));
+  return (
+    <TooltipProvider>
+      <table className="w-full table-fixed text-left" style={{ fontSize: "11px" }}>
+        <thead className="text-fg-4">
+          <tr>
+            <th className="pb-2 font-medium">Name</th>
+            <th className="w-28 pb-2 text-right font-medium">Total</th>
+            {harnesses.map((harness) => (
+              <th key={harness} className="w-28 pb-2 text-right font-medium">
+                <span className="inline-flex items-center gap-1">
+                  <span
+                    className="h-2 w-2 rounded-full"
+                    style={{ backgroundColor: harnessColor(harness) }}
+                  />
+                  {harness}
+                </span>
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((row) => (
+            <tr
+              key={row.id}
+              className="border-t border-line text-fg-2"
+              tabIndex={0}
+              data-testid="stats-detail-row"
+            >
+              <td className="py-2 pr-2">
+                {onOpen ? (
+                  <button
+                    type="button"
+                    aria-label={`Open ${row.name}`}
+                    onClick={() => onOpen(row)}
+                    className="text-left hover:text-fg"
+                  >
+                    {row.name}
+                  </button>
+                ) : (
+                  row.name
+                )}
+              </td>
+              <td className="py-2 text-right">
+                <CostCell
+                  unit={unit}
+                  metric={{
+                    harness: "total",
+                    usd: row.usd,
+                    estimated: row.estimated,
+                    partial: row.partial,
+                    executions: row.executions,
+                    readable: row.readable,
+                    unknown: row.unknown,
+                    average_usd: row.average_usd,
+                    unpriced_models: row.unpriced_models,
+                    missing_reasons: row.missing_reasons,
+                  }}
+                />
+              </td>
+              {harnesses.map((harness) => (
+                <td key={harness} className="py-2 text-right">
+                  <CostCell
+                    unit={unit}
+                    metric={row.harnesses.find((item) => item.harness === harness)}
+                  />
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </TooltipProvider>
+  );
+}
+
+function CostTab({
+  cost,
+  error,
+}: {
+  cost: StatsCost | null;
+  error: string | null;
+}) {
+  const [axis, setAxis] = useState<"pipeline" | "project">("pipeline");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [drilledPipelineId, setDrilledPipelineId] = useState<string | null>(null);
+
+  if (error) {
     return (
-      <div
-        className="rounded-md border border-st-failed/30 bg-st-failed-bg px-3 py-2 text-st-failed"
-        style={{ fontSize: "11.5px" }}
-        data-testid="stats-cost-error"
-      >
+      <div className="rounded-md border border-st-failed/30 bg-st-failed-bg px-3 py-2 text-st-failed">
         {error}
       </div>
     );
-  // No synchronous loading flag (see useStats): null cost + no error = fetching.
+  }
   if (!cost) return <EmptyNote>Loading cost…</EmptyNote>;
 
-  const periodBars = cost.by_period.map((b) => ({ label: b.bucket, usd: b.usd }));
-  const hasSpend = cost.by_period.some((b) => b.usd > 0);
+  const rows = axis === "pipeline" ? cost.by_pipeline : cost.by_project;
+  const selected = rows.find((row) => row.id === selectedId) ?? null;
+  const drilledPipeline =
+    axis === "project" && selected
+      ? (selected as StatsProjectCostEntity).pipelines.find(
+          (pipeline) => pipeline.id === drilledPipelineId,
+        ) ?? null
+      : null;
+  const aggregate = drilledPipeline ?? selected ?? cost.total;
+  const periods = drilledPipeline
+    ? drilledPipeline.by_period
+    : selected
+      ? selected.by_period
+      : cost.by_period;
+  let detailRows: StatsCostEntity[];
+  let detailUnit: "Run" | "execution" = "Run";
+  let onOpen: ((row: StatsCostEntity) => void) | undefined;
+  if (drilledPipeline) {
+    detailRows = drilledPipeline.nodes;
+    detailUnit = "execution";
+  } else if (!selected) {
+    detailRows = axis === "project" ? cost.by_project : cost.by_pipeline;
+  } else if (axis === "project") {
+    detailRows = (selected as StatsProjectCostEntity).pipelines;
+    onOpen = (pipeline) => setDrilledPipelineId(pipeline.id);
+  } else {
+    detailRows = selected.nodes;
+    detailUnit = "execution";
+  }
 
   return (
-    <div className="flex flex-col gap-4" data-testid="stats-chart-cost">
-      <div className="text-fg-4" style={{ fontSize: "10.5px" }} data-testid="stats-cost-disclaimer">
-        Estimates from local Claude Code token usage × public list prices — not an invoice. A bucket
-        with any partial run is a lower bound (†); runs with no transcript are excluded (shown as —).
+    <div className="relative flex min-h-full" data-testid="stats-chart-cost">
+      <aside
+        className="w-[290px] shrink-0 border-r border-line pr-4"
+        data-testid="stats-drilldown-navigation"
+      >
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
+            Ranked by cost
+          </span>
+          <select
+            aria-label="Cost grouping"
+            value={axis}
+            onChange={(event) => {
+              setAxis(event.target.value as "pipeline" | "project");
+              setSelectedId(null);
+              setDrilledPipelineId(null);
+            }}
+            className="rounded border border-line bg-bg-3 px-2 py-1 text-fg-2"
+          >
+            <option value="pipeline">By pipeline</option>
+            <option value="project">By project</option>
+          </select>
+        </div>
+        <MasterList
+          rows={rows}
+          selected={selectedId}
+          valueLabel={(row) => formatCostAmount(row.usd, row.partial, row.estimated)}
+          onSelect={(id) => {
+            setSelectedId(id);
+            setDrilledPipelineId(null);
+          }}
+        />
+      </aside>
+
+      <div
+        className="min-w-0 flex-1 pl-5"
+        data-testid="stats-drilldown-detail"
+      >
+        <div
+          className="mb-3 text-fg-4"
+          style={{ fontSize: "10.5px" }}
+          data-testid="stats-cost-breadcrumb"
+        >
+          Total{selected ? ` / ${selected.name}` : ""}
+          {drilledPipeline ? ` / ${drilledPipeline.name}` : ""}
+        </div>
+        <HarnessLegend harnesses={cost.harnesses} />
+        <div className="mt-4 text-fg" data-testid="stats-selection-headline">
+          {formatCostAmount(aggregate.usd, aggregate.partial, aggregate.estimated)} total
+          {" · "}
+          {formatCostAmount(aggregate.average_usd, aggregate.partial, aggregate.estimated)} per Run
+        </div>
+        <div className="mt-4">
+          <HarnessCards aggregate={aggregate} />
+        </div>
+        {aggregate.unknown > 0 && (
+          <div className="mt-4 text-st-await" style={{ fontSize: "10.5px" }}>
+            {aggregate.unknown} Run{aggregate.unknown === 1 ? "" : "s"} without computable cost
+          </div>
+        )}
+        <div className="mt-4">
+          <HarnessBars periods={periods} harnesses={cost.harnesses} value="usd" />
+        </div>
+        <div className="mt-4 min-h-[240px]">
+          <CostTable
+            rows={detailRows}
+            harnesses={cost.harnesses}
+            unit={detailUnit}
+            onOpen={onOpen}
+          />
+        </div>
       </div>
-
-      {hasSpend && (
-        <ChartFrame>
-          <BarChart data={periodBars} margin={{ top: 8, right: 8, left: -8, bottom: 0 }}>
-            <CartesianGrid stroke={C.grid} strokeDasharray="3 3" vertical={false} />
-            <XAxis dataKey="label" {...AXIS_PROPS} />
-            <YAxis {...AXIS_PROPS} tickFormatter={(v) => `$${v}`} />
-            <RTooltip
-              contentStyle={{ background: "#161b22", border: `1px solid ${C.grid}`, fontSize: 11 }}
-              formatter={(value) => {
-                const v = typeof value === "number" ? value : Number(value) || 0;
-                return [`~$${v.toFixed(v < 1 ? 4 : 2)}`, "est. cost"];
-              }}
-            />
-            <Bar dataKey="usd" name="Est. cost" fill={C.cost} radius={[2, 2, 0, 0]} />
-          </BarChart>
-        </ChartFrame>
-      )}
-
-      <CostSection
-        title="By period"
-        rows={cost.by_period.map((b) => ({ label: b.bucket, bucket: b }))}
-      />
-      <CostSection
-        title="By pipeline"
-        rows={cost.by_pipeline.map((b) => ({ label: b.key, bucket: b }))}
-      />
-      <CostSection
-        title="By project"
-        rows={cost.by_project.map((b) => ({ label: b.key, bucket: b }))}
-      />
-      <ResolvedPrices resolved={cost.resolved} />
     </div>
   );
 }
@@ -316,10 +644,15 @@ export interface StatsChartsProps {
   costError: string | null;
 }
 
-/** The chart surface for the active tab. Lazy-loaded (so recharts is code-split
- *  out of the main bundle). */
-export default function StatsCharts({ tab, overview, cost, costError }: StatsChartsProps) {
-  if (tab === "cost") return <CostTab cost={cost} error={costError} />;
+export default function StatsCharts({
+  tab,
+  overview,
+  cost,
+  costError,
+}: StatsChartsProps) {
+  if (tab === "cost") {
+    return <CostTab cost={cost} error={costError} />;
+  }
   if (!overview) return <EmptyNote>Loading…</EmptyNote>;
   if (tab === "runs") return <RunsTab overview={overview} />;
   if (tab === "sessions") return <SessionsTab overview={overview} />;

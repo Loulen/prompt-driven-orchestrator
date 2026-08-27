@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   costPrecision,
+  formatCostAmount,
   formatEstCost,
-  formatBucketCost,
   COST_ESTIMATE_NOTE,
   COST_REPORTED_NOTE,
 } from "./costLabel";
@@ -13,6 +13,14 @@ describe("costPrecision", () => {
     expect(costPrecision(0.999)).toBe(4);
     expect(costPrecision(1)).toBe(2);
     expect(costPrecision(12.5)).toBe(2);
+  });
+
+  describe("formatCostAmount (#638)", () => {
+    it("distinguishes derived estimates from reported cost", () => {
+      expect(formatCostAmount(2, false, true)).toBe("~$2.00");
+      expect(formatCostAmount(2, false, false)).toBe("$2.00");
+      expect(formatCostAmount(null, false, false)).toBe("—");
+    });
   });
 });
 
@@ -166,60 +174,5 @@ describe("formatEstCost (single run, #272)", () => {
     expect(c.title).toContain("claude-opus-6");
     // The reported slice never contributes an unpriced-model name.
     expect(c.title).toMatch(/via `copilot` \(reported\)/);
-  });
-});
-
-describe("formatBucketCost (aggregate, #377)", () => {
-  it("sums a plain bucket with no partial/null contributions", () => {
-    const c = formatBucketCost(3.4, 0, 0, 2);
-    expect(c.text).toBe("~$3.40");
-    expect(c.dagger).toBe(false);
-    expect(c.empty).toBe(false);
-    expect(c.title).toMatch(/estimate/i);
-    expect(c.title).not.toMatch(/lower bound/i);
-    expect(c.title).not.toMatch(/no transcript/i);
-  });
-
-  it("marks a bucket with a partial run as a lower bound and counts it", () => {
-    const c = formatBucketCost(5.0, 1, 0, 3);
-    expect(c.dagger).toBe(true);
-    expect(c.text).toBe("~$5.00");
-    expect(c.title).toMatch(/lower bound/i);
-    expect(c.title).toMatch(/1 partial run\b/);
-  });
-
-  it("names the unioned unpriced models alongside the partial-run count (#425)", () => {
-    const c = formatBucketCost(5.0, 2, 0, 4, ["claude-fable-5", "claude-sonnet-5"]);
-    expect(c.dagger).toBe(true);
-    expect(c.title).toMatch(/lower bound/i);
-    expect(c.title).toContain("claude-fable-5");
-    expect(c.title).toContain("claude-sonnet-5");
-    expect(c.title).toMatch(/2 partial runs/);
-  });
-
-  it("pluralises partial run count", () => {
-    expect(formatBucketCost(5.0, 2, 0, 4).title).toMatch(/2 partial runs/);
-  });
-
-  it("surfaces null-cost runs in the tooltip without inflating the figure", () => {
-    const c = formatBucketCost(2.0, 0, 1, 3);
-    expect(c.text).toBe("~$2.00");
-    expect(c.empty).toBe(false);
-    expect(c.title).toMatch(/1 run had no transcript \(excluded\)/);
-  });
-
-  it("renders — (never $0) for a bucket with no priced runs (all null)", () => {
-    const c = formatBucketCost(0, 0, 3, 3);
-    expect(c.text).toBe("—");
-    expect(c.empty).toBe(true);
-    expect(c.text).not.toContain("$");
-    // The tooltip still explains why it is empty.
-    expect(c.title).toMatch(/3 runs had no transcript/);
-  });
-
-  it("renders — for a bucket with no runs at all", () => {
-    const c = formatBucketCost(0, 0, 0, 0);
-    expect(c.text).toBe("—");
-    expect(c.empty).toBe(true);
   });
 });

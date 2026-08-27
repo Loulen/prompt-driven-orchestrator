@@ -1179,32 +1179,77 @@ export interface StatsOverview {
   errors: StatsBucketCount[];
   /** `node_started` starts (re-spawns and loop laps included, manager excluded). */
   sessions: StatsBucketCount[];
+  /** Harness columns active in the selected Run cohort. */
+  session_harnesses: string[];
+  /** Session starts split by harness for the stacked chart. */
+  sessions_by_period: StatsSessionPeriod[];
+  /** Pipeline → Node session hierarchy. */
+  sessions_by_pipeline: StatsSessionEntity[];
   fires_by_pipeline: StatsPipelineFireCount[];
   triggers_created_runs: StatsTriggersCreatedRuns;
 }
 
-/** A cost breakdown row. Cost is a **sum of lower bounds**: `partial` runs and
- *  `null` runs (no transcript, excluded from `usd`) are counted separately so
- *  the number is never silently undercounted (ADR-0001 / ADR-0022). */
-export interface StatsCostBucket {
-  usd: number;
-  /** Runs whose cost is a lower bound (an unpriced model was excluded). */
-  partial: number;
-  /** Runs with no transcript, excluded from `usd` but surfaced. */
-  null: number;
-  /** Total runs folded here (priced + partial + null). */
-  runs: number;
-  /** Union of the family keys no tier priced across this bucket's partial runs,
-   *  sorted + de-duplicated (#425 AC#4). Empty ⟺ `partial === 0`. */
-  unpriced_models: string[];
+export interface StatsSessionHarness {
+  harness: string;
+  executions: number;
 }
 
-export interface StatsCostPeriodBucket extends StatsCostBucket {
+export interface StatsSessionPeriod {
+  bucket: string;
+  harnesses: StatsSessionHarness[];
+}
+
+export interface StatsSessionEntity {
+  id: string;
+  name: string;
+  executions: number;
+  harnesses: StatsSessionHarness[];
+  by_period: StatsSessionPeriod[];
+  nodes: StatsSessionEntity[];
+}
+
+/** One harness's cost and denominator coverage within an aggregate. */
+export interface StatsHarnessCost {
+  harness: string;
+  /** Null means no readable contribution, never zero. */
+  usd: number | null;
+  estimated: boolean;
+  partial: boolean;
+  executions: number;
+  readable: number;
+  unknown: number;
+  average_usd: number | null;
+  unpriced_models: string[];
+  missing_reasons: string[];
+}
+
+/** Cost shared by Total, periods, Projects, Pipelines and Nodes. */
+export interface StatsCostAggregate {
+  usd: number | null;
+  average_usd: number | null;
+  estimated: boolean;
+  partial: boolean;
+  executions: number;
+  readable: number;
+  unknown: number;
+  unpriced_models: string[];
+  missing_reasons: string[];
+  harnesses: StatsHarnessCost[];
+}
+
+export interface StatsCostPeriod extends StatsCostAggregate {
   bucket: string;
 }
 
-export interface StatsCostKeyBucket extends StatsCostBucket {
-  key: string;
+export interface StatsCostEntity extends StatsCostAggregate {
+  id: string;
+  name: string;
+  by_period: StatsCostPeriod[];
+  nodes: StatsCostEntity[];
+}
+
+export interface StatsProjectCostEntity extends StatsCostEntity {
+  pipelines: StatsCostEntity[];
 }
 
 /** One resolved price row (#528): a family, the tier that decides it, the price in
@@ -1221,9 +1266,11 @@ export interface PriceRow {
 }
 
 export interface StatsCost {
-  by_period: StatsCostPeriodBucket[];
-  by_pipeline: StatsCostKeyBucket[];
-  by_project: StatsCostKeyBucket[];
+  harnesses: string[];
+  total: StatsCostAggregate;
+  by_period: StatsCostPeriod[];
+  by_pipeline: StatsCostEntity[];
+  by_project: StatsProjectCostEntity[];
   /** The resolved price table, one row per family in alphabetical order (#528).
    *  Window-independent — a property of the price table, not the fold. Refreshed
    *  by the "Sync costs" refetch on the Cost tab. */

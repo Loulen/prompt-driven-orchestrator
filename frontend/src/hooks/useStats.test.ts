@@ -14,11 +14,32 @@ const OVERVIEW: StatsOverview = {
   runs: [{ bucket: "2026-07-15", count: 2 }],
   errors: [],
   sessions: [],
+  session_harnesses: [],
+  sessions_by_period: [],
+  sessions_by_pipeline: [],
   fires_by_pipeline: [],
   triggers_created_runs: { fired: 0, distinct_triggers: 0, enabled_triggers: 1 },
 };
 
-const COST: StatsCost = { by_period: [], by_pipeline: [], by_project: [], resolved: [] };
+const COST: StatsCost = {
+  harnesses: [],
+  total: {
+    usd: null,
+    average_usd: null,
+    estimated: true,
+    partial: false,
+    executions: 0,
+    readable: 0,
+    unknown: 0,
+    unpriced_models: [],
+    missing_reasons: [],
+    harnesses: [],
+  },
+  by_period: [],
+  by_pipeline: [],
+  by_project: [],
+  resolved: [],
+};
 
 beforeEach(() => {
   vi.mocked(api.fetchStatsOverview).mockReset().mockResolvedValue(OVERVIEW);
@@ -51,6 +72,20 @@ describe("useStats (#377)", () => {
     rerender({ costActive: true });
     await waitFor(() => expect(result.current.cost).toEqual(COST));
     expect(api.fetchStatsCost).toHaveBeenCalledWith("F", "T", "day");
+  });
+
+  it("does not refetch cost when returning from another section", async () => {
+    const { rerender } = renderHook(
+      ({ costActive }) => useStats(true, "F", "T", "day", costActive),
+      { initialProps: { costActive: true } },
+    );
+    await waitFor(() => expect(api.fetchStatsCost).toHaveBeenCalledTimes(1));
+
+    rerender({ costActive: false });
+    rerender({ costActive: true });
+    await Promise.resolve();
+
+    expect(api.fetchStatsCost).toHaveBeenCalledTimes(1);
   });
 
   it("refetches overview when the period changes", async () => {

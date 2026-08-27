@@ -11,6 +11,25 @@ import type { HarnessDescriptorsView, NodeDef } from "../types";
 /** The floor of the precedence chain — a node with no pin runs on `claude`. */
 export const HARNESS_FLOOR = "claude";
 
+const PINNED_HARNESS_COLORS: Record<string, string> = {
+  copilot: "#58a6ff",
+  claude: "#f0883e",
+};
+
+/** Stable series colour shared by every harness visualization. */
+export function harnessColor(name: string): string {
+  const normalized = name.trim().toLowerCase();
+  const pinned = PINNED_HARNESS_COLORS[normalized];
+  if (pinned) return pinned;
+
+  let hash = 2166136261;
+  for (const char of normalized) {
+    hash ^= char.codePointAt(0) ?? 0;
+    hash = Math.imul(hash, 16777619);
+  }
+  return `hsl(${(hash >>> 0) % 360} 64% 58%)`;
+}
+
 /** One harness as the picker offers it (#586): its name and whether its binary is
  *  installed (an uninstalled harness renders greyed and non-selectable). */
 export interface HarnessOption {

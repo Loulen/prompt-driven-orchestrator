@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { fetchStatsOverview, fetchStatsCost } from "../api";
 import type { StatsOverview, StatsCost } from "../types";
 
@@ -34,6 +34,11 @@ export function useStats(
   const [cost, setCost] = useState<StatsCost | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [costError, setCostError] = useState<string | null>(null);
+  const [computedAt, setComputedAt] = useState<Date | null>(null);
+  const [overviewReloadKey, setOverviewReloadKey] = useState(0);
+  const [costReloadKey, setCostReloadKey] = useState(0);
+  const costRequestKey = `${from}\u0000${to}\u0000${bucket}\u0000${reloadKey}`;
+  const requestedCostKey = useRef<string | null>(null);
 
   // Overview: eager on open + on every period change.
   useEffect(() => {
@@ -44,10 +49,15 @@ export function useStats(
         if (!cancelled) {
           setOverview(data);
           setError(null);
+          setComputedAt(new Date());
+          setOverviewReloadKey(reloadKey);
         }
       })
       .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : String(e));
+          setOverviewReloadKey(reloadKey);
+        }
       });
     return () => {
       cancelled = true;
@@ -57,21 +67,32 @@ export function useStats(
   // Cost: lazy — only once the cost tab is active, then on period change too.
   useEffect(() => {
     if (!open || !costActive) return;
-    let cancelled = false;
+    if (requestedCostKey.current === costRequestKey) return;
+    requestedCostKey.current = costRequestKey;
     fetchStatsCost(from, to, bucket)
       .then((data) => {
-        if (!cancelled) {
+        if (requestedCostKey.current === costRequestKey) {
           setCost(data);
           setCostError(null);
+          setComputedAt(new Date());
+          setCostReloadKey(reloadKey);
         }
       })
       .catch((e) => {
-        if (!cancelled) setCostError(e instanceof Error ? e.message : String(e));
+        if (requestedCostKey.current === costRequestKey) {
+          setCostError(e instanceof Error ? e.message : String(e));
+          setCostReloadKey(reloadKey);
+        }
       });
-    return () => {
-      cancelled = true;
-    };
-  }, [open, costActive, from, to, bucket, reloadKey]);
+  }, [open, costActive, from, to, bucket, reloadKey, costRequestKey]);
 
-  return { overview, cost, error, costError };
+  return {
+    overview,
+    cost,
+    error,
+    costError,
+    computedAt,
+    overviewReloadKey,
+    costReloadKey,
+  };
 }

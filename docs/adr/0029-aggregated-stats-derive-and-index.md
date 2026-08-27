@@ -15,18 +15,21 @@ runs » est exactement ce fan-out interdit : mesuré à 2 502 transcripts / 1,1 
   qui fige une métrique. **Préserve ADR-0022** (Shape B, snapshot à la complétion, explicitement
   rejeté) et ADR-0001 (outil tranchant, étiquetage honnête).
 - **Deux classes, deux endpoints.** `GET /stats/overview` = SQL bon marché, index-backed
-  (`GROUP BY strftime`). `GET /stats/cost` = lourd, lazy, derrière un **memo RAM `(run_id,
-  mtime-max)`** (l'échappatoire sanctionnée par ADR-0022 lignes 84-85), borné à la période visible ;
-  le chemin single-run de `get_run` reste inchangé.
-- **Deux index idempotents** au boot : `events(kind, ts)` et `trigger_fires(ts)`
+  (`GROUP BY strftime` et jointure de cohorte). `GET /stats/cost` = lourd, lazy, derrière un
+  **memo RAM de contributions** indexé par le Run, les événements, les mtimes Claude/Copilot,
+  l'empreinte tarifaire et les racines de stockage, borné à la période visible ; le chemin
+  single-run de `get_run` reste inchangé.
+- **Trois index idempotents** au boot : `events(kind, ts)` pour sélectionner les cohortes,
+  `events(run_id, kind, id)` pour joindre seulement leurs démarrages de Node dans l'ordre, et
+  `trigger_fires(ts)`
   (`CREATE INDEX IF NOT EXISTS`, nativement idempotent — pas de garde PRAGMA, contrairement aux
   `ALTER ADD COLUMN` de #239/#244).
 - **`pipeline_id` porté par `RunStarted`** (fallback `pipeline_name`) pour que « par pipeline »
   survive un renommage (#230). Additif, rétro-compatible.
-- **Axes catégoriels du coût pliés côté app (Rust).** Le coût est un scalaire par-run sans dimension
-  pipeline/projet ; « par projet » = `effective_repo_root` (fallback runtime absent des tables). Les
-  cinq séries *nommées* (runs/sessions/erreurs/fires-par-pipeline/triggers-ayant-créé-un-run) restent
-  du SQL pur indexé.
+- **Axes catégoriels du coût pliés côté app (Rust).** Les contributions par Run portent le harnais,
+  le Node ou la catégorie Infrastructure/Non attribué ; « par projet » =
+  `effective_repo_root` (fallback runtime absent des tables). La sélection des cohortes et des
+  sessions reste du SQL indexé ; le pli hiérarchique reste en mémoire.
 - **Ventilation multi-harnais par exécution (#638).** La fenêtre sélectionne une cohorte de Runs par
   leur démarrage, puis attribue le coût complet de chaque exécution à son harnais, son Pipeline et son
   Node. Chaque harnais traduit sa propre source vers cette contribution commune ; une source moins
@@ -41,9 +44,10 @@ runs » est exactement ce fan-out interdit : mesuré à 2 502 transcripts / 1,1 
   (#427 : le remplissage de la table de prix est out-of-band, la lecture reste deux `fs::read` et un
   `const`), aucune divergence possible avec l'event log (source de vérité unique), le coût reste
   consultable pour un run archivé.
-- **Négatif / assumé.** Le memo vit en RAM (perdu au restart, reconstruit à la demande) et sa clé est
-  `(run_id, mtime-max, empreinte de la table de prix)` — le troisième composant est arrivé avec #427,
-  sans lui un sync resterait invisible ici jusqu'au redémarrage alors que `GET /runs/:id` dirait vrai.
+- **Négatif / assumé.** Le memo vit en RAM (perdu au restart, reconstruit à la demande) et sa clé
+  couvre `run_id`, l'empreinte des événements, les mtimes des transcripts Claude et journaux
+  Copilot, les racines injectées et l'empreinte de la table de prix. Sans cette dernière, un sync
+  resterait invisible ici jusqu'au redémarrage alors que `GET /runs/:id` dirait vrai.
   La table de prix se résout **`manuel → fetché → embarquée`**, le tier fetché étant alimenté hors du
   chemin de lecture (ADR-0022 amendement #427, ADR-0034). « Sessions/période » compte les *démarrages* de
   session (`node_started`), re-spawns et laps de boucle inclus (cohérent avec la stat par-run).

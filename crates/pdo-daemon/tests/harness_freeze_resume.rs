@@ -173,6 +173,68 @@ async fn resolved_harness_is_frozen_on_node_started() {
 }
 
 #[tokio::test]
+async fn stats_exposes_frozen_harnesses_through_the_real_daemon() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon).await;
+    wait_for_both_started(&daemon, &run_id).await;
+    let period = "from=1970-01-01T00:00:00Z&to=2100-01-01T00:00:00Z&bucket=day";
+
+    let overview: serde_json::Value =
+        reqwest::get(format!("{}/stats/overview?{period}", daemon.url()))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+    assert_eq!(
+        overview["session_harnesses"],
+        serde_json::json!(["claude", "opencode"])
+    );
+    let pipeline = overview["sessions_by_pipeline"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == PIPELINE_NAME)
+        .expect("the started Run belongs to the harness test Pipeline");
+    assert_eq!(pipeline["executions"], 2);
+    assert_eq!(
+        pipeline["harnesses"],
+        serde_json::json!([
+            {"harness":"claude","executions":1},
+            {"harness":"opencode","executions":1}
+        ])
+    );
+
+    let cost: serde_json::Value =
+        reqwest::get(format!("{}/stats/cost?{period}", daemon.url()))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+    assert_eq!(cost["harnesses"], serde_json::json!(["claude", "opencode"]));
+    let pipeline = cost["by_pipeline"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == PIPELINE_NAME)
+        .expect("cost hierarchy keeps the Run's Pipeline");
+    assert_eq!(pipeline["executions"], 1);
+    let opencode = pipeline["harnesses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["harness"] == "opencode")
+        .expect("a harness stays visible when it has no cost source");
+    assert!(opencode["usd"].is_null());
+    assert_eq!(opencode["unknown"], 1);
+    assert_eq!(
+        opencode["missing_reasons"],
+        serde_json::json!(["harness has no cost source"])
+    );
+}
+
+#[tokio::test]
 async fn resume_reposes_the_frozen_harness() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let run_id = create_run(&daemon).await;

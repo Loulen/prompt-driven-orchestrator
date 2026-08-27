@@ -4,7 +4,7 @@ members = ["crates/pdo-daemon"]
 
 [workspace.package]
 edition = "2021"
-version = "1.42.0"
+version = "1.43.0"
 license = "MIT"
 description = "Prompt-Driven Orchestrator — a local daemon that runs and supervises agentic coding pipelines"
 repository = "https://github.com/Loulen/prompt-driven-orchestrator"

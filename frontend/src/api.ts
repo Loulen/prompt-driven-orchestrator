@@ -1,4 +1,4 @@
-import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, Project, BranchRef } from "./types";
+import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, StatsPerformance, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, Project, BranchRef } from "./types";
 import { foldHarnessOntoNode } from "./lib/harness";
 
 const BASE = "";
@@ -286,6 +286,17 @@ export function fetchStatsCost(
   bucket: string,
 ): Promise<StatsCost> {
   return request<StatsCost>("GET", "/stats/cost", { query: { from, to, bucket } });
+}
+
+/** Context and wall-clock distributions. Heavy journal reads, so callers load it lazily. */
+export function fetchStatsPerformance(
+  from: string,
+  to: string,
+  refresh = false,
+): Promise<StatsPerformance> {
+  return request<StatsPerformance>("GET", "/stats/performance", {
+    query: { from, to, ...(refresh ? { refresh: true } : {}) },
+  });
 }
 
 export function fetchRun(runId: string): Promise<RunState> {

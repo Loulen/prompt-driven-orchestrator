@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import {
   Bar,
   BarChart,
@@ -16,6 +17,10 @@ import type {
   StatsCostPeriod,
   StatsHarnessCost,
   StatsOverview,
+  StatsDistribution,
+  StatsPerformance,
+  StatsPerformanceAggregate,
+  StatsPerformanceEntity,
   StatsProjectCostEntity,
   StatsSessionEntity,
   StatsSessionHarness,
@@ -25,7 +30,7 @@ import { formatCostAmount } from "../lib/costLabel";
 import { harnessColor } from "../lib/harness";
 import { Tooltip, TooltipProvider } from "./ui/tooltip";
 
-export type StatsTab = "runs" | "sessions" | "triggers" | "cost";
+export type StatsTab = "runs" | "sessions" | "triggers" | "cost" | "performance";
 
 const CHART = {
   runs: "#58a6ff",
@@ -180,11 +185,13 @@ function MasterList<T extends { id: string; name: string }>({
   selected,
   valueLabel,
   onSelect,
+  ariaLabel = "Spenders",
 }: {
   rows: T[];
   selected: string | null;
   valueLabel: (row: T) => string;
   onSelect: (id: string | null) => void;
+  ariaLabel?: string;
 }) {
   const options = [{ id: "__total__", name: "Total" } as T, ...rows];
   const selectedIndex = Math.max(
@@ -197,7 +204,7 @@ function MasterList<T extends { id: string; name: string }>({
   return (
     <div
       role="listbox"
-      aria-label="Spenders"
+      aria-label={ariaLabel}
       className="flex flex-col gap-1"
       onKeyDown={(event) => {
         if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -637,11 +644,368 @@ function CostTab({
   );
 }
 
+type PerformanceMetric = "context" | "duration";
+
+function performanceScore(
+  aggregate: StatsPerformanceAggregate,
+  metric: PerformanceMetric,
+): [number, number] {
+  const distributions = aggregate.harnesses
+    .map((item) => item[metric])
+    .filter((item) => item.stats !== null);
+  return [
+    Math.max(-1, ...distributions.map((item) => item.stats!.mean)),
+    Math.max(-1, ...distributions.map((item) => item.stats!.median)),
+  ];
+}
+
+function sortPerformance<T extends StatsPerformanceAggregate & { name: string }>(
+  rows: T[],
+  metric: PerformanceMetric,
+): T[] {
+  return [...rows].sort((a, b) => {
+    const [aMean, aMedian] = performanceScore(a, metric);
+    const [bMean, bMedian] = performanceScore(b, metric);
+    return bMean - aMean || bMedian - aMedian || a.name.localeCompare(b.name);
+  });
+}
+
+function formatPerformanceValue(value: number, metric: PerformanceMetric): string {
+  if (metric === "context") {
+    return value >= 1_000 ? `${Math.round(value / 1_000)}k` : Math.round(value).toString();
+  }
+  const seconds = Math.round(value / 1_000);
+  const minutes = Math.floor(seconds / 60);
+  return minutes ? `${minutes}m${String(seconds % 60).padStart(2, "0")}s` : `${seconds}s`;
+}
+
+function distributionDetail(
+  name: string,
+  harness: string,
+  metric: PerformanceMetric,
+  value: StatsDistribution,
+): string {
+  const label = metric === "context" ? "Context" : "Duration";
+  const fmt = (raw: number) => formatPerformanceValue(raw, metric);
+  const stats = value.stats;
+  if (!stats) {
+    return `${name} · ${harness} · ${label}. 0 measured of ${value.expected} successful executions. Missing: ${value.missing_reasons.join("; ")}.`;
+  }
+  const reasons = value.missing_reasons.length
+    ? ` Missing: ${value.missing_reasons.join("; ")}.`
+    : "";
+  return `${name} · ${harness} · ${label}. Max ${fmt(stats.max)} · Q3 ${fmt(stats.q3)} · Mean ${fmt(stats.mean)} · Median ${fmt(stats.median)} · Q1 ${fmt(stats.q1)} · Min ${fmt(stats.min)}. ${value.measured} measured of ${value.expected} successful executions.${reasons}`;
+}
+
+function DistributionPlot({
+  name,
+  harness,
+  metric,
+  value,
+  scaleMax,
+}: {
+  name: string;
+  harness: string;
+  metric: PerformanceMetric;
+  value: StatsDistribution;
+  scaleMax: number;
+}) {
+  if (!value.stats) {
+    const detail = `${name} · ${harness} · ${metric === "context" ? "Context" : "Duration"}. 0 measured of ${value.expected} successful executions. Missing: ${value.missing_reasons.join("; ")}.`;
+    return (
+      <Tooltip content={detail} side="top">
+        <button
+          type="button"
+          aria-label={detail}
+          className="text-left text-fg-4 underline decoration-dotted underline-offset-2"
+        >
+          — {value.missing_reasons[0] ?? "not measurable"}
+        </button>
+      </Tooltip>
+    );
+  }
+  const stats = value.stats;
+  const pct = (raw: number) => `${Math.max(0, Math.min(100, (raw / scaleMax) * 100))}%`;
+  const detail = distributionDetail(name, harness, metric, value);
+  const partial = value.measured < value.expected;
+  return (
+    <div className="flex min-w-0 flex-col gap-1">
+      <div
+        className="relative h-4 min-w-28"
+        data-testid={`performance-${metric}-boxplot`}
+        data-scale-max={scaleMax}
+        aria-hidden="true"
+      >
+        <span
+          className="absolute top-[7px] h-px bg-fg-4"
+          style={{ left: pct(stats.min), width: pct(stats.max - stats.min) }}
+        />
+        <span
+          className="absolute top-[4px] h-[7px] border border-current opacity-70"
+          style={{
+            color: harnessColor(harness),
+            left: pct(stats.q1),
+            width: pct(Math.max(stats.q3 - stats.q1, scaleMax * 0.005)),
+          }}
+        />
+        <span
+          className="absolute top-[3px] h-[9px] w-px bg-fg"
+          style={{ left: pct(stats.median) }}
+        />
+        <span
+          className="absolute top-[5px] h-[5px] w-[5px] -translate-x-1/2 rounded-full bg-current"
+          style={{ color: harnessColor(harness), left: pct(stats.mean) }}
+        />
+      </div>
+      <Tooltip content={detail} side="top">
+        <button
+          type="button"
+          aria-label={detail}
+          className="w-fit text-left font-mono text-fg-4 underline decoration-dotted underline-offset-2"
+          style={{ fontSize: "9.5px" }}
+        >
+          {formatPerformanceValue(stats.mean, metric)} avg · n={value.measured}
+          {partial ? " ⚠" : ""}
+        </button>
+      </Tooltip>
+    </div>
+  );
+}
+
+function PerformanceCards({ aggregate }: { aggregate: StatsPerformanceAggregate }) {
+  return (
+    <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+      {aggregate.harnesses.map((item) => (
+        <div key={item.harness} className="rounded-md border border-line bg-bg-3 p-3">
+          <div className="mb-2 flex items-center gap-1.5 text-fg-3">
+            <span
+              className="h-2 w-2 rounded-full"
+              style={{ backgroundColor: harnessColor(item.harness) }}
+            />
+            {item.harness}
+          </div>
+          <div className="font-mono text-fg">
+            {item.context.stats
+              ? formatPerformanceValue(item.context.stats.median, "context")
+              : "—"}{" "}
+            median context
+          </div>
+          <div className="font-mono text-fg-3">
+            {item.duration.stats
+              ? formatPerformanceValue(item.duration.stats.median, "duration")
+              : "—"}{" "}
+            median duration
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PerformanceTable({
+  rows,
+  harnesses,
+  sort,
+}: {
+  rows: StatsPerformanceEntity[];
+  harnesses: string[];
+  sort: PerformanceMetric;
+}) {
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const ordered = sortPerformance(rows, sort);
+  const visible = ordered.flatMap((row) => [
+    { row, child: false },
+    ...(expanded.has(row.id)
+      ? sortPerformance(row.subagents, sort).map((child) => ({ row: child, child: true }))
+      : []),
+  ]);
+  const scaleRows = rows.flatMap((row) => [row, ...row.subagents]);
+  const scaleMax = (metric: PerformanceMetric) =>
+    Math.max(
+      1,
+      ...scaleRows.flatMap((row) =>
+        row.harnesses.map((item) => item[metric].stats?.max ?? 0),
+      ),
+    );
+  const contextMax = scaleMax("context");
+  const durationMax = scaleMax("duration");
+
+  return (
+    <TooltipProvider>
+      <table className="w-full table-fixed text-left" style={{ fontSize: "11px" }}>
+        <thead className="text-fg-4">
+          <tr>
+            <th className="w-48 pb-2 font-medium">Name</th>
+            <th className="pb-2 font-medium">Context (peak tokens)</th>
+            <th className="pb-2 font-medium">Duration (wall-clock)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {visible.map(({ row, child }) => (
+            <tr key={`${child ? "subagent" : "entity"}-${row.id}`} className="border-t border-line">
+              <td className={`py-2 pr-2 text-fg-2 ${child ? "pl-7" : ""}`}>
+                {!child && row.subagents.length > 0 ? (
+                  <button
+                    type="button"
+                    aria-label={`${expanded.has(row.id) ? "Collapse" : "Expand"} ${row.name} subagents`}
+                    onClick={() =>
+                      setExpanded((current) => {
+                        const next = new Set(current);
+                        if (next.has(row.id)) next.delete(row.id);
+                        else next.add(row.id);
+                        return next;
+                      })
+                    }
+                    className="inline-flex items-center gap-1 hover:text-fg"
+                  >
+                    {expanded.has(row.id) ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                    {row.name}
+                  </button>
+                ) : (
+                  row.name
+                )}
+              </td>
+              {(["context", "duration"] as const).map((metric) => (
+                <td key={metric} className="py-2 pr-3 align-top">
+                  <div className="grid gap-1.5">
+                    {harnesses.map((harness) => (
+                      <div key={harness} className="flex items-start gap-2">
+                        <span
+                          className="mt-1 h-[7px] w-[7px] shrink-0 rounded-full"
+                          style={{ backgroundColor: harnessColor(harness) }}
+                        />
+                        <DistributionPlot
+                          name={row.name}
+                          harness={harness}
+                          metric={metric}
+                          value={
+                            row.harnesses.find((item) => item.harness === harness)?.[metric] ?? {
+                              stats: null,
+                              measured: 0,
+                              expected: 0,
+                              missing_reasons: [`never ran on ${harness}`],
+                            }
+                          }
+                          scaleMax={metric === "context" ? contextMax : durationMax}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </TooltipProvider>
+  );
+}
+
+function PerformanceTab({
+  performance,
+  error,
+}: {
+  performance: StatsPerformance | null;
+  error: string | null;
+}) {
+  const [sort, setSort] = useState<PerformanceMetric>("context");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  if (error) {
+    return (
+      <div className="rounded-md border border-st-failed/30 bg-st-failed-bg px-3 py-2 text-st-failed">
+        {error}
+      </div>
+    );
+  }
+  if (!performance) return <EmptyNote>Loading performance…</EmptyNote>;
+  if (performance.by_pipeline.length === 0 && performance.infrastructure.length === 0) {
+    return <EmptyNote>No successful executions in this period.</EmptyNote>;
+  }
+
+  const infrastructureRow: StatsPerformanceEntity = {
+    id: "__infrastructure__",
+    name: "Infrastructure",
+    ...performance.infrastructure_total,
+    nodes: performance.infrastructure,
+    subagents: [],
+  };
+  const masterRows = sortPerformance(
+    [...performance.by_pipeline, infrastructureRow],
+    sort,
+  );
+  const selected = masterRows.find((row) => row.id === selectedId) ?? null;
+  const aggregate = selected ?? performance.total;
+  const detailRows = selected
+    ? selected.id === "__infrastructure__"
+      ? performance.infrastructure
+      : selected.nodes
+    : masterRows;
+  const contexts = aggregate.harnesses.map((item) =>
+    item.context.stats ? formatPerformanceValue(item.context.stats.median, "context") : "—",
+  );
+  const durations = aggregate.harnesses.map((item) =>
+    item.duration.stats ? formatPerformanceValue(item.duration.stats.median, "duration") : "—",
+  );
+
+  return (
+    <div className="relative flex min-h-full" data-testid="stats-chart-performance">
+      <aside className="w-[290px] shrink-0 border-r border-line pr-4">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
+            Ranked by {sort}
+          </span>
+          <select
+            aria-label="Performance sort"
+            value={sort}
+            onChange={(event) => setSort(event.target.value as PerformanceMetric)}
+            className="rounded border border-line bg-bg-3 px-2 py-1 text-fg-2"
+          >
+            <option value="context">By context</option>
+            <option value="duration">By duration</option>
+          </select>
+        </div>
+        <MasterList
+          rows={masterRows}
+          selected={selectedId}
+          ariaLabel="Performance groups"
+          valueLabel={(row) => {
+            const [mean] = performanceScore(row, sort);
+            return mean < 0 ? "—" : formatPerformanceValue(mean, sort);
+          }}
+          onSelect={setSelectedId}
+        />
+      </aside>
+      <div className="min-w-0 flex-1 pl-5">
+        <div className="mb-3 text-fg-4" style={{ fontSize: "10.5px" }}>
+          Total{selected ? ` / ${selected.name}` : ""}
+        </div>
+        <HarnessLegend harnesses={performance.harnesses} />
+        <div className="mt-4 text-fg" data-testid="stats-performance-headline">
+          {contexts.join(" / ") || "—"} median peak context · {durations.join(" / ") || "—"} median
+          duration
+        </div>
+        <div className="mt-4">
+          <PerformanceCards aggregate={aggregate} />
+        </div>
+        <div className="mt-4 min-h-[240px]">
+          <PerformanceTable
+            rows={detailRows}
+            harnesses={performance.harnesses}
+            sort={sort}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export interface StatsChartsProps {
   tab: StatsTab;
   overview: StatsOverview | null;
   cost: StatsCost | null;
   costError: string | null;
+  performance?: StatsPerformance | null;
+  performanceError?: string | null;
 }
 
 export default function StatsCharts({
@@ -649,7 +1013,12 @@ export default function StatsCharts({
   overview,
   cost,
   costError,
+  performance = null,
+  performanceError = null,
 }: StatsChartsProps) {
+  if (tab === "performance") {
+    return <PerformanceTab performance={performance} error={performanceError} />;
+  }
   if (tab === "cost") {
     return <CostTab cost={cost} error={costError} />;
   }

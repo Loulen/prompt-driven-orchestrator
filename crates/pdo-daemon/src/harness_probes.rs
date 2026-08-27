@@ -188,6 +188,42 @@ impl UsageLimitAnchor {
     }
 }
 
+/// How PDO measures a harness's **context-window peak** — the maximum per-turn
+/// occupancy a session reached, in tokens (#585, Stats → Performance). A
+/// marker, not the parser itself: [`crate::context_peak`] holds the actual
+/// per-harness token math, so this enum can never describe a mechanism that
+/// module does not implement.
+///
+/// Absent ⇒ Performance shows no Context column for this harness at all (it
+/// never invents a boxplot from a metric it cannot read).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ContextUsageSource {
+    /// Claude Code's per-message `usage` (input + both cache buckets + output),
+    /// deduplicated across resume/compaction replays, maxed over the session's
+    /// turns — [`crate::context_peak::claude_session_peak`].
+    ClaudeTranscriptPeak,
+    /// GitHub Copilot's event journal `usage` readings, converted from their
+    /// cumulative-since-session-start counters to a per-turn contribution before
+    /// the max is sought — [`crate::context_peak::copilot_session_peak`].
+    CopilotJournalPeak,
+}
+
+impl ContextUsageSource {
+    /// How this source reads in the published support table. See
+    /// [`CostSource::label`] for why the label sits on the variant.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            ContextUsageSource::ClaudeTranscriptPeak => {
+                "derived — per-turn token usage from the transcript, deduplicated and maxed"
+            }
+            ContextUsageSource::CopilotJournalPeak => {
+                "derived — the journal's cumulative usage counters, converted to a per-turn \
+                 contribution and maxed"
+            }
+        }
+    }
+}
+
 /// The sandbox staging floor a harness guarantees (ADR-0031).
 ///
 /// Absent ⇒ a sandboxed Run on this harness holds only by the user's image and
@@ -239,6 +275,11 @@ pub(crate) trait HarnessProbes: Sync {
     /// The sandbox staging floor, or `None` (a sandboxed Run says its absence
     /// once).
     fn staging_floor(&self) -> Option<StagingFloor> {
+        None
+    }
+    /// The context-usage source, or `None` (Performance shows no Context column
+    /// for this harness). #585.
+    fn context_usage_source(&self) -> Option<ContextUsageSource> {
         None
     }
 
@@ -305,6 +346,48 @@ pub(crate) trait HarnessProbes: Sync {
     fn classify_hard_error(&self, _tail: &str) -> Option<String> {
         None
     }
+
+    /// This harness's context-window peak for one transcript/journal's `text`, in
+    /// tokens (#585). The default is `None` — a harness with no
+    /// [`Self::context_usage_source`] never reaches a parser at all, so
+    /// `crate::stats_performance` never has to name `claude`'s or `copilot`'s
+    /// parser itself (that was exactly the ADR-0051 regression: a generic caller
+    /// `match`ing on the harness string to pick a parsing function). `claude`
+    /// dispatches to [`crate::context_peak::claude_session_peak`], `copilot` to
+    /// [`crate::context_peak::copilot_session_peak`] — each pure, injected text
+    /// in, `Option<u64>` out.
+    fn context_peak(&self, _text: &str) -> Option<u64> {
+        None
+    }
+
+    /// This session's own **subagent** transcripts — declared-group discovery
+    /// under one main session, for Stats → Performance's subagent breakdown
+    /// (#585, issue user stories #27/#28/#36). Each entry is `(file_stem,
+    /// transcript_text)`; the caller (`crate::stats_performance`) decides the
+    /// declared-group label from the stem — this method's only job is "where do
+    /// this session's subagent transcripts live, if this harness has that
+    /// concept at all".
+    ///
+    /// The default is an **empty `Vec`**, not a `match harness { .. }` the caller
+    /// has to write: a harness with no nested-subagent convention (every harness
+    /// but `claude` today) answers "none" from the dispatch itself, so its
+    /// absence is a value, never a silently-skipped branch (ADR-0051 §2). This is
+    /// deliberately investigated, not assumed, for `copilot`: its event journal
+    /// declares no delegate/subagent event kind at all (only
+    /// `assistant.turn_end`, `session.error`, `session.usage_checkpoint`,
+    /// `session.shutdown` — see [`crate::copilot_journal`]'s module doc), and its
+    /// store has no per-directory nesting under a session id to enumerate in the
+    /// first place (`<store>/<session-id>/events.jsonl`, flat). A future harness
+    /// that DOES expose declared subagent identity overrides this method with its
+    /// own discovery, exactly like `claude`'s below — never a shared heuristic.
+    fn subagent_transcripts(
+        &self,
+        _project_root: &Path,
+        _working_dir: &Path,
+        _session_id: &str,
+    ) -> Vec<(String, String)> {
+        Vec::new()
+    }
 }
 
 /// The `claude` capabilities — all five, exactly as they are today. This slice is
@@ -327,6 +410,11 @@ impl HarnessProbes for ClaudeProbes {
     }
     fn staging_floor(&self) -> Option<StagingFloor> {
         Some(StagingFloor::ClaudeDotClaude)
+    }
+
+    /// #585: Claude's per-turn token usage, deduplicated and maxed.
+    fn context_usage_source(&self) -> Option<ContextUsageSource> {
+        Some(ContextUsageSource::ClaudeTranscriptPeak)
     }
 
     /// `claude`'s transcript resolution: by the pinned session id when the node
@@ -360,6 +448,56 @@ impl HarnessProbes for ClaudeProbes {
     fn detect_usage_limit(&self, pane: &str) -> bool {
         crate::stale_detector::detect_usage_limit(pane)
     }
+
+    /// `claude`'s context-peak parser: per-message token `usage`, deduplicated
+    /// and maxed ([`crate::context_peak::claude_session_peak`]). #585.
+    fn context_peak(&self, text: &str) -> Option<u64> {
+        crate::context_peak::claude_session_peak(text)
+    }
+
+    /// `claude`'s subagent discovery: every `*.jsonl` transcript under this main
+    /// session's own `subagents/` directory
+    /// (`<project_root>/<encoded_cwd>/<session_id>/subagents/`, recursed exactly
+    /// like [`crate::run_cost`]'s own transcript glob) — the only harness with a
+    /// confirmed nested-subagent convention today (#585).
+    fn subagent_transcripts(
+        &self,
+        project_root: &Path,
+        working_dir: &Path,
+        session_id: &str,
+    ) -> Vec<(String, String)> {
+        let dir = project_root
+            .join(crate::run_cost::cc_project_dirname(working_dir))
+            .join(session_id)
+            .join("subagents");
+        let mut out = Vec::new();
+        collect_jsonl_stems(&dir, &mut out);
+        out
+    }
+}
+
+/// Recurse `dir`, pairing every `*.jsonl` file's stem with its text — the raw
+/// discovery step behind [`ClaudeProbes::subagent_transcripts`]. No grouping
+/// heuristic lives here: labelling a stem as a declared group or falling back to
+/// "Unidentified subagent" is `crate::stats_performance`'s own concern, not a
+/// harness capability.
+fn collect_jsonl_stems(dir: &Path, out: &mut Vec<(String, String)>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_jsonl_stems(&path, out);
+        } else if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                out.push((stem.to_string(), text));
+            }
+        }
+    }
 }
 
 /// The single `claude` instance handed out by [`probes_for`]. Zero-sized, so this
@@ -379,6 +517,13 @@ static CLAUDE_PROBES: ClaudeProbes = ClaudeProbes;
 ///
 /// The three present capabilities dispatch to `copilot`'s own implementation — its
 /// event journal, never `claude`'s cwd-keyed JSONL store.
+///
+/// `subagent_transcripts` is left at the trait's default (empty) — investigated,
+/// not assumed: `copilot`'s journal declares no delegate/subagent event kind
+/// ([`crate::copilot_journal`]'s module doc lists all four it does carry), and its
+/// store is flat (`<store>/<session-id>/events.jsonl`, no directory nesting under
+/// a session to enumerate). That absence is the value this dispatch returns for
+/// `copilot`, not a `crate::stats_performance` branch that silently skips it.
 struct CopilotProbes;
 
 impl HarnessProbes for CopilotProbes {
@@ -395,6 +540,12 @@ impl HarnessProbes for CopilotProbes {
         Some(TurnEndSubstrate::CopilotEventJournal)
     }
     // usage_limit_anchor / staging_floor stay `None` — declared absent (see above).
+
+    /// #585: Copilot's cumulative journal usage counters, converted to a
+    /// per-turn contribution and maxed.
+    fn context_usage_source(&self) -> Option<ContextUsageSource> {
+        Some(ContextUsageSource::CopilotJournalPeak)
+    }
 
     /// `copilot`'s transcript resolution: the session's event journal, at
     /// `<store>/<session-id>/events.jsonl` — by the **session identity PDO
@@ -422,6 +573,15 @@ impl HarnessProbes for CopilotProbes {
         crate::copilot_journal::turn_ended(tail)
     }
     // detect_usage_limit stays the trait default (`false`) — no anchor.
+
+    /// `copilot`'s context-peak parser: the journal's cumulative usage counters,
+    /// converted to a per-turn contribution and maxed
+    /// ([`crate::context_peak::copilot_session_peak`]). #585.
+    fn context_peak(&self, text: &str) -> Option<u64> {
+        crate::context_peak::copilot_session_peak(text)
+    }
+    // subagent_transcripts stays the trait default (empty) — see the struct doc
+    // comment above for why that is an investigated absence, not an assumption.
 
     /// `copilot` exits 0 on a hard model failure (ADR-0052), so its exit is not a
     /// verdict — the journal is.
@@ -473,6 +633,29 @@ pub(crate) fn resolve_transcript(
     session_id: Option<&str>,
 ) -> Option<PathBuf> {
     resolved(harness).resolve_transcript(projects_root, working_dir, session_id)
+}
+
+/// `harness`'s context-window peak for this transcript/journal `text`, dispatched
+/// to its implementation (ADR-0051 §585) — the seam
+/// [`crate::stats_performance`] calls instead of matching the harness string
+/// itself to pick `claude_session_peak` vs `copilot_session_peak`. A harness with
+/// no [`HarnessProbes::context_usage_source`] answers `None`.
+pub(crate) fn context_peak(harness: &str, text: &str) -> Option<u64> {
+    resolved(harness).context_peak(text)
+}
+
+/// `harness`'s subagent transcripts for one main session, dispatched to its
+/// implementation (ADR-0051 §585) — `claude` discovers them under
+/// `subagents/`, every other harness answers an empty `Vec` (a value, not a
+/// silently-skipped branch). [`crate::stats_performance`] applies its own
+/// declared-group labelling to whatever this returns.
+pub(crate) fn subagent_transcripts(
+    harness: &str,
+    project_root: &Path,
+    working_dir: &Path,
+    session_id: &str,
+) -> Vec<(String, String)> {
+    resolved(harness).subagent_transcripts(project_root, working_dir, session_id)
 }
 
 /// Whether `harness` constates an end of turn from this transcript `tail`,
@@ -550,6 +733,7 @@ pub(crate) struct Capabilities {
     pub turn_end: bool,
     pub usage_limit: bool,
     pub staging: bool,
+    pub context_usage: bool,
 }
 
 impl Capabilities {
@@ -561,12 +745,13 @@ impl Capabilities {
         turn_end: false,
         usage_limit: false,
         staging: false,
+        context_usage: false,
     };
 }
 
-/// Resolve `harness` to its five capability booleans. `None` from the factory ⇒
+/// Resolve `harness` to its six capability booleans. `None` from the factory ⇒
 /// [`Capabilities::NONE`], so an unknown or data-declared harness is absent on all
-/// five — the property the whole slice rests on.
+/// six — the property the whole slice rests on.
 pub(crate) fn capabilities(harness: &str) -> Capabilities {
     match probes_for(harness) {
         None => Capabilities::NONE,
@@ -576,6 +761,7 @@ pub(crate) fn capabilities(harness: &str) -> Capabilities {
             turn_end: p.turn_end_substrate().is_some(),
             usage_limit: p.usage_limit_anchor().is_some(),
             staging: p.staging_floor().is_some(),
+            context_usage: p.context_usage_source().is_some(),
         },
     }
 }
@@ -586,6 +772,16 @@ pub(crate) fn capabilities(harness: &str) -> Capabilities {
 pub(crate) fn can_cost(harness: &str) -> bool {
     let c = capabilities(harness);
     c.cost && c.transcript
+}
+
+/// Whether PDO can measure `harness`'s context-window peak (#585): it needs both
+/// a context-usage source and a way to find the transcript that source reads.
+/// Mirrors [`can_cost`]'s shape — a harness with a source but no transcript
+/// resolution (impossible today, but not structurally excluded) would still read
+/// "absent", never a made-up zero.
+pub(crate) fn can_measure_context(harness: &str) -> bool {
+    let c = capabilities(harness);
+    c.context_usage && c.transcript
 }
 
 /// The one-time note for a sandboxed Run whose node runs on a harness with no
@@ -622,6 +818,10 @@ mod tests {
         assert!(bare.turn_end_substrate().is_none());
         assert!(bare.usage_limit_anchor().is_none());
         assert!(bare.staging_floor().is_none());
+        assert!(bare.context_peak("anything").is_none());
+        assert!(bare
+            .subagent_transcripts(Path::new("/root"), Path::new("/wd"), "sid")
+            .is_empty());
     }
 
     #[test]
@@ -656,9 +856,29 @@ mod tests {
                 turn_end: true,
                 usage_limit: true,
                 staging: true,
+                context_usage: true,
             }
         );
         assert!(can_cost(CLAUDE));
+    }
+
+    #[test]
+    fn claude_and_copilot_declare_context_usage_others_do_not() {
+        // #585: Performance's "context usage" capability. Claude and Copilot each
+        // declare their own mechanism; a data-declared harness (and `opencode`)
+        // gets `None` like every other capability.
+        assert_eq!(
+            probes_for(CLAUDE).unwrap().context_usage_source(),
+            Some(ContextUsageSource::ClaudeTranscriptPeak)
+        );
+        assert_eq!(
+            probes_for(COPILOT).unwrap().context_usage_source(),
+            Some(ContextUsageSource::CopilotJournalPeak)
+        );
+        assert!(capabilities(CLAUDE).context_usage);
+        assert!(capabilities(COPILOT).context_usage);
+        assert!(!capabilities(OPENCODE).context_usage);
+        assert!(!capabilities("never-seen").context_usage);
     }
 
     #[test]
@@ -690,6 +910,7 @@ mod tests {
                 turn_end: true,
                 usage_limit: false,
                 staging: false,
+                context_usage: true,
             }
         );
         // A reported cost is still a cost PDO can produce (source + a resolvable
@@ -880,5 +1101,80 @@ mod tests {
         assert!(note.contains("`my-custom-harness`"));
         assert!(note.contains("no staging floor"));
         assert!(note.contains("$HOME"));
+    }
+
+    // --- #585 review follow-up: context_peak / subagent_transcripts dispatch ----
+
+    fn claude_turn(id: &str, input: u64, output: u64) -> String {
+        serde_json::json!({
+            "type": "assistant",
+            "requestId": format!("r-{id}"),
+            "message": {
+                "id": id,
+                "model": "claude-opus-4-8",
+                "usage": { "input_tokens": input, "output_tokens": output }
+            }
+        })
+        .to_string()
+    }
+
+    fn copilot_checkpoint(input: u64, output: u64) -> String {
+        serde_json::json!({
+            "type": "session.usage_checkpoint",
+            "data": {
+                "totalNanoAiu": 1,
+                "usage": { "inputTokens": input, "outputTokens": output, "cacheReadTokens": 0, "cacheCreationTokens": 0 }
+            }
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn context_peak_dispatches_to_each_harnesss_own_parser_not_the_others() {
+        // The public dispatch (`crate::harness_probes::context_peak`), not the
+        // `ClaudeProbes`/`CopilotProbes` methods directly — this is exactly the
+        // seam `crate::stats_performance` calls instead of a hard-coded
+        // `match harness.as_str() { .. }` (ADR-0051 review follow-up).
+        let claude_text = claude_turn("m1", 100, 20);
+        assert_eq!(context_peak(CLAUDE, &claude_text), Some(120));
+        // Claude's parser on a Copilot-shaped journal finds nothing (proves the
+        // dispatch, not a shared heuristic, is what's under test).
+        let copilot_text = copilot_checkpoint(500, 100);
+        assert_eq!(context_peak(CLAUDE, &copilot_text), None);
+        assert_eq!(context_peak(COPILOT, &copilot_text), Some(600));
+        // A harness with no context-usage source answers `None` from the
+        // dispatch itself, never a guess.
+        assert_eq!(context_peak(OPENCODE, &claude_text), None);
+        assert_eq!(context_peak("never-seen", &claude_text), None);
+    }
+
+    #[test]
+    fn subagent_transcripts_dispatches_only_claude_to_its_directory_convention() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project_root = tmp.path().join("projects");
+        let working_dir = Path::new("/home/user/project");
+        let encoded = crate::stale_detector::encode_working_dir(working_dir);
+        let subagents_dir = project_root.join(&encoded).join("sid-1").join("subagents");
+        std::fs::create_dir_all(&subagents_dir).unwrap();
+        std::fs::write(
+            subagents_dir.join("reviewer.jsonl"),
+            claude_turn("m2", 10, 5),
+        )
+        .unwrap();
+
+        // `claude` discovers the file, stem verbatim (grouping is the caller's
+        // job, not this dispatch's — see the trait method's doc comment).
+        let claude_found = subagent_transcripts(CLAUDE, &project_root, working_dir, "sid-1");
+        assert_eq!(claude_found.len(), 1);
+        assert_eq!(claude_found[0].0, "reviewer");
+
+        // `copilot` has no nested-subagent convention: the SAME directory
+        // existing on disk is never picked up for it — a motivated absence
+        // (the dispatch answers empty), never a silently-skipped branch.
+        let copilot_found = subagent_transcripts(COPILOT, &project_root, working_dir, "sid-1");
+        assert!(copilot_found.is_empty());
+
+        // A data-declared harness: empty too, from the trait default.
+        assert!(subagent_transcripts(OPENCODE, &project_root, working_dir, "sid-1").is_empty());
     }
 }

@@ -1277,3 +1277,44 @@ export interface StatsCost {
    *  by the "Sync costs" refetch on the Cost tab. */
   resolved: PriceRow[];
 }
+
+/** One R-7 distribution and its measurement coverage (#585). */
+export interface StatsDistribution {
+  stats: {
+    min: number;
+    q1: number;
+    median: number;
+    mean: number;
+    q3: number;
+    max: number;
+  } | null;
+  measured: number;
+  expected: number;
+  missing_reasons: string[];
+}
+
+export interface StatsHarnessPerformance {
+  harness: string;
+  context: StatsDistribution;
+  duration: StatsDistribution;
+}
+
+export interface StatsPerformanceAggregate {
+  harnesses: StatsHarnessPerformance[];
+}
+
+export interface StatsPerformanceEntity extends StatsPerformanceAggregate {
+  id: string;
+  name: string;
+  nodes: StatsPerformanceEntity[];
+  subagents: StatsPerformanceEntity[];
+}
+
+/** Derived `GET /stats/performance` payload. */
+export interface StatsPerformance {
+  harnesses: string[];
+  total: StatsPerformanceAggregate;
+  infrastructure_total: StatsPerformanceAggregate;
+  by_pipeline: StatsPerformanceEntity[];
+  infrastructure: StatsPerformanceEntity[];
+}

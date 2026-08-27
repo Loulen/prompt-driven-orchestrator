@@ -205,13 +205,12 @@ async fn stats_exposes_frozen_harnesses_through_the_real_daemon() {
         ])
     );
 
-    let cost: serde_json::Value =
-        reqwest::get(format!("{}/stats/cost?{period}", daemon.url()))
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
+    let cost: serde_json::Value = reqwest::get(format!("{}/stats/cost?{period}", daemon.url()))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert_eq!(cost["harnesses"], serde_json::json!(["claude", "opencode"]));
     let pipeline = cost["by_pipeline"]
         .as_array()

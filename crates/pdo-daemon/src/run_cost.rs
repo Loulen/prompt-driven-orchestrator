@@ -719,10 +719,8 @@ fn copilot_reported_cost(events: &[crate::event_log::Event], copilot_root: &Path
 
 /// Assemble the Run's cost, **ventilated by harness** (#615, ADR-0052 §3), from its
 /// already-computed `claude` derived slice and a fresh read of the `copilot`
-/// reported slice. Shared by the uncached ([`run_cost_or_absence`]) and cached
-/// ([`run_cost_or_absence_cached`]) paths so the Run line and the Stats aggregate
-/// take the **same** shape (*correctif 5*). `None` when neither harness contributed
-/// a cost (no claude transcript dir and no copilot reading) — the surfaces' "—".
+/// reported slice. `None` when neither harness contributed a cost (no claude
+/// transcript dir and no copilot reading) — the surfaces' "—".
 fn ventilate(
     claude: Option<CostStat>,
     events: &[crate::event_log::Event],
@@ -821,28 +819,6 @@ fn slices_or_empty(ventilated: Option<CostStat>) -> Vec<HarnessCost> {
 /// ids); `claude_root` is the #408 seam's Claude Code `projects/` root; `copilot_root`
 /// is the copilot session-state store root.
 pub(crate) fn run_cost_or_absence(
-    events: &[crate::event_log::Event],
-    claude_root: &Path,
-    copilot_root: &Path,
-    repo_root: &Path,
-    run_id: &str,
-    prices: &PriceTable,
-) -> Option<CostStat> {
-    let uncosted = uncosted_harnesses(events);
-    let claude = compute_run_cost(claude_root, repo_root, run_id, prices);
-    let ventilated = ventilate(claude, events, copilot_root);
-    if !uncosted.is_empty() {
-        return Some(cost_unavailable(uncosted, slices_or_empty(ventilated)));
-    }
-    ventilated
-}
-
-/// [`run_cost_or_absence`] on the memoized claude path (*correctif 5*): the Stats
-/// aggregate and the Run line take the **same** honest, ventilated shape, so a
-/// mixed Run never reads "—" on one surface and a figure on the other. Only the
-/// derived (`claude`) slice is memoized (the expensive transcript fold); the
-/// reported (`copilot`) slice is a cheap re-read of a handful of small journals.
-pub(crate) fn run_cost_or_absence_cached(
     events: &[crate::event_log::Event],
     claude_root: &Path,
     copilot_root: &Path,
@@ -1697,10 +1673,7 @@ mod tests {
     }
 
     #[test]
-    fn the_cached_path_also_says_the_slices_under_an_unavailable_total() {
-        // *Correctif 5* holds under the fix: the Stats aggregate and the Run line
-        // take the same shape, absence included, so a trio Run never ventilates on
-        // one surface and stays mute on the other.
+    fn the_run_cost_path_says_the_slices_under_an_unavailable_total() {
         let home = tempfile::tempdir().unwrap();
         let projects = home.path().join(".claude").join("projects");
         let copilot = home.path().join(".copilot").join("session-state");
@@ -1719,7 +1692,7 @@ mod tests {
             node_started_sid("p", "copilot", "sid-cop-cached"),
         ];
 
-        let cost = run_cost_or_absence_cached(
+        let cost = run_cost_or_absence(
             &events,
             &projects,
             &copilot,

@@ -622,18 +622,46 @@ describe("exportNodeAsYaml (#345)", () => {
     expect(yaml).not.toContain("edges");
   });
 
-  it("includes model when set and omits it when unset (#296)", () => {
-    expect(exportNodeAsYaml(node({ model: "opus" }), "p")).toContain("model: opus");
-    expect(exportNodeAsYaml(node({ model: null }), "p")).not.toContain("model:");
+  // #616 (correctif 7): the harness axis round-trips as `pin_harness` + the
+  // per-harness `harnesses` map — NOT a flat `model:`/`effort:`, which reimport
+  // would re-home onto `claude`. `exportNodeAsYaml` is the SECOND emitter,
+  // deliberately not unified with `pipelineToYamlObject` — a harness field added
+  // to one must be added to the other.
+  it("folds the flat model into the resolved harness's entry, not a flat key", () => {
+    // Unpinned → resolves to the claude floor → the model lands under harnesses.claude.
+    const yaml = exportNodeAsYaml(node({ model: "opus" }), "p");
+    expect(yaml).toContain("harnesses:");
+    expect(yaml).toMatch(/claude: \{ model: opus \}/);
+    expect(yaml).not.toMatch(/(^|\n)model:/); // no flat key that would re-home on reimport
+    // Unset → no harnesses key at all.
+    expect(exportNodeAsYaml(node({ model: null }), "p")).not.toContain("harnesses:");
   });
 
-  it("includes effort when set and omits it when unset (#424)", () => {
-    // `exportNodeAsYaml` is the SECOND emitter, deliberately not unified with
-    // `pipelineToYamlObject` — a field added to one must be added to the other.
-    expect(exportNodeAsYaml(node({ effort: "low" }), "p")).toContain("effort: low");
-    expect(exportNodeAsYaml(node({ effort: "turbo" }), "p")).toContain("effort: turbo");
-    expect(exportNodeAsYaml(node({ effort: null }), "p")).not.toContain("effort:");
-    expect(exportNodeAsYaml(node({ effort: "" }), "p")).not.toContain("effort:");
+  it("emits the pinned harness and folds model/effort under it (#616 correctif 7)", () => {
+    const yaml = exportNodeAsYaml(
+      node({ pin_harness: "copilot", model: "gpt-5-codex", effort: "high" }),
+      "p",
+    );
+    expect(yaml).toContain("pin_harness: copilot");
+    // The pin makes copilot the resolved harness, so the settings land under it —
+    // never under claude, the reimport-re-home hazard this closes.
+    expect(yaml).toMatch(/copilot: \{ model: gpt-5-codex, effort: high \}/);
+    expect(yaml).not.toMatch(/claude:/);
+  });
+
+  it("carries a non-resolved harness's entry through export (#616 correctif 7)", () => {
+    // A node pinned on copilot but with a claude entry too: BOTH survive, so a
+    // reimport keeps claude's settings instead of dropping them.
+    const yaml = exportNodeAsYaml(
+      node({
+        pin_harness: "copilot",
+        model: "gpt-5-codex",
+        harnesses: { claude: { model: "opus" }, copilot: { model: "gpt-5-codex" } },
+      }),
+      "p",
+    );
+    expect(yaml).toMatch(/claude: \{ model: opus \}/);
+    expect(yaml).toMatch(/copilot: \{ model: gpt-5-codex \}/);
   });
 
   it("emits interactive only when true", () => {

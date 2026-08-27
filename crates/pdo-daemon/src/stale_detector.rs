@@ -148,7 +148,12 @@ fn strip_ansi(s: &str) -> String {
 /// True if the captured pane shows Claude Code's usage-limit interactive menu.
 /// `pane` is raw tmux capture (may contain ANSI). Observability-only (#290): the
 /// caller flags the node but never changes its fate.
-pub fn detect_usage_limit(pane: &str) -> bool {
+///
+/// `pub(crate)` since #613/ADR-0051: this is **`claude`'s** usage-limit
+/// implementation ([`crate::harness_probes::HarnessProbes::detect_usage_limit`]),
+/// not a generic matcher — a consumer dispatches through
+/// [`crate::harness_probes::usage_limit_shown`], never calling this directly.
+pub(crate) fn detect_usage_limit(pane: &str) -> bool {
     // Normalise: strip ANSI, lowercase (anchors are ASCII), collapse whitespace so
     // line-wrap / padding can't split an anchor.
     let stripped = strip_ansi(pane).to_ascii_lowercase();
@@ -176,37 +181,6 @@ pub enum Detection {
     /// Nothing to do. Includes every "alive but not progressing" shape —
     /// mid-tool-call, wedged on an interactive prompt, API retries exhausted.
     Ok,
-}
-
-/// The two harness capabilities the sweep gates its probes on (#553, ADR-0045).
-///
-/// Absent ⇒ the probe **does not run**: no turn-end auto-completion on an invented
-/// heuristic (the substrate is claude's JSONL transcript), and no pane capture for
-/// a usage-limit menu whose wording is proper to another harness. The sweep
-/// ([`crate::lib`]) fills this from [`crate::harness_probes`] for the node's
-/// frozen-at-spawn harness; keeping it a plain two-bool struct here keeps
-/// [`assess_node`] pure and injected, exactly like `autocomplete_turn_end`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct HarnessCapabilities {
-    /// The harness has an end-of-turn substrate PDO can read
-    /// ([`crate::harness_probes::HarnessProbes::turn_end_substrate`]).
-    pub turn_end: bool,
-    /// The harness has a usage-limit menu anchor PDO can match
-    /// ([`crate::harness_probes::HarnessProbes::usage_limit_anchor`]).
-    pub usage_limit: bool,
-}
-
-impl HarnessCapabilities {
-    /// Both present — `claude`, and the shape the pre-#553 sweep always assumed.
-    pub const CLAUDE: HarnessCapabilities = HarnessCapabilities {
-        turn_end: true,
-        usage_limit: true,
-    };
-    /// Both absent — a data-declared harness: neither probe runs.
-    pub const NONE: HarnessCapabilities = HarnessCapabilities {
-        turn_end: false,
-        usage_limit: false,
-    };
 }
 
 /// Pure liveness decision: session alive or not (#469 §1).
@@ -282,7 +256,12 @@ enum RecordRole {
 /// The JSONL layout is not a documented contract — same caution as the #290 pane
 /// anchors — though `tool_use` / `tool_result` blocks and their `id`s are its
 /// most stable part, far ahead of a menu's wording.
-pub fn parse_turn_state(tail: &str) -> TurnState {
+///
+/// `pub(crate)` since #613/ADR-0051: this is **`claude`'s** end-of-turn parser
+/// ([`crate::harness_probes::HarnessProbes::classify_turn_ended`]) — a consumer
+/// dispatches through [`crate::harness_probes::turn_ended`], never reading another
+/// harness's store with it.
+pub(crate) fn parse_turn_state(tail: &str) -> TurnState {
     let mut open_tool_uses: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut last_role: Option<RecordRole> = None;
 
@@ -383,7 +362,10 @@ pub fn encode_working_dir(dir: &Path) -> String {
 /// stays the single source of truth (#373). Returns `None` when the file does not
 /// exist yet (a session that has not written its transcript), which the sweep
 /// treats as "no signal".
-pub fn session_jsonl_by_id(
+/// `pub(crate)` since #613/ADR-0051: part of **`claude`'s** transcript resolution
+/// ([`crate::harness_probes::HarnessProbes::resolve_transcript`]); a consumer
+/// dispatches through [`crate::harness_probes::resolve_transcript`].
+pub(crate) fn session_jsonl_by_id(
     projects_root: &Path,
     working_dir: &Path,
     session_id: &str,
@@ -410,7 +392,7 @@ pub fn session_jsonl_by_id(
 /// [`crate::sandbox_run::transcripts_root`] (staging for a live sandboxed Run,
 /// `~/.claude/projects/` otherwise). The cwd encoding stays here, the single
 /// source of truth (#373) — the seam only swaps the base root.
-pub fn find_session_jsonl(projects_root: &Path, working_dir: &Path) -> Option<PathBuf> {
+pub(crate) fn find_session_jsonl(projects_root: &Path, working_dir: &Path) -> Option<PathBuf> {
     let encoded = encode_working_dir(working_dir);
     newest_jsonl_in(&projects_root.join(encoded))
 }
@@ -710,13 +692,29 @@ pub fn assess_node(
     iter: i64,
     now: SystemTime,
     autocomplete_turn_end: bool,
-    caps: HarnessCapabilities,
+    harness: &str,
 ) -> Assessment {
+    // #613/ADR-0051: the two probes are dispatch points, not presence guards. The
+    // gate reads the resolved harness's declared capabilities, and the detection
+    // itself is dispatched to that harness's implementation — `claude`'s JSONL
+    // parser / pane anchor for `claude`, a data-declared harness's own (or nothing).
+    let caps = crate::harness_probes::capabilities(harness);
     let detection = decide(probes.session_alive());
 
     if detection == Detection::SessionDied {
         let mut events = detection_events(&detection, run_id, node_id, iter);
-        let diag = probes.session_death_diagnostics();
+        let mut diag = probes.session_death_diagnostics();
+        // #615/ADR-0052: a harness that exits 0 on a hard failure (`copilot`) leaves
+        // the verdict in its journal, not its exit code. Only such a harness pays a
+        // tail read on death (gated on `exit_code_is_verdict` being false) — so
+        // `claude`, whose death is its own signal, keeps short-circuiting every
+        // probe. When the tail trails on a hard error, name it in the death
+        // diagnostics, so the `NodeFailed` payload says WHY, not just "session died".
+        if !crate::harness_probes::exit_code_is_verdict(harness) && diag.harness_error.is_none() {
+            diag.harness_error = probes
+                .transcript_tail()
+                .and_then(|tail| crate::harness_probes::hard_error(harness, &tail.text));
+        }
         attach_diagnostics(&mut events, &diag);
         return Assessment {
             detection,
@@ -736,7 +734,7 @@ pub fn assess_node(
     let blocked_on_limit = caps.usage_limit
         && probes
             .capture_pane()
-            .is_some_and(|pane| detect_usage_limit(&pane));
+            .is_some_and(|pane| crate::harness_probes::usage_limit_shown(harness, &pane));
     let events = if blocked_on_limit
         && !episode_has_event(prior_events, &EventKind::NodeBlockedOnLimit, node_id, iter)
     {
@@ -765,7 +763,7 @@ pub fn assess_node(
         && caps.turn_end
         && probes.transcript_tail().is_some_and(|tail| {
             quiet_long_enough(tail.mtime, now)
-                && parse_turn_state(&tail.text) == TurnState::TurnEnded
+                && crate::harness_probes::turn_ended(harness, &tail.text)
         })
         && probes.outputs_valid();
 
@@ -805,6 +803,13 @@ pub struct SessionDeathDiagnostics {
     /// session-dead in this sweep. A non-zero count points at a server-wide
     /// collapse (multiple runs dying ~ms apart) rather than an isolated death.
     pub correlated_deaths: usize,
+    /// The **hard error** the node's harness journal carries (#615, ADR-0052), if
+    /// any. Set for a harness that **exits 0 on a hard failure** (`copilot`): the
+    /// exit code is not a verdict, so PDO reads the failure off the journal and
+    /// names it here, in the `NodeFailed` payload, instead of reporting only the
+    /// symptom ("session died"). `None` for `claude` (whose death is its own
+    /// signal) and for any harness whose journal shows no trailing error.
+    pub harness_error: Option<String>,
 }
 
 impl SessionDeathDiagnostics {
@@ -817,6 +822,7 @@ impl SessionDeathDiagnostics {
             "mem_available_kb": self.mem_available_kb,
             "swap_free_kb": self.swap_free_kb,
             "correlated_deaths": self.correlated_deaths,
+            "harness_error": self.harness_error,
         })
     }
 }
@@ -1299,12 +1305,17 @@ mod tests {
             mem_available_kb: Some(123),
             swap_free_kb: Some(456),
             correlated_deaths: 2,
+            harness_error: Some("model failure after retries".to_string()),
         };
         let json = diag.to_json();
         assert_eq!(json["tmux_server_alive"], serde_json::json!(false));
         assert_eq!(json["mem_available_kb"], serde_json::json!(123));
         assert_eq!(json["swap_free_kb"], serde_json::json!(456));
         assert_eq!(json["correlated_deaths"], serde_json::json!(2));
+        assert_eq!(
+            json["harness_error"],
+            serde_json::json!("model failure after retries")
+        );
     }
 
     #[test]
@@ -1326,6 +1337,7 @@ mod tests {
             mem_available_kb: Some(2048),
             swap_free_kb: Some(0),
             correlated_deaths: 1,
+            harness_error: None,
         };
         attach_diagnostics(&mut events, &diag);
 
@@ -1721,8 +1733,9 @@ SwapFree:         204800 kB
 
     fn assess(probes: &FakeProbes, autocomplete: bool) -> Assessment {
         // The existing suite is about the `claude` sweep, which has both
-        // capabilities; #553's capability gating is exercised by the dedicated
-        // tests below with `HarnessCapabilities::NONE`.
+        // capabilities and whose JSONL parser the `FakeProbes` fixtures feed;
+        // #613's capability gating is exercised by the dedicated tests below on a
+        // data-declared harness (`opencode`, which has neither capability).
         assess_node(
             probes,
             &[],
@@ -1731,7 +1744,7 @@ SwapFree:         204800 kB
             1,
             SystemTime::now(),
             autocomplete,
-            HarnessCapabilities::CLAUDE,
+            crate::harness_registry::CLAUDE,
         )
     }
 
@@ -1767,7 +1780,7 @@ SwapFree:         204800 kB
     #[test]
     fn assess_dead_session_probes_no_transcript() {
         // Death short-circuits everything: no tail read, no outputs validation,
-        // no pane capture.
+        // no pane capture. `claude`'s exit IS its verdict, so no journal is read.
         let probes = FakeProbes {
             session_alive: false,
             ..FakeProbes::finished_turn()
@@ -1775,6 +1788,77 @@ SwapFree:         204800 kB
         assert_eq!(assess(&probes, true).detection, Detection::SessionDied);
         assert_eq!(probes.tail_calls.get(), 0);
         assert_eq!(probes.validate_calls.get(), 0);
+    }
+
+    // --- #615: copilot's journal is the verdict, not its exit code (ADR-0052) ---
+
+    const COPILOT_HARD_ERROR: &str = concat!(
+        r#"{"type":"assistant.turn_start","data":{"turnId":"0"}}"#,
+        "\n",
+        r#"{"type":"session.error","data":{"errorType":"query","message":"Failed to get response from the AI model; retried 5 times"}}"#,
+        "\n"
+    );
+    const COPILOT_TURN_ENDED: &str = concat!(
+        r#"{"type":"assistant.turn_start","data":{"turnId":"0"}}"#,
+        "\n",
+        r#"{"type":"assistant.turn_end","data":{"turnId":"0"}}"#,
+        "\n"
+    );
+
+    #[test]
+    fn assess_dead_copilot_session_names_the_journal_error() {
+        // AC (#615): a hard error the harness EXITED 0 on is recognised from the
+        // journal, not the exit code. The session died; PDO reads the tail copilot
+        // left and names the failure in the diagnostics.
+        let probes = FakeProbes {
+            session_alive: false,
+            ..FakeProbes::with_tail(COPILOT_HARD_ERROR, Duration::from_secs(1), false)
+        };
+        let a = assess_harness(&probes, true, crate::harness_registry::COPILOT);
+        assert_eq!(a.detection, Detection::SessionDied);
+        let err = a
+            .session_death_diagnostics
+            .as_ref()
+            .unwrap()
+            .harness_error
+            .as_deref()
+            .expect("the journal error is named");
+        assert!(err.contains("Failed to get response from the AI model"));
+        // And it rides in the NodeInterrupted payload alongside the symptom.
+        assert_eq!(
+            a.events[0].payload.as_ref().unwrap()["diagnostics"]["harness_error"],
+            serde_json::json!(err)
+        );
+    }
+
+    #[test]
+    fn assess_copilot_errored_turn_is_not_auto_completed() {
+        // A copilot node whose journal trails on a hard error must NOT be auto-
+        // completed as a finished turn — even with the setting on and outputs valid.
+        let probes = FakeProbes::with_tail(
+            COPILOT_HARD_ERROR,
+            TURN_END_QUIET_PERIOD + Duration::from_secs(5),
+            true,
+        );
+        let a = assess_harness(&probes, true, crate::harness_registry::COPILOT);
+        assert_ne!(
+            a.detection,
+            Detection::TurnEnded,
+            "an errored turn is not ended"
+        );
+    }
+
+    #[test]
+    fn assess_copilot_finished_turn_is_auto_completed() {
+        // The positive control: a real copilot turn-end (its own event shape) with
+        // valid outputs auto-completes — dispatched to copilot's journal parser.
+        let probes = FakeProbes::with_tail(
+            COPILOT_TURN_ENDED,
+            TURN_END_QUIET_PERIOD + Duration::from_secs(5),
+            true,
+        );
+        let a = assess_harness(&probes, true, crate::harness_registry::COPILOT);
+        assert_eq!(a.detection, Detection::TurnEnded);
     }
 
     // --- setting OFF: the default path is one liveness probe (#469 §4, AC8) ---
@@ -1940,7 +2024,7 @@ SwapFree:         204800 kB
             1,
             SystemTime::now(),
             true,
-            HarnessCapabilities::CLAUDE,
+            crate::harness_registry::CLAUDE,
         );
         assert!(
             a.blocked_on_limit,
@@ -1967,13 +2051,9 @@ SwapFree:         204800 kB
         assert_eq!(a.events[0].kind, EventKind::NodeBlockedOnLimit);
     }
 
-    // --- #553: capability gating — a data-declared harness runs no probe ---
+    // --- #553/#613: capability gating — a data-declared harness runs no probe ---
 
-    fn assess_caps(
-        probes: &FakeProbes,
-        autocomplete: bool,
-        caps: HarnessCapabilities,
-    ) -> Assessment {
+    fn assess_harness(probes: &FakeProbes, autocomplete: bool, harness: &str) -> Assessment {
         assess_node(
             probes,
             &[],
@@ -1982,9 +2062,13 @@ SwapFree:         204800 kB
             1,
             SystemTime::now(),
             autocomplete,
-            caps,
+            harness,
         )
     }
+
+    /// A data-declared harness the sweep carries no code for: neither capability,
+    /// no transcript resolution, no pane anchor. `opencode` is the embedded example.
+    const DATA_DECLARED: &str = crate::harness_registry::OPENCODE;
 
     #[test]
     fn a_harness_without_the_turn_end_capability_is_never_auto_completed() {
@@ -1992,7 +2076,7 @@ SwapFree:         204800 kB
         // but its harness has no turn-end substrate, so the sweep must not complete
         // it, and must not even read a transcript (the substrate is not claude's).
         let probes = FakeProbes::finished_turn();
-        let a = assess_caps(&probes, true, HarnessCapabilities::NONE);
+        let a = assess_harness(&probes, true, DATA_DECLARED);
         assert_eq!(
             a.detection,
             Detection::Ok,
@@ -2011,7 +2095,7 @@ SwapFree:         204800 kB
         // The control: with the capability present (and the setting on) the same
         // finished turn IS completed — the gate is the capability, nothing else.
         let probes = FakeProbes::finished_turn();
-        let a = assess_caps(&probes, true, HarnessCapabilities::CLAUDE);
+        let a = assess_harness(&probes, true, crate::harness_registry::CLAUDE);
         assert_eq!(a.detection, Detection::TurnEnded);
     }
 
@@ -2023,7 +2107,7 @@ SwapFree:         204800 kB
             pane: Some("❯ 1. Stop and wait for limit to reset".to_string()),
             ..FakeProbes::alive()
         };
-        let a = assess_caps(&probes, true, HarnessCapabilities::NONE);
+        let a = assess_harness(&probes, true, DATA_DECLARED);
         assert_eq!(a.detection, Detection::Ok);
         assert!(
             !a.blocked_on_limit,

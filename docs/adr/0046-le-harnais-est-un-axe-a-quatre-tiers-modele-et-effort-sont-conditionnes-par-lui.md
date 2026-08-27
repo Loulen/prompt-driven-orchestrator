@@ -4,6 +4,10 @@
 > et effort*, §*Projet*. **Amende ADR-0015** (la Configuration d'instance gagne un tier au-dessus
 > d'elle, et son défaut de modèle devient un défaut *par harnais*). Forme du descripteur et contrat
 > d'éligibilité d'un harnais → **ADR-0045**.
+>
+> **Amendé par ADR-0053** : le modèle et l'effort restent conditionnés par le harnais, mais ce qui est
+> *offert* pour un harnais est **déduit du binaire installé** et publié par le daemon, jamais écrit en
+> dur — ni côté daemon, ni côté client.
 
 ## Contexte
 

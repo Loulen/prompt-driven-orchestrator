@@ -8,53 +8,113 @@ import {
   DropdownMenuSeparator,
 } from "./ui/dropdown-menu";
 
-/* Model (#296/#324): free-text pass-through to `claude --model <x>`. The menu
-   offers the common aliases for convenience, but any full id is accepted via
-   the Custom… escape hatch — no validation, no closed enum (CONTEXT.md: an
-   enum would perish; an invalid id must fail loud in `claude` itself).
-   Empty / Default ⇒ null ⇒ never serialized ⇒ account default. */
+/* Model (#296/#324, #616): free-text pass-through to `<harness> --model <x>`.
 
-const ALIASES = ["sonnet", "opus", "haiku", "opusplan", "fable"];
+   The offered ids are SERVED, not hard-coded (ADR-0053): the daemon deduces them
+   from the installed binary and the picker renders `models` verbatim. Any full id
+   is still accepted via the Custom… escape hatch — no validation, no closed enum
+   (an enum would perish at each release; an invalid id fails loud in the harness).
+   Empty / Default ⇒ null ⇒ never serialized ⇒ account default.
+
+   Two shapes, chosen by whether the binary offered a catalogue:
+   - `models` non-empty → a dropdown (Default · the offered ids · Custom…), the
+     picker with an escape hatch (design panel 03).
+   - `models` empty → a bare free-text input (design panel 05): the binary exposes
+     no catalogue, so there is nothing to list — a picker that could only show
+     "Default · Custom…" is just a text field with extra clicks, so we show the
+     field directly. This is a DECLARED absence, not a broken picker.
+
+   The picker edits ONE subject at a time, named by `subject`. The field is
+   controlled and its draft is reset whenever the subject or its committed value
+   changes — the #617 FP found the opposite: an uncontrolled `defaultValue` kept
+   the previously selected node's model on screen, and one focus-and-blur then
+   committed an `opencode` slug onto a `copilot` node, breaking the "a model means
+   nothing outside its harness" invariant of #550/ADR-0046. `subject` is required
+   precisely so a new call site cannot forget it. */
 
 const ITEM_CLASSES =
   "flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-fg-2 transition-colors hover:bg-bg-4";
 
+const INPUT_CLASSES =
+  "w-full rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg outline-none focus:border-acc";
+
 export default function ModelPicker({
   value,
   onChange,
+  models,
   testid,
+  subject,
 }: {
   value: string | null;
   onChange: (v: string | null) => void;
+  /** #616/ADR-0053: the model ids the resolved harness's binary offers, served by
+   *  the daemon. Empty ⇒ no catalogue ⇒ the free-text field. */
+  models: string[];
   testid: string; // "node-model" | "merge-model"
+  /** Identity of what this picker edits — a node id, or a stable key for a
+   *  singleton like the Settings default. Changing it resets the draft and the
+   *  Custom… mode, so no value ever crosses from one subject to the next (#617 FP). */
+  subject: string;
 }) {
-  // Custom mode is a transient edit state: the closed trigger always displays
-  // the current value (alias or arbitrary full id — a hand-authored YAML
-  // `model:` must render, never be cleared).
+  // Custom mode is a transient edit state: the closed trigger always displays the
+  // current value (offered id or arbitrary full id — a hand-authored `model:` must
+  // render, never be cleared).
   const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value ?? "");
+  // What the draft was seeded from. React's documented "reset state on prop change"
+  // pattern (adjust during render, no effect + no flash). Keyed on the SUBJECT as
+  // well as the value: two nodes can both carry `null`, and a draft typed on the
+  // first must not survive onto the second.
+  const [seed, setSeed] = useState<{ subject: string; value: string | null }>({
+    subject,
+    value,
+  });
+  if (seed.subject !== subject || seed.value !== value) {
+    setSeed({ subject, value });
+    setDraft(value ?? "");
+    if (seed.subject !== subject) setEditing(false);
+  }
+
+  /** Commit the draft, normalising "" to null (unset ⇒ account default). Silent
+   *  when nothing changed: a focus-and-blur that types nothing must not dirty the
+   *  pipeline, let alone write a value the user never chose. */
+  const commit = () => {
+    const next = draft.trim() || null;
+    setEditing(false);
+    if (next !== value) onChange(next);
+  };
+
+  // A bare free-text input, shared by Custom… (`autoFocus`) and the no-catalogue
+  // shape (`autoFocus` off — it is not a transient popped-open editor).
+  const freeTextInput = (autoFocus: boolean) => (
+    <input
+      autoFocus={autoFocus}
+      value={draft}
+      onChange={(e) => setDraft(e.currentTarget.value)}
+      data-testid={`${testid}-input`}
+      placeholder="type a model id…"
+      className={INPUT_CLASSES}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          // Blur IS the commit — one path, so Enter can never write twice.
+          e.currentTarget.blur();
+        } else if (e.key === "Escape") {
+          // Abandon the edit: back to the committed value, nothing written.
+          setDraft(value ?? "");
+          setEditing(false);
+        }
+      }}
+      onBlur={commit}
+    />
+  );
+
+  // No catalogue served: the free-text field IS the control (design panel 05).
+  if (models.length === 0) {
+    return freeTextInput(false);
+  }
 
   if (editing) {
-    return (
-      <input
-        autoFocus
-        defaultValue={value ?? ""}
-        data-testid={`${testid}-input`}
-        placeholder="default model"
-        className="w-full rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg outline-none focus:border-acc"
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            onChange(e.currentTarget.value.trim() || null);
-            setEditing(false);
-          } else if (e.key === "Escape") {
-            setEditing(false);
-          }
-        }}
-        onBlur={(e) => {
-          onChange(e.currentTarget.value.trim() || null);
-          setEditing(false);
-        }}
-      />
-    );
+    return freeTextInput(true);
   }
 
   return (
@@ -81,7 +141,7 @@ export default function ModelPicker({
         >
           Default
         </DropdownMenuItem>
-        {ALIASES.map((m) => (
+        {models.map((m) => (
           <DropdownMenuItem
             key={m}
             data-testid={`${testid}-option-${m}`}

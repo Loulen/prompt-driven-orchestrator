@@ -5,6 +5,11 @@
 > **rapporté**, qu'on somme tel quel — mesuré indispensable : ses buckets de cache ne se mappent pas sur
 > les quatre d'ici, donc un recalcul uniforme est impossible. Un harnais sans capacité de coût rend « — ».
 >
+> **Amendé par ADR-0052** : la forme **rapportée** entrevue par ADR-0045 est précisée — elle se
+> convertit en dollars par une **constante publiée** et **ne passe pas par la table de prix** (les
+> buckets ne se mappent pas, et le total d'input d'un autre harnais peut déjà inclure le cache, mesuré) ;
+> un total de Run reste sommable mais se **dit ventilé par harnais**.
+>
 > **Amendé par ADR-0034 (#427)** : la table de prix n'est plus un `const` seul — elle a trois tiers
 > (`manuel → fetché → embarquée`, fusion par clé) remplis par un fetch hors du chemin de lecture.
 > Ce qui survit intact ici : le coût reste une **estimation**, **dérivée à la lecture**, jamais

@@ -7,6 +7,10 @@ name: Tag on version bump
 # c'est releasé. Un push qui ne change pas la version (docs, fix sans bump) est
 # un no-op tant que le tag courant existe déjà.
 #
+# Le workflow dist généré est validé AVANT de créer le tag. Un release.yml
+# désynchronisé échoue donc sans consommer la version ; le push correctif suivant
+# peut créer le même tag, sans réécriture d'un tag de release.
+#
 # Le tag est poussé avec un PAT (secret RELEASE_PLZ_TOKEN, hérité de l'ancien
 # release-plz), PAS le GITHUB_TOKEN par défaut : un tag poussé par le bot Actions
 # ne déclenche aucun workflow, donc dist ne partirait jamais. Le même PAT sert au
@@ -32,6 +36,16 @@ jobs:
           fetch-depth: 0
           # PAT pour que le push du tag déclenche dist (le GITHUB_TOKEN par défaut ne le ferait pas).
           token: ${{ secrets.RELEASE_PLZ_TOKEN }}
+      - name: Vérifier que release.yml est synchronisé
+        shell: bash
+        run: |
+          set -euo pipefail
+          dist_version=$(sed -nE 's/^cargo-dist-version = "([^"]+)"/\1/p' Cargo.toml)
+          test -n "${dist_version}"
+          curl --proto '=https' --tlsv1.2 -LsSf \
+            "https://github.com/axodotdev/cargo-dist/releases/download/v${dist_version}/cargo-dist-installer.sh" |
+            sh
+          dist generate --check
       - name: Créer v{version} si le tag manque
         run: |
           set -euo pipefail

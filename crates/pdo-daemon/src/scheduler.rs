@@ -1738,6 +1738,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    instructions: None,
                     required: false,
                 })
                 .collect(),
@@ -1751,6 +1752,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    instructions: None,
                     required: false,
                 })
                 .collect(),
@@ -1777,6 +1779,7 @@ mod tests {
                 frontmatter: None,
                 when: None,
                 description: None,
+                instructions: None,
                 required: false,
             }],
             outputs: vec![],
@@ -3070,6 +3073,7 @@ mod tests {
                 frontmatter: None,
                 when: None,
                 description: None,
+                instructions: None,
                 required: false,
             }],
             outputs: branch_outputs,
@@ -3092,6 +3096,7 @@ mod tests {
             frontmatter: None,
             when: Some(serde_yaml::from_str(when_yaml).unwrap()),
             description: None,
+            instructions: None,
             required: false,
         }
     }
@@ -3105,6 +3110,7 @@ mod tests {
             frontmatter: None,
             when: None,
             description: None,
+            instructions: None,
             required: false,
         }
     }
@@ -3771,6 +3777,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    instructions: None,
                     required: false,
                 },
                 Port {
@@ -3781,6 +3788,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    instructions: None,
                     required: false,
                 },
             ],
@@ -3793,6 +3801,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    instructions: None,
                     required: false,
                 },
                 Port {
@@ -3803,6 +3812,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    instructions: None,
                     required: false,
                 },
             ],
@@ -4333,6 +4343,7 @@ mod tests {
                 frontmatter: None,
                 when: None,
                 description: None,
+                instructions: None,
                 required: false,
             }],
             interactive: false,

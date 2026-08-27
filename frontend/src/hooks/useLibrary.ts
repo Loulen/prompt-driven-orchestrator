@@ -51,6 +51,7 @@ function portsMatch(
     // order is nondeterministic on the daemon side (Rust HashMap).
     if (!deepEqual(np.frontmatter ?? null, lp.frontmatter ?? null)) return false;
     if (!deepEqual(np.when ?? null, lp.when ?? null)) return false;
+    if ((np.instructions ?? null) !== (lp.instructions ?? null)) return false;
   }
   return true;
 }
@@ -93,4 +94,3 @@ export function useLibraryState(
     return computeSyncState(node, prompt, entries);
   }, [node, prompt, entries]);
 }
-

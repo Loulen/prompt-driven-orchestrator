@@ -133,6 +133,7 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
           p.port_type = port.port_type;
         if (port.frontmatter) p.frontmatter = frontmatterToYamlObject(port.frontmatter);
         if (port.when) p.when = port.when;
+        if (port.instructions?.trim()) p.instructions = port.instructions;
         return p;
       });
     if (n.view) node.view = n.view;
@@ -221,6 +222,7 @@ function portToYamlObject(port: PortDef, defaultSide: PortSide): Record<string, 
   if (port.port_type && port.port_type !== "markdown") p.port_type = port.port_type;
   if (port.frontmatter) p.frontmatter = frontmatterToYamlObject(port.frontmatter);
   if (port.when) p.when = port.when;
+  if (port.instructions?.trim()) p.instructions = port.instructions;
   return p;
 }
 
@@ -367,4 +369,3 @@ function dumpYaml(val: unknown, indent: number): string {
   }
   return String(val);
 }
-

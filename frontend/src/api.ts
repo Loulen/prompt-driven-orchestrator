@@ -1337,6 +1337,7 @@ export interface LibraryPort {
   port_type?: PortType;
   frontmatter?: Record<string, FrontmatterFieldDecl> | null;
   when?: Record<string, unknown> | null;
+  instructions?: string | null;
 }
 
 export function libraryPortToPortDef(port: LibraryPort, defaultSide: PortSide): PortDef {
@@ -1347,6 +1348,7 @@ export function libraryPortToPortDef(port: LibraryPort, defaultSide: PortSide): 
     ...(port.port_type ? { port_type: port.port_type } : {}),
     ...(port.frontmatter ? { frontmatter: port.frontmatter } : {}),
     ...(port.when ? { when: port.when } : {}),
+    ...(port.instructions?.trim() ? { instructions: port.instructions } : {}),
   };
 }
 

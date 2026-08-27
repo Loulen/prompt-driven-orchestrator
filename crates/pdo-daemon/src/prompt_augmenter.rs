@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::pipeline::{NodeDef, PipelineDef, PortType, IMAGE_EXTENSIONS};
+use crate::pipeline::{NodeDef, NodeType, PipelineDef, PortType, IMAGE_EXTENSIONS};
 
 pub(crate) struct InputResolution {
     pub port_name: String,
@@ -543,24 +543,36 @@ pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
     } else {
         let ext_list = IMAGE_EXTENSIONS.join(", .");
         for output in &outputs {
+            let instructions = matches!(
+                ctx.node.node_type,
+                NodeType::DocOnly | NodeType::CodeMutating
+            )
+            .then(|| {
+                ctx.node
+                    .outputs
+                    .iter()
+                    .find(|port| port.name == output.port_name)
+                    .and_then(|port| port.instructions.as_deref())
+            })
+            .flatten();
             match output.port_type {
                 PortType::Image => {
                     preamble.push_str(&format!(
-                        "- `{}` (image): drop exactly one image file in `{}`\n\
-                         \x20 Accepted extensions: .{}\n",
+                        "- `{}` (image): drop exactly one image file in `{}`\n",
                         output.port_name,
                         output.path.display(),
-                        ext_list,
                     ));
+                    append_output_instructions(&mut preamble, instructions);
+                    preamble.push_str(&format!("  Accepted extensions: .{}\n", ext_list));
                 }
                 PortType::ImageList => {
                     preamble.push_str(&format!(
-                        "- `{}` (image_list): drop one or more image files in `{}`\n\
-                         \x20 Accepted extensions: .{}\n",
+                        "- `{}` (image_list): drop one or more image files in `{}`\n",
                         output.port_name,
                         output.path.display(),
-                        ext_list,
                     ));
+                    append_output_instructions(&mut preamble, instructions);
+                    preamble.push_str(&format!("  Accepted extensions: .{}\n", ext_list));
                 }
                 PortType::Markdown => {
                     preamble.push_str(&format!(
@@ -568,6 +580,7 @@ pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
                         output.port_name,
                         output.path.display()
                     ));
+                    append_output_instructions(&mut preamble, instructions);
 
                     let schema = ctx
                         .node
@@ -600,17 +613,32 @@ pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
                 // sandboxed iframe (ADR-0028), so it can't rely on JS.
                 PortType::Html => {
                     preamble.push_str(&format!(
-                        "- `{}` (html): write a single self-contained HTML file to `{}`\n\
-                         \x20 Inline all CSS in a `<style>` tag and use no external network \
+                        "- `{}` (html): write a single self-contained HTML file to `{}`\n",
+                        output.port_name,
+                        output.path.display(),
+                    ));
+                    append_output_instructions(&mut preamble, instructions);
+                    preamble.push_str(
+                        "  Inline all CSS in a `<style>` tag and use no external network \
                          requests (no CDN links, web fonts, or remote assets) — the artifact is \
                          rendered offline.\n\
                          \x20 **JavaScript will NOT run**: the file is displayed in a sandboxed \
                          iframe with scripts disabled. Do not rely on `<script>`, inline event \
                          handlers, or any interactivity — everything must be conveyed through \
                          static HTML and CSS.\n",
-                        output.port_name,
-                        output.path.display(),
-                    ));
+                    );
+                }
+            }
+        }
+
+        fn append_output_instructions(preamble: &mut String, instructions: Option<&str>) {
+            if let Some(instructions) = instructions {
+                let mut lines = instructions.lines();
+                if let Some(first_line) = lines.next() {
+                    preamble.push_str(&format!("  Expected content: {first_line}\n"));
+                }
+                for line in lines {
+                    preamble.push_str(&format!("  {line}\n"));
                 }
             }
         }
@@ -1179,6 +1207,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    instructions: None,
                     required: false,
                 }],
                 outputs: vec![Port {
@@ -1189,6 +1218,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    instructions: None,
                     required: false,
                 }],
                 interactive: false,
@@ -1589,6 +1619,7 @@ mod tests {
                 frontmatter: None,
                 when: None,
                 description: None,
+                instructions: None,
                 required: false,
             }],
             outputs: vec![Port {
@@ -1599,6 +1630,7 @@ mod tests {
                 frontmatter: None,
                 when: None,
                 description: None,
+                instructions: None,
                 required: false,
             }],
             interactive: false,
@@ -1892,6 +1924,7 @@ mod tests {
                         frontmatter: None,
                         when: None,
                         description: None,
+                        instructions: None,
                         required: false,
                     }],
                     interactive: false,
@@ -1915,6 +1948,7 @@ mod tests {
                         frontmatter: None,
                         when: None,
                         description: None,
+                        instructions: None,
                         required: false,
                     }],
                     interactive: false,
@@ -1938,6 +1972,7 @@ mod tests {
                             frontmatter: None,
                             when: None,
                             description: None,
+                            instructions: None,
                             required: false,
                         },
                         Port {
@@ -1948,6 +1983,7 @@ mod tests {
                             frontmatter: None,
                             when: None,
                             description: None,
+                            instructions: None,
                             required: false,
                         },
                     ],
@@ -1959,6 +1995,7 @@ mod tests {
                         frontmatter: None,
                         when: None,
                         description: None,
+                        instructions: None,
                         required: false,
                     }],
                     interactive: false,
@@ -2051,6 +2088,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    instructions: None,
                     required: false,
                 }],
                 outputs: vec![Port {
@@ -2071,6 +2109,7 @@ mod tests {
                     ),
                     when: None,
                     description: None,
+                    instructions: None,
                     required: false,
                 }],
                 interactive: false,
@@ -2122,6 +2161,71 @@ mod tests {
             !preamble.contains("Required YAML frontmatter"),
             "port without schema should not mention frontmatter requirements"
         );
+    }
+
+    #[test]
+    fn output_instructions_are_scoped_ordered_and_literal_for_every_artifact_type() {
+        let cases = [
+            (PortType::Markdown, "Required YAML frontmatter:"),
+            (PortType::Image, "Accepted extensions:"),
+            (PortType::ImageList, "Accepted extensions:"),
+            (PortType::Html, "Inline all CSS"),
+        ];
+
+        for (port_type, format_constraint) in cases {
+            let mut pipeline = sample_pipeline();
+            let output = &mut pipeline.nodes[0].outputs[0];
+            output.port_type = port_type;
+            output.instructions = Some("Keep ${topic} literal.\nSecond line.".into());
+            if port_type == PortType::Markdown {
+                output.frontmatter = Some(
+                    [(
+                        "issue_link".into(),
+                        crate::pipeline::FrontmatterFieldDecl {
+                            field_type: "string".into(),
+                            allowed: None,
+                        },
+                    )]
+                    .into_iter()
+                    .collect(),
+                );
+            }
+
+            let node = &pipeline.nodes[0];
+            let vars = HashMap::new();
+            let preamble = build_preamble(&sample_ctx(&pipeline, node, &vars));
+            let output_position = preamble.find("`plan`").expect("output declaration");
+            let instructions_position = preamble
+                .find("Expected content: Keep ${topic} literal.\n  Second line.")
+                .expect("literal multiline instructions");
+            let constraint_position = preamble
+                .find(format_constraint)
+                .expect("artifact format constraint");
+            assert!(
+                output_position < instructions_position
+                    && instructions_position < constraint_position,
+                "instructions must stay under their output and before its format constraint: {preamble}"
+            );
+        }
+
+        let pipeline = sample_pipeline();
+        let node = &pipeline.nodes[0];
+        let vars = HashMap::new();
+        assert!(!build_preamble(&sample_ctx(&pipeline, node, &vars)).contains("Expected content:"));
+    }
+
+    #[test]
+    fn deterministic_nodes_do_not_inject_preserved_output_instructions() {
+        let mut pipeline = sample_pipeline();
+        pipeline.nodes[0].node_type = NodeType::Merge;
+        pipeline.nodes[0].outputs[0].instructions = Some("This must remain metadata only.".into());
+
+        let node = &pipeline.nodes[0];
+        let vars = HashMap::new();
+        let preamble = build_preamble(&sample_ctx(&pipeline, node, &vars));
+
+        assert!(!preamble.contains("This must remain metadata only."));
+        assert!(!preamble.contains("Expected content:"));
     }
 
     #[test]
@@ -2332,6 +2436,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    instructions: None,
                     required: false,
                 }],
                 interactive: false,
@@ -2385,6 +2490,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    instructions: None,
                     required: false,
                 }],
                 interactive: false,
@@ -2433,6 +2539,7 @@ mod tests {
                     frontmatter: None,
                     when: None,
                     description: None,
+                    instructions: None,
                     required: false,
                 }],
                 interactive: false,

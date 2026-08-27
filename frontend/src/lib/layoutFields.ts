@@ -54,7 +54,7 @@ export const SEMANTIC_FIELDS: Record<SerializerScope, readonly string[]> = {
   // the node-library star already treats port side as identity, so the pipeline
   // diff must agree or the two stars contradict each other on the same edit.
   inputPort: ["name", "repeated", "side", "port_type", "frontmatter"] satisfies (keyof PortDef)[],
-  outputPort: ["name", "repeated", "side", "port_type", "frontmatter", "when"] satisfies (keyof PortDef)[],
+  outputPort: ["name", "repeated", "side", "port_type", "frontmatter", "when", "instructions"] satisfies (keyof PortDef)[],
   edge: ["source", "target", "when", "else"] satisfies (keyof EdgeDef)[],
   loopRegion: ["id", "kind", "members", "max_iter", "over"] satisfies (keyof LoopRegion)[],
   note: [], // the whole `notes` block is layout — no semantic note field

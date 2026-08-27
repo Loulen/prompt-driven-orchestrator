@@ -277,3 +277,74 @@ edges:
         "run-scoped prompt edit must round-trip"
     );
 }
+
+#[tokio::test]
+async fn output_instructions_edit_only_changes_the_next_spawn() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon).await;
+    wait_for_node_status(&daemon.url(), &run_id, "worker", &["running"]).await;
+
+    let prompt_url = format!(
+        "{}/runs/{}/nodes/worker/prompt?iter=1",
+        daemon.url(),
+        run_id
+    );
+    let original_prompt = reqwest::get(&prompt_url)
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(!original_prompt.contains("Write a concise implementation summary."));
+
+    let yaml_with_instructions = PIPELINE_YAML.replace(
+        "      - name: result",
+        "      - name: result\n        instructions: Write a concise implementation summary.",
+    );
+    let update = reqwest::Client::new()
+        .put(format!("{}/runs/{}/pipeline", daemon.url(), run_id))
+        .json(&serde_json::json!({ "yaml": yaml_with_instructions, "prompts": {} }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(update.status(), 200);
+
+    let launched_prompt = reqwest::get(&prompt_url)
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert_eq!(
+        launched_prompt, original_prompt,
+        "an already launched session must keep its original preamble"
+    );
+
+    let restart = reqwest::Client::new()
+        .post(format!("{}/runs/{}/commands", daemon.url(), run_id))
+        .json(&serde_json::json!({
+            "kind": "restart_node",
+            "node_id": "worker",
+            "iter": 1
+        }))
+        .send()
+        .await
+        .unwrap();
+    let restart_status = restart.status();
+    let restart_body = restart.text().await.unwrap();
+    assert_eq!(restart_status, 200, "restart response: {restart_body}");
+
+    for _ in 0..100 {
+        let prompt = reqwest::get(&prompt_url)
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        if prompt.contains("Expected content: Write a concise implementation summary.") {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("the next spawn did not receive the edited output instructions");
+}

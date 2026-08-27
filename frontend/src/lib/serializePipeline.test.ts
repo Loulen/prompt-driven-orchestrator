@@ -228,6 +228,25 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
     expect(typeIndent).toBe(allowedIndent);
   });
 
+  it("round-trips multiline output instructions and omits blank values", () => {
+    const reviewer: NodeDef = {
+      id: "reviewer", name: "reviewer", type: "doc-only",
+      inputs: [],
+      outputs: [{
+        name: "review", repeated: false, side: "right",
+        instructions: "Summarize the risks.\nName the owner.",
+      }],
+      interactive: false,
+    };
+    const yaml = serializePipeline(makeFullPipeline([reviewer]));
+    expect(yaml).toContain("instructions:");
+    expect(yaml).toContain("Summarize the risks.");
+    expect(yaml).toContain("Name the owner.");
+
+    reviewer.outputs[0].instructions = "   \n";
+    expect(serializePipeline(makeFullPipeline([reviewer]))).not.toContain("instructions:");
+  });
+
   it("serializes an edge when clause at correct indentation", () => {
     const gate: NodeDef = {
       id: "gate", name: "gate", type: "doc-only",
@@ -700,6 +719,21 @@ describe("exportNodeAsYaml (#345)", () => {
     );
     expect(yaml).toContain("type: bool");
     expect(yaml).not.toContain("allowed:");
+  });
+
+  it("preserves output instructions in a node-library export", () => {
+    const yaml = exportNodeAsYaml(
+      node({
+        outputs: [{
+          name: "review",
+          repeated: false,
+          side: "right",
+          instructions: "Return a concise verdict.",
+        }],
+      }),
+      "p",
+    );
+    expect(yaml).toContain("instructions: Return a concise verdict.");
   });
 });
 

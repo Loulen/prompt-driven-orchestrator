@@ -55,6 +55,20 @@ edges:
 test.beforeAll(async () => {
   await fs.mkdir(PIPELINE_DIR, { recursive: true });
   await fs.writeFile(PIPELINE_PATH, SEED_YAML);
+
+  // Mark fixture setup as a daemon write so its pending watcher event cannot
+  // arrive after the editor becomes dirty and create a false conflict.
+  const response = await fetch(
+    `http://127.0.0.1:${process.env.PDO_E2E_PORT ?? 5273}/pipelines/${PIPELINE_NAME}?scope=repo`,
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ yaml: SEED_YAML, prompts: {} }),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`failed to seed pipeline fixture: ${response.status}`);
+  }
 });
 
 test.afterAll(async () => {

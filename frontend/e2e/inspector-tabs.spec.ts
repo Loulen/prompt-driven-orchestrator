@@ -204,7 +204,11 @@ test("terminal run: clicking a node defaults to Run tab (#271)", async ({
   });
 
   const resp = await page.request.post(`${baseURL}/runs`, {
-    multipart: runMultipart({ pipeline: PIPELINE_NAME, input: "terminal tab test" }),
+    multipart: runMultipart({
+      pipeline: PIPELINE_NAME,
+      input: "terminal tab test",
+      auto_fail: "true",
+    }),
   });
   expect(resp.status()).toBe(201);
   const { run_id } = await resp.json();

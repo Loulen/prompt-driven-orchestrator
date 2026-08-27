@@ -80,6 +80,18 @@ impl HarnessDescriptor {
     pub fn pins_session_id(&self) -> bool {
         self.launch.iter().any(|t| t.contains("{session_id}"))
     }
+
+    /// Whether the LAUNCH template can carry a settings file (`{settings}`), and
+    /// therefore whether PDO can arm a hook on this harness (#433, #594).
+    ///
+    /// Only `claude` does. Without the hole the token is dropped silently at
+    /// render, so a caller that depends on a hook — the library assistant's
+    /// per-message focus injection (ADR-0051 §3) — must ask *before* assuming its
+    /// mechanism is armed, and say so when it is not. Same shape as
+    /// [`Self::has_effort_hole`]: an absence declared by the descriptor.
+    pub fn can_inject_hooks(&self) -> bool {
+        self.launch.iter().any(|t| t.contains("{settings}"))
+    }
 }
 
 /// The `claude` harness name — the floor of the precedence chain (ADR-0046).

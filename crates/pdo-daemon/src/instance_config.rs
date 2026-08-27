@@ -32,6 +32,15 @@ pub(crate) struct InstanceConfig {
     pub session_cap: Option<i64>,
     /// Stored tmux reaper TTL in seconds, or `None` when unset.
     pub reaper_ttl_secs: Option<i64>,
+    /// Stored idle TTL of the shared library assistant in seconds, or `None` when
+    /// unset (#594, ADR-0051). Its own knob, not a reuse of
+    /// [`Self::reaper_ttl_secs`]: that one bounds a *completed node's* session
+    /// (default 1 h, an operator may want to read it later), this one bounds an
+    /// assistant nobody is attached to and nobody is editing against (default
+    /// 120 s). The resolver
+    /// ([`crate::tmux_session_manager::libassist_idle_ttl_with`]) owns the
+    /// precedence.
+    pub libassist_idle_ttl_secs: Option<i64>,
     /// Stored Trigger guard timeout in **seconds**, or `None` when unset. Note
     /// the env seam ([`crate::guard_runner::GUARD_TIMEOUT_MS_OVERRIDE_ENV`]) is
     /// in milliseconds; the stored value is seconds (ADR-0015).
@@ -119,6 +128,9 @@ pub(crate) struct InstanceConfig {
 pub(crate) struct UpdateInstanceConfig {
     pub session_cap: Option<i64>,
     pub reaper_ttl_secs: Option<i64>,
+    /// Set the shared library assistant's idle TTL in seconds (#594). Set-only,
+    /// like the other numeric knobs.
+    pub libassist_idle_ttl_secs: Option<i64>,
     pub guard_timeout_secs: Option<i64>,
     pub default_model: Option<String>,
     /// Set the instance-wide default sandbox mode (#410). `Some("")` clears it back to
@@ -157,6 +169,7 @@ impl UpdateInstanceConfig {
     fn is_empty(&self) -> bool {
         self.session_cap.is_none()
             && self.reaper_ttl_secs.is_none()
+            && self.libassist_idle_ttl_secs.is_none()
             && self.guard_timeout_secs.is_none()
             && self.default_model.is_none()
             && self.default_sandbox.is_none()
@@ -189,6 +202,7 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             default_harness    TEXT,
             default_harness_model TEXT,
             auto_fail          INTEGER,
+            libassist_idle_ttl_secs INTEGER,
             updated_at         TEXT NOT NULL
         )",
     )
@@ -327,6 +341,22 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
+    // Additive migration for pre-#594 databases: the `libassist_idle_ttl_secs`
+    // column is absent on tables created before the library assistant became a
+    // shared, idle-reaped session (ADR-0051). Same guarded `ADD COLUMN` idiom —
+    // NULLABLE so an existing install falls through env → 120 s.
+    let has_libassist_idle_ttl = sqlx::query(
+        "SELECT 1 FROM pragma_table_info('instance_config') WHERE name = 'libassist_idle_ttl_secs'",
+    )
+    .fetch_optional(db)
+    .await?
+    .is_some();
+    if !has_libassist_idle_ttl {
+        sqlx::query("ALTER TABLE instance_config ADD COLUMN libassist_idle_ttl_secs INTEGER")
+            .execute(db)
+            .await?;
+    }
+
     Ok(())
 }
 
@@ -334,6 +364,7 @@ fn row_to_config(row: &sqlx::sqlite::SqliteRow) -> InstanceConfig {
     InstanceConfig {
         session_cap: row.get("session_cap"),
         reaper_ttl_secs: row.get("reaper_ttl_secs"),
+        libassist_idle_ttl_secs: row.get("libassist_idle_ttl_secs"),
         guard_timeout_secs: row.get("guard_timeout_secs"),
         default_model: row.get("default_model"),
         default_sandbox: row.get("default_sandbox"),
@@ -381,6 +412,9 @@ pub(crate) async fn update(
     if edit.reaper_ttl_secs.is_some() {
         sets.push("reaper_ttl_secs = ?");
     }
+    if edit.libassist_idle_ttl_secs.is_some() {
+        sets.push("libassist_idle_ttl_secs = ?");
+    }
     if edit.guard_timeout_secs.is_some() {
         sets.push("guard_timeout_secs = ?");
     }
@@ -417,6 +451,9 @@ pub(crate) async fn update(
         query = query.bind(v);
     }
     if let Some(v) = edit.reaper_ttl_secs {
+        query = query.bind(v);
+    }
+    if let Some(v) = edit.libassist_idle_ttl_secs {
         query = query.bind(v);
     }
     if let Some(v) = edit.guard_timeout_secs {

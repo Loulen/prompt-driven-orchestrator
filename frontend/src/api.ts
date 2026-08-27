@@ -76,6 +76,14 @@ export interface RequestOpts {
   responseMode?: ResponseMode;
   /** Fallback error label; defaults to `` `${method} ${path}` ``. */
   label?: string;
+  /**
+   * Let the request outlive the document (#594). A normal `fetch` started while
+   * the page is unloading is cancelled with it, so the assistant's reap on
+   * `pagehide` would never leave the browser. `sendBeacon` is not an option: it
+   * is POST-only and this is a `DELETE`. Fire-and-forget by nature — the
+   * response is not guaranteed to arrive.
+   */
+  keepalive?: boolean;
 }
 
 /**
@@ -89,7 +97,7 @@ export async function request<T = unknown>(
   path: string,
   opts: RequestOpts = {},
 ): Promise<T> {
-  const { body, query, responseMode = "json", label } = opts;
+  const { body, query, responseMode = "json", label, keepalive } = opts;
 
   let url = BASE + path;
   if (query) {
@@ -101,6 +109,7 @@ export async function request<T = unknown>(
   }
 
   const init: RequestInit = { method };
+  if (keepalive) init.keepalive = true;
   // #507: declare the request's origin on EVERY call (falsifiable hint read
   // into `audit_log.actor_hint`, never a gate). Set unconditionally — the JSON
   // branch alone would miss FormData and body-less GET/DELETE.
@@ -452,35 +461,62 @@ export function openRunShell(
 }
 
 /**
- * Open (or re-attach) the library pipeline authoring assistant for `pipelineId`
- * (#302 / ADR-0048). Create-if-absent; returns the `pdo-libassist-<id>` tmux
- * session name to attach to via the existing `WS /sessions/<session>/pty` bridge.
- * `scope` selects the pipelines directory (`repo` vs `user`/`library`).
+ * Open (or re-attach) the library pipeline authoring assistant (#302 / ADR-0048,
+ * #594 / ADR-0051). Create-if-absent; returns the shared tmux session name to
+ * attach to via the existing `WS /sessions/<session>/pty` bridge.
+ *
+ * No pipeline id: there is **one** assistant for the whole daemon, and which
+ * template it works on travels through {@link putLibassistFocus} instead.
  */
-export function openLibraryAssistant(
-  pipelineId: string,
-  scope?: string,
-): Promise<{ session: string; created: boolean }> {
+export function openLibraryAssistant(): Promise<{
+  session: string;
+  created: boolean;
+}> {
   return request<{ session: string; created: boolean }>(
     "POST",
-    `/sessions/${encodeURIComponent(pipelineId)}/libassist`,
-    { query: { scope }, label: "open assistant" },
+    "/sessions/libassist",
+    { label: "open assistant" },
   );
 }
 
 /**
- * Reap the library authoring assistant for `pipelineId` (#302 / ADR-0048). The
- * assistant is create-on-open / reap-on-leave, so the UI calls this when the user
- * leaves the Assistant tab. Best-effort: reaping an absent session is a no-op.
+ * Reap the library authoring assistant (#302 / ADR-0048, #594 / ADR-0051).
+ *
+ * Called when the user leaves **every** pipeline edit view — not when they leave
+ * the Assistant tab, which used to throw the conversation away on each round trip
+ * between two templates. Best-effort: reaping an absent session is a no-op.
+ *
+ * `keepalive` lets the request survive the document, which is the only way the
+ * `pagehide` path can send anything at all.
  */
 export function closeLibraryAssistant(
-  pipelineId: string,
+  opts: { keepalive?: boolean } = {},
 ): Promise<{ ok: boolean; reaped: boolean }> {
   return request<{ ok: boolean; reaped: boolean }>(
     "DELETE",
-    `/sessions/${encodeURIComponent(pipelineId)}/libassist`,
-    { label: "close assistant" },
+    "/sessions/libassist",
+    { label: "close assistant", keepalive: opts.keepalive },
   );
+}
+
+/**
+ * Declare which template the UI is editing — or `null` to clear it (#594 /
+ * ADR-0051). Sent on every edit-view change and repeated as a heartbeat.
+ *
+ * Two jobs in one call: it is how the assistant learns the open pipeline on its
+ * next message, and it is how the daemon's reaper knows a human is still editing
+ * even when no terminal is attached. Only `{id, scope}` — the daemon resolves the
+ * file path, because "scope" does not mean the same thing on an edit tab as it
+ * does in the library store.
+ */
+export function putLibassistFocus(
+  pipelineId: string | null,
+  scope?: string,
+): Promise<unknown> {
+  return request("PUT", "/sessions/libassist/focus", {
+    body: { pipeline_id: pipelineId, scope },
+    label: "declare assistant focus",
+  });
 }
 
 export interface PaneResponse {

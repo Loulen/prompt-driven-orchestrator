@@ -8,6 +8,7 @@ import { useLibraryPipelines } from "./hooks/useLibraryPipelines";
 import { fetchRuns, fetchRun, fetchTriggers, fetchProjects, fetchSessions, fetchTriggersHealth, pauseTriggers } from "./api";
 import { pickLatestLiveNode } from "./lib/pickLatestLiveNode";
 import { useRightPaneRouter } from "./hooks/useRightPaneRouter";
+import { useLibassistLifecycle } from "./hooks/useLibassistLifecycle";
 import type { RunListEntry, RunState, Trigger, Project, DaemonStatus } from "./types";
 import { shouldAutoSnapToLiveNode } from "./lib/autoSnap";
 import SessionCounter from "./components/SessionCounter";
@@ -245,7 +246,23 @@ export default function App() {
   // active edit tab's pipeline id + scope — never a run. `null` on a run tab hides
   // the Assistant tab (the Manager tab covers a run instead).
   const assistantId = editTab && !isEditingRun ? editTab.id : null;
-  const assistantScope = editTab?.scope;
+  // Paired with `assistantId`, deliberately: a scope of `"run"` alongside a null
+  // id would be a half-fact, and it would churn the lifecycle effect on every
+  // hop to a Run for nothing.
+  const assistantScope = assistantId ? editTab?.scope : undefined;
+
+  // #594 / ADR-0051 §4: the reap fires when the user leaves **every** edit view —
+  // so it reads the open tabs, not the active one. Keying it on the active tab
+  // (the first cut) meant a glance at a Run threw the conversation away while two
+  // templates were still open, which is the regret this issue is made of.
+  const hasTemplateTab = openTabs.some((t) => t.scope !== "run");
+
+  // The assistant's whole lifecycle hangs here, and not down in the Assistant
+  // tab. This is the right altitude for it: the tab unmounts on every panel close
+  // (#385), the user does not stop editing when it does, and a lifecycle keyed on
+  // the tab is what made the assistant lose its conversation on each round trip
+  // between two templates.
+  useLibassistLifecycle(assistantId, assistantScope, hasTemplateTab);
 
   // #315: an archived run is read-only — its worktree (and `pipeline.yaml`) is
   // gone, so any save would PUT into a 404. `isArchived` tracks the *selected*
@@ -721,7 +738,6 @@ export default function App() {
                 initialTab={infoPanelInitialTab}
                 scrollToLine={infoPanelScrollToLine}
                 assistantId={assistantId}
-                assistantScope={assistantScope}
               />
             ) : paneOwner === "editTab" ? (
               <>

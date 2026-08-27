@@ -4645,6 +4645,12 @@ async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
         .execute(db)
         .await
         .context("failed to create idx_events_kind_ts")?;
+    // #638 / ADR-0029: after the indexed `run_started` cohort lookup, Sessions
+    // joins only each selected Run's `node_started` rows in append order.
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_events_run_kind_id ON events(run_id, kind, id)")
+        .execute(db)
+        .await
+        .context("failed to create idx_events_run_kind_id")?;
 
     // #328 / ADR-0024: tombstones for forgotten runs — a run_id present here
     // can never receive events again (guard in `append_event`).
@@ -9288,7 +9294,7 @@ async fn sync_cost_prices(State(state): State<Arc<AppState>>) -> Response {
 
     if !outcome.changed {
         // Nothing to write, so nothing is written — which also leaves the table's
-        // fingerprint alone and keeps `COST_MEMO` warm for every Run.
+        // fingerprint alone and keeps the cost-breakdown memo warm for every Run.
         return Json(serde_json::json!({
             "ok": true,
             "noop": true,
@@ -10415,10 +10421,12 @@ async fn get_run(
             // HOST home — prices are an instance concept), while transcripts come
             // from `projects_root` (the #408 seam, which moves for a sandboxed Run).
             let prices = price_table::PriceTable::load(&home_root);
+            let copilot_root = sandbox_run::copilot_store_root(&home_root);
             augment_run_state_from_disk(
                 &mut run_state,
                 &events,
                 &projects_root,
+                &copilot_root,
                 &repo_root,
                 &prices,
             );
@@ -16153,6 +16161,7 @@ fn augment_run_state_from_disk(
     run_state: &mut event_log::RunState,
     events: &[event_log::Event],
     projects_root: &std::path::Path,
+    copilot_root: &std::path::Path,
     repo_root: &std::path::Path,
     prices: &price_table::PriceTable,
 ) {
@@ -16173,8 +16182,14 @@ fn augment_run_state_from_disk(
     // `CostStat` (never `$0`); otherwise it is exactly `compute_run_cost`. Needs the
     // raw events for the frozen-at-spawn harnesses (`RunState` alone does not carry
     // them per node).
-    run_state.cost =
-        run_cost::run_cost_or_absence(events, projects_root, repo_root, &run_state.run_id, prices);
+    run_state.cost = run_cost::run_cost_or_absence(
+        events,
+        projects_root,
+        copilot_root,
+        repo_root,
+        &run_state.run_id,
+        prices,
+    );
 
     let yaml_path = run_scoped_pipeline_path(repo_root, &run_state.run_id);
     let Ok(yaml) = std::fs::read_to_string(&yaml_path) else {
@@ -17155,6 +17170,481 @@ mod tests {
             allowed_ws_origins: Vec::new(),
             libassist_focus: Mutex::new(None),
         })
+    }
+
+    #[tokio::test]
+    async fn stats_overview_sessions_use_run_cohorts_and_dynamic_harness_hierarchies() {
+        let state = test_state().await;
+        let insert = |run: &str,
+                      ts: &str,
+                      kind: &str,
+                      node: Option<&str>,
+                      iter: Option<i64>,
+                      payload: Option<serde_json::Value>| {
+            let db = state.db.clone();
+            let run = run.to_string();
+            let ts = ts.to_string();
+            let kind = kind.to_string();
+            let node = node.map(str::to_string);
+            async move {
+                sqlx::query(
+                    "INSERT INTO events (run_id, ts, kind, node_id, iter, payload) \
+                     VALUES (?, ?, ?, ?, ?, ?)",
+                )
+                .bind(run)
+                .bind(ts)
+                .bind(kind)
+                .bind(node)
+                .bind(iter)
+                .bind(payload.map(|value| value.to_string()))
+                .execute(&db)
+                .await
+                .unwrap();
+            }
+        };
+
+        insert(
+            "before",
+            "2026-07-14T09:00:00Z",
+            "run_started",
+            None,
+            None,
+            Some(serde_json::json!({
+                "pipeline_id": "p-out",
+                "pipeline_name": "Outside",
+                "node_defs": [{"id":"worker","name":"Outside worker","node_type":"doc-only"}]
+            })),
+        )
+        .await;
+        insert(
+            "before",
+            "2026-07-15T09:00:00Z",
+            "node_started",
+            Some("worker"),
+            Some(1),
+            Some(serde_json::json!({"node_type":"doc-only","harness":"claude"})),
+        )
+        .await;
+
+        insert(
+            "r1",
+            "2026-07-15T09:00:00Z",
+            "run_started",
+            None,
+            None,
+            Some(serde_json::json!({
+                "pipeline_id": "p1",
+                "pipeline_name": "Pipeline old",
+                "target_repo": "/repos/product",
+                "node_defs": [
+                    {"id":"worker","name":"Worker old","node_type":"doc-only"},
+                    {"id":"build","name":"Build","node_type":"script"}
+                ]
+            })),
+        )
+        .await;
+        for (harness, node_type, session_id) in [
+            (None, "doc-only", None),
+            (Some("copilot"), "doc-only", Some("copilot-resurrected")),
+            (Some("copilot"), "doc-only", Some("copilot-resurrected")),
+            (Some("copilot"), "doc-only", Some("copilot-restart")),
+            (None, "script", None),
+        ] {
+            insert(
+                "r1",
+                "2026-07-20T09:00:00Z",
+                "node_started",
+                Some(if node_type == "script" {
+                    "build"
+                } else {
+                    "worker"
+                }),
+                Some(1),
+                Some(serde_json::json!({
+                    "node_type":node_type,
+                    "harness":harness,
+                    "session_id":session_id
+                })),
+            )
+            .await;
+        }
+
+        insert(
+            "r2",
+            "2026-07-16T09:00:00Z",
+            "run_started",
+            None,
+            None,
+            Some(serde_json::json!({
+                "pipeline_id": "p1",
+                "pipeline_name": "Pipeline latest",
+                "target_repo": "/repos/product",
+                "node_defs": [{"id":"worker","name":"Worker latest","node_type":"doc-only"}]
+            })),
+        )
+        .await;
+        for (iter, session_id) in [(1, "future-loop-1"), (2, "future-loop-2")] {
+            insert(
+                "r2",
+                "2026-07-16T10:00:00Z",
+                "node_started",
+                Some("worker"),
+                Some(iter),
+                Some(serde_json::json!({
+                    "node_type":"doc-only",
+                    "harness":"future-harness",
+                    "session_id":session_id
+                })),
+            )
+            .await;
+        }
+
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .uri(
+                        "/stats/overview?from=2026-07-15T00:00:00Z&to=2026-07-17T00:00:00Z&bucket=day",
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            body["session_harnesses"],
+            serde_json::json!(["claude", "copilot", "future-harness"])
+        );
+        assert_eq!(
+            body["sessions_by_period"],
+            serde_json::json!([
+                {
+                    "bucket":"2026-07-15",
+                    "harnesses":[
+                        {"harness":"claude","executions":1},
+                        {"harness":"copilot","executions":2}
+                    ]
+                },
+                {
+                    "bucket":"2026-07-16",
+                    "harnesses":[
+                        {"harness":"future-harness","executions":2}
+                    ]
+                }
+            ])
+        );
+        let pipeline = &body["sessions_by_pipeline"][0];
+        assert_eq!(pipeline["id"], "p1");
+        assert_eq!(pipeline["name"], "Pipeline latest");
+        let worker = pipeline["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["id"] == "worker")
+            .unwrap();
+        assert_eq!(worker["name"], "Worker latest");
+        assert_eq!(worker["executions"], 5);
+        assert_eq!(
+            worker["harnesses"],
+            serde_json::json!([
+                {"harness":"claude","executions":1},
+                {"harness":"copilot","executions":2},
+                {"harness":"future-harness","executions":2}
+            ])
+        );
+        assert!(
+            pipeline["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|node| node["id"] != "build"),
+            "script starts are excluded"
+        );
+        assert_eq!(pipeline["executions"], 5);
+    }
+
+    #[tokio::test]
+    async fn stats_cost_returns_harness_coverage_and_nested_contribution_hierarchies() {
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let mut state = test_state().await;
+        let home = state
+            .repo_root
+            .join(".pdo")
+            .join("test-stats-cost")
+            .join(uuid::Uuid::new_v4().to_string());
+        let _cleanup = Cleanup(home.clone());
+        std::fs::create_dir_all(&home).unwrap();
+        Arc::get_mut(&mut state).unwrap().sandbox_home_override = Some(home.clone());
+        let repo = state.repo_root.to_string_lossy().into_owned();
+        sqlx::query(
+            "INSERT INTO projects (id, name, harness, created_at) VALUES \
+             ('prj-product', 'Product', NULL, '2026-07-01T00:00:00Z')",
+        )
+        .execute(&state.db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO project_members (path, project_id, created_at) VALUES \
+             (?, 'prj-product', '2026-07-01T00:00:00Z')",
+        )
+        .bind(&repo)
+        .execute(&state.db)
+        .await
+        .unwrap();
+
+        async fn insert_event(
+            db: &sqlx::SqlitePool,
+            run: &str,
+            ts: &str,
+            kind: &str,
+            node: Option<&str>,
+            iter: Option<i64>,
+            payload: serde_json::Value,
+        ) {
+            sqlx::query(
+                "INSERT INTO events (run_id, ts, kind, node_id, iter, payload) \
+                 VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(run)
+            .bind(ts)
+            .bind(kind)
+            .bind(node)
+            .bind(iter)
+            .bind(payload.to_string())
+            .execute(db)
+            .await
+            .unwrap();
+        }
+
+        let run_ids = ["stats-cost-r1", "stats-cost-r2", "stats-cost-r3"];
+        for (index, run_id) in run_ids.iter().enumerate() {
+            insert_event(
+                &state.db,
+                run_id,
+                &format!("2026-07-{}T09:00:00Z", 15 + index),
+                "run_started",
+                None,
+                None,
+                serde_json::json!({
+                    "pipeline_id":"p1",
+                    "pipeline_name":format!("Pipeline {}", index + 1),
+                    "target_repo":repo,
+                    "harness":"claude",
+                    "node_defs":[{"id":"worker","name":format!("Worker {}", index + 1),"node_type":"code-mutating"}]
+                }),
+            )
+            .await;
+        }
+        insert_event(
+            &state.db,
+            run_ids[0],
+            "2026-07-20T09:00:00Z",
+            "node_started",
+            Some("worker"),
+            Some(1),
+            serde_json::json!({"node_type":"code-mutating","harness":"claude","session_id":"claude-1"}),
+        )
+        .await;
+        insert_event(
+            &state.db,
+            run_ids[0],
+            "2026-07-20T10:00:00Z",
+            "node_started",
+            Some("worker"),
+            Some(1),
+            serde_json::json!({"node_type":"code-mutating","harness":"copilot","session_id":"copilot-1"}),
+        )
+        .await;
+        insert_event(
+            &state.db,
+            run_ids[0],
+            "2026-07-20T11:00:00Z",
+            "node_started",
+            Some("worker"),
+            Some(2),
+            serde_json::json!({"node_type":"code-mutating","harness":"future-harness","session_id":"future-1"}),
+        )
+        .await;
+        insert_event(
+            &state.db,
+            run_ids[1],
+            "2026-07-21T09:00:00Z",
+            "node_started",
+            Some("worker"),
+            Some(1),
+            serde_json::json!({"node_type":"code-mutating","harness":"future-harness","session_id":"future-2"}),
+        )
+        .await;
+        insert_event(
+            &state.db,
+            run_ids[2],
+            "2026-07-22T09:00:00Z",
+            "node_started",
+            Some("worker"),
+            Some(1),
+            serde_json::json!({"node_type":"doc-only"}),
+        )
+        .await;
+
+        let claude_dir =
+            home.join(".claude")
+                .join("projects")
+                .join(stale_detector::encode_working_dir(
+                    &worktree_ops::sub_worktree_path(&state.repo_root, run_ids[0], "worker", 1),
+                ));
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        std::fs::write(
+            claude_dir.join("claude-1.jsonl"),
+            r#"{"type":"assistant","requestId":"r1","message":{"id":"m1","model":"claude-opus-4-8","usage":{"input_tokens":1000000,"output_tokens":0}}}"#,
+        )
+        .unwrap();
+        let legacy_dir =
+            home.join(".claude")
+                .join("projects")
+                .join(stale_detector::encode_working_dir(
+                    &worktree_ops::worktree_dir_for_run(&state.repo_root, run_ids[2]),
+                ));
+        std::fs::create_dir_all(&legacy_dir).unwrap();
+        std::fs::write(
+            legacy_dir.join("legacy.jsonl"),
+            r#"{"type":"assistant","requestId":"r3","message":{"id":"m3","model":"claude-opus-4-8","usage":{"input_tokens":1000000,"output_tokens":0}}}"#,
+        )
+        .unwrap();
+        let copilot_dir = home
+            .join(".copilot")
+            .join("session-state")
+            .join("copilot-1");
+        std::fs::create_dir_all(&copilot_dir).unwrap();
+        std::fs::write(
+            copilot_dir.join("events.jsonl"),
+            r#"{"type":"session.shutdown","data":{"totalNanoAiu":100000000000}}"#,
+        )
+        .unwrap();
+
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/stats/cost?from=2026-07-15T00:00:00Z&to=2026-07-18T00:00:00Z&bucket=day")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            body["harnesses"],
+            serde_json::json!(["claude", "copilot", "future-harness"])
+        );
+        assert_eq!(body["total"]["usd"], 11.0);
+        assert_eq!(body["total"]["executions"], 3);
+        assert_eq!(body["total"]["readable"], 0);
+        assert_eq!(body["total"]["unknown"], 3);
+        assert!(
+            body["total"]["unknown"].as_i64().unwrap()
+                <= body["total"]["executions"].as_i64().unwrap()
+        );
+        let claude = body["total"]["harnesses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|metric| metric["harness"] == "claude")
+            .unwrap();
+        assert_eq!(claude["usd"], 10.0);
+        assert!(claude["average_usd"].is_null());
+        assert_eq!(claude["estimated"], true);
+        assert_eq!(claude["executions"], 3);
+        assert_eq!(claude["readable"], 0);
+        assert_eq!(claude["unknown"], 3);
+        let future = body["total"]["harnesses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|metric| metric["harness"] == "future-harness")
+            .unwrap();
+        assert!(future["usd"].is_null());
+        assert_eq!(future["executions"], 2);
+        assert_eq!(future["unknown"], 2);
+        assert!(future["missing_reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason == "harness has no cost source"));
+        let copilot = body["total"]["harnesses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|metric| metric["harness"] == "copilot")
+            .unwrap();
+        assert_eq!(copilot["estimated"], false);
+        assert_eq!(copilot["executions"], 1);
+        assert_eq!(copilot["readable"], 1);
+        assert_eq!(copilot["unknown"], 0);
+        assert_eq!(copilot["average_usd"], 1.0);
+        for metric in body["total"]["harnesses"].as_array().unwrap() {
+            assert!(metric["unknown"].as_i64().unwrap() <= metric["executions"].as_i64().unwrap());
+        }
+
+        assert_eq!(body["by_period"][0]["bucket"], "2026-07-15");
+        assert_eq!(body["by_period"][0]["usd"], 6.0);
+        let pipeline = &body["by_pipeline"][0];
+        assert_eq!(pipeline["id"], "p1");
+        assert_eq!(pipeline["name"], "Pipeline 3");
+        assert_eq!(pipeline["executions"], 3);
+        assert_eq!(pipeline["readable"], 0);
+        assert_eq!(pipeline["unknown"], 3);
+        let worker = pipeline["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == "worker")
+            .unwrap();
+        assert_eq!(worker["name"], "Worker 3");
+        assert_eq!(worker["executions"], 5);
+        assert_eq!(worker["readable"], 2);
+        assert_eq!(worker["unknown"], 3);
+        let infrastructure = pipeline["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["name"] == "Infrastructure")
+            .unwrap();
+        assert_eq!(infrastructure["executions"], 3);
+        assert_eq!(infrastructure["unknown"], 3);
+        let unassigned = pipeline["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["name"] == "Unassigned")
+            .unwrap();
+        assert_eq!(unassigned["usd"], 5.0);
+        assert_eq!(unassigned["readable"], 0);
+        assert_eq!(body["by_project"][0]["id"], "prj-product");
+        assert_eq!(body["by_project"][0]["name"], "Product");
+        assert_eq!(body["by_project"][0]["executions"], 3);
+        assert_eq!(body["by_project"][0]["readable"], 0);
+        assert_eq!(body["by_project"][0]["unknown"], 3);
+        assert_eq!(body["by_project"][0]["pipelines"][0]["id"], "p1");
+        assert!(!body["resolved"].as_array().unwrap().is_empty());
     }
 
     /// Like [`test_state`], but with an injected [`ServiceHealth`] so the

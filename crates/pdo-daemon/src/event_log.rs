@@ -692,6 +692,27 @@ pub struct CostStat {
     /// meant before this field existed.
     #[serde(default)]
     pub uncosted_harnesses: Vec<String>,
+    /// Readable cost slices grouped by harness.
+    #[serde(default)]
+    pub by_harness: Vec<HarnessCost>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CostForm {
+    Derived,
+    Reported,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HarnessCost {
+    pub harness: String,
+    pub usd: f64,
+    pub form: CostForm,
+    #[serde(default)]
+    pub partial: bool,
+    #[serde(default)]
+    pub unpriced_models: Vec<String>,
 }
 
 /// A secondary repository pinned to a Run (#465, ADR-0042).

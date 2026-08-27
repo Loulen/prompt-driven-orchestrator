@@ -98,6 +98,8 @@ impl HarnessDescriptor {
 pub const CLAUDE: &str = "claude";
 /// The `opencode` harness name (ADR-0045, measured on 1.18.18).
 pub const OPENCODE: &str = "opencode";
+/// The GitHub Copilot CLI harness.
+pub const COPILOT: &str = "copilot";
 
 /// The `claude` descriptor: the legacy launch, expressed as data.
 ///

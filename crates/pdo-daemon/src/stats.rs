@@ -1,26 +1,22 @@
 //! Instance-stats cockpit (#377, ADR-0029): cross-run, period-filterable
 //! aggregates for the Stats modal. Two endpoints split by cost class:
 //!
-//! - [`stats_overview`] — **Class A**, cheap indexed SQL. Runs/errors/sessions
-//!   per period (`GROUP BY strftime` over `events`, backed by
-//!   `idx_events_kind_ts`), fires per pipeline (`LEFT JOIN triggers`, backed by
-//!   `idx_trigger_fires_ts`), and the "triggers that created a run" KPI.
-//! - [`stats_cost`] — **Class B**, heavy. Enumerates the `run_started` events in
-//!   the period, resolves each run's estimated cost through the memoized
-//!   [`crate::run_cost::compute_run_cost_cached`], and folds the per-run scalars
-//!   app-side into by-period / by-pipeline / by-project buckets (cost has no
-//!   pipeline/project dimension in SQL, and "by project" needs the
-//!   `effective_repo_root` runtime fallback). It also carries the **resolved
-//!   price table** (#528): one row per family key — the winning tier and the
-//!   `$/MTok` in force — read from the SAME table the fold prices with, so the
-//!   Cost tab can never show a set the pricer would price otherwise (#373).
+//! - [`stats_overview`] keeps the indexed Runs and Triggers queries, then selects
+//!   the session cohort by `run_started.ts`. Every agentic `node_started` in a
+//!   selected Run counts, including later loop laps and restarts. The response
+//!   splits those executions by dynamic harness and Pipeline → Node identity.
+//! - [`stats_cost`] is the lazy heavy read. It selects the same Run cohort,
+//!   resolves memoized harness-specific contributions, and folds them into
+//!   period, Pipeline → Node, and Project → Pipeline → Node hierarchies. The
+//!   response includes readable denominators, unknown-cost reasons, and the
+//!   resolved price table used for derived Claude costs.
 //!
 //! Everything is derived on read — no snapshot table, no metric-freezing event
 //! (preserves ADR-0022). Aggregated cost is a **sum of lower bounds**: partial
 //! runs (an unpriced model) and null-cost runs (no transcript) are counted
 //! separately so a bucket is never silently undercounted (ADR-0001 honesty).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -30,7 +26,6 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
-use crate::event_log::CostStat;
 use crate::AppState;
 
 /// Query string shared by both endpoints: an ISO-8601 `[from, to)` window and a
@@ -95,6 +90,138 @@ pub(crate) struct StatsOverview {
     pub sessions: Vec<BucketCount>,
     pub fires_by_pipeline: Vec<PipelineFireCount>,
     pub triggers_created_runs: TriggersCreatedRuns,
+    pub session_harnesses: Vec<String>,
+    pub sessions_by_period: Vec<StatsSessionPeriod>,
+    pub sessions_by_pipeline: Vec<StatsSessionEntity>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct HarnessCount {
+    pub total: u64,
+    pub by_harness: BTreeMap<String, u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct StatsSessionHarness {
+    pub harness: String,
+    pub executions: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct StatsSessionPeriod {
+    pub bucket: String,
+    pub harnesses: Vec<StatsSessionHarness>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct StatsSessionEntity {
+    pub id: String,
+    pub name: String,
+    pub executions: u64,
+    pub harnesses: Vec<StatsSessionHarness>,
+    pub by_period: Vec<StatsSessionPeriod>,
+    pub nodes: Vec<StatsSessionEntity>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct SessionNodeBuilder {
+    name: String,
+    count: HarnessCount,
+    periods: BTreeMap<String, HarnessCount>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct SessionPipelineBuilder {
+    name: String,
+    count: HarnessCount,
+    periods: BTreeMap<String, HarnessCount>,
+    nodes: BTreeMap<String, SessionNodeBuilder>,
+}
+
+fn increment_harness(count: &mut HarnessCount, harness: &str) {
+    count.total += 1;
+    *count.by_harness.entry(harness.to_string()).or_default() += 1;
+}
+
+fn harness_rows(count: BTreeMap<String, u64>) -> Vec<StatsSessionHarness> {
+    count
+        .into_iter()
+        .map(|(harness, executions)| StatsSessionHarness {
+            harness,
+            executions,
+        })
+        .collect()
+}
+
+fn period_rows(periods: BTreeMap<String, HarnessCount>) -> Vec<StatsSessionPeriod> {
+    periods
+        .into_iter()
+        .map(|(bucket, count)| StatsSessionPeriod {
+            bucket,
+            harnesses: harness_rows(count.by_harness),
+        })
+        .collect()
+}
+
+fn finish_node(id: String, builder: SessionNodeBuilder) -> StatsSessionEntity {
+    StatsSessionEntity {
+        id,
+        name: builder.name,
+        executions: builder.count.total,
+        harnesses: harness_rows(builder.count.by_harness),
+        by_period: period_rows(builder.periods),
+        nodes: Vec::new(),
+    }
+}
+
+fn finish_pipeline(id: String, builder: SessionPipelineBuilder) -> StatsSessionEntity {
+    let mut nodes: Vec<StatsSessionEntity> = builder
+        .nodes
+        .into_iter()
+        .map(|(id, node)| finish_node(id, node))
+        .collect();
+    nodes.sort_by(|a, b| {
+        b.executions
+            .cmp(&a.executions)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    StatsSessionEntity {
+        id,
+        name: builder.name,
+        executions: builder.count.total,
+        harnesses: harness_rows(builder.count.by_harness),
+        by_period: period_rows(builder.periods),
+        nodes,
+    }
+}
+
+fn project_identity(
+    payload: &serde_json::Value,
+    daemon_root: &Path,
+    projects: &[crate::project_store::Project],
+) -> (String, String) {
+    let root = cost_project_root(payload, daemon_root);
+    let root_text = root.to_string_lossy().into_owned();
+    if let Some(project) = projects
+        .iter()
+        .find(|project| project.members.iter().any(|member| member == &root_text))
+    {
+        return (project.id.clone(), project.name.clone());
+    }
+    let name = root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(&root_text)
+        .to_string();
+    (root_text, name)
+}
+
+struct SessionStats {
+    sessions: Vec<BucketCount>,
+    periods: Vec<StatsSessionPeriod>,
+    harnesses: Vec<String>,
+    pipelines: Vec<StatsSessionEntity>,
 }
 
 /// Count events of one `kind` per period bucket. Backed by `idx_events_kind_ts`.
@@ -169,6 +296,163 @@ async fn triggers_created_runs(
     })
 }
 
+async fn session_stats(
+    state: &AppState,
+    q: &StatsQuery,
+    fmt: &str,
+) -> Result<SessionStats, sqlx::Error> {
+    type SessionRow = (
+        String,
+        String,
+        Option<String>,
+        Option<i64>,
+        Option<String>,
+        Option<i64>,
+        Option<String>,
+    );
+    let rows = sqlx::query_as::<_, SessionRow>(
+        "SELECT strftime(?, cohort.ts), cohort.run_id, cohort.payload, event.id, \
+                event.node_id, event.iter, event.payload \
+         FROM events cohort \
+         JOIN events event ON event.run_id = cohort.run_id AND event.kind = 'node_started' \
+         WHERE cohort.kind = 'run_started' AND cohort.ts >= ? AND cohort.ts < ? \
+         ORDER BY cohort.ts, event.id",
+    )
+    .bind(fmt)
+    .bind(&q.from)
+    .bind(&q.to)
+    .fetch_all(&state.db)
+    .await?;
+
+    let mut periods = BTreeMap::<String, HarnessCount>::new();
+    let mut session_periods = BTreeMap::<String, i64>::new();
+    let mut harnesses = BTreeSet::<String>::new();
+    let mut pipelines = BTreeMap::<String, SessionPipelineBuilder>::new();
+    let mut seen_executions = HashSet::new();
+
+    for (order, (bucket, run_id, run_payload, event_id, node_id, iter, event_payload)) in
+        rows.into_iter().enumerate()
+    {
+        let run_payload: serde_json::Value = run_payload
+            .as_deref()
+            .and_then(|payload| serde_json::from_str(payload).ok())
+            .unwrap_or(serde_json::Value::Null);
+        let event_payload: serde_json::Value = event_payload
+            .as_deref()
+            .and_then(|payload| serde_json::from_str(payload).ok())
+            .unwrap_or(serde_json::Value::Null);
+        let pipeline_id = run_payload
+            .get("pipeline_id")
+            .and_then(|value| value.as_str())
+            .or_else(|| {
+                run_payload
+                    .get("pipeline_name")
+                    .and_then(|value| value.as_str())
+            })
+            .unwrap_or("(unknown)")
+            .to_string();
+        let pipeline_name = run_payload
+            .get("pipeline_name")
+            .and_then(|value| value.as_str())
+            .unwrap_or(&pipeline_id)
+            .to_string();
+        let mut node_defs = BTreeMap::<String, (String, String)>::new();
+        if let Some(defs) = run_payload
+            .get("node_defs")
+            .and_then(|value| value.as_array())
+        {
+            for def in defs {
+                let Some(id) = def.get("id").and_then(|value| value.as_str()) else {
+                    continue;
+                };
+                let name = def
+                    .get("name")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or(id)
+                    .to_string();
+                let node_type = def
+                    .get("node_type")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                node_defs.insert(id.to_string(), (name, node_type));
+            }
+        }
+
+        let Some(node_id) = node_id else {
+            continue;
+        };
+        let node_type = event_payload
+            .get("node_type")
+            .and_then(|value| value.as_str())
+            .or_else(|| node_defs.get(&node_id).map(|(_, kind)| kind.as_str()))
+            .unwrap_or("");
+        if node_type == "script" {
+            continue;
+        }
+        let harness = event_payload
+            .get("harness")
+            .and_then(|value| value.as_str())
+            .filter(|harness| !harness.is_empty())
+            .unwrap_or("claude")
+            .to_string();
+        let identity = crate::run_cost::frozen_execution_identity(
+            &harness,
+            event_payload
+                .get("session_id")
+                .and_then(|value| value.as_str()),
+            Some(&node_id),
+            iter,
+            event_id,
+            order,
+        );
+        if !seen_executions.insert((run_id, identity)) {
+            continue;
+        }
+
+        harnesses.insert(harness.clone());
+        increment_harness(periods.entry(bucket.clone()).or_default(), &harness);
+
+        let pipeline = pipelines.entry(pipeline_id.clone()).or_default();
+        pipeline.name = pipeline_name.clone();
+        increment_harness(&mut pipeline.count, &harness);
+        increment_harness(
+            pipeline.periods.entry(bucket.clone()).or_default(),
+            &harness,
+        );
+
+        *session_periods.entry(bucket.clone()).or_default() += 1;
+        let node_name = node_defs
+            .get(&node_id)
+            .map(|(name, _)| name.clone())
+            .unwrap_or_else(|| node_id.clone());
+        let node = pipeline.nodes.entry(node_id.clone()).or_default();
+        node.name = node_name;
+        increment_harness(&mut node.count, &harness);
+        increment_harness(node.periods.entry(bucket).or_default(), &harness);
+    }
+
+    let mut pipeline_rows: Vec<_> = pipelines
+        .into_iter()
+        .map(|(id, pipeline)| finish_pipeline(id, pipeline))
+        .collect();
+    pipeline_rows.sort_by(|a, b| {
+        b.executions
+            .cmp(&a.executions)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+
+    Ok(SessionStats {
+        sessions: session_periods
+            .into_iter()
+            .map(|(bucket, count)| BucketCount { bucket, count })
+            .collect(),
+        periods: period_rows(periods),
+        harnesses: harnesses.into_iter().collect(),
+        pipelines: pipeline_rows,
+    })
+}
+
 /// Assemble the full overview payload (testable without an `AppState`).
 async fn compute_overview(
     db: &sqlx::SqlitePool,
@@ -199,6 +483,9 @@ async fn compute_overview(
         sessions,
         fires_by_pipeline: fires,
         triggers_created_runs: created,
+        session_harnesses: Vec::new(),
+        sessions_by_period: Vec::new(),
+        sessions_by_pipeline: Vec::new(),
     })
 }
 
@@ -214,9 +501,18 @@ pub(crate) async fn stats_overview(
         )
             .into_response();
     };
-    match compute_overview(&state.db, fmt, &q.from, &q.to).await {
-        Ok(overview) => Json(overview).into_response(),
-        Err(e) => (
+    match (
+        compute_overview(&state.db, fmt, &q.from, &q.to).await,
+        session_stats(&state, &q, fmt).await,
+    ) {
+        (Ok(mut overview), Ok(sessions)) => {
+            overview.sessions = sessions.sessions;
+            overview.session_harnesses = sessions.harnesses;
+            overview.sessions_by_period = sessions.periods;
+            overview.sessions_by_pipeline = sessions.pipelines;
+            Json(overview).into_response()
+        }
+        (Err(e), _) | (_, Err(e)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": format!("stats overview failed: {e}") })),
         )
@@ -225,39 +521,6 @@ pub(crate) async fn stats_overview(
 }
 
 // --- Cost (Class B) ----------------------------------------------------------
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub(crate) struct CostPeriodBucket {
-    pub bucket: String,
-    /// Sum of priced per-run costs (a lower bound — see `partial`/`null`).
-    pub usd: f64,
-    /// Runs in this bucket whose cost is a lower bound (an unpriced model).
-    pub partial: i64,
-    /// Runs in this bucket with no transcript (excluded from `usd`, surfaced so
-    /// the bucket is never silently undercounted). Serialized as `"null"`.
-    #[serde(rename = "null")]
-    pub null_count: i64,
-    /// Total runs folded into this bucket (priced + partial + null).
-    pub runs: i64,
-    /// The union of every unpriced model family key seen across the bucket's
-    /// partial runs — sorted, de-duplicated (#425 AC#4). Empty ⟺ `partial == 0`.
-    /// Lets the chart name *which* models are dragging the bucket to a lower
-    /// bound, not just how many runs were affected.
-    pub unpriced_models: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub(crate) struct CostKeyBucket {
-    pub key: String,
-    pub usd: f64,
-    pub partial: i64,
-    #[serde(rename = "null")]
-    pub null_count: i64,
-    pub runs: i64,
-    /// Union of unpriced model family keys across this bucket's partial runs
-    /// (#425 AC#4). See [`CostPeriodBucket::unpriced_models`].
-    pub unpriced_models: Vec<String>,
-}
 
 /// One resolved price row (#528): a family key, the tier that decides it, and the
 /// `$/MTok` actually in force. `tier` serializes as `"manual" | "fetched" |
@@ -273,113 +536,257 @@ pub(crate) struct ResolvedPriceRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
+pub(crate) struct StatsHarnessCost {
+    pub harness: String,
+    pub usd: Option<f64>,
+    pub estimated: bool,
+    pub partial: bool,
+    pub executions: i64,
+    pub readable: i64,
+    pub unknown: i64,
+    pub average_usd: Option<f64>,
+    pub unpriced_models: Vec<String>,
+    pub missing_reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub(crate) struct StatsCostAggregate {
+    pub usd: Option<f64>,
+    pub average_usd: Option<f64>,
+    pub estimated: bool,
+    pub partial: bool,
+    pub executions: i64,
+    pub readable: i64,
+    pub unknown: i64,
+    pub unpriced_models: Vec<String>,
+    pub missing_reasons: Vec<String>,
+    pub harnesses: Vec<StatsHarnessCost>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub(crate) struct StatsCostPeriod {
+    pub bucket: String,
+    #[serde(flatten)]
+    pub aggregate: StatsCostAggregate,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub(crate) struct StatsCostEntity {
+    pub id: String,
+    pub name: String,
+    #[serde(flatten)]
+    pub aggregate: StatsCostAggregate,
+    pub by_period: Vec<StatsCostPeriod>,
+    pub nodes: Vec<StatsCostEntity>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub(crate) struct StatsProjectCostEntity {
+    #[serde(flatten)]
+    pub entity: StatsCostEntity,
+    pub pipelines: Vec<StatsCostEntity>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) struct StatsCost {
-    pub by_period: Vec<CostPeriodBucket>,
-    pub by_pipeline: Vec<CostKeyBucket>,
-    pub by_project: Vec<CostKeyBucket>,
-    /// The resolved price table (#528), one row per family key in BTreeMap
-    /// (alphabetical) order — the winning tier + resolved `$/MTok`. Independent of
-    /// the `[from, to)` window: it is a property of the price table, not the fold.
-    /// The pure [`fold_cost`] leaves this empty; the handler injects the live table
-    /// so the "Sync costs" button refreshes it on the same refetch it triggers.
+    pub harnesses: Vec<String>,
+    pub total: StatsCostAggregate,
+    pub by_period: Vec<StatsCostPeriod>,
+    pub by_pipeline: Vec<StatsCostEntity>,
+    pub by_project: Vec<StatsProjectCostEntity>,
     pub resolved: Vec<ResolvedPriceRow>,
 }
 
-/// One run's contribution to the cost fold: its period bucket, pipeline key,
-/// project key, and resolved cost (`None` = no transcript).
-struct CostRow {
-    bucket: String,
-    pipeline: String,
-    project: String,
-    cost: Option<CostStat>,
-}
-
-#[derive(Default, Clone)]
-struct CostAcc {
+#[derive(Debug, Clone, Default)]
+struct CostMetricAcc {
     usd: f64,
-    partial: i64,
-    null_count: i64,
-    runs: i64,
-    /// De-dated model keys no tier priced, unioned across the bucket's runs. A
-    /// `BTreeSet` so the emitted `Vec` is sorted + unique for free (#425 AC#4).
-    unpriced: std::collections::BTreeSet<String>,
+    readable_usd: f64,
+    has_usd: bool,
+    estimated: bool,
+    partial: bool,
+    executions: i64,
+    readable: i64,
+    unknown: i64,
+    unpriced_models: BTreeSet<String>,
+    missing_reasons: BTreeSet<String>,
 }
 
-impl CostAcc {
-    fn add(&mut self, cost: &Option<CostStat>) {
-        self.runs += 1;
-        match cost {
-            Some(c) => {
-                self.usd += c.usd;
-                if c.partial {
-                    self.partial += 1;
-                }
-                // Already de-dated by `run_cost::aggregate`; union names across
-                // the bucket so the chart can say which models, not just how many.
-                self.unpriced.extend(c.unpriced_models.iter().cloned());
+impl CostMetricAcc {
+    fn add_contribution(&mut self, contribution: &crate::run_cost::CostContribution) {
+        self.executions += contribution.executions;
+        self.readable += contribution.readable_executions;
+        self.unknown += contribution.executions - contribution.readable_executions;
+        if let Some(usd) = contribution.usd {
+            self.usd += usd;
+            self.has_usd = true;
+            if contribution.readable_executions > 0 {
+                self.readable_usd += usd;
             }
-            None => self.null_count += 1,
+        }
+        self.estimated |= contribution.form == Some(crate::event_log::CostForm::Derived);
+        self.partial |= contribution.partial;
+        self.unpriced_models
+            .extend(contribution.unpriced_models.iter().cloned());
+        self.missing_reasons
+            .extend(contribution.unavailable_reasons.iter().cloned());
+    }
+
+    fn add_run(&mut self, contributions: &[&crate::run_cost::CostContribution]) {
+        if contributions.is_empty() {
+            return;
+        }
+        self.executions += 1;
+        let mut all_readable = true;
+        let mut run_usd = 0.0;
+        for contribution in contributions {
+            if let Some(usd) = contribution.usd {
+                self.usd += usd;
+                run_usd += usd;
+                self.has_usd = true;
+            }
+            all_readable &= if contribution.executions > 0 {
+                contribution.readable_executions == contribution.executions
+            } else {
+                contribution.usd.is_some()
+            };
+            self.estimated |= contribution.form == Some(crate::event_log::CostForm::Derived);
+            self.partial |= contribution.partial;
+            self.unpriced_models
+                .extend(contribution.unpriced_models.iter().cloned());
+            self.missing_reasons
+                .extend(contribution.unavailable_reasons.iter().cloned());
+        }
+        if all_readable {
+            self.readable_usd += run_usd;
+        }
+        self.readable += i64::from(all_readable);
+        self.unknown += i64::from(!all_readable);
+    }
+
+    fn wire(&self) -> StatsCostAggregate {
+        StatsCostAggregate {
+            usd: self.has_usd.then_some(self.usd),
+            average_usd: (self.readable > 0).then_some(self.readable_usd / self.readable as f64),
+            estimated: self.estimated,
+            partial: self.partial,
+            executions: self.executions,
+            readable: self.readable,
+            unknown: self.unknown.max(0),
+            unpriced_models: self.unpriced_models.iter().cloned().collect(),
+            missing_reasons: self.missing_reasons.iter().cloned().collect(),
+            harnesses: Vec::new(),
+        }
+    }
+
+    fn wire_harness(&self, harness: String) -> StatsHarnessCost {
+        StatsHarnessCost {
+            harness,
+            usd: self.has_usd.then_some(self.usd),
+            estimated: self.estimated,
+            partial: self.partial,
+            executions: self.executions,
+            readable: self.readable,
+            unknown: self.unknown.max(0),
+            average_usd: (self.readable > 0).then_some(self.readable_usd / self.readable as f64),
+            unpriced_models: self.unpriced_models.iter().cloned().collect(),
+            missing_reasons: self.missing_reasons.iter().cloned().collect(),
         }
     }
 }
 
-/// Fold per-run cost rows into the three categorical breakdowns. Pure — the
-/// handler does the DB enumeration and cost resolution, this only accumulates,
-/// so it is unit-testable with synthetic rows.
-fn fold_cost(rows: &[CostRow]) -> StatsCost {
-    use std::collections::HashMap;
-    let mut by_period: HashMap<&str, CostAcc> = HashMap::new();
-    let mut by_pipeline: HashMap<&str, CostAcc> = HashMap::new();
-    let mut by_project: HashMap<&str, CostAcc> = HashMap::new();
-    for r in rows {
-        by_period.entry(&r.bucket).or_default().add(&r.cost);
-        by_pipeline.entry(&r.pipeline).or_default().add(&r.cost);
-        by_project.entry(&r.project).or_default().add(&r.cost);
+#[derive(Debug, Clone, Default)]
+struct CostAggregateAcc {
+    total: CostMetricAcc,
+    harnesses: BTreeMap<String, CostMetricAcc>,
+}
+
+impl CostAggregateAcc {
+    fn add_run(&mut self, contributions: &[crate::run_cost::CostContribution]) {
+        let all: Vec<_> = contributions.iter().collect();
+        self.total.add_run(&all);
+        let mut names = BTreeSet::new();
+        for contribution in contributions {
+            if contribution.executions > 0 || contribution.usd.is_some() {
+                names.insert(contribution.harness.clone());
+            }
+        }
+        for harness in names {
+            let matching: Vec<_> = contributions
+                .iter()
+                .filter(|contribution| contribution.harness == harness)
+                .collect();
+            self.harnesses
+                .entry(harness)
+                .or_default()
+                .add_run(&matching);
+        }
     }
 
-    // by_period sorts by label (chronological); the categorical axes sort by
-    // spend desc, then key, for a stable, meaningful order.
-    let mut period: Vec<CostPeriodBucket> = by_period
-        .into_iter()
-        .map(|(bucket, a)| CostPeriodBucket {
-            bucket: bucket.to_string(),
-            usd: a.usd,
-            partial: a.partial,
-            null_count: a.null_count,
-            runs: a.runs,
-            unpriced_models: a.unpriced.iter().cloned().collect(),
-        })
-        .collect();
-    period.sort_by(|a, b| a.bucket.cmp(&b.bucket));
+    fn add_contribution(&mut self, contribution: &crate::run_cost::CostContribution) {
+        self.total.add_contribution(contribution);
+        self.harnesses
+            .entry(contribution.harness.clone())
+            .or_default()
+            .add_contribution(contribution);
+    }
 
-    let to_key_buckets = |map: HashMap<&str, CostAcc>| {
-        let mut v: Vec<CostKeyBucket> = map
-            .into_iter()
-            .map(|(key, a)| CostKeyBucket {
-                key: key.to_string(),
-                usd: a.usd,
-                partial: a.partial,
-                null_count: a.null_count,
-                runs: a.runs,
-                unpriced_models: a.unpriced.iter().cloned().collect(),
-            })
+    fn wire(&self) -> StatsCostAggregate {
+        let mut aggregate = self.total.wire();
+        aggregate.harnesses = self
+            .harnesses
+            .iter()
+            .map(|(harness, metric)| metric.wire_harness(harness.clone()))
             .collect();
-        v.sort_by(|a, b| {
-            b.usd
-                .partial_cmp(&a.usd)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.key.cmp(&b.key))
-        });
-        v
-    };
+        aggregate
+    }
+}
 
-    StatsCost {
-        by_period: period,
-        by_pipeline: to_key_buckets(by_pipeline),
-        by_project: to_key_buckets(by_project),
-        // The pure fold knows nothing of prices; the handler fills this from the
-        // live table (#528).
-        resolved: Vec::new(),
+#[derive(Debug, Clone, Default)]
+struct CostEntityAcc {
+    name: String,
+    aggregate: CostAggregateAcc,
+    periods: BTreeMap<String, CostAggregateAcc>,
+    nodes: BTreeMap<String, CostEntityAcc>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct CostProjectAcc {
+    name: String,
+    aggregate: CostAggregateAcc,
+    periods: BTreeMap<String, CostAggregateAcc>,
+    pipelines: BTreeMap<String, CostEntityAcc>,
+}
+
+fn wire_periods(periods: BTreeMap<String, CostAggregateAcc>) -> Vec<StatsCostPeriod> {
+    periods
+        .into_iter()
+        .map(|(bucket, aggregate)| StatsCostPeriod {
+            bucket,
+            aggregate: aggregate.wire(),
+        })
+        .collect()
+}
+
+fn wire_cost_entity(id: String, entity: CostEntityAcc) -> StatsCostEntity {
+    let mut nodes: Vec<_> = entity
+        .nodes
+        .into_iter()
+        .map(|(id, node)| wire_cost_entity(id, node))
+        .collect();
+    nodes.sort_by(|a, b| {
+        b.aggregate
+            .usd
+            .unwrap_or(-1.0)
+            .partial_cmp(&a.aggregate.usd.unwrap_or(-1.0))
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    StatsCostEntity {
+        id,
+        name: entity.name,
+        aggregate: entity.aggregate.wire(),
+        by_period: wire_periods(entity.periods),
+        nodes,
     }
 }
 
@@ -420,6 +827,165 @@ fn cost_project_root(payload: &serde_json::Value, daemon_root: &Path) -> PathBuf
         .and_then(|v| v.as_str())
         .map(PathBuf::from)
         .unwrap_or_else(|| daemon_root.to_path_buf())
+}
+
+struct CostRunRow {
+    bucket: String,
+    pipeline_id: String,
+    pipeline_name: String,
+    project_id: String,
+    project_name: String,
+    node_names: BTreeMap<String, String>,
+    contributions: Vec<crate::run_cost::CostContribution>,
+}
+
+fn fold_harness_cost(runs: &[CostRunRow], resolved: Vec<ResolvedPriceRow>) -> StatsCost {
+    let mut total = CostAggregateAcc::default();
+    let mut periods = BTreeMap::<String, CostAggregateAcc>::new();
+    let mut pipelines = BTreeMap::<String, CostEntityAcc>::new();
+    let mut projects = BTreeMap::<String, CostProjectAcc>::new();
+    let mut active_harnesses = BTreeSet::new();
+
+    for run in runs {
+        total.add_run(&run.contributions);
+        periods
+            .entry(run.bucket.clone())
+            .or_default()
+            .add_run(&run.contributions);
+
+        let pipeline = pipelines.entry(run.pipeline_id.clone()).or_default();
+        pipeline.name = run.pipeline_name.clone();
+        pipeline.aggregate.add_run(&run.contributions);
+        pipeline
+            .periods
+            .entry(run.bucket.clone())
+            .or_default()
+            .add_run(&run.contributions);
+
+        let project = projects.entry(run.project_id.clone()).or_default();
+        project.name = run.project_name.clone();
+        project.aggregate.add_run(&run.contributions);
+        project
+            .periods
+            .entry(run.bucket.clone())
+            .or_default()
+            .add_run(&run.contributions);
+        let project_pipeline = project
+            .pipelines
+            .entry(run.pipeline_id.clone())
+            .or_default();
+        project_pipeline.name = run.pipeline_name.clone();
+        project_pipeline.aggregate.add_run(&run.contributions);
+        project_pipeline
+            .periods
+            .entry(run.bucket.clone())
+            .or_default()
+            .add_run(&run.contributions);
+
+        for contribution in &run.contributions {
+            if contribution.executions > 0 {
+                active_harnesses.insert(contribution.harness.clone());
+            }
+            let (id, name) = match contribution.scope {
+                crate::run_cost::CostScope::Node => {
+                    let id = contribution
+                        .node_id
+                        .clone()
+                        .unwrap_or_else(|| "(unknown)".to_string());
+                    let name = run
+                        .node_names
+                        .get(&id)
+                        .cloned()
+                        .unwrap_or_else(|| id.clone());
+                    (id, name)
+                }
+                crate::run_cost::CostScope::Infrastructure => (
+                    format!("{}:infrastructure", run.pipeline_id),
+                    "Infrastructure".to_string(),
+                ),
+                crate::run_cost::CostScope::Unassigned => (
+                    format!("{}:unassigned", run.pipeline_id),
+                    "Unassigned".to_string(),
+                ),
+            };
+            let node = pipeline.nodes.entry(id.clone()).or_default();
+            node.name = name.clone();
+            node.aggregate.add_contribution(contribution);
+            node.periods
+                .entry(run.bucket.clone())
+                .or_default()
+                .add_contribution(contribution);
+
+            let project_node = project_pipeline.nodes.entry(id).or_default();
+            project_node.name = name;
+            project_node.aggregate.add_contribution(contribution);
+            project_node
+                .periods
+                .entry(run.bucket.clone())
+                .or_default()
+                .add_contribution(contribution);
+        }
+    }
+
+    let mut by_pipeline: Vec<_> = pipelines
+        .into_iter()
+        .map(|(id, pipeline)| wire_cost_entity(id, pipeline))
+        .collect();
+    by_pipeline.sort_by(|a, b| {
+        b.aggregate
+            .usd
+            .unwrap_or(-1.0)
+            .partial_cmp(&a.aggregate.usd.unwrap_or(-1.0))
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+
+    let mut by_project: Vec<_> = projects
+        .into_iter()
+        .map(|(id, project)| {
+            let mut pipelines: Vec<_> = project
+                .pipelines
+                .into_iter()
+                .map(|(id, pipeline)| wire_cost_entity(id, pipeline))
+                .collect();
+            pipelines.sort_by(|a, b| {
+                b.aggregate
+                    .usd
+                    .unwrap_or(-1.0)
+                    .partial_cmp(&a.aggregate.usd.unwrap_or(-1.0))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| a.id.cmp(&b.id))
+            });
+            StatsProjectCostEntity {
+                entity: StatsCostEntity {
+                    id,
+                    name: project.name,
+                    aggregate: project.aggregate.wire(),
+                    by_period: wire_periods(project.periods),
+                    nodes: Vec::new(),
+                },
+                pipelines,
+            }
+        })
+        .collect();
+    by_project.sort_by(|a, b| {
+        b.entity
+            .aggregate
+            .usd
+            .unwrap_or(-1.0)
+            .partial_cmp(&a.entity.aggregate.usd.unwrap_or(-1.0))
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.entity.id.cmp(&b.entity.id))
+    });
+
+    StatsCost {
+        harnesses: active_harnesses.into_iter().collect(),
+        total: total.wire(),
+        by_period: wire_periods(periods),
+        by_pipeline,
+        by_project,
+        resolved,
+    }
 }
 
 /// `GET /stats/cost` — Class B, memo + app-side fold. Heavy (fans over the
@@ -474,8 +1040,19 @@ pub(crate) async fn stats_cost(
     // not this one. The table's fingerprint is the memo's third key component, so a
     // sync is visible here without a daemon restart.
     let prices = crate::price_table::PriceTable::load(&home_root);
+    let copilot_root = crate::sandbox_run::copilot_store_root(&home_root);
+    let stored_projects = match crate::project_store::list(&state.db).await {
+        Ok(projects) => projects,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("stats cost failed: {error}") })),
+            )
+                .into_response();
+        }
+    };
 
-    let mut cost_rows: Vec<CostRow> = Vec::with_capacity(rows.len());
+    let mut cost_rows: Vec<CostRunRow> = Vec::with_capacity(rows.len());
     for (run_id, bucket, payload) in rows {
         let payload: serde_json::Value = payload
             .as_deref()
@@ -484,15 +1061,21 @@ pub(crate) async fn stats_cost(
 
         // Pipeline key: `pipeline_id` going forward (#377), else the (always
         // present) `pipeline_name` — so grouping survives a rename (#230).
-        let pipeline = payload
+        let pipeline_id = payload
             .get("pipeline_id")
             .and_then(|v| v.as_str())
             .or_else(|| payload.get("pipeline_name").and_then(|v| v.as_str()))
             .unwrap_or("(unknown)")
             .to_string();
+        let pipeline_name = payload
+            .get("pipeline_name")
+            .and_then(|value| value.as_str())
+            .unwrap_or(&pipeline_id)
+            .to_string();
 
         let repo_root = cost_project_root(&payload, &state.repo_root);
-        let project = repo_root.to_string_lossy().into_owned();
+        let (project_id, project_name) =
+            project_identity(&payload, &state.repo_root, &stored_projects);
 
         // #408: read the transcripts from the sandboxed Run's staged home while it
         // is live (else `~/.claude/projects/`). Read `sandbox` straight off the
@@ -512,22 +1095,51 @@ pub(crate) async fn stats_cost(
             });
         let projects_root =
             crate::sandbox_run::transcripts_root(sandboxed, &run_id, &home_root, &sandbox_root);
-
-        let cost =
-            crate::run_cost::compute_run_cost_cached(&projects_root, &repo_root, &run_id, &prices);
-        cost_rows.push(CostRow {
+        let events = match crate::load_events(&state.db, &run_id).await {
+            Ok(events) => events,
+            Err(error) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": format!("stats cost failed: {error}") })),
+                )
+                    .into_response();
+            }
+        };
+        let breakdown = crate::run_cost::compute_run_cost_breakdown_cached(
+            &events,
+            &projects_root,
+            &copilot_root,
+            &repo_root,
+            &run_id,
+            &prices,
+        );
+        let node_names = payload
+            .get("node_defs")
+            .and_then(|value| value.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|node| {
+                let id = node.get("id")?.as_str()?.to_string();
+                let name = node
+                    .get("name")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or(&id)
+                    .to_string();
+                Some((id, name))
+            })
+            .collect();
+        cost_rows.push(CostRunRow {
             bucket,
-            pipeline,
-            project,
-            cost,
+            pipeline_id,
+            pipeline_name,
+            project_id,
+            project_name,
+            node_names,
+            contributions: breakdown.contributions,
         });
     }
 
-    // #528: carry the resolved price table alongside the fold — the same `prices`
-    // that billed every row above, so the Cost tab shows exactly what the pricer
-    // would apply, and a "Sync costs" refetch refreshes it in one round-trip.
-    let mut stats = fold_cost(&cost_rows);
-    stats.resolved = resolved_price_rows(&prices);
+    let stats = fold_harness_cost(&cost_rows, resolved_price_rows(&prices));
     Json(stats).into_response()
 }
 
@@ -543,6 +1155,19 @@ mod tests {
             .unwrap();
         crate::init_db(&db).await.unwrap();
         db
+    }
+
+    #[tokio::test]
+    async fn init_db_installs_the_idempotent_session_cohort_join_index() {
+        let db = mem_db().await;
+        crate::init_db(&db).await.unwrap();
+        let columns = sqlx::query_scalar::<_, String>(
+            "SELECT name FROM pragma_index_info('idx_events_run_kind_id') ORDER BY seqno",
+        )
+        .fetch_all(&db)
+        .await
+        .unwrap();
+        assert_eq!(columns, vec!["run_id", "kind", "id"]);
     }
 
     /// Insert a `run_started` + a terminal event for a run. `target_repo` is an
@@ -766,141 +1391,6 @@ mod tests {
     }
 
     #[test]
-    fn fold_cost_sums_and_propagates_partial_and_null() {
-        let rows = vec![
-            CostRow {
-                bucket: "2026-07-15".into(),
-                pipeline: "alpha".into(),
-                project: "/proj/A".into(),
-                cost: Some(CostStat {
-                    usd: 1.0,
-                    partial: false,
-                    unpriced_models: vec![],
-                    uncosted_harnesses: vec![],
-                }),
-            },
-            CostRow {
-                bucket: "2026-07-15".into(),
-                pipeline: "alpha".into(),
-                project: "/proj/A".into(),
-                cost: Some(CostStat {
-                    usd: 2.0,
-                    partial: true,
-                    unpriced_models: vec!["claude-sonnet-5".into()],
-                    uncosted_harnesses: vec![],
-                }),
-            },
-            CostRow {
-                bucket: "2026-07-16".into(),
-                pipeline: "beta".into(),
-                project: "/proj/B".into(),
-                cost: None, // no transcript
-            },
-        ];
-        let c = fold_cost(&rows);
-
-        // by_period: the 15th sums 1.0 + 2.0 with one partial run; the 16th is
-        // all-null (usd 0, null 1).
-        let d15 = c
-            .by_period
-            .iter()
-            .find(|b| b.bucket == "2026-07-15")
-            .unwrap();
-        assert!((d15.usd - 3.0).abs() < 1e-9);
-        assert_eq!(d15.partial, 1);
-        assert_eq!(d15.null_count, 0);
-        assert_eq!(d15.runs, 2);
-        // #425 AC#4: the unpriced model of the one partial run is named on the
-        // bucket, not just counted.
-        assert_eq!(d15.unpriced_models, vec!["claude-sonnet-5".to_string()]);
-        let d16 = c
-            .by_period
-            .iter()
-            .find(|b| b.bucket == "2026-07-16")
-            .unwrap();
-        assert_eq!(d16.usd, 0.0);
-        assert_eq!(d16.null_count, 1);
-        assert_eq!(d16.runs, 1);
-        // by_period is chronological.
-        assert_eq!(
-            c.by_period
-                .iter()
-                .map(|b| b.bucket.as_str())
-                .collect::<Vec<_>>(),
-            vec!["2026-07-15", "2026-07-16"]
-        );
-
-        // by_pipeline: alpha carries all the spend (sorted first, desc by usd).
-        assert_eq!(c.by_pipeline[0].key, "alpha");
-        assert!((c.by_pipeline[0].usd - 3.0).abs() < 1e-9);
-        assert_eq!(c.by_pipeline[0].partial, 1);
-        assert_eq!(c.by_pipeline[0].runs, 2);
-        assert_eq!(
-            c.by_pipeline[0].unpriced_models,
-            vec!["claude-sonnet-5".to_string()]
-        );
-        let beta = c.by_pipeline.iter().find(|b| b.key == "beta").unwrap();
-        assert_eq!(beta.usd, 0.0);
-        assert_eq!(beta.null_count, 1);
-        // A wholly-null bucket names nothing.
-        assert!(beta.unpriced_models.is_empty());
-
-        // by_project mirrors the pipeline split here.
-        assert_eq!(c.by_project[0].key, "/proj/A");
-        assert!((c.by_project[0].usd - 3.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn fold_cost_unions_and_dedups_unpriced_model_names_across_runs() {
-        // #425 AC#4: two partial runs in one bucket, sharing one offender and each
-        // bringing one of its own → the bucket names the UNION, sorted and unique.
-        let rows = vec![
-            CostRow {
-                bucket: "d".into(),
-                pipeline: "p".into(),
-                project: "/proj".into(),
-                cost: Some(CostStat {
-                    usd: 0.0,
-                    partial: true,
-                    unpriced_models: vec!["claude-sonnet-5".into(), "claude-fable-5".into()],
-                    uncosted_harnesses: vec![],
-                }),
-            },
-            CostRow {
-                bucket: "d".into(),
-                pipeline: "p".into(),
-                project: "/proj".into(),
-                cost: Some(CostStat {
-                    usd: 0.0,
-                    partial: true,
-                    unpriced_models: vec!["claude-fable-5".into(), "claude-opus-5".into()],
-                    uncosted_harnesses: vec![],
-                }),
-            },
-        ];
-        let c = fold_cost(&rows);
-        let d = c.by_period.iter().find(|b| b.bucket == "d").unwrap();
-        assert_eq!(d.partial, 2);
-        assert_eq!(
-            d.unpriced_models,
-            vec![
-                "claude-fable-5".to_string(),
-                "claude-opus-5".to_string(),
-                "claude-sonnet-5".to_string(),
-            ],
-            "union across the bucket, de-duplicated and sorted"
-        );
-    }
-
-    #[test]
-    fn fold_cost_leaves_resolved_empty_the_handler_fills_it() {
-        // The pure fold knows nothing of prices — the handler injects the live
-        // table (#528). This pins the contract so a future refactor can't wire the
-        // price table into the fold by accident.
-        assert!(fold_cost(&[]).resolved.is_empty());
-    }
-
-    #[test]
     fn resolved_price_rows_project_the_floor_faithfully() {
         // The projection `resolved_entries -> ResolvedPriceRow` is faithful: the
         // fourteen embedded families (since #527 floored the current generation),
@@ -938,6 +1428,70 @@ mod tests {
             cost_project_root(&payload, Path::new("/daemon/root")),
             PathBuf::from("/proj/A")
         );
+    }
+
+    #[test]
+    fn unnamed_project_uses_the_primary_repository_identity_and_readable_name() {
+        let payload = serde_json::json!({ "target_repo": "/repos/product-api" });
+        assert_eq!(
+            project_identity(&payload, Path::new("/daemon/root"), &[]),
+            ("/repos/product-api".to_string(), "product-api".to_string())
+        );
+    }
+
+    #[test]
+    fn harness_cost_fold_keeps_lower_bounds_and_unknown_columns_honest() {
+        let run = CostRunRow {
+            bucket: "2026-07-15".to_string(),
+            pipeline_id: "p".to_string(),
+            pipeline_name: "Pipeline".to_string(),
+            project_id: "/repo".to_string(),
+            project_name: "repo".to_string(),
+            node_names: BTreeMap::from([("n".to_string(), "Node".to_string())]),
+            contributions: vec![
+                crate::run_cost::CostContribution {
+                    harness: "claude".to_string(),
+                    scope: crate::run_cost::CostScope::Node,
+                    node_id: Some("n".to_string()),
+                    executions: 1,
+                    readable_executions: 1,
+                    usd: Some(0.0),
+                    form: Some(crate::event_log::CostForm::Derived),
+                    partial: true,
+                    unpriced_models: vec!["claude-fable-5".to_string()],
+                    unavailable_reasons: Vec::new(),
+                },
+                crate::run_cost::CostContribution {
+                    harness: "future".to_string(),
+                    scope: crate::run_cost::CostScope::Node,
+                    node_id: Some("n".to_string()),
+                    executions: 1,
+                    readable_executions: 0,
+                    usd: None,
+                    form: None,
+                    partial: false,
+                    unpriced_models: Vec::new(),
+                    unavailable_reasons: vec!["harness has no cost source".to_string()],
+                },
+            ],
+        };
+
+        let stats = fold_harness_cost(&[run], Vec::new());
+        assert_eq!(stats.harnesses, vec!["claude", "future"]);
+        assert_eq!(stats.total.usd, Some(0.0));
+        assert!(stats.total.partial);
+        assert_eq!(stats.total.executions, 1);
+        assert_eq!(stats.total.readable, 0);
+        assert_eq!(stats.total.unknown, 1);
+        assert_eq!(stats.total.average_usd, None);
+        assert_eq!(stats.total.unpriced_models, vec!["claude-fable-5"]);
+        let claude = &stats.total.harnesses[0];
+        assert_eq!(claude.average_usd, Some(0.0));
+        assert_eq!(claude.readable, 1);
+        let future = &stats.total.harnesses[1];
+        assert_eq!(future.usd, None);
+        assert_eq!(future.unknown, 1);
+        assert_eq!(future.missing_reasons, vec!["harness has no cost source"]);
     }
 
     #[test]

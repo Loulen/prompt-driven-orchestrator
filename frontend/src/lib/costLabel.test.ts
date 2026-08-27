@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
   costPrecision,
+  formatCostAmount,
   formatEstCost,
-  formatBucketCost,
+  COST_ESTIMATE_NOTE,
+  COST_REPORTED_NOTE,
 } from "./costLabel";
 
 describe("costPrecision", () => {
@@ -11,6 +13,14 @@ describe("costPrecision", () => {
     expect(costPrecision(0.999)).toBe(4);
     expect(costPrecision(1)).toBe(2);
     expect(costPrecision(12.5)).toBe(2);
+  });
+
+  describe("formatCostAmount (#638)", () => {
+    it("distinguishes derived estimates from reported cost", () => {
+      expect(formatCostAmount(2, false, true)).toBe("~$2.00");
+      expect(formatCostAmount(2, false, false)).toBe("$2.00");
+      expect(formatCostAmount(null, false, false)).toBe("—");
+    });
   });
 });
 
@@ -75,59 +85,94 @@ describe("formatEstCost (single run, #272)", () => {
     // Not framed as a lower bound — there is no figure at all.
     expect(c.title).not.toContain("claude-fable-5");
   });
-});
 
-describe("formatBucketCost (aggregate, #377)", () => {
-  it("sums a plain bucket with no partial/null contributions", () => {
-    const c = formatBucketCost(3.4, 0, 0, 2);
-    expect(c.text).toBe("~$3.40");
+  it("ventilates a mixed Run by harness, summable but said per harness (#615)", () => {
+    const c = formatEstCost(7.0, false, [], [], [
+      { harness: "claude", usd: 5.0, form: "derived", partial: false, unpriced_models: [] },
+      { harness: "copilot", usd: 2.0, form: "reported", partial: false, unpriced_models: [] },
+    ]);
+    // The total stays summable.
+    expect(c.text).toBe("~$7.00");
+    // Breakdown carries both slices, each with its form.
+    expect(c.ventilation).toEqual([
+      { harness: "claude", text: "~$5.00", form: "derived" },
+      { harness: "copilot", text: "~$2.00", form: "reported" },
+    ]);
+    // The Claude-Code estimate wording appears only under the derived slice…
+    expect(c.title).toMatch(/via `claude` \(derived\)/);
+    expect(c.title).toContain(COST_ESTIMATE_NOTE);
+    // …and the reported slice is framed as reported, not as an estimate.
+    expect(c.title).toMatch(/via `copilot` \(reported\)/);
+    expect(c.title).toContain(COST_REPORTED_NOTE);
+  });
+
+  it("does not label a pure-copilot Run as a Claude-Code estimate (#615)", () => {
+    const c = formatEstCost(1.0, false, [], [], [
+      { harness: "copilot", usd: 1.0, form: "reported", partial: false, unpriced_models: [] },
+    ]);
+    expect(c.text).toBe("~$1.00");
+    // The AC: "estimate from Claude Code transcripts" shows ONLY under a derived
+    // cost — a reported copilot figure must not carry it.
+    expect(c.title).not.toContain(COST_ESTIMATE_NOTE);
+    expect(c.title).toContain(COST_REPORTED_NOTE);
     expect(c.dagger).toBe(false);
-    expect(c.empty).toBe(false);
-    expect(c.title).toMatch(/estimate/i);
-    expect(c.title).not.toMatch(/lower bound/i);
-    expect(c.title).not.toMatch(/no transcript/i);
   });
 
-  it("marks a bucket with a partial run as a lower bound and counts it", () => {
-    const c = formatBucketCost(5.0, 1, 0, 3);
-    expect(c.dagger).toBe(true);
-    expect(c.text).toBe("~$5.00");
-    expect(c.title).toMatch(/lower bound/i);
-    expect(c.title).toMatch(/1 partial run\b/);
-  });
+  it("says its slices under an unavailable total — only the sum is refused (#617 FP)", () => {
+    // The three-harness Run: claude + opencode + copilot. `opencode` withholds the
+    // TOTAL (#553), but what came through the two instrumented harnesses is known
+    // and must be said (ADR-0052 §3). Suppressing the breakdown made the one Run
+    // built to observe ventilation the one Run that could not show any.
+    const c = formatEstCost(0, false, [], ["opencode"], [
+      { harness: "claude", usd: 0.342386, form: "derived", partial: false, unpriced_models: [] },
+      { harness: "copilot", usd: 0.1005058, form: "reported", partial: false, unpriced_models: [] },
+    ]);
 
-  it("names the unioned unpriced models alongside the partial-run count (#425)", () => {
-    const c = formatBucketCost(5.0, 2, 0, 4, ["claude-fable-5", "claude-sonnet-5"]);
-    expect(c.dagger).toBe(true);
-    expect(c.title).toMatch(/lower bound/i);
-    expect(c.title).toContain("claude-fable-5");
-    expect(c.title).toContain("claude-sonnet-5");
-    expect(c.title).toMatch(/2 partial runs/);
-  });
-
-  it("pluralises partial run count", () => {
-    expect(formatBucketCost(5.0, 2, 0, 4).title).toMatch(/2 partial runs/);
-  });
-
-  it("surfaces null-cost runs in the tooltip without inflating the figure", () => {
-    const c = formatBucketCost(2.0, 0, 1, 3);
-    expect(c.text).toBe("~$2.00");
-    expect(c.empty).toBe(false);
-    expect(c.title).toMatch(/1 run had no transcript \(excluded\)/);
-  });
-
-  it("renders — (never $0) for a bucket with no priced runs (all null)", () => {
-    const c = formatBucketCost(0, 0, 3, 3);
+    // Still "—", still no dagger, still naming the reason.
     expect(c.text).toBe("—");
-    expect(c.empty).toBe(true);
-    expect(c.text).not.toContain("$");
-    // The tooltip still explains why it is empty.
-    expect(c.title).toMatch(/3 runs had no transcript/);
+    expect(c.dagger).toBe(false);
+    expect(c.title).toMatch(/cost unavailable/i);
+    expect(c.title).toContain("opencode");
+
+    // …and the two slices are there, each framed by its own form.
+    expect(c.ventilation).toEqual([
+      { harness: "claude", text: "~$0.3424", form: "derived" },
+      { harness: "copilot", text: "~$0.1005", form: "reported" },
+    ]);
+    expect(c.title).toMatch(/via `claude` \(derived\)/);
+    expect(c.title).toMatch(/via `copilot` \(reported\)/);
+    expect(c.title).toContain(COST_REPORTED_NOTE);
+    // The reason leads the tooltip — the absence is the headline, not a footnote.
+    expect(c.title.indexOf("Cost unavailable")).toBeLessThan(c.title.indexOf("via `claude`"));
   });
 
-  it("renders — for a bucket with no runs at all", () => {
-    const c = formatBucketCost(0, 0, 0, 0);
+  it("frames a reported slice as reported even under an unavailable total (#615 AC)", () => {
+    // copilot + opencode: no total, and the only slice is a reported one. The
+    // Claude-Code estimate wording must not appear — there is no derived cost here.
+    const c = formatEstCost(0, false, [], ["opencode"], [
+      { harness: "copilot", usd: 1.0, form: "reported", partial: false, unpriced_models: [] },
+    ]);
     expect(c.text).toBe("—");
-    expect(c.empty).toBe(true);
+    expect(c.title).not.toContain(COST_ESTIMATE_NOTE);
+    expect(c.title).toContain(COST_REPORTED_NOTE);
+  });
+
+  it("keeps a bare '—' when an unavailable Run has no computable slice (#553)", () => {
+    // An all-opencode Run: nothing to ventilate, so nothing is invented.
+    const c = formatEstCost(0, false, [], ["opencode"], []);
+    expect(c.text).toBe("—");
+    expect(c.ventilation).toBeUndefined();
+    expect(c.title).toMatch(/cost unavailable/i);
+  });
+
+  it("daggers a mixed Run only when a DERIVED slice is a lower bound (#615)", () => {
+    const c = formatEstCost(7.0, true, ["claude-opus-6"], [], [
+      { harness: "claude", usd: 5.0, form: "derived", partial: true, unpriced_models: ["claude-opus-6"] },
+      { harness: "copilot", usd: 2.0, form: "reported", partial: false, unpriced_models: [] },
+    ]);
+    expect(c.dagger).toBe(true);
+    expect(c.title).toContain("claude-opus-6");
+    // The reported slice never contributes an unpriced-model name.
+    expect(c.title).toMatch(/via `copilot` \(reported\)/);
   });
 });

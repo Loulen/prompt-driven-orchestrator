@@ -356,7 +356,7 @@ export interface HarnessDescriptorsView {
 }
 
 /** One resolved harness, as `GET /settings → harness_descriptors.harnesses`
- *  discloses it (#586). */
+ *  discloses it (#586, #616). */
 export interface HarnessListItem {
   name: string;
   /** `builtin` = the embedded floor (claude/opencode); `descriptor` = the disk tier. */
@@ -364,6 +364,20 @@ export interface HarnessListItem {
   /** Whether the harness's binary resolves on the daemon's `$PATH`. `false` greys
    *  the row and blocks selection — a spawn would fail fast (ADR-0037). */
   installed: boolean;
+  /** #616/ADR-0053: the model ids the installed binary offers, deduced from it and
+   *  served — the picker renders THESE instead of a hard-coded alias list. Empty ⇒
+   *  the binary enumerates none, so the client falls back to free text (a declared
+   *  absence). Optional so a daemon predating #616 still typechecks. */
+  models?: string[];
+  /** #616/ADR-0053: the effort levels the binary offers. Empty ⇒ no effort axis. */
+  efforts?: string[];
+  /** #616/ADR-0053: the served effort-axis fact — whether this harness has an
+   *  effort axis at all. Drives the effort-picker greying, replacing the client's
+   *  hard-coded map. */
+  has_effort?: boolean;
+  /** #616/ADR-0053: the probed binary version the catalogue was read at, for the
+   *  picker's provenance line. `null` when the binary answered no `--version`. */
+  version?: string | null;
 }
 
 /** `GET /settings` → `price_table` (#427). */
@@ -612,6 +626,14 @@ export interface NodeState {
    * `NodeState` literal in `App.tsx` would otherwise stop compiling.
    */
   missing_outputs?: string[];
+  /**
+   * #616/ADR-0046: the harness this node's session was FROZEN on at spawn, from the
+   * `NodeStarted` payload. Shown per-node in the Run view (next to the id, on
+   * select) so what actually ran is visible — distinct from the run-level default
+   * (`RunState.harness`). Optional: absent for a node that never started (a pure
+   * skip) or a pre-#616 daemon.
+   */
+  harness?: string;
 }
 
 export interface EdgeInfo {
@@ -837,13 +859,30 @@ export interface RunState {
    * summable, so the UI shows "—" with a reason naming them, never a `$0` and
    * never a mute lower-bound — a categorically different state from `partial`
    * (which still shows a figure). Empty on every all-`claude` Run.
+   *
+   * `by_harness` (#615, ADR-0052): the total ventilated by harness — "X via
+   * `copilot`, Y via `claude`". `usd` is their sum; each slice carries its `form`
+   * (a `derived` claude estimate vs a `reported` copilot figure), so the UI frames
+   * *only* a derived slice as a Claude-Code estimate and never labels a reported
+   * one as one. Absent/empty on a pre-#615 Run or one with no costable session.
    */
   cost?: {
     usd: number;
     partial: boolean;
     unpriced_models: string[];
     uncosted_harnesses?: string[];
+    by_harness?: HarnessCost[];
   } | null;
+}
+
+/** One harness's slice of a Run's cost (#615, ADR-0052 §3). Additive in dollars,
+ *  tagged with its `form` so a reported figure is never mislabelled an estimate. */
+export interface HarnessCost {
+  harness: string;
+  usd: number;
+  form: "derived" | "reported";
+  partial: boolean;
+  unpriced_models: string[];
 }
 
 export interface DaemonEvent {
@@ -1141,32 +1180,77 @@ export interface StatsOverview {
   errors: StatsBucketCount[];
   /** `node_started` starts (re-spawns and loop laps included, manager excluded). */
   sessions: StatsBucketCount[];
+  /** Harness columns active in the selected Run cohort. */
+  session_harnesses: string[];
+  /** Session starts split by harness for the stacked chart. */
+  sessions_by_period: StatsSessionPeriod[];
+  /** Pipeline → Node session hierarchy. */
+  sessions_by_pipeline: StatsSessionEntity[];
   fires_by_pipeline: StatsPipelineFireCount[];
   triggers_created_runs: StatsTriggersCreatedRuns;
 }
 
-/** A cost breakdown row. Cost is a **sum of lower bounds**: `partial` runs and
- *  `null` runs (no transcript, excluded from `usd`) are counted separately so
- *  the number is never silently undercounted (ADR-0001 / ADR-0022). */
-export interface StatsCostBucket {
-  usd: number;
-  /** Runs whose cost is a lower bound (an unpriced model was excluded). */
-  partial: number;
-  /** Runs with no transcript, excluded from `usd` but surfaced. */
-  null: number;
-  /** Total runs folded here (priced + partial + null). */
-  runs: number;
-  /** Union of the family keys no tier priced across this bucket's partial runs,
-   *  sorted + de-duplicated (#425 AC#4). Empty ⟺ `partial === 0`. */
-  unpriced_models: string[];
+export interface StatsSessionHarness {
+  harness: string;
+  executions: number;
 }
 
-export interface StatsCostPeriodBucket extends StatsCostBucket {
+export interface StatsSessionPeriod {
+  bucket: string;
+  harnesses: StatsSessionHarness[];
+}
+
+export interface StatsSessionEntity {
+  id: string;
+  name: string;
+  executions: number;
+  harnesses: StatsSessionHarness[];
+  by_period: StatsSessionPeriod[];
+  nodes: StatsSessionEntity[];
+}
+
+/** One harness's cost and denominator coverage within an aggregate. */
+export interface StatsHarnessCost {
+  harness: string;
+  /** Null means no readable contribution, never zero. */
+  usd: number | null;
+  estimated: boolean;
+  partial: boolean;
+  executions: number;
+  readable: number;
+  unknown: number;
+  average_usd: number | null;
+  unpriced_models: string[];
+  missing_reasons: string[];
+}
+
+/** Cost shared by Total, periods, Projects, Pipelines and Nodes. */
+export interface StatsCostAggregate {
+  usd: number | null;
+  average_usd: number | null;
+  estimated: boolean;
+  partial: boolean;
+  executions: number;
+  readable: number;
+  unknown: number;
+  unpriced_models: string[];
+  missing_reasons: string[];
+  harnesses: StatsHarnessCost[];
+}
+
+export interface StatsCostPeriod extends StatsCostAggregate {
   bucket: string;
 }
 
-export interface StatsCostKeyBucket extends StatsCostBucket {
-  key: string;
+export interface StatsCostEntity extends StatsCostAggregate {
+  id: string;
+  name: string;
+  by_period: StatsCostPeriod[];
+  nodes: StatsCostEntity[];
+}
+
+export interface StatsProjectCostEntity extends StatsCostEntity {
+  pipelines: StatsCostEntity[];
 }
 
 /** One resolved price row (#528): a family, the tier that decides it, the price in
@@ -1183,9 +1267,11 @@ export interface PriceRow {
 }
 
 export interface StatsCost {
-  by_period: StatsCostPeriodBucket[];
-  by_pipeline: StatsCostKeyBucket[];
-  by_project: StatsCostKeyBucket[];
+  harnesses: string[];
+  total: StatsCostAggregate;
+  by_period: StatsCostPeriod[];
+  by_pipeline: StatsCostEntity[];
+  by_project: StatsProjectCostEntity[];
   /** The resolved price table, one row per family in alphabetical order (#528).
    *  Window-independent — a property of the price table, not the fold. Refreshed
    *  by the "Sync costs" refetch on the Cost tab. */

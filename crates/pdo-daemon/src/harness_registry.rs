@@ -51,6 +51,19 @@ pub struct HarnessDescriptor {
     /// resume mechanism, so a resume serves the last pane snapshot rather than an
     /// error (AC #9, same branch as a `script` node).
     pub resume: Vec<String>,
+    /// The flag that fills the resume template's `{resume}` hole to re-enter a
+    /// conversation **by session identity** — `claude`/`copilot`'s `--resume`. The
+    /// resume seam prepends it to the node's recorded session id (`--resume '<id>'`).
+    /// **Empty** ⇒ the harness cannot resume by identity, so the seam falls back to
+    /// [`Self::resume_blind`]. This is the #614 move: the resume *verb* is a property
+    /// of the harness, not a constant hard-coded in the resume seam.
+    pub resume_by_id: String,
+    /// The flag that fills `{resume}` when the node has **no** recorded identity —
+    /// `claude`/`opencode`'s blind `--continue` (re-enter the cwd's latest session).
+    /// **Empty** ⇒ the harness never blind-continues, so a resume with no identity
+    /// renders no resume flag at all (`copilot`: resume is by identity or not at
+    /// all — never a blind continue).
+    pub resume_blind: String,
     /// Env exported before an agent tail (`K=V`). Rendered by the wrapper.
     pub env: Vec<(String, String)>,
 }
@@ -70,6 +83,22 @@ impl HarnessDescriptor {
     /// serves the pane snapshot (AC #9).
     pub fn can_resume(&self) -> bool {
         !self.resume.is_empty()
+    }
+
+    /// Whether the templates carry a `{settings}` hole — i.e. this harness accepts
+    /// an injected settings file (the turn-end `Stop` hook substrate, #433/ADR-0043).
+    ///
+    /// #613/ADR-0051 (correctif 8): PDO writes the claude-format settings file
+    /// **only** for a harness that has this hole. `opencode` has none (its template
+    /// carries no `{settings}` token), so a node on it gets no stray settings file
+    /// beside its prompt — "the absence is said, never supplied". Checks both
+    /// templates so a harness that resumes but does not launch with settings (or the
+    /// reverse) is still handled at the matching seam.
+    pub fn has_settings_hole(&self) -> bool {
+        self.launch
+            .iter()
+            .chain(self.resume.iter())
+            .any(|t| t.contains("{settings}"))
     }
 
     /// Whether the LAUNCH template pins a session identity (`{session_id}`).
@@ -98,6 +127,39 @@ impl HarnessDescriptor {
 pub const CLAUDE: &str = "claude";
 /// The `opencode` harness name (ADR-0045, measured on 1.18.18).
 pub const OPENCODE: &str = "opencode";
+/// The `copilot` harness name — PDO's second first-party harness (#614).
+pub const COPILOT: &str = "copilot";
+
+/// The `claude` build PDO's capabilities were last measured against.
+pub const CLAUDE_VALIDATED_VERSION: &str = "2.1.246";
+/// The `opencode` build PDO's descriptor was last measured against — the release
+/// ADR-0045 records: no launch-time effort axis, no pinnable session identity, and
+/// a session store PDO deliberately declares no resolution for.
+pub const OPENCODE_VALIDATED_VERSION: &str = "1.18.18";
+/// The `copilot` build PDO's capabilities were last measured against — the release
+/// #615 measured the `-i` interactive launch, the event journal's `assistant.turn_end`,
+/// and the `session.usage_checkpoint` reported cost on.
+pub const COPILOT_VALIDATED_VERSION: &str = "1.0.80";
+
+/// The **last validated version** of `name`'s binary — the release PDO's knowledge
+/// of that harness was measured against (#617). `None` for a data-declared harness:
+/// PDO carries no code for it, so it has validated nothing.
+///
+/// This is a **documented bound, not a guard**. PDO does not read the installed
+/// version here and never refuses to launch on a different one (#612 put version
+/// gating out of scope). It exists because the same harness can be installed twice
+/// on one machine, months apart, with different event schemas — and an inventory
+/// taken on the wrong install is worse than no inventory. The published support
+/// table ([`crate::harness_support`]) names it beside each harness's capabilities so
+/// a reader knows *which* binary the row describes.
+pub fn validated_version(name: &str) -> Option<&'static str> {
+    match name {
+        CLAUDE => Some(CLAUDE_VALIDATED_VERSION),
+        OPENCODE => Some(OPENCODE_VALIDATED_VERSION),
+        COPILOT => Some(COPILOT_VALIDATED_VERSION),
+        _ => None,
+    }
+}
 
 /// The `claude` descriptor: the legacy launch, expressed as data.
 ///
@@ -134,6 +196,11 @@ pub fn claude() -> HarnessDescriptor {
         .iter()
         .map(|s| s.to_string())
         .collect(),
+        // #614: the resume verbs, now a property of the descriptor rather than
+        // constants in the resume seam. `--resume '<id>'` re-enters by identity
+        // (#473); `--continue` blind-continues a pre-#473 row or the manager.
+        resume_by_id: "--resume".to_string(),
+        resume_blind: "--continue".to_string(),
         // AC #4: the CCR suppression now comes from the descriptor for an agent
         // tail (byte-identical to the wrapper's old hard-coded export — see the
         // `harness_env` handling in `tmux_session_manager::wrap_with_env`).
@@ -166,18 +233,107 @@ pub fn opencode() -> HarnessDescriptor {
         .iter()
         .map(|s| s.to_string())
         .collect(),
-        resume: ["exec", "opencode", "--auto", "--continue"]
+        resume: ["exec", "opencode", "--auto", "{resume}"]
             .iter()
             .map(|s| s.to_string())
             .collect(),
+        // opencode cannot pin a session identity, so it only ever blind-continues
+        // — `resume_by_id` is empty and `{resume}` always renders `--continue`
+        // (byte-identical to the pre-#614 literal tail).
+        resume_by_id: String::new(),
+        resume_blind: "--continue".to_string(),
         env: vec![],
+    }
+}
+
+/// The `copilot` descriptor — GitHub Copilot CLI as PDO's second first-party
+/// harness (#614, ADR-0045). Embedded (the third arm of the floor), not a disk
+/// descriptor: the picker's provenance is decided by name, so a `copilot` declared
+/// on disk would read "From descriptors" and contradict the support table.
+///
+/// **Instrumented since #615** (ADR-0051/0052): `copilot` declares three
+/// capabilities in [`crate::harness_probes`] — a **reported** cost (converted by a
+/// published constant), a transcript resolution (its event journal, by session
+/// identity), and an end-of-turn substrate (the journal's `assistant.turn_end`) —
+/// and declares the other two (usage-limit anchor, staging floor) absent.
+///
+/// The launch uses copilot's **interactive** mode with the prompt auto-executed
+/// (`-i {prompt}`), so the harness is **resident after the turn** — an attachable
+/// session the user can take over, PDO's core contract (CONTEXT.md § "Harnais
+/// agentique", ADR-0012). The non-interactive `-p` is deliberately *not* used: it
+/// exits at turn end, making the harness ineligible (a session death indistinguishable
+/// from a failure, ADR-0032). This is the #615-iter-2 correction of the launch that
+/// originally shipped a **positional** prompt (`"{prompt}"`): copilot 1.0.80 reserves
+/// the positional slot for **subcommands**, so a positional prompt is refused
+/// (`error: too many arguments`) and the node hangs `running` forever — the way to
+/// enter interactive mode *with* a prompt is `-i`, measured on the installed binary.
+/// Interactive mode writes the `events.jsonl` journal PDO resolves by session
+/// identity (the transcript, the `assistant.turn_end` substrate, the
+/// `session.usage_checkpoint` reported cost) — the three capabilities
+/// [`crate::harness_probes`] declares for copilot. `exit_code_is_verdict = false`
+/// reads naturally here: a resident harness never hands PDO an exit code to read as a
+/// verdict, so the journal is the signal. The tokens:
+/// - `--allow-all` grants full autonomy — no tool, path or URL permission dialog
+///   (AC "aucun dialogue de permission d'outil, de chemin ou d'URL");
+/// - `--no-ask-user` disables the question tool, so the node never stalls asking;
+/// - the model hole is **absent when unset**, so a node with no explicit model
+///   launches on copilot's own automatic model selector (AC), the class of
+///   dead-end #561 measured on `opencode` never arises;
+/// - `--session-id {session_id}` pins the session identity at launch (measured on
+///   the installed binary — the caller-provided id the SDK documents, requested
+///   for the CLI in github/copilot-cli#167), so resume re-enters **this** node's
+///   session by identity, never a blind `--continue` (AC);
+/// - `-i {prompt}` enters interactive mode and auto-executes the augmented prompt.
+///
+/// **Prerequisite (not PDO code):** interactive copilot gates a first turn behind a
+/// one-time "trust this folder" dialog (`-p` bypasses it, interactive does not).
+/// Trust **cascades** to subdirectories, so trusting the target repo root once covers
+/// every node sub-worktree beneath it — the "dossier de travail approuvé" prerequisite
+/// (CONTEXT.md § "Harnais agentique"), documented like auth, never staged by PDO.
+///
+/// `COPILOT_AUTO_UPDATE=false` freezes the binary: PDO decides when the target
+/// moves, not the provider (AC).
+pub fn copilot() -> HarnessDescriptor {
+    HarnessDescriptor {
+        name: COPILOT.to_string(),
+        binary: "copilot".to_string(),
+        launch: [
+            "exec",
+            "copilot",
+            "--allow-all",
+            "--no-ask-user",
+            "--model {model}",
+            "--session-id {session_id}",
+            "-i {prompt}",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect(),
+        resume: [
+            "exec",
+            "copilot",
+            "--allow-all",
+            "--no-ask-user",
+            "{resume}",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect(),
+        // Resume is by identity (`--resume '<id>'`) or not at all: `resume_blind`
+        // is empty, so a resume with no recorded id renders no resume flag rather
+        // than a blind continue (AC "jamais par un continue aveugle").
+        resume_by_id: "--resume".to_string(),
+        resume_blind: String::new(),
+        // PDO owns when the harness moves (AC): disable copilot's start-of-session
+        // plugin auto-update.
+        env: vec![("COPILOT_AUTO_UPDATE".to_string(), "false".to_string())],
     }
 }
 
 /// The embedded floor: the harnesses PDO ships compiled in, in precedence-neutral
 /// declaration order.
 pub fn embedded_floor() -> Vec<HarnessDescriptor> {
-    vec![claude(), opencode()]
+    vec![claude(), opencode(), copilot()]
 }
 
 /// Merge a user-declared disk tier over the embedded floor, **by name**: a disk
@@ -275,8 +431,33 @@ struct DescriptorRow {
     launch: Vec<String>,
     #[serde(default)]
     resume: Vec<String>,
+    /// The resume-by-identity verb (`--resume`) that fills the resume template's
+    /// `{resume}` hole (#614). Optional — a disk descriptor whose resume tail bakes
+    /// its verb literally (the shape the pre-#614 examples used) leaves it empty.
+    #[serde(default)]
+    resume_by_id: String,
+    /// The blind-resume verb (`--continue`) for a node with no recorded identity
+    /// (#614). Optional, same default as [`Self::resume_by_id`].
+    #[serde(default)]
+    resume_blind: String,
     #[serde(default)]
     env: BTreeMap<String, String>,
+}
+
+/// Whether the launch template makes the **declared binary the leader of the
+/// pane** — the one thing PDO validates about a descriptor (ADR-0054).
+///
+/// The check is syntactic (a proxy, ADR-0054 §"Limites"): the template must begin
+/// with the token `exec` immediately followed by the declared `binary`. `exec`
+/// replaces the pane's shell with the harness, so the harness — not a surviving
+/// shell — is the pane leader, which is the precondition of PDO's only terminal
+/// liveness verdict (ADR-0032): the harness dies ⇒ the session dies ⇒ the node
+/// fails visibly. A template that wraps the binary in a shell, or omits `exec`,
+/// leaves the shell leader: the harness can die while the session lives on, and
+/// the node stays `Running` forever, mute. That descriptor is refused.
+pub fn launch_makes_binary_leader(launch: &[String], binary: &str) -> bool {
+    launch.first().map(String::as_str) == Some("exec")
+        && launch.get(1).map(String::as_str) == Some(binary)
 }
 
 /// Parse the descriptor file (`descriptors.yaml`). PURE.
@@ -350,11 +531,31 @@ pub fn parse_descriptors(text: &str) -> ParsedDescriptors {
             });
             continue;
         }
+        // ADR-0054: the ONLY thing PDO validates about a descriptor — the launch
+        // must make the declared binary the pane leader (`exec <binary> …`).
+        // Otherwise the harness can die behind a surviving shell without the
+        // session dying, and the node stays `Running` forever, mute — PDO's only
+        // terminal liveness verdict (ADR-0032) becomes silently false. Same refusal
+        // shape as a missing `binary`/`launch`: the row is inert, its key falls
+        // through to the next tier.
+        if !launch_makes_binary_leader(&row.launch, &binary) {
+            parsed.rejected.push(RejectedDescriptor {
+                name,
+                why: format!(
+                    "launch does not make the binary `{binary}` the pane leader — it must begin \
+                     `exec {binary} …` (ADR-0054); otherwise the harness can die without the \
+                     session dying and the node hangs `Running` forever"
+                ),
+            });
+            continue;
+        }
         parsed.descriptors.push(HarnessDescriptor {
             name,
             binary,
             launch: row.launch,
             resume: row.resume,
+            resume_by_id: row.resume_by_id,
+            resume_blind: row.resume_blind,
             env: row.env.into_iter().collect(),
         });
     }
@@ -541,6 +742,10 @@ mod tests {
         assert!(d.pins_session_id(), "claude pins --session-id");
         assert!(d.has_effort_hole(), "claude has an effort axis");
         assert!(d.can_resume(), "claude resumes by --resume/--continue");
+        assert!(
+            d.has_settings_hole(),
+            "claude accepts an injected settings file (the Stop-hook substrate)"
+        );
     }
 
     #[test]
@@ -556,6 +761,114 @@ mod tests {
         );
         assert!(d.can_resume(), "opencode blind-continues");
         assert!(d.env.is_empty(), "opencode carries no CCR env");
+        assert!(
+            !d.has_settings_hole(),
+            "opencode has no settings hole — PDO writes it no settings file (#613)"
+        );
+    }
+
+    #[test]
+    fn copilot_is_on_the_floor_pins_identity_and_resumes_by_identity_only() {
+        // #614: copilot is the third arm of the embedded floor, launchable and
+        // resumable before any capability.
+        assert!(resolve(COPILOT).is_some());
+        let d = copilot();
+        assert_eq!(d.binary, "copilot");
+        // Full autonomy + question tool off, so a node runs unattended.
+        assert!(d.launch.iter().any(|t| t == "--allow-all"));
+        assert!(d.launch.iter().any(|t| t == "--no-ask-user"));
+        // A model hole that drops when unset ⇒ copilot's automatic selector.
+        assert!(d.launch.iter().any(|t| t.contains("{model}")));
+        // Identity is pinned at launch, so resume re-enters THIS session.
+        assert!(d.pins_session_id(), "copilot pins --session-id");
+        assert!(d.can_resume());
+        // Resume is by identity or not at all — never a blind continue (AC).
+        assert_eq!(d.resume_by_id, "--resume");
+        assert!(
+            d.resume_blind.is_empty(),
+            "copilot never blind-continues (AC)"
+        );
+        // Auto-update frozen: PDO owns when the target moves.
+        assert_eq!(
+            d.env,
+            vec![("COPILOT_AUTO_UPDATE".to_string(), "false".to_string())]
+        );
+    }
+
+    #[test]
+    fn the_whole_floor_makes_its_binary_the_pane_leader() {
+        // ADR-0054: PDO's one descriptor invariant holds for every embedded harness
+        // — each launch begins `exec <binary> …`, so the harness leads the pane.
+        for d in embedded_floor() {
+            assert!(
+                launch_makes_binary_leader(&d.launch, &d.binary),
+                "{} must make its binary the pane leader",
+                d.name
+            );
+        }
+    }
+
+    #[test]
+    fn every_embedded_harness_names_a_validated_version() {
+        // #617: the support table names the binary each row describes. A harness on
+        // the floor with no validated version would publish a row about nothing —
+        // so the floor and the version table are kept in step by this test rather
+        // than by memory.
+        for d in embedded_floor() {
+            let v = validated_version(&d.name)
+                .unwrap_or_else(|| panic!("{} must name a validated version", d.name));
+            assert!(!v.trim().is_empty(), "{} version must not be blank", d.name);
+        }
+        // A data-declared harness has validated nothing.
+        assert_eq!(validated_version("my-custom-harness"), None);
+    }
+
+    #[test]
+    fn resume_verbs_are_the_floor_harnesses_own_property() {
+        // #614: the resume verb is a descriptor property, not a resume-seam constant.
+        assert_eq!(claude().resume_by_id, "--resume");
+        assert_eq!(claude().resume_blind, "--continue");
+        // opencode cannot pin identity → blind-continue only.
+        assert!(opencode().resume_by_id.is_empty());
+        assert_eq!(opencode().resume_blind, "--continue");
+    }
+
+    #[test]
+    fn parse_descriptors_refuses_a_launch_that_does_not_lead_the_pane() {
+        // ADR-0054: a launch that wraps the binary in a shell (or omits `exec`) is
+        // refused whole, same shape as a missing `binary`/`launch`; its key falls
+        // through to the next tier.
+        let wrapped = parse_descriptors(
+            "harnesses:\n  x:\n    binary: x\n    launch: [\"bash\", \"-lc\", \"exec x\"]\n",
+        );
+        assert!(wrapped.descriptors.is_empty());
+        assert_eq!(wrapped.rejected.len(), 1);
+        assert_eq!(wrapped.rejected[0].name, "x");
+        assert!(wrapped.rejected[0].why.contains("pane leader"));
+
+        // Missing `exec` — the binary is launched but the shell stays leader.
+        let no_exec =
+            parse_descriptors("harnesses:\n  x:\n    binary: x\n    launch: [\"x\", \"--auto\"]\n");
+        assert_eq!(no_exec.rejected.len(), 1);
+        assert!(no_exec.rejected[0].why.contains("pane leader"));
+
+        // `exec` present but leading a DIFFERENT binary than declared.
+        let wrong_leader = parse_descriptors(
+            "harnesses:\n  x:\n    binary: x\n    launch: [\"exec\", \"y\", \"--auto\"]\n",
+        );
+        assert_eq!(wrong_leader.rejected.len(), 1);
+        assert!(wrong_leader.rejected[0].why.contains("pane leader"));
+    }
+
+    #[test]
+    fn parse_descriptors_carries_the_resume_verbs() {
+        // A disk descriptor may declare its resume verbs (#614), filling `{resume}`.
+        let parsed = parse_descriptors(
+            "harnesses:\n  h:\n    binary: h\n    launch: [\"exec\", \"h\", \"{prompt}\"]\n    resume: [\"exec\", \"h\", \"{resume}\"]\n    resume_by_id: \"--resume\"\n    resume_blind: \"--continue\"\n",
+        );
+        assert_eq!(parsed.descriptors.len(), 1);
+        assert_eq!(parsed.descriptors[0].resume_by_id, "--resume");
+        assert_eq!(parsed.descriptors[0].resume_blind, "--continue");
     }
 
     #[test]
@@ -565,6 +878,8 @@ mod tests {
             binary: "my-claude".to_string(),
             launch: vec!["exec".to_string(), "my-claude".to_string()],
             resume: vec![],
+            resume_by_id: String::new(),
+            resume_blind: String::new(),
             env: vec![],
         };
         let merged = merge_by_name(embedded_floor(), vec![custom_claude.clone()]);
@@ -582,11 +897,15 @@ mod tests {
             binary: "novel".to_string(),
             launch: vec!["exec".to_string(), "novel".to_string()],
             resume: vec![],
+            resume_by_id: String::new(),
+            resume_blind: String::new(),
             env: vec![],
         };
         let merged = merge_by_name(embedded_floor(), vec![novel]);
         assert!(merged.iter().any(|d| d.name == "novel"));
-        assert_eq!(merged.len(), 3);
+        // The three-harness floor (claude, opencode, copilot) plus the novel disk
+        // harness.
+        assert_eq!(merged.len(), 4);
     }
 
     // --- the disk tier (#553) ------------------------------------------------
@@ -667,7 +986,14 @@ mod tests {
         assert!(reg.resolve(OPENCODE).is_some());
         assert!(reg.resolve("nope").is_none());
         assert!(reg.diagnostic().is_none());
-        assert_eq!(reg.names(), vec![CLAUDE.to_string(), OPENCODE.to_string()]);
+        assert_eq!(
+            reg.names(),
+            vec![
+                CLAUDE.to_string(),
+                OPENCODE.to_string(),
+                COPILOT.to_string()
+            ]
+        );
     }
 
     #[test]
@@ -817,10 +1143,11 @@ mod tests {
     #[test]
     fn builtin_listing_is_the_floor_as_builtin() {
         let listing = HarnessRegistry::builtin().listing();
-        assert_eq!(listing.len(), 2);
+        assert_eq!(listing.len(), 3);
         assert!(listing.iter().all(|h| h.source == HarnessSource::Builtin));
         assert_eq!(listing[0].name, CLAUDE);
         assert_eq!(listing[1].name, OPENCODE);
+        assert_eq!(listing[2].name, COPILOT);
     }
 
     #[test]

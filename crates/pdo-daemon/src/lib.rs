@@ -11,6 +11,7 @@ mod boot_recovery;
 pub(crate) mod completion_refusal;
 #[allow(dead_code)]
 mod condition;
+mod copilot_journal;
 #[allow(dead_code)]
 mod cron_schedule;
 mod edge_router;
@@ -21,9 +22,11 @@ mod frontmatter_parser;
 mod graph_resolver;
 mod guard_runner;
 mod harness_argv;
+mod harness_catalogue;
 mod harness_probes;
 pub mod harness_registry;
 mod harness_resolver;
+pub mod harness_support;
 mod input_resolution;
 mod instance_config;
 mod library_store;
@@ -234,6 +237,35 @@ pub enum Commands {
         #[command(subcommand)]
         action: ServiceAction,
     },
+    /// Print the documentation PDO generates from its own code (#617).
+    Docs {
+        #[command(subcommand)]
+        action: DocsAction,
+    },
+}
+
+/// Actions for `pdo docs` (#617). A blocking one-shot like `Migrate` — pure
+/// rendering plus, for `--write`, one file rewrite. No daemon, no tokio.
+#[derive(Subcommand, Debug)]
+pub enum DocsAction {
+    /// The harness support matrix — which capability each harness has, what is
+    /// absent and why, and the last validated version of each binary.
+    ///
+    /// Rendered from the capability declaration in `harness_probes.rs`, which is
+    /// its only source of truth. With no flag it prints the block; `--check` fails
+    /// (exit 1) if the block committed in the target file has drifted from what the
+    /// code declares, and `--write` puts it back.
+    SupportTable {
+        /// Fail if the block in the target file has drifted from the code.
+        #[arg(long)]
+        check: bool,
+        /// Rewrite the block in the target file from the code.
+        #[arg(long, conflicts_with = "check")]
+        write: bool,
+        /// The file carrying the generated block, between its two markers.
+        #[arg(long, default_value = "README.md")]
+        file: std::path::PathBuf,
+    },
 }
 
 /// Actions for `pdo service` (#156, D2). A new top-level subcommand rather than
@@ -392,6 +424,18 @@ struct AppState {
     /// docker round-trip). The refresh runs under `spawn_blocking` + a short
     /// `timeout`, so a cold Docker daemon never hangs the `/settings` response.
     docker_probe_cache: Arc<tokio::sync::Mutex<Option<(Instant, sandbox_image::DockerProbe)>>>,
+    /// Per-harness offered-catalogue cache (#616, ADR-0053 §3), keyed by harness
+    /// name. Each entry stamps the moment it was last version-checked and the
+    /// [`harness_catalogue::CachedCatalogue`] read (models, efforts, and the version
+    /// they came from). The freshness contract: at most one `--version` re-check per
+    /// harness per [`CATALOGUE_VERSION_TTL`] window, and a full `--help` re-probe
+    /// only when that version has changed — so an auto-updating binary is followed
+    /// without a restart, at a bounded subprocess cost on the `/settings` path.
+    /// Populated eagerly at boot (a sibling of the price refresh) and lazily on the
+    /// first `/settings` fetch. Never persisted: a probe is cheap and the truth is
+    /// on disk, so a restart simply re-reads it.
+    harness_catalogue_cache:
+        Arc<tokio::sync::Mutex<HashMap<String, (Instant, harness_catalogue::CachedCatalogue)>>>,
     /// Serializes price syncs (#427). Unlike `trigger_tick_lock`, which *serializes*
     /// because both triggers (cron and manual) are legitimate and must both land, a
     /// second concurrent price sync brings nothing — so this is taken with
@@ -1084,6 +1128,55 @@ pub fn run_skip(reason: String) -> Result<()> {
         let body = resp.text().unwrap_or_default();
         anyhow::bail!("daemon returned {status}: {body}");
     }
+    Ok(())
+}
+
+/// One-shot `pdo docs` (#617): render the documentation PDO generates from its own
+/// code, and — with `--check` — refuse a committed copy that has drifted from it.
+///
+/// Blocking, no tokio, no daemon: the support matrix is a pure function of the
+/// capability declaration ([`harness_support::render`]), so this is rendering plus
+/// at most one file rewrite. `--check` is what `make check` runs, which is what
+/// makes "the table cannot lie" true by construction rather than by discipline.
+pub fn run_docs(action: DocsAction) -> Result<()> {
+    let DocsAction::SupportTable { check, write, file } = action;
+    let block = harness_support::render();
+
+    if !check && !write {
+        print!("{block}");
+        return Ok(());
+    }
+
+    let document = std::fs::read_to_string(&file)
+        .with_context(|| format!("failed to read {}", file.display()))?;
+
+    if check {
+        return match harness_support::check(&document) {
+            Ok(()) => {
+                eprintln!(
+                    "ok: {} carries the generated harness support table.",
+                    file.display()
+                );
+                Ok(())
+            }
+            // `bail!` rather than a bespoke exit code: `make check` only needs
+            // non-zero, and the message is where the value is (it names the drift).
+            Err(why) => anyhow::bail!("{}: {why}", file.display()),
+        };
+    }
+
+    let updated = harness_support::splice(&document, &block)
+        .map_err(|why| anyhow::anyhow!("{}: {why}", file.display()))?;
+    if updated == document {
+        eprintln!("unchanged: {} was already current.", file.display());
+        return Ok(());
+    }
+    std::fs::write(&file, &updated)
+        .with_context(|| format!("failed to write {}", file.display()))?;
+    eprintln!(
+        "wrote: {} — harness support table regenerated.",
+        file.display()
+    );
     Ok(())
 }
 
@@ -1948,6 +2041,15 @@ impl DaemonHandle {
         refresh_prices_at_boot(&self.state).await;
     }
 
+    /// Warm the harness-catalogue cache synchronously (#616, ADR-0053 §3). Sibling
+    /// of [`Self::run_price_refresh_tick`]: production spawns this DETACHED at boot,
+    /// so a test drives it here instead of racing the detached task. Same code path
+    /// as boot, so a test can prove "installed harness → catalogue cached, version
+    /// recorded".
+    pub async fn run_catalogue_probe_tick(&self) {
+        probe_harness_catalogues_at_boot(&self.state).await;
+    }
+
     /// Run a single orphan-sweep (reaper) pass synchronously. Lets integration
     /// tests drive session reaping deterministically instead of racing the
     /// ~60 s background interval + process-global TTL env (#316). Resolves the
@@ -2542,6 +2644,7 @@ pub async fn serve_with_config(
         node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         service_health,
         docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
+        harness_catalogue_cache: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         price_sync_lock: tokio::sync::Mutex::new(()),
         price_source_url: config.price_source_url,
         price_refresh_at_boot: config.price_refresh_at_boot,
@@ -2718,6 +2821,21 @@ pub async fn serve_with_config(
         tokio::spawn(async move {
             run_isolated("price refresh", async move {
                 refresh_prices_at_boot(&price_state).await;
+            })
+            .await;
+        });
+    }
+
+    // #616/ADR-0053 §3: warm the harness-catalogue cache at boot, a sibling of the
+    // price refresh and detached for the same reason — probing every installed
+    // harness's `--help`/`--version` must not delay the first `accept()`. The first
+    // `/settings` fetch then answers from warm cache; an auto-update afterwards is
+    // caught by the version re-check behind that fetch.
+    {
+        let catalogue_state = state.clone();
+        tokio::spawn(async move {
+            run_isolated("harness catalogue probe", async move {
+                probe_harness_catalogues_at_boot(&catalogue_state).await;
             })
             .await;
         });
@@ -4645,6 +4763,12 @@ async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
         .execute(db)
         .await
         .context("failed to create idx_events_kind_ts")?;
+    // #638 / ADR-0029: after the indexed `run_started` cohort lookup, Sessions
+    // joins only each selected Run's `node_started` rows in append order.
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_events_run_kind_id ON events(run_id, kind, id)")
+        .execute(db)
+        .await
+        .context("failed to create idx_events_run_kind_id")?;
 
     // #328 / ADR-0024: tombstones for forgotten runs — a run_id present here
     // can never receive events again (guard in `append_event`).
@@ -8532,13 +8656,21 @@ async fn spawn_manager_session(
     let default_harness = stored_default_harness(&state.db).await;
     let manager_harness_name =
         harness_resolver::resolve_infra_harness(run_harness.as_deref(), default_harness.as_deref());
-    let manager_harness = harness_registry::resolve(&manager_harness_name).unwrap_or_else(|| {
-        warn!(
-            "manager for run {run_id}: unknown harness '{manager_harness_name}' — \
-             launching the manager on the claude floor (the first node spawn fails fast)"
-        );
-        harness_registry::claude()
-    });
+    // #614 (correctif 3): resolve against the DISK TIER, so "this Run runs on X" is
+    // true even when X is a user-declared harness — the manager follows the Run's
+    // frozen harness through the same registry the node spawns resolve against.
+    let harness_home_root = sandbox_run::sandbox_home_roots(state)
+        .map(|(home, _)| home)
+        .unwrap_or_default();
+    let manager_harness = harness_registry::HarnessRegistry::load(&harness_home_root)
+        .resolve(&manager_harness_name)
+        .unwrap_or_else(|| {
+            warn!(
+                "manager for run {run_id}: unknown harness '{manager_harness_name}' — \
+                 launching the manager on the claude floor (the first node spawn fails fast)"
+            );
+            harness_registry::claude()
+        });
     if let Err(e) = tmux_session_manager::spawn(
         &session_name,
         &full_prompt,
@@ -8748,6 +8880,104 @@ async fn docker_probe_cached(state: &AppState) -> sandbox_image::DockerProbe {
     };
     *guard = Some((Instant::now(), probe.clone()));
     probe
+}
+
+/// How often a harness binary's **version** is re-checked behind a `/settings`
+/// fetch (#616, ADR-0053 §3). Long enough that a burst of settings reads pays at
+/// most one `--version` subprocess per harness; short enough that an auto-update is
+/// noticed within the minute, no restart. The full `--help` re-probe runs only when
+/// the version actually changed, so the steady-state cost is one cheap `--version`
+/// per harness per window.
+const CATALOGUE_VERSION_TTL: Duration = Duration::from_secs(60);
+
+/// Env var that overrides [`CATALOGUE_VERSION_TTL`], in milliseconds. Exists so a
+/// test can prove the re-probe-on-version-change contract (ADR-0053 §3) in
+/// milliseconds instead of waiting out the production minute; ops may also shorten it
+/// on a machine whose harnesses auto-update aggressively. An unparseable value is
+/// ignored — a typo must not disable the cache.
+pub const CATALOGUE_VERSION_TTL_MS_ENV: &str = "PDO_CATALOGUE_VERSION_TTL_MS";
+
+/// The effective version re-check window: [`CATALOGUE_VERSION_TTL_MS_ENV`] if it
+/// parses, else [`CATALOGUE_VERSION_TTL`]. Read per call (not cached in a `OnceLock`)
+/// so a test that sets the var after the daemon booted still sees it.
+fn catalogue_version_ttl() -> Duration {
+    std::env::var(CATALOGUE_VERSION_TTL_MS_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(CATALOGUE_VERSION_TTL)
+}
+
+/// Return `harness`'s offered catalogue (models + efforts + the version they were
+/// read from), from the cache when fresh, else by (re)probing `binary` (#616,
+/// ADR-0053 §3). The freshness protocol, per harness:
+///
+/// 1. A cache entry younger than [`CATALOGUE_VERSION_TTL`] is returned as-is — a
+///    burst of `/settings` reads pays no subprocess at all.
+/// 2. Past the window, `--version` is re-read (off the runtime thread). If it
+///    matches the cached version, the catalogue is still current: restamp and
+///    return it, no `--help` run.
+/// 3. On a first miss or a changed version, `--help` is re-read and parsed, and the
+///    new `{version, catalogue}` cached.
+///
+/// Both subprocess reads run under `spawn_blocking` with the probe's own timeout, so
+/// a wedged binary can never hang the settings response — it degrades to the last
+/// good catalogue (or an empty one), i.e. the free-text fallback.
+async fn catalogue_for(
+    state: &AppState,
+    harness: &str,
+    binary: &str,
+) -> harness_catalogue::CachedCatalogue {
+    let mut guard = state.harness_catalogue_cache.lock().await;
+    if let Some((at, cached)) = guard.get(harness) {
+        if at.elapsed() < catalogue_version_ttl() {
+            return cached.clone();
+        }
+    }
+
+    // Past the TTL (or never probed): re-read the version off the runtime thread.
+    let bin = binary.to_string();
+    let version = tokio::task::spawn_blocking(move || tmux_session_manager::probe_version(&bin))
+        .await
+        .ok()
+        .flatten();
+
+    // Version unchanged ⇒ the catalogue is still current; restamp, skip --help.
+    if let Some((_, cached)) = guard.get(harness) {
+        if cached.version == version {
+            let refreshed = cached.clone();
+            guard.insert(harness.to_string(), (Instant::now(), refreshed.clone()));
+            return refreshed;
+        }
+    }
+
+    // First probe or a changed version ⇒ re-read and parse the catalogue.
+    let bin = binary.to_string();
+    let catalogue =
+        tokio::task::spawn_blocking(move || tmux_session_manager::probe_catalogue(&bin))
+            .await
+            .unwrap_or_default();
+    let cached = harness_catalogue::CachedCatalogue { version, catalogue };
+    guard.insert(harness.to_string(), (Instant::now(), cached.clone()));
+    cached
+}
+
+/// Probe every installed harness's catalogue once, populating the cache (#616,
+/// ADR-0053 §3). Wired as a detached boot task (a sibling of the price refresh) so
+/// the first `/settings` fetch answers from warm cache rather than paying the
+/// subprocess cost inline. Reads the registry from the host `$HOME` (the same tier
+/// the settings view resolves); a harness whose binary is absent is skipped — no
+/// probe, an empty offer, the free-text field.
+async fn probe_harness_catalogues_at_boot(state: &Arc<AppState>) {
+    let registry = match sandbox_run::sandbox_home_roots(state).ok().map(|(h, _)| h) {
+        Some(home) => harness_registry::HarnessRegistry::load(&home),
+        None => harness_registry::HarnessRegistry::builtin(),
+    };
+    for listing in registry.listing() {
+        if tmux_session_manager::binary_available(&listing.binary) {
+            let _ = catalogue_for(state, &listing.name, &listing.binary).await;
+        }
+    }
 }
 
 /// Build the `GET /settings` view: per knob, the effective value, the winning
@@ -9030,45 +9260,62 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
     // name/source/binary; `binary_available` (the same probe the spawn seam runs)
     // decides `installed` here, beside the environment, so the picker greys a
     // harness that would only fail-fast at launch.
-    let harness_list_json = |registry: &harness_registry::HarnessRegistry| {
-        registry
-            .listing()
-            .iter()
-            .map(|h| {
-                serde_json::json!({
-                    "name": h.name,
-                    "source": h.source.as_str(),
-                    "installed": tmux_session_manager::binary_available(&h.binary),
-                })
-            })
-            .collect::<Vec<_>>()
+    // #616/ADR-0053: each entry now also carries the offer deduced from the binary —
+    // its `models`, its `efforts`, the served `has_effort` fact (so the client greys
+    // the effort picker off a served truth, not a hard-coded map), and the `version`
+    // the offer was read at. An uninstalled harness carries an empty offer (no probe)
+    // — the free-text fallback, a declared absence.
+    let registry = match &host_home_path {
+        Some(home) => harness_registry::HarnessRegistry::load(home),
+        None => harness_registry::HarnessRegistry::builtin(),
     };
+    let mut harness_list = Vec::new();
+    for h in registry.listing() {
+        let installed = tmux_session_manager::binary_available(&h.binary);
+        let cached = if installed {
+            catalogue_for(state, &h.name, &h.binary).await
+        } else {
+            harness_catalogue::CachedCatalogue::default()
+        };
+        // The served effort-axis fact: the binary enumerates effort stops, OR the
+        // launch template carries an `{effort}` hole (a harness that takes effort but
+        // prints no list still offers the axis). Either way it is a fact the daemon
+        // owns and serves, replacing the client's hard-coded `HARNESS_HAS_EFFORT`.
+        let has_effort_hole = registry
+            .resolve(&h.name)
+            .map(|d| d.has_effort_hole())
+            .unwrap_or(false);
+        let has_effort = cached.catalogue.has_effort_axis() || has_effort_hole;
+        harness_list.push(serde_json::json!({
+            "name": h.name,
+            "source": h.source.as_str(),
+            "installed": installed,
+            "version": cached.version,
+            "models": cached.catalogue.models,
+            "efforts": cached.catalogue.efforts,
+            "has_effort": has_effort,
+        }));
+    }
     let harness_descriptors_view = match &host_home_path {
-        Some(home) => {
-            let registry = harness_registry::HarnessRegistry::load(home);
-            serde_json::json!({
-                "path": harness_registry::HarnessRegistry::descriptors_path(home).to_string_lossy(),
-                "names": registry.names(),
-                "harnesses": harness_list_json(&registry),
-                "rejected": registry
-                    .rejected()
-                    .iter()
-                    .map(|r| serde_json::json!({ "name": r.name, "why": r.why }))
-                    .collect::<Vec<_>>(),
-                "reason": registry.diagnostic(),
-            })
-        }
-        None => {
-            let registry = harness_registry::HarnessRegistry::builtin();
-            serde_json::json!({
-                "path": null,
-                "names": registry.names(),
-                "harnesses": harness_list_json(&registry),
-                "rejected": [],
-                "reason": "HOME is unset, so the descriptor file has no resolvable path — \
-                           only the harnesses compiled into the binary apply",
-            })
-        }
+        Some(home) => serde_json::json!({
+            "path": harness_registry::HarnessRegistry::descriptors_path(home).to_string_lossy(),
+            "names": registry.names(),
+            "harnesses": harness_list,
+            "rejected": registry
+                .rejected()
+                .iter()
+                .map(|r| serde_json::json!({ "name": r.name, "why": r.why }))
+                .collect::<Vec<_>>(),
+            "reason": registry.diagnostic(),
+        }),
+        None => serde_json::json!({
+            "path": null,
+            "names": registry.names(),
+            "harnesses": harness_list,
+            "rejected": [],
+            "reason": "HOME is unset, so the descriptor file has no resolvable path — \
+                       only the harnesses compiled into the binary apply",
+        }),
     };
 
     Ok(serde_json::json!({
@@ -9288,7 +9535,7 @@ async fn sync_cost_prices(State(state): State<Arc<AppState>>) -> Response {
 
     if !outcome.changed {
         // Nothing to write, so nothing is written — which also leaves the table's
-        // fingerprint alone and keeps `COST_MEMO` warm for every Run.
+        // fingerprint alone and keeps the cost-breakdown memo warm for every Run.
         return Json(serde_json::json!({
             "ok": true,
             "noop": true,
@@ -9567,6 +9814,27 @@ async fn put_settings(
         // no silent default) (#410/#432). Same shared gate as the Trigger surfaces.
         if let Err(msg) = validate_sandbox_ref(&state.db, s).await {
             return bad(&msg);
+        }
+    }
+    if let Some(h) = req.default_harness.as_deref() {
+        // #614 (correctif 10): "" = clear sentinel (accepted); anything else must
+        // RESOLVE against the registry (embedded floor merged with the disk tier),
+        // exactly as the default sandbox must above. A default harness that resolves
+        // to nothing would break EVERY subsequent spawn that falls through to it —
+        // so it is refused at registration, fail-fast, never a silent broken default.
+        if !h.is_empty() {
+            let home_root = sandbox_run::sandbox_home_roots(&state)
+                .map(|(home, _)| home)
+                .unwrap_or_default();
+            let registry = harness_registry::HarnessRegistry::load(&home_root);
+            if registry.resolve(h).is_none() {
+                return bad(&format!(
+                    "unknown default harness `{h}`: it resolves to no embedded or declared \
+                     harness — a default that does not resolve would break every spawn that \
+                     falls through to it. Known harnesses: {}",
+                    registry.names().join(", ")
+                ));
+            }
         }
     }
 
@@ -10415,10 +10683,14 @@ async fn get_run(
             // HOST home — prices are an instance concept), while transcripts come
             // from `projects_root` (the #408 seam, which moves for a sandboxed Run).
             let prices = price_table::PriceTable::load(&home_root);
+            // #615: the copilot reported-cost slice reads its session journals from
+            // the host `.copilot/session-state/` (copilot has no staging floor).
+            let copilot_root = sandbox_run::copilot_store_root(&home_root);
             augment_run_state_from_disk(
                 &mut run_state,
                 &events,
                 &projects_root,
+                &copilot_root,
                 &repo_root,
                 &prices,
             );
@@ -10832,6 +11104,9 @@ fn gather_session_death_diagnostics(
         mem_available_kb,
         swap_free_kb,
         correlated_deaths,
+        // #615: filled by `assess_node` after this impure gather, from the harness's
+        // journal (this function does the tmux/proc reads only).
+        harness_error: None,
     }
 }
 
@@ -10855,6 +11130,11 @@ struct SweepNodeProbes<'a> {
     /// transcript by identity (`<uuid>.jsonl`); `None` (a pre-#473 row / a script
     /// node) ⇒ the legacy newest-mtime fallback.
     session_id: Option<&'a str>,
+    /// #613/ADR-0051: the node's frozen-at-spawn harness. Transcript resolution
+    /// dispatches on it — `claude`'s `<uuid>.jsonl` / newest-mtime for `claude`,
+    /// nothing for a harness whose store PDO cannot map — so this adapter never
+    /// hardcodes claude's resolution for a foreign harness.
+    harness: &'a str,
     pipeline_path: &'a Path,
     artifacts_dir: &'a Path,
     run_id: &'a str,
@@ -10869,19 +11149,19 @@ impl stale_detector::NodeProbes for SweepNodeProbes<'_> {
     }
 
     fn transcript_tail(&self) -> Option<stale_detector::TranscriptTail> {
-        // #473: resolve by pinned session identity when we have one — this node's
-        // own `<uuid>.jsonl`, never the newest `.jsonl` in a cwd shared with the
-        // manager / sibling non-CM nodes. A pre-#473 node (no recorded id) falls
-        // back to the legacy newest-mtime resolution.
-        let resolved = match self.session_id {
-            Some(sid) => {
-                stale_detector::session_jsonl_by_id(self.projects_root, self.working_dir, sid)
-            }
-            None => stale_detector::find_session_jsonl(self.projects_root, self.working_dir),
-        };
-        resolved
-            .as_deref()
-            .and_then(stale_detector::read_transcript_tail)
+        // #613/ADR-0051: dispatch transcript resolution to the resolved harness's
+        // implementation. `claude` resolves by pinned session identity (this node's
+        // own `<uuid>.jsonl`, #473) or the legacy newest-mtime fallback; a
+        // data-declared harness resolves `None` and no tail is read. The byte-read
+        // of the resolved path is generic (`read_transcript_tail`).
+        harness_probes::resolve_transcript(
+            self.harness,
+            self.projects_root,
+            self.working_dir,
+            self.session_id,
+        )
+        .as_deref()
+        .and_then(stale_detector::read_transcript_tail)
     }
 
     fn outputs_valid(&self) -> bool {
@@ -11010,6 +11290,10 @@ async fn run_stale_detection(state: &Arc<AppState>) {
             &home_root,
             &sandbox_root,
         );
+        // #615: copilot resolves its transcript from its own session-state store
+        // (host `.copilot/session-state/`, no staging floor), not claude's projects
+        // root. Picked per node below by the frozen harness.
+        let copilot_root = sandbox_run::copilot_store_root(&home_root);
 
         let running = stale_detector::running_nodes(&run_state);
         for (node_id, iter) in &running {
@@ -11033,32 +11317,37 @@ async fn run_stale_detection(state: &Arc<AppState>) {
             // usage-limit-dedup pipeline lives in `assess_node`, with all tmux +
             // filesystem I/O injected via this adapter. The sweep only appends
             // the returned events and runs the reap/spawn side effects below.
+            // #553/#613: the node's FROZEN-at-spawn harness (ADR-0046), never the
+            // current YAML. `None` (a script node, a pre-#550 row) is the `claude`
+            // floor. Every capability — transcript resolution, turn-end, usage-limit
+            // — dispatches on this name (ADR-0051): `claude`'s implementation for
+            // `claude`, a data-declared harness's own (or nothing) otherwise. So the
+            // sweep never reads another harness's store with claude's parser.
+            let node_harness = find_launch_harness(&events, node_id, *iter)
+                .unwrap_or_else(|| harness_registry::CLAUDE.to_string());
+
+            // #615: the transcript store root is the resolved harness's own —
+            // copilot's session-state store, else claude's projects root. The
+            // per-harness `resolve_transcript` (ADR-0051) joins the right leaf.
+            let node_store_root: &Path = if node_harness == harness_registry::COPILOT {
+                &copilot_root
+            } else {
+                &projects_root
+            };
+
             let probes = SweepNodeProbes {
                 socket: &socket,
                 session_name: &session_name,
                 working_dir: &working_dir,
-                projects_root: &projects_root,
+                projects_root: node_store_root,
                 session_id: launch_session_id.as_deref(),
+                harness: &node_harness,
                 pipeline_path: &pipeline_path,
                 artifacts_dir: &artifacts_dir,
                 run_id,
                 node_id,
                 iter: *iter,
                 running: &running,
-            };
-
-            // #553: gate the turn-end and usage-limit probes on the node's
-            // FROZEN-at-spawn harness (ADR-0046), never the current YAML. `None`
-            // (a script node, a pre-#550 row) is the `claude` floor, which has both
-            // capabilities — so the sweep is byte-identical to pre-#553 there. A
-            // node on a harness without them runs neither probe: no auto-completion
-            // on an invented heuristic, no capture for another harness's menu.
-            let node_harness = find_launch_harness(&events, node_id, *iter)
-                .unwrap_or_else(|| harness_registry::CLAUDE.to_string());
-            let hc = harness_probes::capabilities(&node_harness);
-            let caps = stale_detector::HarnessCapabilities {
-                turn_end: hc.turn_end,
-                usage_limit: hc.usage_limit,
             };
 
             let assessment = stale_detector::assess_node(
@@ -11069,7 +11358,7 @@ async fn run_stale_detection(state: &Arc<AppState>) {
                 *iter,
                 now,
                 autocomplete_turn_end,
-                caps,
+                &node_harness,
             );
 
             if assessment.blocked_on_limit {
@@ -11442,6 +11731,13 @@ pub(crate) enum ReattachOutcome {
     /// ADR-0045). The optimal path is unavailable — the caller falls back
     /// (`recover_node` → restart-with-artifacts, AC #9 / `node_pane` → snapshot).
     CannotResume,
+    /// The harness FROZEN at spawn no longer resolves — its embedded name was
+    /// dropped, or its disk descriptor was removed/renamed (#614, correctif 2).
+    /// PDO **refuses** rather than relaunch `claude` in this node's worktree: a
+    /// silent fallback would run a different agent than the one the node was
+    /// started on, corrupting its transcript and its cost attribution. The caller
+    /// surfaces the refusal, naming the missing harness.
+    FrozenHarnessGone { harness: String },
     /// The session cap refused the re-attach (a re-attach IS a (re)spawn, #487 §3).
     CapReached { live: usize, cap: usize },
     /// The `NodeStarted` resurrection trace was refused (e.g. a terminal Run) — do
@@ -11497,16 +11793,28 @@ pub(crate) async fn reattach_node_session(
     let launch_effort = find_launch_effort(events, node_id, iter);
     let launch_session_id = find_launch_session_id(events, node_id, iter);
     // #550/#553/ADR-0046: re-pose the harness FROZEN at spawn, resolved against the
-    // embedded floor MERGED with the disk descriptor tier; any failure falls back
-    // to the `claude` floor, byte-identical to the legacy resume.
+    // embedded floor MERGED with the disk descriptor tier. #614 (correctif 2): a
+    // name that WAS frozen but no longer resolves REFUSES — never a silent `claude`
+    // relaunch, which would run a different agent in this node's worktree. A row
+    // with NO frozen harness (pre-#550, a legacy resume) keeps the `claude` floor,
+    // byte-identical to the legacy resume.
     let launch_harness = find_launch_harness(events, node_id, iter);
     let harness_home_root = sandbox_run::sandbox_home_roots(state)
         .map(|(home, _)| home)
         .unwrap_or_default();
-    let descriptor = launch_harness
-        .as_deref()
-        .and_then(|name| harness_registry::HarnessRegistry::load(&harness_home_root).resolve(name))
-        .unwrap_or_else(harness_registry::claude);
+    let descriptor = match launch_harness.as_deref() {
+        Some(name) => {
+            match harness_registry::HarnessRegistry::load(&harness_home_root).resolve(name) {
+                Some(d) => d,
+                None => {
+                    return ReattachOutcome::FrozenHarnessGone {
+                        harness: name.to_string(),
+                    }
+                }
+            }
+        }
+        None => harness_registry::claude(),
+    };
     // AC #9 / ADR-0045: a harness with no resume tail cannot be re-attached.
     if !descriptor.can_resume() {
         return ReattachOutcome::CannotResume;
@@ -11686,6 +11994,26 @@ async fn node_pane(
                     resumed: false,
                     stale: false,
                     source,
+                })
+                .into_response();
+            }
+            // #614 (correctif 2): the frozen harness no longer resolves — refuse,
+            // naming it, rather than relaunch `claude` in this node's worktree.
+            ReattachOutcome::FrozenHarnessGone { harness } => {
+                warn!(
+                    "node_pane: refusing to resurrect {node_id} iter {iter} in {run_id} — its \
+                     frozen harness '{harness}' no longer resolves (embedded name dropped or disk \
+                     descriptor removed); not relaunching claude in its place"
+                );
+                return Json(PaneResponse {
+                    content: format!(
+                        "Session cannot be resumed: this node's harness '{harness}' no longer \
+                         resolves. Restore its descriptor, or retry the node to start fresh."
+                    ),
+                    session_name,
+                    resumed: false,
+                    stale: false,
+                    source: "unavailable",
                 })
                 .into_response();
             }
@@ -12082,13 +12410,19 @@ async fn spawn_merge_resolver(
     let default_harness = stored_default_harness(&state.db).await;
     let resolver_harness_name =
         harness_resolver::resolve_infra_harness(run_harness.as_deref(), default_harness.as_deref());
-    let resolver_harness = harness_registry::resolve(&resolver_harness_name).unwrap_or_else(|| {
-        warn!(
-            "merge resolver for run {run_id}: unknown harness '{resolver_harness_name}' — \
-             launching on the claude floor"
-        );
-        harness_registry::claude()
-    });
+    // #614 (correctif 3): resolve against the DISK TIER, like the manager.
+    let resolver_home_root = sandbox_run::sandbox_home_roots(state)
+        .map(|(home, _)| home)
+        .unwrap_or_default();
+    let resolver_harness = harness_registry::HarnessRegistry::load(&resolver_home_root)
+        .resolve(&resolver_harness_name)
+        .unwrap_or_else(|| {
+            warn!(
+                "merge resolver for run {run_id}: unknown harness '{resolver_harness_name}' — \
+                 launching on the claude floor"
+            );
+            harness_registry::claude()
+        });
     if let Err(e) = tmux_session_manager::spawn(
         &session_name,
         &prompt,
@@ -13485,6 +13819,17 @@ async fn force_spawn_node(
         .map(|ov| materialize_override_inputs(&artifacts_dir, node_id, iter, ov))
         .filter(|m| !m.is_empty());
 
+    // #614 (correctif 4): resolve the winning harness against the DISK TIER, so a
+    // manual force-spawn / Start reaches a user-declared harness exactly like the
+    // scheduler's `spawn_node` does — these commands stop being reserved to
+    // embedded harnesses. Bound before `params` so the borrow outlives `start_node`.
+    // Absent HOME degrades to the embedded floor (`load` returns the floor when the
+    // file is unreadable).
+    let harness_home_root = sandbox_run::sandbox_home_roots(state)
+        .map(|(home, _)| home)
+        .unwrap_or_default();
+    let harness_registry = harness_registry::HarnessRegistry::load(&harness_home_root);
+
     let params = node_primitives::StartNodeParams {
         run_id,
         node_id,
@@ -13519,6 +13864,8 @@ async fn force_spawn_node(
         // auto-completion fresh so a force-spawned node arms the `Stop` hook when
         // the setting is on, instead of silently missing it on this seam alone.
         inject_hook: stored_autocomplete_turn_end(&state.db).await,
+        // #614 (correctif 4): honour the disk tier on this manual seam too.
+        harness_registry: Some(&harness_registry),
     };
 
     // D5 (#204): admission cap as an atomic check-and-reserve. Hold the lock
@@ -14348,12 +14695,18 @@ async fn open_library_assistant(State(state): State<Arc<AppState>>) -> Response 
     // floor — mirror of the manager/merge-resolver resolution.
     let default_harness = stored_default_harness(&state.db).await;
     let harness_name = harness_resolver::resolve_infra_harness(None, default_harness.as_deref());
-    let harness = harness_registry::resolve(&harness_name).unwrap_or_else(|| {
-        warn!(
-            "library assistant: unknown harness '{harness_name}' — launching on the claude floor"
-        );
-        harness_registry::claude()
-    });
+    // #614 (correctif 3): resolve against the DISK TIER, like the manager/resolver.
+    let libassist_home_root = sandbox_run::sandbox_home_roots(&state)
+        .map(|(home, _)| home)
+        .unwrap_or_default();
+    let harness = harness_registry::HarnessRegistry::load(&libassist_home_root)
+        .resolve(&harness_name)
+        .unwrap_or_else(|| {
+            warn!(
+                "library assistant: unknown harness '{harness_name}' — launching on the claude floor"
+            );
+            harness_registry::claude()
+        });
     // ADR-0051 §3: the per-message focus hook rides on `--settings`, a hole only
     // the `claude` launch template has. On another harness the token is dropped
     // silently, and the primer's fetch-the-focus instruction becomes the only
@@ -16153,6 +16506,7 @@ fn augment_run_state_from_disk(
     run_state: &mut event_log::RunState,
     events: &[event_log::Event],
     projects_root: &std::path::Path,
+    copilot_root: &std::path::Path,
     repo_root: &std::path::Path,
     prices: &price_table::PriceTable,
 ) {
@@ -16173,8 +16527,14 @@ fn augment_run_state_from_disk(
     // `CostStat` (never `$0`); otherwise it is exactly `compute_run_cost`. Needs the
     // raw events for the frozen-at-spawn harnesses (`RunState` alone does not carry
     // them per node).
-    run_state.cost =
-        run_cost::run_cost_or_absence(events, projects_root, repo_root, &run_state.run_id, prices);
+    run_state.cost = run_cost::run_cost_or_absence(
+        events,
+        projects_root,
+        copilot_root,
+        repo_root,
+        &run_state.run_id,
+        prices,
+    );
 
     let yaml_path = run_scoped_pipeline_path(repo_root, &run_state.run_id);
     let Ok(yaml) = std::fs::read_to_string(&yaml_path) else {
@@ -17149,12 +17509,488 @@ mod tests {
                 persistent: None,
             }),
             docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
+            harness_catalogue_cache: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: None,
             price_refresh_at_boot: false,
             allowed_ws_origins: Vec::new(),
             libassist_focus: Mutex::new(None),
         })
+    }
+
+    #[tokio::test]
+    async fn stats_overview_sessions_use_run_cohorts_and_dynamic_harness_hierarchies() {
+        let state = test_state().await;
+        let insert = |run: &str,
+                      ts: &str,
+                      kind: &str,
+                      node: Option<&str>,
+                      iter: Option<i64>,
+                      payload: Option<serde_json::Value>| {
+            let db = state.db.clone();
+            let run = run.to_string();
+            let ts = ts.to_string();
+            let kind = kind.to_string();
+            let node = node.map(str::to_string);
+            async move {
+                sqlx::query(
+                    "INSERT INTO events (run_id, ts, kind, node_id, iter, payload) \
+                     VALUES (?, ?, ?, ?, ?, ?)",
+                )
+                .bind(run)
+                .bind(ts)
+                .bind(kind)
+                .bind(node)
+                .bind(iter)
+                .bind(payload.map(|value| value.to_string()))
+                .execute(&db)
+                .await
+                .unwrap();
+            }
+        };
+
+        insert(
+            "before",
+            "2026-07-14T09:00:00Z",
+            "run_started",
+            None,
+            None,
+            Some(serde_json::json!({
+                "pipeline_id": "p-out",
+                "pipeline_name": "Outside",
+                "node_defs": [{"id":"worker","name":"Outside worker","node_type":"doc-only"}]
+            })),
+        )
+        .await;
+        insert(
+            "before",
+            "2026-07-15T09:00:00Z",
+            "node_started",
+            Some("worker"),
+            Some(1),
+            Some(serde_json::json!({"node_type":"doc-only","harness":"claude"})),
+        )
+        .await;
+
+        insert(
+            "r1",
+            "2026-07-15T09:00:00Z",
+            "run_started",
+            None,
+            None,
+            Some(serde_json::json!({
+                "pipeline_id": "p1",
+                "pipeline_name": "Pipeline old",
+                "target_repo": "/repos/product",
+                "node_defs": [
+                    {"id":"worker","name":"Worker old","node_type":"doc-only"},
+                    {"id":"build","name":"Build","node_type":"script"}
+                ]
+            })),
+        )
+        .await;
+        for (harness, node_type, session_id) in [
+            (None, "doc-only", None),
+            (Some("copilot"), "doc-only", Some("copilot-resurrected")),
+            (Some("copilot"), "doc-only", Some("copilot-resurrected")),
+            (Some("copilot"), "doc-only", Some("copilot-restart")),
+            (None, "script", None),
+        ] {
+            insert(
+                "r1",
+                "2026-07-20T09:00:00Z",
+                "node_started",
+                Some(if node_type == "script" {
+                    "build"
+                } else {
+                    "worker"
+                }),
+                Some(1),
+                Some(serde_json::json!({
+                    "node_type":node_type,
+                    "harness":harness,
+                    "session_id":session_id
+                })),
+            )
+            .await;
+        }
+
+        insert(
+            "r2",
+            "2026-07-16T09:00:00Z",
+            "run_started",
+            None,
+            None,
+            Some(serde_json::json!({
+                "pipeline_id": "p1",
+                "pipeline_name": "Pipeline latest",
+                "target_repo": "/repos/product",
+                "node_defs": [{"id":"worker","name":"Worker latest","node_type":"doc-only"}]
+            })),
+        )
+        .await;
+        for (iter, session_id) in [(1, "future-loop-1"), (2, "future-loop-2")] {
+            insert(
+                "r2",
+                "2026-07-16T10:00:00Z",
+                "node_started",
+                Some("worker"),
+                Some(iter),
+                Some(serde_json::json!({
+                    "node_type":"doc-only",
+                    "harness":"future-harness",
+                    "session_id":session_id
+                })),
+            )
+            .await;
+        }
+
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .uri(
+                        "/stats/overview?from=2026-07-15T00:00:00Z&to=2026-07-17T00:00:00Z&bucket=day",
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            body["session_harnesses"],
+            serde_json::json!(["claude", "copilot", "future-harness"])
+        );
+        assert_eq!(
+            body["sessions_by_period"],
+            serde_json::json!([
+                {
+                    "bucket":"2026-07-15",
+                    "harnesses":[
+                        {"harness":"claude","executions":1},
+                        {"harness":"copilot","executions":2}
+                    ]
+                },
+                {
+                    "bucket":"2026-07-16",
+                    "harnesses":[
+                        {"harness":"future-harness","executions":2}
+                    ]
+                }
+            ])
+        );
+        let pipeline = &body["sessions_by_pipeline"][0];
+        assert_eq!(pipeline["id"], "p1");
+        assert_eq!(pipeline["name"], "Pipeline latest");
+        let worker = pipeline["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["id"] == "worker")
+            .unwrap();
+        assert_eq!(worker["name"], "Worker latest");
+        assert_eq!(worker["executions"], 5);
+        assert_eq!(
+            worker["harnesses"],
+            serde_json::json!([
+                {"harness":"claude","executions":1},
+                {"harness":"copilot","executions":2},
+                {"harness":"future-harness","executions":2}
+            ])
+        );
+        assert!(
+            pipeline["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|node| node["id"] != "build"),
+            "script starts are excluded"
+        );
+        assert_eq!(pipeline["executions"], 5);
+    }
+
+    #[tokio::test]
+    async fn stats_cost_returns_harness_coverage_and_nested_contribution_hierarchies() {
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let mut state = test_state().await;
+        let home = state
+            .repo_root
+            .join(".pdo")
+            .join("test-stats-cost")
+            .join(uuid::Uuid::new_v4().to_string());
+        let _cleanup = Cleanup(home.clone());
+        std::fs::create_dir_all(&home).unwrap();
+        Arc::get_mut(&mut state).unwrap().sandbox_home_override = Some(home.clone());
+        let repo = state.repo_root.to_string_lossy().into_owned();
+        sqlx::query(
+            "INSERT INTO projects (id, name, harness, created_at) VALUES \
+             ('prj-product', 'Product', NULL, '2026-07-01T00:00:00Z')",
+        )
+        .execute(&state.db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO project_members (path, project_id, created_at) VALUES \
+             (?, 'prj-product', '2026-07-01T00:00:00Z')",
+        )
+        .bind(&repo)
+        .execute(&state.db)
+        .await
+        .unwrap();
+
+        async fn insert_event(
+            db: &sqlx::SqlitePool,
+            run: &str,
+            ts: &str,
+            kind: &str,
+            node: Option<&str>,
+            iter: Option<i64>,
+            payload: serde_json::Value,
+        ) {
+            sqlx::query(
+                "INSERT INTO events (run_id, ts, kind, node_id, iter, payload) \
+                 VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(run)
+            .bind(ts)
+            .bind(kind)
+            .bind(node)
+            .bind(iter)
+            .bind(payload.to_string())
+            .execute(db)
+            .await
+            .unwrap();
+        }
+
+        let run_ids = ["stats-cost-r1", "stats-cost-r2", "stats-cost-r3"];
+        for (index, run_id) in run_ids.iter().enumerate() {
+            insert_event(
+                &state.db,
+                run_id,
+                &format!("2026-07-{}T09:00:00Z", 15 + index),
+                "run_started",
+                None,
+                None,
+                serde_json::json!({
+                    "pipeline_id":"p1",
+                    "pipeline_name":format!("Pipeline {}", index + 1),
+                    "target_repo":repo,
+                    "harness":"claude",
+                    "node_defs":[{"id":"worker","name":format!("Worker {}", index + 1),"node_type":"code-mutating"}]
+                }),
+            )
+            .await;
+        }
+        insert_event(
+            &state.db,
+            run_ids[0],
+            "2026-07-20T09:00:00Z",
+            "node_started",
+            Some("worker"),
+            Some(1),
+            serde_json::json!({"node_type":"code-mutating","harness":"claude","session_id":"claude-1"}),
+        )
+        .await;
+        insert_event(
+            &state.db,
+            run_ids[0],
+            "2026-07-20T10:00:00Z",
+            "node_started",
+            Some("worker"),
+            Some(1),
+            serde_json::json!({"node_type":"code-mutating","harness":"copilot","session_id":"copilot-1"}),
+        )
+        .await;
+        insert_event(
+            &state.db,
+            run_ids[0],
+            "2026-07-20T11:00:00Z",
+            "node_started",
+            Some("worker"),
+            Some(2),
+            serde_json::json!({"node_type":"code-mutating","harness":"future-harness","session_id":"future-1"}),
+        )
+        .await;
+        insert_event(
+            &state.db,
+            run_ids[1],
+            "2026-07-21T09:00:00Z",
+            "node_started",
+            Some("worker"),
+            Some(1),
+            serde_json::json!({"node_type":"code-mutating","harness":"future-harness","session_id":"future-2"}),
+        )
+        .await;
+        insert_event(
+            &state.db,
+            run_ids[2],
+            "2026-07-22T09:00:00Z",
+            "node_started",
+            Some("worker"),
+            Some(1),
+            serde_json::json!({"node_type":"doc-only"}),
+        )
+        .await;
+
+        let claude_dir =
+            home.join(".claude")
+                .join("projects")
+                .join(stale_detector::encode_working_dir(
+                    &worktree_ops::sub_worktree_path(&state.repo_root, run_ids[0], "worker", 1),
+                ));
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        std::fs::write(
+            claude_dir.join("claude-1.jsonl"),
+            r#"{"type":"assistant","requestId":"r1","message":{"id":"m1","model":"claude-opus-4-8","usage":{"input_tokens":1000000,"output_tokens":0}}}"#,
+        )
+        .unwrap();
+        let legacy_dir =
+            home.join(".claude")
+                .join("projects")
+                .join(stale_detector::encode_working_dir(
+                    &worktree_ops::worktree_dir_for_run(&state.repo_root, run_ids[2]),
+                ));
+        std::fs::create_dir_all(&legacy_dir).unwrap();
+        std::fs::write(
+            legacy_dir.join("legacy.jsonl"),
+            r#"{"type":"assistant","requestId":"r3","message":{"id":"m3","model":"claude-opus-4-8","usage":{"input_tokens":1000000,"output_tokens":0}}}"#,
+        )
+        .unwrap();
+        let copilot_dir = home
+            .join(".copilot")
+            .join("session-state")
+            .join("copilot-1");
+        std::fs::create_dir_all(&copilot_dir).unwrap();
+        std::fs::write(
+            copilot_dir.join("events.jsonl"),
+            r#"{"type":"session.shutdown","data":{"totalNanoAiu":100000000000}}"#,
+        )
+        .unwrap();
+
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/stats/cost?from=2026-07-15T00:00:00Z&to=2026-07-18T00:00:00Z&bucket=day")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            body["harnesses"],
+            serde_json::json!(["claude", "copilot", "future-harness"])
+        );
+        assert_eq!(body["total"]["usd"], 11.0);
+        assert_eq!(body["total"]["executions"], 3);
+        assert_eq!(body["total"]["readable"], 0);
+        assert_eq!(body["total"]["unknown"], 3);
+        assert!(
+            body["total"]["unknown"].as_i64().unwrap()
+                <= body["total"]["executions"].as_i64().unwrap()
+        );
+        let claude = body["total"]["harnesses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|metric| metric["harness"] == "claude")
+            .unwrap();
+        assert_eq!(claude["usd"], 10.0);
+        assert!(claude["average_usd"].is_null());
+        assert_eq!(claude["estimated"], true);
+        assert_eq!(claude["executions"], 3);
+        assert_eq!(claude["readable"], 0);
+        assert_eq!(claude["unknown"], 3);
+        let future = body["total"]["harnesses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|metric| metric["harness"] == "future-harness")
+            .unwrap();
+        assert!(future["usd"].is_null());
+        assert_eq!(future["executions"], 2);
+        assert_eq!(future["unknown"], 2);
+        assert!(future["missing_reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason == "harness has no cost source"));
+        let copilot = body["total"]["harnesses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|metric| metric["harness"] == "copilot")
+            .unwrap();
+        assert_eq!(copilot["estimated"], false);
+        assert_eq!(copilot["executions"], 1);
+        assert_eq!(copilot["readable"], 1);
+        assert_eq!(copilot["unknown"], 0);
+        assert_eq!(copilot["average_usd"], 1.0);
+        for metric in body["total"]["harnesses"].as_array().unwrap() {
+            assert!(metric["unknown"].as_i64().unwrap() <= metric["executions"].as_i64().unwrap());
+        }
+
+        assert_eq!(body["by_period"][0]["bucket"], "2026-07-15");
+        assert_eq!(body["by_period"][0]["usd"], 6.0);
+        let pipeline = &body["by_pipeline"][0];
+        assert_eq!(pipeline["id"], "p1");
+        assert_eq!(pipeline["name"], "Pipeline 3");
+        assert_eq!(pipeline["executions"], 3);
+        assert_eq!(pipeline["readable"], 0);
+        assert_eq!(pipeline["unknown"], 3);
+        let worker = pipeline["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == "worker")
+            .unwrap();
+        assert_eq!(worker["name"], "Worker 3");
+        assert_eq!(worker["executions"], 5);
+        assert_eq!(worker["readable"], 2);
+        assert_eq!(worker["unknown"], 3);
+        let infrastructure = pipeline["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["name"] == "Infrastructure")
+            .unwrap();
+        assert_eq!(infrastructure["executions"], 3);
+        assert_eq!(infrastructure["unknown"], 3);
+        let unassigned = pipeline["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["name"] == "Unassigned")
+            .unwrap();
+        assert_eq!(unassigned["usd"], 5.0);
+        assert_eq!(unassigned["readable"], 0);
+        assert_eq!(body["by_project"][0]["id"], "prj-product");
+        assert_eq!(body["by_project"][0]["name"], "Product");
+        assert_eq!(body["by_project"][0]["executions"], 3);
+        assert_eq!(body["by_project"][0]["readable"], 0);
+        assert_eq!(body["by_project"][0]["unknown"], 3);
+        assert_eq!(body["by_project"][0]["pipelines"][0]["id"], "p1");
+        assert!(!body["resolved"].as_array().unwrap().is_empty());
     }
 
     /// Like [`test_state`], but with an injected [`ServiceHealth`] so the
@@ -17195,6 +18031,7 @@ mod tests {
             node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             service_health: Arc::new(service_health),
             docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
+            harness_catalogue_cache: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: None,
             price_refresh_at_boot: false,
@@ -20398,6 +21235,7 @@ mod tests {
         rs.nodes.insert(
             node_id.into(),
             event_log::NodeState {
+                harness: None,
                 node_id: node_id.into(),
                 status,
                 iter,
@@ -20612,6 +21450,7 @@ mod tests {
         run_state.nodes.insert(
             "a".into(),
             event_log::NodeState {
+                harness: None,
                 node_id: "a".into(),
                 status: event_log::NodeStatus::Completed,
                 iter: 2,
@@ -20666,6 +21505,7 @@ mod tests {
         run_state.nodes.insert(
             "a".into(),
             event_log::NodeState {
+                harness: None,
                 node_id: "a".into(),
                 status: event_log::NodeStatus::Stale,
                 iter: 1,
@@ -20685,6 +21525,7 @@ mod tests {
         run_state.nodes.insert(
             "b".into(),
             event_log::NodeState {
+                harness: None,
                 node_id: "b".into(),
                 status: event_log::NodeStatus::Waiting,
                 iter: 1,
@@ -20911,6 +21752,7 @@ mod tests {
             rs.nodes.insert(
                 node_id.into(),
                 event_log::NodeState {
+                    harness: None,
                     node_id: node_id.into(),
                     status: event_log::NodeStatus::Completed,
                     iter: iters,
@@ -21572,6 +22414,7 @@ mod tests {
                 persistent: None,
             }),
             docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
+            harness_catalogue_cache: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: None,
             price_refresh_at_boot: false,
@@ -27653,6 +28496,7 @@ edges: []
                 persistent: None,
             }),
             docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
+            harness_catalogue_cache: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: None,
             price_refresh_at_boot: false,
@@ -27851,6 +28695,7 @@ edges: []
                 persistent: None,
             }),
             docker_probe_cache: Arc::new(tokio::sync::Mutex::new(None)),
+            harness_catalogue_cache: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: None,
             price_refresh_at_boot: false,
@@ -32114,10 +32959,22 @@ edges:
                 "source is builtin|descriptor, got {source:?}"
             );
             assert!(h["installed"].is_boolean(), "installed is a bool: {h}");
+            // #616/ADR-0053: the offer deduced from the binary rides on each entry —
+            // the model & effort catalogues (arrays, possibly empty = free-text
+            // fallback), the served effort-axis fact (a bool, replacing the client's
+            // hard-coded map), and the probed version (a string or null).
+            assert!(h["models"].is_array(), "models is an array: {h}");
+            assert!(h["efforts"].is_array(), "efforts is an array: {h}");
+            assert!(h["has_effort"].is_boolean(), "has_effort is a bool: {h}");
+            assert!(
+                h["version"].is_string() || h["version"].is_null(),
+                "version is a string or null: {h}"
+            );
         }
 
-        // The embedded floor always resolves, always as `builtin`.
-        for floor in ["claude", "opencode"] {
+        // The embedded floor always resolves, always as `builtin` — copilot is the
+        // third arm (#614), listed under "Built-in" like the other two.
+        for floor in ["claude", "opencode", "copilot"] {
             let entry = harnesses
                 .iter()
                 .find(|h| h["name"] == floor)

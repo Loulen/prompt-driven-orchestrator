@@ -24,7 +24,7 @@ import type {
 import ModelPicker from "./ModelPicker";
 import SessionCounter from "./SessionCounter";
 import HarnessSelect from "./HarnessSelect";
-import { harnessCatalog } from "../lib/harness";
+import { harnessCatalog, findHarnessOption } from "../lib/harness";
 
 interface Props {
   open: boolean;
@@ -256,11 +256,14 @@ function SettingsForm({
   const [defaultHarness, setDefaultHarness] = useState<string>(
     () => settings.default_harness.effective ?? "",
   );
-  const [claudeDefaultModel, setClaudeDefaultModel] = useState<string>(
-    () => settings.default_harness_model.stored["claude"] ?? "",
-  );
-  const [opencodeDefaultModel, setOpencodeDefaultModel] = useState<string>(
-    () => settings.default_harness_model.stored["opencode"] ?? "",
+  // #616 (correctif 1): the per-harness default model is a MAP keyed by harness
+  // name, derived from the SERVED harness list — not two hard-coded `claude` /
+  // `opencode` fields. Seeded from the stored map so every harness that already
+  // carries a default keeps its value in the editor; a row is shown per served
+  // harness. This is what fixes the correctif-1 bug: saving builds the payload from
+  // the full stored map (below), so a harness with no field is never wiped.
+  const [harnessModels, setHarnessModels] = useState<Record<string, string>>(
+    () => ({ ...settings.default_harness_model.stored }),
   );
   // Default sandbox (#410/#432): `off` or a staging-profile name. `effective` is always
   // a present string (the `?? "off"` is belt-and-braces).
@@ -343,17 +346,23 @@ function SettingsForm({
     if (defaultHarness !== (settings.default_harness.effective ?? "")) {
       patch.default_harness = defaultHarness;
     }
+    // #616 (correctif 1): build the per-harness model map from the FULL edited map,
+    // dropping only trimmed-empty entries — never a two-field block. The daemon
+    // replaces the stored map wholesale, so sending the whole thing is what
+    // PRESERVES a harness whose row wasn't touched (and one not even shown, e.g. a
+    // declared-but-uninstalled harness whose stored default must survive). Sent only
+    // when the effective map actually changed.
     const storedModels = settings.default_harness_model.stored;
-    const claudeM = claudeDefaultModel.trim();
-    const opencodeM = opencodeDefaultModel.trim();
-    if (
-      (claudeM || undefined) !== (storedModels["claude"] || undefined) ||
-      (opencodeM || undefined) !== (storedModels["opencode"] || undefined)
-    ) {
-      const map: Record<string, string> = {};
-      if (claudeM) map["claude"] = claudeM;
-      if (opencodeM) map["opencode"] = opencodeM;
-      patch.default_harness_model = map;
+    const nextModels: Record<string, string> = {};
+    for (const [name, raw] of Object.entries(harnessModels)) {
+      const v = raw.trim();
+      if (v) nextModels[name] = v;
+    }
+    const sameMap =
+      Object.keys(nextModels).length === Object.keys(storedModels).length &&
+      Object.entries(nextModels).every(([k, v]) => storedModels[k] === v);
+    if (!sameMap) {
+      patch.default_harness_model = nextModels;
     }
 
     // Default sandbox mode (#410): a concrete enum variant, only sent when it changed. The
@@ -536,7 +545,19 @@ function SettingsForm({
           <label className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
             Default model
           </label>
-          <ModelPicker value={model} onChange={setModel} testid="default-model" />
+          <ModelPicker
+            value={model}
+            onChange={setModel}
+            /* #616: the legacy instance-wide default folds under `claude` at
+               resolve, so it offers claude's served catalogue (free text if none). */
+            models={
+              findHarnessOption(harnessCatalog(settings.harness_descriptors), "claude")
+                ?.models ?? []
+            }
+            testid="default-model"
+            /* One instance-wide default, not one per node — a constant subject. */
+            subject="instance-default"
+          />
           <div className="text-fg-4" style={{ fontSize: "10.5px" }}>
             The model every work node launches with unless it sets its own. "Default"
             leaves it to your Claude account (no <span className="font-mono">--model</span>).
@@ -579,34 +600,38 @@ function SettingsForm({
           </div>
         </div>
 
-        {/* Default model per harness (#550/ADR-0046): a slug means nothing outside
-            its harness, so the instance default model is per-harness. Free text. */}
+        {/* Default model per harness (#550/ADR-0046, #616 correctif 1): a slug means
+            nothing outside its harness, so the instance default model is per-harness.
+            The rows are DERIVED from the served harness list — one per resolved
+            harness — never two hard-coded fields. Saving preserves every harness's
+            value (the map is sent whole), so setting one no longer wipes another. */}
         <div className="flex flex-col gap-1.5" data-testid="setting-default-harness-model">
           <label className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
             Default model per harness
           </label>
-          <label className="flex items-center gap-2 text-fg-3" style={{ fontSize: "11px" }}>
-            <span className="w-16 font-mono">claude</span>
-            <input
-              type="text"
-              value={claudeDefaultModel}
-              onChange={(e) => setClaudeDefaultModel(e.target.value)}
-              placeholder="account default"
-              data-testid="setting-default-model-claude"
-              className="flex-1 rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg"
-            />
-          </label>
-          <label className="flex items-center gap-2 text-fg-3" style={{ fontSize: "11px" }}>
-            <span className="w-16 font-mono">opencode</span>
-            <input
-              type="text"
-              value={opencodeDefaultModel}
-              onChange={(e) => setOpencodeDefaultModel(e.target.value)}
-              placeholder="account default"
-              data-testid="setting-default-model-opencode"
-              className="flex-1 rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg"
-            />
-          </label>
+          {(() => {
+            const cat = harnessCatalog(settings.harness_descriptors);
+            const rows = [...cat.builtin, ...cat.descriptors];
+            return rows.map((h) => (
+              <label
+                key={h.name}
+                className="flex items-center gap-2 text-fg-3"
+                style={{ fontSize: "11px" }}
+              >
+                <span className="w-16 font-mono">{h.name}</span>
+                <input
+                  type="text"
+                  value={harnessModels[h.name] ?? ""}
+                  onChange={(e) =>
+                    setHarnessModels((m) => ({ ...m, [h.name]: e.target.value }))
+                  }
+                  placeholder="account default"
+                  data-testid={`setting-default-model-${h.name}`}
+                  className="flex-1 rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg"
+                />
+              </label>
+            ));
+          })()}
           <div className="text-fg-4" style={{ fontSize: "10.5px" }}>
             The model a node runs with on that harness when it sets none. Empty = the
             harness account default.

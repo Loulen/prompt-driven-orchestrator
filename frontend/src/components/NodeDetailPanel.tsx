@@ -276,6 +276,13 @@ export default function NodeDetailPanel({
   const hasMultipleIters = (node.iterations?.length ?? 0) > 1;
   const showTerminal = node.status !== "pending";
 
+  // The status of the iteration **on screen**, not the node's rollup (#617). They
+  // agree on the latest iteration; they part when the IterSelector sits on an older
+  // one, whose session was reaped long ago even though the node is running again.
+  // The terminal reads this to decide whether to attach or to read the frozen pane.
+  const selectedIterStatus =
+    node.iterations?.find((i) => i.iter === selectedIter)?.status ?? node.status;
+
   // #369: the I/O poll (`setInputs`/`setOutputs`) re-renders this panel every
   // tick (1s live, 5s settled). Building the modal's `source` prop as an inline
   // object literal handed the child a fresh reference on every one of those
@@ -319,6 +326,20 @@ export default function NodeDetailPanel({
           >
             {STATUS_LABELS[node.status] ?? node.status}
           </span>
+          {/* #616/ADR-0046: the harness this node's session was FROZEN on, next to
+              the id — so the Run view shows what actually ran (distinct from the
+              run-level default in the pipeline info panel). Absent for a node that
+              never started (a pure skip) or a pre-#616 daemon. */}
+          {node.harness && (
+            <span
+              data-testid="node-frozen-harness"
+              title="Harness frozen at spawn"
+              className="rounded border border-acc/40 bg-acc/5 px-1.5 py-0.5 font-mono text-acc"
+              style={{ fontSize: "10px" }}
+            >
+              {node.harness}
+            </span>
+          )}
         </div>
         <div className="mt-0.5 font-mono text-fg-4" style={{ fontSize: "9px" }}>
           {node.node_id}
@@ -614,7 +635,12 @@ export default function NodeDetailPanel({
                 onExpand={() =>
                   setTerminalView((v) => (v === "expanded" ? "split" : "expanded"))
                 }
-                status={node.status}
+                status={selectedIterStatus}
+                // #617: the iteration this panel is showing, so a terminal one can
+                // read back the pane PDO froze when it reaped the session. The
+                // selected iter — not `node.iter` — because the IterSelector can be
+                // sitting on an older, long-reaped iteration.
+                paneSource={{ runId, nodeId: node.node_id, iter: selectedIter }}
               />
             ) : (
               <div className="flex h-full flex-col" data-testid="pending-placeholder">

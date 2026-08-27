@@ -22,10 +22,40 @@ vi.mock("../api", () => ({
   fetchSettings: vi.fn().mockResolvedValue({
     harness_descriptors: {
       path: null,
-      names: ["claude", "opencode"],
+      names: ["claude", "opencode", "copilot"],
+      // #616/ADR-0053: the served catalogue drives the model/effort pickers and the
+      // effort greying. claude offers models + efforts (effort axis present);
+      // opencode offers a model list but no effort axis (greyed); copilot offers
+      // efforts but NO model catalogue yet (#629), so its model control is the
+      // free-text field — the shape the #617 FP caught leaking a value.
       harnesses: [
-        { name: "claude", source: "builtin", installed: true },
-        { name: "opencode", source: "builtin", installed: true },
+        {
+          name: "claude",
+          source: "builtin",
+          installed: true,
+          models: ["sonnet", "opus", "haiku", "opusplan"],
+          efforts: ["low", "medium", "high", "xhigh", "max"],
+          has_effort: true,
+          version: "claude 1.0",
+        },
+        {
+          name: "opencode",
+          source: "builtin",
+          installed: true,
+          models: ["openrouter/foo"],
+          efforts: [],
+          has_effort: false,
+          version: "opencode 1.18",
+        },
+        {
+          name: "copilot",
+          source: "builtin",
+          installed: true,
+          models: [],
+          efforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+          has_effort: true,
+          version: "copilot 1.0.80",
+        },
       ],
       rejected: [],
       reason: null,
@@ -242,13 +272,16 @@ describe("NodeInspector — pooled emergent inputs (#153)", () => {
   });
 });
 
-describe("NodeInspector — per-node model field (#296/#324)", () => {
+describe("NodeInspector — per-node model field (#296/#324, #616)", () => {
+  // #616: the model picker renders the SERVED catalogue, fetched async via
+  // `useHarnessCatalog`. Queries `findBy*` so the fetch (claude's models) resolves
+  // before the dropdown trigger exists.
   it("writes the picked model onto the node and marks the tab dirty", async () => {
     const user = userEvent.setup();
     seedTabWithReviewer(false, "Review this code.");
     renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
 
-    await user.click(screen.getByTestId("node-model-trigger"));
+    await user.click(await screen.findByTestId("node-model-trigger"));
     await user.click(await screen.findByTestId("node-model-option-opus"));
 
     const tab = useEditStore.getState().openTabs[0];
@@ -263,35 +296,35 @@ describe("NodeInspector — per-node model field (#296/#324)", () => {
     useEditStore.getState().updateNode("rv1", { model: "opus" });
     renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
 
-    expect(screen.getByTestId("node-model-trigger")).toHaveTextContent("opus");
+    expect(await screen.findByTestId("node-model-trigger")).toHaveTextContent("opus");
 
     await user.click(screen.getByTestId("node-model-trigger"));
     await user.click(await screen.findByTestId("node-model-option-default"));
     expect(useEditStore.getState().openTabs[0].pipeline.nodes[0].model).toBeNull();
   });
 
-  it("renders a seeded alias on the trigger", () => {
+  it("renders a seeded served id on the trigger", async () => {
     seedTabWithReviewer(false, "Review this code.");
     useEditStore.getState().updateNode("rv1", { model: "haiku" });
     renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
-    expect(screen.getByTestId("node-model-trigger")).toHaveTextContent("haiku");
+    expect(await screen.findByTestId("node-model-trigger")).toHaveTextContent("haiku");
   });
 
-  it("renders a seeded arbitrary full id on the trigger (free text survives)", () => {
+  it("renders a seeded arbitrary full id on the trigger (free text survives)", async () => {
     seedTabWithReviewer(false, "Review this code.");
     useEditStore.getState().updateNode("rv1", { model: "claude-opus-4-8" });
     renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
-    expect(screen.getByTestId("node-model-trigger")).toHaveTextContent("claude-opus-4-8");
+    expect(await screen.findByTestId("node-model-trigger")).toHaveTextContent("claude-opus-4-8");
   });
 });
 
-describe("NodeInspector — per-node effort field (#424)", () => {
+describe("NodeInspector — per-node effort field (#424, #616)", () => {
   it("writes the picked effort onto the node and marks the tab dirty", async () => {
     const user = userEvent.setup();
     seedTabWithReviewer(false, "Review this code.");
     renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
 
-    await user.click(screen.getByTestId("node-effort-option-low"));
+    await user.click(await screen.findByTestId("node-effort-option-low"));
 
     const tab = useEditStore.getState().openTabs[0];
     expect(tab.pipeline.nodes[0].effort).toBe("low");
@@ -304,7 +337,7 @@ describe("NodeInspector — per-node effort field (#424)", () => {
     useEditStore.getState().updateNode("rv1", { effort: "high" });
     renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
 
-    expect(screen.getByTestId("node-effort-option-high")).toHaveAttribute(
+    expect(await screen.findByTestId("node-effort-option-high")).toHaveAttribute(
       "aria-checked",
       "true",
     );
@@ -319,7 +352,7 @@ describe("NodeInspector — per-node effort field (#424)", () => {
     useEditStore.getState().updateNode("rv1", { model: "opus" });
     renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
 
-    await user.click(screen.getByTestId("node-effort-option-max"));
+    await user.click(await screen.findByTestId("node-effort-option-max"));
 
     const node = useEditStore.getState().openTabs[0].pipeline.nodes[0];
     expect(node.effort).toBe("max");
@@ -566,21 +599,29 @@ describe("NodeInspector — harness axis (#550, ADR-0046)", () => {
     seedNode({});
   });
 
-  it("resolves to the claude floor when the node has no pin", () => {
+  it("resolves to the claude floor when the node has no pin", async () => {
     seedNode({});
     renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
     expect(screen.getByTestId("node-harness-resolved")).toHaveTextContent("claude");
-    // The effort picker is ENABLED on claude (it has an effort axis).
-    expect(screen.getByTestId("node-effort-option-high")).not.toBeDisabled();
+    // #616: claude serves an effort axis → the picker is ENABLED and renders its
+    // served stops (here, "high"). `findBy*` awaits the async catalogue fetch.
+    expect(await screen.findByTestId("node-effort-option-high")).not.toBeDisabled();
   });
 
-  it("shows the pinned harness as resolved and greys the effort picker on opencode", () => {
+  it("shows the pinned harness as resolved and greys the effort picker on opencode", async () => {
     seedNode({ pin_harness: "opencode" });
     renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
     expect(screen.getByTestId("node-harness-resolved")).toHaveTextContent("opencode");
-    // AC #13: opencode has no launch-time effort axis → the picker is greyed.
-    // Assert the `disabled` attribute, never `.value`.
-    expect(screen.getByTestId("node-effort-option-high")).toBeDisabled();
+    // #616/AC #3: opencode's SERVED `has_effort` is false → the picker is greyed.
+    // opencode enumerates no stops, so assert on the always-present Default segment
+    // and the group — never on a served level (there is none). Assert `disabled`,
+    // never `.value`.
+    await waitFor(() => expect(vi.mocked(fetchSettings)).toHaveBeenCalled());
+    expect(screen.getByTestId("node-effort-option-default")).toBeDisabled();
+    expect(screen.getByRole("radiogroup", { name: "Effort" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
   });
 
   it("pinning a harness writes pin_harness onto the node", async () => {
@@ -604,5 +645,87 @@ describe("NodeInspector — harness axis (#550, ADR-0046)", () => {
     seedNode({ type: "script" });
     renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
     expect(screen.queryByTestId("node-harness")).toBeNull();
+  });
+});
+
+// #617 FP finding 3: the inspector is ONE component reused as the selection moves,
+// so a picker holding its own state can show — and then WRITE — the previously
+// selected node's model. That is an `opencode` slug landing on a `copilot` node,
+// which is exactly what "a model means nothing outside its harness" (#550/ADR-0046)
+// forbids. The journey below is the one the FP walked.
+describe("NodeInspector — the model field does not follow the selection (#617)", () => {
+  function seedTwoNodes() {
+    const base = {
+      type: "doc-only" as const,
+      interactive: false,
+      inputs: [],
+      outputs: [{ name: "out", repeated: false, side: "right" as const }],
+      view: { x: 0, y: 0 },
+    };
+    useEditStore.setState({
+      openTabs: [
+        {
+          id: "p1",
+          scope: "repo",
+          pipeline: {
+            name: "p1",
+            version: "1.0",
+            variables: {},
+            nodes: [
+              // Pinned to a harness with no served model catalogue so BOTH nodes
+              // render the free-text control — the shape that carried the value.
+              {
+                ...base,
+                id: "opc",
+                name: "opencode-ish",
+                pin_harness: "copilot",
+                model: "openrouter/anthropic/claude-haiku-4.5",
+              },
+              { ...base, id: "cop", name: "copilot", pin_harness: "copilot" },
+            ],
+            edges: [],
+          },
+          prompts: { opc: "a", cop: "b" },
+          diagnostics: [],
+          dirty: false,
+          externalDirty: false,
+        },
+      ],
+      activeTabId: "p1",
+      selection: { kind: "node", id: "opc" },
+    });
+  }
+
+  it("shows nothing on a node that carries no model, whatever was selected before", async () => {
+    seedTwoNodes();
+    const { rerender } = renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    const field = async () => (await screen.findByTestId("node-model-input")) as HTMLInputElement;
+    expect((await field()).value).toBe("openrouter/anthropic/claude-haiku-4.5");
+
+    useEditStore.setState({ selection: { kind: "node", id: "cop" } });
+    rerender(
+      <TooltipProvider>
+        <NodeInspector libraryEntries={[]} onLibraryChanged={() => {}} />
+      </TooltipProvider>,
+    );
+
+    expect((await field()).value).toBe("");
+  });
+
+  it("a focus-and-blur on the second node writes no model onto it", async () => {
+    const user = userEvent.setup();
+    seedTwoNodes();
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    await screen.findByTestId("node-model-input");
+
+    useEditStore.setState({ selection: { kind: "node", id: "cop" } });
+    await user.click(await screen.findByTestId("node-model-input"));
+    await user.click(screen.getByTestId("node-harness-resolved")); // click away
+
+    const cop = useEditStore.getState().openTabs[0].pipeline.nodes[1];
+    expect(cop.model ?? null).toBeNull();
+    // …and the tab is not dirtied by a field the user only looked at.
+    expect(useEditStore.getState().openTabs[0].dirty).toBe(false);
   });
 });

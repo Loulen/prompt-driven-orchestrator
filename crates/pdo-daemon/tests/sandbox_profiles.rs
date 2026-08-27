@@ -815,6 +815,11 @@ async fn an_extra_is_copied_into_the_staging_and_mounted_never_bound_from_the_ho
     }
 
     // (d) And the host file is byte-identical after the Run — nothing wrote back.
+    // `docker create` appearing in the log only proves prep began; the node may still
+    // be `preparing` when we ask it to complete, which the transition guard rejects
+    // (409). Wait for `running` first, as every other completion in this file does —
+    // otherwise the done races prep and flakes under a loaded, parallel test run.
+    wait_node_status(&daemon, &run_id, "running").await;
     write_node_output(&daemon, &run_id, "done\n");
     simulate_node_done(&daemon, &run_id).await;
     wait_run_status(&daemon, &run_id, "completed").await;

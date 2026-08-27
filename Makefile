@@ -1,6 +1,6 @@
 SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
-.PHONY: help dev build test check lint fmt clean install update service-install service-status service-restart service-logs
+.PHONY: help dev build test check lint fmt clean support-table install update service-install service-status service-restart service-logs
 
 PORT := 6172
 VITE_PORT := 5174
@@ -17,10 +17,11 @@ help:
 	@echo "  make dev     Run dev daemon (port $(PORT)) + Vite (port $(VITE_PORT)) for chrome-MCP testing"
 	@echo "  make build   cargo build + pnpm run build (frontend embedded into daemon)"
 	@echo "  make test    cargo nextest + doctests + vitest"
-	@echo "  make check   cargo check + tsc --noEmit"
+	@echo "  make check   cargo check + tsc --noEmit + the README support table is current"
 	@echo "  make lint    cargo clippy + eslint"
 	@echo "  make fmt     cargo fmt"
 	@echo "  make clean   cargo clean + rm frontend/dist"
+	@echo "  make support-table  Regenerate the README harness support table from the code"
 	@echo ""
 	@echo "Installed global daemon ($(PDO_PROD_DIR), port $(PDO_PROD_PORT)):"
 	@echo "  make install          Clone if needed + build release + install $(PDO_BIN)"
@@ -56,6 +57,16 @@ test:
 check:
 	cargo check --workspace
 	cd frontend && pnpm run typecheck
+	# The README support table is generated from the capability declaration in
+	# crates/pdo-daemon/src/harness_probes.rs (#617). A hand-edited table would be
+	# wrong at the next capability; this fails and names the drift instead. Fix it
+	# with `make support-table`, never by editing the README block.
+	cargo run --quiet -p pdo-daemon -- docs support-table --check --file $(CURDIR)/README.md
+
+# Rewrite the README's generated block from the code. Run it after adding a
+# harness, adding a capability, or moving a "last validated version".
+support-table:
+	cargo run --quiet -p pdo-daemon -- docs support-table --write --file $(CURDIR)/README.md
 
 lint:
 	cargo clippy --workspace --all-targets -- -D warnings

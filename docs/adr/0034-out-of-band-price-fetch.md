@@ -1,5 +1,10 @@
 # La table de prix a une source distante, fetchée hors du chemin de lecture
 
+> **Amendé par ADR-0052** : la table résolue cesse d'être le passage obligé de tout coût. Un coût
+> **rapporté** par le harnais se convertit par une constante publiée et ne la consulte pas — elle reste
+> donc la table des modèles **tarifés par famille Anthropic**, sans avoir à s'étendre aux catalogues
+> des autres harnais.
+
 ## Contexte
 
 ADR-0022 estime le coût d'un Run en multipliant les compteurs de tokens des transcripts locaux par

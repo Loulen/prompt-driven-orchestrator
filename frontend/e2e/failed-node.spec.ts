@@ -11,8 +11,8 @@ import { openRunNodeDetails, cleanupRuns, runMultipart } from "./helpers";
 // 2. Mark complete with missing outputs shows the 409 sub-banner listing ports.
 // 3. Mark complete succeeds once the output files exist, and the node completes.
 //
-// 4. #490: clicking Mark complete on a node of an already-Failed run SHOWS the
-//    guard's refusal ("resume the run first") instead of nothing at all.
+// 4. Mark complete on an already-Failed run reopens it, then shows output
+//    validation instead of the obsolete "resume the run first" refusal.
 //
 // Tests 2 and 3 operate on a *running* node, not a failed one: failing the only
 // worker drives the whole run terminal (Failed), and the daemon then refuses
@@ -22,10 +22,8 @@ import { openRunNodeDetails, cleanupRuns, runMultipart } from "./helpers";
 // which is exactly what those two assertions exercise. Each test owns its run so
 // they are independent of order and of each other's state.
 //
-// That second refusal used to be invisible — this file documented it as a
-// workaround for two years' worth of commits. Test 4 turns the workaround into
-// the assertion, and it is the #490 regression test at the ONE layer the CI
-// actually plays (vitest does not run in CI).
+// Test 4 keeps the terminal-run recovery path at the ONE layer the CI actually
+// plays (vitest does not run in CI).
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
@@ -96,7 +94,11 @@ async function waitForWorkerStatus(
 
 async function createRun(page: Page, baseURL: string): Promise<string> {
   const resp = await page.request.post(`${baseURL}/runs`, {
-    multipart: runMultipart({ pipeline: PIPELINE_NAME, input: "e2e failed-node test" }),
+    multipart: runMultipart({
+      pipeline: PIPELINE_NAME,
+      input: "e2e failed-node test",
+      auto_fail: "true",
+    }),
   });
   expect(resp.status()).toBe(201);
   const { run_id } = await resp.json();
@@ -211,7 +213,7 @@ test("Mark complete succeeds after creating output files", async ({
   await expect(page.getByText("Completed")).toBeVisible({ timeout: 5_000 });
 });
 
-test("Mark complete on a node of a failed run shows the guard's refusal (#490)", async ({
+test("Mark complete on a failed run reopens it before output validation", async ({
   page,
   baseURL,
 }) => {
@@ -222,8 +224,7 @@ test("Mark complete on a node of a failed run shows the guard's refusal (#490)",
 
   const runId = await createRun(page, baseURL!);
 
-  // Failing the only worker drives the whole run terminal, so the completion
-  // guard — not output validation — is what answers the next click.
+  // `auto_fail: true` makes failure of the only worker terminalise the run.
   const failResp = await page.request.post(
     `${baseURL}/runs/${runId}/nodes/worker/fail`,
     { data: { reason: "driven terminal on purpose", iter: 1 } },
@@ -237,14 +238,19 @@ test("Mark complete on a node of a failed run shows the guard's refusal (#490)",
 
   await button.click();
 
-  // Pre-#490 this produced a `200` carrying a prose `error`, which the client read
-  // as `missing_outputs` with an empty list and a `length > 0` gate — so NOTHING
-  // was displayed. Now the refusal names itself, and says what to do.
+  // The human gesture reopens the run, then reaches the normal output validator.
   const verdict = page.getByTestId("mark-complete-verdict");
   await expect(verdict).toBeVisible({ timeout: 5_000 });
   await expect(verdict).toHaveAttribute("data-verdict", "refused");
-  await expect(verdict).toHaveAttribute("data-recoverable", "false");
-  await expect(verdict).toContainText("resume the run first");
+  await expect(verdict).toHaveAttribute("data-slug", "missing_outputs");
+  await expect(verdict).toHaveAttribute("data-recoverable", "true");
+  await expect(verdict).toContainText("Missing outputs: summary, report");
+  await expect
+    .poll(async () => {
+      const response = await page.request.get(`${baseURL}/runs/${runId}`);
+      return (await response.json()).status as string;
+    })
+    .toBe("running");
 
   // And it STAYS: a second click must not blink it out (the handler no longer
   // clears before awaiting).

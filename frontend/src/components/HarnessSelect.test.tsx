@@ -2,17 +2,22 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import HarnessSelect from "./HarnessSelect";
-import type { HarnessCatalog } from "../lib/harness";
+import type { HarnessCatalog, HarnessOption } from "../lib/harness";
+
+// #616: a HarnessOption now carries the served offer too; HarnessSelect only reads
+// `name`/`installed`, so this helper fills the rest with harmless defaults.
+const opt = (name: string, installed: boolean): HarnessOption => ({
+  name,
+  installed,
+  models: [],
+  efforts: [],
+  hasEffort: true,
+  version: null,
+});
 
 const catalog: HarnessCatalog = {
-  builtin: [
-    { name: "claude", installed: true },
-    { name: "opencode", installed: false },
-  ],
-  descriptors: [
-    { name: "pi", installed: true },
-    { name: "aider", installed: false },
-  ],
+  builtin: [opt("claude", true), opt("opencode", false)],
+  descriptors: [opt("pi", true), opt("aider", false)],
 };
 
 function renderPicker(props: Partial<React.ComponentProps<typeof HarnessSelect>> = {}) {
@@ -123,7 +128,7 @@ describe("HarnessSelect (#586)", () => {
   it("omits an empty section rather than rendering a blank header", async () => {
     const user = userEvent.setup();
     renderPicker({
-      catalog: { builtin: [{ name: "claude", installed: true }], descriptors: [] },
+      catalog: { builtin: [opt("claude", true)], descriptors: [] },
     });
     await user.click(screen.getByTestId("hs"));
     await screen.findByTestId("hs-option-claude");

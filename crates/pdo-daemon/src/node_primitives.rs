@@ -74,6 +74,14 @@ pub(crate) struct StartNodeParams<'a> {
     /// keeps a manual force-spawn honouring the instance default — the same
     /// silent-bug class the `default_model` comment warns about (#347).
     pub inject_hook: bool,
+    /// The harness registry to resolve the winning harness name against (#614,
+    /// correctif 4). `Some` ⇒ the **disk tier** is honoured (embedded floor merged
+    /// with `~/.pdo/harnesses/descriptors.yaml`), so a force-spawn / Start-button
+    /// relaunch reaches a user-declared harness exactly like the scheduler's
+    /// `spawn_node` does — these commands stop being reserved to embedded harnesses.
+    /// `None` ⇒ the embedded floor only (the DB-less test default, and the pre-#614
+    /// behaviour). Borrowed: the async caller loads it once and passes a ref.
+    pub harness_registry: Option<&'a harness_registry::HarnessRegistry>,
 }
 
 /// Everything needed to launch the node's tmux session, once its reservation has
@@ -115,8 +123,10 @@ pub(crate) struct StartNodeSpawn {
 enum StartNodeTail {
     Agent {
         /// #550: the resolved harness descriptor (owned; `execute` borrows it into
-        /// [`tmux_session_manager::SessionTail::Agent`]).
-        harness: harness_registry::HarnessDescriptor,
+        /// [`tmux_session_manager::SessionTail::Agent`]). Boxed (#614) so the wide
+        /// descriptor — grown by the resume fields — does not bloat every
+        /// `StartNodeTail` (`clippy::large_enum_variant`).
+        harness: Box<harness_registry::HarnessDescriptor>,
         model: Option<String>,
         effort: Option<String>,
         /// #473: the pinned Claude Code session id (owned mirror of
@@ -155,7 +165,7 @@ impl StartNodeSpawn {
                 effort,
                 session_id,
             } => tmux_session_manager::SessionTail::Agent {
-                harness,
+                harness: harness.as_ref(),
                 model: model.as_deref(),
                 effort: effort.as_deref(),
                 session_id: session_id.as_deref(),
@@ -421,21 +431,31 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
     };
     let harness_descriptor = match &resolved_harness {
         None => None,
-        Some(r) => match harness_registry::resolve(&r.harness) {
-            Some(d) => Some(d),
-            None => {
-                return StartNodeResult {
-                    outcome: PrimitiveOutcome::Rejected {
-                        reason: format!(
-                            "node '{}': unknown harness '{}'",
-                            params.node_id, r.harness
-                        ),
-                    },
-                    events: vec![],
-                    spawn: None,
-                };
+        // #614 (correctif 4): resolve the name against the disk tier when the
+        // caller supplied a loaded registry (force-spawn / Start), else the
+        // embedded floor (the DB-less default). Either way, an unresolvable name is
+        // a rejection that names it — never a silent claude fallback.
+        Some(r) => {
+            let resolved = match params.harness_registry {
+                Some(reg) => reg.resolve(&r.harness),
+                None => harness_registry::resolve(&r.harness),
+            };
+            match resolved {
+                Some(d) => Some(d),
+                None => {
+                    return StartNodeResult {
+                        outcome: PrimitiveOutcome::Rejected {
+                            reason: format!(
+                                "node '{}': unknown harness '{}'",
+                                params.node_id, r.harness
+                            ),
+                        },
+                        events: vec![],
+                        spawn: None,
+                    };
+                }
             }
-        },
+        }
     };
     // AC #10: a missing harness binary is a spawn that cannot happen — reject
     // (never a 2xx), naming the harness. Skipped under the test seam.
@@ -445,8 +465,14 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
             return StartNodeResult {
                 outcome: PrimitiveOutcome::Rejected {
                     reason: format!(
-                        "node '{}': harness '{}' binary '{}' not found on PATH",
-                        params.node_id, d.name, d.binary
+                        "node '{}': harness '{}' binary '{}' not found in PATH {} \
+                         (ADR-0055: the user's interactive PATH, not the service's) — \
+                         install it or check the name; this is not \"not installed\" unless \
+                         the binary is truly absent from that PATH",
+                        params.node_id,
+                        d.name,
+                        d.binary,
+                        tmux_session_manager::harness_probe_path()
                     ),
                 },
                 events: vec![],
@@ -471,9 +497,11 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         }
     } else {
         StartNodeTail::Agent {
-            harness: harness_descriptor
-                .clone()
-                .expect("a non-script node resolved a harness descriptor"),
+            harness: Box::new(
+                harness_descriptor
+                    .clone()
+                    .expect("a non-script node resolved a harness descriptor"),
+            ),
             model: resolved_model.clone(),
             effort: resolved_effort.clone(),
             session_id: session_id.clone(),
@@ -1007,6 +1035,7 @@ mod tests {
 
     fn running_node(id: &str, iter: i64) -> NodeState {
         NodeState {
+            harness: None,
             node_id: id.into(),
             status: NodeStatus::Running,
             iter,
@@ -1028,6 +1057,7 @@ mod tests {
 
     fn completed_node(id: &str, iter: i64) -> NodeState {
         NodeState {
+            harness: None,
             node_id: id.into(),
             status: NodeStatus::Completed,
             iter,
@@ -1049,6 +1079,7 @@ mod tests {
 
     fn pending_node(id: &str) -> NodeState {
         NodeState {
+            harness: None,
             node_id: id.into(),
             status: NodeStatus::Pending,
             iter: 1,
@@ -1109,6 +1140,7 @@ mod tests {
             default_harness_models: Default::default(),
             project_harness: None,
             inject_hook: false,
+            harness_registry: None,
         };
 
         let result = start_node(&params);
@@ -1152,6 +1184,7 @@ mod tests {
             default_harness_models: Default::default(),
             project_harness: None,
             inject_hook: false,
+            harness_registry: None,
         };
 
         let result = start_node(&params);
@@ -1201,6 +1234,7 @@ mod tests {
             default_harness_models: Default::default(),
             project_harness: None,
             inject_hook: true,
+            harness_registry: None,
         };
         let result = start_node(&params);
         assert_eq!(result.outcome, PrimitiveOutcome::Executed);
@@ -1255,6 +1289,7 @@ mod tests {
             default_harness_models: Default::default(),
             project_harness: None,
             inject_hook: true,
+            harness_registry: None,
         };
         let result = start_node(&params);
         assert_eq!(result.outcome, PrimitiveOutcome::Executed);
@@ -1321,6 +1356,7 @@ mod tests {
             default_harness_models: Default::default(),
             project_harness: None,
             inject_hook: false,
+            harness_registry: None,
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -1383,6 +1419,7 @@ mod tests {
             default_harness_models: Default::default(),
             project_harness: None,
             inject_hook: false,
+            harness_registry: None,
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -1442,6 +1479,7 @@ mod tests {
             default_harness_models: Default::default(),
             project_harness: None,
             inject_hook: false,
+            harness_registry: None,
         };
         let input_paths = resolve_inputs(&params, node);
         assert_eq!(
@@ -1551,6 +1589,7 @@ mod tests {
             default_harness_models: Default::default(),
             project_harness: None,
             inject_hook: false,
+            harness_registry: None,
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -1623,6 +1662,7 @@ mod tests {
             default_harness_models: Default::default(),
             project_harness: None,
             inject_hook: false,
+            harness_registry: None,
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -1633,6 +1673,7 @@ mod tests {
     fn completed_node_iters(id: &str, iters: &[(i64, NodeStatus)]) -> NodeState {
         let (head_iter, head_status) = iters.last().cloned().unwrap_or((1, NodeStatus::Pending));
         NodeState {
+            harness: None,
             node_id: id.into(),
             status: head_status,
             iter: head_iter,
@@ -1719,6 +1760,7 @@ mod tests {
             default_harness_models: Default::default(),
             project_harness: None,
             inject_hook: false,
+            harness_registry: None,
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -1787,6 +1829,7 @@ mod tests {
             default_harness_models: Default::default(),
             project_harness: None,
             inject_hook: false,
+            harness_registry: None,
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -1855,6 +1898,7 @@ mod tests {
             default_harness_models: Default::default(),
             project_harness: None,
             inject_hook: false,
+            harness_registry: None,
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -2119,6 +2163,7 @@ mod tests {
             default_harness_models: Default::default(),
             project_harness: None,
             inject_hook: false,
+            harness_registry: None,
         };
 
         let result = start_node(&params);

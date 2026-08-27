@@ -1,6 +1,6 @@
 import { render, screen, act } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { useEffect } from "react";
+import { useRef } from "react";
 
 // #369 (residual flicker, after #532): a poll-driven parent re-render must NOT
 // remount the mermaid diagram. NodeDetailPanel polls node I/O and re-renders the
@@ -19,9 +19,11 @@ import { useEffect } from "react";
 let mountCount = 0;
 vi.mock("./MermaidDiagram", () => {
   function MermaidDiagramStub({ source }: { source: string }) {
-    useEffect(() => {
+    const mounted = useRef(false);
+    if (!mounted.current) {
+      mounted.current = true;
       mountCount++;
-    }, []);
+    }
     return <div data-testid="mermaid-stub">{source}</div>;
   }
   return { default: MermaidDiagramStub };

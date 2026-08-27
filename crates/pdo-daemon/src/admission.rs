@@ -167,6 +167,7 @@ mod tests {
             run.nodes.insert(
                 (*id).into(),
                 NodeState {
+                    harness: None,
                     node_id: (*id).into(),
                     status: status.clone(),
                     iter: 1,

@@ -1860,6 +1860,7 @@ mod tests {
 
     fn completed_node(id: &str) -> NodeState {
         NodeState {
+            harness: None,
             node_id: id.into(),
             status: NodeStatus::Completed,
             iter: 1,
@@ -1876,6 +1877,7 @@ mod tests {
 
     fn completed_node_iter(id: &str, iter: i64) -> NodeState {
         NodeState {
+            harness: None,
             node_id: id.into(),
             status: NodeStatus::Completed,
             iter,
@@ -1892,6 +1894,7 @@ mod tests {
 
     fn running_node(id: &str) -> NodeState {
         NodeState {
+            harness: None,
             node_id: id.into(),
             status: NodeStatus::Running,
             iter: 1,

@@ -463,6 +463,17 @@ fn recover_response(
             "harness_cannot_resume",
             "the frozen harness declares no resume tail (ADR-0045)",
         ),
+        // #614 (correctif 2): the mechanism-choice above already refuses a gone
+        // frozen harness early, so this is normally unreachable — mapped for
+        // exhaustiveness, and honest if `reattach_node_session` reaches it.
+        ReattachOutcome::FrozenHarnessGone { harness } => recover_conflict(
+            mechanism,
+            "frozen_harness_gone",
+            &format!(
+                "this node's frozen harness '{harness}' no longer resolves; PDO will not \
+                 relaunch claude in its place"
+            ),
+        ),
         ReattachOutcome::TraceRefused { error } => {
             recover_conflict(mechanism, "reattach_refused", &error)
         }
@@ -1839,17 +1850,35 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 return (StatusCode::NOT_FOUND, "run not found").into_response();
             };
             // Resolve the frozen harness against the embedded floor merged with the
-            // disk descriptor tier; any failure (pre-#550 row, unknown name,
-            // unresolved home) falls back to the `claude` floor — which `can_resume`.
+            // disk descriptor tier. #614 (correctif 2): a name that WAS frozen but no
+            // longer resolves REFUSES — never a silent `claude` relaunch in this
+            // node's worktree. A row with NO frozen harness (pre-#550) keeps the
+            // `claude` floor, which `can_resume`.
             let harness_home_root = sandbox_run::sandbox_home_roots(&state)
                 .map(|(home, _)| home)
                 .unwrap_or_default();
-            let descriptor = crate::find_launch_harness(&events, &node_id, iter)
-                .as_deref()
-                .and_then(|name| {
-                    crate::harness_registry::HarnessRegistry::load(&harness_home_root).resolve(name)
-                })
-                .unwrap_or_else(crate::harness_registry::claude);
+            let descriptor = match crate::find_launch_harness(&events, &node_id, iter).as_deref() {
+                Some(name) => {
+                    match crate::harness_registry::HarnessRegistry::load(&harness_home_root)
+                        .resolve(name)
+                    {
+                        Some(d) => d,
+                        None => {
+                            return recover_conflict(
+                                crate::recovery::RecoveryMechanism::Reattach,
+                                "frozen_harness_gone",
+                                &format!(
+                                    "this node's frozen harness '{name}' no longer resolves \
+                                     (embedded name dropped or disk descriptor removed); PDO will \
+                                     not relaunch claude in its place — restore its descriptor, or \
+                                     retry the node to start fresh"
+                                ),
+                            );
+                        }
+                    }
+                }
+                None => crate::harness_registry::claude(),
+            };
             let mechanism = crate::recovery::choose_recovery(descriptor.can_resume());
 
             // Audit the intent, naming the mechanism so the automatic fallback is

@@ -1436,6 +1436,11 @@ export interface ParseNodeResult {
     interactive: boolean;
     model?: string | null;
     effort?: string | null;
+    /** #616 (correctif 7): the pinned harness and per-harness settings map, so a
+     *  node exported with a harness axis round-trips through reimport without its
+     *  model/effort re-homing onto `claude`. */
+    pin_harness?: string | null;
+    harnesses?: Record<string, { model?: string; effort?: string }> | null;
     max_iter?: number | string | null;
     branches?: number | null;
   };

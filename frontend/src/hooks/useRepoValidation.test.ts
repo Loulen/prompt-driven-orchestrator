@@ -13,7 +13,12 @@ const DEBOUNCE_MS = 400;
 
 beforeEach(() => {
   vi.mocked(api.validateRepo).mockReset().mockResolvedValue({ valid: true });
-  vi.useFakeTimers({ shouldAdvanceTime: true });
+  // Fake timers WITHOUT `shouldAdvanceTime`: with it, real wall-clock time also
+  // advances the fake clock, so "wait 399 ms of a 400 ms debounce" fires early on a
+  // loaded machine and the test flakes only in the full suite. Every step here drives
+  // the clock explicitly through `advanceTimersByTimeAsync`, which flushes the
+  // microtasks too — nothing needs real time to pass.
+  vi.useFakeTimers();
 });
 
 afterEach(() => {

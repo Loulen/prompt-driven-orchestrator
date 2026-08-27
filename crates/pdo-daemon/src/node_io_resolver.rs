@@ -297,6 +297,7 @@ mod tests {
     fn run_state_with(node_id: &str, iters: &[(i64, NodeStatus)]) -> RunState {
         let (head_iter, head_status) = iters.last().cloned().unwrap_or((1, NodeStatus::Pending));
         let node = NodeState {
+            harness: None,
             node_id: node_id.to_string(),
             status: head_status,
             iter: head_iter,

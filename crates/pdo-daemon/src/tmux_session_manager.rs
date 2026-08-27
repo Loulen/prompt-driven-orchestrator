@@ -5,7 +5,8 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use tracing::{info, warn};
@@ -608,16 +609,20 @@ fn build_resume_script(
     sandbox: Option<&SandboxWrap<'_>>,
     settings_path: Option<&Path>,
 ) -> String {
-    // #473/ADR-0045: the resume *selector* is the one thing the pure hole-drop
-    // rule cannot express (emit `--continue` precisely *when* the id is empty), so
-    // it is computed here — "reprendre par identité ou en aveugle" stays in code.
-    // `--resume <uuid>` targets THIS node's transcript by identity; a row with no
-    // recorded id (pre-#473, or a harness like `opencode` that can't pin one)
-    // falls back to blind `--continue`. Both delivered harnesses blind-continue
-    // with `--continue`.
+    // #473/#614: the resume *selector* is the one thing the pure hole-drop rule
+    // cannot express (emit the blind verb precisely *when* the id is empty), so it
+    // is computed here — but the VERBS are now the descriptor's property, not
+    // constants (#614). `<resume_by_id> '<uuid>'` targets THIS node's transcript by
+    // identity; a row with no recorded id (pre-#473, or a harness like `opencode`
+    // that can't pin one) falls back to the harness's blind verb. A harness that
+    // declares neither (an empty `resume_by_id`/`resume_blind` for the case at
+    // hand) renders no resume flag: `copilot` resumes by identity or not at all,
+    // never a blind continue (AC).
     let resume_selector = match session_id {
-        Some(s) if !s.is_empty() => format!("--resume {}", sh_single_quote(s)),
-        _ => "--continue".to_string(),
+        Some(s) if !s.is_empty() && !descriptor.resume_by_id.is_empty() => {
+            format!("{} {}", descriptor.resume_by_id, sh_single_quote(s))
+        }
+        _ => descriptor.resume_blind.clone(),
     };
     let quote_opt = |v: Option<&str>| {
         v.filter(|s| !s.is_empty())
@@ -747,7 +752,15 @@ pub fn spawn(
     // prompt (gitignored under `.pdo/`, resolves identically host and container).
     // Callers pass `false` for `script`/manager/merge-resolver sessions; the tail
     // selector in `build_tmux_script` is the belt-and-suspenders guard.
-    let settings_path = if inject_hook {
+    //
+    // #613/ADR-0051 (correctif 8): write the claude-format settings file ONLY for a
+    // harness that actually has a `{settings}` hole to fill. A node on a harness
+    // with none (`opencode`) would never reference the file — writing it beside the
+    // prompt was the one place "absence is supplied, not said" leaked. Now the
+    // absence is honoured: no hole, no file.
+    let harness_takes_settings =
+        matches!(&tail, SessionTail::Agent { harness, .. } if harness.has_settings_hole());
+    let settings_path = if inject_hook && harness_takes_settings {
         let p = prompt_dir.join(format!("{node_id}-iter-{iter}.settings.json"));
         std::fs::write(&p, STOP_HOOK_SETTINGS_JSON)?;
         Some(p)
@@ -950,7 +963,10 @@ pub fn resume(
     // reference it. `create_dir_all` covers the rare case where the prompt dir was
     // pruned since spawn. `false` (setting off, or a `script` node) ⇒ no file, and
     // `build_resume_script` emits a byte-identical `--continue` tail.
-    let settings_path = if inject_hook {
+    //
+    // #613/ADR-0051 (correctif 8): as at spawn, only a harness with a `{settings}`
+    // hole gets the file — a resumed `opencode` node writes none.
+    let settings_path = if inject_hook && descriptor.has_settings_hole() {
         let prompt_dir = working_dir.join(".pdo").join("prompts");
         std::fs::create_dir_all(&prompt_dir)?;
         let p = prompt_dir.join(format!("{node_id}-iter-{iter}.settings.json"));
@@ -1342,12 +1358,93 @@ pub fn default_harness_with(stored: Option<String>) -> Option<String> {
         .or_else(env_default_harness)
 }
 
-/// Whether `binary` resolves on the current `PATH` — the fail-fast spawn check
-/// (#550, AC #10). A name with a `/` is checked directly; a bare name is searched
-/// across `$PATH`. **Never executes** the binary (a probe run could hang a
-/// resident harness), and lives here (not in the pure `harness_registry`) because
-/// it reads `$PATH`. A missing binary makes the spawn fail *before* any session
-/// or start event exists (ADR-0037).
+/// The `PATH` the daemon searches for harness binaries (ADR-0055).
+///
+/// A daemon launched as a service inherits the **unit's** `PATH`, which misses the
+/// entries a package manager (Homebrew, nvm, a user prefix) adds only to an
+/// **interactive** shell — so a harness the user installed and can run by hand is
+/// invisible to the service, and the spawn fails saying an installed binary does
+/// not exist. This resolves the binary in the `PATH` the user has *when they type
+/// the command*: the interactive shell's `PATH`, unioned with the process `PATH`
+/// so nothing the service already saw is lost. Measured (ADR-0055): a *login*
+/// shell does not suffice — package managers add their paths from the
+/// **interactive** rc files — so the probe sources an interactive shell (`-i`).
+///
+/// Resolved **once** and cached for the daemon's lifetime: the cost of sourcing
+/// the user's shell config is paid at the first probe, not per spawn, and a `PATH`
+/// the user changes afterwards is seen only on the next daemon start (ADR-0055
+/// limits, same freshness contract as the model catalogue, ADR-0053). The env
+/// override `PDO_HARNESS_PROBE_PATH` short-circuits the shell probe (ops / tests).
+pub fn harness_probe_path() -> String {
+    static PROBE_PATH: OnceLock<String> = OnceLock::new();
+    PROBE_PATH.get_or_init(resolve_harness_probe_path).clone()
+}
+
+/// Compute the probe `PATH` (uncached): the interactive shell's `PATH` unioned
+/// with the process `PATH`. See [`harness_probe_path`].
+fn resolve_harness_probe_path() -> String {
+    // An explicit override wins outright — the deterministic seam a test or an
+    // operator uses instead of the ambient shell.
+    if let Some(p) = std::env::var_os("PDO_HARNESS_PROBE_PATH") {
+        if !p.is_empty() {
+            return p.to_string_lossy().into_owned();
+        }
+    }
+    let process_path = std::env::var_os("PATH")
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    match interactive_path_via_shell() {
+        Some(interactive) => union_paths(&interactive, &process_path),
+        None => process_path,
+    }
+}
+
+/// The user's `PATH` as an **interactive** shell reports it, or `None` when the
+/// probe fails (no `$SHELL`, the shell errors, empty output). Runs `$SHELL -i -c`
+/// so the interactive rc files — where version and package managers add their
+/// paths — are sourced (a *login* shell, `-l`, is not enough; ADR-0055).
+fn interactive_path_via_shell() -> Option<String> {
+    let shell = std::env::var_os("SHELL").filter(|s| !s.is_empty())?;
+    // `printf` with no trailing newline, stdout only — job-control chatter an
+    // interactive shell may emit goes to stderr and is ignored.
+    let output = std::process::Command::new(&shell)
+        .arg("-i")
+        .arg("-c")
+        .arg(r#"printf '%s' "$PATH""#)
+        .output()
+        .ok()?;
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!path.is_empty()).then_some(path)
+}
+
+/// Union two `PATH` strings, `first` taking precedence, dropping duplicates and
+/// empty entries while preserving order. Pure — the testable core of the ADR-0055
+/// merge.
+fn union_paths(first: &str, second: &str) -> String {
+    let mut seen = std::collections::HashSet::new();
+    let joined: Vec<String> = std::env::split_paths(first)
+        .chain(std::env::split_paths(second))
+        .filter(|p| !p.as_os_str().is_empty())
+        .filter(|p| seen.insert(p.clone()))
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    joined.join(":")
+}
+
+/// Whether `binary` resolves in `path`. Pure — the testable core of the probe.
+fn path_contains_binary(path: &str, binary: &str) -> bool {
+    std::env::split_paths(path).any(|dir| dir.join(binary).is_file())
+}
+
+/// Whether `binary` resolves on the harness probe `PATH` — the fail-fast spawn
+/// check (#550, AC #10). A name with a `/` is checked directly; a bare name is
+/// searched across [`harness_probe_path`] (the user's interactive `PATH`, ADR-0055
+/// — **not** the service's inherited one). **Never executes** the binary (a probe
+/// run could hang a resident harness), and lives here (not in the pure
+/// `harness_registry`) because it reads the environment. A missing binary makes
+/// the spawn fail *before* any session or start event exists (ADR-0037); the
+/// caller's diagnostic names [`harness_probe_path`] so "not found" cannot read as
+/// "not installed".
 pub fn binary_available(binary: &str) -> bool {
     if binary.is_empty() {
         return false;
@@ -1355,10 +1452,172 @@ pub fn binary_available(binary: &str) -> bool {
     if binary.contains('/') {
         return Path::new(binary).is_file();
     }
-    match std::env::var_os("PATH") {
-        Some(path) => std::env::split_paths(&path).any(|dir| dir.join(binary).is_file()),
-        None => false,
+    path_contains_binary(&harness_probe_path(), binary)
+}
+
+/// How long a catalogue / version probe is allowed to run before it is killed and
+/// treated as "no answer" (#616). `--help` / `--version` exit immediately on every
+/// harness in play; the cap is a defence against a binary that blocks (a broken
+/// install, a prompt on stdin), so a probe can never wedge the boot task or the
+/// `/settings` response.
+const CATALOGUE_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The version string of `binary`, read by running `<binary> --version` on the
+/// harness probe `PATH` (#616, ADR-0053 §3). `None` when the binary can't be run,
+/// times out, or prints nothing. This is the **freshness key** of the catalogue
+/// cache: a changed version invalidates the cached catalogue and re-probes, so an
+/// auto-updating binary is followed without a daemon restart.
+///
+/// UNLIKE [`binary_available`], this **executes** the binary — deliberately, and
+/// only ever off the resident hot path: at daemon boot, and on a throttled version
+/// re-check behind the `/settings` fetch. `--version` is non-interactive and exits
+/// at once; the timeout is the backstop.
+pub(crate) fn probe_version(binary: &str) -> Option<String> {
+    probe_version_on(binary, &harness_probe_path())
+}
+
+/// The offered catalogue of `binary`, read from the harness probe `PATH` (#616/#629,
+/// ADR-0053 §1, ADR-0056). A binary that can't be run, times out, or enumerates
+/// nothing anywhere yields [`harness_catalogue::Catalogue::default`] — the free-text
+/// fallback. Executes the binary; see [`probe_version`] for why that is safe here and
+/// not in [`binary_available`].
+pub(crate) fn probe_catalogue(binary: &str) -> crate::harness_catalogue::Catalogue {
+    probe_catalogue_on(binary, &harness_probe_path())
+}
+
+/// [`probe_version`] with an explicit `PATH` — the testable core (a test points it
+/// at a tempdir holding a fake binary, no ambient shell).
+pub(crate) fn probe_version_on(binary: &str, path: &str) -> Option<String> {
+    let out = run_probe(binary, &["--version"], path)?;
+    out.lines()
+        .next()
+        .map(|l| l.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// [`probe_catalogue`] with an explicit `PATH` — the testable core, and where #629's
+/// three sources (ADR-0056) are actually run.
+///
+/// `--help` is run **first, always**: it is universal, it is one of the three sources,
+/// and — the reason it leads — it is where a CLI **declares its subcommands**. Only the
+/// richer sources a binary advertises are then run. That gate is not politeness, it is
+/// the correctness of the whole ladder. Measured: `claude` has no `completion` and no
+/// `help` subcommand, and treats either as a *prompt* — `claude completion bash` opens
+/// a session and idles until the probe's timeout kills it. Walking the ladder blind
+/// would spend two five-second timeouts on every claude re-probe, one of them inside a
+/// `/settings` response.
+///
+/// The **preference** order of ADR-0056 is independent of the run order: an answer from
+/// the generated completion script outranks one from the settings prose, which outranks
+/// `--help`'s own — per axis, so copilot's models can come from one source and its
+/// effort stops from another. `--help` folds in last precisely because it is the
+/// lowest-preference source, not because it ran first.
+///
+/// Cost, measured on the three first-party harnesses: `claude` one subprocess (as
+/// before #629), `copilot` two, `opencode` two — never a hang, never an error. A binary
+/// that answers no `--help` at all yields the free-text fallback without any subcommand
+/// being guessed at.
+pub(crate) fn probe_catalogue_on(binary: &str, path: &str) -> crate::harness_catalogue::Catalogue {
+    use crate::harness_catalogue as cat;
+    let Some(help) = run_probe(binary, &["--help"], path) else {
+        return cat::Catalogue::default();
+    };
+    let mut catalogue = cat::Catalogue::default();
+
+    // Preference 1: the generated completion script.
+    if cat::advertises_subcommand(&help, "completion") {
+        if let Some(script) = run_probe(binary, &["completion", "bash"], path) {
+            catalogue.fill_missing_from(cat::parse_completion_script(&script));
+        }
     }
+    // Preference 2: the settings help topic, if an axis is still unanswered.
+    if !catalogue.is_complete() && cat::advertises_subcommand(&help, "help") {
+        if let Some(topic) = run_probe(binary, &["help", "config"], path) {
+            catalogue.fill_missing_from(cat::parse_settings_prose(&topic));
+        }
+    }
+    // Preference 3: what `--help` itself enumerates.
+    catalogue.fill_missing_from(cat::parse_help(&help));
+    catalogue
+}
+
+/// Run `<binary> <args>` with `PATH=path`, capturing stdout+stderr (a CLI may print
+/// its help to either), bounded by [`CATALOGUE_PROBE_TIMEOUT`]. Returns `None` when
+/// the binary can't be spawned, times out, or exits without output. Pure w.r.t. the
+/// daemon's environment — the `PATH` is injected, so this is unit-testable against a
+/// fake binary.
+///
+/// The timeout is a poll-and-kill loop rather than a blocking `output()` so a
+/// wedged child (blocked on stdin, a broken install) is reaped instead of hanging
+/// the caller's `spawn_blocking` worker forever.
+///
+/// Both pipes are **drained on their own threads while the child runs** (#629). The
+/// obvious shape — wait for exit, then read — deadlocks on any source that outprints
+/// the OS pipe buffer: the child blocks in `write`, never exits, and the probe reports
+/// a timeout for a binary that answered perfectly. Measured: copilot's completion
+/// script is 71 KB against a 64 KB Linux pipe buffer, so the source ADR-0056 prefers
+/// is exactly the one that hit it.
+fn run_probe(binary: &str, args: &[&str], path: &str) -> Option<String> {
+    use std::io::Read;
+    if binary.is_empty() {
+        return None;
+    }
+    let mut child = std::process::Command::new(binary)
+        .args(args)
+        .env("PATH", path)
+        // A probe must never inherit an interactive stdin; if a binary asks, it
+        // gets EOF and exits rather than blocking.
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .ok()?;
+
+    fn drain<R: Read + Send + 'static>(
+        pipe: Option<R>,
+    ) -> Option<std::thread::JoinHandle<Vec<u8>>> {
+        pipe.map(|mut p| {
+            std::thread::spawn(move || {
+                let mut buf = Vec::new();
+                let _ = p.read_to_end(&mut buf);
+                buf
+            })
+        })
+    }
+    let out_reader = drain(child.stdout.take());
+    let err_reader = drain(child.stderr.take());
+
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if start.elapsed() > CATALOGUE_PROBE_TIMEOUT {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    // Leave the readers detached rather than joining them: a killed
+                    // child whose grandchild still holds the pipe would never EOF, and
+                    // a probe must not be able to block on that. Partial output is not
+                    // a catalogue anyway — a timeout is "no answer".
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(_) => return None,
+        }
+    }
+    // The child exited, so both pipes are at EOF and the readers join immediately.
+    let joined = |r: Option<std::thread::JoinHandle<Vec<u8>>>| {
+        r.and_then(|h| h.join().ok()).unwrap_or_default()
+    };
+    let (stdout, stderr) = (joined(out_reader), joined(err_reader));
+
+    let mut text = String::from_utf8_lossy(&stdout).into_owned();
+    if !stderr.is_empty() {
+        text.push('\n');
+        text.push_str(&String::from_utf8_lossy(&stderr));
+    }
+    (!text.trim().is_empty()).then_some(text)
 }
 
 /// Resolve the model a work node launches with: the node's own `model:`
@@ -2436,9 +2695,10 @@ mod tests {
         assert_eq!(decisions[2].verdict, SweepVerdict::Keep);
     }
 
-    /// #550/AC #10: the fail-fast PATH probe. A bare name absent from `$PATH` is
-    /// unavailable; an empty name is never available; a slash-path is checked as a
-    /// file directly. `sh` is on every CI box, so it stands in for "installed".
+    /// #550/AC #10: the fail-fast PATH probe. A bare name absent from the probe
+    /// `PATH` is unavailable; an empty name is never available; a slash-path is
+    /// checked as a file directly. `sh` is on every CI box (and the process `PATH`
+    /// is unioned into the probe path, ADR-0055), so it stands in for "installed".
     #[test]
     fn binary_available_probes_path_without_executing() {
         assert!(!binary_available(""), "empty name is never available");
@@ -2454,6 +2714,261 @@ mod tests {
             !binary_available("/no/such/absolute/path/binary"),
             "a missing slash-path is unavailable"
         );
+    }
+
+    /// #616: write an executable fake binary into `dir` that echoes `stdout` on
+    /// `--help` and `version` on `--version`. Returns the dir's `PATH` string.
+    #[cfg(unix)]
+    fn fake_harness_binary(dir: &std::path::Path, name: &str, help: &str, version: &str) -> String {
+        fake_harness_binary_with(dir, name, version, &[("--help", help)])
+    }
+
+    /// #629: write an executable fake binary that answers `--version` and any set of
+    /// `(argv-head, stdout)` pairs — one per catalogue source under test. Returns the
+    /// dir's `PATH` string. An argv the fixture does not declare falls through to a
+    /// usage error on stderr, exactly as a real CLI answers a subcommand it lacks.
+    ///
+    /// Self-contained: `printf` is a `/bin/sh` builtin, so the script runs even though
+    /// `run_probe` sets `PATH` to just this dir (no `cat`/`echo` binary). That
+    /// restricted PATH mirrors nothing in production — there the probe PATH is a full
+    /// union (ADR-0055) — it only keeps the fixture honest.
+    #[cfg(unix)]
+    fn fake_harness_binary_with(
+        dir: &std::path::Path,
+        name: &str,
+        version: &str,
+        sources: &[(&str, &str)],
+    ) -> String {
+        use std::os::unix::fs::PermissionsExt;
+        // Match on the whole argv (`"$*"`), so a two-word source (`completion bash`,
+        // `help config`) is as expressible as a flag.
+        let arms: String = sources
+            .iter()
+            .map(|(argv, out)| format!("  '{argv}') printf '%s' '{out}';;\n"))
+            .collect();
+        let script = format!(
+            "#!/bin/sh\ncase \"$*\" in\n  '--version') printf '%s\\n' '{version}';;\n{arms}  *) printf 'error: unknown command\\n' >&2; exit 1;;\nesac\n"
+        );
+        let bin = dir.join(name);
+        std::fs::write(&bin, script).unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        dir.to_string_lossy().into_owned()
+    }
+
+    /// #616, ADR-0053 §1/§3: running the resolved binary reads its version and parses
+    /// its offered catalogue. Executed against a fake binary on an injected `PATH`,
+    /// so the test is deterministic and touches no real harness.
+    #[cfg(unix)]
+    #[test]
+    fn probe_reads_version_and_catalogue_from_the_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        let help =
+            "  --model <m>  [gpt-5|gpt-5-codex|o4-mini]\n  --effort <e>  One of: low, medium, high";
+        let path = fake_harness_binary(dir.path(), "fake-harness", help, "fake-harness 1.402");
+
+        assert_eq!(
+            probe_version_on("fake-harness", &path).as_deref(),
+            Some("fake-harness 1.402")
+        );
+        let cat = probe_catalogue_on("fake-harness", &path);
+        assert_eq!(cat.models, vec!["gpt-5", "gpt-5-codex", "o4-mini"]);
+        assert_eq!(cat.efforts, vec!["low", "medium", "high"]);
+    }
+
+    /// The `Commands:` block a fake binary prints so the probe is allowed to ask it
+    /// for the richer sources (#629, ADR-0056). Without it, the gate — correctly —
+    /// never runs `completion` / `help`.
+    const DECLARES_BOTH_SUBCOMMANDS: &str =
+        "Commands:\n  completion <shell>  Generate a shell completion script\n  help [topic]  Display help information\n";
+
+    /// #629, ADR-0056: the completion script is preferred over the settings topic and
+    /// over `--help`. The fixture makes the three sources disagree on purpose — only
+    /// the completion script's answer may survive.
+    #[cfg(unix)]
+    #[test]
+    fn the_generated_completion_script_outranks_the_prose_sources() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = fake_harness_binary_with(
+            dir.path(),
+            "ladder-harness",
+            "ladder-harness 2.0",
+            &[
+                (
+                    "completion bash",
+                    "        --model)\n            COMPREPLY=( $(compgen -W \"auto from-completion\" -- \"$cur\") )\n            ;;\n        --effort|--reasoning-effort)\n            COMPREPLY=( $(compgen -W \"low max\" -- \"$cur\") )\n            ;;\n",
+                ),
+                ("help config", "  `model`: the model.\n    - \"from-settings\"\n"),
+                (
+                    "--help",
+                    &format!(
+                        "  --model <m> [from-help|other]\n  --effort <e> One of: a, b\n{DECLARES_BOTH_SUBCOMMANDS}"
+                    ),
+                ),
+            ],
+        );
+        let cat = probe_catalogue_on("ladder-harness", &path);
+        assert_eq!(cat.models, vec!["auto", "from-completion"]);
+        assert_eq!(cat.efforts, vec!["low", "max"]);
+    }
+
+    /// #629: a source larger than the OS pipe buffer is read in full, not timed out.
+    /// The blind spot the fixtures had: every fake help was a few hundred bytes, so
+    /// nobody noticed the probe waited for exit *before* reading. Measured on the real
+    /// binary, `copilot completion bash` prints 71 KB against a 64 KB pipe — the child
+    /// blocked in `write`, never exited, and the source ADR-0056 *prefers* was the one
+    /// silently reported as a timeout.
+    #[cfg(unix)]
+    #[test]
+    fn a_source_bigger_than_the_pipe_buffer_is_read_whole() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("chatty-harness");
+        // ~200 KB of padding, then the enumeration — so the list only parses if the
+        // whole stream was drained. `yes`-style loops need an external binary, and the
+        // probe's PATH holds only this dir; a `while` over a doubling string is a
+        // builtin-only way to print a lot.
+        std::fs::write(
+            &bin,
+            "#!/bin/sh\ncase \"$*\" in\n  '--version') printf 'chatty 1.0\\n';;\n  '--help')\n    pad=0123456789abcdef\n    i=0\n    while [ $i -lt 14 ]; do pad=\"$pad$pad\"; i=$((i+1)); done\n    printf '%s\\n' \"$pad\"\n    printf '  --model <m> [big|list]\\n  --effort <e> One of: low, high\\n'\n    ;;\nesac\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = dir.path().to_string_lossy().into_owned();
+
+        let raw =
+            run_probe("chatty-harness", &["--help"], &path).expect("a big answer is an answer");
+        assert!(raw.len() > 200_000, "the fixture must exceed a pipe buffer");
+        let cat = probe_catalogue_on("chatty-harness", &path);
+        assert_eq!(cat.models, vec!["big", "list"]);
+        assert_eq!(cat.efforts, vec!["low", "high"]);
+    }
+
+    /// #629, ADR-0056: a binary that declares neither subcommand is never asked for
+    /// them. The fixture makes both **hang** — the measured `claude` hazard, where
+    /// `claude completion bash` is read as a prompt and idles to the probe timeout.
+    /// The probe must come back with `--help`'s own answer, promptly.
+    #[cfg(unix)]
+    #[test]
+    fn an_unadvertised_subcommand_is_never_run() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        // Its own script rather than `fake_harness_binary_with`: the point of the
+        // fixture is the catch-all, which must **hang** instead of erroring out. Its
+        // `--help` declares no `Commands:` block, so nothing is advertised.
+        let bin = dir.path().join("prompt-harness");
+        std::fs::write(
+            &bin,
+            "#!/bin/sh\ncase \"$*\" in\n  '--version') printf 'prompt-harness 3.0\\n';;\n  '--help') printf '%s' 'Usage: prompt-harness [prompt]\n  --model <m> [only|from-help]\n  --effort <e> One of: low, high\n';;\n  *) sleep 30;;\nesac\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = dir.path().to_string_lossy().into_owned();
+
+        let started = Instant::now();
+        let cat = probe_catalogue_on("prompt-harness", &path);
+        assert!(
+            started.elapsed() < CATALOGUE_PROBE_TIMEOUT,
+            "an unadvertised subcommand must not be run at all, let alone timed out"
+        );
+        assert_eq!(cat.models, vec!["only", "from-help"]);
+        assert_eq!(cat.efforts, vec!["low", "high"]);
+    }
+
+    /// #629: the copilot shape as measured on 1.0.80 minus its completion script (an
+    /// older release, or a generator that stops emitting choices) — models from
+    /// `help config`, efforts from `--help`, each axis owned by the first source that
+    /// answers for it.
+    #[cfg(unix)]
+    #[test]
+    fn each_axis_falls_through_to_the_next_source_independently() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = fake_harness_binary_with(
+            dir.path(),
+            "split-harness",
+            "split-harness 1.0.80",
+            &[
+                (
+                    "help config",
+                    "  `model`: AI model to use.\n    - \"claude-opus-5\"\n    - \"gpt-5.5\"\n\n  `contextTier`: tier.\n",
+                ),
+                (
+                    "--help",
+                    &format!(
+                        "  --model <model>  Set the AI model to use (use 'auto')\n  --effort <level> Set the effort (choices: \"none\", \"max\")\n{DECLARES_BOTH_SUBCOMMANDS}"
+                    ),
+                ),
+            ],
+        );
+        let cat = probe_catalogue_on("split-harness", &path);
+        assert_eq!(cat.models, vec!["claude-opus-5", "gpt-5.5"]);
+        assert_eq!(cat.efforts, vec!["none", "max"]);
+    }
+
+    /// #629: a binary that enumerates nothing on any of the three sources still yields
+    /// an empty catalogue — the free-text fallback — and never an error. This is the
+    /// measured `opencode` shape: a bare `provider/model` placeholder, no completion
+    /// choices, no settings topic.
+    #[cfg(unix)]
+    #[test]
+    fn a_binary_that_enumerates_nowhere_is_still_the_free_text_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = fake_harness_binary_with(
+            dir.path(),
+            "bare-harness",
+            "bare-harness 0.1",
+            &[("--help", "  --model <provider/model>  Model to use\n")],
+        );
+        assert_eq!(
+            probe_catalogue_on("bare-harness", &path),
+            crate::harness_catalogue::Catalogue::default()
+        );
+    }
+
+    /// #616: a binary that can't be resolved on the injected `PATH` yields no
+    /// version and an empty catalogue — the free-text fallback, never a panic.
+    #[test]
+    fn probe_of_an_absent_binary_is_empty_not_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_string_lossy().into_owned();
+        assert_eq!(probe_version_on("no-such-harness", &path), None);
+        assert_eq!(
+            probe_catalogue_on("no-such-harness", &path),
+            crate::harness_catalogue::Catalogue::default()
+        );
+    }
+
+    /// ADR-0055: the pure core of the probe `PATH` search — a directory that holds
+    /// the binary makes it resolvable; one that does not, does not.
+    #[test]
+    fn path_contains_binary_searches_each_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("my-harness");
+        std::fs::write(&bin, b"#!/bin/sh\n").unwrap();
+        let path = format!("/nonexistent-a:{}:/nonexistent-b", dir.path().display());
+        assert!(path_contains_binary(&path, "my-harness"));
+        assert!(!path_contains_binary(&path, "absent-harness"));
+        assert!(
+            !path_contains_binary("/nonexistent-a:/nonexistent-b", "my-harness"),
+            "no entry holds it"
+        );
+    }
+
+    /// ADR-0055: the user's interactive `PATH` is unioned with the process one,
+    /// first wins, duplicates and empty entries dropped, order preserved — so the
+    /// package-manager prefix the service never inherited becomes searchable
+    /// without losing any entry the service already had.
+    #[test]
+    fn union_paths_merges_first_precedence_dedup_order_preserved() {
+        assert_eq!(
+            union_paths("/opt/homebrew/bin:/usr/bin", "/usr/bin:/bin"),
+            "/opt/homebrew/bin:/usr/bin:/bin"
+        );
+        // Empty operands collapse cleanly.
+        assert_eq!(union_paths("", "/usr/bin:/bin"), "/usr/bin:/bin");
+        assert_eq!(union_paths("/usr/bin", ""), "/usr/bin");
+        assert_eq!(union_paths("", ""), "");
+        // A stray empty entry ("::") never becomes a "search the cwd" hole.
+        assert_eq!(union_paths("/a::/b", "/b"), "/a:/b");
     }
 
     #[test]
@@ -2765,6 +3280,71 @@ mod tests {
         assert_eq!(
             v["hooks"]["Stop"][0]["hooks"][0]["type"].as_str(),
             Some("command")
+        );
+    }
+
+    /// Drive the real `spawn` with a benign tail and report whether it dropped the
+    /// turn-end settings file beside the prompt. Kills the ephemeral tmux server on
+    /// its own socket afterwards. `port` isolates the socket from sibling tests.
+    fn spawn_and_check_settings_file(
+        port: u16,
+        harness: &crate::harness_registry::HarnessDescriptor,
+    ) -> bool {
+        let wd = tempfile::tempdir().unwrap();
+        let session = node_session_name("run-c8", "n", 1);
+        // The tail runs `true` (exits at once); we only assert on the file the write
+        // gate controls, which is written before tmux is ever touched.
+        let _ = spawn(
+            &session,
+            "prompt body",
+            wd.path(),
+            "run-c8",
+            "n",
+            1,
+            port,
+            Some("true"),
+            SessionTail::Agent {
+                harness,
+                model: None,
+                effort: None,
+                session_id: None,
+            },
+            None,
+            true, // inject_hook ON — the setting is enabled
+        );
+        let settings = wd
+            .path()
+            .join(".pdo")
+            .join("prompts")
+            .join("n-iter-1.settings.json");
+        let present = settings.is_file();
+        // Tear down the ephemeral server (ignore errors — the `true` tail may have
+        // already ended the only session, leaving no server to kill).
+        let _ = std::process::Command::new("tmux")
+            .args(["-L", &tmux_socket_name(port), "kill-server"])
+            .output();
+        present
+    }
+
+    #[test]
+    fn spawn_writes_the_settings_file_for_a_harness_with_a_settings_hole() {
+        // #613 (correctif 8) control: `claude` HAS a `{settings}` hole, so with the
+        // setting on PDO writes the Stop-hook file beside the prompt, as always.
+        assert!(
+            spawn_and_check_settings_file(58231, &crate::harness_registry::claude()),
+            "claude must still get its turn-end settings file"
+        );
+    }
+
+    #[test]
+    fn spawn_writes_no_settings_file_for_a_harness_without_a_settings_hole() {
+        // #613 (correctif 8): `opencode` has NO `{settings}` hole, so even with
+        // turn-end auto-completion enabled PDO writes it no claude-format settings
+        // file — the absence is honoured, not supplied. This was the one place the
+        // discipline was broken.
+        assert!(
+            !spawn_and_check_settings_file(58232, &crate::harness_registry::opencode()),
+            "opencode must get no settings file — it has no settings hole"
         );
     }
 
@@ -3719,6 +4299,52 @@ mod tests {
         );
         // Effort is still re-posed after the resume flag (#424).
         assert!(wrapped.contains("--effort"), "{wrapped}");
+    }
+
+    #[test]
+    fn build_resume_script_takes_the_resume_verb_from_the_descriptor() {
+        // #614: the resume verb is the descriptor's property, not a seam constant.
+        // copilot resumes by identity with ITS `--resume`, and — because its
+        // `resume_blind` is empty — a resume with no id renders NO resume flag,
+        // never a blind `--continue`.
+        let sid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let by_id = build_resume_script(
+            "r1",
+            "solo",
+            1,
+            6172,
+            &crate::harness_registry::copilot(),
+            None,
+            Some(sid),
+            None,
+            None,
+            None,
+        );
+        assert!(
+            by_id.contains(&format!(r"--resume '\''{sid}'\''")),
+            "copilot resumes by identity with its own --resume verb: {by_id}"
+        );
+        assert!(
+            !by_id.contains("--continue"),
+            "copilot never blind-continues: {by_id}"
+        );
+
+        let no_id = build_resume_script(
+            "r1",
+            "solo",
+            1,
+            6172,
+            &crate::harness_registry::copilot(),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        assert!(
+            !no_id.contains("--resume") && !no_id.contains("--continue"),
+            "with no identity copilot renders no resume flag at all (AC): {no_id}"
+        );
     }
 
     #[test]

@@ -27,6 +27,10 @@ runs » est exactement ce fan-out interdit : mesuré à 2 502 transcripts / 1,1 
   pipeline/projet ; « par projet » = `effective_repo_root` (fallback runtime absent des tables). Les
   cinq séries *nommées* (runs/sessions/erreurs/fires-par-pipeline/triggers-ayant-créé-un-run) restent
   du SQL pur indexé.
+- **Ventilation multi-harnais par exécution (#638).** La fenêtre sélectionne une cohorte de Runs par
+  leur démarrage, puis attribue le coût complet de chaque exécution à son harnais, son Pipeline et son
+  Node. Chaque harnais traduit sa propre source vers cette contribution commune ; une source moins
+  précise reste `Non attribué`, jamais imputée à un Node ou à l'Infrastructure par supposition.
 - **Étiquetage honnête agrégé (load-bearing).** Un bucket est une **somme de bornes basses** : tout
   run `partial` (modèle non tarifé) rend le bucket borne-basse (`†`). Les runs sans transcript sont
   exclus de la somme mais **comptés (`null`)** et exposés, jamais silencieusement sous-comptés.

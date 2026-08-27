@@ -3,7 +3,12 @@ import userEvent from "@testing-library/user-event";
 import { describe, it, expect } from "vitest";
 
 import StatsCharts from "./StatsCharts";
-import type { StatsCost, StatsHarnessCost, StatsOverview } from "../types";
+import type {
+  StatsCost,
+  StatsHarnessCost,
+  StatsOverview,
+  StatsPerformance,
+} from "../types";
 
 // The resolved price table (#528) lives on the Stats → Cost tab, fed by
 // `/stats/cost`. `by_period: []` means no spend, so the recharts chart never
@@ -244,6 +249,88 @@ const OVERVIEW: StatsOverview = {
   triggers_created_runs: { fired: 0, distinct_triggers: 0, enabled_triggers: 0 },
 };
 
+const distribution = (mean: number, measured = 2, expected = 2) => ({
+  stats: {
+    min: mean - 20,
+    q1: mean - 10,
+    median: mean,
+    mean,
+    q3: mean + 10,
+    max: mean + 20,
+  },
+  measured,
+  expected,
+  missing_reasons: measured === expected ? [] : ["no reliable bounds"],
+});
+
+const PERFORMANCE: StatsPerformance = {
+  harnesses: ["claude", "copilot"],
+  total: {
+    harnesses: [
+      { harness: "claude", context: distribution(96_000), duration: distribution(410_000) },
+      { harness: "copilot", context: distribution(68_000), duration: distribution(505_000) },
+    ],
+  },
+  infrastructure_total: {
+    harnesses: [
+      { harness: "claude", context: distribution(20_000), duration: distribution(120_000) },
+    ],
+  },
+  by_pipeline: [
+    {
+      id: "pipeline-id",
+      name: "Implement loop",
+      harnesses: [
+        { harness: "claude", context: distribution(90_000), duration: distribution(300_000) },
+        { harness: "copilot", context: distribution(60_000), duration: distribution(500_000) },
+      ],
+      nodes: [
+        {
+          id: "design-id",
+          name: "Design",
+          harnesses: [
+            { harness: "claude", context: distribution(141_000), duration: distribution(350_000) },
+            { harness: "copilot", context: distribution(84_000), duration: distribution(420_000, 1, 2) },
+          ],
+          nodes: [],
+          subagents: [
+            {
+              id: "explore",
+              name: "Explore",
+              harnesses: [
+                {
+                  harness: "claude",
+                  context: distribution(55_000),
+                  duration: {
+                    stats: null,
+                    measured: 0,
+                    expected: 1,
+                    missing_reasons: ["no reliable bounds"],
+                  },
+                },
+              ],
+              nodes: [],
+              subagents: [],
+            },
+          ],
+        },
+      ],
+      subagents: [],
+    },
+  ],
+  infrastructure: [
+    {
+      id: "pipeline-manager",
+      name: "Pipeline Manager",
+      harnesses: [
+        { harness: "claude", context: distribution(20_000), duration: distribution(120_000) },
+      ],
+      nodes: [],
+      subagents: [],
+    },
+  ],
+};
+
 describe("StatsCharts — harness drill-down (#638)", () => {
     it("shows harness session volumes and drills from a Pipeline into its Nodes", async () => {
       const user = userEvent.setup();
@@ -252,9 +339,11 @@ describe("StatsCharts — harness drill-down (#638)", () => {
       expect(screen.getByTestId("stats-harness-legend-claude")).toHaveStyle({
         backgroundColor: "#f0883e",
       });
+
       expect(screen.getByTestId("stats-harness-legend-copilot")).toHaveStyle({
         backgroundColor: "#58a6ff",
       });
+
       expect(screen.getAllByText("Implement loop")).toHaveLength(2);
       expect(screen.queryByText("pipe-hidden-id")).not.toBeInTheDocument();
 
@@ -323,5 +412,94 @@ describe("StatsCharts — harness drill-down (#638)", () => {
       "Total / PDO / Implement loop",
     );
     expect(screen.getByText("Review")).toBeInTheDocument();
+  });
+});
+
+describe("StatsCharts — Performance (#585)", () => {
+  it("drills from Pipeline to Nodes and expands subagent types", async () => {
+    const user = userEvent.setup();
+    render(
+      <StatsCharts
+        tab="performance"
+        overview={null}
+        cost={null}
+        costError={null}
+        performance={PERFORMANCE}
+        performanceError={null}
+      />,
+    );
+
+    expect(screen.getByText("Ranked by context")).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Context (peak tokens)" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Duration (wall-clock)" })).toBeInTheDocument();
+    await user.click(screen.getByRole("option", { name: /Implement loop/ }));
+    expect(screen.getByText("Design")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Expand Design subagents" }));
+    expect(screen.getByText("Explore")).toBeInTheDocument();
+  });
+
+  it("uses shared metric scales, exposes R-7 values and coverage, and sorts by duration", async () => {
+    const user = userEvent.setup();
+    render(
+      <StatsCharts
+        tab="performance"
+        overview={null}
+        cost={null}
+        costError={null}
+        performance={PERFORMANCE}
+        performanceError={null}
+      />,
+    );
+    await user.click(screen.getByRole("option", { name: /Implement loop/ }));
+
+    const contextPlots = screen.getAllByTestId("performance-context-boxplot");
+    expect(contextPlots[0]).toHaveAttribute("data-scale-max", "141020");
+    expect(contextPlots[1]).toHaveAttribute("data-scale-max", "141020");
+    const coverage = screen.getByRole("button", { name: /Design · claude · Context/ });
+    await user.hover(coverage);
+    expect(await screen.findByTestId("tooltip-content")).toHaveTextContent(
+      /Max.*Q3.*Mean.*Median.*Q1.*Min.*2 measured of 2 successful executions/i,
+    );
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "Performance sort" }), "duration");
+    expect(screen.getByText("Ranked by duration")).toBeInTheDocument();
+  });
+
+  it("distinguishes loading, empty, and source errors", () => {
+    const { rerender } = render(
+      <StatsCharts
+        tab="performance"
+        overview={null}
+        cost={null}
+        costError={null}
+        performance={null}
+        performanceError={null}
+      />,
+    );
+    expect(screen.getByText("Loading performance…")).toBeInTheDocument();
+
+    rerender(
+      <StatsCharts
+        tab="performance"
+        overview={null}
+        cost={null}
+        costError={null}
+        performance={{ ...PERFORMANCE, by_pipeline: [], infrastructure: [] }}
+        performanceError={null}
+      />,
+    );
+    expect(screen.getByText("No successful executions in this period.")).toBeInTheDocument();
+
+    rerender(
+      <StatsCharts
+        tab="performance"
+        overview={null}
+        cost={null}
+        costError={null}
+        performance={null}
+        performanceError="Claude journal could not be read"
+      />,
+    );
+    expect(screen.getByText("Claude journal could not be read")).toBeInTheDocument();
   });
 });

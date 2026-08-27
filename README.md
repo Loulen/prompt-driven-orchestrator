@@ -81,6 +81,7 @@ PDO ships these harnesses compiled in. **Launching, attaching, resuming and comp
 | **End of turn** | Complete a node by itself when its turn ends. Absent ⇒ the agent runs `pdo complete`, or you do | ✅ an injected `Stop` hook, plus the transcript tail as the sweep's fallback | ❌ | ✅ the journal's explicit `assistant.turn_end` event |
 | **Usage-limit menu** | Notice a session parked on the harness's usage-limit menu (informational, no recovery) | ✅ the interactive "wait for limit to reset" menu, matched in a pane capture | ❌ | ❌ |
 | **Sandbox staging floor** | Hold a sandboxed session's staged home — credentials, settings, pre-granted trust | ✅ a staged `.claude` home — credentials, org managed settings, pre-granted trust | ❌ | ❌ |
+| **Context usage** | Measure a session's context-window peak, in tokens, for Stats → Performance (#585). Absent ⇒ no Context column for the harness, never an invented reading | ✅ derived — per-turn token usage from the transcript, deduplicated and maxed | ❌ | ✅ derived — the journal's cumulative usage counters, converted to a per-turn contribution and maxed |
 
 The version beside each harness is the **last validated** one — the build PDO's knowledge of that harness was measured against. It is a documented bound, not a guard: PDO launches on whatever version you have installed and says nothing about the difference. It is written down because the same harness can sit on one machine twice, months apart, with different event schemas and different model lists — and an inventory taken against the wrong install is worse than no inventory.
 
@@ -93,10 +94,11 @@ Why a capability is absent:
 | `opencode` | End of turn | It exposes no end-of-turn signal PDO can read: its argv template carries no `{settings}` hole for a `Stop` hook, and it has no transcript for a sweep to tail (see above). |
 | `opencode` | Usage-limit menu | The menu wording is `claude`'s. Matching another harness's pane against it would invent a state, and the probe triggers no recovery anyway (ADR-0012). |
 | `opencode` | Sandbox staging floor | Configuring a harness is a documented prerequisite, not PDO code. A sandboxed Run on it holds by your image and the profile's `$HOME` exceptions, and PDO says so once, visibly. |
+| `opencode` | Context usage | Its own SQLite reports token usage in four buckets that do not map onto `claude`'s (see Cost above), and it carries no transcript PDO can tail (see Transcript above) — a context peak is code, written per harness (#585), and nobody has written that code yet. |
 | `copilot` | Usage-limit menu | The menu wording is `claude`'s, its own documentation admits the textual anchor drifts each release, and the probe triggers no recovery (ADR-0012). Declaring it absent degrades nothing actionable. |
 | `copilot` | Sandbox staging floor | Configuring a harness is a documented prerequisite, not PDO code (ADR-0031). A sandboxed Run on it holds by your image and the profile's `$HOME` exceptions, and PDO says so once, visibly. |
 
-A harness **you** declare in `~/.pdo/harnesses/descriptors.yaml` carries no code, so it is absent on all five — it still launches, attaches, resumes, and completes when its agent runs `pdo complete`. That is a legitimate way to run a harness, not a broken one.
+A harness **you** declare in `~/.pdo/harnesses/descriptors.yaml` carries no code, so it is absent on all six — it still launches, attaches, resumes, and completes when its agent runs `pdo complete`. That is a legitimate way to run a harness, not a broken one.
 
 <!-- support-table:end -->
 

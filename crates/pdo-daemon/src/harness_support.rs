@@ -44,10 +44,10 @@ pub const BEGIN_MARKER: &str = "<!-- support-table:begin -->";
 /// The HTML comment closing the generated block.
 pub const END_MARKER: &str = "<!-- support-table:end -->";
 
-/// One of the five capabilities the support table publishes, in publication order.
+/// One of the six capabilities the support table publishes, in publication order.
 ///
-/// A closed enum is right *here* (unlike the harness axis, ADR-0045): the five are
-/// the trait's five methods, so a sixth capability is a code change in
+/// A closed enum is right *here* (unlike the harness axis, ADR-0045): the six are
+/// the trait's six methods, so a seventh capability is a code change in
 /// [`crate::harness_probes`] anyway — and this `match` is then the compiler's
 /// reminder to publish it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,16 +57,18 @@ pub(crate) enum Capability {
     TurnEnd,
     UsageLimit,
     Staging,
+    ContextUsage,
 }
 
 impl Capability {
-    /// The five, in the order the table lists them.
-    pub(crate) const ALL: [Capability; 5] = [
+    /// The six, in the order the table lists them.
+    pub(crate) const ALL: [Capability; 6] = [
         Capability::Cost,
         Capability::Transcript,
         Capability::TurnEnd,
         Capability::UsageLimit,
         Capability::Staging,
+        Capability::ContextUsage,
     ];
 
     /// The capability's column name in the published table.
@@ -77,6 +79,7 @@ impl Capability {
             Capability::TurnEnd => "End of turn",
             Capability::UsageLimit => "Usage-limit menu",
             Capability::Staging => "Sandbox staging floor",
+            Capability::ContextUsage => "Context usage",
         }
     }
 
@@ -103,6 +106,11 @@ impl Capability {
                 "Hold a sandboxed session's staged home — credentials, \
                                     settings, pre-granted trust"
             }
+            Capability::ContextUsage => {
+                "Measure a session's context-window peak, in tokens, for Stats → \
+                                        Performance (#585). Absent ⇒ no Context column for the \
+                                        harness, never an invented reading"
+            }
         }
     }
 
@@ -117,6 +125,7 @@ impl Capability {
             Capability::TurnEnd => p.turn_end_substrate().map(|t| t.label()),
             Capability::UsageLimit => p.usage_limit_anchor().map(|u| u.label()),
             Capability::Staging => p.staging_floor().map(|s| s.label()),
+            Capability::ContextUsage => p.context_usage_source().map(|c| c.label()),
         }
     }
 }
@@ -125,7 +134,7 @@ impl Capability {
 /// motive is prose; enforced, because a missing entry fails a test rather than
 /// publishing a bare ❌.
 ///
-/// A data-declared harness needs no row: it is absent on all five for one reason —
+/// A data-declared harness needs no row: it is absent on all six for one reason —
 /// PDO carries no code for it — and the block says that in a sentence.
 const ABSENCES: &[(&str, Capability, &str)] = &[
     (
@@ -158,6 +167,13 @@ const ABSENCES: &[(&str, Capability, &str)] = &[
         Capability::Staging,
         "Configuring a harness is a documented prerequisite, not PDO code. A sandboxed Run on it \
          holds by your image and the profile's `$HOME` exceptions, and PDO says so once, visibly.",
+    ),
+    (
+        OPENCODE,
+        Capability::ContextUsage,
+        "Its own SQLite reports token usage in four buckets that do not map onto `claude`'s \
+         (see Cost above), and it carries no transcript PDO can tail (see Transcript above) — a \
+         context peak is code, written per harness (#585), and nobody has written that code yet.",
     ),
     (
         COPILOT,
@@ -258,7 +274,7 @@ pub fn render() -> String {
 
     out.push_str(
         "\nA harness **you** declare in `~/.pdo/harnesses/descriptors.yaml` carries no code, so it \
-         is absent on all five — it still launches, attaches, resumes, and completes when its \
+         is absent on all six — it still launches, attaches, resumes, and completes when its \
          agent runs `pdo complete`. That is a legitimate way to run a harness, not a broken one.\n\n",
     );
     out.push_str(END_MARKER);
@@ -384,7 +400,7 @@ mod tests {
 
     #[test]
     fn the_matrix_reads_the_dispatch_table_not_a_hand_written_list() {
-        // claude: five present. copilot: three present, two absent. opencode: none.
+        // claude: six present. copilot: four present, two absent. opencode: none.
         // These are read through `mechanism`, so this test pins the *wiring*, not a
         // duplicate of the capability declaration.
         assert!(Capability::ALL
@@ -394,17 +410,18 @@ mod tests {
         assert!(Capability::TurnEnd.mechanism(COPILOT).is_some());
         assert!(Capability::UsageLimit.mechanism(COPILOT).is_none());
         assert!(Capability::Staging.mechanism(COPILOT).is_none());
+        assert!(Capability::ContextUsage.mechanism(COPILOT).is_some());
         assert!(Capability::ALL
             .iter()
             .all(|c| c.mechanism(OPENCODE).is_none()));
-        // A harness PDO carries no code for: absent on all five, no per-name code.
+        // A harness PDO carries no code for: absent on all six, no per-name code.
         assert!(Capability::ALL
             .iter()
             .all(|c| c.mechanism("my-custom-harness").is_none()));
     }
 
     #[test]
-    fn render_names_every_harness_its_version_and_the_five_capabilities() {
+    fn render_names_every_harness_its_version_and_the_six_capabilities() {
         let block = render();
         for d in embedded_floor() {
             assert!(

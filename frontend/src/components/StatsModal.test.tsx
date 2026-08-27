@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const fetchStatsOverviewMock = vi.fn();
 const fetchStatsCostMock = vi.fn();
+const fetchStatsPerformanceMock = vi.fn();
 const syncCostPricesMock = vi.fn();
 
 // Every api function StatsModal (or anything it renders) touches MUST be in this
@@ -13,6 +14,7 @@ const syncCostPricesMock = vi.fn();
 vi.mock("../api", () => ({
   fetchStatsOverview: (...args: unknown[]) => fetchStatsOverviewMock(...args),
   fetchStatsCost: (...args: unknown[]) => fetchStatsCostMock(...args),
+  fetchStatsPerformance: (...args: unknown[]) => fetchStatsPerformanceMock(...args),
   syncCostPrices: (...args: unknown[]) => syncCostPricesMock(...args),
 }));
 
@@ -85,6 +87,13 @@ async function openCostTab() {
 beforeEach(() => {
   fetchStatsOverviewMock.mockReset().mockResolvedValue(OVERVIEW);
   fetchStatsCostMock.mockReset().mockResolvedValue(COST);
+  fetchStatsPerformanceMock.mockReset().mockResolvedValue({
+    harnesses: [],
+    total: { harnesses: [] },
+    infrastructure_total: { harnesses: [] },
+    by_pipeline: [],
+    infrastructure: [],
+  });
   syncCostPricesMock.mockReset().mockResolvedValue(report());
 });
 
@@ -116,14 +125,27 @@ describe("StatsModal — price sync (#427, ADR-0034)", () => {
   });
 
   describe("StatsModal — full-screen Stats window (#638)", () => {
-    it("covers the application and exposes the four sections in a side rail", async () => {
+    it("covers the application and exposes Performance as the fifth side-rail section", async () => {
       render(<StatsModal open onClose={() => {}} />);
 
       expect(await screen.findByTestId("stats-modal")).toHaveClass("h-screen", "w-screen");
       const rail = screen.getByRole("tablist", { name: "Stats sections" });
       expect(rail).toHaveClass("flex-col");
-      expect(screen.getAllByRole("tab")).toHaveLength(4);
+      expect(screen.getAllByRole("tab")).toHaveLength(5);
+      expect(screen.getByTestId("stats-tab-performance")).toHaveTextContent("Performance");
       expect(screen.getByRole("group", { name: "Period" })).toBeInTheDocument();
+    });
+
+    it("loads Performance only when opened and refreshes it explicitly", async () => {
+      const user = userEvent.setup();
+      render(<StatsModal open onClose={() => {}} />);
+      await waitFor(() => expect(fetchStatsOverviewMock).toHaveBeenCalledTimes(1));
+      expect(fetchStatsPerformanceMock).not.toHaveBeenCalled();
+
+      await user.click(screen.getByTestId("stats-tab-performance"));
+      await waitFor(() => expect(fetchStatsPerformanceMock).toHaveBeenCalledTimes(1));
+      await user.click(screen.getByTestId("stats-refresh"));
+      await waitFor(() => expect(fetchStatsPerformanceMock).toHaveBeenCalledTimes(2));
     });
 
     it("refreshes visible data without blanking it and advances the computed time", async () => {

@@ -1002,7 +1002,12 @@ fn breakdown_memo() -> &'static Mutex<BreakdownMemoMap> {
     BREAKDOWN_MEMO.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn copilot_mtime_millis(events: &[crate::event_log::Event], copilot_root: &Path) -> i64 {
+/// Max mtime (epoch millis) across every Copilot `events.jsonl` a Run's own
+/// events reference by `session_id` — the Copilot mirror of
+/// [`max_transcript_mtime_millis`]'s Claude walk. `pub(crate)` so a whole-cohort
+/// cache key (e.g. `stats_performance`'s) can fold a Run's Copilot contribution
+/// in alongside its Claude one without re-deriving this lookup.
+pub(crate) fn copilot_mtime_millis(events: &[crate::event_log::Event], copilot_root: &Path) -> i64 {
     events
         .iter()
         .filter_map(|event| {
@@ -1027,7 +1032,12 @@ fn copilot_mtime_millis(events: &[crate::event_log::Event], copilot_root: &Path)
         .unwrap_or(0)
 }
 
-fn event_fingerprint(events: &[crate::event_log::Event]) -> u64 {
+/// Order-and-content fingerprint of a Run's own event log — any append,
+/// edit, or replay changes it. `pub(crate)` so any other cache keyed on "this
+/// Run's events haven't changed" (not just this module's own cost memo) can
+/// reuse the exact same hash rather than defining a second, possibly
+/// inconsistent one.
+pub(crate) fn event_fingerprint(events: &[crate::event_log::Event]) -> u64 {
     let mut hasher = DefaultHasher::new();
     for event in events {
         event.run_id.hash(&mut hasher);

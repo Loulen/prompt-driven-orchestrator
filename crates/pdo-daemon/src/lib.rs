@@ -11,9 +11,11 @@ mod boot_recovery;
 pub(crate) mod completion_refusal;
 #[allow(dead_code)]
 mod condition;
+mod context_peak;
 mod copilot_journal;
 #[allow(dead_code)]
 mod cron_schedule;
+mod distribution;
 mod edge_router;
 mod event_log;
 #[allow(dead_code)]
@@ -67,6 +69,7 @@ mod scheduler_interpreter;
 mod service_unit;
 pub mod stale_detector;
 mod stats;
+mod stats_performance;
 mod switch_router;
 pub mod tmux_session_manager;
 mod transition_guard;
@@ -4459,6 +4462,10 @@ fn build_router(state: Arc<AppState>) -> Router {
         // fetched only when the cost tab is shown).
         .route("/stats/overview", get(stats::stats_overview))
         .route("/stats/cost", get(stats::stats_cost))
+        .route(
+            "/stats/performance",
+            get(stats_performance::stats_performance),
+        )
         // Out-of-Run audit feed (#507, ADR-0044). NEW top-level `/audit` prefix
         // → added to the vite dev proxy whitelist (frontend/vite.config.ts) so a
         // dev-mode GET hits the daemon instead of the SPA fallback (same trap as
@@ -17991,6 +17998,1413 @@ mod tests {
         assert_eq!(body["by_project"][0]["unknown"], 3);
         assert_eq!(body["by_project"][0]["pipelines"][0]["id"], "p1");
         assert!(!body["resolved"].as_array().unwrap().is_empty());
+    }
+
+    /// `GET /stats/performance` (#585) — the whole shape in one cohort: success-only
+    /// filtering (a loop lap, a stopped-then-restarted attempt, a script node, a
+    /// failed Run, a failed merge-resolver attempt all excluded/retained per the
+    /// issue's rules), stable Pipeline/Node identity with "latest name wins",
+    /// Pipeline aggregation pooling from raw main sessions (not from the Nodes'
+    /// own means), the whole-cohort `total`, Claude subagent grouping (declared
+    /// name + the "Unidentified subagent" fallback for an opaque id), a harness
+    /// with no context-usage source still keeping its Duration, and both
+    /// Infrastructure roles (Pipeline Manager, Merge resolver).
+    #[tokio::test]
+    async fn stats_performance_returns_pipeline_node_subagent_and_infrastructure_metrics() {
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let mut state = test_state().await;
+        let home = state
+            .repo_root
+            .join(".pdo")
+            .join("test-stats-performance")
+            .join(uuid::Uuid::new_v4().to_string());
+        let _cleanup = Cleanup(home.clone());
+        std::fs::create_dir_all(&home).unwrap();
+        Arc::get_mut(&mut state).unwrap().sandbox_home_override = Some(home.clone());
+        let repo = state.repo_root.to_string_lossy().into_owned();
+
+        async fn insert_event(
+            db: &sqlx::SqlitePool,
+            run: &str,
+            ts: &str,
+            kind: &str,
+            node: Option<&str>,
+            iter: Option<i64>,
+            payload: serde_json::Value,
+        ) {
+            sqlx::query(
+                "INSERT INTO events (run_id, ts, kind, node_id, iter, payload) \
+                 VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(run)
+            .bind(ts)
+            .bind(kind)
+            .bind(node)
+            .bind(iter)
+            .bind(payload.to_string())
+            .execute(db)
+            .await
+            .unwrap();
+        }
+
+        // --- run_started: two runs of pipeline p1 (latest name "Loop V2" wins),
+        // one run of pipeline p2, one run of p1 that will fail outright (so its
+        // Pipeline Manager attempt is excluded, never even "expected").
+        insert_event(
+            &state.db,
+            "perf-r1",
+            "2026-07-15T09:00:00Z",
+            "run_started",
+            None,
+            None,
+            serde_json::json!({
+                "pipeline_id":"p1","pipeline_name":"Loop V1","target_repo":repo,"harness":"claude",
+                "node_defs":[
+                    {"id":"worker","name":"Worker V1","node_type":"code-mutating"},
+                    {"id":"build","name":"Build","node_type":"script"}
+                ]
+            }),
+        )
+        .await;
+        insert_event(
+            &state.db,
+            "perf-r2",
+            "2026-07-16T09:00:00Z",
+            "run_started",
+            None,
+            None,
+            serde_json::json!({
+                "pipeline_id":"p1","pipeline_name":"Loop V2","target_repo":repo,"harness":"copilot",
+                "node_defs":[{"id":"worker","name":"Worker V2","node_type":"code-mutating"}]
+            }),
+        )
+        .await;
+        insert_event(
+            &state.db,
+            "perf-r3",
+            "2026-07-17T09:00:00Z",
+            "run_started",
+            None,
+            None,
+            serde_json::json!({
+                "pipeline_id":"p2","pipeline_name":"Other pipeline","target_repo":repo,"harness":"claude",
+                "node_defs":[{"id":"solo","name":"Solo","node_type":"code-mutating"}]
+            }),
+        )
+        .await;
+        insert_event(
+            &state.db,
+            "perf-r4",
+            "2026-07-18T09:00:00Z",
+            "run_started",
+            None,
+            None,
+            serde_json::json!({
+                "pipeline_id":"p1","pipeline_name":"Loop V2","target_repo":repo,"harness":"claude",
+                "node_defs":[]
+            }),
+        )
+        .await;
+
+        // --- perf-r1: worker's loop lap (iter 1, 2), a stopped attempt on iter 3
+        // that is then restarted and succeeds, a fourth iter on a harness with no
+        // context source, plus a script node that must never appear at all.
+        insert_event(
+            &state.db, "perf-r1", "2026-07-15T09:10:00Z", "node_started",
+            Some("worker"), Some(1),
+            serde_json::json!({"node_type":"code-mutating","harness":"claude","session_id":"claude-1"}),
+        ).await;
+        insert_event(
+            &state.db,
+            "perf-r1",
+            "2026-07-15T09:20:00Z",
+            "node_completed",
+            Some("worker"),
+            Some(1),
+            serde_json::json!({}),
+        )
+        .await;
+        insert_event(
+            &state.db, "perf-r1", "2026-07-15T09:30:00Z", "node_started",
+            Some("worker"), Some(2),
+            serde_json::json!({"node_type":"code-mutating","harness":"claude","session_id":"claude-2"}),
+        ).await;
+        insert_event(
+            &state.db,
+            "perf-r1",
+            "2026-07-15T09:35:00Z",
+            "node_completed",
+            Some("worker"),
+            Some(2),
+            serde_json::json!({}),
+        )
+        .await;
+        insert_event(
+            &state.db, "perf-r1", "2026-07-15T09:40:00Z", "node_started",
+            Some("worker"), Some(3),
+            serde_json::json!({"node_type":"code-mutating","harness":"claude","session_id":"claude-3"}),
+        ).await;
+        insert_event(
+            &state.db,
+            "perf-r1",
+            "2026-07-15T09:41:00Z",
+            "node_stopped",
+            Some("worker"),
+            Some(3),
+            serde_json::json!({}),
+        )
+        .await;
+        insert_event(
+            &state.db, "perf-r1", "2026-07-15T09:45:00Z", "node_started",
+            Some("worker"), Some(3),
+            serde_json::json!({"node_type":"code-mutating","harness":"claude","session_id":"claude-3b"}),
+        ).await;
+        insert_event(
+            &state.db,
+            "perf-r1",
+            "2026-07-15T09:50:00Z",
+            "node_completed",
+            Some("worker"),
+            Some(3),
+            serde_json::json!({}),
+        )
+        .await;
+        insert_event(
+            &state.db, "perf-r1", "2026-07-15T10:00:00Z", "node_started",
+            Some("worker"), Some(4),
+            serde_json::json!({"node_type":"code-mutating","harness":"future-harness","session_id":"future-1"}),
+        ).await;
+        insert_event(
+            &state.db,
+            "perf-r1",
+            "2026-07-15T10:05:00Z",
+            "node_completed",
+            Some("worker"),
+            Some(4),
+            serde_json::json!({}),
+        )
+        .await;
+        insert_event(
+            &state.db,
+            "perf-r1",
+            "2026-07-15T09:10:00Z",
+            "node_started",
+            Some("build"),
+            Some(1),
+            serde_json::json!({"node_type":"script","harness":"claude","session_id":"build-1"}),
+        )
+        .await;
+        insert_event(
+            &state.db,
+            "perf-r1",
+            "2026-07-15T09:11:00Z",
+            "node_completed",
+            Some("build"),
+            Some(1),
+            serde_json::json!({}),
+        )
+        .await;
+
+        // Pipeline Manager: one successful Run.
+        insert_event(
+            &state.db,
+            "perf-r1",
+            "2026-07-15T09:55:00Z",
+            "run_completed",
+            None,
+            None,
+            serde_json::json!({}),
+        )
+        .await;
+        // Merge resolver: one failed attempt (excluded), then one successful
+        // pairing scoped to worker's iter-3 restart (its own worktree).
+        insert_event(
+            &state.db,
+            "perf-r1",
+            "2026-07-15T09:51:00Z",
+            "merge_resolver_started",
+            None,
+            None,
+            serde_json::json!({}),
+        )
+        .await;
+        insert_event(
+            &state.db,
+            "perf-r1",
+            "2026-07-15T09:51:30Z",
+            "merge_resolver_failed",
+            None,
+            None,
+            serde_json::json!({}),
+        )
+        .await;
+        insert_event(
+            &state.db,
+            "perf-r1",
+            "2026-07-15T09:52:00Z",
+            "merge_resolver_started",
+            None,
+            None,
+            serde_json::json!({"conflicting_node_id":"worker","iter":3}),
+        )
+        .await;
+        insert_event(
+            &state.db,
+            "perf-r1",
+            "2026-07-15T09:53:00Z",
+            "merge_resolver_completed",
+            None,
+            None,
+            serde_json::json!({}),
+        )
+        .await;
+
+        // --- perf-r2: worker's one Copilot execution.
+        insert_event(
+            &state.db, "perf-r2", "2026-07-16T09:10:00Z", "node_started",
+            Some("worker"), Some(1),
+            serde_json::json!({"node_type":"code-mutating","harness":"copilot","session_id":"copilot-1"}),
+        ).await;
+        insert_event(
+            &state.db,
+            "perf-r2",
+            "2026-07-16T09:20:00Z",
+            "node_completed",
+            Some("worker"),
+            Some(1),
+            serde_json::json!({}),
+        )
+        .await;
+
+        // --- perf-r3: p2's solo node, one Claude execution. Also a second
+        // successful Run, pooled into the same Pipeline Manager role.
+        insert_event(
+            &state.db, "perf-r3", "2026-07-17T09:10:00Z", "node_started",
+            Some("solo"), Some(1),
+            serde_json::json!({"node_type":"code-mutating","harness":"claude","session_id":"claude-solo"}),
+        ).await;
+        insert_event(
+            &state.db,
+            "perf-r3",
+            "2026-07-17T09:16:00Z",
+            "node_completed",
+            Some("solo"),
+            Some(1),
+            serde_json::json!({}),
+        )
+        .await;
+        insert_event(
+            &state.db,
+            "perf-r3",
+            "2026-07-17T09:20:00Z",
+            "run_completed",
+            None,
+            None,
+            serde_json::json!({}),
+        )
+        .await;
+
+        // --- perf-r4: the whole Run fails outright — never an "expected"
+        // Pipeline Manager attempt at all.
+        insert_event(
+            &state.db,
+            "perf-r4",
+            "2026-07-18T09:05:00Z",
+            "run_failed",
+            None,
+            None,
+            serde_json::json!({}),
+        )
+        .await;
+
+        // --- Claude transcripts (main sessions + one Node's two subagents).
+        let claude_root = home.join(".claude").join("projects");
+        let write_claude_main = |run_id: &str,
+                                 node_id: &str,
+                                 iter: i64,
+                                 session: &str,
+                                 tokens: u64| {
+            let dir = claude_root.join(stale_detector::encode_working_dir(
+                &worktree_ops::sub_worktree_path(&state.repo_root, run_id, node_id, iter),
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join(format!("{session}.jsonl")),
+                format!(
+                    r#"{{"type":"assistant","message":{{"model":"claude-opus-4-8","usage":{{"input_tokens":{tokens},"output_tokens":0}}}}}}"#
+                ),
+            )
+            .unwrap();
+            dir
+        };
+        let worker1_dir = write_claude_main("perf-r1", "worker", 1, "claude-1", 20000);
+        write_claude_main("perf-r1", "worker", 2, "claude-2", 25000);
+        let worker3_dir = write_claude_main("perf-r1", "worker", 3, "claude-3b", 30000);
+        write_claude_main("perf-r3", "solo", 1, "claude-solo", 45000);
+
+        // --- Infrastructure subagents (#585 user story #36): a Pipeline
+        // Manager session left in the Run's own top-level worktree (never
+        // colliding with a code-mutating Node's disjoint sub-worktree) and a
+        // Merge resolver session left in the conflicting Node's own
+        // iter-3 worktree, alongside (and excluded from) that Node's own
+        // "claude-3b" session — resolved by exclusion, never by path alone.
+        let pm_project_dir = claude_root.join(stale_detector::encode_working_dir(
+            &worktree_ops::worktree_dir_for_run(&state.repo_root, "perf-r1"),
+        ));
+        std::fs::create_dir_all(&pm_project_dir).unwrap();
+        std::fs::write(
+            pm_project_dir.join("pm-session.jsonl"),
+            r#"{"type":"assistant","message":{"model":"claude-opus-4-8","usage":{"input_tokens":12000,"output_tokens":0}}}"#,
+        )
+        .unwrap();
+        let pm_subagents_dir = pm_project_dir.join("pm-session").join("subagents");
+        std::fs::create_dir_all(&pm_subagents_dir).unwrap();
+        std::fs::write(
+            pm_subagents_dir.join("reviewer.jsonl"),
+            "{\"type\":\"assistant\",\"timestamp\":\"2026-07-15T09:50:10Z\",\"message\":{\"model\":\"claude-opus-4-8\",\"usage\":{\"input_tokens\":8000,\"output_tokens\":0}}}\n\
+             {\"type\":\"user\",\"timestamp\":\"2026-07-15T09:50:40Z\"}\n",
+        )
+        .unwrap();
+
+        std::fs::write(
+            worker3_dir.join("mr-session.jsonl"),
+            r#"{"type":"assistant","message":{"model":"claude-opus-4-8","usage":{"input_tokens":9000,"output_tokens":0}}}"#,
+        )
+        .unwrap();
+        let mr_subagents_dir = worker3_dir.join("mr-session").join("subagents");
+        std::fs::create_dir_all(&mr_subagents_dir).unwrap();
+        std::fs::write(
+            mr_subagents_dir.join("patch-reviewer.jsonl"),
+            "{\"type\":\"assistant\",\"timestamp\":\"2026-07-15T09:52:10Z\",\"message\":{\"model\":\"claude-opus-4-8\",\"usage\":{\"input_tokens\":7000,\"output_tokens\":0}}}\n\
+             {\"type\":\"user\",\"timestamp\":\"2026-07-15T09:52:40Z\"}\n",
+        )
+        .unwrap();
+
+        let subagents_dir = worker1_dir.join("claude-1").join("subagents");
+        std::fs::create_dir_all(&subagents_dir).unwrap();
+        std::fs::write(
+            subagents_dir.join("explore.jsonl"),
+            "{\"type\":\"assistant\",\"timestamp\":\"2026-07-15T09:10:00Z\",\"message\":{\"model\":\"claude-opus-4-8\",\"usage\":{\"input_tokens\":55000,\"output_tokens\":0}}}\n\
+             {\"type\":\"user\",\"timestamp\":\"2026-07-15T09:15:00Z\"}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            subagents_dir.join("3fa85f64-5717-4562-b3fc-2c963f66afa6.jsonl"),
+            "{\"type\":\"assistant\",\"message\":{\"model\":\"claude-opus-4-8\",\"usage\":{\"input_tokens\":30000,\"output_tokens\":0}}}\n",
+        )
+        .unwrap();
+
+        // --- Copilot journal for the one Copilot execution.
+        let copilot_dir = home
+            .join(".copilot")
+            .join("session-state")
+            .join("copilot-1");
+        std::fs::create_dir_all(&copilot_dir).unwrap();
+        std::fs::write(
+            copilot_dir.join("events.jsonl"),
+            r#"{"type":"session.shutdown","data":{"usage":{"inputTokens":40000,"outputTokens":0}}}"#,
+        )
+        .unwrap();
+
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/stats/performance?from=2026-07-15T00:00:00Z&to=2026-07-19T00:00:00Z")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            body["harnesses"],
+            serde_json::json!(["claude", "copilot", "future-harness"])
+        );
+
+        // --- Pipeline identity + latest-name-wins.
+        let by_pipeline = body["by_pipeline"].as_array().unwrap();
+        assert_eq!(by_pipeline.len(), 2, "got: {by_pipeline:#?}");
+        let p1 = by_pipeline.iter().find(|p| p["id"] == "p1").unwrap();
+        assert_eq!(p1["name"], "Loop V2");
+        let p2 = by_pipeline.iter().find(|p| p["id"] == "p2").unwrap();
+        assert_eq!(p2["name"], "Other pipeline");
+
+        // --- Node identity + latest-name-wins + success-only filtering: 3
+        // observations (loop lap + restart), never 4 (stopped attempt excluded)
+        // or 5 (script node excluded).
+        let nodes = p1["nodes"].as_array().unwrap();
+        assert_eq!(
+            nodes.len(),
+            1,
+            "the script node must never appear: {nodes:#?}"
+        );
+        let worker = &nodes[0];
+        assert_eq!(worker["id"], "worker");
+        assert_eq!(worker["name"], "Worker V2");
+        let worker_harnesses = worker["harnesses"].as_array().unwrap();
+        let worker_claude = worker_harnesses
+            .iter()
+            .find(|h| h["harness"] == "claude")
+            .unwrap();
+        assert_eq!(worker_claude["context"]["measured"], 3);
+        assert_eq!(worker_claude["context"]["expected"], 3);
+        assert_eq!(worker_claude["context"]["stats"]["min"], 20000.0);
+        assert_eq!(worker_claude["context"]["stats"]["max"], 30000.0);
+        assert_eq!(worker_claude["context"]["stats"]["mean"], 25000.0);
+        assert_eq!(worker_claude["context"]["stats"]["median"], 25000.0);
+        assert_eq!(worker_claude["duration"]["measured"], 3);
+        assert_eq!(worker_claude["duration"]["stats"]["min"], 300000.0);
+        assert_eq!(worker_claude["duration"]["stats"]["max"], 600000.0);
+        assert_eq!(worker_claude["duration"]["stats"]["mean"], 400000.0);
+        let worker_copilot = worker_harnesses
+            .iter()
+            .find(|h| h["harness"] == "copilot")
+            .unwrap();
+        assert_eq!(worker_copilot["context"]["stats"]["mean"], 40000.0);
+        assert_eq!(worker_copilot["duration"]["stats"]["mean"], 600000.0);
+        let worker_future = worker_harnesses
+            .iter()
+            .find(|h| h["harness"] == "future-harness")
+            .unwrap();
+        assert!(
+            worker_future["context"]["stats"].is_null(),
+            "a harness with no context source must never fake a value: {worker_future}"
+        );
+        assert_eq!(
+            worker_future["context"]["measured"], 0,
+            "coverage survives a fully absent metric: {worker_future}"
+        );
+        assert_eq!(worker_future["context"]["expected"], 1);
+        assert_eq!(
+            worker_future["context"]["missing_reasons"],
+            serde_json::json!(["harness has no context-usage source"])
+        );
+        assert_eq!(worker_future["duration"]["stats"]["mean"], 300000.0);
+        assert_eq!(worker_future["duration"]["measured"], 1);
+        assert_eq!(worker_future["duration"]["expected"], 1);
+
+        // --- Subagent grouping: declared name + "Unidentified subagent" fallback,
+        // never touching the parent Node's own distribution above.
+        let subagents = worker["subagents"].as_array().unwrap();
+        assert_eq!(subagents.len(), 2, "got: {subagents:#?}");
+        let explore = subagents.iter().find(|s| s["name"] == "explore").unwrap();
+        let explore_claude = explore["harnesses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|h| h["harness"] == "claude")
+            .unwrap();
+        assert_eq!(explore_claude["context"]["stats"]["mean"], 55000.0);
+        assert_eq!(explore_claude["duration"]["stats"]["mean"], 300000.0);
+        let unidentified = subagents
+            .iter()
+            .find(|s| s["name"] == "Unidentified subagent")
+            .unwrap();
+        let unidentified_claude = unidentified["harnesses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|h| h["harness"] == "claude")
+            .unwrap();
+        assert_eq!(unidentified_claude["context"]["stats"]["mean"], 30000.0);
+        assert!(
+            unidentified_claude["duration"]["stats"].is_null(),
+            "no reliable bounds in this subagent transcript: {unidentified_claude}"
+        );
+        assert_eq!(unidentified_claude["duration"]["measured"], 0);
+        assert_eq!(
+            unidentified_claude["duration"]["missing_reasons"],
+            serde_json::json!(["no reliable start/end bounds in subagent transcript"])
+        );
+
+        // --- Pipeline aggregation pools from raw main sessions, matching its own
+        // single Node here exactly (p1 has only one Node).
+        let p1_claude = p1["harnesses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|h| h["harness"] == "claude")
+            .unwrap();
+        assert_eq!(p1_claude["context"]["stats"]["mean"], 25000.0);
+
+        // --- p2's solo Node.
+        let p2_worker = &p2["nodes"].as_array().unwrap()[0];
+        assert_eq!(p2_worker["id"], "solo");
+        let p2_claude = p2_worker["harnesses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|h| h["harness"] == "claude")
+            .unwrap();
+        assert_eq!(p2_claude["context"]["stats"]["mean"], 45000.0);
+
+        // --- `total`: every main-session Claude observation across BOTH
+        // pipelines pooled together (never Infrastructure, never subagents).
+        let total_claude = body["total"]["harnesses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|h| h["harness"] == "claude")
+            .unwrap();
+        assert_eq!(total_claude["context"]["measured"], 4);
+        assert_eq!(total_claude["context"]["stats"]["min"], 20000.0);
+        assert_eq!(total_claude["context"]["stats"]["max"], 45000.0);
+        assert_eq!(total_claude["context"]["stats"]["mean"], 30000.0);
+        assert_eq!(total_claude["context"]["stats"]["median"], 27500.0);
+
+        // --- Infrastructure: Pipeline Manager pools BOTH successful Runs (never
+        // the failed one); Merge resolver keeps only its successful pairing.
+        // Both roles now discover their own residual Claude session — and its
+        // subagents — by exclusion from the directory their turns are known to
+        // land in (#585 user story #36), never guessing at the ambiguous ones.
+        let infra = body["infrastructure"].as_array().unwrap();
+        assert_eq!(infra.len(), 2, "got: {infra:#?}");
+        let pipeline_manager = infra
+            .iter()
+            .find(|r| r["id"] == "pipeline-manager")
+            .unwrap();
+        assert_eq!(pipeline_manager["name"], "Pipeline Manager");
+        let pm_claude = pipeline_manager["harnesses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|h| h["harness"] == "claude")
+            .unwrap();
+        // perf-r1's Run resolves a session (measured); perf-r3's Run leaves no
+        // attributable session in its own top-level worktree (absent, but
+        // coverage survives: expected still counts it).
+        assert_eq!(pm_claude["context"]["measured"], 1);
+        assert_eq!(pm_claude["context"]["expected"], 2);
+        assert_eq!(pm_claude["context"]["stats"]["mean"], 12000.0);
+        assert_eq!(
+            pm_claude["context"]["missing_reasons"],
+            serde_json::json!(["no attributable session for this infrastructure role"])
+        );
+        assert_eq!(pm_claude["duration"]["measured"], 2);
+        assert_eq!(pm_claude["duration"]["expected"], 2);
+        assert_eq!(pm_claude["duration"]["stats"]["min"], 1200000.0);
+        assert_eq!(pm_claude["duration"]["stats"]["max"], 3300000.0);
+        let pm_subagents = pipeline_manager["subagents"].as_array().unwrap();
+        assert_eq!(pm_subagents.len(), 1, "got: {pm_subagents:#?}");
+        let pm_reviewer_claude = pm_subagents[0]["harnesses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|h| h["harness"] == "claude")
+            .unwrap();
+        assert_eq!(pm_subagents[0]["name"], "reviewer");
+        assert_eq!(pm_reviewer_claude["context"]["stats"]["mean"], 8000.0);
+        assert_eq!(pm_reviewer_claude["duration"]["stats"]["mean"], 30000.0);
+
+        let merge_resolver = infra.iter().find(|r| r["id"] == "merge-resolver").unwrap();
+        assert_eq!(merge_resolver["name"], "Merge resolver");
+        let mr_claude = merge_resolver["harnesses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|h| h["harness"] == "claude")
+            .unwrap();
+        assert_eq!(mr_claude["context"]["measured"], 1);
+        assert_eq!(mr_claude["context"]["stats"]["mean"], 9000.0);
+        assert_eq!(mr_claude["duration"]["measured"], 1);
+        assert_eq!(mr_claude["duration"]["stats"]["mean"], 60000.0);
+        let mr_subagents = merge_resolver["subagents"].as_array().unwrap();
+        assert_eq!(mr_subagents.len(), 1, "got: {mr_subagents:#?}");
+        let mr_patch_claude = mr_subagents[0]["harnesses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|h| h["harness"] == "claude")
+            .unwrap();
+        assert_eq!(mr_subagents[0]["name"], "patch-reviewer");
+        assert_eq!(mr_patch_claude["context"]["stats"]["mean"], 7000.0);
+        assert_eq!(mr_patch_claude["duration"]["stats"]["mean"], 30000.0);
+
+        // --- infrastructure_total: both Infrastructure roles' raw observations
+        // pooled together — NOT the mean of Pipeline Manager's mean and Merge
+        // resolver's mean (#585 review follow-up, blocker 3). Context pools
+        // Pipeline Manager's one measured peak (12000) with Merge resolver's
+        // one measured peak (9000): 2 measured out of 3 expected occurrences
+        // (Pipeline Manager's own expected=2 + Merge resolver's own expected=1).
+        // Duration pools all three occurrences directly, since every occurrence
+        // is paired Run/resolver timestamps with no absence possible here.
+        let infra_total_claude = body["infrastructure_total"]["harnesses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|h| h["harness"] == "claude")
+            .unwrap();
+        assert_eq!(infra_total_claude["context"]["expected"], 3);
+        assert_eq!(infra_total_claude["context"]["measured"], 2);
+        assert_eq!(infra_total_claude["context"]["stats"]["mean"], 10500.0);
+        assert_eq!(infra_total_claude["duration"]["expected"], 3);
+        assert_eq!(infra_total_claude["duration"]["measured"], 3);
+        assert_eq!(infra_total_claude["duration"]["stats"]["mean"], 1520000.0);
+    }
+
+    /// `GET /stats/performance` (#585, user story #36) — an Infrastructure
+    /// role's own session is never guessed at by path or timing alone: a
+    /// non-code-mutating Claude Node sharing the Pipeline Manager's top-level
+    /// worktree, with no recorded `session_id`, makes that directory's
+    /// residual session ambiguous — Context (and its subagents) stays a
+    /// motivated absence rather than an unsafe guess, while Duration (paired
+    /// from `RunStarted`/`RunCompleted` timestamps, no session lookup
+    /// involved) is unaffected.
+    #[tokio::test]
+    async fn stats_performance_infrastructure_context_is_ambiguous_when_a_shared_session_has_no_recorded_identity(
+    ) {
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let mut state = test_state().await;
+        let home = state
+            .repo_root
+            .join(".pdo")
+            .join("test-stats-performance-ambiguous")
+            .join(uuid::Uuid::new_v4().to_string());
+        let _cleanup = Cleanup(home.clone());
+        std::fs::create_dir_all(&home).unwrap();
+        Arc::get_mut(&mut state).unwrap().sandbox_home_override = Some(home.clone());
+        let repo = state.repo_root.to_string_lossy().into_owned();
+
+        async fn insert_event(
+            db: &sqlx::SqlitePool,
+            run: &str,
+            ts: &str,
+            kind: &str,
+            node: Option<&str>,
+            iter: Option<i64>,
+            payload: serde_json::Value,
+        ) {
+            sqlx::query(
+                "INSERT INTO events (run_id, ts, kind, node_id, iter, payload) \
+                 VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(run)
+            .bind(ts)
+            .bind(kind)
+            .bind(node)
+            .bind(iter)
+            .bind(payload.to_string())
+            .execute(db)
+            .await
+            .unwrap();
+        }
+
+        insert_event(
+            &state.db,
+            "perf-amb",
+            "2026-08-01T09:00:00Z",
+            "run_started",
+            None,
+            None,
+            serde_json::json!({
+                "pipeline_id":"amb","pipeline_name":"Ambiguous","target_repo":repo,"harness":"claude",
+                "node_defs":[{"id":"docs","name":"Docs","node_type":"doc-only"}]
+            }),
+        )
+        .await;
+        // A non-code-mutating (so it shares the Run's top-level worktree)
+        // Claude Node with no recorded `session_id` — the directory can no
+        // longer be trusted to hold only the Pipeline Manager's own session.
+        insert_event(
+            &state.db,
+            "perf-amb",
+            "2026-08-01T09:10:00Z",
+            "node_started",
+            Some("docs"),
+            Some(1),
+            serde_json::json!({"node_type":"doc-only","harness":"claude"}),
+        )
+        .await;
+        insert_event(
+            &state.db,
+            "perf-amb",
+            "2026-08-01T09:15:00Z",
+            "node_completed",
+            Some("docs"),
+            Some(1),
+            serde_json::json!({}),
+        )
+        .await;
+        insert_event(
+            &state.db,
+            "perf-amb",
+            "2026-08-01T09:20:00Z",
+            "run_completed",
+            None,
+            None,
+            serde_json::json!({}),
+        )
+        .await;
+
+        // A residual session does exist in the shared directory — but it must
+        // never be attributed, since the co-resident Node's own identity is
+        // unknown.
+        let claude_root = home.join(".claude").join("projects");
+        let pm_project_dir = claude_root.join(stale_detector::encode_working_dir(
+            &worktree_ops::worktree_dir_for_run(&state.repo_root, "perf-amb"),
+        ));
+        std::fs::create_dir_all(&pm_project_dir).unwrap();
+        std::fs::write(
+            pm_project_dir.join("pm-session.jsonl"),
+            r#"{"type":"assistant","message":{"model":"claude-opus-4-8","usage":{"input_tokens":12000,"output_tokens":0}}}"#,
+        )
+        .unwrap();
+
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/stats/performance?from=2026-08-01T00:00:00Z&to=2026-08-02T00:00:00Z")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+
+        let infra = body["infrastructure"].as_array().unwrap();
+        let pipeline_manager = infra
+            .iter()
+            .find(|r| r["id"] == "pipeline-manager")
+            .unwrap();
+        let pm_claude = pipeline_manager["harnesses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|h| h["harness"] == "claude")
+            .unwrap();
+        assert_eq!(pm_claude["context"]["measured"], 0);
+        assert_eq!(pm_claude["context"]["expected"], 1);
+        assert!(pm_claude["context"]["stats"].is_null());
+        assert_eq!(
+            pm_claude["context"]["missing_reasons"],
+            serde_json::json!(["ambiguous session identity in a directory shared with a Node"])
+        );
+        assert!(
+            pipeline_manager["subagents"].as_array().unwrap().is_empty(),
+            "an ambiguous session must never contribute subagents either: {pipeline_manager}"
+        );
+        // Duration is untouched by the ambiguity — it never looked at a
+        // session file at all.
+        assert_eq!(pm_claude["duration"]["measured"], 1);
+        assert_eq!(pm_claude["duration"]["stats"]["mean"], 1200000.0);
+    }
+
+    /// #585 review follow-up (blocker 4): Copilot's journal has no declared
+    /// subagent concept, and its store is flat — this must be a **motivated**
+    /// absence (the dispatch answers empty), not a coincidence of never having
+    /// the right directory to look in. Proven by planting a directory that
+    /// *would* read as subagents under Claude's convention right next to the
+    /// Copilot session's own journal, and asserting it never surfaces: the
+    /// Copilot execution's own Context is still read correctly (the absence is
+    /// specific to subagent discovery, not a wholesale failure to read Copilot
+    /// at all).
+    #[tokio::test]
+    async fn stats_performance_copilot_subagents_are_a_motivated_absence_not_silently_missing() {
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let mut state = test_state().await;
+        let home = state
+            .repo_root
+            .join(".pdo")
+            .join("test-stats-performance-copilot-subagents")
+            .join(uuid::Uuid::new_v4().to_string());
+        let _cleanup = Cleanup(home.clone());
+        std::fs::create_dir_all(&home).unwrap();
+        Arc::get_mut(&mut state).unwrap().sandbox_home_override = Some(home.clone());
+        let repo = state.repo_root.to_string_lossy().into_owned();
+
+        sqlx::query(
+            "INSERT INTO events (run_id, ts, kind, node_id, iter, payload) VALUES \
+             ('perf-cs1', '2026-08-01T09:00:00Z', 'run_started', NULL, NULL, ?)",
+        )
+        .bind(
+            serde_json::json!({
+                "pipeline_id":"p1","pipeline_name":"Loop","target_repo":repo,"harness":"copilot",
+                "node_defs":[{"id":"worker","name":"Worker","node_type":"code-mutating"}]
+            })
+            .to_string(),
+        )
+        .execute(&state.db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO events (run_id, ts, kind, node_id, iter, payload) VALUES \
+             ('perf-cs1', '2026-08-01T09:10:00Z', 'node_started', 'worker', 1, ?)",
+        )
+        .bind(
+            serde_json::json!({"node_type":"code-mutating","harness":"copilot","session_id":"copilot-cs1"})
+                .to_string(),
+        )
+        .execute(&state.db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO events (run_id, ts, kind, node_id, iter, payload) VALUES \
+             ('perf-cs1', '2026-08-01T09:20:00Z', 'node_completed', 'worker', 1, '{}')",
+        )
+        .execute(&state.db)
+        .await
+        .unwrap();
+
+        let copilot_session_dir = home
+            .join(".copilot")
+            .join("session-state")
+            .join("copilot-cs1");
+        std::fs::create_dir_all(&copilot_session_dir).unwrap();
+        std::fs::write(
+            copilot_session_dir.join("events.jsonl"),
+            r#"{"type":"session.shutdown","data":{"usage":{"inputTokens":12000,"outputTokens":0}}}"#,
+        )
+        .unwrap();
+        // Plant a directory that reads as subagents under Claude's own
+        // convention, right next to the Copilot session's journal.
+        let lookalike_subagents = copilot_session_dir.join("subagents");
+        std::fs::create_dir_all(&lookalike_subagents).unwrap();
+        std::fs::write(
+            lookalike_subagents.join("reviewer.jsonl"),
+            "{\"type\":\"assistant\",\"message\":{\"model\":\"claude-opus-4-8\",\"usage\":{\"input_tokens\":999,\"output_tokens\":0}}}\n",
+        )
+        .unwrap();
+
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/stats/performance?from=2026-08-01T00:00:00Z&to=2026-08-02T00:00:00Z")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+
+        let by_pipeline = body["by_pipeline"].as_array().unwrap();
+        let p1 = by_pipeline.iter().find(|p| p["id"] == "p1").unwrap();
+        let worker = &p1["nodes"].as_array().unwrap()[0];
+        let worker_copilot = worker["harnesses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|h| h["harness"] == "copilot")
+            .unwrap();
+        // The motivated absence is scoped to subagents — Context itself still
+        // reads correctly for the Copilot execution.
+        assert_eq!(worker_copilot["context"]["measured"], 1);
+        assert_eq!(worker_copilot["context"]["stats"]["mean"], 12000.0);
+        assert!(
+            worker["subagents"].as_array().unwrap().is_empty(),
+            "a look-alike subagents/ directory must never surface for copilot: {worker}"
+        );
+    }
+
+    /// `GET /stats/performance` (#585 review follow-up, blocker 2) — the
+    /// result is cached in memory: a repeat request for the identical `[from,
+    /// to)` window, with nothing in the cohort's events or the underlying
+    /// Claude transcript changed, is served from the memo — [`fold_performance`]
+    /// (the transcript-reading heavy fold) never runs a second time — while
+    /// still returning the exact same payload a fresh computation would.
+    #[tokio::test]
+    async fn stats_performance_result_is_memoized_and_reused_when_nothing_changed() {
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let mut state = test_state().await;
+        let home = state
+            .repo_root
+            .join(".pdo")
+            .join("test-stats-performance-cache")
+            .join(uuid::Uuid::new_v4().to_string());
+        let _cleanup = Cleanup(home.clone());
+        std::fs::create_dir_all(&home).unwrap();
+        Arc::get_mut(&mut state).unwrap().sandbox_home_override = Some(home.clone());
+        let repo = state.repo_root.to_string_lossy().into_owned();
+
+        async fn insert_event(
+            db: &sqlx::SqlitePool,
+            run: &str,
+            ts: &str,
+            kind: &str,
+            node: Option<&str>,
+            iter: Option<i64>,
+            payload: serde_json::Value,
+        ) {
+            sqlx::query(
+                "INSERT INTO events (run_id, ts, kind, node_id, iter, payload) \
+                 VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(run)
+            .bind(ts)
+            .bind(kind)
+            .bind(node)
+            .bind(iter)
+            .bind(payload.to_string())
+            .execute(db)
+            .await
+            .unwrap();
+        }
+
+        insert_event(
+            &state.db,
+            "cache-r1",
+            "2031-01-15T09:00:00Z",
+            "run_started",
+            None,
+            None,
+            serde_json::json!({
+                "pipeline_id":"cp1","pipeline_name":"Cache Pipeline","target_repo":repo,"harness":"claude",
+                "node_defs":[{"id":"worker","name":"Worker","node_type":"code-mutating"}]
+            }),
+        )
+        .await;
+        insert_event(
+            &state.db, "cache-r1", "2031-01-15T09:10:00Z", "node_started",
+            Some("worker"), Some(1),
+            serde_json::json!({"node_type":"code-mutating","harness":"claude","session_id":"cache-1"}),
+        )
+        .await;
+        insert_event(
+            &state.db,
+            "cache-r1",
+            "2031-01-15T09:20:00Z",
+            "node_completed",
+            Some("worker"),
+            Some(1),
+            serde_json::json!({}),
+        )
+        .await;
+
+        let claude_root = home.join(".claude").join("projects");
+        let dir = claude_root.join(stale_detector::encode_working_dir(
+            &worktree_ops::sub_worktree_path(&state.repo_root, "cache-r1", "worker", 1),
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("cache-1.jsonl"),
+            r#"{"type":"assistant","message":{"model":"claude-opus-4-8","usage":{"input_tokens":10000,"output_tokens":0}}}"#,
+        )
+        .unwrap();
+
+        let from = "2031-01-15T00:00:00Z";
+        let to = "2031-01-16T00:00:00Z";
+        let uri = format!("/stats/performance?from={from}&to={to}");
+
+        async fn call(state: &Arc<AppState>, uri: &str) -> serde_json::Value {
+            let response = build_router(state.clone())
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            serde_json::from_slice(
+                &axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap(),
+            )
+            .unwrap()
+        }
+
+        let first = call(&state, &uri).await;
+        let after_first = stats_performance::recompute_count_for_test(from, to);
+        assert_eq!(
+            after_first, 1,
+            "first request must run the heavy fold exactly once"
+        );
+
+        let second = call(&state, &uri).await;
+        let after_second = stats_performance::recompute_count_for_test(from, to);
+        assert_eq!(
+            after_second, after_first,
+            "an identical repeat request must be served from the memo, not recomputed"
+        );
+        assert_eq!(
+            first, second,
+            "a memo hit must return byte-for-byte the same payload"
+        );
+        let refreshed = call(&state, &format!("{uri}&refresh=true")).await;
+        assert_eq!(
+            stats_performance::recompute_count_for_test(from, to),
+            after_second + 1,
+            "an explicit user refresh must bypass the memo"
+        );
+        assert_eq!(first, refreshed);
+        let worker_claude = first["by_pipeline"][0]["nodes"][0]["harnesses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|h| h["harness"] == "claude")
+            .unwrap();
+        assert_eq!(worker_claude["context"]["stats"]["mean"], 10000.0);
+    }
+
+    /// `GET /stats/performance` (#585 review follow-up, blocker 2) — the memo
+    /// key covers both halves the issue calls out: cohort **event** state (a
+    /// newly appended Run changes the answer on the very next identical
+    /// request) and **transcript/journal source** state (rewriting a session's
+    /// own file — same events, same session id, new content/mtime — does too).
+    /// Neither can silently serve a stale answer.
+    #[tokio::test]
+    async fn stats_performance_cache_is_invalidated_by_new_events_and_by_transcript_changes() {
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let mut state = test_state().await;
+        let home = state
+            .repo_root
+            .join(".pdo")
+            .join("test-stats-performance-cache-invalidation")
+            .join(uuid::Uuid::new_v4().to_string());
+        let _cleanup = Cleanup(home.clone());
+        std::fs::create_dir_all(&home).unwrap();
+        Arc::get_mut(&mut state).unwrap().sandbox_home_override = Some(home.clone());
+        let repo = state.repo_root.to_string_lossy().into_owned();
+
+        async fn insert_event(
+            db: &sqlx::SqlitePool,
+            run: &str,
+            ts: &str,
+            kind: &str,
+            node: Option<&str>,
+            iter: Option<i64>,
+            payload: serde_json::Value,
+        ) {
+            sqlx::query(
+                "INSERT INTO events (run_id, ts, kind, node_id, iter, payload) \
+                 VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(run)
+            .bind(ts)
+            .bind(kind)
+            .bind(node)
+            .bind(iter)
+            .bind(payload.to_string())
+            .execute(db)
+            .await
+            .unwrap();
+        }
+
+        insert_event(
+            &state.db,
+            "cache-i1",
+            "2031-02-15T09:00:00Z",
+            "run_started",
+            None,
+            None,
+            serde_json::json!({
+                "pipeline_id":"cip1","pipeline_name":"Cache Invalidation Pipeline","target_repo":repo,"harness":"claude",
+                "node_defs":[{"id":"worker","name":"Worker","node_type":"code-mutating"}]
+            }),
+        )
+        .await;
+        insert_event(
+            &state.db, "cache-i1", "2031-02-15T09:10:00Z", "node_started",
+            Some("worker"), Some(1),
+            serde_json::json!({"node_type":"code-mutating","harness":"claude","session_id":"cache-i-1"}),
+        )
+        .await;
+        insert_event(
+            &state.db,
+            "cache-i1",
+            "2031-02-15T09:20:00Z",
+            "node_completed",
+            Some("worker"),
+            Some(1),
+            serde_json::json!({}),
+        )
+        .await;
+
+        let claude_root = home.join(".claude").join("projects");
+        let dir = claude_root.join(stale_detector::encode_working_dir(
+            &worktree_ops::sub_worktree_path(&state.repo_root, "cache-i1", "worker", 1),
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("cache-i-1.jsonl"),
+            r#"{"type":"assistant","message":{"model":"claude-opus-4-8","usage":{"input_tokens":10000,"output_tokens":0}}}"#,
+        )
+        .unwrap();
+
+        let from = "2031-02-15T00:00:00Z";
+        let to = "2031-02-17T00:00:00Z";
+        let uri = format!("/stats/performance?from={from}&to={to}");
+
+        async fn call(state: &Arc<AppState>, uri: &str) -> serde_json::Value {
+            let response = build_router(state.clone())
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            serde_json::from_slice(
+                &axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap(),
+            )
+            .unwrap()
+        }
+
+        let first = call(&state, &uri).await;
+        assert_eq!(stats_performance::recompute_count_for_test(from, to), 1);
+        let worker_claude_first = first["by_pipeline"][0]["nodes"][0]["harnesses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|h| h["harness"] == "claude")
+            .unwrap()
+            .clone();
+        assert_eq!(worker_claude_first["context"]["measured"], 1);
+        assert_eq!(worker_claude_first["context"]["stats"]["mean"], 10000.0);
+
+        // --- (a) cohort event state: a second Run appears in the same window.
+        insert_event(
+            &state.db,
+            "cache-i2",
+            "2031-02-16T09:00:00Z",
+            "run_started",
+            None,
+            None,
+            serde_json::json!({
+                "pipeline_id":"cip1","pipeline_name":"Cache Invalidation Pipeline","target_repo":repo,"harness":"claude",
+                "node_defs":[{"id":"worker","name":"Worker","node_type":"code-mutating"}]
+            }),
+        )
+        .await;
+        insert_event(
+            &state.db, "cache-i2", "2031-02-16T09:10:00Z", "node_started",
+            Some("worker"), Some(1),
+            serde_json::json!({"node_type":"code-mutating","harness":"claude","session_id":"cache-i-2"}),
+        )
+        .await;
+        insert_event(
+            &state.db,
+            "cache-i2",
+            "2031-02-16T09:20:00Z",
+            "node_completed",
+            Some("worker"),
+            Some(1),
+            serde_json::json!({}),
+        )
+        .await;
+        let dir2 = claude_root.join(stale_detector::encode_working_dir(
+            &worktree_ops::sub_worktree_path(&state.repo_root, "cache-i2", "worker", 1),
+        ));
+        std::fs::create_dir_all(&dir2).unwrap();
+        std::fs::write(
+            dir2.join("cache-i-2.jsonl"),
+            r#"{"type":"assistant","message":{"model":"claude-opus-4-8","usage":{"input_tokens":20000,"output_tokens":0}}}"#,
+        )
+        .unwrap();
+
+        let after_new_run = call(&state, &uri).await;
+        assert_eq!(
+            stats_performance::recompute_count_for_test(from, to),
+            2,
+            "a new Run in the same window must force a recompute"
+        );
+        let worker_claude_after_new_run = after_new_run["by_pipeline"][0]["nodes"][0]["harnesses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|h| h["harness"] == "claude")
+            .unwrap();
+        assert_eq!(
+            worker_claude_after_new_run["context"]["measured"], 2,
+            "the new Run's own Context observation must now be pooled: {after_new_run:#?}"
+        );
+
+        // --- (b) transcript/journal source state: rewrite the FIRST Run's own
+        // session file in place (no new event at all) with a different token
+        // count.
+        std::fs::write(
+            dir.join("cache-i-1.jsonl"),
+            r#"{"type":"assistant","message":{"model":"claude-opus-4-8","usage":{"input_tokens":99000,"output_tokens":0}}}"#,
+        )
+        .unwrap();
+
+        let after_transcript_rewrite = call(&state, &uri).await;
+        assert_eq!(
+            stats_performance::recompute_count_for_test(from, to),
+            3,
+            "rewriting a session's own transcript, with no new event, must still force a recompute"
+        );
+        let worker_claude_after_rewrite = after_transcript_rewrite["by_pipeline"][0]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["id"] == "worker")
+            .unwrap()["harnesses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|h| h["harness"] == "claude")
+            .unwrap()
+            .clone();
+        // Node-level rows sum over both Runs' own Worker iter-1 sessions; only
+        // cache-i1's was rewritten (10000 -> 99000), cache-i2's (20000) is
+        // unaffected — the mean must reflect the rewrite, not the stale value.
+        assert_eq!(worker_claude_after_rewrite["context"]["measured"], 2);
+        assert_eq!(
+            worker_claude_after_rewrite["context"]["stats"]["mean"],
+            (99000.0 + 20000.0) / 2.0
+        );
+    }
+
+    /// An empty cohort (no Runs in the window) is not an error — an empty
+    /// Performance payload, distinct from the source-wide-unreadable case below.
+    #[tokio::test]
+    async fn stats_performance_empty_cohort_is_not_an_error() {
+        let state = test_state().await;
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/stats/performance?from=2026-01-01T00:00:00Z&to=2026-01-02T00:00:00Z")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["harnesses"], serde_json::json!([]));
+        assert_eq!(body["by_pipeline"], serde_json::json!([]));
+        assert_eq!(body["infrastructure"], serde_json::json!([]));
+        assert_eq!(body["total"]["harnesses"], serde_json::json!([]));
+    }
+
+    /// A harness's whole transcript source existing but unreadable (permissions,
+    /// a corrupted mount) is a visible endpoint error — distinct from a single
+    /// unreadable session, which just degrades to a local absence reason.
+    #[tokio::test]
+    async fn stats_performance_source_wide_unreadable_is_a_visible_error() {
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::set_permissions(
+                    &self.0,
+                    std::os::unix::fs::PermissionsExt::from_mode(0o755),
+                );
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let mut state = test_state().await;
+        let home = state
+            .repo_root
+            .join(".pdo")
+            .join("test-stats-performance-unreadable")
+            .join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&home).unwrap();
+        Arc::get_mut(&mut state).unwrap().sandbox_home_override = Some(home.clone());
+        let repo = state.repo_root.to_string_lossy().into_owned();
+
+        sqlx::query(
+            "INSERT INTO events (run_id, ts, kind, node_id, iter, payload) VALUES \
+             ('perf-unreadable', '2026-07-15T09:00:00Z', 'run_started', NULL, NULL, ?)",
+        )
+        .bind(
+            serde_json::json!({
+                "pipeline_id":"p1","pipeline_name":"Loop","target_repo":repo,"harness":"claude",
+                "node_defs":[{"id":"worker","name":"Worker","node_type":"code-mutating"}]
+            })
+            .to_string(),
+        )
+        .execute(&state.db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO events (run_id, ts, kind, node_id, iter, payload) VALUES \
+             ('perf-unreadable', '2026-07-15T09:10:00Z', 'node_started', 'worker', 1, ?)",
+        )
+        .bind(
+            serde_json::json!({"node_type":"code-mutating","harness":"claude","session_id":"claude-1"})
+                .to_string(),
+        )
+        .execute(&state.db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO events (run_id, ts, kind, node_id, iter, payload) VALUES \
+             ('perf-unreadable', '2026-07-15T09:20:00Z', 'node_completed', 'worker', 1, '{}')",
+        )
+        .execute(&state.db)
+        .await
+        .unwrap();
+
+        let claude_root = home.join(".claude").join("projects");
+        std::fs::create_dir_all(&claude_root).unwrap();
+        std::fs::set_permissions(
+            &claude_root,
+            std::os::unix::fs::PermissionsExt::from_mode(0o000),
+        )
+        .unwrap();
+        let _cleanup = Cleanup(claude_root.clone());
+
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/stats/performance?from=2026-07-15T00:00:00Z&to=2026-07-16T00:00:00Z")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let message = body["error"].as_str().unwrap_or_default();
+        assert!(
+            message.contains("Claude"),
+            "the error must name the harness/source: {message}"
+        );
     }
 
     /// Like [`test_state`], but with an injected [`ServiceHealth`] so the

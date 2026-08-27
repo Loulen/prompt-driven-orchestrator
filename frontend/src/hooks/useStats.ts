@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { fetchStatsOverview, fetchStatsCost } from "../api";
-import type { StatsOverview, StatsCost } from "../types";
+import { fetchStatsOverview, fetchStatsCost, fetchStatsPerformance } from "../api";
+import type { StatsOverview, StatsCost, StatsPerformance } from "../types";
 
 /**
  * State for the Stats modal (#377, ADR-0029). Two-endpoint split by cost class:
@@ -28,17 +28,23 @@ export function useStats(
   to: string,
   bucket: string,
   costActive: boolean,
+  performanceActive: boolean,
   reloadKey: number = 0,
 ) {
   const [overview, setOverview] = useState<StatsOverview | null>(null);
   const [cost, setCost] = useState<StatsCost | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [costError, setCostError] = useState<string | null>(null);
+  const [performance, setPerformance] = useState<StatsPerformance | null>(null);
+  const [performanceError, setPerformanceError] = useState<string | null>(null);
   const [computedAt, setComputedAt] = useState<Date | null>(null);
   const [overviewReloadKey, setOverviewReloadKey] = useState(0);
   const [costReloadKey, setCostReloadKey] = useState(0);
+  const [performanceReloadKey, setPerformanceReloadKey] = useState(0);
   const costRequestKey = `${from}\u0000${to}\u0000${bucket}\u0000${reloadKey}`;
   const requestedCostKey = useRef<string | null>(null);
+  const performanceRequestKey = `${from}\u0000${to}\u0000${reloadKey}`;
+  const requestedPerformanceKey = useRef<string | null>(null);
 
   // Overview: eager on open + on every period change.
   useEffect(() => {
@@ -86,13 +92,37 @@ export function useStats(
       });
   }, [open, costActive, from, to, bucket, reloadKey, costRequestKey]);
 
+  useEffect(() => {
+    if (!open || !performanceActive) return;
+    if (requestedPerformanceKey.current === performanceRequestKey) return;
+    requestedPerformanceKey.current = performanceRequestKey;
+    fetchStatsPerformance(from, to, reloadKey > 0)
+      .then((data) => {
+        if (requestedPerformanceKey.current === performanceRequestKey) {
+          setPerformance(data);
+          setPerformanceError(null);
+          setComputedAt(new Date());
+          setPerformanceReloadKey(reloadKey);
+        }
+      })
+      .catch((e) => {
+        if (requestedPerformanceKey.current === performanceRequestKey) {
+          setPerformanceError(e instanceof Error ? e.message : String(e));
+          setPerformanceReloadKey(reloadKey);
+        }
+      });
+  }, [open, performanceActive, from, to, reloadKey, performanceRequestKey]);
+
   return {
     overview,
     cost,
     error,
     costError,
+    performance,
+    performanceError,
     computedAt,
     overviewReloadKey,
     costReloadKey,
+    performanceReloadKey,
   };
 }

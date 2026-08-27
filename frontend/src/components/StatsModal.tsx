@@ -26,6 +26,7 @@ const TABS: { id: StatsTab; label: string }[] = [
   { id: "sessions", label: "Sessions" },
   { id: "triggers", label: "Triggers" },
   { id: "cost", label: "Cost" },
+  { id: "performance", label: "Performance" },
 ];
 
 function utcDayStart(date: Date): string {
@@ -180,15 +181,19 @@ export default function StatsModal({ open, onClose }: Props) {
     cost,
     error,
     costError,
+    performance,
+    performanceError,
     computedAt,
     overviewReloadKey,
     costReloadKey,
+    performanceReloadKey,
   } = useStats(
     open,
     period.from,
     period.to,
     period.bucket,
     tab === "cost",
+    tab === "performance",
     reloadKey,
   );
 
@@ -213,7 +218,9 @@ export default function StatsModal({ open, onClose }: Props) {
   if (!open) return null;
 
   const refreshing =
-    overviewReloadKey !== reloadKey || (tab === "cost" && costReloadKey !== reloadKey);
+    overviewReloadKey !== reloadKey ||
+    (tab === "cost" && costReloadKey !== reloadKey) ||
+    (tab === "performance" && performanceReloadKey !== reloadKey);
 
   const refresh = () => {
     setReloadKey((value) => value + 1);
@@ -355,7 +362,14 @@ export default function StatsModal({ open, onClose }: Props) {
                 </div>
               }
             >
-              <StatsCharts tab={tab} overview={overview} cost={cost} costError={costError} />
+              <StatsCharts
+                tab={tab}
+                overview={overview}
+                cost={cost}
+                costError={costError}
+                performance={performance}
+                performanceError={performanceError}
+              />
             </Suspense>
           </main>
         </div>

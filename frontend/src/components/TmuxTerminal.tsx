@@ -5,13 +5,40 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 import { Maximize2, Minimize2, ExternalLink } from "lucide-react";
 import { Tooltip } from "./ui/tooltip";
-import { attachSession } from "../api";
+import { attachSession, fetchPane } from "../api";
+
+/** Which node iteration's frozen pane to read when the live session is gone (#617). */
+export interface PaneSource {
+  runId: string;
+  nodeId: string;
+  iter: number;
+}
 
 interface Props {
   session: string;
   expanded?: boolean;
   onExpand?: () => void;
   status?: string;
+  /** #617: where to read the post-mortem pane once the node's iteration is
+   *  terminal. Omit ⇒ live attach only (the Run shell has no node identity). */
+  paneSource?: PaneSource;
+}
+
+// A node iteration in one of these states has had its tmux session reaped on the
+// terminal transition (#205, the one-live-iteration invariant), so attaching a PTY
+// to it can only produce tmux's `can't find session:` on a dead socket. What
+// survives is the snapshot the daemon froze on the way out — and until #617 the UI
+// never asked for it, so the primary surface of every finished node was that error
+// string. The set mirrors the daemon's own `iter_is_terminal` in `node_pane`:
+// `interrupted` is absent from both, its session may still be alive.
+const REAPED_STATUSES = new Set(["completed", "failed", "stopped", "stale"]);
+
+// xterm writes raw bytes: a snapshot captured with `tmux capture-pane -pe` is
+// newline-separated, and a bare \n moves down without returning, so every line
+// would start where the previous one ended. Normalise to CRLF without doubling
+// the \r of a line that already carries one.
+function toTerminalNewlines(content: string): string {
+  return content.replace(/\r?\n/g, "\r\n");
 }
 
 // Send a resize message to the daemon, but only if the dimensions are valid.
@@ -31,17 +58,45 @@ function sendResize(ws: WebSocket, fitAddon: FitAddon): void {
   );
 }
 
+// What this terminal is showing. `probing` is the beat before the daemon has said
+// whether the reaped iteration left a snapshot behind; `live` is the PTY attach.
+type PaneMode = "probing" | "live" | "frozen";
+
 export default function TmuxTerminal({
   session,
   expanded = false,
   onExpand,
   status,
+  paneSource,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const [connected, setConnected] = useState(false);
+  const [frozen, setFrozen] = useState<{
+    content: string;
+    /** `false` ⇒ the daemon has no snapshot either; say so instead of pretending. */
+    preserved: boolean;
+  } | null>(null);
+
+  const reaped =
+    paneSource !== undefined &&
+    status !== undefined &&
+    REAPED_STATUSES.has(status);
+
+  // Decided **once per session identity**, not on every status change: a node that
+  // settles under the user's eyes keeps the live buffer it already has (the daemon
+  // may not even have frozen the snapshot yet), while a node opened after it
+  // settled reads the snapshot. A retry spawns a new iteration — a new session name
+  // — so the live path is re-entered there, which is what this re-decision is for.
+  const [mode, setMode] = useState<PaneMode>(reaped ? "probing" : "live");
+  const [decidedFor, setDecidedFor] = useState(session);
+  if (decidedFor !== session) {
+    setDecidedFor(session);
+    setMode(reaped ? "probing" : "live");
+    setFrozen(null);
+  }
 
   const handleDetach = useCallback(async () => {
     try {
@@ -51,12 +106,58 @@ export default function TmuxTerminal({
     }
   }, [session]);
 
+  // #617: read the frozen pane before opening any socket. `GET …/pane` answers
+  // `live` when the session is somehow still up (then we attach as usual) and
+  // `snapshot` for the reaped-and-frozen case this exists for. It never resurrects
+  // a terminal iteration, so asking is free of side effects — which is why the
+  // probe is gated on a reaped status rather than run for every node.
+  // Deps are the three primitives, not the `paneSource` object: the detail panel
+  // re-renders on every I/O poll tick, so an object identity here would cancel and
+  // restart the probe once a second and never land.
+  const paneRunId = paneSource?.runId;
+  const paneNodeId = paneSource?.nodeId;
+  const paneIter = paneSource?.iter;
+  useEffect(() => {
+    if (mode !== "probing") return;
+    if (paneRunId === undefined || paneNodeId === undefined || paneIter === undefined) {
+      return;
+    }
+    let cancelled = false;
+    fetchPane(paneRunId, paneNodeId, paneIter)
+      .then((pane) => {
+        if (cancelled) return;
+        if (pane.source === "live" || pane.source === "resumed") {
+          setMode("live");
+          return;
+        }
+        setFrozen({
+          content: pane.content,
+          preserved: pane.source === "snapshot",
+        });
+        setMode("frozen");
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setFrozen({ content: "Pane unavailable.", preserved: false });
+        setMode("frozen");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, paneRunId, paneNodeId, paneIter]);
+
   useEffect(() => {
     if (!containerRef.current) return;
+    if (mode === "probing") return;
     const container = containerRef.current;
 
+    const isFrozen = mode === "frozen";
+
     const term = new Terminal({
-      cursorBlink: true,
+      // A frozen pane has no cursor to blink — the session it belonged to is gone.
+      cursorBlink: !isFrozen,
+      // Nothing to type into: the socket is not opened at all below.
+      disableStdin: isFrozen,
       fontSize: 11,
       fontFamily: "'Geist Mono Variable', monospace",
       theme: {
@@ -97,19 +198,28 @@ export default function TmuxTerminal({
     terminalRef.current = term;
     fitAddonRef.current = fitAddon;
 
-    // WebSocket connection
+    // #617: a frozen pane opens **no** socket. Attaching a PTY to a session the
+    // daemon already reaped is what put tmux's `can't find session:` on the primary
+    // surface of every finished node; the snapshot is written straight into the same
+    // xterm instead, so scrollback, colours and selection all keep working.
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const wsUrl = `${protocol}//${window.location.host}/sessions/${encodeURIComponent(session)}/pty`;
-    const ws = new WebSocket(wsUrl);
-    ws.binaryType = "arraybuffer";
+    const ws = isFrozen ? null : new WebSocket(wsUrl);
+    if (ws) {
+      ws.binaryType = "arraybuffer";
+    }
     wsRef.current = ws;
 
-    ws.addEventListener("open", () => {
+    if (isFrozen) {
+      term.write(toTerminalNewlines(frozen?.content ?? ""));
+    }
+
+    ws?.addEventListener("open", () => {
       setConnected(true);
       sendResize(ws, fitAddon);
     });
 
-    ws.addEventListener("message", (event) => {
+    ws?.addEventListener("message", (event) => {
       if (event.data instanceof ArrayBuffer) {
         term.write(new Uint8Array(event.data));
       } else if (typeof event.data === "string") {
@@ -117,17 +227,17 @@ export default function TmuxTerminal({
       }
     });
 
-    ws.addEventListener("close", () => {
+    ws?.addEventListener("close", () => {
       setConnected(false);
     });
 
-    ws.addEventListener("error", () => {
+    ws?.addEventListener("error", () => {
       setConnected(false);
     });
 
     // Forward user input to WS
     const inputDisposable = term.onData((data) => {
-      if (ws.readyState === WebSocket.OPEN) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
         const encoder = new TextEncoder();
         ws.send(encoder.encode(data));
       }
@@ -135,7 +245,7 @@ export default function TmuxTerminal({
 
     // Handle binary input (for paste etc.)
     const binaryDisposable = term.onBinary((data) => {
-      if (ws.readyState === WebSocket.OPEN) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
         const buffer = new Uint8Array(data.length);
         for (let i = 0; i < data.length; i++) {
           buffer[i] = data.charCodeAt(i);
@@ -174,7 +284,7 @@ export default function TmuxTerminal({
     // Resize observer
     const resizeObserver = new ResizeObserver(() => {
       fitAddon.fit();
-      sendResize(ws, fitAddon);
+      if (ws) sendResize(ws, fitAddon);
     });
     resizeObserver.observe(container);
 
@@ -183,20 +293,28 @@ export default function TmuxTerminal({
       resizeObserver.disconnect();
       inputDisposable.dispose();
       binaryDisposable.dispose();
-      ws.close();
+      ws?.close();
       term.dispose();
       terminalRef.current = null;
       fitAddonRef.current = null;
       wsRef.current = null;
     };
-  }, [session]);
+  }, [session, mode, frozen]);
 
   const isActive =
     status === "running" || status === "awaiting_user" || status === "stale";
 
   let dotClass: string;
   let statusLabel: string;
-  if (!connected) {
+  if (mode === "probing") {
+    dotClass = "bg-fg-5";
+    statusLabel = "reading pane…";
+  } else if (mode === "frozen") {
+    // Named, not dressed up as a connection: what is on screen is the pane PDO
+    // froze when it reaped the session, and the reap is the invariant, not a fault.
+    dotClass = "bg-fg-5";
+    statusLabel = frozen?.preserved ? "snapshot · session reaped" : "no pane kept";
+  } else if (!connected) {
     dotClass = "bg-fg-5";
     statusLabel = "disconnected";
   } else if (isActive) {
@@ -252,15 +370,19 @@ export default function TmuxTerminal({
             </button>
           </Tooltip>
         )}
-        <Tooltip content="Detach to OS terminal">
-          <button
-            onClick={handleDetach}
-            className="flex h-5 w-5 cursor-pointer items-center justify-center rounded text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg"
-            data-testid="term-detach"
-          >
-            <ExternalLink size={12} />
-          </button>
-        </Tooltip>
+        {/* No session to attach to once the pane is frozen — offering the button
+            would be an action that can only fail. */}
+        {mode !== "frozen" && (
+          <Tooltip content="Detach to OS terminal">
+            <button
+              onClick={handleDetach}
+              className="flex h-5 w-5 cursor-pointer items-center justify-center rounded text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg"
+              data-testid="term-detach"
+            >
+              <ExternalLink size={12} />
+            </button>
+          </Tooltip>
+        )}
       </div>
 
       {/* Terminal container */}

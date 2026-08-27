@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use pdo_daemon::{
-    run_complete, run_daemon, run_fail, run_migrate, run_reap, run_service, run_skip, Cli, Commands,
+    run_complete, run_daemon, run_docs, run_fail, run_migrate, run_reap, run_service, run_skip,
+    Cli, Commands,
 };
 use std::process::ExitCode;
 
@@ -53,6 +54,9 @@ fn main() -> ExitCode {
             terminal_ttl_hours,
             budget_secs,
         } => run_reap(count, dry_run, ttl_hours, terminal_ttl_hours, budget_secs),
+        // Blocking one-shot (#617): pure rendering of the generated docs, plus at
+        // most one file rewrite under `--write`.
+        Commands::Docs { action } => run_docs(action),
     };
 
     if let Err(e) = res {

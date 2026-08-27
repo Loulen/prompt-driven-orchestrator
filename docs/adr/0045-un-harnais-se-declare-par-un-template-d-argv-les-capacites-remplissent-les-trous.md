@@ -4,6 +4,13 @@
 > Vocabulaire : CONTEXT.md §*Harnais agentique*. Précédence et conditionnement du modèle → **ADR-0046**.
 > **Amende ADR-0032** : « la mort de session est le seul verdict de mort » devient un **critère
 > d'éligibilité** d'un harnais, pas seulement un constat sur `claude`.
+>
+> **Amendé par ADR-0051** : une capacité n'est pas une garde qui décide *si* on appelle
+> l'implémentation de `claude`, c'est le point où l'implémentation du harnais résolu est **choisie** ;
+> `None` devient une valeur explicite.
+> **Amendé par ADR-0054** : « PDO ne valide pas un descripteur » gagne une exception, unique et
+> nommée — le template de lancement doit faire du binaire déclaré le leader du pane, faute de quoi le
+> critère d'éligibilité posé ici est silencieusement faux.
 
 ## Contexte
 

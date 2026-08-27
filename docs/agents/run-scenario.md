@@ -53,8 +53,11 @@ The point of this layer is that the UI alone doesn't tell the full story — ver
 
 - **tmux sessions**: `tmux capture-pane -p -t pdo-<run_id>-<node_id>-iter-<n>`. The session-name
   pattern is fixed; confirm it shows the expected program (e.g. `claude` running, not a bare shell
-  that exited). A first launch in a fresh worktree lands on the "Quick safety check" trust dialog —
-  confirm it with `tmux send-keys -t <session> Enter`.
+  that exited). A first `claude` launch in a fresh worktree lands on the "Quick safety check" trust
+  dialog — confirm it with `tmux send-keys -t <session> Enter`. `copilot`'s equivalent is **not** a
+  step to drive: approve the target repository's root once, outside the journey, and it cascades to
+  every node sub-worktree (README § Prerequisites). A `copilot` pane parked on it means the
+  prerequisite was never met.
 - **Filesystem** (read with `cat` / Read):
   - Pipelines: `.pdo/pipelines/<name>.yaml` and the sidecar `.pdo/pipelines/<name>.prompts/<node>.md`
   - Run artifacts: `.pdo/runs/<run_id>/worktree/.pdo/artifacts/...`

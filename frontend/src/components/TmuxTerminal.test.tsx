@@ -131,8 +131,11 @@ vi.mock("@xterm/addon-web-links", () => ({
 
 vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
 
+const fetchPaneMock = vi.fn();
+
 vi.mock("../api", () => ({
   attachSession: vi.fn(),
+  fetchPane: (...args: unknown[]) => fetchPaneMock(...args),
 }));
 
 vi.mock("./ui/tooltip", () => ({
@@ -147,6 +150,7 @@ describe("TmuxTerminal", () => {
     mockTerminalCalls.length = 0;
     mockTerminalInstances.length = 0;
     proposeDimensionsImpl.current = () => ({ cols: 80, rows: 24 });
+    fetchPaneMock.mockReset();
   });
 
   afterEach(() => {
@@ -464,5 +468,187 @@ describe("TmuxTerminal", () => {
     expect(screen.getByTestId("tmux-terminal").className).toContain("flex-1");
     rerender(<TmuxTerminal session="test-session" expanded />);
     expect(screen.getByTestId("tmux-terminal").className).toContain("flex-1");
+  });
+
+  // #617 — the frozen pane on the primary surface. Before this, a finished node's
+  // terminal opened a PTY onto a session the daemon had already reaped, so the
+  // browser showed `disconnected` over tmux's `can't find session:` — while
+  // `GET …/pane` was serving the snapshot the whole time, to nobody.
+  describe("frozen pane of a reaped iteration", () => {
+    const paneSource = { runId: "run-1", nodeId: "cop", iter: 1 };
+
+    function frozenPane(content: string) {
+      fetchPaneMock.mockResolvedValue({
+        content,
+        session_name: "pdo-run-1-cop-iter-1",
+        resumed: false,
+        stale: false,
+        source: "snapshot",
+      });
+    }
+
+    it("reads the pane instead of attaching, for a completed node", async () => {
+      frozenPane("❯ ");
+      render(
+        <TmuxTerminal
+          session="pdo-run-1-cop-iter-1"
+          status="completed"
+          paneSource={paneSource}
+        />,
+      );
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(fetchPaneMock).toHaveBeenCalledWith("run-1", "cop", 1);
+      expect(wsInstances).toHaveLength(0);
+    });
+
+    it("writes the snapshot into the terminal, newlines translated for xterm", async () => {
+      frozenPane("first line\nsecond line\n");
+      render(
+        <TmuxTerminal
+          session="pdo-run-1-cop-iter-1"
+          status="completed"
+          paneSource={paneSource}
+        />,
+      );
+      await new Promise((r) => setTimeout(r, 10));
+
+      const written = mockTerminalInstances[0].write.mock.calls
+        .map((c) => c[0])
+        .join("");
+      // A bare \n moves down without returning: every line would start where the
+      // previous one ended.
+      expect(written).toBe("first line\r\nsecond line\r\n");
+    });
+
+    it("says the pane is a snapshot and offers no detach", async () => {
+      frozenPane("❯ ");
+      render(
+        <TmuxTerminal
+          session="pdo-run-1-cop-iter-1"
+          status="completed"
+          paneSource={paneSource}
+        />,
+      );
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(screen.getByText("snapshot · session reaped")).toBeInTheDocument();
+      // Attaching an OS terminal to a reaped session can only fail.
+      expect(screen.queryByTestId("term-detach")).toBeNull();
+    });
+
+    it("says so plainly when no pane was kept", async () => {
+      fetchPaneMock.mockResolvedValue({
+        content: "Session no longer available",
+        session_name: "pdo-run-1-cop-iter-1",
+        resumed: false,
+        stale: false,
+        source: "unavailable",
+      });
+      render(
+        <TmuxTerminal
+          session="pdo-run-1-cop-iter-1"
+          status="completed"
+          paneSource={paneSource}
+        />,
+      );
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(screen.getByText("no pane kept")).toBeInTheDocument();
+      expect(wsInstances).toHaveLength(0);
+    });
+
+    it("attaches after all when the daemon reports the session still live", async () => {
+      fetchPaneMock.mockResolvedValue({
+        content: "still here",
+        session_name: "pdo-run-1-cop-iter-1",
+        resumed: false,
+        stale: false,
+        source: "live",
+      });
+      render(
+        <TmuxTerminal
+          session="pdo-run-1-cop-iter-1"
+          status="stale"
+          paneSource={paneSource}
+        />,
+      );
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(wsInstances).toHaveLength(1);
+      expect(screen.getByTestId("term-detach")).toBeInTheDocument();
+    });
+
+    it("never probes a live node — the live path is untouched", async () => {
+      render(
+        <TmuxTerminal
+          session="pdo-run-1-cop-iter-1"
+          status="running"
+          paneSource={paneSource}
+        />,
+      );
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(fetchPaneMock).not.toHaveBeenCalled();
+      expect(wsInstances).toHaveLength(1);
+    });
+
+    it("never probes without a pane source — the Run shell has no node identity", async () => {
+      render(<TmuxTerminal session="pdo-run-1-shell" status="completed" />);
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(fetchPaneMock).not.toHaveBeenCalled();
+      expect(wsInstances).toHaveLength(1);
+    });
+
+    it("re-enters the live path when a retry gives the node a new session", async () => {
+      frozenPane("the old conversation");
+      const { rerender } = render(
+        <TmuxTerminal
+          session="pdo-run-1-cop-iter-1"
+          status="completed"
+          paneSource={paneSource}
+        />,
+      );
+      await new Promise((r) => setTimeout(r, 10));
+      expect(wsInstances).toHaveLength(0);
+
+      // Retry spawns iteration 2 — a new session name, and a live one.
+      rerender(
+        <TmuxTerminal
+          session="pdo-run-1-cop-iter-2"
+          status="running"
+          paneSource={{ runId: "run-1", nodeId: "cop", iter: 2 }}
+        />,
+      );
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(wsInstances).toHaveLength(1);
+      expect(wsInstances[0].url).toContain("/sessions/pdo-run-1-cop-iter-2/pty");
+    });
+
+    it("probes once, not once per parent render tick", async () => {
+      // The detail panel re-renders on every I/O poll. A probe keyed on the
+      // `paneSource` object identity would cancel and restart forever.
+      frozenPane("❯ ");
+      const { rerender } = render(
+        <TmuxTerminal
+          session="pdo-run-1-cop-iter-1"
+          status="completed"
+          paneSource={{ runId: "run-1", nodeId: "cop", iter: 1 }}
+        />,
+      );
+      for (let i = 0; i < 3; i++) {
+        rerender(
+          <TmuxTerminal
+            session="pdo-run-1-cop-iter-1"
+            status="completed"
+            paneSource={{ runId: "run-1", nodeId: "cop", iter: 1 }}
+          />,
+        );
+        await new Promise((r) => setTimeout(r, 2));
+      }
+      expect(fetchPaneMock).toHaveBeenCalledTimes(1);
+    });
   });
 });

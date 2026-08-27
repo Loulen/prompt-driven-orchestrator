@@ -9,9 +9,7 @@
 //! process-global `PDO_HARNESS_PROBE_PATH` (a `OnceLock`) is set once, before any
 //! probe runs, pointing at a tempdir holding a self-contained fake binary.
 
-mod common;
-
-use common::TestDaemon;
+use crate::common::TestDaemon;
 
 /// Write a self-contained fake harness binary that answers `--version` and prints an
 /// enumerated `--help`. `printf` is a `/bin/sh` builtin, so it runs even though the

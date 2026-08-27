@@ -13,6 +13,9 @@ export default defineConfig({
   timeout: 30_000,
   expect: { timeout: 5_000 },
   fullyParallel: false,
+  // Every spec shares one real daemon and one SQLite database. Multiple workers
+  // race on global runs, triggers, and pipeline watcher events.
+  workers: 1,
   forbidOnly: !!process.env.CI,
   // Layer 3b drives a real daemon + tmux + browser, so a test can fail on a
   // transient (a slow session spawn, an SSE lag). Retry in CI to keep the gate
@@ -31,7 +34,11 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: `cargo run -p pdo-daemon --quiet -- daemon --port ${PORT}`,
+    // This daemon owns a port-scoped tmux socket and must exercise production
+    // recovery even when Playwright itself runs inside a PDO node.
+    command:
+      `env -u PDO_NODE_ID -u PDO_DAEMON_NO_CLEANUP ` +
+      `cargo run -p pdo-daemon --quiet -- daemon --port ${PORT}`,
     cwd: "..",
     url: `http://${HOST}:${PORT}/runs`,
     timeout: 180_000,

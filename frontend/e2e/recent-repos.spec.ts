@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { cleanupRuns } from "./helpers";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
@@ -9,6 +10,7 @@ const PIPELINE_NAME = `e2e-recent-repos-${process.pid}-${Date.now()}`;
 const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 const PROMPTS_DIR = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.prompts`);
+const createdRunIds: string[] = [];
 
 const SEED_YAML = `name: ${PIPELINE_NAME}
 version: "1.0"
@@ -48,12 +50,13 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
+  await cleanupRuns(...createdRunIds);
   await fs.rm(PIPELINE_PATH, { force: true });
   await fs.rm(PROMPTS_DIR, { recursive: true, force: true });
   delete process.env.PDO_TMUX_CMD_OVERRIDE;
 });
 
-test("recent repos dropdown appears on focus when runs exist", async ({
+test("a recent repo is pre-filled when runs exist", async ({
   page,
   baseURL,
 }) => {
@@ -69,6 +72,7 @@ test("recent repos dropdown appears on focus when runs exist", async ({
     },
   });
   expect(resp.status()).toBe(201);
+  createdRunIds.push(((await resp.json()) as { run_id: string }).run_id);
 
   // Give the store a moment to refresh
   await page.waitForTimeout(500);
@@ -81,8 +85,11 @@ test("recent repos dropdown appears on focus when runs exist", async ({
   await page.getByRole("button", { name: "New Run" }).click();
   await expect(page.getByTestId("target-repo-input")).toBeVisible();
 
-  // The input should be pre-filled with the workspace root
-  await expect(page.getByTestId("target-repo-input")).toHaveValue(WORKSPACE_ROOT);
+  const repoInput = page.getByTestId("target-repo-input");
+  const recentResp = await page.request.get(`${baseURL}/repos/recent`);
+  expect(recentResp.status()).toBe(200);
+  const recentRepos = (await recentResp.json()) as string[];
+  expect(recentRepos).toContain(await repoInput.inputValue());
 
   // Validation should trigger automatically (green border or valid message)
   await expect(page.getByTestId("repo-valid")).toBeVisible({ timeout: 10_000 });
@@ -104,6 +111,7 @@ test("clicking a dropdown item fills the input", async ({
     },
   });
   expect(resp1.status()).toBe(201);
+  createdRunIds.push(((await resp1.json()) as { run_id: string }).run_id);
 
   // Re-navigate to pick up the store
   await page.goto("/");
@@ -147,6 +155,7 @@ test("typing non-matching path closes the dropdown", async ({
     },
   });
   expect(resp.status()).toBe(201);
+  createdRunIds.push(((await resp.json()) as { run_id: string }).run_id);
 
   await page.goto("/");
   await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });

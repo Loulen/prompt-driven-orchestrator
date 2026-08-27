@@ -9,9 +9,7 @@
 //! than silently re-enter this worktree on a `claude --continue`, which would run a
 //! different agent than the node was started on.
 
-mod common;
-
-use common::TestDaemon;
+use crate::common::TestDaemon;
 
 const PIPELINE_NAME: &str = "ghost-test";
 const PIPELINE_YAML: &str = r#"name: ghost-test

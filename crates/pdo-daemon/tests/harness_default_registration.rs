@@ -5,9 +5,7 @@
 //! Layer-3, through `PUT /settings`. An embedded name (`claude`, `copilot`)
 //! resolves and is accepted; an unknown name is a `400` that names the knobs.
 
-mod common;
-
-use common::TestDaemon;
+use crate::common::TestDaemon;
 
 /// A minimal repo so the daemon boots; no run is created here.
 fn seed() -> impl FnOnce(&std::path::Path) -> anyhow::Result<()> {

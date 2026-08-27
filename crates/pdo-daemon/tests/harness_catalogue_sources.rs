@@ -16,9 +16,7 @@
 //! (a `OnceLock`) and `PDO_CATALOGUE_VERSION_TTL_MS`, which two concurrent tests
 //! could not share safely.
 
-mod common;
-
-use common::TestDaemon;
+use crate::common::TestDaemon;
 
 /// The completion script copilot generates: a `case` on the previous word, one arm
 /// per value-taking flag, choices in a `compgen -W` list. Verbatim shape, abridged

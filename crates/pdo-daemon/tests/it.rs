@@ -38,8 +38,20 @@ mod guard_dry_run;
 #[path = "guard_dry_run_timeout.rs"]
 mod guard_dry_run_timeout;
 
+#[path = "harness_catalogue_served.rs"]
+mod harness_catalogue_served;
+
+#[path = "harness_catalogue_sources.rs"]
+mod harness_catalogue_sources;
+
+#[path = "harness_default_registration.rs"]
+mod harness_default_registration;
+
 #[path = "harness_freeze_resume.rs"]
 mod harness_freeze_resume;
+
+#[path = "harness_resume_frozen_gone.rs"]
+mod harness_resume_frozen_gone;
 
 #[path = "hot_reload_conflict.rs"]
 mod hot_reload_conflict;
@@ -145,6 +157,9 @@ mod start_node;
 
 #[path = "sub_worktree_survive.rs"]
 mod sub_worktree_survive;
+
+#[path = "support_table_committed.rs"]
+mod support_table_committed;
 
 #[path = "switch_when_validation.rs"]
 mod switch_when_validation;

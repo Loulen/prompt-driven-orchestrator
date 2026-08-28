@@ -316,9 +316,7 @@ async fn focus_round_trips_and_resolves_the_absolute_path() {
 
     let focus = get_focus(&daemon).await;
     assert_eq!(focus["pipeline_id"], serde_json::json!("alpha"));
-    assert_eq!(focus["scope"], serde_json::json!("repo"));
-    // The CLIENT never sends a path — the daemon resolves it, because the two
-    // meanings of "scope" (edit tab vs library store) do not coincide.
+    assert!(focus.get("scope").is_none());
     assert_eq!(
         focus["path"],
         serde_json::json!(path.to_string_lossy()),
@@ -348,18 +346,18 @@ async fn focus_accepts_an_unsaved_template_with_a_null_path() {
 }
 
 #[tokio::test]
-async fn focus_rejects_an_unknown_scope() {
+async fn focus_ignores_the_retired_scope_field() {
     let daemon = TestDaemon::spawn_nested(|_| Ok(())).await.unwrap();
     let resp = put_focus(
         &daemon,
         serde_json::json!({"pipeline_id": "alpha", "scope": "bogus"}),
     )
     .await;
-    assert_eq!(resp.status(), 400, "an unknown scope is a 400");
+    assert_eq!(resp.status(), 200, "scope no longer selects a registry");
     assert_eq!(
         get_focus(&daemon).await["pipeline_id"],
-        serde_json::json!(null),
-        "a rejected declaration stores nothing"
+        serde_json::json!("alpha"),
+        "the instance pipeline identity is retained"
     );
 }
 
@@ -385,7 +383,7 @@ async fn a_null_pipeline_id_clears_the_focus() {
 }
 
 /// `?format=text` is what the hook injects verbatim into the assistant's context.
-/// It must name the pipeline, the scope, the absolute path — and the one endpoint
+/// It must name the pipeline, the absolute path — and the one endpoint
 /// that writes where the focus points. Naming the save endpoint here is not
 /// decoration: the assistant reads this line before every message, and pointing it
 /// at `POST /library/pipelines` is what made it write a duplicate into the wrong
@@ -411,7 +409,10 @@ async fn focus_renders_a_plain_line_for_the_hook() {
     .unwrap();
 
     assert!(text.contains("alpha"), "names the pipeline: {text}");
-    assert!(text.contains("repo"), "names the scope: {text}");
+    assert!(
+        !text.contains("scope `"),
+        "does not expose a retired scope: {text}"
+    );
     assert!(
         text.contains(&*path.to_string_lossy()),
         "names the absolute path: {text}"
@@ -420,10 +421,7 @@ async fn focus_renders_a_plain_line_for_the_hook() {
         text.contains("/sessions/libassist/save"),
         "names the one endpoint that writes where the focus points: {text}"
     );
-    assert!(
-        text.contains("/library/pipelines"),
-        "and names the endpoint NOT to save through, by name: {text}"
-    );
+    assert!(!text.contains("/library/pipelines"));
 }
 
 /// Declaring a focus must never *start* the assistant (ADR-0048 ruled auto-spawn
@@ -599,7 +597,7 @@ async fn save_writes_the_focused_template_in_place() {
     assert_eq!(resp.status(), 200, "saving the open template succeeds");
     let body = resp.json::<serde_json::Value>().await.unwrap();
     assert_eq!(body["id"], serde_json::json!("alpha"));
-    assert_eq!(body["scope"], serde_json::json!("repo"));
+    assert!(body.get("scope").is_none());
     assert_eq!(body["path"], serde_json::json!(path.to_string_lossy()));
 
     let on_disk = std::fs::read_to_string(&path).unwrap();
@@ -646,12 +644,8 @@ async fn save_writes_node_prompts_beside_the_template() {
     );
 }
 
-/// A `library`-scoped tab edits the library store, and the save must follow it
-/// there — the symmetric half of the property above. `get_scope` reads the entry's
-/// *current* store off disk rather than mapping the edit tab's word onto the
-/// library enum, which is the mapping that produced the bug in the first place.
 #[tokio::test]
-async fn save_honours_a_library_focus() {
+async fn save_ignores_a_retired_library_scope() {
     let daemon = TestDaemon::spawn_nested(|_| Ok(())).await.unwrap();
     let library_dir = daemon
         .repo_root()
@@ -673,17 +667,20 @@ async fn save_honours_a_library_focus() {
 
     assert_eq!(
         std::fs::read_to_string(&library_path).unwrap(),
-        SAVED_YAML,
-        "a library-scoped focus writes into the library store"
+        "name: seeded\nnodes: []\nedges: []\n",
+        "the legacy library is not a write target"
     );
-    assert!(
-        !daemon
-            .repo_root()
-            .join(".pdo")
-            .join("pipelines")
-            .join("alpha.yaml")
-            .exists(),
-        "and does not leak a copy into the repo store"
+    assert_eq!(
+        std::fs::read_to_string(
+            daemon
+                .repo_root()
+                .join(".pdo")
+                .join("pipelines")
+                .join("alpha.yaml")
+        )
+        .unwrap(),
+        SAVED_YAML,
+        "the instance registry receives the save"
     );
 }
 

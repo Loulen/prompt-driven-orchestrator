@@ -70,19 +70,6 @@ export function useLaunchTargets(open: boolean) {
     loadPipelines();
   }, [loadPipelines]);
 
-  const repoPipelines = useMemo(
-    () => pipelines.filter((p) => p.scope === "repo"),
-    [pipelines],
-  );
-  const libraryPipelines = useMemo(
-    () => pipelines.filter((p) => p.scope === "library"),
-    [pipelines],
-  );
-  const userPipelines = useMemo(
-    () => pipelines.filter((p) => p.scope === "user"),
-    [pipelines],
-  );
-
   const selectedPipeline = useMemo(
     () => pipelines.find((p) => p.id === selectedPipelineId),
     [pipelines, selectedPipelineId],
@@ -90,9 +77,6 @@ export function useLaunchTargets(open: boolean) {
 
   return {
     pipelines,
-    repoPipelines,
-    libraryPipelines,
-    userPipelines,
     selectedPipeline,
     selectedPipelineId,
     setSelectedPipelineId,

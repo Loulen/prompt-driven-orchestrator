@@ -74,7 +74,7 @@ export function useLibassistLifecycle(
     hasEdited.current = true;
 
     const declare = () => {
-      void putLibassistFocus(target.id, target.scope).catch(() => {});
+      void putLibassistFocus(target.id).catch(() => {});
     };
     declare();
     const timer = setInterval(declare, FOCUS_HEARTBEAT_MS);

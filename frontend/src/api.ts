@@ -548,16 +548,12 @@ export function closeLibraryAssistant(
  *
  * Two jobs in one call: it is how the assistant learns the open pipeline on its
  * next message, and it is how the daemon's reaper knows a human is still editing
- * even when no terminal is attached. Only `{id, scope}` — the daemon resolves the
- * file path, because "scope" does not mean the same thing on an edit tab as it
- * does in the library store.
+ * even when no terminal is attached. The daemon resolves the instance-owned
+ * pipeline path from its id.
  */
-export function putLibassistFocus(
-  pipelineId: string | null,
-  scope?: string,
-): Promise<unknown> {
+export function putLibassistFocus(pipelineId: string | null): Promise<unknown> {
   return request("PUT", "/sessions/libassist/focus", {
-    body: { pipeline_id: pipelineId, scope },
+    body: { pipeline_id: pipelineId },
     label: "declare assistant focus",
   });
 }
@@ -1340,14 +1336,11 @@ export function saveRunPipeline(
 // repo-then-user, so a `library` (or `user`) entry colliding with a same-named
 // repo pipeline routes to the wrong file (#216). `repo`/`user`/`run` map to the
 // historical default and are only forwarded when explicitly known.
-function scopeQuery(scope?: string): string {
-  return scope && scope !== "run" ? `?scope=${encodeURIComponent(scope)}` : "";
-}
-
 export function fetchPipeline(id: string, scope?: string): Promise<PipelineDetail> {
+  void scope;
   return request<PipelineDetail>(
     "GET",
-    `/pipelines/${encodeURIComponent(id)}${scopeQuery(scope)}`,
+    `/pipelines/${encodeURIComponent(id)}`,
     { label: `GET /pipelines/${id}` },
   ).then(foldPipelineDetail);
 }
@@ -1358,22 +1351,55 @@ export function savePipeline(
   prompts: Record<string, string>,
   scope?: string,
 ): Promise<void> {
+  void scope;
   return request<void>(
     "PUT",
-    `/pipelines/${encodeURIComponent(id)}${scopeQuery(scope)}`,
+    `/pipelines/${encodeURIComponent(id)}`,
     { body: { yaml, prompts }, responseMode: "void", label: `PUT /pipelines/${id}` },
   );
 }
 
 export function createPipeline(
   name: string,
-  scope: string,
+  scope?: string,
 ): Promise<{ id: string; scope: string; path: string }> {
+  void scope;
   return request<{ id: string; scope: string; path: string }>(
     "POST",
     "/pipelines",
-    { body: { name, scope }, label: "POST /pipelines" },
+    { body: { name }, label: "POST /pipelines" },
   );
+}
+
+export function duplicatePipeline(
+  id: string,
+): Promise<{ id: string; scope: string; path: string }> {
+  return request("POST", `/pipelines/${encodeURIComponent(id)}/duplicate`, {
+    label: `POST /pipelines/${id}/duplicate`,
+  });
+}
+
+export function fetchPipelineDocument(id: string): Promise<string> {
+  return request("GET", `/pipelines/${encodeURIComponent(id)}/document`, {
+    responseMode: "text",
+    label: `GET /pipelines/${id}/document`,
+  });
+}
+
+export function fetchRunPipelineDocument(runId: string): Promise<string> {
+  return request("GET", `/runs/${encodeURIComponent(runId)}/pipeline/document`, {
+    responseMode: "text",
+    label: `GET /runs/${runId}/pipeline/document`,
+  });
+}
+
+export function importPipelineDocument(
+  document: string,
+): Promise<{ id: string; scope: string; path: string }> {
+  return request("POST", "/pipelines/import", {
+    body: { document },
+    label: "POST /pipelines/import",
+  });
 }
 
 // --- Library API ---
@@ -1508,12 +1534,13 @@ export function parseNodeYaml(yaml: string): Promise<ParseNodeResult> {
 }
 
 export async function deletePipeline(id: string, scope?: string): Promise<void> {
+  void scope;
   // Status-inspecting: a 409 (active runs) carries the reason in the body, so
   // raw mode keeps the bespoke branch (incl. the deliberately UNGUARDED 409
   // json). The old `{ conflict }` field had no reader — folded into status 409.
   const resp = await request<Response>(
     "DELETE",
-    `/pipelines/${encodeURIComponent(id)}${scopeQuery(scope)}`,
+    `/pipelines/${encodeURIComponent(id)}`,
     { responseMode: "raw" },
   );
   if (resp.status === 409) {

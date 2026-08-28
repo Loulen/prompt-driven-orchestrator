@@ -961,7 +961,7 @@ export interface BranchRef {
 
 // --- Edit mode types ---
 
-export type PipelineScope = "repo" | "user" | "library";
+export type PipelineScope = "instance" | "repo" | "user" | "library";
 
 export interface PipelineListEntry {
   id: string;

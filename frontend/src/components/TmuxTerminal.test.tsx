@@ -574,10 +574,11 @@ describe("TmuxTerminal", () => {
           paneSource={paneSource}
         />,
       );
-      await new Promise((r) => setTimeout(r, 10));
 
-      expect(wsInstances).toHaveLength(1);
-      expect(screen.getByTestId("term-detach")).toBeInTheDocument();
+      await waitFor(() => {
+        expect(wsInstances).toHaveLength(1);
+        expect(screen.getByTestId("term-detach")).toBeInTheDocument();
+      });
     });
 
     it("never probes a live node — the live path is untouched", async () => {

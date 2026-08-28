@@ -576,6 +576,7 @@ pub(crate) mod pipelines {
         None
     }
 
+    #[allow(dead_code)]
     pub(crate) fn get_yaml(repo_root: &Path, id: &str) -> Option<String> {
         let (path, _) = locate(repo_root, id)?;
         std::fs::read_to_string(&path).ok()

@@ -12,13 +12,26 @@ vi.mock("./TmuxTerminal", () => ({ default: () => null }));
 // #302 / ADR-0048: the Assistant tab drives create-if-absent / reap-on-leave
 // against the daemon. Mock those two api helpers so the tests can assert the
 // lifecycle without a network or a tmux session.
-const { openLibraryAssistant, closeLibraryAssistant } = vi.hoisted(() => ({
+const {
+  openLibraryAssistant,
+  closeLibraryAssistant,
+  fetchPipelineDocument,
+  fetchRunPipelineDocument,
+} = vi.hoisted(() => ({
   openLibraryAssistant: vi.fn(),
   closeLibraryAssistant: vi.fn(),
+  fetchPipelineDocument: vi.fn(),
+  fetchRunPipelineDocument: vi.fn(),
 }));
 vi.mock("../api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api")>();
-  return { ...actual, openLibraryAssistant, closeLibraryAssistant };
+  return {
+    ...actual,
+    openLibraryAssistant,
+    closeLibraryAssistant,
+    fetchPipelineDocument,
+    fetchRunPipelineDocument,
+  };
 });
 
 import PipelineInfoPanel from "./PipelineInfoPanel";
@@ -161,6 +174,8 @@ describe("PipelineInfoPanel — Assistant tab (#302)", () => {
       created: true,
     });
     closeLibraryAssistant.mockResolvedValue({ ok: true, reaped: true });
+    fetchPipelineDocument.mockResolvedValue("pdo_pipeline: 1\npipeline:\n  name: feature-with-review\n");
+    fetchRunPipelineDocument.mockResolvedValue("pdo_pipeline: 1\npipeline:\n  name: run-snapshot\n");
   });
 
   it("shows the Assistant tab (not Manager) for a library template", () => {
@@ -180,6 +195,24 @@ describe("PipelineInfoPanel — Assistant tab (#302)", () => {
   it("hides the Assistant tab when no pipeline id is resolvable", () => {
     renderTemplatePanel({ assistantId: null });
     expect(screen.queryByTestId("info-tab-assistant")).not.toBeInTheDocument();
+  });
+
+  it("shows and copies the portable document from the daemon", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    renderTemplatePanel();
+
+    await userEvent.click(screen.getByTestId("info-tab-yaml"));
+    expect(await screen.findByTestId("portable-document-bar")).toHaveTextContent(
+      "Portable document · v1",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Copy" }));
+
+    expect(fetchPipelineDocument).toHaveBeenCalledWith("feature-with-review");
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining("pdo_pipeline: 1"));
   });
 
   it("ensures the shared session on open, with no pipeline id", async () => {

@@ -68,7 +68,6 @@ vi.mock("../api", () => ({
     { name: "dev", kind: "local" },
     { name: "feature-x", kind: "local" },
   ]),
-  promotePipeline: vi.fn().mockResolvedValue({ id: "test-pipe", drifted: false }),
   testGuard: vi.fn().mockResolvedValue({
     outcome: "pass",
     stdout: "",
@@ -78,7 +77,7 @@ vi.mock("../api", () => ({
   }),
 }));
 
-const { validateRepo, listBranches, createRun, createTrigger, updateTrigger, fetchPipelines, fetchSettings, promotePipeline, testGuard } = await import("../api");
+const { validateRepo, listBranches, createRun, createTrigger, updateTrigger, fetchPipelines, fetchSettings, testGuard } = await import("../api");
 
 const noop = () => {};
 
@@ -123,16 +122,16 @@ async function enterValidRepo(value = "/home/user/project") {
   });
 }
 
-describe("NewRunModal — grouped pipeline picker", () => {
-  it("shows repo pipelines in the Repo group", async () => {
+describe("NewRunModal — pipeline picker", () => {
+  it("shows instance pipelines in the Pipelines group", async () => {
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "review", name: "Review Pipeline", scope: "repo" }),
+      makePipeline({ id: "review", name: "Review Pipeline", scope: "instance" }),
     ]);
     renderModal();
     await enterValidRepo();
 
     const select = screen.getByTestId("pipeline-select") as HTMLSelectElement;
-    const optgroup = select.querySelector('optgroup[label="Repo pipelines"]');
+    const optgroup = select.querySelector('optgroup[label="Pipelines"]');
     expect(optgroup).not.toBeNull();
     expect(optgroup!.querySelector("option")!.textContent).toBe("Review Pipeline");
   });
@@ -161,7 +160,7 @@ describe("NewRunModal — grouped pipeline picker", () => {
     const select = screen.getByTestId("pipeline-select") as HTMLSelectElement;
     const groups = Array.from(select.querySelectorAll("optgroup"));
     expect(groups.length).toBeGreaterThanOrEqual(2);
-    expect(groups[0].label).toBe("Repo pipelines");
+    expect(groups[0].label).toBe("Pipelines");
     expect(groups[1].label).toBe("★ Library");
   });
 
@@ -188,29 +187,27 @@ describe("NewRunModal — grouped pipeline picker", () => {
 });
 
 describe("NewRunModal — drift indicator", () => {
-  it("shows drift warning text for drifted library pipeline", async () => {
+  it("does not show legacy drift decorations", async () => {
     vi.mocked(fetchPipelines).mockResolvedValue([
       makePipeline({ id: "drifted", name: "Drifted Pipe", scope: "library", drifted: true }),
     ]);
     renderModal();
     await enterValidRepo();
 
-    await waitFor(() => {
-      expect(screen.getByTestId("drift-indicator")).toBeInTheDocument();
-    });
-    expect(screen.getByTestId("drift-warning")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("option", { name: /Drifted Pipe/ })).toBeInTheDocument());
+    expect(screen.queryByTestId("drift-indicator")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("drift-warning")).not.toBeInTheDocument();
   });
 
-  it("shows filled star without dot for synced library pipeline", async () => {
+  it("does not show a library star", async () => {
     vi.mocked(fetchPipelines).mockResolvedValue([
       makePipeline({ id: "synced", name: "Synced Pipe", scope: "library", drifted: false }),
     ]);
     renderModal();
     await enterValidRepo();
 
-    await waitFor(() => {
-      expect(screen.getByTestId("library-star")).toBeInTheDocument();
-    });
+    await waitFor(() => expect(screen.getByRole("option", { name: "Synced Pipe" })).toBeInTheDocument());
+    expect(screen.queryByTestId("library-star")).not.toBeInTheDocument();
     expect(screen.queryByTestId("drift-indicator")).not.toBeInTheDocument();
   });
 
@@ -227,46 +224,19 @@ describe("NewRunModal — drift indicator", () => {
   });
 });
 
-describe("NewRunModal — promote button", () => {
-  it("shows promote button for selected repo pipeline", async () => {
+describe("NewRunModal — instance pipelines", () => {
+  it("does not show legacy promotion controls", async () => {
     vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "repo-pipe", name: "Repo Pipeline", scope: "repo" }),
+      makePipeline({ id: "instance-pipe", name: "Instance Pipeline", scope: "instance" }),
     ]);
     renderModal();
     await enterValidRepo();
 
     await waitFor(() => {
-      expect(screen.getByTestId("promote-button")).toBeInTheDocument();
-    });
-  });
-
-  it("calls promotePipeline when promote button is clicked", async () => {
-    vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "repo-pipe", name: "Repo Pipeline", scope: "repo" }),
-    ]);
-    renderModal();
-    await enterValidRepo();
-
-    vi.useRealTimers();
-    const button = screen.getByTestId("promote-button");
-    fireEvent.click(button);
-
-    await waitFor(() => {
-      expect(promotePipeline).toHaveBeenCalledWith("repo-pipe");
-    });
-  });
-
-  it("does not show promote button for library pipelines", async () => {
-    vi.mocked(fetchPipelines).mockResolvedValue([
-      makePipeline({ id: "lib-pipe", name: "Lib Pipe", scope: "library" }),
-    ]);
-    renderModal();
-    await enterValidRepo();
-
-    await waitFor(() => {
-      expect(screen.getByTestId("library-star")).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: "Instance Pipeline" })).toBeInTheDocument();
     });
     expect(screen.queryByTestId("promote-button")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("library-star")).not.toBeInTheDocument();
   });
 });
 

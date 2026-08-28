@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, Clock, FolderGit2, GitBranch, ImagePlus, Save, Sparkles, Star, X } from "lucide-react";
+import { ChevronDown, Clock, FolderGit2, GitBranch, ImagePlus, Save, Sparkles, X } from "lucide-react";
 import type { InstanceSettings, Trigger } from "../types";
 import type { TestGuardResponse } from "../api";
-import { createRun, createTrigger, updateTrigger, fetchSettings, promotePipeline, testGuard } from "../api";
+import { createRun, createTrigger, updateTrigger, fetchSettings, testGuard } from "../api";
 import { useEditStore } from "../stores/editStore";
 import { useRecentReposStore } from "../stores/recentReposStore";
 import RepoCombobox from "./RepoCombobox";
@@ -68,7 +68,6 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     selectedPipeline,
     selectedPipelineId,
     setSelectedPipelineId,
-    loadPipelines,
     branches,
     branchesLoading,
     sourceBranch,
@@ -503,15 +502,6 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
   }, []);
-
-  const handlePromote = useCallback(async (pipelineId: string) => {
-    try {
-      await promotePipeline(pipelineId);
-      loadPipelines();
-    } catch {
-      // ignore
-    }
-  }, [loadPipelines]);
 
   // Whether this pipeline may launch with an empty prompt (#158) — see `newRunForm`.
   const promptOptional = newRunForm.promptOptional(selectedPipeline);
@@ -1019,7 +1009,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
                     </option>
                   )}
                   {repoValid && repoPipelines.length > 0 && (
-                    <optgroup label="Repo pipelines">
+                    <optgroup label="Pipelines">
                       {repoPipelines.map((p) => (
                         <option key={`repo-${p.id}`} value={p.id}>
                           {p.name}
@@ -1046,44 +1036,10 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
                     </optgroup>
                   )}
                 </select>
-                {selectedPipeline?.scope === "repo" && (
-                  <button
-                    type="button"
-                    onClick={() => handlePromote(selectedPipeline.id)}
-                    className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-md border border-line-strong bg-bg-3 text-fg-4 transition-colors hover:bg-bg-4 hover:text-acc"
-                    title="Promote to library"
-                    data-testid="promote-button"
-                  >
-                    <Star size={14} />
-                  </button>
-                )}
-                {selectedPipeline?.scope === "library" && (
-                  <span
-                    className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-md border border-line-strong bg-bg-3"
-                    title={selectedPipeline.drifted ? "Source has changed since promoted" : "In library — synced"}
-                    data-testid="library-star"
-                  >
-                    <span className="relative">
-                      <Star size={14} className="fill-acc text-acc" />
-                      {selectedPipeline.drifted && (
-                        <span
-                          className="absolute -bottom-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-st-blocked"
-                          data-testid="drift-indicator"
-                        />
-                      )}
-                    </span>
-                  </span>
-                )}
               </div>
-              {selectedPipeline?.scope === "repo" && (
+              {selectedPipeline?.scope === "instance" && (
                 <span className="inline-flex items-center gap-1 text-fg-4" style={{ fontSize: "10.5px" }}>
-                  <span className="rounded bg-bg-3 px-1 py-0.5 font-mono text-fg-3" style={{ fontSize: "9px" }}>REPO</span>
                   {selectedPipeline.path}
-                </span>
-              )}
-              {selectedPipeline?.scope === "library" && selectedPipeline.drifted && (
-                <span className="text-st-blocked" style={{ fontSize: "10.5px" }} data-testid="drift-warning">
-                  Source pipeline has changed — re-promote to update library copy
                 </span>
               )}
             </div>

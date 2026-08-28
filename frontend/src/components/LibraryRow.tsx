@@ -1,18 +1,13 @@
 import type { MouseEvent } from "react";
-import { Copy, Star, Trash2 } from "lucide-react";
+import { Copy, Trash2 } from "lucide-react";
 import type { PipelineScope } from "../types";
 import SelectControl from "./SelectControl";
-
-const SCOPE_BADGE: Record<PipelineScope, { label: string; cls: string }> = {
-  repo: { label: "repo", cls: "border-acc text-acc" },
-  user: { label: "user", cls: "border-st-await text-st-await" },
-  library: { label: "library", cls: "border-st-await text-st-await" },
-};
 
 interface Props {
   name: string;
   scope: PipelineScope;
   nodeCount: number;
+  modified?: string | null;
   /** Star badge — the visible "this name is in your Library" link (#227). */
   starred: boolean;
   /** Highlighted as the open editor tab. Only meaningful on an openable row. */
@@ -67,8 +62,10 @@ export default function LibraryRow({
   testId,
   checked = false,
   onToggleSelect,
+  modified,
 }: Props) {
-  const badge = SCOPE_BADGE[scope];
+  void scope;
+  void starred;
 
   const body = (
     <>
@@ -81,13 +78,6 @@ export default function LibraryRow({
       )}
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
-          {starred && (
-            <Star
-              size={10}
-              className="shrink-0 fill-acc text-acc"
-              data-testid="left-panel-star"
-            />
-          )}
           <span className="truncate font-medium">{name}</span>
         </div>
         <div
@@ -95,14 +85,14 @@ export default function LibraryRow({
           style={{ fontSize: "10px" }}
         >
           <span>{nodeCount} nodes</span>
+          {modified && (
+            <>
+              <span>·</span>
+              <span>{new Date(modified).toLocaleDateString()}</span>
+            </>
+          )}
         </div>
       </div>
-      <span
-        className={`shrink-0 rounded border px-1 py-px group-hover:hidden ${badge.cls}`}
-        style={{ fontSize: "9px", fontWeight: 500 }}
-      >
-        {badge.label}
-      </span>
       {showDuplicate && (
         <span
           className="hidden shrink-0 group-hover:inline-flex"

@@ -1,15 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, Copy, FileUp, Pause, Pencil, Play, Plus, RotateCcw, SquareTerminal, Trash2, Zap } from "lucide-react";
-import { isLiveRun, isTerminalRun, type RunListEntry, type RunStatus, type PipelineListEntry, type PipelineScope, type Trigger, type Project } from "../types";
+import { isLiveRun, isTerminalRun, type RunListEntry, type RunStatus, type PipelineListEntry, type Trigger, type Project } from "../types";
 import type { LibraryPipelineEntry } from "../api";
-import { cleanupRun, createPipeline, deleteLibraryPipeline, duplicateLibraryPipeline, forgetRun, importWorkflow, openRunShell, pauseRun, renameRun, resumeRun, retryAll } from "../api";
+import { cleanupRun, createPipeline, duplicatePipeline, forgetRun, importPipelineDocument, importWorkflow, openRunShell, pauseRun, renameRun, resumeRun, retryAll } from "../api";
 import { useEditStore } from "../stores/editStore";
 import { useSelectionStore } from "../stores/selectionStore";
 import { handleSelectionKeydown } from "../lib/selectionKeys";
 import { type BulkItem, type BulkOutcome } from "../lib/bulk";
 import { groupByProject, type ProjectRef } from "../lib/groupByRepo";
 import { projectLookup } from "../lib/projectLookup";
-import { cascadableTwin, isStarred, libraryOnly } from "../lib/libraryTwins";
 import BulkActionBar from "./BulkActionBar";
 import BulkActionModal from "./BulkActionModal";
 import CleanupConfirmModal from "./CleanupConfirmModal";
@@ -71,7 +70,6 @@ export default function UnifiedLeftPanel({
   selectedRunId,
   onSelectRun,
   onNewRun,
-  libraryPipelines,
   onLibraryPipelinesChanged,
   triggers = [],
   selectedTriggerId = null,
@@ -210,33 +208,14 @@ export default function UnifiedLeftPanel({
     setRenameValue("");
   }
 
-  async function handleConfirmDelete(cascade: boolean) {
+  async function handleConfirmDelete() {
     if (!deleteTarget) return;
-    // The twin rule (name-keyed, unique-only) lives in `lib/libraryTwins` — the
-    // same call the checkbox's visibility uses, so what the user was offered and
-    // what runs here cannot drift (#227).
-    const twin = cascadableTwin(deleteTarget, libraryPipelines);
     try {
-      // Forward scope so a `library` entry deletes from the library store, not
-      // the same-named repo pipeline file (#216).
-      await removePipeline(deleteTarget.id, deleteTarget.scope);
-      if (cascade && twin) {
-        // #227: also remove the durable Library copy the star created.
-        try {
-          await deleteLibraryPipeline(twin.id);
-        } catch {
-          /* non-fatal: the working pipeline is already gone */
-        }
-      }
-      // Re-fetch the authoritative block-1 list (covers the #216 dual-scope row).
+      await removePipeline(deleteTarget.id);
       await loadPipelines();
     } catch {
       // ignore (e.g. 409 active runs)
     } finally {
-      // #227 core: refresh the library list on EVERY delete, not only
-      // scope === "library" — otherwise a deleted repo star's copy lingers
-      // and re-surfaces as a phantom library-only row.
-      onLibraryPipelinesChanged();
       setDeleteTarget(null);
     }
   }
@@ -257,9 +236,9 @@ export default function UnifiedLeftPanel({
     if (duplicatingId === id) return;
     setDuplicatingId(id);
     try {
-      await duplicateLibraryPipeline(id);
+      const copy = await duplicatePipeline(id);
       await loadPipelines();
-      onLibraryPipelinesChanged(); // refresh; do NOT auto-open the copy
+      await openPipeline(copy.id);
     } catch {
       /* ignore */
     } finally {
@@ -567,24 +546,13 @@ export default function UnifiedLeftPanel({
   // and passive library-only rows) delete through different seams, so each row
   // registers its own `del`/`dup` keyed by the SAME id its React key uses. Bulk
   // then just dispatches per selected id — no re-deriving which list it came from.
-  const libraryOnlyEntries = libraryOnly(libraryPipelines, pipelines);
   interface LibTarget { selId: string; name: string; del: () => Promise<void>; dup?: () => Promise<void>; }
-  const libTargets: LibTarget[] = [
-    ...pipelines.map((p) => ({
+  const libTargets: LibTarget[] = pipelines.map((p) => ({
       selId: `${p.scope}-${p.id}`,
       name: p.name,
       del: () => removePipeline(p.id, p.scope),
-      // Duplicate is a library operation — offered only on a library-scoped row
-      // (same rule as the per-row Copy affordance, #224/#273).
-      dup: p.scope === "library" ? () => duplicateLibraryPipeline(p.id).then(() => {}) : undefined,
-    })),
-    ...libraryOnlyEntries.map((lp) => ({
-      selId: `lib-only-${lp.scope}-${lp.id}`,
-      name: lp.name,
-      del: () => deleteLibraryPipeline(lp.id),
-      dup: () => duplicateLibraryPipeline(lp.id).then(() => {}),
-    })),
-  ];
+      dup: () => duplicatePipeline(p.id).then(() => {}),
+    }));
   const libTargetById = new Map(libTargets.map((t) => [t.selId, t]));
   const libVisibleIds = libTargets.map((t) => t.selId);
   const selectedLibTargets = libTargets.filter((t) => librarySel.has(t.selId));
@@ -631,7 +599,7 @@ export default function UnifiedLeftPanel({
   const tabs: { id: LeftTab; label: string }[] = [
     { id: "runs", label: "Runs" },
     { id: "triggers", label: "Triggers" },
-    { id: "library", label: "Library" },
+    { id: "library", label: "Pipelines" },
   ];
   // #577 — per-tab selection counts, for the badge left on the tab you switch away
   // from (so an in-flight selection is never silently lost).
@@ -910,7 +878,7 @@ export default function UnifiedLeftPanel({
         className="flex h-[32px] shrink-0 items-center border-b border-line px-3 font-medium text-fg-2"
         style={{ fontSize: "11.5px" }}
       >
-        Library
+        Pipelines
         <button
           onClick={() => setShowImportModal(true)}
           className="ml-auto grid h-5 w-5 cursor-pointer place-items-center rounded border border-line-strong bg-bg-3 text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg"
@@ -944,7 +912,7 @@ export default function UnifiedLeftPanel({
             })
           }
         >
-          {pipelines.length === 0 && libraryPipelines.length === 0 && (
+          {pipelines.length === 0 && (
             <div
               className="px-3 py-4 text-center text-fg-4"
               style={{ fontSize: "11px" }}
@@ -954,7 +922,7 @@ export default function UnifiedLeftPanel({
           )}
           {pipelines.map((p) => (
             <LibraryRow
-              key={`${p.scope}-${p.id}`}
+              key={p.id}
               name={p.name}
               scope={p.scope}
               nodeCount={p.node_count}
@@ -968,7 +936,7 @@ export default function UnifiedLeftPanel({
               // the same name. This is the visible link the user expects when
               // they click the canvas star: their pipeline gets a star badge
               // here, confirming the action had effect.
-              starred={isStarred(p, libraryPipelines)}
+              starred={false}
               selected={p.id === activeTabId}
               // #273: scope:"library" rows now appear here in block 1 (the
               // /pipelines scope-merge from #216 means they no longer fall
@@ -976,47 +944,14 @@ export default function UnifiedLeftPanel({
               // affordance #224 shipped, gated on identity (scope), not the
               // name-absence filter that block 2 uses. `p.id` is the HOME
               // library file-stem — duplicateLibraryPipeline resolves it.
-              showDuplicate={p.scope === "library"}
-              onOpen={() => openPipeline(p.id, p.scope)}
+              showDuplicate
+              modified={p.modified}
+              onOpen={() => openPipeline(p.id)}
               onDuplicate={() => handleDuplicate(p.id)}
               // Confirm-gated, because this row is a working pipeline file and
               // the delete may cascade to its Library twin (#227).
               onDelete={() => setDeleteTarget(p)}
               deleteTitle="Delete pipeline"
-            />
-          ))}
-          {/* Library-only entries (no matching name in /pipelines). These
-              previously only showed up in the New Run dropdown — surfacing
-              them here means starring a brand-new pipeline yields a visible
-              entry in the sidebar, matching the user's mental model that
-              starred == in the library. No `onOpen`: there is no working
-              pipeline behind them to open. */}
-          {libraryOnlyEntries.map((lp) => (
-            <LibraryRow
-              key={`lib-only-${lp.scope}-${lp.id}`}
-              name={lp.name}
-              scope={lp.scope}
-              nodeCount={lp.node_count}
-              checked={librarySel.has(`lib-only-${lp.scope}-${lp.id}`)}
-              onToggleSelect={(e) => {
-                const selId = `lib-only-${lp.scope}-${lp.id}`;
-                if (e.shiftKey) selectRange("library", selId, libVisibleIds);
-                else toggleSel("library", selId);
-              }}
-              // Unconditional: these rows come straight out of the library.
-              starred
-              showDuplicate
-              onDuplicate={() => handleDuplicate(lp.id)}
-              // Direct, no confirm modal: nothing cascades from a row that only
-              // exists in the library (#227 d).
-              onDelete={async () => {
-                try {
-                  await deleteLibraryPipeline(lp.id);
-                  onLibraryPipelinesChanged();
-                } catch { /* ignore */ }
-              }}
-              deleteTitle="Remove from library"
-              testId="library-only-entry"
             />
           ))}
         </div>
@@ -1117,10 +1052,6 @@ export default function UnifiedLeftPanel({
         />
       )}
 
-      {/* Show the cascade checkbox only when the target has exactly one same-name
-          Library copy and isn't itself the library row (#227) — the SAME
-          `cascadableTwin` call `handleConfirmDelete` acts on, so the offer and
-          the deed can never disagree. */}
       <ConfirmDeleteModal
         // Remount per target so the checkbox resets to OFF each open (#227).
         key={deleteTarget?.id ?? "none"}
@@ -1128,11 +1059,6 @@ export default function UnifiedLeftPanel({
         onClose={() => setDeleteTarget(null)}
         onConfirm={handleConfirmDelete}
         name={deleteTarget?.name ?? ""}
-        cascadeLabel={
-          cascadableTwin(deleteTarget, libraryPipelines)
-            ? "Also remove the Library copy"
-            : undefined
-        }
       />
 
       {showNewModal && (
@@ -1151,14 +1077,13 @@ export default function UnifiedLeftPanel({
 
 function NewPipelineModal({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState("");
-  const [scope, setScope] = useState<PipelineScope>("repo");
   const loadPipelines = useEditStore((s) => s.loadPipelines);
   const openPipeline = useEditStore((s) => s.openPipeline);
 
   async function handleCreate() {
     if (!name.trim()) return;
     try {
-      const result = await createPipeline(name.trim(), scope);
+      const result = await createPipeline(name.trim());
       await loadPipelines();
       await openPipeline(result.id);
       onClose();
@@ -1187,27 +1112,7 @@ function NewPipelineModal({ onClose }: { onClose: () => void }) {
           onKeyDown={(e) => e.key === "Enter" && handleCreate()}
         />
 
-        <label className="mb-1 block text-fg-3" style={{ fontSize: "11px" }}>
-          Scope
-        </label>
-        <div className="mb-4 flex gap-1">
-          {(["repo", "user"] as PipelineScope[]).map((s) => (
-            <button
-              key={s}
-              onClick={() => setScope(s)}
-              className={`rounded border px-3 py-1 font-medium transition-colors ${
-                scope === s
-                  ? "border-acc bg-acc-bg text-acc"
-                  : "border-line-strong bg-bg-3 text-fg-3 hover:text-fg"
-              }`}
-              style={{ fontSize: "11px" }}
-            >
-              {s}
-            </button>
-          ))}
-        </div>
-
-        <div className="flex justify-end gap-2">
+        <div className="mt-4 flex justify-end gap-2">
           <button
             onClick={onClose}
             className="rounded border border-line-strong bg-bg-3 px-3 py-1 text-fg-3 transition-colors hover:text-fg"
@@ -1237,28 +1142,41 @@ function ImportWorkflowModal({
   onClose: () => void;
   onImported: () => void;
 }) {
+  const [mode, setMode] = useState<"pdo" | "claude">("pdo");
   const [file, setFile] = useState<File | null>(null);
+  const [content, setContent] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[] | null>(null);
   const loadPipelines = useEditStore((s) => s.loadPipelines);
+  const openPipeline = useEditStore((s) => s.openPipeline);
+
+  const looksLikePdo = /^\s*pdo_pipeline\s*:/m.test(content);
+  const looksLikeClaude = /\b(?:agent|pipeline|parallel)\s*\(/.test(content);
+  const mismatch =
+    content.trim() &&
+    ((mode === "pdo" && looksLikeClaude && !looksLikePdo) ||
+      (mode === "claude" && looksLikePdo));
 
   async function handleImport() {
-    if (!file || submitting) return;
+    if (!content.trim() || submitting || mismatch) return;
     setSubmitting(true);
     setError(null);
     setWarnings(null);
     try {
-      const content = await file.text();
-      const result = await importWorkflow(file.name, content);
+      const result =
+        mode === "pdo"
+          ? await importPipelineDocument(content)
+          : await importWorkflow(file?.name ?? "workflow.js", content);
       onImported();
       await loadPipelines();
-      const w = result.warnings ?? [];
+      const w = "warnings" in result ? result.warnings ?? [] : [];
       if (w.length > 0) {
         // Surface the lossy-translation diagnostics (ADR-0001) rather than
         // silently closing — the annotation is the onboarding tutorial.
         setWarnings(w);
       } else {
+        await openPipeline(result.id);
         onClose();
       }
     } catch (e) {
@@ -1266,6 +1184,13 @@ function ImportWorkflowModal({
     } finally {
       setSubmitting(false);
     }
+  }
+
+  async function loadFile(next: File | null) {
+    setFile(next);
+    setContent(next ? await next.text() : "");
+    setError(null);
+    setWarnings(null);
   }
 
   return (
@@ -1276,26 +1201,80 @@ function ImportWorkflowModal({
         data-testid="import-workflow-modal"
       >
         <div className="mb-1 font-medium text-fg">Import a workflow</div>
-        <p className="mb-3 text-fg-4" style={{ fontSize: "11px" }}>
-          Decompile a Claude Code workflow (<code>.js</code>) into a draft
-          pipeline. The file is parsed, never run; unmapped idioms become
-          annotated placeholders.
-        </p>
+        <div className="mb-3 grid grid-cols-2 rounded border border-line-strong bg-bg-3 p-0.5">
+          {([
+            ["pdo", "Pipeline PDO"],
+            ["claude", "Workflow Claude Code"],
+          ] as const).map(([value, label]) => (
+            <button
+              key={value}
+              onClick={() => {
+                setMode(value);
+                setError(null);
+                setWarnings(null);
+              }}
+              className={`rounded px-2 py-1.5 ${
+                mode === value ? "bg-bg-4 font-medium text-fg" : "text-fg-4"
+              }`}
+              data-testid={`import-mode-${value}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
 
-        <label className="mb-1 block text-fg-3" style={{ fontSize: "11px" }}>
-          Workflow file
-        </label>
-        <input
-          type="file"
-          accept=".js"
-          data-testid="workflow-file-input"
-          onChange={(e) => {
-            setFile(e.target.files?.[0] ?? null);
-            setError(null);
-            setWarnings(null);
-          }}
-          className="mb-3 w-full rounded border border-line-strong bg-bg-3 px-2 py-1.5 text-fg outline-none file:mr-2 file:rounded file:border-0 file:bg-bg-4 file:px-2 file:py-0.5 file:text-fg-3"
-        />
+        {mode === "pdo" ? (
+          <>
+            <p className="mb-2 text-fg-4" style={{ fontSize: "11px" }}>
+              Paste a portable PDO pipeline document or load a YAML file.
+            </p>
+            <textarea
+              value={content}
+              onChange={(event) => {
+                setContent(event.target.value);
+                setError(null);
+              }}
+              className="h-48 w-full resize-y rounded border border-line-strong bg-bg-3 p-2 font-mono text-fg outline-none focus:border-acc"
+              data-testid="pipeline-document-input"
+              autoFocus
+            />
+            <label className="mb-3 mt-1.5 inline-block cursor-pointer text-acc hover:underline">
+              load a file…
+              <input
+                type="file"
+                accept=".yaml,.yml"
+                className="hidden"
+                onChange={(event) => void loadFile(event.target.files?.[0] ?? null)}
+              />
+            </label>
+          </>
+        ) : (
+          <>
+            <p className="mb-2 text-fg-4" style={{ fontSize: "11px" }}>
+              Decompile a Claude Code workflow into a draft. Unmapped idioms are
+              annotated instead of executed.
+            </p>
+            <input
+              type="file"
+              accept=".js"
+              data-testid="workflow-file-input"
+              onChange={(event) => void loadFile(event.target.files?.[0] ?? null)}
+              className="mb-3 w-full rounded border border-line-strong bg-bg-3 px-2 py-1.5 text-fg outline-none file:mr-2 file:rounded file:border-0 file:bg-bg-4 file:px-2 file:py-0.5 file:text-fg-3"
+            />
+          </>
+        )}
+
+        {mismatch && (
+          <div className="mb-3 rounded border border-st-await/40 bg-st-await/10 px-2 py-1.5 text-fg-2">
+            This content looks like a {mode === "pdo" ? "Claude Code workflow" : "PDO pipeline"}.
+            <button
+              className="ml-1 text-acc hover:underline"
+              onClick={() => setMode(mode === "pdo" ? "claude" : "pdo")}
+            >
+              Switch mode
+            </button>
+          </div>
+        )}
 
         {error && (
           <div
@@ -1335,7 +1314,7 @@ function ImportWorkflowModal({
           {!warnings && (
             <button
               onClick={handleImport}
-              disabled={!file || submitting}
+              disabled={!content.trim() || submitting || !!mismatch}
               className="rounded bg-acc px-3 py-1 font-medium text-bg-0 transition-colors hover:bg-acc-dim disabled:opacity-50"
             >
               {submitting ? "Importing…" : "Import"}

@@ -71,7 +71,7 @@ export function useLaunchTargets(open: boolean) {
   }, [loadPipelines]);
 
   const repoPipelines = useMemo(
-    () => pipelines.filter((p) => p.scope === "repo"),
+    () => pipelines.filter((p) => p.scope === "instance" || p.scope === "repo"),
     [pipelines],
   );
   const libraryPipelines = useMemo(

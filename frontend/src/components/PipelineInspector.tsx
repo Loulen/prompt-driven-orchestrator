@@ -1,57 +1,20 @@
 import { useEditStore } from "../stores/editStore";
-import { serializePipeline } from "../lib/serializePipeline";
 import type { VariableDef } from "../types";
 import { SectionHead, Field } from "./InspectorPrimitives";
-import type { LibraryPipelineEntry, LibraryPipelineScope } from "../api";
-import { saveLibraryPipeline } from "../api";
 
 const VAR_TYPES = ["int", "float", "string", "bool", "list"] as const;
 
-export default function PipelineInspector({
-  libraryPipelines,
-  onLibraryChanged,
-}: {
-  libraryPipelines: LibraryPipelineEntry[];
-  onLibraryChanged: () => void;
-}) {
+export default function PipelineInspector() {
   const openTabs = useEditStore((s) => s.openTabs);
   const activeTabId = useEditStore((s) => s.activeTabId);
   const selection = useEditStore((s) => s.selection);
   const updateMeta = useEditStore((s) => s.updatePipelineMeta);
-  const setLibraryBinding = useEditStore((s) => s.setLibraryBinding);
 
   const tab = openTabs.find((t) => t.id === activeTabId);
   if (!tab || selection.kind !== "none") return null;
 
   const pipeline = tab.pipeline;
   const variables = Object.entries(pipeline.variables);
-
-  // Show the scope control only when the pipeline is actually in the library —
-  // for a non-starred pipeline this toggle has no target on disk.
-  const matchedLibrary =
-    (tab.libraryId
-      ? libraryPipelines.find((e) => e.id === tab.libraryId)
-      : libraryPipelines.find((e) => e.name === pipeline.name)) ?? null;
-  const isInLibrary = matchedLibrary != null;
-  const currentScope: LibraryPipelineScope | null =
-    (tab.libraryScope ?? matchedLibrary?.scope) ?? null;
-
-  async function handleScopeChange(scope: LibraryPipelineScope) {
-    if (!tab) return;
-    const idForSave = tab.libraryId ?? matchedLibrary?.id;
-    if (!idForSave) return;
-    const yaml = serializePipeline(pipeline);
-    try {
-      const result = await saveLibraryPipeline(pipeline.name, yaml, tab.prompts, {
-        id: idForSave,
-        scope,
-      });
-      setLibraryBinding(tab.id, result.id, result.scope);
-      onLibraryChanged();
-    } catch {
-      // ignore
-    }
-  }
 
   function handleAddVariable() {
     let name = "new_var";
@@ -122,31 +85,6 @@ export default function PipelineInspector({
           />
           Prompt required
         </label>
-
-        {isInLibrary && (
-          <Field label="Library scope">
-            <div className="flex gap-1" data-testid="pipeline-inspector-scope">
-              {(["repo", "user"] as LibraryPipelineScope[]).map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => {
-                    if (currentScope !== s) handleScopeChange(s);
-                  }}
-                  data-testid={`pipeline-inspector-scope-${s}`}
-                  className={`rounded border px-2 py-0.5 font-medium transition-colors ${
-                    currentScope === s
-                      ? "border-acc bg-acc-bg text-acc"
-                      : "border-line-strong bg-bg-3 text-fg-3 hover:text-fg"
-                  }`}
-                  style={{ fontSize: "10.5px" }}
-                >
-                  {s}
-                </button>
-              ))}
-            </div>
-          </Field>
-        )}
 
         {/* Variables */}
         <SectionHead title="Variables" count={variables.length} onAdd={handleAddVariable} />

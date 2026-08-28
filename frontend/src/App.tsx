@@ -20,10 +20,8 @@ import NewRunModal, { RUN_INTENT } from "./components/NewRunModal";
 import SettingsModal from "./components/SettingsModal";
 import StatsModal from "./components/StatsModal";
 import ConflictModal from "./components/ConflictModal";
-import PipelineChangedModal from "./components/PipelineChangedModal";
 import SaveErrorModal from "./components/SaveErrorModal";
 import ConfirmCloseTabsModal from "./components/ConfirmCloseTabsModal";
-import { shouldPromptLibraryUpdate } from "./hooks/useLibraryPipelines";
 import { useRecentReposStore } from "./stores/recentReposStore";
 import type { TabId } from "./components/PipelineInfoPanel";
 import EditCanvas from "./components/EditCanvas";
@@ -204,7 +202,6 @@ export default function App() {
   const editRedo = useEditStore((s) => s.redo);
   const editActiveTabId = useEditStore((s) => s.activeTabId);
   const resolveConflict = useEditStore((s) => s.resolveConflict);
-  const reloadFromLibrary = useEditStore((s) => s.reloadFromLibrary);
   const clearSaveError = useEditStore((s) => s.clearSaveError);
   // #342: a single-tab open/replace parked because it would discard unsaved
   // work — resolved by the global confirm modal below.
@@ -214,14 +211,6 @@ export default function App() {
   // Merged /pipelines list — used to derive the selected trigger's prompt-required
   // signal for the guard dry-run caveat (#351).
   const pipelines = useEditStore((s) => s.pipelines);
-
-  // Track which library-YAML version we've already prompted about for a given
-  // run-scoped tab. Re-prompting only when the library changes again avoids
-  // nagging the user every time they switch back to the same run tab.
-  const promptedLibraryYamlRef = useRef<Map<string, string>>(new Map());
-  const [pipelineChangedPrompt, setPipelineChangedPrompt] = useState<
-    { tabId: string; libraryYaml: string; pipelineName: string } | null
-  >(null);
 
   const editTab = openTabs.find((t) => t.id === editActiveTabId);
   const editNodeType = editTab && selection.kind === "node" && selection.id
@@ -585,45 +574,6 @@ export default function App() {
     });
   }, [subscribe, refreshRuns, refreshRun, refreshSessions, refreshTriggers, refreshProjects, reloadPipeline, loadPipelines]);
 
-  // Detect: active tab is a run whose library twin (matched by id, then name)
-  // diverges from the run snapshot — pipeline or prompts, the same comparison
-  // the star indicator uses. Show the modal once per (tabId, library-yaml)
-  // pair so re-entering an unchanged run is silent.
-  useEffect(() => {
-    if (!editTab) return;
-    const libEntry = shouldPromptLibraryUpdate(
-      editTab,
-      libraryPipelines,
-      promptedLibraryYamlRef.current.get(editTab.id),
-    );
-    if (!libEntry) return;
-    setPipelineChangedPrompt({
-      tabId: editTab.id,
-      libraryYaml: libEntry.yaml,
-      pipelineName: editTab.pipeline.name,
-    });
-  }, [editTab, libraryPipelines]);
-
-  const handlePipelineChangedKeep = useCallback(() => {
-    if (!pipelineChangedPrompt) return;
-    promptedLibraryYamlRef.current.set(
-      pipelineChangedPrompt.tabId,
-      pipelineChangedPrompt.libraryYaml,
-    );
-    setPipelineChangedPrompt(null);
-  }, [pipelineChangedPrompt]);
-
-  const handlePipelineChangedReload = useCallback(async () => {
-    if (!pipelineChangedPrompt) return;
-    promptedLibraryYamlRef.current.set(
-      pipelineChangedPrompt.tabId,
-      pipelineChangedPrompt.libraryYaml,
-    );
-    const { tabId, libraryYaml } = pipelineChangedPrompt;
-    setPipelineChangedPrompt(null);
-    await reloadFromLibrary(tabId, libraryYaml);
-  }, [pipelineChangedPrompt, reloadFromLibrary]);
-
   const selectedNode =
     selectedNodeId && selectedRun
       ? selectedRun.nodes[selectedNodeId] ?? null
@@ -783,10 +733,7 @@ export default function App() {
                     <RunInfoSidebar run={selectedRun} onEdited={refreshRun} />
                   )}
                 {selection.kind === "none" && !isEditingRun && (
-                  <PipelineInspector
-                    libraryPipelines={libraryPipelines}
-                    onLibraryChanged={refreshLibraryPipelines}
-                  />
+                  <PipelineInspector />
                 )}
               </>
             ) : (
@@ -852,12 +799,6 @@ export default function App() {
         onTake={() => {
           if (conflictTab) resolveConflict(conflictTab.id, "take");
         }}
-      />
-      <PipelineChangedModal
-        open={pipelineChangedPrompt != null}
-        pipelineName={pipelineChangedPrompt?.pipelineName ?? ""}
-        onKeep={handlePipelineChangedKeep}
-        onReload={handlePipelineChangedReload}
       />
       <SaveErrorModal
         open={saveErrorTab != null}

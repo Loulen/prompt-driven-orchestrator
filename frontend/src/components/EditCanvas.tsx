@@ -39,8 +39,6 @@ import AddNodeFromYamlModal from "./AddNodeFromYamlModal";
 import LintBanner, { type LintBannerItem } from "./LintBanner";
 import DragConnectionLine from "./DragConnectionLine";
 import { DragHighlightProvider, useIsDropTarget } from "./DragHighlightContext";
-import PipelineStar from "./PipelineStar";
-import { usePipelineLibraryState } from "../hooks/useLibraryPipelines";
 import { useDismissedNudges } from "../hooks/useDismissedNudges";
 import { anchorHandleId, anchorsByDropOnBody, chooseAnchorSide, isEmergentInputNode } from "../lib/anchorSide";
 import { useAgentProfiles } from "../hooks/useAgentProfiles";
@@ -274,7 +272,7 @@ interface EditCanvasProps {
   onSelectRun?: (runId: string) => void;
 }
 
-function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, onLibraryPipelinesChanged, infoOpen, onToggleInfo, onCloseInfo, assistantActive, onOpenAssistant, runState, onSelectRun }: EditCanvasProps) {
+function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleInfo, onCloseInfo, assistantActive, onOpenAssistant, runState, onSelectRun }: EditCanvasProps) {
   const openTabs = useEditStore((s) => s.openTabs);
   const activeTabId = useEditStore((s) => s.activeTabId);
   const setSelection = useEditStore((s) => s.setSelection);
@@ -404,30 +402,11 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
     );
   }, [selection.kind, setSelection]);
 
-  const pipelineSync = usePipelineLibraryState(
-    pipeline ?? null,
-    libraryPipelines,
-    tab?.libraryId ?? null,
-    tab?.prompts,
-  );
   const { profiles: agentProfiles } = useAgentProfiles();
   const agentProfileIds = useMemo(
     () => new Set(agentProfiles.map((profile) => profile.id)),
     [agentProfiles],
   );
-  const setLibraryBinding = useEditStore((s) => s.setLibraryBinding);
-
-  // Lock the library binding once we've identified a match by name. This makes
-  // future renames non-destructive: even though `pipelineSync.entry` will keep
-  // resolving via libraryId, the canvas-side name can drift freely until the
-  // user saves, at which point the library file is updated in place.
-  useEffect(() => {
-    if (!tab) return;
-    if (tab.libraryId) return;
-    if (!pipelineSync.entry) return;
-    setLibraryBinding(tab.id, pipelineSync.entry.id, pipelineSync.entry.scope);
-  }, [tab, pipelineSync.entry, setLibraryBinding]);
-
   const derivedNodes = useMemo(() => {
     if (!pipeline) return [];
     const cards = deriveEditNodes(pipeline, activeRunState, agentProfileIds);
@@ -791,24 +770,6 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
         onRetryAll={() => setConfirmRetryAll(true)}
         onOpenShell={handleOpenShell}
       />
-      {pipeline && tab && (
-        <div
-          // #225: z-20 (not z-10) so the star's popover outranks the lint-banner
-          // overlay below (also z-10, painted later in DOM). The popover's own
-          // z-50 is trapped inside this container's stacking context, so the bump
-          // must be on the container itself, not the popover. See Part 2 of #225.
-          className="absolute right-3 top-2 z-20"
-          data-testid="canvas-pipeline-star-container"
-        >
-          <PipelineStar
-            tabId={tab.id}
-            pipeline={pipeline}
-            syncState={pipelineSync.state}
-            libraryEntry={pipelineSync.entry}
-            onLibraryChanged={onLibraryPipelinesChanged}
-          />
-        </div>
-      )}
       {/* #225: lint diagnostics are an edit-mode affordance — suppress on run tabs.
           NOTE: this also suppresses lint while editing-during-run (ADR-0007), a
           deliberate trade-off ratified at PR time. `tab` is non-null here (early

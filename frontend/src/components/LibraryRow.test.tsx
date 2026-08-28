@@ -79,22 +79,11 @@ describe("LibraryRow openable vs passive", () => {
   });
 });
 
-describe("LibraryRow star", () => {
-  it("shows the star when starred", () => {
-    renderRow({ starred: true });
-    expect(screen.getByTestId("left-panel-star")).toBeInTheDocument();
-  });
-
-  it("hides the star when not starred", () => {
-    renderRow({ starred: false });
+describe("LibraryRow instance metadata", () => {
+  it("does not render legacy stars or scope badges", () => {
+    renderRow({ starred: true, scope: "instance" });
     expect(screen.queryByTestId("left-panel-star")).not.toBeInTheDocument();
-  });
-});
-
-describe("LibraryRow scope badge", () => {
-  it.each<PipelineScope>(["repo", "user", "library"])("labels a %s row", (scope) => {
-    renderRow({ scope });
-    expect(screen.getByText(scope)).toBeInTheDocument();
+    expect(screen.queryByText("instance")).not.toBeInTheDocument();
   });
 });
 

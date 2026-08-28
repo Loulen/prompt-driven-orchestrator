@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import PipelineInspector from "./PipelineInspector";
-import type { LibraryPipelineEntry } from "../api";
 import { useEditStore } from "../stores/editStore";
 import { TooltipProvider } from "./ui/tooltip";
 
@@ -13,8 +12,6 @@ vi.mock("../api", () => ({
   saveToLibrary: vi.fn().mockResolvedValue({}),
   deleteFromLibrary: vi.fn().mockResolvedValue(undefined),
 }));
-
-const EMPTY_PIPELINE = { name: "My Pipeline", variables: {}, nodes: [], edges: [] };
 
 function seedTab(libraryBinding?: { id: string | null; scope: "repo" | "user" | null }) {
   useEditStore.setState({
@@ -64,13 +61,10 @@ function seedTab(libraryBinding?: { id: string | null; scope: "repo" | "user" | 
   });
 }
 
-function renderInspector(libraryPipelines: LibraryPipelineEntry[] = []) {
+function renderInspector() {
   return render(
     <TooltipProvider>
-      <PipelineInspector
-        libraryPipelines={libraryPipelines}
-        onLibraryChanged={() => {}}
-      />
+      <PipelineInspector />
     </TooltipProvider>,
   );
 }
@@ -84,7 +78,7 @@ describe("PipelineInspector", () => {
   // PipelineStar is now the single source of truth (see PipelineStar.tsx).
   it("renders identity and does not show any inline star", () => {
     seedTab();
-    renderInspector([]);
+    renderInspector();
 
     expect(screen.getByText("Pipeline Inspector")).toBeInTheDocument();
     expect(screen.queryByTitle("Star as template")).not.toBeInTheDocument();
@@ -93,42 +87,30 @@ describe("PipelineInspector", () => {
 
   it("does not show an inline star even when the pipeline is in the library", () => {
     seedTab({ id: "my-pipeline", scope: "repo" });
-    const starred: LibraryPipelineEntry[] = [
-      { id: "my-pipeline", name: "My Pipeline", scope: "repo", node_count: 2, modified: null, yaml: "", pipeline: EMPTY_PIPELINE, prompts: {} },
-    ];
-    renderInspector(starred);
+    renderInspector();
 
     expect(screen.queryByTitle("Star as template")).not.toBeInTheDocument();
     expect(screen.queryByTitle("Remove from library")).not.toBeInTheDocument();
   });
 
-  it("shows a scope toggle only when the pipeline is in the library", () => {
+  it("does not expose legacy pipeline scope controls", () => {
     seedTab();
-    const { rerender } = renderInspector([]);
+    const { rerender } = renderInspector();
     expect(screen.queryByTestId("pipeline-inspector-scope")).not.toBeInTheDocument();
 
     seedTab({ id: "my-pipeline", scope: "repo" });
     rerender(
       <TooltipProvider>
-        <PipelineInspector
-          libraryPipelines={[
-            { id: "my-pipeline", name: "My Pipeline", scope: "repo", node_count: 2, modified: null, yaml: "", pipeline: EMPTY_PIPELINE, prompts: {} },
-          ]}
-          onLibraryChanged={() => {}}
-        />
+        <PipelineInspector />
       </TooltipProvider>,
     );
-    expect(screen.getByTestId("pipeline-inspector-scope")).toBeInTheDocument();
-    // The currently-selected scope renders with the acc-coloured outline; the
-    // other option is still visible so the user can flip.
-    expect(screen.getByTestId("pipeline-inspector-scope-repo")).toBeInTheDocument();
-    expect(screen.getByTestId("pipeline-inspector-scope-user")).toBeInTheDocument();
+    expect(screen.queryByTestId("pipeline-inspector-scope")).not.toBeInTheDocument();
   });
 
   // Prompt-required checkbox (#158)
   it("checks 'Prompt required' by default when the flag is absent", () => {
     seedTab();
-    renderInspector([]);
+    renderInspector();
     const checkbox = screen.getByTestId("prompt-required-checkbox") as HTMLInputElement;
     expect(checkbox.checked).toBe(true);
   });
@@ -140,14 +122,14 @@ describe("PipelineInspector", () => {
         t.id === "p1" ? { ...t, pipeline: { ...t.pipeline, prompt_required: false } } : t,
       ),
     }));
-    renderInspector([]);
+    renderInspector();
     const checkbox = screen.getByTestId("prompt-required-checkbox") as HTMLInputElement;
     expect(checkbox.checked).toBe(false);
   });
 
   it("toggling the checkbox persists prompt_required to the store", () => {
     seedTab();
-    renderInspector([]);
+    renderInspector();
     const checkbox = screen.getByTestId("prompt-required-checkbox");
 
     // Uncheck → prompt-optional.
@@ -176,7 +158,7 @@ describe("PipelineInspector", () => {
           : t,
       ),
     }));
-    renderInspector([]);
+    renderInspector();
     expect(screen.getByText("Pipeline Inspector")).toBeInTheDocument(); // inspector did mount
     expect(screen.queryByTestId("lint-banner")).not.toBeInTheDocument(); // but no banner
   });

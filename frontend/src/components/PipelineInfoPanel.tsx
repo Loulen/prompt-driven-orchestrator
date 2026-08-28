@@ -1,10 +1,10 @@
 import { useState, useMemo, useRef, useEffect } from "react";
-import { Info, Terminal, X, FileText, Code, Box, Loader, Bot } from "lucide-react";
+import { Info, Terminal, X, FileText, Code, Box, Loader, Bot, Copy, Download, ChevronDown, ChevronRight } from "lucide-react";
 import { SectionHead } from "./InspectorPrimitives";
 import TmuxTerminal from "./TmuxTerminal";
 import DiffSection from "./DiffSection";
 import type { LibraryPipelineEntry } from "../api";
-import { openLibraryAssistant } from "../api";
+import { fetchPipelineDocument, fetchRunPipelineDocument, openLibraryAssistant } from "../api";
 import type { RunState, PipelineDef } from "../types";
 import { isLiveRun } from "../types";
 import { formatDuration, useRunDuration } from "../lib/runDuration";
@@ -185,7 +185,12 @@ export default function PipelineInfoPanel({
       )}
 
       {resolvedTab === "yaml" && (
-        <YamlTab pipeline={pipeline} scrollToLine={scrollToLine} />
+        <YamlTab
+          pipeline={pipeline}
+          pipelineId={assistantId ?? null}
+          runId={run?.run_id ?? null}
+          scrollToLine={scrollToLine}
+        />
       )}
     </aside>
   );
@@ -469,12 +474,44 @@ function InfoTab({
   );
 }
 
-function YamlTab({ pipeline, scrollToLine }: { pipeline: PipelineDef | null; scrollToLine?: number }) {
+function YamlTab({
+  pipeline,
+  pipelineId,
+  runId,
+  scrollToLine,
+}: {
+  pipeline: PipelineDef | null;
+  pipelineId: string | null;
+  runId: string | null;
+  scrollToLine?: number;
+}) {
   const preRef = useRef<HTMLPreElement>(null);
-  const yaml = useMemo(
+  const fallbackYaml = useMemo(
     () => (pipeline ? serializePipeline(pipeline) : ""),
     [pipeline],
   );
+  const [yaml, setYaml] = useState(fallbackYaml);
+  const [copied, setCopied] = useState(false);
+  const [showExcluded, setShowExcluded] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const request = runId
+      ? fetchRunPipelineDocument(runId)
+      : pipelineId
+        ? fetchPipelineDocument(pipelineId)
+        : Promise.resolve(fallbackYaml);
+    request
+      .then((document) => {
+        if (!cancelled) setYaml(document);
+      })
+      .catch(() => {
+        if (!cancelled) setYaml(fallbackYaml);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [fallbackYaml, pipelineId, runId]);
 
   useEffect(() => {
     if (scrollToLine == null || !preRef.current) return;
@@ -491,8 +528,66 @@ function YamlTab({ pipeline, scrollToLine }: { pipeline: PipelineDef | null; scr
     );
   }
 
+  async function copyDocument() {
+    await navigator.clipboard.writeText(yaml);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 2000);
+  }
+
+  const pipelineName = pipeline.name || "pipeline";
+
+  function downloadDocument() {
+    const url = URL.createObjectURL(new Blob([yaml], { type: "application/yaml" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${pipelineName}.pdo.yaml`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-auto">
+      <div className="border-b border-line bg-bg-3 px-3 py-2" data-testid="portable-document-bar">
+        <div className="flex items-center gap-2">
+          <span className="h-1.5 w-1.5 rounded-full bg-acc" />
+          <span className="font-medium text-fg-2" style={{ fontSize: "11px" }}>
+            Portable document · v1
+          </span>
+          <button
+            className="ml-auto flex items-center gap-1 rounded px-1.5 py-1 text-fg-3 hover:bg-bg-4 hover:text-fg"
+            onClick={copyDocument}
+          >
+            <Copy size={11} />
+            {copied ? "✓ Copied" : "Copy"}
+          </button>
+          <button
+            className="flex items-center gap-1 rounded px-1.5 py-1 text-fg-3 hover:bg-bg-4 hover:text-fg"
+            onClick={downloadDocument}
+          >
+            <Download size={11} />
+            Download
+          </button>
+        </div>
+        {runId && (
+          <p className="mt-1 text-fg-4" style={{ fontSize: "10px" }}>
+            This is the pipeline that ran, not the Run. Runtime values are not included.
+          </p>
+        )}
+        <button
+          className="mt-1.5 flex items-center gap-1 text-fg-4 hover:text-fg-2"
+          style={{ fontSize: "10.5px" }}
+          onClick={() => setShowExcluded((value) => !value)}
+        >
+          {showExcluded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+          Not included
+        </button>
+        {showExcluded && (
+          <p className="mt-1 text-fg-4" style={{ fontSize: "10px" }}>
+            Secrets, environment, runtime values, and instance configuration. Named agent
+            profiles become Inherit; shared nodes become ordinary nodes.
+          </p>
+        )}
+      </div>
       <pre
         ref={preRef}
         className="flex-1 overflow-auto p-3 font-mono text-fg-3 select-text"

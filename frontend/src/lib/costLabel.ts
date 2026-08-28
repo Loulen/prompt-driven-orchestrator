@@ -7,7 +7,7 @@
 // The vocabulary lives here ONCE so the per-run row and the charts stay
 // byte-identical.
 
-import type { HarnessCost } from "../types";
+import type { HarnessCost, NodeCost } from "../types";
 
 /** Adaptive precision: sub-dollar estimates show 4 decimals, else 2 (#272). */
 export function costPrecision(usd: number): number {
@@ -37,6 +37,29 @@ export const COST_ESTIMATE_NOTE =
  */
 export const COST_REPORTED_NOTE =
   "Reported by the harness in its own billing unit, converted by a published constant — not re-derived from tokens.";
+
+export function nodeCostTitle(cost: NodeCost): string {
+  const base =
+    cost.form === "reported"
+      ? COST_REPORTED_NOTE
+      : cost.form === "derived"
+        ? COST_ESTIMATE_NOTE
+        : cost.usd === null
+          ? "Cost projected from attributed harness contributions."
+          : "Includes derived estimates and harness-reported costs; reported portions are not re-derived from tokens.";
+  const lowerBound = cost.partial
+    ? lowerBoundClause(cost.unpriced_models ?? [])
+    : "";
+  const unavailable =
+    cost.usd === null && (cost.unavailable_reasons?.length ?? 0) > 0
+      ? ` Cost unavailable: ${cost.unavailable_reasons!.join("; ")}.`
+      : "";
+  const executions =
+    cost.executions > 1
+      ? ` Covers ${cost.executions} executions of this node.`
+      : "";
+  return `${base}${lowerBound}${unavailable}${executions}`;
+}
 
 /** A per-harness slice ready to render (#615): its harness, dollar text, and form. */
 export interface CostVentilationSlice {

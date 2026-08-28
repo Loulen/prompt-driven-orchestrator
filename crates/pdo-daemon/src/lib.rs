@@ -16876,16 +16876,7 @@ fn augment_run_state_from_disk(
     // the immutable borrow of `run_state` ends before the mutable assignment to `.loc`.
     let base = run_diff_base(run_state).to_string();
     run_state.loc = compute_run_loc(repo_root, &run_state.run_id, &base);
-    // Estimated cost (#272), likewise independent of the run YAML: it reads the
-    // Claude Code transcripts under `projects_root` (the #408 seam — the staged
-    // home while a sandboxed Run is live, `~/.claude/projects/` otherwise), not
-    // the run dir. `repo_root` builds the run-id dir prefix, not the read root.
-    // #553/ADR-0045: honest about a harness with no cost source. If a node ran on
-    // such a harness the aggregate is not summable, so this yields a "—"-with-reason
-    // `CostStat` (never `$0`); otherwise it is exactly `compute_run_cost`. Needs the
-    // raw events for the frozen-at-spawn harnesses (`RunState` alone does not carry
-    // them per node).
-    run_state.cost = run_cost::run_cost_or_absence(
+    let breakdown = run_cost::compute_run_cost_breakdown_cached(
         events,
         projects_root,
         copilot_root,
@@ -16893,6 +16884,63 @@ fn augment_run_state_from_disk(
         &run_state.run_id,
         prices,
     );
+    run_state.cost = breakdown.cost;
+
+    let mut node_costs: std::collections::HashMap<String, (event_log::NodeCost, bool)> =
+        std::collections::HashMap::new();
+    for contribution in breakdown
+        .contributions
+        .iter()
+        .filter(|contribution| contribution.scope == run_cost::CostScope::Node)
+    {
+        let Some(node_id) = contribution.node_id.as_ref() else {
+            continue;
+        };
+        let (cost, has_unknown) = node_costs.entry(node_id.clone()).or_insert_with(|| {
+            (
+                event_log::NodeCost {
+                    usd: Some(0.0),
+                    form: contribution.form,
+                    partial: false,
+                    unpriced_models: Vec::new(),
+                    unavailable_reasons: Vec::new(),
+                    executions: 0,
+                    readable_executions: 0,
+                },
+                false,
+            )
+        });
+        if cost.executions > 0 && cost.form != contribution.form {
+            cost.form = None;
+        } else if cost.executions == 0 {
+            cost.form = contribution.form;
+        }
+        if let Some(usd) = contribution.usd {
+            if !*has_unknown {
+                cost.usd = Some(cost.usd.unwrap_or_default() + usd);
+            }
+        } else {
+            *has_unknown = true;
+            cost.usd = None;
+            cost.form = None;
+        }
+        cost.partial |= contribution.partial;
+        cost.executions += contribution.executions;
+        cost.readable_executions += contribution.readable_executions;
+        cost.unpriced_models
+            .extend(contribution.unpriced_models.iter().cloned());
+        cost.unavailable_reasons
+            .extend(contribution.unavailable_reasons.iter().cloned());
+    }
+    for (node_id, (mut cost, _)) in node_costs {
+        cost.unpriced_models.sort();
+        cost.unpriced_models.dedup();
+        cost.unavailable_reasons.sort();
+        cost.unavailable_reasons.dedup();
+        if let Some(node) = run_state.nodes.get_mut(&node_id) {
+            node.cost = Some(cost);
+        }
+    }
 
     let yaml_path = run_scoped_pipeline_path(repo_root, &run_state.run_id);
     let Ok(yaml) = std::fs::read_to_string(&yaml_path) else {
@@ -21118,6 +21166,63 @@ mod tests {
         assert!(body.get("cost").is_none() || body["cost"].is_null());
     }
 
+    #[test]
+    fn run_detail_projects_the_same_cost_onto_its_parent_node() {
+        let home = tempfile::tempdir().unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        let projects = home.path().join(".claude/projects");
+        let copilot = home.path().join(".copilot/session-state");
+        let run_id = "node-cost";
+        let working_dir = worktree_ops::worktree_dir_for_run(repo.path(), run_id);
+        let project = projects.join(run_cost::cc_project_dirname(&working_dir));
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join("sid.jsonl"),
+            "{\"type\":\"assistant\",\"requestId\":\"r\",\"message\":{\"id\":\"m\",\"model\":\"claude-opus-4-8\",\"usage\":{\"input_tokens\":1000000}}}\n",
+        )
+        .unwrap();
+        let events = vec![
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::RunStarted,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({ "pipeline_name": "test" })),
+            },
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeStarted,
+                node_id: Some("worker".into()),
+                iter: Some(1),
+                payload: Some(serde_json::json!({
+                    "node_type": "doc-only",
+                    "harness": "claude",
+                    "session_id": "sid"
+                })),
+            },
+        ];
+        let mut run_state = event_log::project(&events).unwrap();
+
+        augment_run_state_from_disk(
+            &mut run_state,
+            &events,
+            &projects,
+            &copilot,
+            repo.path(),
+            &price_table::PriceTable::load(home.path()),
+        );
+
+        let node_cost = run_state.nodes["worker"].cost.as_ref().unwrap();
+        assert_eq!(node_cost.form, Some(event_log::CostForm::Derived));
+        assert!((node_cost.usd.unwrap() - 5.0).abs() < 1e-9);
+        assert_eq!(node_cost.executions, 1);
+        assert_eq!(run_state.cost.as_ref().unwrap().usd, node_cost.usd.unwrap());
+    }
+
     #[tokio::test]
     async fn cleanup_run_archives_and_preserves_events() {
         let state = test_state().await;
@@ -23001,6 +23106,7 @@ mod tests {
             node_id.into(),
             event_log::NodeState {
                 harness: None,
+                cost: None,
                 node_id: node_id.into(),
                 status,
                 iter,
@@ -23217,6 +23323,7 @@ mod tests {
             "a".into(),
             event_log::NodeState {
                 harness: None,
+                cost: None,
                 node_id: "a".into(),
                 status: event_log::NodeStatus::Completed,
                 iter: 2,
@@ -23272,6 +23379,7 @@ mod tests {
             "a".into(),
             event_log::NodeState {
                 harness: None,
+                cost: None,
                 node_id: "a".into(),
                 status: event_log::NodeStatus::Stale,
                 iter: 1,
@@ -23292,6 +23400,7 @@ mod tests {
             "b".into(),
             event_log::NodeState {
                 harness: None,
+                cost: None,
                 node_id: "b".into(),
                 status: event_log::NodeStatus::Waiting,
                 iter: 1,
@@ -23519,6 +23628,7 @@ mod tests {
                 node_id.into(),
                 event_log::NodeState {
                     harness: None,
+                    cost: None,
                     node_id: node_id.into(),
                     status: event_log::NodeStatus::Completed,
                     iter: iters,

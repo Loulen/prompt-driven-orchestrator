@@ -524,6 +524,8 @@ pub struct NodeState {
     /// snapshot; `skip_serializing_if` keeps the wire byte-identical when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<NodeCost>,
     pub status: NodeStatus,
     pub iter: i64,
     pub started_at: Option<String>,
@@ -555,6 +557,19 @@ pub struct NodeState {
     /// byte-identical for any non-`script` failure.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub missing_outputs: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NodeCost {
+    pub usd: Option<f64>,
+    pub form: Option<CostForm>,
+    pub partial: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unpriced_models: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unavailable_reasons: Vec<String>,
+    pub executions: i64,
+    pub readable_executions: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1915,6 +1930,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                     .entry(node_id.clone())
                     .or_insert_with(|| NodeState {
                         harness: None,
+                        cost: None,
                         node_id: node_id.clone(),
                         status: NodeStatus::Waiting,
                         iter,
@@ -1950,6 +1966,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                     .entry(node_id.clone())
                     .or_insert_with(|| NodeState {
                         harness: None,
+                        cost: None,
                         node_id: node_id.clone(),
                         status: NodeStatus::Running,
                         iter,
@@ -2039,6 +2056,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                         node_id.clone(),
                         NodeState {
                             harness: None,
+                            cost: None,
                             node_id: node_id.clone(),
                             status: done_status.clone(),
                             iter,
@@ -2157,6 +2175,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                     .entry(node_id.clone())
                     .or_insert_with(|| NodeState {
                         harness: None,
+                        cost: None,
                         node_id: node_id.clone(),
                         status: NodeStatus::Interrupted,
                         iter,
@@ -2282,6 +2301,7 @@ fn apply_switch_event(state: &mut RunState, event: &Event) {
                 .entry(node_id.to_string())
                 .or_insert_with(|| NodeState {
                     harness: None,
+                    cost: None,
                     node_id: node_id.to_string(),
                     status: NodeStatus::Completed,
                     iter,
@@ -3470,6 +3490,7 @@ mod tests {
         assert_eq!(value["harness"], "copilot");
         let bare = super::NodeState {
             harness: None,
+            cost: None,
             node_id: "x".into(),
             status: NodeStatus::Waiting,
             iter: 1,
@@ -6424,6 +6445,7 @@ mod tests {
     ) -> NodeState {
         NodeState {
             harness: None,
+            cost: None,
             node_id: id.to_string(),
             status,
             iter,

@@ -10,6 +10,13 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.45.0
+
+**Un seul fold de coût attribué pour le Run, ses Nodes et Stats** (#647 ; ADR-0058). Les coûts des
+subagents Claude et Copilot appartiennent au Node parent et chaque message Claude est dédupliqué à
+l'échelle du Run. `GET /runs/:id` expose désormais un coût dérivé à la lecture sur chaque Node
+agentique ; une valeur inconnue reste `null` et s'affiche « — », jamais zéro.
+
 ## 1.37.0
 
 **Assistant de bibliothèque : un seul assistant, focus par message, reap par inactivité** (#594 ;

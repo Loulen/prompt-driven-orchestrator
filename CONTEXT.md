@@ -67,6 +67,19 @@ Le **modèle** dit *quel agent* tourne, le **niveau d'effort** *combien il réfl
 - **Ce que la reprise conserve dépend du harnais** : sur `claude`, le modèle survit, l'effort non — PDO le re-pose depuis l'événement de démarrage, jamais depuis le YAML courant, qui a pu être édité entre-temps (#424, ADR-0007). Le YAML est la vérité au *spawn*, l'event log au *resume*.
 - **Défaut d'instance** (#347) : un modèle par harnais peut être posé daemon-wide (Configuration d'instance, ADR-0015).
 
+### Profil agentique
+
+Un **profil agentique** est un réglage d'instance nommé et réutilisable qui associe un harnais agentique obligatoire à un modèle et un niveau d'effort facultatifs. Son identité ne dépend pas de son nom, qui peut changer sans casser ses référents.
+
+Là où PDO choisit aujourd'hui un harnais, avec ou sans modèle et effort, l'utilisateur choisit **Inherit**, un profil agentique nommé, ou **Custom**. Inherit poursuit la précédence `Node → Run → Projet → Configuration d'instance → Default` ; un profil nommé fournit sa combinaison complète ; Custom porte à ce tier une combinaison complète non réutilisable. Le pipeline distingue visuellement les nodes qui suivent un profil de ceux qui utilisent Custom.
+
+Le profil **Default** est le plancher modifiable et renommable de l'instance, avec une identité réservée et sans suppression possible ; il vaut initialement `claude`, sans modèle ni effort. La référence à tout profil reste vivante jusqu'au démarrage du node, qui en gèle alors les valeurs pour cette exécution. Un profil référencé puis supprimé produit un avertissement et reprend la précédence au tier suivant.
+
+Les noms de profils sont uniques sans distinction de casse. Un picker affiche le nom puis la combinaison `harnais - modèle - effort`, en signalant les valeurs absentes. Avant une suppression, PDO liste toutes les références encore vivantes ; les NodeRuns déjà démarrés n'en font pas partie.
+
+Modifier un profil ne modifie ni ne salit les pipelines qui le référencent ; leur affichage reflète sa valeur vivante. Un profil absent apparaît dans l'avertissement global du pipeline et dans le picker qui porte la référence cassée.
+_Éviter_ : « profil » seul (ambigu avec le profil de staging), « preset », « template », « copie du profil », « override manuel », « ancien mode » pour Custom.
+
 ### Node `script` — exécution déterministe (ADR-0017)
 
 Un node **`script`** exécute le bash de l'auteur au lieu de lancer Claude, dans une **session tmux** attachable comme tout NodeRun (ADR-0005) : exit 0 ⇒ `completed`, non-zéro ou timeout ⇒ `failed`. En v1 il est d'**effet doc-only** (tourne dans le worktree du Run, doit le laisser propre).

@@ -215,6 +215,21 @@ describe("PipelineInfoPanel — Assistant tab (#302)", () => {
     expect(writeText).toHaveBeenCalledWith(expect.stringContaining("pdo_pipeline: 1"));
   });
 
+  it("surfaces a rejected clipboard write", async () => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: vi.fn().mockRejectedValue(new Error("denied")) },
+    });
+    renderTemplatePanel();
+
+    await userEvent.click(screen.getByTestId("info-tab-yaml"));
+    await userEvent.click(await screen.findByRole("button", { name: "Copy" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Clipboard access was denied. Use Download instead.",
+    );
+  });
+
   it("ensures the shared session on open, with no pipeline id", async () => {
     renderTemplatePanel({ initialTab: "assistant" });
 

@@ -492,6 +492,7 @@ function YamlTab({
   );
   const [yaml, setYaml] = useState(fallbackYaml);
   const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState(false);
   const [showExcluded, setShowExcluded] = useState(false);
 
   useEffect(() => {
@@ -529,9 +530,14 @@ function YamlTab({
   }
 
   async function copyDocument() {
-    await navigator.clipboard.writeText(yaml);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 2000);
+    setCopyError(false);
+    try {
+      await navigator.clipboard.writeText(yaml);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setCopyError(true);
+    }
   }
 
   const pipelineName = pipeline.name || "pipeline";
@@ -568,6 +574,11 @@ function YamlTab({
             Download
           </button>
         </div>
+        {copyError && (
+          <div className="mt-1 text-st-failed" role="alert">
+            Clipboard access was denied. Use Download instead.
+          </div>
+        )}
         {runId && (
           <p className="mt-1 text-fg-4" style={{ fontSize: "10px" }}>
             This is the pipeline that ran, not the Run. Runtime values are not included.

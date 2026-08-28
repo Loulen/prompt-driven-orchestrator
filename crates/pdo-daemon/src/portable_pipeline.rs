@@ -101,10 +101,26 @@ pub(crate) fn interpret(source: &str) -> Result<InterpretedDocument, String> {
         ));
     }
 
-    let document: PortablePipelineDocument =
-        serde_yaml::from_value(value).map_err(|e| format!("invalid pipeline document: {e}"))?;
-    let portable = serde_yaml::from_value(document.pipeline)
-        .map_err(|e| format!("pipeline: invalid definition: {e}"))?;
+    let document: PortablePipelineDocument = serde_yaml::from_value(value).map_err(|e| {
+        if e.to_string().starts_with("missing field") {
+            format!(
+                "truncated or incomplete pipeline document at line {}: {e}",
+                source.lines().count().max(1)
+            )
+        } else {
+            format!("invalid pipeline document: {e}")
+        }
+    })?;
+    let portable = serde_yaml::from_value(document.pipeline).map_err(|e| {
+        if e.to_string().starts_with("missing field") {
+            format!(
+                "truncated or incomplete pipeline document at line {}: pipeline: {e}",
+                source.lines().count().max(1)
+            )
+        } else {
+            format!("pipeline: invalid definition: {e}")
+        }
+    })?;
     let portable = make_portable(portable);
 
     let canonical = serde_yaml::to_string(&portable)
@@ -282,6 +298,16 @@ mod tests {
     fn unknown_version_is_rejected_with_the_document_path() {
         let error = super::interpret("pdo_pipeline: 4\npipeline: {}\nprompts: {}\n").unwrap_err();
         assert!(error.contains("pdo_pipeline: 4"), "{error}");
+    }
+
+    #[test]
+    fn truncated_document_is_rejected_with_its_last_line() {
+        let source = "pdo_pipeline: 1\npipeline:\n  version: '1.0'\n";
+
+        let error = super::interpret(source).unwrap_err();
+
+        assert!(error.contains("truncated or incomplete"), "{error}");
+        assert!(error.contains("line 3"), "{error}");
     }
 
     #[test]

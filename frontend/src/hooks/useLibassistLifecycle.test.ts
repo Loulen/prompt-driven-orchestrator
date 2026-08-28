@@ -35,7 +35,7 @@ describe("useLibassistLifecycle (#594)", () => {
 
   it("declares the focus as soon as an edit view is open", () => {
     render({ id: "alpha", scope: "user", open: true });
-    expect(putLibassistFocus).toHaveBeenCalledWith("alpha", "user");
+    expect(putLibassistFocus).toHaveBeenCalledWith("alpha");
   });
 
   // The heartbeat is the whole "do not reap while I am editing" mechanism: the
@@ -58,10 +58,10 @@ describe("useLibassistLifecycle (#594)", () => {
 
   it("re-declares immediately when the edited template changes", () => {
     const { rerender } = render({ id: "alpha", scope: "user", open: true });
-    expect(putLibassistFocus).toHaveBeenLastCalledWith("alpha", "user");
+    expect(putLibassistFocus).toHaveBeenLastCalledWith("alpha");
 
     rerender({ id: "beta", scope: "library", open: true });
-    expect(putLibassistFocus).toHaveBeenLastCalledWith("beta", "library");
+    expect(putLibassistFocus).toHaveBeenLastCalledWith("beta");
     // Switching template must NOT reap: that is the shared session's whole point.
     expect(closeLibraryAssistant).not.toHaveBeenCalled();
   });
@@ -81,7 +81,7 @@ describe("useLibassistLifecycle (#594)", () => {
     act(() => {
       vi.advanceTimersByTime(20_000);
     });
-    expect(putLibassistFocus).toHaveBeenLastCalledWith("alpha", "user");
+    expect(putLibassistFocus).toHaveBeenLastCalledWith("alpha");
 
     rerender({ id: "alpha", scope: "user", open: true });
     expect(closeLibraryAssistant).not.toHaveBeenCalled();

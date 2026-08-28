@@ -72,6 +72,25 @@ describe("portable pipeline import", () => {
     expect(screen.getByTestId("pipeline-document-input")).toBeInTheDocument();
   });
 
+  it("offers to switch modes for a partial Claude workflow header", async () => {
+    render(
+      <UnifiedLeftPanel
+        runs={[]}
+        selectedRunId={null}
+        onSelectRun={() => {}}
+        onNewRun={() => {}}
+      />,
+    );
+    await userEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
+    await userEvent.click(screen.getByTestId("import-workflow-button"));
+    fireEvent.change(screen.getByTestId("pipeline-document-input"), {
+      target: { value: "export default {\n  meta: {\n    name: 'Review'" },
+    });
+
+    expect(screen.getByText(/looks like a Claude Code workflow/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Import" })).toBeDisabled();
+  });
+
   it("opens a successful Claude import even when translation warnings remain", async () => {
     const openPipeline = vi.fn().mockResolvedValue(undefined);
     useEditStore.setState({ openPipeline });

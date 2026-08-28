@@ -1143,7 +1143,10 @@ function ImportWorkflowModal({
   const openPipeline = useEditStore((s) => s.openPipeline);
 
   const looksLikePdo = /^\s*pdo_pipeline\s*:/m.test(content);
-  const looksLikeClaude = /\b(?:agent|pipeline|parallel)\s*\(/.test(content);
+  const looksLikeClaude =
+    /\b(?:agent|pipeline|parallel)\s*\(/.test(content) ||
+    /\bmeta\s*:\s*\{/.test(content) ||
+    /^\s*(?:export\s+default|const\s+\w+\s*=)/m.test(content);
   const mismatch =
     content.trim() &&
     ((mode === "pdo" && looksLikeClaude && !looksLikePdo) ||

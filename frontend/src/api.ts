@@ -548,16 +548,12 @@ export function closeLibraryAssistant(
  *
  * Two jobs in one call: it is how the assistant learns the open pipeline on its
  * next message, and it is how the daemon's reaper knows a human is still editing
- * even when no terminal is attached. Only `{id, scope}` — the daemon resolves the
- * file path, because "scope" does not mean the same thing on an edit tab as it
- * does in the library store.
+ * even when no terminal is attached. The daemon resolves the instance-owned
+ * pipeline path from its id.
  */
-export function putLibassistFocus(
-  pipelineId: string | null,
-  scope?: string,
-): Promise<unknown> {
+export function putLibassistFocus(pipelineId: string | null): Promise<unknown> {
   return request("PUT", "/sessions/libassist/focus", {
-    body: { pipeline_id: pipelineId, scope },
+    body: { pipeline_id: pipelineId },
     label: "declare assistant focus",
   });
 }

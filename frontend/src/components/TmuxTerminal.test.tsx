@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Mock ResizeObserver
@@ -511,14 +511,15 @@ describe("TmuxTerminal", () => {
           paneSource={paneSource}
         />,
       );
-      await new Promise((r) => setTimeout(r, 10));
-
-      const written = mockTerminalInstances[0].write.mock.calls
-        .map((c) => c[0])
-        .join("");
-      // A bare \n moves down without returning: every line would start where the
-      // previous one ended.
-      expect(written).toBe("first line\r\nsecond line\r\n");
+      await waitFor(() => {
+        expect(mockTerminalInstances).toHaveLength(1);
+        const written = mockTerminalInstances[0].write.mock.calls
+          .map((c) => c[0])
+          .join("");
+        // A bare \n moves down without returning: every line would start where the
+        // previous one ended.
+        expect(written).toBe("first line\r\nsecond line\r\n");
+      });
     });
 
     it("says the pane is a snapshot and offers no detach", async () => {

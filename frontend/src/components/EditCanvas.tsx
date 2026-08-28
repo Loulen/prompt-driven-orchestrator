@@ -43,6 +43,8 @@ import PipelineStar from "./PipelineStar";
 import { usePipelineLibraryState } from "../hooks/useLibraryPipelines";
 import { useDismissedNudges } from "../hooks/useDismissedNudges";
 import { anchorHandleId, anchorsByDropOnBody, chooseAnchorSide, isEmergentInputNode } from "../lib/anchorSide";
+import { useAgentProfiles } from "../hooks/useAgentProfiles";
+import { Bookmark, SlidersHorizontal, TriangleAlert } from "lucide-react";
 
 // The four emergent body anchor handles (#168), each pinned to its side-centre
 // with the matching xyflow `Position` so a bound incoming edge arrives from that
@@ -81,6 +83,7 @@ interface EditNodeData {
   // collection (`⇉ ...`, #151) or a single-member bounded loop (`↻ ...`, #173).
   // Absent on non-member nodes and on multi-member regions (boxed instead).
   loopBadge?: { text: string; kind: LoopKind };
+  agentMode?: "inherit" | "profile" | "custom" | "broken";
   [key: string]: unknown;
 }
 
@@ -174,7 +177,18 @@ export function EditNode({ data, id, selected }: NodeProps<Node<EditNodeData>>) 
           and the amber interactive badge are intentionally dropped from the
           card. */}
       <div className="flex items-center gap-2">
-        <NodeTypeIcon type={data.nodeType} size={14} className={`shrink-0 ${iconColor}`} />
+        <span className="relative shrink-0">
+          <NodeTypeIcon type={data.nodeType} size={14} className={iconColor} />
+          {data.agentMode === "profile" && (
+            <Bookmark data-testid="agent-mode-profile" size={8} className="absolute -bottom-1 -right-1 text-fg-2" />
+          )}
+          {data.agentMode === "custom" && (
+            <SlidersHorizontal data-testid="agent-mode-custom" size={8} className="absolute -bottom-1 -right-1 text-fg-2" />
+          )}
+          {data.agentMode === "broken" && (
+            <TriangleAlert data-testid="agent-mode-broken" size={8} className="absolute -bottom-1 -right-1 text-st-blocked" />
+          )}
+        </span>
         <span className="font-medium text-fg">{data.label}</span>
         <CodeDocMarker type={data.nodeType} />
         {data.loopBadge && (
@@ -396,6 +410,11 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
     tab?.libraryId ?? null,
     tab?.prompts,
   );
+  const { profiles: agentProfiles } = useAgentProfiles();
+  const agentProfileIds = useMemo(
+    () => new Set(agentProfiles.map((profile) => profile.id)),
+    [agentProfiles],
+  );
   const setLibraryBinding = useEditStore((s) => s.setLibraryBinding);
 
   // Lock the library binding once we've identified a match by name. This makes
@@ -411,7 +430,7 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
 
   const derivedNodes = useMemo(() => {
     if (!pipeline) return [];
-    const cards = deriveEditNodes(pipeline, activeRunState);
+    const cards = deriveEditNodes(pipeline, activeRunState, agentProfileIds);
     // Bounded loop regions (ADR-0011 / #148) render as translucent boxes BEHIND
     // their member cards. Each multi-member region is backed by a decorative,
     // non-interactive `loopRegion` node so it tracks pan/zoom with the graph;
@@ -425,7 +444,7 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
     // pipeline alone (independent of run state).
     const noteNodes: Node[] = buildNoteNodes(pipeline);
     return [...regionNodes, ...cards, ...noteNodes];
-  }, [pipeline, activeRunState]);
+  }, [pipeline, activeRunState, agentProfileIds]);
   const derivedEdges = useMemo(
     () => (pipeline ? deriveEditEdges(pipeline) : []),
     [pipeline],
@@ -632,8 +651,17 @@ function EditCanvasInner({ libraryEntries, libraryPipelines, onLibraryDelete, on
       ...n,
       kind: "nudge" as const,
     }));
-    return [...lint, ...nudges];
-  }, [tab]);
+    const missingProfiles = tab.pipeline.nodes.flatMap((node) => {
+      const choice = node.agent_choice;
+      if (choice?.mode !== "profile" || agentProfileIds.has(choice.profile_id)) return [];
+      return [{
+        id: `agent-profile:${node.id}:${choice.profile_id}`,
+        kind: "lint" as const,
+        message: `Agent profile ${choice.profile_id} no longer exists. Node ${node.name ?? node.id} falls back to the next tier. Pick a profile or set Custom.`,
+      }];
+    });
+    return [...lint, ...missingProfiles, ...nudges];
+  }, [tab, agentProfileIds]);
   // Filter BEFORE the render gate so dismissing the last nudge (with no lint)
   // collapses the whole overlay. MUST depend on `dismissed` or it won't update.
   const visibleItems = useMemo(

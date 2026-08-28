@@ -110,6 +110,16 @@ pub(crate) struct InstanceConfig {
     /// [`Self::autocomplete_turn_end`]: `NULL` makes the `stored → env → default`
     /// fall-through work; a stored `0` is a decision that beats the env.
     pub auto_fail: Option<i64>,
+    /// The Instance tier of the agentic-profile union (#563, ADR-0057) — the
+    /// **coarsest** tier `agent_choice::resolve` consults, just above the
+    /// reserved Default profile floor. `None` (unset) preserves the pre-#563
+    /// legacy precedence exactly: [`Self::default_harness`] /
+    /// [`Self::default_harness_model`] still apply. `Some(Profile | Custom)`
+    /// wins outright over them at this tier (never merges). Persisted as a
+    /// JSON object in a nullable TEXT column, same idiom as
+    /// [`Self::default_harness_model`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_choice: Option<crate::agent_choice::AgentChoice>,
     /// RFC3339-millis UTC timestamp of the last write (or the seed).
     pub updated_at: String,
 }
@@ -163,6 +173,13 @@ pub(crate) struct UpdateInstanceConfig {
     /// `1`, `Some(false)` stores `0`, `None` leaves it untouched. Same set-only,
     /// `0`-not-`NULL` discipline as [`Self::autocomplete_turn_end`].
     pub auto_fail: Option<bool>,
+    /// Set the Instance tier of the agentic-profile union (#563): `Some(None)`
+    /// clears it back to unset (legacy `default_harness`/`default_harness_model`
+    /// decide again); `Some(Some(choice))` sets it; `None` leaves it untouched.
+    /// Double-`Option`, mirroring [`crate::trigger_store::UpdateTrigger::harness`]
+    /// — this column, unlike the set-only numeric knobs, needs a genuine "clear"
+    /// path back to legacy precedence.
+    pub agent_choice: Option<Option<crate::agent_choice::AgentChoice>>,
 }
 
 impl UpdateInstanceConfig {
@@ -178,6 +195,7 @@ impl UpdateInstanceConfig {
             && self.default_harness.is_none()
             && self.default_harness_model.is_none()
             && self.auto_fail.is_none()
+            && self.agent_choice.is_none()
     }
 }
 
@@ -203,6 +221,7 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             default_harness_model TEXT,
             auto_fail          INTEGER,
             libassist_idle_ttl_secs INTEGER,
+            agent_choice       TEXT,
             updated_at         TEXT NOT NULL
         )",
     )
@@ -357,6 +376,22 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
+    // Additive migration for pre-#563 databases: the `agent_choice` column is
+    // absent on tables created before the agentic-profile union. Same guarded
+    // `ADD COLUMN` idiom — NULLABLE so an existing install falls through to the
+    // legacy `default_harness`/`default_harness_model` precedence unchanged.
+    let has_agent_choice = sqlx::query(
+        "SELECT 1 FROM pragma_table_info('instance_config') WHERE name = 'agent_choice'",
+    )
+    .fetch_optional(db)
+    .await?
+    .is_some();
+    if !has_agent_choice {
+        sqlx::query("ALTER TABLE instance_config ADD COLUMN agent_choice TEXT")
+            .execute(db)
+            .await?;
+    }
+
     Ok(())
 }
 
@@ -379,6 +414,11 @@ fn row_to_config(row: &sqlx::sqlite::SqliteRow) -> InstanceConfig {
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default(),
         auto_fail: row.get("auto_fail"),
+        // #563: NULL / unparseable ⇒ `None` — the tier is simply transparent,
+        // never an error (mirrors `default_harness_model`'s degrade-to-empty).
+        agent_choice: row
+            .get::<Option<String>, _>("agent_choice")
+            .and_then(|s| serde_json::from_str(&s).ok()),
         updated_at: row.get("updated_at"),
     }
 }
@@ -439,6 +479,9 @@ pub(crate) async fn update(
     if edit.auto_fail.is_some() {
         sets.push("auto_fail = ?");
     }
+    if edit.agent_choice.is_some() {
+        sets.push("agent_choice = ?");
+    }
     // Always bump the write timestamp on a real edit.
     sets.push("updated_at = ?");
 
@@ -495,6 +538,11 @@ pub(crate) async fn update(
         // 0/1, never NULL: unchecking must persist a stored `0` that beats a
         // `PDO_AUTO_FAIL=1`, not fall through to it (ADR-0049).
         query = query.bind(if v { 1_i64 } else { 0_i64 });
+    }
+    if let Some(v) = edit.agent_choice {
+        // #563: `Some(None)` → SQL NULL (fall back to legacy `default_harness`/
+        // `default_harness_model`); `Some(Some(choice))` → the serialized JSON.
+        query = query.bind(v.map(|c| serde_json::to_string(&c).unwrap_or_default()));
     }
     query = query.bind(crate::event_log::now_iso());
     query.execute(db).await?;
@@ -756,6 +804,137 @@ mod tests {
         let cfg = get(&db).await.unwrap();
         assert_eq!(cfg.default_harness.as_deref(), Some("opencode"));
         assert_eq!(cfg.default_harness_model, map);
+    }
+
+    /// #563/ADR-0057: the Instance tier of `AgentChoice` — a fresh row carries
+    /// none, round-trips a `Profile` reference, then clears back to `None` via
+    /// the `Some(None)` double-Option idiom (mirrors `trigger_store::harness`).
+    #[tokio::test]
+    async fn agent_choice_round_trips_and_clears() {
+        let db = test_db().await;
+        assert_eq!(get(&db).await.unwrap().agent_choice, None);
+
+        let choice = crate::agent_choice::AgentChoice::Profile {
+            profile_id: "reviewer".to_string(),
+        };
+        let updated = update(
+            &db,
+            UpdateInstanceConfig {
+                agent_choice: Some(Some(choice.clone())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.agent_choice, Some(choice.clone()));
+        assert_eq!(get(&db).await.unwrap().agent_choice, Some(choice));
+
+        // `Some(None)` clears it back to unset; `None` (the default) leaves it be.
+        update(
+            &db,
+            UpdateInstanceConfig {
+                agent_choice: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(get(&db).await.unwrap().agent_choice, None);
+    }
+
+    /// #563: a `Custom` combination round-trips model/effort too, and an
+    /// `agent_choice`-only edit does not disturb `default_harness`.
+    #[tokio::test]
+    async fn agent_choice_custom_round_trips_alongside_legacy_default_harness() {
+        let db = test_db().await;
+        update(
+            &db,
+            UpdateInstanceConfig {
+                default_harness: Some("claude".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let choice = crate::agent_choice::AgentChoice::Custom {
+            harness: "opencode".to_string(),
+            model: Some("gpt-5".to_string()),
+            effort: Some("high".to_string()),
+        };
+        update(
+            &db,
+            UpdateInstanceConfig {
+                agent_choice: Some(Some(choice.clone())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let cfg = get(&db).await.unwrap();
+        assert_eq!(cfg.agent_choice, Some(choice));
+        assert_eq!(
+            cfg.default_harness.as_deref(),
+            Some("claude"),
+            "an agent_choice-only edit must not touch the legacy field"
+        );
+    }
+
+    #[tokio::test]
+    async fn init_migrates_pre_agent_choice_schema() {
+        // #563: a table created before the `agent_choice` column gains it on
+        // init, idempotently, without clobbering a pre-existing knob — same
+        // guarded `ADD COLUMN` idiom as `default_harness` above.
+        let db = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::query(
+            "CREATE TABLE instance_config (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                session_cap INTEGER,
+                reaper_ttl_secs INTEGER,
+                guard_timeout_secs INTEGER,
+                default_model TEXT,
+                triggers_paused INTEGER,
+                default_sandbox TEXT,
+                autocomplete_turn_end INTEGER,
+                default_auto_name INTEGER,
+                default_harness TEXT,
+                default_harness_model TEXT,
+                auto_fail INTEGER,
+                libassist_idle_ttl_secs INTEGER,
+                updated_at TEXT NOT NULL
+            )",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO instance_config (id, session_cap, updated_at) VALUES (1, 7, 'seed')",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+
+        init(&db).await.unwrap();
+        init(&db).await.unwrap();
+
+        let cfg = get(&db).await.unwrap();
+        assert_eq!(cfg.session_cap, Some(7), "pre-existing knob survives");
+        assert_eq!(cfg.agent_choice, None, "new column defaults to NULL");
+
+        let choice = crate::agent_choice::AgentChoice::Profile {
+            profile_id: "reviewer".to_string(),
+        };
+        update(
+            &db,
+            UpdateInstanceConfig {
+                agent_choice: Some(Some(choice.clone())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(get(&db).await.unwrap().agent_choice, Some(choice));
     }
 
     #[tokio::test]

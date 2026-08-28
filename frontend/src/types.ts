@@ -258,6 +258,7 @@ export interface InstanceSettings {
     effective: Record<string, string>;
     stored: Record<string, string>;
   };
+  agent_choice?: AgentChoice | null;
   /**
    * Instance-wide default sandbox (#410/#432): `"off"` (host, default) or the name of a
    * **staging profile**. No longer a closed enum — its value space is the user's profile
@@ -440,6 +441,8 @@ export interface UpdateSettingsRequest {
   default_harness?: string;
   /** #550: per-harness default model map; replaces the stored map wholesale. */
   default_harness_model?: Record<string, string>;
+  /** Atomic instance agent selection. `null` clears to the Default floor. */
+  agent_choice?: AgentChoice | null;
   /** Default sandbox (#410/#432): `"off"` or a staging-profile name, or `""` to clear
    *  back to the built-in default (`off`). Same `""`-sentinel discipline as
    *  `default_model`. The daemon 400s a name that does not resolve.
@@ -511,6 +514,7 @@ export interface Project {
   name: string;
   /** The harness this Projet carries, or absent/null when it carries none. */
   harness?: string | null;
+  agent_choice?: AgentChoice | null;
   /** Member repository paths (the effective-repo keys the lists group by). */
   members: string[];
 }
@@ -552,6 +556,7 @@ export interface Trigger {
    *  instance default. Read at fire time and folded into the fired Run's harness (no
    *  separate Trigger tier — a cron tick and a "Run now" produce the same one). */
   harness?: string | null;
+  agent_choice?: AgentChoice | null;
   /** Whether Runs this Trigger fires are auto-named (#338). Frozen at creation from the
    *  instance default; `true` is the pre-#338 behaviour. A flat bool (no inherit state). */
   auto_name: boolean;
@@ -1017,6 +1022,35 @@ export interface NodeDef {
    *  are the RESOLVED harness's view (folded from this map on load, back into it on
    *  save); the map preserves entries for the non-resolved harnesses. */
   harnesses?: Record<string, HarnessSettings>;
+  /** Atomic agent selection for this node. Missing/`inherit` continues precedence. */
+  agent_choice?: AgentChoice | null;
+}
+
+export interface AgentCombination {
+  harness: string;
+  model?: string | null;
+  effort?: string | null;
+}
+
+export type AgentChoice =
+  | { mode: "inherit" }
+  | { mode: "profile"; profile_id: string }
+  | ({ mode: "custom" } & AgentCombination);
+
+export interface AgentProfile extends AgentCombination {
+  id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentProfileReferents {
+  profile_id: string;
+  instance: boolean;
+  pipelines: { id: string; name: string; node_id?: string }[];
+  runs: { run_id: string; name?: string | null }[];
+  projects: { id: string; name: string }[];
+  triggers: { id: string; name: string; pipeline_id: string }[];
 }
 
 /** #550/ADR-0046: a node's `{model, effort}` for one harness. Free-text

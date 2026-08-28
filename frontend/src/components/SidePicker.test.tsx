@@ -7,6 +7,7 @@ import { useEditStore } from "../stores/editStore";
 import type { NodeDef, PipelineDef } from "../types";
 
 vi.mock("../api", () => ({
+  fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
   saveToLibrary: vi.fn(),
   deleteFromLibrary: vi.fn(),
   instantiateFromLibrary: vi.fn(),

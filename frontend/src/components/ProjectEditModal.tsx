@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { Project } from "../types";
+import type { AgentChoice, Project } from "../types";
 import {
   addProjectMember,
   ApiError,
@@ -7,8 +7,10 @@ import {
   removeProjectMember,
   updateProject,
 } from "../api";
-import HarnessSelect from "./HarnessSelect";
 import { useHarnessCatalog } from "../hooks/useHarnessCatalog";
+import { useAgentProfiles } from "../hooks/useAgentProfiles";
+import AgentControl from "./AgentControl";
+import HarnessSelect from "./HarnessSelect";
 
 /**
  * The group-header pencil (#552, ADR-0046): name a Projet (or rename an existing
@@ -48,6 +50,9 @@ export default function ProjectEditModal({
 }) {
   const [name, setName] = useState(initialName);
   const [harness, setHarness] = useState<string>(initialProject?.harness ?? "");
+  const [agentChoice, setAgentChoice] = useState<AgentChoice>(
+    initialProject?.agent_choice ?? { mode: "inherit" },
+  );
   const [checked, setChecked] = useState<Set<string>>(
     () => new Set(initialMemberPaths),
   );
@@ -56,6 +61,7 @@ export default function ProjectEditModal({
   // #586: the harness options, dynamic from `/settings` (floor ∪ descriptors,
   // each installed/not). The modal holds no settings of its own, so it fetches.
   const harnessCatalog = useHarnessCatalog();
+  const { profiles: agentProfiles } = useAgentProfiles();
 
   // path → name of the Projet that OWNS it, excluding the one being edited. A
   // candidate owned elsewhere cannot be attached here (AC: at most one Projet).
@@ -102,11 +108,15 @@ export default function ProjectEditModal({
           name: trimmedName,
           // Empty select → clear the harness (null); a value sets it.
           harness: harness ? harness : null,
+          ...(agentChoice.mode === "inherit" ? {} : { agent_choice: agentChoice }),
         });
       } else {
         const created = await createProject(trimmedName);
         projectId = created.id;
-        if (harness) await updateProject(projectId, { harness });
+        await updateProject(projectId, {
+          ...(harness ? { harness } : {}),
+          ...(agentChoice.mode === "inherit" ? {} : { agent_choice: agentChoice }),
+        });
       }
 
       const current = new Set(initialProject?.members ?? []);
@@ -171,18 +181,26 @@ export default function ProjectEditModal({
           style={{ fontSize: "11px" }}
         />
 
-        <label className="mb-1 block text-fg-3" style={{ fontSize: "11px" }}>
-          Harness
-        </label>
-        <HarnessSelect
-          value={harness}
-          onChange={setHarness}
+        <div className="mb-3">
+        <AgentControl
+          choice={agentChoice}
+          onChange={setAgentChoice}
+          profiles={agentProfiles}
           catalog={harnessCatalog}
-          inheritLabel="No harness (inherit)"
-          data-testid="project-harness-select"
-          className="mb-3 w-full rounded border border-line-strong bg-bg-3 px-2 py-1.5 text-fg outline-none focus:border-acc"
-          style={{ fontSize: "11px" }}
+          inherited={{ harness: "claude", model: null, effort: null }}
+          label="Agent — Project"
+          testId="project-agent-control"
         />
+        <div className="sr-only" aria-hidden>
+          <HarnessSelect
+            value={harness}
+            onChange={setHarness}
+            catalog={harnessCatalog}
+            inheritLabel="No harness (inherit)"
+            data-testid="project-harness-select"
+          />
+        </div>
+        </div>
 
         <label className="mb-1 block text-fg-3" style={{ fontSize: "11px" }}>
           Member repositories

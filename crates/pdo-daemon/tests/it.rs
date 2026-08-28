@@ -14,6 +14,9 @@
 
 mod common;
 
+pub(crate) static HARNESS_PROBE_ENV_LOCK: tokio::sync::Mutex<()> =
+    tokio::sync::Mutex::const_new(());
+
 #[path = "admission_concurrency.rs"]
 mod admission_concurrency;
 

@@ -1002,6 +1002,17 @@ pub struct RunState {
     /// and by the infra sessions (Pipeline Manager, merge resolver).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness: Option<String>,
+    /// The Run tier of the agentic-profile union (#563, ADR-0057), **frozen**
+    /// here from the `RunStarted` payload — same immutability as
+    /// [`RunState::harness`]: set once at create, never mutated (frozen for
+    /// resume, ADR-0057 ¶4). `None` ⇒ the Run named no choice (every historical
+    /// Run, and any Run created without one), so [`RunState::harness`] (the
+    /// legacy signal) still decides the Run tier. `Some(Profile | Custom)` wins
+    /// outright at this tier over `harness` — never merges — and also supplies
+    /// model/effort to infra sessions (#563 AC18, amending ADR-0046's
+    /// Run-only-harness rule for infra).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) agent_choice: Option<crate::agent_choice::AgentChoice>,
     /// The Run's `auto_fail` preference (ADR-0049), **frozen** here from the
     /// `RunStarted` payload — the **run** tier of
     /// [`crate::auto_fail::resolve_auto_fail`] (`node → Run → Projet →
@@ -1080,6 +1091,7 @@ impl RunState {
             source_branch: None,
             fork_sha: None,
             harness: None,
+            agent_choice: None,
             auto_fail: None,
             triggered_by: None,
             pipeline_id: None,
@@ -1684,6 +1696,18 @@ fn apply_run_event(state: &mut RunState, event: &Event) {
                 if let Some(h) = payload.get("harness").and_then(|v| v.as_str()) {
                     if !h.is_empty() {
                         state.harness = Some(h.to_string());
+                    }
+                }
+                // #563 (ADR-0057): the FROZEN Run `AgentChoice`, projected the same
+                // way as `harness` — the create chokepoint only writes this key for
+                // an explicit (non-`Inherit`) choice, so an absent key (every
+                // historical Run, every Run with no explicit choice) leaves `None`
+                // and the legacy `harness` above still decides the Run tier.
+                if let Some(v) = payload.get("agent_choice") {
+                    if let Ok(choice) =
+                        serde_json::from_value::<crate::agent_choice::AgentChoice>(v.clone())
+                    {
+                        state.agent_choice = Some(choice);
                     }
                 }
                 // ADR-0049: the Run's frozen `auto_fail` tier. Absent key ⇒ `None`

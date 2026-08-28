@@ -49,6 +49,12 @@ pub(crate) struct Project {
     /// instance default). No env/default tier of its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_fail: Option<bool>,
+    /// The Projet tier of the agentic-profile union (#563, ADR-0057), or `None`
+    /// when this Projet states none — the tier is then transparent and
+    /// [`Self::harness`] (the legacy signal) still applies. `Some(Profile |
+    /// Custom)` wins outright at this tier over `harness` (never merges).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_choice: Option<crate::agent_choice::AgentChoice>,
     /// Member repository paths, compared **verbatim** (ADR-0033). Ordered by
     /// attach time (the `rowid` of `project_members`).
     #[serde(default)]
@@ -84,6 +90,7 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             name       TEXT NOT NULL,
             harness    TEXT,
             auto_fail  INTEGER,
+            agent_choice TEXT,
             created_at TEXT NOT NULL
         )",
     )
@@ -101,6 +108,21 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .is_some();
     if !has_auto_fail {
         sqlx::query("ALTER TABLE projects ADD COLUMN auto_fail INTEGER")
+            .execute(db)
+            .await?;
+    }
+
+    // Additive migration for pre-#563 databases: the `agent_choice` column is
+    // absent on `projects` tables created before the agentic-profile union.
+    // Guarded `ADD COLUMN` — NULLABLE so an existing Projet falls back to its
+    // legacy `harness` column unchanged.
+    let has_agent_choice =
+        sqlx::query("SELECT 1 FROM pragma_table_info('projects') WHERE name = 'agent_choice'")
+            .fetch_optional(db)
+            .await?
+            .is_some();
+    if !has_agent_choice {
+        sqlx::query("ALTER TABLE projects ADD COLUMN agent_choice TEXT")
             .execute(db)
             .await?;
     }
@@ -143,6 +165,10 @@ fn row_to_project(row: &sqlx::sqlite::SqliteRow, members: Vec<String>) -> Projec
             .get::<Option<String>, _>("harness")
             .filter(|s| !s.is_empty()),
         auto_fail: row.get::<Option<i64>, _>("auto_fail").map(|v| v != 0),
+        // #563: NULL / unparseable ⇒ `None` — the tier is simply transparent.
+        agent_choice: row
+            .get::<Option<String>, _>("agent_choice")
+            .and_then(|s| serde_json::from_str(&s).ok()),
         members,
     }
 }
@@ -174,6 +200,7 @@ pub(crate) async fn create(db: &SqlitePool, name: &str) -> Result<Project, sqlx:
         name: name.to_string(),
         harness: None,
         auto_fail: None,
+        agent_choice: None,
         members: Vec::new(),
     })
 }
@@ -261,6 +288,35 @@ pub(crate) async fn auto_fail_for_path(
     path: &str,
 ) -> Result<Option<bool>, sqlx::Error> {
     Ok(owner_of(db, path).await?.and_then(|p| p.auto_fail))
+}
+
+/// Set (or clear, with `None`) the `AgentChoice` a Projet carries (#563,
+/// ADR-0057). `None` clears it back to "states none" (SQL `NULL`) — the tier
+/// is then transparent and the legacy [`Project::harness`] still applies.
+/// Returns `true` iff a row was updated.
+pub(crate) async fn set_agent_choice(
+    db: &SqlitePool,
+    id: &str,
+    agent_choice: Option<crate::agent_choice::AgentChoice>,
+) -> Result<bool, sqlx::Error> {
+    let stored = agent_choice.map(|c| serde_json::to_string(&c).unwrap_or_default());
+    let res = sqlx::query("UPDATE projects SET agent_choice = ? WHERE id = ?")
+        .bind(stored)
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+/// Resolve the `AgentChoice` a `path` inherits from its Projet, for the
+/// Projet tier of [`crate::agent_choice::resolve`]. `None` ⇒ the path is in no
+/// Projet, or its Projet states none — the tier is transparent either way (the
+/// legacy `harness` signal, read via [`harness_for_path`], still applies).
+pub(crate) async fn agent_choice_for_path(
+    db: &SqlitePool,
+    path: &str,
+) -> Result<Option<crate::agent_choice::AgentChoice>, sqlx::Error> {
+    Ok(owner_of(db, path).await?.and_then(|p| p.agent_choice))
 }
 
 /// The Projet that currently owns `path`, if any. Read-then-decide basis for the
@@ -476,6 +532,124 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    /// #563/ADR-0057: the Projet tier of `AgentChoice` — a fresh Projet carries
+    /// none, `set_agent_choice` sets it, both member paths inherit it (mirrors
+    /// `harness_for_path` above), and clearing it back to `None` makes the tier
+    /// transparent again (falls back to the legacy `harness` column).
+    #[tokio::test]
+    async fn agent_choice_for_path_reads_the_owning_projects_choice() {
+        let db = mem_db().await;
+        let a = create(&db, "Alpha").await.unwrap();
+        add_member(&db, &a.id, "/repos/front").await.unwrap();
+        add_member(&db, &a.id, "/repos/back").await.unwrap();
+
+        assert!(agent_choice_for_path(&db, "/repos/front")
+            .await
+            .unwrap()
+            .is_none());
+
+        let choice = crate::agent_choice::AgentChoice::Profile {
+            profile_id: "reviewer".to_string(),
+        };
+        assert!(set_agent_choice(&db, &a.id, Some(choice.clone()))
+            .await
+            .unwrap());
+        assert_eq!(
+            agent_choice_for_path(&db, "/repos/front").await.unwrap(),
+            Some(choice.clone())
+        );
+        // Both members inherit it, like the legacy harness tier.
+        assert_eq!(
+            agent_choice_for_path(&db, "/repos/back").await.unwrap(),
+            Some(choice)
+        );
+        // A non-member path inherits nothing.
+        assert!(agent_choice_for_path(&db, "/repos/other")
+            .await
+            .unwrap()
+            .is_none());
+
+        // Clearing it (`None`) makes the tier transparent again.
+        assert!(set_agent_choice(&db, &a.id, None).await.unwrap());
+        assert!(agent_choice_for_path(&db, "/repos/front")
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    /// #563: the legacy `harness` column and the new `agent_choice` column
+    /// coexist independently on the same Projet row — setting one never
+    /// disturbs the other (resolution order is `agent_choice.rs`'s concern).
+    #[tokio::test]
+    async fn agent_choice_and_legacy_harness_coexist_on_the_same_project() {
+        let db = mem_db().await;
+        let a = create(&db, "Alpha").await.unwrap();
+        add_member(&db, &a.id, "/repos/front").await.unwrap();
+        assert!(set_harness(&db, &a.id, Some("claude")).await.unwrap());
+
+        let choice = crate::agent_choice::AgentChoice::Custom {
+            harness: "opencode".to_string(),
+            model: Some("gpt-5".to_string()),
+            effort: None,
+        };
+        assert!(set_agent_choice(&db, &a.id, Some(choice.clone()))
+            .await
+            .unwrap());
+
+        let p = get(&db, &a.id).await.unwrap().unwrap();
+        assert_eq!(p.harness.as_deref(), Some("claude"));
+        assert_eq!(p.agent_choice, Some(choice));
+    }
+
+    #[tokio::test]
+    async fn init_migrates_pre_agent_choice_schema() {
+        // #563: a `projects` table created before the `agent_choice` column
+        // gains it on init, idempotently, without clobbering existing rows —
+        // same guarded `ADD COLUMN` idiom the pre-résilience `auto_fail`
+        // migration already established on this table.
+        let db = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::query(
+            "CREATE TABLE projects (
+                id         TEXT PRIMARY KEY,
+                name       TEXT NOT NULL,
+                harness    TEXT,
+                created_at TEXT NOT NULL
+            )",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO projects (id, name, harness, created_at) \
+             VALUES ('prj-1', 'Alpha', 'claude', 'seed')",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+
+        init(&db).await.unwrap();
+        init(&db).await.unwrap();
+
+        let p = get(&db, "prj-1").await.unwrap().unwrap();
+        assert_eq!(
+            p.harness.as_deref(),
+            Some("claude"),
+            "pre-existing survives"
+        );
+        assert_eq!(p.agent_choice, None, "new column defaults to NULL");
+
+        let choice = crate::agent_choice::AgentChoice::Profile {
+            profile_id: "reviewer".to_string(),
+        };
+        assert!(set_agent_choice(&db, "prj-1", Some(choice.clone()))
+            .await
+            .unwrap());
+        assert_eq!(
+            get(&db, "prj-1").await.unwrap().unwrap().agent_choice,
+            Some(choice)
+        );
     }
 
     #[tokio::test]

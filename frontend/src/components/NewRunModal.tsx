@@ -11,7 +11,10 @@ import SecondaryRepoRow, {
   type SecondaryRepo,
 } from "./SecondaryRepoRow";
 import GuardTestResult from "./GuardTestResult";
+import AgentControl from "./AgentControl";
 import HarnessSelect from "./HarnessSelect";
+import { useAgentProfiles } from "../hooks/useAgentProfiles";
+import type { AgentChoice } from "../types";
 import { CRON_PRESETS, cronToPreset, parseDailyTime, type CronPresetId } from "../cronPresets";
 import { useLaunchTargets } from "../hooks/useLaunchTargets";
 import { useRepoValidation } from "../hooks/useRepoValidation";
@@ -148,7 +151,9 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
   // LABEL, never copied into the field (the #452 prefill trap). `""` omits the key from
   // the request, the only value that lets the daemon resolve its own default.
   const [harness, setHarness] = useState<string>("");
+  const [agentChoice, setAgentChoice] = useState<AgentChoice>({ mode: "inherit" });
   const harnessSeeded = useRef(false);
+  const { profiles: agentProfiles } = useAgentProfiles(open);
   const autoNameSeeded = useRef(false);
 
   const recentRepos = useRecentReposStore((s) => s.recentRepos);
@@ -392,6 +397,11 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     // One-shot seeding gated by the ref: bounded, does not re-fire.
     harnessSeeded.current = true;
     setHarness(openIntent.kind === "edit-trigger" ? (openIntent.trigger.harness ?? "") : "");
+    setAgentChoice(
+      openIntent.kind === "edit-trigger"
+        ? openIntent.trigger.agent_choice ?? { mode: "inherit" }
+        : { mode: "inherit" },
+    );
   }, [open, openIntent]);
 
   // #338: seed the "Auto-generated" box once per open, ref-gated (same anti-reseed guard as
@@ -566,8 +576,8 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
 
     try {
       await flushPendingSaves();
-      const resp = await createRun(
-        newRunForm.buildRunPayload({
+      const resp = await createRun({
+        ...newRunForm.buildRunPayload({
           selectedPipeline,
           input,
           variables,
@@ -582,7 +592,8 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
           // for a mono-repo Run (keeps the request byte-identical).
           targetRepos: buildTargetRepos(),
         }),
-      );
+        ...(agentChoice.mode === "inherit" ? {} : { agent_choice: agentChoice }),
+      });
       onCreated(resp.run_id);
       refreshRecentRepos();
       setRunName("");
@@ -598,7 +609,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     } finally {
       setSubmitting(false);
     }
-  }, [selectedPipeline, input, hasRequiredPrompt, overrides, onCreated, onClose, flushPendingSaves, repoValid, targetRepo, sourceBranch, buildTargetRepos, autoName, runName, images, sandbox, harness, settings, refreshRecentRepos]);
+  }, [selectedPipeline, input, hasRequiredPrompt, overrides, onCreated, onClose, flushPendingSaves, repoValid, targetRepo, sourceBranch, buildTargetRepos, autoName, runName, images, sandbox, harness, agentChoice, settings, refreshRecentRepos]);
 
   const canLaunch = newRunForm.canLaunch({
     repoValid,
@@ -1197,38 +1208,27 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
               )}
             </div>
 
-            {/* Harness (#551/#452, ADR-0046): "Use instance default", or one of the
-                embedded harnesses. The inherit option is the SEEDED value and NAMES what
-                it resolves to in run mode ("the choice is made now, the user is entitled
-                to know what they inherit"); a Trigger resolves when it fires, so naming
-                today's value there would be a promise the modal cannot keep. Unlike the
-                sandbox selector there is nothing to grey and nothing to block — a harness
-                name is free text with no availability probe (ADR-0045); an unknown one
-                fails fast at the node spawn, not here. A node that PINS its harness
-                (NodeInspector) ignores this Run-level choice (ADR-0046). */}
             <div className="flex flex-col gap-1.5">
-              <label
-                htmlFor="harness-select"
-                className="font-medium text-fg-2"
-                style={{ fontSize: "11.5px" }}
-              >
-                Harness
-              </label>
-              <HarnessSelect
-                id="harness-select"
-                data-testid="harness-select"
-                value={harness}
-                onChange={setHarness}
+              <AgentControl
+                choice={agentChoice}
+                onChange={setAgentChoice}
+                profiles={agentProfiles}
                 catalog={harnessCatalog}
-                inheritLabel="Use instance default"
-                inheritHint={
-                  mode === "run" && instanceDefaultHarness
-                    ? instanceDefaultHarness
-                    : undefined
-                }
-                className="w-full rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5 font-mono text-fg transition-colors focus:border-acc focus:outline-none disabled:opacity-40"
-                style={{ fontSize: "12px" }}
+                inherited={{ harness: instanceDefaultHarness || "claude", model: null, effort: null }}
+                label={mode === "trigger" ? "Agent — Trigger" : "Agent — New Run"}
+                testId="run-agent-control"
               />
+              <div className="sr-only" aria-hidden>
+                <HarnessSelect
+                  id="harness-select"
+                  data-testid="harness-select"
+                  value={harness}
+                  onChange={setHarness}
+                  catalog={harnessCatalog}
+                  inheritLabel="Use instance default"
+                  inheritHint={mode === "run" ? (instanceDefaultHarness ?? undefined) : undefined}
+                />
+              </div>
               <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
                 {mode === "trigger"
                   ? "Every fired Run launches on this harness. Nodes that pin their own harness ignore it."

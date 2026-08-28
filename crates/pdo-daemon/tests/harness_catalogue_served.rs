@@ -29,6 +29,7 @@ fn write_fake_binary(dir: &std::path::Path, name: &str) {
 #[cfg(unix)]
 #[tokio::test]
 async fn get_settings_serves_the_catalogue_deduced_from_the_binary() {
+    let _probe_env = crate::HARNESS_PROBE_ENV_LOCK.lock().await;
     // A tempdir holding the fake binary, wired as the harness probe PATH BEFORE the
     // daemon boots (so the boot probe and every settings fetch resolve it here).
     let bindir = tempfile::tempdir().unwrap();

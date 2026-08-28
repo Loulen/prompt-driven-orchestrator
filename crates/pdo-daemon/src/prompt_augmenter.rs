@@ -1227,6 +1227,7 @@ mod tests {
                 over: None,
                 pin_harness: None,
                 harnesses: Default::default(),
+                agent_choice: None,
                 auto_fail: None,
             }],
             edges: vec![],
@@ -1497,6 +1498,7 @@ mod tests {
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            agent_choice: None,
             auto_fail: None,
         });
         pipeline.edges.push(EdgeDef {
@@ -1639,6 +1641,7 @@ mod tests {
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            agent_choice: None,
             auto_fail: None,
         });
         pipeline.edges.push(EdgeDef {
@@ -1700,6 +1703,7 @@ mod tests {
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            agent_choice: None,
             auto_fail: None,
         });
 
@@ -1733,6 +1737,7 @@ mod tests {
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            agent_choice: None,
             auto_fail: None,
         });
         pipeline.edges.push(EdgeDef {
@@ -1780,6 +1785,7 @@ mod tests {
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            agent_choice: None,
             auto_fail: None,
         });
         pipeline.edges.push(EdgeDef {
@@ -1933,6 +1939,7 @@ mod tests {
                     over: None,
                     pin_harness: None,
                     harnesses: Default::default(),
+                    agent_choice: None,
                     auto_fail: None,
                 },
                 NodeDef {
@@ -1957,6 +1964,7 @@ mod tests {
                     over: None,
                     pin_harness: None,
                     harnesses: Default::default(),
+                    agent_choice: None,
                     auto_fail: None,
                 },
                 NodeDef {
@@ -2004,6 +2012,7 @@ mod tests {
                     over: None,
                     pin_harness: None,
                     harnesses: Default::default(),
+                    agent_choice: None,
                     auto_fail: None,
                 },
             ],
@@ -2118,6 +2127,7 @@ mod tests {
                 over: None,
                 pin_harness: None,
                 harnesses: Default::default(),
+                agent_choice: None,
                 auto_fail: None,
             }],
             edges: vec![],
@@ -2445,6 +2455,7 @@ mod tests {
                 over: None,
                 pin_harness: None,
                 harnesses: Default::default(),
+                agent_choice: None,
                 auto_fail: None,
             }],
             edges: vec![],
@@ -2499,6 +2510,7 @@ mod tests {
                 over: None,
                 pin_harness: None,
                 harnesses: Default::default(),
+                agent_choice: None,
                 auto_fail: None,
             }],
             edges: vec![],
@@ -2548,6 +2560,7 @@ mod tests {
                 over: None,
                 pin_harness: None,
                 harnesses: Default::default(),
+                agent_choice: None,
                 auto_fail: None,
             }],
             edges: vec![],

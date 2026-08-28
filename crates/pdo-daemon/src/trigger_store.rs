@@ -75,6 +75,15 @@ pub(crate) struct Trigger {
     /// double-`Option` [`UpdateTrigger::harness`] (mirror of `sandbox`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness: Option<String>,
+    /// The Run tier of the agentic-profile union carried by a Trigger's Run
+    /// template (#563, ADR-0057), or `None` to inherit the counterpart of
+    /// [`Self::harness`]: there is NO separate Trigger tier — a Trigger *is* a
+    /// Run template, so this is read at fire time and folded into the create
+    /// request's `run` choice, same as `harness`. `None` ⇒ `harness` above
+    /// (and the tiers below it) still decide. Clearable back to `None` via the
+    /// double-`Option` [`UpdateTrigger::agent_choice`] (mirror of `harness`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_choice: Option<crate::agent_choice::AgentChoice>,
     /// Whether Runs fired from this Trigger are auto-named by the manager (#338). A
     /// flat bool (mirror of [`Self::enabled`]), NOT a nullable inherit: the choice is
     /// frozen at creation from the instance default and read at fire time. `true`
@@ -117,6 +126,9 @@ pub(crate) struct NewTrigger {
     pub sandbox: Option<String>,
     /// Per-Trigger harness (#551); `None` inherits the instance default at fire time.
     pub harness: Option<String>,
+    /// Per-Trigger `AgentChoice` (#563); `None` inherits the legacy `harness`
+    /// tier (and the tiers below it) at fire time.
+    pub agent_choice: Option<crate::agent_choice::AgentChoice>,
     /// Whether Runs this Trigger fires are auto-named (#338). Seeded from the instance
     /// default in the create modal and frozen here; `true` is the pre-#338 behaviour.
     pub auto_name: bool,
@@ -184,6 +196,7 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             max_concurrent INTEGER,
             sandbox TEXT,
             harness TEXT,
+            agent_choice TEXT,
             auto_name INTEGER NOT NULL DEFAULT 1,
             enabled INTEGER NOT NULL DEFAULT 1,
             next_fire_at TEXT,
@@ -256,6 +269,20 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .is_some();
     if !has_harness {
         sqlx::query("ALTER TABLE triggers ADD COLUMN harness TEXT")
+            .execute(db)
+            .await?;
+    }
+
+    // Additive migration (#563): per-Trigger `agent_choice`. Same PRAGMA-guarded
+    // `ALTER` precedent as `harness` above — NULLABLE: a NULL row inherits the
+    // legacy `harness` tier (and the tiers below it) at fire time.
+    let has_agent_choice =
+        sqlx::query("SELECT 1 FROM pragma_table_info('triggers') WHERE name = 'agent_choice'")
+            .fetch_optional(db)
+            .await?
+            .is_some();
+    if !has_agent_choice {
+        sqlx::query("ALTER TABLE triggers ADD COLUMN agent_choice TEXT")
             .execute(db)
             .await?;
     }
@@ -355,8 +382,8 @@ pub(crate) async fn create(db: &SqlitePool, new: NewTrigger) -> Result<Trigger, 
         "INSERT INTO triggers
             (id, name, pipeline_id, pipeline_name, target_repo, target_repos, source_branch,
              input_template, variables, cron, guard_command, overlap_policy,
-             max_concurrent, sandbox, harness, auto_name, enabled, next_fire_at, last_fired_at, last_outcome, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL, ?)",
+             max_concurrent, sandbox, harness, agent_choice, auto_name, enabled, next_fire_at, last_fired_at, last_outcome, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL, ?)",
     )
     .bind(&id)
     .bind(&new.name)
@@ -373,6 +400,11 @@ pub(crate) async fn create(db: &SqlitePool, new: NewTrigger) -> Result<Trigger, 
     .bind(new.max_concurrent)
     .bind(&new.sandbox)
     .bind(&new.harness)
+    .bind(
+        new.agent_choice
+            .as_ref()
+            .map(|c| serde_json::to_string(c).unwrap_or_default()),
+    )
     .bind(if new.auto_name { 1_i64 } else { 0_i64 })
     .bind(&new.next_fire_at)
     .bind(&now)
@@ -404,6 +436,13 @@ fn row_to_trigger(row: &sqlx::sqlite::SqliteRow) -> Trigger {
         // #551: tolerant of a legacy-NULL / pre-migration read (mirror of `target_repos`) —
         // absence inherits the instance default at fire time.
         harness: row.try_get("harness").unwrap_or(None),
+        // #563: tolerant of a legacy-NULL / pre-migration read (mirror of `harness`) —
+        // absence, or an unparseable value, inherits the legacy `harness` tier.
+        agent_choice: row
+            .try_get::<Option<String>, _>("agent_choice")
+            .ok()
+            .flatten()
+            .and_then(|s| serde_json::from_str(&s).ok()),
         // #338: tolerant of a legacy NULL (a pre-migration row read mid-upgrade) —
         // absence reads as auto-name ON, the pre-#338 behaviour.
         auto_name: row.try_get::<i64, _>("auto_name").unwrap_or(1) != 0,
@@ -593,6 +632,10 @@ pub(crate) struct UpdateTrigger {
     /// plain `serde(default)` would make present-`null` indistinguishable from omitted, so
     /// the UI could never reset a Trigger back to inheriting.
     pub harness: Option<Option<String>>,
+    /// Per-Trigger `AgentChoice` (#563), double-wrapped like `harness`: `None`
+    /// leaves it, `Some(None)` clears to NULL (= legacy `harness` tier decides
+    /// again), `Some(Some(choice))` sets it.
+    pub agent_choice: Option<Option<crate::agent_choice::AgentChoice>>,
     /// Auto-naming toggle (#338): `None` leaves the flag, `Some(v)` sets it. A FLAT
     /// `Option<bool>` (mirror of [`Self::enabled`]), NOT double-wrapped like `sandbox`
     /// — there is no "inherit" state to clear back to; the choice is a plain on/off.
@@ -620,6 +663,7 @@ impl UpdateTrigger {
             && self.max_concurrent.is_none()
             && self.sandbox.is_none()
             && self.harness.is_none()
+            && self.agent_choice.is_none()
             && self.auto_name.is_none()
             && self.next_fire_at.is_none()
             && self.enabled.is_none()
@@ -681,6 +725,9 @@ pub(crate) async fn update(
     if edit.harness.is_some() {
         sets.push("harness = ?");
     }
+    if edit.agent_choice.is_some() {
+        sets.push("agent_choice = ?");
+    }
     if edit.auto_name.is_some() {
         sets.push("auto_name = ?");
     }
@@ -740,6 +787,14 @@ pub(crate) async fn update(
         // `Some(Some(name))` → the harness name. Mirror of `sandbox`.
         query = query.bind(v.clone());
     }
+    if let Some(v) = &edit.agent_choice {
+        // #563: `Some(None)` → SQL NULL (inherit the legacy `harness` tier);
+        // `Some(Some(choice))` → the serialized JSON. Mirror of `harness`.
+        query = query.bind(
+            v.as_ref()
+                .map(|c| serde_json::to_string(c).unwrap_or_default()),
+        );
+    }
     if let Some(v) = &edit.auto_name {
         // Flat bool → 0/1 (mirror of `enabled`), never NULL: the column is
         // `NOT NULL DEFAULT 1` and the choice is a plain on/off (#338).
@@ -786,6 +841,7 @@ mod tests {
             max_concurrent: None,
             sandbox: None,
             harness: None,
+            agent_choice: None,
             auto_name: true,
             next_fire_at: Some("2026-06-06T10:00:00.000Z".to_string()),
         }
@@ -1598,6 +1654,188 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(get(&db, &t.id).await.unwrap().unwrap().harness, None);
+    }
+
+    /// #563 (ADR-0057): the per-Trigger `AgentChoice` round-trips through create, is
+    /// set and cleared through the double-`Option` update, and an unrelated edit
+    /// leaves it. Mirror of `harness_round_trips_and_clears` above.
+    #[tokio::test]
+    async fn agent_choice_round_trips_and_clears() {
+        use crate::agent_choice::AgentChoice;
+
+        let db = test_db().await;
+        let mut new = sample("t", "0 9 * * *");
+        new.agent_choice = Some(AgentChoice::Profile {
+            profile_id: "prof-1".to_string(),
+        });
+        let t = create(&db, new).await.unwrap();
+        assert_eq!(
+            t.agent_choice,
+            Some(AgentChoice::Profile {
+                profile_id: "prof-1".to_string()
+            })
+        );
+
+        // Some(Some(choice)) sets it to another choice.
+        update(
+            &db,
+            &t.id,
+            UpdateTrigger {
+                agent_choice: Some(Some(AgentChoice::Custom {
+                    harness: "opencode".to_string(),
+                    model: None,
+                    effort: None,
+                })),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            get(&db, &t.id).await.unwrap().unwrap().agent_choice,
+            Some(AgentChoice::Custom {
+                harness: "opencode".to_string(),
+                model: None,
+                effort: None,
+            })
+        );
+
+        // An unrelated edit (agent_choice = None) leaves it untouched.
+        update(
+            &db,
+            &t.id,
+            UpdateTrigger {
+                input_template: Some("changed".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            get(&db, &t.id).await.unwrap().unwrap().agent_choice,
+            Some(AgentChoice::Custom {
+                harness: "opencode".to_string(),
+                model: None,
+                effort: None,
+            })
+        );
+
+        // Some(None) clears it back to the legacy `harness` field deciding again.
+        update(
+            &db,
+            &t.id,
+            UpdateTrigger {
+                agent_choice: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(get(&db, &t.id).await.unwrap().unwrap().agent_choice, None);
+    }
+
+    /// #563: a Trigger can carry both a legacy `harness` string AND an
+    /// `agent_choice`, independently — the two fields coexist on the row exactly
+    /// like `instance_config`'s and `project_store`'s equivalent tests, since
+    /// `agent_choice::resolve` (not this store) decides which one wins.
+    #[tokio::test]
+    async fn agent_choice_and_legacy_harness_coexist() {
+        use crate::agent_choice::AgentChoice;
+
+        let db = test_db().await;
+        let mut new = sample("t", "0 9 * * *");
+        new.harness = Some("claude".to_string());
+        new.agent_choice = Some(AgentChoice::Custom {
+            harness: "opencode".to_string(),
+            model: Some("gpt-5".to_string()),
+            effort: Some("high".to_string()),
+        });
+        let t = create(&db, new).await.unwrap();
+
+        let fetched = get(&db, &t.id).await.unwrap().unwrap();
+        assert_eq!(fetched.harness.as_deref(), Some("claude"));
+        assert_eq!(
+            fetched.agent_choice,
+            Some(AgentChoice::Custom {
+                harness: "opencode".to_string(),
+                model: Some("gpt-5".to_string()),
+                effort: Some("high".to_string()),
+            })
+        );
+    }
+
+    /// #563 migration: a `~/.pdo/pdo.db` created before `agent_choice` existed must
+    /// pick up the column on the next `init`, and a legacy row must read back with
+    /// `agent_choice = None` (the legacy `harness` field, if any, still decides) —
+    /// mirror of `init_adds_harness_to_legacy_table` above.
+    #[tokio::test]
+    async fn init_adds_agent_choice_to_legacy_table() {
+        let db = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+
+        // Pre-#563 schema: `triggers` WITH `harness` but WITHOUT `agent_choice`.
+        sqlx::query(
+            "CREATE TABLE triggers (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                pipeline_id TEXT NOT NULL,
+                pipeline_name TEXT NOT NULL DEFAULT '',
+                target_repo TEXT,
+                target_repos TEXT,
+                source_branch TEXT,
+                input_template TEXT NOT NULL DEFAULT '',
+                variables JSON NOT NULL DEFAULT '{}',
+                cron TEXT NOT NULL,
+                guard_command TEXT,
+                overlap_policy TEXT NOT NULL DEFAULT 'skip',
+                max_concurrent INTEGER,
+                sandbox TEXT,
+                harness TEXT,
+                auto_name INTEGER NOT NULL DEFAULT 1,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                next_fire_at TEXT,
+                last_fired_at TEXT,
+                last_outcome TEXT,
+                created_at TEXT NOT NULL
+            )",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO triggers (id, name, pipeline_id, cron, harness, created_at)
+             VALUES ('trg-legacy', 'legacy', 'lib-pipe', '0 9 * * *', 'claude', '2026-01-01T00:00:00.000Z')",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+
+        let before =
+            sqlx::query("SELECT 1 FROM pragma_table_info('triggers') WHERE name = 'agent_choice'")
+                .fetch_optional(&db)
+                .await
+                .unwrap();
+        assert!(
+            before.is_none(),
+            "precondition: legacy table lacks the column"
+        );
+
+        init(&db).await.unwrap();
+        init(&db).await.unwrap(); // idempotent
+
+        let after =
+            sqlx::query("SELECT 1 FROM pragma_table_info('triggers') WHERE name = 'agent_choice'")
+                .fetch_optional(&db)
+                .await
+                .unwrap();
+        assert!(after.is_some(), "init must add the column");
+
+        let legacy = get(&db, "trg-legacy").await.unwrap().unwrap();
+        assert_eq!(legacy.harness.as_deref(), Some("claude"));
+        assert_eq!(legacy.agent_choice, None);
     }
 
     /// #551 migration: a `~/.pdo/pdo.db` created before `harness` existed must pick up the

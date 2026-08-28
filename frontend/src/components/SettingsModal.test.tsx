@@ -22,6 +22,7 @@ const fetchSandboxProfileReferentsMock = vi.fn();
 // that would let every un-stubbed function reach the real `fetch` under jsdom, trading a
 // loud error for a silent one.
 vi.mock("../api", () => ({
+  fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
   fetchSettings: (...args: unknown[]) => fetchSettingsMock(...args),
   updateSettings: (...args: unknown[]) => updateSettingsMock(...args),
   browseFs: (...args: unknown[]) => browseFsMock(...args),

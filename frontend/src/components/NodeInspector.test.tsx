@@ -16,6 +16,7 @@ function renderInspector(props: Parameters<typeof NodeInspector>[0]) {
 }
 
 vi.mock("../api", () => ({
+  fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
   fetchLibrary: vi.fn().mockResolvedValue([]),
   // #586: the harness pin picker now fetches /settings for its dynamic option
   // list. Resolve it with the embedded floor so the picker offers claude/opencode.

@@ -312,6 +312,7 @@ mod tests {
             max_concurrent: None,
             sandbox: None,
             harness: None,
+            agent_choice: None,
             auto_name: true,
             enabled: true,
             next_fire_at: next_fire_at.map(str::to_string),

@@ -147,6 +147,14 @@ struct NodeProjection<'a> {
     /// both see it. A `BTreeMap` so the canonical form is key-ordered; empty ⇒
     /// serialized as `{}` (a plain claude node with no settings).
     harnesses: &'a std::collections::BTreeMap<String, crate::harness_resolver::HarnessEntry>,
+    /// The node's agent-profile choice (#563, ADR-0057) — semantic: it changes
+    /// harness/model/effort just as directly as `pin_harness`/`harnesses` above,
+    /// and CONTEXT.md is explicit ("la carte entre dans le diff sémantique").
+    /// `skip_serializing_if` keeps a pre-#563 pipeline (which never sets it)
+    /// byte-identical to its old content hash — the same discipline `auto_fail`
+    /// below uses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_choice: Option<&'a crate::agent_choice::AgentChoice>,
     max_iter: Option<serde_json::Value>,
     /// Legacy per-node collection driver. The frontend serializer no longer emits
     /// it, so it is absent from `SEMANTIC_FIELDS.node`; it is still a behavioural
@@ -176,6 +184,7 @@ impl<'a> NodeProjection<'a> {
             over,
             pin_harness,
             harnesses,
+            agent_choice,
             auto_fail,
         } = node;
         let _layout = view; // LAYOUT_FIELDS["node"]
@@ -186,6 +195,7 @@ impl<'a> NodeProjection<'a> {
             interactive: *interactive,
             pin_harness: pin_harness.as_deref(),
             harnesses,
+            agent_choice: agent_choice.as_ref(),
             max_iter: max_iter.as_ref().map(canon_yaml),
             over: over.as_deref(),
             auto_fail: *auto_fail,

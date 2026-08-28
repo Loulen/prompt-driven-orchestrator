@@ -545,6 +545,7 @@ impl Importer {
             over: None,
             pin_harness: None,
             harnesses,
+            agent_choice: None,
             auto_fail: None,
         };
         self.nodes.push(node);
@@ -944,6 +945,7 @@ fn start_node() -> NodeDef {
         over: None,
         pin_harness: None,
         harnesses: Default::default(),
+        agent_choice: None,
         auto_fail: None,
     }
 }
@@ -964,6 +966,7 @@ fn end_node(agent_count: usize) -> NodeDef {
         over: None,
         pin_harness: None,
         harnesses: Default::default(),
+        agent_choice: None,
         auto_fail: None,
     }
 }

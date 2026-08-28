@@ -873,7 +873,7 @@ Le daemon bind **`0.0.0.0:<port>`** — joignable depuis le LAN, c'est **délib�
 
 Un **onglet de pipeline** = un document ouvert dans la zone centrale (un `PipelineDef` + prompts + historique d'undo). À ne pas confondre avec les onglets de **liste** du panneau gauche ni l'onglet **info** de la toolbar.
 
-- **Onglet de run** : contexte = un Run, édite le snapshot run-scope. Un onglet de **template** édite la bibliothèque.
+- **Onglet de run** : contexte = un Run, édite le snapshot run-scope. Un onglet de **pipeline** édite le registre d'instance.
 - **Mode mono-onglet** *(préférence UI, #342)* : ouvrir une pipeline **remplace** l'onglet courant. Préférence par-poste (`localStorage`), hors Configuration d'instance (ADR-0015 ne couvre pas la présentation locale). _Éviter_ : « mode document » (collision avec *document* = artefact).
 
 ### Création d'un nouveau nœud
@@ -884,21 +884,29 @@ From scratch (« + Add node »), duplicate (clic droit), drag-drop depuis la bib
 
 ## Bibliothèque
 
-`~/.pdo/library/` — store user-managed à deux niveaux :
+La **bibliothèque de nodes** contient les nodes réutilisables qu'un utilisateur peut ajouter à une Pipeline. La réutilisation reste une aide à l'édition : un Document de pipeline transportable développe chaque node partagé en node ordinaire, sans recréer son appartenance à la bibliothèque sur l'instance cible.
 
-- **Nodes** (`library/nodes/`) — nodes réutilisables, drag-drop vers le canvas. Une entrée porte le `model` et l'`effort` par-node, et est aussi la forme d'un *Export as YAML…*.
-- **Pipelines** (`library/pipelines/`) — templates complets. C'est cette liste qui peuple le dropdown « + New Run ». Le clone vers `<repo>/.pdo/runs/<run-id>/pipeline.yaml` se produit au démarrage d'un Run ; les modifs pendant un Run propagent vers la template (auto-sync montant, ADR-0007).
+_Éviter_ : « pipeline de bibliothèque » — les Pipelines appartiennent au registre d'instance, pas à la bibliothèque.
 
-- **Drift de librairie** (badge ⚠) — verdict **sémantique** : « la source a-t-elle changé de sens depuis son promote ? ». Le hash porte sur la **projection sémantique** du pipeline parsé, pas les octets (#395) : déplacer un nœud, épingler une route ou ajouter une note ne drifte pas ; renommer, changer un port, une condition, un `model` ou un `effort` drifte. Un source qui ne parse plus lit « drifté », jamais « synced ».
-- **Duplicate (library pipeline)** (#224) — clone **délié** : id frais, nom suffixé `(copy)`, aucune métadonnée de promotion, YAML réécrit verbatim sauf la ligne `name:` (préserve clés inconnues, commentaires, ordre). À distinguer de **Promote** (qui enregistre la provenance) et du duplicate de nœud sur canvas.
-- **Supprimer une pipeline ≠ supprimer sa copie en bibliothèque** (#227) — par défaut la copie favorite subsiste, visible comme entrée *library-only* (pas d'auto-cleanup). Case opt-in pour retirer aussi la copie, uniquement si non ambigu.
+### Registre de pipelines
+
+Le **registre de pipelines** est l'ensemble des Pipelines possédées par une instance PDO. Une Pipeline n'appartient ni à un dépôt ni à une bibliothèque ; le dépôt est choisi comme contexte d'un Run.
+
+**Duplicate (pipeline)** — clone indépendant dans le registre : identité fraîche, nom suffixé `(copy)` puis `(copy N)`, contenu possédé par la Pipeline conservé au maximum. À distinguer du duplicate de node sur canvas.
+
+### Document de pipeline transportable
+
+Un **Document de pipeline transportable** est la représentation YAML versionnée et interprétable qui permet de copier une Pipeline entre instances. Il conserve au maximum le graphe, les boucles, le routage, la présentation, les notes, les prompts, les déclarations et valeurs par défaut de variables, et développe les nodes partagés en nodes ordinaires.
+
+Il ne transporte ni secrets, ni environnement, ni valeurs d'exécution, ni configuration d'instance. Un choix agentique lié à un profil d'instance redevient **Inherit** ; l'identité de la Pipeline est recréée à l'import. L'import est atomique, et un document invalide ou d'une version non prise en charge est refusé avec diagnostics.
+_Éviter_ : « YAML canonique » — le format interne peut séparer des contenus que le document rassemble ; le contrat est la fidélité maximale du round-trip, pas l'identité avec le stockage interne.
 
 ---
 
 ## Import de workflow (Claude Code → pipeline)
 
 **Import de workflow** :
-Décompilation **avec perte** d'un workflow Claude Code (`.claude/workflows/*.js`) en un **brouillon de Pipeline** déposé en Bibliothèque (jamais lancé). But = **onboarding**, pas fidélité — « importe le câblage, signale le reste ». Parsing par AST statique, **jamais d'exécution du `.js`** (ADR-0016 — le daemon bind `0.0.0.0`, exécuter du JS étranger serait un RCE).
+Décompilation **avec perte** d'un workflow Claude Code (`.claude/workflows/*.js`) en un **brouillon de Pipeline** déposé dans le registre (jamais lancé). But = **onboarding**, pas fidélité — « importe le câblage, signale le reste ». Parsing par AST statique, **jamais d'exécution du `.js`** (ADR-0016 — le daemon bind `0.0.0.0`, exécuter du JS étranger serait un RCE).
 _Éviter_ : « conversion », « migration » — la **migration** réécrit du YAML PDO d'un ancien schéma vers le courant (même format) ; l'**import** traduit un format étranger.
 
 **Placeholder annoté** :
@@ -909,6 +917,7 @@ Règle de récupération des prompts : string-literal sans interpolation → ver
 
 ### Relations
 
-- Un **Import de workflow** produit un **brouillon de Pipeline** en Bibliothèque.
+- Un **Import de workflow** produit un **brouillon de Pipeline** dans le registre.
+- L'**import de Pipeline PDO** interprète un Document de pipeline transportable et crée une Pipeline indépendante ; il partage la même modale que l'Import de workflow, mais constitue un mode distinct et fidèle.
 - Idiomes mappés : `agent()` → **Node**, `pipeline()` → boucle **`collection`**, `for`/`while` autour d'un `agent()` → boucle **`bounded`**, `if`/`return` gardé → **edge conditionnelle**, schémas JSON → **frontmatter de port de sortie**.
 - Un idiome hors sous-ensemble → **placeholder annoté**. Un `git merge` scripté → Node `code-mutating` annoté, **pas** le Merge first-class (dont il excède le contrat).

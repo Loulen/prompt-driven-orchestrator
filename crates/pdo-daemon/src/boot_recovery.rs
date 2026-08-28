@@ -370,6 +370,7 @@ mod tests {
             node_id.into(),
             event_log::NodeState {
                 harness: None,
+                cost: None,
                 node_id: node_id.into(),
                 status,
                 iter,

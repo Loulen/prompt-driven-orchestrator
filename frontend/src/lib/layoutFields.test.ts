@@ -73,6 +73,7 @@ const NODE: Complete<NodeDef> = {
   // naming them proves nothing about emission (the serializer tests do that).
   pin_harness: "claude",
   harnesses: { claude: { model: "opus", effort: "low" } },
+  agent_choice: { mode: "profile", profile_id: "deep-work" },
 };
 const EDGE: Complete<EdgeDef> = {
   source: { node: "n1", port: "out" },

@@ -182,6 +182,17 @@ pub(crate) struct NodeDef {
     /// (`pipeline_semantics`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub harnesses: BTreeMap<String, crate::harness_resolver::HarnessEntry>,
+    /// The node's own tier of the agentic-profile union (#563, ADR-0057):
+    /// `Inherit` (absent, the default — continue `Run → Projet → instance →
+    /// Default`), a named `Profile` reference, or an inline `Custom` combo.
+    /// When this is `Some(Profile | Custom)` it supplies harness, model and
+    /// effort atomically and [`pin_harness`]/[`harnesses`] above are NOT
+    /// consulted for this node (ADR-0057 ¶1: Custom "ne réactive pas l'ancien
+    /// résolveur"). Absent, or `Some(Inherit)`, preserves the pre-#563 legacy
+    /// behaviour exactly (`pin_harness` + `harnesses`) — no pipeline is migrated
+    /// automatically (#563, out of scope). Semantic, not layout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_choice: Option<crate::agent_choice::AgentChoice>,
     /// Optional `auto_fail` preference for this node (ADR-0049): the **finest**
     /// tier of [`crate::auto_fail::resolve_auto_fail`] (`node → Run → Projet →
     /// instance`). `Some(true)`/`Some(false)` overrides every coarser tier for a
@@ -2585,12 +2596,134 @@ nodes:
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            agent_choice: None,
             auto_fail: None,
         };
         let yaml = serde_yaml::to_string(&node).unwrap();
         assert!(yaml.contains("type: script"), "serializes to kebab: {yaml}");
         let back: NodeDef = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(back.node_type, NodeType::Script);
+    }
+
+    /// #563/ADR-0057: a node with no `agent_choice:` key at all parses to
+    /// `None` and re-serializes without the key — the byte-identical
+    /// no-migration contract the resolver's own tests pin from the other side.
+    #[test]
+    fn node_without_agent_choice_key_parses_to_none_and_omits_it_on_reserialize() {
+        let yaml = with_start_end(
+            r#"
+name: legacy-pipeline
+nodes:
+  - id: ab000001
+    name: planner
+    type: doc-only
+    inputs:
+      - name: task
+    outputs:
+      - name: plan
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        let node = result
+            .pipeline
+            .nodes
+            .iter()
+            .find(|n| n.id == "ab000001")
+            .unwrap();
+        assert_eq!(node.agent_choice, None);
+        let round = serde_yaml::to_string(node).unwrap();
+        assert!(
+            !round.contains("agent_choice"),
+            "absent agent_choice must not appear on reserialize: {round}"
+        );
+    }
+
+    /// #563/ADR-0057: a node's `agent_choice: {mode: profile, profile_id: ...}`
+    /// parses into the matching [`crate::agent_choice::AgentChoice::Profile`]
+    /// and round-trips through YAML unchanged.
+    #[test]
+    fn node_agent_choice_profile_reference_round_trips() {
+        let yaml = with_start_end(
+            r#"
+name: profile-pipeline
+nodes:
+  - id: ab000001
+    name: planner
+    type: doc-only
+    inputs:
+      - name: task
+    outputs:
+      - name: plan
+    agent_choice:
+      mode: profile
+      profile_id: reviewer
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        let node = result
+            .pipeline
+            .nodes
+            .iter()
+            .find(|n| n.id == "ab000001")
+            .unwrap();
+        assert_eq!(
+            node.agent_choice,
+            Some(crate::agent_choice::AgentChoice::Profile {
+                profile_id: "reviewer".into()
+            })
+        );
+        let round = serde_yaml::to_string(node).unwrap();
+        let back: NodeDef = serde_yaml::from_str(&round).unwrap();
+        assert_eq!(back.agent_choice, node.agent_choice);
+    }
+
+    /// #563/ADR-0057: a node's `agent_choice: {mode: custom, harness, model,
+    /// effort}` parses atomically — no field is read from `harnesses`/
+    /// `pin_harness` even if both are also present (ADR-0057 ¶1: Custom does
+    /// not reactivate the old per-harness resolver).
+    #[test]
+    fn node_agent_choice_custom_round_trips_and_coexists_with_legacy_fields() {
+        let yaml = with_start_end(
+            r#"
+name: custom-pipeline
+nodes:
+  - id: ab000001
+    name: planner
+    type: doc-only
+    inputs:
+      - name: task
+    outputs:
+      - name: plan
+    pin_harness: claude
+    harnesses:
+      claude:
+        model: sonnet
+    agent_choice:
+      mode: custom
+      harness: opencode
+      model: gpt-5
+      effort: high
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        let node = result
+            .pipeline
+            .nodes
+            .iter()
+            .find(|n| n.id == "ab000001")
+            .unwrap();
+        assert_eq!(
+            node.agent_choice,
+            Some(crate::agent_choice::AgentChoice::Custom {
+                harness: "opencode".into(),
+                model: Some("gpt-5".into()),
+                effort: Some("high".into()),
+            })
+        );
+        // Legacy fields are still parsed and preserved verbatim — Custom wins
+        // at resolution time (agent_choice.rs), it does not erase them.
+        assert_eq!(node.pin_harness.as_deref(), Some("claude"));
+        assert!(node.harnesses.contains_key("claude"));
     }
 
     #[test]

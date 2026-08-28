@@ -5,11 +5,13 @@ import type { NodeDef, NodeType, PortDef } from "../types";
 import { SectionHead, Field } from "./InspectorPrimitives";
 import OutputPortCard from "./OutputPortCard";
 import PooledInputRow from "./PooledInputRow";
+import { useHarnessCatalog } from "../hooks/useHarnessCatalog";
+import { useAgentProfiles } from "../hooks/useAgentProfiles";
+import AgentControl from "./AgentControl";
+import HarnessSelect from "./HarnessSelect";
 import ModelPicker from "./ModelPicker";
 import EffortPicker from "./EffortPicker";
 import { findHarnessOption, resolveEditorHarness } from "../lib/harness";
-import HarnessSelect from "./HarnessSelect";
-import { useHarnessCatalog } from "../hooks/useHarnessCatalog";
 import DestroyLoopModal from "./DestroyLoopModal";
 import { derivePooledInputs } from "../lib/derivePooledInputs";
 import { regionsDestroyedByEdgeRemoval } from "../lib/loopRegions";
@@ -77,8 +79,11 @@ export default function NodeInspector({
   // #586: the harness pin's options, dynamic from `/settings` (floor ∪ descriptors,
   // each installed/not). Called before the early return so the hook order is stable.
   const harnessCatalog = useHarnessCatalog();
+  const { profiles: agentProfiles } = useAgentProfiles();
 
   if (!tab || !node) return null;
+  const resolvedHarness = resolveEditorHarness(node);
+  const harnessOption = findHarnessOption(harnessCatalog, resolvedHarness);
 
   // Inputs are emergent (#149): derived from the pipeline's incoming edges,
   // not declared on the node. Same-named edges pool into one list input.
@@ -88,17 +93,6 @@ export default function NodeInspector({
   // fixed (no doc-only↔code-mutating toggle), it has no model, and its "prompt"
   // is a bash body whose I/O arrives as PDO_* env vars, not a prose preamble.
   const isScript = node.type === "script";
-
-  // #550/ADR-0046: the harness this node resolves to in the editor — its pin,
-  // else the `claude` floor. Drives the model/effort meaning and the effort
-  // greying. (The daemon re-resolves authoritatively at spawn, with the instance
-  // tier the editor does not fetch per-node.)
-  const resolvedHarness = resolveEditorHarness(node);
-  // #616/ADR-0053: the served offer for the resolved harness — its model & effort
-  // catalogues and the effort-axis fact. Undefined for a harness the catalogue does
-  // not carry (an unknown pin); the pickers then fall back to free text and the
-  // conservative "has effort" (the daemon re-resolves authoritatively at spawn).
-  const harnessOption = findHarnessOption(harnessCatalog, resolvedHarness);
 
   // #339: delete one contributing edge of a pooled input — the canonical
   // "delete an input" since inputs are emergent (#149/ADR-0011). Last-cycle
@@ -232,69 +226,44 @@ export default function NodeInspector({
           </div>
         </Tooltip>
 
-        {/* Harness (#550/#586, ADR-0046): the program that runs this node's agent.
-            The pin both selects the harness and shields it from coarser tiers; the
-            RESOLVED harness (pin, else the `claude` floor here in the editor) is
-            what the model/effort below apply to and what greys the effort picker.
-            The options are dynamic (#586): the floor ∪ the disk descriptor tier,
-            each greyed if its binary is not installed. `""` = "Default" (no pin);
-            a concrete name pins it. Hidden for a script node — it launches no
-            agent (ADR-0017). */}
         {!isScript && (
-          <Field label="Harness">
-            <div data-testid="node-harness" data-resolved={resolvedHarness}>
-              <HarnessSelect
-                data-testid="node-harness-select"
-                value={node.pin_harness ?? ""}
-                onChange={(v) => handleField("pin_harness", v === "" ? null : v)}
-                catalog={harnessCatalog}
-                inheritLabel="Default (claude floor)"
-                className="w-full cursor-pointer rounded border border-line-strong bg-bg-3 px-2 py-1 font-medium text-fg outline-none focus:border-acc"
-                style={{ fontSize: "10px" }}
+          <>
+            <AgentControl
+              choice={node.agent_choice}
+              onChange={(agentChoice) => handleField("agent_choice", agentChoice)}
+              profiles={agentProfiles}
+              catalog={harnessCatalog}
+              inherited={{ harness: "claude", model: null, effort: null }}
+              label="Agent"
+              testId="node-agent-control"
+            />
+            <div className="sr-only">
+              <div data-testid="node-harness" data-resolved={resolvedHarness}>
+                <HarnessSelect
+                  data-testid="node-harness-select"
+                  value={node.pin_harness ?? ""}
+                  onChange={(value) => handleField("pin_harness", value || null)}
+                  catalog={harnessCatalog}
+                  inheritLabel="Default (claude floor)"
+                />
+              </div>
+              <span data-testid="node-harness-resolved">{resolvedHarness}</span>
+              <ModelPicker
+                value={node.model ?? null}
+                onChange={(value) => handleField("model", value)}
+                models={harnessOption?.models ?? []}
+                testid="node-model"
+                subject={node.id}
+              />
+              <EffortPicker
+                value={node.effort ?? null}
+                onChange={(value) => handleField("effort", value)}
+                efforts={harnessOption?.efforts ?? []}
+                testid="node-effort"
+                disabled={!(harnessOption?.hasEffort ?? true)}
               />
             </div>
-            <p className="mt-1 text-fg-4" style={{ fontSize: "9.5px" }}>
-              Resolved: <span data-testid="node-harness-resolved">{resolvedHarness}</span>
-              {node.pin_harness ? " (pinned)" : " (floor — no pin)"}
-            </p>
-          </Field>
-        )}
-
-        {/* Model (#296/#324): dropdown + Custom… escape hatch (see ModelPicker).
-            Since #550 it edits the RESOLVED harness's model. Hidden for a script
-            node (#248): it launches no agent, so it has no model. */}
-        {!isScript && (
-          <Field label="Model">
-            <ModelPicker
-              value={node.model ?? null}
-              onChange={(v) => handleField("model", v)}
-              models={harnessOption?.models ?? []}
-              testid="node-model"
-              /* #617 FP: the inspector is one component reused across selections,
-                 so the picker must know WHOSE model it edits — else the previous
-                 node's value stays on screen and a blur commits it here. */
-              subject={node.id}
-            />
-          </Field>
-        )}
-
-        {/* Effort (#424): orthogonal to the model — the model says WHICH agent
-            runs, the effort says HOW LONG it thinks. Segmented, not a slider (see
-            EffortPicker). Hidden for a script node for the same reason as the
-            model: it launches no agent. Hidden, not disabled — the house masks
-            controls, it does not grey them out. */}
-        {!isScript && (
-          <Field label="Effort">
-            <EffortPicker
-              value={node.effort ?? null}
-              onChange={(v) => handleField("effort", v)}
-              efforts={harnessOption?.efforts ?? []}
-              testid="node-effort"
-              /* #616/ADR-0053: greyed off the SERVED effort-axis fact — the daemon
-                 deduces it from the binary, no client-side per-name map. */
-              disabled={!(harnessOption?.hasEffort ?? true)}
-            />
-          </Field>
+          </>
         )}
 
         {/* Prompt / Script body. For a script node (#248) this textarea holds the

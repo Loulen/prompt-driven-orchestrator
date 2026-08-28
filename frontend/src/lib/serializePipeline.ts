@@ -100,6 +100,9 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
     // emitter and `exportNodeAsYaml` are deliberately NOT unified (see the note
     // further down) — a field added here must be added there too.
     if (n.pin_harness) node.pin_harness = n.pin_harness;
+    if (n.agent_choice && n.agent_choice.mode !== "inherit") {
+      node.agent_choice = n.agent_choice;
+    }
     const harnesses = foldNodeIntoHarnesses(n);
     if (harnesses) node.harnesses = harnesses;
     // Legacy `type: loop` nodes (pre-region model, ADR-0011) carry a node-level
@@ -281,6 +284,9 @@ export function exportNodeAsYaml(node: NodeDef, prompt: string): string {
   };
   if (node.interactive) obj.interactive = true;
   if (node.pin_harness) obj.pin_harness = node.pin_harness;
+  if (node.agent_choice && node.agent_choice.mode !== "inherit") {
+    obj.agent_choice = node.agent_choice;
+  }
   const harnesses = foldNodeIntoHarnesses(node);
   if (harnesses) obj.harnesses = harnesses;
   // Legacy bounded-loop nodes carry a node-level `max_iter` the daemon still

@@ -21,11 +21,11 @@ use crate::worktree_ops::{
     ensure_sub_worktree, reap_orphan_sub_worktree, sub_worktree_branch, sub_worktree_path,
 };
 use crate::{
-    admission, append_event_with, count_global_live_sessions_excluding, event_log,
-    harness_registry, harness_resolver, input_resolution, merge_action, panic_payload_message,
-    pipeline, prompt_augmenter, reload_run_state_with, stored_autocomplete_turn_end,
-    stored_default_harness, stored_default_harness_models, stored_session_cap,
-    tmux_session_manager, transition_guard, AppState,
+    admission, agent_choice, agent_profile, append_event_with,
+    count_global_live_sessions_excluding, event_log, harness_registry, input_resolution,
+    merge_action, panic_payload_message, pipeline, prompt_augmenter, reload_run_state_with,
+    stored_autocomplete_turn_end, stored_default_harness, stored_default_harness_models,
+    stored_session_cap, tmux_session_manager, transition_guard, AppState,
 };
 
 pub(crate) struct SpawnContext<'a> {
@@ -136,6 +136,35 @@ fn warn_turn_end_unsupported_once(run_id: &str, harness: &str) {
     let said = guard.get_or_insert_with(HashSet::new);
     if said.insert((run_id.to_string(), harness.to_string())) {
         warn!("run {run_id}: {note}");
+    }
+}
+
+/// #563 (AC13/AC14): say ONCE per `(run, tier, profile_id)` that a tier named a
+/// `Profile` reference absent from the atomic snapshot — the walk warned and
+/// behaved as `Inherit` for that tier rather than failing the spawn. Deduped the
+/// same way as [`warn_missing_staging_floor_once`] so a busy scheduler replaying
+/// the same stale reference doesn't spam the log every retry.
+fn warn_missing_agent_profile_once(
+    run_id: &str,
+    warning: &crate::agent_choice::MissingProfileWarning,
+) {
+    use std::collections::HashSet;
+    use std::sync::Mutex;
+    static SAID: Mutex<Option<HashSet<(String, String, String)>>> = Mutex::new(None);
+
+    let mut guard = SAID.lock().unwrap_or_else(|e| e.into_inner());
+    let said = guard.get_or_insert_with(HashSet::new);
+    let key = (
+        run_id.to_string(),
+        format!("{:?}", warning.tier),
+        warning.profile_id.clone(),
+    );
+    if said.insert(key) {
+        warn!(
+            "run {run_id}: agent profile '{}' referenced at tier {:?} no longer exists — \
+             falling through as if that tier stated no choice",
+            warning.profile_id, warning.tier
+        );
     }
 }
 
@@ -418,22 +447,55 @@ pub(crate) async fn spawn_node(
                     None
                 }
             };
-        let tiers = harness_resolver::HarnessTiers {
+        // #563/ADR-0057: the Projet's `AgentChoice`, read alongside its legacy
+        // `harness` above — same primary-repo key, same "a DB error degrades the
+        // tier to transparent" posture.
+        let project_choice =
+            match crate::project_store::agent_choice_for_path(deps.db, &primary_repo).await {
+                Ok(c) => c,
+                Err(e) => {
+                    warn!("project agent_choice lookup failed for {primary_repo}: {e}");
+                    None
+                }
+            };
+        // #563: the Instance tier's `AgentChoice`, from a fresh read alongside the
+        // legacy `default_harness`/`default_models` tiers (`stored_default_*` above
+        // already call `instance_config::get` internally; this is a second fresh
+        // read rather than plumbing the whole config through those two helpers — a
+        // DB error degrades the tier to transparent, same posture as every other
+        // tier here).
+        let instance_choice = crate::instance_config::get(deps.db)
+            .await
+            .ok()
+            .and_then(|c| c.agent_choice);
+        // #563: the atomic profile snapshot — taken ONCE per spawn (ADR-0057 ¶4),
+        // so every `Profile` reference this resolution touches (node/run/project/
+        // instance) resolves against the exact same point-in-time read. A DB error
+        // degrades to an empty snapshot: `agent_choice::resolve` still falls through
+        // to its defensive `claude` floor rather than failing the spawn.
+        let profiles = agent_profile::snapshot(deps.db).await.unwrap_or_default();
+        let tiers = agent_choice::Tiers {
+            node_choice: node.agent_choice.as_ref(),
             node_pin: node.pin_harness.as_deref(),
+            node_harnesses: Some(&node.harnesses),
             // #551: the Run tier — the harness frozen in this Run's `RunStarted`
             // (`projected` is the fresh projection loaded at the head of this spawn).
             // A pinned node still ignores it; a free node follows it (ADR-0046).
-            run: projected.and_then(|s| s.harness.as_deref()),
+            run_choice: projected.and_then(|s| s.agent_choice.as_ref()),
+            run_harness: projected.and_then(|s| s.harness.as_deref()),
             // #552: the Projet tier — resolved just above from this Run's primary
             // repo. Sits below the Run and above the instance default (ADR-0046).
-            project: project_harness.as_deref(),
-            instance_default: default_harness.as_deref(),
+            project_choice: project_choice.as_ref(),
+            project_harness: project_harness.as_deref(),
+            instance_choice: instance_choice.as_ref(),
+            instance_default_harness: default_harness.as_deref(),
+            instance_default_models: Some(&default_models),
         };
-        Some(harness_resolver::resolve(
-            &tiers,
-            &node.harnesses,
-            &default_models,
-        ))
+        let resolved = agent_choice::resolve(&tiers, &profiles, agent_profile::DEFAULT_PROFILE_ID);
+        for warning in &resolved.warnings {
+            warn_missing_agent_profile_once(run_id, warning);
+        }
+        Some(resolved.combo)
     };
     let harness_descriptor = match &resolved_harness {
         None => None,

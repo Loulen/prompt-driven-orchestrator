@@ -431,6 +431,7 @@ mod tests {
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            agent_choice: None,
             auto_fail: None,
         }
     }
@@ -496,6 +497,7 @@ mod tests {
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            agent_choice: None,
             auto_fail: None,
         }
     }

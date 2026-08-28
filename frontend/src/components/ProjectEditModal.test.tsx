@@ -15,6 +15,7 @@ vi.mock("../api", () => {
   // class declared outside would be in its TDZ here.
   class ApiError extends Error {}
   return {
+    fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
     ApiError,
     createProject: (name: string) => createProject(name),
     updateProject: (id: string, req: unknown) => updateProject(id, req),

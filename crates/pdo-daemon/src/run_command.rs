@@ -2218,6 +2218,11 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 // `Some`-wrapping-for-explicit dance: the create chokepoint freezes
                 // `req.harness` verbatim, with no precedence resolution of its own.
                 harness: run_state.harness.clone(),
+                // #563: reproduce the original Run's `AgentChoice`, like `harness` —
+                // `None` (stated none) forwards as `None`, so the retry re-resolves
+                // through the legacy `harness` tier (or Projet/instance) exactly as
+                // the original did.
+                agent_choice: run_state.agent_choice.clone(),
                 // #338: pin the historical retry behaviour exactly. A retry has always
                 // set `name: None` and re-derived the name (placeholder or from input);
                 // `Some(true)` reproduces that regardless of the instance default, so a
@@ -3278,6 +3283,7 @@ mod tests {
                 over: None,
                 pin_harness: None,
                 harnesses: Default::default(),
+                agent_choice: None,
                 auto_fail: None,
             }],
             edges: vec![EdgeDef {
@@ -3334,6 +3340,7 @@ mod tests {
                 over: None,
                 pin_harness: None,
                 harnesses: Default::default(),
+                agent_choice: None,
                 auto_fail: None,
             }],
             edges: vec![EdgeDef {

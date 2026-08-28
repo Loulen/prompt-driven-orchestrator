@@ -39,6 +39,7 @@ export function markerReached(
 export function deriveEditNodes(
   pipeline: PipelineDef,
   runState: RunState | null | undefined,
+  agentProfileIds: ReadonlySet<string> = new Set(),
 ): Node[] {
   // A single-member loop region renders as a compact badge on the member's card
   // instead of a box (ADR-0011 / #148, #151; the LoopRegion type's "compact
@@ -97,6 +98,10 @@ export function deriveEditNodes(
         inputs: n.inputs.map((p) => ({ name: p.name, side: p.side ?? "left", description: p.description })),
         outputs: n.outputs.map((p) => ({ name: p.name, side: p.side ?? "right", description: p.description })),
         interactive: n.interactive,
+        agentMode:
+          n.agent_choice?.mode === "profile"
+            ? agentProfileIds.has(n.agent_choice.profile_id) ? "profile" : "broken"
+            : n.agent_choice?.mode === "custom" ? "custom" : "inherit",
         // Compact badge for the single member of a loop region: `⇉ ...` for a
         // collection (#151) or `↻ ...` for a single-member bounded loop (#173).
         // Absent on non-member nodes and multi-member regions (boxed instead).

@@ -29,6 +29,7 @@ vi.mock("@xyflow/react", async (importOriginal) => {
 // EditCanvas (via usePipelineLibraryState) and PipelineInspector both import the
 // API client; stub the network so nothing fetches on mount.
 vi.mock("../api", () => ({
+  fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
   fetchLibrary: vi.fn().mockResolvedValue([]),
   fetchLibraryPipelines: vi.fn().mockResolvedValue([]),
   saveLibraryPipeline: vi.fn().mockResolvedValue({ id: "my-pipeline", scope: "repo" }),

@@ -4,6 +4,8 @@
 #![warn(unreachable_pub)]
 
 pub mod admission;
+mod agent_choice;
+mod agent_profile;
 mod audit_log;
 mod auto_fail;
 mod blackboard;
@@ -572,6 +574,16 @@ struct CreateRunRequest {
     /// (a Run has a single origin), so "Run now" and a cron tick produce the same one.
     #[serde(default)]
     harness: Option<String>,
+    /// The Run tier of the agentic-profile union (#563, ADR-0057) — the
+    /// counterpart of [`Self::harness`], but as the full exclusive union
+    /// (`Inherit`/`Profile`/`Custom`), atomically supplying harness, model and
+    /// effort. `None`/`Inherit` ⇒ the Run states no choice, so `harness` above
+    /// (and the tiers below it) still decide — byte-identical to the pre-#563
+    /// shape. `Some(Profile | Custom)` wins outright at this tier (never
+    /// merges with `harness`) and is frozen into `RunStarted`, same immutability
+    /// discipline as `harness`. A Trigger fire folds its stored choice in here.
+    #[serde(default)]
+    agent_choice: Option<crate::agent_choice::AgentChoice>,
     /// Whether the manager auto-names this Run (#338). `Option`, NOT `bool`:
     /// `#[serde(default)]` → `None` is an **omitted** field, which resolves
     /// back-compatibly by the presence of `name` (a supplied `name` with no flag
@@ -617,6 +629,7 @@ const CREATE_RUN_FIELDS: &[&str] = &[
     "triggered_by",
     "sandbox",
     "harness",
+    "agent_choice",
     "auto_name",
     "auto_fail",
 ];
@@ -765,6 +778,12 @@ struct PatchProjectRequest {
     name: Option<String>,
     #[serde(default, deserialize_with = "deserialize_double_option")]
     harness: Option<Option<String>>,
+    /// The Projet's `AgentChoice` (#563, ADR-0057), same double-`Option` shape as
+    /// `harness`: **absent** leaves it untouched, `null` clears it (falls through to
+    /// the legacy `harness` field, itself falling through to the instance tier), an
+    /// object sets it.
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    agent_choice: Option<Option<crate::agent_choice::AgentChoice>>,
     /// The Projet's `auto_fail` (ADR-0049) — same double-`Option` shape as
     /// `harness`: **absent** leaves it untouched, `null` clears it (states no
     /// preference), a bool sets it.
@@ -2154,6 +2173,7 @@ impl DaemonHandle {
                 max_concurrent: None,
                 sandbox: None,
                 harness: None,
+                agent_choice: None,
                 auto_name: true,
                 next_fire_at: Some("2030-01-01T00:00:00.000Z".to_string()),
             },
@@ -3284,6 +3304,12 @@ struct CreateTriggerRequest {
     /// harness (there is no separate Trigger tier). Free text — no validation (ADR-0045).
     #[serde(default)]
     harness: Option<String>,
+    /// Per-Trigger `AgentChoice` (#563, ADR-0057): `Inherit`/absent falls through to
+    /// the legacy `harness` field above (itself falling through to the Run/Project/
+    /// Instance tiers); `Profile`/`Custom` is folded into the fired Run's explicit
+    /// tier at fire time, same posture as `harness`.
+    #[serde(default)]
+    agent_choice: Option<crate::agent_choice::AgentChoice>,
     /// Whether Runs this Trigger fires are auto-named (#338). Seeded from the instance
     /// default in the create modal and frozen on the row; `#[serde(default)]` → `true`
     /// so an older client that omits the field keeps the pre-#338 auto-naming behaviour.
@@ -3620,6 +3646,11 @@ async fn create_trigger(
         // #551: same normalisation for the harness — a blank selector value inherits the
         // instance default at fire time rather than persisting as a harness named "".
         harness: req.harness.filter(|s| !s.trim().is_empty()),
+        // #563: fold the request's `AgentChoice` straight through — `None`/`Inherit`/
+        // a blank `Custom`/`Profile` payload are all already transparent inside
+        // `agent_choice::resolve`, so no extra normalisation is needed here (unlike
+        // the flat-string `harness` field above).
+        agent_choice: req.agent_choice,
         // #338: freeze the auto-naming choice on the row (seeded from the instance
         // default in the modal). No re-resolution at fire time — the runtime never
         // decides autonomy (ADR-0012 frontier).
@@ -3823,6 +3854,12 @@ struct PatchTriggerRequest {
     /// UI reset a Trigger to "use the instance default".
     #[serde(default, deserialize_with = "deserialize_double_option")]
     harness: Option<Option<String>>,
+    /// Per-Trigger `AgentChoice` (#563), double-wrapped like `harness`: absent = leave,
+    /// present `null` = clear back to inheriting the legacy `harness` field, an object
+    /// = set. The custom deserializer makes present-`null` → `Some(None)` reachable
+    /// from JSON.
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    agent_choice: Option<Option<crate::agent_choice::AgentChoice>>,
     /// Auto-naming toggle (#338), a FLAT `Option<bool>` like `enabled` — NOT
     /// double-wrapped like `sandbox`/`max_concurrent`. There is no "inherit" state to
     /// clear back to: a Trigger's autonomy is a plain on/off. `None` leaves it,
@@ -4080,6 +4117,10 @@ async fn patch_trigger(
         harness: req
             .harness
             .map(|inner| inner.filter(|s| !s.trim().is_empty())),
+        // #563: `Some(Some(choice))` sets, `Some(None)` clears back to inheriting the
+        // legacy `harness` field, `None` leaves it. Passed straight through, matching
+        // the `agent_choice::resolve` transparency of `None`/`Inherit`/blank payloads.
+        agent_choice: req.agent_choice,
         // #338: flat toggle — `Some(v)` sets, `None` leaves. No clear state.
         auto_name: req.auto_name,
         next_fire_at,
@@ -4444,6 +4485,20 @@ fn build_router(state: Arc<AppState>) -> Router {
         // gesture (`/triggers/{id}/fire`, `/triggers/pause`, `/pipelines/{id}/promote`).
         // The ONLY route in the crate that reaches the network.
         .route("/settings/cost-prices/sync", post(sync_cost_prices))
+        .route(
+            "/settings/agent-profiles",
+            get(list_agent_profiles).post(create_agent_profile),
+        )
+        .route(
+            "/settings/agent-profiles/{id}",
+            get(get_agent_profile)
+                .put(update_agent_profile)
+                .delete(delete_agent_profile),
+        )
+        .route(
+            "/settings/agent-profiles/{id}/referents",
+            get(get_agent_profile_referents),
+        )
         .route("/settings/sandbox-profiles", get(list_sandbox_profiles))
         .route(
             "/settings/sandbox-profiles/{name}",
@@ -4603,6 +4658,15 @@ async fn patch_project(
         let harness = harness.as_deref();
         if let Err(e) = project_store::set_harness(&state.db, &project_id, harness).await {
             error!("failed to set harness on project {project_id}: {e}");
+            return project_list_error();
+        }
+    }
+    // Same double-`Option` semantics as `harness` (#563): `Some(None)` clears the
+    // AgentChoice (falling through to the legacy `harness` field), `Some(Some(c))` sets it.
+    if let Some(agent_choice) = req.agent_choice {
+        if let Err(e) = project_store::set_agent_choice(&state.db, &project_id, agent_choice).await
+        {
+            error!("failed to set agent_choice on project {project_id}: {e}");
             return project_list_error();
         }
     }
@@ -4817,6 +4881,13 @@ async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
     project_store::init(db)
         .await
         .context("failed to create project tables")?;
+
+    // #563 / ADR-0057: agent profiles — instance-scoped, named harness+model+effort
+    // combinations. Unlike `project_store`, this table IS seeded: the reserved
+    // `Default` profile must exist on every instance, immediately (#563 AC10).
+    agent_profile::init(db)
+        .await
+        .context("failed to create agent_profiles table")?;
 
     Ok(())
 }
@@ -5608,6 +5679,10 @@ async fn fire_one_trigger(
                 // route through here) freeze the SAME harness. A blank/absent stored
                 // value defers to the instance default. No validation (ADR-0045).
                 harness: trigger.harness.clone(),
+                // #563: fold the Trigger's stored `AgentChoice` into the create
+                // request's explicit Run tier, same posture as `harness` above —
+                // a cron tick and a "Run now" freeze the SAME choice.
+                agent_choice: trigger.agent_choice.clone(),
                 // #338: pass the Trigger's frozen auto-naming choice as the explicit
                 // tier. `Some(b)` wins the chokepoint resolution unconditionally, so a
                 // fire with `auto_name=false` keeps a stable per-id name and the manager
@@ -6166,6 +6241,11 @@ const KNOWN_NODE_KEYS: &[&str] = &[
     // pasted flat pair is folded into `harnesses.claude` by `normalize_node_value`).
     "pin_harness",
     "harnesses",
+    // #563/ADR-0057: the node's agent-profile choice (Inherit/Profile/Custom).
+    // Not yet surfaced in `LibraryEntry` (a #345-style follow-up), but a pasted
+    // node carrying it must not be told it is "unknown field ... (ignored)"
+    // when parse_node_spec silently keeps it off the library entry.
+    "agent_choice",
     // Accepted-and-dropped, not a semantic loss → no warning.
     "id",
     "view",
@@ -6270,6 +6350,15 @@ fn parse_node_spec(yaml: &str) -> Result<serde_json::Value, String> {
         .get("harnesses")
         .map(yaml_value_to_json)
         .unwrap_or(serde_json::Value::Null);
+    // #563/ADR-0057: the node's agent-profile choice rides through verbatim (as
+    // JSON) — same "carried, not interpreted" posture as `harnesses` above. It
+    // is not (yet) a `LibraryEntry` field, so it must be read off the raw value
+    // here or it would silently vanish through the `LibraryEntry` deserialize
+    // below.
+    let agent_choice = value
+        .get("agent_choice")
+        .map(yaml_value_to_json)
+        .unwrap_or(serde_json::Value::Null);
 
     // 8. Deserialize the (normalized) map into a LibraryEntry. `prompt` defaults
     //    to empty (a structural node carries none); unknown fields are ignored.
@@ -6289,6 +6378,8 @@ fn parse_node_spec(yaml: &str) -> Result<serde_json::Value, String> {
             // #550: the harness axis, for the pin selector + per-harness UI.
             "pin_harness": pin_harness,
             "harnesses": harnesses,
+            // #563: the node's agent-profile choice, carried verbatim.
+            "agent_choice": agent_choice,
             "max_iter": entry.max_iter,
             "branches": entry.branches,
         },
@@ -7548,6 +7639,7 @@ async fn parse_multipart_create_run(
     // field is absent/blank — the chokepoint then freezes nothing and the Run resolves
     // through the instance default and the floor.
     let mut harness: Option<String> = None;
+    let mut agent_choice: Option<crate::agent_choice::AgentChoice> = None;
     // #338: an explicit auto-naming choice may ride the multipart (browser) create
     // when images are attached, so an unchecked "Auto-generated" box is honoured on
     // that path too. `None` when the field is absent — the chokepoint then resolves
@@ -7661,6 +7753,18 @@ async fn parse_multipart_create_run(
                     harness = Some(v);
                 }
             }
+            "agent_choice" => {
+                let value = field
+                    .text()
+                    .await
+                    .map_err(|e| format!("bad field agent_choice: {e}"))?;
+                if !value.trim().is_empty() {
+                    agent_choice = Some(
+                        serde_json::from_str(&value)
+                            .map_err(|e| format!("invalid agent_choice JSON: {e}"))?,
+                    );
+                }
+            }
             "auto_name" => {
                 // #338: an explicit flag off the multipart form. Reuses the shared
                 // boolean parser; an unrecognised token leaves `None` (defer to the
@@ -7727,6 +7831,7 @@ async fn parse_multipart_create_run(
         sandbox,
         // #551: the explicit harness threaded off the multipart form.
         harness,
+        agent_choice,
         // #338: the explicit auto-naming choice threaded off the multipart form.
         auto_name,
         // ADR-0049: the explicit auto_fail choice threaded off the multipart form.
@@ -8243,6 +8348,28 @@ async fn create_run_inner(
     {
         run_payload["harness"] = serde_json::json!(h);
     }
+    // #563 (ADR-0057): FREEZE the Run's `AgentChoice` into `RunStarted`, same
+    // immutability posture as `harness` above — resolved and frozen ATOMICALLY at
+    // spawn, never re-decided by a later profile edit or resume (ADR-0057 ¶4).
+    // Written ONLY for an explicit (non-`Inherit`) choice with a non-blank payload,
+    // so a Run that states none keeps its payload byte-identical to the pre-#563
+    // shape (absent key → `None` → `harness` above still decides the Run tier).
+    let explicit_agent_choice = match &req.agent_choice {
+        Some(crate::agent_choice::AgentChoice::Custom { harness, .. })
+            if !harness.trim().is_empty() =>
+        {
+            req.agent_choice.clone()
+        }
+        Some(crate::agent_choice::AgentChoice::Profile { profile_id })
+            if !profile_id.trim().is_empty() =>
+        {
+            req.agent_choice.clone()
+        }
+        _ => None,
+    };
+    if let Some(choice) = explicit_agent_choice {
+        run_payload["agent_choice"] = serde_json::to_value(choice).unwrap_or_default();
+    }
     // ADR-0049: FREEZE the Run's `auto_fail` choice into `RunStarted`, same
     // immutability posture as `harness`. Written ONLY when the Run states a
     // preference, so a Run that states none keeps its payload byte-identical
@@ -8657,12 +8784,22 @@ async fn spawn_manager_session(
     // falls back to `claude` with a warning rather than failing the whole Run here:
     // the first NODE spawn is where an unknown harness fails fast (ADR-0037), and the
     // manager is a best-effort assist that must not itself wedge the Run.
-    let run_harness = reload_run_state(state, run_id)
+    let run_state = reload_run_state(state, run_id)
         .await
-        .and_then(|(_, s)| s.harness);
-    let default_harness = stored_default_harness(&state.db).await;
-    let manager_harness_name =
-        harness_resolver::resolve_infra_harness(run_harness.as_deref(), default_harness.as_deref());
+        .map(|(_, state)| state);
+    let config = instance_config::get(&state.db).await.ok();
+    let profiles = agent_profile::snapshot(&state.db).await.unwrap_or_default();
+    let manager_agent = agent_choice::resolve_infra(
+        run_state.as_ref().and_then(|run| run.agent_choice.as_ref()),
+        run_state.as_ref().and_then(|run| run.harness.as_deref()),
+        config.as_ref().and_then(|cfg| cfg.agent_choice.as_ref()),
+        config
+            .as_ref()
+            .and_then(|cfg| cfg.default_harness.as_deref()),
+        &profiles,
+        agent_profile::DEFAULT_PROFILE_ID,
+    );
+    let manager_harness_name = manager_agent.combo.harness.clone();
     // #614 (correctif 3): resolve against the DISK TIER, so "this Run runs on X" is
     // true even when X is a user-declared harness — the manager follows the Run's
     // frozen harness through the same registry the node spawns resolve against.
@@ -8695,8 +8832,8 @@ async fn spawn_manager_session(
         // transcript, which shares this cwd, from being read as a node's.
         tmux_session_manager::SessionTail::Agent {
             harness: &manager_harness,
-            model: None,
-            effort: None,
+            model: manager_agent.combo.model.as_deref(),
+            effort: manager_agent.combo.effort.as_deref(),
             session_id: None,
         },
         sandbox_wrap.as_ref(),
@@ -9343,6 +9480,7 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
             "effective": dhm_effective,
             "stored": dhm_stored,
         },
+        "agent_choice": cfg.agent_choice,
         // #553/ADR-0045: the disk descriptor tier — which harnesses resolve (floor
         // ∪ disk), the file path, and any inert/refused descriptor named. The
         // settings surface is where a broken descriptor is ALWAYS said.
@@ -9860,6 +9998,209 @@ async fn put_settings(
         )
             .into_response(),
     }
+}
+
+// --- Agent profiles (#563, ADR-0057) ---------------------------------------
+
+#[derive(Deserialize)]
+struct WriteAgentProfileRequest {
+    name: String,
+    harness: String,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    effort: Option<String>,
+}
+
+fn agent_profile_error_response(error: agent_profile::AgentProfileError) -> Response {
+    let status = match error {
+        agent_profile::AgentProfileError::NotFound => StatusCode::NOT_FOUND,
+        agent_profile::AgentProfileError::DuplicateName { .. } => StatusCode::CONFLICT,
+        agent_profile::AgentProfileError::EmptyName
+        | agent_profile::AgentProfileError::EmptyHarness
+        | agent_profile::AgentProfileError::DefaultUndeletable => StatusCode::BAD_REQUEST,
+        agent_profile::AgentProfileError::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    (
+        status,
+        Json(serde_json::json!({ "error": error.to_string() })),
+    )
+        .into_response()
+}
+
+async fn list_agent_profiles(State(state): State<Arc<AppState>>) -> Response {
+    match agent_profile::list(&state.db).await {
+        Ok(profiles) => Json(serde_json::json!({ "profiles": profiles })).into_response(),
+        Err(error) => {
+            error!("failed to list agent profiles: {error}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": error.to_string() })),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn get_agent_profile(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    match agent_profile::get(&state.db, &id).await {
+        Ok(Some(profile)) => Json(profile).into_response(),
+        Ok(None) => agent_profile_error_response(agent_profile::AgentProfileError::NotFound),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": error.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn create_agent_profile(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<WriteAgentProfileRequest>,
+) -> Response {
+    match agent_profile::create(
+        &state.db,
+        &req.name,
+        &req.harness,
+        req.model.as_deref(),
+        req.effort.as_deref(),
+    )
+    .await
+    {
+        Ok(profile) => (StatusCode::CREATED, Json(profile)).into_response(),
+        Err(error) => agent_profile_error_response(error),
+    }
+}
+
+async fn update_agent_profile(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<WriteAgentProfileRequest>,
+) -> Response {
+    match agent_profile::update(
+        &state.db,
+        &id,
+        &req.name,
+        &req.harness,
+        req.model.as_deref(),
+        req.effort.as_deref(),
+    )
+    .await
+    {
+        Ok(profile) => Json(profile).into_response(),
+        Err(error) => agent_profile_error_response(error),
+    }
+}
+
+async fn delete_agent_profile(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    match agent_profile::delete(&state.db, &id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => agent_profile_error_response(agent_profile::AgentProfileError::NotFound),
+        Err(error) => agent_profile_error_response(error),
+    }
+}
+
+async fn get_agent_profile_referents(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    if !matches!(agent_profile::get(&state.db, &id).await, Ok(Some(_))) {
+        return agent_profile_error_response(agent_profile::AgentProfileError::NotFound);
+    }
+
+    let instance = instance_config::get(&state.db)
+        .await
+        .ok()
+        .and_then(|config| config.agent_choice)
+        .is_some_and(|choice| {
+            matches!(choice, agent_choice::AgentChoice::Profile { profile_id } if profile_id == id)
+        });
+
+    let projects = project_store::list(&state.db)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|project| {
+            matches!(
+                project.agent_choice.as_ref(),
+                Some(agent_choice::AgentChoice::Profile { profile_id }) if profile_id == &id
+            )
+        })
+        .map(|project| serde_json::json!({ "id": project.id, "name": project.name }))
+        .collect::<Vec<_>>();
+
+    let triggers = trigger_store::list(&state.db)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|trigger| {
+            matches!(
+                trigger.agent_choice.as_ref(),
+                Some(agent_choice::AgentChoice::Profile { profile_id }) if profile_id == &id
+            )
+        })
+        .map(|trigger| {
+            serde_json::json!({
+                "id": trigger.id,
+                "name": trigger.name,
+                "pipeline_id": trigger.pipeline_id
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let mut pipeline_entries = scan_pipeline_dir(&state.repo_root.join(".pdo/pipelines"), "repo");
+    if let Some(home) = dirs_next_home() {
+        pipeline_entries.extend(scan_pipeline_dir(&home.join(".pdo/pipelines"), "user"));
+    }
+    if let Some(directory) = library_store::pipelines::user_pipelines_dir() {
+        pipeline_entries.extend(scan_pipeline_dir(&directory, "library"));
+    }
+    let pipelines = pipeline_entries
+        .into_iter()
+        .flat_map(|entry| {
+            let Ok(yaml) = std::fs::read_to_string(&entry.path) else {
+                return Vec::new();
+            };
+            let Ok(parsed) = pipeline::parse_pipeline(&yaml) else {
+                return Vec::new();
+            };
+            parsed
+                .pipeline
+                .nodes
+                .into_iter()
+                .filter(|node| {
+                    matches!(
+                        node.agent_choice.as_ref(),
+                        Some(agent_choice::AgentChoice::Profile { profile_id }) if profile_id == &id
+                    )
+                })
+                .map(|node| {
+                    serde_json::json!({
+                        "id": entry.id,
+                        "name": entry.name,
+                        "node_id": node.id,
+                        "scope": entry.scope
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    Json(serde_json::json!({
+        "profile_id": id,
+        "instance": instance,
+        "projects": projects,
+        "triggers": triggers,
+        "pipelines": pipelines,
+        "runs": []
+    }))
+    .into_response()
 }
 
 // --- Staging profiles (#432, ADR-0031 §2-§7) --------------------------------
@@ -12383,9 +12724,9 @@ async fn spawn_merge_resolver(
     // AND on the harness OF THE RUN. Project both from the SAME (immutable) reload —
     // the mode defaults to `off`, the harness to `None`, if the state can't be
     // reloaded.
-    let (sandbox_mode, run_harness) = reload_run_state(state, run_id)
+    let (sandbox_mode, run_harness, run_agent_choice) = reload_run_state(state, run_id)
         .await
-        .map(|(_, s)| (s.sandbox, s.harness))
+        .map(|(_, s)| (s.sandbox, s.harness, s.agent_choice))
         .unwrap_or_default();
 
     let resolver_started = event_log::Event {
@@ -12414,9 +12755,19 @@ async fn spawn_merge_resolver(
     // the manager — `Run → instance → floor`, no node tier, no model/effort. Unknown
     // name (unvalidated Run choice, ADR-0045) falls back to `claude` with a warning:
     // the resolver is dead in production since ADR-0006, so this is defence in depth.
-    let default_harness = stored_default_harness(&state.db).await;
-    let resolver_harness_name =
-        harness_resolver::resolve_infra_harness(run_harness.as_deref(), default_harness.as_deref());
+    let config = instance_config::get(&state.db).await.ok();
+    let profiles = agent_profile::snapshot(&state.db).await.unwrap_or_default();
+    let resolver_agent = agent_choice::resolve_infra(
+        run_agent_choice.as_ref(),
+        run_harness.as_deref(),
+        config.as_ref().and_then(|cfg| cfg.agent_choice.as_ref()),
+        config
+            .as_ref()
+            .and_then(|cfg| cfg.default_harness.as_deref()),
+        &profiles,
+        agent_profile::DEFAULT_PROFILE_ID,
+    );
+    let resolver_harness_name = resolver_agent.combo.harness.clone();
     // #614 (correctif 3): resolve against the DISK TIER, like the manager.
     let resolver_home_root = sandbox_run::sandbox_home_roots(state)
         .map(|(home, _)| home)
@@ -12446,8 +12797,8 @@ async fn spawn_merge_resolver(
         // `spawn_node` and DOES carry an effort and a pinned id.
         tmux_session_manager::SessionTail::Agent {
             harness: &resolver_harness,
-            model: None,
-            effort: None,
+            model: resolver_agent.combo.model.as_deref(),
+            effort: resolver_agent.combo.effort.as_deref(),
             session_id: None,
         },
         sandbox_wrap.as_ref(),
@@ -22698,6 +23049,7 @@ mod tests {
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            agent_choice: None,
             auto_fail: None,
         }
     }
@@ -31844,6 +32196,7 @@ edges: []
             over: None,
             pin_harness: None,
             harnesses: Default::default(),
+            agent_choice: None,
             auto_fail: None,
         };
         let pipeline = pipeline::PipelineDef {
@@ -34090,6 +34443,7 @@ edges:
             "triggered_by": null,
             "sandbox": null,
             "harness": null,
+            "agent_choice": null,
             "auto_name": null,
             "auto_fail": null,
         });

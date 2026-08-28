@@ -21,6 +21,7 @@ const makePipeline = (overrides: Partial<PipelineListEntry> = {}): PipelineListE
 });
 
 vi.mock("../api", () => ({
+  fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
   fetchPipelines: vi.fn().mockResolvedValue([]),
   // #410: the modal fetches settings on open (default_sandbox prefill +
   // sandbox_docker greying). Default: off + Docker available. Tests override per case.

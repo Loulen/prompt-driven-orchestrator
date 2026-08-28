@@ -1,4 +1,4 @@
-import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, StatsPerformance, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, Project, BranchRef } from "./types";
+import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, StatsPerformance, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, Project, BranchRef, AgentChoice, AgentProfile, AgentProfileReferents } from "./types";
 import { foldHarnessOntoNode } from "./lib/harness";
 
 const BASE = "";
@@ -163,6 +163,38 @@ export function updateSettings(
   patch: UpdateSettingsRequest,
 ): Promise<InstanceSettings> {
   return request<InstanceSettings>("PUT", "/settings", { body: patch });
+}
+
+export function fetchAgentProfiles(): Promise<{ profiles: AgentProfile[] }> {
+  return request("GET", "/settings/agent-profiles");
+}
+
+export function createAgentProfile(
+  profile: Pick<AgentProfile, "name" | "harness" | "model" | "effort">,
+): Promise<AgentProfile> {
+  return request("POST", "/settings/agent-profiles", { body: profile });
+}
+
+export function updateAgentProfile(
+  id: string,
+  profile: Pick<AgentProfile, "name" | "harness" | "model" | "effort">,
+): Promise<AgentProfile> {
+  return request("PUT", `/settings/agent-profiles/${encodeURIComponent(id)}`, {
+    body: profile,
+  });
+}
+
+export function deleteAgentProfile(id: string): Promise<void> {
+  return request("DELETE", `/settings/agent-profiles/${encodeURIComponent(id)}`, {
+    responseMode: "void",
+  });
+}
+
+export function fetchAgentProfileReferents(id: string): Promise<AgentProfileReferents> {
+  return request(
+    "GET",
+    `/settings/agent-profiles/${encodeURIComponent(id)}/referents`,
+  );
 }
 
 // --- Staging profiles (#432, ADR-0031 §2-§7) --------------------------------
@@ -649,6 +681,7 @@ export interface CreateRunRequest {
    *  blank → the Run names no harness and each free node resolves through the instance
    *  default and the `claude` floor. Frozen into `RunStarted` at the create chokepoint. */
   harness?: string;
+  agent_choice?: AgentChoice;
   /** Whether the manager auto-names this Run (#338). The modal always sends it; omit and
    *  the server resolves back-compat by the presence of `name`, then the instance default. */
   auto_name?: boolean;
@@ -683,6 +716,7 @@ export function createRun(req: CreateRunRequest): Promise<CreateRunResponse> {
     // WITH attached images keeps its harness choice (the daemon's multipart parser reads
     // this field). Omitted when blank — the Run then names no harness.
     if (req.harness) form.append("harness", req.harness);
+    if (req.agent_choice) form.append("agent_choice", JSON.stringify(req.agent_choice));
     // #338: thread the explicit auto-naming choice through the multipart path too, so an
     // unchecked "Auto-generated" box is honoured on a create WITH attached images. Sent as
     // a stringified bool; only when the caller made a choice (it always does from the modal).
@@ -773,6 +807,7 @@ export interface CreateTriggerRequest {
   /** Per-Trigger harness (#551): a harness name, or null/omit to inherit the instance
    *  default. Folded into the fired Run's harness (no separate Trigger tier). */
   harness?: string | null;
+  agent_choice?: AgentChoice | null;
   /** Whether Runs this Trigger fires are auto-named (#338). Seeded from the instance
    *  default in the modal; omit → the server defaults to `true` (pre-#338 behaviour). */
   auto_name?: boolean;
@@ -818,6 +853,7 @@ export interface UpdateTriggerRequest {
   /** Per-Trigger harness (#551): a value sets it, `null` clears back to inheriting the
    *  instance default, `undefined` leaves it unchanged. */
   harness?: string | null;
+  agent_choice?: AgentChoice | null;
   /** Auto-naming toggle (#338): a bool sets it, `undefined` leaves it unchanged. A flat
    *  bool (no clear state) — mirror of `enabled`. */
   auto_name?: boolean;
@@ -857,6 +893,7 @@ export function createProject(name: string): Promise<Project> {
 export interface UpdateProjectRequest {
   name?: string;
   harness?: string | null;
+  agent_choice?: AgentChoice | null;
 }
 
 export function updateProject(

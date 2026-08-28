@@ -1376,6 +1376,14 @@ pub fn default_harness_with(stored: Option<String>) -> Option<String> {
 /// limits, same freshness contract as the model catalogue, ADR-0053). The env
 /// override `PDO_HARNESS_PROBE_PATH` short-circuits the shell probe (ops / tests).
 pub fn harness_probe_path() -> String {
+    // Explicit overrides are a deterministic per-process seam. Read them before
+    // the production cache so the single integration-test binary can isolate
+    // tests that intentionally provide different fake harness directories.
+    if let Some(path) = std::env::var_os("PDO_HARNESS_PROBE_PATH") {
+        if !path.is_empty() {
+            return path.to_string_lossy().into_owned();
+        }
+    }
     static PROBE_PATH: OnceLock<String> = OnceLock::new();
     PROBE_PATH.get_or_init(resolve_harness_probe_path).clone()
 }

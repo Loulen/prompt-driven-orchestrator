@@ -115,6 +115,7 @@ fn served_harness(settings: &serde_json::Value, harness: &str) -> serde_json::Va
 #[cfg(unix)]
 #[tokio::test]
 async fn copilots_catalogue_is_deduced_from_its_binary_and_re_read_when_it_updates() {
+    let _probe_env = crate::HARNESS_PROBE_ENV_LOCK.lock().await;
     let bindir = tempfile::tempdir().unwrap();
     write_fake_copilot(
         bindir.path(),

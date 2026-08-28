@@ -2589,6 +2589,10 @@ pub async fn serve_with_config(
         }
     }
 
+    #[cfg(not(test))]
+    migrate_legacy_pipelines(&repo_root)
+        .map_err(|error| anyhow::anyhow!("pipeline registry migration failed: {error}"))?;
+
     let (event_tx, _) = broadcast::channel::<event_log::Event>(256);
     let (pipeline_tx, _) = broadcast::channel::<serde_json::Value>(64);
 
@@ -2599,6 +2603,7 @@ pub async fn serve_with_config(
 
     let watcher = pipeline_watcher::spawn_watcher(
         repo_root.clone(),
+        instance_pipeline_dir(&repo_root),
         pipeline_tx.clone(),
         recent_writes.clone(),
         run_modified_tx,
@@ -2697,10 +2702,6 @@ pub async fn serve_with_config(
         // passive on tmux state, same as the sweep/reaper).
         boot_recovery::run_boot_recovery(&state).await;
     }
-
-    #[cfg(not(test))]
-    migrate_legacy_pipelines(&state.repo_root)
-        .map_err(|error| anyhow::anyhow!("pipeline registry migration failed: {error}"))?;
 
     let app = build_router(state.clone());
 

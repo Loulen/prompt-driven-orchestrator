@@ -11,7 +11,7 @@ pub(crate) const VERSION: u32 = 1;
 #[serde(deny_unknown_fields)]
 struct PortablePipelineDocument {
     pdo_pipeline: u32,
-    pipeline: PipelineDef,
+    pipeline: serde_yaml::Value,
     #[serde(default)]
     prompts: BTreeMap<String, String>,
 }
@@ -31,6 +31,33 @@ fn make_portable(mut pipeline: PipelineDef) -> PipelineDef {
     pipeline
 }
 
+fn sort_mappings(value: &mut serde_yaml::Value) {
+    match value {
+        serde_yaml::Value::Sequence(values) => {
+            for value in values {
+                sort_mappings(value);
+            }
+        }
+        serde_yaml::Value::Mapping(mapping) => {
+            let mut entries = std::mem::take(mapping).into_iter().collect::<Vec<_>>();
+            for (key, value) in &mut entries {
+                sort_mappings(key);
+                sort_mappings(value);
+            }
+            entries.sort_by_cached_key(|(key, _)| serde_yaml::to_string(key).unwrap_or_default());
+            mapping.extend(entries);
+        }
+        _ => {}
+    }
+}
+
+fn ordered_pipeline_value(pipeline: PipelineDef) -> Result<serde_yaml::Value, String> {
+    let mut value = serde_yaml::to_value(pipeline)
+        .map_err(|e| format!("failed to serialize portable pipeline: {e}"))?;
+    sort_mappings(&mut value);
+    Ok(value)
+}
+
 pub(crate) fn export(
     pipeline: &PipelineDef,
     prompts: &HashMap<String, String>,
@@ -43,7 +70,7 @@ pub(crate) fn export(
         .pipeline;
     serde_yaml::to_string(&PortablePipelineDocument {
         pdo_pipeline: VERSION,
-        pipeline: canonical,
+        pipeline: ordered_pipeline_value(canonical)?,
         prompts: prompts
             .iter()
             .map(|(id, prompt)| (id.clone(), prompt.clone()))
@@ -74,11 +101,13 @@ pub(crate) fn interpret(source: &str) -> Result<InterpretedDocument, String> {
         ));
     }
 
-    let mut document: PortablePipelineDocument =
+    let document: PortablePipelineDocument =
         serde_yaml::from_value(value).map_err(|e| format!("invalid pipeline document: {e}"))?;
-    document.pipeline = make_portable(document.pipeline);
+    let portable = serde_yaml::from_value(document.pipeline)
+        .map_err(|e| format!("pipeline: invalid definition: {e}"))?;
+    let portable = make_portable(portable);
 
-    let canonical = serde_yaml::to_string(&document.pipeline)
+    let canonical = serde_yaml::to_string(&portable)
         .map_err(|e| format!("pipeline: failed to validate: {e}"))?;
     let parsed = pipeline::parse_pipeline(&canonical)
         .map_err(|e| format!("pipeline: invalid definition: {e}"))?;
@@ -192,6 +221,57 @@ mod tests {
             Some(AgentChoice::Inherit)
         );
         assert_eq!(imported.prompts, prompts);
+    }
+
+    #[test]
+    fn export_orders_variables_deterministically() {
+        let mut pipeline = pipeline();
+        for name in ["zulu", "echo", "hotel", "alpha", "yankee", "bravo"] {
+            pipeline.variables.insert(
+                name.into(),
+                crate::pipeline::VariableDef {
+                    var_type: crate::pipeline::VariableType::String,
+                    default: serde_yaml::Value::String(name.into()),
+                },
+            );
+        }
+
+        let document = super::export(&pipeline, &HashMap::new()).unwrap();
+        let positions = ["alpha:", "bravo:", "echo:", "hotel:", "yankee:", "zulu:"]
+            .map(|name| document.find(name).unwrap());
+
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+
+    #[test]
+    fn export_orders_nested_pipeline_maps_deterministically() {
+        let mut pipeline = pipeline();
+        let frontmatter = ["zulu", "echo", "hotel", "alpha", "yankee", "bravo"]
+            .into_iter()
+            .map(|name| {
+                (
+                    format!("field_{name}"),
+                    crate::pipeline::FrontmatterFieldDecl {
+                        field_type: "string".into(),
+                        allowed: None,
+                    },
+                )
+            })
+            .collect();
+        pipeline.nodes[0].outputs[0].frontmatter = Some(frontmatter);
+
+        let document = super::export(&pipeline, &HashMap::new()).unwrap();
+        let positions = [
+            "field_alpha:",
+            "field_bravo:",
+            "field_echo:",
+            "field_hotel:",
+            "field_yankee:",
+            "field_zulu:",
+        ]
+        .map(|name| document.find(name).unwrap());
+
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
     }
 
     #[test]

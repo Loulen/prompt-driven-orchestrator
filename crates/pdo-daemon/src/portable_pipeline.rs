@@ -111,6 +111,10 @@ pub(crate) fn interpret(source: &str) -> Result<InterpretedDocument, String> {
         .map_err(|e| format!("pipeline: failed to validate: {e}"))?;
     let parsed = pipeline::parse_pipeline(&canonical)
         .map_err(|e| format!("pipeline: invalid definition: {e}"))?;
+    let dangling = pipeline::dangling_edge_references(&parsed.pipeline);
+    if !dangling.is_empty() {
+        return Err(format!("pipeline.edges: {}", dangling.join("; ")));
+    }
 
     let known_nodes = parsed
         .pipeline
@@ -289,5 +293,20 @@ mod tests {
         assert!(super::interpret(&source)
             .unwrap_err()
             .contains("cannot be used as a prompt filename"));
+    }
+
+    #[test]
+    fn dangling_edge_reference_is_rejected_with_the_document_path() {
+        let source = super::export(&pipeline(), &HashMap::new())
+            .unwrap()
+            .replace(
+                "  edges: []",
+                "  edges:\n  - source:\n      node: start\n      port: user_prompt\n    target:\n      node: ghost\n      port: input",
+            );
+
+        let error = super::interpret(&source).unwrap_err();
+
+        assert!(error.contains("pipeline.edges"), "{error}");
+        assert!(error.contains("non-existent node 'ghost'"), "{error}");
     }
 }

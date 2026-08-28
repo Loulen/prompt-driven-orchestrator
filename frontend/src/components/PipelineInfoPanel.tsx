@@ -38,8 +38,10 @@ function StatRow({
 interface Props {
   run: RunState | null;
   pipeline: PipelineDef | null;
-  libraryPipelines: LibraryPipelineEntry[];
-  onLibraryChanged: () => void;
+  /** @deprecated Instance pipelines no longer have a library scope. */
+  libraryPipelines?: LibraryPipelineEntry[];
+  /** @deprecated Instance pipelines refresh through the edit store. */
+  onLibraryChanged?: () => void;
   onClose: () => void;
   initialTab?: TabId;
   scrollToLine?: number;
@@ -66,8 +68,6 @@ const STATUS_DOT: Record<string, string> = {
 export default function PipelineInfoPanel({
   run,
   pipeline,
-  libraryPipelines: _libraryPipelines, // eslint-disable-line @typescript-eslint/no-unused-vars
-  onLibraryChanged: _onLibraryChanged, // eslint-disable-line @typescript-eslint/no-unused-vars
   onClose,
   initialTab,
   scrollToLine,

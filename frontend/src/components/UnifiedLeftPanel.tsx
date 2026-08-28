@@ -43,8 +43,10 @@ interface Props {
   selectedRunId: string | null;
   onSelectRun: (runId: string) => void;
   onNewRun: () => void;
-  libraryPipelines: LibraryPipelineEntry[];
-  onLibraryPipelinesChanged: () => void;
+  /** @deprecated Instance pipelines no longer have a library scope. */
+  libraryPipelines?: LibraryPipelineEntry[];
+  /** @deprecated Instance pipelines refresh through loadPipelines. */
+  onLibraryPipelinesChanged?: () => void;
   /** Triggers (#160). Optional so existing callers/tests keep working. */
   triggers?: Trigger[];
   selectedTriggerId?: string | null;
@@ -70,7 +72,6 @@ export default function UnifiedLeftPanel({
   selectedRunId,
   onSelectRun,
   onNewRun,
-  onLibraryPipelinesChanged,
   triggers = [],
   selectedTriggerId = null,
   onSelectTrigger,
@@ -563,12 +564,9 @@ export default function UnifiedLeftPanel({
   const handleLibrarySettled = useCallback(
     (o: BulkOutcome) => {
       deselect("library", o.succeeded.map((r) => r.id));
-      // Refresh BOTH pipeline lists on every bulk op (delete / duplicate), the
-      // same pair the single-item paths refresh (#227/#371).
       void loadPipelines();
-      onLibraryPipelinesChanged();
     },
-    [deselect, loadPipelines, onLibraryPipelinesChanged],
+    [deselect, loadPipelines],
   );
 
   // Open the pencil on a group header: an existing Projet pre-fills its record;
@@ -1064,10 +1062,7 @@ export default function UnifiedLeftPanel({
       )}
 
       {showImportModal && (
-        <ImportWorkflowModal
-          onClose={() => setShowImportModal(false)}
-          onImported={onLibraryPipelinesChanged}
-        />
+        <ImportWorkflowModal onClose={() => setShowImportModal(false)} />
       )}
     </aside>
   );
@@ -1135,10 +1130,8 @@ function NewPipelineModal({ onClose }: { onClose: () => void }) {
 /// (never executes it) and returns a draft plus lossy-translation warnings.
 function ImportWorkflowModal({
   onClose,
-  onImported,
 }: {
   onClose: () => void;
-  onImported: () => void;
 }) {
   const [mode, setMode] = useState<"pdo" | "claude">("pdo");
   const [file, setFile] = useState<File | null>(null);
@@ -1166,7 +1159,6 @@ function ImportWorkflowModal({
         mode === "pdo"
           ? await importPipelineDocument(content)
           : await importWorkflow(file?.name ?? "workflow.js", content);
-      onImported();
       await loadPipelines();
       await openPipeline(result.id);
       const w = "warnings" in result ? result.warnings ?? [] : [];

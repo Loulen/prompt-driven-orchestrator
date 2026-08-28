@@ -256,9 +256,11 @@ const DEFAULT_NODE_NAMES: Partial<Record<NodeType, string>> = {
 
 interface EditCanvasProps {
   libraryEntries: LibraryEntry[];
-  libraryPipelines: LibraryPipelineEntry[];
+  /** @deprecated Instance pipelines no longer have a library scope. */
+  libraryPipelines?: LibraryPipelineEntry[];
   onLibraryDelete: (name: string) => void;
-  onLibraryPipelinesChanged: () => void;
+  /** @deprecated Instance pipelines refresh through the edit store. */
+  onLibraryPipelinesChanged?: () => void;
   infoOpen?: boolean;
   onToggleInfo?: () => void;
   onCloseInfo?: () => void;

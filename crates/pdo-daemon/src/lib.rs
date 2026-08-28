@@ -6134,6 +6134,22 @@ fn read_prompts_from_dir(prompts_dir: &Path) -> HashMap<String, String> {
 }
 
 fn available_pipeline_identity(dir: &Path, requested_name: &str) -> (String, String) {
+    let existing_names = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("yaml"))
+        .filter_map(|entry| std::fs::read_to_string(entry.path()).ok())
+        .filter_map(|yaml| serde_yaml::from_str::<serde_yaml::Value>(&yaml).ok())
+        .filter_map(|value| {
+            value
+                .as_mapping()?
+                .get(serde_yaml::Value::String("name".into()))?
+                .as_str()
+                .map(str::trim)
+                .map(str::to_owned)
+        })
+        .collect::<std::collections::HashSet<_>>();
     let base_name = requested_name.trim().to_string();
     let base_name = if base_name.is_empty() {
         "Untitled".to_string()
@@ -6155,7 +6171,7 @@ fn available_pipeline_identity(dir: &Path, requested_name: &str) -> (String, Str
     let mut id = slug.to_string();
     let mut name = base_name.clone();
     let mut suffix = 2u32;
-    while dir.join(format!("{id}.yaml")).exists() {
+    while dir.join(format!("{id}.yaml")).exists() || existing_names.contains(&name) {
         id = format!("{slug}-{suffix}");
         name = format!("{base_name} ({suffix})");
         suffix += 1;
@@ -17944,6 +17960,21 @@ mod tests {
         std::fs::write(right.path().join("worker.md"), "right").unwrap();
 
         assert!(!directories_match(left.path(), right.path()).unwrap());
+    }
+
+    #[test]
+    fn available_pipeline_identity_avoids_an_existing_name_with_a_different_id() {
+        let registry = tempfile::tempdir().unwrap();
+        std::fs::write(
+            registry.path().join("legacy-id.yaml"),
+            "name: Release train\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            available_pipeline_identity(registry.path(), "Release train"),
+            ("release-train-2".into(), "Release train (2)".into())
+        );
     }
 
     // --- The nested-daemon (no-cleanup) posture resolver ---

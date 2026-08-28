@@ -4,7 +4,6 @@ import { useDaemonSocket } from "./hooks/useDaemonSocket";
 import type { ConnectionStatus } from "./hooks/useDaemonSocket";
 import { useResizableLayout } from "./hooks/useResizableLayout";
 import { useLibrary } from "./hooks/useLibrary";
-import { useLibraryPipelines } from "./hooks/useLibraryPipelines";
 import { fetchRuns, fetchRun, fetchTriggers, fetchProjects, fetchSessions, fetchTriggersHealth, pauseTriggers } from "./api";
 import { pickLatestLiveNode } from "./lib/pickLatestLiveNode";
 import { useRightPaneRouter } from "./hooks/useRightPaneRouter";
@@ -147,7 +146,6 @@ function useSelectedRun() {
 export default function App() {
   const { status, subscribe } = useDaemonSocket();
   const { entries: libraryEntries, refresh: refreshLibrary } = useLibrary();
-  const { entries: libraryPipelines, refresh: refreshLibraryPipelines } = useLibraryPipelines();
   const { runs, refresh: refreshRuns } = useRuns();
   const { sessions, refresh: refreshSessions } = useSessions();
   const { triggers, refresh: refreshTriggers } = useTriggers();
@@ -297,18 +295,14 @@ export default function App() {
       setSelectedRunId(null);
       setSelectedNodeId(null);
       selectRun(null);
-      // #320: also open the pipeline this Trigger would launch, in the canvas.
-      // Resolve scope the way the daemon resolves it at FIRE time (library-first,
-      // repo/user fallback): if the id is in the library store, open with scope
-      // "library"; otherwise let the daemon resolve a repo/user file (undefined).
+      // #320: also open the instance-owned pipeline this Trigger would launch.
       const trig = triggers.find((t) => t.id === triggerId);
       if (trig) {
-        const inLibrary = libraryPipelines.some((p) => p.id === trig.pipeline_id);
         setTriggerOpenedTabId(trig.pipeline_id);
-        openPipeline(trig.pipeline_id, inLibrary ? "library" : undefined);
+        openPipeline(trig.pipeline_id);
       }
     },
-    [selectRun, triggers, libraryPipelines, openPipeline],
+    [selectRun, triggers, openPipeline],
   );
 
   // #341: "Run now" is a real fire (guard + overlap + audit row), not a
@@ -619,8 +613,6 @@ export default function App() {
               selectedRunId={selectedRunId}
               onSelectRun={handleSelectRun}
               onNewRun={() => openNewRunModal({ kind: "run" })}
-              libraryPipelines={libraryPipelines}
-              onLibraryPipelinesChanged={refreshLibraryPipelines}
               triggers={triggers}
               selectedTriggerId={selectedTriggerId}
               onSelectTrigger={handleSelectTrigger}
@@ -643,13 +635,11 @@ export default function App() {
                 <TabBar />
                 <EditCanvas
                   libraryEntries={libraryEntries}
-                  libraryPipelines={libraryPipelines}
                   onLibraryDelete={async (name) => {
                     const { deleteFromLibrary: delLib } = await import("./api");
                     await delLib(name);
                     refreshLibrary();
                   }}
-                  onLibraryPipelinesChanged={refreshLibraryPipelines}
                   infoOpen={infoPanelOpen}
                   onToggleInfo={handleToggleInfo}
                   onCloseInfo={handleCloseInfo}
@@ -682,8 +672,6 @@ export default function App() {
                 key={infoPanelInitialTab ?? "default"}
                 run={isEditingRun ? selectedRun : null}
                 pipeline={editTab?.pipeline ?? null}
-                libraryPipelines={libraryPipelines}
-                onLibraryChanged={refreshLibraryPipelines}
                 onClose={handleCloseInfo}
                 initialTab={infoPanelInitialTab}
                 scrollToLine={infoPanelScrollToLine}

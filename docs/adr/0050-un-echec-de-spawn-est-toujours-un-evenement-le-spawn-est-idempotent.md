@@ -11,7 +11,7 @@
 Sans cette ADR, un échec de spawn côté scheduler ne fait qu'un `error!` et laisse le run figé
 `running`, seul `journalctl` connaissant la cause. Deux gaps ouverts (1.31.1) :
 
-- **#498** — un `SpawnOutcome::Failed` sur le chemin scheduler (`git worktree add -b` sur une branche
+- **#498** — un échec de spawn sur le chemin scheduler (`git worktree add -b` sur une branche
   survivante) est **fondu dans le seau `skipped`** avec les temporisations bénignes. Aucun événement
   appendé → les **trois filets ratent** : la liveness ne voit pas de session morte, le stall detector
   ne voit pas de node `Running`, `run_stall_reason` voit un node « schedulable ».
@@ -24,7 +24,7 @@ Sans cette ADR, un échec de spawn côté scheduler ne fait qu'un `error!` et la
 
 ### 1. Un échec de spawn appende un événement, toujours
 
-Tout `SpawnOutcome::Failed`/`Aborted` sur le chemin scheduler appende un **événement terminal**
+Tout échec ou abort de spawn sur le chemin scheduler appende un **événement terminal**
 nommant le node et la cause. Le run se réconcilie visiblement (→ `Interrupted`/`AwaitingUser`,
 ADR-0049), jamais figé. L'événement est le **seul canal** de vérité côté scheduler — il n'y a pas de
 réponse HTTP à laquelle mentir.

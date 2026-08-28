@@ -181,5 +181,4 @@ slot qu'un restart throttlé attend.
 
 Deux limites d'origine sont **fermées** : un `Err` de spawn tmux appende désormais `NodeFailed` + reap gaté
 + `RunFailed`, donc la panne tmux retombe sous §1 et §3 au lieu d'y échapper (#508) ; et le retry des nœuds
-en attente est re-drivé par `re_evaluate_after_command` et `boot_recovery` — fix événementiel, toujours pas
-de timer (#509).
+en attente est re-drivé événementiellement, toujours pas de timer (#509).

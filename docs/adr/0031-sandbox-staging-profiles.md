@@ -5,7 +5,7 @@ sandbox comme le seul levier — c'est-à-dire qu'un pipeline ayant besoin des s
 MCP paierait ~1 Go par Run ou perdrait tout, et qu'aucun Run sandboxé n'aurait accès à ce qui vit hors
 de `~/.claude` (identité git, auth `gh`).
 
-> Statut : accepted (PRD #403 ; §1 en #426, §2-§7 en #432, §8 en #468, §9 en #467/#471). Complète
+> Statut : accepted (PRD #403 ; amendements repliés dans le corps). Complète
 > ADR-0030 : celle-là dit *où* tourne un Run sandboxé, celle-ci *avec quoi*. Le nom de stockage
 > `sandbox_profiles` est conservé malgré ce périmètre élargi : le renommer coûterait une repointe des
 > trois stockages qui comparent son nom pour un gain de prose.

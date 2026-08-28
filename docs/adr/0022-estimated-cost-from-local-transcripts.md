@@ -3,15 +3,11 @@
 Sans cet ADR, un agent chercherait une télémétrie de coût côté serveur (ou la déclarerait
 impossible) au lieu de dériver le coût des transcripts locaux, et il persisterait le résultat.
 
-> **Amendé par ADR-0045 / ADR-0052** : le coût dérivé décrit ici n'est plus la seule forme. Un
-> harnais qui compte lui-même son coût en fournit un **rapporté**, converti par une **constante
-> publiée** et qui **ne passe pas par la table de prix** (les buckets de cache ne se mappent pas, et
-> le total d'input d'un autre harnais peut déjà inclure le cache). Un total de Run reste sommable
-> mais se **dit ventilé par harnais** ; un harnais sans capacité de coût rend « — ».
->
-> **Amendé par ADR-0034 (#427)** : la table de prix a trois tiers (`manuel → fetché → embarquée`,
-> fusion par clé) remplis hors du chemin de lecture. Survivent intacts : le coût reste une
-> **estimation**, **dérivée à la lecture**, jamais persistée, chemin de lecture strictement local.
+> Le coût dérivé décrit ici n'est pas la seule forme : un harnais qui compte lui-même son coût
+> en fournit un **rapporté**, converti par une **constante publiée** et qui **ne passe pas par la
+> table de prix** (les buckets de cache ne se mappent pas, et le total d'input d'un autre harnais
+> peut déjà inclure le cache). Un total de Run reste sommable mais se **dit ventilé par harnais** ;
+> un harnais sans capacité de coût rend « — ». Voir ADR-0045 et ADR-0052.
 
 ## Décision
 
@@ -50,6 +46,11 @@ atteignable localement ; un coût **estimé** l'est.
   liste, pas de remise entreprise, modèles non tarifés à $0) est un piège : « Est. cost », préfixe
   `~`, tooltip « estimate … not an invoice », « † lower bound » quand `partial` (ADR-0001).
 
+- **Racine des transcripts injectable, pas figée.** Un Run sandboxé vivant lit son *staged home* ;
+  après `cleanup_run`, le merge-back a flushé les transcripts vers `~/.claude/projects/` et la racine
+  redevient le défaut hôte (un Run `off` lit toujours le défaut hôte). Le memo garde la même racine
+  pour la clé et la valeur — sinon une racine changée en cours de vie du Run casserait le cache.
+
 ## Conséquences
 
 - Le coût est **plus durable que LOC** : le cleanup supprime la branche (LOC → « — ») mais pas les
@@ -61,13 +62,6 @@ atteignable localement ; un coût **estimé** l'est.
 - Deux limites héritées du « dérivé à la lecture » : le mode fast est invisible (même id dans les
   transcripts → sous-facturé), et éditer la table retarife tous les Runs historiques, archivés
   inclus.
-
-## Amendement — Runs sandboxés (#408)
-
-La racine des transcripts n'est plus figée : le calcul prend un `transcripts_root` injectable (seam
-d'ADR-0030 pt 9). Un Run sandboxé **vivant** lit son *staged home* ; après `cleanup_run`, le
-merge-back a flushé les transcripts vers `~/.claude/projects/` et la racine redevient le défaut hôte.
-Un Run `off` lit toujours le défaut hôte. Le memo garde la même racine pour la clé et la valeur.
 
 ## Alternatives rejetées
 

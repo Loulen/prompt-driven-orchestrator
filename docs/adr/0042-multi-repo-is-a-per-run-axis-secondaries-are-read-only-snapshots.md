@@ -62,8 +62,8 @@ branch par dépôt.
   retiré-mais-persistant.
 - La garde de complétion itère la liste **active** : un secondaire retiré n'est plus dirty-checké —
   voulu.
-- La validation par-secondaire est **un seul helper** (`resolve_one_secondary_pin`) partagé par le
-  chokepoint de création **et** `patch_run_repos`, pour que les deux surfaces ne divergent pas.
+- La validation par-secondaire est **un seul helper** partagé par le chokepoint de création **et**
+  l'édition en cours de Run, pour que les deux surfaces ne divergent pas.
 - Les différés « écriture / git in-sandbox » sont **levés par ADR-0047**, sans rouvrir le merge-back
   rejeté en décision 3 : PDO ne livre jamais lui-même — c'est le nœud `Ship It` (ADR-0036) qui ouvre
   la PR, dépôt par dépôt. Reste différé : le sélecteur `repo:` par nœud.

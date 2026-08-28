@@ -4,9 +4,9 @@ Sans cette ADR, on isolerait un Run par conteneur éphémère **par nœud**, ou 
 quand Docker manque — deux choix qui cassent respectivement le kill ciblé et la garantie d'isolation
 demandée, sans qu'aucun test ne le signale.
 
-> Statut : accepted (#407 ; amendements #405, #410, #414, #426, #431, #445, #447, #466, #467, #471
-> repliés dans le corps). ADR-0031 dit *ce que* contient le home stagé ; celle-ci dit *où* et
-> *comment* le Run s'exécute — y compris le contrat de l'image (pt 7).
+> Statut : accepted (#407 ; amendements repliés dans le corps). ADR-0031 dit *ce que* contient le
+> home stagé ; celle-ci dit *où* et *comment* le Run s'exécute — y compris le contrat de l'image
+> (pt 7).
 
 Un Run en mode `minimal`/`full` exécute **toutes ses tails** (nœuds agents, manager, merge-resolver,
 nœuds `script`, run-shell) dans un unique conteneur long-vécu par Run (`sleep infinity`, PID 1 = tini).

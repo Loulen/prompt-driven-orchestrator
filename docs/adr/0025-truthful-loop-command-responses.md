@@ -2,18 +2,13 @@
 
 Date : 2026-07-11 · Statut : accepté · Issue : #327
 
-> **Amendé par ADR-0035 (#490).** La convention noop de §3 tient pour les quatre commandes de boucle,
-> mais elle citait `mark_node_done` comme précédent : sur le **corps de complétion partagé**, huit
-> refus répondaient `200`, quatre après avoir appendé `RunFailed`. ADR-0035 ajoute la classe que
-> cette ADR n'avait pas — **noop ≠ refus** — et pose « un refus n'est jamais un `2xx` ». Lire §3
-> comme « dire l'effet », jamais comme « un `200` suffit à le dire ».
->
-> **Amendé par ADR-0037 (#489).** §2 (« valider avant d'écrire ») s'étend au **kill** : sur une
-> commande qui détruit une session tmux, un `4xx` rendu après la destruction n'est pas une
-> validation, c'est un constat. §3 est corrigé sur le mot `noop` pour le throttle d'un spawn **par
-> nœud** (`restart_node`, `node_retry`), qui répond `{"ok":true,"waiting":true,…}` : un `NodeWaiting`
-> **a** été appendé et a changé le statut du nœud. Les quatre commandes de boucle gardent le
-> vocabulaire de cette ADR ; la véracité du `SpawnOutcome` s'étend aux commandes de spawn par nœud.
+> La convention noop de §3 (« dire l'effet », jamais « un `200` suffit à le dire ») tient pour les
+> quatre commandes de boucle mais ne s'arrête pas là : **noop ≠ refus**, et un refus n'est jamais un
+> `2xx` — y compris quand le refus suit un effet de bord irréversible (une commande qui détruit une
+> session tmux doit valider *avant* de détruire, pas rendre un `4xx` après coup comme s'il s'agissait
+> d'une validation). Le throttle d'un spawn par nœud (`restart_node`, `node_retry`) qui répond
+> `{"ok":true,"waiting":true,…}` n'est pas non plus un noop : un `NodeWaiting` a été appendé et a
+> changé le statut du nœud. Voir ADR-0035 et ADR-0037.
 
 ## Contexte
 

@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import UnifiedLeftPanel from "./UnifiedLeftPanel";
 import type { PipelineListEntry, RunListEntry, Trigger } from "../types";
 import type { LibraryPipelineEntry } from "../api";
-import { cleanupRun, deleteLibraryPipeline, deletePipeline, duplicateLibraryPipeline, fetchPipelines, openRunShell, pauseRun, renameRun, resumeRun, retryAll } from "../api";
+import { cleanupRun, deleteLibraryPipeline, deletePipeline, duplicateLibraryPipeline, fetchPipelines, importWorkflow, openRunShell, pauseRun, renameRun, resumeRun, retryAll } from "../api";
 import { useEditStore } from "../stores/editStore";
 
 const mockRenameRun = vi.mocked(renameRun);
@@ -18,6 +18,8 @@ const mockPauseRun = vi.mocked(pauseRun);
 const mockResumeRun = vi.mocked(resumeRun);
 const mockRetryAll = vi.mocked(retryAll);
 const mockCleanupRun = vi.mocked(cleanupRun);
+const mockImportWorkflow = vi.mocked(importWorkflow);
+const originalOpenPipeline = useEditStore.getState().openPipeline;
 
 vi.mock("../api", () => ({
   cleanupRun: vi.fn().mockResolvedValue(undefined),
@@ -63,8 +65,44 @@ describe("portable pipeline import", () => {
     await userEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
     await userEvent.click(screen.getByTestId("import-workflow-button"));
 
+    expect(screen.getByText("Import a pipeline")).toBeInTheDocument();
     expect(screen.getByTestId("import-mode-pdo")).toHaveClass("font-medium");
+    expect(screen.getByTestId("import-mode-pdo")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("import-mode-claude")).toHaveAttribute("aria-pressed", "false");
     expect(screen.getByTestId("pipeline-document-input")).toBeInTheDocument();
+  });
+
+  it("opens a successful Claude import even when translation warnings remain", async () => {
+    const openPipeline = vi.fn().mockResolvedValue(undefined);
+    useEditStore.setState({ openPipeline });
+    mockImportWorkflow.mockResolvedValue({
+      id: "workflow-with-warnings",
+      scope: "instance",
+      warnings: ["parallel branch was flattened"],
+    });
+
+    render(
+      <UnifiedLeftPanel
+        runs={[]}
+        selectedRunId={null}
+        onSelectRun={() => {}}
+        onNewRun={() => {}}
+        libraryPipelines={[]}
+        onLibraryPipelinesChanged={() => {}}
+      />,
+    );
+    await userEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
+    await userEvent.click(screen.getByTestId("import-workflow-button"));
+    await userEvent.click(screen.getByTestId("import-mode-claude"));
+    fireEvent.change(screen.getByTestId("workflow-file-input"), {
+      target: {
+        files: [new File(["pipeline('Review')"], "review.js", { type: "text/javascript" })],
+      },
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Import" }));
+
+    await waitFor(() => expect(openPipeline).toHaveBeenCalledWith("workflow-with-warnings"));
+    expect(screen.getByText("parallel branch was flattened")).toBeInTheDocument();
   });
 });
 
@@ -84,6 +122,7 @@ beforeEach(() => {
     openTabs: [],
     activeTabId: null,
     pipelines: [],
+    openPipeline: originalOpenPipeline,
   });
 });
 

@@ -62,9 +62,6 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
   // target repo's branches, both served by the daemon (#359).
   const {
     pipelines,
-    repoPipelines,
-    libraryPipelines,
-    userPipelines,
     selectedPipeline,
     selectedPipelineId,
     setSelectedPipelineId,
@@ -432,7 +429,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
   // Auto-select first repo pipeline when available
   const shouldAutoSelect = open && repoValid && pipelines.length > 0 && !selectedPipelineId;
   if (shouldAutoSelect) {
-    const first = repoPipelines[0] ?? libraryPipelines[0] ?? userPipelines[0];
+    const first = pipelines[0];
     if (first) setSelectedPipelineId(first.id);
   }
 
@@ -1008,33 +1005,11 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
                       No pipelines found
                     </option>
                   )}
-                  {repoValid && repoPipelines.length > 0 && (
-                    <optgroup label="Pipelines">
-                      {repoPipelines.map((p) => (
-                        <option key={`repo-${p.id}`} value={p.id}>
-                          {p.name}
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                  {repoValid && libraryPipelines.length > 0 && (
-                    <optgroup label="★ Library">
-                      {libraryPipelines.map((p) => (
-                        <option key={`lib-${p.id}`} value={p.id}>
-                          {p.drifted ? "⚠ " : ""}{p.name}
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                  {repoValid && userPipelines.length > 0 && (
-                    <optgroup label="User pipelines">
-                      {userPipelines.map((p) => (
-                        <option key={`user-${p.id}`} value={p.id}>
-                          {p.name}
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
+                  {repoValid && pipelines.map((pipeline) => (
+                    <option key={pipeline.id} value={pipeline.id}>
+                      {pipeline.name}
+                    </option>
+                  ))}
                 </select>
               </div>
               {selectedPipeline?.scope === "instance" && (

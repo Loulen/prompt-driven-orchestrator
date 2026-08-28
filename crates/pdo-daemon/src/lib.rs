@@ -96,7 +96,7 @@ use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{
     FromRequest, Json, Multipart, Path as AxumPath, Query, State, WebSocketUpgrade,
 };
-use axum::http::{header, HeaderMap, StatusCode, Uri};
+use axum::http::{header, HeaderMap, Method, StatusCode, Uri};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
@@ -4419,24 +4419,10 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/library/{name}/instantiate",
             post(instantiate_from_library),
         )
-        .route("/library/pipelines", get(list_library_pipelines))
-        .route("/library/pipelines", post(save_library_pipeline))
         // #155 — import a Claude Code workflow .js as a draft pipeline (user scope).
         // Static segment beside `/library/pipelines`; the `/library` vite proxy
         // prefix already covers it (no vite proxy edit).
         .route("/library/import", post(import_library_pipeline))
-        .route(
-            "/library/pipelines/{id}",
-            axum::routing::delete(delete_library_pipeline),
-        )
-        // Static segment after the `{id}` param: axum 0.8 allows this (same
-        // precedent as `/triggers/health` beside `/triggers/{trigger_id}`); the
-        // `/library` proxy prefix already covers it — no vite proxy edit (#224).
-        .route(
-            "/library/pipelines/{id}/duplicate",
-            post(duplicate_library_pipeline),
-        )
-        .route("/pipelines/{pipeline_id}/promote", post(promote_pipeline))
         .route("/repos/branches", get(repos_branches))
         .route("/repos/validate", get(repos_validate))
         .route("/repos/recent", get(repos_recent))
@@ -17855,7 +17841,11 @@ pub use tmux_session_manager::{build_tmux_script, TMUX_CMD_OVERRIDE_ENV};
 
 // --- Static file serving ---
 
-async fn static_handler(uri: Uri) -> Response {
+async fn static_handler(method: Method, uri: Uri) -> Response {
+    if method != Method::GET && method != Method::HEAD {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
     let path = uri.path().trim_start_matches('/');
 
     if path.is_empty() || path == "index.html" {
@@ -26030,123 +26020,36 @@ edges:
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
-    async fn promote_pipeline_copies_to_library() {
+    async fn obsolete_pipeline_library_routes_are_not_registered() {
         let fake_home = FakeHome::new();
-
         write_test_pipeline(fake_home.path(), "promotable");
         let state = test_state_with_dir(fake_home.path()).await;
         let app = build_router(state);
 
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/pipelines/promotable/promote")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        for (method, uri) in [
+            ("GET", "/library/pipelines"),
+            ("POST", "/pipelines/promotable/promote"),
+            ("POST", "/library/pipelines/promotable/duplicate"),
+            ("DELETE", "/library/pipelines/promotable"),
+        ] {
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(uri)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
 
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(result["id"], "promotable");
-        assert_eq!(result["drifted"], false);
-
-        let lib_dir = library_store::pipelines::user_pipelines_dir().unwrap();
-        assert!(lib_dir.join("promotable.yaml").exists());
-        assert!(lib_dir.join("promotable.meta.json").exists());
-    }
-
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn promote_nonexistent_pipeline_returns_error() {
-        let fake_home = FakeHome::new();
-
-        let state = test_state_with_dir(fake_home.path()).await;
-        let app = build_router(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/pipelines/nonexistent/promote")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    }
-
-    // #224 — POST /library/pipelines/{id}/duplicate.
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn duplicate_library_pipeline_returns_201() {
-        let _fake_home = FakeHome::new();
-        // A repo root distinct from HOME so the repo-scope and user-scope library
-        // dirs do not collapse onto one path (they share a relative layout but
-        // different roots in production). Promoting writes to the HOME user dir,
-        // so the entry is genuinely user-scope.
-        let repo = tempfile::tempdir().unwrap();
-        write_test_pipeline(repo.path(), "dupable");
-        library_store::pipelines::promote(repo.path(), "dupable").unwrap();
-
-        let state = test_state_with_dir(repo.path()).await;
-        let app = build_router(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/library/pipelines/dupable/duplicate")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::CREATED);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_ne!(result["id"].as_str().unwrap(), "dupable");
-        assert_eq!(result["scope"], "user");
-        assert!(result["entry"].is_object());
-
-        // The clone is a separate, unlinked file with the "(copy)" name.
-        let lib_dir = library_store::pipelines::user_pipelines_dir().unwrap();
-        let copy_id = result["id"].as_str().unwrap();
-        assert!(lib_dir.join(format!("{copy_id}.yaml")).exists());
-        assert!(!lib_dir.join(format!("{copy_id}.meta.json")).exists());
-        assert_eq!(result["entry"]["name"], "dupable (copy)");
-    }
-
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn duplicate_nonexistent_library_pipeline_returns_404() {
-        let fake_home = FakeHome::new();
-
-        let state = test_state_with_dir(fake_home.path()).await;
-        let app = build_router(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/library/pipelines/does-not-exist/duplicate")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+            assert!(
+                resp.status().is_client_error(),
+                "{method} {uri} unexpectedly returned {}",
+                resp.status()
+            );
+        }
     }
 
     // #155 — POST /library/import: a Claude Code workflow .js becomes an

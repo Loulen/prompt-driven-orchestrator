@@ -17,7 +17,7 @@ function pipeline(over: Partial<PipelineListEntry> = {}): PipelineListEntry {
   return {
     id: "p1",
     name: "Auditor",
-    scope: "repo",
+    scope: "instance",
     path: "/repo/.pdo/pipelines/auditor.yaml",
     node_count: 3,
     modified: null,
@@ -64,17 +64,17 @@ describe("useLaunchTargets — the pipelines", () => {
     await waitFor(() => expect(api.fetchPipelines).toHaveBeenCalledTimes(2));
   });
 
-  it("groups the list by scope, repo pipelines first", async () => {
+  it("keeps the daemon's instance pipeline list flat", async () => {
     vi.mocked(api.fetchPipelines).mockResolvedValue([
-      pipeline({ id: "lib", name: "Lib", scope: "library" }),
-      pipeline({ id: "repo", name: "Repo", scope: "repo" }),
-      pipeline({ id: "user", name: "User", scope: "user" }),
+      pipeline({ id: "first", name: "First" }),
+      pipeline({ id: "second", name: "Second" }),
     ]);
     const { result } = setup();
-    await waitFor(() => expect(result.current.pipelines).toHaveLength(3));
-    expect(result.current.repoPipelines.map((p) => p.id)).toEqual(["repo"]);
-    expect(result.current.libraryPipelines.map((p) => p.id)).toEqual(["lib"]);
-    expect(result.current.userPipelines.map((p) => p.id)).toEqual(["user"]);
+    await waitFor(() => expect(result.current.pipelines).toHaveLength(2));
+    expect(result.current.pipelines.map((p) => p.id)).toEqual(["first", "second"]);
+    expect(result.current).not.toHaveProperty("repoPipelines");
+    expect(result.current).not.toHaveProperty("libraryPipelines");
+    expect(result.current).not.toHaveProperty("userPipelines");
   });
 
   it("resolves the selected pipeline by id, and nothing while the id is unknown", async () => {
@@ -100,16 +100,14 @@ describe("useLaunchTargets — the pipelines", () => {
     expect(result.current.pipelines).toEqual([]);
   });
 
-  // What the promote button calls: the star moves from "repo" to "library" server-side, so
-  // the list has to be re-read for it to show.
   it("re-reads the list on demand", async () => {
     const { result } = setup();
     await waitFor(() => expect(api.fetchPipelines).toHaveBeenCalledTimes(1));
-    vi.mocked(api.fetchPipelines).mockResolvedValue([pipeline({ scope: "library" })]);
+    vi.mocked(api.fetchPipelines).mockResolvedValue([pipeline()]);
     await act(async () => {
       result.current.loadPipelines();
     });
-    await waitFor(() => expect(result.current.libraryPipelines).toHaveLength(1));
+    await waitFor(() => expect(result.current.pipelines).toHaveLength(1));
   });
 });
 

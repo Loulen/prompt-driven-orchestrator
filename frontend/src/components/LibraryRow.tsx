@@ -1,15 +1,11 @@
 import type { MouseEvent } from "react";
 import { Copy, Trash2 } from "lucide-react";
-import type { PipelineScope } from "../types";
 import SelectControl from "./SelectControl";
 
 interface Props {
   name: string;
-  scope: PipelineScope;
   nodeCount: number;
   modified?: string | null;
-  /** Star badge — the visible "this name is in your Library" link (#227). */
-  starred: boolean;
   /** Highlighted as the open editor tab. Only meaningful on an openable row. */
   selected?: boolean;
   showDuplicate: boolean;
@@ -50,9 +46,7 @@ interface Props {
  */
 export default function LibraryRow({
   name,
-  scope,
   nodeCount,
-  starred,
   selected = false,
   showDuplicate,
   onOpen,
@@ -64,9 +58,6 @@ export default function LibraryRow({
   onToggleSelect,
   modified,
 }: Props) {
-  void scope;
-  void starred;
-
   const body = (
     <>
       {onToggleSelect && (
@@ -88,7 +79,7 @@ export default function LibraryRow({
           {modified && (
             <>
               <span>·</span>
-              <span>{new Date(modified).toLocaleDateString()}</span>
+              <span>edited {new Date(modified).toLocaleDateString()}</span>
             </>
           )}
         </div>

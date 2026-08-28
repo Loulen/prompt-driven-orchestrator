@@ -924,7 +924,6 @@ export default function UnifiedLeftPanel({
             <LibraryRow
               key={p.id}
               name={p.name}
-              scope={p.scope}
               nodeCount={p.node_count}
               checked={librarySel.has(`${p.scope}-${p.id}`)}
               onToggleSelect={(e) => {
@@ -936,7 +935,6 @@ export default function UnifiedLeftPanel({
               // the same name. This is the visible link the user expects when
               // they click the canvas star: their pipeline gets a star badge
               // here, confirming the action had effect.
-              starred={false}
               selected={p.id === activeTabId}
               // #273: scope:"library" rows now appear here in block 1 (the
               // /pipelines scope-merge from #216 means they no longer fall
@@ -1170,13 +1168,13 @@ function ImportWorkflowModal({
           : await importWorkflow(file?.name ?? "workflow.js", content);
       onImported();
       await loadPipelines();
+      await openPipeline(result.id);
       const w = "warnings" in result ? result.warnings ?? [] : [];
       if (w.length > 0) {
         // Surface the lossy-translation diagnostics (ADR-0001) rather than
         // silently closing — the annotation is the onboarding tutorial.
         setWarnings(w);
       } else {
-        await openPipeline(result.id);
         onClose();
       }
     } catch (e) {
@@ -1200,7 +1198,7 @@ function ImportWorkflowModal({
         style={{ fontSize: "12px" }}
         data-testid="import-workflow-modal"
       >
-        <div className="mb-1 font-medium text-fg">Import a workflow</div>
+        <div className="mb-1 font-medium text-fg">Import a pipeline</div>
         <div className="mb-3 grid grid-cols-2 rounded border border-line-strong bg-bg-3 p-0.5">
           {([
             ["pdo", "Pipeline PDO"],
@@ -1216,6 +1214,7 @@ function ImportWorkflowModal({
               className={`rounded px-2 py-1.5 ${
                 mode === value ? "bg-bg-4 font-medium text-fg" : "text-fg-4"
               }`}
+              aria-pressed={mode === value}
               data-testid={`import-mode-${value}`}
             >
               {label}

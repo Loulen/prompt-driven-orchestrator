@@ -123,7 +123,7 @@ async function enterValidRepo(value = "/home/user/project") {
 }
 
 describe("NewRunModal — pipeline picker", () => {
-  it("shows instance pipelines in the Pipelines group", async () => {
+  it("shows instance pipelines in the flat picker", async () => {
     vi.mocked(fetchPipelines).mockResolvedValue([
       makePipeline({ id: "review", name: "Review Pipeline", scope: "instance" }),
     ]);
@@ -131,12 +131,11 @@ describe("NewRunModal — pipeline picker", () => {
     await enterValidRepo();
 
     const select = screen.getByTestId("pipeline-select") as HTMLSelectElement;
-    const optgroup = select.querySelector('optgroup[label="Pipelines"]');
-    expect(optgroup).not.toBeNull();
-    expect(optgroup!.querySelector("option")!.textContent).toBe("Review Pipeline");
+    expect(Array.from(select.options).find((option) => option.value === "review")?.textContent)
+      .toBe("Review Pipeline");
   });
 
-  it("shows library pipelines in the Library group", async () => {
+  it("does not group legacy-scoped responses", async () => {
     vi.mocked(fetchPipelines).mockResolvedValue([
       makePipeline({ id: "lib-pipe", name: "Library Pipeline", scope: "library" }),
     ]);
@@ -144,12 +143,12 @@ describe("NewRunModal — pipeline picker", () => {
     await enterValidRepo();
 
     const select = screen.getByTestId("pipeline-select") as HTMLSelectElement;
-    const optgroup = select.querySelector('optgroup[label="★ Library"]');
-    expect(optgroup).not.toBeNull();
-    expect(optgroup!.querySelector("option")!.textContent).toBe("Library Pipeline");
+    expect(select.querySelectorAll("optgroup")).toHaveLength(0);
+    expect(Array.from(select.options).find((option) => option.value === "lib-pipe")?.textContent)
+      .toBe("Library Pipeline");
   });
 
-  it("shows repo pipelines before library pipelines", async () => {
+  it("shows one flat instance pipeline list", async () => {
     vi.mocked(fetchPipelines).mockResolvedValue([
       makePipeline({ id: "lib-pipe", name: "Library Pipeline", scope: "library" }),
       makePipeline({ id: "repo-pipe", name: "Repo Pipeline", scope: "repo" }),
@@ -158,10 +157,11 @@ describe("NewRunModal — pipeline picker", () => {
     await enterValidRepo();
 
     const select = screen.getByTestId("pipeline-select") as HTMLSelectElement;
-    const groups = Array.from(select.querySelectorAll("optgroup"));
-    expect(groups.length).toBeGreaterThanOrEqual(2);
-    expect(groups[0].label).toBe("Pipelines");
-    expect(groups[1].label).toBe("★ Library");
+    expect(select.querySelectorAll("optgroup")).toHaveLength(0);
+    expect(Array.from(select.options).map((option) => option.textContent)).toEqual([
+      "Library Pipeline",
+      "Repo Pipeline",
+    ]);
   });
 
   it("shows empty state when no pipelines found", async () => {
@@ -211,7 +211,7 @@ describe("NewRunModal — drift indicator", () => {
     expect(screen.queryByTestId("drift-indicator")).not.toBeInTheDocument();
   });
 
-  it("prefixes drifted library pipeline name with warning icon in dropdown", async () => {
+  it("does not prefix a pipeline name with a legacy drift warning", async () => {
     vi.mocked(fetchPipelines).mockResolvedValue([
       makePipeline({ id: "drifted", name: "Drifted Pipe", scope: "library", drifted: true }),
     ]);
@@ -219,8 +219,8 @@ describe("NewRunModal — drift indicator", () => {
     await enterValidRepo();
 
     const select = screen.getByTestId("pipeline-select") as HTMLSelectElement;
-    const option = select.querySelector('optgroup[label="★ Library"] option');
-    expect(option!.textContent).toContain("⚠");
+    const option = Array.from(select.options).find((entry) => entry.value === "drifted");
+    expect(option!.textContent).toBe("Drifted Pipe");
   });
 });
 

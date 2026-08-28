@@ -2,25 +2,19 @@
 //! by `GET /runs/reapable` a disk janitor should reclaim, and in what order.
 //!
 //! **Layer 1: no I/O, no clock.** The daemon computes each entry's `age_secs` at
-//! the moment of the listing, so the policy is a pure function of that number and
-//! the Run's status — deterministic and unit-testable with zero stubbing. The CLI
-//! (`pdo reap`) does the I/O around it; the shipped `disk-janitor` pipeline's
-//! `script` node drives the CLI (ADR-0017: a script node is testable end-to-end
-//! in CI with no stub, unlike an agent node).
+//! listing time, so the policy is a pure function of that number and the status.
+//! The CLI (`pdo reap`) does the I/O around it, driven by the shipped
+//! `disk-janitor` pipeline's `script` node (ADR-0017: a script node is testable
+//! end-to-end in CI with no stub, unlike an agent node).
 //!
-//! Why a **graded TTL** rather than the original recipe's flat
-//! `completed`-only / 7-day rule:
-//!   - `completed` Runs are pure residue once old → reclaimable on a short TTL.
-//!   - `failed` / `halted` / `skipped` Runs are post-mortem evidence → a *longer*
-//!     TTL, but **not** infinite: excluding them outright leaks their worktrees
-//!     forever (the `auto-issue-implement` class carries a multi-GB `target/`),
-//!     so the leak is bounded, never unbounded.
-//!   - The janitor's **own** completed Runs pile up one-per-fire (an hourly cron
-//!     ⇒ 24 lingering worktrees + 24 immortal `__manager__` sessions, marching
-//!     toward the ~30-session tmux collapse). A short self-TTL lets the janitor
-//!     tidy after itself without ever touching its *live* Run — a `running` Run is
-//!     never reapable, so the janitor cannot delete itself out from under its
-//!     own feet.
+//! Why a **graded TTL** rather than a flat `completed`-only / 7-day rule:
+//!   - `failed`/`halted`/`skipped` Runs are post-mortem evidence, so a longer TTL —
+//!     but **not** infinite: excluding them outright leaks their worktrees forever
+//!     (the `auto-issue-implement` class carries a multi-GB `target/`).
+//!   - The janitor's own completed Runs pile up one-per-fire (hourly cron ⇒ 24
+//!     worktrees + 24 immortal `__manager__` sessions, marching toward the
+//!     ~30-session tmux collapse), hence the short self-TTL. It cannot delete
+//!     itself out from under its own feet: a `running` Run is never reapable.
 //!
 //! Live / archived Runs are never listed by the endpoint, but the policy defends
 //! against them anyway rather than trusting its caller.
@@ -126,7 +120,6 @@ impl ReapPolicy {
             | RunStatus::Archived => return None,
         };
 
-        // Self fast-lane: the janitor's own past Runs, any terminal status.
         if let Some(self_pipe) = &self.self_pipeline {
             if !run.pipeline_name.is_empty() && &run.pipeline_name == self_pipe {
                 return Some((
@@ -144,7 +137,6 @@ impl ReapPolicy {
         Some((ttl, base.to_string()))
     }
 
-    /// Compute the reclaim plan for a listing.
     pub(crate) fn plan(&self, runs: &[ReapableRun]) -> ReapPlan {
         let mut reclaim = Vec::new();
         let mut retained = 0usize;
@@ -167,7 +159,6 @@ impl ReapPolicy {
             }
         }
 
-        // Biggest-first, ties by run_id → stable and deterministic.
         reclaim.sort_by(|a, b| {
             b.approx_disk_bytes
                 .unwrap_or(0)
@@ -229,7 +220,6 @@ mod tests {
         assert_eq!(p.terminal_ttl_secs, 72 * 3600);
         assert_eq!(p.self_ttl_secs, 3600);
         assert_eq!(p.self_pipeline.as_deref(), Some("disk-janitor"));
-        // Evidence is held strictly longer than residue.
         assert!(p.terminal_ttl_secs > p.completed_ttl_secs);
     }
 
@@ -238,7 +228,6 @@ mod tests {
         let p = no_self_policy();
         let ttl = p.completed_ttl_secs;
 
-        // age == ttl → reclaimed (boundary inclusive).
         let at = p.plan(&[run(
             "r",
             "some-pipe",
@@ -249,7 +238,6 @@ mod tests {
         assert_eq!(at.reclaim.len(), 1, "age == ttl must reclaim");
         assert_eq!(at.retained, 0);
 
-        // age == ttl - 1 → retained.
         let below = p.plan(&[run(
             "r",
             "some-pipe",
@@ -279,7 +267,6 @@ mod tests {
         );
         assert_eq!(young.retained, 1);
 
-        // 72 h: reclaimed — the leak is bounded, not infinite.
         let old = p.plan(&[run(
             "f",
             "some-pipe",
@@ -354,9 +341,9 @@ mod tests {
 
     #[test]
     fn self_pipeline_fast_lane_reaps_own_runs_early() {
-        let p = ReapPolicy::default(); // self fast-lane on: disk-janitor @ 1h
-                                       // A janitor's own completed Run at 2h: under the 24h completed TTL, but
-                                       // past the 1h self TTL → reclaimed.
+        // Self fast-lane on (disk-janitor @ 1h): 2h is under the 24h completed TTL
+        // but past the self TTL.
+        let p = ReapPolicy::default();
         let own = p.plan(&[run(
             "own",
             "disk-janitor",
@@ -371,7 +358,6 @@ mod tests {
         );
         assert!(own.reclaim[0].reason.starts_with("self-pipeline:"));
 
-        // A different pipeline's completed Run at 2h: normal completed TTL → retained.
         let other = p.plan(&[run(
             "other",
             "some-pipe",
@@ -388,7 +374,6 @@ mod tests {
 
     #[test]
     fn self_fast_lane_still_respects_liveness() {
-        // Even the janitor's own live Run must never be reaped (it is running).
         let p = ReapPolicy::default();
         let plan = p.plan(&[run(
             "live",
@@ -451,7 +436,6 @@ mod tests {
 
     #[test]
     fn ttl_overrides_take_effect() {
-        // Tighten the completed TTL to 1h: a 2h completed Run now reclaims.
         let mut p = no_self_policy();
         p.completed_ttl_secs = 3600;
         let plan = p.plan(&[run(
@@ -466,8 +450,8 @@ mod tests {
 
     #[test]
     fn deserializes_reapable_endpoint_shape_ignoring_extra_fields() {
-        // Mirrors the real `GET /runs/reapable?size=true` payload, including
-        // fields the policy does not consume.
+        // Mirrors the real `GET /runs/reapable?size=true` payload, extra fields
+        // included.
         let json = r#"[
             {
                 "run_id": "20260805-140021-86b6b86",

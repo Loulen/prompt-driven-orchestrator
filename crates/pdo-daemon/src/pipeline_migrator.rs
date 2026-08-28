@@ -87,10 +87,9 @@ fn needs_migration(yaml_value: &serde_yaml::Value) -> bool {
         return true;
     }
     for node in nodes {
-        // #550/ADR-0046: a flat `model:` / `effort:` on ANY node (including a
-        // `merge` node, which spawns an agent) migrates under `harnesses.claude.*`.
-        // Checked before the structural-node `continue` below so a `merge` node's
-        // flat fields are not skipped.
+        // A flat `model:` / `effort:` on ANY node migrates under
+        // `harnesses.claude.*`. Checked before the structural-node `continue` below,
+        // or a `merge` node's flat fields would be skipped.
         if node.get("model").is_some() || node.get("effort").is_some() {
             return true;
         }
@@ -106,11 +105,9 @@ fn needs_migration(yaml_value: &serde_yaml::Value) -> bool {
                 return true;
             }
         }
-        // Inputs are emergent (#149): a *regular* node (doc-only / code-mutating)
-        // that still declares any input needs migration so the declared port is
-        // dropped (and a `repeated` flag migrated onto its edge). Structural
-        // nodes (for-each here; start/end/switch/loop/merge already `continue`d
-        // above) keep their required ports.
+        // Inputs are emergent: a regular node that still declares one needs
+        // migration so the port is dropped and any `repeated` flag moves onto its
+        // edge. Structural nodes keep their required ports.
         if node_type != "for-each"
             && node
                 .get("inputs")
@@ -135,14 +132,10 @@ pub(crate) struct MigrateResult {
     pub prompt_moves: Vec<(String, String)>,
 }
 
-/// The `review-loop` seed pipeline **as it was shipped before #396**: a
-/// `type: loop` control node (bound 3) wrapping implementer → reviewer, exited
-/// through a `type: switch`. The seed on disk is now migrated (that is half of
-/// the #396 fix: the editor cannot draw a region for a legacy loop node, so the
-/// canvas offered no `max_iter` at all), which would have left the tests below
-/// asserting dissolution against an already-dissolved file — green and blind.
-/// Kept verbatim here so the Loop/Switch dissolution stays covered, and shared
-/// with the `GET /pipelines/<id>` route test that pins how a legacy file is served.
+/// The `review-loop` seed pipeline **as it shipped pre-ADR-0011**: a `type: loop`
+/// node (bound 3) wrapping implementer → reviewer, exited through a `type: switch`.
+/// Kept verbatim because the seed on disk is now migrated — asserting dissolution
+/// against it would be green and blind.
 #[cfg(test)]
 pub(crate) const LEGACY_REVIEW_LOOP_YAML: &str = r#"
 name: review-loop
@@ -323,17 +316,14 @@ pub(crate) fn migrate_pipeline_yaml(
         }
     }
 
-    // The dissolve passes above run *before* id-rewriting, so the `loops:`
-    // regions they emit (and any pre-existing region) reference original node
-    // ids. Remap `members` like the edges — a stale member id orphans the
-    // region, which then silently no-ops at runtime (the exact failure #269
-    // eliminates).
+    // The dissolve passes run *before* id-rewriting, so their `loops:` regions
+    // reference original node ids. Remap `members` like the edges: a stale member
+    // id orphans the region, which then silently no-ops at runtime.
     rewrite_loop_members(&mut doc, &id_map);
 
-    // Inputs are emergent (#149): strip declared inputs from regular nodes,
-    // migrating any `repeated: true` flag onto the matching incoming edge so the
-    // accumulate-across-iterations behavior is preserved. Run before side
-    // backfill so we don't bother backfilling sides on inputs we're dropping.
+    // Strip declared inputs from regular nodes (they are emergent), moving any
+    // `repeated: true` onto the matching incoming edge so accumulation survives.
+    // Before side backfill, so dropped inputs are never backfilled.
     drop_declared_inputs(&mut doc);
 
     let nodes_for_side = doc.get_mut("nodes").and_then(|n| n.as_sequence_mut());
@@ -346,12 +336,8 @@ pub(crate) fn migrate_pipeline_yaml(
 
     inject_start_end_nodes(&mut doc);
 
-    // #550/ADR-0046: fold every node's flat `model:` / `effort:` into
-    // `harnesses.claude.*`, removing the flat keys. Reuses the exact fold
-    // `pipeline::normalize_node_value` runs, so a persisted rewrite and an
-    // in-memory parse agree — and it is idempotent (an already-folded node is a
-    // no-op). Runs after `inject_start_end_nodes` so injected Start/End nodes
-    // (which carry neither) are harmlessly visited too.
+    // Reuse the exact fold `pipeline::normalize_node_value` runs, so a persisted
+    // rewrite and an in-memory parse agree; idempotent.
     if let Some(nodes) = doc.get_mut("nodes").and_then(|n| n.as_sequence_mut()) {
         for node in nodes.iter_mut() {
             if let Some(mapping) = node.as_mapping_mut() {
@@ -389,9 +375,8 @@ fn dissolve_foreaches(doc: &mut serde_yaml::Value) -> Result<(), String> {
         None => return Ok(()),
     };
 
-    // Collect ForEach nodes: id -> (name, over). `fe_order` keeps document
-    // order so the emitted regions are stable across runs (a HashSet walk is
-    // not deterministic).
+    // `fe_order` keeps document order so the emitted regions are stable across
+    // runs — a HashSet walk is not deterministic.
     let mut fe_ids: HashSet<String> = HashSet::new();
     let mut fe_order: Vec<String> = Vec::new();
     let mut fe_meta: HashMap<String, (String, String)> = HashMap::new();
@@ -499,11 +484,10 @@ fn dissolve_foreaches(doc: &mut serde_yaml::Value) -> Result<(), String> {
         }
     }
 
-    // Region ids default to the ForEach node's *name*, which is user-chosen
-    // free text: guard against collisions with surviving node ids, existing
-    // `loops:` region ids, and sibling ForEach names (two ForEaches named
-    // "per-item" would otherwise corrupt each other's loop counters). The
-    // removed ForEach node ids themselves are free to reuse.
+    // Region ids default to the ForEach node's *name*, user-chosen free text:
+    // guard against collisions with surviving node ids, existing region ids, and
+    // sibling ForEach names — two ForEaches named "per-item" would otherwise
+    // corrupt each other's loop counters. The removed ForEach ids are free to reuse.
     let mut taken_ids: HashSet<String> = nodes
         .iter()
         .filter_map(|n| n.get("id").and_then(|v| v.as_str()).map(String::from))
@@ -664,10 +648,9 @@ fn body_terminal(
     (terminal, out_port)
 }
 
-/// #149: inputs are emergent. Strip declared `inputs` from regular (doc-only /
-/// code-mutating) nodes. Structural nodes (start/end/merge/loop/for-each) keep
-/// their required ports. Any `repeated: true` declared input is migrated onto
-/// the matching incoming edge so loop accumulation is preserved.
+/// Inputs are emergent: strip declared `inputs` from regular nodes, keeping them on
+/// structural ones. Any `repeated: true` declared input moves onto the matching
+/// incoming edge so loop accumulation is preserved.
 fn drop_declared_inputs(doc: &mut serde_yaml::Value) {
     // Pass 1: collect (node_id, input_name) pairs that carried `repeated: true`,
     // and the set of regular node ids whose inputs we will drop.
@@ -1154,15 +1137,11 @@ fn dissolve_loops(doc: &mut serde_yaml::Value) -> Result<(), String> {
         serde_yaml::Value::Mapping(m)
     };
 
-    // Per-loop wiring: entry (body target), upstream-in edges, break edges,
-    // done edges.
-    let mut loop_entry: HashMap<String, (String, String)> = HashMap::new(); // loop -> (entry node, entry port)
-                                                                            // loop -> [(U node, U port, the whole `U.p -> L.in` edge)]. The edge itself is
-                                                                            // kept, not just its endpoint, because its routing clauses have to survive the
-                                                                            // rewire: `U.p -> L.in [when W]` becomes `U.p -> E.q [when W]`. Dropping `W`
-                                                                            // here turned a guarded loop entry into an unconditional one — the shipped
-                                                                            // `simple-bugfix` lost its "Verdict == Bug" gate and every verdict entered the
-                                                                            // fix loop, with the `else` route to End permanently dead (#396).
+    let mut loop_entry: HashMap<String, (String, String)> = HashMap::new();
+    // Keep the whole `U.p -> L.in` edge, not just its endpoint: its routing clauses
+    // must survive the rewire (`U.p -> L.in [when W]` becomes `U.p -> E.q [when W]`).
+    // Dropping `W` turned a guarded loop entry into an unconditional one, so every
+    // verdict entered the fix loop and the `else` route to End became dead code.
     let mut loop_in_sources: HashMap<String, Vec<(String, String, serde_yaml::Value)>> =
         HashMap::new();
     let mut loop_break_edges: HashMap<String, Vec<serde_yaml::Value>> = HashMap::new();
@@ -1316,9 +1295,8 @@ fn dissolve_loops(doc: &mut serde_yaml::Value) -> Result<(), String> {
         }
     }
 
-    // Compute members (body subgraph) for each loop from the *rewired* graph is
-    // tricky; instead derive them from the original edges: BFS from each loop's
-    // entry, following edges, stopping at the loop node and at other loops.
+    // Derive members from the ORIGINAL edges, not the rewired graph: BFS from each
+    // loop's entry, stopping at the loop node and at other loops.
     let mut regions: Vec<serde_yaml::Value> = Vec::new();
     for loop_id in &loop_ids {
         let entry = match loop_entry.get(loop_id) {
@@ -1445,7 +1423,6 @@ pub(crate) fn migrate_pipeline_file(pipeline_path: &Path) -> Result<bool, String
     Ok(true)
 }
 
-// #494: exercised only by this module's unit tests since demotion; kept as a tested helper.
 #[allow(dead_code)]
 pub(crate) fn migrate_all(pipelines_dir: &Path) -> Result<usize, String> {
     let mut count = 0;
@@ -1470,26 +1447,17 @@ pub(crate) fn migrate_all(pipelines_dir: &Path) -> Result<usize, String> {
     Ok(count)
 }
 
-/// One-shot boot migration for #231. The run-scoped pipeline save used to write
-/// node prompts to a flat `<pipelines>/prompts/<id>.md` directory that no reader
-/// ever consults — the canonical location is
-/// `<pipelines>/<stem>.prompts/<id>.md`. As a result, prompts edited from inside
-/// a run were saved to disk but appeared blank in the editor and to freshly
-/// spawned nodes.
+/// One-shot boot migration: node prompts stranded in the flat
+/// `<pipelines>/prompts/<id>.md` dir (which no reader consults) move to the
+/// canonical `<pipelines>/<stem>.prompts/<id>.md`. Node ids are globally unique, so
+/// each flat file reattaches to at most one pipeline.
 ///
-/// For each pipeline YAML in `pipelines_dir`, every declared node id whose prompt
-/// is stranded in the flat dir is moved into that pipeline's canonical
-/// `<stem>.prompts/` dir. Node ids are globally unique (nanoids), so each flat
-/// file reattaches to at most one pipeline.
+/// A flat prompt moves only when the canonical file is *missing*: an existing
+/// canonical file is authoritative and never clobbered, and the stale flat
+/// duplicate stays put so the conflict remains visible.
 ///
-/// Move semantics mirror [`migrate_pipeline_file`]: a flat prompt is moved only
-/// when the canonical file is *missing*. An existing canonical file is never
-/// clobbered — it is authoritative (the writer fix keeps it current), and the
-/// stale flat duplicate is left in place so the conflict stays visible.
-///
-/// Afterward the flat dir is removed *only if the migration emptied it*. A
-/// non-empty remainder (a prompt for a deleted pipeline, or a flat duplicate of
-/// an existing canonical file) is preserved rather than destroyed.
+/// The flat dir is removed only if the migration emptied it; a non-empty remainder
+/// is preserved rather than destroyed.
 ///
 /// Returns the number of prompt files moved.
 pub(crate) fn migrate_stranded_flat_prompts(pipelines_dir: &Path) -> Result<usize, String> {
@@ -1600,7 +1568,6 @@ pub(crate) fn migrate_stranded_flat_prompts(pipelines_dir: &Path) -> Result<usiz
 /// target but no Merge node sits between them and the target.
 ///
 /// Returns info-only diagnostics (ADR-0001: non-blocking).
-// #494: exercised only by this module's unit tests since demotion; kept as a tested helper.
 #[allow(dead_code)]
 pub(crate) fn lint_missing_merge(pipeline: &PipelineDef) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
@@ -1706,17 +1673,16 @@ nodes:
       - name: result
 edges: []
 "#;
-        // A canonical pipeline (nanoid ids, no declared inputs on regular nodes —
-        // inputs are emergent per #149) is already migrated: a no-op.
+        // A canonical pipeline (nanoid ids, no declared inputs on regular nodes) is
+        // already migrated: a no-op.
         let result = migrate_pipeline_yaml(yaml, Path::new("/tmp/test.yaml")).unwrap();
         assert!(!result.migrated);
     }
 
     #[test]
     fn migrates_flat_model_effort_into_harnesses_claude() {
-        // #550/ADR-0046: a pipeline whose only legacy trait is a flat model/effort
-        // must fold them under `harnesses.claude` and drop the flat keys — then a
-        // second run is a no-op (idempotent).
+        // A pipeline whose only legacy trait is a flat model/effort folds them under
+        // `harnesses.claude` and drops the flat keys; a second run is a no-op.
         let yaml = r#"
 name: test
 version: "1.0"
@@ -1759,7 +1725,6 @@ edges: []
         assert_eq!(node["harnesses"]["claude"]["model"].as_str(), Some("opus"));
         assert_eq!(node["harnesses"]["claude"]["effort"].as_str(), Some("low"));
 
-        // Idempotent: re-running the migrated YAML is a no-op.
         let again = migrate_pipeline_yaml(&result.yaml_text, Path::new("/tmp/test.yaml")).unwrap();
         assert!(
             !again.migrated,
@@ -1769,8 +1734,8 @@ edges: []
 
     #[test]
     fn migrates_flat_model_effort_on_a_merge_node() {
-        // #550: a `merge` node spawns an agent, so its flat model/effort migrate too
-        // — the `needs_migration` clause runs before the structural-node `continue`.
+        // A `merge` node spawns an agent, so its flat model/effort migrate too: the
+        // `needs_migration` clause runs before the structural-node `continue`.
         let yaml = r#"
 name: test
 version: "1.0"
@@ -1813,8 +1778,8 @@ edges: []
 
     #[test]
     fn drops_declared_inputs_on_regular_nodes() {
-        // #149: inputs are emergent (derived from edges). The migrator strips the
-        // now-redundant declared `inputs` from doc-only / code-mutating nodes.
+        // Inputs are emergent, so the migrator strips the declared `inputs` from
+        // regular nodes.
         let yaml = r#"
 name: test
 version: "1.0"
@@ -1851,7 +1816,6 @@ edges:
             .iter()
             .find(|n| n["name"].as_str() == Some("planner"))
             .unwrap();
-        // Declared inputs are gone; outputs are kept.
         assert!(
             planner.get("inputs").is_none()
                 || planner["inputs"]
@@ -1870,8 +1834,8 @@ edges:
 
     #[test]
     fn migrates_repeated_input_flag_onto_edge() {
-        // #149: behavior preservation — a `repeated: true` declared input becomes
-        // `repeated: true` on the matching incoming edge so accumulation survives.
+        // A `repeated: true` declared input becomes `repeated: true` on the matching
+        // incoming edge, so accumulation survives.
         let yaml = r#"
 name: cycle
 version: "1.0"
@@ -1921,7 +1885,6 @@ edges:
             "repeated should migrate from the input port onto the edge"
         );
 
-        // And the declared input is dropped.
         let nodes = parsed["nodes"].as_sequence().unwrap();
         let implementer = nodes
             .iter()
@@ -2054,8 +2017,8 @@ edges: []
 
     #[test]
     fn backfills_output_port_side_defaults() {
-        // Output ports get a default `side: right` on migration. Declared inputs
-        // are dropped (emergent, #149) so there are no input sides to backfill.
+        // Output ports get a default `side: right`; declared inputs are dropped, so
+        // there are no input sides to backfill.
         let yaml = r#"
 name: test
 version: "1.0"
@@ -2093,8 +2056,8 @@ edges: []
 
     #[test]
     fn preserves_existing_output_port_side() {
-        // An explicit output `side` is never overwritten by migration. Declared
-        // inputs are dropped regardless (emergent, #149).
+        // An explicit output `side` is never overwritten; declared inputs are
+        // dropped regardless.
         let yaml = r#"
 name: test
 version: "1.0"
@@ -2117,8 +2080,6 @@ nodes:
         side: top
 edges: []
 "#;
-        // No declared inputs on the regular node and an explicit output side:
-        // already canonical, so a no-op.
         let result = migrate_pipeline_yaml(yaml, Path::new("/tmp/test.yaml")).unwrap();
         assert!(!result.migrated);
     }
@@ -2146,7 +2107,6 @@ edges: []
         assert!(canonical.exists());
         assert_eq!(std::fs::read_to_string(canonical).unwrap(), "hello prompt");
 
-        // idempotent: second run does nothing
         let not_migrated = migrate_pipeline_file(&yaml_path).unwrap();
         assert!(!not_migrated);
     }
@@ -2164,7 +2124,6 @@ edges: []
         let count = migrate_all(tmp.path()).unwrap();
         assert_eq!(count, 1);
 
-        // second run: already migrated
         let count2 = migrate_all(tmp.path()).unwrap();
         assert_eq!(count2, 0);
     }
@@ -2215,8 +2174,8 @@ nodes:
 edges: []
 "#;
         let result = migrate_pipeline_yaml(yaml, Path::new("/tmp/test.yaml")).unwrap();
-        // The Loop alone (everything already nanoid + sided) needs no migration;
-        // but the Switch is now dissolved into guarded edges (ADR-0011).
+        // The Loop alone needs no migration, but the Switch dissolves into guarded
+        // edges.
         assert!(result.migrated);
         let migrated: PipelineDef = serde_yaml::from_str(&result.yaml_text).unwrap();
         assert!(
@@ -2266,10 +2225,9 @@ edges:
 
     #[test]
     fn migrates_switch_node_to_guarded_edges() {
-        // A producer → Switch → {pass, default} dissolves into two edges leaving
-        // the producer's output port directly: a guarded edge (when:) for `pass`,
-        // an `else: true` edge for `default`. The Switch node disappears.
-        // Nanoid ids + sided ports so the ONLY migration is switch dissolution.
+        // A producer → Switch → {pass, default} dissolves into two edges leaving the
+        // producer's port directly. Nanoid ids + sided ports so the ONLY migration
+        // under test is switch dissolution.
         let yaml = r#"
 name: switch-migrate
 version: "1.0"
@@ -2334,7 +2292,6 @@ edges:
 
         let migrated: PipelineDef = serde_yaml::from_str(&result.yaml_text).unwrap();
 
-        // Switch node is gone.
         assert!(
             !migrated
                 .nodes
@@ -2435,8 +2392,6 @@ edges:
             "a migrated switch pipeline must not migrate again"
         );
     }
-
-    // --- lint_missing_merge tests (issue #61) ---
 
     use crate::pipeline::{EdgeDef, EdgeEndpoint, NodeDef, Port, PortSide, PortType};
 
@@ -2666,13 +2621,10 @@ edges:
         assert!(diags.is_empty());
     }
 
-    // --- ForEach `over` migration tests (issue #65) ---
-
     #[test]
     fn migrates_foreach_without_over_defaults_to_items() {
-        // ADR-0011 / #151: a ForEach node without an explicit `over` dissolves
-        // into a collection region whose `over` defaults to `items` (the legacy
-        // ForEach default). The ForEach node itself is gone.
+        // A ForEach without an explicit `over` dissolves into a collection region
+        // whose `over` defaults to `items`, the legacy ForEach default.
         let yaml = r#"
 name: test
 version: "1.0"
@@ -2723,9 +2675,8 @@ edges:
     target: { node: end, port: result }
 "#;
         let parsed = migrate_str_and_parse(yaml);
-        // `parse_pipeline` now hard-refuses `type: for-each` (ADR-0011 / #269),
-        // so `migrate_str_and_parse` succeeding already proves dissolution;
-        // assert the node id is gone for good measure.
+        // `parse_pipeline` hard-refuses `type: for-each`, so `migrate_str_and_parse`
+        // succeeding already proves dissolution.
         assert!(
             !parsed.nodes.iter().any(|n| n.id == "feNODE01"),
             "ForEach node must be dissolved"
@@ -2737,11 +2688,9 @@ edges:
 
     #[test]
     fn migrates_foreach_node_to_collection_region() {
-        // ADR-0011 / #151: a ForEach node dissolves into a `loops:` collection
-        // entry (kind: collection + over) + rewired body edges. The lister ->
-        // FE(over: issues) -> worker, FE.done -> end shape must produce a
-        // single-member collection region whose member is the body node, with the
-        // ForEach node and its ports gone.
+        // A ForEach dissolves into a `loops:` collection entry + rewired body edges:
+        // lister -> FE(over: issues) -> worker, FE.done -> end must yield a
+        // single-member collection region, ForEach node and ports gone.
         let yaml = r#"
 name: foreach-migrate
 version: "1.0"
@@ -2796,8 +2745,6 @@ edges:
 "#;
         let parsed = migrate_str_and_parse(yaml);
 
-        // No ForEach node may remain, nor any edge referencing it (parse would
-        // refuse a surviving `type: for-each` outright, ADR-0011 / #269).
         assert!(
             !parsed.nodes.iter().any(|n| n.id == "feNODE01"),
             "no ForEach node may remain after migration"
@@ -2845,10 +2792,9 @@ edges:
 
     #[test]
     fn foreach_dissolution_dedups_colliding_region_ids_in_document_order() {
-        // #269 slice 2: the region id defaults to the ForEach node's NAME —
-        // user-chosen free text. Two ForEaches sharing a name must not emit
-        // two regions with the same id (colliding loop counters); the second
-        // gets a deterministic `-2` suffix, in document order.
+        // The region id defaults to the ForEach node's NAME, user-chosen free text.
+        // Two ForEaches sharing a name must not emit colliding region ids (and so
+        // colliding loop counters); the second gets a deterministic `-2` suffix.
         let yaml = r#"
 name: foreach-dup
 version: "1.0"
@@ -2941,9 +2887,6 @@ edges:
 
     #[test]
     fn migrate_str_and_parse_rejects_foreach() {
-        // Helper guard: after migration there must be no ForEach node left, which
-        // `migrate_str_and_parse` already enforces via parse. This documents that
-        // the ForEach node type is retired (ADR-0011 / #151).
         let yaml = r#"
 name: foreach-empty-over
 version: "1.0"
@@ -3001,11 +2944,10 @@ edges:
 
     #[test]
     fn foreach_dissolution_remaps_members_when_body_has_human_id() {
-        // #269 regression: the dissolve passes run before id-rewriting, so the
-        // emitted region references the body's *original* id. When that id is
-        // human-readable (the common legacy case) it gets re-idified to a
-        // nanoid — `loops[].members` must follow, like the edges, or the
-        // migrated region is orphaned and silently no-ops at runtime.
+        // The dissolve passes run before id-rewriting, so the emitted region
+        // references the body's *original* id. When that id is re-idified to a
+        // nanoid, `loops[].members` must follow like the edges, or the region is
+        // orphaned and silently no-ops at runtime.
         let yaml = r#"
 name: foreach-human-id
 version: "1.0"
@@ -3060,9 +3002,8 @@ edges:
 
     #[test]
     fn loop_dissolution_remaps_members_when_body_has_human_id() {
-        // Same bug class as the ForEach variant, for `bounded` regions emitted
-        // by dissolve_loops: a human-id body node is re-idified, members must
-        // follow.
+        // Same bug class for `bounded` regions from dissolve_loops: a re-idified
+        // body node's members must follow.
         let yaml = r#"
 name: loop-human-id
 version: "1.0"
@@ -3119,8 +3060,6 @@ edges:
         );
     }
 
-    // --- Real fixtures: Switch → guarded edges (issue #144) ---
-
     fn migrate_str_and_parse(yaml: &str) -> PipelineDef {
         let result = migrate_pipeline_yaml(yaml, Path::new("/tmp/fixture.yaml")).unwrap();
         // After migration there must be no Switch left, and the result re-parses.
@@ -3145,10 +3084,8 @@ edges:
 
     #[test]
     fn migrates_loop_node_to_bounded_region() {
-        // ADR-0011 / #148: a Loop node dissolves into a `loops:` entry + rewired
-        // body edges. The legacy review-loop shape (start -> loop -> body -> ...)
-        // must produce a bounded region whose members are the body nodes, with the
-        // Loop node and its ports gone.
+        // A Loop node dissolves into a `loops:` entry + rewired body edges: the
+        // legacy review-loop shape must yield a bounded region over the body nodes.
         let yaml = LEGACY_REVIEW_LOOP_YAML;
         let parsed = migrate_str_and_parse(yaml);
 
@@ -3216,10 +3153,9 @@ edges:
     #[test]
     fn loop_entry_guard_survives_dissolution() {
         // `U.p -> L.in [when W]`: the guard decides whether the loop is entered at
-        // all. Dissolving the Loop node rewires that edge onto the body entry, and
-        // the guard MUST ride along — the shipped simple-bugfix lost its
-        // "Verdict == Bug" gate this way, so every verdict entered the fix loop and
-        // the `else` route to End was dead code (#396).
+        // all, so it MUST ride along when the edge is rewired onto the body entry.
+        // Dropping it made every verdict enter the fix loop, with the `else` route
+        // to End dead code.
         let yaml = r#"
 name: guarded-entry
 version: "1.0"
@@ -3297,11 +3233,9 @@ edges:
 
     #[test]
     fn shipped_loop_fixtures_need_no_migration() {
-        // #396: `review-loop` and `simple-bugfix` shipped as pre-ADR-0011 YAML
-        // (`type: loop` + `type: switch`). The editor has no representation for
-        // those nodes, so opening either one drew no loop region and left
-        // `max_iter` unreachable — the reported symptom. They now ship migrated:
-        // a real cycle plus a `loops:` entry carrying the bound the engine runs.
+        // `review-loop` and `simple-bugfix` ship migrated: the editor has no
+        // representation for `type: loop` / `type: switch`, so the legacy YAML drew
+        // no loop region and left `max_iter` unreachable.
         for (name, yaml, expect_members, expect_max) in [
             (
                 "review-loop",
@@ -3344,9 +3278,9 @@ edges:
             let mut members = region.members.clone();
             members.sort();
             assert_eq!(members, expect_members, "{name}: region members");
-            // The bound comes off the file, NOT from DEFAULT_MAX_ITER: a region
-            // materialized over the legacy shape would have advertised 5 while the
-            // engine ran the node's own bound (#396).
+            // The bound comes off the file, NOT DEFAULT_MAX_ITER: a region
+            // materialized over the legacy shape advertised 5 while the engine ran
+            // the node's own bound.
             assert_eq!(
                 crate::loop_region::resolve_region_max_iter(region, &HashMap::new()),
                 expect_max,
@@ -3375,8 +3309,6 @@ edges:
             "planner has no switch, so no conditional edges should appear"
         );
     }
-
-    // --- #231: stranded flat-prompt boot migration ---
 
     /// Writes a minimal pipeline YAML declaring the given node ids.
     fn write_pipeline_with_nodes(dir: &Path, stem: &str, node_ids: &[&str]) {

@@ -15,32 +15,28 @@ pub(crate) struct LibraryEntry {
     pub outputs: Vec<pipeline::Port>,
     #[serde(default)]
     pub interactive: bool,
-    /// Per-node model override (#296 / #345). Added with the YAML node
-    /// export/import: the node library is now model-aware (it silently dropped
-    /// the model before). Optional + skip-if-none, so pre-#345 entries and nodes
-    /// on the account default round-trip byte-identically.
+    /// Per-node model override. Don't drop `skip_serializing_if`: a node on the
+    /// account default must serialize byte-identically to an older entry that
+    /// never knew the key, or it reads `diverged` forever.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    /// Per-node reasoning-effort override (#424). Carried for the same reason as
-    /// `model`: a starred node whose effort the library did not know would read
-    /// `diverged` forever (the #345 trap). Optional + skip-if-none, so pre-#424
-    /// entries and nodes on the account default round-trip byte-identically.
+    /// Per-node reasoning-effort override. Same `skip_serializing_if` invariant
+    /// as `model`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_iter: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branches: Option<u32>,
-    /// Defaulted (#345): a structural node exported to YAML carries no prompt,
-    /// and `POST /nodes/parse` must accept a prompt-less node map. Existing
-    /// library files always carry a prompt, so this is purely additive.
+    /// Defaulted: a structural node exported to YAML carries no prompt, and
+    /// `POST /nodes/parse` must accept a prompt-less node map.
     #[serde(default)]
     pub prompt: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-// #494: exercised only by this module's unit tests since demotion; kept as a tested helper.
+// Only this module's unit tests call it; kept as a tested helper.
 #[allow(dead_code)]
 pub(crate) enum SyncState {
     Outline,
@@ -109,13 +105,9 @@ pub(crate) fn get(name: &str) -> Option<LibraryEntry> {
     let dir = library_dir()?;
     let slug = slugify(name);
     let path = dir.join(format!("{slug}.yaml"));
-    // Fast path: the direct slug file — but only when it exists, parses, AND
-    // actually names this entry. Any miss falls through to a full scan by name,
-    // keeping `get` consistent with `list`/`find_by_name`. A slug collision can
-    // legitimately park this entry under a `-N` suffix, and an absent or
-    // unparseable slug file (e.g. a 0-byte remnant of an interrupted or
-    // out-of-disk write) must not shadow an entry that still lives on disk —
-    // otherwise `list` surfaces it while `get`/instantiate 404 on the same name.
+    // Don't return early on a slug-file miss: a collision parks the entry under a
+    // `-N` suffix, and an unparseable slug file (0-byte remnant of an interrupted
+    // write) must not shadow it — `list` would surface a name `get` 404s on.
     if let Ok(contents) = std::fs::read_to_string(&path) {
         if let Ok(entry) = serde_yaml::from_str::<LibraryEntry>(&contents) {
             if entry.name == name {
@@ -198,7 +190,7 @@ fn find_path_by_name(dir: &Path, name: &str) -> Option<PathBuf> {
     None
 }
 
-// #494: exercised only by this module's unit tests since demotion; kept as a tested helper.
+// Only this module's unit tests call it; kept as a tested helper.
 #[allow(dead_code)]
 pub(crate) fn entry_from_node(node: &pipeline::NodeDef, prompt: &str) -> LibraryEntry {
     LibraryEntry {
@@ -207,15 +199,12 @@ pub(crate) fn entry_from_node(node: &pipeline::NodeDef, prompt: &str) -> Library
         inputs: node.inputs.clone(),
         outputs: node.outputs.clone(),
         interactive: node.interactive,
-        // #345/#296: carry the per-node model so a starred node stays synced
-        // instead of flipping to `diverged` the moment it has an override. Since
-        // #550 the model/effort live under `harnesses.claude`; the node library
-        // stays claude-aware (its pre-#550 contract), so project that entry.
+        // The node library's schema is claude-only, so project the
+        // `harnesses.claude` entry rather than the whole map.
         model: node
             .harnesses
             .get(crate::harness_registry::CLAUDE)
             .and_then(|e| e.model.clone()),
-        // #424: same reasoning for the effort level.
         effort: node
             .harnesses
             .get(crate::harness_registry::CLAUDE)
@@ -226,7 +215,7 @@ pub(crate) fn entry_from_node(node: &pipeline::NodeDef, prompt: &str) -> Library
     }
 }
 
-// #494: exercised only by this module's unit tests since demotion; kept as a tested helper.
+// Only this module's unit tests call it; kept as a tested helper.
 #[allow(dead_code)]
 pub(crate) fn sync_state(node: &pipeline::NodeDef, prompt: &str) -> SyncState {
     let Some(entry) = get(&node.name) else {
@@ -278,16 +267,14 @@ pub(crate) mod pipelines {
         pub repo: String,
         pub path: String,
         pub content_hash: String,
-        /// Which digest `content_hash` holds (#395). `Some(HASH_ALGO_SEMANTIC)` on
-        /// everything written since the semantic projection landed; **absent** on
-        /// pre-#395 `meta.json` files, whose hash is a raw-byte digest. Changing the
-        /// algorithm without this marker would flip every promoted pipeline to ⚠ —
-        /// the exact symptom being fixed. See `compute_drift` for the legacy path.
+        /// Which digest `content_hash` holds. **Absent** on legacy `meta.json`
+        /// files, whose hash is a raw-byte digest; without this marker every
+        /// promoted pipeline would flip to ⚠ on upgrade. See `compute_drift`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub hash_algo: Option<String>,
     }
 
-    /// Marker for the semantic-projection digest (#395).
+    /// Marker for the semantic-projection digest.
     pub(crate) const HASH_ALGO_SEMANTIC: &str = "semantic-v1";
 
     /// Domain tags keeping the two digest shapes in disjoint spaces, so a pipeline
@@ -301,19 +288,16 @@ pub(crate) mod pipelines {
         pub promoted_from: Option<PromotedFrom>,
     }
 
-    /// Digest of a pipeline's **semantics** plus its prompt files (#395).
+    /// Digest of a pipeline's **semantics** plus its prompt files.
     ///
-    /// Hashing the file's bytes made a node move — pure layout — read as library
-    /// drift, contradicting the canvas star, which has ignored layout since #355.
-    /// So the YAML is parsed and projected first (`pipeline_semantics`): layout
-    /// dropped, key order and parser defaults normalized away. That also absorbs
-    /// the wholesale reformatting a canvas save performs on a hand-written file,
-    /// which a textual strip of `view:` would still have flagged.
+    /// Don't hash the raw bytes: a node move — pure layout — would read as drift,
+    /// contradicting the canvas star, and a canvas save reformats the whole file.
+    /// Projecting through `pipeline_semantics` drops layout and normalizes key
+    /// order and parser defaults.
     ///
-    /// A source that no longer parses cannot be projected. Rather than silently
-    /// reporting it synced, its bytes are hashed under a separate domain tag: the
-    /// digest still moves when the file moves, and a pipeline that breaks after a
-    /// promote reads as drifted (which it is).
+    /// A source that no longer parses is hashed by bytes under a separate domain
+    /// tag rather than reported synced — a pipeline that breaks after a promote
+    /// has drifted.
     pub(crate) fn content_hash(yaml: &str, prompts: &HashMap<String, String>) -> String {
         match crate::pipeline::parse_pipeline(yaml)
             .ok()
@@ -324,11 +308,10 @@ pub(crate) mod pipelines {
         }
     }
 
-    /// `domain || body || prompts`, every part length-framed so no two different
-    /// inputs can be concatenated into the same byte stream (the old digest fed
-    /// `key` and `value` back to back, making `("a", "bc")` and `("ab", "c")`
-    /// collide). An empty prompt counts as absent, matching the frontend's
-    /// `promptsEqual`, so a freshly-created empty `<node>.md` is not drift.
+    /// `domain || body || prompts`. Don't drop the length framing: feeding `key`
+    /// and `value` back to back makes `("a", "bc")` and `("ab", "c")` collide.
+    /// An empty prompt counts as absent, matching the frontend's `promptsEqual`,
+    /// so a freshly-created empty `<node>.md` is not drift.
     fn digest(domain: &str, body: &[u8], prompts: &HashMap<String, String>) -> String {
         let mut hasher = Sha256::new();
         hasher.update(domain.as_bytes());
@@ -351,10 +334,9 @@ pub(crate) mod pipelines {
         format!("{:x}", hasher.finalize())
     }
 
-    /// The pre-#395 digest — raw YAML bytes, then unframed key/value pairs. Kept
-    /// verbatim (bugs included) because `meta.json` files written before the
-    /// semantic projection still hold it, and `compute_drift` has to be able to
-    /// recognize one.
+    /// The legacy digest — raw YAML bytes, then unframed key/value pairs. Don't
+    /// "fix" it: legacy `meta.json` files hold it verbatim, bugs included, and
+    /// `compute_drift` has to recognize one.
     fn legacy_content_hash(yaml: &str, prompts: &HashMap<String, String>) -> String {
         let mut hasher = Sha256::new();
         hasher.update(yaml.as_bytes());
@@ -397,20 +379,16 @@ pub(crate) mod pipelines {
             return Some(content_hash(&yaml, &prompts) != promoted_from.content_hash);
         }
 
-        // ── Pre-#395 `meta.json`: `content_hash` holds a raw-byte digest ─────────
-        // Re-hashing the source under the new algorithm would never match it, so
-        // every already-promoted pipeline would light up ⚠ on upgrade. Read it in
-        // its own algebra instead. No lazy rewrite: `list`/`check_drift` are read
-        // paths, and a GET that rewrites metadata is a surprise nobody asked for.
-        // The marker appears on the next `promote`, which is also the gesture that
-        // legitimately refreshes the hash.
+        // Legacy `meta.json`: `content_hash` is a raw-byte digest, so read it in
+        // its own algebra — re-hashing under the new algorithm would light up ⚠ on
+        // every already-promoted pipeline. Don't rewrite the meta here: this is a
+        // read path, and the marker appears on the next `promote` anyway.
         if legacy_content_hash(&yaml, &prompts) == promoted_from.content_hash {
             return Some(false); // bytes untouched — nothing to decide
         }
         // Bytes moved, but only the promote-time *semantics* answer the question.
-        // `promote` copies the source verbatim into the library, so the library copy
-        // IS the promoted snapshot — as long as it hasn't itself been edited since,
-        // which its legacy hash tells us.
+        // `promote` copies the source verbatim, so the library copy IS the promoted
+        // snapshot — as long as its legacy hash says it wasn't edited since.
         let lib_yaml = std::fs::read_to_string(lib_path).ok()?;
         let lib_prompts = read_prompts_dir(&lib_path.with_extension("prompts"));
         if legacy_content_hash(&lib_yaml, &lib_prompts) == promoted_from.content_hash {
@@ -435,7 +413,7 @@ pub(crate) mod pipelines {
     }
 
     /// The on-disk pipelines directory for a scope — the cwd a library authoring
-    /// assistant (#302 / ADR-0048) is spawned in, and where `save` writes.
+    /// assistant (ADR-0048) is spawned in, and where `save` writes.
     pub(crate) fn scope_dir(repo_root: &Path, scope: Scope) -> Option<PathBuf> {
         match scope {
             Scope::Repo => Some(repo_pipelines_dir(repo_root)),
@@ -737,9 +715,9 @@ pub(crate) mod pipelines {
     /// slice before the opening `(` (which may carry a trailing space the caller
     /// re-trims). `None` if there is no such tail. Case-sensitive on `copy`.
     fn strip_one_copy_tail(s: &str) -> Option<&str> {
-        let inner = s.strip_suffix(')')?; // drop the closing ')'
-        let open = inner.rfind('(')?; // opening paren of the last group
-        let body = &inner[open + 1..]; // content between '(' and ')'
+        let inner = s.strip_suffix(')')?;
+        let open = inner.rfind('(')?;
+        let body = &inner[open + 1..];
         let is_copy = body == "copy"
             || body
                 .strip_prefix("copy ")
@@ -823,26 +801,22 @@ pub(crate) mod pipelines {
     /// line** (never re-serialized) so unknown top-level keys, comments, and
     /// formatting survive a round-trip — see `rewrite_top_level_name`.
     pub(crate) fn duplicate(repo_root: &Path, id: &str) -> Result<String, String> {
-        // 1. Locate source (repo OR user) — one call yields path + scope.
         let (source_path, scope) =
             locate(repo_root, id).ok_or_else(|| format!("pipeline not found: {id}"))?;
 
-        // 2. Read raw YAML verbatim (do NOT re-serialize the document).
         let yaml = std::fs::read_to_string(&source_path)
             .map_err(|e| format!("cannot read source pipeline: {e}"))?;
 
-        // 3. Source prompts (empty map if .prompts/ is absent — not an error).
         let prompts = read_prompts_dir(&source_path.with_extension("prompts"));
 
-        // 4. Compute a unique "(copy)" name against all library names (both scopes).
+        // Uniqueness is checked against both scopes' names, not just `scope`.
         let parsed = crate::pipeline::parse_pipeline(&yaml)
             .map_err(|e| format!("invalid source pipeline YAML: {e}"))?;
         let base = strip_copy_tail(&parsed.pipeline.name);
         let existing: Vec<String> = list(repo_root).into_iter().map(|e| e.name).collect();
         let new_name = compute_copy_name(&base, &existing);
 
-        // 5. Textual rewrite of the single column-0 `name:` line + re-parse
-        //    assertion (parse alone won't catch a no-op rewrite).
+        // Re-parse and compare: a successful parse alone won't catch a no-op rewrite.
         let rewritten = rewrite_top_level_name(&yaml, &new_name)?;
         let reparsed = crate::pipeline::parse_pipeline(&rewritten)
             .map_err(|e| format!("rewritten pipeline YAML invalid: {e}"))?;
@@ -853,7 +827,7 @@ pub(crate) mod pipelines {
             ));
         }
 
-        // 6. Clean fork: id=None ⇒ fresh slug, writes YAML + prompts, no meta.json.
+        // `id=None` ⇒ fresh slug and no meta.json — the fork must stay unlinked.
         save(repo_root, None, &new_name, &rewritten, &prompts, scope)
     }
 
@@ -866,7 +840,7 @@ pub(crate) mod pipelines {
             .and_then(|pf| compute_drift(&lib_path, pf))
     }
 
-    // #494: exercised only by this module's unit tests since demotion; kept as a tested helper.
+    // Only this module's unit tests call it; kept as a tested helper.
     #[allow(dead_code)]
     pub(crate) fn get_meta(library_id: &str) -> Option<PipelineMeta> {
         let lib_dir = user_pipelines_dir()?;
@@ -878,10 +852,9 @@ pub(crate) mod pipelines {
         }
     }
 
-    /// Unit tests for the pure `(copy)`-naming and YAML-rewrite helpers. They are
-    /// private to this module, so this nested test mod (a descendant) is the only
-    /// place that can exercise them directly — the behavioral `duplicate` tests
-    /// live in the outer `library_store::tests` module against the public fn.
+    /// The `(copy)`-naming and YAML-rewrite helpers are private, so only a
+    /// descendant mod can exercise them directly. Behavioral `duplicate` tests
+    /// live in the outer `library_store::tests`.
     #[cfg(test)]
     mod copy_helpers_tests {
         use super::*;
@@ -892,7 +865,6 @@ pub(crate) mod pipelines {
 
         #[test]
         fn strip_copy_tail_table() {
-            // (input, expected base) — mirrors the spec truth table.
             let cases = [
                 ("foo (copy)", "foo"),
                 ("foo (copy 2)", "foo"),
@@ -940,10 +912,8 @@ pub(crate) mod pipelines {
         fn rewrite_top_level_name_replaces_only_first_column0_name() {
             let out = rewrite_top_level_name(VALID_YAML, "new name").unwrap();
             assert!(out.starts_with("name: \"new name\"\n"));
-            // Indented node `name:` lines are untouched.
             assert!(out.contains("    name: Start\n"));
             assert!(out.contains("    name: End\n"));
-            // Re-parsing yields exactly the requested name.
             let parsed = crate::pipeline::parse_pipeline(&out).unwrap();
             assert_eq!(parsed.pipeline.name, "new name");
         }
@@ -955,7 +925,6 @@ pub(crate) mod pipelines {
             assert!(out.contains("# leading comment\n"));
             assert!(out.contains("\nauto_merge_resolver: true\n"));
             assert!(out.contains("name: \"review-loop (copy)\"\n"));
-            // Everything except the name: line is byte-identical.
             let strip_name = |s: &str| {
                 s.lines()
                     .filter(|l| !l.starts_with("name:"))
@@ -981,7 +950,6 @@ pub(crate) mod pipelines {
 
         #[test]
         fn rewrite_top_level_name_preserves_missing_final_newline() {
-            // No trailing newline on the last line must survive.
             let yaml = "name: a\nversion: \"1.0\"";
             let out = rewrite_top_level_name(yaml, "b").unwrap();
             assert!(!out.ends_with('\n'));
@@ -1029,8 +997,6 @@ mod tests {
         });
     }
 
-    /// #550: set a node's `harnesses.claude` entry — the source `entry_from_node`
-    /// now projects into a `LibraryEntry`'s `model`/`effort`.
     fn set_claude_entry(node: &mut pipeline::NodeDef, model: Option<&str>, effort: Option<&str>) {
         node.harnesses.insert(
             crate::harness_registry::CLAUDE.to_string(),
@@ -1161,16 +1127,12 @@ mod tests {
 
     #[test]
     fn get_scans_past_unparseable_slug_file() {
-        // Regression: a 0-byte (or otherwise unparseable) file squatting the
-        // direct slug path — the remnant of an interrupted or out-of-disk write —
-        // must not shadow an entry that still lives under a collision `-N` slug.
-        // `get` must agree with `list`: before this, `get`/instantiate 404'd on a
-        // name `list` happily returned (root cause of a flaky `library_node_ports`).
+        // An unparseable file squatting the direct slug path must not shadow an
+        // entry parked under a collision `-N` slug: `get` has to agree with `list`.
         with_temp_home(|| {
             let dir = library_dir().unwrap();
             std::fs::create_dir_all(&dir).unwrap();
 
-            // The real entry, parked at the collision slug.
             let entry = LibraryEntry {
                 name: "Typed Reviewer".to_string(),
                 node_type: pipeline::NodeType::DocOnly,
@@ -1188,7 +1150,6 @@ mod tests {
                 serde_yaml::to_string(&entry).unwrap(),
             )
             .unwrap();
-            // A poison 0-byte file at the direct slug path.
             std::fs::write(dir.join("typed-reviewer.yaml"), "").unwrap();
 
             let got = get("Typed Reviewer").expect("get must scan past the poison file");
@@ -1232,9 +1193,7 @@ mod tests {
         let entry = LibraryEntry {
             name: "Complex Node".to_string(),
             node_type: pipeline::NodeType::CodeMutating,
-            // #345/#296: a per-node model must round-trip losslessly.
             model: Some("opus".to_string()),
-            // #424: and so must a per-node effort.
             effort: Some("low".to_string()),
             inputs: vec![
                 pipeline::Port {
@@ -1288,7 +1247,6 @@ mod tests {
         };
 
         let yaml = serde_yaml::to_string(&entry).unwrap();
-        // #345/#296: the per-node model rides through the YAML.
         assert!(yaml.contains("model: opus"), "yaml missing model:\n{yaml}");
         let parsed: LibraryEntry = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(parsed, entry);
@@ -1296,8 +1254,8 @@ mod tests {
 
     #[test]
     fn yaml_round_trip_model_absent_is_omitted() {
-        // A node on the account default (model: None) must not emit a `model:`
-        // key, and must round-trip to None (#345/#296 — skip_serializing_if).
+        // A node on the account default must not emit a `model:` key: an entry
+        // that does reads `diverged` against a library file that never had one.
         let entry = LibraryEntry {
             name: "Plain".to_string(),
             node_type: pipeline::NodeType::DocOnly,
@@ -1319,8 +1277,6 @@ mod tests {
 
     #[test]
     fn entry_from_node_carries_model() {
-        // #345/#296: a node with a per-node model must produce a model-aware
-        // library entry (previously the model was silently dropped).
         let mut node = make_node("Modelled");
         set_claude_entry(&mut node, Some("sonnet"), None);
         let entry = entry_from_node(&node, "prompt");
@@ -1329,10 +1285,8 @@ mod tests {
 
     #[test]
     fn yaml_round_trip_effort_absent_is_omitted() {
-        // #424: a node on the account default (effort: None) must not emit an
-        // `effort:` key, and must round-trip to None (skip_serializing_if). This is
-        // the gate that keeps an unset node byte-identical to a pre-#424 library
-        // entry — the alternative is `diverged` forever (the #345 trap).
+        // Same invariant as `model`: an unset node must stay byte-identical to a
+        // library entry written before the key existed.
         let entry = LibraryEntry {
             name: "Plain".to_string(),
             node_type: pipeline::NodeType::DocOnly,
@@ -1357,8 +1311,7 @@ mod tests {
 
     #[test]
     fn entry_from_node_carries_effort() {
-        // #424: a node with a per-node effort must produce an effort-aware library
-        // entry, and the two axes must not interfere.
+        // The two axes must not interfere.
         let mut node = make_node("Effortful");
         set_claude_entry(&mut node, Some("sonnet"), Some("xhigh"));
         let entry = entry_from_node(&node, "prompt");
@@ -1368,9 +1321,8 @@ mod tests {
 
     #[test]
     fn sync_state_diverges_on_effort_change() {
-        // #424: the starred-node verdict must see the effort. A library entry that
-        // did not know the field would read `synced` while the two differ — exactly
-        // bug #345, one field later.
+        // The starred-node verdict must see the effort: a library entry blind to
+        // the field reads `synced` while the two actually differ.
         with_temp_home(|| {
             let mut node = make_node("Effortful");
             set_claude_entry(&mut node, None, Some("low"));
@@ -2233,10 +2185,8 @@ mod tests {
         });
     }
 
-    // --- #395: drift is a semantic verdict, not a byte comparison ---
-
     /// start → planner → end **with layout**, so a test can rewrite the layout and
-    /// nothing else. Mirrors the reproducer's `drift-demo`.
+    /// nothing else.
     fn laid_out_pipeline(name: &str, planner_x: u32, extras: &str) -> String {
         format!(
             "name: {name}\nversion: '1.0'\nnodes:\n\
@@ -2263,8 +2213,8 @@ mod tests {
 
     #[test]
     fn content_hash_ignores_layout_only_edits() {
-        // Acceptance criterion 4, layout half: node position, pinned route, arrow
-        // side and notes are presentation — the digest must not move.
+        // Node position, pinned route, arrow side and notes are presentation —
+        // the digest must not move.
         let prompts = HashMap::new();
         let plain = laid_out_pipeline("Demo", 300, "");
         let moved = laid_out_pipeline("Demo", 540, "");
@@ -2293,12 +2243,10 @@ mod tests {
 
     #[test]
     fn content_hash_ignores_serializer_reformatting() {
-        // The amplifier from the reproduction: a canvas save rewrites the *whole*
-        // file in the serializer's style, so on a hand-written pipeline the first
-        // trivial edit changes far more bytes than the node that moved.
-        // Same document as `laid_out_pipeline("Demo", 300, "")`: indented block
-        // sequences, double-quoted version, block-style `view`, keys reordered, and
-        // port defaults spelled out instead of left to the parser.
+        // A canvas save rewrites the *whole* file in the serializer's style, so on
+        // a hand-written pipeline the first trivial edit changes far more bytes
+        // than the node that moved. Same document as `laid_out_pipeline("Demo",
+        // 300, "")`, reserialized.
         let reserialized = "name: Demo\nversion: \"1.0\"\nnodes:\n  - id: start\n    type: start\n    name: Start\n    view:\n      y: 60\n      x: 300\n    outputs:\n      - name: user_prompt\n        repeated: false\n        side: right\n        port_type: markdown\n  - id: planner\n    type: doc-only\n    name: Planner\n    view:\n      y: 260\n      x: 300\n    outputs:\n      - name: plan\n        side: right\n  - id: end\n    type: end\n    name: End\n    view:\n      y: 460\n      x: 300\n    inputs:\n      - name: result\n        side: left\nedges:\n  - target: {node: planner, port: in}\n    source: {node: start, port: user_prompt}\n  - target: {node: end, port: result}\n    source: {node: planner, port: plan}\n";
         let prompts = HashMap::new();
         let handwritten = laid_out_pipeline("Demo", 300, "");
@@ -2314,7 +2262,6 @@ mod tests {
 
     #[test]
     fn content_hash_detects_semantic_edits() {
-        // Acceptance criterion 4, semantic half.
         let prompts = HashMap::new();
         let base = laid_out_pipeline("Demo", 300, "");
         let cases = [
@@ -2380,8 +2327,8 @@ mod tests {
 
     #[test]
     fn drift_stays_false_after_layout_only_edit() {
-        // The bug itself (#395): one node dragged, saved, and the badge flipped to
-        // "out of sync" while the canvas star still said "synced".
+        // One node dragged and saved must not flip the badge to "out of sync"
+        // while the canvas star still says "synced".
         with_temp_repo(|repo| {
             write_repo_pipeline(repo, "demo", &laid_out_pipeline("Demo", 300, ""));
             pipelines::promote(repo, "demo").unwrap();
@@ -2418,8 +2365,8 @@ mod tests {
 
     #[test]
     fn promote_records_the_hash_algorithm() {
-        // Without this marker a pre-#395 meta.json is indistinguishable from a
-        // fresh one, and the migration path in `compute_drift` has nothing to key on.
+        // Without this marker a legacy meta.json is indistinguishable from a fresh
+        // one, and `compute_drift`'s migration path has nothing to key on.
         with_temp_repo(|repo| {
             let slug = create_repo_pipeline(repo, "Marked");
             pipelines::promote(repo, &slug).unwrap();
@@ -2446,9 +2393,8 @@ mod tests {
 
     #[test]
     fn unparsable_source_reads_as_drift_not_synced() {
-        // Trap 2 of the report: the semantic projection needs `parse_pipeline`,
-        // which can fail. A source that stopped parsing must never be reported
-        // synced — silence dressed up as confirmation.
+        // The semantic projection needs `parse_pipeline`, which can fail. A source
+        // that stopped parsing must never be reported synced.
         with_temp_repo(|repo| {
             let slug = create_repo_pipeline(repo, "Breaker");
             pipelines::promote(repo, &slug).unwrap();
@@ -2462,9 +2408,7 @@ mod tests {
         });
     }
 
-    // --- #395 migration: `meta.json` files written before the semantic digest ---
-
-    /// The pre-#395 digest, re-implemented independently of the daemon so the
+    /// The legacy digest, re-implemented independently of the daemon so the
     /// migration tests pin the legacy algorithm instead of asserting against
     /// whatever the code happens to do now.
     fn legacy_hash_of(yaml: &str, prompts: &HashMap<String, String>) -> String {
@@ -2480,7 +2424,7 @@ mod tests {
         format!("{:x}", hasher.finalize())
     }
 
-    /// Rewrite `<slug>.meta.json` the way pre-#395 code did: a raw-byte hash of the
+    /// Rewrite `<slug>.meta.json` the way legacy code did: a raw-byte hash of the
     /// given YAML and **no** `hash_algo` key.
     fn downgrade_meta_to_legacy(repo: &std::path::Path, slug: &str, promoted_yaml: &str) {
         let meta_path = pipelines::user_pipelines_dir()
@@ -2514,9 +2458,9 @@ mod tests {
 
     #[test]
     fn legacy_meta_untouched_source_is_not_drift() {
-        // The cheap case: the bytes never moved, so the legacy hash still matches
-        // and there is nothing to decide. This is the case that would have turned
-        // EVERY promoted pipeline into a ⚠ had the algorithm changed unversioned.
+        // The bytes never moved, so the legacy hash still matches. This is the case
+        // that would turn EVERY promoted pipeline into a ⚠ if the algorithm changed
+        // unversioned.
         with_temp_repo(|repo| {
             let yaml = laid_out_pipeline("Legacy", 300, "");
             write_repo_pipeline(repo, "legacy", &yaml);
@@ -2632,11 +2576,8 @@ mod tests {
         });
     }
 
-    // --- #224: duplicate a library pipeline (unlinked clone) ---
-
     /// A library YAML with a leading comment and a non-`PipelineDef` top-level
-    /// key (`auto_merge_resolver`) — the byte-fidelity bait, mirrors
-    /// `review-loop.yaml`.
+    /// key (`auto_merge_resolver`) — the byte-fidelity bait.
     fn fixture_with_extras(name: &str) -> String {
         format!(
             "# a comment that must survive\nname: {name}\nversion: \"1.0\"\nnodes:\n  - id: start\n    name: Start\n    type: start\n    outputs:\n      - name: user_prompt\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\nauto_merge_resolver: true\n"
@@ -2663,7 +2604,6 @@ mod tests {
             let copy = all.iter().find(|e| e.id == copy_id).unwrap();
             assert_eq!(copy.name, "My Pipeline (copy)");
             assert_eq!(copy.scope, pipelines::Scope::User);
-            // Source is untouched.
             assert!(all.iter().any(|e| e.id == id && e.name == "My Pipeline"));
         });
     }
@@ -2687,13 +2627,11 @@ mod tests {
             let copy_yaml =
                 std::fs::read_to_string(lib_dir.join(format!("{copy_id}.yaml"))).unwrap();
 
-            // The unknown top-level key and the comment survive verbatim.
             assert!(
                 copy_yaml.contains("\nauto_merge_resolver: true\n"),
                 "unknown top-level key must survive: {copy_yaml}"
             );
             assert!(copy_yaml.starts_with("# a comment that must survive\n"));
-            // Only the name: line changed.
             assert!(copy_yaml.contains("name: \"Fixture (copy)\"\n"));
             let strip_name = |s: &str| {
                 s.lines()
@@ -2739,13 +2677,11 @@ mod tests {
     #[test]
     fn duplicate_of_promoted_source_has_no_meta() {
         with_temp_repo(|repo| {
-            // Promote a repo pipeline -> a user-scope library entry WITH meta.json.
             let slug = create_repo_pipeline(repo, "Promoted");
             pipelines::promote(repo, &slug).unwrap();
             let lib_dir = pipelines::user_pipelines_dir().unwrap();
             assert!(lib_dir.join(format!("{slug}.meta.json")).exists());
 
-            // Duplicating it yields a clean fork: no meta.json, no promoted_from.
             let copy_id = pipelines::duplicate(repo, &slug).unwrap();
             assert!(
                 !lib_dir.join(format!("{copy_id}.meta.json")).exists(),

@@ -1,41 +1,28 @@
 # ADR-0038 — Le balayage d'orphelins inventorie tmux avant de lire le log, et aucune session n'existe avant sa réservation
 
-> Statut : accepted (issue #485, reproduite 3/3 en pile isolée le 2026-07-31, 9 occurrences en
-> production sur 8 jours). Vocabulaire : CONTEXT.md § « Balayage d'orphelins ». **Amende
-> ADR-0032** : la mort de session reste le seul verdict terminal de liveness, mais l'exactitude
-> « par construction » qu'elle revendique valait pour le *détecteur* et était fausse pour le
-> *reaper*, qui **fabriquait** la mort que le détecteur observait fidèlement. **Amende ADR-0009** :
-> la précondition posée ici est la première que la primitive de démarrage de nœud ne pouvait pas
-> rater sans conséquence pour un autre sous-système — l'écart « legacy à résorber » devient
-> porteur, avec un argument d'exactitude et non plus seulement d'hygiène. **Ne touche pas à
-> ADR-0012(a)** : le balayage ne supprime toujours ni worktree ni branche, et ne change **rien** à
-> *qui* est un orphelin.
+Sans cette ADR, on écrirait le balayage dans l'ordre naturel — projeter les Runs, puis lister les
+sessions tmux — et on tuerait les sessions nées entre les deux observations. Le code se lit comme
+correct dans les deux ordres ; seule la monotonie du log départage, et aucun test ne peut reproduire la
+course.
+
+> Statut : accepted (#485). **Amende ADR-0032** : la mort de session reste le seul verdict terminal
+> de liveness, mais l'exactitude « par construction » qu'elle revendique valait pour le *détecteur*
+> et était fausse pour le *reaper*, qui **fabriquait** la mort que le détecteur observait
+> fidèlement. **Amende ADR-0009** : la précondition posée ici devient un contrat de couche 2
+> opposable, plus un simple écart d'hygiène. **Ne touche pas à ADR-0012(a)** : le balayage ne
+> supprime toujours ni worktree ni branche, et ne change rien à *qui* est un orphelin.
 
 ## Contexte
 
-Le reaper rend un verdict de **non-existence** : « aucune réservation dans l'event log ⟹ orphelin
-⟹ kill ». Ce verdict n'est jamais vrai en soi. Il est vrai *relativement à deux observations* —
-l'inventaire des sessions tmux vivantes, et la lecture du log — et le code les prenait dans le
-mauvais ordre.
-
-Le balayage construisait **d'abord** un instantané de **tous** les Runs (une lecture-projection par
-Run), puis n'énumérait les sessions qu'ensuite. Une session née entre les deux était donc
-**présente** dans l'inventaire (elle existait à l'instant de l'énumération) et **absente** de
-l'instantané (sa réservation n'était pas encore committée quand le Run a été lu). Bras « absent »,
-kill. Sans re-lecture, sans garde d'âge, sans seconde chance.
-
-Occurrence du 2026-07-30, Run `20260730-020012-e5cfea0`, nœud `pqWxfLa1` :
-
-```
-02:13:10.621  Spawned tmux session: pdo-20260730-020012-e5cfea0-pqWxfLa1-iter-1
-02:13:10.771  Orphan sweep: killing session for absent run 20260730-020012-e5cfea0/pqWxfLa1   ← +150 ms
-02:13:39.985  Stale detector: node pqWxfLa1 — session died
-02:13:40.845  WARN Run 20260730-020012-e5cfea0 reconciled to Failed — run_stalled: blocked behind: pqWxfLa1
-```
-
-Deux Runs perdus cette nuit-là, sous un verdict qui accuse tmux, la RAM et l'API — tout sauf le
-coupable. Et le seul témoin du kill était `journalctl` : ni l'UI, ni l'API, ni l'event log n'en
-portaient trace.
+Le reaper rend un verdict de **non-existence** : « aucune réservation dans l'event log ⟹ orphelin ⟹
+kill ». Ce verdict n'est jamais vrai en soi : il est vrai *relativement à deux observations* —
+l'inventaire des sessions tmux vivantes et la lecture du log — et le code les prenait dans le mauvais
+ordre. Le balayage construisait **d'abord** un instantané de **tous** les Runs, puis n'énumérait les
+sessions qu'ensuite. Une session née entre les deux était **présente** dans l'inventaire et **absente**
+de l'instantané : bras « absent », kill, sans re-lecture ni seconde chance. En production, le nœud
+mourait ~150 ms après son spawn, puis la veille de vivacité le déclarait `session_died` et le Run
+échouait en `run_stalled` — un verdict qui accuse tmux, la RAM et l'API, tout sauf le coupable. Seul
+témoin : `journalctl`.
 
 Trois faits gouvernent la décision.
 
@@ -191,17 +178,3 @@ redémarrage remet à zéro) ; `journalctl` garde le détail par session.
 - **#498 n'est pas fermée.** La session tuée est perdue, mais son sous-worktree et sa branche
   survivent, et la collision de branche qui s'ensuit condamne le nœud à vie. Ce correctif supprime
   le **producteur principal** de cette condition ; il en reste d'autres (#487, #489).
-
-## Relations
-
-- **ADR-0009** (primitives à trois couches) — amendée : la décision de balayage est de la couche 1
-  pure, et la précondition de réservation devient un contrat de couche 2 opposable, plus un simple
-  écart d'hygiène.
-- **ADR-0032** (liveness) — amendée : le détecteur ne mentait pas, il rapportait fidèlement une
-  mort que nous avions causée. Aucun seuil, aucun verdict de liveness n'est touché.
-- **ADR-0034** (prix hors bande) — la raison invoquée pour mettre l'observabilité *dans* le
-  périmètre : elle nomme `journalctl` seul comme le motif de panne récurrent de ce produit, en
-  citant #485.
-- **ADR-0015** — inchangée : le TTL reste lu frais à chaque tick.
-- **ADR-0012(a)** — inchangée : le balayage tue des sessions, jamais un worktree ni une branche.
-- **ADR-0024** (tombstone) — cf. §4 : un Run oublié voit sa session reapée, et c'est voulu.

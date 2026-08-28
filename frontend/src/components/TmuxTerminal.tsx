@@ -235,7 +235,6 @@ export default function TmuxTerminal({
       setConnected(false);
     });
 
-    // Forward user input to WS
     const inputDisposable = term.onData((data) => {
       if (ws && ws.readyState === WebSocket.OPEN) {
         const encoder = new TextEncoder();
@@ -243,7 +242,6 @@ export default function TmuxTerminal({
       }
     });
 
-    // Handle binary input (for paste etc.)
     const binaryDisposable = term.onBinary((data) => {
       if (ws && ws.readyState === WebSocket.OPEN) {
         const buffer = new Uint8Array(data.length);
@@ -281,7 +279,6 @@ export default function TmuxTerminal({
       capture: true,
     });
 
-    // Resize observer
     const resizeObserver = new ResizeObserver(() => {
       fitAddon.fit();
       if (ws) sendResize(ws, fitAddon);

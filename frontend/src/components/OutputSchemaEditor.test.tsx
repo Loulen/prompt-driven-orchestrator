@@ -115,8 +115,6 @@ describe("OutputSchemaEditor", () => {
     expect(onChange).toHaveBeenCalledWith(undefined);
   });
 
-  // --- F1 field row structure tests ---
-
   it("each field renders as a .fld row", () => {
     const schema = {
       verdict: { type: "enum", allowed: ["PASS"] },

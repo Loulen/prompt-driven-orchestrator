@@ -236,8 +236,6 @@ mod tests {
         EvalContext::new(iter)
     }
 
-    // --- eq ---
-
     #[test]
     fn eq_integer_match() {
         let when = yaml("iter: { eq: 3 }");
@@ -259,8 +257,6 @@ mod tests {
         assert!(evaluate_with_iter(&when, &ctx));
     }
 
-    // --- neq ---
-
     #[test]
     fn neq_integer_match() {
         let when = yaml("iter: { neq: 3 }");
@@ -272,8 +268,6 @@ mod tests {
         let when = yaml("iter: { neq: 3 }");
         assert!(!evaluate_with_iter(&when, &ctx_iter(3)));
     }
-
-    // --- lt ---
 
     #[test]
     fn lt_true() {
@@ -293,8 +287,6 @@ mod tests {
         assert!(!evaluate_with_iter(&when, &ctx_iter(7)));
     }
 
-    // --- lte ---
-
     #[test]
     fn lte_true_less() {
         let when = yaml("iter: { lte: 5 }");
@@ -312,8 +304,6 @@ mod tests {
         let when = yaml("iter: { lte: 5 }");
         assert!(!evaluate_with_iter(&when, &ctx_iter(6)));
     }
-
-    // --- gt ---
 
     #[test]
     fn gt_true() {
@@ -333,8 +323,6 @@ mod tests {
         assert!(!evaluate_with_iter(&when, &ctx_iter(1)));
     }
 
-    // --- gte ---
-
     #[test]
     fn gte_true_greater() {
         let when = yaml("iter: { gte: 3 }");
@@ -352,8 +340,6 @@ mod tests {
         let when = yaml("iter: { gte: 3 }");
         assert!(!evaluate_with_iter(&when, &ctx_iter(2)));
     }
-
-    // --- in ---
 
     #[test]
     fn in_string_match() {
@@ -379,8 +365,6 @@ mod tests {
         assert!(evaluate_with_iter(&when, &ctx_iter(2)));
     }
 
-    // --- not_in ---
-
     #[test]
     fn not_in_match() {
         let when = yaml("verdict: { not_in: [PASS, APPROVED] }");
@@ -398,8 +382,6 @@ mod tests {
             .insert("verdict".into(), serde_yaml::Value::String("PASS".into()));
         assert!(!evaluate_with_iter(&when, &ctx));
     }
-
-    // --- implicit AND ---
 
     #[test]
     fn implicit_and_all_true() {
@@ -419,8 +401,6 @@ mod tests {
         assert!(!evaluate_with_iter(&when, &ctx));
     }
 
-    // --- any: (OR) ---
-
     #[test]
     fn any_or_first_clause_true() {
         let when = yaml("any:\n  - iter: { eq: 1 }\n  - iter: { eq: 5 }");
@@ -438,8 +418,6 @@ mod tests {
         let when = yaml("any:\n  - iter: { eq: 1 }\n  - iter: { eq: 5 }");
         assert!(!evaluate_with_iter(&when, &ctx_iter(3)));
     }
-
-    // --- edge cases ---
 
     #[test]
     fn missing_field_returns_false() {
@@ -483,8 +461,6 @@ mod tests {
             .insert("verdict".into(), serde_yaml::Value::String("PASS".into()));
         assert!(!evaluate_with_iter(&when, &ctx));
     }
-
-    // --- halt message rendering ---
 
     #[test]
     fn render_halt_message_basic() {
@@ -549,8 +525,6 @@ mod tests {
         assert_eq!(msg, "Halted: verdict was FAIL");
     }
 
-    // --- combined predicate on single field ---
-
     #[test]
     fn combined_predicates_on_iter() {
         let when = yaml("iter: { gte: 2, lte: 4 }");
@@ -560,8 +534,6 @@ mod tests {
         assert!(evaluate_with_iter(&when, &ctx_iter(4)));
         assert!(!evaluate_with_iter(&when, &ctx_iter(5)));
     }
-
-    // --- $<var> resolution in conditions ---
 
     #[test]
     fn dollar_var_resolved_in_lt_operand() {

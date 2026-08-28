@@ -23,12 +23,12 @@ use crate::fire_decision::GuardResult;
 /// guard never freezes the scheduler.
 pub(crate) const GUARD_TIMEOUT_SECS: u64 = 60;
 
-/// Test seam: override the guard timeout (in milliseconds) so integration tests
-/// can exercise the timeout path without waiting the full production bound.
+/// Test seam: override the guard timeout, in **milliseconds** (the stored and
+/// default values are seconds).
 pub const GUARD_TIMEOUT_MS_OVERRIDE_ENV: &str = "PDO_GUARD_TIMEOUT_MS";
 
-/// Environment variable injected into the guard process pointing at the target
-/// repo, so a guard can reference it without hardcoding a path.
+/// Injected into the guard process so a guard can reference the target repo
+/// without hardcoding a path.
 pub(crate) const TARGET_REPO_ENV: &str = "PDO_TARGET_REPO";
 
 /// Cap on the guard output we *capture* for the fire history (#244): each of
@@ -42,8 +42,8 @@ pub(crate) const GUARD_CAPTURE_LIMIT_BYTES: usize = 16 * 1024;
 const TRUNCATION_MARKER: &str = "…[truncated, showing last 16 KB]\n";
 
 /// Keep the last `limit` *bytes* of `s`, snapped forward to a UTF-8 char
-/// boundary so the result is always valid UTF-8; prefix [`TRUNCATION_MARKER`]
-/// when truncated. Counts bytes (it's a storage bound), not chars.
+/// boundary so the result is always valid UTF-8. Counts bytes (it's a storage
+/// bound), not chars.
 fn cap_tail(s: &str, limit: usize) -> String {
     if s.len() <= limit {
         return s.to_string();
@@ -65,8 +65,7 @@ fn cap_tail(s: &str, limit: usize) -> String {
 /// this is a defensive floor).
 ///
 /// The guard timeout is read fresh on each tick, so a stored change takes effect
-/// on the next tick without a restart. [`guard_timeout`] is the `stored = None`
-/// shorthand (env-only, unchanged — preserves the ms test seam).
+/// on the next tick without a restart.
 pub(crate) fn guard_timeout_with(stored_secs: Option<u64>) -> Duration {
     stored_secs
         .filter(|&n| (1..=600).contains(&n))
@@ -76,23 +75,17 @@ pub(crate) fn guard_timeout_with(stored_secs: Option<u64>) -> Duration {
 }
 
 /// The guard timeout (**milliseconds**) contributed by
-/// [`GUARD_TIMEOUT_MS_OVERRIDE_ENV`] alone, or `None` when unset or unparseable.
+/// [`GUARD_TIMEOUT_MS_OVERRIDE_ENV`] alone.
 ///
-/// Kept as the integration-test seam. Exposed so `GET /settings` can disclose a
-/// shadowed env var and compute the winning tier identically to
-/// [`guard_timeout_with`] (#129, ADR-0015). Note the unit is ms, while the
-/// stored/default guard values are seconds.
+/// Exposed so `GET /settings` can disclose a shadowed env var and compute the
+/// winning tier identically to [`guard_timeout_with`] (#129, ADR-0015).
 pub(crate) fn env_guard_timeout_ms() -> Option<u64> {
     std::env::var(GUARD_TIMEOUT_MS_OVERRIDE_ENV)
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
 }
 
-/// Run a guard command and classify the outcome.
-///
-/// `command` is run as `sh -c "<command>"` with CWD set to `target_repo`. The
-/// daemon environment is inherited and `PDO_TARGET_REPO` is injected.
-/// The command is bounded by `timeout`; exceeding it yields
+/// Run a guard command and classify the outcome. Exceeding `timeout` yields
 /// [`GuardResult::Error`] rather than blocking.
 pub(crate) async fn run_guard(command: &str, target_repo: &Path, timeout: Duration) -> GuardResult {
     let mut cmd = tokio::process::Command::new("sh");
@@ -171,9 +164,8 @@ pub(crate) async fn run_guard(command: &str, target_repo: &Path, timeout: Durati
     }
 }
 
-/// Await a stream-draining task (stdout or stderr) and decode it lossily.
-/// Returns empty on a join or read error so a guard with garbled output still
-/// yields a usable outcome.
+/// Decodes lossily and returns empty on a join error, so a guard with garbled
+/// output still yields a usable outcome.
 async fn collect_stream(task: Option<tokio::task::JoinHandle<Vec<u8>>>) -> String {
     match task {
         Some(handle) => match handle.await {
@@ -240,14 +232,11 @@ mod tests {
     async fn stderr_flood_returns_promptly_not_a_timeout() {
         // Regression for the latent deadlock (#244): stderr was piped but never
         // drained, so a guard flooding it past the ~64 KB pipe buffer blocked
-        // forever and was misclassified as a timeout `guard-error`. With the
-        // concurrent stderr drain it must return a Skip well under the timeout.
+        // until the timeout bound and was misclassified as a `guard-error`.
         let dir = std::env::temp_dir();
         let result = run_guard(
             "yes flood | head -c 200000 >&2; exit 1",
             &dir,
-            // A generous-but-finite timeout: pre-fix this deadlocks until the
-            // bound, post-fix it returns in milliseconds.
             Duration::from_secs(10),
         )
         .await;
@@ -256,7 +245,6 @@ mod tests {
                 stderr, exit_code, ..
             } => {
                 assert_eq!(exit_code, Some(1));
-                // Tail-capped to the 16 KB bound (+ marker), never unbounded.
                 assert!(
                     stderr.len() <= GUARD_CAPTURE_LIMIT_BYTES + TRUNCATION_MARKER.len(),
                     "stderr must be tail-capped, got {} bytes",
@@ -278,7 +266,6 @@ mod tests {
         // Unit care (#129, ADR-0015): stored is SECONDS, env is MILLISECONDS.
         let saved = std::env::var(GUARD_TIMEOUT_MS_OVERRIDE_ENV).ok();
 
-        // Default when nothing is set.
         std::env::remove_var(GUARD_TIMEOUT_MS_OVERRIDE_ENV);
         assert_eq!(
             guard_timeout_with(None),
@@ -313,10 +300,8 @@ mod tests {
 
     #[test]
     fn cap_tail_keeps_the_last_bytes_with_a_marker() {
-        // Short input passes through untouched.
         assert_eq!(cap_tail("short", 1024), "short");
 
-        // Long input keeps the tail and prefixes the marker.
         let s: String = (0..1000).map(|_| 'a').collect();
         let capped = cap_tail(&s, 100);
         assert!(capped.starts_with(TRUNCATION_MARKER));
@@ -340,8 +325,6 @@ mod tests {
     #[tokio::test]
     async fn long_running_command_times_out_with_error() {
         let dir = std::env::temp_dir();
-        // A command that outlives the timeout must be classified as an error,
-        // never block the caller.
         let result = run_guard("sleep 30", &dir, Duration::from_millis(200)).await;
         match result {
             GuardResult::Error { detail } => assert!(

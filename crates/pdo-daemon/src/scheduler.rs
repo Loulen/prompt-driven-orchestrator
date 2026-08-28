@@ -13,22 +13,19 @@ pub(crate) enum SchedulerAction {
         node_id: String,
         iter: i64,
     },
-    /// A **deliberate** halt: an edge to `End` carried a `reason:` (a `when:`
-    /// gate message telling the run to stop here). Terminal-but-resumable
-    /// (`RunHalted`) — the pipeline author's decision, not a runtime give-up.
+    /// A **deliberate** halt: an edge to `End` carried a `reason:`. Terminal-but-
+    /// resumable (`RunHalted`) — the pipeline author's decision, not a runtime
+    /// give-up.
     Halt {
         message: String,
     },
-    /// An **`unrouted`** convergence (ADR-0049): conditional routing suppressed
-    /// every path to `End`, or a bounded region exhausted with no matching exit
-    /// edge. The runtime cannot drive the run forward but did not fail it — it
-    /// parks `AwaitingUser` (`RunInterrupted`) with the diagnostic, so a human
-    /// routes it (e.g. from the Pipeline Manager) or reopens. Distinct from
-    /// [`SchedulerAction::Halt`], which stays a deliberate terminal halt.
+    /// An **`unrouted`** convergence (ADR-0049): the runtime cannot drive the run
+    /// forward but did not fail it — it parks `AwaitingUser` (`RunInterrupted`) so
+    /// a human routes it. Distinct from [`SchedulerAction::Halt`], which stays a
+    /// deliberate terminal halt.
     Interrupt {
-        /// Stable machine slug (#601): the `reason_code` the park event carries
-        /// alongside the prose, so the manager/UI branch on a code instead of
-        /// string-matching the sentence (e.g. `unrouted`, `region_exhausted`).
+        /// Stable machine slug so the manager/UI branch on a code instead of
+        /// string-matching the prose (e.g. `unrouted`, `region_exhausted`).
         reason_code: String,
         message: String,
     },
@@ -53,14 +50,13 @@ pub(crate) enum SchedulerAction {
         loop_node_id: String,
     },
     /// A `kind: collection` region resolved its `over` list and fans its entry
-    /// out, one lap per item (ADR-0011 / #269). The caller deposits `items` so
-    /// each lap reads its own item.
+    /// out, one lap per item (ADR-0011). The caller deposits `items` so each lap
+    /// reads its own item.
     CollectionStarted {
         region_id: String,
         entry: String,
-        /// Every member of the region, projected into `CollectionState` so the
-        /// transition guard can recognise a parallel item lap without reading
-        /// the pipeline file (#453).
+        /// Projected into `CollectionState` so the transition guard can recognise
+        /// a parallel item lap without reading the pipeline file.
         members: Vec<String>,
         total_items: i64,
         items: Vec<serde_yaml::Value>,
@@ -77,11 +73,9 @@ pub(crate) enum SchedulerAction {
 
 /// The `collection_started` event payload for a [`SchedulerAction::CollectionStarted`].
 ///
-/// Lives here, next to the producer, so the emitter (`lib::emit_collection_action`)
-/// and the seam test that replays the fan-out share ONE definition of the wire
-/// shape. The projection reads `members` back out to recognise a parallel item lap
-/// (#453); a test that hand-rolled the payload could drift from the emitter and go
-/// green while production stayed broken.
+/// Don't inline this wire shape in the emitter: the seam test that replays the
+/// fan-out would then hand-roll its own copy, drift from production, and stay
+/// green while the projection broke.
 ///
 /// Returns `None` for any other action.
 pub(crate) fn collection_started_payload(action: &SchedulerAction) -> Option<serde_json::Value> {
@@ -95,8 +89,6 @@ pub(crate) fn collection_started_payload(action: &SchedulerAction) -> Option<ser
         } => Some(serde_json::json!({
             "region_id": region_id,
             "entry": entry,
-            // #453: the region's shape, so the transition guard can tell a
-            // parallel item lap from an illegal concurrent iteration.
             "members": members,
             "total_items": total_items,
         })),
@@ -107,15 +99,10 @@ pub(crate) fn collection_started_payload(action: &SchedulerAction) -> Option<ser
 /// Bootstraps Loop nodes whose `in` port is fed by a Start node (or a node
 /// already completed) but whose first iteration has not yet been started.
 ///
-/// Returns a list of `LoopIterStarted{1}` plus `Spawn{body_target, 1}` actions
-/// for each such loop. The caller is responsible for emitting the events and
-/// spawning the body subgraph entry nodes.
-///
-/// This closes the gap between [`ready_nodes`] (which deliberately skips Loop
-/// nodes — they are not spawnable as tmux sessions) and the regular outgoing
-/// edge handling in [`evaluate_outgoing_edges_with_context`] (which never
-/// fires when the loop is the very first downstream of `Start`, because Start
-/// itself never "completes" in the scheduler's eyes).
+/// Closes the gap between [`ready_nodes`] (which deliberately skips Loop nodes —
+/// they are not spawnable as tmux sessions) and [`evaluate_outgoing_edges_with_context`]
+/// (which never fires when the loop is the first node downstream of `Start`,
+/// because `Start` never "completes" in the scheduler's eyes).
 pub(crate) fn seed_pending_loops(
     pipeline: &PipelineDef,
     run_state: &RunState,
@@ -199,9 +186,8 @@ pub(crate) fn evaluate_outgoing_edges_with_context(
     resolved_vars: &HashMap<String, serde_yaml::Value>,
     frontmatter_fields: &HashMap<String, serde_yaml::Value>,
 ) -> Vec<SchedulerAction> {
-    // Single-node callers (tests, var-update reprocessing) supply only the
-    // just-completed node's frontmatter. Seed the per-node map with it so
-    // convergence suppression can re-evaluate this producer's edges. Other
+    // Seed the per-node map with the completed node's own frontmatter, or
+    // convergence suppression cannot re-evaluate this producer's edges. Other
     // producers fall back to empty frontmatter (treated as live — conservative).
     let mut frontmatter_by_node: HashMap<String, HashMap<String, serde_yaml::Value>> =
         HashMap::new();
@@ -219,10 +205,8 @@ pub(crate) fn evaluate_outgoing_edges_with_context(
 /// Same as [`evaluate_outgoing_edges_with_context`] but with an explicit
 /// per-node frontmatter map, so convergence suppression (ADR-0011) can
 /// re-evaluate the conditional edges of *other* completed producers (e.g. the
-/// classifier feeding a suppressed `else` branch). This is THE canonical
-/// scheduler entry point: the daemon's event-driven handlers
-/// (`handle_node_completion`, `re_evaluate_after_command`) call it for each
-/// completed producer.
+/// classifier feeding a suppressed `else` branch). THE canonical scheduler entry
+/// point — call it per completed producer.
 pub(crate) fn evaluate_outgoing_edges_full(
     pipeline: &PipelineDef,
     run_state: &RunState,
@@ -239,14 +223,10 @@ pub(crate) fn evaluate_outgoing_edges_full(
         .map(|n| n.iter)
         .unwrap_or(1);
 
-    // #600 / ADR-0011: a `force_route` on this node short-circuits its `when:`
-    // edges entirely. The operator has declared the exit, so the scheduler spawns
-    // the target (or completes the run, if the target is `End`) and skips both the
-    // conditional routing below AND the `unrouted` detection — the whole point is
-    // to unstick a run wedged because a non-`PASS` verdict reached no live branch
-    // (FP #3). The route is folded from the log, so it re-decides identically on
-    // the next lap and after a reopen (FP #8). A forced route to a non-existent
-    // target is impossible: the handler validates both endpoints before appending.
+    // ADR-0011: a `force_route` short-circuits this node's `when:` edges AND the
+    // `unrouted` detection below — the point is to unstick a run wedged because no
+    // live branch matched. Endpoints are validated by the handler before append,
+    // so the target always exists.
     if let Some(target) = run_state.forced_routes.get(completed_node_id) {
         let end_node_id = pipeline
             .nodes
@@ -287,13 +267,10 @@ pub(crate) fn evaluate_outgoing_edges_full(
         .find(|n| n.node_type == NodeType::End)
         .map(|n| n.id.as_str());
 
-    // Conditional routing on edges (ADR-0011): for a non-Switch producer,
-    // evaluate the source node's outgoing edges in multi-match. Every edge whose
+    // Conditional routing on edges (ADR-0011), multi-match: every edge whose
     // `when:` is satisfied fires; an `else` edge fires iff no sibling on the same
-    // source port matched; an unconditional edge always fires. We compute the
-    // firing set up-front (keyed by index into `pipeline.edges`) and gate the
-    // loop on it. (Switch nodes keep their own port-based routing via
-    // `matched_port` for backward compatibility.)
+    // source port matched. Switch nodes keep their own port-based routing via
+    // `matched_port` for backward compatibility.
     let fired_indices: HashSet<usize> = if is_switch {
         // Switch routing is handled by `matched_port`; don't double-gate.
         HashSet::new()
@@ -307,7 +284,6 @@ pub(crate) fn evaluate_outgoing_edges_full(
         let edge_refs: Vec<&crate::pipeline::EdgeDef> = outgoing.iter().map(|(_, e)| *e).collect();
         let fired =
             edge_router::fired_edges(&edge_refs, frontmatter_fields, resolved_vars, source_iter);
-        // Map firing edges back to their global indices by identity.
         outgoing
             .iter()
             .filter(|(_, e)| fired.iter().any(|f| std::ptr::eq(*f, *e)))
@@ -326,20 +302,15 @@ pub(crate) fn evaluate_outgoing_edges_full(
             }
         }
 
-        // Skip edges whose conditional clause did not fire (non-Switch sources).
         if !is_switch && !fired_indices.contains(&edge_index) {
             continue;
         }
 
         let target_id = &edge.target.node;
 
-        // ── Collection region exit suppression (ADR-0011 / #269) ─────────────
-        //
-        // A member→non-member edge of a `collection` region is a BARRIER exit:
-        // it fires once, when every item lap has completed — never per-lap.
-        // The barrier sweep (`evaluate_collection_barrier`) owns that firing;
-        // letting the generic path (or the End shortcut above) act here would
-        // spawn downstream / complete the run after the FIRST item.
+        // A member→non-member edge of a `collection` region is a BARRIER exit,
+        // owned by `evaluate_collection_barrier`. Don't let the generic path act
+        // here: it would spawn downstream / complete the run after the FIRST item.
         if let Some(region) =
             crate::loop_region::collection_region_for_member(pipeline, completed_node_id)
         {
@@ -368,47 +339,28 @@ pub(crate) fn evaluate_outgoing_edges_full(
                 frontmatter_by_node,
                 resolved_vars,
             ) {
-                // ── `End` is a CONVERGENCE BARRIER, not first-past-the-post (#394) ──
-                //
-                // A flat parallel fan-out (`start→A→end`, `start→B→end`, with NO
-                // edge between the branches, no `Merge`, no `collection`) reaches
-                // this site with two independent edges into `End`. Firing
-                // `Complete` on the FIRST one flipped the WHOLE run to `completed`
-                // the instant the fast branch arrived — stranding the sibling
-                // branch `running` forever, with no supported way back (its late
-                // `pdo complete` → 409 "resume the run first"; `resume_run` is a
-                // no-op on a terminal run). Every OTHER join in the graph already
-                // waits on a barrier — a `Merge` gates on `check_all_upstream_
-                // completed`, a `collection` region on its lap barrier — and the
-                // completion guard the drivers own (`should_complete_run` /
-                // `all_nodes_completed`) requires the FULL node set. `End` was the
-                // lone exception. It now converges through the very same gate a
-                // `Merge` uses: complete only once EVERY inbound edge to `End` is
-                // resolved — its source completed, is the node that just completed,
-                // or is a dead (permanently-suppressed) branch, so a suppressed
-                // conditional path never stalls the run. The last live branch to
-                // reach `End` completes the run; each earlier arrival is a no-op.
+                // `End` is a CONVERGENCE BARRIER, not first-past-the-post: don't
+                // complete on the first inbound edge. In a flat parallel fan-out
+                // that flipped the whole run `completed` when the fast branch
+                // arrived, stranding the sibling `running` with no way back (its
+                // late `pdo complete` → 409, and `resume_run` is a no-op on a
+                // terminal run). Gate like a `Merge`: complete only once EVERY
+                // inbound edge is resolved (source completed, is the just-completed
+                // node, or is a dead branch — so a suppressed conditional path
+                // never stalls the run).
                 actions.push(SchedulerAction::Complete);
             }
-            // else: a sibling edge into `End` is still live (its source is running
-            // or not yet done). Suppress — the branch that resolves the LAST inbound
-            // edge will complete the run. `End` staying unreached keeps `is_node_dead`
-            // false, so the unrouted-convergence halt below does not misfire either.
+            // else: a sibling edge into `End` is still live. Suppressing keeps `End`
+            // unreached, so `is_node_dead` stays false and the unrouted-convergence
+            // check below does not misfire.
         } else if let Some(region) = crate::loop_region::bounded_region_reentered_by_edge(
             pipeline,
             completed_node_id,
             target_id,
         ) {
-            // ── Bounded loop REGION re-entry (ADR-0011 / #148) ────────────────
-            //
-            // The fired edge is a region back-edge (member -> entry): the
-            // region wants another lap. The region engine — not the generic
-            // forward-spawn path — governs this. While iter < max, advance the
-            // counter and re-spawn the entry once (coalesced). At max_iter with
-            // re-entry still requested, the region is *exhausted*: route an
-            // `iter >= max` exit edge if one matches, else emit the explicit
-            // "exhausted — unrouted" halt (never a silent stall, never an
-            // off-by-one spawn past the bound).
+            // Region back-edge (member -> entry): the region engine, not the
+            // generic forward-spawn path, governs re-entry — otherwise the entry
+            // would be spawned once per fired back-edge and past the bound.
             actions.extend(handle_region_reentry(
                 pipeline,
                 run_state,
@@ -423,13 +375,9 @@ pub(crate) fn evaluate_outgoing_edges_full(
             completed_node_id,
             target_id,
         ) {
-            // ── Collection region ENTRY (ADR-0011 / #269) ─────────────────────
-            //
-            // The fired edge enters a `collection` region from outside: the
-            // artifact's frontmatter carries the region's `over` list. The
-            // region engine — not the generic forward-spawn path — governs the
-            // spawn: it fans the entry out once per item (laps 1..=total), or
-            // fires the barrier immediately for an empty collection.
+            // Entry into a `collection` region from outside: the region engine,
+            // not the generic forward-spawn path, owns the spawn — it fans the
+            // entry out once per item of the frontmatter's `over` list.
             actions.extend(handle_collection_entry(
                 pipeline,
                 run_state,
@@ -488,16 +436,10 @@ pub(crate) fn evaluate_outgoing_edges_full(
                         target_id,
                         resolved_vars,
                     ) {
-                        // #601: a bounded region gets a `loop_states` entry from
-                        // lap 1. This edge enters the region from outside (source
-                        // is not a member, target is), so it is the region's first
-                        // lap; emit `LoopIterStarted{region, 1}` in the same batch
-                        // that spawns the entry, so "no loop_states entry" means
-                        // "no loop" and never "first lap" (ADR-0025 §4). Purely
-                        // additive to the generic spawn, guarded by the absent
-                        // loop state so re-processing this producer never
-                        // double-seeds. A member→member forward edge (source is a
-                        // member) is not an entry and is skipped by the helper.
+                        // A bounded region gets its `loop_states` entry from lap 1,
+                        // so "no loop_states entry" means "no loop" and never
+                        // "first lap" (ADR-0025 §4). The absent-loop-state guard is
+                        // what keeps re-processing this producer from double-seeding.
                         if let Some(region) = crate::loop_region::bounded_region_entered_by_edge(
                             pipeline,
                             completed_node_id,
@@ -532,22 +474,14 @@ pub(crate) fn evaluate_outgoing_edges_full(
         }
     }
 
-    // ── Explicit halt on unrouted convergence (ADR-0011, "jamais de stall
-    // silencieux", extended to Merge by the ADR-0006 addendum) ───────────────
+    // Explicit halt on unrouted convergence (ADR-0011, "jamais de stall
+    // silencieux"). A convergence whose branches are ALL dead is never spawned and
+    // becomes dead itself; the cascade can render `End` unreachable, and the run
+    // would sit `Running` forever. Park instead, so the state is diagnosable.
     //
-    // The edge-resolution barrier above lets a convergence node spawn on its
-    // *live* (fired) branches and skip *dead* (permanently-suppressed) ones. But
-    // a convergence whose branches are ALL dead never has an edge fire into it,
-    // so it is never spawned — it becomes a dead node too. Death propagates
-    // downstream: when the cascade renders `End` unreachable through every live
-    // path, the Run would otherwise sit `Running` forever. Detect that here and
-    // emit an explicit Halt instead, so the state is diagnosable ("unrouted")
-    // rather than a silent stall.
-    //
-    // We only consider halting when this completion produced no forward progress
-    // (no Spawn / Complete / Halt). If End is still reachable through any live
-    // path, `is_node_dead(End)` is false and we stay our hand — a Merge waiting
-    // on a still-running sibling is normal, not a stall.
+    // Only when this completion produced no forward progress: if `End` is still
+    // reachable through a live path, a Merge waiting on a running sibling is
+    // normal, not a stall.
     if !is_switch
         && !actions.iter().any(|a| {
             matches!(
@@ -569,10 +503,9 @@ pub(crate) fn evaluate_outgoing_edges_full(
                 &mut visiting,
             );
             if end_dead {
-                // AC4 (#600): don't just say "unrouted" — list this producer's
-                // candidate edges, each guard, whether it fired, and the value
-                // actually read for the fields it tests, so the operator sees why
-                // no branch reached End and where to `force_route`.
+                // Don't just say "unrouted": the operator needs each guard, whether
+                // it fired, and the value actually read, to know where to
+                // `force_route`.
                 let candidates = describe_candidate_edges(
                     pipeline,
                     completed_node_id,
@@ -597,30 +530,12 @@ pub(crate) fn evaluate_outgoing_edges_full(
     actions
 }
 
-/// Drives one re-entry of a bounded loop region (ADR-0011 / #148) when a member's
-/// back-edge fired. Delegates the decision to the pure region engine
-/// (`loop_region`):
-///
-/// - **NextLap**: emit `LoopIterStarted{region, iter+1}` (so the projection
-///   tracks the region counter in `loop_states`) and re-`Spawn` the region entry
-///   once at the next iter — even if several back-edges fired this lap, the
-///   engine coalesces to one (#108).
-/// - **Exhausted** (`iter >= max_iter` with re-entry still requested): consult
-///   `exhaustion_outcome`. `Routed` ⇒ `Spawn` each external target (or `Complete`
-///   if it is `End`); `Unrouted` ⇒ the explicit "exhausted — unrouted" `Halt` —
-///   the diagnosable state the Pipeline Manager routes (#152), never a silent
-///   stall and never an off-by-one spawn past the bound.
-///
-/// The region's live counter is read from `run_state.loop_states[region.id]`,
-/// defaulting to lap 1 before any iteration event has been projected.
 /// The bounded region's **effective** iteration cap: the live
-/// `set_region_max_iter` override (ADR-0011 / #600) if the operator raised it in
-/// flight, else the region's declared `max_iter` resolved from the pipeline
-/// (literal or `$var`, [`crate::loop_region::resolve_region_max_iter`]). Reading
-/// the override off `run_state` — folded from the append-only log — is what makes
-/// the raise **uniform** across a literal and a `$var` cap (FP #1) and durable
-/// across a reopen re-projection: the scheduler never re-reads the YAML for the
-/// bound once an override exists.
+/// `set_region_max_iter` override if the operator raised it in flight, else the
+/// declared `max_iter` resolved from the pipeline. Read the override off
+/// `run_state` (folded from the append-only log), never the YAML: that is what
+/// makes the raise uniform across a literal and a `$var` cap, and durable across a
+/// reopen re-projection.
 pub(crate) fn effective_region_max_iter(
     run_state: &RunState,
     region: &crate::pipeline::LoopRegion,
@@ -647,29 +562,21 @@ fn handle_region_reentry(
     let max_iter = effective_region_max_iter(run_state, region, resolved_vars);
     let region_loop_state = run_state.loop_states.get(region.id.as_str());
     let current_iter = region_loop_state.map(|ls| ls.current_iter).unwrap_or(1);
-    // #199: an ended region (`end_region` projected as `done`) never starts
-    // another lap — it routes its exit at the current iter, like exhaustion.
-    // #600: a `force_route` on the region is likewise a request to exit NOW — the
-    // operator has named the region's exit, so the region stops looping and routes
-    // there instead of running out its (possibly just-raised) cap.
+    // An ended region (`end_region` projected as `done`) never starts another lap —
+    // it routes its exit at the current iter, like exhaustion. A `force_route` on
+    // the region is likewise an exit-now request: stop looping rather than run out
+    // the (possibly just-raised) cap.
     let forced_region_route = run_state.forced_routes.get(region.id.as_str()).cloned();
     let ended = region_loop_state.is_some_and(|ls| ls.done) || forced_region_route.is_some();
 
-    // #626: a bounded region's back-edge advances the loop by ONE lap per
-    // completing member. In steady state exactly one member completes per pass,
-    // so the region counter sits at that member's own lap (`current_iter ==
-    // source_iter`) and the back-edge advances to the next. `reopen_run`,
-    // however, re-fires the outgoing edges of *every* settled-complete member in
-    // a single pass (`re_evaluate_after_command_inner`). When the two sides of a
-    // two-member loop are at different laps — the head already re-entered a later
-    // lap while the tail is a lap behind — the tail's back-edge represents a lap
-    // advance the region ALREADY took (`current_iter > source_iter`). Re-firing it
-    // spawns the entry a lap ahead of the frontier, forking the loop into two
-    // concurrent branches over the same worktree (the double-spawn of #626). The
-    // stale re-entry is inert: the frontier member's forward edge drives the sole
-    // legitimate resume. An `ended`/force-routed region still routes its exit —
-    // that is terminal routing, not a lap advance — so the guard scopes to the
-    // plain NextLap path only.
+    // Drop a back-edge from a member that lags the region counter
+    // (`current_iter > source_iter`): it represents a lap the region ALREADY took.
+    // `reopen_run` re-fires the outgoing edges of *every* settled-complete member
+    // in one pass, so a lagging member would spawn the entry a lap ahead of the
+    // frontier, forking the loop into two concurrent branches over the same
+    // worktree. The frontier member's forward edge drives the legitimate resume.
+    // An `ended`/force-routed region still routes its exit — terminal routing, not
+    // a lap advance — so the guard scopes to the plain NextLap path only.
     if !ended && forced_region_route.is_none() && current_iter > source_iter {
         return actions;
     }
@@ -693,7 +600,6 @@ fn handle_region_reentry(
                 iter,
                 max_iter,
             });
-            // Trust the engine's entry, falling back to the edge target.
             let entry = if entry.is_empty() {
                 entry_id.to_string()
             } else {
@@ -750,10 +656,8 @@ fn handle_region_reentry(
                     }
                 }
                 crate::loop_region::ExhaustionOutcome::Unrouted => {
-                    // AC4 (#600): enrich the region-exhaustion diagnostic with the
-                    // exit-edge candidates evaluated at the exhausted lap. Only the
-                    // just-completed member's frontmatter is in scope, so read values
-                    // are shown where the guard reads one of its fields.
+                    // Only the just-completed member's frontmatter is in scope, so
+                    // read values only appear where the guard reads one of its fields.
                     let exit_edges = describe_region_exit_edges(
                         pipeline,
                         region,
@@ -761,8 +665,6 @@ fn handle_region_reentry(
                         frontmatter_fields,
                         resolved_vars,
                     );
-                    // #601: every non-advancement carries a stable machine slug next
-                    // to the prose.
                     let (reason_code, head) = if ended {
                         (
                             "region_ended_unrouted",
@@ -802,17 +704,15 @@ fn handle_region_reentry(
     actions
 }
 
-/// Decides the iter for a generic forward spawn of `target_id` after
-/// `source_id` completed — or `None` when the target must not spawn
-/// (#199 / #195 / #210):
+/// Decides the iter for a generic forward spawn of `target_id` after `source_id`
+/// completed — or `None` when the target must not spawn:
 ///
-/// - never run → spawn at iter 1;
-/// - already ran → re-run ONLY when the fired edge closes an emergent cycle
-///   (the target reaches the source through forward edges), at `iter + 1`.
-///   A node reached only by forward edges is never re-spawned by
-///   re-evaluation — that is the "feeder dragged into a lap" bug;
+/// - never run → iter 1;
+/// - already ran → re-run ONLY when the fired edge closes an emergent cycle (the
+///   target reaches the source through forward edges), at `iter + 1`. Re-spawning
+///   a node reached only by forward edges is the "feeder dragged into a lap" bug;
 /// - a bounded-region member is never spawned past its effective `max_iter`;
-/// - a pure self-edge (source == target) is inert outside a region (#207).
+/// - a pure self-edge is inert outside a region.
 fn forward_spawn_iter(
     pipeline: &PipelineDef,
     run_state: &RunState,
@@ -837,24 +737,17 @@ fn forward_spawn_iter(
 
     let member_region = crate::loop_region::bounded_region_for_member(pipeline, target_id);
     if let Some(region) = member_region {
-        // #600: honour a live `set_region_max_iter` raise here too, or a member
-        // forward-spawn would still be capped at the YAML bound after the operator
-        // lifted it — the region head would re-enter but its body node would refuse
-        // the new lap.
+        // Honour a live `set_region_max_iter` raise here too: on the YAML bound,
+        // the region head would re-enter but its body node would refuse the new lap.
         let max = effective_region_max_iter(run_state, region, resolved_vars);
         if proposed > max {
             return None;
         }
 
-        // #626: a member→member forward edge inside a bounded region carries the
-        // source's output to the next member of the SAME lap — the target belongs
-        // one lap behind the source and this edge lifts it to the source's lap. At
-        // `reopen_run`, `re_evaluate_after_command_inner` re-fires every completed
-        // member's edges in one pass; if the target has already caught up to (or
-        // passed) the source's lap, this forward edge would re-spawn it a lap
-        // ahead of where the source's output feeds — the sibling of the #626
-        // double-spawn on the forward side. Fire only while the target is
-        // genuinely a lap behind the source it consumes from.
+        // A member→member forward edge lifts the target to the source's lap. Fire
+        // only while the target is genuinely a lap behind: `reopen_run` re-fires
+        // every completed member's edges in one pass, and a target that already
+        // caught up would be re-spawned a lap ahead of the source's output.
         if region.members.iter().any(|m| m == source_id) {
             let source_iter = run_state.nodes.get(source_id).map(|n| n.iter).unwrap_or(1);
             if run_state
@@ -940,7 +833,6 @@ fn handle_loop_input(
                 max_iter: resolve_max_iter(loop_node, resolved_vars),
             });
 
-            // Fire body subgraph entry nodes
             for edge in &pipeline.edges {
                 if edge.source.node == loop_node_id && edge.source.port == "body" {
                     actions.push(SchedulerAction::Spawn {
@@ -979,7 +871,7 @@ pub(crate) fn evaluate_loop_body_completion(
         None => return actions,
     };
 
-    // Break is unconditional termination — skip body completion check.
+    // Break is unconditional termination — skip the body completion check.
     if loop_state.break_received {
         actions.push(SchedulerAction::LoopDone {
             loop_node_id: loop_node_id.to_string(),
@@ -1025,7 +917,6 @@ pub(crate) fn evaluate_loop_body_completion(
             max_iter,
         });
 
-        // Re-fire body subgraph entry nodes
         for edge in &pipeline.edges {
             if edge.source.node == loop_node_id && edge.source.port == "body" {
                 actions.push(SchedulerAction::Spawn {
@@ -1061,20 +952,13 @@ fn fire_done_port(pipeline: &PipelineDef, loop_node_id: &str, actions: &mut Vec<
     }
 }
 
-/// Drives the ENTRY of a `kind: collection` region (ADR-0011 / #269) when an
-/// external edge fired into it. Delegates the decision to the pure region
-/// engine (`loop_region::collection_fanout`):
+/// Drives the ENTRY of a `kind: collection` region (ADR-0011) when an external
+/// edge fired into it. An empty collection still emits `CollectionEmpty` +
+/// `CollectionDone` and fires the barrier targets, so a vacuous region never
+/// stalls the run.
 ///
-/// - **Non-empty collection**: emit `CollectionStarted` (projected into
-///   `collection_states` so the barrier sweep can account laps) then `Spawn`
-///   the region entry once per item, at laps `1..=total`, in parallel.
-/// - **Empty collection**: emit `CollectionEmpty` + `CollectionDone` and fire
-///   the barrier targets immediately (`Complete` if a target is `End`) —
-///   vacuous barrier, zero item laps, never a silent stall.
-///
-/// Idempotent per region: once `collection_states[region.id]` exists the
-/// fan-out already happened (a second inbound edge re-firing must not double
-/// the laps) — mirrors the legacy ForEach `in`-port guard.
+/// Idempotent per region: once `collection_states[region.id]` exists the fan-out
+/// already happened, and a second inbound edge re-firing must not double the laps.
 fn handle_collection_entry(
     pipeline: &PipelineDef,
     run_state: &RunState,
@@ -1117,11 +1001,9 @@ fn handle_collection_entry(
     actions
 }
 
-/// Evaluates the BARRIER of a `kind: collection` region (ADR-0011 / #269): once
-/// every member has completed every lap `1..=total`, emit `CollectionDone` and
-/// fire the region's exits once (`Complete` if a target is `End`). The region
-/// twin of [`evaluate_foreach_body_completion`]; called from the lib.rs sweep
-/// after each node completion / re-evaluation, on fresh projected state.
+/// Evaluates the BARRIER of a `kind: collection` region (ADR-0011): once every
+/// member has completed every lap `1..=total`, emit `CollectionDone` and fire the
+/// region's exits once. Must be called on freshly projected state.
 pub(crate) fn evaluate_collection_barrier(
     pipeline: &PipelineDef,
     run_state: &RunState,
@@ -1159,9 +1041,6 @@ pub(crate) fn evaluate_collection_barrier(
     actions
 }
 
-/// Maps a collection region's barrier targets to actions: `Complete` for `End`,
-/// `Spawn { iter: 1 }` for everything else — the same exit shape as the legacy
-/// ForEach `done` port.
 fn collection_barrier_spawns(
     pipeline: &PipelineDef,
     region: &crate::pipeline::LoopRegion,
@@ -1194,19 +1073,10 @@ fn check_all_upstream_completed(
     frontmatter_by_node: &HashMap<String, HashMap<String, serde_yaml::Value>>,
     vars: &HashMap<String, serde_yaml::Value>,
 ) -> bool {
-    // Forward preconditions only (#194 / #210, preserving #172): a self-edge can
-    // never be satisfied before the node's own first run, and a bounded-region
-    // back-edge (member -> entry) is the region engine's concern
-    // (`handle_region_reentry`) — counting either as an upstream blocker
-    // makes the join unsatisfiable and stalls the run silently. Two forensic
-    // sources: #172 (entering a bounded loop from an external forward edge — the
-    // entry never spawned because its back-edge source sits downstream in the
-    // cycle), and run 9c8d123 (#194 — the loop-entry node never spawned, zero
-    // events for 8+ min). The sprint's region-engine check
-    // (`bounded_region_reentered_by_edge`) subsumes #172's edge-index exclusion
-    // and additionally drops self-edges (#207); the #172 regression tests
-    // (`external_forward_edge_spawns_bounded_loop_entry`,
-    // `bounded_loop_entry_then_forwards_to_second_member`) still guard this path.
+    // Forward preconditions only: a self-edge can never be satisfied before the
+    // node's own first run, and a bounded-region back-edge (member -> entry)
+    // belongs to `handle_region_reentry`. Counting either as an upstream blocker
+    // makes the join unsatisfiable and stalls the run silently.
     let upstream: HashSet<&str> = pipeline
         .edges
         .iter()
@@ -1224,10 +1094,9 @@ fn check_all_upstream_completed(
         .collect();
 
     upstream.iter().all(|src| {
-        // A collection-region member upstream (ADR-0011 / #269) is a BARRIER
-        // input: it counts as completed only once the whole region is done —
-        // a per-lap completion (or a stale `Completed` status mid-fan-out)
-        // must not satisfy a downstream join early.
+        // A collection-region member upstream is a BARRIER input: it counts as
+        // completed only once the whole region is done. A per-lap completion (or a
+        // stale `Completed` status mid-fan-out) must not satisfy the join early.
         if let Some(region) = crate::loop_region::collection_region_for_member(pipeline, src) {
             return run_state
                 .collection_states
@@ -1261,24 +1130,9 @@ fn check_all_upstream_completed(
     })
 }
 
-/// Returns `true` when `node_id` is **dead** for this run (decided model,
-/// ADR-0006 addendum): it has incoming edges and every one of them is dead —
-/// i.e. each producer has completed and the edge into `node_id` did not fire
-/// (its `when:` was false, or it is an `else` whose sibling matched), or the
-/// producer is itself dead. Death propagates upstream-to-downstream through this
-/// recursion: a node fed only by dead branches is dead, including a `Merge`
-/// whose `branches` are all dead, and including `End` itself (used to detect an
-/// unrouted convergence that must halt explicitly rather than stall silently).
-///
-/// Conservative on purpose: if any incoming edge is still *live* (its producer
-/// has not completed yet, or the edge fired, or the producer's outcome is not
-/// yet decided), the node is NOT dead and the convergence keeps waiting. A node
-/// already present in `run_state` (spawned at any status) is by definition not
-/// dead. A node with no incoming edges is a root and is likewise never dead.
-/// Renders a `serde_yaml` scalar as a short, human-readable token for the
-/// `unrouted` diagnostic — a bare string/number/bool, or a compact YAML flow for a
-/// mapping/sequence. Keeps the enriched message readable without dumping multi-line
-/// YAML into a run's `awaiting_reason`.
+/// Renders a `serde_yaml` scalar as a short token for the `unrouted` diagnostic:
+/// a compact YAML flow for a mapping/sequence, so multi-line YAML never lands in a
+/// run's `awaiting_reason`.
 fn yaml_token(v: &serde_yaml::Value) -> String {
     match v {
         serde_yaml::Value::Null => "null".to_string(),
@@ -1318,12 +1172,10 @@ fn when_fields(when: &serde_yaml::Value) -> Vec<String> {
     fields
 }
 
-/// Builds the enriched `unrouted` diagnostic for a completed node whose outgoing
-/// edges routed nowhere (ADR-0011 / #600, AC4): one line per candidate edge naming
-/// its target, its `when:`/`else` guard, whether it fired, and — crucially — the
-/// **value actually read** for each field the guard tests. This is what lets an
-/// operator see *why* no branch is live ("verdict=minor_changes, the edge wanted
-/// verdict in [PASS]") from the run state alone, without reading the daemon log.
+/// Builds the enriched `unrouted` diagnostic: one line per candidate edge with its
+/// guard, whether it fired, and the **value actually read** for each field the
+/// guard tests — so the operator sees why no branch is live from the run state
+/// alone, without reading the daemon log.
 fn describe_candidate_edges(
     pipeline: &PipelineDef,
     source_node_id: &str,
@@ -1344,8 +1196,7 @@ fn describe_candidate_edges(
             "(unconditional)".to_string()
         };
         let fired = fired_indices.contains(&idx);
-        // Name the read value for each field the guard tests, so the mismatch is
-        // legible ("read verdict=minor_changes"). `iter` reads the source's lap.
+        // `iter` reads the source's lap, not a frontmatter field.
         let reads: Vec<String> = edge
             .when
             .as_ref()
@@ -1385,11 +1236,11 @@ fn describe_candidate_edges(
     }
 }
 
-/// Builds the enriched exit-edge listing for an exhausted/ended bounded region
-/// (ADR-0011 / #600, AC4): one line per member→non-member edge with its guard,
-/// whether it fires at the exhausted lap (evaluated against the just-completed
-/// member's frontmatter, as [`crate::loop_region::exhaustion_outcome`] does), and
-/// the value read for each guard field. Names why the region has no live exit.
+/// Builds the exit-edge listing for an exhausted/ended bounded region: one line
+/// per member→non-member edge with its guard and whether it fires at the exhausted
+/// lap. Evaluated against the just-completed member's frontmatter, as
+/// [`crate::loop_region::exhaustion_outcome`] does — keep the two in step or the
+/// diagnostic will contradict the routing decision.
 fn describe_region_exit_edges(
     pipeline: &PipelineDef,
     region: &crate::pipeline::LoopRegion,
@@ -1455,6 +1306,15 @@ fn describe_region_exit_edges(
     }
 }
 
+/// Returns `true` when `node_id` is **dead** for this run (ADR-0006 addendum): it
+/// has incoming edges and every one of them is dead — its producer completed and
+/// the edge did not fire, or the producer is itself dead. Death propagates
+/// downstream, up to and including `End` (which is how an unrouted convergence is
+/// detected instead of stalling silently).
+///
+/// Conservative on purpose: any still-live incoming edge means NOT dead, so the
+/// convergence keeps waiting. A node present in `run_state`, or with no incoming
+/// edges, is never dead.
 fn is_node_dead(
     pipeline: &PipelineDef,
     run_state: &RunState,
@@ -1463,12 +1323,11 @@ fn is_node_dead(
     vars: &HashMap<String, serde_yaml::Value>,
     visiting: &mut HashSet<String>,
 ) -> bool {
-    // Already spawned (running / completed / failed / stopped): not dead.
     if run_state.nodes.contains_key(node_id) {
         return false;
     }
-    // Cycle guard: if we re-encounter a node mid-walk, do not let it prop up its
-    // own deadness. Treat the recursion as "not dead via this edge".
+    // Cycle guard: a node re-encountered mid-walk must not prop up its own
+    // deadness. Treat the recursion as "not dead via this edge".
     if !visiting.insert(node_id.to_string()) {
         return false;
     }
@@ -1479,13 +1338,11 @@ fn is_node_dead(
         .filter(|e| e.target.node == node_id)
         .collect();
 
-    // A root with no incoming edges is an entry point, never dead.
     if incoming.is_empty() {
         visiting.remove(node_id);
         return false;
     }
 
-    // The node is dead iff EVERY incoming edge is dead.
     let dead = incoming.iter().all(|edge| {
         edge_is_dead(
             pipeline,
@@ -1501,20 +1358,15 @@ fn is_node_dead(
     dead
 }
 
-/// True when `src` is a member of a bounded loop region that is **still
-/// iterating** at its just-completed lap `source_iter` (#620). "Still iterating"
-/// means a re-entry (back) edge from `src` fired this lap *and* the region has
-/// not reached its effective `max_iter` — so the loop will run at least one more
-/// lap, on which `src` completes again and its guarded exit edges can still fire.
+/// True when `src` is a member of a bounded loop region **still iterating** at its
+/// just-completed lap: a back-edge from `src` fired this lap and the region has not
+/// reached its effective `max_iter`.
 ///
-/// This is what [`edge_is_dead`] consults before pruning a member's exit edge: an
-/// exit that did not fire on lap N of a live loop is **not** permanently dead
-/// (unlike a plain either/or branch), because lap N+1 can make it fire. Only once
-/// the loop **exits** (no back-edge fired this lap — the loop is leaving) or
-/// **exhausts** (`source_iter >= max_iter`) is that exit settled and normal
-/// edge-death reasoning correct. Without this guard the resilience sweep confused
-/// "not yet reached" with "unreachable", auto-skipped a node hanging off a live
-/// loop's exit, and completed the run with a lap still in flight (#620).
+/// [`edge_is_dead`] must consult this before pruning a member's exit edge: an exit
+/// that did not fire on lap N of a live loop is not permanently dead, since lap N+1
+/// can fire it. Without the guard the sweep confuses "not yet reached" with
+/// "unreachable", auto-skips a node hanging off the loop's exit, and completes the
+/// run with a lap in flight.
 fn bounded_loop_still_iterating(
     pipeline: &PipelineDef,
     run_state: &RunState,
@@ -1532,7 +1384,6 @@ fn bounded_loop_still_iterating(
     if source_iter >= max_iter {
         return false;
     }
-    // A re-entry (member → region entry) edge fired this lap ⇒ the loop re-enters.
     fired.iter().any(|e| {
         crate::loop_region::bounded_region_reentered_by_edge(pipeline, src, &e.target.node)
             .is_some()
@@ -1540,15 +1391,12 @@ fn bounded_loop_still_iterating(
 }
 
 /// Is a single incoming `edge` **dead** — permanently unable to deliver its
-/// artifact (ADR-0011)? Factored out of [`is_node_dead`] so the reachability
-/// auto-skip (#600 / #589) can reason per required-input port, not only per whole
-/// node. An edge is dead when its producer completed and the edge did not fire, or
-/// when the producer never ran and is itself dead (recursion, cycle-guarded by
-/// `visiting`). A producer still running (outcome undecided) or a Switch producer
-/// (retired, routes by port) keeps the edge live — we keep waiting rather than
-/// skip. A producer that is a **live bounded-loop member** likewise keeps its
-/// non-firing exit edge live (#620): the loop can still fire it on a later lap —
-/// see [`bounded_loop_still_iterating`].
+/// artifact (ADR-0011)? Separate from [`is_node_dead`] so the reachability
+/// auto-skip can reason per required-input port, not only per whole node.
+///
+/// Live (keep waiting rather than skip) when the producer is still running, is a
+/// Switch (routes by port), or is a still-iterating bounded-loop member — see
+/// [`bounded_loop_still_iterating`].
 fn edge_is_dead(
     pipeline: &PipelineDef,
     run_state: &RunState,
@@ -1559,22 +1407,18 @@ fn edge_is_dead(
 ) -> bool {
     let src = edge.source.node.as_str();
     let producer = pipeline.nodes.iter().find(|n| n.id == src);
-    // #620: a **skipped** producer counts as completed here. It wrote an empty
-    // output and its (non-firing) edges must still be evaluated for deadness — if
-    // it did not count, control would fall to the "spawned but not completed" arm
-    // and wrongly keep every one of its edges live, hanging any downstream join /
-    // `End` on a producer that will never run.
+    // A **skipped** producer must count as completed: otherwise control falls to
+    // the "spawned but not completed" arm, keeps all its edges live, and hangs any
+    // downstream join / `End` on a producer that will never run.
     let producer_completed = run_state
         .nodes
         .get(src)
         .is_some_and(|n| n.status.is_settled_complete());
 
     if producer_completed {
-        // The producer has run: this edge is dead only if it did NOT fire.
-        // Recompute the firing set from the producer's recorded frontmatter.
-        // Switch producers route by port; we conservatively treat their
-        // edges as live (Switch is being retired by ADR-0011 and is not part
-        // of the conditional-edge convergence path).
+        // Switch producers route by port, not by `when:`; treat their edges as
+        // live (Switch is being retired by ADR-0011 and is outside the
+        // conditional-edge convergence path).
         let is_switch = producer.is_some_and(|n| n.node_type == NodeType::Switch);
         if is_switch {
             return false; // live: keep waiting
@@ -1592,22 +1436,14 @@ fn edge_is_dead(
         if this_edge_fired {
             return false; // live: the edge fired
         }
-        // #620: an exit that did not fire on this lap of a still-iterating bounded
-        // loop is NOT dead — a later lap can still make it fire. Keep it live so a
-        // node hanging off the loop's exit is never auto-skipped mid-flight and the
-        // run is not completed with a lap in flight.
         if bounded_loop_still_iterating(pipeline, run_state, src, source_iter, &fired, vars) {
             return false;
         }
-        // Dead: this edge did not fire and the loop (if any) has settled.
         true
     } else if run_state.nodes.contains_key(src) {
-        // Producer spawned but not completed (running / awaiting / failed):
-        // outcome not yet decided — edge is still live.
+        // Spawned but not settled: outcome undecided, so the edge is still live.
         false
     } else {
-        // Producer never spawned: this edge is dead only if the producer is
-        // itself dead (recurse).
         is_node_dead(
             pipeline,
             run_state,
@@ -1620,24 +1456,16 @@ fn edge_is_dead(
 }
 
 /// Nodes that are **structurally unreachable** and must be auto-skipped so the run
-/// does not hang waiting on an input that can never arrive (ADR-0011 / #589 / #600,
-/// AC7). Returns `(node_id, reason)` — the reason lands in the skip event so the
-/// operator sees *why* the node was skipped (ADR-0049 observability).
+/// does not hang waiting on an input that can never arrive (ADR-0011). Returns
+/// `(node_id, reason)`; the reason lands in the skip event (ADR-0049).
 ///
-/// A never-started node qualifies when either:
-///   (a) **every** incoming edge is dead — its producing branch was not taken
-///       (an either/or where the other branch fired), so nothing will ever spawn
-///       it; or
-///   (b) it declares a `required: true` input port and **every** edge feeding that
-///       port is dead — a required input that will never come, even if the node has
-///       other live inputs.
+/// A never-started node qualifies when either (a) every incoming edge is dead, or
+/// (b) it declares a `required: true` input port whose every feeding edge is dead —
+/// even if the node has other live inputs.
 ///
 /// `Start`/`End` and the structural `Loop`/`Switch`/`Merge` routers are never
 /// auto-skipped here: `End`-unreachability is the `unrouted` convergence path, and a
-/// `Merge` keeps its ADR-0006 **edge-centred barrier** (a mix of live/dead branches
-/// fires on the live ones; an all-dead `Merge` renders `End` unreachable and parks
-/// `unrouted`). Auto-skip is for a plain producer node whose required input arrives
-/// only on a branch that was not taken — exactly the FP #6 either/or hang.
+/// `Merge` keeps its ADR-0006 edge-centred barrier.
 pub(crate) fn unreachable_nodes(
     pipeline: &PipelineDef,
     run_state: &RunState,
@@ -1646,7 +1474,6 @@ pub(crate) fn unreachable_nodes(
 ) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for node in &pipeline.nodes {
-        // Only never-started, non-structural producer nodes are candidates.
         if run_state.nodes.contains_key(node.id.as_str()) {
             continue;
         }
@@ -1661,7 +1488,7 @@ pub(crate) fn unreachable_nodes(
             continue; // an entry point is never structurally dead
         }
 
-        // Rule (a): the whole node is dead (every incoming edge dead).
+        // Rule (a).
         let mut visiting = HashSet::new();
         if is_node_dead(
             pipeline,
@@ -1682,9 +1509,7 @@ pub(crate) fn unreachable_nodes(
             continue;
         }
 
-        // Rule (b): a declared `required` input port whose feeding edges are ALL
-        // dead. Only meaningful for a node with declared input ports (a structural
-        // node); an emergent-input node declares none and is covered by rule (a).
+        // Rule (b). An emergent-input node declares no ports and is covered by (a).
         for port in node.inputs.iter().filter(|p| p.required) {
             let feeders: Vec<&crate::pipeline::EdgeDef> = pipeline
                 .edges
@@ -2109,8 +1934,6 @@ mod tests {
         assert!(ready.is_empty());
     }
 
-    // --- evaluate_outgoing_edges ---
-
     #[test]
     fn unconditional_edge_spawns_target() {
         let pipeline = PipelineDef {
@@ -2213,14 +2036,9 @@ mod tests {
         assert_eq!(actions, vec![SchedulerAction::Complete]);
     }
 
-    /// #394 regression: `End` is a convergence barrier, not first-past-the-post.
-    ///
-    /// Two independent parallel branches converge on `End` (`a→end`, `b→end`) with
-    /// no edge between them and no `Merge`/`collection`. When the fast branch `a`
-    /// completes while `b` is still running, the run MUST NOT complete — doing so
-    /// stranded `b` `running` forever (its late `pdo complete` → 409, `resume_run`
-    /// → no-op). The run completes only once the slow branch `b` also finishes and
-    /// every inbound edge to `End` is resolved.
+    /// `End` is a convergence barrier, not first-past-the-post: two parallel
+    /// branches converge on `End` and the fast one completing must NOT complete the
+    /// run, which stranded the sibling `running` forever.
     #[test]
     fn parallel_fanout_to_end_waits_for_the_slow_sibling() {
         let pipeline = PipelineDef {
@@ -3060,8 +2878,6 @@ mod tests {
         );
     }
 
-    // --- Switch node tests ---
-
     fn make_switch_node(id: &str, branch_outputs: Vec<Port>) -> NodeDef {
         NodeDef {
             id: id.into(),
@@ -3263,8 +3079,6 @@ mod tests {
         );
     }
 
-    // --- Inline Switch evaluation (issue #118) ---
-
     #[test]
     fn upstream_completion_evaluates_switch_inline() {
         // upstream → sw → downstream
@@ -3314,7 +3128,6 @@ mod tests {
             &fm,
         );
 
-        // Switch should be evaluated inline: SwitchRouted emitted
         assert!(
             actions.contains(&SchedulerAction::SwitchRouted {
                 node_id: "sw".into(),
@@ -3322,7 +3135,6 @@ mod tests {
             }),
             "expected SwitchRouted, got {actions:?}"
         );
-        // Downstream of the matched branch should be spawned
         assert!(
             actions.contains(&SchedulerAction::Spawn {
                 node_id: "pass-handler".into(),
@@ -3330,14 +3142,12 @@ mod tests {
             }),
             "expected Spawn pass-handler, got {actions:?}"
         );
-        // No Spawn for the Switch node itself
         assert!(
             !actions
                 .iter()
                 .any(|a| matches!(a, SchedulerAction::Spawn { node_id, .. } if node_id == "sw")),
             "Switch must NOT be spawned, got {actions:?}"
         );
-        // Non-matched branch must NOT be spawned
         assert!(
             !actions.iter().any(
                 |a| matches!(a, SchedulerAction::Spawn { node_id, .. } if node_id == "default-handler")
@@ -3675,7 +3485,6 @@ mod tests {
 
         let mut state = empty_run_state();
         state.nodes.insert("a".into(), completed_node("a"));
-        // b is still running
         state.nodes.insert("b".into(), running_node("b"));
 
         let fm: HashMap<String, serde_yaml::Value> =
@@ -3729,7 +3538,6 @@ mod tests {
                 .into_iter()
                 .collect();
 
-        // First evaluation: clause matches → routes to "pass"
         let pipeline_v1 = make_pipeline_with_clause("verdict: { eq: PASS }");
         let actions_v1 = evaluate_outgoing_edges_with_context(
             &pipeline_v1,
@@ -3763,8 +3571,6 @@ mod tests {
             "v2 (edited clause) should route to default"
         );
     }
-
-    // --- Loop node tests ---
 
     fn make_loop_node(id: &str, max_iter: i64) -> NodeDef {
         NodeDef {
@@ -3856,7 +3662,6 @@ mod tests {
 
         let state = empty_run_state();
         let ready = ready_nodes(&pipeline, &state);
-        // Only entry is ready; loop1 is skipped, worker waits for loop1
         assert_eq!(ready, vec!["entry"]);
     }
 
@@ -4092,17 +3897,9 @@ mod tests {
 
     #[test]
     fn body_to_break_edge_stops_loop_at_iter_1_when_state_is_refreshed() {
-        // Loop.body → impl → Loop.break (no switch — every body completion
-        // unconditionally fires break). The orchestration in
-        // lib.rs::handle_node_completion runs two passes against the same
-        // RunState. If pass 2 sees the LoopBreakReceived just emitted by
-        // pass 1, the loop must terminate at iter 1.
-        //
-        // Regression: before the reload_run_state fix in lib.rs, pass 2 ran
-        // against a stale snapshot where break_received=false and wrongly
-        // advanced to iter 2. This test pins down the contract: when the
-        // dispatcher correctly re-projects between passes, evaluate_loop_body_completion
-        // sees break_received=true and emits LoopDone (not LoopIterStarted{2}).
+        // Loop.body → impl → Loop.break. `handle_node_completion` runs two passes
+        // against the same RunState; when it re-projects between them, pass 2 sees
+        // break_received=true and emits LoopDone, not LoopIterStarted{2}.
         let pipeline = PipelineDef {
             name: "body-to-break".into(),
             version: None,
@@ -4137,7 +3934,6 @@ mod tests {
             .nodes
             .insert("impl".into(), completed_node_iter("impl", 1));
 
-        // Pass 1: outgoing edges of impl emit LoopBreakReceived.
         let pass1 = evaluate_outgoing_edges(&pipeline, &state, "impl");
         assert!(
             pass1.contains(&SchedulerAction::LoopBreakReceived {
@@ -4146,8 +3942,7 @@ mod tests {
             "expected LoopBreakReceived in pass 1, got {pass1:?}"
         );
 
-        // Mirror the projection of LoopBreakReceived (event_log.rs:395-403).
-        // In production, lib.rs::handle_node_completion achieves the same by
+        // Mirror the projection of LoopBreakReceived; production does this by
         // calling reload_run_state between passes.
         for action in &pass1 {
             if let SchedulerAction::LoopBreakReceived { loop_node_id } = action {
@@ -4157,7 +3952,6 @@ mod tests {
             }
         }
 
-        // Pass 2: body completion check with refreshed state.
         let pass2 = evaluate_loop_body_completion(&pipeline, &state, "loop1", &HashMap::new());
         assert!(
             pass2.contains(&SchedulerAction::LoopDone {
@@ -4175,11 +3969,8 @@ mod tests {
 
     #[test]
     fn body_to_break_with_stale_state_wrongly_advances_iter() {
-        // This pins down the *bug shape* the reload_run_state fix prevents.
-        // If the dispatcher fails to refresh the RunState between passes,
-        // evaluate_loop_body_completion still observes break_received=false
-        // and emits LoopIterStarted{iter=2}. Catching this in CI ensures any
-        // future regression of the orchestration contract is loud.
+        // The bug shape the reload_run_state fix prevents: without a refresh
+        // between passes, break_received stays false and the loop wrongly advances.
         let pipeline = PipelineDef {
             name: "body-to-break-stale".into(),
             version: None,
@@ -4260,7 +4051,6 @@ mod tests {
                 done: false,
             },
         );
-        // impl done but reviewer still running
         state.nodes.insert("impl".into(), completed_node("impl"));
         state
             .nodes
@@ -4330,8 +4120,6 @@ mod tests {
             "break_received must fire done port to spawn downstream, got {actions:?}"
         );
     }
-
-    // --- seed_pending_loops tests ---
 
     fn make_start_node(id: &str) -> NodeDef {
         NodeDef {
@@ -4549,8 +4337,6 @@ mod tests {
             iter: 1,
         }));
     }
-
-    // --- Collection region live dispatch (ADR-0011 / #269) ---
 
     fn collection_region(id: &str, members: &[&str], over: &str) -> crate::pipeline::LoopRegion {
         crate::pipeline::LoopRegion {
@@ -4967,12 +4753,8 @@ mod tests {
         assert!(ready.contains(&"sink".to_string()));
     }
 
-    // --- Layer 3a: integration test — parse YAML + schedule (#65 → #269) ---
-    //
-    // The ex-ForEach integration coverage, migrated to the collection-region
-    // model: parse a `loops: {kind: collection}` YAML, then drive the live
-    // dispatch end-to-end (fan-out on a typed upstream / empty on a missing
-    // `over` field).
+    // Integration: parse a `loops: {kind: collection}` YAML, then drive the live
+    // dispatch end-to-end (fan-out on a typed upstream / empty on a missing `over`).
 
     #[test]
     fn integration_collection_over_issues_with_typed_upstream() {
@@ -5156,13 +4938,8 @@ loops:
         );
     }
 
-    // ── Bounded loop REGION iteration (ADR-0011 / #148) ──────────────────────
-    //
-    // The bounded-region review loop migrated from Loop+Switch: the body is the
-    // `loops:` region [impl, rev]; routing lives on the edges (rev -> end WHEN
-    // verdict in [PASS], rev -> impl ELSE). These tests pin the scheduler's
-    // runtime wiring for region iteration — the seam the L5 manager-unstick
-    // scenario exercises and which had no daemon-level coverage.
+    // Bounded-region review loop: body is the `loops:` region [impl, rev], routing
+    // lives on the edges (rev -> end WHEN verdict in [PASS], rev -> impl ELSE).
 
     fn migrated_review_loop_pipeline(max_iter: i64) -> PipelineDef {
         PipelineDef {
@@ -5265,13 +5042,10 @@ loops:
         );
     }
 
-    // ── #626: reopen of a bounded loop must not double-spawn both members ─────
-    //
-    // `re_evaluate_after_command_inner` re-fires the outgoing edges of EVERY
-    // settled-complete member in a single pass. The three tests below drive that
-    // exact sequence (evaluate each completed member, collect all spawns) and
-    // assert the loop resumes at ONE alternation point, never two branches racing
-    // over the same worktree.
+    // Reopen must not double-spawn both members. `re_evaluate_after_command_inner`
+    // re-fires EVERY settled-complete member's edges in one pass; the tests below
+    // drive that sequence and assert the loop resumes at ONE alternation point,
+    // never two branches racing over the same worktree.
 
     /// Re-fire every settled-complete member's edges, as the reopen re-drive does.
     fn reopen_spawns(pipeline: &PipelineDef, state: &RunState) -> Vec<(String, i64)> {
@@ -5539,13 +5313,9 @@ loops:
         );
     }
 
-    // ── Canonical upstream preconditions (#194 / #210) ───────────────────────
-    //
-    // A forward spawn's preconditions consider only *forward* edges. A
-    // self-edge can never be satisfied before the node's own first run; a
-    // region back-edge belongs to the region engine (`handle_region_reentry`).
-    // Counting either as an upstream blocker reproduces the forensic
-    // run-9c8d123 stall: zero events, run sits Running forever.
+    // A forward spawn's preconditions consider only *forward* edges. Counting a
+    // self-edge or a region back-edge as an upstream blocker reproduces the
+    // forensic stall: zero events, run sits Running forever.
 
     #[test]
     fn self_edge_is_not_an_upstream_precondition() {
@@ -5624,8 +5394,6 @@ loops:
              its back-edge, got {actions:?}"
         );
     }
-
-    // ── Region closure (#199 / #210) ─────────────────────────────────────────
 
     fn region_state(current_iter: i64, max_iter: i64, done: bool) -> crate::event_log::LoopState {
         crate::event_log::LoopState {
@@ -5711,7 +5479,6 @@ loops:
             .loop_states
             .insert("review_loop".into(), region_state(3, 3, true));
 
-        // Re-evaluation pass replays the feeder's outgoing edges.
         let actions = evaluate_outgoing_edges_full(
             &pipeline,
             &state,
@@ -5764,7 +5531,6 @@ loops:
             .nodes
             .insert("griller".into(), completed_node_iter("griller", 1));
 
-        // Re-evaluation replays start's outgoing edges; griller already ran.
         let actions = evaluate_outgoing_edges_full(
             &pipeline,
             &state,
@@ -6020,8 +5786,6 @@ loops:
         );
     }
 
-    // ── #600: live region cap override, force_route, reachability auto-skip ────
-
     fn region(id: &str, members: &[&str], max_iter: i64) -> crate::pipeline::LoopRegion {
         crate::pipeline::LoopRegion {
             id: id.into(),
@@ -6272,14 +6036,10 @@ loops:
         );
     }
 
-    // ── #620: a not-yet-reached node off a LIVE bounded loop is not "unreachable" ──
-    //
-    // The `simple-bugfix` shape: a bounded loop `{implementer, tester}` whose
-    // reviewer either passes (exit `tester -> ship` when Verdict == Pass) or fails
-    // (else back-edge `tester -> implementer`, another lap). `ship` hangs off the
-    // loop's exit. When lap 1 fails, the loop re-enters — `ship` is simply not
-    // reached YET, NOT structurally unreachable. The resilience sweep must leave it
-    // alone; auto-skipping it (empty output) completed the run with a lap in flight.
+    // A not-yet-reached node off a LIVE bounded loop is not "unreachable": `ship`
+    // hangs off the loop's exit, and when lap 1 fails the loop re-enters. The
+    // resilience sweep must leave it alone; auto-skipping it (empty output)
+    // completed the run with a lap in flight.
 
     /// start -> implementer; implementer -> tester; tester -> ship WHEN Verdict in
     /// [Pass] (loop exit); tester -> implementer ELSE (back-edge). One bounded

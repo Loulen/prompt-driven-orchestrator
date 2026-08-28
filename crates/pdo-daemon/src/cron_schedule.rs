@@ -1,10 +1,9 @@
 //! Pure cron scheduling: parse a 5-field cron expression and compute the next
-//! fire time strictly after a given instant, in the local timezone.
+//! fire time strictly after a given instant.
 //!
-//! Scope (per CONTEXT.md → *Trigger* / ADR-0012): standard 5-field Unix cron
+//! Scope (CONTEXT.md → *Trigger* / ADR-0012): standard 5-field Unix cron
 //! (`minute hour day-of-month month day-of-week`), minute resolution, no
-//! seconds and no year field. No I/O — the public entry point takes a `now`
-//! and returns the next matching local datetime.
+//! seconds and no year field.
 
 use chrono::{DateTime, Datelike, Duration, SecondsFormat, TimeZone, Timelike, Utc};
 
@@ -22,7 +21,6 @@ pub(crate) struct CronSchedule {
     dow_restricted: bool,
 }
 
-/// Error parsing a cron expression.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum CronError {
     #[error("cron expression must have exactly 5 fields, got {0}")]
@@ -32,8 +30,6 @@ pub(crate) enum CronError {
 }
 
 impl CronSchedule {
-    /// Parse a standard 5-field cron expression
-    /// (`minute hour day-of-month month day-of-week`).
     pub(crate) fn parse(expr: &str) -> Result<Self, CronError> {
         let fields: Vec<&str> = expr.split_whitespace().collect();
         if fields.len() != 5 {
@@ -63,7 +59,6 @@ impl CronSchedule {
     /// (e.g. an impossible expression like Feb 30) — callers treat that as
     /// "never fires".
     pub(crate) fn next_fire_after<Tz: TimeZone>(&self, now: DateTime<Tz>) -> Option<DateTime<Tz>> {
-        // Start from the next whole minute strictly after `now`.
         let mut candidate = now
             .with_second(0)?
             .with_nanosecond(0)?
@@ -198,8 +193,6 @@ mod tests {
     use super::*;
     use chrono::TimeZone;
 
-    /// `every minute` (`* * * * *`) advances to the next whole minute strictly
-    /// after `now`, dropping sub-minute components.
     #[test]
     fn every_minute_advances_to_next_minute() {
         let sched = CronSchedule::parse("* * * * *").expect("valid cron");
@@ -215,8 +208,6 @@ mod tests {
         assert_eq!(next, expected);
     }
 
-    /// `daily at 09:00` (`0 9 * * *`) rolls forward to tomorrow when `now` is
-    /// already past today's slot.
     #[test]
     fn daily_at_nine_rolls_to_next_day() {
         let sched = CronSchedule::parse("0 9 * * *").expect("valid cron");
@@ -226,7 +217,6 @@ mod tests {
         assert_eq!(next, tz.with_ymd_and_hms(2026, 6, 7, 9, 0, 0).unwrap());
     }
 
-    /// When `now` is before today's daily slot, it fires today.
     #[test]
     fn daily_at_nine_fires_today_when_before_slot() {
         let sched = CronSchedule::parse("0 9 * * *").expect("valid cron");
@@ -236,7 +226,6 @@ mod tests {
         assert_eq!(next, tz.with_ymd_and_hms(2026, 6, 6, 9, 0, 0).unwrap());
     }
 
-    /// `every 15 min` (`*/15 * * * *`) lands on the next quarter-hour boundary.
     #[test]
     fn every_fifteen_minutes_lands_on_next_quarter() {
         let sched = CronSchedule::parse("*/15 * * * *").expect("valid cron");
@@ -246,7 +235,6 @@ mod tests {
         assert_eq!(next, tz.with_ymd_and_hms(2026, 6, 6, 10, 30, 0).unwrap());
     }
 
-    /// A `*/15` slot at :45 rolls into the next hour at :00.
     #[test]
     fn every_fifteen_minutes_rolls_into_next_hour() {
         let sched = CronSchedule::parse("*/15 * * * *").expect("valid cron");
@@ -256,8 +244,7 @@ mod tests {
         assert_eq!(next, tz.with_ymd_and_hms(2026, 6, 6, 11, 0, 0).unwrap());
     }
 
-    /// Day-of-week field (`0 9 * * 1` = Mondays at 09:00) skips to the next
-    /// matching weekday. 2026-06-06 is a Saturday; next Monday is 2026-06-08.
+    /// 2026-06-06 is a Saturday; the next Monday is 2026-06-08.
     #[test]
     fn day_of_week_skips_to_next_matching_weekday() {
         let sched = CronSchedule::parse("0 9 * * 1").expect("valid cron");
@@ -267,7 +254,6 @@ mod tests {
         assert_eq!(next, tz.with_ymd_and_hms(2026, 6, 8, 9, 0, 0).unwrap());
     }
 
-    /// Sunday is both `0` and `7`.
     #[test]
     fn day_of_week_seven_is_sunday() {
         let sched = CronSchedule::parse("0 0 * * 7").expect("valid cron");
@@ -278,7 +264,6 @@ mod tests {
         assert_eq!(next, tz.with_ymd_and_hms(2026, 6, 7, 0, 0, 0).unwrap());
     }
 
-    /// Crossing a year boundary: `0 0 1 1 *` (midnight Jan 1) from December.
     #[test]
     fn rolls_across_year_boundary() {
         let sched = CronSchedule::parse("0 0 1 1 *").expect("valid cron");
@@ -288,8 +273,6 @@ mod tests {
         assert_eq!(next, tz.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap());
     }
 
-    /// `now` exactly on a matching minute fires the *next* slot, never `now`
-    /// itself (strictly-after contract).
     #[test]
     fn strictly_after_skips_the_current_matching_minute() {
         let sched = CronSchedule::parse("* * * * *").expect("valid cron");
@@ -299,7 +282,6 @@ mod tests {
         assert_eq!(next, tz.with_ymd_and_hms(2026, 6, 6, 10, 31, 0).unwrap());
     }
 
-    /// An impossible expression (Feb 30) never fires: `None` within the horizon.
     #[test]
     fn impossible_expression_never_fires() {
         let sched = CronSchedule::parse("0 0 30 2 *").expect("parses fine");
@@ -337,8 +319,6 @@ mod tests {
         assert_eq!(next.day(), 25);
     }
 
-    /// `next_fire_utc` stringifies to canonical UTC millis (`…Z`) — the single
-    /// stringification point (#372, invariant #222).
     #[test]
     fn next_fire_utc_formats_canonical_utc_millis() {
         let sched = CronSchedule::parse("* * * * *").expect("valid cron");
@@ -351,8 +331,6 @@ mod tests {
         assert_eq!(next, "2026-06-06T10:31:00.000Z");
     }
 
-    /// An impossible expression (Feb 30) yields `None` — the ADVANCE arms of the
-    /// recompute matrix turn that into a "clear / stops firing".
     #[test]
     fn next_fire_utc_is_none_for_impossible_expression() {
         let sched = CronSchedule::parse("0 0 30 2 *").expect("parses fine");

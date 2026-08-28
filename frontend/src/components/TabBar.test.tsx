@@ -64,7 +64,6 @@ describe("TabBar context menu (#342)", () => {
     render(<TabBar />);
     rightClickTab("c");
     expect(screen.getByTestId("tab-ctx-close-right")).toBeDisabled();
-    // Re-open on a non-last tab.
     fireEvent.keyDown(document, { key: "Escape" });
     rightClickTab("a");
     expect(screen.getByTestId("tab-ctx-close-right")).not.toBeDisabled();

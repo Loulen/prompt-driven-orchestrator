@@ -4,41 +4,30 @@
 //! cumulative cost from its session journal. Unknown harnesses retain their
 //! executions and an absence reason without inventing a zero cost.
 //!
-//! ## Two forms, ventilated by harness (#615, ADR-0052)
+//! ## Two forms, ventilated by harness (ADR-0052)
 //!
-//! That transcript-derived path is `claude`'s — a **derived** cost. A second
-//! first-party harness, `copilot`, counts its own cost and PDO converts it by a
-//! **published constant** ([`crate::copilot_journal`]) — a **reported** cost, read
-//! by session identity, never through the price table (so it can never flag an
-//! unpriced model). [`run_cost_or_absence`] pairs the two into one summable dollar
-//! total that *says* itself per harness (`CostStat::by_harness`): "X via `copilot`,
-//! Y via `claude`". A harness with no cost source at all (`opencode`) still makes
-//! the whole aggregate "—" with a reason (never `$0`), as before — but only the
-//! **total** goes: the per-harness slices are computed and carried alongside the
-//! absence, so a Run mixing `opencode` with instrumented harnesses still says where
-//! its known dollars came from (#617 FP, ADR-0052 §3).
+//! `claude`'s transcript path is a **derived** cost; `copilot` counts its own and
+//! PDO converts it by a published constant — a **reported** cost, read by session
+//! identity, never through the price table (so it can never flag an unpriced
+//! model). A harness with no cost source at all (`opencode`) makes only the
+//! **total** "—" with a reason: the per-harness slices are still computed and
+//! carried alongside the absence, so a mixed Run still says where its known
+//! dollars came from (ADR-0052 §3).
 //!
-//! Since #427 that table is **injected** too, as a [`crate::price_table::PriceTable`]
-//! resolved by the caller at the request edge (`manual → fetched → embedded`, see
-//! ADR-0034). There is deliberately NO N-1-argument wrapper meaning "the embedded
-//! prices": the next call site added would silently ignore both disk tiers and no
-//! test could catch it.
+//! The price table is **injected** by the caller at the request edge. There is
+//! deliberately NO N-1-argument wrapper meaning "the embedded prices": the next
+//! call site added would silently ignore both disk tiers, uncatchable by test.
 //!
 //! The `projects_root` is injected by the caller (the #408 observability seam,
 //! [`crate::sandbox_run::transcripts_root`]): `~/.claude/projects/` for an
 //! `off`/archived run, the staged home while a sandboxed run is live. This
 //! module never reads `$HOME` — one root in, path-math + `std::fs` out.
 //!
-//! Claude cost is an **estimate, not an invoice**: it uses public list prices (no
-//! enterprise discount), and any model absent from the table contributes $0,
-//! flips the `partial` flag, and is named in `unpriced_models`. Copilot cost is
-//! reported, not recalculated from tokens.
-//! It mirrors `LocStat`'s
-//! "derived on read, never persisted" contract (see [`crate::event_log::CostStat`]),
-//! and happens to be *more* durable than LOC: archival deletes the run branch
-//! (so LOC → "—") but leaves `~/.claude/projects/` intact (merge_back flushed a
-//! sandboxed run's transcripts there at cleanup), so an archived run still shows
-//! its cost.
+//! Claude cost is an **estimate, not an invoice**: public list prices, and any
+//! model absent from the table contributes $0, flips `partial`, and is named in
+//! `unpriced_models`. Derived on read, never persisted (like `LocStat`) — but
+//! more durable: archival deletes the run branch (LOC → "—") while leaving
+//! `~/.claude/projects/` intact, so an archived run still shows its cost.
 //!
 //! ## Correctness notes (each verified against real transcripts, ADR-0022)
 //! - **Dedup is mandatory.** Claude Code replays assistant messages on
@@ -46,12 +35,6 @@
 //!   transcript. We dedup by `(message.id, requestId)`, keeping the first — the
 //!   `usage` is byte-identical within a group, so keep-one is exact (matches
 //!   `ccusage`). Without it the number is 2–3× too high.
-//! - **Path encoder.** [`cc_project_dirname`] maps a working dir to the name CC
-//!   writes under `~/.claude/projects/`. Since #373 it delegates to the (now
-//!   correct) [`crate::stale_detector::encode_working_dir`] — one source of
-//!   truth. Historically it reimplemented the mapping to route around a bug in
-//!   that function (it stripped the leading `/` and left `.` unmapped, so the
-//!   stale-detector's mtime probe resolved `None` for every node).
 //! - **Cache tokens don't overlap `input_tokens`.** CC's `input_tokens` excludes
 //!   cache tokens, so the four buckets sum without subtraction (matches ccusage).
 //! - **Tolerant parsing.** Torn writes (an interleaved-flush `clauclaude-opus-4-8`
@@ -128,12 +111,9 @@ pub(crate) fn frozen_execution_identity(
     }
 }
 
-/// GitHub Copilot bills in AI credits (AIU), one AIU worth one US cent. Its
-/// journal reports cumulative spend in nano-AIU, so:
-///
-/// `USD = nanoAiu × 1e-9 AIU/nano-AIU × $0.01/AIU = nanoAiu × 1e-11`.
-///
-/// This is Copilot's published billing conversion, not a token-price estimate.
+/// GitHub Copilot bills in AI credits (AIU), one AIU worth one US cent, and its
+/// journal reports cumulative spend in nano-AIU. This is Copilot's published
+/// billing conversion, not a token-price estimate.
 const USD_PER_AIU: f64 = 0.01;
 const NANO_PER_AIU: f64 = 1e9;
 
@@ -489,8 +469,8 @@ pub(crate) fn compute_run_cost_breakdown(
     }
 }
 
-/// Token counts from one assistant message's `usage`. The four cache buckets are
-/// disjoint from `input`/`output` (CC's `input_tokens` excludes cache tokens).
+/// The four cache buckets are disjoint from `input`/`output` — CC's
+/// `input_tokens` already excludes cache tokens, so they sum without subtraction.
 #[derive(Default)]
 struct Usage {
     input: u64,
@@ -500,8 +480,6 @@ struct Usage {
     cache_create_1h: u64,
 }
 
-/// One cost-bearing transcript line: its dedup key `(message_id, request_id)`,
-/// its model, and its token usage.
 struct Line {
     message_id: Option<String>,
     request_id: Option<String>,
@@ -509,8 +487,8 @@ struct Line {
     usage: Usage,
 }
 
-/// Cost of one line, in USD (the 5-term ccusage formula; `in_p`/`out_p` are the
-/// per-MTok input/output list prices — cache is derived from `in_p`).
+/// The 5-term ccusage formula. `in_p`/`out_p` are per-MTok list prices; the
+/// three cache rates are derived from `in_p`.
 fn line_cost(u: &Usage, in_p: f64, out_p: f64) -> f64 {
     (u.input as f64 * in_p
         + u.output as f64 * out_p
@@ -520,8 +498,7 @@ fn line_cost(u: &Usage, in_p: f64, out_p: f64) -> f64 {
         / 1_000_000.0
 }
 
-/// Parse one transcript line into a cost-bearing [`Line`], or `None` to skip it.
-/// Tolerant: a torn/invalid JSON line is skipped, never propagated. Only
+/// Tolerant: a torn/invalid JSON line is skipped, never `?`-propagated. Only
 /// `assistant` lines with a real (non-`<synthetic>`, non-error, non-zero) usage
 /// carry cost.
 fn parse_line(raw: &str) -> Option<Line> {
@@ -578,18 +555,14 @@ fn parse_line(raw: &str) -> Option<Line> {
     })
 }
 
-/// Dedup by `(message.id, requestId)` (keep first), price each surviving line
-/// against the resolved `prices` table, and collect the family key of every line
-/// no tier could price. Lines without a `message.id` are always counted (no key
-/// to dedup on).
+/// Dedup by `(message.id, requestId)`, keeping the first. Lines without a
+/// `message.id` are always counted (no key to dedup on).
 ///
-/// The unknown model ids are **de-dated** before collection (`strip_date_suffix`),
-/// so `claude-sonnet-5-20260501` and `claude-sonnet-5` name one offender, not two —
-/// the same family key a human would add to `models.yaml` to price it. `partial` is
-/// **derived** from that set (`⟺ !unpriced_models.is_empty()`): the invariant holds
-/// by construction, so no caller can flip one without the other. `<synthetic>` is
-/// priced $0 by the table (never `None`), so it never lands here — the negative
-/// control that keeps `partial` honest survives untouched.
+/// Unknown model ids are **de-dated** before collection, so a dated id and its
+/// family name one offender, not two — the same key a human would add to
+/// `models.yaml`. `partial` is **derived** from that set, so no caller can flip
+/// one without the other. `<synthetic>` is priced $0 by the table (never
+/// `None`), so it never lands here.
 fn aggregate(lines: impl Iterator<Item = Line>, prices: &PriceTable) -> CostStat {
     let mut seen = std::collections::HashSet::new();
     let mut usd = 0.0;
@@ -613,24 +586,18 @@ fn aggregate(lines: impl Iterator<Item = Line>, prices: &PriceTable) -> CostStat
         usd,
         partial: !unpriced_models.is_empty(),
         unpriced_models,
-        // The aggregate is transcript-derived — i.e. it already ran because the
-        // Run's harness HAS a cost source. Absent-cost-source harnesses never reach
-        // this fold; they are handled one layer up in [`run_cost_or_absence`], which
-        // returns a "—"-with-reason `CostStat` before any transcript is read.
+        // Both are assembled one layer up, in `run_cost_or_absence`: an
+        // absent-cost-source harness never reaches this fold, and the by-harness
+        // ventilation pairs this derived slice with copilot's reported one.
         uncosted_harnesses: Vec::new(),
-        // The claude-derived aggregate carries no ventilation of its own; the
-        // by-harness breakdown is assembled one layer up (`run_cost_or_absence`),
-        // which pairs this derived slice with `copilot`'s reported one (#615).
         by_harness: Vec::new(),
     }
 }
 
-/// The distinct harnesses this Run launched a node on that have **no cost source**
-/// capability (#553) — sorted, deduplicated. Read off the `NodeStarted` payloads
-/// (the frozen-at-spawn harness, ADR-0046), never the current YAML. A `null`
-/// harness (a `script` node, or any pre-#550 row) is the `claude` floor, which HAS
-/// a cost source, so it never lands here — only an explicit `opencode` or a
-/// data-declared harness does.
+/// The distinct harnesses this Run launched a node on that have **no cost
+/// source**. Read off the `NodeStarted` payloads (the frozen-at-spawn harness,
+/// ADR-0046), never the current YAML. A `null` harness is the `claude` floor,
+/// which HAS a cost source, so it never lands here.
 pub(crate) fn uncosted_harnesses(events: &[crate::event_log::Event]) -> Vec<String> {
     let mut names: BTreeSet<String> = BTreeSet::new();
     for e in events {
@@ -653,13 +620,10 @@ pub(crate) fn uncosted_harnesses(events: &[crate::event_log::Event]) -> Vec<Stri
     names.into_iter().collect()
 }
 
-/// The `copilot` session ids this Run launched a node on (#615), latest per
-/// `(node_id, iter)` so a same-iter restart resolves to the fresh id — the exact
-/// [`crate::lib::find_launch_session_id`] discipline, folded over the whole Run.
-/// Only a `NodeStarted` whose frozen harness is `copilot` and that pinned a
-/// non-empty session id contributes: an infra session, or a session on another
-/// harness, has no entry here, so its journal is never attributed to this Run
-/// (*correctif 6*). Sorted + de-duplicated.
+/// The `copilot` session ids this Run launched a node on, latest per
+/// `(node_id, iter)` so a same-iter restart resolves to the fresh id. Only a
+/// `NodeStarted` with a frozen `copilot` harness AND a non-empty session id
+/// contributes, so an infra or other-harness journal is never attributed here.
 fn copilot_session_ids(events: &[crate::event_log::Event]) -> Vec<String> {
     // Last `NodeStarted` per (node, iter) wins (a restart re-pins a fresh id).
     let mut latest: BTreeMap<(String, i64), String> = BTreeMap::new();
@@ -692,15 +656,13 @@ fn copilot_session_ids(events: &[crate::event_log::Event]) -> Vec<String> {
     ids
 }
 
-/// The Run's **reported** `copilot` cost in USD (#615, ADR-0052), summed over its
-/// copilot nodes' journals — or `None` when the Run has no copilot node with a
-/// usage reading yet (no journal, or a session that has not finished a first turn).
+/// The Run's **reported** `copilot` cost in USD, or `None` when no copilot node
+/// has a usage reading yet.
 ///
-/// Attribution is by the **imposed session identity** ([`copilot_session_ids`]),
-/// read from `<copilot_root>/<session-id>/events.jsonl`, never by scanning the
-/// store (copilot's journal carries no working-directory encoding — #615). A
-/// reading is available mid-session (each turn writes a `session.usage_checkpoint`),
-/// so a live copilot node has a cost, not a "—" until its reap.
+/// Attribution is by the imposed session identity, never by scanning the store:
+/// copilot's journal carries no working-directory encoding. A reading exists
+/// mid-session (each turn writes a `session.usage_checkpoint`), so a live
+/// copilot node has a cost rather than a "—" until its reap.
 fn copilot_reported_cost(events: &[crate::event_log::Event], copilot_root: &Path) -> Option<f64> {
     let mut usd = 0.0;
     let mut any = false;
@@ -717,10 +679,8 @@ fn copilot_reported_cost(events: &[crate::event_log::Event], copilot_root: &Path
     any.then_some(usd)
 }
 
-/// Assemble the Run's cost, **ventilated by harness** (#615, ADR-0052 §3), from its
-/// already-computed `claude` derived slice and a fresh read of the `copilot`
-/// reported slice. `None` when neither harness contributed a cost (no claude
-/// transcript dir and no copilot reading) — the surfaces' "—".
+/// Assemble the Run's cost, **ventilated by harness** (ADR-0052 §3). `None` when
+/// neither harness contributed a cost — the surfaces' "—".
 fn ventilate(
     claude: Option<CostStat>,
     events: &[crate::event_log::Event],
@@ -754,8 +714,8 @@ fn ventilate(
             harness: crate::harness_registry::COPILOT.to_string(),
             usd,
             form: CostForm::Reported,
-            // A reported cost never consults the price table, so it can never be a
-            // lower bound and never names an unpriced model (ADR-0052 §2).
+            // A reported cost never consults the price table, so it can never
+            // be a lower bound nor name an unpriced model (ADR-0052 §2).
             partial: false,
             unpriced_models: Vec::new(),
         });
@@ -771,14 +731,12 @@ fn ventilate(
     })
 }
 
-/// A Run whose cost is **unavailable** because a node ran on a harness with no cost
-/// source (a data-declared harness, e.g. `opencode`) — "—" with a reason, never a
-/// `$0`. Shared by the uncached and cached honest paths.
+/// A Run whose cost is **unavailable** because a node ran on a harness with no
+/// cost source — "—" with a reason, never a `$0`.
 ///
-/// `slices` are the per-harness costs PDO could still compute for the Run's *other*
-/// nodes. They **survive** the unavailable total (ADR-0052 §3): what is refused is
-/// the sum, not the knowledge. Suppressing them was the #617 FP finding — the trio
-/// Run built to observe ventilation was the one Run that could not show any.
+/// `slices` are the per-harness costs PDO could still compute for the Run's
+/// *other* nodes; they **survive** the unavailable total (ADR-0052 §3). What is
+/// refused is the sum, not the knowledge.
 fn cost_unavailable(uncosted: Vec<String>, slices: Vec<HarnessCost>) -> CostStat {
     CostStat {
         // Not a total, and never rendered as one: `uncosted_harnesses` non-empty is
@@ -797,27 +755,17 @@ fn cost_unavailable(uncosted: Vec<String>, slices: Vec<HarnessCost>) -> CostStat
     }
 }
 
-/// The per-harness slices of a Run whose total is unavailable: [`ventilate`]'s
-/// breakdown, or empty when nothing in the Run was costable at all.
 fn slices_or_empty(ventilated: Option<CostStat>) -> Vec<HarnessCost> {
     ventilated.map(|c| c.by_harness).unwrap_or_default()
 }
 
-/// The Run's cost, **honest about harnesses without a cost source** (#553) and
-/// **ventilated by harness** (#615). It pairs `claude`'s derived slice
-/// ([`compute_run_cost`]) with `copilot`'s reported one, summed in dollars and said
-/// per harness (ADR-0052).
+/// The Run's cost, **honest about harnesses without a cost source** and
+/// **ventilated by harness** (ADR-0052).
 ///
-/// If any node ran on a harness PDO cannot cost (a data-declared harness — `copilot`
-/// is costed, so it is NOT one), the **total** is not honestly summable and this
-/// returns a "—"-with-reason `CostStat`. The ventilation still runs: the slices PDO
-/// *can* compute ride along with the absence, so a mixed Run says what came through
-/// `claude` and what came through `copilot` even while refusing to add them
-/// (ADR-0052 §3). Only the sum is withheld.
-///
-/// `events` is the Run's event-log snapshot (frozen harnesses + copilot session
-/// ids); `claude_root` is the #408 seam's Claude Code `projects/` root; `copilot_root`
-/// is the copilot session-state store root.
+/// If any node ran on a harness PDO cannot cost, the **total** is not honestly
+/// summable and this returns a "—"-with-reason `CostStat`. The ventilation still
+/// runs, so a mixed Run says what came through each harness even while refusing
+/// to add them (ADR-0052 §3). Only the sum is withheld.
 pub(crate) fn run_cost_or_absence(
     events: &[crate::event_log::Event],
     claude_root: &Path,
@@ -837,21 +785,16 @@ pub(crate) fn run_cost_or_absence(
 
 /// Encode an absolute path exactly as Claude Code names its `~/.claude/projects`
 /// directory: every non-`[A-Za-z0-9]` char → `-`, case preserved, runs NOT
-/// collapsed. So a leading `/` becomes a leading `-` and `.pdo` becomes `--pdo`.
-/// Verified against real dirs: `/home/u/.pdo/runs/X/worktree` →
-/// `-home-u--pdo-runs-X-worktree`.
-///
-/// Delegates to [`crate::stale_detector::encode_working_dir`], the single source
-/// of truth for this encoding. (Historically this reimplemented the mapping to
-/// route around a bug in that function; #373 fixed and unified them.)
+/// collapsed — so `/home/u/.pdo/runs/X/worktree` → `-home-u--pdo-runs-X-worktree`
+/// (verified against real dirs). Delegates to
+/// [`crate::stale_detector::encode_working_dir`], the single source of truth.
 pub(crate) fn cc_project_dirname(path: &Path) -> String {
     crate::stale_detector::encode_working_dir(path)
 }
 
-/// Recursively collect every parseable cost line from `*.jsonl` under `dir`.
-/// The recursion captures subagent transcripts nested at
-/// `<project>/<uuid>/subagents/*.jsonl` (D7); dedup by `message.id` makes any
-/// resulting double-count with the parent impossible.
+/// The recursion is what captures subagent transcripts nested at
+/// `<project>/<uuid>/subagents/*.jsonl`; dedup by `message.id` makes a
+/// double-count with the parent impossible.
 fn collect_jsonl_recursive(dir: &Path, out: &mut Vec<Line>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -872,19 +815,13 @@ fn collect_jsonl_recursive(dir: &Path, out: &mut Vec<Line>) {
     }
 }
 
-/// Estimated cost for a run: aggregate every CC transcript whose project dir is
-/// under `<repo_root>/.pdo/runs/<run_id>/` (all nodes, the manager, the
-/// merge-resolver, and their subagents). `None` when no such dir exists (UI
-/// "—"); `Some { usd: 0.0, .. }` when dirs exist but carry no priced tokens.
+/// Estimated cost for a run: every CC transcript whose project dir is under
+/// `<repo_root>/.pdo/runs/<run_id>/`. `None` when no such dir exists (UI "—");
+/// `Some { usd: 0.0, .. }` when dirs exist but carry no priced tokens.
 ///
-/// `projects_root` is the Claude Code `projects/` root to read (the #408
-/// observability seam — `~/.claude/projects/` for an `off`/archived run, the
-/// staged home for a live sandboxed run). `repo_root` must be the run's
-/// **effective** repo root (honours `target_repo`) — pass the value the caller
-/// already resolved via `effective_repo_root`; it builds the run-id dir prefix,
-/// NOT the read root.
-/// `prices` is the table resolved at the request edge (#427) — mandatory; see the
-/// module header on why there is no defaulting wrapper.
+/// `repo_root` must be the run's **effective** repo root (honours `target_repo`,
+/// as already resolved by `effective_repo_root`): it builds the run-id dir
+/// prefix, NOT the read root — that is `projects_root`.
 pub(crate) fn compute_run_cost(
     projects_root: &Path,
     repo_root: &Path,
@@ -910,18 +847,13 @@ pub(crate) fn compute_run_cost(
     Some(aggregate(lines.into_iter(), prices))
 }
 
-// --- Read-side memo for the aggregate contribution path ----------------------
-//
-// `/stats/cost` fans over every Run in the selected cohort. The production memo
+// Read-side memo for `/stats/cost`, which fans over every Run in the cohort. It
 // stores the complete harness contribution breakdown, never a superseded scalar.
-// Its key changes with the event snapshot, Claude transcripts, Copilot journals,
-// resolved prices, or storage roots. Nothing is persisted.
-
+// Nothing is persisted.
 const BREAKDOWN_MEMO_CAP: usize = 4096;
 
-/// Recurse a project dir, folding the max `*.jsonl` mtime (epoch millis) into
-/// `max_ms`. Mirrors [`collect_jsonl_recursive`]'s traversal but `stat`s only —
-/// no file contents are read.
+/// Mirrors [`collect_jsonl_recursive`]'s traversal but `stat`s only — no file
+/// contents are read.
 fn max_mtime_recursive(dir: &Path, max_ms: &mut i64) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -944,11 +876,10 @@ fn max_mtime_recursive(dir: &Path, max_ms: &mut i64) {
     }
 }
 
-/// Max mtime (epoch millis) across every `*.jsonl` transcript that contributes
-/// to `run_id`'s cost — the same recursive glob [`compute_run_cost`] aggregates.
-/// `0` when no transcript dir/file exists yet (so a later write bumps the key and
-/// invalidates the memo). A pure `stat` walk: no file contents are read, so it is
-/// far cheaper than the aggregate it guards.
+/// Max mtime (epoch millis) across every `*.jsonl` transcript contributing to
+/// `run_id`'s cost — the same recursive glob [`compute_run_cost`] aggregates.
+/// `0` when nothing exists yet, so a later write bumps the key and invalidates
+/// the memo.
 pub(crate) fn max_transcript_mtime_millis(
     projects_root: &Path,
     repo_root: &Path,
@@ -978,11 +909,9 @@ fn breakdown_memo() -> &'static Mutex<BreakdownMemoMap> {
     BREAKDOWN_MEMO.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Max mtime (epoch millis) across every Copilot `events.jsonl` a Run's own
-/// events reference by `session_id` — the Copilot mirror of
-/// [`max_transcript_mtime_millis`]'s Claude walk. `pub(crate)` so a whole-cohort
-/// cache key (e.g. `stats_performance`'s) can fold a Run's Copilot contribution
-/// in alongside its Claude one without re-deriving this lookup.
+/// The Copilot mirror of [`max_transcript_mtime_millis`]. `pub(crate)` so a
+/// whole-cohort cache key (`stats_performance`'s) can fold a Run's Copilot
+/// contribution alongside its Claude one without re-deriving this lookup.
 pub(crate) fn copilot_mtime_millis(events: &[crate::event_log::Event], copilot_root: &Path) -> i64 {
     events
         .iter()
@@ -1008,11 +937,9 @@ pub(crate) fn copilot_mtime_millis(events: &[crate::event_log::Event], copilot_r
         .unwrap_or(0)
 }
 
-/// Order-and-content fingerprint of a Run's own event log — any append,
-/// edit, or replay changes it. `pub(crate)` so any other cache keyed on "this
-/// Run's events haven't changed" (not just this module's own cost memo) can
-/// reuse the exact same hash rather than defining a second, possibly
-/// inconsistent one.
+/// Order-and-content fingerprint of a Run's own event log. `pub(crate)` so any
+/// other cache keyed on "this Run's events haven't changed" reuses this exact
+/// hash rather than defining a second, possibly inconsistent one.
 pub(crate) fn event_fingerprint(events: &[crate::event_log::Event]) -> u64 {
     let mut hasher = DefaultHasher::new();
     for event in events {
@@ -1032,8 +959,6 @@ pub(crate) fn event_fingerprint(events: &[crate::event_log::Event]) -> u64 {
     hasher.finish()
 }
 
-/// Memoized contribution fold for the lazy Stats cost endpoint. The key covers
-/// the event snapshot, Claude transcripts, Copilot journals, and resolved prices.
 pub(crate) fn compute_run_cost_breakdown_cached(
     events: &[crate::event_log::Event],
     claude_root: &Path,

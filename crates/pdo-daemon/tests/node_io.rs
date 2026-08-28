@@ -168,7 +168,6 @@ async fn io_endpoint_returns_port_paths_and_frontmatter() {
     let fm = &outputs[0]["files"][0]["frontmatter"];
     assert_eq!(fm["verdict"], "PASS", "frontmatter should contain verdict");
 
-    // Cleanup
     let session1 = format!("pdo-{run_id}-planner-iter-1");
     let session2 = format!("pdo-{run_id}-implementer-iter-1");
     let _ = std::process::Command::new("tmux")
@@ -254,7 +253,6 @@ async fn io_endpoint_resolves_cross_iteration_input_to_latest_completed_source()
         "the iter-1 feeder artifact exists and must be surfaced, not reported missing"
     );
 
-    // Cleanup
     for session in [
         format!("pdo-{run_id}-planner-iter-1"),
         format!("pdo-{run_id}-implementer-iter-1"),
@@ -306,7 +304,6 @@ async fn artifact_endpoint_returns_markdown_content() {
     let body = resp.text().await.unwrap();
     assert!(body.contains("# Plan"), "artifact should contain the plan");
 
-    // Cleanup
     let session1 = format!("pdo-{run_id}-planner-iter-1");
     let session2 = format!("pdo-{run_id}-implementer-iter-1");
     let _ = std::process::Command::new("tmux")

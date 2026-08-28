@@ -144,8 +144,6 @@ describe("TriggerDetailPanel", () => {
     expect(screen.getByTestId("trigger-detail-overlap")).toHaveTextContent("skip (default)");
   });
 
-  // --- #244: guard-output disclosure on guard-exit-nonzero rows ---
-
   it("shows no guard-output toggle on a non-guard (fired) row", async () => {
     fetchTriggerFires.mockResolvedValue([fire()]);
     render(<TriggerDetailPanel trigger={trigger()} onSelectRun={noop} />);
@@ -232,8 +230,6 @@ describe("TriggerDetailPanel", () => {
     expect(output).not.toHaveTextContent("stdout");
     expect(output).not.toHaveTextContent("stderr");
   });
-
-  // --- #351: Test guard (dry-run) from a saved trigger's detail panel ---
 
   const GUARD = "gh issue list --label ready-for-agent";
 

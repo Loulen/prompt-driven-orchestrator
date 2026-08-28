@@ -137,8 +137,6 @@ async fn start_run(daemon: &TestDaemon, pipeline: &str) -> String {
         .to_string()
 }
 
-/// Poll `GET /runs/{id}` until `nodes[node_id].status` reaches `expected`, or
-/// time out. Returns the final run JSON.
 async fn wait_for_node_status(
     daemon: &TestDaemon,
     run_id: &str,
@@ -188,7 +186,6 @@ async fn script_node_completes_on_exit_zero() {
         "script node should complete on exit 0; run was: {run}"
     );
 
-    // The author-written output.md is present with the expected bytes.
     let out = daemon
         .repo_root()
         .join(".pdo/runs")
@@ -202,7 +199,6 @@ async fn script_node_completes_on_exit_zero() {
         "output bytes: {content}"
     );
 
-    // The side effect landed in the run's shared worktree.
     let sentinel = daemon
         .repo_root()
         .join(".pdo/runs")
@@ -386,7 +382,6 @@ async fn script_node_missing_declared_output_fails_fast() {
         reason.contains("failed output validation"),
         "the surviving reason must be the daemon's fail-fast one, got {reason:?}"
     );
-    // The run parks AwaitingUser, never Failed.
     let run: serde_json::Value = reqwest::get(format!("{}/runs/{run_id}", daemon.url()))
         .await
         .unwrap()

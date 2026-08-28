@@ -219,11 +219,9 @@ describe("NodeDetailPanel", () => {
         </TooltipProvider>,
       );
 
-      // Expand
       fireEvent.click(screen.getByTestId("term-expand"));
       expect(screen.queryByTestId("details-pane")).not.toBeInTheDocument();
 
-      // Collapse again
       fireEvent.click(screen.getByTestId("term-expand"));
       expect(screen.getByTestId("details-pane")).toBeInTheDocument();
       expect(screen.getByText("Mark complete")).toBeInTheDocument();
@@ -281,19 +279,16 @@ describe("NodeDetailPanel", () => {
       expect(tmuxUnmountCount.current).toBe(0);
       const firstNode = screen.getByTestId("tmux-terminal");
 
-      // Expand
       fireEvent.click(screen.getByTestId("term-expand"));
       expect(tmuxMountCount.current).toBe(1);
       expect(tmuxUnmountCount.current).toBe(0);
       expect(screen.getByTestId("tmux-terminal")).toBe(firstNode);
 
-      // Collapse
       fireEvent.click(screen.getByTestId("term-expand"));
       expect(tmuxMountCount.current).toBe(1);
       expect(tmuxUnmountCount.current).toBe(0);
       expect(screen.getByTestId("tmux-terminal")).toBe(firstNode);
 
-      // Expand again
       fireEvent.click(screen.getByTestId("term-expand"));
       expect(tmuxMountCount.current).toBe(1);
       expect(tmuxUnmountCount.current).toBe(0);
@@ -339,11 +334,9 @@ describe("NodeDetailPanel", () => {
       fetchNodeIOMock.mockClear();
       fetchPromptMock.mockClear();
 
-      // Open dropdown
       const trigger = screen.getByText(/iter 2/);
       fireEvent.click(trigger);
 
-      // Click iter 1 option
       const option = await screen.findByTestId("iter-option-1");
       fireEvent.click(option);
 

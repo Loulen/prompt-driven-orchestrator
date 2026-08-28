@@ -119,8 +119,6 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
-    // --- well-formed frontmatter ---
-
     #[test]
     fn parses_simple_frontmatter() {
         let content = "---\nverdict: PASS\nscore: 8\n---\n\n## Body\nSome content here.";
@@ -146,8 +144,6 @@ mod tests {
         let val = fields["confidence"].as_f64().unwrap();
         assert!((val - 0.95).abs() < 1e-10);
     }
-
-    // --- missing frontmatter (treated as empty) ---
 
     #[test]
     fn no_frontmatter_returns_empty() {
@@ -176,16 +172,12 @@ mod tests {
         assert!(fields.is_empty());
     }
 
-    // --- malformed YAML ---
-
     #[test]
     fn malformed_yaml_returns_error() {
         let content = "---\n{{invalid: yaml:::\n---\n\nBody";
         let err = parse_frontmatter(content).unwrap_err();
         assert!(matches!(err, FrontmatterError::MalformedYaml(_)));
     }
-
-    // --- enum validation ---
 
     #[test]
     fn validates_enum_field_pass() {
@@ -271,8 +263,6 @@ mod tests {
         assert!(validate_against_schema(&fields, &schema).is_ok());
     }
 
-    // --- parse_frontmatter_from_file ---
-
     #[test]
     fn nonexistent_file_returns_empty() {
         let fields =
@@ -280,16 +270,12 @@ mod tests {
         assert!(fields.is_empty());
     }
 
-    // --- frontmatter with leading whitespace ---
-
     #[test]
     fn frontmatter_with_leading_whitespace() {
         let content = "  ---\nverdict: FAIL\n---\n\nBody";
         let fields = parse_frontmatter(content).unwrap();
         assert_eq!(fields["verdict"], serde_yaml::Value::String("FAIL".into()));
     }
-
-    // --- multiple fields ---
 
     #[test]
     fn parses_multiple_fields() {

@@ -368,9 +368,7 @@ async fn shell_runs_real_bash_in_pipeline_worktree() {
     let marker = worktree.join("fp316-marker.txt");
     let env_marker = worktree.join("env-marker.txt");
 
-    // Poll for the side effect (interactive bash + send-keys is async), on the
-    // CONTENT rather than on the file existing, re-sending the (idempotent) echo
-    // until bash is ready to run it — see `wait_for_marker`.
+    // Poll on CONTENT, re-sending the idempotent echo — see `wait_for_marker`.
     let got = wait_for_marker(
         &socket,
         &session,
@@ -663,7 +661,6 @@ async fn shell_survives_pty_client_disconnect() {
         "shell must exist right after opening"
     );
 
-    // Attach a real PTY-bridge client, exactly as the browser modal does.
     let ws_url = format!("ws://{}/sessions/{}/pty", daemon.addr, session);
     let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url)
         .await
@@ -679,7 +676,6 @@ async fn shell_survives_pty_client_disconnect() {
     ws.send(WsMessage::Binary(b"echo hi\n".to_vec().into()))
         .await
         .unwrap();
-    // Read a couple of output frames (best-effort, bounded).
     for _ in 0..2 {
         match tokio::time::timeout(Duration::from_secs(2), ws.next()).await {
             Ok(Some(Ok(_))) => {}
@@ -691,7 +687,6 @@ async fn shell_survives_pty_client_disconnect() {
     ws.close(None).await.ok();
     drop(ws);
 
-    // Give the daemon time to tear the bridge down.
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     assert!(
@@ -749,9 +744,8 @@ async fn shell_survives_eof_and_exit() {
          so the pane (and session) outlives any single shell (ADR-0021 #4)"
     );
 
-    // ...and a fresh, usable bash must have taken its place: prove it by writing
-    // a marker from the respawned shell into the pipeline worktree. Re-send the
-    // (idempotent) echo until the respawned bash is ready — see `wait_for_marker`.
+    // ...and a fresh, usable bash must have taken its place. Re-send the
+    // idempotent echo until the respawned bash is ready — see `wait_for_marker`.
     let marker = worktree_path(&daemon, &run_id).join("respawn-marker.txt");
     let got = wait_for_marker(
         &socket,

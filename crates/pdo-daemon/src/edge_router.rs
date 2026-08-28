@@ -28,8 +28,8 @@ pub(crate) fn fired_edges<'a>(
         .with_fields(frontmatter.clone())
         .with_variables(vars.clone());
 
-    // First pass: evaluate each guarded (`when:`) edge once, recording both the
-    // per-edge result and which source ports had at least one guarded match.
+    // Evaluate each guard once and cache it: the `else` rule needs the whole
+    // port's verdict, so a single pass would re-evaluate predicates.
     let mut guard_matched: Vec<bool> = Vec::with_capacity(outgoing.len());
     let mut matched_ports: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for edge in outgoing {
@@ -43,16 +43,13 @@ pub(crate) fn fired_edges<'a>(
         guard_matched.push(matched);
     }
 
-    // Second pass: collect the firing edges, reusing the cached guard results.
     let mut fired = Vec::new();
     for (edge, &matched) in outgoing.iter().zip(&guard_matched) {
         let fires = if edge.when.is_some() {
             matched
         } else if edge.is_else {
-            // `else` fires iff no sibling on the same source port matched.
             !matched_ports.contains(edge.source.port.as_str())
         } else {
-            // Unconditional edge: always fires.
             true
         };
         if fires {
@@ -166,7 +163,6 @@ mod tests {
             edge("out", "archiver", None, true), // else
         ];
 
-        // Sibling matched → else suppressed.
         let matched = [("verdict".to_string(), val_s("FAIL"))]
             .into_iter()
             .collect();
@@ -175,7 +171,6 @@ mod tests {
             vec!["implementer".to_string()]
         );
 
-        // No sibling matched → else fires.
         let none = [("verdict".to_string(), val_s("PASS"))]
             .into_iter()
             .collect();
@@ -192,7 +187,6 @@ mod tests {
         let fm = [("verdict".to_string(), val_s("PASS"))]
             .into_iter()
             .collect();
-        // Port `a` matched; port `b` had no guarded sibling, so its else fires.
         assert_eq!(
             fired_targets(&edges, fm, 1),
             vec!["matched_a".to_string(), "else_b".to_string()]

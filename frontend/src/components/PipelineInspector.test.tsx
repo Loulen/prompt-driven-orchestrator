@@ -150,13 +150,11 @@ describe("PipelineInspector", () => {
     renderInspector([]);
     const checkbox = screen.getByTestId("prompt-required-checkbox");
 
-    // Uncheck → prompt-optional.
     fireEvent.click(checkbox);
     expect(
       useEditStore.getState().openTabs[0].pipeline.prompt_required,
     ).toBe(false);
 
-    // Re-check → prompt-required again.
     fireEvent.click(checkbox);
     expect(
       useEditStore.getState().openTabs[0].pipeline.prompt_required,

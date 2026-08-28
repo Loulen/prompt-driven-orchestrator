@@ -7,23 +7,7 @@
 //!
 //! Ce module gère le conteneur **unique et long-vécu** d'un Run sandboxé,
 //! `pdo-sbx-<run_id>` (dormant, `sleep infinity`, PID 1 = `tini` via `--init`), dans
-//! lequel toutes les sessions du Run entrent par `docker exec` :
-//! - [`create_args`] / [`container_name`] — construction PURE de l'argv `docker create`
-//!   (identity mounts, `--user uid:gid` hôte, `--add-host`, `--init`, image, `sleep infinity`) ;
-//! - [`ensure_running`] — machine à états idempotente (up → réutilise ; arrêté → `start` ;
-//!   absent → `create` + `start`) dont la sonde ne confond JAMAIS une erreur transitoire
-//!   (daemon Docker down, permission) avec une absence ;
-//! - [`exec_prefix`] — le préfixe `docker exec -it …` qu'un nœud préposera à sa tail `claude`,
-//!   avec forwarding d'env par-nœud et un marqueur de session ([`SESSION_MARKER_ENV`]) ;
-//! - [`kill_session_in_container`] — kill CIBLÉ : tue le seul arbre de process porteur du
-//!   marqueur (scan `/proc/*/environ`), les sessions sœurs survivent ;
-//! - [`remove`] — `docker rm -f` idempotent, au `cleanup_run`.
-//!
-//! Les slices sœurs le CONSOMMENT mais ne sont PAS ici :
-//! - #407 câble [`ensure_running`]/[`exec_prefix`]/[`kill_session_in_container`]/[`remove`]
-//!   dans le run-advance et écrit **l'ADR-0030** (modèle d'exécution : réseau/auth) ;
-//! - #405 fournit l'image (`ensure_image`) et le seam docker réutilisé ici
-//!   ([`crate::sandbox_image::docker_bin_from_env`] / `DOCKER_NOT_FOUND_MSG`).
+//! lequel toutes les sessions du Run entrent par `docker exec`.
 //!
 //! ## Décisions de conception (voir la section « Sandbox » de `CONTEXT.md`)
 //! - **Marqueur de session = variable d'env, pas label Docker.** [`SESSION_MARKER_ENV`] est
@@ -61,7 +45,7 @@
 //!   (manager, ADR-0030 §8) passent par le même appel — c'est ce qui interdit qu'un chemin
 //!   résolve pendant que l'autre reste sur `localhost`.
 
-#![allow(dead_code)] // Tracer bullet : consommé/câblé par #407, non câblé dans cette slice.
+#![allow(dead_code)]
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -111,8 +95,6 @@ const IDENTITY_NAME: &str = "pdo";
 /// être réservé, et c'est voulu.
 pub(crate) const RUN_CONSTANT_ENV_KEYS: &[&str] = &["HOME", "PDO_DAEMON_URL", "PDO_RUN_ID"];
 
-// -- résolveur d'URL du daemon (#447) ----------------------------------------
-
 /// Hostname du daemon **vu depuis le côté hôte** : le conteneur exclu, `localhost`
 /// désigne bien la machine qui écoute.
 const HOST_SIDE_HOST: &str = "localhost";
@@ -146,8 +128,6 @@ pub(crate) fn daemon_url(port: u16, sandboxed: bool) -> String {
     };
     format!("http://{host}:{port}")
 }
-
-// -- type valeur (assemblé par les résolveurs, nourrit les builders purs) ----
 
 /// Tout ce dont [`create_args`] a besoin pour construire l'argv `docker create` d'un conteneur
 /// sandbox. Assemblé par le caller (#407) à partir des résolveurs de bord + des sorties de
@@ -210,8 +190,6 @@ pub(crate) struct ContainerSpec<'a> {
     pub writable_secondary_gitdirs: &'a [std::path::PathBuf],
 }
 
-// -- builders purs (golden-testés) -------------------------------------------
-
 /// Nom déterministe du conteneur d'un Run : `pdo-sbx-<run_id>`. Par-Run → kill/destruction
 /// CIBLÉS (jamais un balayage global).
 pub(crate) fn container_name(run_id: &str) -> String {
@@ -242,8 +220,6 @@ fn create_env(run_id: &str, spec: &ContainerSpec) -> Vec<(String, String)> {
     let mut env: Vec<(String, String)> = vec![
         ("HOME".to_string(), spec.host_home.display().to_string()),
         (
-            // #447 : la MÊME résolution que celle du texte des préambules. L'env et la
-            // prose ne peuvent plus diverger.
             "PDO_DAEMON_URL".to_string(),
             daemon_url(spec.daemon_port, true),
         ),
@@ -296,7 +272,6 @@ pub(crate) fn create_args(run_id: &str, spec: &ContainerSpec) -> Vec<String> {
         "-w".to_string(),
         spec.run_worktree.display().to_string(),
     ];
-    // Vars RUN-CONSTANTES + queue d'env du profil, posées une fois au create.
     for (key, value) in create_env(run_id, spec) {
         args.push("-e".to_string());
         args.push(format!("{key}={value}"));
@@ -339,7 +314,6 @@ pub(crate) fn create_args(run_id: &str, spec: &ContainerSpec) -> Vec<String> {
         args.push("-v".to_string());
         args.push(format!("{g}:{g}:rw", g = gitdir.display()));
     }
-    // Image, puis la commande dormante.
     args.push(spec.image_ref.to_string());
     args.push("sleep".to_string());
     args.push("infinity".to_string());
@@ -430,8 +404,6 @@ pub(crate) fn exec_prefix(
     workdir: &Path,
     marker: &str,
 ) -> Vec<String> {
-    // Delegate with an empty catalogue: the output stays byte-identical to the
-    // #406 golden (the base three `-e` only, no per-node values).
     exec_prefix_with_env(run_id, uid, gid, workdir, marker, &[])
 }
 
@@ -469,8 +441,8 @@ pub(crate) fn exec_prefix_with_env(
         "PDO_NODE_ITER".to_string(),
     ];
     for (k, v) in extra_env {
-        // Invariant: PDO_DAEMON_URL is posed at create → host.docker.internal; a
-        // re-passed `-e` (bare or valued) would clobber the gateway.
+        // Don't re-pass PDO_DAEMON_URL: posed at create → host.docker.internal, a
+        // second `-e` (bare or valued) clobbers the gateway.
         if k == "PDO_DAEMON_URL" {
             continue;
         }
@@ -484,8 +456,6 @@ pub(crate) fn exec_prefix_with_env(
     args.push(container_name(run_id));
     args
 }
-
-// -- effets docker (sync std::process::Command, anyhow + .context) -----------
 
 /// État du conteneur tel que résolu par la sonde. Privé : le monde extérieur voit
 /// [`ensure_running`], pas les états intermédiaires.
@@ -739,8 +709,6 @@ pub(crate) fn remove(docker_bin: &str, run_id: &str) -> Result<()> {
     )
 }
 
-// -- helpers (privés) --------------------------------------------------------
-
 /// Sentinelle docker « conteneur absent », insensible à la casse. Couvre les deux libellés
 /// (`No such container` de `rm`/`exec`, `No such object` d'`inspect`). Une comparaison de
 /// substring, pas d'exit-code, car un exit != 0 peut aussi être transitoire.
@@ -783,7 +751,7 @@ fn sh_single_quote(s: &str) -> String {
     out
 }
 
-// -- résolveurs de bord (seuls lecteurs env/uid ; les tests injectent directement) -------
+// Seuls lecteurs env/uid du module ; les tests injectent directement.
 
 /// `$HOME` hôte. `None` si absent. Câblé par le daemon (#407) ; les unit tests injectent des
 /// temp dirs et bypassent ce résolveur.
@@ -1007,8 +975,6 @@ mod tests {
         })
     }
 
-    // -- 0. résolveur d'URL du daemon (#447) ----------------------------------
-
     /// Les deux côtés d'exécution rendent des hostnames DIFFÉRENTS, et le port suit.
     /// C'est la propriété que le bug violait : une seule des deux formes existait.
     #[test]
@@ -1055,8 +1021,6 @@ mod tests {
         );
     }
 
-    // -- 1. create_args golden (AC#1, éclaté en trois en #432, en cinq en #468) ------
-    //
     // « Accommoder la queue variable, pas la figer » : le préfixe FIXE est gravé UNE
     // fois, chaque queue est prouvée séparément, et un test pin la propriété
     // structurelle (les extras ne peuvent QUE grossir la queue). Le filtre de dédup se
@@ -1169,8 +1133,6 @@ mod tests {
         assert_eq!(one[image_at - 2], "-v");
     }
 
-    // -- 1a-bis. create_args × secondaires modifiables (ADR-0047) -------------
-
     /// Un secondaire modifiable ⇒ un `-v <g>:<g>:rw` (chemin identique host==conteneur),
     /// inséré entre les `-v` fixes/extras et l'image. Un read-only n'en gagne aucun (il
     /// n'entre jamais dans `writable_secondary_gitdirs`, cf. `context_from_state`).
@@ -1220,8 +1182,6 @@ mod tests {
         assert_eq!(&got[image_at..], &create_argv_suffix()[..]);
         assert_eq!(got[image_at - 2], "-v");
     }
-
-    // -- 1b. create_args × env du profil (#468) -------------------------------
 
     /// AC#5 de #468, dit deux fois : pas d'env ⇒ l'argv de #432, au byte.
     /// `create_args_golden_no_extras` le prouve déjà pour la queue de mounts ; celui-ci
@@ -1344,8 +1304,6 @@ mod tests {
         }
     }
 
-    // -- 2. exec_prefix golden (AC#1) ----------------------------------------
-
     #[test]
     fn exec_prefix_golden() {
         let wt = Path::new("/repo/.pdo/runs/r1/nodes/n1/iter-1");
@@ -1374,13 +1332,9 @@ mod tests {
         );
     }
 
-    // -- 2b. exec_prefix_with_env golden : catalogue script (#407, D6) --------
-
     #[test]
     fn exec_prefix_with_env_golden() {
         let wt = Path::new("/repo/.pdo/runs/r1/nodes/n1/iter-1");
-        // A realistic `script` node catalogue (order preserved), plus a
-        // PDO_DAEMON_URL that MUST be filtered out (invariant).
         let env = vec![
             (
                 "PDO_ARTIFACTS_DIR".to_string(),
@@ -1433,8 +1387,6 @@ mod tests {
 
     #[test]
     fn exec_prefix_empty_env_equals_bare_prefix() {
-        // exec_prefix (délégation `&[]`) == exec_prefix_with_env(&[]) : garde de
-        // non-régression du golden #406.
         let wt = Path::new("/repo/.pdo/runs/r1/nodes/n1/iter-1");
         assert_eq!(
             exec_prefix("r1", 1000, 1000, wt, "m"),
@@ -1442,8 +1394,6 @@ mod tests {
         );
     }
 
-    // -- 2c. identité du conteneur (#414) ------------------------------------
-    //
     // Le script est le seul endroit du dépôt où vivent les subtilités mesurées pendant le
     // grilling (`*` vs `x`, `>>` vs `>`, la garde). Chacune a son test NOMMÉ, pour qu'une
     // simplification bien intentionnée tombe sur un refus qui porte sa raison.
@@ -1578,8 +1528,6 @@ mod tests {
         assert_eq!(args[user_at + 1], "1000:1000");
     }
 
-    // -- 3-8. ensure_running / probe (AC#2) ----------------------------------
-
     /// Position de l'`exec` d'identité (#414) dans l'`argv.log` du fake docker : la ligne
     /// `0:0` en est le témoin UNIQUE (aucune autre invocation ne porte ce `--user`).
     fn identity_exec_at(lines: &[String]) -> Option<usize> {
@@ -1673,7 +1621,6 @@ mod tests {
             .position(|l| l == "start")
             .expect("start attendu");
         assert!(create_pos < start_pos, "create doit précéder start");
-        // Le create se termine par la commande dormante.
         assert!(
             lines.contains(&"sleep".to_string()) && lines.contains(&"infinity".to_string()),
             "create doit poser `sleep infinity`"
@@ -1744,7 +1691,6 @@ mod tests {
         let (docker, log) = write_fake_docker(tmp.path(), &spec);
         let fx = Fixtures::sample();
 
-        // Le conteneur est bien créé et démarré ; seule l'identité a échoué.
         retry_etxtbsy(|| ensure_running(&docker, "r1", &fx.spec())).unwrap();
 
         let lines = log_lines(&log);
@@ -1817,14 +1763,11 @@ mod tests {
             err.chain().count() >= 2,
             "la source io::Error doit être préservée dans la chaîne anyhow"
         );
-        // Aucune invocation docker n'a pu tourner → pas de log.
         assert!(
             !tmp.path().join("argv.log").exists(),
             "docker absent → argv-log vide"
         );
     }
-
-    // -- 9. kill ciblé (AC#3) ------------------------------------------------
 
     #[test]
     fn kill_targets_only_marker() {
@@ -1861,8 +1804,6 @@ mod tests {
         );
     }
 
-    // -- 10-12. remove (AC#4 / AC#5) -----------------------------------------
-
     #[test]
     fn remove_present_ok() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1883,7 +1824,6 @@ mod tests {
         };
         let (docker, _) = write_fake_docker(tmp.path(), &spec);
 
-        // Idempotent : `rm -f` d'un conteneur absent → Ok.
         retry_etxtbsy(|| remove(&docker, "r1")).unwrap();
     }
 
@@ -1901,8 +1841,6 @@ mod tests {
         );
         assert!(err.chain().count() >= 2, "source io::Error préservée");
     }
-
-    // -- 13. schéma de nom ---------------------------------------------------
 
     #[test]
     fn container_name_schema() {

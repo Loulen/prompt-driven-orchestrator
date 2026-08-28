@@ -1023,14 +1023,12 @@ describe("save error storage", () => {
 
   it("clears save error on successful save", async () => {
     seedTab("p1", true);
-    // First fail
     mockSavePipeline.mockImplementationOnce(() =>
       Promise.reject(new ApiError("fail")),
     );
     await useEditStore.getState().save("p1");
     expect(useEditStore.getState().openTabs[0].saveError).toBeDefined();
 
-    // Make dirty again and succeed
     useEditStore.setState((s) => ({
       openTabs: s.openTabs.map((t) => (t.id === "p1" ? { ...t, dirty: true } : t)),
     }));
@@ -1268,7 +1266,6 @@ describe("resolveConflict", () => {
   it("'keep' discards external data and keeps canvas", () => {
     seedTab("my-pipe", true);
 
-    // Simulate conflict state
     useEditStore.setState((s) => ({
       openTabs: s.openTabs.map((t) =>
         t.id === "my-pipe"

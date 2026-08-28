@@ -6,18 +6,12 @@
 //! they live in pipeline authors' bash, and a `script` node's tail branches on the
 //! `4` so it does not double a failure the daemon already recorded.
 //!
-//! Originally this file only proved "does not panic", which is why it is still
-//! named that way in git history. The panic regression it was written for:
+//! The file name is narrower than its scope: it started as the regression for a
+//! panic — `reqwest::blocking` cannot drop its inner runtime inside
+//! `#[tokio::main]`'s async context — and grew the exit-code matrix.
 //!
-//! Surfaced while running the run-minimal scenario for #18: the spawn primitive
-//! worked, claude wrote the artifact, but `pdo complete` panicked with
-//! "Cannot drop a runtime in a context where blocking is not allowed" — the
-//! sync subcommands were running inside `#[tokio::main]`'s async context and
-//! `reqwest::blocking` could not safely shut down its inner runtime there.
-//!
-//! These tests spawn the real `pdo` binary in a subprocess (mirroring what
-//! claude does inside the tmux session) and assert clean exit codes against a
-//! live TestDaemon.
+//! These tests spawn the real `pdo` binary in a subprocess, mirroring what claude
+//! does inside the tmux session; an in-process call would not exercise exit codes.
 
 use std::process::Command;
 use std::time::Duration;
@@ -123,7 +117,6 @@ async fn pdo_complete_does_not_panic_and_marks_node_done() {
     std::fs::create_dir_all(&port_dir).unwrap();
     std::fs::write(port_dir.join("output.md"), "# Output\nDone.").unwrap();
 
-    // Sanity: the daemon is reachable from this process via async reqwest.
     reqwest::get(format!("{}/runs", daemon.url()))
         .await
         .expect("daemon should be reachable from test process")
@@ -163,7 +156,6 @@ async fn pdo_complete_does_not_panic_and_marks_node_done() {
         output.status.code()
     );
 
-    // Side-effect: the daemon now treats the node as done.
     let run = reqwest::get(format!("{}/runs/{run_id}", daemon.url()))
         .await
         .unwrap()

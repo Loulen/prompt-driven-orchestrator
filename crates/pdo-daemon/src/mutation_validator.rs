@@ -613,7 +613,6 @@ mod tests {
 
     #[test]
     fn allows_removing_member_from_region_not_in_flight() {
-        // No live lap counter for the region — membership is freely editable.
         let old = pipeline_with_region(region("review_loop", 5));
         let mut new = pipeline_with_region(region("review_loop", 5));
         new.loops[0].members = vec!["impl".to_string()];
@@ -738,7 +737,6 @@ mod tests {
             simple_node("a", pipeline::NodeType::CodeMutating),
             simple_node("b", pipeline::NodeType::CodeMutating),
         ]);
-        // "a" pending in run state, "b" not in run state at all.
         let rs = run_state_with_nodes(vec![("a", event_log::NodeStatus::Pending)]);
 
         let result = validate_run_mutation(&old, &new, &rs);

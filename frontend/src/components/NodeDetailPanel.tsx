@@ -964,8 +964,6 @@ function PromptSection({
   );
 }
 
-// --- Iter Selector ---
-
 const STATUS_DOTS: Record<NodeStatus, string> = {
   pending: "bg-st-pending",
   running: "bg-st-running",
@@ -1029,8 +1027,6 @@ function IterSelector({
   );
 }
 
-// --- IO Section ---
-
 function IOSection({
   title,
   ports,
@@ -1069,8 +1065,6 @@ function IOSection({
     </div>
   );
 }
-
-// --- Port Row ---
 
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "webp", "gif"]);
 

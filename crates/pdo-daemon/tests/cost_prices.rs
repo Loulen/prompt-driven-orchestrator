@@ -85,8 +85,6 @@ const MODELS_DEV_BUMPED: &str = r#"{
   } }
 }"#;
 
-// --- the fixture source ------------------------------------------------------
-
 /// A local price source. Counts its hits, so a test can assert **zero requests**
 /// — the only honest way to prove "no egress before the first click".
 struct Fixture {
@@ -130,8 +128,6 @@ async fn spawn_fixture(body: &'static str) -> Fixture {
         _task: task,
     }
 }
-
-// --- repo / run helpers ------------------------------------------------------
 
 fn tmux_available() -> bool {
     Command::new("tmux")
@@ -225,7 +221,6 @@ async fn start_run(daemon: &TestDaemon) -> String {
         .json(&serde_json::json!({
             "pipeline": "prices",
             "input": "hello",
-            // #470: the target repo is required at the create boundary (ADR-0033).
             "target_repo": daemon.target_repo(),
         }))
         .send()
@@ -267,8 +262,6 @@ fn age_fetched_at(path: &Path, hours: i64) {
     doc["fetched_at"] = serde_json::json!(then.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
     std::fs::write(path, serde_json::to_vec_pretty(&doc).unwrap()).unwrap();
 }
-
-// --- 1. the route exists, and the anti-SPA gate ------------------------------
 
 #[tokio::test]
 async fn sync_is_registered_and_answers_json() {
@@ -328,8 +321,6 @@ async fn sync_is_registered_and_answers_json() {
     assert_eq!(doc["models"]["claude-opus-5"]["input"], 5.0);
     assert_eq!(fixture.hits(), 1);
 }
-
-// --- 2. the repair is visible in the SAME process ----------------------------
 
 #[tokio::test]
 async fn a_sync_reprices_a_live_run_without_restarting_the_daemon() {
@@ -392,8 +383,6 @@ async fn a_sync_reprices_a_live_run_without_restarting_the_daemon() {
     );
 }
 
-// --- 3. every failure mode leaves the last known table intact ----------------
-
 #[tokio::test]
 async fn a_dead_port_answers_502_naming_the_url() {
     // 127.0.0.1:9 (discard) is reserved and never bound in this environment: a
@@ -455,8 +444,6 @@ async fn an_empty_harvest_answers_502_and_leaves_the_table_byte_identical() {
     assert_eq!(s["price_table"]["fetched_rows"].as_u64(), Some(6));
 }
 
-// --- 4. a second sync with nothing to change ---------------------------------
-
 #[tokio::test]
 async fn a_second_sync_with_nothing_to_change_is_an_explicit_noop() {
     // ADR-0025: never a blind `{ok:true}`.
@@ -490,8 +477,6 @@ async fn a_second_sync_with_nothing_to_change_is_an_explicit_noop() {
     );
 }
 
-// --- 5. concurrency ----------------------------------------------------------
-
 #[tokio::test]
 async fn two_concurrent_syncs_yield_one_200_and_one_409() {
     let fixture = spawn_fixture(MODELS_DEV).await;
@@ -508,8 +493,6 @@ async fn two_concurrent_syncs_yield_one_200_and_one_409() {
         "a second click brings nothing, and ADR-0025 wants us to say so"
     );
 }
-
-// --- 6. the manual tier wins, and the report says so ------------------------
 
 #[tokio::test]
 async fn the_manual_tier_shadows_the_fetched_one_and_the_report_names_it() {
@@ -548,8 +531,6 @@ async fn the_manual_tier_shadows_the_fetched_one_and_the_report_names_it() {
     );
 }
 
-// --- 7. discoverability: the paths are named even when absent ----------------
-
 #[tokio::test]
 async fn settings_names_both_price_paths_even_when_no_file_exists() {
     // Nothing is ever seeded (that would freeze a snapshot, ADR-0031 §2), so
@@ -577,8 +558,6 @@ async fn settings_names_both_price_paths_even_when_no_file_exists() {
     assert_eq!(fixture.hits(), 0, "reading settings must not egress");
 }
 
-// --- 7b. the resolved read view on /stats/cost: winning tier + $/MTok per family (#528) ---
-//
 // The resolved table rides on `GET /stats/cost` — beside the "Sync costs" action
 // in the Stats → Cost tab, so pressing sync and reading what PDO can price happen
 // at one endpoint. It reads the SAME `PriceTable` the cost fold bills with, so the
@@ -709,8 +688,6 @@ async fn a_refused_row_is_inert_and_reported_but_never_fails_a_read() {
     assert_eq!(resp.status(), 200);
 }
 
-// --- 8. the boot refresh: refreshes, never seeds -----------------------------
-
 #[tokio::test]
 async fn the_boot_refresh_never_creates_a_cache() {
     // ADR-0034: no egress before the user has clicked once. The click IS the
@@ -800,7 +777,6 @@ async fn an_unreachable_source_at_boot_leaves_the_table_and_the_daemon_alive() {
         stale,
         "the table survives an unreachable source, byte for byte"
     );
-    // The daemon is still serving.
     let s = settings(&daemon2).await;
     assert_eq!(s["price_table"]["fetched_rows"].as_u64(), Some(6));
 }

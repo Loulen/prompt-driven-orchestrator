@@ -1,57 +1,31 @@
 //! Harness-specific context-window **peak** parsing (#585, Stats → Performance).
 //!
-//! A session's context peak is the maximum "occupancy" any one of its turns
-//! reached — never a percentage, never converted through a model's context-window
-//! catalogue (explicitly out of scope, see the issue's "Out of Scope" §1/§2). Each
-//! harness reports occupancy in its own shape, so each gets its own parser; there
-//! is no generic "usage" struct shared across them (ADR-0051: a capability is
-//! code, written harness by harness, never a shared heuristic).
+//! A peak is the max occupancy any one turn reached — never a percentage, never
+//! converted through a model's context-window catalogue (out of scope). Each
+//! harness gets its own parser; no generic "usage" struct is shared across them
+//! (ADR-0051: a capability is code, written harness by harness).
 //!
-//! Both parsers are **pure**: transcript/journal text in, `Option<u64>` tokens
-//! out. No I/O, no clock — the caller ([`crate::stats_performance`]) resolves the
-//! file and injects its bytes, exactly like [`crate::run_cost`] and
-//! [`crate::copilot_journal`] already do for cost.
+//! ## Claude
 //!
-//! ## Claude (#585 Implementation Decisions §"Pour Claude")
+//! Unlike cost, which **sums** every line, a peak takes the **max**: Claude's
+//! `input_tokens`/cache fields are not per-message deltas but the full context
+//! sent for that turn, so the largest single turn IS the session's peak.
 //!
-//! A turn's occupancy is `input_tokens` (non-cache) + `cache_read_input_tokens` +
-//! `cache_creation_input_tokens` (both the 5m/1h buckets) + `output_tokens` — the
-//! same four cache/input buckets [`crate::run_cost`] costs, plus the turn's own
-//! output. Unlike cost, which **sums** every line, a context peak takes the
-//! **max**: each assistant message already carries the *whole* conversation's
-//! current window occupancy (Claude's `input_tokens`/cache fields are not
-//! per-message deltas — they are the full context sent for that turn), so the
-//! largest single turn IS the session's peak.
+//! Replayed messages (resume/compaction) are deduplicated by `(message.id,
+//! requestId)` — the same key `run_cost`'s `aggregate` uses — because counting a
+//! replay twice would invent a peak that never happened.
 //!
-//! Messages replayed on resume/compaction are deduplicated by `(message.id,
-//! requestId)` before the max is taken — **the same dedup key** `run_cost`'s
-//! `aggregate` uses for cost, because a replayed message is not a second, larger
-//! turn; counting it twice would let a resume/compaction artefact invent a peak
-//! that never happened.
+//! ## Copilot
 //!
-//! ## Copilot (#585 Implementation Decisions §"Pour Copilot")
+//! `session.usage_checkpoint` / `session.shutdown` carry `usage.inputTokens` /
+//! `outputTokens`, **cumulative since session start**. Two consequences:
 //!
-//! Copilot's `session.usage_checkpoint` / `session.shutdown` events (the same two
-//! kinds [`crate::copilot_journal::reported_cost_usd`] reads) carry a `usage`
-//! object whose `inputTokens` / `outputTokens` fields are **cumulative since
-//! session start** — mirroring `totalNanoAiu`'s own cumulative semantics. Two
-//! rules the issue is explicit about:
-//!
-//! - `inputTokens` **already includes** whatever the journal separately reports
-//!   as cache (`cacheReadTokens` / `cacheCreationTokens`), so those two buckets are
-//!   read for information only and are **never added again** — doing so would
-//!   double-count the cache.
-//! - the cumulative counters are converted to their **per-turn contribution**
-//!   (this reading minus the previous one) before the max is sought — the
-//!   cumulative *total* grows monotonically and would otherwise always crown the
-//!   session's LAST turn as its peak, whatever that turn actually occupied.
-//!
-//! A turn's occupancy is then `Δ inputTokens + Δ outputTokens` for that
-//! checkpoint. The session's peak is the max across all such deltas.
+//! - `inputTokens` already includes `cacheReadTokens` / `cacheCreationTokens`:
+//!   adding those would double-count the cache.
+//! - the counters are converted to a per-turn delta before the max is sought;
+//!   on the raw cumulative totals the LAST turn would always win.
 
 use serde_json::Value;
-
-// --- Claude ------------------------------------------------------------------
 
 /// One assistant message's dedup key and context occupancy — the same four
 /// cache/input buckets [`crate::run_cost`]'s `Usage` costs, plus output, folded
@@ -62,10 +36,9 @@ struct ClaudeTurn {
     occupancy: u64,
 }
 
-/// Parse one Claude transcript line into a [`ClaudeTurn`], or `None` to skip it —
-/// tolerant of torn/invalid JSON, `<synthetic>` messages, and non-assistant lines,
-/// mirroring `run_cost::parse_line`'s tolerance exactly (a session transcript is
-/// external input, never trusted to be well-formed).
+/// Parse one Claude transcript line into a [`ClaudeTurn`], or `None` to skip it.
+/// Tolerant of torn JSON, `<synthetic>` messages and non-assistant lines: a
+/// session transcript is external input, never trusted to be well-formed.
 fn parse_claude_line(raw: &str) -> Option<ClaudeTurn> {
     let v: Value = serde_json::from_str(raw).ok()?;
     if v.get("type").and_then(|t| t.as_str()) != Some("assistant") {
@@ -111,10 +84,9 @@ fn parse_claude_line(raw: &str) -> Option<ClaudeTurn> {
 
 /// The session's context peak, in tokens — the maximum per-turn occupancy across
 /// every **deduplicated** assistant message in `text` (a Claude JSONL transcript,
-/// main session or subagent — the parser is the same either way, ADR-0051's "a
-/// capability is proper to the harness", not to the role). `None` when the
-/// transcript carries no readable usage at all — never `Some(0)`, so an absent
-/// reading is never mistaken for a session that used no context.
+/// main session or subagent — the same parser either way, a capability being
+/// proper to the harness, not to the role). `None` rather than `Some(0)` when no
+/// usage is readable, so an absent reading is never read as "used no context".
 pub(crate) fn claude_session_peak(text: &str) -> Option<u64> {
     let mut seen = std::collections::HashSet::new();
     text.lines()
@@ -130,18 +102,14 @@ pub(crate) fn claude_session_peak(text: &str) -> Option<u64> {
         .max()
 }
 
-/// The `[start, end]` wall-clock span covered by every top-level `"timestamp"`
-/// field found across `text`'s lines (a Claude JSONL transcript) — the "reliable
-/// start/end bounds" #585's subagent-duration user story asks for, since a
-/// subagent has no `node_started`/`node_completed` pair of its own (only its
-/// parent Node does). Both timestamps are the transcript's own RFC-3339 strings,
-/// unparsed here: the caller ([`crate::stats_performance`]) already owns
-/// `chrono` diffing for every other duration in Performance, so this stays a
-/// pure string min/max, not a second date library entry point.
+/// The `[start, end]` wall-clock span of every top-level `"timestamp"` in `text`
+/// — the duration bounds a subagent lacks, having no `node_started`/
+/// `node_completed` pair of its own. Timestamps stay unparsed RFC-3339 strings:
+/// the caller ([`crate::stats_performance`]) already owns `chrono` diffing, so
+/// this stays a string min/max rather than a second date-library entry point.
 ///
-/// `None` when not a single line carries a readable `timestamp` — the caller
-/// reports a motivated absence rather than inventing a duration (#585 explicitly
-/// forbids inventing a subagent duration without reliable bounds).
+/// `None` when no line carries a readable `timestamp`: the caller must report a
+/// motivated absence, never invent a subagent duration (#585).
 pub(crate) fn claude_transcript_time_span(text: &str) -> Option<(String, String)> {
     let mut min: Option<String> = None;
     let mut max: Option<String> = None;
@@ -161,8 +129,6 @@ pub(crate) fn claude_transcript_time_span(text: &str) -> Option<(String, String)
     }
     min.zip(max)
 }
-
-// --- Copilot -------------------------------------------------------------------
 
 /// One `usage` reading off a Copilot journal event — cumulative since session
 /// start, exactly like `totalNanoAiu`.
@@ -184,11 +150,8 @@ fn parse_copilot_usage(value: &Value) -> Option<CopilotReading> {
 /// The session's context peak, in tokens — the maximum per-turn occupancy across
 /// every `session.usage_checkpoint` / `session.shutdown` reading in `journal`.
 /// Each reading is **cumulative**, so occupancy is the delta from the previous
-/// reading (the first reading's delta is against a zero baseline); `inputTokens`
-/// already includes whatever the journal separately reports as cache, so only
-/// `inputTokens` and `outputTokens` are read — `cacheReadTokens` /
-/// `cacheCreationTokens`, if present, are never added a second time. `None` when
-/// the journal carries no usage reading at all.
+/// one (the first is against a zero baseline); `inputTokens` already includes the
+/// cache, so `cacheReadTokens` / `cacheCreationTokens` are never added again.
 pub(crate) fn copilot_session_peak(journal: &str) -> Option<u64> {
     let mut prev_input = 0u64;
     let mut prev_output = 0u64;
@@ -223,8 +186,6 @@ pub(crate) fn copilot_session_peak(journal: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // --- Claude --------------------------------------------------------------
 
     fn claude_line(
         id: &str,
@@ -267,7 +228,7 @@ mod tests {
     #[test]
     fn claude_dedup_keeps_the_replayed_message_from_inflating_the_peak() {
         // The same (message.id, requestId) written twice (resume/compaction
-        // replay, ADR-0022) must count once — the peak must not double it.
+        // replay, ADR-0022) must count once.
         let one_turn = claude_line("m1", "r1", 400, 50, 300, 0);
         let replayed = format!("{one_turn}\n{one_turn}\n");
         assert_eq!(claude_session_peak(&replayed), Some(750));
@@ -305,13 +266,11 @@ mod tests {
 
     #[test]
     fn claude_peak_reused_for_a_subagent_transcript() {
-        // #585: a subagent transcript is read by the exact same parser as the
-        // parent's — the peak has no notion of "role", only of turns.
+        // A subagent transcript uses the parent's parser: the peak has no notion
+        // of "role", only of turns.
         let text = claude_line("sub-1", "r1", 200, 30, 0, 0);
         assert_eq!(claude_session_peak(&format!("{text}\n")), Some(230));
     }
-
-    // --- Claude time span ------------------------------------------------------
 
     fn claude_line_at(id: &str, ts: &str) -> String {
         serde_json::json!({
@@ -366,8 +325,6 @@ mod tests {
         assert_eq!(claude_transcript_time_span(&format!("{no_ts}\n")), None);
     }
 
-    // --- Copilot ---------------------------------------------------------------
-
     fn checkpoint(input: u64, output: u64, cache_read: u64) -> String {
         serde_json::json!({
             "type": "session.usage_checkpoint",
@@ -386,12 +343,9 @@ mod tests {
 
     #[test]
     fn copilot_peak_converts_cumulative_counters_to_a_per_turn_contribution() {
-        // Two turns: cumulative inputTokens grows 500 -> 1300 (turn 2 alone added
-        // 800), outputTokens grows 100 -> 260 (turn 2 added 160). Turn 1's own
-        // contribution (500 + 100 = 600) is smaller than turn 2's (800 + 160 =
-        // 960) — the max must be turn 2's contribution, not the final cumulative
-        // total (1300 + 260 = 1560), which a naive "read the last checkpoint"
-        // would wrongly report.
+        // Turn 2 contributes 800 + 160 = 960, turn 1 only 600. The max must be
+        // 960, not the final cumulative total (1300 + 260 = 1560) a naive "read
+        // the last checkpoint" would report.
         let journal = format!(
             "{}\n{}\n",
             checkpoint(500, 100, 0),
@@ -402,10 +356,8 @@ mod tests {
 
     #[test]
     fn copilot_peak_never_double_counts_cache_already_inside_input_tokens() {
-        // `inputTokens` already includes the cache; a naive parser that also adds
-        // `cacheReadTokens` would inflate the peak past what actually occupied the
-        // window. A single turn: inputTokens=1000 (which already covers the 400
-        // reported as cache) + outputTokens=50 => peak must be 1050, not 1450.
+        // inputTokens=1000 already covers the 400 reported as cache; adding
+        // `cacheReadTokens` again would give 1450 instead of 1050.
         let journal = checkpoint(1000, 50, 400);
         assert_eq!(copilot_session_peak(&format!("{journal}\n")), Some(1050));
     }

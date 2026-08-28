@@ -16,8 +16,6 @@ pub(crate) fn compute_ready_to_spawn(
         .into_iter()
         .filter(|node_id| match run_state.nodes.get(node_id) {
             None => true,
-            // #620: a `Skipped` node is settled just like `Completed` — treat it
-            // identically for re-spawn eligibility.
             Some(n) => n.status.is_settled_complete(),
         })
         .map(|node_id| ReadySpawn { node_id, iter: 1 })
@@ -211,7 +209,6 @@ mod tests {
             prompt_required: true,
         };
 
-        // First call: planner is ready (entry node, no state yet)
         let state = empty_run_state();
         let ready = compute_ready_to_spawn(&pipeline, &state);
         assert_eq!(
@@ -222,7 +219,6 @@ mod tests {
             }]
         );
 
-        // Second call: planner is now Running (simulates after first spawn)
         let mut state = empty_run_state();
         state
             .nodes
@@ -230,7 +226,6 @@ mod tests {
         let ready = compute_ready_to_spawn(&pipeline, &state);
         assert!(ready.is_empty(), "running node should not be re-spawned");
 
-        // Third call: planner completed, implementer becomes ready
         let mut state = empty_run_state();
         state
             .nodes
@@ -244,7 +239,6 @@ mod tests {
             }]
         );
 
-        // Fourth call: implementer now running too — nothing to spawn
         state
             .nodes
             .insert("implementer".into(), running_node("implementer"));

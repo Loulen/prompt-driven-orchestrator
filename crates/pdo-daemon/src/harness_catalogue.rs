@@ -464,10 +464,6 @@ pub(crate) fn advertises_subcommand(help: &str, name: &str) -> bool {
     })
 }
 
-// ---------------------------------------------------------------------------
-// Source 1 — the generated shell-completion script (#629, ADR-0056)
-// ---------------------------------------------------------------------------
-
 /// Backstop bound on one case arm's body, for a generator that ends its arms some
 /// way other than `;;` / `esac`. The `compgen -W` list *itself* may be far longer
 /// (copilot's is ~700 chars); this bounds only where we look for the `-W`.
@@ -543,10 +539,6 @@ fn compgen_word_list(rest: &str) -> Vec<String> {
     };
     split_tokens(&inner[..close], &[' ', '\t', '\n'])
 }
-
-// ---------------------------------------------------------------------------
-// Source 2 — the settings help topic (#629, ADR-0056)
-// ---------------------------------------------------------------------------
 
 /// How many lines past a settings key we read its bullet list before giving up — a
 /// generous ceiling on one setting's block (copilot's `model` bullets 27 ids).
@@ -664,7 +656,6 @@ mod tests {
 
     #[test]
     fn parses_a_bracketed_pipe_model_list() {
-        // copilot-shape help: models in a `[a|b|c]` group beside `--model`.
         let help = "\
 Usage: copilot [options]
 
@@ -684,14 +675,12 @@ Options:
                 "gemini-2.5-pro"
             ]
         );
-        // No effort enumeration in this help ⇒ no effort axis.
         assert!(cat.efforts.is_empty());
         assert!(!cat.has_effort_axis());
     }
 
     #[test]
     fn parses_a_keyword_effort_list_and_a_keyword_model_list() {
-        // claude-shape help: `Choices:` / `One of:` comma lists.
         let help = "\
   --model <model>    Model for the session. Choices: sonnet, opus, haiku, opusplan
   --effort <level>   Reasoning effort. One of: low, medium, high, max
@@ -714,8 +703,6 @@ Options:
 
     #[test]
     fn seven_effort_stops_including_ones_claude_has_no_name_for() {
-        // AC #4: a harness may enumerate more effort stops than claude — the picker
-        // renders whatever the binary offers, not a curated five.
         let help = "  --effort <level>   [default|min|low|medium|high|max|ultra]\n";
         let cat = parse_help(help);
         assert_eq!(
@@ -935,15 +922,11 @@ Options:
         }
     }
 
-    // -- The subcommand gate (#629, ADR-0056) ------------------------------------
-
     #[test]
     fn a_command_list_is_read_bare_or_binary_prefixed() {
-        // copilot's shape: bare command names under `Commands:`.
         let copilot = "Commands:\n  completion <shell>   Generate a shell completion script\n  help [topic]         Display help information\n";
         assert!(advertises_subcommand(copilot, "completion"));
         assert!(advertises_subcommand(copilot, "help"));
-        // opencode's shape: each command line repeats the binary name.
         let opencode = "Commands:\n  opencode completion    generate shell completion script\n  opencode models        list all available models\n";
         assert!(advertises_subcommand(opencode, "completion"));
         assert!(
@@ -978,8 +961,6 @@ Commands:
         );
     }
 
-    // -- Source 1: the generated completion script (#629, ADR-0056) ---------------
-
     /// The verbatim shape of `copilot completion bash` 1.0.80: a `case` on the
     /// previous word, one arm per value-taking flag, choices in a `compgen -W` list.
     /// Abridged to five model ids; the structure is what is under test.
@@ -1004,9 +985,6 @@ Commands:
 
     #[test]
     fn a_completion_script_yields_both_axes() {
-        // AC #1/#2: the machine-generated source carries the model ids `--help` only
-        // describes in prose — including `auto`, copilot's automatic selector, which
-        // the settings prose does not list.
         let cat = parse_completion_script(COPILOT_COMPLETION);
         assert_eq!(
             cat.models,
@@ -1081,8 +1059,6 @@ Commands:
             vec!["opus", "sonnet"]
         );
     }
-
-    // -- Source 2: the settings help topic (#629, ADR-0056) ----------------------
 
     /// The verbatim shape of `copilot help config` 1.0.80: settings keys in
     /// backticks, allowed values bulleted and quoted underneath. Abridged.
@@ -1162,12 +1138,8 @@ Commands:
         );
     }
 
-    // -- The per-axis fold across sources (#629, ADR-0056) -----------------------
-
     #[test]
     fn each_axis_is_owned_by_the_first_source_that_offers_it() {
-        // The copilot case with an older binary: models come from the settings topic,
-        // efforts from `--help`, and neither overwrites an axis already answered.
         let mut cat = parse_settings_prose(COPILOT_HELP_CONFIG);
         assert!(!cat.is_complete(), "models only ⇒ the walk continues");
         cat.fill_missing_from(parse_help(

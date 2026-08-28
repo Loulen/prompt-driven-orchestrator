@@ -277,8 +277,6 @@ describe("SettingsModal", () => {
     expect((screen.getByTestId("setting-guard-timeout") as HTMLInputElement).value).toBe("60");
   });
 
-  // --- price table (#427, ADR-0034) ---
-
   it("names both price paths even though neither file exists", async () => {
     // Nothing is ever seeded (that would freeze a snapshot, ADR-0031 §2), so naming
     // the paths IS the whole discoverability story.
@@ -916,8 +914,6 @@ describe("SettingsModal — Interface / single-tab toggle (#342)", () => {
   });
 });
 
-// --- Staging profiles (#432, ADR-0031 §2-§7) ---------------------------------
-
 describe("relativiseToHome (#432)", () => {
   // The pure half of "an explorer pick becomes an entry": `onPick` yields an ABSOLUTE
   // path, an entry is RELATIVE to `$HOME`. Returning `null` (instead of guessing) is what
@@ -1208,8 +1204,6 @@ describe("SettingsModal — staging profiles panel (#432)", () => {
     expect(screen.queryByTestId("staging-profiles-error")).not.toBeInTheDocument();
   });
 
-  // --- #468: per-profile environment ---------------------------------------
-
   it("sets an environment variable through a full-replacement PUT", async () => {
     await openPanel();
     // A profile with no env says so explicitly — an empty area would read as a loading
@@ -1294,8 +1288,6 @@ describe("SettingsModal — staging profiles panel (#432)", () => {
     expect(warning).toHaveTextContent(/event log/i);
     expect(warning).toHaveTextContent(/docker inspect/i);
   });
-
-  // --- #467: the profile's image source -----------------------------------
 
   it("sets an explicit registry ref on the profile", async () => {
     await openPanel();

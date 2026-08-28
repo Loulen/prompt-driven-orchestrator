@@ -253,7 +253,6 @@ async fn close_assistant_reaps_the_session() {
         "the tmux session is gone after leave"
     );
 
-    // Reaping again is a harmless no-op (double-leave / race).
     let second = delete_assistant(&daemon)
         .await
         .json::<serde_json::Value>()
@@ -291,10 +290,6 @@ async fn close_assistant_clears_the_focus() {
     );
     assert_eq!(focus["age_secs"], serde_json::json!(null));
 }
-
-// ---------------------------------------------------------------------------
-// The focus (#594, ADR-0051 §2)
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn focus_round_trips_and_resolves_the_absolute_path() {
@@ -447,10 +442,6 @@ async fn focus_never_spawns_the_assistant() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// The sweep (#594, ADR-0051 §4)
-// ---------------------------------------------------------------------------
-
 /// **Point 2 of the issue**: the user is editing (the UI re-declared its focus),
 /// with no terminal attached — the state after the info panel auto-closes on an
 /// edit-tab switch (#385). The session must survive a full sweep pass.
@@ -536,10 +527,6 @@ async fn the_sweep_keeps_an_attached_assistant_with_no_focus() {
 
     let _ = futures_util::SinkExt::close(&mut ws).await;
 }
-
-// ---------------------------------------------------------------------------
-// The save (#594, ADR-0051) — the assistant's one write path
-// ---------------------------------------------------------------------------
 
 /// A three-node template, valid enough for the parser and different enough from
 /// the seeded one that "did it write?" is unambiguous.

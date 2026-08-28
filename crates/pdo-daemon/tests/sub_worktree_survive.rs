@@ -1,9 +1,7 @@
 //! Layer 3a — sub-worktree survival integration tests for issues #32 and #489.
 //!
-//! Spawns a real TestDaemon with a code-mutating pipeline, creates a run,
-//! marks the code-mutating node done, then asserts:
-//! - the sub-worktree directory still exists on disk
-//! - GET /runs/{run_id}/nodes/{node_id}/prompt?iter=1 returns 200
+//! A code-mutating node's sub-worktree must outlive the node's completion, so the
+//! work stays inspectable.
 //!
 //! #489 extends the file to the other half of "survives": a `restart_node` on the
 //! same node must re-spawn it **without destroying the dead session's uncommitted
@@ -99,8 +97,6 @@ async fn create_run(daemon: &TestDaemon) -> String {
     let json: serde_json::Value = resp.json().await.unwrap();
     json["run_id"].as_str().unwrap().to_string()
 }
-
-// ── #489 helpers ─────────────────────────────────────────────────────────────
 
 /// `git <args>` in `dir`, stdout trimmed. Panics on a non-zero exit: every use
 /// below is a fact the assertions depend on, so a silent empty string would turn a
@@ -386,14 +382,11 @@ async fn a_panic_on_a_reused_sub_worktree_destroys_nothing() {
     assert_eq!(git_out(&sub_wt_dir, &["rev-parse", "HEAD"]), head_before);
 }
 
-/// Layer 3a: after marking a code-mutating node done, the sub-worktree
-/// directory must still exist on disk and the prompt endpoint must return 200.
 #[tokio::test]
 async fn sub_worktree_survives_node_completion() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let run_id = create_run(&daemon).await;
 
-    // The daemon creates the sub-worktree at spawn time. Verify it exists.
     let sub_wt_dir = daemon
         .repo_root()
         .join(".pdo/runs")
@@ -436,14 +429,12 @@ async fn sub_worktree_survives_node_completion() {
         .unwrap();
     assert_eq!(resp.status(), 200);
 
-    // Sub-worktree directory must still exist after node completion (refs #32)
     assert!(
         sub_wt_dir.exists(),
         "sub-worktree must survive after merge for inspection (refs #32): {}",
         sub_wt_dir.display()
     );
 
-    // Prompt endpoint must return 200 for the completed iter
     let resp = reqwest::get(format!(
         "{}/runs/{}/nodes/{}/prompt?iter=1",
         daemon.url(),
@@ -462,15 +453,13 @@ async fn sub_worktree_survives_node_completion() {
     let body = resp.text().await.unwrap();
     assert!(!body.is_empty(), "prompt response body must be non-empty");
 
-    // Cleanup tmux session
     let session_name = format!("pdo-{run_id}-{NODE_ID}-iter-1");
     let _ = std::process::Command::new("tmux")
         .args(["kill-session", "-t", &session_name])
         .output();
 }
 
-/// Layer 3a: cleanup_run must still remove all sub-worktrees even though
-/// they now survive merge.
+/// The flip side of #32: surviving merge must not mean surviving `cleanup_run`.
 #[tokio::test]
 async fn cleanup_run_removes_surviving_sub_worktrees() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
@@ -484,7 +473,6 @@ async fn cleanup_run_removes_surviving_sub_worktrees() {
         .join(NODE_ID)
         .join("iter-1");
 
-    // Write a code change and mark done
     std::fs::write(sub_wt_dir.join("implementation.rs"), "fn main() {}\n").unwrap();
 
     let port_dir = daemon
@@ -511,10 +499,8 @@ async fn cleanup_run_removes_surviving_sub_worktrees() {
         .unwrap();
     assert_eq!(resp.status(), 200);
 
-    // Sub-worktree survives merge
     assert!(sub_wt_dir.exists());
 
-    // Run cleanup
     let resp = reqwest::Client::new()
         .post(format!("{}/runs/{}/commands", daemon.url(), run_id))
         .json(&serde_json::json!({ "kind": "cleanup_run" }))
@@ -523,13 +509,11 @@ async fn cleanup_run_removes_surviving_sub_worktrees() {
         .unwrap();
     assert_eq!(resp.status(), 200);
 
-    // Sub-worktree must be gone after cleanup
     assert!(
         !sub_wt_dir.exists(),
         "cleanup_run must remove sub-worktree directory"
     );
 
-    // Run directory must be gone
     let run_dir = daemon.repo_root().join(".pdo/runs").join(&run_id);
     assert!(
         !run_dir.exists(),

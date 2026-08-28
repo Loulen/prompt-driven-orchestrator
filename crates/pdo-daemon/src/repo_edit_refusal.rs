@@ -3,16 +3,14 @@
 //!
 //! Same shape as [`completion_refusal`](crate::completion_refusal): the cause is a
 //! value, and [`repo_edit_refusal_response`] is the **single** place a status is
-//! chosen. [`RepoEditRefusal::status`] is a closed `match` with **no wildcard**, so
-//! a new variant cannot compile until its status is decided — the `event_log`
-//! dispatch patron. The whole chain travels as `Option<RepoEditRefusal>` (≈40 bytes)
-//! and never as `Result<_, axum::Response>`: a `Response` returned by value in a
-//! `Result::Err` trips `clippy::result_large_err`, which the CI treats as
-//! `-D warnings`.
+//! chosen. Don't carry the refusal as `Result<_, axum::Response>`: a `Response`
+//! returned by value in a `Result::Err` trips `clippy::result_large_err`, which the
+//! CI treats as `-D warnings` — hence `Option<RepoEditRefusal>` (≈40 bytes)
+//! throughout.
 //!
-//! `PATCH /runs/{id}/repos` is additive — it only ever adds or drops read-only
-//! secondary snapshots — so there is **no** `recoverable` axis here (that flag is
-//! `pdo complete`'s exit-3-vs-4 signal, meaningless to an HTTP edit). Every body is
+//! Don't add a `recoverable` axis: `PATCH /runs/{id}/repos` is additive (it only
+//! adds or drops read-only secondary snapshots), and that flag is `pdo complete`'s
+//! exit-3-vs-4 signal, meaningless to an HTTP edit. Every body is
 //! `{ "error": <slug>, "message": <prose>, ...detail }`.
 
 use axum::{http::StatusCode, response::IntoResponse, response::Response, Json};
@@ -20,47 +18,57 @@ use axum::{http::StatusCode, response::IntoResponse, response::Response, Json};
 use crate::event_log::RunStatus;
 
 /// The cause of a refused `PATCH /runs/{id}/repos`.
-///
-/// `Clone` for symmetry with `CompletionRefusal` (the handler logs the reason then
-/// projects it); the variants are small.
 #[derive(Debug, Clone)]
 pub(crate) enum RepoEditRefusal {
-    /// Run tombstoned (#328 / ADR-0024). Keeps its `410` — "never 2xx" is not
-    /// "always 409".
-    RunForgotten { run_id: String },
-    /// The projection renders no Run for this id — unknown target, `404`.
+    /// Run tombstoned (#328 / ADR-0024).
+    RunForgotten {
+        run_id: String,
+    },
     RunNotFound,
-    /// The Run is terminal (`Completed`/`Failed`/`Skipped`/`Halted`/`Archived`) and
-    /// its repo list is frozen for good (#221). `409` — the request is well-formed,
-    /// the target is simply not editable any more. The reducer no-ops too (double
-    /// guard), so even a forced append cannot un-terminalize the Run.
-    RunTerminal { status: RunStatus },
+    /// The Run is terminal and its repo list is frozen for good (#221). The reducer
+    /// no-ops too (double guard), so even a forced append cannot un-terminalize it.
+    RunTerminal {
+        status: RunStatus,
+    },
     /// An `add` entry resolves (by canonical path) to the Run's **primary** repo. A
     /// repo cannot be its own read-only secondary — the nodes already work in the
-    /// primary. `400`.
-    SelfReference { repo: String },
-    /// An `add` entry is already an active secondary of this Run. `409`.
-    RepoAlreadyPinned { repo: String },
+    /// primary.
+    SelfReference {
+        repo: String,
+    },
+    RepoAlreadyPinned {
+        repo: String,
+    },
     /// An `add` entry is not an absolute path / not a git repo, or its base ref does
-    /// not resolve to a single commit **locally** (no fetch, ever). `400` — the same
+    /// not resolve to a single commit **locally** (no fetch, ever) — the same
     /// fail-fast boundary the create path enforces, so a bad repo yields no snapshot
     /// and no event.
-    BadRepo { repo: String, error: String },
-    /// `git worktree add --detach` failed while materialising the snapshot — a panne,
-    /// not a verdict, so `500`. Raised **before** any event is appended: the log
-    /// never carries a pin whose snapshot is missing.
-    SnapshotMaterializeFailed { repo: String, error: String },
+    BadRepo {
+        repo: String,
+        error: String,
+    },
+    /// `git worktree add --detach` failed while materialising the snapshot. Raised
+    /// **before** any event is appended: the log never carries a pin whose snapshot
+    /// is missing.
+    SnapshotMaterializeFailed {
+        repo: String,
+        error: String,
+    },
     /// A failure to load / project the Run before any verdict (db read, forgotten
-    /// check). `500` — the daemon could not decide, not a refusal it argues.
-    Internal { error: String },
+    /// check) — the daemon could not decide, not a refusal it argues.
+    Internal {
+        error: String,
+    },
     /// The `RunReposEdited` event could not be appended after the snapshots were
-    /// materialised. `500`.
-    AppendFailed { error: String },
+    /// materialised.
+    AppendFailed {
+        error: String,
+    },
 }
 
 impl RepoEditRefusal {
     /// The stable slug clients discriminate on — **never** the status (a status has
-    /// too few bits for the causes here). Matches the table in the ADR/plan.
+    /// too few bits for the causes here).
     pub(crate) fn slug(&self) -> &'static str {
         match self {
             Self::RunForgotten { .. } => "run_forgotten",
@@ -75,9 +83,8 @@ impl RepoEditRefusal {
         }
     }
 
-    /// HTTP status. Closed `match`, **no wildcard**, **never** `2xx`: adding a
-    /// variant does not compile until its status is decided (the `event_log`
-    /// dispatch patron), and `a_refusal_never_projects_to_a_2xx` proves the range.
+    /// HTTP status. Don't add a wildcard arm: the closed `match` is what stops a new
+    /// variant compiling until its status is decided.
     fn status(&self) -> StatusCode {
         match self {
             Self::RunForgotten { .. } => StatusCode::GONE,
@@ -118,7 +125,7 @@ impl RepoEditRefusal {
     }
 
     /// The variant-specific detail, merged flat into the body next to `error` and
-    /// `message` — mirrors [`completion_refusal`](crate::completion_refusal).
+    /// `message`.
     fn detail(&self) -> serde_json::Value {
         match self {
             Self::RunTerminal { status } => serde_json::json!({ "status": status_slug(status) }),
@@ -134,8 +141,8 @@ impl RepoEditRefusal {
     }
 }
 
-/// The snake_case wire token of a [`RunStatus`], for the body / prose. Local so
-/// this module owns its projection and does not lean on `serde` internals leaking.
+/// The snake_case wire token of a [`RunStatus`]. Local on purpose: don't reach for
+/// `serde` internals, they are not a wire contract.
 fn status_slug(status: &RunStatus) -> &'static str {
     match status {
         RunStatus::Running => "running",
@@ -150,10 +157,6 @@ fn status_slug(status: &RunStatus) -> &'static str {
 }
 
 /// The **single** projection of a repo-edit refusal onto HTTP.
-///
-/// Takes a reference: the caller logs the refusal before projecting it, and a
-/// `Response` returned by value from a `Result::Err` would trip
-/// `clippy::result_large_err` (`-D warnings` in CI).
 pub(crate) fn repo_edit_refusal_response(r: &RepoEditRefusal) -> Response {
     let mut body = serde_json::json!({
         "error": r.slug(),
@@ -171,9 +174,8 @@ pub(crate) fn repo_edit_refusal_response(r: &RepoEditRefusal) -> Response {
 mod tests {
     use super::*;
 
-    /// One sample per variant, produced behind an exhaustive `match` **without a
-    /// wildcard** — a new variant that is not sampled here stops compiling. Same
-    /// floor as `completion_refusal::every_refusal`.
+    /// One sample per variant, behind an exhaustive `match` **without a wildcard** —
+    /// a new variant that is not sampled here stops compiling.
     fn every_refusal() -> Vec<RepoEditRefusal> {
         let all = vec![
             RepoEditRefusal::RunForgotten {
@@ -228,7 +230,6 @@ mod tests {
         all
     }
 
-    /// The invariant: no refusal ever projects to a `2xx`.
     #[test]
     fn a_refusal_never_projects_to_a_2xx() {
         for r in every_refusal() {
@@ -241,8 +242,7 @@ mod tests {
         }
     }
 
-    /// "Never 2xx" ≠ "always 409": the tombstone keeps its 410, the unknown target
-    /// its 404, the bad-repo / self-reference their 400, the pannes their 500.
+    /// "Never 2xx" is not "always 409".
     #[test]
     fn statuses_match_the_table() {
         let cases = [
@@ -298,8 +298,6 @@ mod tests {
         }
     }
 
-    /// Every body carries a string `error` slug and a string `message`, and the
-    /// slug round-trips.
     #[tokio::test]
     async fn every_body_carries_error_and_message() {
         for r in every_refusal() {
@@ -318,8 +316,7 @@ mod tests {
         }
     }
 
-    /// The terminal refusal carries the offending status slug so a client can tell
-    /// a Completed Run from an Archived one.
+    /// A client must be able to tell a Completed Run from an Archived one.
     #[tokio::test]
     async fn terminal_refusal_names_the_status() {
         let r = RepoEditRefusal::RunTerminal {

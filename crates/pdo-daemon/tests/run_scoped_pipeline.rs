@@ -140,7 +140,6 @@ async fn run_creates_pipeline_copy() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let run_id = create_run(&daemon).await;
 
-    // Assert pipeline.yaml was copied to the run dir
     let yaml_path = daemon
         .repo_root()
         .join(".pdo")
@@ -154,7 +153,6 @@ async fn run_creates_pipeline_copy() {
         "content should match source pipeline"
     );
 
-    // Assert prompts dir was copied
     let prompts_dir = daemon
         .repo_root()
         .join(".pdo")
@@ -208,7 +206,6 @@ async fn cleanup_run_removes_pipeline_copy() {
     let run_dir = daemon.repo_root().join(".pdo").join("runs").join(&run_id);
     assert!(run_dir.join("pipeline.yaml").exists());
 
-    // Cleanup
     let resp = reqwest::Client::new()
         .post(format!("{}/runs/{}/commands", daemon.url(), run_id))
         .json(&serde_json::json!({ "kind": "cleanup_run" }))
@@ -217,7 +214,6 @@ async fn cleanup_run_removes_pipeline_copy() {
         .unwrap();
     assert!(resp.status().is_success(), "cleanup should succeed");
 
-    // The entire run dir (including pipeline.yaml) should be gone
     assert!(!run_dir.exists(), "run dir should be removed after cleanup");
 }
 
@@ -314,7 +310,6 @@ async fn run_scoped_save_syncs_prompt_to_canonical_template_dir() {
     );
 }
 
-/// Wait for a specific event kind + node_id on the WebSocket.
 async fn next_event_for_node(
     ws: &mut tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
@@ -453,7 +448,6 @@ edges:
 "#;
     std::fs::write(&yaml_path, new_yaml).unwrap();
 
-    // Should see a node_started event for implementer within the debounce + scheduler eval window
     let evt = next_event_for_node(
         &mut ws,
         "node_started",
@@ -479,7 +473,6 @@ async fn get_run_returns_augmented_node_defs() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let run_id = create_run(&daemon).await;
 
-    // Modify the run-scoped YAML to add a node
     let yaml_path = daemon
         .repo_root()
         .join(".pdo")
@@ -524,7 +517,6 @@ edges:
 "#;
     std::fs::write(&yaml_path, new_yaml).unwrap();
 
-    // GET /runs/:id should reflect the updated node_defs
     let resp = reqwest::get(format!("{}/runs/{}", daemon.url(), run_id))
         .await
         .unwrap();
@@ -544,8 +536,6 @@ edges:
     let edges = run_state["edges"].as_array().unwrap();
     assert_eq!(edges.len(), 2, "should reflect augmented edges");
 }
-
-// --- Issue #43: unrelated files under run worktree must not emit events ---
 
 /// Wait for a pipeline event attributed to one of the paths changed by the test.
 /// Startup may still deliver a debounced event for the copied prompt; that is a
@@ -620,8 +610,6 @@ async fn unrelated_md_in_run_worktree_does_not_emit_pipeline_event() {
         "unrelated .md files under run worktree must not emit pipeline events, got: {evt:?}"
     );
 }
-
-// --- Symmetric test: removing a node from the YAML should not spawn it ---
 
 const TWO_NODE_PIPELINE_NAME: &str = "two-node-test";
 const TWO_NODE_PIPELINE_YAML: &str = r#"name: two-node-test
@@ -787,7 +775,6 @@ edges:
         .unwrap();
     assert!(resp.status().is_success(), "mark_node_done should succeed");
 
-    // Wait and confirm: implementer should NOT receive a node_started event
     let evt = next_event_for_node(
         &mut ws,
         "node_started",

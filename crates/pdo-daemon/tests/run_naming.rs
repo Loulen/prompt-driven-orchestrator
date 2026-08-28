@@ -88,7 +88,6 @@ fn git_init_with_commit(repo: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `POST /runs` with the given body, asserting 201, returning the new run id.
 async fn create_run(daemon: &TestDaemon, mut body: serde_json::Value) -> String {
     // #470: default the target repo to the daemon's own root, so each call site
     // stays about naming and none of them has to restate the boundary rule.
@@ -106,7 +105,6 @@ async fn create_run(daemon: &TestDaemon, mut body: serde_json::Value) -> String 
     json["run_id"].as_str().unwrap().to_string()
 }
 
-/// Fetch `GET /runs` and return the entry for `run_id`.
 async fn run_entry(daemon_url: &str, run_id: &str) -> serde_json::Value {
     let resp = reqwest::get(format!("{daemon_url}/runs")).await.unwrap();
     assert_eq!(resp.status(), 200);
@@ -165,7 +163,6 @@ async fn run_with_input_but_no_name_has_no_placeholder() {
     );
 }
 
-/// A user-supplied name is honoured verbatim and not overwritten by a placeholder.
 #[tokio::test]
 async fn user_named_run_keeps_its_name() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
@@ -183,9 +180,6 @@ async fn user_named_run_keeps_its_name() {
     );
 }
 
-// --- #338: configurable auto-naming ------------------------------------------
-
-/// PUT `/settings`, asserting 200.
 async fn put_settings(daemon: &TestDaemon, body: serde_json::Value) {
     let resp = reqwest::Client::new()
         .put(format!("{}/settings", daemon.url()))

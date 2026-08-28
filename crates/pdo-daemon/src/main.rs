@@ -38,15 +38,13 @@ fn main() -> ExitCode {
                 .context("failed to build tokio runtime")
                 .and_then(|rt| rt.block_on(run_daemon(port)))
         }
-        // Unreachable: intercepted above so it can return its own exit code.
         Commands::Complete { .. } => unreachable!("`complete` returns its own ExitCode"),
         Commands::Fail { reason } => run_fail(reason),
         Commands::Skip { reason } => run_skip(reason),
-        // A blocking one-shot like Complete/Fail/Skip — no tokio runtime (#156).
+        // Every arm below is a blocking one-shot: no tokio runtime, for the
+        // `reqwest::blocking` reason given above.
         Commands::Service { action } => run_service(action),
-        // Blocking one-shot as well (#269): pure fs + YAML rewriting.
         Commands::Migrate { dir, dry_run } => run_migrate(dir, dry_run),
-        // Blocking one-shot (#480): HTTP to the daemon, no tokio runtime.
         Commands::Reap {
             count,
             dry_run,
@@ -54,8 +52,6 @@ fn main() -> ExitCode {
             terminal_ttl_hours,
             budget_secs,
         } => run_reap(count, dry_run, ttl_hours, terminal_ttl_hours, budget_secs),
-        // Blocking one-shot (#617): pure rendering of the generated docs, plus at
-        // most one file rewrite under `--write`.
         Commands::Docs { action } => run_docs(action),
     };
 

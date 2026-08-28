@@ -1,94 +1,67 @@
 # ADR-0027 — Le « Run now » d'un Trigger est un fire de première classe
 
+Sans cet ADR, un agent réimplémenterait « Run now » comme un raccourci frontend qui POSTe `/runs`
+directement — contournant le guard, la gate d'overlap, l'audit `trigger_fires` et `triggered_by`.
+
 Date : 2026-07-13 · Statut : accepté · Issue : #341
-
-## Contexte
-
-« Run now » sur un Trigger était un raccourci purement frontend : il ouvrait la modale New
-Run pré-remplie et POSTait `/runs` directement. Conséquences : le guard n'était pas exécuté,
-la gate d'overlap était contournée, aucune ligne `trigger_fires` n'était écrite, et le Run
-créé ne portait pas `triggered_by`. Le choix initial (« le guard n'est pas exécuté », documenté
-dans CONTEXT.md) sidestepait l'ambiguïté guard/overlap — mais l'historique mentait par
-omission et « tester ce que fait ce Trigger » ne testait précisément pas le contrat du
-Trigger. #341 renverse ce choix.
 
 ## Décision
 
-Un fire manuel emprunte **exactement le chemin cron**, extrait en `fire_one_trigger(state,
-trigger, now, source)` (lib.rs), partagé verbatim entre le tick du scheduler
-(`FireSource::Cron`) et le nouvel endpoint `POST /triggers/{id}/fire` (`FireSource::Manual`).
-Guard, gate d'overlap, `prompt_required`, création du Run avec `triggered_by`, audit
-`trigger_fires` + broadcast WS `trigger_fired` : identiques. Le handler manuel se sérialise
-avec le tick via `trigger_tick_lock` (pas de course sur la fenêtre d'overlap).
+Un fire manuel emprunte **exactement le chemin cron**, extrait en `fire_one_trigger(state, trigger,
+now, source)`, partagé verbatim entre le tick du scheduler (`FireSource::Cron`) et `POST
+/triggers/{id}/fire` (`FireSource::Manual`). Guard, gate d'overlap, `prompt_required`, création du
+Run avec `triggered_by`, audit `trigger_fires` + broadcast WS : identiques. Le handler manuel se
+sérialise avec le tick via `trigger_tick_lock` (pas de course sur la fenêtre d'overlap).
 
-Contrat HTTP véridique (ADR-0025) :
-
-| Cas | Réponse |
-|---|---|
-| Trigger inconnu | `404` |
-| Trigger disabled | `409` nommant le trigger, **avant tout effet** — aucune ligne d'audit |
-| Référence pipeline/repo cassée | `409` « broken reference: … » (le cron garde son outcome `error` audité) |
-| Fire | `200 {ok:true, fired:true, run_id}` |
-| Guard exit ≠ 0 / overlap atteint | `200 {ok:true, fired:false, outcome, reason}` + ligne d'audit — un noop légal est un 200 honnête |
+Contrat HTTP véridique (ADR-0025) : `404` sur trigger inconnu ; `409` nommant le trigger s'il est
+disabled, **avant tout effet** — aucune ligne d'audit ; `409 broken reference` sur référence
+pipeline/repo cassée (le cron garde son outcome `error` audité) ; `200 {fired:true, run_id}` sur
+fire ; `200 {fired:false, outcome, reason}` + ligne d'audit sur guard non nul ou overlap atteint —
+un noop légal est un 200 honnête.
 
 Différences assumées entre manuel et cron :
 
-1. **`due` est forcé** : le clic de l'utilisateur *est* le planning. Le skip silencieux de
-   `decide()` (`!enabled || !due`) reste réservé au cron ; le handler vérifie `enabled` → 409
-   avant d'atteindre le chemin partagé.
-2. **`next_fire_at` intact** : le fire manuel ne recale jamais `set_next_fire` (gated sur
-   `FireSource::Cron`). Un « Run now » à 14 h 32 ne décale pas le slot de 15 h 00.
+1. **`due` est forcé** : le clic de l'utilisateur *est* le planning. Le skip silencieux de `decide()`
+   reste réservé au cron ; le handler vérifie `enabled` → 409 avant d'atteindre le chemin partagé.
+2. **`next_fire_at` intact** : le fire manuel ne recale jamais `set_next_fire`. Un « Run now » à
+   14 h 32 ne décale pas le slot de 15 h 00.
 
-Provenance dans l'historique : colonne additive **`source TEXT`** sur `trigger_fires`
-(`manual` / `cron`, NULL legacy ≈ cron), migrée par le même `ALTER` gardé par
-`pragma_table_info` que les colonnes #239/#244. **Pas de nouveaux outcomes** : l'origine est
-une dimension orthogonale au résultat ; l'UI n'a aucun nouvel état à apprendre (badge
-« manual » sur la ligne, c'est tout).
-
-Frontend : le bouton Play appelle l'endpoint puis ouvre le **détail du trigger** via
-`handleSelectTrigger` (seul chemin qui survit à la réconciliation #320), où la ligne
-apparaît — le handler WS `trigger_fired` bumpe désormais un `refreshKey` qui refetch
-l'historique du panneau ouvert (couvre aussi les fires cron tombant pendant la consultation).
+Provenance : colonne additive **`source TEXT`** sur `trigger_fires` (`manual` / `cron`, NULL legacy ≈
+cron), migrée par le même `ALTER` gardé par `pragma_table_info` que les colonnes #239/#244. **Pas de
+nouveaux outcomes** : l'origine est une dimension orthogonale au résultat ; l'UI n'a aucun nouvel
+état à apprendre.
 
 ## Alternatives rejetées
 
-- **Fire quand même sur un trigger disabled** (« un clic humain est explicite ») : un état
-  qui interdit l'action mérite un refus explicite, pas un contournement — cohérent ADR-0025.
-  Réactiver puis cliquer reste à un clic.
-- **Bump de `next_fire_at` après un fire manuel** : le planning cron appartient au heartbeat
-  cron (invariant UTC #222) ; un fire manuel n'est pas un slot consommé.
-- **Nouveaux outcomes `fired-manual`/…** : dimension provenance encodée dans l'outcome →
-  explosion combinatoire et nouveaux status-dots à enseigner à l'UI. La colonne `source`
-  suit le précédent #244 (colonnes additives descriptives).
+- **Fire quand même sur un trigger disabled** : un état qui interdit l'action mérite un refus
+  explicite, pas un contournement (ADR-0025). Réactiver puis cliquer reste à un clic.
+- **Bump de `next_fire_at` après un fire manuel** : le planning cron appartient au heartbeat cron
+  (invariant UTC #222) ; un fire manuel n'est pas un slot consommé.
+- **Nouveaux outcomes `fired-manual`/…** : explosion combinatoire et nouveaux status-dots à
+  enseigner à l'UI. La colonne `source` suit le précédent #244.
 
 ## Conséquences
 
-- L'ancienne modale « Run now » (mode `run` de `NewRunModal`) n'est plus appelée par le
-  bouton Play ; le mode reste dans le code (inoffensif) tant qu'un autre appelant existe.
-- Un guard lent (timeout dur ~30 s) rend la requête manuelle synchrone d'autant — acceptable
-  pour un geste explicite ; le lock tick est tenu pendant ce temps, comme pour un tick cron.
+- Un guard lent (timeout dur ~30 s) rend la requête manuelle synchrone d'autant — acceptable pour un
+  geste explicite ; le lock tick est tenu pendant ce temps, comme pour un tick cron.
 
 ## Addendum (2026-07-18, #350) — le pôle opposé : « Tester le guard (dry-run) »
 
-Le même axe « exécuter le guard d'un Trigger » porte un second pôle, symétrique de « Run now » :
-tester le guard **sans le moindre effet de bord**. `POST /triggers/guard/test` (#350) exécute la
-commande de guard *telle qu'en cours de saisie dans l'onglet New trigger* (le Trigger n'est pas
-forcément sauvegardé) via un **seam pur** (`run_guard`, sans `Trigger` ni `AppState`), puis
+Le même axe porte un second pôle, symétrique : tester le guard **sans le moindre effet de bord**.
+`POST /triggers/guard/test` exécute la commande de guard *telle qu'en cours de saisie* (le Trigger
+n'est pas forcément sauvegardé) via un **seam pur** (`run_guard`, sans `Trigger` ni `AppState`), puis
 s'arrête au verdict : **aucun Run spawné, aucune ligne `trigger_fires`, aucun recalcul de
-`next_fire_at`, aucun lock de tick, aucune gate d'overlap**. L'endpoint est **guard-faithful** — il
-mappe `GuardResult` 1:1 — et le verdict **would-fire / would-reject** est composé **côté client** à
-partir de l'`outcome` retourné.
+`next_fire_at`, aucun lock de tick, aucune gate d'overlap**. L'endpoint est **guard-faithful** ; le
+verdict would-fire / would-reject est composé **côté client**.
 
 Pourquoi *ne pas* réutiliser `fire_one_trigger` avec un flag `dry_run` : ce chemin *est défini par
-ses effets* (audit + Run + provenance + lock) ; un flag qui les court-circuiterait tous ferait
-mentir son nom et rouvrirait la fenêtre de course que `trigger_tick_lock` ferme. Le dry-run n'a
-besoin que du guard, d'où un seam dédié à zéro effet de bord.
+ses effets* (audit + Run + provenance + lock) ; un flag qui les court-circuiterait tous ferait mentir
+son nom et rouvrirait la fenêtre de course que `trigger_tick_lock` ferme.
 
 La sécurité est **net-neutre** : le même sink `run_guard` → `sh -c` est déjà atteignable, sans auth,
-via `POST /triggers` + `POST /triggers/{id}/fire` (cf. ADR-0017 : « même surface, aucune nouvelle
-frontière de confiance »). Le durcissement du bind `0.0.0.0` (#260) reste orthogonal.
+via `POST /triggers` + `POST /triggers/{id}/fire` (ADR-0017 : « même surface, aucune nouvelle
+frontière de confiance »).
 
-Ce pôle n'est **pas** un ADR distinct : additif, trivialement réversible (aucune migration, aucun
-état persistant), il ne fait que compléter l'axe du présent ADR. Il se distingue aussi du **rejet
-de champ vide** à la création d'un Trigger (`prompt_required` sans input résolu) — un refus de
-*config*, pas un verdict de *guard*. (ADR-0029 est réservé par le plan de #373.)
+Ce pôle n'est **pas** un ADR distinct : additif, trivialement réversible. Il se distingue aussi du
+**rejet de champ vide** à la création d'un Trigger (`prompt_required` sans input résolu) — un refus
+de *config*, pas un verdict de *guard*.

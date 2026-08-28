@@ -1076,8 +1076,6 @@ function defaultSandboxSourceNote(field: EnumSettingFieldWithReason): string {
   return `Source: built-in default (${field.default ?? "off"}).`;
 }
 
-// --- Staging profiles (#432, ADR-0031 §2-§7) ---------------------------------
-
 /**
  * Turn an absolute path from {@link FsExplorerModal} into a `$HOME`-relative profile
  * entry. `null` when it does not live under `$HOME` (or `$HOME` is unknown), so the caller

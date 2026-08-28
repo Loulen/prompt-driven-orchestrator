@@ -1,7 +1,11 @@
 # ADR-0033 — Le cwd du daemon n'est jamais une cible de Run implicite : `target_repo` obligatoire à l'écriture, replié à la lecture
 
-> Statut : accepted (grilling du 2026-07-30, issue #470). Vocabulaire : CONTEXT.md § « Repo cible
-> (`target_repo`) ». Ferme une fuite d'**ADR-0012(a)** (le runtime n'initie aucun effet durable —
+Sans cette ADR, on « symétriserait » le champ `target_repo` — soit en gardant le repli sur le cwd du
+daemon à l'écriture (le daemon invente alors la seule réponse qui compte : quel dépôt ce travail va
+muter), soit en rendant le repli de **lecture** faillible, ce qui ferait disparaître la moitié de
+l'historique. L'asymétrie est la conception, et c'est la seule partie qu'un relecteur voudra corriger.
+
+> Statut : accepted (#470). Ferme une fuite d'**ADR-0012(a)** (le runtime n'initie aucun effet durable —
 > choisir le dépôt qu'un Run mute en est un) et rend explicite le corollaire d'**ADR-0012(b)** (un
 > Trigger est un template de Run : ce qui est obligatoire dans un `POST /runs` l'est dans un Trigger).
 > Qualifie la portée de la phrase `WorkingDirectory=` load-bearing d'**ADR-0019** (elle gouverne la
@@ -138,14 +142,3 @@ de cet ADR qu'un relecteur voudra « corriger » ; c'est pour ça qu'elle est é
   Run de 2026-07 est lisible, il faut le résoudre.
 - Les appelants directs de l'API (scripts, agents, `curl`) doivent nommer `target_repo`. C'est la
   rupture, et elle est intentionnelle.
-
-## Relations
-
-#114 (introduction de `target_repo` / `source_branch`), #258 (« par projet », pas de bucket
-« Unassigned » — c'est la lecture que le repli protège), #336 (filtrage de la liste Runs), #350
-(dry-run de guard), #470 (cet ADR), ADR-0004 (aucune AC fermée sans test couche ≥ 3 —
-`create_run_without_target_repo_is_refused`), ADR-0012 (autonomie méritée, et Trigger = template de
-Run), ADR-0015 et ADR-0031 (les deux ADR qui citaient « #470 » faute d'ADR), ADR-0019
-(`WorkingDirectory` load-bearing, portée qualifiée ici), ADR-0020 (chemins d'archive, dépendants du
-repli), ADR-0022 / ADR-0029 (coût dérivé à la lecture, dépendant du repli), ADR-0025 (contrat
-véridique : 409 plutôt qu'un skip silencieux), ADR-0027 (« Run now » est un vrai fire).

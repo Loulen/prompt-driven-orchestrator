@@ -47,7 +47,7 @@
 //! CONSERVÉS et repointés sur ce défaut : une instance headless n'a que des profils virtuels et
 //! pas d'UI, donc l'env est son seul moyen de changer d'image sans POSTer un profil.
 
-#![allow(dead_code)] // Tracer bullet : consommé par #406/#407, non câblé dans cette slice.
+#![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -529,7 +529,6 @@ pub(crate) fn ensure_hash_derived_image(
 
 // -- résolveurs de bord (seuls lecteurs d'env) -------------------------------
 
-/// Binaire docker : [`DOCKER_CMD_OVERRIDE_ENV`] sinon `"docker"`.
 pub(crate) fn docker_bin_from_env() -> String {
     std::env::var(DOCKER_CMD_OVERRIDE_ENV).unwrap_or_else(|_| "docker".to_string())
 }
@@ -591,8 +590,7 @@ pub(crate) fn resolve_image_source(env: Option<ImageSource>) -> ImageSource {
     env.unwrap_or(crate::sandbox_profile::DEFAULT_PROFILE_IMAGE.source)
 }
 
-/// Le tier env de la source d'image : `Some` si [`IMAGE_SOURCE_ENV`] porte un token connu, `None`
-/// s'il est absent, vide, ou inconnu. Lu UNE fois au bord par [`image_plan_with`].
+/// Le tier env de la source d'image. Lu UNE fois au bord, par [`image_plan_with`].
 pub(crate) fn env_image_source() -> Option<ImageSource> {
     std::env::var(IMAGE_SOURCE_ENV)
         .ok()
@@ -786,7 +784,6 @@ pub(crate) struct ResolvedDockerfile {
 /// volume amovible, et le gate autoritaire reste le `is_file()` d'[`ensure_hash_derived_image`].
 pub(crate) const DOCKERFILE_PATH_ENV: &str = "PDO_SANDBOX_DOCKERFILE";
 
-/// Tier env : `Some(path)` si un [`DOCKERFILE_PATH_ENV`] non vide est posé, sinon `None`.
 pub(crate) fn env_dockerfile_path() -> Option<String> {
     std::env::var(DOCKERFILE_PATH_ENV)
         .ok()
@@ -1104,7 +1101,6 @@ mod tests {
             err.chain().count() >= 2,
             "la source io::Error doit être préservée dans la chaîne anyhow"
         );
-        // Le build ne doit jamais être atteint (la sonde échoue avant).
         assert!(
             !build_context_dir(&sandbox_root).exists(),
             "aucun contexte de build ne doit être créé quand docker est absent"
@@ -1153,7 +1149,6 @@ mod tests {
             },
         );
         let sandbox_root = tmp.path().join("sandbox");
-        // Pré-écrire un Dockerfile ÉDITÉ (différent de l'embarqué).
         std::fs::create_dir_all(&sandbox_root).unwrap();
         let edited: &[u8] = b"FROM ubuntu:24.04\nRUN echo edited\n";
         std::fs::write(default_dockerfile_path(&sandbox_root), edited).unwrap();
@@ -1168,13 +1163,11 @@ mod tests {
         })
         .unwrap();
 
-        // (a) Octets inchangés : pas d'écrasement.
         assert_eq!(
             std::fs::read(default_dockerfile_path(&sandbox_root)).unwrap(),
             edited,
             "le seed ne doit jamais écraser un Dockerfile existant"
         );
-        // (b) Tag + argv reflètent le hash des octets ÉDITÉS, pas de l'embarqué.
         assert_eq!(tag, local_image_ref(BASE_IMAGE_NAME, edited));
         assert_ne!(
             tag,
@@ -1215,12 +1208,10 @@ mod tests {
     #[test]
     fn dockerfile_tag_stable_and_edit_sensitive() {
         let base: &[u8] = b"FROM ubuntu:24.04\nRUN apt-get update\n";
-        // Stable pour un contenu identique.
         assert_eq!(
             local_image_ref(BASE_IMAGE_NAME, base),
             local_image_ref(BASE_IMAGE_NAME, base)
         );
-        // Change à l'édition.
         let edited: &[u8] = b"FROM ubuntu:24.04\nRUN apt-get update\nRUN apt-get install -y git\n";
         assert_ne!(dockerfile_hash(base), dockerfile_hash(edited));
 
@@ -1259,13 +1250,11 @@ mod tests {
         let local_ref = local_image_ref(BASE_IMAGE_NAME, EMBEDDED_DOCKERFILE.as_bytes());
         let registry_ref = registry_image_ref(BASE_IMAGE_NAME, EMBEDDED_DOCKERFILE.as_bytes());
         assert_eq!(tag, local_ref);
-        // `pull` fut invoqué sur le ref registry content-addressé.
         assert_eq!(
             invocation(&argv_log, "pull"),
             Some(vec!["pull".to_string(), registry_ref.clone()]),
             "pull must target the registry ref"
         );
-        // `tag` retague registry_ref → local_ref (l'invariant sandbox_container).
         assert_eq!(
             invocation(&argv_log, "tag"),
             Some(vec![
@@ -1275,7 +1264,6 @@ mod tests {
             ]),
             "tag must retag the pulled ref under the local ref"
         );
-        // Aucun build : le pull a réussi.
         assert!(
             build_argv(&argv_log).is_empty(),
             "a successful pull must skip the build; log:\n{}",
@@ -1548,7 +1536,6 @@ mod tests {
         );
         assert_eq!(ImageSource::parse("ecr"), None);
         assert_eq!(ImageSource::parse(""), None);
-        // as_str round-trips both variants.
         assert_eq!(ImageSource::Registry.as_str(), "registry");
         assert_eq!(ImageSource::Dockerfile.as_str(), "dockerfile");
 

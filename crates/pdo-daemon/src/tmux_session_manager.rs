@@ -103,11 +103,8 @@ pub enum SessionTail<'a> {
     },
     /// Ad-hoc run shell (#316 / ADR-0021). Runs an interactive `bash -i` inside a
     /// `while true` respawn loop in the run's pipeline worktree — no LLM, no
-    /// prompt file, no I/O catalogue. The loop is load-bearing: a bare `bash -i`
-    /// exits on EOF (Ctrl-D / `exit` / PTY-bridge teardown) and, as the session's
-    /// only window, takes the whole session down with it — the persistence bug
-    /// caught in iteration 1's validation. Respawning keeps the pane (hence the
-    /// session) alive for its whole lifetime. Deterministic like
+    /// prompt file, no I/O catalogue. The loop is load-bearing — see the `Shell`
+    /// arm of [`build_tmux_script`]. Deterministic like
     /// [`SessionTail::Script`], so it **ignores** `tmux_cmd_override` (the test
     /// seam must never swap the real bash for a `sleep`). Still
     /// `wrap_with_env`-wrapped so every respawned `bash -i` inherits
@@ -143,10 +140,6 @@ pub const LIBASSIST_IDLE_TTL_SECS_ENV: &str = "PDO_LIBASSIST_IDLE_TTL_SECS";
 /// whose timers Chrome has throttled to ~1/min.
 pub const DEFAULT_LIBASSIST_IDLE_TTL: Duration = Duration::from_secs(120);
 
-// ---------------------------------------------------------------------------
-// Shell helpers
-// ---------------------------------------------------------------------------
-
 fn sh_single_quote(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('\'');
@@ -181,10 +174,6 @@ fn sh_quote_arg(s: &str) -> String {
         sh_single_quote(s)
     }
 }
-
-// ---------------------------------------------------------------------------
-// Sandbox wrapping (#407)
-// ---------------------------------------------------------------------------
 
 /// Threaded into [`build_tmux_script`] / [`build_resume_script`] when a Run is
 /// sandboxed (`sandbox != off`, #407). When present, the node's tail is wrapped in
@@ -238,10 +227,6 @@ fn wrap_tail_in_docker_exec(
         .collect::<Vec<_>>()
         .join(" ")
 }
-
-// ---------------------------------------------------------------------------
-// Script builder (pub for assertion in layer-3a tests)
-// ---------------------------------------------------------------------------
 
 /// Wrap a tail command with PDO env exports and an `exec bash -c` trampoline.
 ///
@@ -418,15 +403,13 @@ fn forced_ccr_env() -> Vec<(String, String)> {
 /// Ordering `pdo complete` before shell exit makes the node terminal before the
 /// session dies (#304).
 ///
-/// **The `pdo complete` arm branches on exit code `4`** (#490, ADR-0035 §4). Before
-/// #490 it was a bare `pdo complete || pdo fail --reason "…"`, and that `||` was
-/// dead code: every completion refusal answered `200`, so `pdo complete` exited `0`
-/// and the fallback never fired. Making refusals non-2xx woke it up — and a
-/// terminal refusal (`4`) would then append a **second** `NodeFailed` **and** a
-/// second `RunFailed`, the latter unguarded and carrying a false reason ("after
-/// script success", on a script whose output validation had just failed). So the
-/// fallback fires only on a code that is neither `0` (granted or legal duplicate)
-/// nor `4` (already ruled — the daemon recorded the failure itself). A `3`
+/// **The `pdo complete` arm branches on exit code `4`** (#490, ADR-0035 §4). Don't
+/// simplify it to `pdo complete || pdo fail`: on a terminal refusal (`4`) the
+/// daemon has already recorded the failure, so the fallback would append a second
+/// `NodeFailed` **and** an unguarded second `RunFailed` carrying a false reason
+/// ("after script success", on a script whose output validation just failed). The
+/// fallback therefore fires only on a code that is neither `0` (granted or legal
+/// duplicate) nor `4` (already ruled). A `3`
 /// (refused, still your turn) cannot reach a script node: the fail-fast branch
 /// intercepts before the interactive retry loop.
 fn build_script_tail(prompt_path: &Path, timeout_secs: u64) -> String {
@@ -479,24 +462,16 @@ pub fn build_tmux_script(
         ),
         SessionTail::Shell => {
             // #316: a deterministic interactive bash. Like `Script`, the test
-            // seam must not clobber it (`sleep 600` instead of a real shell is
-            // useless and untestable), so `tmux_cmd_override` is ignored here.
+            // seam must not clobber it, so `tmux_cmd_override` is ignored here.
             //
-            // Respawn loop, NOT a bare `exec bash -i` (iteration 1 shipped that
-            // and it failed the ADR-0021 #4 persistence check): an interactive
-            // bash exits on EOF — a stray Ctrl-D, an explicit `exit`, or the PTY
-            // bridge tearing the pane's input down when the modal/tab closes.
-            // Being the session's only window, that exit destroys the whole
-            // session, losing the long-running command (the `git bisect`) the
-            // feature exists to preserve. Keeping the interactive shell inside a
-            // `while true` loop makes the pane outlive any single bash: on exit a
-            // fresh `bash -i` takes its place in the *same* pane (scrollback
-            // preserved), so the session persists for its whole lifetime and is
-            // torn down only by cleanup / the reaper. The `sleep 0.2` bounds the
-            // loop if bash ever exits instantly (a pathological permanent-EOF
-            // stdin) instead of busy-spinning. The env exports from
-            // `wrap_with_env` sit before the loop, so every respawned bash
-            // inherits `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`.
+            // Don't collapse this to a bare `exec bash -i`: an interactive bash
+            // exits on EOF (a stray Ctrl-D, an explicit `exit`, or the PTY bridge
+            // tearing the pane's input down when the modal/tab closes) and, being
+            // the session's only window, takes the whole session down with it —
+            // losing the long-running command the feature exists to preserve. The
+            // `while true` loop respawns bash in the *same* pane (scrollback
+            // preserved); `sleep 0.2` keeps it from busy-spinning if bash ever
+            // exits instantly on a permanent-EOF stdin.
             (
                 "while true; do bash -i; sleep 0.2; done".to_string(),
                 NO_ENV,
@@ -583,12 +558,12 @@ pub fn build_tmux_script(
 /// the transcript was saved" (https://code.claude.com/docs/en/model-config).
 /// So resuming never silently downgrades the per-node model.
 ///
-/// and nothing else. Measured on claude 2.1.220: `--effort xhigh` then a resume
-/// reports `auto (currently high)` — the level is lost, and the transcript stores
-/// no `effort` field for anything to read back. So the level is re-posed from the
-/// `NodeStarted` payload (launch-time value, not the current YAML — ADR-0007: an
-/// edit has no effect on a live node's current iter). `None` or an empty string ⇒
-/// no `--effort`.
+/// `effort` IS re-posed, unlike the model. Measured on claude 2.1.220: `--effort
+/// xhigh` then a resume reports `auto (currently high)` — the level is lost, and
+/// the transcript stores no `effort` field for anything to read back. It is
+/// re-posed from the `NodeStarted` payload (launch-time value, not the current
+/// YAML — ADR-0007: an edit has no effect on a live node's current iter). `None`
+/// or an empty string ⇒ no `--effort`.
 ///
 /// `settings_path` (#433 / ADR-0043 D7) re-arms the turn-end `Stop` hook so a
 /// resurrected session does not silently lose it; `None` ⇒ no `--settings`.
@@ -674,10 +649,6 @@ fn build_resume_script(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Core operations
-// ---------------------------------------------------------------------------
-
 /// Session naming convention for NodeRuns.
 pub fn node_session_name(run_id: &str, node_id: &str, iter: i64) -> String {
     format!("pdo-{run_id}-{node_id}-iter-{iter}")
@@ -703,11 +674,9 @@ pub fn shell_session_name(run_id: &str) -> String {
 /// **The `-shared` suffix is load-bearing, not decoration.** [`parse_session_name`]
 /// strips the `libassist-` prefix and rejects an *empty* remainder, so a bare
 /// `pdo-libassist` would not parse — and an unparseable `pdo-*` name is killed by
-/// the orphan sweep as `UnrecognisedName` within one sweep interval. The suffix is
-/// what keeps the name readable to the parser now that no pipeline id fills that
-/// slot; it also names the property that changed: one session, shared by every
-/// template. Which template is open travels in the daemon's *focus* instead
-/// (`PUT /sessions/libassist/focus`), never in the session name.
+/// the orphan sweep as `UnrecognisedName` within one sweep interval. Which template
+/// is open travels in the daemon's *focus* (`PUT /sessions/libassist/focus`), never
+/// in the session name.
 pub const LIBASSIST_SESSION_NAME: &str = "pdo-libassist-shared";
 
 /// Session naming convention for the library pipeline authoring assistant.
@@ -858,21 +827,17 @@ const LIBASSIST_ENV_ID: &str = "__libassist__";
 /// (#302 / ADR-0048, reshaped by #594 / ADR-0051) — a `claude` REPL whose cwd is
 /// the repo's pipelines directory.
 ///
-/// Mirror of [`spawn`]'s agent launch (an `Agent` tail, not the `bash -i` of
-/// [`spawn_shell`]), but owning no Run: it emits no `run_command`; its whole
-/// effect is writing the template YAML the user reviews, via the library
-/// endpoints. Like the manager it launches `claude "$(cat <primer>)"`; `claude`
-/// does **not** exit on EOF (unlike `bash -i`), so the session survives a
-/// PTY-bridge/tab close — which is exactly why it needs the sweep as a backstop
-/// (`decide_one`'s `LibAssist` arm) on top of the explicit `DELETE`.
+/// Mirror of [`spawn`]'s agent launch, but owning no Run. `claude` does **not**
+/// exit on EOF (unlike `bash -i`), so the session survives a PTY-bridge/tab close
+/// — which is why it needs the sweep as a backstop (`decide_one`'s `LibAssist`
+/// arm) on top of the explicit `DELETE`.
 ///
-/// **There is no pipeline id here any more.** One session serves every template;
-/// the open one arrives per message via the `UserPromptSubmit` hook this function
-/// arms ([`LIBASSIST_HOOK_SETTINGS_JSON`], written as a sibling `settings.json`
-/// of `prompt_path`). The primer is written to `prompt_path`, kept **out** of
-/// `working_dir` so the user-facing pipelines directory stays clean. Honours
-/// `tmux_cmd_override` (the test seam) exactly as the agent tail does. Never
-/// sandboxed: authoring is design-time work on the host.
+/// One session serves every template; the open one arrives per message via the
+/// `UserPromptSubmit` hook this function arms ([`LIBASSIST_HOOK_SETTINGS_JSON`],
+/// written as a sibling `settings.json` of `prompt_path`). The primer is written
+/// to `prompt_path`, kept **out** of `working_dir` so the user-facing pipelines
+/// directory stays clean. Never sandboxed: authoring is design-time work on the
+/// host.
 // Every argument is an irreducible input to the spawn (identity, working context,
 // primer path, launch selector); a struct would only move the list — same
 // rationale as `spawn` / `spawn_shell` / `build_tmux_script`.
@@ -1116,10 +1081,6 @@ pub fn is_attached(socket: &str, session: &str) -> bool {
         .unwrap_or(false)
 }
 
-// ---------------------------------------------------------------------------
-// Session name parsing
-// ---------------------------------------------------------------------------
-
 /// Parsed components of a `pdo-*` session name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParsedSession {
@@ -1138,12 +1099,11 @@ pub enum ParsedSession {
     /// The library pipeline authoring assistant [`LIBASSIST_SESSION_NAME`]
     /// (#302 / ADR-0048, made a singleton by #594 / ADR-0051).
     ///
-    /// A **unit** variant: it carried a `pipeline_id` while there was one
-    /// assistant per template, and there is now one per daemon. Which template
-    /// is being edited is the daemon's *focus*, not the session's identity —
-    /// putting it back in the name would re-create the per-pipeline session it
-    /// replaced. Owns no Run; reaped by the explicit `DELETE` on leaving every
-    /// edit view, with the sweep's idle arm as the backstop.
+    /// A **unit** variant: one assistant per daemon. Which template is being
+    /// edited is the daemon's *focus*, not the session's identity — putting it
+    /// back in the name would re-create the per-pipeline session it replaced.
+    /// Owns no Run; reaped by the explicit `DELETE` on leaving every edit view,
+    /// with the sweep's idle arm as the backstop.
     LibAssist,
 }
 
@@ -1174,13 +1134,11 @@ pub fn parse_session_name(name: &str) -> Option<ParsedSession> {
     }
 
     // #302: the library assistant — parsed BEFORE the `-iter-` split, like
-    // `shell-` / `mgr-`. Its name has no `-iter-` suffix, so without this branch
-    // it would fall through to the split, return None, and be killed as
-    // "unrecognised" by the orphan sweep on the next pass.
+    // `shell-` / `mgr-`, for the same reason.
     //
-    // The suffix is no longer read (#594: one shared session, [`LIBASSIST_SESSION_NAME`]),
-    // but it must still be **non-empty** — that rejection is precisely why the
-    // singleton is named `pdo-libassist-shared` and not `pdo-libassist`.
+    // The suffix is no longer read (#594: one shared session), but it must still be
+    // **non-empty** — that rejection is why the singleton is named
+    // `pdo-libassist-shared` and not `pdo-libassist`.
     if let Some(suffix) = rest.strip_prefix("libassist-") {
         if !suffix.is_empty() {
             return Some(ParsedSession::LibAssist);
@@ -1220,10 +1178,6 @@ pub fn parse_session_name(name: &str) -> Option<ParsedSession> {
         iter,
     })
 }
-
-// ---------------------------------------------------------------------------
-// Reaper / orphan sweep
-// ---------------------------------------------------------------------------
 
 /// Information the reaper needs about a NodeRun to decide whether to reap.
 ///
@@ -1672,22 +1626,17 @@ pub fn reaper_interval() -> Duration {
 // (`DEFAULT_REAPER_INTERVAL`). That distinction is load-bearing (#485,
 // ADR-0038): only the periodic pass runs against live spawns, so only it can
 // race one. The boot pass cannot — it runs before the router is built, so no
-// request and no scheduler tick is concurrent with it. This module's
-// doc-comment used to say "at daemon boot" and nothing else, and that single
-// omission is what made the race invisible to inspection for the reaper's whole
-// life: the one dangerous caller was documented as not existing.
+// request and no scheduler tick is concurrent with it.
 
 /// One live `pdo-*` session, plus everything the reaper knows about its owner.
 ///
 /// **The inventory is an input, never something the sweep fetches for itself
-/// (#485, ADR-0038).** The pre-#485 `sweep_orphans` called
-/// [`list_pdo_sessions`] from its own body, so the *order* of its two
-/// observations — the tmux inventory and the event-log read — could not be
-/// expressed, let alone guaranteed, by the caller. It read the log first, so a
-/// session born between the two was live in tmux and missing from a snapshot
-/// that predated it: judged absent, killed ~150 ms after its own spawn. Keying
-/// the input *per session* makes the correct order the path of least
-/// resistance — `info` cannot be filled without already holding the names.
+/// (#485, ADR-0038).** If the sweep called [`list_pdo_sessions`] itself, the order
+/// of its two observations — the tmux inventory and the event-log read — could not
+/// be guaranteed by the caller; reading the log first kills a session born between
+/// the two ~150 ms after its own spawn. Keying the input *per session* makes the
+/// correct order the path of least resistance: `info` cannot be filled without
+/// already holding the names.
 #[derive(Debug, Clone)]
 pub struct SweepInput {
     pub session_name: String,
@@ -1735,8 +1684,6 @@ pub enum SweepVerdict {
     Kill(KillReason),
 }
 
-/// One variant per log line the sweep emitted before #485.
-///
 /// Flat on purpose: two of the messages are irregular and a composed
 /// `{kind} × {cause}` formatter would smooth them over silently. The NodeRun
 /// arms say `killing session for absent run …` with **no** "node" word (unlike
@@ -1943,7 +1890,6 @@ fn decide_one(
 
     match parsed {
         ParsedSession::Manager { run_id } => match &input.info {
-            // Kill manager sessions for absent/archived runs
             None => SweepVerdict::Kill(KillReason::ManagerRunAbsent {
                 run_id: run_id.clone(),
             }),
@@ -1966,13 +1912,10 @@ fn decide_one(
             }),
             _ => SweepVerdict::Keep,
         },
-        // #594 / ADR-0051 §4 — **this arm used to be an unconditional `Keep`**
-        // (ADR-0048 §4), and that is the bug the issue is really about. The
-        // assistant owns no Run, so absence/archived say nothing about it; the
-        // explicit `DELETE` was therefore the only thing that could ever reap it,
-        // and React does not run effect cleanups when the document unloads. A
-        // reload or a closed tab sent no `DELETE`, so the session lived until the
-        // next open+leave of the *same* pipeline — i.e. potentially forever.
+        // #594 / ADR-0051 §4. Don't make this an unconditional `Keep`: the
+        // assistant owns no Run, so absence/archived say nothing about it, and the
+        // explicit `DELETE` is not enough — React runs no effect cleanup when the
+        // document unloads, so a reload or a closed tab leaks the session forever.
         //
         // Three verdicts on human presence, in this order, and the order matters:
         //   1. attached — someone has a terminal open on it. Never yank that, even
@@ -2220,15 +2163,6 @@ mod tests {
         );
     }
 
-    // -----------------------------------------------------------------------
-    // Orphan sweep — `decide_sweep` (#485, ADR-0038)
-    //
-    // Layer 1 (ADR-0009): no tmux, no DB, no clock. `sweep_orphans` had zero
-    // unit tests before #485 precisely because it fetched the inventory and the
-    // clock itself; making both inputs is what puts the sweep's decision rule
-    // under CI on every machine, with no `tmux_available()` skip to hide behind.
-    // -----------------------------------------------------------------------
-
     const RID: &str = "20260731-153057-553fcb3";
 
     fn at(iso: &str) -> chrono::DateTime<chrono::Utc> {
@@ -2350,12 +2284,9 @@ mod tests {
         }
     }
 
-    /// #594 / ADR-0051 §4 — **the successor of `library_assistant_is_always_kept`,
-    /// and it deliberately says the opposite in the last two cases.** That test
-    /// pinned ADR-0048's unconditional `Keep`, which is what let a session leaked
-    /// by a browser reload live with no bound at all. Presence, not the owning
-    /// Run, is now the question; the three verdicts are checked in their order of
-    /// precedence, plus the boundary.
+    /// #594 / ADR-0051 §4: presence, not the owning Run, decides the assistant's
+    /// fate. The three verdicts are checked in their order of precedence, plus the
+    /// boundary.
     #[test]
     fn library_assistant_is_kept_while_someone_is_there() {
         let now = at("2026-07-31T15:32:19Z");
@@ -2820,11 +2751,9 @@ mod tests {
     }
 
     /// #629: a source larger than the OS pipe buffer is read in full, not timed out.
-    /// The blind spot the fixtures had: every fake help was a few hundred bytes, so
-    /// nobody noticed the probe waited for exit *before* reading. Measured on the real
-    /// binary, `copilot completion bash` prints 71 KB against a 64 KB pipe — the child
-    /// blocked in `write`, never exited, and the source ADR-0056 *prefers* was the one
-    /// silently reported as a timeout.
+    /// Measured on the real binary, `copilot completion bash` prints 71 KB against a
+    /// 64 KB pipe: a probe that waits for exit before reading blocks the child in
+    /// `write` and reports a timeout for the source ADR-0056 prefers.
     #[cfg(unix)]
     #[test]
     fn a_source_bigger_than_the_pipe_buffer_is_read_whole() {
@@ -3947,7 +3876,6 @@ mod tests {
         std::env::set_var(REAPER_TTL_SECS_ENV, "5");
         assert_eq!(reaper_ttl(), Duration::from_secs(5));
 
-        // --- stored → env → default precedence (#129, ADR-0015) ---
         // Stored wins over env.
         assert_eq!(reaper_ttl_with(Some(120)), Duration::from_secs(120));
         // A zero stored value is ignored → falls through to env.
@@ -4030,8 +3958,6 @@ mod tests {
             "pdo-mgr-20260506-143000-a3f1b2c"
         );
     }
-
-    // -- #407 sandbox wrapping goldens --------------------------------------
 
     fn sample_wrap<'a>(marker: &'a str, workdir: &'a Path) -> SandboxWrap<'a> {
         SandboxWrap {

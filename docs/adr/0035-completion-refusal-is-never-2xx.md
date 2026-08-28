@@ -1,36 +1,28 @@
 # ADR-0035 — Un refus de complétion n'est jamais un `2xx` : le statut dit refusé, le corps dit laquelle
 
-> Statut : accepted (grilling du 2026-07-30, issue #490). Vocabulaire : CONTEXT.md § « Contrat de
-> refus de la complétion ». **Amende ADR-0023** : le `2xx` de `pdo complete` signifie toujours
-> « ton événement terminal est durablement enregistré et l'avance est planifiée », mais ses
-> *Conséquences* laissaient croire qu'une erreur de validation renvoyée « in-request » pouvait
-> l'être en `2xx` — elle ne peut plus. **Amende ADR-0025 §3** : la convention « dire l'effet »
-> tient pour les quatre commandes de boucle, mais son précédent invoqué (le chemin de complétion
-> UI) était partiellement un mensonge ; cette ADR y ajoute la classe que 0025 n'avait pas —
-> **noop ≠ refus**. Ne touche ni au détachement de la queue d'avance (ADR-0023), ni au fail-fast
-> d'un node `script` (ADR-0017), ni au tombstone d'un Run oublié (ADR-0024, qui garde son `410`).
-> Suit ADR-0001 (un slug inconnu se rend tel quel) et ADR-0004 (aucun critère fermé sans test de
-> couche ≥ 3).
+Sans cette ADR, on répondrait `200` à un refus de complétion en comptant sur le corps pour dire la
+vérité — et un client bien écrit qui teste le succès HTTP aurait raison de conclure « accordé ». Rien
+dans le code ne signale la contradiction : le statut et le corps se lisent séparément.
+
+> Statut : accepted (#490). **Amende ADR-0023** : le `2xx` de `pdo complete` signifie toujours
+> « ton événement terminal est enregistré et l'avance est planifiée », mais une erreur de validation
+> renvoyée in-request ne peut plus l'être en `2xx`. **Amende ADR-0025 §3** : la convention « dire
+> l'effet » tient, mais son précédent invoqué (le chemin de complétion UI) était partiellement un
+> mensonge ; cette ADR y ajoute la classe que 0025 n'avait pas — **noop ≠ refus**. Ne touche ni au
+> détachement de la queue d'avance, ni au fail-fast d'un node `script` (ADR-0017), ni au tombstone
+> d'un Run oublié (ADR-0024, qui garde son `410`).
 
 ## Contexte
 
-Le chemin par lequel **tout** node se termine — `pdo complete` côté agent, *Mark complete* côté
-UI — a dix-neuf sorties. Un recensement du 2026-07-30 en a trouvé **huit** qui décrivent un
-**refus** et répondaient malgré tout `200`, dont **quatre après avoir déjà appendé `RunFailed`**
-(échec de validation de script, violation d'immutabilité doc-only, conflit de merge, retries de
-frontmatter épuisés — plus le retry pendant, et deux branches mortes du résolveur de merge).
+Le chemin par lequel **tout** node se termine — `pdo complete` côté agent, *Mark complete* côté UI —
+a dix-neuf sorties, dont **huit** décrivaient un **refus** et répondaient `200`, dont **quatre après
+avoir déjà appendé `RunFailed`**.
 
-**Le consommateur manquant est la CLI, pas l'UI.** `pdo complete` ne regardait que le succès HTTP :
-sur ces huit corps il imprimait « marked complete » et sortait en `0`. Un agent lisait donc
-« livré » sur un Run que le daemon venait de tuer, puis passait à la suite — ou, pire, enchaînait
-`pdo fail` et doublait un échec déjà enregistré.
-
-L'UI, elle, n'était pas muette (elle rend depuis la projection WebSocket, donc elle peignait déjà
-du rouge) mais **en retard, et jamais au niveau du geste** : un `200`-mensonge effaçait la bannière
-du clic sans jamais la remplacer, et le seul refus déjà en `409` — le garde de transition — était
-relu par le client comme une liste vide, donc rien ne s'affichait. C'est le symptôme le plus
-fréquent (tout clic sur un node d'un Run failed), déjà documenté comme contournement dans les tests
-e2e.
+**Le consommateur lésé est la CLI, pas l'UI.** `pdo complete` ne regardait que le succès HTTP : sur
+ces huit corps il imprimait « marked complete » et sortait en `0`. Un agent lisait « livré » sur un
+Run que le daemon venait de tuer — ou, pire, enchaînait `pdo fail` et doublait un échec déjà
+enregistré. L'UI, elle, peignait déjà du rouge depuis la projection WebSocket, mais **en retard et
+jamais au niveau du geste** : un `200`-mensonge effaçait la bannière du clic sans la remplacer.
 
 ## Ce qu'on décide
 
@@ -171,21 +163,3 @@ puis enchaîner `pdo fail` — il tuerait un Run qui vient de réussir. Et sur u
   atteignables depuis la route de complétion (donc depuis chaque `pdo complete`) et pas depuis la
   route de commandes, dont le bras ne fait ni le merge ni le contrôle. Cette ADR ne la crée pas et
   ne la ferme pas ; elle la nomme.
-
-## Relations
-
-- Issue **#490** (cette décision). **#491** vient après (symétrie des corps de succès). **#489**
-  porte la même faute sur une autre route et est livré par **ADR-0037**, qui reprend la forme de
-  corps posée ici.
-- **ADR-0025** (#327) — amendée : la convention noop tient, son précédent était partiellement faux,
-  son vocabulaire gagne **noop ≠ refus**.
-- **ADR-0023** (#304) — amendée : « `2xx` = enregistré + planifié » devient aussi « `2xx` = pas
-  refusé ». Le détachement de la queue est intact.
-- **ADR-0017** (#248) — le fail-fast d'un node `script` est intact ; seul son statut change.
-- **ADR-0032** (#469) — indemne par construction : la veille lit la **variante**, jamais le statut.
-- **ADR-0024** (#328) — le `410` du Run oublié est conservé tel quel.
-- **ADR-0006** — retombée à ficher : la suppression du sous-système vestigial du résolveur de merge
-  (bras inatteignables depuis le retrait du résolveur automatique) est une autre issue ; la mêler
-  ici aurait mélangé deux intentions sous un seul bump.
-- **ADR-0001** — un slug inconnu se rend tel quel. **ADR-0004** — critères fermés par des tests de
-  couche ≥ 3. **#212 / #354** — le garde de transition, dont le refus rejoint le contrat de corps.

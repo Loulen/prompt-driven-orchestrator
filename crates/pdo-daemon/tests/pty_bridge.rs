@@ -53,7 +53,6 @@ async fn pty_ws_roundtrip_echo() {
     let socket = daemon.tmux_socket();
 
     let session_name = "pdo-pty-test-echo";
-    // Clean up any leftover from a previous run
     kill_tmux_session(&socket, session_name);
     create_tmux_session_with_cat(&socket, session_name);
 
@@ -62,16 +61,13 @@ async fn pty_ws_roundtrip_echo() {
         .await
         .expect("WS connect should succeed");
 
-    // Give the PTY a moment to start
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // Send input bytes
     let input = b"hello world\n";
     ws.send(Message::Binary(input.to_vec().into()))
         .await
         .expect("send should succeed");
 
-    // Read output until we see our input echoed back (cat echoes stdin to stdout)
     let mut collected = String::new();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
 
@@ -98,7 +94,6 @@ async fn pty_ws_roundtrip_echo() {
         "expected 'hello world' in PTY output, got: {collected:?}"
     );
 
-    // Clean up
     let _ = ws.close(None).await;
     kill_tmux_session(&socket, session_name);
 }
@@ -268,8 +263,6 @@ async fn ws_default_localhost_origin_still_allowed_with_allowlist_set() {
         .expect("loopback origin should still upgrade with an allowlist set");
     assert_eq!(resp.status(), 101, "loopback default must remain allowed");
 }
-
-// --- #495: the PTY bridge must reap its `tmux attach` child on WS close ---
 
 /// Parse `/proc/<pid>/stat` into `(comm, state, ppid)`. The comm field is
 /// wrapped in parens and may itself contain spaces or parens, so split on the

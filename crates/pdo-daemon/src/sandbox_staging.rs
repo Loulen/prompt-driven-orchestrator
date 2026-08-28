@@ -7,11 +7,7 @@
 //!
 //! Ce module gère le cycle de vie du *staged Claude home* d'un Run sandboxé :
 //! [`prepare`] (seeder), [`merge_back`] (récupérer les transcripts), [`teardown`]
-//! (purger). Les slices sœurs le **consomment** mais ne sont **pas** ici :
-//! - #406 monte `claude-home/` → `$HOME/.claude` et `.claude.json` → `$HOME/.claude.json` ;
-//! - #407 câble `prepare`/`teardown` dans le run-advance (ADR-0030) ;
-//! - #408 câble `merge_back` (transition terminale + `cleanup_run`) + pointe
-//!   stale-detection/coût vers le staging (seam [`crate::sandbox_run::transcripts_root`]).
+//! (purger).
 //!
 //! ## Décisions de conception (voir la section « Sandbox » de `CONTEXT.md`)
 //! - **Allowlist, jamais denylist.** Copier « tout `~/.claude` sauf `projects/` »
@@ -50,9 +46,6 @@
 //!   `-v` propre — conséquence du classificateur unique
 //!   [`crate::sandbox_profile::landing`], partagé par [`prepare`] et [`extra_mounts`].
 
-// #408: `merge_back` is now wired; the rest of the module (path-math + effects)
-// is consumed by #406/#407.
-
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -75,8 +68,6 @@ const SETTINGS_FILE: &str = "settings.json";
 /// `true` dans le `settings.json` stagé suffit — et un `false` hôte doit être
 /// **écrasé** (d'où `insert` et non `entry().or_insert()`).
 const BYPASS_PERMISSIONS_KEY: &str = "skipDangerousModePermissionPrompt";
-
-// -- path math (pur, sans IO) ------------------------------------------------
 
 /// `<sandbox_root>/<run_id>` — racine du staging d'un Run (les 2 sources de mount
 /// + le `.claude.json`).
@@ -170,8 +161,6 @@ pub(crate) fn extra_mounts(
         .collect()
 }
 
-// -- effets (sync std::fs, anyhow + .context) --------------------------------
-
 /// Seede le *staged Claude home* et renvoie sa racine (`<sandbox_root>/<run_id>`).
 ///
 /// **Deux phases** (#426, ADR-0031 §1) :
@@ -212,10 +201,7 @@ pub(crate) fn prepare(
     let src = home_root.join(".claude");
     let staged_json = staged_claude_json(sandbox_root, run_id);
 
-    // -- PHASE 1 : matérialisation du profil ---------------------------------
     materialise_entries(home_root, &src, &home, &staged_json, &staging, entries)?;
-
-    // -- PHASE 2 : plancher, profil-agnostique ------------------------------
     enforce_staging_floor(&src, &home, &staged_json, trusted_root)?;
 
     Ok(staging)
@@ -487,8 +473,6 @@ pub(crate) fn teardown(sandbox_root: &Path, run_id: &str) -> Result<()> {
     Ok(())
 }
 
-// -- résolveur de bord (unique lecture HOME) ---------------------------------
-
 /// `(home_root, sandbox_root)` = `($HOME, $HOME/.pdo/sandbox)`. `None` si `HOME`
 /// est absent. Câblé par le daemon (#407) ; les unit tests injectent des temp
 /// dirs et bypassent ce résolveur (pas de swap `HOME` → pas de mutex global).
@@ -497,8 +481,6 @@ pub(crate) fn default_roots_from_env() -> Option<(PathBuf, PathBuf)> {
     let sandbox = home.join(".pdo").join("sandbox");
     Some((home, sandbox))
 }
-
-// -- helpers (privés) --------------------------------------------------------
 
 /// Copie `src` → `dst` s'il existe (fichier de l'allowlist absent = no-op).
 /// [`std::fs::copy`] préserve le mode sous Unix (dont 0600 des credentials), même
@@ -681,7 +663,6 @@ fn copy_tree_preserving(src: &Path, dst: &Path, copy_root: &Path, depth: u32) {
                 );
             }
         }
-        // else : socket/fifo/device → skip silencieux.
     }
 }
 
@@ -718,7 +699,6 @@ fn stage_symlink(from: &Path, to: &Path, copy_root: &Path, depth: u32) {
         return;
     };
     if canonical.starts_with(copy_root) {
-        // Intra-arbre → recréer le lien verbatim (cible d'origine, non résolue).
         let _ = std::fs::remove_file(to);
         if let Err(e) = std::os::unix::fs::symlink(&link_target, to) {
             warn!(
@@ -728,10 +708,8 @@ fn stage_symlink(from: &Path, to: &Path, copy_root: &Path, depth: u32) {
             );
         }
     } else if canonical.is_dir() {
-        // Échappant (dossier) → déréférencer ; la cible réelle est son copy_root.
         copy_tree_preserving(&canonical, to, &canonical, depth + 1);
     } else if canonical.is_file() {
-        // Échappant (fichier) → copier le contenu déréférencé (mode préservé).
         let _ = std::fs::remove_file(to);
         if let Err(e) = std::fs::copy(&canonical, to) {
             warn!(
@@ -741,7 +719,6 @@ fn stage_symlink(from: &Path, to: &Path, copy_root: &Path, depth: u32) {
             );
         }
     }
-    // else : échappant non-régulier (socket/fifo) → skip.
 }
 
 /// Recopie récursivement les `*.jsonl` de `src_dir` vers `dest_dir`, copy-if-
@@ -921,8 +898,6 @@ mod tests {
     /// « l'hôte n'est jamais muté »).
     const HOST_GITCONFIG: &str = "[user]\n\tname = Host User\n\temail = host@example.com\n";
 
-    // -- path math -----------------------------------------------------------
-
     #[test]
     fn staging_dir_for_run_follows_canonical_schema() {
         let sandbox = Path::new("/home/u/.pdo/sandbox");
@@ -939,8 +914,6 @@ mod tests {
             PathBuf::from("/home/u/.pdo/sandbox/run-x/.claude.json")
         );
     }
-
-    // -- prepare (full) ------------------------------------------------------
 
     #[test]
     fn prepare_full_reproduces_allowlist_and_excludes_projects() {
@@ -1192,8 +1165,6 @@ mod tests {
         assert_eq!(mode_of(&staged), 0o600);
     }
 
-    // -- prepare (minimal) ---------------------------------------------------
-
     /// *L'*assertion que `minimal` == le plancher, ni plus ni moins (#426) : le
     /// contenu exact de `claude-home/` est le plancher, alors que l'hôte porte tout
     /// l'appareil `full` (skills, plugins, settings riches…).
@@ -1287,8 +1258,6 @@ mod tests {
         assert_eq!(json, serde_json::json!({ "hasCompletedOnboarding": true }));
     }
 
-    // -- plancher de staging, G2 : managed settings de l'org (#426) -----------
-
     /// Home fabriqué à la main SANS baseline org — le cas majoritaire (install sans
     /// organisation). Porte des credentials pour que G1 ait quelque chose à faire.
     fn fabricate_home_without_org(home: &Path) {
@@ -1371,8 +1340,6 @@ mod tests {
         // G1 tenue malgré le no-op de G2.
         assert_eq!(mode_of(&home.join(".credentials.json")), 0o600);
     }
-
-    // -- plancher de staging, G3 : bypass permissions (#426) ------------------
 
     fn staged_settings(sandbox: &Path, run_id: &str) -> PathBuf {
         staged_claude_home(sandbox, run_id).join(SETTINGS_FILE)
@@ -1543,8 +1510,6 @@ mod tests {
         );
     }
 
-    // -- plancher de staging, les CINQ garanties en un point (#426) -----------
-
     /// La forme exécutable d'ADR-0031 §1, et le test qu'un relecteur lit pour
     /// répondre « le plancher est-il tenu ? ». La slice « profils » l'étendra
     /// (même corps, plus « … même avec l'entrée décochée »).
@@ -1665,10 +1630,6 @@ mod tests {
             "line\n"
         );
     }
-
-    // -- merge_back ----------------------------------------------------------
-
-    // -- #432 : entrées d'exception `$HOME` (copie + queue de mounts) ---------
 
     /// ADR-0031 §4, la moitié *copie* : une entrée hors `.claude` atterrit sous
     /// `<staging>/home/<rel>`, jamais ailleurs — et surtout jamais dans `claude-home/`,
@@ -2093,8 +2054,6 @@ mod tests {
             .is_file());
     }
 
-    // -- teardown ------------------------------------------------------------
-
     #[test]
     fn teardown_purges_staging() {
         let sandbox_dir = tempfile::tempdir().unwrap();
@@ -2109,11 +2068,8 @@ mod tests {
     #[test]
     fn teardown_absent_is_ok() {
         let sandbox_dir = tempfile::tempdir().unwrap();
-        // No-op idempotent : purge d'un run inexistant.
         teardown(sandbox_dir.path(), "never-created").unwrap();
     }
-
-    // -- round-trip prepare → (write) → merge_back → teardown ----------------
 
     #[test]
     fn prepare_minimal_then_merge_and_teardown_roundtrip() {

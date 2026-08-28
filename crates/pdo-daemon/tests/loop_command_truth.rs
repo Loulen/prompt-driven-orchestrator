@@ -195,7 +195,6 @@ async fn post_command(
     (status, json)
 }
 
-/// The run's `command_issued` events matching a given `command` payload.
 async fn command_events(daemon_url: &str, run_id: &str, command: &str) -> Vec<serde_json::Value> {
     let resp = reqwest::Client::new()
         .get(format!("{daemon_url}/runs/{run_id}/events"))
@@ -349,9 +348,6 @@ async fn end_region_unknown_region_is_400() {
     );
 }
 
-// #600: set_region_max_iter / force_route validate against the run snapshot
-// BEFORE any append — a rejected command leaves no trace (ADR-0025 truth).
-
 #[tokio::test]
 async fn set_region_max_iter_unknown_region_is_400_and_leaves_no_trace() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
@@ -503,7 +499,6 @@ async fn resume_run_reports_noop_when_nothing_to_spawn() {
     assert!(truthful, "body must report the real effect, got: {body}");
 }
 
-/// Every `(node_id, iter)` the run has ever started.
 async fn started_pairs(daemon_url: &str, run_id: &str) -> Vec<(String, i64)> {
     let resp = reqwest::Client::new()
         .get(format!("{daemon_url}/runs/{run_id}/events"))
@@ -525,7 +520,6 @@ async fn started_pairs(daemon_url: &str, run_id: &str) -> Vec<(String, i64)> {
         .collect()
 }
 
-/// How many times a given node has started, whatever the iteration.
 async fn node_started_count(daemon_url: &str, run_id: &str, node_id: &str) -> usize {
     started_pairs(daemon_url, run_id)
         .await
@@ -576,8 +570,7 @@ async fn bump_region_that_actually_reschedules_reports_the_spawn() {
     let run_id = create_run(&daemon, EXHAUST_PIPELINE_NAME).await;
     let url = daemon.url();
 
-    // Worker iter 1 must be up before it can be completed.
-    // Entry node `impl` is spawned by run creation.
+    // Entry node `impl` is spawned by run creation, not by a command.
     wait_until("impl iter 1 to start", || async {
         node_started_count(&url, &run_id, "impl").await >= 1
     })

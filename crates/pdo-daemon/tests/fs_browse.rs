@@ -62,7 +62,6 @@ fn seed_tree() -> TempDir {
     root
 }
 
-/// `GET /fs/browse` with an optional `?path=` plus any extra query params.
 async fn browse(
     daemon: &TestDaemon,
     path: Option<&str>,
@@ -142,7 +141,6 @@ async fn browse_lists_dirs_only_with_flags_sorted() {
         .map(|e| e["name"].as_str().unwrap())
         .collect();
 
-    // Dirs only, dotfiles hidden, files filtered, case-insensitive alpha order.
     assert_eq!(
         names,
         vec!["alpha-project", "beta-plain", "zeta-link"],
@@ -224,8 +222,6 @@ async fn browse_nonexistent_path_clamps_gracefully() {
     assert!(json["error"].is_null(), "clamped open is a clean 200");
     assert!(json["path"].is_string());
 }
-
-// --- #431: the rename, the two flags, `is_dir` ---
 
 #[tokio::test]
 async fn fs_browse_is_registered_and_returns_json() {

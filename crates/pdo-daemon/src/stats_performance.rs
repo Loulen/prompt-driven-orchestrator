@@ -8,29 +8,14 @@
 //!
 //! ## Shape
 //!
-//! Wire shape is [`StatsPerformance`]: `harnesses` (the columns), `total` (the
-//! whole cohort pooled — see its doc comment), `by_pipeline` (Pipeline →
-//! Nodes → subagent groups, [`PerformanceEntity`]'s recursive shape), a
-//! separate `infrastructure` branch (no Project view — out of scope) and
-//! `infrastructure_total` (both Infrastructure roles pooled raw, the
-//! `total`/`by_pipeline` split's own mirror one level up — see its doc
-//! comment, #585 review follow-up). The overall tree (`StatsPerformance` /
-//! `StatsPerformanceEntity` / `StatsHarnessPerformance`) is the **agreed seam
-//! with the frontend** (`frontend/src/types.ts`) — that frontend code was this
-//! module's original reference. [`StatsDistribution`] itself has since been
-//! revised past what `frontend/src/types.ts` currently declares (see its own
-//! doc comment: an always-present coverage object with a nullable `stats`
-//! payload, not an all-or-nothing nullable cell) — a change coordinated with,
-//! not silently made against, the frontend owner; `frontend/src/types.ts` is
-//! expected to catch up to this shape, along with the new `infrastructure_total`
-//! field, rather than the other way around. A Node's row
-//! also carries its discovered subagent groups as children — grouped by
-//! declared name, "Unidentified subagent" when none reads as stable (see
-//! [`claude_subagent_group`]) — which never feed their parent's own
-//! distribution (Implementation Decisions: "Le
+//! The [`StatsPerformance`] tree is the **agreed seam with the frontend**
+//! (`frontend/src/types.ts`); [`StatsDistribution`] has since been revised past
+//! what that file declares (see its doc comment) — the frontend is expected to
+//! catch up to this shape, along with `infrastructure_total`, not the reverse.
+//! A Node's subagent groups never feed their parent's own distribution ("Le
 //! contexte d'une exécution de Node porte uniquement sur sa session
-//! principale"). Duration is in **milliseconds** (matches the frontend's own
-//! `value / 1_000` seconds conversion); Context is a raw peak token count.
+//! principale"). Duration is in **milliseconds** (matching the frontend's
+//! `value / 1_000`); Context is a raw peak token count.
 //!
 //! ## What counts as an observation
 //!
@@ -130,22 +115,10 @@ pub(crate) struct PerformanceQuery {
     pub refresh: bool,
 }
 
-/// One metric's (Context or Duration) coverage for one row × one harness:
-/// `measured` readable values out of `expected` (successful attempts, whether
-/// or not this metric could be read for them), why any gap between the two
-/// exists, and the R-7 six-stat summary — present only when `measured > 0`.
-///
-/// This object is **never null on the wire**: coverage (`measured`/`expected`/
-/// `missing_reasons`) is a property of the metric itself and must stay visible
-/// even when nothing was measured at all — "une mesure absente ne devient
-/// jamais zéro" means the absence must be *explained*, not that the coverage
-/// bookkeeping disappears with it. Only `stats` — the six numbers a boxplot
-/// needs — becomes `null`, and only when `measured == 0` (there is nothing to
-/// summarize). This was changed from an earlier all-or-nothing `Option<...>`
-/// cell precisely because that shape silently dropped `expected`/
-/// `missing_reasons` for a fully absent metric, which the frontend cannot
-/// honestly render ("never ran" vs "no reliable bounds" need to stay
-/// distinguishable even with zero readable values).
+/// One metric's coverage for one row × one harness. **Never null on the wire**:
+/// an all-or-nothing `Option` would drop `expected`/`missing_reasons` for a
+/// fully absent metric, leaving the frontend unable to distinguish "never ran"
+/// from "no reliable bounds". Only `stats` goes `null`, when `measured == 0`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) struct StatsDistribution {
     pub stats: Option<crate::distribution::SixStats>,
@@ -154,9 +127,8 @@ pub(crate) struct StatsDistribution {
     pub missing_reasons: Vec<String>,
 }
 
-/// Context + Duration for one row, under one harness. Matches the frontend's
-/// `StatsHarnessPerformance` — `context`/`duration` are always a
-/// [`StatsDistribution`] object, never `null` (see its doc comment).
+/// Matches the frontend's `StatsHarnessPerformance` — `context`/`duration` are
+/// never `null` (see [`StatsDistribution`]).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) struct StatsHarnessPerformance {
     pub harness: String,
@@ -164,23 +136,17 @@ pub(crate) struct StatsHarnessPerformance {
     pub duration: StatsDistribution,
 }
 
-/// One row's metrics across every harness it saw at least one successful
-/// observation under. Matches the frontend's `StatsPerformanceAggregate`.
+/// Matches the frontend's `StatsPerformanceAggregate`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub(crate) struct PerformanceAggregate {
     pub harnesses: Vec<StatsHarnessPerformance>,
 }
 
 /// One node in the Pipeline→Node / Infrastructure→role / subagent-group tree —
-/// a single recursive shape for all three, matching the frontend's
-/// `StatsPerformanceEntity` (`extends StatsPerformanceAggregate`, i.e. an `id`
-/// and `name` plus the same `harnesses` field, plus `nodes` and `subagents`
-/// children). A Pipeline's `subagents` is always empty (subagents are declared
-/// on Nodes, never Pipelines); a Node's/subagent-group's `nodes` is always
-/// empty (no further nesting below a Node); an Infrastructure role's `nodes`
-/// is always empty, but its `subagents` is populated exactly like a Node's
-/// (issue user story #36 — see the module doc's "Infrastructure subagents"
-/// section for how a role's own session is found).
+/// one recursive shape for all three, matching the frontend's
+/// `StatsPerformanceEntity`. A Pipeline's `subagents` is always empty (they are
+/// declared on Nodes); a Node's / subagent-group's / infra role's `nodes` is
+/// always empty.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub(crate) struct PerformanceEntity {
     pub id: String,
@@ -192,31 +158,20 @@ pub(crate) struct PerformanceEntity {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub(crate) struct StatsPerformance {
-    /// Every harness with at least one successful observation in the cohort —
-    /// the columns the client renders (Claude/Copilot today; ADR-0051 leaves
-    /// room for more without a client change).
+    /// Every harness with at least one successful observation in the cohort.
     pub harnesses: Vec<String>,
     /// Every successful main-session Node observation pooled across the WHOLE
-    /// cohort (every Pipeline, every Node) — the same "pool the raw
-    /// observations, don't average the averages" rule the issue applies to a
-    /// Pipeline's own Nodes, just one level up. Deliberately excludes
-    /// Infrastructure roles (Pipeline Manager / Merge resolver measure a
-    /// different kind of thing — a whole Run's or resolver's wall-clock, not a
-    /// Node execution) — a scoped assumption, since the issue does not spell
-    /// out whether the headline figure should blend the two.
+    /// cohort — pool the raw observations, never average the averages.
+    /// Deliberately excludes Infrastructure roles: a whole Run's or resolver's
+    /// wall-clock is not a Node execution. Scoped assumption, unspecified by
+    /// the issue.
     pub total: PerformanceAggregate,
     pub by_pipeline: Vec<PerformanceEntity>,
     pub infrastructure: Vec<PerformanceEntity>,
-    /// Every successful Infrastructure-role observation (Pipeline Manager's own
-    /// occurrences and Merge resolver's own occurrences) pooled together at the
-    /// **raw-observation** level — never a mean of the two roles' own means.
-    /// This exists precisely so the client's master/detail view (the whole
-    /// Infrastructure branch's own boxplot, alongside its two rows'
-    /// individually) never has to fabricate one by averaging averages, the
-    /// same failure mode [`Self::total`] avoids for Pipeline → Node (#585
-    /// review follow-up, blocker 3). Never pools a role's `subagents` — those
-    /// stay scoped to their own role, exactly like a Node's subagents are
-    /// never folded into [`Self::total`] either.
+    /// Both Infrastructure roles pooled at the **raw-observation** level, never
+    /// a mean of the two roles' means — so the client's master/detail boxplot
+    /// never has to fabricate one by averaging averages. Never pools a role's
+    /// `subagents` (same rule as [`Self::total`]).
     pub infrastructure_total: PerformanceAggregate,
 }
 
@@ -246,10 +201,8 @@ impl IntoResponse for PerformanceError {
 }
 
 /// `GET /stats/performance` — Class B heavy read (fans over the harness
-/// transcript corpora), fetched lazily on-demand only (issue: "Performance ne
-/// charge ses données qu'à son ouverture ou lors d'un Refresh explicite" — the
-/// client, not this handler, owns the "on demand" half; this handler simply
-/// never runs on a timer).
+/// transcript corpora). The client owns the "load on demand / Refresh" half;
+/// this handler never runs on a timer.
 pub(crate) async fn stats_performance(
     State(state): State<Arc<AppState>>,
     Query(q): Query<PerformanceQuery>,
@@ -260,10 +213,6 @@ pub(crate) async fn stats_performance(
     }
 }
 
-// --- Accumulation --------------------------------------------------------------
-
-/// Running fold for one metric on one row × harness: raw readable values (for
-/// the eventual R-7 fold) plus the expected/absent bookkeeping.
 #[derive(Debug, Default)]
 struct MetricAcc {
     values: Vec<f64>,
@@ -284,9 +233,6 @@ impl MetricAcc {
         }
     }
 
-    /// Always returns a coverage object; `stats` is `None` only when nothing
-    /// was readable at all (`measured == 0`) — see [`StatsDistribution`]'s doc
-    /// comment.
     fn finish(self) -> StatsDistribution {
         StatsDistribution {
             stats: r7_distribution(&self.values),
@@ -352,9 +298,8 @@ fn finish_node(id: String, acc: NodeAcc) -> PerformanceEntity {
     }
 }
 
-/// Same shape as [`finish_node`], for an Infrastructure role — `id`/`name` are
-/// the role's own fixed identity, not `acc.name` (an infra `NodeAcc` never
-/// sets it).
+/// Like [`finish_node`], but `id`/`name` are the role's fixed identity: an
+/// infra `NodeAcc` never sets `acc.name`.
 fn finish_infra_role(id: &str, name: &str, acc: NodeAcc) -> PerformanceEntity {
     PerformanceEntity {
         id: id.to_string(),
@@ -386,8 +331,6 @@ fn finish_pipeline(id: String, acc: PipelineAcc) -> PerformanceEntity {
     }
 }
 
-// --- Node identity/type resolution ---------------------------------------------
-
 fn node_defs_from_payload(payload: &Value) -> BTreeMap<String, (String, String)> {
     let mut defs = BTreeMap::new();
     if let Some(list) = payload.get("node_defs").and_then(|v| v.as_array()) {
@@ -411,10 +354,6 @@ fn node_defs_from_payload(payload: &Value) -> BTreeMap<String, (String, String)>
     defs
 }
 
-// --- Subagent declared-group heuristic ------------------------------------------
-
-/// Whether `stem` reads as an opaque, machine-generated identifier (a UUID, or
-/// a long run of hex digits) rather than a human-legible declared name.
 fn looks_like_opaque_id(stem: &str) -> bool {
     let is_uuid = stem.len() == 36
         && stem.as_bytes().iter().enumerate().all(|(i, b)| match i {
@@ -425,19 +364,14 @@ fn looks_like_opaque_id(stem: &str) -> bool {
     is_uuid || is_long_hex
 }
 
-/// The declared group a discovered subagent transcript file falls under
-/// (issue user stories #27/#28): the file's own name, verbatim, unless it reads
-/// as an opaque generated id — in which case the harness declared no stable
-/// identity and the file falls into the explicit "Unidentified subagent"
-/// fallback bucket, so it is never silently dropped.
+/// The declared group a discovered subagent transcript file falls under: its
+/// filename, unless that reads as an opaque generated id — then the explicit
+/// "Unidentified subagent" bucket, so it is never silently dropped.
 ///
-/// **Scoped assumption**: no real Claude Code subagent transcript naming
-/// convention is confirmed anywhere in this repository (only anonymous
-/// filenames like `side.jsonl` appear in existing fixtures/tests, see
-/// `run_cost.rs`). Filename is the only signal available without inventing an
-/// unconfirmed in-transcript field, so it is the one used here; if a harness's
-/// subagent files are later found to embed a `subagent_type` (or similar) key,
-/// this is the seam to extend.
+/// **Scoped assumption**: no Claude Code subagent naming convention is
+/// confirmed anywhere in this repo, so filename is the only signal short of
+/// inventing an unconfirmed in-transcript field. This is the seam to extend if
+/// subagent files are later found to embed a `subagent_type` key.
 fn claude_subagent_group(file_stem: &str) -> String {
     if file_stem.is_empty() || looks_like_opaque_id(file_stem) {
         "Unidentified subagent".to_string()
@@ -446,14 +380,10 @@ fn claude_subagent_group(file_stem: &str) -> String {
     }
 }
 
-// --- Source readability (visible endpoint error) --------------------------------
-
-/// Confirm `root` (a harness's whole transcript/journal source) is listable, or
-/// name it in a visible error. `NotFound` is not an error — it means "this
-/// harness has never written a session yet", not "the source is broken".
-/// Checked once per distinct root the cohort touches (memoized by the caller),
-/// never per session — a single unreadable session degrades to a local,
-/// silent absence instead (issue's explicit source-vs-session distinction).
+/// Confirm a harness's whole transcript source is listable, or name it in a
+/// visible error. `NotFound` is not an error — it means "no session written
+/// yet". Checked once per distinct root, never per session: a single unreadable
+/// session must degrade to a local absence, not fail the whole request.
 fn ensure_source_readable(root: &Path, harness_label: &str) -> Result<(), PerformanceError> {
     if !root.exists() {
         return Ok(());
@@ -467,8 +397,6 @@ fn ensure_source_readable(root: &Path, harness_label: &str) -> Result<(), Perfor
     }
 }
 
-// --- Context/duration resolution -------------------------------------------------
-
 fn parse_ts(ts: &str) -> Option<chrono::DateTime<chrono::FixedOffset>> {
     chrono::DateTime::parse_from_rfc3339(ts).ok()
 }
@@ -479,15 +407,11 @@ fn duration_millis(started_at: &str, completed_at: &str) -> Option<f64> {
     Some((end - start).num_milliseconds() as f64)
 }
 
-/// One harness's storage root to resolve a session's transcript against — the
-/// one remaining harness-name check in this module, and deliberately not one
-/// [`crate::harness_probes`] absorbs: it picks between two independently
-/// **computed** roots (a per-Run, sandbox-aware Claude root vs a global,
-/// home-based Copilot root, see [`compute_performance`]), not between two
-/// **behaviours**. ADR-0051 governs the latter — which parser reads a
-/// transcript, which directory convention finds a subagent — and both of
-/// those now dispatch exclusively through `crate::harness_probes` below, never
-/// through a `match harness.as_str() { .. }` written in this module.
+/// The one remaining harness-name check in this module, deliberately NOT moved
+/// into [`crate::harness_probes`]: it picks between two independently computed
+/// roots (per-Run sandbox-aware Claude vs global home-based Copilot), not
+/// between two behaviours. Behaviour dispatch goes through `harness_probes`
+/// (ADR-0051), never a `match harness` written here.
 fn source_root<'a>(harness: &str, claude_root: &'a Path, copilot_root: &'a Path) -> &'a Path {
     if harness == crate::harness_registry::COPILOT {
         copilot_root
@@ -497,15 +421,9 @@ fn source_root<'a>(harness: &str, claude_root: &'a Path, copilot_root: &'a Path)
 }
 
 /// One harness's context peak for one main session, or the absence reason.
-/// Dispatches exclusively through [`crate::harness_probes`] (ADR-0051): this
-/// function never names `claude_session_peak`/`copilot_session_peak`, nor
-/// `claude`/`copilot`'s own transcript path convention — it asks
-/// [`crate::harness_probes::resolve_transcript`] for the file and
-/// [`crate::harness_probes::context_peak`] for the reading, gated on
-/// [`crate::harness_probes::can_measure_context`]. The source's readability is
-/// checked here too (once per distinct root, via `seen_roots`) — only for a
-/// harness that actually has a context-usage source, so an unrelated harness
-/// (e.g. `opencode`) never triggers a Claude/Copilot root check it doesn't need.
+/// The root readability check sits *after* the `can_measure_context` gate, so a
+/// harness with no context source (e.g. `opencode`) never triggers a
+/// Claude/Copilot root check it does not need.
 fn main_session_context(
     harness: &str,
     root: &Path,
@@ -534,14 +452,10 @@ fn main_session_context(
     })
 }
 
-/// The subagent transcript files discovered for one main session under
-/// `harness`, already grouped into their declared label ([`claude_subagent_group`]).
-/// Dispatches exclusively through [`crate::harness_probes::subagent_transcripts`]
-/// (ADR-0051): a harness with no nested-subagent convention (every harness but
-/// `claude` today, `copilot` included — see [`crate::harness_probes`]'s
-/// `CopilotProbes` doc comment for the investigated motive) answers an empty
-/// `Vec` from the dispatch itself, never a `match`/`if harness == ..` written
-/// here.
+/// The subagent transcript files discovered for one main session, grouped by
+/// declared label. A harness with no nested-subagent convention (every one but
+/// `claude` today) answers an empty `Vec` from the `harness_probes` dispatch
+/// itself — never from an `if harness == ..` written here (ADR-0051).
 fn subagent_groups(
     harness: &str,
     root: &Path,
@@ -557,8 +471,6 @@ fn subagent_groups(
         .collect()
 }
 
-// --- The per-run walk ------------------------------------------------------------
-
 struct PendingNode {
     started_at: String,
     harness: String,
@@ -566,29 +478,22 @@ struct PendingNode {
     node_type: String,
 }
 
-/// A `MergeResolverStarted` awaiting its pairing `MergeResolverCompleted` —
-/// `conflicting_node_id`/`iter` (its own payload fields) resolve the working
-/// directory an attributed session is looked for in (see the module doc's
-/// "Infrastructure subagents" section).
+/// A `MergeResolverStarted` awaiting its pairing `MergeResolverCompleted`.
+/// `conflicting_node_id`/`iter` resolve the working directory an attributed
+/// session is looked for in (module doc, "Infrastructure subagents").
 struct MergeResolverPending {
     started_at: String,
     conflicting_node_id: Option<String>,
     iter: Option<i64>,
 }
 
-/// Fold every discovered subagent transcript (already labelled by
-/// [`subagent_groups`]) into `subagents`' declared groups, under `harness`.
-/// Shared between a Node's own subagents and an Infrastructure role's (issue
-/// user story #36 — a role's subagents are grouped exactly like a Node's).
+/// Fold discovered subagent transcripts into their declared groups. Shared by a
+/// Node's subagents and an Infrastructure role's.
 ///
-/// The context peak dispatches through [`crate::harness_probes::context_peak`]
-/// (ADR-0051), like every other reading in this module. The duration span does
-/// not: no capability marker exists yet for "start/end bounds from a
-/// transcript" (only Claude's subagent convention exists at all today, see
-/// [`crate::harness_probes`]'s `CopilotProbes` doc comment), so
+/// The duration span alone bypasses the `harness_probes` dispatch: no capability
+/// marker exists yet for "start/end bounds from a transcript", so
 /// [`crate::context_peak::claude_transcript_time_span`] stays a direct call —
-/// the seam to extend if a second harness ever grows subagent transcripts of
-/// its own with a different span shape.
+/// the seam to extend when a second harness grows subagent transcripts.
 fn fold_subagents(
     subagents: &mut BTreeMap<String, SubagentAcc>,
     files: Vec<(String, String)>,
@@ -613,12 +518,9 @@ fn fold_subagents(
     }
 }
 
-/// Resolve one successful main-session Node execution's Context/Duration into
-/// `node_acc` (its Node), `pipeline_by_harness` (its Pipeline, pooled) and
-/// `total_by_harness` (the whole cohort, pooled one level further — see
-/// [`StatsPerformance::total`]'s doc comment) alike, and fold every discovered
-/// subagent transcript into the Node's own subagent groups (never into any of
-/// the three harness accumulators — Implementation Decisions).
+/// Record one successful Node execution into its Node, its Pipeline and the
+/// cohort total alike. Discovered subagent transcripts go into the Node's own
+/// subagent groups and NEVER into any of the three harness accumulators.
 #[allow(clippy::too_many_arguments)]
 fn record_node_success(
     node_acc: &mut NodeAcc,
@@ -660,10 +562,7 @@ fn record_node_success(
     Ok(())
 }
 
-/// Capitalize `harness`'s first letter for a human-facing message (`"claude"`
-/// → `"Claude"`, `"copilot"` → `"Copilot"`) — display prose, not a capability
-/// decision, so it needs no `match`/dispatch: every harness name capitalizes
-/// the same way.
+/// Display prose, not a capability decision — so no `harness_probes` dispatch.
 fn harness_display_label(harness: &str) -> String {
     let mut chars = harness.chars();
     match chars.next() {
@@ -683,14 +582,9 @@ fn check_root_once(
     Ok(())
 }
 
-// --- Infrastructure role session resolution (by exclusion) -----------------------
-
-/// Every Claude `session_id` a Node is known to have opened at `(node_id,
-/// iter)`, across every attempt (including a stopped-then-restarted one that
-/// shares the same working directory) — the exclusion list an Infrastructure
-/// role's own session is resolved against. Populated for every `NodeStarted`
-/// seen, regardless of node type or outcome, since even a failed/stopped
-/// attempt's session file still occupies the shared directory.
+/// The exclusion list an Infrastructure role's own session is resolved against.
+/// Populated for EVERY `NodeStarted`, whatever its type or outcome: even a
+/// failed attempt's session file still occupies the shared directory.
 #[derive(Debug, Clone)]
 struct NodeStartRecord {
     node_type: String,
@@ -698,11 +592,9 @@ struct NodeStartRecord {
     session_id: Option<String>,
 }
 
-/// One directory's worth of Claude sessions, resolved down to the ONE not
-/// already known to belong to a Node — or why that couldn't be done. Mirrors
-/// `run_cost.rs`'s `ambiguous_shared_claude` guard, but at session (not
-/// dollar) granularity: an ambiguous directory is never attributed by path
-/// alone (see the module doc's "Infrastructure subagents" section).
+/// One directory's Claude sessions resolved down to the ONE not already known
+/// to belong to a Node — or why that could not be done. An ambiguous directory
+/// is never attributed by path alone.
 enum InfraSession {
     /// Exactly one unattributed `.jsonl` file: `(project_dir, session_id)`.
     One(PathBuf, String),
@@ -750,15 +642,10 @@ fn resolve_infra_session(
 }
 
 /// Context peak + subagent transcripts for one resolved Infrastructure-role
-/// Claude session, or the motivated absence when none could be attributed.
-/// Read exactly like a Node's own session (`main_session_context`/
-/// `subagent_groups`) — a subagent still counts even if the role's own
-/// attempt around it later failed (same semantics as a Node's subagents).
-/// `harness` is threaded through to the dispatch calls (ADR-0051) even though
-/// the caller only ever reaches this for `claude` today (the resolve-by-
-/// exclusion directory scan above it is structurally Claude-only, see the
-/// module doc's "Infrastructure subagents" section) — so this stays correct
-/// unchanged if a second harness ever grows the same directory convention.
+/// session, or the motivated absence. A subagent still counts even if the
+/// role's own attempt around it later failed (same as a Node's subagents).
+/// `harness` is threaded through though only `claude` reaches here today — the
+/// resolve-by-exclusion scan above is structurally Claude-only.
 fn infra_claude_observation(
     harness: &str,
     claude_root: &Path,
@@ -802,12 +689,9 @@ fn infra_claude_observation(
     }
 }
 
-/// Resolve and fold one Infrastructure role's Context/Duration/subagents for
-/// one occurrence into `acc` (its own role) and `infra_total_by_harness` (both
-/// roles pooled, raw — [`StatsPerformance::infrastructure_total`]'s doc
-/// comment) alike — shared by the Pipeline Manager and Merge resolver arms of
-/// the per-run walk (they differ only in which directory and exclusion set
-/// apply).
+/// Fold one Infrastructure-role occurrence into its own role and the raw infra
+/// total alike. Shared by the Pipeline Manager and Merge resolver arms, which
+/// differ only in which directory and exclusion set apply.
 #[allow(clippy::too_many_arguments)]
 fn record_infra_success(
     acc: &mut NodeAcc,
@@ -866,43 +750,19 @@ fn record_infra_success(
     Ok(())
 }
 
-// --- Whole-cohort memo -------------------------------------------------------
+// Whole-cohort memo (in memory only, ADR-0029). `compute_performance` folds the
+// WHOLE cohort in one entangled pass, so no piece of it is independently
+// memoizable — this memos the whole `StatsPerformance`, not a per-Run slice.
 //
-// The issue requires the result "cached in memory according to events and
-// observed sources" (not persisted — ADR-0029) — the same posture
-// `run_cost.rs`'s per-Run breakdown memo already established, just pitched one
-// level up: `compute_performance` folds the WHOLE cohort into shared mutable
-// accumulators in a single entangled pass (unlike a per-Run breakdown, no
-// piece of it is an independent, separately-memoizable result), so this memos
-// the **whole computed [`StatsPerformance`]** rather than a per-Run slice.
+// Key = `(from, to, fingerprint)`. `fingerprint` folds, per Run in range, its
+// event-log fingerprint (reused verbatim from `run_cost` so the two memos can
+// never disagree about what "the events changed" means) plus the max Claude and
+// Copilot transcript mtimes. `[from, to)` is keyed separately, not folded into
+// the fingerprint, so two windows cannot collide on a coincidental footprint.
 //
-// The key is `(from, to, fingerprint)`, where `fingerprint` folds — for every
-// Run whose `RunStarted` falls in `[from, to)` — that Run's own event-log
-// fingerprint ([`crate::run_cost::event_fingerprint`], reused verbatim so the
-// two memos can never disagree about what "the events changed" means) and the
-// max mtime across every transcript/journal file the Run's own events could
-// possibly reference, Claude ([`crate::run_cost::max_transcript_mtime_millis`])
-// and Copilot ([`crate::run_cost::copilot_mtime_millis`]) alike. A new event
-// appended to any Run in range, a rewritten transcript, or a widened `[from,
-// to)` all change the key and force a recompute; nothing outside that
-// footprint can silently go stale, and nothing inside it can silently serve a
-// stale answer. `[from, to)` is part of the key (not just an input folded into
-// the fingerprint) so two different windows can never collide even if their
-// event footprints coincided.
-//
-// A subtlety worth spelling out: this key intentionally does **not** cover a
-// residual Infrastructure session discovered by exclusion (Pipeline
-// Manager/Merge resolver's own directory scan) with its own separate mtime —
-// that discovery only ever walks a directory this same Run's own Claude root
-// already covers via `max_transcript_mtime_millis`'s recursive walk, so a new
-// or rewritten residual file already bumps the same max.
-//
-// No explicit cache-busting query parameter exists (or is needed): the issue
-// describes "Refresh" as the client re-issuing the identical `[from, to)`
-// query on demand (Implementation Decisions: "l'utilisateur déclenche
-// Refresh"), and the natural key already recomputes whenever anything in that
-// window actually changed — a same-window, no-new-data Refresh reusing the
-// memoized answer is the cache doing its job, not staleness.
+// The key deliberately carries no separate mtime for a residual Infrastructure
+// session found by exclusion: that scan only walks a directory
+// `max_transcript_mtime_millis` already covers recursively.
 const PERFORMANCE_MEMO_CAP: usize = 256;
 
 type PerformanceMemoKey = (String, String, u64);
@@ -914,12 +774,10 @@ fn performance_memo() -> &'static Mutex<PerformanceMemoMap> {
     PERFORMANCE_MEMO.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Test-only recompute counter, keyed by the exact memo key — proves a memo
-/// hit truly skips [`fold_performance`] rather than merely producing an
-/// identical answer by coincidence. Keyed (not a bare total) so tests running
-/// concurrently in the same process never interfere with each other as long
-/// as each picks its own `[from, to)` window (the convention every test below
-/// follows). `#[cfg(test)]`-gated: zero footprint in the production binary.
+/// Test-only recompute counter — proves a memo hit truly skips
+/// [`fold_performance`] rather than coincidentally producing an equal answer.
+/// Keyed by memo key so concurrent tests do not interfere, provided each picks
+/// its own `[from, to)` window (the convention every test below follows).
 #[cfg(test)]
 static RECOMPUTE_COUNTS: OnceLock<Mutex<HashMap<PerformanceMemoKey, u32>>> = OnceLock::new();
 
@@ -932,12 +790,9 @@ fn record_recompute_for_test(key: &PerformanceMemoKey) {
     *counts.entry(key.clone()).or_insert(0) += 1;
 }
 
-/// Total number of times [`fold_performance`] actually ran for requests whose
-/// `[from, to)` matched `(from, to)` — regardless of which fingerprint hash
-/// accompanied each call. `pub(crate)` so `lib.rs`'s HTTP-contract tests can
-/// assert a repeat request was served from the memo (count unchanged) or
-/// correctly forced a recompute (count incremented) without reaching into the
-/// map's internals.
+/// How many times [`fold_performance`] actually ran for `[from, to)`, whatever
+/// fingerprint accompanied each call. `pub(crate)` so `lib.rs`'s HTTP-contract
+/// tests can assert memo-hit vs forced-recompute without reaching into the map.
 #[cfg(test)]
 pub(crate) fn recompute_count_for_test(from: &str, to: &str) -> u32 {
     RECOMPUTE_COUNTS
@@ -950,11 +805,9 @@ pub(crate) fn recompute_count_for_test(from: &str, to: &str) -> u32 {
         .sum()
 }
 
-/// One Run's own pre-loaded material for the heavy fold — split out of the
-/// cheap event-log + mtime pass (`compute_performance`) so a memo hit never
-/// has to pay for [`fold_performance`]'s transcript reads (context peak
-/// parsing, subagent directory scans) at all, only the cheap DB reads and
-/// `stat` calls needed to know whether anything changed.
+/// One Run's pre-loaded material for the heavy fold — split out of the cheap
+/// event-log + mtime pass so a memo hit pays only for the DB reads and `stat`
+/// calls needed to know whether anything changed, never a transcript read.
 struct RunContext {
     run_id: String,
     payload: Value,
@@ -962,8 +815,6 @@ struct RunContext {
     claude_root: PathBuf,
     repo_root: PathBuf,
 }
-
-// --- Whole-cohort computation ------------------------------------------------------
 
 async fn compute_performance(
     state: &AppState,
@@ -1055,10 +906,9 @@ async fn compute_performance(
     Ok(value)
 }
 
-/// The heavy fold itself — every transcript read, every subagent directory
-/// scan, gated behind the memo in [`compute_performance`]. Pure/synchronous:
-/// every Run's events are already loaded ([`RunContext`]), so nothing here
-/// touches `state.db` again.
+/// The heavy fold — every transcript read and subagent directory scan, gated
+/// behind the memo. Synchronous: events are already loaded into [`RunContext`],
+/// so nothing here touches `state.db` again.
 fn fold_performance(
     contexts: Vec<RunContext>,
     copilot_root: &Path,

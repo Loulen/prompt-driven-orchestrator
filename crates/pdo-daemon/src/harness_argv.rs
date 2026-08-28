@@ -7,27 +7,21 @@
 //! is the whole reason the `claude` tail stays byte-identical to the legacy launch
 //! when no model / effort / settings / session identity is posed (the #550 gate).
 //!
-//! **Pure by contract — an AC, not advice.** No `$HOME`, no disk, no clock. The
-//! caller shell-quotes each hole value before handing it in (`'opus'`, or
-//! `"$(cat '/path')"` for the prompt), so the shell-quoting discipline stays in
-//! [`crate::tmux_session_manager`] where the shell semantics already live. This
-//! module only substitutes placeholders and joins the survivors, which is exactly
-//! what makes it testable without a fixture.
+//! **Pure by contract — an AC, not advice.** No `$HOME`, no disk, no clock. Don't
+//! shell-quote here: the caller hands in already-quoted values (`'opus'`, or
+//! `"$(cat '/path')"` for the prompt) so the quoting discipline stays in
+//! [`crate::tmux_session_manager`], where the shell semantics live.
 
 /// The values substituted into a descriptor's argv holes.
 ///
 /// Each field is **already shell-quoted by the caller**. An EMPTY string means
-/// "no value": every token that references that hole is dropped, so the rendered
-/// tail collapses to exactly what it would be if the hole did not appear in the
-/// template at all.
+/// "no value": every token referencing that hole is dropped.
 ///
-/// `prompt`, `model`, `effort`, `session_id` and `settings` are the five holes of
-/// ADR-0045. `resume` is a sixth, and it is deliberately NOT one of them: it is
-/// the resume *selector* (`--resume '<id>'` by identity, or a blind `--continue`),
-/// which ADR-0045 keeps in **code** because the identity-or-blind choice reads the
-/// node's event-log row, not the harness. The pure hole-drop rule cannot express
-/// "emit X *when* the hole is empty", so the selector is computed by the caller
-/// and handed in here as one opaque, never-empty value.
+/// `resume` is deliberately NOT one of ADR-0045's five holes: it is the resume
+/// *selector* (`--resume '<id>'` by identity, or a blind `--continue`), and the
+/// identity-or-blind choice reads the node's event-log row, not the harness. The
+/// hole-drop rule cannot express "emit X *when* the hole is empty", so the caller
+/// computes the selector and hands it in as one opaque, never-empty value.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct Holes {
     pub prompt: String,
@@ -39,12 +33,9 @@ pub(crate) struct Holes {
 }
 
 impl Holes {
-    /// Resolve a placeholder name to its (already-quoted) value.
-    ///
     /// An unknown placeholder resolves to the empty string, so its token drops —
-    /// the same "absent" behaviour as an empty known hole. Every embedded
-    /// descriptor is pinned by a byte-for-byte golden, which turns a typo'd
-    /// placeholder into a red test rather than a silent drop.
+    /// the same "absent" behaviour as an empty known hole. A typo'd placeholder is
+    /// caught by the byte-for-byte descriptor goldens, not here.
     fn resolve(&self, name: &str) -> &str {
         match name {
             "prompt" => &self.prompt,
@@ -60,12 +51,10 @@ impl Holes {
 
 /// Render a descriptor's argv-token template into a single tail string.
 ///
-/// Each token may contain zero or more `{hole}` placeholders. A token is dropped
-/// **entirely** if any placeholder it contains resolves to an empty value;
-/// otherwise every placeholder is substituted and the token is kept. The
-/// survivors are joined by a single space — so an absent optional flag leaves no
-/// double space and no trailing space, which is precisely what keeps the no-op
-/// `claude` tail byte-identical to the hand-written legacy literal.
+/// A token is dropped **entirely** if any `{hole}` it contains resolves to empty.
+/// Survivors join on a single space: an absent optional flag must leave no double
+/// space and no trailing space, or the no-op `claude` tail stops being
+/// byte-identical to the legacy literal.
 pub(crate) fn render(tokens: &[String], holes: &Holes) -> String {
     tokens
         .iter()
@@ -74,8 +63,6 @@ pub(crate) fn render(tokens: &[String], holes: &Holes) -> String {
         .join(" ")
 }
 
-/// Render one token, or `None` when it references an empty hole (⇒ the token is
-/// dropped by [`render`]).
 fn render_token(token: &str, holes: &Holes) -> Option<String> {
     let mut out = String::with_capacity(token.len());
     let mut rest = token;
@@ -87,8 +74,7 @@ fn render_token(token: &str, holes: &Holes) -> Option<String> {
             }
             Some(i) => i,
         };
-        // A `{` with no closing `}` is literal text, not a placeholder — keep it
-        // and stop scanning (none of our descriptors do this, but be lenient).
+        // Don't treat an unclosed `{` as a placeholder: it is literal text.
         let rel_close = match rest[open + 1..].find('}') {
             None => {
                 out.push_str(rest);
@@ -100,7 +86,7 @@ fn render_token(token: &str, holes: &Holes) -> Option<String> {
         out.push_str(&rest[..open]);
         let value = holes.resolve(&rest[open + 1..close]);
         if value.is_empty() {
-            return None; // one empty hole drops the whole token
+            return None;
         }
         out.push_str(value);
         rest = &rest[close + 1..];
@@ -112,20 +98,14 @@ mod tests {
     use super::*;
     use crate::harness_registry;
 
-    /// The prompt hole as the caller builds it: `"$(cat '<path>')"`.
     fn prompt_hole(path: &str) -> String {
         format!("\"$(cat '{path}')\"")
     }
 
-    // -----------------------------------------------------------------------
-    // THE GATE (#550): the `claude` launch/resume tails, byte for byte.
-    //
-    // These goldens were captured from the pre-refactor `build_agent_tail` /
-    // `build_resume_script` literals (single space before the prompt cat, leading
-    // space on `--effort` etc.) and then the tail builders were rewritten to route
-    // through this renderer. A golden written *after* the refactor would prove
-    // nothing — so it is the literal here that is authoritative.
-    // -----------------------------------------------------------------------
+    // THE GATE (#550). These goldens were captured from the PRE-refactor
+    // `build_agent_tail` / `build_resume_script` literals; the builders were then
+    // rewritten to route through this renderer. Don't regenerate them from current
+    // output — a golden written after the refactor would prove nothing.
 
     #[test]
     fn claude_launch_no_holes_is_byte_identical_to_the_legacy_tail() {
@@ -143,8 +123,6 @@ mod tests {
     #[test]
     fn claude_resume_no_holes_is_byte_identical_to_the_legacy_tail() {
         let d = harness_registry::resolve("claude").unwrap();
-        // The blind-continue selector, as the resume seam computes it when the row
-        // carries no pinned id (pre-#473 / opencode).
         let holes = Holes {
             resume: "--continue".to_string(),
             ..Default::default()
@@ -175,7 +153,6 @@ mod tests {
 
     #[test]
     fn claude_launch_model_only_hugs_the_base_flag() {
-        // #296/#424: an absent optional flag leaves no double space and no gap.
         let d = harness_registry::resolve("claude").unwrap();
         let holes = Holes {
             prompt: prompt_hole("/tmp/p.md"),
@@ -231,22 +208,12 @@ mod tests {
         );
     }
 
-    // -----------------------------------------------------------------------
-    // #614/#615: the `copilot` launch/resume tails, byte for byte — every hole full
-    // and every hole empty (AC "tous trous pleins et tous trous vides"). The launch
-    // enters interactive mode with the prompt auto-executed (`-i {prompt}`, #615
-    // iter-2), so the harness stays resident: copilot refuses a *positional* prompt
-    // (the slot is for subcommands) and `-i` is how a prompt rides interactive mode.
-    // Goldens pin it so a flag typo — or a regression back to the positional launch
-    // that hung the node — is a red test, never a broken launch discovered only
-    // against a live binary.
-    // -----------------------------------------------------------------------
+    // #614/#615. Don't launch copilot with a positional prompt: that slot is for
+    // subcommands, copilot refuses it, and the node hangs. `-i {prompt}` enters
+    // interactive mode with the prompt auto-executed, so the harness stays resident.
 
     #[test]
     fn copilot_launch_no_holes_uses_the_automatic_selector_and_no_session_pin() {
-        // A node with no model / session id: `--model` and `--session-id` drop, so
-        // copilot launches on its automatic model selector (AC), fully autonomous,
-        // question tool off, resident after the turn, prompt auto-executed by `-i`.
         let d = harness_registry::resolve("copilot").unwrap();
         let holes = Holes {
             prompt: prompt_hole("/tmp/p.md"),
@@ -260,9 +227,7 @@ mod tests {
 
     #[test]
     fn copilot_launch_fills_every_hole() {
-        // Every hole present: model pins the selector, session id pins identity.
-        // `--effort` has no place in copilot's template, so an effort value never
-        // leaks a token (copilot has no launch-time effort axis).
+        // Copilot has no launch-time effort axis: an effort value must leak no token.
         let d = harness_registry::resolve("copilot").unwrap();
         let holes = Holes {
             prompt: prompt_hole("/tmp/p.md"),
@@ -294,8 +259,6 @@ mod tests {
 
     #[test]
     fn copilot_resume_by_identity() {
-        // The resume seam fills `{resume}` with `--resume '<id>'` (its verb is the
-        // descriptor's `resume_by_id`), so copilot re-enters THIS node's session.
         let d = harness_registry::resolve("copilot").unwrap();
         let holes = Holes {
             resume: "--resume 'abc-123'".to_string(),
@@ -309,9 +272,7 @@ mod tests {
 
     #[test]
     fn copilot_resume_with_no_identity_renders_no_resume_flag() {
-        // copilot's `resume_blind` is empty, so a resume with no recorded id leaves
-        // the `{resume}` hole empty and the token drops — never a blind `--continue`
-        // (AC "jamais par un continue aveugle").
+        // copilot's `resume_blind` is empty on purpose: never a blind `--continue`.
         let d = harness_registry::resolve("copilot").unwrap();
         assert_eq!(
             render(&d.resume, &Holes::default()),
@@ -321,9 +282,7 @@ mod tests {
 
     #[test]
     fn opencode_resume_stays_a_blind_continue_byte_for_byte() {
-        // The #614 verb-as-property refactor keeps opencode's resume byte-identical:
-        // `resume_blind` fills `{resume}` with `--continue` (opencode cannot pin an
-        // identity, so it only ever blind-continues).
+        // opencode cannot pin a session identity, so it only ever blind-continues.
         let d = harness_registry::resolve("opencode").unwrap();
         let holes = Holes {
             resume: "--continue".to_string(),
@@ -331,10 +290,6 @@ mod tests {
         };
         assert_eq!(render(&d.resume, &holes), "exec opencode --auto --continue");
     }
-
-    // -----------------------------------------------------------------------
-    // The rendering rule itself, independent of any descriptor.
-    // -----------------------------------------------------------------------
 
     #[test]
     fn a_token_with_one_empty_hole_is_dropped_whole() {

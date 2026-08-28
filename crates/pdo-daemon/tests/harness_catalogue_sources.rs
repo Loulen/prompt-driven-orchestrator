@@ -86,7 +86,6 @@ fn sh_single_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
-/// The `models` array served for one harness in `GET /settings`.
 fn served_models(settings: &serde_json::Value, harness: &str) -> Vec<String> {
     settings["harness_descriptors"]["harnesses"]
         .as_array()
@@ -101,7 +100,6 @@ fn served_models(settings: &serde_json::Value, harness: &str) -> Vec<String> {
         .collect()
 }
 
-/// The whole served entry for one harness.
 fn served_harness(settings: &serde_json::Value, harness: &str) -> serde_json::Value {
     settings["harness_descriptors"]["harnesses"]
         .as_array()

@@ -86,9 +86,9 @@ pub(crate) enum CostSource {
 
 impl CostSource {
     /// How this source reads in the published support table
-    /// ([`crate::harness_support`]) — the mechanism named, not a bare tick. The
-    /// label lives on the variant so the table can never describe a mechanism the
-    /// code no longer dispatches to.
+    /// ([`crate::harness_support`]). The label lives on the variant so the table
+    /// can never describe a mechanism the code no longer dispatches to — same for
+    /// every other capability's `label` below.
     pub(crate) fn label(self) -> &'static str {
         match self {
             CostSource::DerivedFromTranscript => {
@@ -120,8 +120,6 @@ pub(crate) enum TranscriptResolution {
 }
 
 impl TranscriptResolution {
-    /// How this resolution reads in the published support table. See
-    /// [`CostSource::label`] for why the label sits on the variant.
     pub(crate) fn label(self) -> &'static str {
         match self {
             TranscriptResolution::ClaudeJsonl => "the JSONL transcript, keyed by working directory",
@@ -148,8 +146,6 @@ pub(crate) enum TurnEndSubstrate {
 }
 
 impl TurnEndSubstrate {
-    /// How this substrate reads in the published support table. See
-    /// [`CostSource::label`] for why the label sits on the variant.
     pub(crate) fn label(self) -> &'static str {
         match self {
             TurnEndSubstrate::ClaudeTranscript => {
@@ -177,8 +173,6 @@ pub(crate) enum UsageLimitAnchor {
 }
 
 impl UsageLimitAnchor {
-    /// How this anchor reads in the published support table. See
-    /// [`CostSource::label`] for why the label sits on the variant.
     pub(crate) fn label(self) -> &'static str {
         match self {
             UsageLimitAnchor::ClaudePaneMenu => {
@@ -209,8 +203,6 @@ pub(crate) enum ContextUsageSource {
 }
 
 impl ContextUsageSource {
-    /// How this source reads in the published support table. See
-    /// [`CostSource::label`] for why the label sits on the variant.
     pub(crate) fn label(self) -> &'static str {
         match self {
             ContextUsageSource::ClaudeTranscriptPeak => {
@@ -237,8 +229,6 @@ pub(crate) enum StagingFloor {
 }
 
 impl StagingFloor {
-    /// How this floor reads in the published support table. See
-    /// [`CostSource::label`] for why the label sits on the variant.
     pub(crate) fn label(self) -> &'static str {
         match self {
             StagingFloor::ClaudeDotClaude => {
@@ -283,8 +273,6 @@ pub(crate) trait HarnessProbes: Sync {
         None
     }
 
-    // --- the behaviour behind the markers (ADR-0051 dispatch points) ---------
-    //
     // These are the methods a generic consumer actually calls. The default is
     // "absent" — a data-declared harness ([`NullProbes`]) resolves no transcript,
     // never constates an end of turn, never matches a usage-limit menu — so a
@@ -371,15 +359,9 @@ pub(crate) trait HarnessProbes: Sync {
     /// The default is an **empty `Vec`**, not a `match harness { .. }` the caller
     /// has to write: a harness with no nested-subagent convention (every harness
     /// but `claude` today) answers "none" from the dispatch itself, so its
-    /// absence is a value, never a silently-skipped branch (ADR-0051 §2). This is
-    /// deliberately investigated, not assumed, for `copilot`: its event journal
-    /// declares no delegate/subagent event kind at all (only
-    /// `assistant.turn_end`, `session.error`, `session.usage_checkpoint`,
-    /// `session.shutdown` — see [`crate::copilot_journal`]'s module doc), and its
-    /// store has no per-directory nesting under a session id to enumerate in the
-    /// first place (`<store>/<session-id>/events.jsonl`, flat). A future harness
-    /// that DOES expose declared subagent identity overrides this method with its
-    /// own discovery, exactly like `claude`'s below — never a shared heuristic.
+    /// absence is a value, never a silently-skipped branch (ADR-0051 §2). A
+    /// future harness that DOES expose declared subagent identity overrides this
+    /// with its own discovery — never a shared heuristic.
     fn subagent_transcripts(
         &self,
         _project_root: &Path,
@@ -412,7 +394,6 @@ impl HarnessProbes for ClaudeProbes {
         Some(StagingFloor::ClaudeDotClaude)
     }
 
-    /// #585: Claude's per-turn token usage, deduplicated and maxed.
     fn context_usage_source(&self) -> Option<ContextUsageSource> {
         Some(ContextUsageSource::ClaudeTranscriptPeak)
     }
@@ -437,29 +418,20 @@ impl HarnessProbes for ClaudeProbes {
         }
     }
 
-    /// `claude`'s end-of-turn parser: the JSONL turn-state tail classifier
-    /// ([`crate::stale_detector::parse_turn_state`]) answering `TurnEnded`.
     fn classify_turn_ended(&self, tail: &str) -> bool {
         crate::stale_detector::parse_turn_state(tail) == crate::stale_detector::TurnState::TurnEnded
     }
 
-    /// `claude`'s usage-limit matcher over a pane capture
-    /// ([`crate::stale_detector::detect_usage_limit`]).
     fn detect_usage_limit(&self, pane: &str) -> bool {
         crate::stale_detector::detect_usage_limit(pane)
     }
 
-    /// `claude`'s context-peak parser: per-message token `usage`, deduplicated
-    /// and maxed ([`crate::context_peak::claude_session_peak`]). #585.
     fn context_peak(&self, text: &str) -> Option<u64> {
         crate::context_peak::claude_session_peak(text)
     }
 
-    /// `claude`'s subagent discovery: every `*.jsonl` transcript under this main
-    /// session's own `subagents/` directory
-    /// (`<project_root>/<encoded_cwd>/<session_id>/subagents/`, recursed exactly
-    /// like [`crate::run_cost`]'s own transcript glob) — the only harness with a
-    /// confirmed nested-subagent convention today (#585).
+    /// `claude` is the only harness with a confirmed nested-subagent convention
+    /// today (#585): `<project_root>/<encoded_cwd>/<session_id>/subagents/`.
     fn subagent_transcripts(
         &self,
         project_root: &Path,
@@ -522,8 +494,7 @@ static CLAUDE_PROBES: ClaudeProbes = ClaudeProbes;
 /// not assumed: `copilot`'s journal declares no delegate/subagent event kind
 /// ([`crate::copilot_journal`]'s module doc lists all four it does carry), and its
 /// store is flat (`<store>/<session-id>/events.jsonl`, no directory nesting under
-/// a session to enumerate). That absence is the value this dispatch returns for
-/// `copilot`, not a `crate::stats_performance` branch that silently skips it.
+/// a session to enumerate).
 struct CopilotProbes;
 
 impl HarnessProbes for CopilotProbes {
@@ -541,8 +512,6 @@ impl HarnessProbes for CopilotProbes {
     }
     // usage_limit_anchor / staging_floor stay `None` — declared absent (see above).
 
-    /// #585: Copilot's cumulative journal usage counters, converted to a
-    /// per-turn contribution and maxed.
     fn context_usage_source(&self) -> Option<ContextUsageSource> {
         Some(ContextUsageSource::CopilotJournalPeak)
     }
@@ -565,23 +534,15 @@ impl HarnessProbes for CopilotProbes {
         Some(store_root.join(sid).join("events.jsonl"))
     }
 
-    /// `copilot`'s end-of-turn parser: the event journal's explicit
-    /// `assistant.turn_end`, classified by [`crate::copilot_journal::turn_ended`].
     /// A journal trailing on a `session.error` (a hard failure the harness exits 0
     /// on) is **not** a finished turn, so an errored node is never auto-completed.
     fn classify_turn_ended(&self, tail: &str) -> bool {
         crate::copilot_journal::turn_ended(tail)
     }
-    // detect_usage_limit stays the trait default (`false`) — no anchor.
 
-    /// `copilot`'s context-peak parser: the journal's cumulative usage counters,
-    /// converted to a per-turn contribution and maxed
-    /// ([`crate::context_peak::copilot_session_peak`]). #585.
     fn context_peak(&self, text: &str) -> Option<u64> {
         crate::context_peak::copilot_session_peak(text)
     }
-    // subagent_transcripts stays the trait default (empty) — see the struct doc
-    // comment above for why that is an investigated absence, not an assumption.
 
     /// `copilot` exits 0 on a hard model failure (ADR-0052), so its exit is not a
     /// verdict — the journal is.
@@ -589,9 +550,8 @@ impl HarnessProbes for CopilotProbes {
         false
     }
 
-    /// `copilot`'s hard-error recognition: the journal's trailing `session.error`
-    /// ([`crate::copilot_journal::hard_error`]). This is the signal the harness's
-    /// exit code (zero) cannot give.
+    /// The journal's trailing `session.error` — the signal the harness's exit code
+    /// (zero) cannot give.
     fn classify_hard_error(&self, tail: &str) -> Option<String> {
         crate::copilot_journal::hard_error(tail)
     }
@@ -864,9 +824,6 @@ mod tests {
 
     #[test]
     fn claude_and_copilot_declare_context_usage_others_do_not() {
-        // #585: Performance's "context usage" capability. Claude and Copilot each
-        // declare their own mechanism; a data-declared harness (and `opencode`)
-        // gets `None` like every other capability.
         assert_eq!(
             probes_for(CLAUDE).unwrap().context_usage_source(),
             Some(ContextUsageSource::ClaudeTranscriptPeak)
@@ -883,8 +840,6 @@ mod tests {
 
     #[test]
     fn copilot_has_its_three_capabilities_and_declares_two_absent() {
-        // #615: copilot is instrumented on three capabilities (reported cost,
-        // transcript, turn-end) and declares two absent (usage-limit, staging).
         let p = probes_for(COPILOT).expect("copilot has probes");
         assert_eq!(p.cost_source(), Some(CostSource::ReportedByConstant));
         assert_eq!(
@@ -940,8 +895,6 @@ mod tests {
 
     #[test]
     fn copilot_turn_end_dispatches_to_its_journal_parser_not_claudes() {
-        // A copilot journal tail (its own event shape) is called ended by copilot's
-        // parser and NOT by claude's JSONL parser, and vice-versa.
         let copilot_tail =
             "{\"type\":\"assistant.turn_start\",\"data\":{}}\n{\"type\":\"assistant.turn_end\",\"data\":{}}\n";
         assert!(turn_ended(COPILOT, copilot_tail));
@@ -966,8 +919,6 @@ mod tests {
             assert!(!can_cost(name), "{name} cannot be costed");
         }
     }
-
-    // --- ADR-0051: a capability is a dispatch point ------------------------------
 
     /// A fictional harness that **declares its own implementation** of three
     /// capabilities. It is the negative image of `claude`: it resolves a transcript
@@ -1082,8 +1033,6 @@ mod tests {
 
     #[test]
     fn turn_end_absence_note_fires_only_for_a_harness_without_the_substrate() {
-        // AC #7: enabling turn-end completion on a substrate-less harness is said,
-        // not a silent no-op. `claude` has the substrate → no note.
         assert_eq!(turn_end_absence_note(CLAUDE), None);
         let note = turn_end_absence_note("pi").expect("a note for a substrate-less harness");
         assert!(note.contains("`pi`"));
@@ -1093,17 +1042,12 @@ mod tests {
 
     #[test]
     fn staging_floor_absence_note_fires_only_for_a_harness_without_the_floor() {
-        // `claude` has the floor → no note.
         assert_eq!(staging_floor_absence_note(CLAUDE), None);
-        // A data-declared harness has none → one visible note that names it and
-        // says what is NOT guaranteed.
         let note = staging_floor_absence_note("my-custom-harness").expect("a note");
         assert!(note.contains("`my-custom-harness`"));
         assert!(note.contains("no staging floor"));
         assert!(note.contains("$HOME"));
     }
-
-    // --- #585 review follow-up: context_peak / subagent_transcripts dispatch ----
 
     fn claude_turn(id: &str, input: u64, output: u64) -> String {
         serde_json::json!({

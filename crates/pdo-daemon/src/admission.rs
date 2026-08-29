@@ -155,6 +155,7 @@ mod tests {
                 (*id).into(),
                 NodeState {
                     harness: None,
+                    cost: None,
                     node_id: (*id).into(),
                     status: status.clone(),
                     iter: 1,

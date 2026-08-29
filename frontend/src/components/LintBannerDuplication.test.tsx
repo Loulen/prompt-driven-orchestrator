@@ -109,7 +109,7 @@ describe("LintBanner duplication (#63)", () => {
           onLibraryDelete={() => {}}
           onLibraryPipelinesChanged={() => {}}
         />
-        <PipelineInspector libraryPipelines={[]} onLibraryChanged={() => {}} />
+        <PipelineInspector />
       </TooltipProvider>,
     );
 

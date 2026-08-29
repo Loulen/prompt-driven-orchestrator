@@ -88,12 +88,12 @@ describe("saveRunPipeline rejection surfacing", () => {
 // (or `user`) id colliding with a same-named repo pipeline routes to the
 // intended store, not the repo file. The query string is the wire contract the
 // daemon branches on.
-describe("scope-qualified pipeline ops", () => {
-  it("appends ?scope=library to DELETE for a library entry", async () => {
+describe("instance pipeline ops", () => {
+  it("ignores obsolete scopes on DELETE", async () => {
     const fetchMock = captureFetch(200, { ok: true });
     await deletePipeline("simple-bugfix", "library");
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("/pipelines/simple-bugfix?scope=library");
+    expect(url).toBe("/pipelines/simple-bugfix");
     expect(init).toMatchObject({ method: "DELETE" });
   });
 
@@ -109,17 +109,17 @@ describe("scope-qualified pipeline ops", () => {
     expect(fetchMock.mock.calls[0][0]).toBe("/pipelines/r");
   });
 
-  it("appends ?scope=library to GET when opening a library entry", async () => {
+  it("ignores obsolete scopes on GET", async () => {
     const fetchMock = captureFetch(200, { id: "x", scope: "library" });
     await fetchPipeline("simple-bugfix", "library");
-    expect(fetchMock.mock.calls[0][0]).toBe("/pipelines/simple-bugfix?scope=library");
+    expect(fetchMock.mock.calls[0][0]).toBe("/pipelines/simple-bugfix");
   });
 
-  it("appends ?scope=library to PUT when saving a library entry", async () => {
+  it("ignores obsolete scopes on PUT", async () => {
     const fetchMock = captureFetch(200, { ok: true });
     await savePipeline("simple-bugfix", "name: x", {}, "library");
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("/pipelines/simple-bugfix?scope=library");
+    expect(url).toBe("/pipelines/simple-bugfix");
     expect(init).toMatchObject({ method: "PUT" });
   });
 });

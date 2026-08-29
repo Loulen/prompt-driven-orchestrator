@@ -262,6 +262,7 @@ mod tests {
                 id.to_string(),
                 event_log::NodeState {
                     harness: None,
+                    cost: None,
                     node_id: id.to_string(),
                     status,
                     iter: 1,

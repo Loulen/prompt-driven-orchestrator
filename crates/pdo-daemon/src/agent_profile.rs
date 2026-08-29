@@ -187,11 +187,12 @@ fn generate_profile_id() -> String {
 /// All profiles, [`DEFAULT_PROFILE_ID`] first, then by creation order — a stable
 /// listing so the settings panel does not reshuffle rows on every fetch.
 pub(crate) async fn list(db: &SqlitePool) -> Result<Vec<AgentProfile>, sqlx::Error> {
-    let rows =
-        sqlx::query("SELECT * FROM agent_profiles ORDER BY (id = ?) DESC, created_at ASC, id ASC")
-            .bind(DEFAULT_PROFILE_ID)
-            .fetch_all(db)
-            .await?;
+    let rows = sqlx::query(
+        "SELECT * FROM agent_profiles ORDER BY (id = ?) DESC, created_at ASC, rowid ASC",
+    )
+    .bind(DEFAULT_PROFILE_ID)
+    .fetch_all(db)
+    .await?;
     Ok(rows.iter().map(row_to_profile).collect())
 }
 

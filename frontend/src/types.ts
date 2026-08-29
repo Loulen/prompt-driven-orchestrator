@@ -607,6 +607,16 @@ export interface FrontmatterViolation {
   reason: string;
 }
 
+export interface NodeCost {
+  usd: number | null;
+  form: "derived" | "reported" | null;
+  partial: boolean;
+  unpriced_models?: string[];
+  unavailable_reasons?: string[];
+  executions: number;
+  readable_executions: number;
+}
+
 export interface NodeState {
   node_id: string;
   status: NodeStatus;
@@ -639,6 +649,7 @@ export interface NodeState {
    * skip) or a pre-#616 daemon.
    */
   harness?: string;
+  cost?: NodeCost | null;
 }
 
 export interface EdgeInfo {
@@ -946,7 +957,7 @@ export interface BranchRef {
   kind: "local" | "remote";
 }
 
-export type PipelineScope = "repo" | "user" | "library";
+export type PipelineScope = "instance" | "repo" | "user" | "library";
 
 export interface PipelineListEntry {
   id: string;

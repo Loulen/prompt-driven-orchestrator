@@ -1,14 +1,12 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import LibraryRow from "./LibraryRow";
-import type { PipelineScope } from "../types";
 
 function renderRow(
   over: {
     name?: string;
-    scope?: PipelineScope;
     nodeCount?: number;
-    starred?: boolean;
+    modified?: string | null;
     selected?: boolean;
     showDuplicate?: boolean;
     onOpen?: () => void;
@@ -19,9 +17,7 @@ function renderRow(
 ) {
   const props = {
     name: "fixture",
-    scope: "repo" as PipelineScope,
     nodeCount: 3,
-    starred: false,
     showDuplicate: false,
     onDelete: () => {},
     deleteTitle: "Delete pipeline",
@@ -67,9 +63,7 @@ describe("LibraryRow openable vs passive", () => {
     const { container } = render(
       <LibraryRow
         name="fixture"
-        scope="repo"
         nodeCount={3}
-        starred={false}
         showDuplicate={false}
         onDelete={() => {}}
         deleteTitle="Delete pipeline"
@@ -79,22 +73,10 @@ describe("LibraryRow openable vs passive", () => {
   });
 });
 
-describe("LibraryRow star", () => {
-  it("shows the star when starred", () => {
-    renderRow({ starred: true });
-    expect(screen.getByTestId("left-panel-star")).toBeInTheDocument();
-  });
-
-  it("hides the star when not starred", () => {
-    renderRow({ starred: false });
-    expect(screen.queryByTestId("left-panel-star")).not.toBeInTheDocument();
-  });
-});
-
-describe("LibraryRow scope badge", () => {
-  it.each<PipelineScope>(["repo", "user", "library"])("labels a %s row", (scope) => {
-    renderRow({ scope });
-    expect(screen.getByText(scope)).toBeInTheDocument();
+describe("LibraryRow instance metadata", () => {
+  it("labels the useful last-edit metadata", () => {
+    renderRow({ modified: "2026-08-26T12:00:00Z" });
+    expect(screen.getByText(/^edited /)).toBeInTheDocument();
   });
 });
 

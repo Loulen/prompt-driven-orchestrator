@@ -284,18 +284,11 @@ describe("#268 — dismissible fan-out nudges", () => {
   });
 });
 
-describe("#225 Part 2 — star container outranks the lint banner (z-index regression guard)", () => {
-  // jsdom does no layout/hit-testing, so the click-swallow itself cannot be
-  // reproduced here (the real proof is the Layer-5 scenario
-  // banner-run-gate-star-popover.md). This guards the one thing a unit test
-  // CAN pin: the container that traps the popover's stacking context must sit
-  // at z-20, above the z-10 lint-banner overlay.
-  it("renders the star container at z-20 (not z-10) on an edit tab", () => {
+describe("instance-owned pipeline canvas", () => {
+  it("does not render the obsolete promote-to-library star", () => {
     seedTab(editTab());
     renderCanvas();
 
-    const container = screen.getByTestId("canvas-pipeline-star-container");
-    expect(container.className).toContain("z-20");
-    expect(container.className).not.toContain("z-10");
+    expect(screen.queryByTestId("canvas-pipeline-star-container")).not.toBeInTheDocument();
   });
 });

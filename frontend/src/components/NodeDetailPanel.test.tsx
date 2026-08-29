@@ -139,6 +139,43 @@ describe("NodeDetailPanel", () => {
     tmuxUnmountCount.current = 0;
   });
 
+  describe("node cost (#647)", () => {
+    it.each([
+      ["derived", false, 0.5, "~$0.5000"],
+      ["reported", false, 2, "$2.00"],
+      ["derived", true, 2, "~$2.00†"],
+      [null, false, 3, "~$3.00"],
+      ["derived", false, null, "—"],
+    ] as const)("renders %s cost beside the end time", (form, partial, usd, text) => {
+      render(
+        <NodeDetailPanel
+          node={makeNode({
+            status: "completed",
+            completed_at: "2026-01-01T00:01:00Z",
+            cost: {
+              usd,
+              form,
+              partial,
+              executions: 1,
+              readable_executions: usd === null ? 0 : 1,
+              unavailable_reasons: usd === null ? ["missing reading"] : [],
+            },
+          })}
+          runId="run-1"
+        />,
+      );
+      const chip = screen.getByTestId("node-cost");
+      expect(chip).toHaveTextContent(text);
+      expect(chip.parentElement).toHaveTextContent(/ended .* · /);
+      if (usd === null) expect(chip).not.toHaveTextContent("$0");
+    });
+
+    it("omits the cost chip when the projection has no cost", () => {
+      render(<NodeDetailPanel node={makeNode({ cost: undefined })} runId="run-1" />);
+      expect(screen.queryByTestId("node-cost")).toBeNull();
+    });
+  });
+
   describe("TmuxTerminal integration", () => {
     it("renders TmuxTerminal when node is running", () => {
       render(

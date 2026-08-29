@@ -229,6 +229,7 @@ pub(crate) fn sync_state(node: &pipeline::NodeDef, prompt: &str) -> SyncState {
     }
 }
 
+#[cfg(test)]
 pub(crate) mod pipelines {
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
@@ -242,24 +243,6 @@ pub(crate) mod pipelines {
         Repo,
         User,
         Library,
-    }
-
-    impl Scope {
-        pub(crate) fn parse(s: &str) -> Option<Scope> {
-            match s {
-                "repo" => Some(Scope::Repo),
-                "user" => Some(Scope::User),
-                "library" => Some(Scope::Library),
-                _ => None,
-            }
-        }
-        pub(crate) fn as_str(self) -> &'static str {
-            match self {
-                Scope::Repo => "repo",
-                Scope::User => "user",
-                Scope::Library => "library",
-            }
-        }
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -554,6 +537,7 @@ pub(crate) mod pipelines {
         None
     }
 
+    #[allow(dead_code)]
     pub(crate) fn get_yaml(repo_root: &Path, id: &str) -> Option<String> {
         let (path, _) = locate(repo_root, id)?;
         std::fs::read_to_string(&path).ok()
@@ -561,10 +545,6 @@ pub(crate) mod pipelines {
 
     pub(crate) fn get_path(repo_root: &Path, id: &str) -> Option<PathBuf> {
         locate(repo_root, id).map(|(p, _)| p)
-    }
-
-    pub(crate) fn get_scope(repo_root: &Path, id: &str) -> Option<Scope> {
-        locate(repo_root, id).map(|(_, s)| s)
     }
 
     /// Save a library pipeline, supporting rename-in-place.

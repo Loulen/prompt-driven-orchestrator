@@ -45,8 +45,10 @@ mod node_spawn;
 mod outputs_validator;
 mod pipeline;
 mod pipeline_migrator;
+#[cfg(test)]
 mod pipeline_semantics;
 mod pipeline_watcher;
+mod portable_pipeline;
 mod price_table;
 mod project_store;
 mod prompt_augmenter;
@@ -95,7 +97,7 @@ use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{
     FromRequest, Json, Multipart, Path as AxumPath, Query, State, WebSocketUpgrade,
 };
-use axum::http::{header, HeaderMap, StatusCode, Uri};
+use axum::http::{header, HeaderMap, Method, StatusCode, Uri};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
@@ -400,19 +402,10 @@ struct AppState {
     libassist_focus: Mutex<Option<LibassistFocus>>,
 }
 
-/// The library assistant's focus: the template the UI is editing right now.
-///
-/// Don't let the client send a path: the two `scope` vocabularies do not coincide
-/// (an edit tab's `repo`/`user` mean `.pdo/pipelines/`, the library store's mean
-/// `.pdo/library/pipelines/`), and client-side resolution produced a wrong
-/// assistant cwd. The frontend sends `{pipeline_id, scope}`; the daemon resolves.
+/// The library assistant's focus: the instance pipeline the UI is editing now.
 #[derive(Debug, Clone)]
 struct LibassistFocus {
     pipeline_id: String,
-    /// As the edit tab means it: `repo` | `user` | `library`. Echoed back so the
-    /// assistant saves into the store it read from instead of migrating the
-    /// template (the daemon's save default is `repo`).
-    scope: String,
     /// Absolute path of the template's YAML, or `None` when the id resolves to no
     /// file yet — an unsaved template is a legitimate focus, not an error.
     path: Option<PathBuf>,
@@ -725,16 +718,6 @@ struct IterQuery {
 
 fn default_iter() -> i64 {
     1
-}
-
-/// Optional `?scope=` qualifier for the `/pipelines/{id}` open/save/delete
-/// routes. When present it pins the operation to a single store so it can never
-/// silently fall through to a same-named file in a *different* store. `library`
-/// routes to the disk-first library store; `repo`/`user` resolve strictly to that
-/// store; absent keeps the historical repo-then-user default.
-#[derive(Deserialize)]
-struct ScopeQuery {
-    scope: Option<String>,
 }
 
 fn cli_daemon_url() -> String {
@@ -1087,9 +1070,6 @@ pub fn run_migrate(dir: Option<std::path::PathBuf>, dry_run: bool) -> Result<()>
             }
             if let Some(home) = dirs_next_home() {
                 v.push(home.join(".pdo").join("pipelines"));
-            }
-            if let Some(lib) = library_store::pipelines::user_pipelines_dir() {
-                v.push(lib);
             }
             v.retain(|d| d.is_dir());
             v
@@ -2349,6 +2329,9 @@ pub async fn serve_with_config(
         }
     }
 
+    migrate_legacy_pipelines(&repo_root)
+        .map_err(|error| anyhow::anyhow!("pipeline registry migration failed: {error}"))?;
+
     let (event_tx, _) = broadcast::channel::<event_log::Event>(256);
     let (pipeline_tx, _) = broadcast::channel::<serde_json::Value>(64);
 
@@ -2359,6 +2342,7 @@ pub async fn serve_with_config(
 
     let watcher = pipeline_watcher::spawn_watcher(
         repo_root.clone(),
+        instance_pipeline_dir(&repo_root),
         pipeline_tx.clone(),
         recent_writes.clone(),
         run_modified_tx,
@@ -3181,9 +3165,7 @@ async fn create_trigger(
     }
 
     let yaml =
-        library_store::pipelines::get_yaml(&state.repo_root, &req.pipeline_id).or_else(|| {
-            std::fs::read_to_string(resolve_pipeline_path(&state.repo_root, &req.pipeline_id)).ok()
-        });
+        std::fs::read_to_string(resolve_pipeline_path(&state.repo_root, &req.pipeline_id)).ok();
     let yaml = match yaml {
         Some(y) => y,
         None => {
@@ -3544,9 +3526,7 @@ async fn patch_trigger(
     if let Some(ref new_pid) = req.pipeline_id {
         if *new_pid != existing.pipeline_id {
             let yaml =
-                library_store::pipelines::get_yaml(&state.repo_root, new_pid).or_else(|| {
-                    std::fs::read_to_string(resolve_pipeline_path(&state.repo_root, new_pid)).ok()
-                });
+                std::fs::read_to_string(resolve_pipeline_path(&state.repo_root, new_pid)).ok();
             let yaml = match yaml {
                 Some(y) => y,
                 None => {
@@ -3907,6 +3887,15 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/pipelines", get(list_pipelines))
         .route("/pipelines/{pipeline_id}", get(get_pipeline))
         .route(
+            "/pipelines/{pipeline_id}/duplicate",
+            post(duplicate_pipeline),
+        )
+        .route(
+            "/pipelines/{pipeline_id}/document",
+            get(get_pipeline_document),
+        )
+        .route("/pipelines/import", post(import_pipeline_document))
+        .route(
             "/pipelines/{pipeline_id}",
             axum::routing::put(save_pipeline).delete(delete_pipeline),
         )
@@ -3928,6 +3917,10 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/runs/{run_id}/nodes/{node_id}/diff", get(node_diff))
         .route("/runs/{run_id}/artifact", get(artifact))
         .route("/runs/{run_id}/pipeline", get(get_run_pipeline))
+        .route(
+            "/runs/{run_id}/pipeline/document",
+            get(get_run_pipeline_document),
+        )
         .route(
             "/runs/{run_id}/repos",
             axum::routing::patch(patch_run_repos),
@@ -3982,19 +3975,10 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/library/{name}/instantiate",
             post(instantiate_from_library),
         )
-        .route("/library/pipelines", get(list_library_pipelines))
-        .route("/library/pipelines", post(save_library_pipeline))
-        // Import a Claude Code workflow .js as a draft pipeline (user scope).
+        // #155 — import a Claude Code workflow .js as a draft pipeline (user scope).
+        // Static segment beside `/library/pipelines`; the `/library` vite proxy
+        // prefix already covers it (no vite proxy edit).
         .route("/library/import", post(import_library_pipeline))
-        .route(
-            "/library/pipelines/{id}",
-            axum::routing::delete(delete_library_pipeline),
-        )
-        .route(
-            "/library/pipelines/{id}/duplicate",
-            post(duplicate_library_pipeline),
-        )
-        .route("/pipelines/{pipeline_id}/promote", post(promote_pipeline))
         .route("/repos/branches", get(repos_branches))
         .route("/repos/validate", get(repos_validate))
         .route("/repos/recent", get(repos_recent))
@@ -4772,13 +4756,11 @@ async fn trigger_live_run_count(db: &sqlx::SqlitePool, trigger_id: &str) -> usiz
 /// Load a Trigger's target pipeline yaml from the library (falling back to a
 /// pipeline file under the repo). `None` means a dangling pipeline reference.
 fn trigger_pipeline_yaml(state: &AppState, trigger: &trigger_store::Trigger) -> Option<String> {
-    library_store::pipelines::get_yaml(&state.repo_root, &trigger.pipeline_id).or_else(|| {
-        std::fs::read_to_string(resolve_pipeline_path(
-            &state.repo_root,
-            &trigger.pipeline_id,
-        ))
-        .ok()
-    })
+    std::fs::read_to_string(resolve_pipeline_path(
+        &state.repo_root,
+        &trigger.pipeline_id,
+    ))
+    .ok()
 }
 
 /// Resolve the target pipeline's `prompt_required` flag for a Trigger; defaults
@@ -5226,14 +5208,13 @@ struct PipelineListEntry {
     /// Whether a manual Run must supply a non-empty prompt. Surfaced so the New Run
     /// modal can make the prompt field optional.
     prompt_required: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    drifted: Option<bool>,
 }
 
 #[derive(Deserialize)]
 struct CreatePipelineRequest {
     name: String,
-    scope: String,
+    #[serde(default)]
+    scope: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -5307,45 +5288,36 @@ fn scan_pipeline_dir(dir: &std::path::Path, scope: &str) -> Vec<PipelineListEntr
             modified,
             variables,
             prompt_required,
-            drifted: None,
         });
     }
     entries
 }
 
 async fn list_pipelines(State(state): State<Arc<AppState>>) -> Response {
-    let repo_dir = state.repo_root.join(".pdo").join("pipelines");
-    let mut pipelines = scan_pipeline_dir(&repo_dir, "repo");
-
-    if let Some(home) = dirs_next_home() {
-        let user_dir = home.join(".pdo").join("pipelines");
-        pipelines.extend(scan_pipeline_dir(&user_dir, "user"));
+    if let Err(error) = migrate_legacy_pipelines(&state.repo_root) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": error })),
+        )
+            .into_response();
     }
-
-    if let Some(lib_dir) = library_store::pipelines::user_pipelines_dir() {
-        let lib_entries = scan_pipeline_dir(&lib_dir, "library");
-        for mut entry in lib_entries {
-            entry.drifted = library_store::pipelines::check_drift(&entry.id);
-            pipelines.push(entry);
-        }
-    }
-
+    let Some(dir) = instance_pipeline_dir(&state.repo_root) else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "cannot determine instance pipeline directory",
+        )
+            .into_response();
+    };
+    let mut pipelines = scan_pipeline_dir(&dir, "instance");
+    pipelines.sort_by_key(|entry| entry.name.to_lowercase());
     Json(pipelines).into_response()
 }
 
 async fn get_pipeline(
     State(state): State<Arc<AppState>>,
     AxumPath(pipeline_id): AxumPath<String>,
-    Query(scope_q): Query<ScopeQuery>,
 ) -> Response {
-    // A library-scoped open reads the entry's *own* stored YAML, so a promoted
-    // library pipeline stays openable even when the source repo file is gone.
-    if scope_q.scope.as_deref() == Some("library") {
-        return library_pipeline_detail_response(&state.repo_root, &pipeline_id);
-    }
-
-    let path =
-        resolve_pipeline_path_scoped(&state.repo_root, &pipeline_id, scope_q.scope.as_deref());
+    let path = resolve_pipeline_path(&state.repo_root, &pipeline_id);
     let yaml = match std::fs::read_to_string(&path) {
         Ok(y) => y,
         Err(_) => {
@@ -5364,12 +5336,6 @@ async fn get_pipeline(
         }
     };
 
-    let scope = if path.starts_with(&state.repo_root) {
-        "repo"
-    } else {
-        "user"
-    };
-
     let mut prompts: HashMap<String, String> = HashMap::new();
     for node in &parse_result.pipeline.nodes {
         if let Ok(c) = std::fs::read_to_string(pipeline::canonical_prompt_path(&path, &node.id)) {
@@ -5385,7 +5351,7 @@ async fn get_pipeline(
 
     Json(serde_json::json!({
         "id": pipeline_id,
-        "scope": scope,
+        "scope": pipeline_scope_for_response(&state.repo_root, &path),
         "path": path.to_string_lossy(),
         "yaml": yaml,
         "pipeline": parse_result.pipeline,
@@ -5419,17 +5385,9 @@ fn parse_error_to_structured(e: &pipeline::ParseError) -> (String, Option<usize>
 async fn save_pipeline(
     State(state): State<Arc<AppState>>,
     AxumPath(pipeline_id): AxumPath<String>,
-    Query(scope_q): Query<ScopeQuery>,
     Json(req): Json<SavePipelineRequest>,
 ) -> Response {
-    // A library-scoped save writes back into the entry's own library YAML, so a
-    // round-trip edit never overwrites a same-named repo/user file.
-    if scope_q.scope.as_deref() == Some("library") {
-        return save_library_pipeline_response(&state.repo_root, &pipeline_id, &req);
-    }
-
-    let path =
-        resolve_pipeline_path_scoped(&state.repo_root, &pipeline_id, scope_q.scope.as_deref());
+    let path = resolve_pipeline_path(&state.repo_root, &pipeline_id);
     if !path.exists() {
         return (StatusCode::NOT_FOUND, "pipeline not found").into_response();
     }
@@ -5485,36 +5443,35 @@ async fn create_pipeline(
         })
         .collect::<String>();
 
-    let dir = if req.scope == "user" {
-        match dirs_next_home() {
-            Some(home) => home.join(".pdo").join("pipelines"),
-            None => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "cannot determine home directory",
-                )
-                    .into_response();
-            }
-        }
-    } else {
-        state.repo_root.join(".pdo").join("pipelines")
+    let response_scope = "instance";
+    let Some(dir) = instance_pipeline_dir(&state.repo_root) else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "cannot determine instance pipeline directory",
+        )
+            .into_response();
     };
+    let _ = req.scope;
 
     let _ = std::fs::create_dir_all(&dir);
     let path = dir.join(format!("{safe_name}.yaml"));
 
-    if path.exists() {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({ "error": "pipeline already exists" })),
-        )
-            .into_response();
-    }
-
     let scaffold = format!(
         "name: {safe_name}\nversion: \"1.0\"\n\nvariables: {{}}\n\nnodes:\n  - id: start\n    name: Start\n    type: start\n    outputs:\n      - name: user_prompt\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\n\nedges: []\n"
     );
-    if let Err(e) = std::fs::write(&path, &scaffold) {
+    let write_result = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .and_then(|mut file| std::io::Write::write_all(&mut file, scaffold.as_bytes()));
+    if let Err(e) = write_result {
+        if e.kind() == std::io::ErrorKind::AlreadyExists {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({ "error": "pipeline already exists" })),
+            )
+                .into_response();
+        }
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": format!("write failed: {e}") })),
@@ -5527,12 +5484,295 @@ async fn create_pipeline(
         StatusCode::CREATED,
         Json(serde_json::json!({
             "id": safe_name,
-            "scope": req.scope,
+            "scope": response_scope,
             "path": path.to_string_lossy(),
         })),
     )
         .into_response()
 }
+
+fn read_pipeline_prompts(path: &Path) -> HashMap<String, String> {
+    read_prompts_from_dir(&path.with_extension("prompts"))
+}
+
+fn read_prompts_from_dir(prompts_dir: &Path) -> HashMap<String, String> {
+    let mut prompts = HashMap::new();
+    let Ok(entries) = std::fs::read_dir(prompts_dir) else {
+        return prompts;
+    };
+    for entry in entries.flatten() {
+        let prompt_path = entry.path();
+        if prompt_path.extension().and_then(|value| value.to_str()) != Some("md") {
+            continue;
+        }
+        if let (Some(id), Ok(content)) = (
+            prompt_path.file_stem().and_then(|value| value.to_str()),
+            std::fs::read_to_string(&prompt_path),
+        ) {
+            prompts.insert(id.to_string(), content);
+        }
+    }
+    prompts
+}
+
+fn available_pipeline_identity(dir: &Path, requested_name: &str) -> (String, String) {
+    let existing_names = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("yaml"))
+        .filter_map(|entry| std::fs::read_to_string(entry.path()).ok())
+        .filter_map(|yaml| serde_yaml::from_str::<serde_yaml::Value>(&yaml).ok())
+        .filter_map(|value| {
+            value
+                .as_mapping()?
+                .get(serde_yaml::Value::String("name".into()))?
+                .as_str()
+                .map(str::trim)
+                .map(str::to_owned)
+        })
+        .collect::<std::collections::HashSet<_>>();
+    let base_name = requested_name.trim().to_string();
+    let base_name = if base_name.is_empty() {
+        "Untitled".to_string()
+    } else {
+        base_name
+    };
+    let slug = base_name.chars().fold(String::new(), |mut slug, c| {
+        if c.is_ascii_alphanumeric() || c == '_' {
+            slug.push(c.to_ascii_lowercase());
+        } else if !slug.ends_with('-') {
+            slug.push('-');
+        }
+        slug
+    });
+    let slug = slug.trim_matches('-');
+    let slug = if slug.is_empty() { "pipeline" } else { slug };
+    let mut id = slug.to_string();
+    let mut name = base_name.clone();
+    let mut suffix = 2u32;
+    while dir.join(format!("{id}.yaml")).exists() || existing_names.contains(&name) {
+        id = format!("{slug}-{suffix}");
+        name = format!("{base_name} ({suffix})");
+        suffix += 1;
+    }
+    (id, name)
+}
+
+fn write_pipeline_atomically(
+    dir: &Path,
+    id: &str,
+    pipeline: &pipeline::PipelineDef,
+    prompts: &HashMap<String, String>,
+) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("create pipeline registry: {e}"))?;
+    let path = dir.join(format!("{id}.yaml"));
+    let temp_path = dir.join(format!(".{id}.yaml.tmp"));
+    let temp_prompts = dir.join(format!(".{id}.prompts.tmp"));
+    let prompts_path = dir.join(format!("{id}.prompts"));
+    let lock_path = dir.join(format!(".{id}.create.lock"));
+    let lock = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&lock_path)
+        .map_err(|e| format!("pipeline identity is no longer available: {e}"))?;
+    if path.exists() || prompts_path.exists() {
+        drop(lock);
+        let _ = std::fs::remove_file(&lock_path);
+        return Err("pipeline identity is no longer available".into());
+    }
+
+    let yaml = serde_yaml::to_string(pipeline).map_err(|e| format!("serialize pipeline: {e}"))?;
+    pipeline::parse_pipeline(&yaml).map_err(|e| format!("pipeline: {e}"))?;
+    let result = (|| {
+        std::fs::write(&temp_path, yaml).map_err(|e| format!("write pipeline: {e}"))?;
+
+        if !prompts.is_empty() {
+            std::fs::create_dir(&temp_prompts).map_err(|e| format!("stage prompts: {e}"))?;
+            for (node_id, content) in prompts {
+                std::fs::write(temp_prompts.join(format!("{node_id}.md")), content)
+                    .map_err(|e| format!("write prompts.{node_id}: {e}"))?;
+            }
+            std::fs::rename(&temp_prompts, &prompts_path)
+                .map_err(|e| format!("publish prompts: {e}"))?;
+        }
+        std::fs::rename(&temp_path, &path).map_err(|e| format!("publish pipeline: {e}"))?;
+        Ok(path.clone())
+    })();
+    drop(lock);
+    let _ = std::fs::remove_file(&lock_path);
+    let _ = std::fs::remove_file(&temp_path);
+    if temp_prompts.is_dir() {
+        let _ = std::fs::remove_dir_all(&temp_prompts);
+    }
+    if result.is_err() && prompts_path.is_dir() {
+        let _ = std::fs::remove_dir_all(&prompts_path);
+    }
+    result
+}
+
+async fn duplicate_pipeline(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    let source = resolve_pipeline_path(&state.repo_root, &id);
+    let yaml = match std::fs::read_to_string(&source) {
+        Ok(yaml) => yaml,
+        Err(_) => return (StatusCode::NOT_FOUND, "pipeline not found").into_response(),
+    };
+    let parsed = match pipeline::parse_pipeline(&yaml) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("invalid source pipeline: {error}") })),
+            )
+                .into_response()
+        }
+    };
+    let Some(dir) = instance_pipeline_dir(&state.repo_root) else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "cannot determine instance pipeline directory",
+        )
+            .into_response();
+    };
+    let source_name = parsed.pipeline.name.trim();
+    let base_name = source_name
+        .rfind(" (copy")
+        .filter(|&index| {
+            let tail = &source_name[index..];
+            tail == " (copy)"
+                || tail
+                    .strip_prefix(" (copy ")
+                    .and_then(|value| value.strip_suffix(')'))
+                    .is_some_and(|value| {
+                        !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())
+                    })
+        })
+        .map(|index| &source_name[..index])
+        .unwrap_or(source_name);
+    let existing_names = scan_pipeline_dir(&dir, "instance")
+        .into_iter()
+        .map(|entry| entry.name)
+        .collect::<std::collections::HashSet<_>>();
+    let mut copy_number = 1u32;
+    let copy_name = loop {
+        let candidate = if copy_number == 1 {
+            format!("{base_name} (copy)")
+        } else {
+            format!("{base_name} (copy {copy_number})")
+        };
+        if !existing_names.contains(&candidate) {
+            break candidate;
+        }
+        copy_number += 1;
+    };
+    let (new_id, new_name) = available_pipeline_identity(&dir, &copy_name);
+    let mut copy = parsed.pipeline;
+    copy.name = new_name;
+    match write_pipeline_atomically(&dir, &new_id, &copy, &read_pipeline_prompts(&source)) {
+        Ok(path) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({
+                "id": new_id,
+                "scope": "instance",
+                "path": path.to_string_lossy(),
+            })),
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": error })),
+        )
+            .into_response(),
+    }
+}
+
+fn pipeline_document_response(path: &Path) -> Response {
+    let yaml = match std::fs::read_to_string(path) {
+        Ok(yaml) => yaml,
+        Err(_) => return (StatusCode::NOT_FOUND, "pipeline not found").into_response(),
+    };
+    let parsed = match pipeline::parse_pipeline(&yaml) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("invalid pipeline: {error}") })),
+            )
+                .into_response()
+        }
+    };
+    match portable_pipeline::export(&parsed.pipeline, &read_pipeline_prompts(path)) {
+        Ok(document) => (
+            [(header::CONTENT_TYPE, "application/yaml; charset=utf-8")],
+            document,
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": error })),
+        )
+            .into_response(),
+    }
+}
+
+async fn get_pipeline_document(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    pipeline_document_response(&resolve_pipeline_path(&state.repo_root, &id))
+}
+
+#[derive(Deserialize)]
+struct ImportPipelineDocumentRequest {
+    document: String,
+}
+
+async fn import_pipeline_document(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ImportPipelineDocumentRequest>,
+) -> Response {
+    let interpreted = match portable_pipeline::interpret(&req.document) {
+        Ok(interpreted) => interpreted,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": error })),
+            )
+                .into_response()
+        }
+    };
+    let Some(dir) = instance_pipeline_dir(&state.repo_root) else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "cannot determine instance pipeline directory",
+        )
+            .into_response();
+    };
+    let (id, name) = available_pipeline_identity(&dir, &interpreted.pipeline.name);
+    let mut imported = interpreted.pipeline;
+    imported.name = name;
+    match write_pipeline_atomically(&dir, &id, &imported, &interpreted.prompts) {
+        Ok(path) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({
+                "id": id,
+                "scope": "instance",
+                "path": path.to_string_lossy(),
+            })),
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": error })),
+        )
+            .into_response(),
+    }
+}
+
+// --- Library API handlers ---
 
 async fn list_library() -> Response {
     Json(library_store::list()).into_response()
@@ -5782,62 +6022,6 @@ async fn parse_node_yaml(Json(req): Json<ParseNodeRequest>) -> Response {
     }
 }
 
-async fn list_library_pipelines(State(state): State<Arc<AppState>>) -> Response {
-    Json(library_store::pipelines::list(&state.repo_root)).into_response()
-}
-
-#[derive(Deserialize)]
-struct SaveLibraryPipelineRequest {
-    name: String,
-    yaml: String,
-    #[serde(default)]
-    prompts: HashMap<String, String>,
-    /// When set, save in-place at this id even if `name` differs (rename path).
-    #[serde(default)]
-    id: Option<String>,
-    /// Defaults to `"repo"` when starring fresh — the user is working in a
-    /// concrete repo so the most useful default is to keep the template with it.
-    #[serde(default)]
-    scope: Option<String>,
-}
-
-async fn save_library_pipeline(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<SaveLibraryPipelineRequest>,
-) -> Response {
-    let scope_str = req.scope.as_deref().unwrap_or("repo");
-    let Some(scope) = library_store::pipelines::Scope::parse(scope_str) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": format!("unknown scope: {scope_str}") })),
-        )
-            .into_response();
-    };
-    match library_store::pipelines::save(
-        &state.repo_root,
-        req.id.as_deref(),
-        &req.name,
-        &req.yaml,
-        &req.prompts,
-        scope,
-    ) {
-        Ok(id) => {
-            let entry_list = library_store::pipelines::list(&state.repo_root);
-            let entry = entry_list.into_iter().find(|e| e.id == id);
-            (
-                StatusCode::CREATED,
-                Json(serde_json::json!({ "id": id, "scope": scope.as_str(), "entry": entry })),
-            )
-                .into_response()
-        }
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": e })),
-        )
-            .into_response(),
-    }
-}
-
 /// Request body for `POST /library/import`: the raw `.js` source plus the original
 /// filename (used only for the fallback name and error messages). The content
 /// arrives over the wire, so the daemon never reads `~/.claude/workflows` off disk
@@ -5848,11 +6032,11 @@ struct ImportWorkflowRequest {
     content: String,
 }
 
-/// Import a Claude Code workflow `.js` into a draft library pipeline (ADR-0016).
-/// The `.js` is parsed to an AST — **never executed** — and the recognized idioms
-/// are rewired into a `PipelineDef`; lossy-translation diagnostics ride back in
-/// `warnings`. A real `.js` can legitimately fall outside the subset, so a
-/// translation failure is a 400 carrying the verbatim error, not a 500.
+/// Import a Claude Code workflow `.js` into the instance pipeline registry (#155 /
+/// ADR-0016). The `.js` is parsed to an AST — never executed — and the recognized
+/// idioms are rewired into a `PipelineDef`; lossy-translation diagnostics ride
+/// back in `warnings`. On parse/translation failure the verbatim error is
+/// surfaced as 400 (a real `.js` can legitimately fall outside the subset).
 async fn import_library_pipeline(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ImportWorkflowRequest>,
@@ -5872,25 +6056,35 @@ async fn import_library_pipeline(
                 .into_response();
         }
     };
-    match library_store::pipelines::save(
-        &state.repo_root,
-        None,
-        &result.name,
-        &result.yaml_text,
-        &result.prompts,
-        library_store::pipelines::Scope::User,
-    ) {
-        Ok(id) => {
-            let entry = library_store::pipelines::list(&state.repo_root)
-                .into_iter()
-                .find(|e| e.id == id);
+    let parsed = match pipeline::parse_pipeline(&result.yaml_text) {
+        Ok(parsed) => parsed.pipeline,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("import failed: {error}") })),
+            )
+                .into_response();
+        }
+    };
+    let Some(dir) = instance_pipeline_dir(&state.repo_root) else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "cannot determine instance pipeline directory",
+        )
+            .into_response();
+    };
+    let (id, name) = available_pipeline_identity(&dir, &result.name);
+    let mut imported = parsed;
+    imported.name = name;
+    match write_pipeline_atomically(&dir, &id, &imported, &result.prompts) {
+        Ok(path) => {
             let warnings: Vec<String> = result.warnings.iter().map(|d| d.message.clone()).collect();
             (
                 StatusCode::CREATED,
                 Json(serde_json::json!({
                     "id": id,
-                    "scope": "user",
-                    "entry": entry,
+                    "scope": "instance",
+                    "path": path.to_string_lossy(),
                     "warnings": warnings,
                 })),
             )
@@ -5904,185 +6098,11 @@ async fn import_library_pipeline(
     }
 }
 
-async fn delete_library_pipeline(
-    State(state): State<Arc<AppState>>,
-    AxumPath(id): AxumPath<String>,
-) -> Response {
-    match library_store::pipelines::delete(&state.repo_root, &id) {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => (StatusCode::NOT_FOUND, "pipeline template not found").into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e })),
-        )
-            .into_response(),
-    }
-}
-
-/// Duplicate a library pipeline template into a clean, unlinked clone. The
-/// not-found check must stay a pre-check: `duplicate` returns a flat
-/// `Result<String, String>` that cannot distinguish not-found from a write error.
-async fn duplicate_library_pipeline(
-    State(state): State<Arc<AppState>>,
-    AxumPath(id): AxumPath<String>,
-) -> Response {
-    if library_store::pipelines::get_path(&state.repo_root, &id).is_none() {
-        return (StatusCode::NOT_FOUND, "pipeline template not found").into_response();
-    }
-    match library_store::pipelines::duplicate(&state.repo_root, &id) {
-        Ok(new_id) => {
-            let scope = library_store::pipelines::get_scope(&state.repo_root, &new_id);
-            let entry = library_store::pipelines::list(&state.repo_root)
-                .into_iter()
-                .find(|e| e.id == new_id);
-            (
-                StatusCode::CREATED,
-                Json(serde_json::json!({
-                    "id": new_id,
-                    "scope": scope.map(|s| s.as_str()),
-                    "entry": entry,
-                })),
-            )
-                .into_response()
-        }
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": e })),
-        )
-            .into_response(),
-    }
-}
-
-/// Read a library pipeline back into the same JSON shape `get_pipeline` returns,
-/// resolved from the disk-first library store rather than the repo/user stores.
-fn library_pipeline_detail_response(repo_root: &std::path::Path, id: &str) -> Response {
-    let Some(path) = library_store::pipelines::get_path(repo_root, id) else {
-        return (StatusCode::NOT_FOUND, "pipeline not found").into_response();
-    };
-    let yaml = match std::fs::read_to_string(&path) {
-        Ok(y) => y,
-        Err(_) => return (StatusCode::NOT_FOUND, "pipeline not found").into_response(),
-    };
-
-    let parse_result = match pipeline::parse_pipeline(&yaml) {
-        Ok(r) => r,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": format!("parse error: {e}") })),
-            )
-                .into_response();
-        }
-    };
-
-    let mut prompts: HashMap<String, String> = HashMap::new();
-    for node in &parse_result.pipeline.nodes {
-        if let Ok(c) = std::fs::read_to_string(pipeline::canonical_prompt_path(&path, &node.id)) {
-            prompts.insert(node.id.clone(), c);
-        }
-    }
-
-    let diagnostics: Vec<String> = parse_result
-        .diagnostics
-        .iter()
-        .map(|d| d.message.clone())
-        .collect();
-
-    Json(serde_json::json!({
-        "id": id,
-        "scope": "library",
-        "path": path.to_string_lossy(),
-        "yaml": yaml,
-        "pipeline": parse_result.pipeline,
-        "prompts": prompts,
-        "diagnostics": diagnostics,
-    }))
-    .into_response()
-}
-
-/// Save a library pipeline in place from `PUT /pipelines/{id}?scope=library`,
-/// keeping the edit inside the library store. Same response shape as
-/// `save_pipeline`.
-fn save_library_pipeline_response(
-    repo_root: &std::path::Path,
-    id: &str,
-    req: &SavePipelineRequest,
-) -> Response {
-    let parsed = match pipeline::parse_pipeline(&req.yaml) {
-        Ok(r) => r,
-        Err(e) => {
-            let (message, line) = parse_error_to_structured(&e);
-            let mut body =
-                serde_json::json!({ "error": format!("invalid YAML: {e}"), "message": message });
-            if let Some(l) = line {
-                body["line"] = serde_json::json!(l);
-            }
-            return (StatusCode::BAD_REQUEST, Json(body)).into_response();
-        }
-    };
-
-    if library_store::pipelines::get_path(repo_root, id).is_none() {
-        return (StatusCode::NOT_FOUND, "pipeline not found").into_response();
-    }
-
-    // Save in place at the same id, in whichever library scope the entry lives —
-    // default to User, the scope `list_pipelines` surfaces as `library`.
-    let store_scope = library_store::pipelines::get_scope(repo_root, id)
-        .unwrap_or(library_store::pipelines::Scope::User);
-    match library_store::pipelines::save(
-        repo_root,
-        Some(id),
-        &parsed.pipeline.name,
-        &req.yaml,
-        &req.prompts,
-        store_scope,
-    ) {
-        Ok(_) => {
-            info!("Library pipeline {id} saved");
-            (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
-        }
-        Err(e) => {
-            let msg = format!("write failed: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": msg.clone(), "message": msg })),
-            )
-                .into_response()
-        }
-    }
-}
-
-/// Delete a library pipeline (YAML + prompts + meta sidecar) from the library
-/// store. Routed here on `?scope=library` so a library delete never resolves to a
-/// same-named repo file.
-fn delete_library_pipeline_response(repo_root: &std::path::Path, id: &str) -> Response {
-    match library_store::pipelines::delete(repo_root, id) {
-        Ok(true) => {
-            info!("Deleted library pipeline {id}");
-            (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
-        }
-        Ok(false) => (StatusCode::NOT_FOUND, "pipeline not found").into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": format!("delete failed: {e}") })),
-        )
-            .into_response(),
-    }
-}
-
 async fn delete_pipeline(
     State(state): State<Arc<AppState>>,
     AxumPath(pipeline_id): AxumPath<String>,
-    Query(scope_q): Query<ScopeQuery>,
 ) -> Response {
-    // A library-scoped delete operates on the independent library store — never the
-    // repo/user pipeline file that happens to share the id.
-    if scope_q.scope.as_deref() == Some("library") {
-        return delete_library_pipeline_response(&state.repo_root, &pipeline_id);
-    }
-
-    let path =
-        resolve_pipeline_path_scoped(&state.repo_root, &pipeline_id, scope_q.scope.as_deref());
+    let path = resolve_pipeline_path(&state.repo_root, &pipeline_id);
     if !path.exists() {
         return (StatusCode::NOT_FOUND, "pipeline not found").into_response();
     }
@@ -6136,26 +6156,7 @@ async fn delete_pipeline(
     (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
 }
 
-async fn promote_pipeline(
-    State(state): State<Arc<AppState>>,
-    AxumPath(pipeline_id): AxumPath<String>,
-) -> Response {
-    match library_store::pipelines::promote(&state.repo_root, &pipeline_id) {
-        Ok(id) => {
-            let drifted = library_store::pipelines::check_drift(&id);
-            Json(serde_json::json!({
-                "id": id,
-                "drifted": drifted.unwrap_or(false),
-            }))
-            .into_response()
-        }
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": e })),
-        )
-            .into_response(),
-    }
-}
+// --- API handlers ---
 
 /// Deposits one `_item.md` per lap under the collection entry's artifact dir
 /// (ADR-0011): `<artifacts>/<entry>/iter-N/_item.md` with `item / iter / total`
@@ -7273,24 +7274,15 @@ async fn create_run_inner(
         }
     };
 
-    let (yaml, pipeline_path) = if let Some(ref lib_id) = req.pipeline_id {
-        match library_store::pipelines::get_yaml(&state.repo_root, lib_id) {
-            Some(y) => {
-                let path = library_store::pipelines::get_path(&state.repo_root, lib_id)
-                    .unwrap_or_else(|| resolve_pipeline_path(&state.repo_root, &req.pipeline));
-                (y, path)
-            }
-            None => {
-                let path = resolve_pipeline_path(&state.repo_root, lib_id);
-                match std::fs::read_to_string(&path) {
-                    Ok(y) => (y, path),
-                    Err(_) => {
-                        return Err((
-                            StatusCode::BAD_REQUEST,
-                            serde_json::json!({ "error": format!("pipeline template not found: {lib_id}") }),
-                        ));
-                    }
-                }
+    let (yaml, pipeline_path) = if let Some(ref pipeline_id) = req.pipeline_id {
+        let path = resolve_pipeline_path(&state.repo_root, pipeline_id);
+        match std::fs::read_to_string(&path) {
+            Ok(yaml) => (yaml, path),
+            Err(_) => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    serde_json::json!({ "error": format!("pipeline not found: {pipeline_id}") }),
+                ));
             }
         }
     } else {
@@ -9192,13 +9184,9 @@ async fn get_agent_profile_referents(
         })
         .collect::<Vec<_>>();
 
-    let mut pipeline_entries = scan_pipeline_dir(&state.repo_root.join(".pdo/pipelines"), "repo");
-    if let Some(home) = dirs_next_home() {
-        pipeline_entries.extend(scan_pipeline_dir(&home.join(".pdo/pipelines"), "user"));
-    }
-    if let Some(directory) = library_store::pipelines::user_pipelines_dir() {
-        pipeline_entries.extend(scan_pipeline_dir(&directory, "library"));
-    }
+    let pipeline_entries = instance_pipeline_dir(&state.repo_root)
+        .map(|directory| scan_pipeline_dir(&directory, "instance"))
+        .unwrap_or_default();
     let pipelines = pipeline_entries
         .into_iter()
         .flat_map(|entry| {
@@ -10247,6 +10235,51 @@ async fn get_run_pipeline(
         "diagnostics": parse_result.diagnostics.iter().map(|d| &d.message).collect::<Vec<_>>(),
     }))
     .into_response()
+}
+
+async fn get_run_pipeline_document(
+    State(state): State<Arc<AppState>>,
+    AxumPath(run_id): AxumPath<String>,
+) -> Response {
+    let run_state = load_events(&state.db, &run_id)
+        .await
+        .ok()
+        .and_then(|events| event_log::project(&events));
+    let yaml_path = match &run_state {
+        Some(run) => archived_or_live_pipeline_yaml(&state, run, &run_id),
+        None => run_scoped_pipeline_path(&state.repo_root, &run_id),
+    };
+    let yaml = match std::fs::read_to_string(&yaml_path) {
+        Ok(yaml) => yaml,
+        Err(_) => return (StatusCode::NOT_FOUND, "run pipeline not found").into_response(),
+    };
+    let parsed = match pipeline::parse_pipeline(&yaml) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("invalid run pipeline: {error}") })),
+            )
+                .into_response()
+        }
+    };
+    let prompts_dir = match &run_state {
+        Some(run) => archived_or_live_prompts_dir(&state, run, &run_id),
+        None => run_scoped_prompts_dir(&state.repo_root, &run_id),
+    };
+    let prompts = read_prompts_from_dir(&prompts_dir);
+    match portable_pipeline::export(&parsed.pipeline, &prompts) {
+        Ok(document) => (
+            [(header::CONTENT_TYPE, "application/yaml; charset=utf-8")],
+            document,
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": error })),
+        )
+            .into_response(),
+    }
 }
 
 async fn save_run_pipeline(
@@ -13864,10 +13897,6 @@ struct LibassistFocusRequest {
     /// The template being edited, or `null` to clear the focus (the user left
     /// every edit view).
     pipeline_id: Option<String>,
-    /// The edit tab's scope: `repo` | `user` | `library`. Ignored when
-    /// `pipeline_id` is `null`.
-    #[serde(default)]
-    scope: Option<String>,
 }
 
 /// Resolve the absolute YAML path of a focused template — **the daemon's job, not
@@ -13879,19 +13908,11 @@ struct LibassistFocusRequest {
 /// vocabulary applies where, and getting that wrong is what gave the assistant a cwd
 /// where the file it was told to read did not exist.
 ///
-/// `None` for a template with no file yet: a legitimate state, not an error.
-fn resolve_focus_path(
-    repo_root: &std::path::Path,
-    pipeline_id: &str,
-    scope: &str,
-) -> Option<PathBuf> {
-    match scope {
-        "library" => library_store::pipelines::get_path(repo_root, pipeline_id),
-        _ => {
-            let path = resolve_pipeline_path_scoped(repo_root, pipeline_id, Some(scope));
-            path.exists().then_some(path)
-        }
-    }
+/// `None` for a template that has no file yet (never saved) and for a path that
+/// does not exist: a legitimate state, not an error.
+fn resolve_focus_path(repo_root: &std::path::Path, pipeline_id: &str) -> Option<PathBuf> {
+    let path = resolve_pipeline_path(repo_root, pipeline_id);
+    path.exists().then_some(path)
 }
 
 /// Declare (or clear) which template the UI is editing — and, by the same token,
@@ -13913,21 +13934,11 @@ async fn put_libassist_focus(
         return Json(serde_json::json!({ "ok": true, "pipeline_id": null })).into_response();
     };
 
-    let scope = req.scope.unwrap_or_else(|| "repo".to_string());
-    if !matches!(scope.as_str(), "repo" | "user" | "library") {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": format!("unknown scope: {scope}") })),
-        )
-            .into_response();
-    }
-
     // An id that resolves to no file is NOT an error: a template can be open in the
     // canvas and not yet saved.
-    let path = resolve_focus_path(&state.repo_root, &pipeline_id, &scope);
+    let path = resolve_focus_path(&state.repo_root, &pipeline_id);
     let focus = LibassistFocus {
         pipeline_id,
-        scope,
         path,
         at: chrono::Utc::now(),
     };
@@ -13996,7 +14007,6 @@ fn libassist_focus_json(
         }),
         Some(f) => serde_json::json!({
             "pipeline_id": f.pipeline_id,
-            "scope": f.scope,
             "path": f.path.as_ref().map(|p| p.to_string_lossy()),
             "age_secs": now.signed_duration_since(f.at).num_seconds().max(0),
         }),
@@ -14021,13 +14031,11 @@ fn libassist_focus_text(focus: Option<&LibassistFocus>) -> String {
                 None => "(pas encore de fichier sur le disque — template non sauvée)".to_string(),
             };
             format!(
-                "PDO — pipeline actuellement ouverte dans l'UI : `{}` (scope `{}`), fichier : {}\n\
+                "PDO — pipeline actuellement ouverte dans l'UI : `{}`, fichier : {}\n\
                  Travaille sur celle-là, sans la deviner ni la redemander. Pour écrire, un seul \
                  endpoint : POST /sessions/libassist/save avec `{{\"yaml\": …, \"prompts\": …}}` — \
-                 il écrit dans CE fichier, sans id ni scope à fournir. N'utilise jamais \
-                 POST /library/pipelines pour sauver la template ouverte : il écrit dans le \
-                 library store, donc à côté du fichier édité.\n",
-                f.pipeline_id, f.scope, path
+                 il écrit dans CE fichier, sans id ni scope à fournir.\n",
+                f.pipeline_id, path
             )
         }
     }
@@ -14072,83 +14080,43 @@ async fn save_libassist_focused(
 
     // Same gate as `PUT /pipelines/{id}`: a template that does not parse must not
     // reach disk, where it breaks the canvas the user is looking at.
-    let parsed = match pipeline::parse_pipeline(&req.yaml) {
-        Ok(r) => r,
-        Err(e) => {
-            let (message, line) = parse_error_to_structured(&e);
-            let mut body =
-                serde_json::json!({ "error": format!("invalid YAML: {e}"), "message": message });
-            if let Some(l) = line {
-                body["line"] = serde_json::json!(l);
-            }
-            return (StatusCode::BAD_REQUEST, Json(body)).into_response();
+    if let Err(e) = pipeline::parse_pipeline(&req.yaml) {
+        let (message, line) = parse_error_to_structured(&e);
+        let mut body =
+            serde_json::json!({ "error": format!("invalid YAML: {e}"), "message": message });
+        if let Some(l) = line {
+            body["line"] = serde_json::json!(l);
         }
-    };
+        return (StatusCode::BAD_REQUEST, Json(body)).into_response();
+    }
 
     let id = focus.pipeline_id.clone();
-    let path = if focus.scope == "library" {
-        // Read the entry's current store off disk rather than mapping the edit tab's
-        // scope word onto the library store's enum — that mapping is what went wrong.
-        let store_scope = library_store::pipelines::get_scope(&state.repo_root, &id)
-            .unwrap_or(library_store::pipelines::Scope::User);
-        if let Err(e) = library_store::pipelines::save(
-            &state.repo_root,
-            Some(&id),
-            &parsed.pipeline.name,
-            &req.yaml,
-            &req.prompts,
-            store_scope,
-        ) {
-            let msg = format!("write failed: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": msg.clone(), "message": msg })),
-            )
-                .into_response();
-        }
-        match library_store::pipelines::get_path(&state.repo_root, &id) {
-            Some(p) => p,
-            None => {
-                let msg = "write reported success but the template is not in the library store"
-                    .to_string();
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": msg.clone(), "message": msg })),
-                )
-                    .into_response();
-            }
-        }
-    } else {
-        let path = resolve_pipeline_path_scoped(&state.repo_root, &id, Some(&focus.scope));
-        if let Some(parent) = path.parent() {
+    let path = resolve_pipeline_path(&state.repo_root, &id);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    mark_self_write(&state.recent_writes, &path);
+    if let Err(e) = std::fs::write(&path, &req.yaml) {
+        let msg = format!("write failed: {e}");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": msg.clone(), "message": msg })),
+        )
+            .into_response();
+    }
+    for (node_id, content) in &req.prompts {
+        let prompt_path = pipeline::canonical_prompt_path(&path, node_id);
+        if let Some(parent) = prompt_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        mark_self_write(&state.recent_writes, &path);
-        if let Err(e) = std::fs::write(&path, &req.yaml) {
-            let msg = format!("write failed: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": msg.clone(), "message": msg })),
-            )
-                .into_response();
+        mark_self_write(&state.recent_writes, &prompt_path);
+        if let Err(e) = std::fs::write(&prompt_path, content) {
+            warn!("failed to write prompt for {node_id}: {e}");
         }
-        for (node_id, content) in &req.prompts {
-            let prompt_path = pipeline::canonical_prompt_path(&path, node_id);
-            if let Some(parent) = prompt_path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            mark_self_write(&state.recent_writes, &prompt_path);
-            if let Err(e) = std::fs::write(&prompt_path, content) {
-                warn!("failed to write prompt for {node_id}: {e}");
-            }
-        }
-        path
-    };
+    }
 
-    // Announce the write instead of waiting for the file watcher: the repo/user write
-    // is marked as a self-write (the suppression that stops the UI's own saves from
-    // bouncing back), and the library store is not watched at all. Without this the
-    // canvas sits on stale YAML until the tab is reopened.
+    // Announce the write ourselves because self-writes are suppressed by the
+    // watcher; otherwise the canvas would remain stale until reopened.
     let _ = state.pipeline_tx.send(serde_json::json!({
         "type": "pipeline_changed",
         "pipeline_id": id,
@@ -14156,8 +14124,7 @@ async fn save_libassist_focused(
     }));
 
     info!(
-        "Library assistant saved template {id} (scope {}) at {}",
-        focus.scope,
+        "Library assistant saved template {id} at {}",
         path.display()
     );
     (
@@ -14165,7 +14132,6 @@ async fn save_libassist_focused(
         Json(serde_json::json!({
             "ok": true,
             "id": id,
-            "scope": focus.scope,
             "path": path.to_string_lossy(),
         })),
     )
@@ -15452,12 +15418,7 @@ fn augment_run_state_from_disk(
     // before the mutable assignment to `.loc`.
     let base = run_diff_base(run_state).to_string();
     run_state.loc = compute_run_loc(repo_root, &run_state.run_id, &base);
-    // Cost is likewise independent of the run YAML: it reads the transcripts under
-    // `projects_root`, and `repo_root` only builds the run-id dir prefix. A node on a
-    // harness with no cost source makes the aggregate non-summable, so this yields a
-    // "—"-with-reason `CostStat`, never `$0`. Needs the RAW events for the
-    // frozen-at-spawn harnesses — `RunState` alone does not carry them per node.
-    run_state.cost = run_cost::run_cost_or_absence(
+    let breakdown = run_cost::compute_run_cost_breakdown_cached(
         events,
         projects_root,
         copilot_root,
@@ -15465,6 +15426,63 @@ fn augment_run_state_from_disk(
         &run_state.run_id,
         prices,
     );
+    run_state.cost = breakdown.cost;
+
+    let mut node_costs: std::collections::HashMap<String, (event_log::NodeCost, bool)> =
+        std::collections::HashMap::new();
+    for contribution in breakdown
+        .contributions
+        .iter()
+        .filter(|contribution| contribution.scope == run_cost::CostScope::Node)
+    {
+        let Some(node_id) = contribution.node_id.as_ref() else {
+            continue;
+        };
+        let (cost, has_unknown) = node_costs.entry(node_id.clone()).or_insert_with(|| {
+            (
+                event_log::NodeCost {
+                    usd: Some(0.0),
+                    form: contribution.form,
+                    partial: false,
+                    unpriced_models: Vec::new(),
+                    unavailable_reasons: Vec::new(),
+                    executions: 0,
+                    readable_executions: 0,
+                },
+                false,
+            )
+        });
+        if cost.executions > 0 && cost.form != contribution.form {
+            cost.form = None;
+        } else if cost.executions == 0 {
+            cost.form = contribution.form;
+        }
+        if let Some(usd) = contribution.usd {
+            if !*has_unknown {
+                cost.usd = Some(cost.usd.unwrap_or_default() + usd);
+            }
+        } else {
+            *has_unknown = true;
+            cost.usd = None;
+            cost.form = None;
+        }
+        cost.partial |= contribution.partial;
+        cost.executions += contribution.executions;
+        cost.readable_executions += contribution.readable_executions;
+        cost.unpriced_models
+            .extend(contribution.unpriced_models.iter().cloned());
+        cost.unavailable_reasons
+            .extend(contribution.unavailable_reasons.iter().cloned());
+    }
+    for (node_id, (mut cost, _)) in node_costs {
+        cost.unpriced_models.sort();
+        cost.unpriced_models.dedup();
+        cost.unavailable_reasons.sort();
+        cost.unavailable_reasons.dedup();
+        if let Some(node) = run_state.nodes.get_mut(&node_id) {
+            node.cost = Some(cost);
+        }
+    }
 
     let yaml_path = run_scoped_pipeline_path(repo_root, &run_state.run_id);
     let Ok(yaml) = std::fs::read_to_string(&yaml_path) else {
@@ -15522,60 +15540,195 @@ fn edge_info_from_pipeline(e: &pipeline::EdgeDef) -> event_log::EdgeInfo {
     }
 }
 
-fn resolve_pipeline_path(repo_root: &std::path::Path, pipeline_name: &str) -> PathBuf {
-    let repo_path = repo_root
-        .join(".pdo")
-        .join("pipelines")
-        .join(format!("{pipeline_name}.yaml"));
-    if repo_path.exists() {
-        return repo_path;
+fn instance_pipeline_dir(repo_root: &Path) -> Option<PathBuf> {
+    // Unit and integration tests isolate the instance registry inside their
+    // temporary repo. The handlers and migration logic remain identical.
+    let integration_test_binary = cfg!(debug_assertions)
+        && std::env::current_exe()
+            .ok()
+            .and_then(|path| path.file_name().map(|name| name.to_owned()))
+            .and_then(|name| name.to_str().map(str::to_owned))
+            .is_some_and(|name| name.starts_with("it-"));
+    if cfg!(test) || integration_test_binary {
+        return Some(repo_root.join(".pdo").join("pipelines"));
     }
-
-    if let Some(home) = dirs_next_home() {
-        let user_path = home
-            .join(".pdo")
-            .join("pipelines")
-            .join(format!("{pipeline_name}.yaml"));
-        if user_path.exists() {
-            return user_path;
-        }
-    }
-
-    repo_path
+    dirs_next_home().map(|home| home.join(".pdo").join("pipelines"))
 }
 
+fn copy_directory(source: &Path, target: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(target).map_err(|e| format!("create {}: {e}", target.display()))?;
+    for entry in std::fs::read_dir(source).map_err(|e| format!("read {}: {e}", source.display()))? {
+        let entry = entry.map_err(|e| format!("read migration entry: {e}"))?;
+        let source_path = entry.path();
+        let target_path = target.join(entry.file_name());
+        if source_path.is_dir() {
+            copy_directory(&source_path, &target_path)?;
+        } else {
+            std::fs::copy(&source_path, &target_path)
+                .map_err(|e| format!("copy {}: {e}", source_path.display()))?;
+        }
+    }
+    Ok(())
+}
+
+fn directories_match(left: &Path, right: &Path) -> Result<bool, String> {
+    if left.is_dir() != right.is_dir() {
+        return Ok(false);
+    }
+    if !left.is_dir() {
+        return Ok(!right.exists());
+    }
+    let mut left_entries = std::fs::read_dir(left)
+        .map_err(|e| format!("read {}: {e}", left.display()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("read {}: {e}", left.display()))?;
+    let mut right_entries = std::fs::read_dir(right)
+        .map_err(|e| format!("read {}: {e}", right.display()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("read {}: {e}", right.display()))?;
+    left_entries.sort_by_key(|entry| entry.file_name());
+    right_entries.sort_by_key(|entry| entry.file_name());
+    if left_entries.len() != right_entries.len() {
+        return Ok(false);
+    }
+    for (left_entry, right_entry) in left_entries.iter().zip(&right_entries) {
+        if left_entry.file_name() != right_entry.file_name() {
+            return Ok(false);
+        }
+        let left_path = left_entry.path();
+        let right_path = right_entry.path();
+        if left_path.is_dir() {
+            if !directories_match(&left_path, &right_path)? {
+                return Ok(false);
+            }
+        } else if std::fs::read(&left_path)
+            .map_err(|e| format!("read {}: {e}", left_path.display()))?
+            != std::fs::read(&right_path)
+                .map_err(|e| format!("read {}: {e}", right_path.display()))?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn publish_migrated_pipeline(
+    source_yaml: &Path,
+    source_bytes: &[u8],
+    candidate: &Path,
+) -> Result<(), String> {
+    let source_prompts = source_yaml.with_extension("prompts");
+    let candidate_prompts = candidate.with_extension("prompts");
+    let nonce = format!(
+        "{}.{}",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    );
+    let staged_yaml = candidate.with_extension(format!("yaml.migrating-{nonce}"));
+    let staged_prompts = candidate.with_extension(format!("prompts.migrating-{nonce}"));
+    if !candidate.exists() && candidate_prompts.is_dir() {
+        std::fs::remove_dir_all(&candidate_prompts)
+            .map_err(|e| format!("recover {}: {e}", candidate_prompts.display()))?;
+    }
+    let result = (|| {
+        std::fs::write(&staged_yaml, source_bytes)
+            .map_err(|e| format!("stage {}: {e}", candidate.display()))?;
+        if source_prompts.is_dir() {
+            copy_directory(&source_prompts, &staged_prompts)?;
+            std::fs::rename(&staged_prompts, &candidate_prompts)
+                .map_err(|e| format!("publish {}: {e}", candidate_prompts.display()))?;
+        }
+        std::fs::rename(&staged_yaml, candidate)
+            .map_err(|e| format!("publish {}: {e}", candidate.display()))
+    })();
+    let _ = std::fs::remove_file(&staged_yaml);
+    if staged_prompts.is_dir() {
+        let _ = std::fs::remove_dir_all(&staged_prompts);
+    }
+    if result.is_err() && candidate_prompts.is_dir() {
+        let _ = std::fs::remove_dir_all(&candidate_prompts);
+    }
+    result
+}
+
+fn migrate_legacy_pipelines(repo_root: &Path) -> Result<(), String> {
+    let Some(target) = instance_pipeline_dir(repo_root) else {
+        return Err("cannot determine instance pipeline directory".into());
+    };
+    use sha2::{Digest, Sha256};
+    let source_key = Sha256::digest(repo_root.to_string_lossy().as_bytes());
+    let marker = target
+        .parent()
+        .expect("pipeline registry has a .pdo parent")
+        .join(format!(
+            ".pipelines-unified-v1-{}",
+            &format!("{source_key:x}")[..12]
+        ));
+    if marker.exists() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(&target).map_err(|e| format!("create pipeline registry: {e}"))?;
+    // The former user-scoped `~/.pdo/pipelines` directory is the unified
+    // registry itself, so its entries remain in place. Include it in the scan
+    // to make that no-loss case explicit and collision-safe.
+    let mut sources = vec![target.clone(), repo_root.join(".pdo").join("pipelines")];
+    if let Some(home) = dirs_next_home() {
+        sources.push(home.join(".pdo").join("library").join("pipelines"));
+    }
+
+    for source in sources {
+        let Ok(entries) = std::fs::read_dir(&source) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let source_yaml = entry.path();
+            if source_yaml.extension().and_then(|value| value.to_str()) != Some("yaml") {
+                continue;
+            }
+            let Some(base_id) = source_yaml.file_stem().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            let source_bytes = std::fs::read(&source_yaml)
+                .map_err(|e| format!("read {}: {e}", source_yaml.display()))?;
+            let mut id = base_id.to_string();
+            let mut suffix = 2u32;
+            loop {
+                let candidate = target.join(format!("{id}.yaml"));
+                let source_prompts = source_yaml.with_extension("prompts");
+                let candidate_prompts = candidate.with_extension("prompts");
+                if !candidate.exists() {
+                    publish_migrated_pipeline(&source_yaml, &source_bytes, &candidate)?;
+                    break;
+                }
+                if std::fs::read(&candidate).ok().as_deref() == Some(source_bytes.as_slice())
+                    && directories_match(&source_prompts, &candidate_prompts)?
+                {
+                    break;
+                }
+                id = format!("{base_id}-{suffix}");
+                suffix += 1;
+            }
+        }
+    }
+    std::fs::write(marker, b"1\n").map_err(|e| format!("finish pipeline migration: {e}"))
+}
+
+fn pipeline_scope_for_response(_repo_root: &Path, _path: &Path) -> &'static str {
+    "instance"
+}
+
+fn resolve_pipeline_path(repo_root: &std::path::Path, pipeline_name: &str) -> PathBuf {
+    instance_pipeline_dir(repo_root)
+        .unwrap_or_else(|| repo_root.join(".pdo").join("pipelines"))
+        .join(format!("{pipeline_name}.yaml"))
+}
+
+#[allow(dead_code)]
 fn repo_pipeline_path(repo_root: &std::path::Path, pipeline_name: &str) -> PathBuf {
     repo_root
         .join(".pdo")
         .join("pipelines")
         .join(format!("{pipeline_name}.yaml"))
-}
-
-/// Resolve a pipeline YAML path honoring an explicit `scope` when one is given.
-///
-/// `Some("repo")` / `Some("user")` resolve *strictly* to that store: the operation
-/// must never fall through to a same-named file in another store, which is how a
-/// `user`/`library` delete once destroyed a `repo` file. `None` keeps the historical
-/// best-effort behaviour. `Some("library")` lives in a different on-disk store, so it
-/// falls back to the default here — callers MUST branch on `library` before calling.
-fn resolve_pipeline_path_scoped(
-    repo_root: &std::path::Path,
-    pipeline_name: &str,
-    scope: Option<&str>,
-) -> PathBuf {
-    match scope {
-        Some("repo") => repo_pipeline_path(repo_root, pipeline_name),
-        Some("user") => dirs_next_home()
-            .map(|home| {
-                home.join(".pdo")
-                    .join("pipelines")
-                    .join(format!("{pipeline_name}.yaml"))
-            })
-            // No HOME → keep a well-formed path; the caller's `exists()` check turns
-            // it into a clean 404.
-            .unwrap_or_else(|| repo_pipeline_path(repo_root, pipeline_name)),
-        _ => resolve_pipeline_path(repo_root, pipeline_name),
-    }
 }
 
 fn resolve_run_pipeline_path(
@@ -15873,7 +16026,13 @@ fn load_merge_resolver_prompt(repo_root: &std::path::Path) -> String {
 pub use guard_runner::GUARD_TIMEOUT_MS_OVERRIDE_ENV;
 pub use tmux_session_manager::{build_tmux_script, TMUX_CMD_OVERRIDE_ENV};
 
-async fn static_handler(uri: Uri) -> Response {
+// --- Static file serving ---
+
+async fn static_handler(method: Method, uri: Uri) -> Response {
+    if method != Method::GET && method != Method::HEAD {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
     let path = uri.path().trim_start_matches('/');
 
     if path.is_empty() || path == "index.html" {
@@ -15938,6 +16097,109 @@ mod tests {
         use std::sync::atomic::{AtomicU16, Ordering};
         static NEXT: AtomicU16 = AtomicU16::new(20000);
         NEXT.fetch_add(1, Ordering::Relaxed)
+    }
+
+    #[test]
+    fn migrated_pipeline_is_published_with_its_prompt_sidecars() {
+        let source = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        let source_yaml = source.path().join("review.yaml");
+        let source_prompts = source.path().join("review.prompts");
+        std::fs::write(&source_yaml, "name: review\n").unwrap();
+        std::fs::create_dir(&source_prompts).unwrap();
+        std::fs::write(source_prompts.join("worker.md"), "review carefully").unwrap();
+        let candidate = target.path().join("review.yaml");
+        let interrupted_prompts = target.path().join("review.prompts");
+        std::fs::create_dir(&interrupted_prompts).unwrap();
+        std::fs::write(interrupted_prompts.join("worker.md"), "stale partial copy").unwrap();
+
+        publish_migrated_pipeline(&source_yaml, b"name: review\n", &candidate).unwrap();
+
+        assert_eq!(std::fs::read(&candidate).unwrap(), b"name: review\n");
+        assert_eq!(
+            std::fs::read_to_string(target.path().join("review.prompts/worker.md")).unwrap(),
+            "review carefully"
+        );
+        assert!(directories_match(&source_prompts, &target.path().join("review.prompts")).unwrap());
+    }
+
+    #[test]
+    fn migration_collision_comparison_includes_prompt_contents() {
+        let left = tempfile::tempdir().unwrap();
+        let right = tempfile::tempdir().unwrap();
+        std::fs::write(left.path().join("worker.md"), "left").unwrap();
+        std::fs::write(right.path().join("worker.md"), "right").unwrap();
+
+        assert!(!directories_match(left.path(), right.path()).unwrap());
+    }
+
+    #[test]
+    fn migration_moves_legacy_library_pipelines_once_and_preserves_collisions() {
+        let fake_home = FakeHome::new();
+        let repo = tempfile::tempdir().unwrap();
+        let registry = repo.path().join(".pdo/pipelines");
+        std::fs::create_dir_all(&registry).unwrap();
+        std::fs::write(registry.join("review.yaml"), "name: Repo review\n").unwrap();
+        std::fs::write(registry.join("personal.yaml"), "name: Personal\n").unwrap();
+        std::fs::create_dir(registry.join("review.prompts")).unwrap();
+        std::fs::write(registry.join("review.prompts/worker.md"), "repo prompt").unwrap();
+
+        let legacy = fake_home.path().join(".pdo/library/pipelines");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("review.yaml"), "name: Library review\n").unwrap();
+        std::fs::create_dir(legacy.join("review.prompts")).unwrap();
+        std::fs::write(legacy.join("review.prompts/worker.md"), "library prompt").unwrap();
+
+        migrate_legacy_pipelines(repo.path()).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(registry.join("review.yaml")).unwrap(),
+            "name: Repo review\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(registry.join("personal.yaml")).unwrap(),
+            "name: Personal\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(registry.join("review-2.yaml")).unwrap(),
+            "name: Library review\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(registry.join("review-2.prompts/worker.md")).unwrap(),
+            "library prompt"
+        );
+
+        std::fs::write(legacy.join("late.yaml"), "name: Late\n").unwrap();
+        migrate_legacy_pipelines(repo.path()).unwrap();
+        assert!(!registry.join("late.yaml").exists());
+    }
+
+    #[test]
+    fn available_pipeline_identity_avoids_an_existing_name_with_a_different_id() {
+        let registry = tempfile::tempdir().unwrap();
+        std::fs::write(
+            registry.path().join("legacy-id.yaml"),
+            "name: Release train\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            available_pipeline_identity(registry.path(), "Release train"),
+            ("release-train-2".into(), "Release train (2)".into())
+        );
+    }
+
+    #[test]
+    fn available_pipeline_identity_collapses_name_punctuation_in_the_file_id() {
+        let registry = tempfile::tempdir().unwrap();
+
+        assert_eq!(
+            available_pipeline_identity(registry.path(), "Release train (2) (copy)"),
+            (
+                "release-train-2-copy".into(),
+                "Release train (2) (copy)".into()
+            )
+        );
     }
 
     // The nested-daemon (no-cleanup) posture resolver
@@ -19667,6 +19929,63 @@ mod tests {
         assert!(body.get("cost").is_none() || body["cost"].is_null());
     }
 
+    #[test]
+    fn run_detail_projects_the_same_cost_onto_its_parent_node() {
+        let home = tempfile::tempdir().unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        let projects = home.path().join(".claude/projects");
+        let copilot = home.path().join(".copilot/session-state");
+        let run_id = "node-cost";
+        let working_dir = worktree_ops::worktree_dir_for_run(repo.path(), run_id);
+        let project = projects.join(run_cost::cc_project_dirname(&working_dir));
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join("sid.jsonl"),
+            "{\"type\":\"assistant\",\"requestId\":\"r\",\"message\":{\"id\":\"m\",\"model\":\"claude-opus-4-8\",\"usage\":{\"input_tokens\":1000000}}}\n",
+        )
+        .unwrap();
+        let events = vec![
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::RunStarted,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({ "pipeline_name": "test" })),
+            },
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeStarted,
+                node_id: Some("worker".into()),
+                iter: Some(1),
+                payload: Some(serde_json::json!({
+                    "node_type": "doc-only",
+                    "harness": "claude",
+                    "session_id": "sid"
+                })),
+            },
+        ];
+        let mut run_state = event_log::project(&events).unwrap();
+
+        augment_run_state_from_disk(
+            &mut run_state,
+            &events,
+            &projects,
+            &copilot,
+            repo.path(),
+            &price_table::PriceTable::load(home.path()),
+        );
+
+        let node_cost = run_state.nodes["worker"].cost.as_ref().unwrap();
+        assert_eq!(node_cost.form, Some(event_log::CostForm::Derived));
+        assert!((node_cost.usd.unwrap() - 5.0).abs() < 1e-9);
+        assert_eq!(node_cost.executions, 1);
+        assert_eq!(run_state.cost.as_ref().unwrap().usd, node_cost.usd.unwrap());
+    }
+
     #[tokio::test]
     async fn cleanup_run_archives_and_preserves_events() {
         let state = test_state().await;
@@ -21545,6 +21864,7 @@ mod tests {
             node_id.into(),
             event_log::NodeState {
                 harness: None,
+                cost: None,
                 node_id: node_id.into(),
                 status,
                 iter,
@@ -21754,6 +22074,7 @@ mod tests {
             "a".into(),
             event_log::NodeState {
                 harness: None,
+                cost: None,
                 node_id: "a".into(),
                 status: event_log::NodeStatus::Completed,
                 iter: 2,
@@ -21806,6 +22127,7 @@ mod tests {
             "a".into(),
             event_log::NodeState {
                 harness: None,
+                cost: None,
                 node_id: "a".into(),
                 status: event_log::NodeStatus::Stale,
                 iter: 1,
@@ -21826,6 +22148,7 @@ mod tests {
             "b".into(),
             event_log::NodeState {
                 harness: None,
+                cost: None,
                 node_id: "b".into(),
                 status: event_log::NodeStatus::Waiting,
                 iter: 1,
@@ -22053,6 +22376,7 @@ mod tests {
                 node_id.into(),
                 event_log::NodeState {
                     harness: None,
+                    cost: None,
                     node_id: node_id.into(),
                     status: event_log::NodeStatus::Completed,
                     iter: iters,
@@ -22846,7 +23170,7 @@ mod tests {
         assert_eq!(list.len(), 2);
         assert!(list.iter().any(|p| p["id"] == "test-pipe"));
         assert!(list.iter().any(|p| p["id"] == "another-pipe"));
-        assert!(list.iter().all(|p| p["scope"] == "repo"));
+        assert!(list.iter().all(|p| p["scope"] == "instance"));
     }
 
     #[tokio::test]
@@ -23645,7 +23969,7 @@ edges:
             .unwrap();
         let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(result["id"], "new-pipeline");
-        assert_eq!(result["scope"], "repo");
+        assert_eq!(result["scope"], "instance");
 
         let yaml_path = tmp
             .path()
@@ -23912,7 +24236,7 @@ edges:
         let list: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
         let entry = &list[0];
         assert_eq!(entry["name"], "meta-pipe");
-        assert_eq!(entry["scope"], "repo");
+        assert_eq!(entry["scope"], "instance");
         assert_eq!(entry["node_count"], 3);
         assert!(entry["modified"].as_str().is_some());
     }
@@ -23933,127 +24257,40 @@ edges:
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
-    async fn promote_pipeline_copies_to_library() {
+    async fn obsolete_pipeline_library_routes_are_not_registered() {
         let fake_home = FakeHome::new();
-
         write_test_pipeline(fake_home.path(), "promotable");
         let state = test_state_with_dir(fake_home.path()).await;
         let app = build_router(state);
 
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/pipelines/promotable/promote")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        for (method, uri) in [
+            ("GET", "/library/pipelines"),
+            ("POST", "/pipelines/promotable/promote"),
+            ("POST", "/library/pipelines/promotable/duplicate"),
+            ("DELETE", "/library/pipelines/promotable"),
+        ] {
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(uri)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
 
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(result["id"], "promotable");
-        assert_eq!(result["drifted"], false);
-
-        let lib_dir = library_store::pipelines::user_pipelines_dir().unwrap();
-        assert!(lib_dir.join("promotable.yaml").exists());
-        assert!(lib_dir.join("promotable.meta.json").exists());
+            assert!(
+                resp.status().is_client_error(),
+                "{method} {uri} unexpectedly returned {}",
+                resp.status()
+            );
+        }
     }
 
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn promote_nonexistent_pipeline_returns_error() {
-        let fake_home = FakeHome::new();
-
-        let state = test_state_with_dir(fake_home.path()).await;
-        let app = build_router(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/pipelines/nonexistent/promote")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    }
-
-    // #224 — POST /library/pipelines/{id}/duplicate.
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn duplicate_library_pipeline_returns_201() {
-        let _fake_home = FakeHome::new();
-        // A repo root distinct from HOME so the repo-scope and user-scope library
-        // dirs do not collapse onto one path (they share a relative layout but
-        // different roots in production). Promoting writes to the HOME user dir,
-        // so the entry is genuinely user-scope.
-        let repo = tempfile::tempdir().unwrap();
-        write_test_pipeline(repo.path(), "dupable");
-        library_store::pipelines::promote(repo.path(), "dupable").unwrap();
-
-        let state = test_state_with_dir(repo.path()).await;
-        let app = build_router(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/library/pipelines/dupable/duplicate")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::CREATED);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_ne!(result["id"].as_str().unwrap(), "dupable");
-        assert_eq!(result["scope"], "user");
-        assert!(result["entry"].is_object());
-
-        // The clone is a separate, unlinked file with the "(copy)" name.
-        let lib_dir = library_store::pipelines::user_pipelines_dir().unwrap();
-        let copy_id = result["id"].as_str().unwrap();
-        assert!(lib_dir.join(format!("{copy_id}.yaml")).exists());
-        assert!(!lib_dir.join(format!("{copy_id}.meta.json")).exists());
-        assert_eq!(result["entry"]["name"], "dupable (copy)");
-    }
-
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn duplicate_nonexistent_library_pipeline_returns_404() {
-        let fake_home = FakeHome::new();
-
-        let state = test_state_with_dir(fake_home.path()).await;
-        let app = build_router(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/library/pipelines/does-not-exist/duplicate")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-    }
-
-    // #155 — POST /library/import: a Claude Code workflow .js becomes a
-    // user-scope draft pipeline, written to the isolated HOME library dir.
+    // #155 — POST /library/import: a Claude Code workflow .js becomes an
+    // instance-owned draft pipeline.
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn import_library_workflow_returns_201_and_writes_draft() {
@@ -24090,18 +24327,17 @@ edges:
             .await
             .unwrap();
         let result: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(result["scope"], "user");
-        assert!(result["entry"].is_object(), "listed entry returned");
+        assert_eq!(result["scope"], "instance");
         assert!(result["warnings"].is_array(), "warnings array returned");
 
-        // The draft YAML + prompt sidecars land in the isolated HOME library dir.
+        // The draft YAML + prompt sidecars land in the isolated instance registry.
         let id = result["id"].as_str().unwrap();
-        let lib_dir = library_store::pipelines::user_pipelines_dir().unwrap();
+        let registry = repo.path().join(".pdo/pipelines");
         assert!(
-            lib_dir.join(format!("{id}.yaml")).exists(),
-            "draft YAML written to user-scope library"
+            registry.join(format!("{id}.yaml")).exists(),
+            "draft YAML written to instance registry"
         );
-        let prompts_dir = lib_dir.join(format!("{id}.prompts"));
+        let prompts_dir = registry.join(format!("{id}.prompts"));
         assert!(
             prompts_dir.is_dir() && std::fs::read_dir(&prompts_dir).unwrap().next().is_some(),
             "prompt sidecars written"
@@ -24139,7 +24375,7 @@ edges:
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
-    async fn list_pipelines_includes_library_with_drift() {
+    async fn list_pipelines_migrates_an_identical_legacy_copy_once() {
         let fake_home = FakeHome::new();
 
         write_test_pipeline(fake_home.path(), "repo-pipe");
@@ -24165,18 +24401,15 @@ edges:
             .unwrap();
         let list: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
 
-        let repo_entry = list.iter().find(|p| p["scope"] == "repo").unwrap();
-        assert_eq!(repo_entry["id"], "repo-pipe");
-        assert!(repo_entry.get("drifted").is_none() || repo_entry["drifted"].is_null());
-
-        let lib_entry = list.iter().find(|p| p["scope"] == "library").unwrap();
-        assert_eq!(lib_entry["id"], "repo-pipe");
-        assert_eq!(lib_entry["drifted"], false);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0]["id"], "repo-pipe");
+        assert_eq!(list[0]["scope"], "instance");
+        assert!(list[0].get("drifted").is_none());
     }
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
-    async fn list_pipelines_library_shows_drift_after_source_change() {
+    async fn list_pipelines_preserves_a_different_legacy_copy_as_a_collision() {
         let fake_home = FakeHome::new();
 
         write_test_pipeline(fake_home.path(), "drifting");
@@ -24207,8 +24440,11 @@ edges:
             .await
             .unwrap();
         let list: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
-        let lib_entry = list.iter().find(|p| p["scope"] == "library").unwrap();
-        assert_eq!(lib_entry["drifted"], true);
+        assert_eq!(list.len(), 2);
+        assert!(list.iter().all(|entry| entry["scope"] == "instance"));
+        assert!(list.iter().all(|entry| entry.get("drifted").is_none()));
+        assert!(list.iter().any(|entry| entry["id"] == "drifting"));
+        assert!(list.iter().any(|entry| entry["id"] == "drifting-2"));
     }
 
     #[tokio::test]
@@ -24262,13 +24498,9 @@ edges:
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
-    // #216 — the core data-loss regression. A `scope=library` delete of an id
-    // that ALSO exists as a repo pipeline (the normal outcome of "promote to
-    // library") must remove only the library copy and never the repo YAML or
-    // its `.prompts/` sidecar.
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
-    async fn delete_pipeline_scope_library_spares_repo_file() {
+    async fn delete_pipeline_ignores_retired_scope_and_deletes_the_instance_copy() {
         let fake_home = FakeHome::new();
         write_test_pipeline(fake_home.path(), "simple-bugfix");
         // A sidecar prompts dir proves the `remove_dir_all` never reaches the repo.
@@ -24300,28 +24532,20 @@ edges:
 
         assert_eq!(resp.status(), StatusCode::OK);
 
-        // Library copy is gone — the intended target.
-        assert!(!lib_yaml.exists(), "library copy should be deleted");
-        // Repo YAML + sidecar are untouched — the file the user never targeted.
         assert!(
-            fake_home
-                .path()
-                .join(".pdo/pipelines/simple-bugfix.yaml")
-                .exists(),
-            "repo YAML must survive a library-scoped delete"
+            lib_yaml.exists(),
+            "legacy library copy is not a CRUD target"
         );
-        assert!(
-            repo_prompts.join("worker.md").exists(),
-            "repo .prompts/ sidecar must survive a library-scoped delete"
-        );
+        assert!(!fake_home
+            .path()
+            .join(".pdo/pipelines/simple-bugfix.yaml")
+            .exists());
+        assert!(!repo_prompts.exists());
     }
 
-    // #216, fix direction 3 — a promoted library entry stays openable from its
-    // own stored YAML even when the source repo file is gone. The bare-id GET
-    // (no scope) 404s in that state; the scoped GET resolves the library copy.
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
-    async fn get_pipeline_scope_library_reads_own_yaml_when_repo_absent() {
+    async fn get_pipeline_does_not_fall_back_to_a_legacy_library_copy() {
         let fake_home = FakeHome::new();
         write_test_pipeline(fake_home.path(), "promoted");
         library_store::pipelines::promote(fake_home.path(), "promoted").unwrap();
@@ -24343,7 +24567,6 @@ edges:
             .unwrap();
         assert_eq!(bare.status(), StatusCode::NOT_FOUND);
 
-        // Scoped open reads the library entry's own YAML.
         let app = build_router(state);
         let resp = app
             .oneshot(
@@ -24354,28 +24577,17 @@ edges:
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let val: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(val["scope"], "library");
-        assert_eq!(val["id"], "promoted");
-        assert!(val["yaml"].as_str().unwrap().contains("name: promoted"));
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
-    // #216 — a `scope=library` save writes back into the library store, never
-    // the same-named repo file.
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
-    async fn save_pipeline_scope_library_writes_library_not_repo() {
+    async fn save_pipeline_ignores_retired_scope_and_writes_the_instance_copy() {
         let fake_home = FakeHome::new();
         write_test_pipeline(fake_home.path(), "shared");
         library_store::pipelines::promote(fake_home.path(), "shared").unwrap();
 
         let repo_yaml_path = fake_home.path().join(".pdo/pipelines/shared.yaml");
-        let repo_before = std::fs::read_to_string(&repo_yaml_path).unwrap();
-
         let state = test_state_with_dir(fake_home.path()).await;
         let app = build_router(state);
 
@@ -24395,24 +24607,18 @@ edges:
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        // Library copy reflects the edit; repo copy is byte-for-byte unchanged.
         let lib_yaml = library_store::pipelines::get_yaml(fake_home.path(), "shared").unwrap();
-        assert!(lib_yaml.contains("9.9"));
-        assert_eq!(
-            std::fs::read_to_string(&repo_yaml_path).unwrap(),
-            repo_before
-        );
+        assert!(!lib_yaml.contains("9.9"));
+        assert!(std::fs::read_to_string(&repo_yaml_path)
+            .unwrap()
+            .contains("9.9"));
     }
 
-    // #241 (regression lock) — unchecking « Prompt required » on a library
-    // template (`scope=library`) must survive the save→read round-trip:
-    // `prompt_required: false` is written verbatim to the library store, the
-    // scoped GET reports `false`, and no `unknown field 'prompt_required'`
-    // diagnostic fires. The bug was fixed by #216 (the scope=library save path);
-    // this test guards against a silent regression on that surface.
+    // Retired scope query parameters cannot redirect a save away from the
+    // instance registry; ordinary fields still survive the round trip.
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
-    async fn save_pipeline_scope_library_preserves_prompt_required_false() {
+    async fn save_pipeline_with_retired_scope_preserves_prompt_required_false() {
         let fake_home = FakeHome::new();
         // Seeded WITHOUT the flag => defaults to `prompt_required: true`, so
         // saving `false` below is a genuine state transition (non-vacuous).
@@ -24441,14 +24647,13 @@ edges:
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        // On-disk library YAML keeps the flag verbatim.
         let lib_yaml = library_store::pipelines::get_yaml(fake_home.path(), "shared").unwrap();
         assert!(
-            lib_yaml.contains("prompt_required: false"),
-            "library YAML must persist prompt_required: false, got: {lib_yaml}"
+            !lib_yaml.contains("prompt_required: false"),
+            "legacy library YAML must remain untouched, got: {lib_yaml}"
         );
 
-        // Read-back via scope=library exposes `false`, verbatim yaml, no diagnostic.
+        // Read-back exposes `false`, verbatim yaml, and no diagnostic.
         let app = build_router(state);
         let resp = app
             .oneshot(
@@ -24481,13 +24686,11 @@ edges:
         );
     }
 
-    // #216 (defense in depth) — an explicit `scope=user` delete resolves
-    // strictly to the user store and never falls through to a same-named repo
-    // pipeline (repo_root and HOME are kept distinct here so the two stores have
-    // genuinely separate paths).
+    // A retired user-scope query cannot redirect deletion away from the
+    // instance registry or mutate the old user location.
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
-    async fn delete_pipeline_scope_user_does_not_touch_repo() {
+    async fn delete_pipeline_with_retired_user_scope_deletes_the_instance_copy() {
         let fake_home = FakeHome::new();
         let repo = tempfile::tempdir().unwrap();
         write_test_pipeline(repo.path(), "foo");
@@ -24515,11 +24718,11 @@ edges:
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        assert!(!user_dir.join("foo.yaml").exists(), "user copy deleted");
         assert!(
-            repo.path().join(".pdo/pipelines/foo.yaml").exists(),
-            "repo copy must survive a user-scoped delete"
+            user_dir.join("foo.yaml").exists(),
+            "legacy user copy is untouched"
         );
+        assert!(!repo.path().join(".pdo/pipelines/foo.yaml").exists());
     }
 
     #[tokio::test]

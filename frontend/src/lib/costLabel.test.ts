@@ -3,9 +3,11 @@ import {
   costPrecision,
   formatCostAmount,
   formatEstCost,
+  nodeCostTitle,
   COST_ESTIMATE_NOTE,
   COST_REPORTED_NOTE,
 } from "./costLabel";
+import type { NodeCost } from "../types";
 
 describe("costPrecision", () => {
   it("uses 4 decimals below $1 and 2 at or above", () => {
@@ -13,6 +15,35 @@ describe("costPrecision", () => {
     expect(costPrecision(0.999)).toBe(4);
     expect(costPrecision(1)).toBe(2);
     expect(costPrecision(12.5)).toBe(2);
+  });
+
+  describe("nodeCostTitle (#647)", () => {
+    const cost = (overrides: Partial<NodeCost> = {}): NodeCost => ({
+      usd: 1,
+      form: "derived",
+      partial: false,
+      executions: 1,
+      readable_executions: 1,
+      ...overrides,
+    });
+
+    it("describes derived, reported, partial, unavailable, and repeated execution costs honestly", () => {
+      expect(nodeCostTitle(cost())).toContain(COST_ESTIMATE_NOTE);
+      expect(nodeCostTitle(cost({ form: "reported" }))).toContain(COST_REPORTED_NOTE);
+      expect(nodeCostTitle(cost({ form: null }))).not.toContain(COST_ESTIMATE_NOTE);
+      expect(nodeCostTitle(cost({ form: null }))).not.toContain(COST_REPORTED_NOTE);
+      expect(nodeCostTitle(cost({ form: null }))).toMatch(
+        /derived estimates.*reported costs/i,
+      );
+      expect(nodeCostTitle(cost({ partial: true }))).toMatch(/lower bound/i);
+      expect(
+        nodeCostTitle(cost({ usd: null, unavailable_reasons: ["missing reading"] })),
+      ).toContain("missing reading");
+      expect(nodeCostTitle(cost({ executions: 2 }))).toContain(
+        "Covers 2 executions of this node.",
+      );
+      expect(nodeCostTitle(cost())).not.toContain("Covers");
+    });
   });
 
   describe("formatCostAmount (#638)", () => {

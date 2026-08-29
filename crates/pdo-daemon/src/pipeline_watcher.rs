@@ -23,7 +23,7 @@ const POLL_INTERVAL: Duration = Duration::from_secs(1);
 /// thousands of watches). Without the fallback, a failed `watch()` silently
 /// disabled hot-reload and external-edit detection for that path.
 ///
-/// Every watched path is small (a pipelines dir, a run dir, a prompts dir),
+/// Every watched path is small (the instance pipelines dir, a run dir, a prompts dir),
 /// so polling them is cheap; each path is registered with exactly one
 /// backend, so no event is ever delivered twice.
 pub(crate) struct PipelineDebouncer {
@@ -66,25 +66,22 @@ pub(crate) struct RunPipelineModified {
 
 pub(crate) fn spawn_watcher(
     repo_root: PathBuf,
+    instance_pipelines_dir: Option<PathBuf>,
     event_tx: broadcast::Sender<serde_json::Value>,
     recent_writes: Arc<Mutex<HashMap<PathBuf, Instant>>>,
     run_modified_tx: tokio::sync::mpsc::UnboundedSender<RunPipelineModified>,
 ) -> Option<PipelineDebouncer> {
-    let repo_pipelines_dir = repo_root.join(".pdo").join("pipelines");
     let runs_dir = repo_root.join(".pdo").join("runs");
-    let user_pipelines_dir = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .map(|h| h.join(".pdo").join("pipelines"));
 
     let tx = Arc::new(event_tx);
     let mtimes: Arc<Mutex<HashMap<PathBuf, SystemTime>>> = Arc::new(Mutex::new(HashMap::new()));
-    seed_mtimes(&mtimes, &repo_pipelines_dir);
-    if let Some(ref user_dir) = user_pipelines_dir {
-        seed_mtimes(&mtimes, user_dir);
+    if let Some(ref pipeline_dir) = instance_pipelines_dir {
+        seed_mtimes(&mtimes, pipeline_dir);
     }
     seed_run_mtimes(&mtimes, &runs_dir);
 
     let runs_dir_for_closure = runs_dir.clone();
+    let pipelines_dir_for_closure = instance_pipelines_dir.clone();
 
     // One shared handler, fed by both backends (a given path only ever
     // reports through the backend that registered it).
@@ -124,6 +121,12 @@ pub(crate) fn spawn_watcher(
                         );
                         let _ = run_modified_tx.send(modified);
                     }
+                    continue;
+                }
+                if !pipelines_dir_for_closure
+                    .as_deref()
+                    .is_some_and(|dir| is_managed_pipeline_change(path, dir))
+                {
                     continue;
                 }
 
@@ -197,22 +200,14 @@ pub(crate) fn spawn_watcher(
     }
     let mut debouncer = PipelineDebouncer { native, poll };
 
-    if !repo_pipelines_dir.exists() {
-        let _ = std::fs::create_dir_all(&repo_pipelines_dir);
-    }
-    if let Err(e) = debouncer.watch(&repo_pipelines_dir, notify::RecursiveMode::Recursive) {
-        warn!("Failed to watch repo pipelines dir: {e}");
-    } else {
-        info!("Watching repo pipelines: {}", repo_pipelines_dir.display());
-    }
-
-    if let Some(ref user_dir) = user_pipelines_dir {
-        if user_dir.exists() {
-            if let Err(e) = debouncer.watch(user_dir, notify::RecursiveMode::Recursive) {
-                warn!("Failed to watch user pipelines dir: {e}");
-            } else {
-                info!("Watching user pipelines: {}", user_dir.display());
-            }
+    if let Some(ref pipeline_dir) = instance_pipelines_dir {
+        if !pipeline_dir.exists() {
+            let _ = std::fs::create_dir_all(pipeline_dir);
+        }
+        if let Err(e) = debouncer.watch(pipeline_dir, notify::RecursiveMode::Recursive) {
+            warn!("Failed to watch instance pipelines dir: {e}");
+        } else {
+            info!("Watching instance pipelines: {}", pipeline_dir.display());
         }
     }
 
@@ -235,6 +230,10 @@ pub(crate) fn spawn_watcher(
     }
 
     Some(debouncer)
+}
+
+fn is_managed_pipeline_change(path: &Path, instance_pipelines_dir: &Path) -> bool {
+    path.starts_with(instance_pipelines_dir)
 }
 
 /// Watch a single run directory for the only run-scoped files the daemon
@@ -465,5 +464,19 @@ mod tests {
         let runs = Path::new("/repo/.pdo/runs");
         let path = Path::new("/repo/.pdo/pipelines/my-pipeline.yaml");
         assert!(detect_run_scoped_change(path, runs).is_none());
+    }
+
+    #[test]
+    fn only_instance_registry_paths_are_pipeline_changes() {
+        let instance = Path::new("/home/user/.pdo/pipelines");
+
+        assert!(is_managed_pipeline_change(
+            Path::new("/home/user/.pdo/pipelines/managed.yaml"),
+            instance
+        ));
+        assert!(!is_managed_pipeline_change(
+            Path::new("/repo/.pdo/pipelines/legacy.yaml"),
+            instance
+        ));
     }
 }

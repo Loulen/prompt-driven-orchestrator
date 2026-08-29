@@ -10,6 +10,29 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.46.0
+
+**Les pipelines appartiennent à l'instance et voyagent par document** (#572 ; ADR-0059). *Cassant.*
+La distinction `repo` / `user` / `library` disparaît de toutes les surfaces — liste, édition,
+sauvegarde, suppression, lancement — et `GET /library/pipelines` n'existe plus. Les pipelines des
+anciens emplacements (`.pdo/pipelines` d'un dépôt, pipelines utilisateur, `.pdo/library/pipelines`)
+sont migrés une fois au boot vers le registre de l'instance, collisions renommées, prompts inclus ;
+rien ne relit ensuite les anciens fichiers.
+
+Le partage devient explicite : l'onglet YAML d'une Pipeline — et d'un Run — expose un **Document de
+pipeline transportable** (`pdo_pipeline: 1`) avec copie et téléchargement, que la modale d'import
+reconstitue en une pipeline indépendante. Le document embarque le graphe, les positions, les notes,
+les variables et les prompts, développe les nodes partagés en nodes ordinaires, et n'emporte ni
+secret, ni environnement, ni valeur d'exécution, ni configuration d'instance : un profil agentique
+nommé revient à **Inherit**. Un document invalide ou de version inconnue est refusé sans rien créer.
+
+## 1.45.0
+
+**Un seul fold de coût attribué pour le Run, ses Nodes et Stats** (#647 ; ADR-0058). Les coûts des
+subagents Claude et Copilot appartiennent au Node parent et chaque message Claude est dédupliqué à
+l'échelle du Run. `GET /runs/:id` expose désormais un coût dérivé à la lecture sur chaque Node
+agentique ; une valeur inconnue reste `null` et s'affiche « — », jamais zéro.
+
 ## 1.37.0
 
 **Assistant de bibliothèque : un seul assistant, focus par message, reap par inactivité** (#594 ;

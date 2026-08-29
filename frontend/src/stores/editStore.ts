@@ -6,7 +6,6 @@ import type {
   NodeDef,
   EdgeDef,
 } from "../types";
-import type { LibraryPipelineScope } from "../api";
 import type { LoopRegion, NoteDef } from "../types";
 import {
   ApiError,
@@ -16,7 +15,6 @@ import {
   fetchRunPipeline,
   saveRunPipeline,
   deletePipeline as apiDeletePipeline,
-  saveLibraryPipeline,
 } from "../api";
 import { generateNodeId } from "../lib/nanoid";
 import { serializePipeline } from "../lib/serializePipeline";
@@ -80,13 +78,10 @@ export interface OpenPipeline {
   runId?: string;
   conflict?: ConflictData;
   saveError?: SaveErrorData;
-  // Stable id of the library entry this tab is mirroring. Locked once known
-  // (either by name-matching at open time or by the response of `Save to
-  // library`). Renaming the pipeline does NOT clear this — it's the whole
-  // point of tracking it: a renamed-then-saved pipeline stays the same library
-  // entry on disk.
+  /** @deprecated Pipeline library bindings were removed with scoped pipelines. */
   libraryId?: string | null;
-  libraryScope?: LibraryPipelineScope | null;
+  /** @deprecated Pipeline library bindings were removed with scoped pipelines. */
+  libraryScope?: "repo" | "user" | null;
 }
 
 /**
@@ -245,7 +240,7 @@ interface EditState {
   setLibraryBinding: (
     tabId: string,
     libraryId: string | null,
-    libraryScope: LibraryPipelineScope | null,
+    libraryScope: "repo" | "user" | null,
   ) => void;
 }
 
@@ -907,26 +902,6 @@ export const useEditStore = create<EditState>((set, get) => ({
         // Save back into the same store the tab was opened from, so a
         // `library`-scoped edit never overwrites a same-named repo file (#216).
         await savePipeline(id, yaml, tab.prompts, tab.scope);
-      }
-      // Mirror the save into the library entry when this tab is starred, so
-      // renames-then-Save propagate to the library file (without orphaning the
-      // previous entry under the old slug — `libraryId` keeps the file stable).
-      if (tab.libraryId) {
-        try {
-          await saveLibraryPipeline(
-            tab.pipeline.name,
-            yaml,
-            tab.prompts,
-            {
-              id: tab.libraryId,
-              ...(tab.libraryScope ? { scope: tab.libraryScope } : {}),
-            },
-          );
-        } catch {
-          // Non-fatal: the primary pipeline write succeeded. The library entry
-          // will diverge until the next manual sync, but the user's primary
-          // edit is safe on disk.
-        }
       }
       set((s) => ({
         openTabs: s.openTabs.map((t) =>

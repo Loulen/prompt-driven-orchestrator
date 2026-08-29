@@ -30,6 +30,7 @@ import MarkdownArtifactModal from "./MarkdownArtifactModal";
 import type { ArtifactSource } from "./MarkdownArtifactModal";
 import ImageLightbox from "./ImageLightbox";
 import TmuxTerminal from "./TmuxTerminal";
+import { formatCostAmount, nodeCostTitle } from "../lib/costLabel";
 
 const STATUS_LABELS: Record<NodeStatus, string> = {
   pending: "Pending",
@@ -362,6 +363,16 @@ export default function NodeDetailPanel({
           )}
           {node.completed_at && (
             <span> · ended {formatTime(node.completed_at)}</span>
+          )}
+          {node.cost && (
+            <span data-testid="node-cost" title={nodeCostTitle(node.cost)}>
+              {" · "}
+              {formatCostAmount(
+                node.cost.usd,
+                node.cost.partial,
+                node.cost.form !== "reported",
+              )}
+            </span>
           )}
         </div>
       </div>

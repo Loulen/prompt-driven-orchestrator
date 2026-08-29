@@ -10473,7 +10473,7 @@ fn gather_session_death_diagnostics(
 }
 
 /// Sweep-time [`stale_detector::NodeProbes`] adapter: binds one running node's tmux
-/// + filesystem context so [`stale_detector::assess_node`] can run the whole
+/// and filesystem context so [`stale_detector::assess_node`] can run the whole
 /// detection pipeline with real I/O injected. Every method MUST stay a
 /// side-effect-free read; the sweep performs the reap/spawn side effects itself.
 struct SweepNodeProbes<'a> {
@@ -10786,31 +10786,31 @@ async fn run_stale_detection(state: &Arc<AppState>) {
         .store(blocked_on_limit_count, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// One orphan-sweep pass: inventory tmux, resolve owners, decide, kill.
-///
-/// **THE ORDER OF THE FIRST TWO STEPS IS LOAD-BEARING (ADR-0038).** The sweep's
-/// "absent" verdict is never true on its own — it is true *relative to two
-/// observations*, the tmux inventory and the event-log read. Snapshot-then-list
-/// killed a session born in between: live in tmux, missing from a snapshot that
-/// predated it, so `nodes.get(node_id)` → `None` → killed, in one case 150 ms after
-/// its own spawn.
-///
-/// The correct order is sound because **the log only grows**: an absence
-/// observed *after* the inventory implies absence *at* the inventory, so a
-/// session missing from the log we read here cannot have existed when we listed
-/// — it is simply not in `names`, and it gets judged on the next pass with its
-/// reservation visible. Monotonicity works in this direction only; the reverse
-/// order has no symmetric proof. Do not "tidy" this into snapshot-then-list.
-///
-/// The window is not one instruction: it is one SQLite read per run, so it **grows
-/// with the age of the instance**. The boot-time caller never sees it (it runs
-/// before `build_router`, so no spawn is concurrent); only the periodic reaper races
-/// live spawns.
-///
-/// Finally, this function's correctness rests on a precondition it cannot enforce —
-/// **no tmux session exists before the event that reserves it is durably appended**.
-/// `node_spawn::spawn_node`, `node_primitives::start_node`'s callers and
-/// `spawn_manager_session` all own that half; the reaper is only its consumer.
+// One orphan-sweep pass: inventory tmux, resolve owners, decide, kill.
+//
+// **THE ORDER OF THE FIRST TWO STEPS IS LOAD-BEARING (ADR-0038).** The sweep's
+// "absent" verdict is never true on its own — it is true *relative to two
+// observations*, the tmux inventory and the event-log read. Snapshot-then-list
+// killed a session born in between: live in tmux, missing from a snapshot that
+// predated it, so `nodes.get(node_id)` → `None` → killed, in one case 150 ms after
+// its own spawn.
+//
+// The correct order is sound because **the log only grows**: an absence
+// observed *after* the inventory implies absence *at* the inventory, so a
+// session missing from the log we read here cannot have existed when we listed
+// — it is simply not in `names`, and it gets judged on the next pass with its
+// reservation visible. Monotonicity works in this direction only; the reverse
+// order has no symmetric proof. Do not "tidy" this into snapshot-then-list.
+//
+// The window is not one instruction: it is one SQLite read per run, so it **grows
+// with the age of the instance**. The boot-time caller never sees it (it runs
+// before `build_router`, so no spawn is concurrent); only the periodic reaper races
+// live spawns.
+//
+// Finally, this function's correctness rests on a precondition it cannot enforce —
+// **no tmux session exists before the event that reserves it is durably appended**.
+// `node_spawn::spawn_node`, `node_primitives::start_node`'s callers and
+// `spawn_manager_session` all own that half; the reaper is only its consumer.
 
 /// Resolve both sweep TTLs at their `stored → env → default` precedence (ADR-0015).
 ///

@@ -1,7 +1,6 @@
 //! Pure git/fs worktree lifecycle helpers.
 //!
-//! Carved out of the `lib.rs` god-file (issue #276, Slice-1), mirroring the
-//! `run_advance` carve (#235/#275). These are the effect substrate *below*
+//! The effect substrate *below*
 //! layer 1 of ADR-0009: canonical path math for run/sub worktrees plus the
 //! `git worktree add` / `git merge` shell-outs that create, merge, validate and
 //! reap them. No `AppState`, no async, no event log, no tmux — only `&Path` /
@@ -722,7 +721,6 @@ pub(crate) fn commit_and_merge_sub_worktree_inner(
 
     if !output.status.success() {
         let conflict = MergeConflict {
-            // #503 AC3: both streams, in the order git produced them.
             detail: git_report(&output),
             pipeline_tip: pipeline_tip.clone(),
             node_tip: node_tip.clone(),
@@ -810,8 +808,6 @@ pub(crate) fn rev_parse_verified(dir: &Path, rev: &str) -> Result<String> {
         .current_dir(dir)
         .output()
         .with_context(|| format!("failed to run git rev-parse --verify {arg}"))?;
-    // `--verify --quiet` exits non-zero (and prints nothing) on an unresolvable or
-    // ambiguous ref — the failure we want to surface with the ref's own name.
     if !output.status.success() {
         anyhow::bail!(
             "git rev-parse --verify {arg} failed: {} is not a single unambiguous commit in {}",
@@ -898,7 +894,6 @@ fn adoption_allowed(
     ))
 }
 
-/// Do the two tips have a common ancestor at all?
 fn share_an_ancestor(repo_dir: &std::path::Path, a: &str, b: &str) -> bool {
     std::process::Command::new("git")
         .args(["merge-base", a, b])
@@ -981,7 +976,6 @@ pub(crate) fn worktree_has_tracked_changes(worktree_dir: &std::path::Path) -> Re
     Ok(status.lines().any(|line| !line.starts_with("??")))
 }
 
-/// Check that no conflict markers remain in any tracked file.
 pub(crate) fn has_conflict_markers(worktree_dir: &std::path::Path) -> Result<bool> {
     let output = std::process::Command::new("git")
         .args(["grep", "-rlE", "^<{7} |^={7}$|^>{7} "])
@@ -992,7 +986,6 @@ pub(crate) fn has_conflict_markers(worktree_dir: &std::path::Path) -> Result<boo
     Ok(output.status.success() && !output.stdout.is_empty())
 }
 
-/// Validate merge resolution: no conflict markers, clean working tree.
 pub(crate) fn validate_merge_resolution(worktree_dir: &std::path::Path) -> Result<Vec<String>> {
     let mut problems = Vec::new();
 
@@ -1166,14 +1159,12 @@ mod tests {
 
         assert!(sub_wt_dir.exists());
 
-        // Make a code change in the sub-worktree
         std::fs::write(sub_wt_dir.join("foo.rs"), "fn main() {}\n").unwrap();
 
         let result =
             commit_and_merge_sub_worktree(&sub_wt_dir, &wt_dir, &sub_branch, "impl-1", 1).unwrap();
         assert!(matches!(result, MergeResult::Success));
 
-        // Verify the file is present in the pipeline worktree
         assert!(wt_dir.join("foo.rs").exists());
     }
 
@@ -1228,7 +1219,6 @@ mod tests {
         let pipeline_branch = format!("pdo/run-{run_id}");
         create_worktree(repo, &wt_dir, &pipeline_branch, "HEAD").unwrap();
 
-        // Create two sub-worktrees that will conflict
         let sub_wt_1 = sub_worktree_path(repo, run_id, "impl-1", 1);
         let sub_branch_1 = sub_worktree_branch(run_id, "impl-1", 1);
         create_sub_worktree(repo, &sub_wt_1, &sub_branch_1, &pipeline_branch).unwrap();
@@ -1237,16 +1227,13 @@ mod tests {
         let sub_branch_2 = sub_worktree_branch(run_id, "impl-2", 1);
         create_sub_worktree(repo, &sub_wt_2, &sub_branch_2, &pipeline_branch).unwrap();
 
-        // Both modify the same file with different content
         std::fs::write(sub_wt_1.join("shared.txt"), "from impl-1\n").unwrap();
         std::fs::write(sub_wt_2.join("shared.txt"), "from impl-2\n").unwrap();
 
-        // Merge first succeeds
         let r1 =
             commit_and_merge_sub_worktree(&sub_wt_1, &wt_dir, &sub_branch_1, "impl-1", 1).unwrap();
         assert!(matches!(r1, MergeResult::Success));
 
-        // Merge second → conflict
         let r2 =
             commit_and_merge_sub_worktree(&sub_wt_2, &wt_dir, &sub_branch_2, "impl-2", 1).unwrap();
         assert!(matches!(r2, MergeResult::Conflict(_)));

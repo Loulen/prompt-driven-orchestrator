@@ -3,16 +3,11 @@
 //!
 //! Le type ne porte **aucun statut** : la projection ([`restart_response`]) en est
 //! la seule propriétaire, donc « un spawn demandé qui n'a pas eu lieu répond 2xx »
-//! est inexprimable. Avant #489 le bras jetait le `SpawnOutcome` de `spawn_node`
-//! — pas même un `let _ =` — et répondait `200 {"ok":true}` sur les cinq issues,
-//! y compris `Failed`, y compris un `node_id` absent du pipeline, et y compris le
-//! cas où le sous-worktree existait déjà (100 % des nœuds `code-mutating`/`merge`).
+//! est inexprimable.
 //!
-//! Patron cloné de `completion_refusal` (#490, ADR-0035), **pas le type** : celui-ci
-//! est un type tout-refus, sur lequel « jamais 2xx » est un prédicat global. Ici il
-//! y a des succès ([`RestartVerdict::Spawned`]), un sursis
-//! ([`RestartVerdict::Waiting`]) et des refus. L'invariant clonable n'est donc pas
-//! « jamais 2xx » mais **une projection totale, variante par variante**.
+//! Contrairement à `completion_refusal` (type tout-refus, invariant « jamais 2xx »),
+//! celui-ci mélange succès, sursis et refus : l'invariant est **une projection
+//! totale, variante par variante**.
 
 use axum::{http::StatusCode, response::IntoResponse, response::Response, Json};
 
@@ -37,12 +32,11 @@ pub(crate) enum RestartVerdict {
         interrupted_git_ops: Vec<String>,
     },
     /// Le cap d'admission a mis le nœud en file : un `NodeWaiting` **a** été appendé,
-    /// il flippe le statut du nœud à `Waiting`, et l'`admission sweep`
-    /// (`retry_waiting_nodes`) reprend réellement ce nœud-là.
+    /// il flippe le statut du nœud à `Waiting`, et `retry_waiting_nodes` reprend
+    /// réellement ce nœud-là.
     ///
-    /// **Reste `2xx`, et ce n'est pas un `noop`** (ADR-0037 §2) : appeler « no-op »
-    /// une réservation qui a changé le statut du nœud est le petit mensonge
-    /// symétrique de celui que #489 corrige.
+    /// **Reste `2xx`, et n'est pas un `noop`** (ADR-0037 §2) : ne pas le requalifier
+    /// en no-op, une réservation a changé le statut du nœud.
     Waiting { reason: String },
     /// Le garde a rendu `NoOp` : rien à faire, rien fait. **Défensif** —
     /// `validate_start` ne rend jamais `NoOp` aujourd'hui ; la variante existe pour
@@ -53,9 +47,8 @@ pub(crate) enum RestartVerdict {
     /// `SpawnOutcome::Failed` : ce n'est pas un refus, c'est une panne → `500`.
     Broken {
         message: String,
-        /// Un `RunFailed` est-il **déjà** au log ? Les quatre producteurs de `Failed`
-        /// divergent (trois appendent `RunFailed`, celui du bras sous-worktree
-        /// n'appendait rien), donc on ne devine pas : on re-projette et on le dit.
+        /// Un `RunFailed` est-il **déjà** au log ? Les producteurs de `Failed`
+        /// divergent sur ce point : ne pas le deviner, le re-projeter.
         run_failed: bool,
     },
 }
@@ -63,23 +56,17 @@ pub(crate) enum RestartVerdict {
 /// Pourquoi un `restart_node` a été refusé.
 #[derive(Debug, Clone)]
 pub(crate) enum RestartRefusal {
-    /// Refus du garde de transition (#212 / #196). **UN** slug, la prose du garde
-    /// dans `message` — exactement `CompletionRefusal::CompletionRejected` (#490).
-    ///
-    /// Trois raisons du garde y atterrissent (Run non vivant, itération concurrente
-    /// vivante, itération déjà complétée) et elles ne sont **pas** discriminées :
-    /// depuis #515, `Verdict::Reject` **porte** une cause typée (`RejectReason`),
-    /// mais **ce consommateur l'aplatit** sur un seul slug (`restart_refused`), la
-    /// prose dans `message` — comme `CompletionRefusal::CompletionRejected` (#490).
-    /// Discriminer sur la route de retry est #487. Ne jamais sniffer la prose au
-    /// `contains()`.
+    /// Refus du garde de transition (#212 / #196). Les trois raisons du garde (Run
+    /// non vivant, itération concurrente vivante, itération déjà complétée) sont
+    /// **aplaties** sur un seul slug (`restart_refused`), la prose dans `message` —
+    /// bien que `Verdict::Reject` porte une cause typée depuis #515. Discriminer sur
+    /// la route de retry est #487. Ne jamais sniffer la prose au `contains()`.
     RestartRejected {
         message: String,
         session_killed: bool,
     },
     /// La cible n'existe pas dans le pipeline **du Run** (son snapshot, pas la
-    /// bibliothèque). Répondait `200 {"ok":true}` — après avoir tué la session et
-    /// appendé son `CommandIssued`, en violation littérale d'ADR-0025 §2.
+    /// bibliothèque).
     NodeNotFound { node_id: String },
     /// Run sandboxé dont le conteneur n'est pas prêt (#445). Sondé **avant** le kill ;
     /// `session_killed` n'est `true` que sur la course (la précondition est passée à
@@ -121,11 +108,10 @@ impl RestartRefusal {
 
     /// La session tmux du nœud a-t-elle déjà été tuée quand ce refus est parti ?
     ///
-    /// **C'est le bit qui compte sur cette route** (ADR-0037 §5). Un `4xx` avec
-    /// `session_killed:false` n'a touché à rien ; `session_killed:true` signifie que
-    /// la session est morte et que **rien ne l'a remplacée** — le nœud a besoin d'un
-    /// autre levier, pas d'un retry de celui-ci. On discrimine dans le corps, jamais
-    /// en tordant un statut (ADR-0035 §3).
+    /// **C'est le bit qui compte sur cette route** (ADR-0037 §5) : `false` n'a touché
+    /// à rien (retry sûr) ; `true` signifie que la session est morte et que **rien ne
+    /// l'a remplacée** — il faut un autre levier. Discriminé dans le corps, jamais en
+    /// tordant un statut (ADR-0035 §3).
     fn session_killed(&self) -> bool {
         match self {
             Self::RestartRejected { session_killed, .. }
@@ -148,7 +134,6 @@ impl RestartRefusal {
         }
     }
 
-    /// Raison lisible pour le log.
     pub(crate) fn reason(&self) -> String {
         match self {
             Self::RestartRejected { message, .. }
@@ -163,11 +148,9 @@ impl RestartRefusal {
 
 /// L'**unique** projection d'un verdict de restart vers HTTP.
 ///
-/// Prend une **référence** : le verdict est aussi logué par son appelant, et
-/// `Response` (128 octets) rendu par valeur dans un `Result::Err` déclencherait
-/// `clippy::result_large_err`, que la CI traite en `-D warnings`. Le crate ne
-/// contient pas un seul `Result<_, axum::Response>`, et ce n'est pas ici que ça
-/// commencera.
+/// Prend une **référence** : le verdict est aussi logué par son appelant. Ne pas
+/// renvoyer la `Response` par valeur dans un `Result::Err` — `clippy::result_large_err`,
+/// traité en `-D warnings` par la CI.
 pub(crate) fn restart_response(v: &RestartVerdict) -> Response {
     match v {
         RestartVerdict::Spawned {
@@ -207,9 +190,8 @@ pub(crate) fn restart_response(v: &RestartVerdict) -> Response {
                 // Uniformément `true` sur tous les refus de cette route, et c'est
                 // intentionnel (ADR-0037 §4) : sa définition (ADR-0035) est « le
                 // daemon a-t-il DÉJÀ enregistré l'issue terminale ? », et aucun refus
-                // de restart n'enregistre quoi que ce soit. On le ship quand même —
-                // la forme est déclarée transversale par ADR-0035 §3 — et le champ
-                // redevient informatif sur le `500`.
+                // de restart n'enregistre quoi que ce soit. Le champ redevient
+                // informatif sur le `500`.
                 "recoverable": true,
                 "session_killed": r.session_killed(),
             });
@@ -245,7 +227,7 @@ mod tests {
 
     /// Un échantillon par variante, produit derrière un `match` **exhaustif sans
     /// joker** : ajouter une variante à `RestartVerdict` sans l'échantillonner ici ne
-    /// compile plus. Même garde-fou que `every_refusal()` (#490).
+    /// compile plus.
     fn every_restart_verdict() -> Vec<RestartVerdict> {
         let all = vec![
             RestartVerdict::Spawned {
@@ -281,8 +263,6 @@ mod tests {
             },
         ];
 
-        // Plancher de couverture : le `match` sans joker force à nommer chaque
-        // variante, et le compte force l'échantillon à exister vraiment.
         let mut seen = std::collections::BTreeSet::new();
         for v in &all {
             let key = match v {
@@ -307,10 +287,9 @@ mod tests {
         all
     }
 
-    /// **L'invariant du ticket.** Et il n'est PAS « jamais 2xx » : `RestartVerdict`
-    /// mélange succès, sursis et pannes, donc ce qui se prouve est la **totalité de
-    /// la projection** — `Spawned`/`Waiting`/`NoOp` doivent être `2xx`, tout le reste
-    /// ne doit jamais l'être. Un test « jamais 2xx » naïf échouerait sur `Spawned`.
+    /// L'invariant n'est PAS « jamais 2xx » (un tel test échouerait sur `Spawned`)
+    /// mais la **totalité de la projection** : `Spawned`/`Waiting`/`NoOp` en `2xx`,
+    /// tout le reste jamais.
     #[test]
     fn a_spawn_that_did_not_happen_never_projects_to_a_2xx() {
         for v in every_restart_verdict() {
@@ -335,8 +314,7 @@ mod tests {
         }
     }
 
-    /// « Bon camp » ne dit pas *lequel*, et c'est le statut exact sur lequel le
-    /// manager route. Table close, sans joker.
+    /// Le manager route sur le statut exact, pas sur la classe. Table close.
     #[test]
     fn every_variant_maps_to_its_exact_status() {
         let cases = [
@@ -401,8 +379,7 @@ mod tests {
         serde_json::from_slice(&bytes).expect("restart body is JSON")
     }
 
-    /// Chaque refus porte son slug exact, un `recoverable` booléen et le bit
-    /// `session_killed` — les trois champs sur lesquels un client route.
+    /// Les trois champs sur lesquels un client route.
     #[tokio::test]
     async fn every_refusal_body_carries_slug_recoverable_and_session_killed() {
         for v in every_restart_verdict() {
@@ -421,10 +398,8 @@ mod tests {
         }
     }
 
-    /// La prose du garde part dans `message`, jamais dans `error` — et le slug est
-    /// `restart_refused`, qui ne contient PAS le mot « live » : le test de
-    /// caractérisation qui sniffait `body["error"].contains("live")` doit tomber,
-    /// c'est le point.
+    /// La prose du garde part dans `message`, jamais dans `error` : un client qui
+    /// sniffait `body["error"].contains("live")` doit tomber.
     #[tokio::test]
     async fn the_transition_guard_prose_lands_in_message() {
         let v = RestartVerdict::Refused(RestartRefusal::RestartRejected {
@@ -437,9 +412,8 @@ mod tests {
         assert!(body["message"].as_str().unwrap().contains("still live"));
     }
 
-    /// `Throttled` est un `2xx` **et** ce n'est pas un `noop` : un `NodeWaiting` a
-    /// été appendé et il a changé le statut du nœud. La section qu'un relecteur
-    /// pressé voudra « corriger » (ADR-0037 §2).
+    /// `2xx` **et** pas un `noop` : un `NodeWaiting` a été appendé et a changé le
+    /// statut du nœud (ADR-0037 §2). Ne pas « corriger » en no-op.
     #[tokio::test]
     async fn waiting_is_a_2xx_and_is_not_a_noop() {
         let body = body_of(&RestartVerdict::Waiting {
@@ -455,8 +429,7 @@ mod tests {
         );
     }
 
-    /// `recoverable` est dérivé de `run_failed` sur la panne, et c'est le seul
-    /// endroit de la route où le champ porte un bit.
+    /// Le seul endroit de la route où `recoverable` porte réellement un bit.
     #[tokio::test]
     async fn broken_derives_recoverable_from_run_failed() {
         for run_failed in [true, false] {
@@ -472,9 +445,8 @@ mod tests {
         }
     }
 
-    /// Le succès dit ce qu'il a fait du sous-worktree — la garantie neuve de #489-B
-    /// sur laquelle un opérateur (et le manager) va s'appuyer. #516 : `interrupted_git_ops`
-    /// remonte **tous** les marqueurs, dans l'ordre, jamais un seul.
+    /// Le succès dit ce qu'il a fait du sous-worktree, et `interrupted_git_ops`
+    /// remonte **tous** les marqueurs dans l'ordre, jamais un seul (#516).
     #[tokio::test]
     async fn spawned_reports_the_sub_worktree_it_reused() {
         let body = body_of(&RestartVerdict::Spawned {
@@ -490,16 +462,13 @@ mod tests {
         assert_eq!(body["spawned"][0]["iter"], 3);
         assert_eq!(body["reused_sub_worktree"], true);
         assert_eq!(body["base_sha"], "deadbeef");
-        // #516 : le tableau complet, dans l'ordre du scan — pas un scalaire, pas le
-        // premier marqueur seul (qui masquait le second).
         assert_eq!(
             body["interrupted_git_ops"],
             serde_json::json!(["index.lock", "MERGE_HEAD"])
         );
 
-        // Un nœud sans sous-worktree rend `base_sha` en `null`, `reused` en `false`
-        // et `interrupted_git_ops` en `[]` — jamais absents, jamais `null` pour le
-        // tableau : un client (#492) lit `body.interrupted_git_ops.length` sans garde.
+        // Un nœud sans sous-worktree : `interrupted_git_ops` reste `[]`, jamais
+        // absent ni `null` — un client (#492) lit `.length` sans garde.
         let plain = body_of(&RestartVerdict::Spawned {
             node_id: "worker".into(),
             iter: 1,

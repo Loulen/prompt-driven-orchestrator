@@ -33,7 +33,6 @@ async fn every_pipeline_yaml_round_trips_through_save() {
 
     let client = reqwest::Client::new();
 
-    // List all pipelines
     let resp = client
         .get(format!("{}/pipelines", daemon.url()))
         .send()
@@ -69,7 +68,6 @@ async fn every_pipeline_yaml_round_trips_through_save() {
         let detail: serde_json::Value = resp.json().await.unwrap();
         let yaml = detail["yaml"].as_str().unwrap();
 
-        // PUT it back (identity save)
         let body = serde_json::json!({ "yaml": yaml, "prompts": {} });
         let resp = client
             .put(format!("{}/pipelines/{}", daemon.url(), id))
@@ -84,7 +82,6 @@ async fn every_pipeline_yaml_round_trips_through_save() {
             resp.text().await
         );
 
-        // GET again and compare structure
         let resp = client
             .get(format!("{}/pipelines/{}", daemon.url(), id))
             .send()
@@ -175,7 +172,6 @@ edges:
 
     let client = reqwest::Client::new();
 
-    // GET
     let resp = client
         .get(format!("{}/pipelines/reproducer-75", daemon.url()))
         .send()
@@ -185,7 +181,6 @@ edges:
     let detail: serde_json::Value = resp.json().await.unwrap();
     let original_yaml = detail["yaml"].as_str().unwrap();
 
-    // PUT (identity save)
     let body = serde_json::json!({ "yaml": original_yaml, "prompts": {} });
     let resp = client
         .put(format!("{}/pipelines/reproducer-75", daemon.url()))
@@ -200,7 +195,6 @@ edges:
         resp.text().await
     );
 
-    // GET again
     let resp = client
         .get(format!("{}/pipelines/reproducer-75", daemon.url()))
         .send()
@@ -208,7 +202,6 @@ edges:
         .unwrap();
     let detail2: serde_json::Value = resp.json().await.unwrap();
 
-    // Structural identity
     let p1 = &detail["pipeline"];
     let p2 = &detail2["pipeline"];
     assert_eq!(p1["name"], p2["name"]);
@@ -217,7 +210,6 @@ edges:
         p2["nodes"].as_array().unwrap().len()
     );
 
-    // Verify frontmatter survived
     let reviewer = p2["nodes"]
         .as_array()
         .unwrap()

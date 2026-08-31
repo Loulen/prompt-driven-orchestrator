@@ -174,7 +174,6 @@ interface EditState {
   setSelection: (sel: Selection) => void;
   setScrollToPort: (port: string | null) => void;
 
-  // Node mutations
   addNode: (node: NodeDef) => void;
   updateNode: (nodeId: string, updates: Partial<NodeDef>) => void;
   // Batched position write for a group drag (#232): xyflow's onNodeDragStop
@@ -184,7 +183,6 @@ interface EditState {
   deleteNode: (nodeId: string) => void;
   duplicateNode: (nodeId: string) => void;
 
-  // Edge mutations
   addEdge: (edge: EdgeDef) => void;
   // `opts.track === false` mutates without pushing a history entry — used by the
   // draw-edge arrival-side stamp (#168) so a single edge-draw gesture folds into
@@ -213,25 +211,20 @@ interface EditState {
   moveNote: (noteId: string, x: number, y: number) => void;
   deleteNote: (noteId: string) => void;
 
-  // Pipeline-level mutations
   updatePipelineMeta: (updates: Partial<Pick<PipelineDef, "name" | "version" | "variables" | "prompt_required">>) => void;
 
-  // Prompt mutations
   updatePrompt: (nodeId: string, content: string) => void;
 
   // Undo/redo (ADR-0014 / #226) — operate on the active tab's history.
   undo: () => void;
   redo: () => void;
 
-  // Pipeline deletion
   removePipeline: (id: string, scope?: PipelineScope) => Promise<void>;
 
-  // Persistence
   save: (id: string) => Promise<void>;
   flushPendingSaves: () => Promise<void>;
   clearSaveError: (id: string) => void;
 
-  // Hot-reload
   reloadPipeline: (id: string) => Promise<void>;
   resolveConflict: (id: string, resolution: "keep" | "take") => void;
 

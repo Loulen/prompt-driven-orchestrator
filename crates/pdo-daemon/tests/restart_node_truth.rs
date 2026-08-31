@@ -10,8 +10,6 @@
 //! 2. **Every knowable refusal is raised BEFORE the tmux kill.** Proved by
 //!    NEGATIVE assertions: no `command_issued`, no new events at all, the node
 //!    still projected as it was.
-//!
-//! Layer-3 coverage of `restart_node` before this file: zero.
 
 use std::time::Duration;
 
@@ -115,7 +113,6 @@ fn git_init_with_commit(repo: &std::path::Path) -> anyhow::Result<()> {
 }
 
 async fn create_run(daemon: &TestDaemon) -> String {
-    // #470: the target repo is required at the create boundary (ADR-0033).
     let body = serde_json::json!({
         "pipeline": PIPELINE_NAME,
         "input": "test input",
@@ -264,10 +261,6 @@ fn kill_session(daemon: &TestDaemon, run_id: &str, node_id: &str, iter: i64) {
         .output();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Spawned — the positive control
-// ─────────────────────────────────────────────────────────────────────────────
-
 /// A `doc-only` node owns no sub-worktree, so it is the one class `restart_node`
 /// always worked on. It is here as the control: the new body must report the real
 /// spawn, and the three sub-worktree fields must be present-and-empty rather than
@@ -302,10 +295,6 @@ async fn restarting_a_doc_only_node_reports_the_spawn_it_really_did() {
     kill_session(&daemon, &run_id, "planner", 1);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Refusals raised BEFORE the kill
-// ─────────────────────────────────────────────────────────────────────────────
-
 /// A `node_id` absent from the Run's pipeline used to answer `200 {"ok":true}` —
 /// after killing a tmux session and appending an audit event for work that never
 /// happened. Literal violation of ADR-0025 §2, and the negative assertion is the
@@ -326,7 +315,6 @@ async fn an_unknown_node_is_a_400_that_touches_nothing() {
     assert_eq!(body["session_killed"], false, "{body}");
 
     assert_no_trace(&daemon, &run_id, &before).await;
-    // The neighbour is untouched: no session was killed and nothing re-spawned.
     assert_eq!(node_status(&daemon, &run_id, "planner").await, "running");
     assert_eq!(node_started_count(&daemon, &run_id, "planner").await, 1);
 
@@ -499,15 +487,10 @@ async fn an_occupied_sub_worktree_refuses_the_restart_before_the_kill() {
     );
 
     assert_no_trace(&daemon, &run_id, &before).await;
-    // Nothing was reaped: the other worktree is intact.
     assert!(borrowed.join(".gitignore").exists());
 
     kill_session(&daemon, &run_id, "planner", 1);
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Failed → 500, Throttled → 200 {waiting}
-// ─────────────────────────────────────────────────────────────────────────────
 
 /// `SpawnOutcome::Failed` is a **panne, not a verdict**: `500`, with `run_failed`
 /// re-projected rather than guessed. Pre-#489 it answered `200 {"ok":true}` on a
@@ -656,10 +639,6 @@ async fn a_restart_at_a_full_cap_no_longer_throttles_against_itself() {
 
     kill_session(&daemon, &run_id, "planner", 1);
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// #516 — interrupted git ops are inventoried IN FULL and routed to the preamble
-// ─────────────────────────────────────────────────────────────────────────────
 
 /// A linked worktree's private gitdir, read from its `.git` pointer — never
 /// derived from the basename (git disambiguates colliding `iter-1` basenames to

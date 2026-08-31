@@ -88,8 +88,6 @@ fn make_secondary_repo(dir: &std::path::Path) {
     git_init_with_commit(dir).unwrap();
 }
 
-// --- HTTP helpers over the Projet endpoints ----------------------------------
-
 async fn create_project(daemon: &TestDaemon, name: &str) -> String {
     let resp = reqwest::Client::new()
         .post(format!("{}/projects", daemon.url()))

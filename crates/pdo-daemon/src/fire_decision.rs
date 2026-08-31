@@ -1,13 +1,8 @@
 //! Pure firing decision for a Trigger tick.
 //!
-//! Given the relevant trigger state plus the observable world at tick time
-//! (whether the trigger is due, whether its own previous Run is still live, and
-//! the optional guard result), decide whether to fire a Run, skip this tick, or
-//! reject (a misconfiguration surfaced at fire time).
-//!
-//! This is the routing brain of the scheduler, deliberately free of I/O so its
-//! branch matrix (ADR-0012 / CONTEXT.md → *Trigger*) is exhaustively
-//! unit-testable. The scheduler feeds it facts; it returns a verdict.
+//! Deliberately free of I/O so its branch matrix (ADR-0012 / CONTEXT.md →
+//! *Trigger*) is exhaustively unit-testable. The scheduler feeds it facts; it
+//! returns a verdict.
 
 /// The overlap policy of a Trigger: what to do when the Trigger's own previous
 /// Run is still live at fire time.
@@ -78,7 +73,6 @@ pub(crate) struct FireInputs<'a> {
     pub prompt_required: bool,
 }
 
-/// The verdict for a tick.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FireDecision {
     /// Spawn a Run with this resolved input.
@@ -108,16 +102,12 @@ pub(crate) enum SkipReason {
     GuardError { detail: String },
 }
 
-/// Decide what to do for a single Trigger tick.
 pub(crate) fn decide(inputs: &FireInputs) -> FireDecision {
-    // Disabled or not due: a silent no-op (no audit row).
+    // `reason: None` = no audit row: a disabled or not-due tick stays silent.
     if !inputs.enabled || !inputs.due {
         return FireDecision::Skip { reason: None };
     }
 
-    // Overlap policy collapses to one effective ceiling (#239): `skip` ⇒ 1,
-    // `allow+None` ⇒ unbounded, `allow+Some(m)` ⇒ m. Fire iff the count is below
-    // the ceiling.
     if let Some(ceiling) = overlap_ceiling(inputs.overlap, inputs.max_concurrent) {
         if inputs.live_run_count >= ceiling {
             let reason = match inputs.overlap {
@@ -133,7 +123,6 @@ pub(crate) fn decide(inputs: &FireInputs) -> FireDecision {
         }
     }
 
-    // Guard branches. Cron-only triggers pass `None`.
     let guard_stdout = match &inputs.guard {
         Some(GuardResult::Skip {
             stdout,
@@ -159,10 +148,8 @@ pub(crate) fn decide(inputs: &FireInputs) -> FireDecision {
         None => None,
     };
 
-    // Input resolution order: guard stdout (if non-empty) → input_template → none.
     let resolved_input = resolve_input(guard_stdout, inputs.input_template);
 
-    // A prompt-required pipeline with no resolvable input is a misconfiguration.
     if resolved_input.trim().is_empty() && inputs.prompt_required {
         return FireDecision::Reject {
             reason: "this pipeline requires a prompt; add a guard, an input \
@@ -176,8 +163,7 @@ pub(crate) fn decide(inputs: &FireInputs) -> FireDecision {
     }
 }
 
-/// Resolve the Run input: guard stdout when present and non-empty, else the
-/// static template. No merging in v1 (CONTEXT.md → *Trigger*).
+/// No merging of guard stdout and template in v1 (CONTEXT.md → *Trigger*).
 fn resolve_input(guard_stdout: Option<&str>, template: &str) -> String {
     match guard_stdout {
         Some(s) if !s.trim().is_empty() => s.to_string(),
@@ -250,8 +236,6 @@ mod tests {
         );
     }
 
-    // --- #239: bounded-`allow` concurrency cap ---
-
     #[test]
     fn allow_unbounded_fires_regardless_of_count() {
         let inputs = FireInputs {
@@ -318,9 +302,6 @@ mod tests {
 
     #[test]
     fn skip_policy_ignores_max_concurrent() {
-        // Regression: a stray `max_concurrent` is inert under the `skip` policy —
-        // the ceiling is always 1, so any live run skips with the previous-run
-        // reason (not the bounded-allow one).
         let inputs = FireInputs {
             overlap: OverlapPolicy::Skip,
             max_concurrent: Some(5),
@@ -347,7 +328,6 @@ mod tests {
 
     #[test]
     fn cron_only_due_trigger_fires_with_input_template() {
-        // No guard, due, no live run: fire with the static template.
         let inputs = base();
         assert_eq!(
             decide(&inputs),
@@ -381,8 +361,6 @@ mod tests {
 
     #[test]
     fn guard_exit_nonzero_carries_captured_output_into_skip_reason() {
-        // #244: a non-zero guard's stdout, stderr, and exit code flow through the
-        // decision into the audit reason so the fire history can explain the skip.
         let inputs = FireInputs {
             guard: Some(GuardResult::Skip {
                 stdout: "checked 0 issues".to_string(),

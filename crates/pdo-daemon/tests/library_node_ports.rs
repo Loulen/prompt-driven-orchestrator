@@ -53,7 +53,6 @@ async fn library_node_preserves_all_port_fields() {
         "prompt": "You are a code reviewer."
     });
 
-    // POST to library
     let resp = client
         .post(format!("{}/library", daemon.url()))
         .json(&payload)
@@ -65,7 +64,6 @@ async fn library_node_preserves_all_port_fields() {
     let created: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(created["name"], "Typed Reviewer");
 
-    // GET /library and find our entry
     let resp = client
         .get(format!("{}/library", daemon.url()))
         .send()
@@ -78,7 +76,6 @@ async fn library_node_preserves_all_port_fields() {
         .find(|e| e["name"] == "Typed Reviewer")
         .expect("entry should exist in GET /library");
 
-    // Assert inputs
     let inputs = entry["inputs"].as_array().unwrap();
     assert_eq!(inputs.len(), 2);
     assert_eq!(inputs[0]["name"], "code");
@@ -88,7 +85,6 @@ async fn library_node_preserves_all_port_fields() {
     assert_eq!(inputs[1]["repeated"], true);
     assert_eq!(inputs[1]["side"], "top");
 
-    // Assert output with frontmatter + when
     let outputs = entry["outputs"].as_array().unwrap();
     assert_eq!(outputs.len(), 1);
     let output = &outputs[0];
@@ -112,7 +108,6 @@ async fn library_node_preserves_all_port_fields() {
         "Return a verdict and explain the main risk."
     );
 
-    // Assert metadata
     assert_eq!(entry["interactive"], true);
     assert_eq!(entry["model"], "opus");
     assert_eq!(
@@ -121,7 +116,6 @@ async fn library_node_preserves_all_port_fields() {
     );
     assert_eq!(entry["prompt"], "You are a code reviewer.");
 
-    // POST /library/{name}/instantiate and verify round-trip
     let resp = client
         .post(format!(
             "{}/library/{}/instantiate",

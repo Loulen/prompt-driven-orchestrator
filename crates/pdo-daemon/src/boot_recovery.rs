@@ -13,15 +13,10 @@
 //!     `NodeCompleted` (#213 AC3) → surfaced (logged), never fabricated complete;
 //!   - a run-level stall reconciled via the shared `reconcile_run_level_stall`.
 //!
-//! Carve (#276): this concern was extracted verbatim from `lib.rs` behind the
-//! single entry point [`run_boot_recovery`]. Non-reentrancy (ADR-0009): it is a
-//! linear sequence of guarded `append_event` calls and must never call the
-//! scheduler or re-enter itself. The shared `reconcile_run_level_stall` (used by
-//! both boot recovery and the stale sweep) stays in `lib.rs`; this module calls
-//! up into it. #509: it likewise calls up into `retry_waiting_nodes` **once,
-//! after the whole pass**, to redistribute the admission slots that failing
-//! orphaned `Running` nodes just freed (same "call up into `lib.rs`" pattern as
-//! `reconcile_run_level_stall`, never the scheduler directly).
+//! Non-reentrancy (ADR-0009): this is a linear sequence of guarded `append_event`
+//! calls and must never call the scheduler or re-enter itself. `reconcile_run_level_stall`
+//! and `retry_waiting_nodes` live in `lib.rs`; this module calls **up** into them,
+//! never into the scheduler directly.
 
 use tracing::{error, warn};
 
@@ -34,18 +29,8 @@ use crate::{
 
 /// Reconcile persisted run state against the live process world at daemon boot.
 ///
-/// Posture: fail-fast, never silent auto-repair. After a daemon restart the
-/// event log may claim nodes are `Running`/`AwaitingUser` whose tmux sessions
-/// died with the previous process (or whose whole tmux server collapsed). Such
-/// a node would otherwise stay `Running` forever, burning an admission slot
-/// (#202). At boot we detect each one — its session is absent on our socket —
-/// and transition it to `Failed` with a cause naming the orphaned session,
+/// Posture: fail-fast, never silent auto-repair — every reconciliation routes
 /// through the transition guard (#212, via [`append_event`]).
-///
-/// A second divergence class — a sub-worktree branch merged into the pipeline
-/// branch with no corresponding `NodeCompleted` event — is detected and
-/// surfaced (logged) so the operator sees the inconsistency; it is not
-/// silently completed (that would fabricate a transition the agent never made).
 pub(crate) async fn run_boot_recovery(state: &AppState) {
     let run_ids = match load_all_run_ids(&state.db).await {
         Ok(ids) => ids,
@@ -69,15 +54,11 @@ pub(crate) async fn run_boot_recovery(state: &AppState) {
 
         // (0) Terminal run still projecting a session-holding node (#215).
         // Fail-fast can mark the whole run Failed while a sibling node is still
-        // Running, so a terminal run can survive a restart with a node the
-        // projection shows as Running/AwaitingUser. Phase 1 already excludes it
-        // from the session cap, but the projection stays inconsistent until we
-        // reconcile it. Fail each dangling node at its current iter, routed
-        // through the guard (so a second boot pass is a clean no-op), then skip
-        // the live-run handling below — the run is terminal and must stay so.
-        // NOTE: deliberately NOT `RunStatus::is_terminal()` — this set omits
-        // `Skipped`. Whether a `Skipped` run at boot should route through
-        // dangling-node reconciliation is an open question (#237 follow-up F1).
+        // Running, so a terminal run can survive a restart with an inconsistent
+        // projection. Reconcile each dangling node, then skip the live-run
+        // handling below — the run is terminal and must stay so.
+        // Deliberately NOT `RunStatus::is_terminal()`: this set omits `Skipped`,
+        // whose handling at boot is an open question (#237 follow-up F1).
         let run_terminal = matches!(
             run_state.status,
             event_log::RunStatus::Completed
@@ -110,11 +91,10 @@ pub(crate) async fn run_boot_recovery(state: &AppState) {
                         )
                     })),
                 };
-                // Through the guard: idempotent across reboots. validate_interrupt
-                // returns NoOp once the iteration is already terminal/interrupted,
-                // so a second pass appends nothing. The run is terminal, so this
-                // only frees the phantom session-holding slot — `finalize` does not
-                // lift a terminal run to AwaitingUser.
+                // Through the guard: `validate_interrupt` returns NoOp once the
+                // iteration is terminal, so a second boot pass appends nothing.
+                // `finalize` does not lift a terminal run to AwaitingUser, so this
+                // only frees the phantom session-holding slot.
                 if let Err(e) = append_event(state, &interrupted).await {
                     error!(
                         "Boot recovery: failed to reconcile dangling {node_id} iter {iter} \
@@ -137,12 +117,11 @@ pub(crate) async fn run_boot_recovery(state: &AppState) {
         }
 
         // #407 D10: a live sandboxed Run needs its container back after a daemon
-        // restart — reconcile it here (before the orphan scan). Synchronous effect
-        // via spawn_blocking (ensure_ready may build/probe docker). No-op for `off`.
+        // restart — reconcile it here, BEFORE the orphan scan. `spawn_blocking`
+        // because `ensure_ready` may build/probe docker.
         //
-        // #432 (ADR-0031 §7): the two `Err` arms are SPLIT, because they fail for
-        // categorically different reasons. This is the only one of `ensure_ready`'s four
-        // callers that used to swallow both — the other three `RunFailed` or 500.
+        // #432 (ADR-0031 §7): keep the two `Err` arms SPLIT — they fail for
+        // categorically different reasons (see each arm).
         if !run_state.sandbox.is_off() {
             match crate::sandbox_run::context_from_state(state, &run_state).await {
                 Ok(ctx) => {
@@ -150,27 +129,24 @@ pub(crate) async fn run_boot_recovery(state: &AppState) {
                         .await
                     {
                         // #445: record the container as ready, or the spawn precondition
-                        // would refuse every node of a Run whose prep task died with the
-                        // previous daemon (its projection is frozen at `pending`, and
-                        // nothing else would ever lift it). Only on the success arm: the
-                        // two `warn!` arms below leave the projection `pending` on
-                        // purpose, so the run is deferred rather than spawned into a
+                        // refuses every node of a Run whose prep task died with the
+                        // previous daemon (projection frozen at `pending`, nothing else
+                        // lifts it). Success arm only — the `warn!` arms below leave it
+                        // `pending` on purpose, deferring rather than spawning into a
                         // container that is not there. Gated on the Run actually being
-                        // blocked so the common case — every live sandboxed Run, already
-                        // `ready` — does not append one no-op event per Run per boot.
+                        // blocked, else every already-`ready` Run appends a no-op event
+                        // per boot.
                         Ok(Ok(())) => {
                             if run_state.sandbox_spawn_block().is_some() {
                                 crate::mark_sandbox_prep_ready(state, run_id).await;
                             }
                         }
-                        // KEPT as a `warn!`, deliberately. `ensure_ready` touches the
-                        // Docker socket, and `service_unit.rs` emits
-                        // `After=network-online.target` WITHOUT `After=docker.service` —
-                        // so a daemon restarted by systemd at boot can reach this before
-                        // `dockerd` accepts connections. Making this arm fatal would
-                        // mass-`RunFailed` every live sandboxed Run on a boot-ordering
-                        // race. (Real fix — add `After=docker.service`, then make this
-                        // fatal — is a follow-up, not this slice.)
+                        // Don't make this arm fatal: `ensure_ready` touches the Docker
+                        // socket, and `service_unit.rs` emits `After=network-online.target`
+                        // WITHOUT `After=docker.service`, so a systemd-restarted daemon
+                        // can reach this before `dockerd` accepts connections — a fatal
+                        // arm would mass-`RunFailed` every live sandboxed Run on that
+                        // boot-ordering race. (Fix `After=docker.service` first.)
                         Ok(Err(e)) => warn!(
                             "Boot recovery: failed to ensure sandbox container for run {run_id}: {e:#}"
                         ),
@@ -179,11 +155,10 @@ pub(crate) async fn run_boot_recovery(state: &AppState) {
                         ),
                     }
                 }
-                // FATAL since #432: this is where an unresolvable FROZEN staging
-                // selection surfaces, and it never touches the Docker socket — so it
-                // cannot fail transiently. Deterministic: the retry at the next boot
-                // would fail identically, for ever. A Run left `Running` with a home
-                // nobody can stage is strictly worse than a Run that says so.
+                // FATAL since #432: an unresolvable FROZEN staging selection, which
+                // never touches the Docker socket — so it cannot fail transiently, and
+                // the next boot would fail identically for ever. A Run left `Running`
+                // with a home nobody can stage is worse than a Run that says so.
                 Err(e) => {
                     crate::fail_run_sandbox_prep(
                         state,
@@ -196,7 +171,7 @@ pub(crate) async fn run_boot_recovery(state: &AppState) {
             }
         }
 
-        // (1) Orphaned live nodes: Running/AwaitingUser with no tmux session.
+        // (1) Orphaned live nodes: live status, no tmux session.
         let orphaned: Vec<(String, i64)> = run_state
             .nodes
             .iter()
@@ -231,9 +206,8 @@ pub(crate) async fn run_boot_recovery(state: &AppState) {
             };
             // Since résilience (ADR-0049) a node lost across a daemon restart is
             // `Interrupted`, not `Failed`: "la session est morte, pas le travail".
-            // The run parks `AwaitingUser` with this reason (derived in
-            // `finalize`), never `Failed`. Through the guard: if the node turned
-            // terminal organically before this pass, the interrupt is a no-op.
+            // The run parks `AwaitingUser` (derived in `finalize`), never `Failed`.
+            // Through the guard: a node that turned terminal organically is a no-op.
             if let Err(e) = append_event(state, &interrupted).await {
                 error!("Boot recovery: failed to interrupt orphaned {node_id} iter {iter}: {e}");
             } else {
@@ -249,29 +223,21 @@ pub(crate) async fn run_boot_recovery(state: &AppState) {
         let repo_root = effective_repo_root(state, &run_state);
         detect_merged_without_event(&repo_root, run_id, &run_state);
 
-        // (3) #214: run-level stall. A run can survive a crash as `Running` with
-        // no live node and nothing schedulable — either no node ever spawned, or
-        // (1) just failed an orphan whose downstream can never run. Boot recovery
-        // for nodes (1) does not cover this run-level case; reconcile it terminal
-        // here so the run never stays Running forever. Re-reads fresh state so it
-        // sees any orphan failure appended in (1).
+        // (3) #214: run-level stall — `Running` with no live node and nothing
+        // schedulable, which (1) does not cover. Must run AFTER (1): it re-reads
+        // fresh state so it sees the interrupts appended there.
         reconcile_run_level_stall(state, run_id).await;
     }
 
-    // (4) #509: failing an orphaned `Running` node in (1) frees its admission
-    // slot — a `Failed` node no longer counts in
-    // `admission::count_live_node_sessions`. `reconcile_run_level_stall` above
-    // already re-drives the throttled queue, but ONLY for a Run it reconciles
-    // terminal; a Run whose orphan died while a SIBLING node is still `Running`
-    // never stalls at the run level (`run_stall_reason` returns `None` while any
-    // node is live), so its freed slot was never redistributed. The queued nodes
-    // of OTHER runs would then starve indefinitely across the restart, invisible
-    // to both `run_stall_reason` (the live sibling suppresses it) and
-    // `stale_detector` (it inspects `Running` nodes only). `retry_waiting_nodes`
-    // has no timer of its own — all its callers are event-driven (#159) — so this
-    // one restart-time sweep is what closes the gap. It is a global, idempotent
-    // admission pass (guard-superfluous dedup); running it once after the whole
-    // recovery loop redistributes every slot freed above.
+    // (4) #509: interrupting an orphan in (1) frees its admission slot.
+    // `reconcile_run_level_stall` re-drives the queue only for a Run it reconciles
+    // terminal, and a Run whose orphan died while a SIBLING is still `Running`
+    // never stalls at the run level — so its freed slot would never be
+    // redistributed, and other Runs' queued nodes starve across the restart,
+    // invisible to `run_stall_reason` and to `stale_detector` alike.
+    // `retry_waiting_nodes` has no timer of its own (all callers are event-driven,
+    // #159), so this one restart-time sweep is what closes the gap. Global and
+    // idempotent: once, after the whole loop.
     retry_waiting_nodes(state).await;
 }
 
@@ -345,10 +311,8 @@ fn branch_is_merged_into(repo_root: &std::path::Path, branch: &str, into: &str) 
 mod tests {
     use super::*;
 
-    // Duplicated from lib.rs's test module (its stall/`run_stall_reason` tests
-    // still need it) — a tiny pure `RunState`/`NodeState` builder, no `AppState`,
-    // no DB. Deliberate carve-boundary duplication (cf. worktree_ops.rs's
-    // `init_test_repo`). Do not remove the lib.rs copy.
+    // Deliberately duplicated from lib.rs's test module, which still needs its own
+    // copy for the stall tests. Do not remove the lib.rs copy.
     fn run_state_with_node(
         run_id: &str,
         node_id: &str,
@@ -387,8 +351,7 @@ mod tests {
         rs
     }
 
-    // Duplicated from worktree_ops.rs's test module — a 14-line
-    // `git init/config/add/commit` fixture. Do not move.
+    // Deliberately duplicated from worktree_ops.rs's test module. Do not move.
     fn init_test_repo(dir: &std::path::Path) {
         let run = |args: &[&str]| {
             std::process::Command::new("git")
@@ -407,8 +370,6 @@ mod tests {
 
     #[test]
     fn merged_without_event_flags_a_merged_uncompleted_code_node() {
-        // #213 AC3: a code-mutating node whose sub-worktree branch is merged but
-        // which never recorded a NodeCompleted is a git/event-log divergence.
         let rs = run_state_with_node(
             "20260101-120000-abc",
             "impl",
@@ -428,7 +389,6 @@ mod tests {
 
     #[test]
     fn merged_without_event_ignores_completed_node() {
-        // A merged branch WITH a NodeCompleted is the normal, consistent case.
         let rs = run_state_with_node(
             "20260101-120000-abc",
             "impl",
@@ -442,7 +402,7 @@ mod tests {
 
     #[test]
     fn merged_without_event_ignores_unmerged_and_doc_only() {
-        // Doc-only nodes own no sub-worktree branch; an unmerged branch is fine.
+        // Doc-only nodes own no sub-worktree branch.
         let doc = run_state_with_node(
             "20260101-120000-abc",
             "doc",
@@ -462,9 +422,8 @@ mod tests {
         assert!(merged_without_event_nodes("20260101-120000-abc", &cm, |_| false).is_empty());
     }
 
-    // Per-module coverage for the git probe that the closure-injected tests above
-    // stub out (#276 AC: new per-module unit tests). Exercises the real
-    // `git merge-base --is-ancestor` path over a scratch repo.
+    // Exercises the real `git merge-base --is-ancestor` path that the
+    // closure-injected tests above stub out.
     #[test]
     fn branch_is_merged_into_tracks_ancestry() {
         let dir = tempfile::tempdir().unwrap();
@@ -483,8 +442,6 @@ mod tests {
                 .unwrap()
         };
 
-        // Pipeline branch off the initial commit; a sub-worktree branch adds a
-        // commit and is then merged back into the pipeline branch.
         git(&["branch", &pipeline_branch]);
         git(&["checkout", "-b", &sub_branch]);
         std::fs::write(root.join("work.txt"), "node work\n").unwrap();
@@ -498,8 +455,6 @@ mod tests {
             "a merged sub-branch must be an ancestor of the pipeline branch"
         );
 
-        // A commit added to the sub-branch after the merge is no longer contained
-        // in the pipeline branch, so the sub-branch tip is no longer an ancestor.
         git(&["checkout", &sub_branch]);
         std::fs::write(root.join("more.txt"), "extra\n").unwrap();
         git(&["add", "more.txt"]);
@@ -509,7 +464,6 @@ mod tests {
             "a sub-branch with commits beyond the merge point is not fully merged"
         );
 
-        // A branch that does not exist is best-effort false, not a panic.
         assert!(
             !branch_is_merged_into(root, "pdo/sub-does-not-exist", &pipeline_branch),
             "a missing branch is reported unmerged, not an error"

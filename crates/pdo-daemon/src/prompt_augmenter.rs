@@ -5,15 +5,13 @@ use crate::pipeline::{NodeDef, NodeType, PipelineDef, PortType, IMAGE_EXTENSIONS
 
 pub(crate) struct InputResolution {
     pub port_name: String,
-    /// The concrete artifact path(s) this input resolves to. A single wire is a
-    /// one-element list; a `repeated`/pooled input (#353) is one path per
-    /// COMPLETED source iteration (empty when the source has completed none —
-    /// never a raw `iter-*` glob, which cannot exclude a failed iter).
+    /// A single wire is a one-element list; a `repeated`/pooled input is one path
+    /// per COMPLETED source iteration (empty when none completed). Never a raw
+    /// `iter-*` glob, which could not exclude a failed iter.
     pub paths: Vec<PathBuf>,
     pub repeated: bool,
-    /// True when this input is sourced from the Start node's user prompt
-    /// (`_input/output.md`). The entry node's prompt label adapts to
-    /// `prompt_required` (#158).
+    /// Sourced from the Start node's user prompt (`_input/output.md`); the entry
+    /// node's prompt label adapts to `prompt_required`.
     pub from_start: bool,
 }
 
@@ -29,15 +27,12 @@ pub(crate) struct ForEachContext {
     pub total: i64,
 }
 
-/// A secondary repo made visible to a node (#465, ADR-0042/0047), already
-/// resolved to its **absolute snapshot path** so this pure module never touches
-/// the run-dir path math. The absolute path is identical on host and in the
-/// sandbox (invariant D3), so the same string is valid from either.
+/// A secondary repo made visible to a node (ADR-0042/0047), already resolved to
+/// its **absolute snapshot path** so this pure module never touches the run-dir
+/// path math. That path is identical on host and in the sandbox (invariant D3).
 ///
 /// `read_only` is the ADR-0047 opt-in: `false` (the default) means the node may
 /// modify/commit/deliver the repo; `true` restores read-only-context semantics.
-/// The preamble branches on it, and the writable subset is exposed to scripts as
-/// `PDO_WRITABLE_SECONDARY_REPOS`.
 pub(crate) struct SecondaryRepoContext {
     pub alias: String,
     pub abs_path: String,
@@ -45,13 +40,12 @@ pub(crate) struct SecondaryRepoContext {
     pub read_only: bool,
 }
 
-/// Build the per-node secondary-repo view from the Run's frozen pins (#465).
+/// Build the per-node secondary-repo view from the Run's frozen pins.
 ///
 /// The nodes' sub-worktrees do NOT inherit the snapshots (they are siblings under
-/// the run dir and `.pdo/` is gitignored, so `git worktree add` materialises none
-/// of those files) — a node can only reach a secondary by **absolute path**, which
-/// is why the daemon resolves it here and injects it. Shared by both spawn sites
-/// so the preamble and the script env can never disagree.
+/// the run dir and `.pdo/` is gitignored), so a node can only reach a secondary
+/// by **absolute path** — hence resolving it here. Shared by both spawn sites, so
+/// the preamble and the script env can never disagree.
 pub(crate) fn secondary_repo_contexts(
     repo_root: &Path,
     run_id: &str,
@@ -85,51 +79,39 @@ pub(crate) struct AugmentContext<'a> {
     /// pipeline worktree (doc-only, switch, loop, etc.).
     pub source_worktree_dir: Option<&'a Path>,
     pub input_images: Vec<String>,
-    /// Whether the Start node's user prompt (`_input/output.md`) carries any
-    /// non-whitespace content. Precomputed by the daemon (it owns the artifacts
-    /// dir and handles the read error); `build_preamble` stays pure. Only consulted
-    /// for the prompt-optional entry-node preamble (#158, #274).
+    /// Whether the Start node's user prompt carries non-whitespace content.
+    /// Precomputed by the daemon (which owns the artifacts dir and the read
+    /// error) so `build_preamble` stays pure. Only consulted for the
+    /// prompt-optional entry-node preamble.
     pub start_prompt_present: bool,
-    /// Canonical input resolution (#194 / #210): for each upstream source node,
-    /// the iteration whose artifacts this NodeRun reads (the source's latest
-    /// COMPLETED iteration, per `input_resolution`). A source absent from the
-    /// map falls back to the consumer's own `iter` (positional), preserving
+    /// Per upstream source node, the iteration whose artifacts this NodeRun reads
+    /// — the source's latest COMPLETED iteration. A source absent from the map
+    /// falls back to the consumer's own `iter` (positional), preserving
     /// override/injection flows where nothing has completed yet.
     pub source_iters: HashMap<String, i64>,
-    /// Set-valued resolution for `repeated`/pooled inputs (#353): for each
-    /// source node feeding a `repeated` incoming edge, its COMPLETED iterations
-    /// (ascending), per `input_resolution::resolved_repeated_iters`. Precomputed
-    /// by the daemon (this module is pure and cannot hold a `RunState`). A
-    /// source absent from the map (or mapping to an empty `Vec`) pools nothing —
-    /// failed iterations are quarantined, and no raw `iter-*` glob is ever
-    /// handed to an agent or script.
+    /// Per source node feeding a `repeated` incoming edge, its COMPLETED
+    /// iterations (ascending). Precomputed by the daemon: this module is pure and
+    /// cannot hold a `RunState`. A source absent from the map (or mapping to an
+    /// empty `Vec`) pools nothing — failed iterations stay quarantined, and no raw
+    /// `iter-*` glob is ever handed to an agent or script.
     pub repeated_iters: HashMap<String, Vec<i64>>,
-    /// Secondary repos visible to this node (#465, ADR-0042/0047), each with its
-    /// absolute snapshot path, pinned SHA and `read_only` opt-in. Empty for a
-    /// mono-repo Run. The nodes reach these ONLY by absolute path (their
-    /// sub-worktrees do not inherit the snapshot files), so `build_preamble`
-    /// prints the paths (branching read-only vs writable) and `build_script_env`
-    /// exposes them as `PDO_SECONDARY_REPOS` (all) plus
-    /// `PDO_WRITABLE_SECONDARY_REPOS` (the writable subset).
+    /// Secondary repos visible to this node; empty for a mono-repo Run. Nodes
+    /// reach these ONLY by absolute path, so `build_preamble` prints the paths and
+    /// `build_script_env` exposes them as `PDO_SECONDARY_REPOS` plus
+    /// `PDO_WRITABLE_SECONDARY_REPOS`.
     pub secondary_repos: Vec<SecondaryRepoContext>,
-    /// The sub-worktree already existed on the right branch and was reused **in
-    /// place** at `restart_node` (#489): a prior agent's uncommitted work is still
-    /// there. Precomputed by the daemon; `build_preamble` stays pure (same pattern
-    /// as `start_prompt_present`). Always `false` on the start/retry path, where a
-    /// reuse is unreachable by construction.
+    /// The sub-worktree was reused **in place** at `restart_node`, so a prior
+    /// agent's uncommitted work is still there. Always `false` on the start/retry
+    /// path, where a reuse is unreachable by construction.
     pub reused_sub_worktree: bool,
     /// Every interrupted git operation the reused sub-worktree carries, in scan
-    /// order (`index.lock` first) — `index.lock`, `MERGE_HEAD`, `rebase-merge/`,
-    /// `rebase-apply/` (#516). Borrowed: the owning `Vec` lives in `node_spawn` and
-    /// is also moved into `SpawnOutcome::Spawned`. `build_preamble` routes a
-    /// differentiated notice from its contents; empty means no notice.
+    /// order — `index.lock` FIRST, because its instruction ("remove it before
+    /// anything else") depends on that position. Empty means no notice.
     pub interrupted_git_ops: &'a [String],
-    /// The partial output a previous, INTERRUPTED attempt at this node left on
-    /// disk for this iteration (#599 AC1, ADR-0049). A same-iter re-spawn
-    /// (restart-with-artifacts) never wipes it, so `build_preamble` surfaces it as
-    /// input to build on — never a target to clobber. Borrowed: the owning `Vec`
-    /// is computed by the daemon ([`surviving_partial_outputs`]), so
-    /// `build_preamble` stays pure. Empty on a first spawn and on a clean restart.
+    /// The partial output a previous INTERRUPTED attempt left on disk for this
+    /// iteration (ADR-0049). A same-iter re-spawn never wipes it, so
+    /// `build_preamble` surfaces it as input to build on — never a target to
+    /// clobber. Empty on a first spawn and on a clean restart.
     pub partial_outputs: &'a [std::path::PathBuf],
 }
 
@@ -160,10 +142,9 @@ pub(crate) fn discover_input_images(artifacts_dir: &Path) -> Vec<String> {
     images
 }
 
-/// Read whether the Start-sourced user prompt (`_input/output.md`) carries any
-/// non-whitespace content. `Ok(false)` when the file is absent — the expected
-/// prompt-optional case, not an error. `Err` only on a genuine I/O failure, so the
-/// caller can surface it instead of silently reporting "no prompt" (#274).
+/// `Ok(false)` when the file is absent — the expected prompt-optional case, not
+/// an error. `Err` only on a genuine I/O failure, so the caller surfaces it
+/// instead of silently reporting "no prompt".
 pub(crate) fn read_start_prompt_present(artifacts_dir: &Path) -> std::io::Result<bool> {
     match std::fs::read_to_string(crate::blackboard::input_path(artifacts_dir)) {
         Ok(text) => Ok(!text.trim().is_empty()),
@@ -173,12 +154,9 @@ pub(crate) fn read_start_prompt_present(artifacts_dir: &Path) -> std::io::Result
 }
 
 pub(crate) fn resolve_input_paths(ctx: &AugmentContext<'_>) -> Vec<InputResolution> {
-    // Project over the single edge-walk (#370): the iteration decision (source's
-    // latest-completed iter, completed-iters pool, Start → `_input`) lives in
-    // `input_resolution::resolve_consumer_inputs`, fed the precomputed maps the
-    // daemon injected (this module is pure and cannot hold a `RunState`). The
-    // preamble/script-env are then pure projections over the result — one
-    // `InputResolution` per incoming edge, no independent edge-walk.
+    // Project over the SINGLE edge-walk: the iteration decision lives in
+    // `input_resolution::resolve_consumer_inputs`. The preamble and script-env are
+    // pure projections over its result — never a second, independent edge-walk.
     let mut inputs: Vec<InputResolution> = crate::input_resolution::resolve_consumer_inputs(
         ctx.pipeline,
         ctx.artifacts_dir,
@@ -224,8 +202,8 @@ fn output_port_path(
         PortType::Markdown => {
             crate::blackboard::artifact_path(artifacts_dir, node_id, iter, &port.name)
         }
-        // #333: an html port's declared path is its `output.html` file (parallel
-        // to markdown's `output.md`), not the port dir.
+        // An html port's declared path is its `output.html` file (parallel to
+        // markdown's `output.md`), not the port dir.
         PortType::Html => {
             crate::blackboard::artifact_path_html(artifacts_dir, node_id, iter, &port.name)
         }
@@ -244,14 +222,13 @@ pub(crate) fn resolve_output_paths(ctx: &AugmentContext<'_>) -> Vec<OutputDeclar
         .collect()
 }
 
-/// The subset of a node's declared output paths that ALREADY hold content on disk
-/// for `iter` — the partial output an interrupted attempt left behind (#599 AC1,
-/// ADR-0049). A same-iter re-spawn (`restart_node` / `recover_node` fallback)
-/// never wipes this output, so the fresh agent must be shown it and told to build
-/// on it, never to clobber it blindly. Empty on a first spawn.
+/// The declared output paths that ALREADY hold content on disk for `iter` — what
+/// an interrupted attempt left behind (ADR-0049). A same-iter re-spawn never
+/// wipes it, so the fresh agent must be shown it and told to build on it. Empty
+/// on a first spawn.
 ///
-/// I/O (existence probes), so it is computed by the daemon and fed to
-/// [`AugmentContext::partial_outputs`] — `build_preamble` itself stays pure.
+/// Does I/O, so the daemon computes it and feeds
+/// [`AugmentContext::partial_outputs`]; `build_preamble` itself stays pure.
 pub(crate) fn surviving_partial_outputs(
     node: &NodeDef,
     artifacts_dir: &Path,
@@ -274,9 +251,8 @@ fn path_holds_content(path: &Path) -> bool {
     std::fs::read_to_string(path).is_ok_and(|s| !s.trim().is_empty())
 }
 
-/// Sanitize a port / variable name into an env-var suffix: ASCII-upper-cased,
-/// every non-alphanumeric byte replaced with `_` (#248). `out` → `OUT`,
-/// `my-port.v2` → `MY_PORT_V2`.
+/// Sanitize a port / variable name into an env-var suffix: `my-port.v2` →
+/// `MY_PORT_V2`.
 fn env_name_suffix(name: &str) -> String {
     name.chars()
         .map(|c| {
@@ -289,12 +265,11 @@ fn env_name_suffix(name: &str) -> String {
         .collect()
 }
 
-/// Render a pipeline-variable value as the raw string a `script` node's bash
-/// reads from `$PDO_VAR_<NAME>` (#248). Scalars are emitted verbatim — NOT via
-/// `serde_yaml::to_string`, which would quote bool-/number-looking strings
-/// (`"true"` → `'true'`) and leak those quotes into the env value. Sequences and
-/// mappings have no natural scalar form, so they are emitted as compact JSON a
-/// script can parse deterministically (e.g. with `jq`).
+/// The raw string a `script` node's bash reads from `$PDO_VAR_<NAME>`. Scalars
+/// are emitted verbatim — NOT via `serde_yaml::to_string`, which would quote
+/// bool-/number-looking strings (`"true"` → `'true'`) and leak those quotes into
+/// the env value. Sequences and mappings have no scalar form, so they go out as
+/// compact JSON a script can parse with `jq`.
 fn var_value_to_env_string(value: &serde_yaml::Value) -> String {
     match value {
         serde_yaml::Value::Null => String::new(),
@@ -305,11 +280,10 @@ fn var_value_to_env_string(value: &serde_yaml::Value) -> String {
     }
 }
 
-/// Build the `PDO_*` environment catalogue handed to a `script` node's bash
-/// (#248 / ADR-0017). A script can't read the prose preamble, so its inputs,
-/// outputs, artifacts root, and pipeline variables arrive as environment
-/// variables. Mirrors the `resolve_input_paths` / `resolve_output_paths`
-/// resolution the preamble uses — a single source of truth, not a second path.
+/// The `PDO_*` environment catalogue handed to a `script` node's bash
+/// (ADR-0017). A script cannot read the prose preamble, so its I/O arrives as
+/// environment variables — through the SAME `resolve_input_paths` /
+/// `resolve_output_paths` the preamble uses, never a second resolution path.
 ///
 /// - `PDO_ARTIFACTS_DIR` — the Blackboard root.
 /// - `PDO_INPUT_<PORT>` — absolute path of each resolved input. A `repeated`
@@ -336,11 +310,9 @@ pub(crate) fn build_script_env(ctx: &AugmentContext<'_>) -> Vec<(String, String)
         if input.repeated {
             env.push((format!("{key}_REPEATED"), "1".to_string()));
         }
-        // #353: a `repeated` input is one path per completed source iteration,
-        // `\n`-separated (empty when none completed). `sh_single_quote` in
-        // `wrap_with_env` preserves the newlines verbatim, and a newline (not a
-        // space) keeps paths that contain spaces splittable. A single wire is a
-        // one-element list, so its value is unchanged.
+        // `\n`-separated, not space-separated, so a path containing spaces stays
+        // splittable; `sh_single_quote` in `wrap_with_env` preserves the newlines
+        // verbatim. A single wire is a one-element list, so its value is unchanged.
         let value = input
             .paths
             .iter()
@@ -357,10 +329,9 @@ pub(crate) fn build_script_env(ctx: &AugmentContext<'_>) -> Vec<(String, String)
         ));
     }
 
-    // #465 (ADR-0042): secondary repos as `alias=abspath` lines, `\n`-separated
-    // (same convention as a `repeated` input). Only set when there is at least
-    // one, so a mono-repo script's env is byte-identical to pre-#465. A script
-    // reads them with `readarray -t repos <<< "$PDO_SECONDARY_REPOS"`.
+    // Secondary repos as `alias=abspath` lines, `\n`-separated (same convention
+    // as a `repeated` input). Only set when there is at least one, so a mono-repo
+    // script's env is byte-identical to what it was before this feature.
     if !ctx.secondary_repos.is_empty() {
         let value = ctx
             .secondary_repos
@@ -370,11 +341,10 @@ pub(crate) fn build_script_env(ctx: &AugmentContext<'_>) -> Vec<(String, String)
             .join("\n");
         env.push(("PDO_SECONDARY_REPOS".to_string(), value));
 
-        // ADR-0047: the writable subset, same `alias=abspath` format. A delivery
-        // script (e.g. the `Ship It` node) iterates this to know which secondaries
-        // it may commit + deliver, without having to re-derive read-only. Only set
-        // when non-empty — an all-read-only Run (or a mono-repo one) leaves it
-        // unset, so `${PDO_WRITABLE_SECONDARY_REPOS:-}` is the safe read.
+        // The writable subset, so a delivery script knows which secondaries it may
+        // commit without re-deriving read-only. Only set when non-empty — an
+        // all-read-only Run leaves it unset, so `${PDO_WRITABLE_SECONDARY_REPOS:-}`
+        // is the safe read.
         let writable = ctx
             .secondary_repos
             .iter()
@@ -398,12 +368,10 @@ pub(crate) fn build_script_env(ctx: &AugmentContext<'_>) -> Vec<(String, String)
         ));
     }
 
-    // Name sanitization (`env_name_suffix`) can collapse distinct port/variable
-    // names onto the same env key (`foo-bar` and `foo_bar` → `PDO_INPUT_FOO_BAR`),
-    // and the last export silently wins. That is a per-spec mapping (the plan's
-    // "non-alnum → _"), but a silent shadow is a footgun — surface it loudly so
-    // an author can rename, rather than debugging a script that read the wrong
-    // path (ADR-0004 « jamais de comportement silencieux »).
+    // `env_name_suffix` can collapse distinct names onto one env key (`foo-bar`
+    // and `foo_bar` → `PDO_INPUT_FOO_BAR`), and the last export silently wins.
+    // The mapping is per spec, but a silent shadow is a footgun: say it loudly so
+    // an author can rename (ADR-0004, « jamais de comportement silencieux »).
     let mut seen = std::collections::HashSet::new();
     for (key, _) in &env {
         if !seen.insert(key.as_str()) {
@@ -418,19 +386,16 @@ pub(crate) fn build_script_env(ctx: &AugmentContext<'_>) -> Vec<(String, String)
     env
 }
 
-/// Pre-create the directory of every declared output port for a `script` node
-/// (#248). Agents create these lazily via the Write tool, but a bash
-/// `> "$PDO_OUTPUT_out"` fails on a missing parent. For a Markdown port the path
-/// is `.../output.md` (create its parent); for an image port it is a directory
-/// (create it directly). Best-effort: a failure here is not fatal — the script's
-/// own redirect will surface any real problem.
+/// Pre-create the directory of every declared output port for a `script` node.
+/// Agents create these lazily via the Write tool, but a bash
+/// `> "$PDO_OUTPUT_out"` fails on a missing parent. Best-effort: a failure here
+/// is not fatal — the script's own redirect surfaces any real problem.
 pub(crate) fn precreate_output_dirs(ctx: &AugmentContext<'_>) {
     for output in resolve_output_paths(ctx) {
         let dir = match output.port_type {
             PortType::Image | PortType::ImageList => output.path.clone(),
-            // #333: html resolves to a file path (`.../output.html`) like
-            // markdown, so pre-create its parent directory — a `script` node's
-            // `> "$PDO_OUTPUT_x"` redirect fails on a missing parent.
+            // html resolves to a file path like markdown, so pre-create its
+            // PARENT directory.
             PortType::Markdown | PortType::Html => output
                 .path
                 .parent()
@@ -459,15 +424,13 @@ pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
         ctx.node.id, ctx.pipeline.name, ctx.iter
     ));
 
-    // Inputs
     preamble.push_str("## Inputs\n\n");
     if inputs.is_empty() {
         preamble.push_str("No inputs.\n\n");
     } else {
         for input in &inputs {
-            // Entry-node prompt adapts to `prompt_required` (#158): when the
-            // pipeline is prompt-optional and no prompt was supplied, the node
-            // must source its own work; when a prompt is supplied it is merely
+            // When the pipeline is prompt-optional and no prompt was supplied,
+            // the node must source its own work; a supplied prompt is merely
             // additional info layered on the node's own brief.
             if input.from_start && !ctx.pipeline.prompt_required {
                 // `from_start` is always a single path.
@@ -491,10 +454,9 @@ pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
                     ));
                 }
             } else if input.repeated {
-                // #353: enumerate one concrete path per completed source
-                // iteration — a raw `iter-*` glob would re-include failed iters.
-                // Empty pool → an explicit line, never an orphan glob (ADR-0004,
-                // no silent behaviour).
+                // Enumerate one concrete path per completed source iteration: a
+                // raw `iter-*` glob would re-include failed iters. An empty pool
+                // gets an explicit line, never an orphan glob (ADR-0004).
                 if input.paths.is_empty() {
                     preamble.push_str(&format!(
                         "- `{}` (accumulated): no completed iterations yet — nothing to read.\n",
@@ -521,7 +483,6 @@ pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
         preamble.push('\n');
     }
 
-    // Input images
     if !ctx.input_images.is_empty() {
         preamble.push_str("## Input Images\n\n");
         preamble.push_str(
@@ -536,7 +497,6 @@ pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
         preamble.push('\n');
     }
 
-    // Outputs
     preamble.push_str("## Outputs\n\n");
     if outputs.is_empty() {
         preamble.push_str("No outputs declared.\n\n");
@@ -608,9 +568,8 @@ pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
                         }
                     }
                 }
-                // #333: bespoke instruction — no frontmatter block, and the
-                // agent must know the page renders offline in a scriptless
-                // sandboxed iframe (ADR-0028), so it can't rely on JS.
+                // No frontmatter block, and the agent must know the page renders
+                // offline in a scriptless sandboxed iframe (ADR-0028).
                 PortType::Html => {
                     preamble.push_str(&format!(
                         "- `{}` (html): write a single self-contained HTML file to `{}`\n",
@@ -645,10 +604,8 @@ pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
         preamble.push('\n');
     }
 
-    // #599 (ADR-0049 AC1): the partial output an INTERRUPTED attempt left behind.
-    // A same-iter re-spawn (restart-with-artifacts) never wipes it, so surface it
-    // to the fresh agent as input-to-build-on — explicitly NOT a target to
-    // clobber. Empty on a first spawn, so this section only appears on a recovery.
+    // The partial output an INTERRUPTED attempt left behind (ADR-0049). Empty on
+    // a first spawn, so this section only appears on a recovery.
     if !ctx.partial_outputs.is_empty() {
         preamble.push_str("## Partial output from an interrupted attempt\n\n");
         preamble.push_str(
@@ -664,13 +621,10 @@ pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
         preamble.push('\n');
     }
 
-    // #465 (ADR-0042/0047): secondary repositories. Injected by ABSOLUTE path
-    // because a node's sub-worktree does not inherit the snapshot files (they are
-    // siblings under the run dir; `.pdo/` is gitignored). The path is identical on
-    // host and in the sandbox (invariant D3). A secondary is **writable by
-    // default** (ADR-0047): the node may modify/commit/deliver it. A `read_only`
-    // opt-in restores read-only-context semantics — writing a tracked file there
-    // trips the `secondary_repo_dirtied` guard (409).
+    // Secondary repositories, injected by ABSOLUTE path because a node's
+    // sub-worktree does not inherit the snapshot files. Writable by default
+    // (ADR-0047); a `read_only` opt-in makes a tracked-file write trip the
+    // `secondary_repo_dirtied` guard (409).
     if !ctx.secondary_repos.is_empty() {
         let (writable, read_only): (Vec<_>, Vec<_>) =
             ctx.secondary_repos.iter().partition(|s| !s.read_only);
@@ -717,7 +671,6 @@ pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
         }
     }
 
-    // Source code edits (only for nodes that get a per-iteration sub-worktree)
     if let Some(sub_wt) = ctx.source_worktree_dir {
         preamble.push_str("## Source code edits\n\n");
         preamble.push_str(&format!(
@@ -736,10 +689,9 @@ pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
             sub_wt.display()
         ));
 
-        // #516: route the interrupted-git-op notice into the re-spawned node's own
-        // preamble — no longer only into the response the manager sees. Two parts,
-        // BOTH conditional and rendered mechanically from `ctx`, so a fresh cut (the
-        // common case) gets neither.
+        // The interrupted-git-op notice goes into the re-spawned node's OWN
+        // preamble, not only the response the manager sees. Both parts are
+        // conditional, so a fresh cut (the common case) gets neither.
         if ctx.reused_sub_worktree {
             preamble.push_str(
                 "> **This worktree was REUSED from a previous attempt.** A prior agent may \
@@ -758,7 +710,7 @@ pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
             preamble.push_str(&format!(
                 "> ⚠ **An interrupted git operation was left in this worktree:** {listed}\n>\n"
             ));
-            // One sentence per marker, in vector order — `index.lock` leads, and its
+            // Vector order is load-bearing: `index.lock` leads, and its
             // instruction ("remove it before anything else") depends on that.
             for op in ctx.interrupted_git_ops {
                 let line = match op.as_str() {
@@ -789,7 +741,6 @@ pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
         }
     }
 
-    // CLI commands
     preamble.push_str("## Completion\n\n");
     if ctx.node.interactive {
         preamble.push_str(
@@ -835,7 +786,6 @@ pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
         );
     }
 
-    // Variables
     if !ctx.variables.is_empty() {
         preamble.push_str("## Pipeline Variables\n\n");
         for (name, value) in ctx.variables {
@@ -845,7 +795,6 @@ pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
         preamble.push('\n');
     }
 
-    // Collection fan-out context (ADR-0011 / #269, ex-ForEach)
     if let Some(ref fe) = ctx.foreach_context {
         preamble.push_str("## Collection Context\n\n");
         preamble.push_str(&format!(
@@ -865,21 +814,16 @@ pub(crate) fn build_full_prompt(ctx: &AugmentContext<'_>, role_prompt: &str) -> 
     format!("{preamble}---\n\n{role_prompt}")
 }
 
-/// Env seam for the instance default of Run auto-naming (#338, ADR-0015). Middle
-/// tier of `stored → env → default(true)`; the resolver is
+/// Middle tier of `stored → env → default(true)`; resolved by
 /// [`default_auto_name_with`].
 pub(crate) const DEFAULT_AUTO_NAME_ENV: &str = "PDO_DEFAULT_AUTO_NAME";
 
-/// Built-in default for Run auto-naming: **on**.
-///
-/// `true` preserves the pre-#338 behaviour exactly — a Run created with no name is
-/// auto-named by the manager (from its input, or a placeholder renamed best-effort).
-/// #338 only makes that *configurable*; the floor stays what it always was.
+/// Built-in default for Run auto-naming: **on** — a Run created with no name is
+/// auto-named by the manager.
 pub(crate) const DEFAULT_AUTO_NAME_DEFAULT: bool = true;
 
-/// The `env` tier of the Run auto-naming default (#338). Reuses the shared boolean
-/// parser so a typo falls through to the next tier rather than silently meaning
-/// `false`.
+/// Reuses the shared boolean parser so a typo falls through to the next tier
+/// rather than silently meaning `false`.
 pub(crate) fn env_default_auto_name() -> Option<bool> {
     std::env::var(DEFAULT_AUTO_NAME_ENV)
         .ok()
@@ -887,15 +831,13 @@ pub(crate) fn env_default_auto_name() -> Option<bool> {
         .and_then(crate::stale_detector::parse_bool_setting)
 }
 
-/// Resolve the instance default for auto-naming: `stored → env → default(true)`
-/// (#338, ADR-0015).
+/// Resolve the instance default for auto-naming: `stored → env → default(true)`.
 ///
 /// `stored` is the raw `instance_config.default_auto_name` column: `Some(0)` is a
-/// stored **off** and wins over the env, exactly like any other bool knob on that
-/// table; only SQL `NULL` (`None`) falls through.
+/// stored **off** and wins over the env; only SQL `NULL` falls through.
 ///
-/// This is only ever the *default* — the create-run chokepoint consults it solely
-/// when the request carries neither an explicit `auto_name` flag nor a `name`.
+/// Only ever the *default* — the create-run chokepoint consults it solely when
+/// the request carries neither an explicit `auto_name` flag nor a `name`.
 pub(crate) fn default_auto_name_with(stored: Option<i64>) -> bool {
     match stored {
         Some(v) => v != 0,
@@ -903,7 +845,7 @@ pub(crate) fn default_auto_name_with(stored: Option<i64>) -> bool {
     }
 }
 
-/// How the manager should treat run naming, decided by the daemon at spawn (#184).
+/// How the manager should treat run naming, decided by the daemon at spawn.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum RunNameHint {
     /// The user supplied a display name — do not rename.
@@ -1106,24 +1048,19 @@ pub(crate) fn build_manager_prompt(
     format!("{preamble}{role_prompt}")
 }
 
-/// Runtime preamble for the library pipeline authoring assistant (#302 /
-/// ADR-0048, reshaped by #594 / ADR-0051).
+/// Runtime preamble for the library pipeline authoring assistant (ADR-0048,
+/// reshaped by ADR-0051).
 ///
-/// Prepended to the static role prompt (`prompts/builtin/library-assistant.md`),
-/// it gives the daemon base URL and the endpoints the assistant drives —
-/// `GET /sessions/libassist/focus` (which template is open), `POST /nodes/parse`
-/// (validate) and `POST /sessions/libassist/save` (persist) — with `curl` examples. Same
-/// discipline as the manager: we own the session prompt, so we document the
-/// endpoints in plain text rather than shipping a custom MCP. The
-/// **write-on-save** rule (F2 of the issue triage: show a diff, write only on the
-/// user's OK — never on every edit) is stated here so it holds even if the static
-/// role file is trimmed.
+/// Prepended to `prompts/builtin/library-assistant.md`. Same discipline as the
+/// manager: we own the session prompt, so the endpoints are documented in plain
+/// text rather than shipping a custom MCP. The **write-on-save** rule is restated
+/// here so it holds even if the static role file is trimmed.
 ///
-/// **It names no pipeline.** One assistant serves every template now, so a
-/// pipeline id frozen at spawn time would be wrong from the second template
-/// onwards. Which one is open arrives per message via the `UserPromptSubmit` hook;
-/// the instruction to fetch it is kept here in plain text because that hook only
-/// exists on a harness exposing `--settings` (ADR-0051 §3).
+/// **It names no pipeline.** One assistant serves every template, so a pipeline
+/// id frozen at spawn would be wrong from the second template onwards. Which one
+/// is open arrives per message via the `UserPromptSubmit` hook; the instruction to
+/// fetch it is kept here in plain text because that hook only exists on a harness
+/// exposing `--settings` (ADR-0051 §3).
 pub(crate) fn build_library_assistant_preamble(daemon_url: &str) -> String {
     format!(
         r#"# Pipeline Assistant Runtime Preamble
@@ -1177,8 +1114,7 @@ the user reviews. Read first, propose second, write last.
     )
 }
 
-/// Assemble the full library-assistant launch prompt: runtime preamble + the
-/// static role prompt (the pipeline-YAML format guide). Mirror of
+/// Runtime preamble + the static role prompt. Mirror of
 /// [`build_manager_prompt`].
 pub(crate) fn build_library_assistant_prompt(daemon_url: &str, role_prompt: &str) -> String {
     let preamble = build_library_assistant_preamble(daemon_url);

@@ -6,17 +6,14 @@
 //! event log remains the source of truth for *Run* state; a Trigger merely
 //! *produces* Runs.
 //!
-//! The public API is intentionally small: table creation, CRUD (`update` folds
-//! every field edit, including the enable/disable bit, into one atomic write —
-//! #372), the scheduler's `due_triggers(now)` query, and the fire-audit helpers
-//! (`record_fire`, `set_next_fire`).
+//! `update` folds every field edit, including the enable/disable bit, into ONE
+//! atomic write.
 
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
 
-/// serde default for [`Trigger::auto_name`] (#338): a Trigger deserialised from a
-/// payload predating the field keeps auto-naming, matching the `NOT NULL DEFAULT 1`
-/// column.
+/// serde default for [`Trigger::auto_name`]: a Trigger deserialised from a
+/// payload predating the field keeps auto-naming, matching the column default.
 fn default_true() -> bool {
     true
 }
@@ -33,12 +30,10 @@ pub(crate) struct Trigger {
     pub pipeline_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_repo: Option<String>,
-    /// Read-only secondary repos to associate with fired Runs (#465, ADR-0042),
-    /// stored as raw JSON TEXT (a `[{repo, base_branch?}]` array) so `trigger_store`
-    /// stays decoupled from lib's request types. `None`/blank → mono-repo fire.
-    /// Forwarded to the create request at fire time; the create chokepoint re-freezes
-    /// each secondary's SHA. Clearable back to `None` via the double-`Option`
-    /// `UpdateTrigger.target_repos` (mirror of `sandbox`).
+    /// Read-only secondary repos to associate with fired Runs (ADR-0042), stored
+    /// as raw JSON TEXT (`[{repo, base_branch?}]`) so `trigger_store` stays
+    /// decoupled from lib's request types. `None`/blank → mono-repo fire. The
+    /// create chokepoint re-freezes each secondary's SHA at fire time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_repos: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -54,41 +49,33 @@ pub(crate) struct Trigger {
     pub guard_command: Option<String>,
     /// `"skip"` (default) or `"allow"`.
     pub overlap_policy: String,
-    /// Bounded-`allow` ceiling: max simultaneous live Runs of this Trigger (#239).
+    /// Bounded-`allow` ceiling: max simultaneous live Runs of this Trigger.
     /// `None` = unbounded (also the effective value under the `skip` policy).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_concurrent: Option<i64>,
-    /// Per-Trigger sandbox mode (`"off"` | `"full"` | `"minimal"`), or `None` to inherit
-    /// the instance default (#410). Read at fire time and folded into the create
-    /// request's explicit tier; the create chokepoint then resolves precedence
-    /// (run → trigger → instance default). Clearable back to `None` via the
-    /// double-`Option` `UpdateTrigger.sandbox` (mirror of `max_concurrent`, #239).
+    /// Per-Trigger sandbox mode (`"off"` | `"full"` | `"minimal"`), or `None` to
+    /// inherit the instance default. Read at fire time and folded into the create
+    /// request's explicit tier; the create chokepoint resolves the precedence
+    /// (run → trigger → instance default).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox: Option<String>,
-    /// The agentic harness fired Runs launch on (#551, ADR-0046), or `None` to inherit
-    /// the instance default. There is NO separate Trigger tier in the precedence chain:
-    /// a Trigger *is* a Run template, so its harness is read at fire time and folded
-    /// into the create request's `run` choice (`nœud → Run → Projet → instance`). A
-    /// cron tick and a "Run now" both route through `fire_one_trigger`, so they freeze
-    /// the SAME harness. Free text — no validation (ADR-0045); an unknown name fails
-    /// fast at the fired Run's first node spawn. Clearable back to `None` via the
-    /// double-`Option` [`UpdateTrigger::harness`] (mirror of `sandbox`).
+    /// The agentic harness fired Runs launch on (ADR-0046), or `None` to inherit
+    /// the instance default. There is NO separate Trigger tier in the precedence
+    /// chain: a Trigger *is* a Run template, so this is read at fire time and
+    /// folded into the create request's `run` choice
+    /// (`nœud → Run → Projet → instance`). A cron tick and a "Run now" both route
+    /// through `fire_one_trigger`, so they freeze the SAME harness. Free text, no
+    /// validation (ADR-0045): an unknown name fails fast at the first node spawn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness: Option<String>,
-    /// The Run tier of the agentic-profile union carried by a Trigger's Run
-    /// template (#563, ADR-0057), or `None` to inherit the counterpart of
-    /// [`Self::harness`]: there is NO separate Trigger tier — a Trigger *is* a
-    /// Run template, so this is read at fire time and folded into the create
-    /// request's `run` choice, same as `harness`. `None` ⇒ `harness` above
-    /// (and the tiers below it) still decide. Clearable back to `None` via the
-    /// double-`Option` [`UpdateTrigger::agent_choice`] (mirror of `harness`).
+    /// The Run tier of the agentic-profile union (ADR-0057). Read at fire time
+    /// and folded into the create request's `run` choice, exactly like
+    /// [`Self::harness`]. `None` ⇒ `harness` (and the tiers below it) decide.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_choice: Option<crate::agent_choice::AgentChoice>,
-    /// Whether Runs fired from this Trigger are auto-named by the manager (#338). A
-    /// flat bool (mirror of [`Self::enabled`]), NOT a nullable inherit: the choice is
-    /// frozen at creation from the instance default and read at fire time. `true`
-    /// (the column and serde default) preserves the pre-#338 behaviour, where every
-    /// Trigger fire is auto-named. Toggled via the flat `UpdateTrigger.auto_name`.
+    /// Whether Runs fired from this Trigger are auto-named by the manager. A flat
+    /// bool (mirror of [`Self::enabled`]), NOT a nullable inherit: the choice is
+    /// frozen at creation from the instance default and read at fire time.
     #[serde(default = "default_true")]
     pub auto_name: bool,
     pub enabled: bool,
@@ -112,7 +99,7 @@ pub(crate) struct NewTrigger {
     pub pipeline_id: String,
     pub pipeline_name: String,
     pub target_repo: Option<String>,
-    /// Read-only secondary repos as raw JSON TEXT (#465); `None` → mono-repo.
+    /// Raw JSON TEXT; `None` → mono-repo.
     pub target_repos: Option<String>,
     pub source_branch: Option<String>,
     pub input_template: String,
@@ -120,17 +107,15 @@ pub(crate) struct NewTrigger {
     pub cron: String,
     pub guard_command: Option<String>,
     pub overlap_policy: String,
-    /// Bounded-`allow` ceiling (#239); `None` = unbounded.
+    /// `None` = unbounded.
     pub max_concurrent: Option<i64>,
-    /// Per-Trigger sandbox mode (#410); `None` inherits the instance default.
+    /// `None` inherits the instance default.
     pub sandbox: Option<String>,
-    /// Per-Trigger harness (#551); `None` inherits the instance default at fire time.
+    /// `None` inherits the instance default at fire time.
     pub harness: Option<String>,
-    /// Per-Trigger `AgentChoice` (#563); `None` inherits the legacy `harness`
-    /// tier (and the tiers below it) at fire time.
+    /// `None` inherits the legacy `harness` tier (and below) at fire time.
     pub agent_choice: Option<crate::agent_choice::AgentChoice>,
-    /// Whether Runs this Trigger fires are auto-named (#338). Seeded from the instance
-    /// default in the create modal and frozen here; `true` is the pre-#338 behaviour.
+    /// Seeded from the instance default in the create modal and frozen here.
     pub auto_name: bool,
     /// First scheduled fire, computed by the caller from the cron expression.
     pub next_fire_at: Option<String>,
@@ -148,17 +133,16 @@ pub(crate) struct TriggerFire {
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
-    /// Guard diagnostics on a `guard-exit-nonzero` row (#244): what the guard
-    /// printed and the exit status. NULL on every other outcome and on legacy
-    /// rows; tail-capped to 16 KB each (see `guard_runner`).
+    /// Guard diagnostics on a `guard-exit-nonzero` row. NULL on every other
+    /// outcome and on legacy rows; tail-capped to 16 KB each (`guard_runner`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guard_stdout: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guard_stderr: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guard_exit_code: Option<i32>,
-    /// Fire origin (#341): `"manual"` for a Run-now click, `"cron"` for a
-    /// scheduler tick. NULL on legacy rows ≈ cron.
+    /// `"manual"` for a Run-now click, `"cron"` for a scheduler tick. NULL on
+    /// legacy rows ≈ cron.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
 }
@@ -169,11 +153,11 @@ pub(crate) struct FireRecord {
     pub outcome: String,
     pub reason: Option<String>,
     pub run_id: Option<String>,
-    /// Guard diagnostics, set only on a `guard-exit-nonzero` record (#244).
+    /// Set only on a `guard-exit-nonzero` record.
     pub guard_stdout: Option<String>,
     pub guard_stderr: Option<String>,
     pub guard_exit_code: Option<i32>,
-    /// Fire origin (#341): `"manual"` / `"cron"`; `None` writes NULL (≈ cron).
+    /// `"manual"` / `"cron"`; `None` writes NULL (≈ cron).
     pub source: Option<String>,
 }
 
@@ -225,13 +209,11 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(db)
     .await?;
 
-    // Additive migration (#239): a `~/.pdo/pdo.db` created before this column
-    // existed got the table via `CREATE TABLE IF NOT EXISTS` above, which is a
-    // no-op there — so the column must be added out-of-band. There is no
-    // migration runner; this PRAGMA-guarded ALTER is the only durable path. The
-    // guard keeps it idempotent (a bare `ALTER … ADD COLUMN` errors "duplicate
-    // column name" on an already-migrated DB), and is preferred over swallowing
-    // the ALTER error blindly — a swallowed error would hide genuine failures.
+    // Additive migrations. A `~/.pdo/pdo.db` predating a column got the table via
+    // `CREATE TABLE IF NOT EXISTS` above, a no-op there, so the column must be
+    // added out-of-band; there is no migration runner. The PRAGMA guard keeps the
+    // ALTER idempotent (a bare one errors "duplicate column name") and is
+    // preferred over swallowing its error, which would hide genuine failures.
     let has_col =
         sqlx::query("SELECT 1 FROM pragma_table_info('triggers') WHERE name = 'max_concurrent'")
             .fetch_optional(db)
@@ -243,10 +225,7 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
-    // Additive migration (#410): per-Trigger `sandbox` mode. Same PRAGMA-guarded
-    // `ALTER` precedent as `max_concurrent` above — a pre-#410 `~/.pdo/pdo.db` got
-    // the table via `CREATE TABLE IF NOT EXISTS`, a no-op there, so the column must
-    // be added out-of-band. NULLABLE: a NULL row inherits the instance default.
+    // `sandbox` — NULLABLE: a NULL row inherits the instance default.
     let has_sandbox =
         sqlx::query("SELECT 1 FROM pragma_table_info('triggers') WHERE name = 'sandbox'")
             .fetch_optional(db)
@@ -258,10 +237,7 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
-    // Additive migration (#551): per-Trigger `harness`. Same PRAGMA-guarded `ALTER`
-    // precedent as `sandbox` above — a pre-#551 `~/.pdo/pdo.db` got the table via
-    // `CREATE TABLE IF NOT EXISTS`, a no-op there, so the column must be added
-    // out-of-band. NULLABLE: a NULL row inherits the instance default at fire time.
+    // `harness` — NULLABLE: a NULL row inherits the instance default at fire time.
     let has_harness =
         sqlx::query("SELECT 1 FROM pragma_table_info('triggers') WHERE name = 'harness'")
             .fetch_optional(db)
@@ -273,9 +249,8 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
-    // Additive migration (#563): per-Trigger `agent_choice`. Same PRAGMA-guarded
-    // `ALTER` precedent as `harness` above — NULLABLE: a NULL row inherits the
-    // legacy `harness` tier (and the tiers below it) at fire time.
+    // `agent_choice` — NULLABLE: a NULL row inherits the legacy `harness` tier
+    // (and the tiers below it) at fire time.
     let has_agent_choice =
         sqlx::query("SELECT 1 FROM pragma_table_info('triggers') WHERE name = 'agent_choice'")
             .fetch_optional(db)
@@ -287,10 +262,7 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
-    // Additive migration (#465): per-Trigger read-only secondary repos, as raw JSON
-    // TEXT. Same PRAGMA-guarded `ALTER` precedent as `sandbox` above — a pre-#465
-    // `~/.pdo/pdo.db` got the table via `CREATE TABLE IF NOT EXISTS`, a no-op there,
-    // so the column must be added out-of-band. NULLABLE: a NULL row fires mono-repo.
+    // `target_repos` — NULLABLE: a NULL row fires mono-repo.
     let has_target_repos =
         sqlx::query("SELECT 1 FROM pragma_table_info('triggers') WHERE name = 'target_repos'")
             .fetch_optional(db)
@@ -302,11 +274,9 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
-    // Additive migration (#338): per-Trigger `auto_name`. Same PRAGMA-guarded `ALTER`
-    // precedent as `sandbox`/`max_concurrent` above. `NOT NULL DEFAULT 1` — unlike the
-    // nullable columns, a Trigger's autonomy is a plain flat bool (mirror of `enabled`),
-    // and the default `1` is load-bearing: every pre-#338 Trigger keeps auto-naming its
-    // Runs, exactly as it did before this column existed.
+    // `auto_name` — `NOT NULL DEFAULT 1`, unlike the nullable columns: a plain
+    // flat bool (mirror of `enabled`). The default `1` is load-bearing — every
+    // pre-existing Trigger keeps auto-naming its Runs.
     let has_auto_name =
         sqlx::query("SELECT 1 FROM pragma_table_info('triggers') WHERE name = 'auto_name'")
             .fetch_optional(db)
@@ -318,11 +288,8 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
-    // Additive migration (#244): the guard-output columns on `trigger_fires`.
-    // Same PRAGMA-guarded `ALTER` precedent as `max_concurrent` above — a
-    // pre-#244 `~/.pdo/pdo.db` got the table via `CREATE TABLE IF NOT EXISTS`,
-    // a no-op there, so the columns must be added out-of-band or runtime
-    // INSERT/SELECT would fail. Each guard keeps the ALTER idempotent.
+    // Guard-output columns on `trigger_fires`; without them the runtime
+    // INSERT/SELECT below would fail.
     for (col, ddl) in [
         (
             "guard_stdout",
@@ -336,7 +303,6 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             "guard_exit_code",
             "ALTER TABLE trigger_fires ADD COLUMN guard_exit_code INTEGER",
         ),
-        // #341: fire origin (`manual` / `cron`); NULL on legacy rows ≈ cron.
         ("source", "ALTER TABLE trigger_fires ADD COLUMN source TEXT"),
     ] {
         let exists = sqlx::query("SELECT 1 FROM pragma_table_info('trigger_fires') WHERE name = ?")
@@ -349,10 +315,9 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
         }
     }
 
-    // #377 / ADR-0029: back the `GET /stats/overview` fires-per-period query
-    // (`WHERE ts >= ? AND ts < ? GROUP BY strftime`) and the fires-per-pipeline
-    // `LEFT JOIN triggers`. `CREATE INDEX IF NOT EXISTS` is natively idempotent,
-    // so it needs no PRAGMA guard (cf. the `CREATE TABLE IF NOT EXISTS` above).
+    // Back `GET /stats/overview`'s fires-per-period query and its
+    // fires-per-pipeline `LEFT JOIN triggers`. `CREATE INDEX IF NOT EXISTS` is
+    // natively idempotent, so it needs no PRAGMA guard.
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_trigger_fires_ts ON trigger_fires(ts)")
         .execute(db)
         .await?;
@@ -423,7 +388,7 @@ fn row_to_trigger(row: &sqlx::sqlite::SqliteRow) -> Trigger {
         pipeline_id: row.get("pipeline_id"),
         pipeline_name: row.get("pipeline_name"),
         target_repo: row.get("target_repo"),
-        // #465: tolerant of a legacy-NULL / pre-migration read — absence fires mono-repo.
+        // Tolerant of a legacy-NULL / pre-migration read: absence fires mono-repo.
         target_repos: row.try_get("target_repos").unwrap_or(None),
         source_branch: row.get("source_branch"),
         input_template: row.get("input_template"),
@@ -433,18 +398,15 @@ fn row_to_trigger(row: &sqlx::sqlite::SqliteRow) -> Trigger {
         overlap_policy: row.get("overlap_policy"),
         max_concurrent: row.get("max_concurrent"),
         sandbox: row.get("sandbox"),
-        // #551: tolerant of a legacy-NULL / pre-migration read (mirror of `target_repos`) —
-        // absence inherits the instance default at fire time.
+        // Absence (legacy NULL) inherits the instance default at fire time.
         harness: row.try_get("harness").unwrap_or(None),
-        // #563: tolerant of a legacy-NULL / pre-migration read (mirror of `harness`) —
-        // absence, or an unparseable value, inherits the legacy `harness` tier.
+        // Absence, or an unparseable value, inherits the legacy `harness` tier.
         agent_choice: row
             .try_get::<Option<String>, _>("agent_choice")
             .ok()
             .flatten()
             .and_then(|s| serde_json::from_str(&s).ok()),
-        // #338: tolerant of a legacy NULL (a pre-migration row read mid-upgrade) —
-        // absence reads as auto-name ON, the pre-#338 behaviour.
+        // A legacy NULL reads as auto-name ON.
         auto_name: row.try_get::<i64, _>("auto_name").unwrap_or(1) != 0,
         enabled: row.get::<i64, _>("enabled") != 0,
         next_fire_at: row.get("next_fire_at"),
@@ -479,17 +441,14 @@ pub(crate) async fn delete(db: &SqlitePool, id: &str) -> Result<bool, sqlx::Erro
     Ok(res.rows_affected() > 0)
 }
 
-/// Enabled Triggers whose `next_fire_at` is at or before `now`. The scheduler's
+/// Enabled Triggers whose `next_fire_at` is at or before `now` — the scheduler's
 /// central query.
 ///
 /// Comparison and ordering are **timezone-normalised** via `julianday()` rather
-/// than a raw string compare (#222): `next_fire_at` is invariably canonical UTC
-/// (`…Z`) — see [`Trigger::next_fire_at`] — so a string compare *would* be
-/// correct, but a stray local-offset row (legacy data, or `chrono::Local::now()`
-/// slipping back into a writer) sorts lexicographically *after* a `…Z` now-string
-/// and would silently go dormant for hours. `julianday()` parses `Z`/`±HH:MM`/
-/// fractional-second RFC3339 to a UTC instant, so any offset compares correctly.
-/// `now` is a canonical-UTC RFC3339-millis now-string (`…Z`).
+/// than a raw string compare: `next_fire_at` is invariably canonical UTC, so a
+/// string compare *would* be correct, but a stray local-offset row (legacy data,
+/// or `chrono::Local::now()` slipping back into a writer) sorts lexicographically
+/// *after* a `…Z` now-string and would silently go dormant for hours.
 pub(crate) async fn due_triggers(db: &SqlitePool, now: &str) -> Result<Vec<Trigger>, sqlx::Error> {
     let rows = sqlx::query(
         "SELECT * FROM triggers
@@ -551,9 +510,8 @@ pub(crate) async fn fire_history(
     db: &SqlitePool,
     trigger_id: &str,
 ) -> Result<Vec<TriggerFire>, sqlx::Error> {
-    // Cap the read (#244/D5): the new guard-output blobs make each row heavier
-    // and a minute-cron trigger accrues ~1440 rows/day; the panel only ever
-    // shows the recent tail. Newest-first, bounded to the latest 200.
+    // Capped: the guard-output blobs make each row heavy and a minute-cron
+    // trigger accrues ~1440 rows/day, while the panel only shows the recent tail.
     let rows = sqlx::query(
         "SELECT id, trigger_id, ts, outcome, reason, run_id,
                 guard_stdout, guard_stderr, guard_exit_code, source
@@ -593,23 +551,21 @@ pub(crate) async fn set_next_fire(
     Ok(())
 }
 
-/// A partial config edit (#162). Every field is optional: `None` leaves the
-/// stored value untouched. `next_fire_at` is double-wrapped so the caller can
-/// distinguish "leave alone" (`None`) from "set to NULL" (`Some(None)`); the
-/// route recomputes it whenever the schedule changes.
+/// A partial config edit. `None` leaves the stored value untouched. A nullable
+/// field is double-wrapped so the caller can distinguish "leave alone" (`None`)
+/// from "set to NULL" (`Some(None)`) — load-bearing: a plain `serde(default)`
+/// would make present-`null` indistinguishable from omitted, so the UI could
+/// never reset a field back to inheriting.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct UpdateTrigger {
     pub name: Option<String>,
-    /// Repoint the Trigger to a different library pipeline (#230). The route is
-    /// responsible for validating the target exists; both `pipeline_id` and the
-    /// denormalised `pipeline_name` are updated together so list rendering can't
-    /// show a stale name.
+    /// The route validates the target exists. Both `pipeline_id` and the
+    /// denormalised `pipeline_name` are updated together, so list rendering
+    /// cannot show a stale name.
     pub pipeline_id: Option<String>,
     pub pipeline_name: Option<String>,
     pub target_repo: Option<Option<String>>,
-    /// Read-only secondary repos as raw JSON TEXT (#465), double-wrapped like
-    /// `target_repo`: `None` leaves it, `Some(None)` clears to NULL (mono-repo),
-    /// `Some(Some(json))` sets the list.
+    /// `Some(None)` clears to NULL (mono-repo).
     pub target_repos: Option<Option<String>>,
     pub source_branch: Option<Option<String>>,
     pub input_template: Option<String>,
@@ -617,33 +573,19 @@ pub(crate) struct UpdateTrigger {
     pub cron: Option<String>,
     pub guard_command: Option<Option<String>>,
     pub overlap_policy: Option<String>,
-    /// Bounded-`allow` ceiling (#239), double-wrapped like the other nullable
-    /// fields: `None` leaves it, `Some(None)` clears to NULL, `Some(Some(n))` sets.
     pub max_concurrent: Option<Option<i64>>,
-    /// Per-Trigger sandbox mode (#410), double-wrapped like `max_concurrent`: `None`
-    /// leaves it, `Some(None)` clears to NULL (= "inherit the instance default"),
-    /// `Some(Some(mode))` sets. The double-`Option` is load-bearing — a plain
-    /// `serde(default)` would make present-`null` indistinguishable from omitted, so
-    /// the UI could never reset a Trigger back to inheriting.
+    /// `Some(None)` clears to NULL = "inherit the instance default".
     pub sandbox: Option<Option<String>>,
-    /// Per-Trigger harness (#551), double-wrapped like `sandbox`: `None` leaves it,
-    /// `Some(None)` clears to NULL (= "inherit the instance default"), `Some(Some(name))`
-    /// sets it. The double-`Option` is load-bearing for the same reason as `sandbox` — a
-    /// plain `serde(default)` would make present-`null` indistinguishable from omitted, so
-    /// the UI could never reset a Trigger back to inheriting.
+    /// `Some(None)` clears to NULL = "inherit the instance default".
     pub harness: Option<Option<String>>,
-    /// Per-Trigger `AgentChoice` (#563), double-wrapped like `harness`: `None`
-    /// leaves it, `Some(None)` clears to NULL (= legacy `harness` tier decides
-    /// again), `Some(Some(choice))` sets it.
+    /// `Some(None)` clears to NULL = the legacy `harness` tier decides again.
     pub agent_choice: Option<Option<crate::agent_choice::AgentChoice>>,
-    /// Auto-naming toggle (#338): `None` leaves the flag, `Some(v)` sets it. A FLAT
-    /// `Option<bool>` (mirror of [`Self::enabled`]), NOT double-wrapped like `sandbox`
-    /// — there is no "inherit" state to clear back to; the choice is a plain on/off.
+    /// A FLAT `Option<bool>`, NOT double-wrapped: there is no "inherit" state to
+    /// clear back to; the choice is a plain on/off.
     pub auto_name: Option<bool>,
     pub next_fire_at: Option<Option<String>>,
-    /// Enable/disable toggle (#372): `None` leaves the bit, `Some(v)` sets it.
-    /// Folded in here so the enable bit and a forward `next_fire_at` land in one
-    /// atomic UPDATE (was a separate `set_enabled` write).
+    /// Folded in here so the enable bit and a forward `next_fire_at` land in ONE
+    /// atomic UPDATE (it was a separate `set_enabled` write).
     pub enabled: Option<bool>,
 }
 
@@ -680,8 +622,8 @@ pub(crate) async fn update(
         return Ok(());
     }
 
-    // Build the SET clause field-by-field, then bind in the same order so the
-    // positional placeholders line up.
+    // Bind in the SAME order the SET clause is built, so the positional
+    // placeholders line up.
     let mut sets: Vec<&str> = Vec::new();
     if edit.name.is_some() {
         sets.push("name = ?");
@@ -753,7 +695,6 @@ pub(crate) async fn update(
         query = query.bind(v.clone());
     }
     if let Some(v) = &edit.target_repos {
-        // `Some(None)` → SQL NULL (mono-repo); `Some(Some(json))` → the JSON list.
         query = query.bind(v.clone());
     }
     if let Some(v) = &edit.source_branch {
@@ -778,26 +719,19 @@ pub(crate) async fn update(
         query = query.bind(*v);
     }
     if let Some(v) = &edit.sandbox {
-        // `Some(None)` → binds SQL NULL (inherit the instance default);
-        // `Some(Some(mode))` → binds the mode string. Mirror of `target_repo`.
         query = query.bind(v.clone());
     }
     if let Some(v) = &edit.harness {
-        // #551: `Some(None)` → SQL NULL (inherit the instance default);
-        // `Some(Some(name))` → the harness name. Mirror of `sandbox`.
         query = query.bind(v.clone());
     }
     if let Some(v) = &edit.agent_choice {
-        // #563: `Some(None)` → SQL NULL (inherit the legacy `harness` tier);
-        // `Some(Some(choice))` → the serialized JSON. Mirror of `harness`.
         query = query.bind(
             v.as_ref()
                 .map(|c| serde_json::to_string(c).unwrap_or_default()),
         );
     }
     if let Some(v) = &edit.auto_name {
-        // Flat bool → 0/1 (mirror of `enabled`), never NULL: the column is
-        // `NOT NULL DEFAULT 1` and the choice is a plain on/off (#338).
+        // Never NULL: the column is `NOT NULL DEFAULT 1`.
         query = query.bind(if *v { 1_i64 } else { 0_i64 });
     }
     if let Some(v) = &edit.next_fire_at {

@@ -1,9 +1,4 @@
 //! Layer 3a — tmux lifecycle tests for issue #23.
-//!
-//! Tests:
-//! 1. Reaper kills sessions for NodeRuns completed > TTL ago.
-//! 2. Orphan sweep at boot kills pre-existing stale pdo-* sessions.
-//! 3. Dead-session re-spawn: kill a session, hit /pane, assert fresh session.
 
 use std::sync::Mutex;
 use std::time::Duration;
@@ -160,9 +155,8 @@ async fn wait_for_session_gone(socket: &str, session: &str, timeout: Duration) -
 /// behaviour did. A pane snapshot is kept for post-mortem inspection. Uses a
 /// long TTL so this asserts the terminal-state reap, not the periodic reaper.
 #[tokio::test]
-// Holds the process-wide `serial_guard()` MutexGuard across `.await`s to keep
-// the env-var-sensitive reaper tests from racing each other — intentional, and
-// the same allow the rest of the crate uses for serialized async tests.
+// Intentional: the guard must span the `.await`s so env-var-sensitive reaper
+// tests can't race.
 #[allow(clippy::await_holding_lock)]
 async fn completed_node_session_is_reaped_on_terminal_transition() {
     if !tmux_available() {
@@ -195,7 +189,6 @@ async fn completed_node_session_is_reaped_on_terminal_transition() {
     std::fs::create_dir_all(&port_dir).unwrap();
     std::fs::write(port_dir.join("output.md"), "# Output\nDone.").unwrap();
 
-    // Complete the node — the session is reaped on the terminal transition.
     let resp = reqwest::Client::new()
         .post(format!(
             "{}/runs/{run_id}/nodes/{NODE_ID}/done",
@@ -207,13 +200,11 @@ async fn completed_node_session_is_reaped_on_terminal_transition() {
         .unwrap();
     assert_eq!(resp.status(), 200);
 
-    // The session is gone promptly — the terminal reap, not the 1h TTL.
     assert!(
         wait_for_session_gone(&socket, &session, Duration::from_secs(5)).await,
         "session should be reaped on the terminal transition (#205), not held for the TTL"
     );
 
-    // A pane snapshot survives for post-mortem inspection.
     let snapshot = daemon
         .repo_root()
         .join(".pdo/runs")
@@ -224,16 +215,14 @@ async fn completed_node_session_is_reaped_on_terminal_transition() {
         "a pane snapshot must be persisted when the session is reaped"
     );
 
-    // Clean up env
     std::env::remove_var(tmux_session_manager::REAPER_TTL_SECS_ENV);
     std::env::remove_var(tmux_session_manager::REAPER_INTERVAL_SECS_ENV);
 }
 
 /// Layer 3a: At daemon boot, pre-existing orphan pdo-* sessions get swept.
 #[tokio::test]
-// Holds the process-wide `serial_guard()` MutexGuard across `.await`s to keep
-// the env-var-sensitive reaper tests from racing each other — intentional, and
-// the same allow the rest of the crate uses for serialized async tests.
+// Intentional: the guard must span the `.await`s so env-var-sensitive reaper
+// tests can't race.
 #[allow(clippy::await_holding_lock)]
 async fn orphan_sweep_at_boot_kills_stale_session() {
     if !tmux_available() {
@@ -261,7 +250,6 @@ async fn orphan_sweep_at_boot_kills_stale_session() {
         "pre-condition: fake session should exist on daemon's socket"
     );
 
-    // Wait for the reaper to sweep it (interval=1s).
     assert!(
         wait_for_session_gone(&socket, orphan_session, Duration::from_secs(5)).await,
         "orphan session should be killed by the periodic reaper (run absent from event log)"
@@ -281,9 +269,8 @@ async fn orphan_sweep_at_boot_kills_stale_session() {
 /// The posture is injected as config here; that either env var *produces* this
 /// posture is the separate, purely-tested claim of `nested_daemon_from`.
 #[tokio::test]
-// Holds the process-wide `serial_guard()` MutexGuard across `.await`s to keep
-// the env-var-sensitive reaper tests from racing each other — intentional, and
-// the same allow the rest of the crate uses for serialized async tests.
+// Intentional: the guard must span the `.await`s so env-var-sensitive reaper
+// tests can't race.
 #[allow(clippy::await_holding_lock)]
 async fn nested_daemon_skips_orphan_sweep_and_reaper() {
     if !tmux_available() {
@@ -320,7 +307,6 @@ async fn nested_daemon_skips_orphan_sweep_and_reaper() {
         "nested daemon must NOT sweep orphans"
     );
 
-    // Cleanup
     let _ = std::process::Command::new("tmux")
         .args(["-L", &socket, "kill-session", "-t", orphan_session])
         .output();
@@ -330,9 +316,8 @@ async fn nested_daemon_skips_orphan_sweep_and_reaper() {
 
 /// Layer 3a: Kill a session manually, hit /pane, assert a fresh session appears.
 #[tokio::test]
-// Holds the process-wide `serial_guard()` MutexGuard across `.await`s to keep
-// the env-var-sensitive reaper tests from racing each other — intentional, and
-// the same allow the rest of the crate uses for serialized async tests.
+// Intentional: the guard must span the `.await`s so env-var-sensitive reaper
+// tests can't race.
 #[allow(clippy::await_holding_lock)]
 async fn dead_session_respawn_via_pane_endpoint() {
     if !tmux_available() {
@@ -355,7 +340,6 @@ async fn dead_session_respawn_via_pane_endpoint() {
         "session should appear after POST /runs"
     );
 
-    // Kill the session manually
     tmux_session_manager::kill(&socket, &session);
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(
@@ -363,7 +347,6 @@ async fn dead_session_respawn_via_pane_endpoint() {
         "session should be dead after manual kill"
     );
 
-    // Hit the /pane endpoint — should re-spawn via resume
     let resp = reqwest::Client::new()
         .get(format!(
             "{}/runs/{run_id}/nodes/{NODE_ID}/pane?iter=1",
@@ -378,28 +361,24 @@ async fn dead_session_respawn_via_pane_endpoint() {
     assert!(json["content"].is_string());
     assert!(!json["content"].as_str().unwrap().is_empty());
 
-    // The session should now exist again
     assert!(
         tmux_has_session(&socket, &session),
         "session should be re-spawned after /pane request"
     );
 
-    // Clean up
     tmux_session_manager::kill(&socket, &session);
     std::env::remove_var(tmux_session_manager::REAPER_TTL_SECS_ENV);
     std::env::remove_var(tmux_session_manager::REAPER_INTERVAL_SECS_ENV);
 }
 
-// ---------------------------------------------------------------------------
-// #485 / ADR-0038 — the sweep must not kill the session it just spawned
+// #485 / ADR-0038 — the sweep must not kill the session it just spawned.
 //
 // Driven through the deterministic `run_orphan_sweep_tick()` seam, never by
 // racing the 60 s interval. Honest limit, stated in the PR: no layer-3 test can
 // *reproduce* the race — there is no hook between the inventory and the log read.
 // The order is guaranteed by construction (the inventory is a parameter of
-// `decide_sweep`) plus the invariant comments; these tests pin the observable
-// consequences on both sides — the live session survives, the real orphan dies.
-// ---------------------------------------------------------------------------
+// `decide_sweep`); these tests pin the observable consequences on both sides —
+// the live session survives, the real orphan dies.
 
 const TWO_NODE_PIPELINE: &str = "two-step";
 const TWO_NODE_YAML: &str = r#"name: two-step
@@ -534,9 +513,8 @@ async fn settle_reaper(daemon: &TestDaemon) -> serde_json::Value {
 /// sweep resolved live sessions against a snapshot taken before they were born
 /// and killed them within ~150 ms of their own spawn.
 #[tokio::test]
-// Holds the process-wide `serial_guard()` MutexGuard across `.await`s to keep
-// the env-var-sensitive reaper tests from racing each other — intentional, and
-// the same allow the rest of the crate uses for serialized async tests.
+// Intentional: the guard must span the `.await`s so env-var-sensitive reaper
+// tests can't race.
 #[allow(clippy::await_holding_lock)]
 async fn live_node_session_survives_an_immediate_sweep_tick() {
     if !tmux_available() {
@@ -592,9 +570,8 @@ async fn live_node_session_survives_an_immediate_sweep_tick() {
 /// the regression test for that, and it is deliberately *not* about tmux state —
 /// it sweeps a second time over nothing and asserts the tally survives.
 #[tokio::test]
-// Holds the process-wide `serial_guard()` MutexGuard across `.await`s to keep
-// the env-var-sensitive reaper tests from racing each other — intentional, and
-// the same allow the rest of the crate uses for serialized async tests.
+// Intentional: the guard must span the `.await`s so env-var-sensitive reaper
+// tests can't race.
 #[allow(clippy::await_holding_lock)]
 async fn an_idle_sweep_does_not_reset_the_kill_tally() {
     if !tmux_available() {
@@ -632,7 +609,6 @@ async fn an_idle_sweep_does_not_reset_the_kill_tally() {
         "the pass that reaped the orphan must count it (baseline {baseline}), got {killed_once}"
     );
 
-    // Now a pass with nothing whatsoever to do — the one that used to zero it.
     daemon.run_orphan_sweep_tick().await;
 
     let after_idle = reaper_gauge(&daemon).await;
@@ -662,9 +638,8 @@ async fn an_idle_sweep_does_not_reset_the_kill_tally() {
 /// three absence arms plus the unparseable-name arm still kill, and the
 /// `GET /sessions` reaper gauge counts them.
 #[tokio::test]
-// Holds the process-wide `serial_guard()` MutexGuard across `.await`s to keep
-// the env-var-sensitive reaper tests from racing each other — intentional, and
-// the same allow the rest of the crate uses for serialized async tests.
+// Intentional: the guard must span the `.await`s so env-var-sensitive reaper
+// tests can't race.
 #[allow(clippy::await_holding_lock)]
 async fn genuine_orphans_are_still_reaped_and_counted() {
     if !tmux_available() {
@@ -755,9 +730,8 @@ async fn genuine_orphans_are_still_reaped_and_counted() {
 /// `force_spawn_node` targets a node with no history at all — so the reaper's
 /// lookup found no entry for it.
 #[tokio::test]
-// Holds the process-wide `serial_guard()` MutexGuard across `.await`s to keep
-// the env-var-sensitive reaper tests from racing each other — intentional, and
-// the same allow the rest of the crate uses for serialized async tests.
+// Intentional: the guard must span the `.await`s so env-var-sensitive reaper
+// tests can't race.
 #[allow(clippy::await_holding_lock)]
 async fn force_spawn_reserves_before_it_spawns() {
     if !tmux_available() {
@@ -829,9 +803,8 @@ async fn force_spawn_reserves_before_it_spawns() {
 /// `nodes.remove(node_id)` — so during the old spawn-then-append window the
 /// reaper's lookup found no entry at *every* iteration, not just the first.
 #[tokio::test]
-// Holds the process-wide `serial_guard()` MutexGuard across `.await`s to keep
-// the env-var-sensitive reaper tests from racing each other — intentional, and
-// the same allow the rest of the crate uses for serialized async tests.
+// Intentional: the guard must span the `.await`s so env-var-sensitive reaper
+// tests can't race.
 #[allow(clippy::await_holding_lock)]
 async fn retry_reserves_before_it_spawns() {
     if !tmux_available() {

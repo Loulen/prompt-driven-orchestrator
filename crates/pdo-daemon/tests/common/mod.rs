@@ -98,13 +98,11 @@ impl TestDaemon {
                 price_source_url: None,
                 price_refresh_at_boot: false,
                 allowed_ws_origins: Vec::new(),
-                // #450: layer-3 tests drive firing via `run_trigger_tick`; the
-                // background heartbeat's immediate boot tick would race the seam.
+                // #450: tests drive firing via the `run_trigger_tick` seam; the
+                // heartbeat's boot tick would race it.
                 run_trigger_scheduler_loop: false,
-                // The caller's choice, defaulting to `false` in every other
-                // constructor: a TestDaemon behaves like a TOP-LEVEL daemon (sweeps
-                // armed) whatever env the suite itself was launched with, and
-                // `spawn_nested` is the only way to opt out.
+                // A TestDaemon is a TOP-LEVEL daemon (sweeps armed) whatever env
+                // the suite was launched with; `spawn_nested` is the only opt-out.
                 nested_daemon,
             },
         )
@@ -149,12 +147,10 @@ impl TestDaemon {
                 price_source_url: None,
                 price_refresh_at_boot: false,
                 allowed_ws_origins: Vec::new(),
-                // #450: layer-3 tests drive firing via `run_trigger_tick`; the
-                // background heartbeat's immediate boot tick would race the seam.
+                // #450: tests drive firing via the `run_trigger_tick` seam; the
+                // heartbeat's boot tick would race it.
                 run_trigger_scheduler_loop: false,
-                // A TestDaemon behaves like a TOP-LEVEL daemon: sweeps armed,
-                // whatever env the suite itself was launched with. The opt-out is
-                // `TestDaemon::spawn_nested`, per daemon.
+                // See the sibling constructors: armed sweeps, per-daemon opt-out.
                 nested_daemon: false,
             },
         )
@@ -201,12 +197,10 @@ impl TestDaemon {
                 price_source_url: None,
                 price_refresh_at_boot: false,
                 allowed_ws_origins: Vec::new(),
-                // #450: layer-3 tests drive firing via `run_trigger_tick`; the
-                // background heartbeat's immediate boot tick would race the seam.
+                // #450: tests drive firing via the `run_trigger_tick` seam; the
+                // heartbeat's boot tick would race it.
                 run_trigger_scheduler_loop: false,
-                // A TestDaemon behaves like a TOP-LEVEL daemon: sweeps armed,
-                // whatever env the suite itself was launched with. The opt-out is
-                // `TestDaemon::spawn_nested`, per daemon.
+                // See the sibling constructors: armed sweeps, per-daemon opt-out.
                 nested_daemon: false,
             },
         )
@@ -256,12 +250,10 @@ impl TestDaemon {
                 price_source_url: None,
                 price_refresh_at_boot: false,
                 allowed_ws_origins: Vec::new(),
-                // #450: layer-3 tests drive firing via `run_trigger_tick`; the
-                // background heartbeat's immediate boot tick would race the seam.
+                // #450: tests drive firing via the `run_trigger_tick` seam; the
+                // heartbeat's boot tick would race it.
                 run_trigger_scheduler_loop: false,
-                // A TestDaemon behaves like a TOP-LEVEL daemon: sweeps armed,
-                // whatever env the suite itself was launched with. The opt-out is
-                // `TestDaemon::spawn_nested`, per daemon.
+                // See the sibling constructors: armed sweeps, per-daemon opt-out.
                 nested_daemon: false,
             },
         )
@@ -300,12 +292,10 @@ impl TestDaemon {
                 price_source_url: None,
                 price_refresh_at_boot: false,
                 allowed_ws_origins: Vec::new(),
-                // #450: layer-3 tests drive firing via `run_trigger_tick`; the
-                // background heartbeat's immediate boot tick would race the seam.
+                // #450: tests drive firing via the `run_trigger_tick` seam; the
+                // heartbeat's boot tick would race it.
                 run_trigger_scheduler_loop: false,
-                // A TestDaemon behaves like a TOP-LEVEL daemon: sweeps armed,
-                // whatever env the suite itself was launched with. The opt-out is
-                // `TestDaemon::spawn_nested`, per daemon.
+                // See the sibling constructors: armed sweeps, per-daemon opt-out.
                 nested_daemon: false,
             },
         )
@@ -642,9 +632,7 @@ pub fn ws_text(msg: &Message) -> Option<&str> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Process-global env vars: shared serial guards
-// ---------------------------------------------------------------------------
+// Process-global env vars: shared serial guards.
 //
 // The whole `tests/` tree now compiles into ONE binary (`tests/it.rs`), so
 // `cargo test` runs every test as a thread in a single process. Env vars that
@@ -652,10 +640,8 @@ pub fn ws_text(msg: &Message) -> Option<&str> {
 // file is its own process" are no longer safe: two files setting the same var
 // now overlap, and the first to finish unsets it under the other.
 //
-// The locks live here, not in a test file, precisely so that tests in *any*
-// file contend on the same mutex. Same shape as the `SERIAL` mutex
-// `tmux_lifecycle.rs` already uses for `PDO_REAPER_*`, just hoisted to a place
-// both sides of a cross-file collision can reach.
+// The locks live here, not in a test file, so tests in *any* file contend on the
+// same mutex.
 //
 // `EnvVarGuard` restores on `Drop`, so a panicking test still puts the previous
 // value back and still releases the lock — a manual `remove_var` at the end of
@@ -737,13 +723,8 @@ pub fn lock_guard_timeout_ms(value: impl AsRef<str>) -> EnvVarGuard {
 }
 
 /// Prepend the directory holding the freshly built `pdo` binary to `PATH`, once
-/// per process.
-///
-/// Five test files used to keep a `static INIT: Once` of their own for this. In
-/// one binary those are five distinct `Once`s, so all five still fire and all
-/// five read-modify-write `PATH` concurrently. They all prepend the same
-/// directory, so the outcome was fine either way — one shared `Once` just
-/// removes the need to work that out.
+/// per process. Shared so per-file `Once`s can't read-modify-write `PATH`
+/// concurrently.
 pub fn ensure_pdo_on_path() {
     static INIT: std::sync::Once = std::sync::Once::new();
     INIT.call_once(|| {

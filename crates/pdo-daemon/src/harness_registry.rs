@@ -6,22 +6,14 @@
 //! per-feature fields (a named field per case becomes a spelling per case; the
 //! template covers them without naming, ADR-0045).
 //!
-//! **This slice is the embedded floor only.** `claude` and `opencode` are compiled
-//! in; nothing is seeded on disk and this module never reads `$HOME` (the
-//! discipline `run_cost` paid for in #408 — a root goes in, a descriptor comes
-//! out). A user-declared *disk tier* that merges over the floor **by name** is
-//! #553; [`merge_by_name`] is that seam, present and tested now so the disk tier
-//! layers on without rewriting [`resolve`]'s callers — but no caller passes a disk
-//! tier in this slice, so the floor is the whole registry.
-//!
-//! **#553 lands that disk tier.** [`HarnessRegistry::load`] reads a user-declared
-//! descriptor file under an **injected root** (never `$HOME` — the discipline this
-//! module already keeps), parses it, and merges it over the embedded floor **by
-//! name** ([`merge_by_name`]). Nothing is ever written or seeded. A descriptor that
-//! is unreadable or refused is **inert and diagnosed**: its key falls through to
-//! the next tier (the floor), it is never partially applied, and it is named —
-//! once per distinct diagnostic in the log, and always in `GET /settings` — the
-//! exact idiom of `price_table` (ADR-0034).
+//! This module never reads `$HOME` (the discipline `run_cost` paid for in #408 — a
+//! root goes in, a descriptor comes out). [`HarnessRegistry::load`] reads a
+//! user-declared descriptor file under an **injected root**, parses it, and merges
+//! it over the embedded floor **by name** ([`merge_by_name`]). Nothing is ever
+//! written or seeded. A descriptor that is unreadable or refused is **inert and
+//! diagnosed**: its key falls through to the next tier (the floor), it is never
+//! partially applied, and it is named — once per distinct diagnostic in the log,
+//! and always in `GET /settings` — the exact idiom of `price_table` (ADR-0034).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -251,11 +243,7 @@ pub fn opencode() -> HarnessDescriptor {
 /// descriptor: the picker's provenance is decided by name, so a `copilot` declared
 /// on disk would read "From descriptors" and contradict the support table.
 ///
-/// **Instrumented since #615** (ADR-0051/0052): `copilot` declares three
-/// capabilities in [`crate::harness_probes`] — a **reported** cost (converted by a
-/// published constant), a transcript resolution (its event journal, by session
-/// identity), and an end-of-turn substrate (the journal's `assistant.turn_end`) —
-/// and declares the other two (usage-limit anchor, staging floor) absent.
+/// Its capabilities are declared in [`crate::harness_probes`].
 ///
 /// The launch uses copilot's **interactive** mode with the prompt auto-executed
 /// (`-i {prompt}`), so the harness is **resident after the turn** — an attachable
@@ -267,12 +255,8 @@ pub fn opencode() -> HarnessDescriptor {
 /// the positional slot for **subcommands**, so a positional prompt is refused
 /// (`error: too many arguments`) and the node hangs `running` forever — the way to
 /// enter interactive mode *with* a prompt is `-i`, measured on the installed binary.
-/// Interactive mode writes the `events.jsonl` journal PDO resolves by session
-/// identity (the transcript, the `assistant.turn_end` substrate, the
-/// `session.usage_checkpoint` reported cost) — the three capabilities
-/// [`crate::harness_probes`] declares for copilot. `exit_code_is_verdict = false`
-/// reads naturally here: a resident harness never hands PDO an exit code to read as a
-/// verdict, so the journal is the signal. The tokens:
+/// Interactive mode is also what writes the `events.jsonl` journal every copilot
+/// capability reads. The tokens:
 /// - `--allow-all` grants full autonomy — no tool, path or URL permission dialog
 ///   (AC "aucun dialogue de permission d'outil, de chemin ou d'URL");
 /// - `--no-ask-user` disables the question tool, so the node never stalls asking;
@@ -338,9 +322,8 @@ pub fn embedded_floor() -> Vec<HarnessDescriptor> {
 
 /// Merge a user-declared disk tier over the embedded floor, **by name**: a disk
 /// descriptor replaces the floor's entry of the same name; a floor name absent
-/// from disk survives. Pure — the caller (a future slice, #553) reads and parses
-/// the disk tier and hands the descriptors in. No caller passes a disk tier in
-/// this slice, so `merge_by_name(embedded_floor(), vec![])` is the whole registry.
+/// from disk survives. Pure — the caller reads and parses the disk tier and hands
+/// the descriptors in.
 pub fn merge_by_name(
     floor: Vec<HarnessDescriptor>,
     disk: Vec<HarnessDescriptor>,
@@ -358,14 +341,9 @@ pub fn merge_by_name(
 /// Resolve a harness name to its descriptor. `None` ⇒ no harness carries that
 /// name (an unknown harness — the spawn seam turns this into a fail-fast that
 /// names it, never a silent fallback).
-///
-/// The disk tier (#553) layers on by making this `merge_by_name(embedded_floor(),
-/// disk).into_iter().find(...)`; callers don't change.
 pub fn resolve(name: &str) -> Option<HarnessDescriptor> {
     embedded_floor().into_iter().find(|d| d.name == name)
 }
-
-// --- The disk tier (#553) -----------------------------------------------------
 
 /// A refused disk descriptor and why — the material of BOTH the `warn!` and the
 /// `GET /settings` `reason`, so the two can never drift (idiom of
@@ -521,8 +499,6 @@ pub fn parse_descriptors(text: &str) -> ParsedDescriptors {
             });
             continue;
         }
-        // An empty string among the launch tokens is not a hole to fill — it would
-        // render to a stray token. Refuse the row rather than launch something odd.
         if row.launch.is_empty() {
             parsed.rejected.push(RejectedDescriptor {
                 name,
@@ -531,13 +507,6 @@ pub fn parse_descriptors(text: &str) -> ParsedDescriptors {
             });
             continue;
         }
-        // ADR-0054: the ONLY thing PDO validates about a descriptor — the launch
-        // must make the declared binary the pane leader (`exec <binary> …`).
-        // Otherwise the harness can die behind a surviving shell without the
-        // session dying, and the node stays `Running` forever, mute — PDO's only
-        // terminal liveness verdict (ADR-0032) becomes silently false. Same refusal
-        // shape as a missing `binary`/`launch`: the row is inert, its key falls
-        // through to the next tier.
         if !launch_makes_binary_leader(&row.launch, &binary) {
             parsed.rejected.push(RejectedDescriptor {
                 name,
@@ -769,17 +738,12 @@ mod tests {
 
     #[test]
     fn copilot_is_on_the_floor_pins_identity_and_resumes_by_identity_only() {
-        // #614: copilot is the third arm of the embedded floor, launchable and
-        // resumable before any capability.
         assert!(resolve(COPILOT).is_some());
         let d = copilot();
         assert_eq!(d.binary, "copilot");
-        // Full autonomy + question tool off, so a node runs unattended.
         assert!(d.launch.iter().any(|t| t == "--allow-all"));
         assert!(d.launch.iter().any(|t| t == "--no-ask-user"));
-        // A model hole that drops when unset ⇒ copilot's automatic selector.
         assert!(d.launch.iter().any(|t| t.contains("{model}")));
-        // Identity is pinned at launch, so resume re-enters THIS session.
         assert!(d.pins_session_id(), "copilot pins --session-id");
         assert!(d.can_resume());
         // Resume is by identity or not at all — never a blind continue (AC).
@@ -788,7 +752,6 @@ mod tests {
             d.resume_blind.is_empty(),
             "copilot never blind-continues (AC)"
         );
-        // Auto-update frozen: PDO owns when the target moves.
         assert_eq!(
             d.env,
             vec![("COPILOT_AUTO_UPDATE".to_string(), "false".to_string())]
@@ -825,7 +788,6 @@ mod tests {
 
     #[test]
     fn resume_verbs_are_the_floor_harnesses_own_property() {
-        // #614: the resume verb is a descriptor property, not a resume-seam constant.
         assert_eq!(claude().resume_by_id, "--resume");
         assert_eq!(claude().resume_blind, "--continue");
         // opencode cannot pin identity → blind-continue only.
@@ -883,10 +845,8 @@ mod tests {
             env: vec![],
         };
         let merged = merge_by_name(embedded_floor(), vec![custom_claude.clone()]);
-        // claude is replaced by the disk entry…
         let c = merged.iter().find(|d| d.name == CLAUDE).unwrap();
         assert_eq!(c.binary, "my-claude");
-        // …and opencode, absent from the disk tier, survives from the floor.
         assert!(merged.iter().any(|d| d.name == OPENCODE));
     }
 
@@ -903,12 +863,8 @@ mod tests {
         };
         let merged = merge_by_name(embedded_floor(), vec![novel]);
         assert!(merged.iter().any(|d| d.name == "novel"));
-        // The three-harness floor (claude, opencode, copilot) plus the novel disk
-        // harness.
         assert_eq!(merged.len(), 4);
     }
-
-    // --- the disk tier (#553) ------------------------------------------------
 
     #[test]
     fn parse_descriptors_accepts_a_valid_custom_harness() {
@@ -1003,13 +959,11 @@ mod tests {
         assert!(reg.resolve(CLAUDE).is_some());
         assert!(reg.resolve(OPENCODE).is_some());
         assert!(reg.diagnostic().is_none());
-        // Nothing is ever seeded on disk.
         assert!(!HarnessRegistry::descriptors_path(home.path()).exists());
     }
 
     #[test]
     fn load_merges_a_custom_harness_by_name_over_the_floor() {
-        // FP: declare a harness PDO does not know, and it resolves.
         let home = tempfile::tempdir().unwrap();
         let path = HarnessRegistry::descriptors_path(home.path());
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -1024,7 +978,6 @@ mod tests {
             .resolve("my-harness")
             .expect("the custom harness resolves");
         assert_eq!(d.binary, "my-harness");
-        // …and the floor survives alongside it (merge by name).
         assert!(reg.resolve(CLAUDE).is_some());
         assert!(reg.resolve(OPENCODE).is_some());
         assert!(reg.names().contains(&"my-harness".to_string()));
@@ -1040,10 +993,8 @@ mod tests {
         std::fs::write(&path, "harnesses:\n  - not: [a, map\n").unwrap();
 
         let reg = HarnessRegistry::load(home.path());
-        // Floor intact, byte-identical to the embedded claude.
         assert_eq!(reg.resolve(CLAUDE), Some(claude()));
         assert_eq!(reg.resolve(OPENCODE), Some(opencode()));
-        // …and the corruption is named, pointing at the real file.
         let d = reg.diagnostic().expect("a broken file must be said");
         assert!(
             d.contains("descriptors.yaml"),

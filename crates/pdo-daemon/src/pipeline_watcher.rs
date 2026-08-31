@@ -9,7 +9,6 @@ use tracing::{info, warn};
 
 use crate::SELF_WRITE_TTL;
 
-/// Debounce window for both backends.
 const DEBOUNCE: Duration = Duration::from_secs(1);
 /// Scan interval of the polling fallback. Combined with the debounce window,
 /// worst-case detection latency stays well under the 4s the integration tests
@@ -112,7 +111,6 @@ pub(crate) fn spawn_watcher(
                     continue;
                 }
 
-                // Detect run-scoped pipeline changes
                 if path.starts_with(&runs_dir_for_closure) {
                     if let Some(modified) = detect_run_scoped_change(path, &runs_dir_for_closure) {
                         info!(
@@ -263,7 +261,6 @@ pub(crate) fn watch_run_dir(debouncer: &mut PipelineDebouncer, run_dir: &Path) {
     }
 }
 
-/// Detect if a changed path is a run-scoped pipeline file.
 /// Expected patterns:
 ///   `<runs_dir>/<run-id>/pipeline.yaml` → kind "yaml"
 ///   `<runs_dir>/<run-id>/pipeline.prompts/<node-id>.md` → kind "prompt"
@@ -343,7 +340,6 @@ fn seed_mtimes(map: &Mutex<HashMap<PathBuf, SystemTime>>, dir: &std::path::Path)
     }
 }
 
-/// Seed mtimes for existing run-scoped pipeline files.
 fn seed_run_mtimes(map: &Mutex<HashMap<PathBuf, SystemTime>>, runs_dir: &std::path::Path) {
     let Ok(entries) = std::fs::read_dir(runs_dir) else {
         return;

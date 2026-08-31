@@ -1,46 +1,19 @@
-//! Run advancement — the single-pass "tick" that drives a live Run forward.
+//! Run advancement — the single-pass "tick" that drives a live Run forward, plus
+//! the two halves of node completion: the pure head [`evaluate_completion_head`]
+//! and the side-effecting tail [`complete_node`].
 //!
-//! Issue #235: the sequence *load events → [`event_log::project`] → compute what
-//! is ready → [`spawn_node`] → maybe complete the Run* was re-implemented inline
-//! at several call sites in `lib.rs`. This module owns that single-pass tick
-//! behind one entry point — [`advance_run`] — so the sequence lives in exactly
-//! one place.
+//! Don't make [`advance_run`] or [`complete_node`] reentrant (ADR-0009 / #122):
+//! keep them a linear sequence over [`spawn_node`], the pure `scheduler*`
+//! evaluators and `append_event`; never call an advancement helper from another
+//! one, and never wire scheduler-driving code onto `event_tx` — the cycle would
+//! not be caught by the compiler or the tests. [`spawn_node`] stays a leaf.
 //!
-//! Scope (slice-1): only the **single-pass** family is consolidated here. The
-//! two-pass *edge-firing* site `handle_node_completion`'s **body** still lives in
-//! `lib.rs` with its load-bearing `reload_run_state` re-projection, deferred to a
-//! tracked follow-up (no integration backstop yet — #235 plan, §5 follow-up A).
+//! Don't add side effects to the head: its purity (no DB, no tmux, no clock) is
+//! what lets all three completion callers share it. The async checks stay
+//! caller-side — `run_is_forgotten` before the head, the sub-worktree merge and
+//! `check_output_validation_with_retry` after an `Allow`.
 //!
-//! Node-completion HEAD + TAIL (#275, #354): this module owns both halves of
-//! node completion.
-//!
-//! - The **tail** [`complete_node`] (#275) is the shared post-`NodeCompleted`
-//!   sequence the node-done sites used to re-implement inline: it composes the
-//!   deferred two-pass HNC site (`handle_node_completion`, still bodied in
-//!   `lib.rs`) with [`advance_run`], the cross-run `retry_waiting_nodes`, and the
-//!   single completion gate.
-//! - The **head** [`evaluate_completion_head`] (#354) is the shared *pure*
-//!   decision the three guard-driven completion sites (`node_done`, the
-//!   `mark_node_done` command arm, `node_skip`) used to copy: build the
-//!   `NodeCompleted` guard probe → [`transition_guard::validate_transition`] →
-//!   reject (409) / no-op (200) / allow. It touches no DB and no tmux, so every
-//!   caller runs it identically; the async, side-effecting checks stay caller-side
-//!   (`run_is_forgotten`, #328; the sub-worktree merge + `check_output_validation_with_retry`,
-//!   #36). `handle_merge_resolver_done` has no transition-guard head and stays a
-//!   tail-only caller.
-//!
-//! Both are Layer-3 convenience seams (ADR-0009): pure head, side-effecting tail.
-//! Sharing the head does **not** collapse the per-caller tail divergence ratified
-//! by ADR-0023 — `node_done` detaches its tail ([`CompletionOrder::CompletionFirst`]),
-//! the `mark_node_done` arm runs its tail inline ([`CompletionOrder::SweepFirst`],
-//! no self-reap), and `node_skip` ends the run as `Skipped` without a tail advance.
-//!
-//! Non-reentrancy (ADR-0009 / #122): [`advance_run`] calls [`spawn_node`], the
-//! pure `scheduler*` evaluators, and `append_event`/`emit_*` in a **linear**
-//! sequence. It never calls another advancement helper or itself, and never
-//! wires scheduler-driving code onto `event_tx`. [`spawn_node`] stays a leaf.
-//! [`complete_node`] is likewise linear and non-reentrant: it runs HNC + the sweep
-//! + retry once, then the single completion gate — never from an all-runs sweep.
+//! Don't collapse the per-caller tail divergence ratified by ADR-0023.
 
 use tracing::{error, info};
 
@@ -62,15 +35,10 @@ use crate::{
 /// (plus any pending loop-iteration seeds), or — when there is nothing left to
 /// spawn — complete the Run if every expected node is done.
 ///
-/// A no-op unless the run is `Running` or `AwaitingUser`. This is the canonical
-/// body the inline `spawn_ready_after_event` used to carry; every former call
-/// site reaches it (directly or through the `spawn_ready_after_event` shim).
+/// A no-op unless the run is `Running` or `AwaitingUser`.
 pub(crate) async fn advance_run(state: &AppState, run_id: &str) {
-    // #600 / #589: before the readiness sweep, auto-skip any node that has become
-    // structurally unreachable (its required input arrives only on an either/or
-    // branch that was not taken). Otherwise it would sit forever, and the run would
-    // never reach "all expected nodes done". The sweep marks such nodes satisfied
-    // (empty output) and drives their downstream, so `l'aval continue`.
+    // Must run before the readiness sweep: a structurally-unreachable node would
+    // otherwise sit forever and the run would never reach "all expected nodes done".
     sweep_auto_skips(state, run_id).await;
 
     let events = match load_events(&state.db, run_id).await {
@@ -105,12 +73,9 @@ pub(crate) async fn advance_run(state: &AppState, run_id: &str) {
     let loop_seed_actions = scheduler::seed_pending_loops(&pipeline, &run_state, &resolved_vars);
 
     if ready.is_empty() && loop_seed_actions.is_empty() {
-        // Pipeline was modified but no new nodes need spawning. If all current
-        // pipeline nodes are completed, re-complete the run so it doesn't stay
-        // dangling in Running state after a trivial YAML edit. The expected set
-        // here is the *current* pipeline (post-modification), not the run's
-        // frozen snapshot — that is why this site derives ids from
-        // `pipeline.nodes` rather than [`expected_completion_node_ids`].
+        // Don't use [`expected_completion_node_ids`] here: this site must judge
+        // against the *current* (post-YAML-edit) pipeline, not the run's frozen
+        // snapshot, or an edited run stays dangling in Running forever.
         let pipeline_node_ids: Vec<String> = pipeline.nodes.iter().map(|n| n.id.clone()).collect();
         maybe_complete_run(state, run_id, &pipeline_node_ids, &run_state, false).await;
         return;
@@ -132,11 +97,7 @@ pub(crate) async fn advance_run(state: &AppState, run_id: &str) {
     spawn_each(state, &spawn_ctx, &ready).await;
 
     for action in &loop_seed_actions {
-        // `seed_pending_loops` only emits LoopIterStarted + Spawn; the total
-        // `interpret` covers both and makes the old `_ => {}` catch-all a full
-        // match. InternalOnly (no scheduler dedup — a loop seed is a fresh
-        // iter-1) on the pass snapshot (INV-2); source_iter is irrelevant (no
-        // SwitchRouted) → 1.
+        // InternalOnly, not scheduler dedup: a loop seed is always a fresh iter-1.
         let _ = scheduler_interpreter::interpret(
             state,
             &spawn_ctx,
@@ -156,16 +117,13 @@ pub(crate) async fn advance_run(state: &AppState, run_id: &str) {
 }
 
 /// Auto-skip every node that has become **structurally unreachable** — its
-/// producing branch was not taken, so nothing will ever spawn it (ADR-0011 / #589 /
-/// #600, AC7). Each skipped node is marked satisfied with an empty output (so a
-/// downstream resolver finds a concrete artifact, not a missing file) and its edges
-/// are fired, so the run advances instead of hanging on a node that can never run.
+/// producing branch was not taken, so nothing will ever spawn it (ADR-0011).
+/// Each skipped node is marked satisfied with an *empty output* so a downstream
+/// resolver finds a concrete artifact rather than a missing file.
 ///
-/// Iterative and bounded: skipping one node can render a downstream either/or dead
-/// in turn, so it loops until a pass finds nothing new, capped at the node count so
-/// a pathological graph can never spin. A no-op on a run that is not live, and on
-/// the overwhelming-majority run with no unreachable node (the scan is a cheap
-/// graph walk).
+/// Must iterate: skipping one node can render a downstream either/or dead in
+/// turn. The pass count is capped at the node count so a pathological graph
+/// cannot spin.
 async fn sweep_auto_skips(state: &AppState, run_id: &str) {
     let mut passes = 0usize;
     loop {
@@ -254,23 +212,18 @@ async fn sweep_auto_skips(state: &AppState, run_id: &str) {
         if skipped_ids.is_empty() {
             return;
         }
-        // Fire each skipped node's edges so its downstream advances on the empty
-        // output (`l'aval continue`). `fire_edges` re-projects internally, so the
-        // next loop pass sees the updated state and can skip a newly-dead node.
+        // `fire_edges` re-projects internally, so the next pass sees the updated
+        // state and can skip a newly-dead node.
         for node_id in &skipped_ids {
             fire_edges(state, run_id, node_id).await;
         }
     }
 }
 
-/// Spawn each node in `ready_set` (in the order given) through [`spawn_node`].
+/// Spawn each node in `ready_set` through [`spawn_node`].
 ///
-/// Shared by [`advance_run`] (ready set = [`scheduler_dispatcher::compute_ready_to_spawn`])
-/// and `retry_waiting_nodes` (ready set = [`scheduler_dispatcher::waiting_nodes`]).
-/// The caller-supplied order is honoured verbatim — under the session cap it
-/// decides who grabs the last free slot, so it must not be re-sorted here.
-/// `spawn_node` re-checks admission per node, so a node that still can't get a
-/// slot simply stays `Waiting`.
+/// Don't re-sort or de-duplicate `ready_set`: under the session cap its order
+/// decides who grabs the last free slot.
 pub(crate) async fn spawn_each(
     state: &AppState,
     spawn_ctx: &SpawnContext<'_>,
@@ -286,14 +239,11 @@ pub(crate) async fn spawn_each(
 /// The set of node ids that must all be `Completed` for the Run to be done, as
 /// seen from a *node-done* site.
 ///
-/// Prefer the run's own `node_defs` snapshot (frozen at run start, so a mid-run
-/// YAML edit can't change what "all done" means for an in-flight run); fall back
-/// to whatever nodes have appeared in the log when no snapshot exists (legacy
-/// runs). This reproduces the inline derivation the node-done / mark-node-done /
-/// merge-resolver-done sites used before consolidation.
+/// Prefers the run's `node_defs` snapshot, frozen at run start, so a mid-run YAML
+/// edit can't change what "all done" means for an in-flight run; the `nodes`-keys
+/// fallback exists only for legacy runs with no snapshot.
 ///
-/// NB: [`advance_run`]'s own completion branch deliberately uses a *different*
-/// set (`pipeline.nodes`, the post-modification pipeline) — see its comment.
+/// [`advance_run`]'s own completion branch deliberately uses a *different* set.
 pub(crate) fn expected_completion_node_ids(run_state: &event_log::RunState) -> Vec<String> {
     if !run_state.node_defs.is_empty() {
         run_state.node_defs.iter().map(|nd| nd.id.clone()).collect()
@@ -304,15 +254,9 @@ pub(crate) fn expected_completion_node_ids(run_state: &event_log::RunState) -> V
 
 /// Pure decision: should a `RunCompleted` be emitted for this projected state?
 ///
-/// True iff the run is in a completion-permitting status **and** every expected
-/// node is `Completed`. The permitted status is `Running`; setting
-/// `complete_when_awaiting_user` widens it to also include `AwaitingUser` — the
-/// `mark_node_done` path, where the just-finished node was interactive so the
-/// run can still project as `AwaitingUser` at the completion check. Every other
-/// caller permits only `Running`.
-///
-/// Pure over the projected `RunState` (AC#4: state in → decision out, no HTTP),
-/// so the gate is unit-tested directly below.
+/// `complete_when_awaiting_user` exists for `mark_node_done`, where the
+/// just-finished node was interactive so the run still projects `AwaitingUser` at
+/// the completion check. Every other caller permits only `Running`.
 pub(crate) fn should_complete_run(
     run_state: &event_log::RunState,
     expected_node_ids: &[String],
@@ -320,11 +264,9 @@ pub(crate) fn should_complete_run(
 ) -> bool {
     let status_permits = run_state.status == event_log::RunStatus::Running
         || (complete_when_awaiting_user && run_state.status == event_log::RunStatus::AwaitingUser);
-    // A collection region mid-fan-out (ADR-0011 / #269) is unfinished work even
-    // when every node projects `Completed`: node-level status reflects the
-    // LATEST event, so a member whose lap 1 finished while laps 2..N are still
-    // running can transiently project Completed. The barrier (CollectionDone)
-    // is the only truthful "region finished" signal.
+    // Don't drop this in favour of node statuses: node status reflects the LATEST
+    // event, so a collection member whose lap 1 finished while laps 2..N run can
+    // transiently project Completed. The barrier is the only truthful signal.
     let collections_done = run_state.collection_states.values().all(|cs| cs.done);
     status_permits && collections_done && run_state.all_nodes_completed(expected_node_ids)
 }
@@ -332,14 +274,9 @@ pub(crate) fn should_complete_run(
 /// Emit exactly one `RunCompleted` if [`should_complete_run`] says so; returns
 /// whether it emitted.
 ///
-/// The single home for run-completion emission on the single-pass paths: the
-/// `advance_run` "nothing ready" branch and the shared node-done tail
-/// [`complete_node`] (reached by `node_done`, the `mark_node_done` command arm,
-/// and `handle_merge_resolver_done`) all route here. `append_event` does **not**
-/// de-dup `RunCompleted`, so this must stay the only completion emitter on these
-/// paths — never call it from an all-runs/waiting sweep. The returned `bool`
-/// makes the single-`RunCompleted` invariant directly observable to
-/// [`complete_node`] without a re-projection; `advance_run` ignores it.
+/// `append_event` does **not** de-dup `RunCompleted`, so this must stay the only
+/// completion emitter on the single-pass paths — never call it from an
+/// all-runs/waiting sweep, or a run emits several.
 pub(crate) async fn maybe_complete_run(
     state: &AppState,
     run_id: &str,
@@ -369,17 +306,10 @@ pub(crate) async fn maybe_complete_run(
 /// Which order the completion tail runs the producer's edge-firing pass
 /// ([`handle_node_completion`]) relative to the readiness sweep ([`advance_run`]).
 ///
-/// Behavior-equivalent on the final state today — HNC and `advance_run` cover
-/// disjoint spawn sets (HNC fires the just-completed producer's conditional /
-/// loop / foreach edges; `advance_run` spawns only unconditionally-ready nodes,
-/// its `ready_nodes` set explicitly skipping Switch/Loop/ForEach and any node
-/// already present), `spawn_node` re-validates each transition before any side
-/// effect (a duplicate `NodeStarted` is a NoOp), and `all_nodes_completed`
-/// requires the *full* expected set — so neither order can re-fire the other's
-/// spawns nor complete the run early. The two orders are nonetheless preserved
-/// per-caller, so the #275 extraction is a strictly behavior-preserving carve
-/// auditable by diff. Collapsing to one variant is #235 follow-up A (needs the
-/// order-equivalence integration test first).
+/// The two orders are believed behavior-equivalent (the two passes cover disjoint
+/// spawn sets and `spawn_node` re-validates every transition), but don't collapse
+/// them to one variant without an order-equivalence integration test first —
+/// nothing here would catch a divergence.
 pub(crate) enum CompletionOrder {
     /// `node_done` & `handle_merge_resolver_done`: edges, then sweep.
     CompletionFirst,
@@ -392,49 +322,35 @@ pub(crate) enum CompletionOrder {
 pub(crate) enum CompletionOutcome {
     /// `RunCompleted` was emitted on this call.
     RunCompleted,
-    /// The run advanced but not all expected nodes are done yet (or it completed
-    /// earlier in the same tail via an HNC `Complete`/`Halt` action — either way
-    /// the completion gate emitted nothing).
+    /// The run advanced but not all expected nodes are done yet — or it completed
+    /// earlier in the same tail via an HNC `Complete`/`Halt` action. Either way
+    /// the completion gate emitted nothing.
     StillRunning,
-    /// The run projects as `Halted`; no completion emitted (`node_done`'s
-    /// short-circuit, now uniform across callers — see [`complete_node`]).
     Halted,
 }
 
-/// The three-way outcome of the pure completion **head** decision (#354).
+/// The three-way outcome of the pure completion **head** decision.
 ///
-/// Mirrors [`transition_guard::Verdict`] at the run-advance layer so callers
-/// match on a completion-specific type rather than the guard's internal enum:
-/// - [`CompletionHead::Reject`]  → the caller returns `409 CONFLICT { error }`.
-/// - [`CompletionHead::NoOp`]    → the caller returns `200 { ok, noop, reason }`.
-/// - [`CompletionHead::Allow`]   → the caller runs its own side effects, appends
-///   its own `NodeCompleted`, and drives its own tail.
+/// The caller's contract per variant:
+/// - [`CompletionHead::Reject`] → `409 CONFLICT { error }`.
+/// - [`CompletionHead::NoOp`]   → `200 { ok, noop, reason }`.
+/// - [`CompletionHead::Allow`]  → run your own side effects, append your own
+///   `NodeCompleted`, drive your own tail.
 pub(crate) enum CompletionHead {
     Reject { reason: String },
     NoOp { reason: String },
     Allow,
 }
 
-/// The shared, **pure** *head* of node completion (#354): the guard-verdict
-/// decision that `node_done`, the `mark_node_done` command arm, and `node_skip`
-/// used to copy verbatim.
+/// The shared, **pure** *head* of node completion, used by `node_done`, the
+/// `mark_node_done` command arm and `node_skip`.
 ///
-/// Builds the `NodeCompleted` guard probe for `(run_id, node_id, iter)`, runs it
-/// through [`transition_guard::validate_transition`] against the projected
-/// `RunState`, and maps the verdict to [`CompletionHead`].
+/// Decides only *whether* the completion is legal: no DB, no tmux, no append, no
+/// clock (the guard is ts-blind, so the probe carries an empty `ts`). Keep it
+/// that way — see the module header.
 ///
-/// Pure: no DB, no tmux, no append, no clock dependence — the guard ignores
-/// `Event::ts`, so the probe carries an empty `ts`. That purity is what lets all
-/// three callers share it and what makes it unit-testable directly. It decides
-/// only *whether* the completion is legal; it builds no completion event and runs
-/// no tail. The async / side-effecting neighbours stay caller-side by design:
-/// `run_is_forgotten` (async DB, #328) runs *before* this head; the sub-worktree
-/// merge / doc-cleanliness check and `check_output_validation_with_retry` (async +
-/// in-session nudge, #36) run *after* an `Allow`, before the caller's append.
-///
-/// `run_state` is forwarded verbatim: `None` (no projected state) yields the
-/// guard's `Allow` — the caller decides whether to admit `None` (node_done and
-/// node_skip 404 on it *before* calling this; mark forwards it).
+/// `None` `run_state` yields `Allow`; each caller decides whether to admit it
+/// (`node_done` and `node_skip` 404 *before* calling; `mark` forwards it).
 pub(crate) fn evaluate_completion_head(
     run_state: Option<&event_log::RunState>,
     run_id: &str,
@@ -444,7 +360,7 @@ pub(crate) fn evaluate_completion_head(
     let probe = event_log::Event {
         id: None,
         run_id: run_id.to_string(),
-        ts: String::new(), // guard is ts-blind; keep the seam clock-free
+        ts: String::new(),
         kind: event_log::EventKind::NodeCompleted,
         node_id: Some(node_id.to_string()),
         iter: Some(iter),
@@ -452,8 +368,6 @@ pub(crate) fn evaluate_completion_head(
     };
     match transition_guard::validate_transition(run_state, &probe) {
         transition_guard::Verdict::Reject { reason } => CompletionHead::Reject {
-            // #515: `CompletionHead::Reject` stays `String` — convert the typed
-            // cause to its prose at this boundary (blast radius kept to #515).
             reason: reason.to_string(),
         },
         transition_guard::Verdict::NoOp { reason } => CompletionHead::NoOp { reason },
@@ -461,11 +375,10 @@ pub(crate) fn evaluate_completion_head(
     }
 }
 
-/// The completion head for a **local skip** (`skip_node`, #600): identical to
-/// [`evaluate_completion_head`] but the guard probe carries the `skipped: true`
-/// marker, so a node that never started is `Allow`ed (a skip legitimately satisfies
-/// a node stuck waiting on an unreachable input) while a genuine duplicate skip
-/// still no-ops and a terminal run still rejects.
+/// The completion head for a **local skip**: identical to
+/// [`evaluate_completion_head`] but the probe carries `skipped: true`, so a node
+/// that never started is `Allow`ed — a skip legitimately satisfies a node stuck
+/// waiting on an unreachable input.
 pub(crate) fn evaluate_skip_completion_head(
     run_state: Option<&event_log::RunState>,
     run_id: &str,
@@ -490,13 +403,10 @@ pub(crate) fn evaluate_skip_completion_head(
     }
 }
 
-/// Reload + re-project, then fire the just-completed producer's outgoing edges
-/// via [`handle_node_completion`].
+/// Reload + re-project, then fire the just-completed producer's outgoing edges.
 ///
-/// HNC needs a *fresh* `events` slice + `RunState` (its first pass re-projects
-/// nothing itself), so this reloads rather than trusting a stale caller
-/// projection — matching what each node-done site did inline before #275. A load
-/// failure is logged and skipped (same as the inline sites' `else { return }`).
+/// Don't pass the caller's projection through: `handle_node_completion` does not
+/// re-project on its first pass, so it needs a fresh `events` slice.
 async fn fire_edges(state: &AppState, run_id: &str, completed_node_id: &str) {
     let events = match load_events(&state.db, run_id).await {
         Ok(e) => e,
@@ -511,27 +421,18 @@ async fn fire_edges(state: &AppState, run_id: &str, completed_node_id: &str) {
     handle_node_completion(state, &run_state, run_id, completed_node_id, &events).await;
 }
 
-/// Layer-3 convenience command (ADR-0009): the shared post-`NodeCompleted` tail
-/// that drives a Run forward after one of its nodes completes.
+/// The shared post-`NodeCompleted` tail that drives a Run forward after one of
+/// its nodes completes (ADR-0009).
 ///
-/// PRECONDITION (the **post-append seam**): the caller has already appended its
-/// `NodeCompleted` (and any bespoke companion events — e.g. `mark_node_done`'s
-/// `source` payload + `CommandIssued`) and done any session reap. `completed_node_id`
-/// is the node whose edges to fire; for the merge-resolver path this is the
-/// *original conflicting node*, not the route's `__merge_resolver__` param, which
-/// is why it cannot be re-derived from the request.
+/// PRECONDITION: the caller has already appended its `NodeCompleted` (plus any
+/// companion events) and done any session reap. `completed_node_id` is the node
+/// whose edges to fire — on the merge-resolver path that is the *original
+/// conflicting node*, not the route's `__merge_resolver__` param, so it cannot be
+/// re-derived from the request.
 ///
-/// Linear, non-reentrant: fire the producer's edges + the readiness sweep
-/// (`advance_run`) + the cross-run `retry_waiting_nodes` (a freed session slot can
-/// start a `waiting` node in another run, #159), in the requested `order`, then a
-/// single reload → Halted short-circuit → the single completion gate
-/// ([`maybe_complete_run`], the only `RunCompleted` emitter here). Never call it
-/// from an all-runs/waiting sweep (single-emitter rule).
-///
-/// The Halted short-circuit is uniform across all three callers: only `node_done`
-/// short-circuited before, but `maybe_complete_run` already no-ops on a terminal
-/// status, so returning [`CompletionOutcome::Halted`] for the merge / mark paths
-/// emits no `RunCompleted` either way — behavior-preserving.
+/// `retry_waiting_nodes` is cross-run on purpose: a freed session slot can start a
+/// `waiting` node in another run. Never call this tail from an all-runs/waiting
+/// sweep — see [`maybe_complete_run`]'s single-emitter rule.
 pub(crate) async fn complete_node(
     state: &AppState,
     run_id: &str,
@@ -552,7 +453,6 @@ pub(crate) async fn complete_node(
         }
     }
 
-    // Single reload → project → Halted short-circuit → single completion gate.
     let events = match load_events(&state.db, run_id).await {
         Ok(e) => e,
         Err(e) => {
@@ -593,8 +493,6 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
 
-    // --- fixtures -----------------------------------------------------------
-
     fn doc_node(id: &str) -> NodeDef {
         NodeDef {
             id: id.into(),
@@ -633,8 +531,8 @@ mod tests {
         }
     }
 
-    /// A pipeline of root DocOnly nodes (no edges) — every node is immediately
-    /// ready, so `compute_ready_to_spawn` reflects pure declaration order.
+    /// No edges: every node is immediately ready, so `compute_ready_to_spawn`
+    /// reflects pure declaration order.
     fn roots_pipeline(ids: &[&str]) -> PipelineDef {
         PipelineDef {
             name: "roots".into(),
@@ -696,13 +594,10 @@ mod tests {
         }
     }
 
-    // --- ready-set order (AC#4: state in -> spawn order out) ---------------
-
     #[test]
     fn ready_set_preserves_yaml_declaration_order() {
-        // Declared gamma, alpha, beta (NOT alphabetical). The spawn order must
-        // follow YAML declaration order — it decides who grabs the last free
-        // slot under the session cap, so a HashSet/re-sort would be a regression.
+        // Declared NOT alphabetically: a HashSet or a re-sort would still pass a
+        // laxer assertion, and would break who grabs the last slot under the cap.
         let pipeline = roots_pipeline(&["gamma", "alpha", "beta"]);
         let state = RunState::new("run-1".into(), "roots".into());
 
@@ -714,12 +609,8 @@ mod tests {
         assert_eq!(ready, vec!["gamma", "alpha", "beta"]);
     }
 
-    // --- expected-id derivation (protects the STEP-4 dup collapse) ---------
-
     #[test]
     fn expected_ids_prefer_node_defs_snapshot() {
-        // node_defs present -> authoritative, even when extra nodes leaked into
-        // the live `nodes` map. This is the frozen run snapshot.
         let mut state = RunState::new("run-1".into(), "p".into());
         state.node_defs = vec![node_def_info("a"), node_def_info("b")];
         state.nodes.insert("a".into(), completed_node("a"));
@@ -740,8 +631,6 @@ mod tests {
         ids.sort();
         assert_eq!(ids, vec!["x".to_string(), "y".to_string()]);
     }
-
-    // --- completion gate (AC#4: state in -> complete? out, no HTTP) --------
 
     fn state_with(status: RunStatus, nodes: &[(&str, NodeState)]) -> RunState {
         let mut s = RunState::new("run-1".into(), "p".into());
@@ -774,15 +663,13 @@ mod tests {
 
     #[test]
     fn empty_expected_set_never_completes() {
-        // all_nodes_completed is false on an empty set (not vacuous-true): a run
-        // with no expected nodes is not "all done".
+        // Not vacuous-true: a run with no expected nodes is not "all done".
         let s = state_with(RunStatus::Running, &[]);
         assert!(!should_complete_run(&s, &[], false));
     }
 
     #[test]
     fn awaiting_user_does_not_complete_by_default() {
-        // The single-pass / merge-resolver / node_done sites permit ONLY Running.
         let s = state_with(RunStatus::AwaitingUser, &[("a", completed_node("a"))]);
         let expected = vec!["a".to_string()];
         assert!(!should_complete_run(&s, &expected, false));
@@ -790,7 +677,6 @@ mod tests {
 
     #[test]
     fn awaiting_user_completes_only_when_flag_set() {
-        // The mark_node_done command arm (interactive node just finished) opts in.
         let s = state_with(RunStatus::AwaitingUser, &[("a", completed_node("a"))]);
         let expected = vec!["a".to_string()];
         assert!(should_complete_run(&s, &expected, true));
@@ -798,9 +684,8 @@ mod tests {
 
     #[test]
     fn undone_collection_region_blocks_completion() {
-        // ADR-0011 / #269: node status is the LATEST event, so a collection
-        // member can transiently project Completed mid-fan-out. Only the
-        // barrier (`done`) unblocks run completion.
+        // A collection member can transiently project Completed mid-fan-out;
+        // only the barrier unblocks run completion.
         let mut s = state_with(RunStatus::Running, &[("a", completed_node("a"))]);
         s.collection_states.insert(
             "fan".into(),
@@ -831,10 +716,7 @@ mod tests {
         }
     }
 
-    // --- completion head (#354): state in -> guard verdict out, no HTTP -----
-
-    /// A node carrying a single iteration row — the shape `validate_completion`
-    /// actually reads (it consults `iterations[]`, never node-level `status`).
+    /// `validate_completion` reads `iterations[]`, never node-level `status`.
     fn node_iter(id: &str, iter: i64, status: NodeStatus) -> NodeState {
         let completed_at = (status == NodeStatus::Completed).then(|| "t1".to_string());
         NodeState {
@@ -885,7 +767,6 @@ mod tests {
 
     #[test]
     fn completion_head_rejects_never_started() {
-        // Node present but no iteration row for iter 1 -> "never started".
         let s = state_with(RunStatus::Running, &[]);
         assert!(matches!(
             evaluate_completion_head(Some(&s), "run-1", "n", 1),
@@ -895,7 +776,6 @@ mod tests {
 
     #[test]
     fn completion_head_rejects_on_non_running_run() {
-        // Run-status gate fires before the iteration is inspected.
         let s = state_with(
             RunStatus::Halted,
             &[("n", node_iter("n", 1, NodeStatus::Running))],
@@ -908,7 +788,6 @@ mod tests {
 
     #[test]
     fn completion_head_allows_when_no_projected_state() {
-        // mark_node_done's None path: guard maps None -> Allow, forwarded verbatim.
         assert!(matches!(
             evaluate_completion_head(None, "run-1", "n", 1),
             CompletionHead::Allow

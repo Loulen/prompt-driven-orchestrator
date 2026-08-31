@@ -128,7 +128,7 @@ fn strip_ansi(s: &str) -> String {
     while let Some(c) = chars.next() {
         if c == '\u{1b}' {
             if chars.peek() == Some(&'[') {
-                chars.next(); // consume '['
+                chars.next();
                 while let Some(&nc) = chars.peek() {
                     chars.next();
                     if matches!(nc, '\u{40}'..='\u{7e}') {
@@ -136,7 +136,7 @@ fn strip_ansi(s: &str) -> String {
                     }
                 }
             } else {
-                chars.next(); // lone/other escape — drop the following char
+                chars.next();
             }
         } else {
             out.push(c);
@@ -154,8 +154,7 @@ fn strip_ansi(s: &str) -> String {
 /// not a generic matcher — a consumer dispatches through
 /// [`crate::harness_probes::usage_limit_shown`], never calling this directly.
 pub(crate) fn detect_usage_limit(pane: &str) -> bool {
-    // Normalise: strip ANSI, lowercase (anchors are ASCII), collapse whitespace so
-    // line-wrap / padding can't split an anchor.
+    // Whitespace is collapsed so a line-wrap / padding can't split an anchor.
     let stripped = strip_ansi(pane).to_ascii_lowercase();
     let norm = stripped.split_whitespace().collect::<Vec<_>>().join(" ");
     USAGE_LIMIT_ANCHORS.iter().any(|a| norm.contains(a))
@@ -270,8 +269,6 @@ pub(crate) fn parse_turn_state(tail: &str) -> TurnState {
         if line.is_empty() {
             continue;
         }
-        // A clipped leading record (or any future record shape we don't know) is
-        // skipped, never guessed at.
         let Ok(record) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
@@ -334,10 +331,9 @@ fn quiet_long_enough(mtime: SystemTime, now: SystemTime) -> bool {
 /// This is the single source of truth for the CC project-dir encoding;
 /// [`crate::run_cost::cc_project_dirname`] delegates here.
 ///
-/// History (#373): this previously stripped the leading `/` and left `.`
-/// intact, so [`find_session_jsonl`] resolved `None` for *every* PDO node and
-/// the mtime-based `Stale`/`AutoComplete` branches of [`decide`] were dead in
-/// production. Fixed and verified against real on-disk dirs.
+/// Don't "clean up" the encoding (strip the leading `/`, keep `.` intact): that
+/// resolved `None` for *every* PDO node, silently killing the transcript probe
+/// (#373).
 pub fn encode_working_dir(dir: &Path) -> String {
     dir.to_string_lossy()
         .chars()
@@ -645,17 +641,8 @@ fn informational_event(
 }
 
 /// The liveness-sweep policy for a single running node, with all I/O injected
-/// via `probes`. This is the one place the whole pipeline lives:
-///
-/// ```text
-/// session_alive → decide
-///   ├─ SessionDied → detection_events → attach_diagnostics
-///   └─ Ok          → usage-limit dedup (#290)
-///                  → [setting on] transcript_tail → quiet? → parse_turn_state
-///                                 → outputs_valid? → TurnEnded (#469 §2)
-/// ```
-///
-/// so [`crate::lib`]'s sweep is reduced to a loop that builds a [`NodeProbes`]
+/// via `probes`. This is the one place the whole pipeline lives, so
+/// [`crate::lib`]'s sweep is reduced to a loop that builds a [`NodeProbes`]
 /// adapter, calls this, appends [`Assessment::events`], and runs the
 /// reap / complete side effects keyed off [`Assessment::detection`].
 ///
@@ -874,7 +861,6 @@ pub fn count_correlated_deaths(
         .count()
 }
 
-/// Collect all running nodes from a RunState.
 pub fn running_nodes(run_state: &event_log::RunState) -> Vec<(String, i64)> {
     run_state
         .nodes

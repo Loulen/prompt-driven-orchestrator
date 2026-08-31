@@ -329,8 +329,6 @@ fn plant_transcript(
     file
 }
 
-// -- Test 1: cost reads the staged home while a sandboxed run is live ----------
-
 #[tokio::test]
 async fn cost_reads_staging_during_minimal_run() {
     if !tmux_available() {
@@ -348,8 +346,6 @@ async fn cost_reads_staging_during_minimal_run() {
     .unwrap();
 
     let run_id = start_run(&daemon, Some("minimal")).await;
-    // The worker reaches Running with a live (sleeping) session; its staging is
-    // seeded by the eager prep.
     wait_node_status(&daemon, &run_id, "running").await;
     assert!(
         wait_until(|| staging_projects(&daemon, &run_id)
@@ -388,8 +384,6 @@ async fn cost_reads_staging_during_minimal_run() {
         run["cost"]
     );
 }
-
-// -- Test 2: the liveness sweep reads the staged home while live ---------------
 
 /// The real tail of the transcript of #469's node: parses as `TurnEnded` (an
 /// assistant `text` message, no tool call pending).
@@ -503,8 +497,6 @@ async fn liveness_sweep_reads_staging_during_minimal_run() {
     );
 }
 
-// -- Test 3: terminal transition merges staging into ~/.claude/projects --------
-
 #[tokio::test]
 async fn terminal_merges_staging_into_host_claude_projects() {
     if !tmux_available() {
@@ -541,13 +533,10 @@ async fn terminal_merges_staging_into_host_claude_projects() {
         None,
     );
 
-    // Drive the run terminal (worker output present → run completes).
     write_node_output(&daemon, &run_id, "done\n");
     simulate_node_done(&daemon, &run_id).await;
     wait_run_status(&daemon, &run_id, "completed").await;
 
-    // The detached terminal merge lands the transcript in the host projects dir
-    // at the standard encoded dirname, verbatim.
     let enc = encode_working_dir(&worktree_dir(&daemon, &run_id));
     let host_file = host_projects(&daemon).join(&enc).join("s.jsonl");
     assert!(
@@ -567,8 +556,6 @@ async fn terminal_merges_staging_into_host_claude_projects() {
         "cost must stay $5 after the terminal transition: {run}"
     );
 }
-
-// -- Test 4: double merge (terminal then cleanup) is byte-identical ------------
 
 #[tokio::test]
 async fn double_merge_terminal_then_cleanup_is_identical() {
@@ -619,7 +606,6 @@ async fn double_merge_terminal_then_cleanup_is_identical() {
     );
     let after_terminal = std::fs::read(&host_file).unwrap();
 
-    // Second merge at cleanup_run (before teardown), then archive.
     let resp = post_command(
         &daemon,
         &run_id,
@@ -629,8 +615,6 @@ async fn double_merge_terminal_then_cleanup_is_identical() {
     assert!(resp.status().is_success(), "cleanup_run should archive");
     wait_run_status(&daemon, &run_id, "archived").await;
 
-    // Byte-identical, exactly one file (no duplicate / `*.tmp` residue), and the
-    // staging is gone.
     assert_eq!(
         std::fs::read(&host_file).unwrap(),
         after_terminal,
@@ -655,8 +639,6 @@ async fn double_merge_terminal_then_cleanup_is_identical() {
         "cleanup must purge the staging after the merge"
     );
 }
-
-// -- Test 5: resume re-arms the container (ensure_ready) -----------------------
 
 #[tokio::test]
 async fn resume_reengages_seam_and_ensures_container() {
@@ -703,8 +685,6 @@ async fn resume_reengages_seam_and_ensures_container() {
         log_text(&log)
     );
 }
-
-// -- Test 6: resume fails loud when Docker is unavailable ----------------------
 
 #[tokio::test]
 async fn resume_fails_loud_when_docker_unavailable() {

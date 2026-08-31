@@ -119,15 +119,10 @@ pub enum EventKind {
     /// Behaviour-preserving no-op in projection — the node stays Running;
     /// recovery is deferred (Slice 2/3). Wire form: `"node_blocked_on_limit"`.
     NodeBlockedOnLimit,
-    /// Informational (#373 Unit A) — **no producer since #469 (ADR-0032 §3)**.
-    /// The sweep used to emit this when a node had been idle past a threshold with
-    /// valid outputs: "it *would* auto-complete". #469 deleted the threshold (a
-    /// `docker build` is indistinguishable from a dead agent that way) and closed
-    /// Unit B in won't-do, so nothing writes this any more. The variant is KEPT
-    /// because the log is append-only: a Run that recorded one before #469 must
-    /// still deserialise, or `project()` would return `None` and the Run would
-    /// vanish from the UI. Behaviour-preserving no-op in projection — the node
-    /// stays Running. Wire form: `"node_auto_complete_observed"`.
+    /// Informational, **no producer since #469**. Don't delete the variant: the
+    /// log is append-only, and a Run that recorded one before #469 would fail to
+    /// deserialise, so `project()` would return `None` and the Run would vanish
+    /// from the UI. No-op in projection. Wire form: `"node_auto_complete_observed"`.
     NodeAutoCompleteObserved,
     PipelineLint,
     PipelineModified,
@@ -244,23 +239,18 @@ impl RunStatus {
 /// for the Run's whole life — a resumed session matches its transcript by working-dir
 /// path, so flipping the mode mid-life would break `claude --continue`.
 ///
-/// - `Off` — historical host execution (no Docker, byte-identical legacy launch);
-/// - `Profile(name)` — sandboxed, with the **staging profile** `name` deciding what
-///   the staged home carries (ADR-0031 §5). `full` and `minimal` are the two
-///   *virtual defaults* (no DB row until edited), so `"full"`/`"minimal"` keep
-///   round-tripping byte-identically through every historical payload.
+/// `full` and `minimal` are *virtual defaults* (no DB row until edited), so they keep
+/// round-tripping byte-identically through every historical payload.
 ///
 /// The wire form is a **bare string**: `off`, or the profile name verbatim. Serde is
 /// hand-written for exactly that reason — `untagged` would emit `null` for the unit
 /// variant, and `#[serde(from = "String")]` would demand an infallible conversion
 /// while a blank token must fail.
 ///
-/// [`SandboxMode::parse`] is purely **syntactic** since #432: `None` no longer means
-/// *unknown*, it means *blank*. Whether a profile **exists** is a database question,
-/// answered at the edge (create-run, `PUT /settings`, trigger create/patch) and never
-/// here — this module is pure and its projection runs inside `append_event`.
-/// `Default` is `Off`, so an absent payload field (historical runs, bare-API creates)
-/// projects to the host path.
+/// [`SandboxMode::parse`] is purely **syntactic**: `None` means *blank*, not
+/// *unknown*. Whether a profile **exists** is a database question, answered at the
+/// edge (create-run, `PUT /settings`, trigger create/patch) and never here — this
+/// module is pure and its projection runs inside `append_event`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub enum SandboxMode {
     #[default]
@@ -269,14 +259,11 @@ pub enum SandboxMode {
     Profile(String),
 }
 
-/// Wire tokens of the pre-#426 two-position switch. They were dropped **without
-/// alias**, and since #432 `parse` accepts any non-blank token as a profile name —
-/// so a historical payload carrying one would now project to `Profile("copy")`, an
-/// unknown profile, and fail the Run hard. That is a worse answer than the #426
-/// behaviour for a Run created before the rename even existed, so the projection
-/// keeps mapping these two tokens to `Off` + a `warn!`. NOT consulted anywhere the
-/// user can still type a value (a stored `copy` in `instance_config` or on a Trigger
-/// now fails loud at the create chokepoint, which is the point of ADR-0031 §7).
+/// Wire tokens of a dropped two-position switch. Don't remove this mapping: `parse`
+/// accepts any non-blank token as a profile name, so a historical payload carrying
+/// one would project to `Profile("copy")` — an unknown profile — and fail the Run
+/// hard. NOT consulted anywhere the user can still type a value: a stored `copy`
+/// fails loud at the create chokepoint (ADR-0031 §7).
 const LEGACY_SANDBOX_TOKENS: &[&str] = &["copy", "pure"];
 
 impl SandboxMode {
@@ -370,14 +357,12 @@ fn env_default_sandbox() -> Option<SandboxMode> {
 }
 
 /// Instance default, precedence `stored → env → default(Off)`. A stored empty value is
-/// treated as unset (mirror of the `""` sentinel + PUT validator). SINGLE source shared
-/// by `create_run_inner` AND `build_settings_view` (0 drift, lesson #373).
+/// treated as unset. SINGLE source shared by `create_run_inner` AND
+/// `build_settings_view`.
 ///
-/// #432: no `warn!` for an unparseable stored token any more — `parse` is syntactic, so
-/// the only stored value it rejects is blank, which the `""` filter already handles.
-/// A stored name that does not *exist* is no longer demoted to `off` at all: it wins the
-/// tier, and the create-run chokepoint 400s on it by name (ADR-0031 §7 — never a silent
-/// fallback toward less isolation).
+/// A stored profile name that does not *exist* is deliberately NOT demoted to `off`
+/// here: it wins the tier and the create-run chokepoint 400s on it by name (ADR-0031
+/// §7 — never a silent fallback toward less isolation).
 pub(crate) fn default_sandbox_with(stored: Option<String>) -> SandboxMode {
     stored
         .filter(|s| !s.is_empty())
@@ -819,12 +804,6 @@ pub struct RunState {
     /// Why the Run reached a non-green terminal state — the `reason` of its
     /// `RunFailed` / `RunSkipped` / `RunHalted` (#503).
     ///
-    /// Every one of those events has always carried a reason and nothing read it,
-    /// so the entire failure signal a user got was a red dot in the Runs list. A
-    /// `merge_conflict_detected` whose `detail` was empty *and* a Run whose reason
-    /// was unreachable is what turned a one-in-445 event into an afternoon of
-    /// archaeology.
-    ///
     /// Set on the terminal event and cleared by `RunResumed`, mirroring
     /// `NodeState::failure_reason`: a Run being driven again must not still show
     /// last time's cause.
@@ -931,19 +910,10 @@ pub struct RunState {
     pub sandbox_entries_raw_error: Option<String>,
     /// The staging profile's **env, frozen at creation** (#468, ADR-0031 §8). Written to
     /// `RunStarted` as the sibling key `sandbox_env` — but, unlike `sandbox_entries`, only
-    /// when it is **non-empty**, and that asymmetry is deliberate:
-    ///
-    /// - `sandbox_entries` had to be written unconditionally so that "a `sandbox` with no
-    ///   entries" could only mean "pre-#432 daemon", which is what makes its replay table
-    ///   decidable. An empty entry list is a legitimate resolution (`minimal`), so absence
-    ///   and emptiness had to be distinguishable.
-    /// - For the env there is nothing to distinguish. A pre-#468 daemon could not pose any
-    ///   profile env at all, so an absent key and an empty map describe the **same
-    ///   container**. Writing `{}` on every sandboxed Run would change the payload shape for
-    ///   every existing profile in exchange for no new information.
-    ///
-    /// The `Option` is therefore about the *wire*, not the decision: `None` keeps historical
-    /// run JSON byte-identical. Both `None` and `Some(empty)` mean "no profile env".
+    /// when it is **non-empty**. That asymmetry is deliberate: for the entries, absence
+    /// ("pre-#432 daemon") and emptiness (`minimal`) had to stay distinguishable; for the
+    /// env they describe the same container, so `None` and `Some(empty)` both mean "no
+    /// profile env" and historical run JSON stays byte-identical.
     ///
     /// The values are on the wire, like they are in SQLite and in `docker inspect`: the
     /// sandbox is not a security boundary and this is not a secret store (ADR-0031 §8). What
@@ -960,22 +930,19 @@ pub struct RunState {
     /// sibling key of `sandbox_entries` / `sandbox_env`, written by the same `resolve` and — like
     /// the env, unlike the entries — **only when the profile poses one**.
     ///
-    /// `None` therefore means "this Run's profile posed no image source", which is
-    /// indistinguishable, by construction, from "a pre-#467 daemon created this Run": in both
-    /// cases the **profile default** decides ([`crate::sandbox_profile::DEFAULT_PROFILE_IMAGE`],
-    /// #471), with the two env vars able to override it, read fresh at each prep. That is the one
-    /// place the freeze is deliberately *not* total, and it is not a hole — since #471 what is left
-    /// above the default is a compile-time constant and two env vars, and a daemon's environment
-    /// does not change under a running Run.
+    /// `None` means "this Run's profile posed no image source", indistinguishable from "a
+    /// pre-#467 daemon created this Run": in both cases the **profile default** decides
+    /// ([`crate::sandbox_profile::DEFAULT_PROFILE_IMAGE`]), overridable by two env vars read
+    /// fresh at each prep. That is the one place the freeze is deliberately *not* total, and
+    /// it is safe: a daemon's environment does not change under a running Run.
     ///
-    /// What IS frozen is the profile's choice, and that is what matters: a Run cannot have its
-    /// image swapped under it because someone edited the profile, so two nodes of the same Run can
-    /// never land in two different images (ADR-0031 §6).
+    /// What IS frozen is the profile's choice: a Run cannot have its image swapped under it
+    /// because someone edited the profile, so two nodes of the same Run can never land in two
+    /// different images (ADR-0031 §6).
     ///
-    /// Unlike [`SandboxMode`] the value is structured (`{kind, path|ref}`), which is affordable
-    /// here because this key is NEW: there is no historical payload carrying it as a bare string,
-    /// so no reader has to accept `String | Object` for ever — the constraint that disqualified
-    /// nesting `sandbox_entries` under `sandbox`.
+    /// Unlike [`SandboxMode`] the value is structured (`{kind, path|ref}`), affordable here
+    /// only because the key is new — no historical payload carries it as a bare string, so no
+    /// reader has to accept `String | Object` for ever.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox_image: Option<crate::sandbox_image::ProfileImage>,
     /// The raw `sandbox_image` payload value when the key was **present but unreadable** (#467).
@@ -1215,8 +1182,7 @@ impl RunState {
     /// command ends, the tmux session disappears, and ~25 s later the stale detector
     /// renders `session_died` — a failure that names tmux while the real fault is the
     /// ordering. The precondition therefore belongs to the *spawn*, not to the callers
-    /// that reach it: `create_run` gated correctly while the pipeline watcher
-    /// (`handle_run_pipeline_modifications`) and `retry_waiting_nodes` did not.
+    /// that reach it.
     ///
     /// | `sandbox` | `sandbox_prep` | verdict |
     /// |---|---|---|
@@ -1278,9 +1244,7 @@ impl RunState {
 /// wildcard arm, so adding a new region-state map to `RunState` means adding a
 /// variant here — and every consumer that iterates [`RegionStateKind::ALL`]
 /// (notably `run_stall_reason`'s open-region defer) then covers it automatically.
-/// This is the ADR-0035/0037 discipline ("l'invariant remplace l'énumération —
-/// ajouter une variante ne compile plus") applied to region openness, closing the
-/// #453 class where a new region kind fell through to a silent `stalled = false`.
+/// Without it, a new region kind falls through to a silent `stalled = false`.
 ///
 /// `switch_states` is deliberately **absent**: a switch is a routing *record*
 /// (`SwitchState` has no `done` flag and no open/close lifecycle), not a region
@@ -1431,12 +1395,7 @@ pub(crate) fn project(events: &[Event]) -> Option<RunState> {
                 apply_pipeline_event(&mut state, event)
             }
 
-            // #290 / #373: informational only — the node stays in its current
-            // status (Running). Behaviour-preserving no-op, exactly like
-            // `PipelineLint`. `NodeBlockedOnLimit` recovery is deferred (Slice
-            // 2/3); `NodeAutoCompleteObserved` has had no producer since #469
-            // (ADR-0032 §3) and is read-only for historical Runs. No node/run
-            // state touched.
+            // Informational only: the node stays Running, no node/run state touched.
             EventKind::NodeBlockedOnLimit | EventKind::NodeAutoCompleteObserved => {}
 
             EventKind::CommandIssued => apply_command_event(&mut state, event),
@@ -1452,20 +1411,6 @@ pub(crate) fn project(events: &[Event]) -> Option<RunState> {
     Some(state)
 }
 
-// ── Per-concern sub-appliers (#238) ──────────────────────────────────────────
-//
-// `project()` routes each event to exactly one applier by concern; every applier
-// takes `(&mut RunState, &Event)` and folds that one event into the state. Each
-// multi-variant applier runs a focused inner `match event.kind` over only its
-// own subset and ends in a silent `_ => {}` — the appliers MUST NOT panic, since
-// `project()` also runs inside `append_event` (before the transition guard), so
-// a panic here would break event appends, not just reads. Arm bodies are moved
-// verbatim from the former monolithic match; the incident comments they carry
-// (#221, #196/#212, #199, #245, #159, #100) are load-bearing — do not reword.
-
-/// Run-lifecycle events: start (bootstrap pipeline/edges/node-defs/start+end
-/// nodes), the terminal transitions (completed/failed/skipped/halted), the
-/// resumable pause/resume pair, rename, and archive.
 /// The `reason` a non-green run terminal carries, if it says anything (#503).
 ///
 /// An empty string is treated as absent: `Some("")` in the projection would make
@@ -1984,12 +1929,9 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                 node.started_at = Some(event.ts.clone());
                 node.completed_at = None;
                 node.failure_reason = None;
-                // #490, pre-existing bug: this arm reset `completed_at` and
-                // `failure_reason` but not the evidence vectors, so a *successful*
-                // retry left stale violations on a green node — visible in the
-                // projection golden itself, where a `completed` node still carried
-                // its `frontmatter_violations`. A new attempt starts with no
-                // evidence against it.
+                // Reset the evidence vectors too, not just `completed_at` /
+                // `failure_reason`: otherwise a *successful* retry leaves stale
+                // violations on a green node.
                 node.frontmatter_violations = Vec::new();
                 node.missing_outputs = Vec::new();
                 // #616/ADR-0046: freeze the harness this session ran on, from the
@@ -2022,18 +1964,11 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                     .and_then(|p| p.get("skipped"))
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
-                // #620: a skip of a node that **never started** projects as
-                // `NodeStatus::Skipped`, NOT `Completed`, so the canvas greys the
-                // pruned node instead of dressing it in the green "done" cadre a real
-                // success wears. The discriminator is "never ran", not the skip
-                // source: the reachability auto-skip prunes a never-started node (→
-                // Skipped, greyed with its reason), whereas a graceful `skip_node`
-                // (#245) skips a node that DID start and reach a decision (→ stays
-                // Completed; the run, not the node, carries the "nothing to do"
-                // signal). `Skipped` is terminal and satisfies every scheduling gate
-                // exactly like `Completed` (`is_settled_complete`); only the display
-                // differs. The prune `reason` is lifted onto `skip_reason` so it reads
-                // at node level, not only in the event log.
+                // #620: the discriminator is "never ran", NOT the skip source. A
+                // reachability auto-skip prunes a never-started node (→ `Skipped`,
+                // greyed with its reason); a graceful `skip_node` skips a node that
+                // DID start and reach a decision (→ stays `Completed`, and the run,
+                // not the node, carries the "nothing to do" signal).
                 let never_started_skip = is_skip && !state.nodes.contains_key(node_id);
                 let done_status = if never_started_skip {
                     NodeStatus::Skipped
@@ -2117,14 +2052,12 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                                 .get("reason")
                                 .and_then(|v| v.as_str())
                                 .map(String::from);
-                            // #490: read BOTH shapes of the validation evidence. The
-                            // after-retry branch puts `violations` at the top level;
-                            // the `script` fail-fast branch nests everything under
-                            // `detail` (`{kind, violations|missing}`), and nothing
-                            // used to read that — the field was computed and dropped.
-                            // Fixed at the consumer, not by flattening the producer:
-                            // the nesting is what keeps a fail-fast audit trail
-                            // distinguishable from an after-retry one (ADR-0035 §5).
+                            // Read BOTH shapes of the validation evidence: the
+                            // after-retry branch puts `violations` at the top level,
+                            // the `script` fail-fast branch nests them under `detail`.
+                            // Don't flatten the producer — the nesting is what keeps a
+                            // fail-fast audit trail distinguishable from an after-retry
+                            // one (ADR-0035 §5).
                             //
                             // Collision-checked: the only other payload carrying
                             // `detail` is `MergeConflictDetected`, which routes to
@@ -2275,8 +2208,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
 /// `SwitchRouted`: a switch node both records its chosen branch in
 /// `switch_states` AND writes a synthetic `Completed` node entry (the switch has
 /// no NodeRun session of its own), so it is kept as its own concern rather than
-/// folded into the node applier. The outer dispatch guarantees the kind, so no
-/// inner match is needed.
+/// folded into the node applier.
 fn apply_switch_event(state: &mut RunState, event: &Event) {
     if let Some(ref payload) = event.payload {
         if let Some(node_id) = payload.get("node_id").and_then(|v| v.as_str()) {
@@ -2600,26 +2532,18 @@ fn apply_pipeline_event(_state: &mut RunState, event: &Event) {
             // Informational — records lint diagnostics for the pipeline
         }
         EventKind::PipelineModified => {
-            // The run-scoped pipeline changed on disk. Node_defs/edges are
-            // re-parsed from the file at scheduling time
-            // (`spawn_ready_after_event`), which picks up newly-added nodes
-            // for a *live* (Running/AwaitingUser) run on the next tick — no
-            // status change is needed for that, and none happens here.
+            // Node_defs/edges are re-parsed from the file at scheduling time
+            // (`spawn_ready_after_event`), so a live run picks up newly-added nodes
+            // on the next tick with no status change here.
             //
-            // Terminal-state integrity (#221): a `PipelineModified` is a
-            // passive signal. It can be emitted by a stray or foreign file
-            // write — even for a node that is not in this run's DAG at all —
-            // so it must NEVER un-terminalize a run. A run that reached
-            // `RunCompleted` (like one that reached `RunFailed`/`RunHalted`,
-            // handled below) stays terminal. Reopening a Completed run here
-            // left genuinely-finished runs phantom-`running` forever (there
-            // was no reliable re-completion path), held their manager
-            // session and worktree, made overlap-`skip` triggers skip every
-            // subsequent fire, and let a later `resume_run` re-spawn already
-            // satisfied loops (the transition guard sees `Running` instead
-            // of the true terminal state). Resuming a finished run to pick
-            // up newly-added work is an explicit operation (`resume_run`),
-            // not a side effect of the file watcher. No status change.
+            // Don't un-terminalize the run (#221): a `PipelineModified` is a passive
+            // signal that a stray or foreign file write can emit, even for a node
+            // outside this run's DAG. Reopening a terminal run here leaves it
+            // phantom-`running` forever (no reliable re-completion path), holds its
+            // manager session and worktree, makes overlap-`skip` triggers skip every
+            // subsequent fire, and lets a later `resume_run` re-spawn satisfied loops.
+            // Picking up newly-added work is the explicit `resume_run`, not a side
+            // effect of the file watcher.
         }
         _ => {}
     }
@@ -2628,8 +2552,7 @@ fn apply_pipeline_event(_state: &mut RunState, event: &Event) {
 /// `CommandIssued`: the projection-relevant manager/operator commands. A command
 /// dispatcher by nature — `resume_run` re-opens a terminal run and `end_region`
 /// closes a loop region — so the whole event is kept in one applier even though
-/// it touches both run status and `loop_states`. The outer dispatch guarantees
-/// the kind, so no inner match is needed.
+/// it touches both run status and `loop_states`.
 fn apply_command_event(state: &mut RunState, event: &Event) {
     if let Some(ref payload) = event.payload {
         let cmd = payload.get("command").and_then(|v| v.as_str());
@@ -2643,11 +2566,8 @@ fn apply_command_event(state: &mut RunState, event: &Event) {
         // re-opens (append-only). Both clear the previous terminal/incident
         // reason — a Run being driven again must not still show last time's
         // cause (#503) — while the terminal *label* stays in the event log.
-        //
-        // The set now includes `Completed`/`Skipped` (a finished Run can pick up
-        // a newly-added node, FP #6) — the pre-résilience code lifted only
-        // `Halted`/`Failed`. An `AwaitingUser` incident park is also lifted
-        // clean here.
+        // `Completed`/`Skipped` are in the set on purpose: a finished Run can pick
+        // up a newly-added node (FP #6).
         if matches!(cmd, Some("reopen_run") | Some("resume_run"))
             && matches!(
                 state.status,
@@ -2748,8 +2668,6 @@ fn apply_command_event(state: &mut RunState, event: &Event) {
 /// (2) derive run-level `AwaitingUser` from node states — a `Running` run with
 /// any awaiting node is itself awaiting the user.
 fn finalize(state: &mut RunState) {
-    // Sort iterations by iter number and reconcile top-level iter
-    // (handles out-of-order events)
     for node in state.nodes.values_mut() {
         node.iterations.sort_by_key(|i| i.iter);
         if let Some(max_iter) = node.iterations.last() {
@@ -2810,15 +2728,6 @@ fn finalize(state: &mut RunState) {
 /// The function is kept, live and correct, because the event log is append-only:
 /// a Run that recorded a `NodeStale` before #469 still projects `Stale` and must
 /// still render as it always did.
-///
-/// Historical note on the intention, which never held. The docstring here used to
-/// claim this was a **display-only** derivation that "clears automatically as soon
-/// as activity resumes, since stale detection keeps probing it". Both halves were
-/// false: `running_nodes` filtered strictly on `Running`, so a `Stale` node was
-/// never probed again, and `reconcile_run_level_stall` (#214) failed the whole Run
-/// in the very same sweep — 27 ms after the `node_stale`, on the Run that
-/// produced #469. Two mechanisms contradicted each other, the terminal one won,
-/// and the doc described the other.
 pub(crate) fn is_stalled(run: &RunState) -> bool {
     if run.status != RunStatus::Running {
         return false;
@@ -2952,12 +2861,6 @@ mod tests {
             payload: Some(payload),
         }
     }
-
-    // -- Slice A (#410): precedence resolver + instance-default helper ---------
-    //
-    // #432 note: the closed `Full`/`Minimal` variants became `Profile("full")` /
-    // `Profile("minimal")`. The precedence rules themselves are UNCHANGED — these tests
-    // are the same assertions written against the new constructor.
 
     fn full() -> SandboxMode {
         SandboxMode::Profile("full".into())
@@ -3103,8 +3006,6 @@ mod tests {
         }
     }
 
-    // -- Slice K (#432): the FROZEN entry list ---------------------------------
-
     /// The `Option` on `sandbox_entries` is load-bearing: `Some(vec![])` is a legitimate
     /// resolution — it IS `minimal` — while `None` means "no key, a pre-profiles
     /// payload". Confusing the two would send `minimal` Runs down the re-resolve arm.
@@ -3191,8 +3092,6 @@ mod tests {
         assert!(value.get("sandbox_entries").is_none());
     }
 
-    // -- #468: the FROZEN profile env -----------------------------------------
-
     #[test]
     fn a_frozen_env_projects_verbatim() {
         let events = vec![make_event_with_payload(
@@ -3275,8 +3174,6 @@ mod tests {
         assert!(value.get("sandbox_env_raw_error").is_none());
         assert!(value.get("sandbox_env").is_none());
     }
-
-    // -- #467: the FROZEN profile image source --------------------------------
 
     #[test]
     fn a_frozen_image_source_projects_verbatim() {
@@ -3413,8 +3310,6 @@ mod tests {
         assert!(value.get("dockerfile_path").is_none(), "{value}");
     }
 
-    // -- Slice E (#410): sandbox-prep projection ------------------------------
-
     #[test]
     fn sandbox_prep_started_projects_pending_then_ready() {
         let events = vec![
@@ -3511,8 +3406,6 @@ mod tests {
             "an absent harness is skipped from the wire"
         );
     }
-
-    // -- #445: the sandbox spawn precondition, decided on the projection alone ----
 
     #[test]
     fn sandbox_spawn_block_gates_on_the_projected_prep_state() {
@@ -3727,9 +3620,7 @@ mod tests {
     }
 
     /// #490 — the twin of the test above, for the `script` fail-fast shape, which
-    /// nests everything under `detail`. Nothing read `payload.detail` before this
-    /// issue: the daemon computed the evidence and the projector dropped it, so the
-    /// red banner rendered a list of nothing.
+    /// nests everything under `detail`.
     #[test]
     fn projects_nested_detail_violations_of_a_script_fail_fast() {
         let events = vec![
@@ -3761,8 +3652,7 @@ mod tests {
     }
 
     /// The other half of the same nesting: a `script` node that never wrote its
-    /// declared output. `missing_outputs` had NO home at all — Rust or TS — before
-    /// #490, which is why the banner listed nothing.
+    /// declared output.
     #[test]
     fn projects_nested_detail_missing_outputs_of_a_script_fail_fast() {
         let events = vec![
@@ -3806,10 +3696,9 @@ mod tests {
         assert!(node.missing_outputs.is_empty());
     }
 
-    /// #490, pre-existing bug: a *successful* retry used to leave stale violations on
-    /// a green node — `NodeStarted` reset `completed_at` and `failure_reason` but not
-    /// the evidence vectors. Visible in the projection golden itself, where a
-    /// `completed` node still carried them.
+    /// A *successful* retry must leave no stale violations on the now-green node:
+    /// `NodeStarted` resets the evidence vectors, not just `completed_at` /
+    /// `failure_reason` (#490).
     #[test]
     fn a_new_attempt_purges_the_evidence_of_the_previous_one() {
         let events = vec![
@@ -3836,8 +3725,6 @@ mod tests {
         );
         assert!(node.missing_outputs.is_empty());
     }
-
-    // --- résilience: Interrupted / RunInterrupted / reopen (ADR-0049/0050) ------
 
     fn interrupt_event(node_id: &str, iter: i64, reason: &str) -> Event {
         Event {
@@ -3919,8 +3806,6 @@ mod tests {
         assert_eq!(completed.status, RunStatus::Completed);
         assert!(completed.awaiting_reason.is_none());
     }
-
-    // --- #601: machine reason code (slug) alongside the prose ------------------
 
     #[test]
     fn run_interrupted_carries_the_explicit_reason_code() {
@@ -4029,8 +3914,6 @@ mod tests {
         assert!(parse_reason_code("Capitalized: x").is_none());
         assert!(parse_reason_code("slug: ").is_none());
     }
-
-    // --- #601: run_stall_reason exhaustive over region kinds -------------------
 
     #[test]
     fn region_state_kind_all_is_total() {
@@ -4344,10 +4227,7 @@ mod tests {
     #[test]
     fn pipeline_modified_after_completed_stays_completed() {
         // #221: a `PipelineModified` is a passive signal (it can be a stray or
-        // foreign file write) and must NEVER un-terminalize a genuinely-
-        // completed run. Reopening it left runs phantom-`running` forever with
-        // no reliable re-completion path. A terminal run stays terminal — the
-        // same way Failed/Halted are not reopened.
+        // foreign file write) and must NEVER un-terminalize a completed run.
         let events = vec![
             make_event_with_payload(
                 EventKind::RunStarted,
@@ -4465,8 +4345,6 @@ mod tests {
         assert!(id.len() >= 22, "run-id too short: {id}");
         assert!(id.contains('-'));
     }
-
-    // --- start_node projection (issue #30, updated for #39) ---
 
     fn start_node_def() -> serde_json::Value {
         serde_json::json!({ "id": "start", "node_type": "start", "inputs": [], "outputs": [{"name": "user_prompt", "side": "right"}] })
@@ -4667,8 +4545,6 @@ mod tests {
         let start = state.start_node.as_ref().unwrap();
         assert_eq!(start.target_node_ids, vec!["reviewer"]);
     }
-
-    // --- Multi-iteration projection tests (issue #29) ---
 
     fn make_event_ts(kind: EventKind, node_id: Option<&str>, iter: Option<i64>, ts: &str) -> Event {
         Event {
@@ -5034,8 +4910,6 @@ mod tests {
         assert_eq!(state.status, RunStatus::Running);
     }
 
-    // --- End node projection tests (issue #39) ---
-
     #[test]
     fn end_node_pending_while_running() {
         let events = vec![make_event_with_payload(
@@ -5155,8 +5029,6 @@ mod tests {
         let state = project(&events).unwrap();
         assert!(state.end_node.is_none());
     }
-
-    // --- Merge Resolver projection tests (issue #8) ---
 
     #[test]
     fn merge_resolver_full_lifecycle_conflict_to_completion() {
@@ -5280,8 +5152,6 @@ mod tests {
         );
     }
 
-    // --- ForEach integration tests ---
-
     #[test]
     fn foreach_full_lifecycle_3_items() {
         let events = vec![
@@ -5386,8 +5256,6 @@ mod tests {
         assert!(!fe_state.done);
     }
 
-    // --- Collection region projection (ADR-0011 / #269) ---
-
     #[test]
     fn collection_full_lifecycle_3_items() {
         let events = vec![
@@ -5466,8 +5334,6 @@ mod tests {
         let state = project(&events).unwrap();
         assert!(state.collection_states.is_empty());
     }
-
-    // --- Run display labels (issue #115) ---
 
     #[test]
     fn run_started_with_name_sets_display_name() {
@@ -5582,8 +5448,6 @@ mod tests {
         let state = project(&events).unwrap();
         assert!(state.name.is_none());
     }
-
-    // --- New event kinds and statuses (issue #112) ---
 
     #[test]
     fn node_stopped_sets_stopped_status() {
@@ -6185,8 +6049,6 @@ mod tests {
         }
     }
 
-    // --- SwitchRouted projection (issue #118) ---
-
     #[test]
     fn switch_routed_creates_synthetic_completed_node() {
         let events = vec![
@@ -6434,8 +6296,6 @@ mod tests {
             "an unrouted sibling region has no route entry"
         );
     }
-
-    // --- RunState / RunStatus / NodeStatus query interface (#237) ---
 
     fn node_state(
         id: &str,
@@ -6716,8 +6576,6 @@ mod tests {
         assert_eq!(s.node_status("absent"), None);
     }
 
-    // --- is_stalled: run-level stale derivation (#180) ---
-
     #[test]
     fn stalled_when_only_node_went_stale() {
         // A node went stale and nothing else is running/waiting: the run has no
@@ -6878,8 +6736,6 @@ mod tests {
         assert_eq!(state.status, RunStatus::Completed);
         assert!(!is_stalled(&state));
     }
-
-    // --- Golden / characterization projection (issue #238) ---
 
     /// One representative event log that exercises every projection concern in a
     /// single run: run lifecycle (start/pause/resume/rename/complete), node
@@ -7414,7 +7270,6 @@ mod tests {
         assert_eq!(actual, expected);
     }
 
-    // --- Focused per-applier unit tests (#238, AC#2) ---
     // Each sub-applier folds one event into a bare `RunState` in isolation — no
     // full run, no `RunStarted` bootstrap — proving the decomposition is
     // independently unit-testable as the issue requires.

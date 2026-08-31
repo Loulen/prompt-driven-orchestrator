@@ -1,9 +1,5 @@
-/// Pure decision logic for Merge node outcomes, plus the merge-back decision
-/// #503 needed: *may a conflicting merge-back be resolved in the node's favour?*
-///
-/// Given the result of attempting git merges on upstream code-mutating branches,
-/// determines whether the Merge node can auto-complete (no conflicts) or needs
-/// to spawn a Claude Code resolver session (conflicts detected).
+/// Pure decision logic for Merge node outcomes, plus the merge-back decision:
+/// *may a conflicting merge-back be resolved in the node's favour?*
 ///
 /// This module is the *decision* half of the split `worktree_ops` documents: the
 /// git **effect** (`MergeResult`, the shell-outs) lives there, the pure verdict
@@ -150,9 +146,8 @@ mod tests {
         );
     }
 
-    /// Anchored on the LAST spawn of the iteration — the case where a re-spawn
-    /// genuinely re-cut the sub-worktree (`invalidate_nodes`, or a `restart_node`
-    /// whose worktree was `Recyclable`).
+    /// The case where a re-spawn genuinely re-cut the sub-worktree
+    /// (`invalidate_nodes`, or a `restart_node` whose worktree was `Recyclable`).
     #[test]
     fn a_respawn_of_the_same_iteration_wins() {
         let events = vec![
@@ -185,7 +180,6 @@ mod tests {
         );
     }
 
-    /// Iterations are separate bases: a loop lap must not read the previous lap's.
     #[test]
     fn each_iteration_carries_its_own_base() {
         let events = vec![
@@ -200,8 +194,6 @@ mod tests {
         );
     }
 
-    /// An unknown base is not a licence to rewrite a branch: a pre-#503 Run, a
-    /// spawn that recorded nothing, a blank value, or no spawn at all → `None`.
     #[test]
     fn an_unknown_base_stays_unknown() {
         let no_payload = vec![

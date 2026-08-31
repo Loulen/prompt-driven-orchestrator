@@ -44,11 +44,8 @@ impl RecoveryMechanism {
 }
 
 /// Pick the recovery mechanism for a node whose frozen harness `can_resume` (or
-/// not) — ADR-0049 §3.
-///
-/// The whole rule: re-attach when the harness can resume, else fall back to
-/// restart-with-artifacts. The fallback is **automatic** — it is not a second
-/// human decision — which is why it lives here and not in a UI.
+/// not) — ADR-0049 §3. The fallback is **automatic** — it is not a second human
+/// decision — which is why it lives here and not in a UI.
 pub(crate) fn choose_recovery(harness_can_resume: bool) -> RecoveryMechanism {
     if harness_can_resume {
         RecoveryMechanism::Reattach
@@ -61,15 +58,11 @@ pub(crate) fn choose_recovery(harness_can_resume: bool) -> RecoveryMechanism {
 mod tests {
     use super::*;
 
-    /// ADR-0049 §3: the optimal path is re-attach, and it is conditioned on the
-    /// harness declaring a resume capability (ADR-0045).
     #[test]
     fn a_resuming_harness_reattaches() {
         assert_eq!(choose_recovery(true), RecoveryMechanism::Reattach);
     }
 
-    /// The automatic fallback: a harness that cannot resume never strands the
-    /// node — it restarts with the partial artifacts fed back as input.
     #[test]
     fn a_non_resuming_harness_falls_back_to_restart_with_artifacts() {
         assert_eq!(

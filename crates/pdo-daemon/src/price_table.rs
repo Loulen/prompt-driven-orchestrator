@@ -5,8 +5,8 @@
 //! amendment.
 //!
 //! This module never reads `$HOME`: a root goes in, path-math + `std::fs` come
-//! out (the discipline #408 paid a slice to give `run_cost` — `library_store`'s
-//! global `$HOME` read costs a crate-wide test lock, `library_store.rs:967`).
+//! out. A global `$HOME` read costs a crate-wide test lock (see
+//! `library_store.rs:967`).
 //!
 //! ## What is load-bearing here
 //! - **Merge by key, never replacement.** A key present in a tier wins; a key
@@ -16,12 +16,10 @@
 //!   freeze the table against future releases.
 //! - **The embedded tier is a FLOOR, not a seed.** `claude-opus-4-0`,
 //!   `claude-sonnet-4-0` and `claude-3-5-haiku` are absent from every remote
-//!   source examined, so the `const` is their ONLY pricer. Since #527 the floor
-//!   ALSO carries the current generation (`claude-opus-5`, `claude-sonnet-5`,
-//!   `claude-fable-5`), so a never-synced, offline instance prices its default
-//!   model out of the box instead of reading `~$0.0000 †`. models.dev DOES carry
-//!   these, so a sync still overrides them by key — a floor, not a mirror
-//!   (ADR-0034 §Amendement #527). "Seed" in ADR-0034 means materialising the
+//!   source examined, so the `const` is their ONLY pricer. The floor ALSO carries
+//!   the current generation, so a never-synced offline instance prices its
+//!   default model instead of reading `~$0.0000 †`; models.dev does carry those,
+//!   so a sync overrides them by key. "Seed" in ADR-0034 means materialising the
 //!   `const` onto a disk file; adding `const` rows is not that.
 //! - **De-dating is asymmetric on purpose.** A dated key in the *manual* file is
 //!   REFUSED (stripping would silently collapse two rows the author wanted
@@ -44,30 +42,19 @@ use std::sync::Mutex;
 use std::time::Duration;
 use tracing::warn;
 
-/// The prices PDO ships — the former `run_cost::PRICES`, moved here verbatim.
+/// The prices PDO ships — the **floor** (see the module header), never written
+/// to disk and never replaced by a sync.
 ///
 /// Source: https://platform.claude.com/docs/en/about-claude/pricing (fetched
-/// 2026-07-06; gen-5 rows added 2026-08-13, #527). Per-MTok list prices
+/// 2026-07-06; gen-5 rows added 2026-08-13). Per-MTok list prices
 /// `(family_key, input, output)`. Cache prices are DERIVED (write_5m = 1.25×in,
 /// write_1h = 2×in, read = 0.1×in) — verified universal across every current
 /// row. Match on the FULL family key: Opus 4.5–4.8 are $5/$25 but Opus 4.1/4.0
 /// are $15/$75 — never a `starts_with("opus-4")` shortcut.
 ///
-/// Since #427 this is the **floor**, not a seed: a sync never replaces it (merge
-/// by key, [`PriceTable::resolve`]), and nothing here is ever written to disk.
-/// Two kinds of row live here, both floored, never frozen:
-///   - families **no remote source carries** (`claude-opus-4-0`,
-///     `claude-sonnet-4-0`, `claude-3-5-haiku`) — the `const` is their ONLY pricer;
-///   - the **current generation** (`claude-opus-5`, `claude-sonnet-5`,
-///     `claude-fable-5`), seeded by #527 so a never-synced instance prices its
-///     default model out of the box instead of reading `~$0.0000 †`. models.dev
-///     DOES carry these, so any sync overrides them the moment it runs — this is
-///     a floor, not a mirror.
-///
 /// `claude-sonnet-5` is graved at its **post-intro** $3/$15, not the dated intro
 /// $2/$10: the `const` cannot be dated, the intro expires 2026-08-31, and a sync
-/// corrects the ~0.5 % pre-cutover drift — ADR-0034's already-ratified posture for
-/// the fetched tier, now shared by the floor.
+/// corrects the ~0.5 % pre-cutover drift.
 const PRICES: &[(&str, f64, f64)] = &[
     ("claude-opus-4-8", 5.0, 25.0),
     ("claude-opus-4-7", 5.0, 25.0),
@@ -80,9 +67,6 @@ const PRICES: &[(&str, f64, f64)] = &[
     ("claude-sonnet-4-0", 3.0, 15.0),
     ("claude-haiku-4-5", 1.0, 5.0),
     ("claude-3-5-haiku", 0.80, 4.0),
-    // Current generation — floored by #527 so an offline, never-synced instance
-    // prices its default model instead of reading `~$0.0000 †`. models.dev carries
-    // these, so any sync overrides them by key. `sonnet-5` is post-intro $3/$15.
     ("claude-opus-5", 5.0, 25.0),
     ("claude-sonnet-5", 3.0, 15.0),
     ("claude-fable-5", 10.0, 50.0),
@@ -132,7 +116,6 @@ pub(crate) struct Price {
     pub output: f64,
 }
 
-/// Which tier decided a family key. ADR-0015's vocabulary, transposed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum PriceTier {
@@ -157,9 +140,9 @@ pub(crate) struct Provenance {
     pub fetched_at: String,
 }
 
-/// The result of parsing one on-disk tier. Pure: text in, rows + refusals out.
-/// An unparseable document yields `unparseable: Some(err)` and NO rows — never an
-/// `Err`, because a bad price file must not be able to fail a cost read.
+/// One parsed on-disk tier. An unparseable document yields `unparseable:
+/// Some(err)` and NO rows — never an `Err`: a bad price file must not be able to
+/// fail a cost read.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub(crate) struct ParsedTier {
     pub rows: BTreeMap<String, Price>,
@@ -169,8 +152,6 @@ pub(crate) struct ParsedTier {
 }
 
 impl ParsedTier {
-    /// A tier built straight from rows — the shape a test or the sync writer
-    /// wants when there is nothing to refuse.
     #[cfg(test)]
     fn of(rows: &[(&str, f64, f64)]) -> Self {
         Self {
@@ -192,9 +173,9 @@ impl ParsedTier {
 }
 
 /// The table resolved for one read, plus the fingerprint saying WHICH table it
-/// is. That fingerprint is the whole reason this is not a bare map: it is the
-/// third component of `run_cost`'s memo key, without which a sync would stay
-/// invisible on `/stats/cost` until the daemon restarted.
+/// is. That fingerprint is why this is not a bare map: it is a component of
+/// `run_cost`'s memo key, without which a sync would stay invisible on
+/// `/stats/cost` until the daemon restarted.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PriceTable {
     resolved: BTreeMap<String, (Price, PriceTier)>,
@@ -220,10 +201,9 @@ impl PriceTable {
         Self::resolve(ParsedTier::default(), ParsedTier::default(), 0)
     }
 
-    /// PURE, TOTAL resolver — tiers injected, zero IO. Mirrors
-    /// `sandbox_profile::resolve_entry_list`: ONE resolver shared by the cost
-    /// computation and by the `GET /settings` view, so what the UI shows can
-    /// never drift from what actually prices (the lesson of #373).
+    /// PURE, TOTAL resolver — tiers injected, zero IO. ONE resolver shared by
+    /// the cost computation and by the `GET /settings` view, so what the UI
+    /// shows can never drift from what actually prices.
     pub(crate) fn resolve(manual: ParsedTier, fetched: ParsedTier, fingerprint: u64) -> Self {
         let mut resolved: BTreeMap<String, (Price, PriceTier)> = BTreeMap::new();
         // Lowest precedence first, so a higher tier simply overwrites.
@@ -258,7 +238,7 @@ impl PriceTable {
     }
 
     /// `<home_root>/.pdo/prices/{models.yaml, fetched.json}` — path arithmetic
-    /// only, like `sandbox_image::default_dockerfile_path(sandbox_root)`.
+    /// only.
     pub(crate) fn paths(home_root: &Path) -> (PathBuf, PathBuf) {
         let dir = home_root.join(".pdo").join("prices");
         (dir.join("models.yaml"), dir.join("fetched.json"))
@@ -314,13 +294,10 @@ impl PriceTable {
         self.resolved.get(key).map(|(_, t)| *t)
     }
 
-    /// The resolved table, one `(family key, winning price, deciding tier)` per
-    /// entry, in `BTreeMap` order. The SAME map `price_for` reads, so the
-    /// `GET /settings` view can never enumerate a set the pricer would price
-    /// otherwise (#373; cf. the doc-comment on `resolve`). Yields by value:
-    /// `Price` and `PriceTier` are `Copy`. Exposes neither the container nor the
-    /// internal `(Price, PriceTier)` tuple as a `pub(crate)` contract, so the
-    /// wire JSON stays assembled in the axum layer.
+    /// The resolved table, in `BTreeMap` order. The SAME map `price_for` reads,
+    /// so the `GET /settings` view can never enumerate a set the pricer would
+    /// price otherwise. Exposes neither the container nor the internal
+    /// `(Price, PriceTier)` tuple, so the wire JSON stays assembled in axum.
     pub(crate) fn resolved_entries(&self) -> impl Iterator<Item = (&str, Price, PriceTier)> + '_ {
         self.resolved.iter().map(|(k, (p, t))| (k.as_str(), *p, *t))
     }
@@ -345,8 +322,7 @@ impl PriceTable {
         &self.fetched.rows
     }
 
-    /// Vintage of the fetched tier — D14 pt 2: the table's date is readable, not
-    /// guessed.
+    /// Vintage of the fetched tier: the table's date is readable, not guessed.
     pub(crate) fn fetched_at(&self) -> Option<&str> {
         self.fetched
             .provenance
@@ -360,9 +336,8 @@ impl PriceTable {
     }
 
     /// ONE message naming every inert file and every refused row, or `None` when
-    /// nothing is wrong. PURE, so a unit test can pin it instead of a terminal
-    /// (modelled on `retired_sandbox_settings_warning`). ADR-0015:44: two lines
-    /// for one problem read as two problems.
+    /// nothing is wrong. PURE, so a unit test can pin it instead of a terminal.
+    /// ADR-0015:44 — two lines for one problem read as two problems.
     pub(crate) fn diagnostic(&self) -> Option<String> {
         let mut parts: Vec<String> = Vec::new();
         for (tier, parsed, path) in [
@@ -419,9 +394,9 @@ impl PriceTable {
 
 /// Content hash of the bytes actually read. `0` ⇔ both files absent.
 ///
-/// Preferred over mtime: no millisecond granularity to reason about and no
-/// copy-preserves-mtime trap. The hasher need NOT be stable across Rust versions
-/// — the only consumer is `run_cost`'s process-local RAM memo.
+/// Preferred over mtime: no millisecond granularity, no copy-preserves-mtime
+/// trap. The hasher need NOT be stable across Rust versions — the only consumer
+/// is `run_cost`'s process-local RAM memo.
 fn fingerprint_of(manual: Option<&[u8]>, fetched: Option<&[u8]>) -> u64 {
     if manual.is_none() && fetched.is_none() {
         return 0;
@@ -473,8 +448,7 @@ fn reject_sentinel_key(key: &str) -> Option<String> {
     })
 }
 
-/// Parse the manual tier (`models.yaml`). Applies D4's four refusal rules row by
-/// row. PURE.
+/// Parse the manual tier (`models.yaml`), row by row. PURE.
 ///
 /// Shape — a MAP, not a list of records, so key uniqueness is structural and the
 /// file reads as what it is, a sparse patch:
@@ -485,7 +459,7 @@ fn reject_sentinel_key(key: &str) -> Option<String> {
 /// ```
 ///
 /// An unknown *field* stays ignored (no `deny_unknown_fields` anywhere in this
-/// crate; ADR-0015 #471 says an unknown field is simply ignored by serde).
+/// crate).
 pub(crate) fn parse_manual(text: &str) -> ParsedTier {
     #[derive(serde::Deserialize)]
     struct Doc {
@@ -510,10 +484,9 @@ pub(crate) fn parse_manual(text: &str) -> ParsedTier {
 
     let mut tier = ParsedTier::default();
     for (key, value) in doc.models {
-        // Rule 1 — a dated key would NEVER price anything, and the symptom is
+        // A dated key would NEVER price anything, and the symptom is
         // indistinguishable from absence. Refuse, do not normalise: stripping
-        // would silently collapse two rows the author wanted distinct. The
-        // message prints the correct form.
+        // would silently collapse two rows the author wanted distinct.
         let family = strip_date_suffix(&key);
         if family != key {
             tier.rejected.push(RejectedRow {
@@ -524,12 +497,11 @@ pub(crate) fn parse_manual(text: &str) -> ParsedTier {
             });
             continue;
         }
-        // Rule 2 — a sentinel-shaped key.
         if let Some(why) = reject_sentinel_key(&key) {
             tier.rejected.push(RejectedRow { key, why });
             continue;
         }
-        // Rule 3 — the numbers. A missing or wrongly-typed field lands here too.
+        // A missing or wrongly-typed field lands here too.
         let num = |field: &str| -> Result<f64, String> {
             value
                 .get(field)
@@ -543,7 +515,6 @@ pub(crate) fn parse_manual(text: &str) -> ParsedTier {
             }
             Err(why) => tier.rejected.push(RejectedRow { key, why }),
         }
-        // Rule 4 — a duplicate key is structurally impossible: the schema is a map.
     }
     tier
 }
@@ -614,10 +585,9 @@ pub(crate) fn parse_fetched(text: &str) -> ParsedTier {
     tier
 }
 
-// --- The single egress, strictly outside the read path (ADR-0034) ------------
-
-/// GET the price source. The daemon's ONLY outbound call outside `docker pull`
-/// and the shelled Trigger guards.
+/// GET the price source — the single egress, strictly outside the read path
+/// (ADR-0034). The daemon's ONLY outbound call outside `docker pull` and the
+/// shelled Trigger guards.
 ///
 /// **Async, mandatorily**: `reqwest::blocking` panics when invoked from inside
 /// the runtime context, including from a `spawn_blocking` thread (those carry the
@@ -742,7 +712,6 @@ pub(crate) fn normalize_models_dev(
     Ok((rows, rejected))
 }
 
-/// Monotonic counter for unique temp names, like `sandbox_staging`'s `TMP_SEQ`.
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Serialise and write `fetched.json` by tmp + `rename` **in the same

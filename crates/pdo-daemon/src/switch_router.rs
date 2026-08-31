@@ -103,8 +103,6 @@ mod tests {
         serde_yaml::Value::Number(serde_yaml::Number::from(n))
     }
 
-    // --- first-match-wins ---
-
     #[test]
     fn first_match_wins() {
         let sw = make_switch(vec![
@@ -116,8 +114,6 @@ mod tests {
             [("verdict".into(), val_s("PASS"))].into_iter().collect();
         assert_eq!(route(&sw, &fm, &HashMap::new(), 1), "pass");
     }
-
-    // --- all 8 operators ---
 
     #[test]
     fn op_eq() {
@@ -201,8 +197,6 @@ mod tests {
         assert_eq!(route(&sw, &fm, &HashMap::new(), 1), "fail");
     }
 
-    // --- AND-of-rows ---
-
     #[test]
     fn and_of_rows_all_match() {
         let sw = make_switch(vec![
@@ -233,8 +227,6 @@ mod tests {
         assert_eq!(route(&sw, &fm, &HashMap::new(), 1), "default");
     }
 
-    // --- $<var> resolution ---
-
     #[test]
     fn dollar_var_resolved() {
         let sw = make_switch(vec![
@@ -257,8 +249,6 @@ mod tests {
         assert_eq!(route(&sw, &fm, &vars, 1), "default");
     }
 
-    // --- default fallthrough ---
-
     #[test]
     fn default_fallthrough_when_no_match() {
         let sw = make_switch(vec![
@@ -278,8 +268,6 @@ mod tests {
         assert_eq!(route(&sw, &HashMap::new(), &HashMap::new(), 1), "default");
     }
 
-    // --- missing frontmatter field ---
-
     #[test]
     fn missing_field_does_not_match() {
         let sw = make_switch(vec![
@@ -289,8 +277,6 @@ mod tests {
         let fm = [("unrelated".into(), val_s("foo"))].into_iter().collect();
         assert_eq!(route(&sw, &fm, &HashMap::new(), 1), "default");
     }
-
-    // --- iter-based routing ---
 
     #[test]
     fn iter_based_routing() {
@@ -302,8 +288,6 @@ mod tests {
         assert_eq!(route(&sw, &HashMap::new(), &HashMap::new(), 1), "first_run");
         assert_eq!(route(&sw, &HashMap::new(), &HashMap::new(), 3), "retry");
     }
-
-    // --- in operator with list ---
 
     #[test]
     fn in_operator_with_frontmatter_list() {

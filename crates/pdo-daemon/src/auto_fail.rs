@@ -25,9 +25,8 @@
 pub(crate) struct AutoFailTiers {
     /// The node's `auto_fail:` (pipeline YAML). Finest tier.
     pub node: Option<bool>,
-    /// The Run's `auto_fail`, frozen at creation from the `RunStarted` payload.
+    /// Frozen at Run creation from the `RunStarted` payload.
     pub run: Option<bool>,
-    /// The Projet's `auto_fail` (ADR-0046 middle tier).
     pub project: Option<bool>,
     /// The instance default (`stored → env → false`). The floor — always a
     /// resolved boolean.
@@ -36,9 +35,6 @@ pub(crate) struct AutoFailTiers {
 
 /// Resolve the effective `auto_fail`: the finest tier that states a preference
 /// wins, with the instance boolean as the floor.
-///
-/// `node` beats `run` beats `project` beats `instance` — the exact precedence
-/// FP #5 pins (a node-level `auto_fail` overrides a run/project/global one).
 pub(crate) fn resolve_auto_fail(tiers: &AutoFailTiers) -> bool {
     tiers
         .node
@@ -89,7 +85,6 @@ mod tests {
 
     #[test]
     fn node_beats_every_coarser_tier() {
-        // FP #5: `auto_fail` at the node level wins over run / project / global.
         assert!(resolve_auto_fail(&AutoFailTiers {
             node: Some(true),
             run: Some(false),

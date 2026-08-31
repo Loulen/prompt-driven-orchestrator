@@ -53,8 +53,6 @@ fn strftime_fmt(bucket: &str) -> Option<&'static str> {
     }
 }
 
-// --- Overview (Class A) ------------------------------------------------------
-
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) struct BucketCount {
     pub bucket: String,
@@ -519,8 +517,6 @@ pub(crate) async fn stats_overview(
             .into_response(),
     }
 }
-
-// --- Cost (Class B) ----------------------------------------------------------
 
 /// One resolved price row (#528): a family key, the tier that decides it, and the
 /// `$/MTok` actually in force. `tier` serializes as `"manual" | "fetched" |
@@ -1003,8 +999,6 @@ pub(crate) async fn stats_cost(
             .into_response();
     };
 
-    // Cheap SQL: every `run_started` in the window, with its period bucket
-    // (identical strftime to the overview endpoint) and payload.
     let rows = match sqlx::query_as::<_, (String, String, Option<String>)>(
         "SELECT run_id, strftime(?, ts) AS bucket, payload \
          FROM events WHERE kind = 'run_started' AND ts >= ? AND ts < ? ORDER BY ts",
@@ -1318,10 +1312,8 @@ mod tests {
         );
         let total_errors: i64 = ov.errors.iter().map(|b| b.count).sum();
         assert_eq!(total_errors, 2, "run_skipped must not inflate errors");
-        // Sessions = node_started, cumulative = 3.
         let total_sessions: i64 = ov.sessions.iter().map(|b| b.count).sum();
         assert_eq!(total_sessions, 3);
-        // buckets = sorted union across the three series.
         assert_eq!(ov.buckets, vec!["2026-07-15", "2026-07-16", "2026-07-17"]);
     }
 
@@ -1363,7 +1355,6 @@ mod tests {
             .await
             .unwrap();
         }
-        // Orphan fire: trigger 't-gone' has no row in `triggers`.
         sqlx::query(
             "INSERT INTO trigger_fires (trigger_id, ts, outcome, run_id) \
              VALUES ('t-gone', '2026-07-16T05:00:00.000Z', 'fired', 'rX')",

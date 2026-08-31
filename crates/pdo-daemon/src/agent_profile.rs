@@ -76,7 +76,6 @@ impl AgentProfile {
 /// happened, not just render it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum AgentProfileError {
-    /// The name is blank once trimmed.
     EmptyName,
     /// The harness is blank once trimmed — required (#563 AC2).
     EmptyHarness,
@@ -85,7 +84,6 @@ pub(crate) enum AgentProfileError {
         existing_id: String,
         name: String,
     },
-    /// No profile with this id.
     NotFound,
     /// [`DEFAULT_PROFILE_ID`] can never be deleted (ADR-0057 ¶3 / #563 AC10).
     DefaultUndeletable,
@@ -198,7 +196,6 @@ pub(crate) async fn list(db: &SqlitePool) -> Result<Vec<AgentProfile>, sqlx::Err
     Ok(rows.iter().map(row_to_profile).collect())
 }
 
-/// One profile by id, or `None`.
 pub(crate) async fn get(db: &SqlitePool, id: &str) -> Result<Option<AgentProfile>, sqlx::Error> {
     let row = sqlx::query("SELECT * FROM agent_profiles WHERE id = ?")
         .bind(id)
@@ -437,7 +434,6 @@ mod tests {
 
     #[tokio::test]
     async fn names_are_unique_case_insensitively() {
-        // AC25.
         let db = mem_db().await;
         create(&db, "Reviewer", "claude", None, None).await.unwrap();
         let err = create(&db, "REVIEWER", "opencode", None, None)
@@ -512,7 +508,6 @@ mod tests {
 
     #[tokio::test]
     async fn default_cannot_be_deleted() {
-        // AC10/AC12.
         let db = mem_db().await;
         let err = delete(&db, DEFAULT_PROFILE_ID).await.unwrap_err();
         assert_eq!(err, AgentProfileError::DefaultUndeletable);

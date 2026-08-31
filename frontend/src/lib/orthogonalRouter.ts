@@ -167,8 +167,6 @@ function simplify(points: Point[]): Point[] {
   return out;
 }
 
-// --- Geometry helpers ---
-
 // True if an axis-aligned segment passes through the open interior of `rect`.
 // Endpoints lying exactly on an edge do not count as a crossing.
 function segmentHitsRect(a: Point, b: Point, rect: Rect): boolean {
@@ -191,8 +189,6 @@ function polylineHitsRect(points: Point[], rect: Rect): boolean {
   }
   return false;
 }
-
-// --- Grid A* fallback ---
 
 // Builds a coarse routing grid from the endpoints plus each obstacle's
 // margin-expanded edges, then A*-searches orthogonal moves between grid

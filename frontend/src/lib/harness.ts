@@ -154,13 +154,11 @@ export function foldNodeIntoHarnesses(
 ): Record<string, { model?: string; effort?: string }> | undefined {
   const resolved = resolveEditorHarness(node);
   const out: Record<string, { model?: string; effort?: string }> = {};
-  // Carry over existing entries (non-resolved harnesses keep their settings).
   for (const [name, entry] of Object.entries(node.harnesses ?? {})) {
     const model = entry?.model || undefined;
     const effort = entry?.effort || undefined;
     if (model || effort) out[name] = { ...(model ? { model } : {}), ...(effort ? { effort } : {}) };
   }
-  // Overlay the flat view onto the resolved harness.
   const model = node.model || undefined;
   const effort = node.effort || undefined;
   if (model || effort) {

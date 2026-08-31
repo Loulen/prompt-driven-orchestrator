@@ -110,10 +110,8 @@ async fn multi_iter_projection_via_daemon() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let run_id = create_run(&daemon).await;
 
-    // Small delay for the scheduler to process initial events
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
-    // Check initial state: reviewer should be at iter 1, running
     let resp = reqwest::get(format!("{}/runs/{}", daemon.url(), run_id))
         .await
         .unwrap();
@@ -136,7 +134,6 @@ async fn multi_iter_projection_via_daemon() {
     std::fs::create_dir_all(&port_dir).unwrap();
     std::fs::write(port_dir.join("output.md"), "---\nverdict: PASS\n---\nLGTM").unwrap();
 
-    // Mark the node complete for iter 1
     let resp = reqwest::Client::new()
         .post(format!(
             "{}/runs/{}/nodes/reviewer/done",
@@ -155,7 +152,6 @@ async fn multi_iter_projection_via_daemon() {
 
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
-    // After completion, verify iter 1 is completed
     let resp = reqwest::get(format!("{}/runs/{}", daemon.url(), run_id))
         .await
         .unwrap();
@@ -178,7 +174,6 @@ async fn multi_iter_projection_via_daemon() {
     let pane: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(pane["stale"], false, "latest iter pane should not be stale");
 
-    // Cleanup
     let session = format!("pdo-{run_id}-reviewer-iter-1");
     let _ = std::process::Command::new("tmux")
         .args(["kill-session", "-t", &session])

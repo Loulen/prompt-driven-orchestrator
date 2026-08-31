@@ -1,15 +1,10 @@
-//! `POST /runs/{id}/commands` — the Pipeline Manager's command surface (#236).
+//! `POST /runs/{id}/commands` — the Pipeline Manager's command surface: the HTTP
+//! handler, the post-command re-evaluation it drives, and the pipeline helpers
+//! only that re-evaluation uses.
 //!
-//! Carved out of `lib.rs` as a pure move: this module holds the HTTP handler,
-//! the post-command re-evaluation it drives, and the two pipeline helpers only
-//! that re-evaluation uses. The wire contract of the accepted `kind`s is stable;
-//! #600 added `set_region_max_iter`, `force_route` and `skip_node` (the run
-//! resilience levers) alongside the original set.
-//!
-//! Layer 3 in ADR-0009 terms, and the one the Pipeline Manager drives. Its
-//! sibling surface is the per-node route family
+//! Layer 3 in ADR-0009 terms. Its sibling surface is the per-node route family
 //! `POST /runs/{id}/nodes/{node_id}/{start,stop,retry}` (the canvas buttons),
-//! which lives in `lib.rs` still.
+//! which still lives in `lib.rs`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -20,11 +15,6 @@ use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use tracing::{error, info, warn};
 
-// Everything below is private to the crate root. Rust makes a root item visible
-// in the root AND every descendant module, so carving this file out needed no
-// widening: the only visibility change in the whole move is `pub(crate)` on
-// `run_command` itself, which the router (a root item, i.e. an ANCESTOR) has to
-// import by name.
 use crate::node_spawn::{spawn_node, SpawnContext, SpawnDeps, SpawnOutcome};
 use crate::scheduler_interpreter::{ActionOutcome, SpawnDedup};
 use crate::worktree_ops::worktree_dir_for_run;
@@ -39,10 +29,8 @@ use crate::{
     CreateRunRequest, TargetRepoInput,
 };
 
-/// The wire shape of a command. `pub(crate)` only because `run_command` is —
-/// axum's extractor puts this type in the handler's public signature, and the
-/// router lives in the crate root (an ancestor). Its fields stay private: no
-/// caller outside this module builds or reads one.
+/// The wire shape of a command. `pub(crate)` only because axum's extractor puts
+/// this type in the handler's public signature; its fields stay private.
 #[derive(Deserialize)]
 pub(crate) struct RunCommandRequest {
     kind: String,
@@ -52,29 +40,26 @@ pub(crate) struct RunCommandRequest {
     iter: Option<i64>,
     #[serde(default)]
     additional_iter: Option<i64>,
-    /// Identifies the loop region a `bump_region` / `end_region` /
-    /// `set_region_max_iter` command targets (ADR-0011 / #152 / #600 — the Pipeline
-    /// Manager routes a region by id).
+    /// The loop region a `bump_region` / `end_region` / `set_region_max_iter`
+    /// targets.
     #[serde(default)]
     region_id: Option<String>,
-    /// The absolute iteration cap of a `set_region_max_iter` command (#600). Unlike
-    /// `additional_iter` (a `bump_region` delta), this is the total number of laps
-    /// the region should now allow.
+    /// The **absolute** iteration cap of a `set_region_max_iter` — the total laps
+    /// the region now allows, not a delta like `additional_iter`.
     #[serde(default)]
     max_iter: Option<i64>,
-    /// The **source** of a `force_route` command (#600): a node id OR a region id
-    /// whose `when:` edges are short-circuited. Distinct from `node_id`/`region_id`
-    /// so a `force_route` can name either kind without overloading their meaning.
+    /// The **source** of a `force_route`: a node id OR a region id whose `when:`
+    /// edges are short-circuited. Separate from `node_id`/`region_id` so it can name
+    /// either kind without overloading their meaning.
     #[serde(default)]
     from: Option<String>,
-    /// The **target** node a `force_route` exits to (#600).
+    /// The **target** node a `force_route` exits to.
     #[serde(default)]
     target: Option<String>,
-    /// Per-input-port override paths/contents for a `start_node` (#486) or the
-    /// default outputs of a `skip_node` (#600). Keyed by port name; each value is
-    /// **inline content** written to that port's artifact before the node runs (a
-    /// dummy input, or a skipped node's empty-by-default output). An operator can
-    /// thus drive a node without its upstream having produced.
+    /// Per-port overrides for a `start_node`, or the default outputs of a
+    /// `skip_node`. Keyed by port name; each value is **inline content** written to
+    /// that port's artifact before the node runs, so an operator can drive a node
+    /// without its upstream having produced.
     #[serde(default)]
     overrides: Option<HashMap<String, String>>,
     #[serde(default)]
@@ -85,14 +70,12 @@ pub(crate) struct RunCommandRequest {
     name: Option<String>,
 }
 
-/// A command from the Pipeline Manager, already validated (#236). The only way
-/// to build one is [`parse_run_command`], so every field below is checked
-/// before an arm ever sees it: no arm re-validates presence, applies a default,
-/// or re-inspects a path.
+/// A command from the Pipeline Manager, already validated. The only way to build
+/// one is [`parse_run_command`], so no arm re-validates presence, applies a
+/// default, or re-inspects a path.
 ///
-/// The accepted `kind`s, one variant each — except `bump_region`/`end_region`,
-/// which share [`RunCommand::Region`] because they share their whole I/O tail.
-/// #600 added `SetRegionMaxIter`, `ForceRoute` and `SkipNode` (run resilience).
+/// One variant per accepted `kind`, except `bump_region`/`end_region`, which share
+/// [`RunCommand::Region`] because they share their whole I/O tail.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RunCommand {
     MarkNodeDone {
@@ -103,38 +86,33 @@ enum RunCommand {
         node_id: String,
         additional_iter: i64,
     },
-    /// `bump_region` / `end_region`. They differ only in payload and required
-    /// fields — everything after that (region lookup in the snapshot, the
-    /// `CommandIssued` append, the Halt lift, the re-evaluation) is shared. The
-    /// difference lives in [`RegionAction`], which is why `end_region` cannot
-    /// carry an `additional_iter` IN THE TYPE.
+    /// `bump_region` / `end_region`. They differ only in payload; everything after
+    /// (region lookup, `CommandIssued` append, Halt lift, re-evaluation) is shared.
+    /// The difference lives in [`RegionAction`], so `end_region` cannot carry an
+    /// `additional_iter` IN THE TYPE.
     Region {
         region_id: String,
         action: RegionAction,
     },
-    /// `set_region_max_iter` (#600 / ADR-0011): raise a bounded region's iteration
-    /// cap **in flight**, absolute (not a delta). Re-projected without a restart —
+    /// Raise a bounded region's iteration cap **in flight**, absolute, no restart:
     /// the scheduler reads the folded override in place of the declared `max_iter`,
-    /// uniformly for a literal and a `$var` cap (FP #1).
+    /// uniformly for a literal and a `$var` cap.
     SetRegionMaxIter {
         region_id: String,
         max_iter: i64,
     },
-    /// `force_route` (#600 / ADR-0011): declare an explicit exit from a node or a
-    /// region to a target, short-circuiting the source's `when:` edges. `from` is a
-    /// node id OR a region id; `target` is a node id (or the `End` node, which
-    /// completes the run). The lever for a run wedged `unrouted` (FP #3); folded from
-    /// the log so it is not re-decided after a reopen (FP #8).
+    /// An explicit exit from a node or region to a target, short-circuiting the
+    /// source's `when:` edges — the lever for a run wedged `unrouted`. `target` may
+    /// be the `End` node, which completes the run. Folded from the log, so a reopen
+    /// does not re-decide it.
     ForceRoute {
         from: String,
         target: String,
     },
-    /// `skip_node` (#600 / ADR-0049): **skip a node locally** — mark it satisfied
-    /// with an empty output by default (overridable per port), WITHOUT terminating
-    /// the run. Distinct from `pdo skip` (`RunSkipped`, a run-level no-op, #245): the
-    /// run **continues**, downstream advances on the empty/overridden output, and the
-    /// skipped node counts as satisfied for re-projection (a reopen never re-spawns
-    /// it, FP #4).
+    /// Skip a node **locally**: mark it satisfied with an empty (or overridden)
+    /// output WITHOUT terminating the run. Distinct from `pdo skip` (`RunSkipped`, a
+    /// run-level no-op) — downstream advances, and the skipped node counts as
+    /// satisfied for re-projection, so a reopen never re-spawns it.
     SkipNode {
         node_id: String,
         iter: i64,
@@ -142,13 +120,11 @@ enum RunCommand {
     },
     PauseRun,
     ResumeRun,
-    /// The global re-open (ADR-0049, AC8): "re-project + drive the new". Surfaced
-    /// by the Play button in the run-level toolbar. Lifts ANY terminal Run
-    /// (`Completed`/`Skipped`/`Failed`/`Halted`) — and an incident-parked
-    /// `AwaitingUser` — back to `Running` by a safe re-projection that freezes the
-    /// satisfied `(node, iter)` (the scheduler's dedup refuses to re-spawn them,
-    /// anti-#221) and re-drives only the unsatisfied work. Distinct from
-    /// [`RunCommand::RetryAll`] (which archives and forks a NEW run).
+    /// The global re-open (ADR-0049): lifts ANY terminal Run — and an
+    /// incident-parked `AwaitingUser` — back to `Running` by a re-projection that
+    /// freezes the satisfied `(node, iter)` (the scheduler's dedup refuses to
+    /// re-spawn them) and re-drives only the unsatisfied work. Distinct from
+    /// [`RunCommand::RetryAll`], which archives and forks a NEW run.
     ReopenRun,
     KillNode {
         node_id: String,
@@ -158,25 +134,21 @@ enum RunCommand {
         node_id: String,
         iter: i64,
     },
-    /// Recover an `Interrupted` node (#599, ADR-0049 §3). The mechanism is chosen
-    /// off the node's **frozen** harness: re-attach the existing session in place
-    /// when it `can_resume()` (ADR-0045), else fall back **automatically** to
-    /// restart-with-artifacts. See [`crate::recovery`].
+    /// Recover an `Interrupted` node (ADR-0049 §3). The mechanism is chosen off the
+    /// node's **frozen** harness: re-attach in place when it `can_resume()`
+    /// (ADR-0045), else fall back automatically to restart-with-artifacts.
     RecoverNode {
         node_id: String,
         iter: i64,
     },
-    /// `req.iter` is dropped at parse time — `force_spawn_node` derives the
-    /// iteration itself (#204), and letting the manager pin one would fight
-    /// that derivation. `overrides` (#486) supplies per-port input content so the
-    /// node runs on a dummy input without its upstream having produced.
+    /// `req.iter` is dropped at parse time: `force_spawn_node` derives the iteration
+    /// itself, and a manager-pinned one would fight that derivation.
     StartNode {
         node_id: String,
         overrides: Option<HashMap<String, String>>,
     },
     /// `path` stays a `String`, not a `PathBuf`: it is echoed verbatim into the
-    /// `CommandIssued` payload and the `info!`. Already proven relative and
-    /// free of `..` components.
+    /// `CommandIssued` payload. Already proven relative and free of `..`.
     InjectArtifact {
         path: String,
         content: String,
@@ -197,9 +169,8 @@ enum RegionAction {
     End,
 }
 
-/// Rejected at parse time. Every current rejection site
-/// answers `400` + `Json({"error": …})`, so the status is not carried here —
-/// add it the day one of them stops being a 400.
+/// Rejected at parse time. Every rejection site answers `400` + `Json({"error":
+/// …})`, so the status is not carried here — add it the day one stops being a 400.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CommandParseError(String);
 
@@ -214,9 +185,8 @@ impl IntoResponse for CommandParseError {
 }
 
 impl RunCommand {
-    /// The wire `kind` this command came from. Load-bearing, not cosmetic: the
-    /// region arm interpolates it into a `warn!` and an `info!` that both sit
-    /// AFTER an `.await` (so the request is long gone), and every
+    /// The wire `kind` this command came from. Load-bearing: the region arm logs it
+    /// after an `.await` (the request is long gone by then), and every
     /// `CommandIssued` payload carries it as `"command"`.
     fn kind_str(&self) -> &'static str {
         match self {
@@ -248,22 +218,19 @@ impl RunCommand {
     }
 }
 
-/// Turn the wire shape into a validated command. **Pure** — no DB, no
-/// filesystem, no clock — which is the whole point: every one of the
-/// rejections below used to be reachable only through a live daemon.
+/// Turn the wire shape into a validated command. **Pure** — no DB, no filesystem,
+/// no clock — so every rejection below is testable without a live daemon.
 ///
 /// Two orderings are behaviour, not style, and both are pinned by tests:
-/// `bump_region` reports a missing `region_id` BEFORE a missing
-/// `additional_iter`, and `inject_artifact` reports a missing `content` BEFORE
-/// it looks at the path. Swap either and a malformed request changes its
-/// answer.
+/// `bump_region` reports a missing `region_id` BEFORE a missing `additional_iter`,
+/// and `inject_artifact` reports a missing `content` BEFORE it looks at the path.
+/// Swap either and a malformed request changes its answer.
 ///
 /// The `kind` match comes first, so an unknown `kind` with missing fields still
 /// answers `"unknown command"` rather than a field complaint.
 ///
-/// Deliberately NOT derived from the wire with `#[serde(tag = "kind")]`: that
-/// would turn these messages into axum's `422` + serde prose in
-/// text/plain.
+/// Deliberately NOT `#[serde(tag = "kind")]`: that would turn these messages into
+/// axum's `422` + serde prose in text/plain.
 fn parse_run_command(req: RunCommandRequest) -> Result<RunCommand, CommandParseError> {
     fn required(
         value: Option<String>,
@@ -286,7 +253,6 @@ fn parse_run_command(req: RunCommandRequest) -> Result<RunCommand, CommandParseE
     match req.kind.as_str() {
         "mark_node_done" => Ok(RunCommand::MarkNodeDone {
             node_id: required(req.node_id, "node_id", "mark_node_done")?,
-            // Omitted `iter` means 1 — three arms share this default.
             iter: req.iter.unwrap_or(1),
         }),
         "extend_cycle" => {
@@ -297,24 +263,23 @@ fn parse_run_command(req: RunCommandRequest) -> Result<RunCommand, CommandParseE
             })
         }
         kind @ ("bump_region" | "end_region") => {
-            // `region_id` first, for BOTH kinds: `{"kind":"bump_region"}` alone
-            // must complain about the region, not the count.
+            // `region_id` first, for BOTH kinds: `{"kind":"bump_region"}` alone must
+            // complain about the region, not the count.
             let region_id = required(req.region_id, "region_id", kind)?;
             let action = if kind == "bump_region" {
                 RegionAction::Bump {
                     additional_iter: positive_iter(req.additional_iter, "bump_region")?,
                 }
             } else {
-                // A stray `additional_iter` on `end_region` is accepted and
-                // dropped. Rejecting it would be a regression.
+                // A stray `additional_iter` here is accepted and dropped; rejecting
+                // it would be a regression.
                 RegionAction::End
             };
             Ok(RunCommand::Region { region_id, action })
         }
         "set_region_max_iter" => {
-            // `region_id` first (mirrors the region commands), then the cap. A
-            // non-positive cap is rejected here, before any event: a region is
-            // never made zero-lap by a stray command.
+            // A non-positive cap is rejected before any event: a region is never
+            // made zero-lap by a stray command.
             let region_id = required(req.region_id, "region_id", "set_region_max_iter")?;
             let max_iter = req.max_iter.ok_or_else(|| {
                 CommandParseError("max_iter required for set_region_max_iter".into())
@@ -360,8 +325,8 @@ fn parse_run_command(req: RunCommandRequest) -> Result<RunCommand, CommandParseE
         }),
         "inject_artifact" => {
             let path = required(req.path, "path", "inject_artifact")?;
-            // BEFORE the traversal check: a request with a hostile path and no
-            // content answers "content required", not "path traversal".
+            // Before the traversal check: a hostile path with no content answers
+            // "content required", not "path traversal".
             let content = required(req.content, "content", "inject_artifact")?;
             let requested = std::path::Path::new(&path);
             if requested.is_absolute()
@@ -382,10 +347,8 @@ fn parse_run_command(req: RunCommandRequest) -> Result<RunCommand, CommandParseE
     }
 }
 
-/// A `recover_node` refusal, in the transversal shape ADR-0035 §3 fixed for this
-/// surface (`error` = slug, `recoverable`, prose in `message`) plus the chosen
-/// `mechanism`. `409`, because the optimal path could not run against the node's
-/// current state — never a `2xx` that would pretend a re-attach happened.
+/// A `recover_node` refusal in the ADR-0035 §3 shape, plus the chosen `mechanism`.
+/// `409`, never a `2xx` that would pretend a re-attach happened.
 fn recover_conflict(
     mechanism: crate::recovery::RecoveryMechanism,
     slug: &str,
@@ -422,15 +385,13 @@ fn recover_response(
                 Json(serde_json::json!({
                     "ok": true,
                     "mechanism": mechanism.as_str(),
-                    // Same vocabulary as the loop-command responses (ADR-0025): a
-                    // list of pairs, not a bare boolean.
                     "reattached": [{ "node_id": node_id, "iter": iter }],
                 })),
             )
                 .into_response()
         }
-        // A re-attach IS a (re)spawn (#487 §3): the cap can queue it. A `2xx`, and
-        // not a no-op — the caller must not re-issue.
+        // A re-attach IS a (re)spawn, so the cap can queue it. A `2xx` and not a
+        // no-op: the caller must not re-issue.
         ReattachOutcome::CapReached { live, cap } => (
             StatusCode::OK,
             Json(serde_json::json!({
@@ -444,9 +405,9 @@ fn recover_response(
             })),
         )
             .into_response(),
-        // The optimal path could not run. Honest `409`s, never a silent success.
-        // `CannotResume` is unreachable here (this branch was chosen because the
-        // harness CAN resume) but is mapped for exhaustiveness.
+        // Honest `409`s, never a silent success. `CannotResume` is unreachable here
+        // (this branch was chosen because the harness CAN resume) but is mapped for
+        // exhaustiveness.
         ReattachOutcome::ScriptNode => recover_conflict(
             mechanism,
             "script_not_resumable",
@@ -463,9 +424,8 @@ fn recover_response(
             "harness_cannot_resume",
             "the frozen harness declares no resume tail (ADR-0045)",
         ),
-        // #614 (correctif 2): the mechanism-choice above already refuses a gone
-        // frozen harness early, so this is normally unreachable — mapped for
-        // exhaustiveness, and honest if `reattach_node_session` reaches it.
+        // The mechanism choice above already refuses a gone frozen harness, so this
+        // is normally unreachable — mapped for exhaustiveness.
         ReattachOutcome::FrozenHarnessGone { harness } => recover_conflict(
             mechanism,
             "frozen_harness_gone",
@@ -488,9 +448,9 @@ pub(crate) async fn run_command(
     AxumPath(run_id): AxumPath<String>,
     Json(req): Json<RunCommandRequest>,
 ) -> Response {
-    // #328 / ADR-0024: a forgotten run accepts no commands — reject before any
-    // arm can append (extend_cycle appends CommandIssued before its own
-    // existence check) or trigger side effects.
+    // ADR-0024: a forgotten run accepts no commands. Reject before any arm can
+    // append (extend_cycle appends CommandIssued before its own existence check) or
+    // trigger side effects.
     match run_is_forgotten(&state.db, &run_id).await {
         Ok(true) => {
             return (
@@ -509,10 +469,8 @@ pub(crate) async fn run_command(
         }
     }
 
-    // #236: all presence / default / path-shape validation is pure and lives in
-    // `parse_run_command` — AFTER the 410 gate, which must stay first
-    // (ADR-0024 / #328). A malformed command against a forgotten run answers
-    // 410 today, not 400, and that precedence belongs to ADR-0024.
+    // Validation runs AFTER the 410 gate: a malformed command against a forgotten
+    // run answers 410, not 400, and that precedence belongs to ADR-0024.
     let cmd = match parse_run_command(req) {
         Ok(cmd) => cmd,
         Err(e) => return e.into_response(),
@@ -523,42 +481,27 @@ pub(crate) async fn run_command(
 
 /// Run one validated command and answer for it.
 ///
-/// **Returns an `axum::Response`, deliberately — not a semantic
-/// `CommandOutcome` mapped to HTTP by a central mapper.** That alternative is
-/// provably lossy: this surface emits twenty-two distinct (status,
-/// content-type, body-shape) triplets, including seven `404 text/plain` "run
-/// not found" against one `404` in JSON, a `409 text/plain` against eight in
-/// JSON, five success shapes no verdict enum expresses, and the `201 {run_id}`
-/// of `create_run_core` forwarded verbatim by `retry_all` — which the frontend
-/// reads to navigate to the retried Run. A single mapper must pick one
-/// content-type per verdict, and each pick rewrites the other half. Returning
-/// the `Response` is lossless by construction: the wire contract cannot see
-/// this refactor. See the #236 addendum to ADR-0009.
+/// **Returns an `axum::Response` deliberately, not a semantic `CommandOutcome`
+/// mapped to HTTP by a central mapper.** This surface emits twenty-two distinct
+/// (status, content-type, body-shape) triplets — including `404`s in both
+/// text/plain and JSON, and the `201 {run_id}` of `create_run_core` forwarded
+/// verbatim by `retry_all`, which the frontend reads to navigate to the retried
+/// Run. A single mapper must pick one content-type per verdict, and each pick
+/// rewrites the other half. See the ADR-0009 addendum.
 ///
-/// `dispatch` is a DRIVER, not a leaf primitive: it reaches twenty-three root
-/// items across five subsystems (sqlite, tmux, docker, worktrees, Run
-/// creation). The house idiom for a driver is the whole `AppState`
-/// (`run_advance`, `scheduler_interpreter`); dependency injection à la
-/// `SpawnDeps` is reserved for leaves (`node_spawn`), and a bundle here would
-/// carry all of `AppState` while buying no testability.
-///
-/// Both parameters are taken **by value**, which is what lets every arm move
-/// across byte-for-byte: `Arc` because `force_spawn_node` wants `&Arc<AppState>`
-/// and the arms already say `&state`; `run_id` because every arm builds events
-/// that own it. The handler holds no use for either afterwards, so the moves
-/// cost nothing.
+/// `dispatch` is a DRIVER, not a leaf: it reaches across sqlite, tmux, docker,
+/// worktrees and Run creation, so it takes the whole `AppState`. Dependency
+/// injection à la `SpawnDeps` is reserved for leaves (`node_spawn`).
 async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Response {
-    // Read before the match consumes `cmd`: the region arm logs its wire kind
-    // after two `.await`s, and `&'static str` costs nothing to carry.
+    // Read before the match consumes `cmd`: the region arm logs its wire kind after
+    // two `.await`s.
     let kind_str = cmd.kind_str();
 
     match cmd {
         RunCommand::MarkNodeDone { node_id, iter } => {
-            // NOT `load_projected`: this arm needs the `Option<RunState>`
-            // itself. An unstarted run projects `None`, the completion guard
-            // maps that to `Allow`, and the arm then falls back on a synthetic
-            // empty `RunState` — so `mark_node_done` answers 200 and appends on
-            // a run with no log. `load_projected` would 404 instead.
+            // NOT `load_projected`, which would 404 on an unstarted run: this arm
+            // needs the `Option<RunState>` itself, so `None` maps to `Allow` and
+            // falls back on a synthetic empty `RunState`.
             let events = match load_events(&state.db, &run_id).await {
                 Ok(e) => e,
                 Err(e) => {
@@ -571,10 +514,9 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             };
             let run_state = event_log::project(&events);
 
-            // AC7 / ADR-0049: completing a node on a terminal (or incident-parked)
-            // Run embeds the re-open — the human's `mark_node_done` re-opens the
-            // Run atomically so the completion lands on a live Run instead of the
-            // guard's "resume the run first" 409.
+            // ADR-0049: completing a node on a terminal (or incident-parked) Run
+            // embeds the re-open, so the completion lands on a live Run instead of
+            // the guard's "resume the run first" 409.
             let run_state = match run_state {
                 Some(rs) => {
                     match crate::embed_reopen_for_targeted_command(&state, &run_id, rs).await {
@@ -591,15 +533,12 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 None => None,
             };
 
-            // Transition guard (#212, #354): validate the completion against the
-            // projected state BEFORE any side effect (output validation, append,
-            // downstream dispatch). Shared head — same pure decision as
-            // `node_done` and `node_skip`. `run_state.as_ref()` may be `None`
-            // (unstarted run); the guard maps `None -> Allow`, forwarded verbatim.
-            // #490 / ADR-0035: the typed stop keeps the legal-duplicate no-op a
+            // Validate against the projected state BEFORE any side effect (output
+            // validation, append, downstream dispatch) — the same pure decision as
+            // `node_done` and `node_skip`. The typed stop keeps a legal duplicate a
             // `200` while a reject becomes `409 {"error":"completion_rejected",…}`.
-            // This arm is why the invariant could not live on `CompletionAttempt`:
-            // it never builds one, and it is the whole UI path.
+            // The invariant cannot live on `CompletionAttempt`: this arm never
+            // builds one, and it is the whole UI path.
             if let Some(stop) = completion_head_gate(
                 run_advance::evaluate_completion_head(run_state.as_ref(), &run_id, &node_id, iter),
                 "mark_node_done",
@@ -620,9 +559,9 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             let pipeline_path = resolve_run_pipeline_path(&repo_root, &run_id, pipeline_name);
             let worktree_dir = worktree_dir_for_run(&repo_root, &run_id);
             let artifacts_dir = worktree_dir.join(".pdo").join("artifacts");
-            // The shared chokepoint (#490). Both surfaces project the refusal
-            // through the same single function, which is what makes "a refusal is
-            // never a 2xx" cover `POST /commands` too.
+            // The shared chokepoint: both surfaces project the refusal through this
+            // one function, which is what makes "a refusal is never a 2xx" cover
+            // `POST /commands` too.
             if let Some(refusal) = check_output_validation_with_retry(
                 &state,
                 &pipeline_path,
@@ -672,14 +611,11 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 error!("failed to append mark_node_done command event: {e}");
             }
 
-            // Shared post-`NodeCompleted` tail (#275), `SweepFirst`: advance the
-            // run + re-drive throttled waiters, THEN fire this node's edges (the
-            // interactive node is already gone), then the single completion gate.
-            // flag = true: the just-finished node was interactive, so the run can
-            // still project `AwaitingUser` at the gate and must still complete —
-            // unlike the other sites (flag = false, #235). The `NodeCompleted`
-            // (with its `source` payload) + `CommandIssued` appends above are the
-            // caller's head.
+            // Shared post-`NodeCompleted` tail, `SweepFirst`: advance the run +
+            // re-drive throttled waiters, THEN fire this node's edges, then the
+            // single completion gate. flag = true because the just-finished node was
+            // interactive, so the run can still project `AwaitingUser` at the gate
+            // and must still complete — unlike the other sites (flag = false).
             run_advance::complete_node(
                 &state,
                 &run_id,
@@ -696,10 +632,9 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             node_id,
             additional_iter,
         } => {
-            // ADR-0025 / #327: validate the target against the run's pipeline
-            // SNAPSHOT before any event is appended — a rejected command must
-            // leave no trace in the log. Snapshot-first (`resolve_run_pipeline_path`)
-            // so a library edit after launch can't affect an in-flight run.
+            // Validate against the run's pipeline SNAPSHOT before any event is
+            // appended: a rejected command must leave no trace in the log, and a
+            // library edit after launch must not affect an in-flight run.
             let (_, run_state) = match load_projected(&state, &run_id).await {
                 Ok(v) => v,
                 Err(resp) => return *resp,
@@ -735,8 +670,8 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                         .into_response();
                 }
             } else {
-                // An unreadable/unparsable snapshot can't be validated against;
-                // stay permissive (legacy behavior) rather than reject blind.
+                // An unreadable snapshot can't be validated against; stay permissive
+                // rather than reject blind.
                 warn!("extend_cycle: pipeline snapshot unreadable for run {run_id}; skipping target validation");
             }
 
@@ -778,17 +713,15 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 }
             }
 
-            // Re-evaluate outgoing edges with the extended cycle
             let summary = re_evaluate_after_command(&state, &run_id).await;
 
             info!("extend_cycle: node {node_id} +{additional_iter} in run {run_id}");
             (StatusCode::OK, Json(summary.into_response_body())).into_response()
         }
-        // The Pipeline Manager routes a loop region BY ID (ADR-0011 / #152):
-        // `bump_region` runs N more iterations; `end_region` fires its
-        // completion. Both append a control-flow `CommandIssued` event and then
-        // continue the run (lift an exhausted-unrouted Halt and re-evaluate),
-        // so a stalled region is unstuck without restarting the daemon.
+        // The Pipeline Manager routes a loop region BY ID: `bump_region` runs N more
+        // iterations, `end_region` fires its completion. Both append a control-flow
+        // `CommandIssued` then continue the run (lift an exhausted-unrouted Halt and
+        // re-evaluate), so a stalled region is unstuck without a daemon restart.
         RunCommand::Region { region_id, action } => {
             let payload = match &action {
                 RegionAction::Bump { additional_iter } => serde_json::json!({
@@ -802,9 +735,8 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 }),
             };
 
-            // ADR-0025 / #327: validate the region against the run's pipeline
-            // SNAPSHOT before any event is appended — an unknown region_id must
-            // leave no trace in the log.
+            // Validate against the run's pipeline SNAPSHOT before any event is
+            // appended: an unknown region_id must leave no trace in the log.
             let (_, run_state) = match load_projected(&state, &run_id).await {
                 Ok(v) => v,
                 Err(resp) => return *resp,
@@ -849,12 +781,10 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                     .into_response();
             }
 
-            // Continue the run: an exhausted-unrouted region parks the run
-            // (`AwaitingUser` on an incident since ADR-0049, or the historical
-            // terminal `Halted`/`Failed`), so lift it back to `Running` before
-            // re-evaluating. A targeted command embeds its own re-open (AC7). An
-            // interactive `AwaitingUser` (no incident reason) is left alone —
-            // routing a region never overrides a node's genuine user wait.
+            // An exhausted-unrouted region parks the run, so lift it back to
+            // `Running` before re-evaluating. An interactive `AwaitingUser` (no
+            // incident reason) is left alone: routing a region never overrides a
+            // node's genuine user wait.
             let needs_reopen = matches!(
                 run_state.status,
                 event_log::RunStatus::Halted | event_log::RunStatus::Failed
@@ -880,11 +810,9 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             info!("{kind_str}: region {region_id} in run {run_id}");
             (StatusCode::OK, Json(summary.into_response_body())).into_response()
         }
-        // #600 / ADR-0011: raise a bounded region's iteration cap in flight. Same
-        // shape as the region routing arm — validate the region against the run's
-        // snapshot, append the `CommandIssued` (folded into
-        // `region_max_iter_overrides`), lift a parked run, and re-evaluate so the
-        // region runs the extra laps without a restart (FP #1).
+        // Raise a bounded region's cap in flight. Same shape as the region routing
+        // arm: validate against the snapshot, append the `CommandIssued` (folded into
+        // `region_max_iter_overrides`), lift a parked run, re-evaluate.
         RunCommand::SetRegionMaxIter {
             region_id,
             max_iter,
@@ -931,8 +859,8 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
             }
 
-            // Lift a parked run so the raised cap re-drives the region now (mirrors
-            // the region routing arm). An interactive `AwaitingUser` is left alone.
+            // Lift a parked run so the raised cap re-drives the region now. An
+            // interactive `AwaitingUser` is left alone.
             let needs_reopen = matches!(
                 run_state.status,
                 event_log::RunStatus::Halted | event_log::RunStatus::Failed
@@ -957,11 +885,10 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             info!("set_region_max_iter: region {region_id} -> {max_iter} in run {run_id}");
             (StatusCode::OK, Json(summary.into_response_body())).into_response()
         }
-        // #600 / ADR-0011: force an explicit exit from a node or a region,
-        // short-circuiting the source's `when:` edges. Validate BOTH endpoints
-        // against the snapshot (a bad route must leave no trace), append the
-        // `CommandIssued` (folded into `forced_routes`), lift a parked run, and
-        // re-evaluate so the forced target spawns (FP #3).
+        // Force an explicit exit from a node or region, short-circuiting the
+        // source's `when:` edges. Validate BOTH endpoints against the snapshot (a bad
+        // route must leave no trace), append the `CommandIssued` (folded into
+        // `forced_routes`), lift a parked run, re-evaluate.
         RunCommand::ForceRoute { from, target } => {
             let (_, run_state) = match load_projected(&state, &run_id).await {
                 Ok(v) => v,
@@ -1040,12 +967,10 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             info!("force_route: {from} -> {target} in run {run_id}");
             (StatusCode::OK, Json(summary.into_response_body())).into_response()
         }
-        // #600 / ADR-0049: skip a node LOCALLY — mark it satisfied with an empty
-        // output (overridable per port), the run continues. Distinct from
-        // `pdo skip` / `node_skip` (`RunSkipped`, run-level no-op): here NO
-        // `RunSkipped` is appended, downstream advances on the skipped node's
-        // empty/overridden output, and the node counts as satisfied so a reopen
-        // never re-spawns it (FP #4, #7).
+        // Skip a node LOCALLY: mark it satisfied with an empty (or overridden)
+        // output, run continues. Unlike `node_skip`, NO `RunSkipped` is appended;
+        // downstream advances on that output and the node counts as satisfied, so a
+        // reopen never re-spawns it.
         RunCommand::SkipNode {
             node_id,
             iter,
@@ -1060,9 +985,8 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             };
             let run_state = event_log::project(&events);
 
-            // Embed the re-open (AC7 / ADR-0049): skipping a node on a terminal /
-            // incident-parked run lifts it first, so the skip lands on a live run
-            // and the completion gate does not refuse with "resume first".
+            // Embed the re-open: skipping on a terminal / incident-parked run lifts
+            // it first, so the completion gate does not refuse with "resume first".
             let run_state = match run_state {
                 Some(rs) => {
                     match crate::embed_reopen_for_targeted_command(&state, &run_id, rs).await {
@@ -1076,9 +1000,8 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 None => None,
             };
 
-            // Same completion head-gate as `mark_node_done`/`node_skip`: a duplicate
-            // skip (or a skip on a genuinely terminal run) is rejected/no-op'd, never
-            // double-appended.
+            // Same head-gate as `mark_node_done`: a duplicate skip is rejected or
+            // no-op'd, never double-appended.
             if let Some(stop) = completion_head_gate(
                 run_advance::evaluate_skip_completion_head(
                     run_state.as_ref(),
@@ -1102,11 +1025,10 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             let worktree_dir = worktree_dir_for_run(&repo_root, &run_id);
             let artifacts_dir = worktree_dir.join(".pdo").join("artifacts");
 
-            // Write the skipped node's outputs (empty by default, or the operator's
-            // per-port override content) via the shared helper, so the downstream
-            // resolver finds a real (if empty) artifact instead of a missing file
-            // that would read as "not produced". An unreadable snapshot means we
-            // cannot know the node's ports; deposit a single default `output`.
+            // Write the skipped node's outputs, so the downstream resolver finds a
+            // real (if empty) artifact instead of a missing file that would read as
+            // "not produced". An unreadable snapshot hides the node's ports; deposit
+            // a single default `output`.
             let overrides = overrides.unwrap_or_default();
             let write_result = match std::fs::read_to_string(&pipeline_path)
                 .ok()
@@ -1146,8 +1068,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                     .into_response();
             }
 
-            // Mark the node satisfied. Deliberately NO output validation and NO
-            // sub-worktree merge (there is nothing to validate or merge — the whole
+            // Deliberately NO output validation and NO sub-worktree merge (the whole
             // point is an empty/dummy output), and — unlike `node_skip` — NO
             // `RunSkipped`: the run stays live.
             let node_completed = event_log::Event {
@@ -1185,9 +1106,8 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 error!("failed to append skip_node command event: {e}");
             }
 
-            // Drive the run forward on the skipped node's (empty) output — same
-            // post-completion tail as `mark_node_done`, flag=false (a skipped node
-            // is never interactive).
+            // Same post-completion tail as `mark_node_done`, flag=false (a skipped
+            // node is never interactive).
             run_advance::complete_node(
                 &state,
                 &run_id,
@@ -1289,23 +1209,21 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 _ => {}
             }
 
-            // #316: a resumable run re-drives the git merge in its pipeline
-            // worktree; kill any open shell (best-effort) so its uncommitted
-            // edits can't race the merge. 409-refusing would deadlock — a shell
-            // only dies on archive, reachable only from a terminal state.
+            // A resumable run re-drives the git merge in its pipeline worktree; kill
+            // any open shell so its uncommitted edits can't race it. Refusing with a
+            // 409 would deadlock: a shell only dies on archive, itself reachable only
+            // from a terminal state.
             tmux_session_manager::kill(
                 &state.tmux_socket(),
                 &tmux_session_manager::shell_session_name(&run_id),
             );
 
-            // #408 D5: resuming a sandboxed Run must re-arm its container before
-            // the scheduler `docker exec`s into it. Containers are created without
-            // `--restart` and `boot_recovery` skips terminal Runs, so after a host
-            // reboot the container is down — reviving a terminal sandboxed Run
-            // would otherwise spawn into a dead container ("failed to spawn tmux
-            // session"). Resurrect it (via `spawn_blocking`, `ensure_ready` may
-            // `docker build`) or fail EXPLICITLY — never a silent host fallback.
-            // Mirrors the run-shell guard (#407 D11).
+            // Re-arm a sandboxed Run's container before the scheduler `docker exec`s
+            // into it. Containers are created without `--restart` and `boot_recovery`
+            // skips terminal Runs, so after a host reboot the container is down and
+            // reviving the Run would spawn into a dead one. Resurrect it (via
+            // `spawn_blocking`, `ensure_ready` may `docker build`) or fail
+            // EXPLICITLY — never a silent host fallback.
             if !run_state.sandbox.is_off() {
                 let prep = match sandbox_run::context_from_state(&state, &run_state).await {
                     Ok(ctx) => tokio::task::spawn_blocking(move || sandbox_run::ensure_ready(&ctx))
@@ -1324,13 +1242,12 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                     )
                         .into_response();
                 }
-                // #445: the container is up again — say so in the log, or the spawn
-                // precondition would refuse every node the re-evaluation below proposes.
-                // Load-bearing for the Run that failed *during* its own prep: its
-                // projection is still `pending`, and resuming it is the operator's only
-                // recovery path. Emitted only after `ensure_ready` returned `Ok` (so the
-                // event never claims a container that isn't there) and only when the Run
-                // is actually blocked (so a routine resume adds no no-op event).
+                // Record that the container is up again, or the spawn precondition
+                // refuses every node the re-evaluation below proposes. Load-bearing
+                // for a Run that failed *during* its own prep: its projection is
+                // still `pending` and resuming is the operator's only recovery path.
+                // Emitted only after `ensure_ready` returned `Ok`, and only when the
+                // Run is actually blocked, so a routine resume adds no no-op event.
                 if run_state.sandbox_spawn_block().is_some() {
                     mark_sandbox_prep_ready(&state, &run_id).await;
                 }
@@ -1347,11 +1264,10 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 Err(resp) => return *resp,
             };
 
-            // Re-openable = any terminal Run, or an incident-parked `AwaitingUser`
-            // (ADR-0049). An interactive `AwaitingUser` (a node genuinely waiting
-            // on its user) and a cleanly `Running`/`Paused` Run are NOT re-opened
-            // here — reopen never overrides a node's user wait, and a live Run
-            // needs no re-projection. Refuse those loudly (ADR-0035 §3 shape).
+            // Re-openable = any terminal Run, or an incident-parked `AwaitingUser`.
+            // An interactive `AwaitingUser` and a cleanly `Running`/`Paused` Run are
+            // refused loudly: reopen never overrides a node's user wait, and a live
+            // Run needs no re-projection.
             let reopenable = run_state.status.is_terminal()
                 && run_state.status != event_log::RunStatus::Archived
                 || (run_state.status == event_log::RunStatus::AwaitingUser
@@ -1371,9 +1287,9 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                     .into_response();
             }
 
-            // The re-open gesture: the projection lifts the Run to `Running`,
-            // freezes satisfied `(node, iter)` and drops interrupted nodes so they
-            // re-drive (anti-#221, ADR-0049). The terminal label stays in the log.
+            // The projection lifts the Run to `Running`, freezes satisfied
+            // `(node, iter)` and drops interrupted nodes so they re-drive. The
+            // terminal label stays in the log.
             let cmd_event = event_log::Event {
                 id: None,
                 run_id: run_id.clone(),
@@ -1391,14 +1307,14 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                     .into_response();
             }
 
-            // #316: kill any open shell before the re-drive re-arms the merge.
+            // Kill any open shell before the re-drive re-arms the merge.
             tmux_session_manager::kill(
                 &state.tmux_socket(),
                 &tmux_session_manager::shell_session_name(&run_id),
             );
 
-            // #408 D5: re-arm a sandboxed Run's container before the scheduler
-            // `docker exec`s into it (same guard as `resume_run`).
+            // Re-arm a sandboxed Run's container before the scheduler `docker exec`s
+            // into it (same guard as `resume_run`).
             if !run_state.sandbox.is_off() {
                 let prep = match sandbox_run::context_from_state(&state, &run_state).await {
                     Ok(ctx) => tokio::task::spawn_blocking(move || sandbox_run::ensure_ready(&ctx))
@@ -1429,28 +1345,23 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
         }
         RunCommand::KillNode { node_id, iter } => {
             // READ-ONLY, and BEFORE any append: one projection yields both the
-            // `repo_root` the snapshot goes under (#470 / ADR-0033 — a Run may
-            // target a repo other than the daemon's) and the sandbox flag the
-            // in-container kill needs (#407). Both must come from the SAME
-            // projection, as in the `node_fail` tail (lib.rs:10547).
-            // `reload_run_state`, not `load_projected`: both of its failure
-            // modes mean the same thing here — no overridden repo, no container
-            // to kill — so neither may become a 4xx.
+            // `repo_root` the snapshot goes under (a Run may target a repo other than
+            // the daemon's) and the sandbox flag the in-container kill needs. Both
+            // must come from the SAME projection. `reload_run_state`, not
+            // `load_projected`: both of its failure modes mean the same thing here —
+            // no overridden repo, no container to kill — so neither may become a 4xx.
             let (repo_root, kill_sandbox) = reload_run_state(&state, &run_id)
                 .await
                 .map(|(_, s)| (effective_repo_root(&state, &s), !s.sandbox.is_off()))
                 .unwrap_or_else(|| (state.repo_root.clone(), false));
 
-            // #488 — THE TERMINAL EVENT FIRST, THE REAP SECOND.
-            // Reaping first would open a "dead session / projection still
-            // Running" window that `GET …/pane` answers by relaunching
-            // `claude --continue` (the resurrection branch, assumed to be a
-            // feature by `dead_session_respawn_via_pane_endpoint`); and on an
-            // append error the node would stay `Running` forever with its
-            // session already killed, without even the audit event. Appending
-            // first makes a 500 mean "nothing happened, retry".
-            // Accepted risk: a few milliseconds where the node is `Failed` with
-            // a live session. `GET …/pane` answers `live` there, which is true.
+            // THE TERMINAL EVENT FIRST, THE REAP SECOND. Reaping first opens a
+            // "dead session / projection still Running" window that `GET …/pane`
+            // answers by relaunching the harness; and on an append error the node
+            // would stay `Running` forever with its session already killed and no
+            // audit event. Appending first makes a 500 mean "nothing happened,
+            // retry". Accepted risk: a few ms where the node is `Failed` with a live
+            // session, which `GET …/pane` honestly reports as `live`.
             let fail_event = event_log::Event {
                 id: None,
                 run_id: run_id.clone(),
@@ -1471,15 +1382,12 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                     .into_response();
             }
 
-            // #488 / #205 — replaces the bare `tmux kill` + `kill_session_best_effort`
-            // this arm used to do: the helper CONTAINS both, preceded by the pane
-            // capture. Keeping the old pair alongside would double the `docker exec`.
-            // Called unconditionally, including when the append above was no-op'd by
-            // the transition guard (already-terminal iteration: `append_event` returns
-            // `Ok(())` WITHOUT persisting). That is deliberate — a second `kill_node`
-            // must stay an idempotent cleanup — and it is what makes the first
-            // snapshot immutable: the session being dead, `capture` returns `None`,
-            // so nothing is rewritten. No transition guard here (out of scope, #488).
+            // The helper already contains the tmux kill AND the best-effort session
+            // kill, preceded by the pane capture; adding either alongside would double
+            // the `docker exec`. Called unconditionally, including when the append
+            // above was no-op'd by the transition guard, so a second `kill_node` stays
+            // an idempotent cleanup — and the first snapshot stays immutable, since a
+            // dead session makes `capture` return `None`.
             reap_node_session(&state, &repo_root, &run_id, &node_id, iter, kill_sandbox);
 
             let cmd_event = event_log::Event {
@@ -1499,44 +1407,25 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 error!("failed to append kill_node command event: {e}");
             }
 
-            // #489-C: killing a node FREES an admission slot, and nothing in this
-            // module re-drove the nodes throttled into `waiting` by the cap.
-            // `retry_waiting_nodes` has no timer of its own — all eight of its callers
-            // are event-driven — so a `restart_node` that answered `waiting:true`
-            // could starve for ever while the operator's kill_node did exactly the
-            // thing that should have released it. Same posture as `node_stop`, which
-            // has called this since #159.
-            //
-            // The halt/pause arms (via `re_evaluate_after_command`) and
-            // `boot_recovery` (which fails orphaned `Running` nodes) had the same
-            // hole; #509 closed both — see the re-drive in `re_evaluate_after_command`
-            // and at the tail of `run_boot_recovery`.
+            // Killing a node FREES an admission slot, so re-drive the nodes throttled
+            // into `waiting`. `retry_waiting_nodes` has no timer of its own — every
+            // caller is event-driven — so a `restart_node` that answered
+            // `waiting:true` would otherwise starve forever.
             retry_waiting_nodes(&state).await;
 
             info!("kill_node: node {node_id} iter {iter} in run {run_id}");
             (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
         }
         RunCommand::RestartNode { node_id, iter } => {
-            // #489 / ADR-0037 — EVERY KNOWABLE CAUSE IS TESTED BEFORE THE KILL, AND
-            // THE `SpawnOutcome` IS READ.
-            //
-            // Pre-#489 this arm killed the tmux session, appended its
-            // `CommandIssued`, THEN discovered the Run / the pipeline / the node, and
-            // finally dropped `spawn_node`'s return without so much as a `let _ =`.
-            // Every one of the five `SpawnOutcome`s answered `200 {"ok":true}` — and
-            // on a `code-mutating` / `merge` node the spawn failed 100% of the time
-            // (`git worktree add -b` on a branch that already exists, exit 255),
-            // which is the whole of #489: session dead, zero events, node still
-            // projected `Running`, and 30 s later the liveness sweep inventing
-            // `session_died` — a false cause that sent operators after tmux for a git
-            // bug.
-            //
-            // ADR-0025 §2's "validate before writing" now extends to the KILL, not
-            // just the append. The order below is the contract.
+            // ADR-0037: EVERY KNOWABLE CAUSE IS TESTED BEFORE THE KILL, AND THE
+            // `SpawnOutcome` IS READ. ADR-0025 §2's "validate before writing" extends
+            // to the KILL, not just the append — the probe order below is the
+            // contract. Killing first, then discovering a bad Run/pipeline/node,
+            // answered `200 {"ok":true}` over a dead session and a node still
+            // projected `Running`.
 
-            // ── PRE-KILL PROBE 1: the transition guard ────────────────────────────
-            //
-            // NOT `load_projected`, same reason as `mark_node_done`:
+            // PRE-KILL PROBE 1: the transition guard. NOT `load_projected`, same
+            // reason as `mark_node_done`:
             // `validate_transition` takes an `Option<RunState>` and maps
             // `None -> Allow` deliberately, so an unstarted run must reach the guard
             // rather than be 404'd here.
@@ -1551,9 +1440,8 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 }
             };
             let projected = event_log::project(&events);
-            // AC7 / ADR-0049: a restart on a terminal (or incident-parked) Run
-            // re-opens it atomically (the human's own re-open gesture) before the
-            // guard below sees it — no "resume then restart without a GET" race.
+            // A restart on a terminal (or incident-parked) Run re-opens it atomically
+            // before the guard below sees it — no "resume then restart" race.
             let projected = match projected {
                 Some(rs) => {
                     match crate::embed_reopen_for_targeted_command(&state, &run_id, rs).await {
@@ -1578,23 +1466,19 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 iter: Some(iter),
                 payload: None,
             };
-            // #489-2.10: the synthetic `NodeStarted` probe is the RIGHT probe here,
-            // unlike on `node_retry` (#487). `validate_start` answers `Allow` on
-            // `live_iter == iter` — "Same iter: legal restart/promotion of the live
-            // iteration" — and `transition_guard`'s module doc says `restart_node`
-            // alone may re-spawn a live iteration. Do not narrow it to
-            // `run_accepts_lifecycle`.
+            // The synthetic `NodeStarted` probe is the RIGHT probe here, unlike on
+            // `node_retry`: `validate_start` answers `Allow` on `live_iter == iter`,
+            // and `restart_node` alone may re-spawn a live iteration. Do not narrow it
+            // to `run_accepts_lifecycle`.
             match transition_guard::validate_transition(projected.as_ref(), &restart_probe) {
                 transition_guard::Verdict::Allow => {}
                 transition_guard::Verdict::Reject { reason } => {
-                    // ONE slug, the guard's prose in `message` — exactly what #490
-                    // settled for `completion_rejected` on the same guard. Three of
-                    // the guard's reasons land here and are deliberately NOT
-                    // discriminated: see `RestartRefusal::RestartRejected`.
+                    // ONE slug, the guard's prose in `message`. Three of the guard's
+                    // reasons land here and are deliberately NOT discriminated: see
+                    // `RestartRefusal::RestartRejected`.
                     let refusal = restart_verdict::RestartRefusal::RestartRejected {
-                        // #515: forward the typed cause as its historical prose;
-                        // the slug stays `restart_refused` (still NOT
-                        // discriminated — see `RestartRefusal::RestartRejected`).
+                        // Forward the typed cause as prose; the slug stays
+                        // `restart_refused`, still not discriminated.
                         message: reason.to_string(),
                         session_killed: false,
                     };
@@ -1618,11 +1502,8 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 }
             }
 
-            // ── PRE-KILL PROBE 2: does the Run exist at all? ──────────────────────
-            //
-            // `404`, and now WITHOUT a trace. Pre-#489 this same 404 was answered
-            // after the kill and after the `CommandIssued` append. #491/#601: body
-            // normalised to JSON so the front can read it.
+            // PRE-KILL PROBE 2: does the Run exist at all? `404` WITHOUT a trace —
+            // this used to be answered after the kill and the `CommandIssued` append.
             let Some(run_state) = projected else {
                 return (
                     StatusCode::NOT_FOUND,
@@ -1631,12 +1512,8 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                     .into_response();
             };
 
-            // ── PRE-KILL PROBE 3: the Run's pipeline SNAPSHOT ─────────────────────
-            //
-            // `resolve_run_pipeline_path`, the same snapshot-first helper
-            // `extend_cycle` uses (ADR-0025 §2: the source of truth is the Run's
-            // pipeline snapshot, not the library). #491/#601: both `500` bodies are
-            // JSON now.
+            // PRE-KILL PROBE 3: the Run's pipeline SNAPSHOT, not the library
+            // (ADR-0025 §2) — the same snapshot-first helper `extend_cycle` uses.
             let repo_root = effective_repo_root(&state, &run_state);
             let pipeline_path =
                 resolve_run_pipeline_path(&repo_root, &run_id, &run_state.pipeline_name);
@@ -1656,11 +1533,9 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             };
             let pipeline = parse_result.pipeline;
 
-            // ── PRE-KILL PROBE 4: is the target in that pipeline? ─────────────────
-            //
-            // The `if let Some(node)` used to have no `else`: an unknown `node_id`
-            // answered `200 {"ok":true}` after killing a session and appending an
-            // audit event for work that never happened.
+            // PRE-KILL PROBE 4: is the target in that pipeline? Without the `else`,
+            // an unknown `node_id` answered `200 {"ok":true}` after killing a session
+            // and appending an audit event for work that never happened.
             let Some(node) = pipeline.nodes.iter().find(|n| n.id == node_id) else {
                 let refusal = restart_verdict::RestartRefusal::NodeNotFound {
                     node_id: node_id.clone(),
@@ -1671,11 +1546,9 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 );
             };
 
-            // ── PRE-KILL PROBE 5: is the sandbox container up? (#445) ─────────────
-            //
-            // `sandbox_spawn_block()` is pure — no I/O, no await — so evaluating it
-            // here costs nothing and turns a post-kill `200` lie into a pre-kill
-            // `409`. Read off the SAME projection as everything above.
+            // PRE-KILL PROBE 5: is the sandbox container up? `sandbox_spawn_block()`
+            // is pure, so evaluating it here costs nothing and turns a post-kill `200`
+            // lie into a pre-kill `409`. Read off the SAME projection as above.
             if let Some(reason) = run_state.sandbox_spawn_block() {
                 let refusal = restart_verdict::RestartRefusal::SandboxPrepNotReady {
                     message: reason,
@@ -1687,12 +1560,9 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 );
             }
 
-            // ── PRE-KILL PROBE 6: is the sub-worktree someone else's? (#489-B) ────
-            //
-            // A pure `git` read. The cost is accepted on ADR-0037 §3's terms: nothing
-            // knowable is paid for with a kill. `Absent` / `Reusable` / `Recyclable`
-            // all proceed — `ensure_sub_worktree` handles each, and never destroys
-            // work in flight.
+            // PRE-KILL PROBE 6: is the sub-worktree someone else's? A pure `git`
+            // read, paid on ADR-0037 §3's terms: nothing knowable is paid for with a
+            // kill. `Absent` / `Reusable` / `Recyclable` all proceed.
             let owns_sub_worktree = node.node_type == pipeline::NodeType::CodeMutating
                 || node.node_type == pipeline::NodeType::Merge;
             if owns_sub_worktree {
@@ -1717,21 +1587,17 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 }
             }
 
-            // ── FROM HERE ON THERE ARE SIDE EFFECTS ──────────────────────────────
+            // FROM HERE ON THERE ARE SIDE EFFECTS.
 
             let session_name = tmux_session_manager::node_session_name(&run_id, &node_id, iter);
-            // Deliberately a BARE kill, not `reap_node_session` (#488): the helper's
-            // pane snapshot would never be served, because `GET …/pane` only serves a
-            // snapshot for a TERMINAL iteration and a restart leaves the node
-            // non-terminal. `CONTEXT.md` § "Reap sur état terminal" already names the
-            // non-terminal bare kills as an open hole; #489 does not close it.
+            // Deliberately a BARE kill, not `reap_node_session`: the helper's pane
+            // snapshot would never be served, since `GET …/pane` only serves one for a
+            // TERMINAL iteration and a restart leaves the node non-terminal.
             tmux_session_manager::kill(&state.tmux_socket(), &session_name);
-            // #407: also kill the in-container process tree before the re-spawn
-            // (best-effort, no-op for `off`) so the old session's container process
-            // doesn't linger alongside the new one. `sandbox` is immutable over a
-            // Run's life (projected from `RunStarted`), so the pre-kill projection
-            // above answers this — #489 dropped the extra post-kill `reload_run_state`
-            // that used to re-read the same field.
+            // Also kill the in-container process tree before the re-spawn, or the old
+            // session's process lingers alongside the new one. `sandbox` is immutable
+            // over a Run's life, so the pre-kill projection above answers it — no
+            // post-kill `reload_run_state` needed.
             sandbox_run::kill_session_best_effort(
                 state.docker_cmd_override.as_deref().unwrap_or("docker"),
                 !run_state.sandbox.is_off(),
@@ -1769,10 +1635,9 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 repo_root: &repo_root,
             };
 
-            // THE FIX, in one word: `let`. `SpawnOutcome` is not `#[must_use]` and
-            // must not become one (fire-and-forget schedulers drop it on purpose);
-            // what was broken is that THIS caller — the one with a client waiting on
-            // an answer — threw it away.
+            // Read the `SpawnOutcome`. It is not `#[must_use]` and must not become
+            // one (fire-and-forget schedulers drop it on purpose), but THIS caller has
+            // a client waiting on an answer.
             let outcome = spawn_node(SpawnDeps::from_state(&state), &spawn_ctx, node, iter).await;
             let verdict = match outcome {
                 SpawnOutcome::Spawned {
@@ -1786,10 +1651,8 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                     base_sha,
                     interrupted_git_ops,
                 },
-                // ADR-0037 §2: a `2xx`, and NOT a `noop`. A `NodeWaiting` was
-                // appended, it flipped the node to `Waiting`, and
-                // `scheduler_dispatcher::waiting_nodes` → `retry_waiting_nodes`
-                // genuinely picks that node back up.
+                // ADR-0037 §2: a `2xx`, and NOT a `noop` — a `NodeWaiting` was
+                // appended and `retry_waiting_nodes` genuinely picks the node back up.
                 SpawnOutcome::Throttled => restart_verdict::RestartVerdict::Waiting {
                     reason: format!(
                         "node {node_id} iter {iter} is queued behind the session cap: it will \
@@ -1813,11 +1676,9 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                     },
                 ),
                 // A panne, not a verdict → `500`. `run_failed` is re-PROJECTED, never
-                // guessed: the five producers of `Failed` disagree (three append
-                // `RunFailed`, #508's tmux-spawn arm appends `NodeFailed` + `RunFailed`,
-                // the sub-worktree branch appended nothing at all), and a `500` routes
-                // the CLI toward `pdo fail` — catastrophic advice if `RunFailed` is
-                // already on the log. Homogenising the producers is #498-B.
+                // guessed: the producers of `Failed` disagree about what they append,
+                // and a `500` routes the CLI toward `pdo fail` — catastrophic advice if
+                // `RunFailed` is already on the log.
                 SpawnOutcome::Failed { reason } => {
                     let run_failed = reload_run_state(&state, &run_id)
                         .await
@@ -1833,12 +1694,10 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             restart_verdict::restart_response(&verdict)
         }
         RunCommand::RecoverNode { node_id, iter } => {
-            // #599 / ADR-0049 §3 — recover an `Interrupted` node. The mechanism is
-            // chosen off the node's FROZEN harness (#550/#553, never the YAML's
-            // now): re-attach the existing session in place when it `can_resume()`
-            // (ADR-0045), else fall back AUTOMATICALLY to restart-with-artifacts.
-            // The fallback is not a second human decision — it is the harness-
-            // agnostic default whenever the optimal path is unavailable.
+            // ADR-0049 §3: the mechanism is chosen off the node's FROZEN harness,
+            // never the YAML's — re-attach in place when it `can_resume()`, else fall
+            // back AUTOMATICALLY to restart-with-artifacts. The fallback is not a
+            // second human decision.
             let events = match load_events(&state.db, &run_id).await {
                 Ok(e) => e,
                 Err(e) => {
@@ -1849,11 +1708,9 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             let Some(run_state) = event_log::project(&events) else {
                 return (StatusCode::NOT_FOUND, "run not found").into_response();
             };
-            // Resolve the frozen harness against the embedded floor merged with the
-            // disk descriptor tier. #614 (correctif 2): a name that WAS frozen but no
-            // longer resolves REFUSES — never a silent `claude` relaunch in this
-            // node's worktree. A row with NO frozen harness (pre-#550) keeps the
-            // `claude` floor, which `can_resume`.
+            // A name that WAS frozen but no longer resolves REFUSES — never a silent
+            // `claude` relaunch in this node's worktree. A row with NO frozen harness
+            // keeps the `claude` floor, which `can_resume`.
             let harness_home_root = sandbox_run::sandbox_home_roots(&state)
                 .map(|(home, _)| home)
                 .unwrap_or_default();
@@ -1903,11 +1760,10 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
 
             match mechanism {
                 crate::recovery::RecoveryMechanism::RestartWithArtifacts => {
-                    // The harness-agnostic default / automatic fallback: a fresh
-                    // agent handed the partial artifacts as input, via the proven
-                    // restart-with-artifacts path — which reuses the sub-worktree in
-                    // place and never overwrites the partial work (#489 / #599 AC1).
-                    // Boxed because `dispatch` recurses here.
+                    // The automatic fallback: a fresh agent handed the partial
+                    // artifacts as input, reusing the sub-worktree in place so the
+                    // partial work is never overwritten. Boxed because `dispatch`
+                    // recurses here.
                     info!(
                         "recover_node: {node_id} iter {iter} in {run_id} -> \
                          restart_with_artifacts (harness cannot resume)"
@@ -1920,10 +1776,9 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                     .await
                 }
                 crate::recovery::RecoveryMechanism::Reattach => {
-                    // The optimal path: re-attach the SAME session in place
-                    // (`claude --continue`), without re-driving the run. Re-open a
-                    // parked/terminal Run first (AC7 parity with restart_node) so
-                    // the resurrection `NodeStarted` append is accepted.
+                    // The optimal path: re-attach the SAME session in place, without
+                    // re-driving the run. Re-open a parked/terminal Run first, or the
+                    // resurrection `NodeStarted` append is refused.
                     let run_state =
                         match crate::embed_reopen_for_targeted_command(&state, &run_id, run_state)
                             .await
@@ -1962,17 +1817,14 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             }
         }
         RunCommand::StartNode { node_id, overrides } => {
-            // Force-spawn a node out of dependency order (#204). The manager
-            // twin of the UI Start button: both funnel through `force_spawn_node`,
-            // which derives the iteration and owns the run-status (D4) and
-            // admission-cap (D5) guards. The wire `iter` is deliberately dropped
-            // at parse time — letting the manager pin an iter would fight that
-            // derivation. #486: `overrides` supplies per-port dummy inputs so the
-            // node runs without its upstream having produced.
+            // Force-spawn a node out of dependency order. The manager twin of the UI
+            // Start button: both funnel through `force_spawn_node`, which derives the
+            // iteration and owns the run-status and admission-cap guards. The wire
+            // `iter` is dropped at parse time — a manager-pinned iter would fight that
+            // derivation.
 
-            // Audit the manager's intent before acting, mirroring the other
-            // command arms' `CommandIssued` parity event. Only the override port
-            // names are logged (not their content, which lands in artifacts).
+            // Audit the manager's intent before acting. Only the override port names
+            // are logged, not their content, which lands in artifacts.
             let cmd_event = event_log::Event {
                 id: None,
                 run_id: run_id.clone(),
@@ -1998,11 +1850,10 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             // `path` is already proven relative and `..`-free by the parse.
             let requested = std::path::Path::new(&path);
 
-            // NOT `load_projected`: this arm never answers 4xx or 5xx. It is
-            // designed to write the artifact a Run has not produced yet — a
-            // missing projection and a DB error both degrade to the daemon's
-            // own repo root, and the write proceeds. Routing it through the
-            // helper would turn its 200 into a 404.
+            // NOT `load_projected`, which would turn this arm's 200 into a 404: it is
+            // designed to write the artifact a Run has not produced yet, so a missing
+            // projection and a DB error both degrade to the daemon's own repo root and
+            // the write proceeds.
             let repo_root = match load_events(&state.db, &run_id).await {
                 Ok(events) => match event_log::project(&events) {
                     Some(run_state) => effective_repo_root(&state, &run_state),
@@ -2051,10 +1902,9 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                     .into_response();
             }
 
-            // AC7 / ADR-0049: injecting the artifact a parked node was waiting on
-            // embeds the re-open — if the Run is terminal (or incident-parked),
-            // re-open it and re-drive so the freshly-provided output unblocks the
-            // downstream in one round-trip. A live Run is left to its own tick.
+            // Injecting the artifact a parked node was waiting on embeds the re-open,
+            // so the freshly-provided output unblocks the downstream in one
+            // round-trip. A live Run is left to its own tick.
             if let Some((_, run_state)) = reload_run_state(&state, &run_id).await {
                 let needs_reopen = (run_state.status.is_terminal()
                     && run_state.status != event_log::RunStatus::Archived)
@@ -2105,9 +1955,8 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 Err(resp) => return *resp,
             };
 
-            // NOTE: deliberately NOT `RunStatus::is_terminal()` — this set omits
-            // `Archived`. Whether an `Archived` run should be retry-able is an
-            // open question (#237 follow-up F2).
+            // Deliberately NOT `RunStatus::is_terminal()`: this set omits `Archived`,
+            // whose retry-ability is still an open question.
             let is_terminal = matches!(
                 run_state.status,
                 event_log::RunStatus::Completed
@@ -2136,23 +1985,19 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 .and_then(|p| p.get("variables"))
                 .and_then(|v| serde_json::from_value(v.clone()).ok())
                 .unwrap_or_default();
-            // #470: read the RESOLVED repo, not the raw field. A retry of a run
-            // created before the create boundary was hardened carries
-            // `target_repo: null`; forwarding that raw would 400 at the
-            // chokepoint — AFTER `cleanup_run` has already archived the original
-            // (below), i.e. archived with no replacement. Resolving here lands
-            // the retry where the original actually ran, and pins it explicitly.
+            // Read the RESOLVED repo, not the raw field: an old run carries
+            // `target_repo: null`, and forwarding that raw would 400 at the chokepoint
+            // AFTER `cleanup_run` archived the original — archived with no replacement.
             let target_repo = Some(
                 effective_repo_root(&state, &run_state)
                     .to_string_lossy()
                     .into_owned(),
             );
             let source_branch = run_state.source_branch.clone();
-            // #465 (ADR-0042): preserve the original Run's read-only secondaries so the
-            // retry runs in the same multi-repo context. Rebuild the full list with the
-            // primary at [0] (the create chokepoint re-freezes each secondary's SHA
-            // against its recorded base branch). Empty for a mono-repo original, keeping
-            // the retry byte-identical to pre-#465.
+            // Preserve the original Run's read-only secondaries so the retry runs in
+            // the same multi-repo context. The primary must sit at [0]; the create
+            // chokepoint re-freezes each secondary's SHA against its recorded base
+            // branch.
             let target_repos: Vec<TargetRepoInput> = if run_state.target_repos.is_empty() {
                 Vec::new()
             } else {
@@ -2171,7 +2016,6 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 v
             };
 
-            // Archive the current run (cleanup disk resources, keep events)
             let archive_resp = cleanup_run(&state, &run_id).await;
             let archive_status = archive_resp.into_response().status();
             if !archive_status.is_success() {
@@ -2186,54 +2030,39 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 pipeline: pipeline_name,
                 input,
                 variables,
-                // #377: preserve the library pipeline id (when the original run
-                // carried one) so the retried run stays in the same "by pipeline"
-                // stats bucket rather than falling back to the name.
+                // Preserve the library pipeline id so the retried run stays in the
+                // same "by pipeline" stats bucket rather than falling back to the name.
                 pipeline_id: run_state.pipeline_id.clone(),
                 target_repo,
                 target_repos,
                 source_branch,
                 name: None,
                 triggered_by: None,
-                // #407/#410: a retry preserves the original Run's isolation mode
-                // (immutable per-Run property projected from RunStarted). Wrapped in
-                // `Some` so it is treated as EXPLICIT at the chokepoint — the resolver
-                // must honour it exactly, never letting a changed instance default
-                // silently re-sandbox (or un-sandbox) a retried Run.
+                // A retry preserves the original Run's isolation mode. Wrapped in
+                // `Some` so the chokepoint treats it as EXPLICIT: a changed instance
+                // default must never silently re-sandbox (or un-sandbox) a retried Run.
                 //
-                // #432: we HAVE `run_state.sandbox_entries` here and deliberately do NOT
-                // forward it. A retry is a NEW Run — new `run_id`, no node has staged
-                // anything yet — so there is no coherence to protect, and re-resolving is
-                // the only behaviour consistent with ADR-0031 §2 (a profile edited since
-                // must take effect). Do not "fix" this by threading the frozen list.
-                // Side effect, intended: a profile deleted since makes the retry 400,
-                // loudly, instead of quietly running something else.
+                // `run_state.sandbox_entries` is deliberately NOT forwarded. A retry is
+                // a NEW Run with nothing staged, so there is no coherence to protect,
+                // and re-resolving is what ADR-0031 §2 requires (a profile edited since
+                // must take effect). Do not "fix" this by threading the frozen list: a
+                // profile deleted since makes the retry 400 loudly, which is intended.
                 sandbox: Some(run_state.sandbox.clone()),
-                // #551 (ADR-0046): a retry is a new Run, but it must reproduce the
-                // original's harness — an A/B comparison that silently reverted to the
-                // instance default on retry would be worthless. The frozen harness is
-                // projected from the original's `RunStarted`; `None` (the Run named no
-                // harness) forwards as `None`, so the retry resolves through the instance
-                // default exactly as the original did. Unlike `sandbox` this needs no
-                // `Some`-wrapping-for-explicit dance: the create chokepoint freezes
-                // `req.harness` verbatim, with no precedence resolution of its own.
+                // A retry must reproduce the original's harness, or an A/B comparison
+                // silently reverts to the instance default. `None` (the Run named no
+                // harness) forwards as `None`. Unlike `sandbox` this needs no
+                // `Some`-wrapping: the create chokepoint freezes `req.harness` verbatim.
                 harness: run_state.harness.clone(),
-                // #563: reproduce the original Run's `AgentChoice`, like `harness` —
-                // `None` (stated none) forwards as `None`, so the retry re-resolves
-                // through the legacy `harness` tier (or Projet/instance) exactly as
-                // the original did.
+                // Reproduce the original Run's `AgentChoice`, like `harness`: `None`
+                // forwards as `None`, so the retry re-resolves through the legacy
+                // `harness` tier exactly as the original did.
                 agent_choice: run_state.agent_choice.clone(),
-                // #338: pin the historical retry behaviour exactly. A retry has always
-                // set `name: None` and re-derived the name (placeholder or from input);
-                // `Some(true)` reproduces that regardless of the instance default, so a
-                // changed `default_auto_name` cannot silently alter how a retried Run is
-                // named. Not carried from the original (no such field is projected from
-                // RunStarted) — same reasoning as the `sandbox_entries` note above.
+                // A retry sets `name: None` and re-derives the name. `Some(true)`
+                // reproduces that regardless of the instance default, so a changed
+                // `default_auto_name` cannot silently alter how a retried Run is named.
                 auto_name: Some(true),
-                // ADR-0049: reproduce the original Run's `auto_fail` choice, like
-                // `harness` — `None` (stated none) forwards as `None`, so the retry
-                // resolves through the project / instance tiers exactly as the
-                // original did.
+                // Reproduce the original Run's `auto_fail`, like `harness`: `None`
+                // forwards as `None` and re-resolves through project / instance.
                 auto_fail: run_state.auto_fail,
             };
             let new_run_resp = create_run_core(&state, new_run_req, Vec::new()).await;
@@ -2244,21 +2073,19 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
     }
 }
 
-/// The run reached a terminal state during a post-command re-evaluation
-/// (ADR-0025 / #327).
+/// The run reached a terminal state during a post-command re-evaluation.
 #[derive(Debug, Clone)]
 enum ReEvalTerminal {
     Completed,
     Halted(String),
-    /// An `unrouted` convergence parked the run `AwaitingUser` (ADR-0049) — not
-    /// terminal, but the re-evaluation had nothing left to dispatch this pass.
+    /// An `unrouted` convergence parked the run `AwaitingUser` — not terminal, but
+    /// the re-evaluation had nothing left to dispatch this pass.
     Interrupted(String),
 }
 
-/// The real effect of a post-command re-evaluation (ADR-0025 / #327): which
-/// nodes were actually spawned, which candidate spawns were skipped (and why),
-/// and whether the run went terminal. Command handlers surface this in their
-/// response body instead of an unconditional `{ok:true}`.
+/// The real effect of a post-command re-evaluation: which nodes were spawned,
+/// which candidate spawns were skipped and why, and whether the run went terminal.
+/// Handlers surface this instead of an unconditional `{ok:true}`.
 #[derive(Debug, Default)]
 struct ReEvalSummary {
     /// `(node_id, iter)` pairs whose spawn genuinely launched a session.
@@ -2276,17 +2103,17 @@ impl ReEvalSummary {
             SpawnOutcome::Throttled => self.skipped.push(format!(
                 "node '{node_id}' iter {iter} throttled into waiting (session cap)"
             )),
-            // #445: `Deferred` joins the two here rather than getting its own arm —
-            // its reason already reads as the operator sentence, and every consumer of
-            // `skipped` is a "why did nothing start" message.
+            // `Deferred` joins the two rather than getting its own arm: its reason
+            // already reads as the operator sentence, and every consumer of `skipped`
+            // is a "why did nothing start" message.
             SpawnOutcome::Refused { reason }
             | SpawnOutcome::Deferred { reason }
             | SpawnOutcome::Failed { reason } => self.skipped.push(reason),
         }
     }
 
-    /// The truthful command-response body (ADR-0025). Spawns happened →
-    /// `{ok, spawned}`; nothing launched → `{ok, noop, reason}`.
+    /// The truthful command-response body: spawns happened → `{ok, spawned}`,
+    /// nothing launched → `{ok, noop, reason}`.
     fn into_response_body(self) -> serde_json::Value {
         if !self.spawned.is_empty() {
             let spawned: Vec<serde_json::Value> = self
@@ -2314,21 +2141,13 @@ impl ReEvalSummary {
     }
 }
 
-/// Post-command re-evaluation (ADR-0025 / #327) that also re-drives the
-/// admission queue when the command drove the run to a **terminal** state.
+/// Post-command re-evaluation that also re-drives the admission queue when the
+/// command drove the run to a **terminal** state.
 ///
-/// #509: a run going `Halted`/`Completed` here stops counting its
-/// still-session-holding nodes against the global session cap
-/// (`admission::count_live_node_sessions` excludes terminal runs — see
-/// `excludes_halted_run_with_a_running_node`), so a slot frees. But the three
-/// command arms that reach this function (`extend_cycle`, `Region`
-/// bump/end, `resume_run`) never re-drove the nodes throttled into `waiting` in
-/// *other* runs. `retry_waiting_nodes` has no timer of its own — every one of its
-/// callers is event-driven (#159) — so a queued node could starve until an
-/// unrelated event happened to re-drive it. Same posture as the `kill_node` arm
-/// (#489-C): the site that frees a slot re-drives the queue. The sweep is global
-/// and idempotent (guard-superfluous dedup), so a single call after a terminal
-/// re-evaluation is correct.
+/// A run going terminal stops counting its still-session-holding nodes against the
+/// global session cap, so a slot frees — and the site that frees a slot must
+/// re-drive the queue, because `retry_waiting_nodes` has no timer of its own and a
+/// throttled node in another run would starve. The sweep is global and idempotent.
 async fn re_evaluate_after_command(state: &AppState, run_id: &str) -> ReEvalSummary {
     let summary = re_evaluate_after_command_inner(state, run_id).await;
     if summary.terminal.is_some() {
@@ -2337,10 +2156,9 @@ async fn re_evaluate_after_command(state: &AppState, run_id: &str) -> ReEvalSumm
     summary
 }
 
-/// The re-evaluation proper. Loads the pipeline and run state, resolves variables
-/// (including cycle extensions), then re-evaluates outgoing edges of all completed
-/// nodes to find newly ready spawns. Returns what actually happened so command
-/// handlers can tell the truth (ADR-0025 / #327).
+/// The re-evaluation proper: load the pipeline and run state, resolve variables
+/// (including cycle extensions), then re-evaluate the outgoing edges of every
+/// completed node. Returns what actually happened, so handlers can tell the truth.
 async fn re_evaluate_after_command_inner(state: &AppState, run_id: &str) -> ReEvalSummary {
     let mut summary = ReEvalSummary::default();
     let events = match load_events(&state.db, run_id).await {
@@ -2382,8 +2200,8 @@ async fn re_evaluate_after_command_inner(state: &AppState, run_id: &str) -> ReEv
     let artifacts_dir = worktree_dir.join(".pdo").join("artifacts");
     let mut resolved_vars = resolve_run_variables(&pipeline, &events);
 
-    // Apply cycle extensions to variables: for each extend_cycle command,
-    // find variable references in outgoing edges of the target node and bump them.
+    // For each extend_cycle command, bump the variables referenced by the target
+    // node's outgoing edges.
     let extensions = event_log::collect_cycle_extensions(&events);
     for (ext_node_id, additional) in &extensions {
         let var_refs = extract_variable_refs_from_outgoing_edges(&pipeline, ext_node_id);
@@ -2396,11 +2214,10 @@ async fn re_evaluate_after_command_inner(state: &AppState, run_id: &str) -> ReEv
         }
     }
 
-    // Apply manager loop-region routes (ADR-0011 / #152). A `bump_region` raises
-    // the region's effective `max_iter` by the bumped amount; when that cap is a
-    // `$var` reference, bumping the variable lifts the `iter >= max` exit guard
-    // so the region runs the extra laps after `resume_run`. (A literal cap is the
-    // region engine's bound — #148 — and reads the recorded route directly.)
+    // A `bump_region` raises the region's effective `max_iter`. When that cap is a
+    // `$var`, bumping the variable is what lifts the `iter >= max` exit guard so the
+    // region runs the extra laps; a literal cap is the region engine's own bound and
+    // reads the recorded route directly.
     let region_routes = event_log::collect_region_routes(&events);
     for (region_id, route) in &region_routes {
         if route.bumped_by <= 0 {
@@ -2421,9 +2238,9 @@ async fn re_evaluate_after_command_inner(state: &AppState, run_id: &str) -> ReEv
         }
     }
 
-    // Find settled-complete nodes whose outgoing edges might now fire with updated
-    // vars — a `Skipped` node counts too (#620): its edges must be re-evaluated
-    // exactly as a `Completed` node's.
+    // Settled-complete nodes whose edges might now fire with updated vars. A
+    // `Skipped` node counts too: its edges re-evaluate exactly like a `Completed`
+    // node's.
     let completed_node_ids: Vec<String> = run_state
         .nodes
         .values()
@@ -2463,9 +2280,8 @@ async fn re_evaluate_after_command_inner(state: &AppState, run_id: &str) -> ReEv
         );
 
         for action in &actions {
-            // Re-evaluation applies `GuardSuperfluous` (#212): schedule only
-            // MISSING work — never a node with a live iteration, never a
-            // completed one — on the pass-1 `run_state` snapshot (INV-2).
+            // `GuardSuperfluous`: schedule only MISSING work — never a node with a
+            // live iteration, never a completed one — on the pass-1 snapshot (INV-2).
             match scheduler_interpreter::interpret(
                 state,
                 &spawn_ctx,
@@ -2482,7 +2298,6 @@ async fn re_evaluate_after_command_inner(state: &AppState, run_id: &str) -> ReEv
                     outcome,
                 } => summary.record_spawn(&node_id, iter, outcome),
                 ActionOutcome::SpawnSkipped { reason } => {
-                    // Skip log stays driver-side (INV-6): pass-1 prefix.
                     info!("re_evaluate_after_command: skip spawn — {reason}");
                     summary.skipped.push(reason);
                 }
@@ -2503,8 +2318,7 @@ async fn re_evaluate_after_command_inner(state: &AppState, run_id: &str) -> ReEv
         }
     }
 
-    // Pass 1 may have appended events; re-project so pass 2 sees fresh state
-    // (same race fix as handle_node_completion).
+    // Pass 1 may have appended events; re-project so pass 2 sees fresh state.
     let Some((fresh_events, fresh_run_state)) = reload_run_state(state, run_id).await else {
         return summary;
     };
@@ -2529,7 +2343,6 @@ async fn re_evaluate_after_command_inner(state: &AppState, run_id: &str) -> ReEv
         repo_root: &repo_root,
     };
 
-    // Check loop body completion for all loop nodes
     for loop_node in pipeline
         .nodes
         .iter()
@@ -2541,10 +2354,8 @@ async fn re_evaluate_after_command_inner(state: &AppState, run_id: &str) -> ReEv
             &loop_node.id,
             &fresh_resolved_vars,
         );
-        // `evaluate_loop_body_completion` only emits Spawn / Loop* today; the
-        // total `interpret` subsumes the old `_ => emit_loop_action`
-        // fallthrough. GuardSuperfluous on the reloaded snapshot (INV-2);
-        // source_iter is irrelevant here (no SwitchRouted) — pass 1 (INV-3).
+        // GuardSuperfluous on the reloaded snapshot (INV-2); source_iter is
+        // irrelevant here, since no SwitchRouted is emitted (INV-3).
         for action in &loop_actions {
             match scheduler_interpreter::interpret(
                 state,
@@ -2582,7 +2393,6 @@ async fn re_evaluate_after_command_inner(state: &AppState, run_id: &str) -> ReEv
         }
     }
 
-    // Check the barrier of every collection region (ADR-0011 / #269)
     for region in pipeline
         .loops
         .iter()
@@ -2590,10 +2400,8 @@ async fn re_evaluate_after_command_inner(state: &AppState, run_id: &str) -> ReEv
     {
         let collection_actions =
             scheduler::evaluate_collection_barrier(&pipeline, &fresh_run_state, region);
-        // `evaluate_collection_barrier` only emits CollectionDone today; the
-        // total `interpret` routes it through `emit_collection_action` exactly as
-        // the old `_ => emit_collection_action` fallthrough did. GuardSuperfluous
-        // on the reloaded snapshot; source_iter irrelevant (no SwitchRouted).
+        // GuardSuperfluous on the reloaded snapshot; source_iter irrelevant, since
+        // no SwitchRouted is emitted.
         for action in &collection_actions {
             match scheduler_interpreter::interpret(
                 state,
@@ -2687,13 +2495,9 @@ fn collect_yaml_var_refs(val: &serde_yaml::Value, refs: &mut Vec<String>) {
 mod tests {
     use super::*;
 
-    // --- #236: the pure parse ---
-    //
-    // Wire shapes in, verdicts out, no HTTP and no daemon.
-    // Before this slice none of these messages was reachable from a test at
-    // all — which is precisely the argument #236 makes. `#[test]`, not
-    // `#[tokio::test]`: `CommandParseError` is `PartialEq`, so no response body
-    // has to be read back asynchronously to see what was rejected.
+    // The pure parse: wire shapes in, verdicts out, no HTTP and no daemon.
+    // `#[test]`, not `#[tokio::test]`: `CommandParseError` is `PartialEq`, so no
+    // response body has to be read back asynchronously to see what was rejected.
 
     /// Build a wire request from its JSON, exactly as axum's extractor would.
     fn wire(json: serde_json::Value) -> RunCommandRequest {
@@ -2707,8 +2511,6 @@ mod tests {
     fn reject(json: serde_json::Value) -> String {
         parse(json).expect_err("expected a rejection").0
     }
-
-    // ── #600: set_region_max_iter / force_route / skip_node ──────────────────
 
     #[test]
     fn set_region_max_iter_parses_region_and_cap() {
@@ -3039,7 +2841,7 @@ mod tests {
             }),
             "a stray additional_iter on end_region is accepted and dropped"
         );
-        // `start_node` drops the wire `iter` — the server derives it (#204).
+        // `start_node` drops the wire `iter` — the server derives it.
         assert_eq!(
             parse(serde_json::json!({ "kind": "start_node", "node_id": "n1", "iter": 99 })),
             Ok(RunCommand::StartNode {
@@ -3068,8 +2870,8 @@ mod tests {
 
     #[test]
     fn kind_str_round_trips_every_variant() {
-        // `kind_str` feeds two log lines and is total over `RegionAction`
-        // precisely because Bump and End are distinguished in the type.
+        // `kind_str` is total over `RegionAction` precisely because Bump and End are
+        // distinguished in the type.
         for kind in [
             "mark_node_done",
             "extend_cycle",
@@ -3110,18 +2912,13 @@ mod tests {
         );
     }
 
-    // --- #236: the truthful response body (ADR-0025 / #327) ---
-    //
-    // `into_response_body` is what makes a command answer "here is what
-    // actually happened" instead of a blind `{ok:true}`. It is promised to the
-    // Pipeline Manager in its prompt preamble and asserted four times by the
-    // layer-3a suite — and had no direct test at all.
+    // `into_response_body` is what makes a command answer "here is what actually
+    // happened" instead of a blind `{ok:true}`. Promised to the Pipeline Manager in
+    // its prompt preamble.
 
-    /// A plain `Spawned`, for tests that only care about the BUCKET
-    /// `record_spawn` files an outcome in. #489 gave the variant three fields
-    /// (`reused_sub_worktree` / `base_sha` / `interrupted_git_ops`) that the summary
-    /// deliberately ignores: `ReEvalSummary` reports `spawned:[{node_id,iter}]`
-    /// per ADR-0025, and the sub-worktree detail belongs to `restart_verdict`.
+    /// A plain `Spawned`, for tests that only care about the BUCKET `record_spawn`
+    /// files an outcome in. The variant's sub-worktree fields are deliberately
+    /// ignored by the summary — that detail belongs to `restart_verdict`.
     fn spawned_sample() -> SpawnOutcome {
         SpawnOutcome::Spawned {
             reused_sub_worktree: false,
@@ -3203,9 +3000,8 @@ mod tests {
 
     #[test]
     fn record_spawn_maps_every_outcome_to_the_right_bucket() {
-        // The three non-`Spawned` outcomes all read as "why nothing started",
-        // which is why `Deferred` joins `Refused`/`Failed` rather than getting
-        // its own arm (#445).
+        // The three non-`Spawned` outcomes all read as "why nothing started", which
+        // is why `Deferred` joins `Refused`/`Failed` rather than getting its own arm.
         let mut s = ReEvalSummary::default();
         s.record_spawn("a", 1, spawned_sample());
         s.record_spawn("b", 4, SpawnOutcome::Throttled);

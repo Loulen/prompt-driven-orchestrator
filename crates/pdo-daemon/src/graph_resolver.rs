@@ -190,7 +190,6 @@ pub(crate) fn compute_body_subgraph(
 /// This is the topological signature a bounded loop region is auto-materialized
 /// from, so that no cycle is ever accidentally unbounded.
 pub(crate) fn detect_cycles(pipeline: &PipelineDef) -> Vec<Vec<String>> {
-    // Index nodes for stable ordering and adjacency by id.
     let order: HashMap<&str, usize> = pipeline
         .nodes
         .iter()
@@ -198,7 +197,6 @@ pub(crate) fn detect_cycles(pipeline: &PipelineDef) -> Vec<Vec<String>> {
         .map(|(i, n)| (n.id.as_str(), i))
         .collect();
 
-    // Adjacency list (source -> targets), restricted to known nodes.
     let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
     let mut has_self_edge: HashSet<&str> = HashSet::new();
     for edge in &pipeline.edges {
@@ -212,8 +210,7 @@ pub(crate) fn detect_cycles(pipeline: &PipelineDef) -> Vec<Vec<String>> {
         adj.entry(s).or_default().push(t);
     }
 
-    // Tarjan's strongly-connected-components, iterative-friendly via recursion on
-    // a bounded graph (pipelines are small).
+    // Tarjan SCC. Recursion is safe only because pipelines are small graphs.
     struct Tarjan<'a> {
         adj: &'a HashMap<&'a str, Vec<&'a str>>,
         index: HashMap<&'a str, usize>,
@@ -277,7 +274,6 @@ pub(crate) fn detect_cycles(pipeline: &PipelineDef) -> Vec<Vec<String>> {
         }
     }
 
-    // Keep components that are cyclic: size >= 2, or a single self-edged node.
     let mut cycles: Vec<Vec<String>> = tarjan
         .sccs
         .into_iter()
@@ -288,7 +284,6 @@ pub(crate) fn detect_cycles(pipeline: &PipelineDef) -> Vec<Vec<String>> {
         })
         .collect();
 
-    // Order cycles by their first member's node position.
     cycles.sort_by_key(|members| {
         members
             .first()
@@ -598,8 +593,6 @@ mod tests {
         }
     }
 
-    // ========== ready_nodes ==========
-
     #[test]
     fn ready_nodes_skips_switch() {
         let pipeline = make_pipeline(
@@ -689,8 +682,6 @@ mod tests {
 
     #[test]
     fn ready_nodes_spawns_target_with_an_unconditional_incoming_edge() {
-        // A node with at least one plain (unconditional) incoming edge is still
-        // a normal entry point once that upstream completes.
         let pipeline = make_pipeline(
             vec![
                 make_node("a", NodeType::DocOnly, &["task"], &["out"]),
@@ -757,8 +748,6 @@ mod tests {
         let ready = ready_nodes(&pipeline, &empty_run_state());
         assert!(!ready.contains(&"loop1".to_string()));
     }
-
-    // ========== compute_body_subgraph ==========
 
     #[test]
     fn body_subgraph_linear_body() {
@@ -878,8 +867,6 @@ mod tests {
             .collect();
         assert_eq!(body, expected);
     }
-
-    // ========== downstream_subgraph ==========
 
     #[test]
     fn downstream_linear_chain() {
@@ -1102,8 +1089,6 @@ mod tests {
         assert!(!ds.contains("a"));
     }
 
-    // ========== nodes_remaining ==========
-
     #[test]
     fn nodes_remaining_all_pending() {
         let pipeline = make_pipeline(
@@ -1260,7 +1245,6 @@ mod tests {
 
     #[test]
     fn detect_cycles_ignores_acyclic_graph() {
-        // A pure DAG has no cycles — nothing to auto-materialize.
         let pipeline = make_pipeline(
             vec![
                 make_node("a", NodeType::DocOnly, &["in"], &["out"]),

@@ -16,11 +16,9 @@ pub(crate) fn artifact_path(
     port_dir(artifacts_dir, node_id, iter, port_name).join("output.md")
 }
 
-/// Path of an `html` output port's file (#333). Parallel to `artifact_path`
-/// (`output.md`): an html port materializes a single `output.html` in the
-/// port's directory. A dedicated helper localizes the `output.html` choice to
-/// the three output sites that emit it, keeping the type-blind input side
-/// (which reads `output.md`) untouched.
+/// Path of an `html` output port's file. A dedicated helper localizes the
+/// `output.html` choice to the output sites that emit it, keeping the
+/// type-blind input side (which always reads `output.md`) untouched.
 pub(crate) fn artifact_path_html(
     artifacts_dir: &Path,
     node_id: &str,

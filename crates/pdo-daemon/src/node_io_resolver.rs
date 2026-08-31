@@ -87,9 +87,8 @@ pub(crate) fn resolve(
             .collect();
 
         match input_index.get(&input.port) {
-            // Pool same-named edges into one logical list input. Once two edges
-            // share a target name the input is a list (repeated), regardless of
-            // each edge's own flag.
+            // Two edges sharing a target name make the input a list, whatever
+            // each edge's own `repeated` flag says.
             Some(&idx) => {
                 let pooled: &mut PortIO = &mut inputs[idx];
                 pooled.repeated = true;
@@ -148,9 +147,7 @@ pub(crate) fn resolve(
                     files: vec![info],
                 });
             }
-            // #333: an html port lists its single `output.html`. Plain
-            // `file_info` (not `file_info_with_frontmatter`): html has no
-            // frontmatter to parse.
+            // Plain `file_info`: html has no frontmatter to parse.
             PortType::Html => {
                 let path = crate::blackboard::artifact_path_html(
                     artifacts_dir,
@@ -470,8 +467,6 @@ mod tests {
         fs::write(dir.join("output.md"), "# Plan\nfrom the feeder's only lap").unwrap();
 
         let pipeline = simple_pipeline();
-        // The planner (feeder) completed only at iter-1; the implementer reads
-        // it at lap 2.
         let run_state = run_state_with("planner", &[(1, NodeStatus::Completed)]);
         let io = resolve(&pipeline, &artifacts, "implementer", 2, &run_state);
 
@@ -526,7 +521,6 @@ mod tests {
         assert!(io.outputs[0].files[0].frontmatter.is_none());
     }
 
-    /// reviewer → implementer, `repeated` edge feeding port `reviews`.
     fn reviewer_cycle_pipeline() -> PipelineDef {
         PipelineDef {
             name: "cycle".into(),
@@ -632,7 +626,6 @@ mod tests {
         }
 
         let pipeline = reviewer_cycle_pipeline();
-        // The reviewer completed all three laps: the pool is all three files.
         let run_state = run_state_with(
             "reviewer",
             &[
@@ -903,7 +896,6 @@ mod tests {
                     id: "implementer".into(),
                     name: "implementer".into(),
                     node_type: NodeType::CodeMutating,
-                    // Declares NO inputs — the input is emergent.
                     inputs: vec![],
                     outputs: vec![],
                     interactive: false,
@@ -1020,7 +1012,6 @@ mod tests {
 
         let io = resolve(&pipeline, &artifacts, "sink", 1, &empty_run_state());
 
-        // One logical input, pooled into a list of both source files.
         assert_eq!(io.inputs.len(), 1);
         assert_eq!(io.inputs[0].port, "plan");
         assert!(
@@ -1127,9 +1118,6 @@ mod tests {
         assert!(io.outputs.is_empty());
     }
 
-    // --- html output port (#333) ---
-
-    /// A single `designer` node with one `html` output port `report`.
     fn html_output_pipeline() -> PipelineDef {
         PipelineDef {
             name: "html-test".into(),
@@ -1187,7 +1175,6 @@ mod tests {
             "designer/iter-1/report/output.html"
         );
         assert!(io.outputs[0].files[0].exists);
-        // html carries no frontmatter — plain file_info, never parsed.
         assert!(io.outputs[0].files[0].frontmatter.is_none());
     }
 

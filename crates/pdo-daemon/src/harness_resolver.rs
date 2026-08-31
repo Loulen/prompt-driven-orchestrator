@@ -8,24 +8,19 @@
 //! harness's entry in the node's per-harness map (a slug means nothing outside
 //! the harness that accepts it, ADR-0046).
 //!
-//! **This slice populates only `node` and `instance`.** [`HarnessTiers`] already
-//! carries `run` and `project` slots so the two follow-up slices (#551 Run tier,
-//! #552 Projet tier) fill them without rewriting this signature or its callers.
-//!
-//! Pure by contract (an AC): a set of tier values goes in, a [`ResolvedHarness`]
-//! comes out — no `$HOME`, no disk, no clock — so the whole precedence matrix is
-//! unit-tested without a fixture (the discipline `run_cost` paid for in #408).
+//! Pure by contract (an AC): tier values in, a [`ResolvedHarness`] out — no
+//! `$HOME`, no disk, no clock — so the whole precedence matrix is unit-tested
+//! without a fixture.
 
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-/// A node's settings for one harness (`harnesses.<name>` in the YAML): the model
-/// and effort to use when the node runs on that harness. Both are free-text
-/// pass-through (ADR-0001: no closed enum that would perish at every model
-/// release). `BTreeMap`-keyed by harness name on the node, so a node stays
-/// executable on either harness instead of launching every node with a slug the
-/// other harness rejects (ADR-0046).
+/// A node's settings for one harness (`harnesses.<name>` in the YAML). Model and
+/// effort are free-text pass-through — don't close them into an enum, it would
+/// perish at every model release (ADR-0001). Keyed by harness name so a node stays
+/// executable on either harness rather than carrying one slug the other rejects
+/// (ADR-0046).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct HarnessEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -35,19 +30,16 @@ pub(crate) struct HarnessEntry {
 }
 
 /// The harness named at each tier, coarsest last. `None` = that tier names no
-/// harness. `run` and `project` are always `None` in this slice (#551, #552).
+/// harness.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct HarnessTiers<'a> {
-    /// The node's pinned harness (`pin_harness`). A pin both **selects** the
-    /// harness and shields it from every coarser tier (ADR-0046: épinglage ≠
-    /// paramétrage).
+    /// `pin_harness`: a pin both **selects** the harness and shields it from every
+    /// coarser tier (ADR-0046: épinglage ≠ paramétrage).
     pub node_pin: Option<&'a str>,
-    /// The Run's harness (#551) — the tier that re-runs the same pipeline on
-    /// another harness. `None` in this slice.
+    /// The tier that re-runs the same pipeline on another harness (#551).
     pub run: Option<&'a str>,
-    /// The Projet's harness (#552). `None` in this slice.
     pub project: Option<&'a str>,
-    /// The instance default harness (ADR-0015, amended by ADR-0046).
+    /// ADR-0015, amended by ADR-0046.
     pub instance_default: Option<&'a str>,
 }
 
@@ -59,13 +51,11 @@ pub(crate) struct ResolvedHarness {
     pub effort: Option<String>,
 }
 
-/// Resolve the effective harness name: the finest tier that names a non-empty
-/// harness wins, with `claude` as the floor.
+/// The finest tier naming a non-empty harness wins, with `claude` as the floor.
 ///
-/// An empty string never wins a tier — `""` means "unset" everywhere, so a
-/// blank `pin_harness:` in YAML or a blank instance default falls through to the
-/// floor instead of resolving to an unknown harness (the `Some("")` trap of
-/// #347).
+/// `""` means "unset" everywhere: a blank `pin_harness:` or instance default must
+/// fall through to the floor, not resolve to an unknown harness (the `Some("")`
+/// trap of #347).
 pub(crate) fn resolve_harness(tiers: &HarnessTiers<'_>) -> String {
     [
         tiers.node_pin,
@@ -80,11 +70,10 @@ pub(crate) fn resolve_harness(tiers: &HarnessTiers<'_>) -> String {
     .to_string()
 }
 
-/// Resolve the model a node launches with on the winning harness: the node's
-/// entry for that harness wins, else the instance per-harness default, else
-/// `None` (the harness account default — no `--model`, byte-identical to the
-/// legacy launch for `claude`). An empty string on either side collapses to the
-/// next tier (#347).
+/// The node's entry for the winning harness, else the instance per-harness
+/// default, else `None` — no `--model`, i.e. the harness account default, which is
+/// what keeps the `claude` launch byte-identical to the legacy one. Empty collapses
+/// to the next tier (#347).
 pub(crate) fn resolve_model(
     node_entry_model: Option<&str>,
     instance_default_model: Option<&str>,
@@ -95,8 +84,8 @@ pub(crate) fn resolve_model(
         .map(str::to_string)
 }
 
-/// Resolve the effort: the node's entry for the winning harness, empty → `None`
-/// (#424). One tier — effort has no instance default in this slice.
+/// The node's entry for the winning harness, empty → `None` (#424). One tier only:
+/// effort has no instance default.
 pub(crate) fn resolve_effort(node_entry_effort: Option<&str>) -> Option<String> {
     node_entry_effort
         .filter(|s| !s.is_empty())
@@ -104,12 +93,10 @@ pub(crate) fn resolve_effort(node_entry_effort: Option<&str>) -> Option<String> 
 }
 
 /// The harness an **infra** session (Pipeline Manager, merge resolver) runs on
-/// (#551, ADR-0046). Infra sessions have no NodeDef, so no `node` tier and no
-/// model/effort of their own: they follow the Run's frozen harness, then the
-/// instance default, then the `claude` floor — `Run → instance → plancher`. This
-/// is what makes "ce Run tourne sur X" true with no exception to remember (the
-/// A/B on a new harness also exercises the unblocking tool). Same empty-string
-/// collapse as [`resolve_harness`] (the `Some("")` trap of #347).
+/// (#551, ADR-0046). Infra sessions have no NodeDef, hence no `node` tier and no
+/// model/effort: `Run → instance → plancher`. Don't give them their own tier —
+/// "ce Run tourne sur X" must hold with no exception to remember, so an A/B on a
+/// new harness also exercises the unblocking tool.
 pub(crate) fn resolve_infra_harness(run: Option<&str>, instance_default: Option<&str>) -> String {
     resolve_harness(&HarnessTiers {
         node_pin: None,
@@ -119,10 +106,8 @@ pub(crate) fn resolve_infra_harness(run: Option<&str>, instance_default: Option<
     })
 }
 
-/// The single precedence point both spawn seams call (like `effective_sandbox`):
-/// resolve the harness, then read the model and effort from the **winning
-/// harness's** entry. Shaped so #551/#552 fill `tiers.run`/`tiers.project`
-/// without touching this body.
+/// The single precedence point both spawn seams call: resolve the harness, then
+/// read model and effort from the **winning harness's** entry.
 pub(crate) fn resolve(
     tiers: &HarnessTiers<'_>,
     node_entries: &BTreeMap<String, HarnessEntry>,
@@ -164,8 +149,6 @@ mod tests {
         BTreeMap::new()
     }
 
-    // ---- harness precedence matrix (each tier wins in turn) -----------------
-
     #[test]
     fn floor_is_claude_when_no_tier_names_one() {
         assert_eq!(resolve_harness(&HarnessTiers::default()), CLAUDE);
@@ -182,8 +165,6 @@ mod tests {
 
     #[test]
     fn node_pin_beats_every_coarser_tier() {
-        // The pin resists an instance (and, once they land, Run/Projet) change —
-        // "this role requires this harness" (ADR-0046).
         let tiers = HarnessTiers {
             node_pin: Some(CLAUDE),
             run: Some(OPENCODE),
@@ -216,7 +197,6 @@ mod tests {
 
     #[test]
     fn empty_string_never_wins_a_tier() {
-        // The `Some("")` trap of #347: a blank pin falls through to the floor.
         let tiers = HarnessTiers {
             node_pin: Some(""),
             instance_default: Some(""),
@@ -225,32 +205,21 @@ mod tests {
         assert_eq!(resolve_harness(&tiers), CLAUDE);
     }
 
-    // ---- infra sessions follow the Run's harness (#551) ---------------------
-
     #[test]
     fn infra_harness_follows_the_run_then_instance_then_floor() {
-        // AC: the Pipeline Manager and merge resolver run on the harness OF THE RUN,
-        // no node tier, no model/effort. Run wins over the instance default…
         assert_eq!(
             resolve_infra_harness(Some(OPENCODE), Some(CLAUDE)),
             OPENCODE
         );
-        // …the instance default backs an unset Run…
         assert_eq!(resolve_infra_harness(None, Some(OPENCODE)), OPENCODE);
-        // …and with neither set, the manager stays on the `claude` floor — the
-        // byte-identical legacy manager launch (the control).
         assert_eq!(resolve_infra_harness(None, None), CLAUDE);
     }
 
     #[test]
     fn infra_harness_ignores_a_blank_run_choice() {
-        // A blank Run harness (`Some("")`) is "unset", not a harness named "" — it
-        // must fall through to the instance default, never to an unknown harness.
         assert_eq!(resolve_infra_harness(Some(""), Some(OPENCODE)), OPENCODE);
         assert_eq!(resolve_infra_harness(Some(""), Some("")), CLAUDE);
     }
-
-    // ---- model / effort read from the WINNING harness's entry ---------------
 
     #[test]
     fn model_and_effort_come_from_the_winning_harness_entry() {
@@ -264,17 +233,14 @@ mod tests {
         ]);
         let r = resolve(&tiers, &node_entries, &no_defaults());
         assert_eq!(r.harness, OPENCODE);
-        // opencode's entry wins — NOT claude's, even though claude has richer settings.
         assert_eq!(r.model.as_deref(), Some("openrouter/foo"));
         assert_eq!(r.effort, None);
     }
 
     #[test]
     fn a_run_switched_to_another_harness_reads_the_new_harness_entry_not_the_old() {
-        // AC (#551): a Run basculé sur un autre harnais n'hérite jamais du slug écrit pour
-        // le précédent — the model/effort come from the WINNING (Run-tier) harness entry.
-        // Same node, two Runs: no Run harness → claude wins → claude's slug; Run picks
-        // opencode → opencode wins → opencode's slug, never claude's.
+        // AC (#551): a Run switched to another harness never inherits the slug written
+        // for the previous one.
         let node_entries = entries(&[
             (CLAUDE, Some("opus"), Some("high")),
             (OPENCODE, Some("openrouter/foo"), None),
@@ -291,14 +257,12 @@ mod tests {
         };
         let on_opencode = resolve(&run_opencode, &node_entries, &no_defaults());
         assert_eq!(on_opencode.harness, OPENCODE);
-        // opencode's entry wins — claude's `opus`/`high` never leak onto the switched Run.
         assert_eq!(on_opencode.model.as_deref(), Some("openrouter/foo"));
         assert_eq!(on_opencode.effort, None);
     }
 
     #[test]
     fn a_node_without_an_entry_for_the_winning_harness_runs_without_a_model() {
-        // AC: no entry ⇒ no `--model`, the harness account default.
         let tiers = HarnessTiers {
             node_pin: Some(OPENCODE),
             ..Default::default()
@@ -348,8 +312,6 @@ mod tests {
 
     #[test]
     fn claude_node_with_no_settings_resolves_to_the_byte_identical_launch() {
-        // The control: a plain claude node yields no model, no effort — the state
-        // the legacy launch reproduces byte for byte.
         let r = resolve(&HarnessTiers::default(), &BTreeMap::new(), &no_defaults());
         assert_eq!(r.harness, CLAUDE);
         assert_eq!(r.model, None);

@@ -143,7 +143,6 @@ fn started_harness(evs: &[serde_json::Value], node_id: &str) -> Option<String> {
         .map(String::from)
 }
 
-/// Poll the event log until both entry nodes have a `NodeStarted`, or time out.
 async fn wait_for_both_started(daemon: &TestDaemon, run_id: &str) -> Vec<serde_json::Value> {
     for _ in 0..50 {
         let evs = events(daemon, run_id).await;
@@ -265,10 +264,6 @@ async fn resume_reposes_the_frozen_harness() {
     );
 }
 
-// -----------------------------------------------------------------------------
-// #551 — the Run tier (`nœud → Run → instance → plancher`), end to end.
-// -----------------------------------------------------------------------------
-
 /// Poll for the manager session (`pdo-mgr-<run>`) to come up on the daemon's own tmux
 /// socket, proving the manager spawned on the resolved harness without failing fast.
 async fn wait_for_manager_session(daemon: &TestDaemon, run_id: &str) -> bool {
@@ -298,19 +293,17 @@ async fn run_harness_moves_the_free_node_and_manager() {
     let run_id = create_run_with_harness(&daemon, Some("opencode")).await;
     let evs = wait_for_both_started(&daemon, &run_id).await;
 
-    // The unpinned node followed the Run tier off the `claude` floor to `opencode`…
     assert_eq!(
         started_harness(&evs, "aaaaaaaa").as_deref(),
         Some("opencode"),
         "a free node must follow the Run's harness"
     );
-    // …and the pinned node stays `opencode` too (its pin agrees with the Run here).
+    // The pin agrees with the Run here, so this leg cannot tell the two tiers apart.
     assert_eq!(
         started_harness(&evs, "bbbbbbbb").as_deref(),
         Some("opencode")
     );
 
-    // The frozen Run harness is visible in the Run panel (AC): `GET /runs/<id>`.
     let run = get_run(&daemon, &run_id).await;
     assert_eq!(
         run["harness"].as_str(),
@@ -337,13 +330,11 @@ async fn pinned_node_resists_the_run_harness() {
     let run_id = create_run_with_harness(&daemon, Some("claude")).await;
     let evs = wait_for_both_started(&daemon, &run_id).await;
 
-    // The pinned node ignores the Run's `claude` choice and stays on its `opencode` pin.
     assert_eq!(
         started_harness(&evs, "bbbbbbbb").as_deref(),
         Some("opencode"),
         "a pinned node must resist the Run harness"
     );
-    // The free node follows the Run to `claude`.
     assert_eq!(started_harness(&evs, "aaaaaaaa").as_deref(), Some("claude"));
 
     // And the Run panel shows the Run's own frozen choice.

@@ -14,23 +14,19 @@
 use crate::graph_resolver;
 use crate::pipeline::{LoopKind, LoopRegion, NodeType, PipelineDef};
 
-/// The default iteration cap given to an auto-materialized bounded region, so a
-/// drawn cycle is never accidentally unbounded (ADR-0011 / #148). Matches the
-/// daemon's existing `max_iter` fallback.
+/// The cap given to an auto-materialized bounded region, so a drawn cycle is
+/// never accidentally unbounded. Matches the daemon's `max_iter` fallback.
 pub(crate) const DEFAULT_MAX_ITER: i64 = 5;
 
-/// A short, deterministic region id derived from the sorted member ids, prefixed
-/// `loop-`: FNV-1a over the members (each followed by a `0x2f` separator),
-/// rendered hex. Deriving it from the member set — rather than minting a random
-/// id — is what makes auto-materialization *idempotent*: re-reading the same
-/// graph yields the same region id, so the run's per-region lap counter
-/// (`loop_states`, keyed by id) survives every reparse and every daemon restart.
+/// FNV-1a over the sorted member ids. Deriving the id from the member set —
+/// rather than minting a random one — is what makes auto-materialization
+/// *idempotent*: re-reading the same graph yields the same id, so the run's
+/// per-region lap counter (`loop_states`, keyed by id) survives every reparse
+/// and every daemon restart.
 ///
-/// The editor's `lib/loopRegions.ts` `generatedRegionId` is the byte-for-byte
+/// The editor's `lib/loopRegions.ts::generatedRegionId` is the byte-for-byte
 /// mirror of this function (pinned on both sides by
-/// `generated_region_id_matches_the_editor_mirror` / its vitest twin), so a
-/// region materialized on the canvas and the same region materialized here carry
-/// the same identity.
+/// `generated_region_id_matches_the_editor_mirror` and its vitest twin).
 pub(crate) fn generated_region_id(members: &[String]) -> String {
     let mut sorted: Vec<&str> = members.iter().map(String::as_str).collect();
     sorted.sort_unstable();
@@ -54,14 +50,11 @@ pub(crate) fn generated_region_id(members: &[String]) -> String {
 /// ne soit accidentellement non-borné"). A cycle is "covered" when an existing
 /// region's member set is identical to it.
 ///
-/// This is the model-boundary half of the invariant, called from
-/// [`crate::pipeline::parse_pipeline`] so that **every** reader — the editor
-/// (`GET /pipelines/<id>`), the scheduler at run launch, the library twin diff —
-/// sees the same bounded region without anyone having to redraw an edge (#396).
-/// It never touches the file: the region is derived at parse, and only persists
-/// if the user saves. The editor mirror
-/// (`lib/loopRegions.ts::materializeMissingRegions`) covers the *live* gesture,
-/// i.e. the edge just drawn on an unsaved canvas.
+/// Called from [`crate::pipeline::parse_pipeline`] so **every** reader — editor,
+/// scheduler at run launch, library twin diff — sees the same bounded region
+/// without anyone redrawing an edge. Never touches the file: the region is
+/// derived at parse and persists only if the user saves. The editor mirror
+/// (`lib/loopRegions.ts::materializeMissingRegions`) covers the live gesture.
 ///
 /// **Legacy carve-out.** A cycle that runs through a legacy `type: loop` node is
 /// skipped. That node already carries its own `max_iter` and its own iteration
@@ -108,7 +101,6 @@ pub(crate) fn materialize_missing_regions(pipeline: &PipelineDef) -> Vec<LoopReg
     out
 }
 
-/// The live per-region iteration counter (keyed by the region `id` elsewhere).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RegionRuntime {
     pub current_iter: i64,
@@ -117,7 +109,6 @@ pub(crate) struct RegionRuntime {
 }
 
 impl RegionRuntime {
-    /// A region begins at lap 1.
     pub(crate) fn new(max_iter: i64) -> Self {
         Self {
             current_iter: 1,
@@ -140,12 +131,10 @@ pub(crate) enum LapDecision {
     NoReentry,
 }
 
-/// Resolves one lap of a bounded region given how many re-entry edges fired.
-///
-/// `reentry_fired` is the number of back-edges (edges from a member back into the
-/// region) that fired in the completed lap. Any positive count is **coalesced**
-/// into a single next-lap entry-spawn: firing two back-edges in one lap must not
-/// advance the counter twice nor spawn the entry twice (#108 regression).
+/// Resolves one lap of a bounded region. `reentry_fired` is the number of
+/// back-edges that fired in the completed lap; any positive count is
+/// **coalesced** into a single next-lap entry-spawn — firing two back-edges in
+/// one lap must not advance the counter twice nor spawn the entry twice.
 pub(crate) fn resolve_lap(
     pipeline: &PipelineDef,
     region: &LoopRegion,
@@ -170,11 +159,9 @@ pub(crate) fn resolve_lap(
     }
 }
 
-/// Returns the global indices (into `pipeline.edges`) of a region's *re-entry*
-/// edges: edges whose source is a member and whose target is the region entry.
-/// These are the back-edges whose firing requests another lap. No edge is
-/// flagged a "back-edge" in the YAML — the role is derived from the region
-/// topology (ADR-0011).
+/// The indices of a region's *re-entry* edges: member → region entry. These are
+/// the back-edges whose firing requests another lap. No edge is flagged a
+/// "back-edge" in the YAML — the role is derived from the region topology.
 pub(crate) fn reentry_edge_indices(pipeline: &PipelineDef, region: &LoopRegion) -> Vec<usize> {
     let entry = match graph_resolver::region_entry(pipeline, &region.members) {
         Some(e) => e,
@@ -194,9 +181,7 @@ pub(crate) fn reentry_edge_indices(pipeline: &PipelineDef, region: &LoopRegion) 
         .collect()
 }
 
-/// The global indices (into `pipeline.edges`) of every **bounded** region's
-/// re-entry (back) edges — the member → region-entry edges that request another
-/// lap. Aggregates [`reentry_edge_indices`] across all bounded regions.
+/// [`reentry_edge_indices`] aggregated across every bounded region.
 ///
 /// The retry-invalidation walk excludes these so it never steps backward into an
 /// earlier member of the *same* lap: from a member, the back-edge leads to the
@@ -259,11 +244,9 @@ pub(crate) fn regions_destroyed_by_edge_removal(
         .collect()
 }
 
-/// Builds the per-iteration edge-resolution key (ADR-0011 / #148 scheduler
-/// concern). The model from commit da0d72e resolves convergence edges (fired /
-/// dead) for the out-of-loop case; inside a region the resolution state must be
-/// keyed by `(loop id, iter, edge)` so an edge that fired at lap 1 is not counted
-/// resolved at lap 2.
+/// The per-iteration edge-resolution key. Inside a region the convergence
+/// resolution state must be keyed by `(loop id, iter, edge)`, so an edge that
+/// fired at lap 1 is not counted resolved at lap 2.
 pub(crate) fn resolution_key(loop_id: &str, iter: i64, edge_index: usize) -> String {
     format!("{loop_id}#{iter}#{edge_index}")
 }
@@ -292,11 +275,9 @@ pub(crate) fn resolve_region_max_iter(
     }
 }
 
-/// The bounded region `node_id` is a member of, if any (ADR-0025 / #327).
-/// Membership means the node's iteration is governed by the region engine —
-/// `bump_region` is the right lever for it, never `extend_cycle`. The head /
-/// entry node of a region is a member like any other. Returns the first
-/// matching `bounded` region.
+/// The bounded region `node_id` is a member of. Membership means the node's
+/// iteration is governed by the region engine — `bump_region` is the right lever
+/// for it, never `extend_cycle`. The entry node is a member like any other.
 pub(crate) fn bounded_region_for_member<'a>(
     pipeline: &'a PipelineDef,
     node_id: &str,
@@ -328,16 +309,12 @@ pub(crate) fn bounded_region_reentered_by_edge<'a>(
     })
 }
 
-/// The bounded region a fired `source -> target` edge ENTERS from outside
-/// (#601): `target` is a member, `source` is not. Distinct from
+/// The bounded region a fired `source -> target` edge ENTERS from outside:
+/// `target` is a member, `source` is not. Distinct from
 /// [`bounded_region_reentered_by_edge`] (a member→entry back-edge). The scheduler
-/// uses this to give a bounded region a `loop_states` entry from lap 1 — the
-/// legacy `Loop` node already seeds lap 1 via `seed_pending_loops`, but a region
-/// entered as an ordinary node only gained a loop state on its first *re-entry*
-/// (lap 2+), leaving "region on lap 1" indistinguishable from "no loop at all"
-/// (the caveat ADR-0025 §4 recorded). Mirrors
-/// [`collection_region_entered_by_edge`]. Returns the first matching `bounded`
-/// region.
+/// uses this to give a bounded region a `loop_states` entry from lap 1; without
+/// it, a region gained one only on its first *re-entry*, leaving "region on lap
+/// 1" indistinguishable from "no loop at all" (ADR-0025 §4).
 pub(crate) fn bounded_region_entered_by_edge<'a>(
     pipeline: &'a PipelineDef,
     source: &str,
@@ -401,22 +378,17 @@ pub(crate) fn exhaustion_outcome(
     }
 }
 
-// ── Collection region engine (ADR-0011 / #151) ───────────────────────────────
-//
-// A `collection` region (ex-ForEach) carries an `over: <field>` driver naming a
-// list in the entering artifact's frontmatter. It fans the region entry out **in
-// parallel**, one lap per item; the region's outgoing edges fire **once, on the
-// barrier** — when every item finishes — preserving `done → Merge` convergence
-// (ADR-0006). An empty collection fires the barrier immediately with zero
-// item-artifacts. The model concept is the named loop; "region" is the canvas
-// rendering.
+// Collection region engine (ADR-0011). A `collection` region (ex-ForEach)
+// carries an `over: <field>` driver naming a list in the entering artifact's
+// frontmatter. It fans the region entry out **in parallel**, one lap per item;
+// the region's outgoing edges fire **once, on the barrier** — when every item
+// finishes — preserving `done → Merge` convergence (ADR-0006). An empty
+// collection fires the barrier immediately with zero item-artifacts.
 
 /// Resolves a collection region's driver list from the entering artifact's
 /// frontmatter. The list is the value of the region's `over` field; a missing or
 /// non-list field resolves to the empty collection (sharp tool, ADR-0001 — no
-/// error; an empty collection simply fires the barrier immediately). Mirrors the
-/// legacy `scheduler::foreach_resolve_collection` so the collection region and
-/// the retired ForEach node agree on resolution.
+/// error; an empty collection simply fires the barrier immediately).
 pub(crate) fn resolve_collection(
     region: &LoopRegion,
     frontmatter: &std::collections::HashMap<String, serde_yaml::Value>,
@@ -432,11 +404,8 @@ pub(crate) fn resolve_collection(
         .unwrap_or_default()
 }
 
-/// The fan-out plan for a collection region (ADR-0011 / #151). `total` is the
-/// collection size (number of laps); `entry` is the region member spawned once
-/// per item; `items` is the resolved driver list (deposited so each lap reads its
-/// own item). An empty collection has `total == 0` and no entry spawns — the
-/// caller fires the barrier immediately.
+/// The fan-out plan for a collection region. An empty collection has
+/// `total == 0` and no entry spawns — the caller fires the barrier immediately.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CollectionFanout {
     pub total: i64,
@@ -444,12 +413,9 @@ pub(crate) struct CollectionFanout {
     pub items: Vec<serde_yaml::Value>,
 }
 
-/// Plans the parallel fan-out of a collection region from the entering artifact's
-/// frontmatter (ADR-0011 / #151). Resolves the `over` list, then designates the
-/// region entry (the member fed from outside the region; for the common
-/// single-member collection that is the lone member) as the node spawned **once
-/// per item**, at laps `1..=total`. An empty collection yields `total == 0` and
-/// no spawns; the caller fires the barrier immediately.
+/// Plans the parallel fan-out. The region entry — the member fed from outside;
+/// for a single-member collection, the lone member — is the node spawned **once
+/// per item**, at laps `1..=total`.
 pub(crate) fn collection_fanout(
     pipeline: &PipelineDef,
     region: &LoopRegion,
@@ -468,11 +434,9 @@ pub(crate) fn collection_fanout(
     }
 }
 
-/// True once every item-lap of a collection region has completed (ADR-0011 /
-/// #151) — the **barrier**. `total` is the collection size; `completed_iters` is
-/// the set of laps whose every member has finished. The barrier is reached when
-/// laps `1..=total` are all complete. An empty collection (`total == 0`) is
-/// barriered by definition (vacuously), so the caller fires immediately.
+/// The **barrier**: every item-lap of a collection region has completed.
+/// `completed_iters` is the set of laps whose every member has finished. An
+/// empty collection is barriered vacuously, so the caller fires immediately.
 pub(crate) fn collection_barrier_reached(
     total: i64,
     completed_iters: &std::collections::HashSet<i64>,
@@ -483,11 +447,9 @@ pub(crate) fn collection_barrier_reached(
     (1..=total).all(|i| completed_iters.contains(&i))
 }
 
-/// The collection region `node_id` is a member of, if any (ADR-0011 / #269).
-/// Membership means the node's iteration is governed by the region fan-out —
-/// it is spawned once per item by the region engine, never by the generic
-/// forward path, and its member→non-member edges fire only on the barrier.
-/// Returns the first matching `collection` region.
+/// The collection region `node_id` is a member of. Membership means the node is
+/// spawned once per item by the region engine, never by the generic forward
+/// path, and its member→non-member edges fire only on the barrier.
 pub(crate) fn collection_region_for_member<'a>(
     pipeline: &'a PipelineDef,
     node_id: &str,
@@ -498,11 +460,10 @@ pub(crate) fn collection_region_for_member<'a>(
         .find(|r| r.kind == LoopKind::Collection && r.members.iter().any(|m| m == node_id))
 }
 
-/// The collection region a fired `source -> target` edge ENTERS (ADR-0011 /
-/// #269): `target` is a member, `source` is not. Such an edge carries the
-/// artifact whose frontmatter holds the region's `over` list — the scheduler
-/// hands it to the fan-out engine instead of the generic forward-spawn path.
-/// Returns the first matching `collection` region.
+/// The collection region a fired `source -> target` edge ENTERS: `target` is a
+/// member, `source` is not. Such an edge carries the artifact whose frontmatter
+/// holds the region's `over` list — the scheduler hands it to the fan-out engine
+/// instead of the generic forward-spawn path.
 pub(crate) fn collection_region_entered_by_edge<'a>(
     pipeline: &'a PipelineDef,
     source: &str,
@@ -515,11 +476,10 @@ pub(crate) fn collection_region_entered_by_edge<'a>(
     })
 }
 
-/// The external targets a collection region's barrier fires into (ADR-0011 /
-/// #151): the edges leaving the region (member → non-member). Fired **once**, in
-/// edge order, de-duplicated — preserving `done → Merge` convergence (ADR-0006).
-/// Collection-region outgoing edges are unconditional barriers (the lap count is
-/// the collection, not a guard), so every member→non-member edge fires.
+/// The external targets a collection region's barrier fires into. Fired
+/// **once**, in edge order, de-duplicated — preserving `done → Merge`
+/// convergence (ADR-0006). Collection-region outgoing edges are unconditional
+/// (the lap count is the collection, not a guard), so every one fires.
 pub(crate) fn collection_barrier_targets(
     pipeline: &PipelineDef,
     region: &LoopRegion,

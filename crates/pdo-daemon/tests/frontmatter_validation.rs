@@ -184,7 +184,6 @@ async fn invalid_frontmatter_triggers_retry_then_valid_succeeds() {
     let run_id = create_run(&daemon).await;
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
-    // First attempt: invalid enum value
     write_artifact(
         daemon.repo_root(),
         &run_id,
@@ -205,13 +204,11 @@ async fn invalid_frontmatter_triggers_retry_then_valid_succeeds() {
     assert_eq!(body["recoverable"], true);
     assert_eq!(body["violations"][0]["field"], "verdict");
 
-    // Check node is still running with retries > 0
     let state = get_run_state(&daemon, &run_id).await;
     let reviewer = &state["nodes"]["reviewer"];
     assert_eq!(reviewer["status"], "running");
     assert_eq!(reviewer["frontmatter_retries"], 1);
 
-    // Second attempt: valid frontmatter
     write_artifact(
         daemon.repo_root(),
         &run_id,
@@ -236,7 +233,6 @@ async fn double_invalid_frontmatter_fails_node() {
     let run_id = create_run(&daemon).await;
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
-    // First attempt: invalid
     write_artifact(
         daemon.repo_root(),
         &run_id,
@@ -252,7 +248,6 @@ async fn double_invalid_frontmatter_fails_node() {
     assert_eq!(body1["error"], "frontmatter_retry_pending");
     assert_eq!(body1["recoverable"], true);
 
-    // Second attempt: still invalid
     write_artifact(
         daemon.repo_root(),
         &run_id,

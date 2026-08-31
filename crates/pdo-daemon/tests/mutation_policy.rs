@@ -91,7 +91,6 @@ async fn delete_running_node_returns_409() {
     let run_id = create_run(&daemon).await;
 
     // Worker should be running (started by scheduler).
-    // Try to save a pipeline YAML that deletes the worker node.
     let yaml_without_worker = r#"name: mutation-test
 nodes:
   - id: start
@@ -198,7 +197,6 @@ async fn delete_pending_node_succeeds() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let run_id = create_run(&daemon).await;
 
-    // Add a new pending node first
     let yaml_with_extra = r#"name: mutation-test
 nodes:
   - id: start
@@ -232,7 +230,6 @@ edges:
     target: { node: worker, port: task }
 "#;
 
-    // First add the pending node
     let resp = reqwest::Client::new()
         .put(format!("{}/runs/{}/pipeline", daemon.url(), run_id))
         .json(&serde_json::json!({

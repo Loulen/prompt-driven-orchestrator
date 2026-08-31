@@ -5,17 +5,13 @@
 //! presentation (LAYOUT) — see #355 and CONTEXT.md. That partition landed on the
 //! frontend only, so `library_store::pipelines::content_hash` went on hashing raw
 //! YAML bytes: moving a node flipped the library badge to "out of sync" while the
-//! canvas star, on the very same edit, still said "synced". Two contradictory
-//! verdicts on one file.
+//! canvas star, on the very same edit, still said "synced".
 //!
-//! This module mirrors the LAYOUT half of that partition and projects a *parsed*
-//! `PipelineDef` onto a canonical string: layout removed, field order fixed by the
-//! projection structs, map keys sorted, and every parser normalization (port sides,
-//! the switch `default` output, …) already baked in by `parse_pipeline`. Hashing
-//! that string instead of the file's bytes is what makes the daemon agree with the
-//! canvas — and it also absorbs the formatting churn a canvas save produces
-//! (flow vs block style, quoting, key order), which a textual strip of `view:`
-//! would not.
+//! This module mirrors the LAYOUT half and projects a *parsed* `PipelineDef` onto
+//! a canonical string. Don't strip `view:` textually instead: hashing the parsed
+//! projection also absorbs the formatting churn a canvas save produces (flow vs
+//! block style, quoting, key order) and the parser's own normalizations (port
+//! sides, the switch `default` output).
 //!
 //! Two tripwires keep the mirror honest:
 //!
@@ -47,13 +43,12 @@ use crate::pipeline::{
 };
 
 /// Fields excluded from the projection, per serializer scope, spelled exactly as
-/// in `frontend/src/lib/layoutFields.ts`. Scope names use the frontend's
-/// `SerializerScope` spelling so the cross-language guard can match them.
+/// in `frontend/src/lib/layoutFields.ts` (scope names use the frontend's
+/// `SerializerScope` spelling so the cross-language guard can match them).
 ///
-/// GUARD-ONLY, like `SEMANTIC_FIELDS` on the frontend: the projection excludes
-/// layout by *not destructuring it into a field*, never by name lookup. This table
-/// exists so `layout_fields_match_frontend_owner` can compare the two partitions,
-/// and so a reader can see the classification without tracing every `let _layout`.
+/// GUARD-ONLY: the projection excludes layout by *not destructuring it into a
+/// field*, never by name lookup. This table exists only so
+/// `layout_fields_match_frontend_owner` can compare the two partitions.
 #[allow(dead_code)]
 pub(crate) const LAYOUT_FIELDS: &[(&str, &[&str])] = &[
     ("pipeline", &["notes"]),
@@ -62,8 +57,8 @@ pub(crate) const LAYOUT_FIELDS: &[(&str, &[&str])] = &[
     ("outputPort", &[]),
     ("edge", &["mode", "waypoints", "target_side"]),
     ("loopRegion", &[]),
-    // GUARD-ONLY, mirroring the frontend: the whole `notes` block is dropped at
-    // pipeline scope (ADR-0018 R1), so the projection never descends into a note.
+    // The whole `notes` block is dropped at pipeline scope (ADR-0018 R1), so the
+    // projection never descends into a note — this entry exists for the guard only.
     ("note", &["id", "content", "view"]),
 ];
 
@@ -137,22 +132,15 @@ struct NodeProjection<'a> {
     name: &'a str,
     node_type: &'a NodeType,
     interactive: bool,
-    /// Pinned harness (#550, ADR-0046). Semantic: pinning a node to `opencode`
-    /// changes what runs it, so a pipeline that differs only by a pin is *not* the
-    /// same pipeline.
+    /// Semantic (#550, ADR-0046): pinning a node to `opencode` changes what runs
+    /// it, so a pipeline differing only by a pin is *not* the same pipeline.
     pin_harness: Option<&'a str>,
-    /// Per-harness `{model, effort}` map (#550, ADR-0046) — replaces the flat
-    /// `model:`/`effort:` of #296/#424. Semantic for the same reason: it changes
-    /// how the agent behaves, so the library drift badge and the pipeline diff must
-    /// both see it. A `BTreeMap` so the canonical form is key-ordered; empty ⇒
-    /// serialized as `{}` (a plain claude node with no settings).
+    /// Semantic (#550, ADR-0046), replacing the flat `model:`/`effort:` of
+    /// #296/#424. A `BTreeMap` so the canonical form is key-ordered.
     harnesses: &'a std::collections::BTreeMap<String, crate::harness_resolver::HarnessEntry>,
-    /// The node's agent-profile choice (#563, ADR-0057) — semantic: it changes
-    /// harness/model/effort just as directly as `pin_harness`/`harnesses` above,
-    /// and CONTEXT.md is explicit ("la carte entre dans le diff sémantique").
-    /// `skip_serializing_if` keeps a pre-#563 pipeline (which never sets it)
-    /// byte-identical to its old content hash — the same discipline `auto_fail`
-    /// below uses.
+    /// Semantic (#563, ADR-0057), like `pin_harness`/`harnesses` above.
+    /// `skip_serializing_if` keeps a pre-#563 pipeline byte-identical to its old
+    /// content hash — the same discipline `auto_fail` below uses.
     #[serde(skip_serializing_if = "Option::is_none")]
     agent_choice: Option<&'a crate::agent_choice::AgentChoice>,
     max_iter: Option<serde_json::Value>,
@@ -160,10 +148,9 @@ struct NodeProjection<'a> {
     /// it, so it is absent from `SEMANTIC_FIELDS.node`; it is still a behavioural
     /// field on the parse surface, hence semantic here.
     over: Option<&'a str>,
-    /// Per-node `auto_fail` (ADR-0049). Semantic: it changes whether an agent
-    /// `pdo fail` terminalises the run. `skip_serializing_if` keeps every
-    /// pipeline that states no preference byte-identical to its pre-résilience
-    /// content hash (absent key), so this field flags drift only when set.
+    /// Semantic (ADR-0049): it changes whether an agent `pdo fail` terminalises
+    /// the run. `skip_serializing_if` keeps a pipeline that states no preference
+    /// byte-identical to its pre-résilience content hash.
     #[serde(skip_serializing_if = "Option::is_none")]
     auto_fail: Option<bool>,
     inputs: Vec<PortProjection<'a>>,

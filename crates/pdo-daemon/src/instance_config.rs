@@ -253,9 +253,7 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
-    // Additive migration for pre-#348 databases: the `triggers_paused` column is
-    // absent on tables created before the global trigger kill-switch. Same guarded
-    // `ADD COLUMN` idiom as `default_model` above — safe on every boot.
+    // Additive migration, pre-#348: the global trigger kill-switch.
     let has_triggers_paused = sqlx::query(
         "SELECT 1 FROM pragma_table_info('instance_config') WHERE name = 'triggers_paused'",
     )
@@ -268,11 +266,9 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
-    // Additive migration for pre-#410 databases: the `default_sandbox` column is absent
-    // on tables created before the run-level sandbox default landed. Same guarded
-    // `ADD COLUMN` idiom as the columns above — safe on every boot. NULLABLE, never
-    // `NOT NULL DEFAULT`: a non-null default would make the stored tier always win and
-    // break the `off`-by-default (byte-identical) precedence floor.
+    // Additive migration, pre-#410. NULLABLE, never `NOT NULL DEFAULT`: a non-null
+    // default would make the stored tier always win and break the `off`-by-default
+    // (byte-identical) precedence floor. Same for every column below.
     let has_default_sandbox = sqlx::query(
         "SELECT 1 FROM pragma_table_info('instance_config') WHERE name = 'default_sandbox'",
     )
@@ -285,10 +281,8 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
-    // Additive migration for pre-#469 databases: the `autocomplete_turn_end` column is
-    // absent on tables created before turn-end auto-completion. Same guarded `ADD COLUMN`
-    // idiom as the columns above — safe on every boot, and NULLABLE so an existing
-    // install keeps the feature OFF (ADR-0012) with the env tier still able to speak.
+    // Additive migration, pre-#469: NULLABLE keeps an existing install OFF (ADR-0012)
+    // with the env tier still able to speak.
     let has_autocomplete_turn_end = sqlx::query(
         "SELECT 1 FROM pragma_table_info('instance_config') WHERE name = 'autocomplete_turn_end'",
     )
@@ -301,11 +295,8 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
-    // Additive migration for pre-#338 databases: the `default_auto_name` column is absent
-    // on tables created before the configurable manager auto-naming default. Same guarded
-    // `ADD COLUMN` idiom as the columns above — safe on every boot, and NULLABLE so an
-    // existing install falls through env → the built-in default (`true`), preserving the
-    // pre-#338 behaviour (a nameless Run is auto-named by the manager).
+    // Additive migration, pre-#338: NULLABLE preserves the pre-#338 behaviour (a
+    // nameless Run is auto-named by the manager).
     let has_default_auto_name = sqlx::query(
         "SELECT 1 FROM pragma_table_info('instance_config') WHERE name = 'default_auto_name'",
     )
@@ -318,10 +309,7 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
-    // Additive migration for pre-#550 databases: the `default_harness` and
-    // `default_harness_model` columns are absent on tables created before the
-    // multi-harness axis. Same guarded `ADD COLUMN` idiom — NULLABLE so an
-    // existing install falls through env → the `claude` floor unchanged.
+    // Additive migration, pre-#550: the multi-harness axis.
     let has_default_harness = sqlx::query(
         "SELECT 1 FROM pragma_table_info('instance_config') WHERE name = 'default_harness'",
     )
@@ -345,10 +333,7 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
-    // Additive migration for pre-résilience databases: the `auto_fail` column is
-    // absent on tables created before ADR-0049. Same guarded `ADD COLUMN` idiom —
-    // NULLABLE so an existing install falls through env → the built-in default
-    // (`false`: an agent `pdo fail` parks the run, the human confirms).
+    // Additive migration, pre-ADR-0049: `auto_fail`.
     let has_auto_fail =
         sqlx::query("SELECT 1 FROM pragma_table_info('instance_config') WHERE name = 'auto_fail'")
             .fetch_optional(db)
@@ -360,10 +345,7 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
-    // Additive migration for pre-#594 databases: the `libassist_idle_ttl_secs`
-    // column is absent on tables created before the library assistant became a
-    // shared, idle-reaped session (ADR-0051). Same guarded `ADD COLUMN` idiom —
-    // NULLABLE so an existing install falls through env → 120 s.
+    // Additive migration, pre-#594: the shared, idle-reaped library assistant.
     let has_libassist_idle_ttl = sqlx::query(
         "SELECT 1 FROM pragma_table_info('instance_config') WHERE name = 'libassist_idle_ttl_secs'",
     )
@@ -376,10 +358,8 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
-    // Additive migration for pre-#563 databases: the `agent_choice` column is
-    // absent on tables created before the agentic-profile union. Same guarded
-    // `ADD COLUMN` idiom — NULLABLE so an existing install falls through to the
-    // legacy `default_harness`/`default_harness_model` precedence unchanged.
+    // Additive migration, pre-#563: NULLABLE so an existing install falls through
+    // to the legacy `default_harness`/`default_harness_model` precedence unchanged.
     let has_agent_choice = sqlx::query(
         "SELECT 1 FROM pragma_table_info('instance_config') WHERE name = 'agent_choice'",
     )
@@ -695,7 +675,6 @@ mod tests {
 
     #[tokio::test]
     async fn update_sets_and_reads_back_default_harness() {
-        // #550/ADR-0046: the scalar default harness round-trips like `default_model`.
         let db = test_db().await;
         let updated = update(
             &db,
@@ -711,7 +690,6 @@ mod tests {
             get(&db).await.unwrap().default_harness.as_deref(),
             Some("opencode")
         );
-        // "" clears it back to unset (the resolver's floor then applies).
         update(
             &db,
             UpdateInstanceConfig {
@@ -726,8 +704,6 @@ mod tests {
 
     #[tokio::test]
     async fn update_sets_and_reads_back_per_harness_default_model() {
-        // #550/ADR-0046: the per-harness default model map persists as JSON and
-        // round-trips through a re-read.
         let db = test_db().await;
         let map: std::collections::BTreeMap<String, String> = [
             ("claude".to_string(), "opus".to_string()),
@@ -749,10 +725,7 @@ mod tests {
 
     #[tokio::test]
     async fn init_migrates_pre_harness_schema() {
-        // #550: a table created before the harness columns gains them on init,
-        // idempotently, without clobbering a pre-existing knob.
         let db = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        // The full pre-#550 schema (everything except the two harness columns).
         sqlx::query(
             "CREATE TABLE instance_config (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -777,7 +750,6 @@ mod tests {
         .await
         .unwrap();
 
-        // First init adds the columns; a second is a no-op (PRAGMA guard holds).
         init(&db).await.unwrap();
         init(&db).await.unwrap();
 
@@ -786,7 +758,6 @@ mod tests {
         assert_eq!(cfg.default_harness, None, "new column defaults to NULL");
         assert!(cfg.default_harness_model.is_empty());
 
-        // …and both new columns are writable afterward.
         let map: std::collections::BTreeMap<String, String> =
             [("claude".to_string(), "opus".to_string())]
                 .into_iter()
@@ -883,9 +854,6 @@ mod tests {
 
     #[tokio::test]
     async fn init_migrates_pre_agent_choice_schema() {
-        // #563: a table created before the `agent_choice` column gains it on
-        // init, idempotently, without clobbering a pre-existing knob — same
-        // guarded `ADD COLUMN` idiom as `default_harness` above.
         let db = SqlitePool::connect("sqlite::memory:").await.unwrap();
         sqlx::query(
             "CREATE TABLE instance_config (
@@ -950,12 +918,10 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(updated.default_model.as_deref(), Some("opus"));
-        // A re-read confirms persistence (not just the returned row).
         assert_eq!(
             get(&db).await.unwrap().default_model.as_deref(),
             Some("opus")
         );
-        // The numeric knobs stay untouched.
         assert_eq!(updated.session_cap, None);
     }
 
@@ -1021,12 +987,10 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(updated.default_sandbox.as_deref(), Some("minimal"));
-        // A re-read confirms persistence (not just the returned row).
         assert_eq!(
             get(&db).await.unwrap().default_sandbox.as_deref(),
             Some("minimal")
         );
-        // Sibling knobs stay untouched.
         assert_eq!(updated.default_model, None);
     }
 
@@ -1127,7 +1091,6 @@ mod tests {
         );
         assert_eq!(cfg.default_sandbox, None, "new column defaults to NULL");
 
-        // And the migrated column is writable.
         let updated = update(
             &db,
             UpdateInstanceConfig {
@@ -1273,7 +1236,6 @@ mod tests {
             Some(0),
             "unticking must persist a stored 0, never NULL"
         );
-        // Sibling knobs stay untouched.
         assert_eq!(off.session_cap, None);
     }
 
@@ -1342,7 +1304,6 @@ mod tests {
             "resolved OFF unless the env tier says otherwise"
         );
 
-        // And the migrated column is writable.
         let updated = update(
             &db,
             UpdateInstanceConfig {
@@ -1388,7 +1349,6 @@ mod tests {
             Some(0),
             "unticking must persist a stored 0, never NULL"
         );
-        // Sibling knobs stay untouched.
         assert_eq!(off.session_cap, None);
     }
 
@@ -1458,7 +1418,6 @@ mod tests {
             "resolved ON (pre-#338 behaviour) unless the env tier says otherwise"
         );
 
-        // And the migrated column is writable.
         let updated = update(
             &db,
             UpdateInstanceConfig {
@@ -1483,7 +1442,6 @@ mod tests {
         )
         .await
         .unwrap();
-        // A second init (mimicking a daemon restart) must not reset the row.
         init(&db).await.unwrap();
         assert_eq!(get(&db).await.unwrap().session_cap, Some(7));
     }
@@ -1501,11 +1459,9 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(updated.session_cap, Some(4));
-        // Untouched fields stay NULL.
         assert_eq!(updated.reaper_ttl_secs, None);
         assert_eq!(updated.guard_timeout_secs, None);
 
-        // A second partial edit changes only its field, leaving cap intact.
         let updated = update(
             &db,
             UpdateInstanceConfig {
@@ -1562,7 +1518,6 @@ mod tests {
             .connect("sqlite::memory:")
             .await
             .unwrap();
-        // Old CREATE (no default_model) + a seeded, non-default row.
         sqlx::query(
             "CREATE TABLE instance_config (
                 id                 INTEGER PRIMARY KEY CHECK (id = 1),
@@ -1581,7 +1536,6 @@ mod tests {
             .await
             .unwrap();
 
-        // First init adds the column; a second is a no-op (guard holds).
         init(&db).await.unwrap();
         init(&db).await.unwrap();
 
@@ -1593,7 +1547,6 @@ mod tests {
         );
         assert_eq!(cfg.default_model, None, "new column defaults to NULL");
 
-        // And the migrated column is writable.
         let updated = update(
             &db,
             UpdateInstanceConfig {
@@ -1608,7 +1561,6 @@ mod tests {
 
     #[tokio::test]
     async fn triggers_paused_defaults_off() {
-        // A fresh row has NULL triggers_paused ≡ not paused (#348).
         let db = test_db().await;
         assert!(!triggers_paused(&db).await.unwrap());
     }
@@ -1621,7 +1573,6 @@ mod tests {
 
         set_triggers_paused(&db, true).await.unwrap();
         assert!(triggers_paused(&db).await.unwrap(), "paused must read true");
-        // Unpause stores SQL NULL, keeping the "unset ≡ off" table convention.
         set_triggers_paused(&db, false).await.unwrap();
         assert!(
             !triggers_paused(&db).await.unwrap(),

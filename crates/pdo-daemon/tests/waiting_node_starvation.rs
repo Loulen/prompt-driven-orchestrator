@@ -199,7 +199,6 @@ async fn boot_recovery_redrives_a_waiting_node_after_freeing_a_slot() {
     tmux_session_manager::kill(&socket, &leaf1_session);
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    // The boot-recovery pass the daemon runs at startup.
     daemon.run_boot_recovery_tick().await;
 
     // Run A: the orphan is Interrupted (ADR-0049); the sibling and the Run itself
@@ -220,7 +219,6 @@ async fn boot_recovery_redrives_a_waiting_node_after_freeing_a_slot() {
     // slot; the other stays waiting. Before the fix, BOTH stayed waiting for ever.
     wait_for_a_redriven_node(&daemon, &run_b).await;
 
-    // Cleanup the sessions this test spawned out of band.
     tmux_session_manager::kill(
         &socket,
         &tmux_session_manager::node_session_name(&run_a, "leader", 1),
@@ -233,7 +231,6 @@ async fn boot_recovery_redrives_a_waiting_node_after_freeing_a_slot() {
     }
 }
 
-/// Poll until one of Run B's two entry nodes has left `waiting` for `running`.
 async fn wait_for_a_redriven_node(daemon: &TestDaemon, run_b: &str) {
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {

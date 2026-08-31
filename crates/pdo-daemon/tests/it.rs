@@ -86,6 +86,9 @@ mod multi_repo_run;
 #[path = "mutation_policy.rs"]
 mod mutation_policy;
 
+#[path = "node_delivery.rs"]
+mod node_delivery;
+
 #[path = "node_done_detach.rs"]
 mod node_done_detach;
 

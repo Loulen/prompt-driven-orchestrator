@@ -345,7 +345,7 @@ export type MarkNodeDoneRefusal =
   | "frontmatter_retry_pending"
   | "frontmatter_retry_exhausted"
   | "script_validation_failed"
-  | "doc_violated_code_immutability"
+  | "delivery_failed"
   | "merge_conflict"
   | "merge_resolution_failed"
   | "completion_rejected";
@@ -355,7 +355,7 @@ const KNOWN_REFUSALS: readonly string[] = [
   "frontmatter_retry_pending",
   "frontmatter_retry_exhausted",
   "script_validation_failed",
-  "doc_violated_code_immutability",
+  "delivery_failed",
   "merge_conflict",
   "merge_resolution_failed",
   "completion_rejected",

@@ -658,7 +658,21 @@ export interface NodeState {
    * node that never started, a structural node, or a pre-#653 daemon.
    */
   isolated_worktree?: boolean;
+  /**
+   * #654/ADR-0060: what this NodeRun DELIVERED onto the run's branch — the two
+   * tips its delivery moved the branch between. Present for any NodeRun that
+   * delivered changes, isolated or not; absent for one that delivered nothing
+   * (no commit was written) and on a pre-#654 daemon. Its presence, never the
+   * node's type or isolation, is what says a per-node diff exists.
+   */
+  delivery?: NodeDelivery | null;
   cost?: NodeCost | null;
+}
+
+/** The two run-branch tips one delivery moved between (#654 / ADR-0060). */
+export interface NodeDelivery {
+  before: string;
+  after: string;
 }
 
 export interface EdgeInfo {

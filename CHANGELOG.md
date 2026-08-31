@@ -10,6 +10,46 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.49.0
+
+**Un seul contrat de livraison pour les Agents et les Scripts** (#654 ; ADR-0060). *Cassant.*
+Un Node ne reçoit plus aucune consigne Git : il modifie des fichiers, et le runtime livre ce
+qu'il laisse. À la complétion, PDO conserve les commits que le Node a pris lui-même, stage le
+reste avec la sémantique de `git add -A` et crée **un** commit `<node-id> iter-<N>: completed`
+sous l'identité Git configurée, sans trailer. Un Node isolé voit ensuite son sous-worktree
+mergé dans la branche du Run ; un Node non isolé a déjà commité sur place. Aucun changement
+restant ⇒ aucun commit, donc jamais de commit vide.
+
+Cette livraison est **une seule opération** que traversent les quatre chemins de complétion :
+la complétion automatique (hook `Stop` et veille de fin de tour), `pdo complete`, la complétion
+manuelle (`mark_node_done`) et la fin d'un Script. Elle s'exécute **avant** l'événement terminal,
+donc avant tout départ de l'aval : un Node isolé forké ensuite voit le travail d'un Node non
+isolé amont. La complétion manuelle ne faisait auparavant ni merge ni commit — l'asymétrie
+qu'ADR-0035 consignait comme limite acceptée disparaît.
+
+**Le refus `doc_violated_code_immutability` est supprimé, avec toutes ses surfaces.** Un Node non
+isolé qui modifie des fichiers suivis n'est plus refusé : son travail est livré. Le slug disparaît
+du corps de refus, de l'`awaiting_reason_code`, du message de `pdo complete` et du client. Le
+refus `merge_failed` est remplacé par **`delivery_failed`** (`500`), qui couvre désormais le
+staging, le commit et le merge : il appende un `NodeInterrupted`, parque le Run `awaiting_user`
+et **conserve le travail sur disque**, sans rien annuler ni nettoyer.
+
+**Le staging n'exclut rien.** PDO ne retire aucun de ses propres chemins runtime : le `.gitignore`
+du dépôt cible est l'unique politique d'exclusion. Un dépôt qui n'ignore que `.pdo/runs/` verra
+donc le blackboard (`.pdo/artifacts/`, `.pdo/prompts/`) entrer dans les commits de livraison de
+ses Nodes non isolés — ignorez `.pdo/` comme le fait ce dépôt.
+
+**Nouvel événement `node_delivered`** (`before` / `after`, les deux têtes de la branche du Run),
+projeté sur `nodes.<id>.delivery`. Le **diff par NodeRun** s'y appuie : il existe désormais pour
+tout Agent ou Script qui a livré des changements, isolé ou non, et n'est plus réservé aux Nodes
+qui possédaient une branche `pdo/sub-*`. Le sélecteur de diff de l'UI liste ce que les NodeRuns
+ont livré, plus ce qu'ils sont. Comme le diff du Run, il exclut `.pdo/`.
+
+**Posture d'outil tranchant conservée.** Plusieurs Nodes non isolés peuvent tourner en même temps :
+le runtime n'ajoute aucune sérialisation. Le premier qui complète commite tout l'état non ignoré
+alors visible, sous son propre message — l'isolation reste le moyen d'obtenir une attribution
+fiable.
+
 ## 1.48.0
 
 **L'isolation voyage par la bibliothèque et par l'import** (#655 ; ADR-0060). Une entrée de

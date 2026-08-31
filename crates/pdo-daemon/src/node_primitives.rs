@@ -330,6 +330,10 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         daemon_url: &crate::sandbox_container::daemon_url(params.daemon_port, sandboxed),
         foreach_context: None,
         source_worktree_dir: has_sub_worktree.then_some(working_dir.as_path()),
+        // #654: the same section, from the other isolation. This site only
+        // ever builds a preamble for a node that spawns a session, so the
+        // two are exhaustive and mutually exclusive.
+        shared_worktree_dir: (!has_sub_worktree).then_some(working_dir.as_path()),
         input_images: Vec::new(),
         start_prompt_present,
         source_iters: crate::input_resolution::resolved_source_iters(
@@ -657,7 +661,7 @@ fn resolve_inputs(
     let mut input_paths = HashMap::new();
 
     // #486 / #600: overrides win over any edge resolution AND cover **emergent**
-    // input ports. A `DocOnly`/`CodeMutating`/`Script` node declares no `inputs`
+    // input ports. An `Agent`/`Script` node declares no `inputs`
     // (its inputs are derived from incoming edges), so keying overrides only off
     // `node.inputs` would silently drop an operator's dummy input on exactly those
     // nodes. Insert every override first — the declared-port loop below then fills
@@ -1058,6 +1062,7 @@ mod tests {
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
             missing_outputs: Vec::new(),
+            delivery: None,
         }
     }
 
@@ -1082,6 +1087,7 @@ mod tests {
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
             missing_outputs: Vec::new(),
+            delivery: None,
         }
     }
 
@@ -1101,6 +1107,7 @@ mod tests {
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
             missing_outputs: Vec::new(),
+            delivery: None,
         }
     }
 
@@ -1441,7 +1448,7 @@ mod tests {
 
     #[test]
     fn override_applies_to_an_emergent_input_port() {
-        // #486 / #600: a DocOnly/CodeMutating node declares NO input ports (its
+        // #486 / #600: an `agent` node declares NO input ports (its
         // inputs are emergent from edges), so an override keyed on the edge's target
         // port must still attach — otherwise the operator's dummy input is silently
         // dropped on exactly those nodes.
@@ -1705,6 +1712,7 @@ mod tests {
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
             missing_outputs: Vec::new(),
+            delivery: None,
         }
     }
 

@@ -620,6 +620,29 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             let pipeline_path = resolve_run_pipeline_path(&repo_root, &run_id, pipeline_name);
             let worktree_dir = worktree_dir_for_run(&repo_root, &run_id);
             let artifacts_dir = worktree_dir.join(".pdo").join("artifacts");
+
+            // #654 / ADR-0060: the manual completion delivers like every other
+            // one. Pre-#654 this arm ran neither the merge-back nor any
+            // worktree check, so an interactive node marked complete from the UI
+            // left its sub-worktree stranded and its shared-worktree edits
+            // uncommitted — the asymmetry ADR-0035 recorded as an accepted limit
+            // and this ticket removes. Same single operation, same events, before
+            // the terminal append and therefore before the downstream spawn.
+            if let Some(refusal) = crate::deliver_node_run(
+                &state,
+                &events,
+                rs_ref,
+                &repo_root,
+                &worktree_dir,
+                &run_id,
+                &node_id,
+                iter,
+            )
+            .await
+            {
+                return completion_refusal::refusal_response(&refusal);
+            }
+
             // The shared chokepoint (#490). Both surfaces project the refusal
             // through the same single function, which is what makes "a refusal is
             // never a 2xx" cover `POST /commands` too.

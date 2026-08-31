@@ -84,6 +84,11 @@ pub(crate) struct AugmentContext<'a> {
     /// agent must edit in. Set to `None` for nodes that run directly in the
     /// pipeline worktree (non-isolated, switch, loop, etc.).
     pub source_worktree_dir: Option<&'a Path>,
+    /// For a NON-isolated agent/script (#654 / ADR-0060): the Run's shared
+    /// worktree it works in. Mutually exclusive with `source_worktree_dir` — the
+    /// two render the same "Source code edits" section from the two isolations —
+    /// and `None` for anything that spawns no session.
+    pub shared_worktree_dir: Option<&'a Path>,
     pub input_images: Vec<String>,
     /// Whether the Start node's user prompt (`_input/output.md`) carries any
     /// non-whitespace content. Precomputed by the daemon (it owns the artifacts
@@ -714,7 +719,22 @@ pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
         }
     }
 
-    // Source code edits (only for nodes that get a per-iteration sub-worktree)
+    // Source code edits. Two isolations, one section, and NO git instruction in
+    // either (#654 / ADR-0060): the Node edits files, the runtime delivers what it
+    // leaves. What differs is only *where* the NodeRun works.
+    if let Some(shared_wt) = ctx.shared_worktree_dir {
+        preamble.push_str("## Source code edits\n\n");
+        preamble.push_str(&format!(
+            "Your working directory `{}` is the **run's shared worktree**: other \
+             nodes of this run may work in it at the same time. Make **all** \
+             source code edits there — do not `cd` elsewhere to edit files.\n\n\
+             You do not have to run any git command. When this node finishes, PDO \
+             keeps whatever you committed yourself and commits everything else you \
+             left behind onto the run's branch. Anything the repository's \
+             `.gitignore` covers stays out; everything else goes in.\n\n",
+            shared_wt.display()
+        ));
+    }
     if let Some(sub_wt) = ctx.source_worktree_dir {
         preamble.push_str("## Source code edits\n\n");
         preamble.push_str(&format!(
@@ -726,10 +746,11 @@ pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
              worktree* (a different directory, shared with other nodes). \
              Treat those paths as read-only/write-only for artefacts; never \
              edit source code there.\n\n\
-             When you run `pdo complete`, your committed changes are \
-             automatically merged from this sub-worktree back into the \
-             pipeline worktree. Edits made outside this directory will be \
-             silently dropped from the merge.\n\n",
+             You do not have to run any git command. When this node finishes, PDO \
+             keeps whatever you committed yourself, commits everything else you \
+             left behind, then merges this worktree back into the pipeline \
+             worktree. Edits made outside this directory are not part of that \
+             delivery.\n\n",
             sub_wt.display()
         ));
 
@@ -951,8 +972,8 @@ On `curl {daemon_url}/runs/{run_id}` a parked run carries:
   schedulable); `unrouted` / `region_exhausted` / `region_ended_unrouted` (routing left no
   live path — route it with `end_region`/`bump_region` or the exit edge); `merge_conflict`,
   `merge_resolution_failed`, `script_validation_failed`, `frontmatter_retry_exhausted`,
-  `doc_violated_code_immutability` (a completion give-up); `agent_fail_awaiting` (an agent
-  `pdo fail` awaiting your confirmation).
+  `delivery_failed` (a completion give-up); `agent_fail_awaiting` (an agent `pdo fail`
+  awaiting your confirmation).
 - **`awaiting_reason`** — the same cause in prose, for the human.
 
 `awaiting_reason_code` **absent** on an `awaiting_user` run means the wait is *interactive*
@@ -1250,6 +1271,7 @@ mod tests {
             daemon_url: "http://localhost:5172",
             foreach_context: None,
             source_worktree_dir: None,
+            shared_worktree_dir: None,
             input_images: Vec::new(),
             start_prompt_present: false,
             source_iters: HashMap::new(),
@@ -2759,6 +2781,67 @@ mod tests {
         assert!(
             !preamble.contains("interrupted git operation"),
             "no ops means no interrupted-op notice: {preamble}"
+        );
+    }
+
+    // --- #654 / ADR-0060: one "Source code edits" section per isolation, and NO
+    // git instruction in either. The Node edits files; the runtime delivers. ---
+
+    /// A NON-isolated NodeRun gets the section too — pre-#654 it got nothing —
+    /// and it names the shared worktree plus the delivery contract, without ever
+    /// asking for a git command.
+    #[test]
+    fn preamble_tells_a_shared_worktree_node_that_pdo_delivers_what_it_leaves() {
+        let pipeline = sample_pipeline();
+        let node = &pipeline.nodes[0];
+        let vars = HashMap::new();
+        let mut ctx = sample_ctx(&pipeline, node, &vars);
+        ctx.shared_worktree_dir = Some(Path::new("/repo/.pdo/runs/r/worktree"));
+
+        let preamble = build_preamble(&ctx);
+        assert!(preamble.contains("## Source code edits"), "{preamble}");
+        assert!(
+            preamble.contains("run's shared worktree")
+                && preamble.contains("/repo/.pdo/runs/r/worktree"),
+            "it names where the NodeRun works: {preamble}"
+        );
+        assert!(
+            preamble.contains("do not have to run any git command"),
+            "the delivery contract replaces every git instruction: {preamble}"
+        );
+        assert!(
+            preamble.contains(".gitignore"),
+            "…and says what stays out: {preamble}"
+        );
+        assert!(
+            !preamble.contains("dedicated git worktree"),
+            "the two isolations never render together: {preamble}"
+        );
+    }
+
+    /// The isolated section keeps its "edit here, not elsewhere" rule and states
+    /// the same contract — commits kept, the rest committed, then merged back.
+    #[test]
+    fn preamble_tells_an_isolated_node_its_work_is_committed_then_merged_back() {
+        let pipeline = sample_pipeline();
+        let node = &pipeline.nodes[0];
+        let vars = HashMap::new();
+        let mut ctx = sample_ctx(&pipeline, node, &vars);
+        ctx.source_worktree_dir = Some(Path::new(SUB_WT));
+
+        let preamble = build_preamble(&ctx);
+        assert!(preamble.contains("dedicated git worktree"), "{preamble}");
+        assert!(
+            preamble.contains("do not have to run any git command"),
+            "no git instruction is conditioned on anything any more: {preamble}"
+        );
+        assert!(
+            preamble.contains("keeps whatever you committed yourself"),
+            "the node's own commits survive, and it is told so: {preamble}"
+        );
+        assert!(
+            !preamble.contains("run's shared worktree"),
+            "the two isolations never render together: {preamble}"
         );
     }
 

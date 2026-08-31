@@ -31,14 +31,55 @@ export function carriesIsolation(type: NodeType): boolean {
 }
 
 /**
+ * The two places a NodeRun can work, named and described once (#653/#655). The
+ * inspector renders them as radio choices and the library preview reuses the
+ * label, so the editor speaks of a workspace in exactly one vocabulary — the
+ * "new vocabulary everywhere" #655 asks for is a shared constant, not a
+ * convention repeated per component.
+ */
+export const WORKSPACE_CHOICES = [
+  {
+    isolated: true,
+    label: "Isolated worktree",
+    hint: "a sub-worktree of the Node's own",
+  },
+  {
+    isolated: false,
+    label: "Run worktree",
+    hint: "shared with the whole Run",
+  },
+] as const;
+
+/** The label for a workspace, for a surface too small to show both choices. */
+export function workspaceLabel(isolated: boolean): string {
+  return WORKSPACE_CHOICES.find((c) => c.isolated === isolated)!.label;
+}
+
+/**
+ * Isolation resolved from a stated value and a type, with the type having the
+ * last word on whether there is a choice at all. `null` for a type that carries
+ * none — the signal the serializer uses to leave the key off and the inspector
+ * uses to hide the section.
+ *
+ * Takes the type as a bare string so the node library can call it too (#655): a
+ * `LibraryEntry.type` crosses the wire untyped, and an entry saved for an
+ * unknown type must resolve to `null` rather than to a guess.
+ */
+export function resolveIsolation(
+  type: string,
+  stated: boolean | null | undefined,
+): boolean | null {
+  const fallback = DEFAULT_ISOLATION[type as NodeType] ?? null;
+  if (fallback === null) return null;
+  return stated ?? fallback;
+}
+
+/**
  * A node's isolation as the document states it, falling back to its type's
- * default. `null` for a type that carries none — the signal the serializer uses
- * to leave the key off and the inspector uses to hide the section.
+ * default.
  */
 export function nodeIsolation(node: NodeDef): boolean | null {
-  const fallback = DEFAULT_ISOLATION[node.type] ?? null;
-  if (fallback === null) return null;
-  return node.isolated_worktree ?? fallback;
+  return resolveIsolation(node.type, node.isolated_worktree);
 }
 
 /**

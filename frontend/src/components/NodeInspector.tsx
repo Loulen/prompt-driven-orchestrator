@@ -13,7 +13,12 @@ import HarnessSelect from "./HarnessSelect";
 import ModelPicker from "./ModelPicker";
 import EffortPicker from "./EffortPicker";
 import { findHarnessOption, resolveEditorHarness } from "../lib/harness";
-import { carriesIsolation, nodeIsolation, worktreePathFor } from "../lib/nodeIsolation";
+import {
+  WORKSPACE_CHOICES,
+  carriesIsolation,
+  nodeIsolation,
+  worktreePathFor,
+} from "../lib/nodeIsolation";
 import DestroyLoopModal from "./DestroyLoopModal";
 import { derivePooledInputs } from "../lib/derivePooledInputs";
 import { regionsDestroyedByEdgeRemoval } from "../lib/loopRegions";
@@ -28,19 +33,6 @@ import type { LibrarySyncState } from "../hooks/useLibrary";
  * #653 / ADR-0060: the two places a NodeRun can work, named and described in one
  * breath. A radio pair rather than a switch — "off" would name neither place.
  */
-const WORKSPACE_CHOICES = [
-  {
-    isolated: true,
-    label: "Isolated worktree",
-    hint: "a sub-worktree of the Node's own",
-  },
-  {
-    isolated: false,
-    label: "Run worktree",
-    hint: "shared with the whole Run",
-  },
-] as const;
-
 export default function NodeInspector({
   libraryEntries,
   onLibraryChanged,
@@ -517,6 +509,10 @@ function StarButton({
       // annotation, so omitting a field here compiles fine — the star would just
       // read `diverged` forever.
       effort: node.effort ?? null,
+      // #655/ADR-0060: star where the node works, resolved (not raw) so a node
+      // sitting silently on its type's default stars on that default instead of
+      // on a silence — a silence would read `diverged` the instant it was saved.
+      isolated_worktree: nodeIsolation(node),
       prompt,
     };
   }
@@ -557,6 +553,9 @@ function StarButton({
         model: result.spec.model ?? null,
         // #424: and the effort level.
         effort: result.spec.effort ?? null,
+        // #655/ADR-0060: and the workspace — resetting to the library must put
+        // the node back where the entry says it works, not where its type would.
+        isolated_worktree: result.spec.isolated_worktree ?? null,
       });
       updatePromptFn(result.prompt);
       setPopoverOpen(false);

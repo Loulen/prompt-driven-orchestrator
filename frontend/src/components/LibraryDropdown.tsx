@@ -4,14 +4,11 @@ import type { LibraryEntry } from "../api";
 import { instantiateFromLibrary, libraryPortToPortDef } from "../api";
 import { useEditStore } from "../stores/editStore";
 import { generateNodeId } from "../lib/nanoid";
+import { resolveIsolation, workspaceLabel } from "../lib/nodeIsolation";
+import { NodeTypeIcon } from "./NodeTypeIcon";
 import type { NodeDef, NodeType } from "../types";
 import { Tooltip } from "./ui/tooltip";
 
-const TYPE_ICONS: Record<string, string> = {
-  // #653: one agentic type, one badge. The pair of `CM`/`DO` letters was the
-  // library's echo of the retired type split.
-  "agent": "AG",
-};
 
 export default function LibraryDropdown({
   entries,
@@ -64,6 +61,10 @@ export default function LibraryDropdown({
         model: result.spec.model ?? null,
         // #424: effort-aware too.
         effort: result.spec.effort ?? null,
+        // #655/ADR-0060: and isolation-aware. Without this the dropped node
+        // falls back to its type's default, so an Agent starred in the Run's
+        // worktree would fork one of its own on every instantiation.
+        isolated_worktree: result.spec.isolated_worktree ?? null,
         view,
       };
       addNode(node);
@@ -165,6 +166,10 @@ function LibraryRow({
 }) {
   const [hovered, setHovered] = useState(false);
   const preview = entry.prompt.slice(0, 60).replace(/\n/g, " ");
+  // #655/ADR-0060: the preview names the entry's workspace, so "which of my two
+  // Reviewers is the one that shares the Run's tree?" is answered before the
+  // drop rather than after it. `null` on the types that carry no isolation.
+  const isolation = resolveIsolation(entry.type, entry.isolated_worktree);
 
   return (
     <div
@@ -172,15 +177,26 @@ function LibraryRow({
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      <span
-        className="shrink-0 rounded bg-bg-5 px-1 py-0.5 font-mono text-fg-4"
-        style={{ fontSize: "8px" }}
-      >
-        {TYPE_ICONS[entry.type] ?? "??"}
+      {/* #655: the same glyph the canvas and the inspector use for the type.
+          The two-letter badge it replaces only knew `agent`, so a starred
+          `script` — or any other type — read `??` in its own library. */}
+      <span className="shrink-0 text-fg-4">
+        <NodeTypeIcon type={entry.type as NodeType} size={12} />
       </span>
       <div className="min-w-0 flex-1">
-        <div className="truncate font-medium text-fg" style={{ fontSize: "11px" }}>
-          {entry.name}
+        <div className="flex items-baseline gap-1.5">
+          <span className="truncate font-medium text-fg" style={{ fontSize: "11px" }}>
+            {entry.name}
+          </span>
+          {isolation !== null && (
+            <span
+              data-testid={`library-workspace-${isolation ? "isolated" : "shared"}`}
+              className="shrink-0 text-fg-4"
+              style={{ fontSize: "9px" }}
+            >
+              {workspaceLabel(isolation)}
+            </span>
+          )}
         </div>
         <div className="truncate text-fg-4" style={{ fontSize: "10px" }}>
           {preview || "No prompt"}

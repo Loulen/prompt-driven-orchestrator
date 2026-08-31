@@ -10,6 +10,24 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.48.0
+
+**L'isolation voyage par la bibliothèque et par l'import** (#655 ; ADR-0060). Une entrée de
+bibliothèque `agent` ou `script` porte désormais `isolated_worktree`, l'instanciation le restitue
+tel quel, et l'aperçu de la bibliothèque nomme le workspace de chaque entrée. Sans ça, une entrée
+étoilée retombait sur le défaut de son type à chaque dépôt sur le canvas : un Agent garé dans le
+worktree du Run en forkait un à lui, en silence.
+
+L'isolation entre du même coup dans l'identité de l'entrée. **Conséquence à l'upgrade** : une
+entrée écrite avant cette version ne dit rien de son workspace ; elle se lit au défaut de son type
+(Agent isolé, Script partagé) — donc rien ne bouge pour la majorité des entrées, mais un Node que
+vous aviez sorti de son isolation lira `out of sync` face à son entrée jusqu'à ce que vous la
+mettiez à jour. C'est la divergence réelle, pas un faux positif.
+
+Import de workflow : tout rôle importé, placeholder annoté compris, devient un `agent` **isolé** et
+le brouillon écrit la ligne. L'import ne déduit jamais l'isolation du prompt, du nom du rôle, de ses
+sorties ni de son appartenance à une région `collection`.
+
 ## 1.47.0
 
 **`agent` remplace `doc-only` et `code-mutating` ; l'isolation devient explicite** (#653 ;

@@ -22,7 +22,7 @@ Contrairement à : Liza (pipelines YAML), Langgraph (conditional edges + LLM-rou
 
 ## Node
 
-Unité atomique d'un Pipeline. Un **Node** représente un rôle. La plupart des nodes lancent un **harnais agentique** (cf. §*Harnais agentique*) à qui on confie un prompt système qui définit sa mission (Implementer, Planner, Reviewer, etc.). Un node **`script`** fait exception : il exécute du **bash déterministe fourni par l'auteur**, sans LLM (ADR-0017).
+Unité atomique d'un Pipeline. Un **Node** représente un rôle. Un Node **`agent`** lance un **harnais agentique** (cf. §*Harnais agentique*) à qui on confie un prompt système qui définit sa mission (Implementer, Planner, Reviewer, etc.). Un node **`script`** exécute du **bash déterministe fourni par l'auteur**, sans LLM (ADR-0017).
 
 Un Node se définit par :
 
@@ -35,7 +35,16 @@ Asymétrie assumée : le Node *connaît* ses sorties, *découvre* ses entrées a
 
 Distinct de :
 
-- **NodeRun** — l'exécution d'un Node au sein d'un Pipeline Run précis. Un NodeRun = une session tmux d'un harnais agentique dans un sous-worktree dédié, avec un statut (pending/running/done/failed).
+- **NodeRun** — l'exécution d'un Node au sein d'un Pipeline Run précis. Un NodeRun = une session tmux d'un harnais agentique, avec un statut (pending/running/done/failed). Son isolation de travail dépend du Node.
+
+### Isolation de Node
+
+L'**isolation de Node** choisit où un NodeRun travaille : dans un sous-worktree propre, ou directement dans le worktree partagé du Run. Un Node `agent` est isolé par défaut ; partager le worktree du Run est un opt-out explicite de l'auteur du Pipeline. Un Node `script` partage le worktree du Run par défaut et peut opter pour l'isolation. Le choix reste écrit dans les deux cas : le Document de pipeline dit toujours où le Node travaille, sans le déduire de son type ou de son livrable attendu.
+
+Un Node isolé peut travailler en parallèle sans partager son arbre de travail. Un Node non isolé évite le coût d'un sous-worktree ; s'il s'exécute en même temps qu'un autre Node non isolé, l'auteur accepte qu'ils partagent leurs modifications. PDO ne sérialise pas ce choix à sa place. À la complétion, PDO commite tout changement que Git n'ignore pas ; le dépôt cible porte la responsabilité d'ignorer les fichiers qu'il ne veut pas versionner. Deux Runs ne partagent jamais leur worktree, même lorsqu'ils exécutent la même Pipeline (ADR-0060).
+
+Le Node ne porte aucune responsabilité Git particulière : il modifie les fichiers nécessaires. PDO livre les commits existants et crée un commit déterministe s'il reste des changements, avant que le Node soit déclaré terminé et que l'aval démarre.
+_Éviter_ : « doc-only » et « code-mutating » ; « worktree par pipeline » pour le worktree partagé d'un Run.
 
 ### Harnais agentique
 
@@ -94,7 +103,7 @@ Un node **`script`** exécute le bash de l'auteur au lieu de lancer Claude, dans
 Modèle (A) — **document-first, code en side-channel** :
 
 - Les arêtes du DAG transportent **uniquement des documents** (artefacts markdown).
-- Le **code** vit dans la branche du Pipeline Run. Quand un NodeRun finit, son sous-worktree est mergé dans la branche du Pipeline Run. Le NodeRun suivant fork un nouveau sous-worktree depuis cet état.
+- Le **code** vit dans la branche du Pipeline Run. Quand un NodeRun isolé finit, son sous-worktree est mergé dans cette branche. Quand un NodeRun non isolé finit, ses changements non ignorés y sont committés directement. Un NodeRun isolé lancé ensuite fork depuis cet état.
 - Les wires de l'éditeur = dataflow documentaire intentionnel. L'état du code suit en arrière-plan.
 
 ---

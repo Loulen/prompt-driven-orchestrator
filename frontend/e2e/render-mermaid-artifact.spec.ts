@@ -35,7 +35,8 @@ nodes:
     view: { x: 0, y: 200 }
   - id: diagrammer
     name: diagrammer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     prompt_file: ${PIPELINE_NAME}.prompts/diagrammer.md
     inputs:
       - { name: in, side: left }

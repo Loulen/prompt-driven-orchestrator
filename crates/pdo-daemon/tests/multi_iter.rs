@@ -22,7 +22,8 @@ nodes:
       - name: user_prompt
   - id: reviewer
     name: reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:

@@ -28,8 +28,8 @@ use tracing::{error, warn};
 use crate::worktree_ops::sub_worktree_branch;
 use crate::{admission, event_log, tmux_session_manager};
 use crate::{
-    append_event, effective_repo_root, find_node_type, load_all_run_ids, load_events,
-    reconcile_run_level_stall, retry_waiting_nodes, AppState,
+    append_event, effective_repo_root, load_all_run_ids, load_events, reconcile_run_level_stall,
+    retry_waiting_nodes, AppState,
 };
 
 /// Reconcile persisted run state against the live process world at daemon boot.
@@ -296,8 +296,8 @@ fn detect_merged_without_event(
     }
 }
 
-/// Pure detection of the git/event-log divergence in #213 AC3: a node owning a
-/// sub-worktree branch (`code-mutating` / `merge`) that is **not** marked
+/// Pure detection of the git/event-log divergence in #213 AC3: an **isolated**
+/// node (#653) — one owning a sub-worktree branch — that is **not** marked
 /// `Completed` in the event log, yet whose branch `is_merged` reports as merged
 /// into the pipeline branch. Returns `(node_id, sub_branch, status)` triples.
 ///
@@ -312,8 +312,11 @@ where
 {
     let mut out = Vec::new();
     for (node_id, ns) in &run_state.nodes {
-        let node_type = find_node_type(run_state, node_id);
-        if !matches!(node_type, Some("code-mutating") | Some("merge")) {
+        // #653/ADR-0060: a sub-branch exists iff the node is isolated. Read off
+        // the Run snapshot (this sweep holds no event log): a node whose frozen
+        // value differs has an `is_merged` probe answer of its own anyway — an
+        // absent branch simply never reports merged.
+        if !crate::snapshot_isolation(run_state, node_id) {
             continue;
         }
         // #620: a `Skipped` node is settled and never held a sub-branch — exclude
@@ -352,15 +355,16 @@ mod tests {
     fn run_state_with_node(
         run_id: &str,
         node_id: &str,
-        node_type: &str,
+        isolated: bool,
         status: event_log::NodeStatus,
         iter: i64,
     ) -> event_log::RunState {
         let mut rs = event_log::RunState::new(run_id.into(), "test".into());
         rs.node_defs.push(event_log::NodeDefInfo {
+            isolated_worktree: Some(isolated),
             id: node_id.into(),
             name: None,
-            node_type: node_type.into(),
+            node_type: "agent".into(),
             view_x: None,
             view_y: None,
             inputs: Vec::new(),
@@ -369,6 +373,7 @@ mod tests {
         rs.nodes.insert(
             node_id.into(),
             event_log::NodeState {
+                isolated_worktree: None,
                 harness: None,
                 cost: None,
                 node_id: node_id.into(),
@@ -406,13 +411,13 @@ mod tests {
     }
 
     #[test]
-    fn merged_without_event_flags_a_merged_uncompleted_code_node() {
-        // #213 AC3: a code-mutating node whose sub-worktree branch is merged but
+    fn merged_without_event_flags_a_merged_uncompleted_isolated_node() {
+        // #213 AC3: an isolated node whose sub-worktree branch is merged but
         // which never recorded a NodeCompleted is a git/event-log divergence.
         let rs = run_state_with_node(
             "20260101-120000-abc",
             "impl",
-            "code-mutating",
+            true,
             event_log::NodeStatus::Running,
             1,
         );
@@ -432,7 +437,7 @@ mod tests {
         let rs = run_state_with_node(
             "20260101-120000-abc",
             "impl",
-            "code-mutating",
+            true,
             event_log::NodeStatus::Completed,
             1,
         );
@@ -441,25 +446,25 @@ mod tests {
     }
 
     #[test]
-    fn merged_without_event_ignores_unmerged_and_doc_only() {
-        // Doc-only nodes own no sub-worktree branch; an unmerged branch is fine.
+    fn merged_without_event_ignores_unmerged_and_shared_worktree() {
+        // A non-isolated node owns no sub-worktree branch; an unmerged branch is fine.
         let doc = run_state_with_node(
             "20260101-120000-abc",
             "doc",
-            "doc-only",
+            false,
             event_log::NodeStatus::Running,
             1,
         );
         assert!(merged_without_event_nodes("20260101-120000-abc", &doc, |_| true).is_empty());
 
-        let cm = run_state_with_node(
+        let isolated = run_state_with_node(
             "20260101-120000-abc",
             "impl",
-            "code-mutating",
+            true,
             event_log::NodeStatus::Running,
             1,
         );
-        assert!(merged_without_event_nodes("20260101-120000-abc", &cm, |_| false).is_empty());
+        assert!(merged_without_event_nodes("20260101-120000-abc", &isolated, |_| false).is_empty());
     }
 
     // Per-module coverage for the git probe that the closure-injected tests above

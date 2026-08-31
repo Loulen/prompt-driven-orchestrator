@@ -23,7 +23,8 @@ nodes:
       - name: user_prompt
   - id: worker
     name: worker
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:
@@ -48,7 +49,8 @@ nodes:
       - name: user_prompt
   - id: worker
     name: worker-renamed
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
       - name: context

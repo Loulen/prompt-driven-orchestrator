@@ -45,7 +45,8 @@ loops: [ ... ]                    # optional; bounded loop regions
 nodes:
   - id: implement                 # stable slug, unique in the pipeline
     name: implementer             # display label
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     inputs:                       # emergent for work nodes — usually omit; named by edges
       - { name: in, side: left }
     outputs:
@@ -63,14 +64,26 @@ nodes:
 
 - `start` — the entry; its output carries the user prompt. One per pipeline.
 - `end` — the terminal sink. One per pipeline.
-- `code-mutating` — an agent node that edits the repo (gets a sub-worktree).
-- `doc-only` — an agent node with no repo side effect (analysis, review, design).
+- `agent` — a node that runs an agentic harness on its system prompt.
   Add `interactive: true` for a node a human drives and marks done by hand.
 - `script` — deterministic author-written bash instead of an agent (ADR-0017).
 - `merge` — joins parallel branches back together (ADR-0006).
 - `switch` — mechanical fan-out on a typed value.
 
-Work nodes (`code-mutating` / `doc-only` / `script`) have **emergent inputs**: an
+**Where a node works** (`isolated_worktree:`, ADR-0060). Every `agent` and every
+`script` states it, always — write the line even when it equals the default:
+
+- `true` — the NodeRun gets a sub-worktree of its own. The default for an
+  `agent`, and what parallel branches need to avoid sharing an uncommitted tree.
+- `false` — the NodeRun works directly in the Run's shared worktree. The default
+  for a `script`, and the right choice for a sequential pipeline that does not
+  need a fork per role.
+
+`merge` is isolated by construction and carries no line; `start`/`end` carry none
+either. There is no `doc-only` or `code-mutating` — a node's type names its
+execution role, never a guess about what it will touch.
+
+Work nodes (`agent` / `script`) have **emergent inputs**: an
 input port is created from each incoming edge and named after the edge's target
 port — you normally don't declare `inputs:` on them. Structural nodes
 (`start`/`end`/`merge`/`switch`) keep declared ports.

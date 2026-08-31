@@ -38,7 +38,7 @@ pub(crate) enum CompletionRefusal {
     MergeFailed { error: String },
     /// Conflit de merge ; `MergeConflictDetected` + `RunFailed` déjà appendés.
     MergeConflict { node_id: String },
-    /// Node `doc-only`/`script` ayant sali des fichiers suivis ; `NodeFailed` +
+    /// Node non-isolated ayant sali des fichiers suivis ; `NodeFailed` +
     /// `RunFailed` déjà appendés.
     DocImmutabilityViolated { node_id: String },
     /// Ports de sortie déclarés sans artefact. Le node reste vivant.
@@ -159,7 +159,7 @@ impl CompletionRefusal {
                 serde_json::json!({ "message": format!("merge conflict on {node_id}") })
             }
             Self::DocImmutabilityViolated { node_id } => serde_json::json!({
-                "message": format!("doc-only node {node_id} violated code immutability")
+                "message": format!("non-isolated node {node_id} violated code immutability")
             }),
             Self::MissingOutputs { missing } => serde_json::json!({ "missing": missing }),
             Self::ScriptValidationFailed { detail } => serde_json::json!({ "detail": detail }),
@@ -194,7 +194,7 @@ impl CompletionRefusal {
             }
             Self::MergeConflict { node_id } => format!("merge conflict on {node_id}"),
             Self::DocImmutabilityViolated { node_id } => {
-                format!("doc-only node {node_id} violated code immutability")
+                format!("non-isolated node {node_id} violated code immutability")
             }
             Self::MissingOutputs { missing } => {
                 format!("missing declared outputs: {}", missing.join(", "))

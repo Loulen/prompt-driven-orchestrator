@@ -82,7 +82,7 @@ The bulk of the screen. Renders the pipeline DAG of the currently selected run u
 
 - **Nodes** are styled as rounded rectangular boxes (~180×80 px), with:
   - Node name (top, bold).
-  - Node type badge: `code-mutating` (small icon: pen-on-code) or `doc-only` (small icon: document).
+  - Node type icon (`agent`, `script`, `merge`, `start`, `end`), plus a discreet branch glyph on the nodes that fork a worktree of their own.
   - Status indicator border or fill — same color scheme as the run-status icons (blue pulsing if running, gray if pending, green if done, etc.).
   - For nodes inside a topological cycle (with a back-edge), show an iteration counter `iter: 3/5` if applicable.
   - Input/output handles on left/right sides, one per port, labeled with port name.
@@ -200,7 +200,8 @@ The right panel adapts to the selection:
 
 **If a Node is selected:**
 - Section "Identity": id (auto-generated, editable), Name (display name).
-- Section "Type": radio between `code-mutating` and `doc-only`. Tooltip explains: "code-mutating gets its own git worktree and can commit; doc-only reads the pipeline branch and only writes Blackboard artifacts."
+- Section "Type": a static label (`agent`, or `script` for deterministic bash) — the type names the execution role and is not a toggle.
+- Section "Workspace": a radio pair between `Isolated worktree` ("a sub-worktree of the Node's own") and `Run worktree` ("shared with the whole Run"), with the resolved working directory printed underneath in monospace. Isolated is the default for an `agent`, the Run worktree for a `script`. Absent on `merge` (isolated by construction) and on Start/End.
 - Section "Behavior": toggle `interactive` (with help text: "When true, this node pauses after spawning and waits for the user to interact via terminal and click 'Mark complete' in run mode.").
 - Section "Prompt": a large textarea (≥10 rows, monospace, markdown) bound to the node's external prompt file (e.g. `prompts/<node-id>.md`). Auto-saved.
 - Section "Inputs": list of input ports. Each row: port name (editable), `repeated` toggle (with tooltip: "When true, this port reads all artifacts matching `iter-*/<port>.md` instead of just the latest."). "+ Add input port" button.
@@ -277,7 +278,7 @@ Do **not** design:
 
 Generate a clickable mockup with at least these screens / states:
 
-1. Run mode, default — a Run is selected, currently running with 2 active nodes (one `code-mutating` Implementer, one `doc-only` Reviewer).
+1. Run mode, default — a Run is selected, currently running with 2 active nodes (an isolated Implementer, a Reviewer sharing the Run worktree).
 2. Run mode — a Run is selected, blocked at a halt (max iterations reached). Manager attach button highlighted.
 3. Run mode — a Run is selected, awaiting user input on an interactive node. Right panel shows the awaiting-user banner and the Mark complete button.
 4. Edit mode — an existing pipeline open in the canvas, one node selected, right panel shows the node inspector.

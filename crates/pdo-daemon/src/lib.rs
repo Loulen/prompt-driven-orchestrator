@@ -6476,6 +6476,11 @@ const KNOWN_NODE_KEYS: &[&str] = &[
     // node carrying it must not be told it is "unknown field ... (ignored)"
     // when parse_node_spec silently keeps it off the library entry.
     "agent_choice",
+    // #653/ADR-0060: where the node works. `normalize_node_value` stamps the
+    // type's default onto every `agent`/`script`, so this key is present on
+    // virtually every pasted node spec — announcing it as an ignored field would
+    // be a warning about a loss that never happens.
+    "isolated_worktree",
     // Accepted-and-dropped, not a semantic loss → no warning.
     "id",
     "view",
@@ -6538,7 +6543,7 @@ fn parse_node_spec(yaml: &str) -> Result<serde_json::Value, String> {
     }
 
     // 5. Normalize the node `type` in place — shared with `parse_pipeline`:
-    //    default/coerce to doc-only (warnings), refuse retired `for-each`.
+    //    default/coerce to non-isolated (warnings), refuse retired `for-each`.
     let mut warnings: Vec<String> = pipeline::normalize_node_value(&mut value)
         .map_err(|e| format!("{e}"))?
         .into_iter()
@@ -6589,6 +6594,15 @@ fn parse_node_spec(yaml: &str) -> Result<serde_json::Value, String> {
         .get("agent_choice")
         .map(yaml_value_to_json)
         .unwrap_or(serde_json::Value::Null);
+    // #653/ADR-0060: where the pasted node works. `normalize_node_value` above
+    // already stamped the type's default onto an `agent`/`script` that said
+    // nothing, so this is never a guess — and reading it here is what keeps a
+    // node that opted out of isolation from silently forking one on instantiation
+    // (the silent loss ADR-0001/#268 forbid). `null` for the types that carry no
+    // isolation, which the canvas then leaves off the node.
+    let isolated_worktree = value
+        .get(pipeline::ISOLATED_WORKTREE_KEY)
+        .and_then(serde_yaml::Value::as_bool);
 
     // 8. Deserialize the (normalized) map into a LibraryEntry. `prompt` defaults
     //    to empty (a structural node carries none); unknown fields are ignored.
@@ -6610,6 +6624,8 @@ fn parse_node_spec(yaml: &str) -> Result<serde_json::Value, String> {
             "harnesses": harnesses,
             // #563: the node's agent-profile choice, carried verbatim.
             "agent_choice": agent_choice,
+            // #653: where the node works.
+            "isolated_worktree": isolated_worktree,
             "max_iter": entry.max_iter,
             "branches": entry.branches,
         },
@@ -11658,10 +11674,9 @@ async fn run_stale_detection(state: &Arc<AppState>) {
 
         let running = stale_detector::running_nodes(&run_state);
         for (node_id, iter) in &running {
-            let node_type = find_node_type(&run_state, node_id);
-            let is_cm = matches!(node_type, Some("code-mutating") | Some("merge"));
-
-            let working_dir = if is_cm {
+            // #653/ADR-0060: the sweep probes where the NodeRun actually works —
+            // its frozen isolation, not a type that no longer implies a directory.
+            let working_dir = if node_run_isolation(&events, &run_state, node_id, *iter) {
                 sub_worktree_path(&repo_root, run_id, node_id, *iter)
             } else {
                 worktree_dir.clone()
@@ -11766,7 +11781,7 @@ async fn run_stale_detection(state: &Arc<AppState>) {
                 stale_detector::Detection::TurnEnded => {
                     // #469 §3: complete through the SAME body `POST …/done`
                     // runs, not by appending a terminal event here. On a
-                    // `code-mutating`/`merge` node a bare append would record a
+                    // isolated node a bare append would record a
                     // `Completed` whose commit stayed on `pdo/sub-…`, leaving the
                     // downstream with nothing — the exact defect of the old
                     // observe-only design's `Act` half.
@@ -12129,14 +12144,21 @@ pub(crate) async fn reattach_node_session(
     iter: i64,
     session_name: &str,
 ) -> ReattachOutcome {
-    let node_type = find_node_type(run_state, node_id).unwrap_or("doc-only");
+    let node_type = find_node_type(run_state, node_id).unwrap_or("agent");
     // #248 / ADR-0017: never resume a `script` node via `claude --continue`.
     if node_type == "script" {
         return ReattachOutcome::ScriptNode;
     }
 
-    let working_dir =
-        tmux_session_manager::working_dir_for_node(repo_root, run_id, node_id, iter, node_type);
+    // #653: the FROZEN isolation of this iteration — re-attaching has to open the
+    // directory the session actually runs in, not the one the document now names.
+    let working_dir = tmux_session_manager::working_dir_for_node(
+        repo_root,
+        run_id,
+        node_id,
+        iter,
+        node_run_isolation(events, run_state, node_id, iter),
+    );
     if !working_dir.exists() {
         return ReattachOutcome::WorkingDirMissing;
     }
@@ -12553,6 +12575,38 @@ fn find_node_type<'a>(run_state: &'a event_log::RunState, node_id: &str) -> Opti
         .map(|nd| nd.node_type.as_str())
 }
 
+/// Where a node works according to the Run's **pipeline snapshot** (#653,
+/// ADR-0060) — the answer for an iteration that has not started, and the
+/// fallback for one whose events predate #653.
+///
+/// A snapshot that states the isolation is authoritative. Absent it, the type's
+/// default stands in: `merge` is isolated by construction, an `agent` is
+/// isolated, a `script` shares the Run worktree, and a structural node has no
+/// worktree of its own.
+fn snapshot_isolation(run_state: &event_log::RunState, node_id: &str) -> bool {
+    let Some(def) = run_state.node_defs.iter().find(|nd| nd.id == node_id) else {
+        return false;
+    };
+    def.isolated_worktree
+        .unwrap_or(matches!(def.node_type.as_str(), "merge" | "agent"))
+}
+
+/// Where a node's iteration `iter` works (#653, ADR-0060): its FROZEN answer
+/// when it has one, the Run snapshot's otherwise.
+///
+/// Every reader that has the event log on hand goes through here, so a node that
+/// started isolated is still read as isolated after someone edits the document
+/// mid-run — the freeze is a property of the NodeRun, not of the file.
+fn node_run_isolation(
+    events: &[event_log::Event],
+    run_state: &event_log::RunState,
+    node_id: &str,
+    iter: i64,
+) -> bool {
+    merge_action::frozen_isolation(events, node_id, iter)
+        .unwrap_or_else(|| snapshot_isolation(run_state, node_id))
+}
+
 async fn node_prompt(
     State(state): State<Arc<AppState>>,
     AxumPath((run_id, node_id)): AxumPath<(String, String)>,
@@ -12570,9 +12624,16 @@ async fn node_prompt(
     }
 
     let repo_root = effective_repo_root(&state, &run_state);
-    let node_type = find_node_type(&run_state, &node_id).unwrap_or("doc-only");
-    let working_dir =
-        tmux_session_manager::working_dir_for_node(&repo_root, &run_id, &node_id, iter, node_type);
+    let working_dir = tmux_session_manager::working_dir_for_node(
+        &repo_root,
+        &run_id,
+        &node_id,
+        iter,
+        // #653: the prompt file lives wherever the NodeRun works. Read from the
+        // snapshot: this endpoint holds no event log, and a started iteration's
+        // frozen value equals it unless the document was edited mid-run.
+        snapshot_isolation(&run_state, &node_id),
+    );
 
     let prompt_path = working_dir
         .join(".pdo")
@@ -13136,7 +13197,7 @@ impl CompletionAttempt {
 /// The whole body lives in that shared function since #469 §3, because the
 /// liveness sweep's turn-end auto-completion must take the *same* path: the
 /// forgotten-run refusal (#328), the completion guard (#212/#354), the
-/// sub-worktree commit+merge, the doc-only cleanliness check, output validation,
+/// sub-worktree commit+merge, the non-isolated cleanliness check, output validation,
 /// the terminal append, then the detached reap+advance tail (#304/ADR-0023).
 async fn node_done(
     State(state): State<Arc<AppState>>,
@@ -13336,7 +13397,7 @@ async fn complete_node_iteration(
     let worktree_dir = worktree_dir_for_run(&repo_root, &run_id);
 
     // Transition guard (#212, #354): validate the completion against the
-    // projected state BEFORE any side effect (sub-worktree merge, doc-only
+    // projected state BEFORE any side effect (sub-worktree merge, non-isolated
     // cleanliness check, output validation, downstream dispatch). A duplicate
     // completion is a no-op — it must not merge again nor re-trigger downstream
     // spawns. The pure decision lives in the shared head.
@@ -13369,8 +13430,12 @@ async fn complete_node_iteration(
         return CompletionAttempt::refused(refusal);
     }
 
-    match find_node_type(&pre_run_state, &node_id) {
-        Some("code-mutating") | Some("merge") => {
+    // #653/ADR-0060: the completion path branches on where the NodeRun WORKED,
+    // read from its frozen isolation — not on a type that no longer implies a
+    // working directory. An isolated NodeRun merges its sub-worktree back; a
+    // non-isolated one is held to the shared worktree's cleanliness contract.
+    match node_run_isolation(&events, &pre_run_state, &node_id, iter) {
+        true => {
             let sub_wt_dir = sub_worktree_path(&repo_root, &run_id, &node_id, iter);
             let sub_branch = sub_worktree_branch(&run_id, &node_id, iter);
 
@@ -13531,12 +13596,13 @@ async fn complete_node_iteration(
                 }
             }
         }
-        // A `script` node (#248 / ADR-0017) is doc-only-effect in v1: like a
-        // doc-only node it runs in the run's shared worktree and must leave
-        // tracked files clean (untracked artifacts are fine — the guard ignores
-        // `??`). The sharp-tool caveat (a script that `git commit`s leaves a
-        // clean tree and passes) is documented in ADR-0017.
-        Some("doc-only") | Some("script") => match worktree_has_tracked_changes(&worktree_dir) {
+        // A non-isolated agent or script runs in the Run's shared worktree and
+        // must leave tracked files clean (untracked artifacts are fine — the
+        // guard ignores `??`). The sharp-tool caveat (a node that `git commit`s
+        // leaves a clean tree and passes) is documented in ADR-0017. #654 turns
+        // this refusal into an in-place delivery; until then a shared worktree
+        // keeps the contract it had.
+        false => match worktree_has_tracked_changes(&worktree_dir) {
             Ok(true) => {
                 // ADR-0049: a completion refusal is a runtime give-up, not a
                 // deliberate failure — `Interrupted`, never `Failed`. The run
@@ -13551,7 +13617,7 @@ async fn complete_node_iteration(
                     iter: Some(iter),
                     payload: Some(serde_json::json!({
                         "reason": format!(
-                            "doc_violated_code_immutability: doc-only node {node_id} \
+                            "doc_violated_code_immutability: non-isolated node {node_id} \
                              violated code immutability (modified tracked files)"
                         ),
                         "reason_code": "doc_violated_code_immutability",
@@ -13559,7 +13625,7 @@ async fn complete_node_iteration(
                 };
                 let _ = append_event(state, &interrupt_event).await;
 
-                warn!("Doc-only node {node_id} modified tracked files in run {run_id}");
+                warn!("Non-isolated node {node_id} modified tracked files in run {run_id}");
                 // Same leak as the merge-conflict path (#503 AC5): this refusal
                 // parks the Run, so the node's session has nothing left to do.
                 reap_dead_node_after_run_failure(
@@ -13581,7 +13647,6 @@ async fn complete_node_iteration(
                 warn!("Could not check worktree cleanliness for {node_id}: {e}");
             }
         },
-        _ => {}
     }
 
     let pipeline_path =
@@ -16911,16 +16976,11 @@ fn node_def_from_pipeline(n: &pipeline::NodeDef) -> event_log::NodeDefInfo {
     event_log::NodeDefInfo {
         id: n.id.clone(),
         name: Some(n.name.clone()),
-        node_type: match n.node_type {
-            pipeline::NodeType::DocOnly => "doc-only".into(),
-            pipeline::NodeType::CodeMutating => "code-mutating".into(),
-            pipeline::NodeType::Start => "start".into(),
-            pipeline::NodeType::End => "end".into(),
-            pipeline::NodeType::Switch => "switch".into(),
-            pipeline::NodeType::Loop => "loop".into(),
-            pipeline::NodeType::Merge => "merge".into(),
-            pipeline::NodeType::Script => "script".into(),
-        },
+        node_type: n.node_type.as_str().into(),
+        // #653/ADR-0060: the isolation the Run's snapshot froze for this node —
+        // what the completion path reads back to know whether a sub-worktree has
+        // to be merged, without re-deriving it from a type that no longer says.
+        isolated_worktree: n.isolated_worktree,
         view_x: n.view.as_ref().map(|v| v.x),
         view_y: n.view.as_ref().map(|v| v.y),
         inputs: n.inputs.iter().map(|p| port_brief(p, "left")).collect(),
@@ -17386,7 +17446,7 @@ fn short(sha: &str) -> &str {
 /// Reap the session of a node whose completion just killed the Run (#503 AC5).
 ///
 /// Called from the refusal paths that append `RunFailed` — a merge-back conflict
-/// and a doc-only immutability violation. Those return a refusal *to a
+/// and a non-isolated immutability violation. Those return a refusal *to a
 /// `pdo complete` running inside the very session being killed*, so the kill has
 /// to outlive this request: detached, exactly like `node_done`'s reap (#304,
 /// ADR-0023), or the response never reaches the CLI and #490's exit codes lose
@@ -17663,19 +17723,46 @@ mod tests {
     fn parse_node_spec_happy_path_library_shape() {
         // Exactly what the front export emits (LibraryEntry shape) → no warnings.
         let body = parse_node_spec(
-            "name: Writer\ntype: doc-only\noutputs:\n  - name: adr\nprompt: |\n  Write an ADR.\n",
+            "name: Writer\ntype: agent\nisolated_worktree: false\noutputs:\n  - name: adr\nprompt: |\n  Write an ADR.\n",
         )
         .unwrap();
-        assert_eq!(body["spec"]["type"], "doc-only");
+        assert_eq!(body["spec"]["type"], "agent");
         assert_eq!(body["spec"]["name"], "Writer");
         assert_eq!(body["spec"]["outputs"][0]["name"], "adr");
+        // #653: the pasted node's opt-out of isolation rides through — dropping
+        // it would silently fork a sub-worktree on instantiation.
+        assert_eq!(body["spec"]["isolated_worktree"], false);
         assert_eq!(body["prompt"], "Write an ADR.\n");
         assert_eq!(body["warnings"].as_array().unwrap().len(), 0);
     }
 
+    /// #653 / ADR-0060: a node pasted with no isolation line gets its type's
+    /// default stamped and states it in the spec — the canvas never has to
+    /// re-derive it. A type that carries no isolation reports `null`.
+    #[test]
+    fn parse_node_spec_states_the_isolation_for_every_node() {
+        for (yaml, expected) in [
+            ("name: n\ntype: agent\n", serde_json::json!(true)),
+            ("name: n\ntype: script\n", serde_json::json!(false)),
+            (
+                "name: n\ntype: agent\nisolated_worktree: false\n",
+                serde_json::json!(false),
+            ),
+            ("name: n\ntype: start\n", serde_json::Value::Null),
+        ] {
+            let body = parse_node_spec(yaml).unwrap();
+            assert_eq!(body["spec"]["isolated_worktree"], expected, "{yaml}");
+            assert_eq!(
+                body["warnings"].as_array().unwrap().len(),
+                0,
+                "the stamped default is not a loss to warn about: {yaml}"
+            );
+        }
+    }
+
     #[test]
     fn parse_node_spec_missing_name_is_hard_error() {
-        let err = parse_node_spec("type: doc-only\n").unwrap_err();
+        let err = parse_node_spec("type: agent\n").unwrap_err();
         assert!(err.contains("name"), "{err}");
     }
 
@@ -17711,9 +17798,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_node_spec_missing_type_defaults_doc_only_with_warning() {
+    fn parse_node_spec_missing_type_defaults_agent_with_warning() {
         let body = parse_node_spec("name: n\n").unwrap();
-        assert_eq!(body["spec"]["type"], "doc-only");
+        assert_eq!(body["spec"]["type"], "agent");
         let ws = body["warnings"].as_array().unwrap();
         assert!(
             ws.iter()
@@ -17723,9 +17810,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_node_spec_unknown_type_coerces_doc_only_with_warning() {
+    fn parse_node_spec_unknown_type_coerces_agent_with_warning() {
         let body = parse_node_spec("name: n\ntype: bogus\n").unwrap();
-        assert_eq!(body["spec"]["type"], "doc-only");
+        assert_eq!(body["spec"]["type"], "agent");
         let ws = body["warnings"].as_array().unwrap();
         assert!(
             ws.iter()
@@ -17736,7 +17823,7 @@ mod tests {
 
     #[test]
     fn parse_node_spec_legacy_types_kept_verbatim() {
-        // Legacy switch/loop are NOT coerced to doc-only (silent semantic loss is
+        // Legacy switch/loop are NOT coerced to `agent` (silent semantic loss is
         // forbidden, ADR-0001/#268) — imported as-is (a soft warning is fine).
         for t in ["switch", "loop"] {
             let body = parse_node_spec(&format!("name: n\ntype: {t}\n")).unwrap();
@@ -17746,8 +17833,9 @@ mod tests {
 
     #[test]
     fn parse_node_spec_unknown_field_warns_but_still_parses() {
-        let body = parse_node_spec("name: n\ntype: doc-only\nwidget: 3\n").unwrap();
-        assert_eq!(body["spec"]["type"], "doc-only");
+        let body =
+            parse_node_spec("name: n\ntype: agent\nisolated_worktree: false\nwidget: 3\n").unwrap();
+        assert_eq!(body["spec"]["type"], "agent");
         let ws = body["warnings"].as_array().unwrap();
         assert!(
             ws.iter()
@@ -17759,18 +17847,21 @@ mod tests {
     #[test]
     fn parse_node_spec_drops_id_and_view_without_warning() {
         // id is regenerated on add, view re-centred — dropping them is not a loss.
-        let body = parse_node_spec("name: n\ntype: doc-only\nid: keepme\nview:\n  x: 1\n  y: 2\n")
-            .unwrap();
+        let body = parse_node_spec(
+            "name: n\ntype: agent\nisolated_worktree: false\nid: keepme\nview:\n  x: 1\n  y: 2\n",
+        )
+        .unwrap();
         assert_eq!(body["warnings"].as_array().unwrap().len(), 0);
         assert!(body["spec"].get("id").is_none());
     }
 
     #[test]
     fn parse_node_spec_model_round_trips() {
-        let body = parse_node_spec("name: n\ntype: code-mutating\nmodel: opus\n").unwrap();
+        let body = parse_node_spec("name: n\ntype: agent\nisolated_worktree: true\nmodel: opus\n")
+            .unwrap();
         assert_eq!(body["spec"]["model"], "opus");
         // A node on the account default omits `model:` → null in the spec.
-        let plain = parse_node_spec("name: n\ntype: doc-only\n").unwrap();
+        let plain = parse_node_spec("name: n\ntype: agent\nisolated_worktree: false\n").unwrap();
         assert!(plain["spec"]["model"].is_null());
     }
 
@@ -17797,7 +17888,7 @@ mod tests {
             ev(
                 "legacy",
                 1,
-                Some(serde_json::json!({"node_type": "doc-only"})),
+                Some(serde_json::json!({"node_type": "agent", "isolated_worktree": false})),
             ),
             // Guard-probe shape (never appended in production, but harmless here).
             ev("nopayload", 1, None),
@@ -17844,8 +17935,10 @@ mod tests {
         // #424: the only test that catches the `json!` spec in `parse_node_spec`
         // dropping the effort — the macro compiles perfectly without the key, so
         // *Add node from YAML…* would silently create an effort-less node.
-        let body =
-            parse_node_spec("name: n\ntype: code-mutating\nmodel: opus\neffort: low\n").unwrap();
+        let body = parse_node_spec(
+            "name: n\ntype: agent\nisolated_worktree: true\nmodel: opus\neffort: low\n",
+        )
+        .unwrap();
         assert_eq!(body["spec"]["effort"], "low");
         assert_eq!(body["spec"]["model"], "opus");
         // …and `effort` is a KNOWN node key: a YAML that parses fine must NOT be
@@ -17858,7 +17951,7 @@ mod tests {
             body["warnings"]
         );
         // A node on the account default omits `effort:` → null in the spec.
-        let plain = parse_node_spec("name: n\ntype: doc-only\n").unwrap();
+        let plain = parse_node_spec("name: n\ntype: agent\nisolated_worktree: false\n").unwrap();
         assert!(plain["spec"]["effort"].is_null());
     }
 
@@ -17867,14 +17960,16 @@ mod tests {
         // #424: the wire is free-text. A level the curated UI set does not know
         // must reach the spec verbatim, not be dropped or coerced (the picker
         // renders it in a dedicated pass-through segment).
-        let body = parse_node_spec("name: n\ntype: doc-only\neffort: turbo\n").unwrap();
+        let body =
+            parse_node_spec("name: n\ntype: agent\nisolated_worktree: false\neffort: turbo\n")
+                .unwrap();
         assert_eq!(body["spec"]["effort"], "turbo");
         assert_eq!(body["warnings"].as_array().unwrap().len(), 0);
     }
 
     #[test]
     fn parse_node_spec_prompt_absent_defaults_empty() {
-        let body = parse_node_spec("name: n\ntype: doc-only\n").unwrap();
+        let body = parse_node_spec("name: n\ntype: agent\nisolated_worktree: false\n").unwrap();
         assert_eq!(body["prompt"], "");
     }
 
@@ -17889,7 +17984,7 @@ mod tests {
                     .header("content-type", "application/json")
                     .body(Body::from(
                         serde_json::to_string(&serde_json::json!({
-                            "yaml": "name: n\ntype: doc-only\nprompt: |\n  hi\n"
+                            "yaml": "name: n\ntype: agent\nisolated_worktree: false\nprompt: |\n  hi\n"
                         }))
                         .unwrap(),
                     ))
@@ -17904,7 +17999,7 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-        assert_eq!(body["spec"]["type"], "doc-only");
+        assert_eq!(body["spec"]["type"], "agent");
         assert_eq!(body["prompt"], "hi\n");
     }
 
@@ -17918,7 +18013,7 @@ mod tests {
                     .uri("/nodes/parse")
                     .header("content-type", "application/json")
                     .body(Body::from(
-                        serde_json::to_string(&serde_json::json!({ "yaml": "type: doc-only\n" }))
+                        serde_json::to_string(&serde_json::json!({ "yaml": "type: agent\n" }))
                             .unwrap(),
                     ))
                     .unwrap(),
@@ -18143,7 +18238,7 @@ mod tests {
             Some(serde_json::json!({
                 "pipeline_id": "p-out",
                 "pipeline_name": "Outside",
-                "node_defs": [{"id":"worker","name":"Outside worker","node_type":"doc-only"}]
+                "node_defs": [{"id":"worker","name":"Outside worker","node_type":"agent", "isolated_worktree":false}]
             })),
         )
         .await;
@@ -18153,7 +18248,7 @@ mod tests {
             "node_started",
             Some("worker"),
             Some(1),
-            Some(serde_json::json!({"node_type":"doc-only","harness":"claude"})),
+            Some(serde_json::json!({"node_type":"agent", "isolated_worktree":false,"harness":"claude"})),
         )
         .await;
 
@@ -18168,17 +18263,17 @@ mod tests {
                 "pipeline_name": "Pipeline old",
                 "target_repo": "/repos/product",
                 "node_defs": [
-                    {"id":"worker","name":"Worker old","node_type":"doc-only"},
+                    {"id":"worker","name":"Worker old","node_type":"agent", "isolated_worktree":false},
                     {"id":"build","name":"Build","node_type":"script"}
                 ]
             })),
         )
         .await;
         for (harness, node_type, session_id) in [
-            (None, "doc-only", None),
-            (Some("copilot"), "doc-only", Some("copilot-resurrected")),
-            (Some("copilot"), "doc-only", Some("copilot-resurrected")),
-            (Some("copilot"), "doc-only", Some("copilot-restart")),
+            (None, "agent", None),
+            (Some("copilot"), "agent", Some("copilot-resurrected")),
+            (Some("copilot"), "agent", Some("copilot-resurrected")),
+            (Some("copilot"), "agent", Some("copilot-restart")),
             (None, "script", None),
         ] {
             insert(
@@ -18210,7 +18305,7 @@ mod tests {
                 "pipeline_id": "p1",
                 "pipeline_name": "Pipeline latest",
                 "target_repo": "/repos/product",
-                "node_defs": [{"id":"worker","name":"Worker latest","node_type":"doc-only"}]
+                "node_defs": [{"id":"worker","name":"Worker latest","node_type":"agent", "isolated_worktree":false}]
             })),
         )
         .await;
@@ -18222,7 +18317,7 @@ mod tests {
                 Some("worker"),
                 Some(iter),
                 Some(serde_json::json!({
-                    "node_type":"doc-only",
+                    "node_type":"agent", "isolated_worktree":false,
                     "harness":"future-harness",
                     "session_id":session_id
                 })),
@@ -18374,7 +18469,7 @@ mod tests {
                     "pipeline_name":format!("Pipeline {}", index + 1),
                     "target_repo":repo,
                     "harness":"claude",
-                    "node_defs":[{"id":"worker","name":format!("Worker {}", index + 1),"node_type":"code-mutating"}]
+                    "node_defs":[{"id":"worker","name":format!("Worker {}", index + 1),"node_type":"agent", "isolated_worktree":true}]
                 }),
             )
             .await;
@@ -18386,7 +18481,7 @@ mod tests {
             "node_started",
             Some("worker"),
             Some(1),
-            serde_json::json!({"node_type":"code-mutating","harness":"claude","session_id":"claude-1"}),
+            serde_json::json!({"node_type":"agent", "isolated_worktree":true,"harness":"claude","session_id":"claude-1"}),
         )
         .await;
         insert_event(
@@ -18396,7 +18491,7 @@ mod tests {
             "node_started",
             Some("worker"),
             Some(1),
-            serde_json::json!({"node_type":"code-mutating","harness":"copilot","session_id":"copilot-1"}),
+            serde_json::json!({"node_type":"agent", "isolated_worktree":true,"harness":"copilot","session_id":"copilot-1"}),
         )
         .await;
         insert_event(
@@ -18406,7 +18501,7 @@ mod tests {
             "node_started",
             Some("worker"),
             Some(2),
-            serde_json::json!({"node_type":"code-mutating","harness":"future-harness","session_id":"future-1"}),
+            serde_json::json!({"node_type":"agent", "isolated_worktree":true,"harness":"future-harness","session_id":"future-1"}),
         )
         .await;
         insert_event(
@@ -18416,7 +18511,7 @@ mod tests {
             "node_started",
             Some("worker"),
             Some(1),
-            serde_json::json!({"node_type":"code-mutating","harness":"future-harness","session_id":"future-2"}),
+            serde_json::json!({"node_type":"agent", "isolated_worktree":true,"harness":"future-harness","session_id":"future-2"}),
         )
         .await;
         insert_event(
@@ -18426,7 +18521,7 @@ mod tests {
             "node_started",
             Some("worker"),
             Some(1),
-            serde_json::json!({"node_type":"doc-only"}),
+            serde_json::json!({"node_type":"agent", "isolated_worktree":false}),
         )
         .await;
 
@@ -18644,7 +18739,7 @@ mod tests {
             serde_json::json!({
                 "pipeline_id":"p1","pipeline_name":"Loop V1","target_repo":repo,"harness":"claude",
                 "node_defs":[
-                    {"id":"worker","name":"Worker V1","node_type":"code-mutating"},
+                    {"id":"worker","name":"Worker V1","node_type":"agent", "isolated_worktree":true},
                     {"id":"build","name":"Build","node_type":"script"}
                 ]
             }),
@@ -18659,7 +18754,7 @@ mod tests {
             None,
             serde_json::json!({
                 "pipeline_id":"p1","pipeline_name":"Loop V2","target_repo":repo,"harness":"copilot",
-                "node_defs":[{"id":"worker","name":"Worker V2","node_type":"code-mutating"}]
+                "node_defs":[{"id":"worker","name":"Worker V2","node_type":"agent", "isolated_worktree":true}]
             }),
         )
         .await;
@@ -18672,7 +18767,7 @@ mod tests {
             None,
             serde_json::json!({
                 "pipeline_id":"p2","pipeline_name":"Other pipeline","target_repo":repo,"harness":"claude",
-                "node_defs":[{"id":"solo","name":"Solo","node_type":"code-mutating"}]
+                "node_defs":[{"id":"solo","name":"Solo","node_type":"agent", "isolated_worktree":true}]
             }),
         )
         .await;
@@ -18696,7 +18791,7 @@ mod tests {
         insert_event(
             &state.db, "perf-r1", "2026-07-15T09:10:00Z", "node_started",
             Some("worker"), Some(1),
-            serde_json::json!({"node_type":"code-mutating","harness":"claude","session_id":"claude-1"}),
+            serde_json::json!({"node_type":"agent", "isolated_worktree":true,"harness":"claude","session_id":"claude-1"}),
         ).await;
         insert_event(
             &state.db,
@@ -18711,7 +18806,7 @@ mod tests {
         insert_event(
             &state.db, "perf-r1", "2026-07-15T09:30:00Z", "node_started",
             Some("worker"), Some(2),
-            serde_json::json!({"node_type":"code-mutating","harness":"claude","session_id":"claude-2"}),
+            serde_json::json!({"node_type":"agent", "isolated_worktree":true,"harness":"claude","session_id":"claude-2"}),
         ).await;
         insert_event(
             &state.db,
@@ -18726,7 +18821,7 @@ mod tests {
         insert_event(
             &state.db, "perf-r1", "2026-07-15T09:40:00Z", "node_started",
             Some("worker"), Some(3),
-            serde_json::json!({"node_type":"code-mutating","harness":"claude","session_id":"claude-3"}),
+            serde_json::json!({"node_type":"agent", "isolated_worktree":true,"harness":"claude","session_id":"claude-3"}),
         ).await;
         insert_event(
             &state.db,
@@ -18741,7 +18836,7 @@ mod tests {
         insert_event(
             &state.db, "perf-r1", "2026-07-15T09:45:00Z", "node_started",
             Some("worker"), Some(3),
-            serde_json::json!({"node_type":"code-mutating","harness":"claude","session_id":"claude-3b"}),
+            serde_json::json!({"node_type":"agent", "isolated_worktree":true,"harness":"claude","session_id":"claude-3b"}),
         ).await;
         insert_event(
             &state.db,
@@ -18756,7 +18851,7 @@ mod tests {
         insert_event(
             &state.db, "perf-r1", "2026-07-15T10:00:00Z", "node_started",
             Some("worker"), Some(4),
-            serde_json::json!({"node_type":"code-mutating","harness":"future-harness","session_id":"future-1"}),
+            serde_json::json!({"node_type":"agent", "isolated_worktree":true,"harness":"future-harness","session_id":"future-1"}),
         ).await;
         insert_event(
             &state.db,
@@ -18847,7 +18942,7 @@ mod tests {
         insert_event(
             &state.db, "perf-r2", "2026-07-16T09:10:00Z", "node_started",
             Some("worker"), Some(1),
-            serde_json::json!({"node_type":"code-mutating","harness":"copilot","session_id":"copilot-1"}),
+            serde_json::json!({"node_type":"agent", "isolated_worktree":true,"harness":"copilot","session_id":"copilot-1"}),
         ).await;
         insert_event(
             &state.db,
@@ -18865,7 +18960,7 @@ mod tests {
         insert_event(
             &state.db, "perf-r3", "2026-07-17T09:10:00Z", "node_started",
             Some("solo"), Some(1),
-            serde_json::json!({"node_type":"code-mutating","harness":"claude","session_id":"claude-solo"}),
+            serde_json::json!({"node_type":"agent", "isolated_worktree":true,"harness":"claude","session_id":"claude-solo"}),
         ).await;
         insert_event(
             &state.db,
@@ -18928,7 +19023,7 @@ mod tests {
 
         // --- Infrastructure subagents (#585 user story #36): a Pipeline
         // Manager session left in the Run's own top-level worktree (never
-        // colliding with a code-mutating Node's disjoint sub-worktree) and a
+        // colliding with an isolated Node's disjoint sub-worktree) and a
         // Merge resolver session left in the conflicting Node's own
         // iter-3 worktree, alongside (and excluded from) that Node's own
         // "claude-3b" session — resolved by exclusion, never by path alone.
@@ -19235,7 +19330,7 @@ mod tests {
 
     /// `GET /stats/performance` (#585, user story #36) — an Infrastructure
     /// role's own session is never guessed at by path or timing alone: a
-    /// non-code-mutating Claude Node sharing the Pipeline Manager's top-level
+    /// non-isolated Claude Node sharing the Pipeline Manager's top-level
     /// worktree, with no recorded `session_id`, makes that directory's
     /// residual session ambiguous — Context (and its subagents) stays a
     /// motivated absence rather than an unsafe guess, while Duration (paired
@@ -19295,11 +19390,11 @@ mod tests {
             None,
             serde_json::json!({
                 "pipeline_id":"amb","pipeline_name":"Ambiguous","target_repo":repo,"harness":"claude",
-                "node_defs":[{"id":"docs","name":"Docs","node_type":"doc-only"}]
+                "node_defs":[{"id":"docs","name":"Docs","node_type":"agent", "isolated_worktree":false}]
             }),
         )
         .await;
-        // A non-code-mutating (so it shares the Run's top-level worktree)
+        // A non-isolated (so it shares the Run's top-level worktree)
         // Claude Node with no recorded `session_id` — the directory can no
         // longer be trusted to hold only the Pipeline Manager's own session.
         insert_event(
@@ -19309,7 +19404,7 @@ mod tests {
             "node_started",
             Some("docs"),
             Some(1),
-            serde_json::json!({"node_type":"doc-only","harness":"claude"}),
+            serde_json::json!({"node_type":"agent", "isolated_worktree":false,"harness":"claude"}),
         )
         .await;
         insert_event(
@@ -19428,7 +19523,7 @@ mod tests {
         .bind(
             serde_json::json!({
                 "pipeline_id":"p1","pipeline_name":"Loop","target_repo":repo,"harness":"copilot",
-                "node_defs":[{"id":"worker","name":"Worker","node_type":"code-mutating"}]
+                "node_defs":[{"id":"worker","name":"Worker","node_type":"agent", "isolated_worktree":true}]
             })
             .to_string(),
         )
@@ -19440,7 +19535,7 @@ mod tests {
              ('perf-cs1', '2026-08-01T09:10:00Z', 'node_started', 'worker', 1, ?)",
         )
         .bind(
-            serde_json::json!({"node_type":"code-mutating","harness":"copilot","session_id":"copilot-cs1"})
+            serde_json::json!({"node_type":"agent", "isolated_worktree":true,"harness":"copilot","session_id":"copilot-cs1"})
                 .to_string(),
         )
         .execute(&state.db)
@@ -19569,14 +19664,14 @@ mod tests {
             None,
             serde_json::json!({
                 "pipeline_id":"cp1","pipeline_name":"Cache Pipeline","target_repo":repo,"harness":"claude",
-                "node_defs":[{"id":"worker","name":"Worker","node_type":"code-mutating"}]
+                "node_defs":[{"id":"worker","name":"Worker","node_type":"agent", "isolated_worktree":true}]
             }),
         )
         .await;
         insert_event(
             &state.db, "cache-r1", "2031-01-15T09:10:00Z", "node_started",
             Some("worker"), Some(1),
-            serde_json::json!({"node_type":"code-mutating","harness":"claude","session_id":"cache-1"}),
+            serde_json::json!({"node_type":"agent", "isolated_worktree":true,"harness":"claude","session_id":"cache-1"}),
         )
         .await;
         insert_event(
@@ -19711,14 +19806,14 @@ mod tests {
             None,
             serde_json::json!({
                 "pipeline_id":"cip1","pipeline_name":"Cache Invalidation Pipeline","target_repo":repo,"harness":"claude",
-                "node_defs":[{"id":"worker","name":"Worker","node_type":"code-mutating"}]
+                "node_defs":[{"id":"worker","name":"Worker","node_type":"agent", "isolated_worktree":true}]
             }),
         )
         .await;
         insert_event(
             &state.db, "cache-i1", "2031-02-15T09:10:00Z", "node_started",
             Some("worker"), Some(1),
-            serde_json::json!({"node_type":"code-mutating","harness":"claude","session_id":"cache-i-1"}),
+            serde_json::json!({"node_type":"agent", "isolated_worktree":true,"harness":"claude","session_id":"cache-i-1"}),
         )
         .await;
         insert_event(
@@ -19783,14 +19878,14 @@ mod tests {
             None,
             serde_json::json!({
                 "pipeline_id":"cip1","pipeline_name":"Cache Invalidation Pipeline","target_repo":repo,"harness":"claude",
-                "node_defs":[{"id":"worker","name":"Worker","node_type":"code-mutating"}]
+                "node_defs":[{"id":"worker","name":"Worker","node_type":"agent", "isolated_worktree":true}]
             }),
         )
         .await;
         insert_event(
             &state.db, "cache-i2", "2031-02-16T09:10:00Z", "node_started",
             Some("worker"), Some(1),
-            serde_json::json!({"node_type":"code-mutating","harness":"claude","session_id":"cache-i-2"}),
+            serde_json::json!({"node_type":"agent", "isolated_worktree":true,"harness":"claude","session_id":"cache-i-2"}),
         )
         .await;
         insert_event(
@@ -19927,7 +20022,7 @@ mod tests {
         .bind(
             serde_json::json!({
                 "pipeline_id":"p1","pipeline_name":"Loop","target_repo":repo,"harness":"claude",
-                "node_defs":[{"id":"worker","name":"Worker","node_type":"code-mutating"}]
+                "node_defs":[{"id":"worker","name":"Worker","node_type":"agent", "isolated_worktree":true}]
             })
             .to_string(),
         )
@@ -19939,7 +20034,7 @@ mod tests {
              ('perf-unreadable', '2026-07-15T09:10:00Z', 'node_started', 'worker', 1, ?)",
         )
         .bind(
-            serde_json::json!({"node_type":"code-mutating","harness":"claude","session_id":"claude-1"})
+            serde_json::json!({"node_type":"agent", "isolated_worktree":true,"harness":"claude","session_id":"claude-1"})
                 .to_string(),
         )
         .execute(&state.db)
@@ -21378,7 +21473,7 @@ mod tests {
                 node_id: Some("worker".into()),
                 iter: Some(1),
                 payload: Some(serde_json::json!({
-                    "node_type": "doc-only",
+                    "node_type": "agent", "isolated_worktree": false,
                     "harness": "claude",
                     "session_id": "sid"
                 })),
@@ -22085,7 +22180,7 @@ mod tests {
         let run_id = "cleanup-sub-wt";
         let state = test_state_with_dir(repo).await;
 
-        seed_run_with_node(&state, run_id, "impl-1", "code-mutating").await;
+        seed_run_with_node(&state, run_id, "impl-1", true).await;
         for ev in [
             event_log::Event {
                 id: None,
@@ -22776,7 +22871,7 @@ mod tests {
                 Some(serde_json::json!({
                     "pipeline_name": "conflict",
                     "node_defs": [
-                        { "id": "worker", "node_type": "code-mutating", "inputs": [], "outputs": [] }
+                        { "id": "worker", "node_type": "agent", "isolated_worktree": true, "inputs": [], "outputs": [] }
                     ],
                     "edges": []
                 })),
@@ -22981,7 +23076,7 @@ mod tests {
                     Some(serde_json::json!({
                         "pipeline_name": "interactive",
                         "node_defs": [
-                            { "id": "worker", "node_type": "doc-only", "inputs": [], "outputs": [] }
+                            { "id": "worker", "node_type": "agent", "isolated_worktree": false, "inputs": [], "outputs": [] }
                         ],
                         "edges": []
                     })),
@@ -23273,6 +23368,7 @@ mod tests {
     ) -> event_log::RunState {
         let mut rs = event_log::RunState::new(run_id.into(), "test".into());
         rs.node_defs.push(event_log::NodeDefInfo {
+            isolated_worktree: None,
             id: node_id.into(),
             name: None,
             node_type: node_type.into(),
@@ -23284,6 +23380,7 @@ mod tests {
         rs.nodes.insert(
             node_id.into(),
             event_log::NodeState {
+                isolated_worktree: None,
                 harness: None,
                 cost: None,
                 node_id: node_id.into(),
@@ -23323,9 +23420,10 @@ mod tests {
 
     fn doc_node_def(id: &str) -> pipeline::NodeDef {
         pipeline::NodeDef {
+            isolated_worktree: None,
             id: id.into(),
             name: id.into(),
-            node_type: pipeline::NodeType::DocOnly,
+            node_type: pipeline::NodeType::Agent,
             inputs: Vec::new(),
             outputs: Vec::new(),
             interactive: false,
@@ -23357,7 +23455,7 @@ mod tests {
         }
     }
 
-    /// Two doc-only nodes wired `a -> b`. `a` is the entry node (no incoming
+    /// Two non-isolated nodes wired `a -> b`. `a` is the entry node (no incoming
     /// edges), `b` only spawns once `a` completes.
     fn linear_two_node_pipeline() -> pipeline::PipelineDef {
         pipeline::PipelineDef {
@@ -23376,7 +23474,7 @@ mod tests {
         run_state_with_node(
             "20260613-012555-stall",
             node_id,
-            "doc-only",
+            "agent",
             event_log::NodeStatus::Failed,
             1,
         )
@@ -23432,7 +23530,7 @@ mod tests {
         let run_state = run_state_with_node(
             "20260613-live",
             "a",
-            "doc-only",
+            "agent",
             event_log::NodeStatus::Running,
             1,
         );
@@ -23454,7 +23552,7 @@ mod tests {
         let mut run_state = run_state_with_node(
             "20260613-await",
             "a",
-            "doc-only",
+            "agent",
             event_log::NodeStatus::AwaitingUser,
             1,
         );
@@ -23501,6 +23599,7 @@ mod tests {
         run_state.nodes.insert(
             "a".into(),
             event_log::NodeState {
+                isolated_worktree: None,
                 harness: None,
                 cost: None,
                 node_id: "a".into(),
@@ -23557,6 +23656,7 @@ mod tests {
         run_state.nodes.insert(
             "a".into(),
             event_log::NodeState {
+                isolated_worktree: None,
                 harness: None,
                 cost: None,
                 node_id: "a".into(),
@@ -23578,6 +23678,7 @@ mod tests {
         run_state.nodes.insert(
             "b".into(),
             event_log::NodeState {
+                isolated_worktree: None,
                 harness: None,
                 cost: None,
                 node_id: "b".into(),
@@ -23767,7 +23868,7 @@ mod tests {
         let run_state = run_state_with_node(
             "20260630-live-old",
             "a",
-            "doc-only",
+            "agent",
             event_log::NodeStatus::Running,
             1,
         );
@@ -23806,6 +23907,7 @@ mod tests {
             rs.nodes.insert(
                 node_id.into(),
                 event_log::NodeState {
+                    isolated_worktree: None,
                     harness: None,
                     cost: None,
                     node_id: node_id.into(),
@@ -23939,7 +24041,7 @@ mod tests {
         std::fs::create_dir_all(&pipelines).unwrap();
         std::fs::write(
             pipelines.join("stall-test.yaml"),
-            "name: stall-test\nversion: \"1.0\"\nprompt_required: false\nnodes:\n  - id: start\n    name: Start\n    type: start\n    outputs:\n      - name: user_prompt\n  - id: a\n    name: a\n    type: doc-only\n    inputs:\n      - name: task\n    outputs:\n      - name: result\n  - id: b\n    name: b\n    type: doc-only\n    inputs:\n      - name: in\n    outputs:\n      - name: out\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\nedges:\n  - source: { node: start, port: user_prompt }\n    target: { node: a, port: task }\n  - source: { node: a, port: result }\n    target: { node: b, port: in }\n  - source: { node: b, port: out }\n    target: { node: end, port: result }\n",
+            "name: stall-test\nversion: \"1.0\"\nprompt_required: false\nnodes:\n  - id: start\n    name: Start\n    type: start\n    outputs:\n      - name: user_prompt\n  - id: a\n    name: a\n    type: agent\n    isolated_worktree: false\n    inputs:\n      - name: task\n    outputs:\n      - name: result\n  - id: b\n    name: b\n    type: agent\n    isolated_worktree: false\n    inputs:\n      - name: in\n    outputs:\n      - name: out\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\nedges:\n  - source: { node: start, port: user_prompt }\n    target: { node: a, port: task }\n  - source: { node: a, port: result }\n    target: { node: b, port: in }\n  - source: { node: b, port: out }\n    target: { node: end, port: result }\n",
         )
         .unwrap();
 
@@ -24049,7 +24151,7 @@ mod tests {
         std::fs::create_dir_all(&pipelines).unwrap();
         std::fs::write(
             pipelines.join("stall-test.yaml"),
-            "name: stall-test\nversion: \"1.0\"\nprompt_required: false\nnodes:\n  - id: start\n    name: Start\n    type: start\n    outputs:\n      - name: user_prompt\n  - id: a\n    name: a\n    type: doc-only\n    inputs:\n      - name: task\n    outputs:\n      - name: result\n  - id: b\n    name: b\n    type: doc-only\n    inputs:\n      - name: in\n    outputs:\n      - name: out\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\nedges:\n  - source: { node: start, port: user_prompt }\n    target: { node: a, port: task }\n  - source: { node: a, port: result }\n    target: { node: b, port: in }\n  - source: { node: b, port: out }\n    target: { node: end, port: result }\n",
+            "name: stall-test\nversion: \"1.0\"\nprompt_required: false\nnodes:\n  - id: start\n    name: Start\n    type: start\n    outputs:\n      - name: user_prompt\n  - id: a\n    name: a\n    type: agent\n    isolated_worktree: false\n    inputs:\n      - name: task\n    outputs:\n      - name: result\n  - id: b\n    name: b\n    type: agent\n    isolated_worktree: false\n    inputs:\n      - name: in\n    outputs:\n      - name: out\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\nedges:\n  - source: { node: start, port: user_prompt }\n    target: { node: a, port: task }\n  - source: { node: a, port: result }\n    target: { node: b, port: in }\n  - source: { node: b, port: out }\n    target: { node: end, port: result }\n",
         )
         .unwrap();
 
@@ -24362,8 +24464,8 @@ mod tests {
 
         // Doc-only variant: a run cut at the fork tip with NO commit changed nothing.
         // With HEAD still parked on the divergent branch, the honest answer is {0,0,0}
-        // (the triage's "even doc-only, zero files" case), not the phantom.
-        let doc_run = "loc-parked-doc-only";
+        // (the triage's "even non-isolated, zero files" case), not the phantom.
+        let doc_run = "loc-parked-non-isolated";
         git(&["branch", &format!("pdo/run-{doc_run}"), &default_branch]);
         assert_eq!(
             compute_run_loc(repo, doc_run, &default_branch).expect("branch present -> Some"),
@@ -24372,12 +24474,12 @@ mod tests {
                 deletions: 0,
                 files_changed: 0,
             },
-            "a doc-only run reads 0, not the parked-checkout phantom"
+            "a run that changed nothing reads 0, not the parked-checkout phantom"
         );
     }
 
     #[tokio::test]
-    async fn node_done_with_cm_node_def_in_events() {
+    async fn node_def_isolation_projects_from_the_run_snapshot() {
         let state = test_state().await;
         let run_id = "test-cm-node-done";
 
@@ -24392,7 +24494,7 @@ mod tests {
                 "pipeline_name": "cm-test",
                 "input": "test",
                 "node_defs": [
-                    { "id": "impl-1", "node_type": "code-mutating", "inputs": [], "outputs": [] }
+                    { "id": "impl-1", "node_type": "agent", "isolated_worktree": true, "inputs": [], "outputs": [] }
                 ],
                 "edges": []
             })),
@@ -24406,13 +24508,17 @@ mod tests {
             kind: event_log::EventKind::NodeStarted,
             node_id: Some("impl-1".into()),
             iter: Some(1),
-            payload: Some(serde_json::json!({ "node_type": "code-mutating" })),
+            payload: Some(serde_json::json!({ "node_type": "agent", "isolated_worktree": true })),
         };
         append_event(&state, &node_started).await.unwrap();
 
         let events = load_events(&state.db, run_id).await.unwrap();
         let run_state = event_log::project(&events).unwrap();
-        assert_eq!(find_node_type(&run_state, "impl-1"), Some("code-mutating"));
+        assert_eq!(find_node_type(&run_state, "impl-1"), Some("agent"));
+        // #653/ADR-0060: the snapshot carries where the node works, and the
+        // NodeRun's own frozen answer agrees with it on a first spawn.
+        assert!(snapshot_isolation(&run_state, "impl-1"));
+        assert!(node_run_isolation(&events, &run_state, "impl-1", 1));
     }
 
     async fn test_state_with_dir(dir: &std::path::Path) -> Arc<AppState> {
@@ -24484,7 +24590,7 @@ mod tests {
         let pipelines_dir = dir.join(".pdo").join("pipelines");
         std::fs::create_dir_all(&pipelines_dir).unwrap();
         let yaml = format!(
-            "name: {name}\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: doc-only\n    inputs:\n      - name: task\n    outputs:\n      - name: result\n"
+            "name: {name}\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: agent\n    isolated_worktree: false\n    inputs:\n      - name: task\n    outputs:\n      - name: result\n"
         );
         std::fs::write(pipelines_dir.join(format!("{name}.yaml")), yaml).unwrap();
     }
@@ -24495,7 +24601,7 @@ mod tests {
         let pipelines_dir = dir.join(".pdo").join("pipelines");
         std::fs::create_dir_all(&pipelines_dir).unwrap();
         let yaml = format!(
-            "name: {id}\nversion: \"1.0\"\nprompt_required: false\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: doc-only\n    inputs:\n      - name: task\n    outputs:\n      - name: result\n"
+            "name: {id}\nversion: \"1.0\"\nprompt_required: false\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: agent\n    isolated_worktree: false\n    inputs:\n      - name: task\n    outputs:\n      - name: result\n"
         );
         std::fs::write(pipelines_dir.join(format!("{id}.yaml")), yaml).unwrap();
     }
@@ -24615,7 +24721,7 @@ mod tests {
         // Prompt-optional pipeline.
         let pipelines_dir = tmp.path().join(".pdo").join("pipelines");
         let yaml = format!(
-            "name: optional-pipe\nversion: \"1.0\"\nprompt_required: false\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: doc-only\n    inputs:\n      - name: task\n    outputs:\n      - name: result\n"
+            "name: optional-pipe\nversion: \"1.0\"\nprompt_required: false\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: agent\n    isolated_worktree: false\n    inputs:\n      - name: task\n    outputs:\n      - name: result\n"
         );
         std::fs::write(pipelines_dir.join("optional-pipe.yaml"), yaml).unwrap();
 
@@ -25284,12 +25390,14 @@ nodes:
       - { name: user_prompt, side: right }
   - id: aaaa0001
     name: implementer
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     outputs:
       - { name: code, side: right }
   - id: aaaa0002
     name: reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: review
         side: right
@@ -25589,7 +25697,7 @@ edges:
         let state = test_state_with_dir(tmp.path()).await;
         let app = build_router(state);
 
-        let yaml = format!("name: prompt-save\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: ab12cd34\n    name: worker\n    type: doc-only\n    inputs:\n      - name: task\n    outputs:\n      - name: result\n");
+        let yaml = format!("name: prompt-save\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: ab12cd34\n    name: worker\n    type: agent\n    isolated_worktree: false\n    inputs:\n      - name: task\n    outputs:\n      - name: result\n");
         let body = serde_json::json!({
             "yaml": yaml,
             "prompts": { "ab12cd34": "You are a worker agent." }
@@ -26954,11 +27062,13 @@ edges:
     // node_prompt endpoint — Layer 2 contract tests
     // -----------------------------------------------------------------------
 
+    /// Seed a Run whose single `agent` node has already started, with the
+    /// isolation (#653) that decides where its NodeRun works.
     async fn seed_run_with_node(
         state: &Arc<AppState>,
         run_id: &str,
         node_id: &str,
-        node_type: &str,
+        isolated: bool,
     ) {
         let run_started = event_log::Event {
             id: None,
@@ -26971,7 +27081,13 @@ edges:
                 "pipeline_name": "test-pipe",
                 "input": "test",
                 "node_defs": [
-                    { "id": node_id, "node_type": node_type, "inputs": [], "outputs": [] }
+                    {
+                        "id": node_id,
+                        "node_type": "agent",
+                        "isolated_worktree": isolated,
+                        "inputs": [],
+                        "outputs": []
+                    }
                 ],
                 "edges": []
             })),
@@ -26985,7 +27101,9 @@ edges:
             kind: event_log::EventKind::NodeStarted,
             node_id: Some(node_id.into()),
             iter: Some(1),
-            payload: Some(serde_json::json!({ "node_type": node_type })),
+            payload: Some(
+                serde_json::json!({ "node_type": "agent", "isolated_worktree": isolated }),
+            ),
         };
         append_event(state, &node_started).await.unwrap();
     }
@@ -27013,7 +27131,7 @@ edges:
         let tmp = tempfile::tempdir().unwrap();
         let state = test_state_with_dir(tmp.path()).await;
         let run_id = "prompt-test-no-node";
-        seed_run_with_node(&state, run_id, "worker", "doc-only").await;
+        seed_run_with_node(&state, run_id, "worker", false).await;
 
         let app = build_router(state);
         let resp = app
@@ -27034,7 +27152,7 @@ edges:
         let tmp = tempfile::tempdir().unwrap();
         let state = test_state_with_dir(tmp.path()).await;
         let run_id = "prompt-test-no-file";
-        seed_run_with_node(&state, run_id, "worker", "doc-only").await;
+        seed_run_with_node(&state, run_id, "worker", false).await;
 
         let app = build_router(state);
         let resp = app
@@ -27064,7 +27182,7 @@ edges:
         .unwrap();
 
         let state = test_state_with_dir(tmp.path()).await;
-        seed_run_with_node(&state, run_id, "worker", "doc-only").await;
+        seed_run_with_node(&state, run_id, "worker", false).await;
 
         let app = build_router(state);
         let resp = app
@@ -27105,7 +27223,7 @@ edges:
         std::fs::write(prompt_dir.join("worker-iter-1.md"), "prompt content").unwrap();
 
         let state = test_state_with_dir(tmp.path()).await;
-        seed_run_with_node(&state, run_id, "worker", "doc-only").await;
+        seed_run_with_node(&state, run_id, "worker", false).await;
 
         let app = build_router(state);
         let resp = app
@@ -27129,7 +27247,7 @@ edges:
 
         let run_id = "prompt-cm-survive";
         let state = test_state_with_dir(repo).await;
-        seed_run_with_node(&state, run_id, "impl-1", "code-mutating").await;
+        seed_run_with_node(&state, run_id, "impl-1", true).await;
 
         // Create real worktrees
         let wt_dir = repo.join(".pdo/runs").join(run_id).join("worktree");
@@ -27170,7 +27288,7 @@ edges:
         assert_eq!(
             resp.status(),
             StatusCode::OK,
-            "prompt endpoint must return 200 for completed code-mutating node iter"
+            "prompt endpoint must return 200 for completed isolated node iter"
         );
 
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
@@ -27194,7 +27312,7 @@ edges:
         std::fs::write(
             &pipeline_path,
             format!(
-                "name: io-test-pipe\nnodes:\n{START_END_YAML}  - id: planner\n    name: planner\n    type: doc-only\n    inputs:\n      - name: task\n    outputs:\n      - name: plan\n  - id: implementer\n    name: implementer\n    type: code-mutating\n    inputs:\n      - name: plan\n    outputs:\n      - name: summary\nedges:\n  - source: {{ node: planner, port: plan }}\n    target: {{ node: implementer, port: plan }}\n"
+                "name: io-test-pipe\nnodes:\n{START_END_YAML}  - id: planner\n    name: planner\n    type: agent\n    isolated_worktree: false\n    inputs:\n      - name: task\n    outputs:\n      - name: plan\n  - id: implementer\n    name: implementer\n    type: agent\n    isolated_worktree: true\n    inputs:\n      - name: plan\n    outputs:\n      - name: summary\nedges:\n  - source: {{ node: planner, port: plan }}\n    target: {{ node: implementer, port: plan }}\n"
             ),
         )
         .unwrap();
@@ -27223,8 +27341,8 @@ edges:
                     "pipeline_name": "io-test-pipe",
                     "input": "test",
                     "node_defs": [
-                        { "id": "planner", "node_type": "doc-only", "inputs": ["task"], "outputs": ["plan"] },
-                        { "id": "implementer", "node_type": "code-mutating", "inputs": ["plan"], "outputs": ["summary"] }
+                        { "id": "planner", "node_type": "agent", "isolated_worktree": false, "inputs": ["task"], "outputs": ["plan"] },
+                        { "id": "implementer", "node_type": "agent", "isolated_worktree": true, "inputs": ["plan"], "outputs": ["summary"] }
                     ],
                     "edges": [
                         { "source_node": "planner", "source_port": "plan", "target_node": "implementer", "target_port": "plan" }
@@ -27520,7 +27638,7 @@ edges:
         let pipelines_dir = dir.join(".pdo").join("pipelines");
         std::fs::create_dir_all(&pipelines_dir).unwrap();
         let yaml = format!(
-            "name: {name}\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: doc-only\n    inputs:\n      - name: task\n    outputs:\n      - name: summary\n      - name: report\n    view: {{ x: 100, y: 100 }}\nedges: []\n"
+            "name: {name}\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: agent\n    isolated_worktree: false\n    inputs:\n      - name: task\n    outputs:\n      - name: summary\n      - name: report\n    view: {{ x: 100, y: 100 }}\nedges: []\n"
         );
         std::fs::write(pipelines_dir.join(format!("{name}.yaml")), yaml).unwrap();
     }
@@ -27794,13 +27912,13 @@ edges:
 
     // --- Transition guard wiring (#212, closes #195 #196 #197 #198 #201) ---
 
-    /// Pipeline `worker -> consumer` (both doc-only, no declared outputs) so
+    /// Pipeline `worker -> consumer` (both non-isolated, no declared outputs) so
     /// downstream re-spawn behavior is observable in the event log.
     fn write_pipeline_with_consumer(dir: &std::path::Path, name: &str) {
         let pipelines_dir = dir.join(".pdo").join("pipelines");
         std::fs::create_dir_all(&pipelines_dir).unwrap();
         let yaml = format!(
-            "name: {name}\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: doc-only\n    inputs:\n      - name: task\n    outputs:\n      - name: result\n  - id: consumer\n    name: consumer\n    type: doc-only\n    inputs:\n      - name: feed\n    outputs:\n      - name: out\nedges:\n  - source: {{ node: worker, port: result }}\n    target: {{ node: consumer, port: feed }}\n"
+            "name: {name}\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: agent\n    isolated_worktree: false\n    inputs:\n      - name: task\n    outputs:\n      - name: result\n  - id: consumer\n    name: consumer\n    type: agent\n    isolated_worktree: false\n    inputs:\n      - name: feed\n    outputs:\n      - name: out\nedges:\n  - source: {{ node: worker, port: result }}\n    target: {{ node: consumer, port: feed }}\n"
         );
         std::fs::write(pipelines_dir.join(format!("{name}.yaml")), yaml).unwrap();
     }
@@ -28453,7 +28571,7 @@ edges:
         let pipelines_dir = tmp.path().join(".pdo").join("pipelines");
         std::fs::create_dir_all(&pipelines_dir).unwrap();
         let yaml = format!(
-            "name: {pipe_name}\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: a\n    name: a\n    type: doc-only\n    inputs: [{{ name: in }}]\n    outputs: [{{ name: out }}]\n  - id: b\n    name: b\n    type: doc-only\n    inputs: [{{ name: in }}]\n    outputs: [{{ name: out }}]\n  - id: c\n    name: c\n    type: doc-only\n    inputs: [{{ name: in }}]\n    outputs: [{{ name: out }}]\nedges:\n  - source: {{ node: a, port: out }}\n    target: {{ node: b, port: in }}\n  - source: {{ node: b, port: out }}\n    target: {{ node: c, port: in }}\n"
+            "name: {pipe_name}\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: a\n    name: a\n    type: agent\n    isolated_worktree: false\n    inputs: [{{ name: in }}]\n    outputs: [{{ name: out }}]\n  - id: b\n    name: b\n    type: agent\n    isolated_worktree: false\n    inputs: [{{ name: in }}]\n    outputs: [{{ name: out }}]\n  - id: c\n    name: c\n    type: agent\n    isolated_worktree: false\n    inputs: [{{ name: in }}]\n    outputs: [{{ name: out }}]\nedges:\n  - source: {{ node: a, port: out }}\n    target: {{ node: b, port: in }}\n  - source: {{ node: b, port: out }}\n    target: {{ node: c, port: in }}\n"
         );
         std::fs::write(pipelines_dir.join(format!("{pipe_name}.yaml")), yaml).unwrap();
 
@@ -28546,7 +28664,7 @@ edges:
         let pipelines_dir = tmp.path().join(".pdo").join("pipelines");
         std::fs::create_dir_all(&pipelines_dir).unwrap();
         let yaml = format!(
-            "name: {pipe_name}\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: a\n    name: a\n    type: doc-only\n    inputs: [{{ name: in }}]\n    outputs: [{{ name: out }}]\n  - id: b\n    name: b\n    type: doc-only\n    inputs: [{{ name: in }}]\n    outputs: [{{ name: out }}]\nedges:\n  - source: {{ node: a, port: out }}\n    target: {{ node: b, port: in }}\n  - source: {{ node: b, port: out }}\n    target: {{ node: a, port: in }}\n    when: \"iter < 3\"\n"
+            "name: {pipe_name}\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: a\n    name: a\n    type: agent\n    isolated_worktree: false\n    inputs: [{{ name: in }}]\n    outputs: [{{ name: out }}]\n  - id: b\n    name: b\n    type: agent\n    isolated_worktree: false\n    inputs: [{{ name: in }}]\n    outputs: [{{ name: out }}]\nedges:\n  - source: {{ node: a, port: out }}\n    target: {{ node: b, port: in }}\n  - source: {{ node: b, port: out }}\n    target: {{ node: a, port: in }}\n    when: \"iter < 3\"\n"
         );
         std::fs::write(pipelines_dir.join(format!("{pipe_name}.yaml")), yaml).unwrap();
 
@@ -29585,9 +29703,9 @@ edges:
         // #489: the body is no longer a blind `{"ok":true}`. It reports the real
         // effect — `spawned:[{node_id,iter}]` plus what happened to the
         // sub-worktree — because the arm now READS `spawn_node`'s return.
-        // `worker` is `doc-only` (`write_test_pipeline`), so it owns no
+        // `worker` is non-isolated (`write_test_pipeline`), so it owns no
         // sub-worktree: `reused_sub_worktree:false`, `base_sha:null`. The
-        // `code-mutating` twin below is the one that can see #489 at all.
+        // isolated twin below is the one that can see #489 at all.
         let tmp = tempfile::tempdir().unwrap();
         write_test_pipeline(tmp.path(), "restart-pipe");
         let state = test_state_with_dir(tmp.path()).await;
@@ -29639,22 +29757,22 @@ edges:
         assert_eq!(started[0].iter, Some(1));
     }
 
-    /// The pipeline the `code-mutating` restart twin needs: `worker` owns a
+    /// The pipeline the isolated restart twin needs: `worker` owns a
     /// sub-worktree, which is the ONLY node class #489 breaks.
-    fn write_code_mutating_pipeline(dir: &std::path::Path, name: &str) {
+    fn write_isolated_node_pipeline(dir: &std::path::Path, name: &str) {
         let pipelines_dir = dir.join(".pdo").join("pipelines");
         std::fs::create_dir_all(&pipelines_dir).unwrap();
         let yaml = format!(
-            "name: {name}\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: code-mutating\n    inputs:\n      - name: task\n    outputs:\n      - name: result\n"
+            "name: {name}\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: agent\n    isolated_worktree: true\n    inputs:\n      - name: task\n    outputs:\n      - name: result\n"
         );
         std::fs::write(pipelines_dir.join(format!("{name}.yaml")), yaml).unwrap();
     }
 
     #[tokio::test]
-    async fn restart_node_on_a_code_mutating_node_reuses_its_sub_worktree() {
+    async fn restart_node_on_an_isolated_node_reuses_its_sub_worktree() {
         // #489, the class that mattered. `write_test_pipeline`'s `worker` is
-        // `doc-only`, so the repo's only `restart_node` happy path was
-        // STRUCTURALLY incapable of seeing this bug: a `doc-only` node owns no
+        // non-isolated, so the repo's only `restart_node` happy path was
+        // STRUCTURALLY incapable of seeing this bug: a non-isolated node owns no
         // sub-worktree, and `git worktree add -b` was never replayed.
         //
         // Here the first restart CREATES the sub-worktree and the second one has
@@ -29663,7 +29781,7 @@ edges:
         // the log — the whole issue, in two HTTP calls.
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
-        write_code_mutating_pipeline(dir, "restart-cm");
+        write_isolated_node_pipeline(dir, "restart-cm");
         init_test_repo(dir);
         let state = test_state_with_dir(dir).await;
         let run_id = "restart-cm-run";
@@ -30018,7 +30136,8 @@ nodes:
       - name: user_prompt
   - id: worker
     name: worker
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:
@@ -30050,7 +30169,8 @@ nodes:
       - name: user_prompt
   - id: planner
     name: planner
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:
@@ -30375,7 +30495,8 @@ nodes:
       - name: result
   - id: n1
     name: Reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: code
     outputs:
@@ -30471,7 +30592,7 @@ edges: []
                     .body(Body::from(
                         serde_json::to_string(&serde_json::json!({
                             "name": "Reviewer",
-                            "type": "doc-only",
+                            "type": "agent",
                             "inputs": [{"name": "code"}],
                             "outputs": [{"name": "review"}],
                             "interactive": false,
@@ -30648,7 +30769,7 @@ edges: []
                     .body(Body::from(
                         serde_json::to_string(&serde_json::json!({
                             "name": "DraftReviewer",
-                            "type": "doc-only",
+                            "type": "agent",
                             "inputs": [{"name": "in"}],
                             "outputs": [{"name": "out"}],
                             "interactive": false,
@@ -31010,7 +31131,7 @@ edges: []
 
         let run_id = "diff-empty";
         let state = test_state_with_dir(repo).await;
-        seed_run_with_node(&state, run_id, "impl-1", "code-mutating").await;
+        seed_run_with_node(&state, run_id, "impl-1", true).await;
 
         let wt_dir = repo.join(".pdo/runs").join(run_id).join("worktree");
         let pipeline_branch = format!("pdo/run-{run_id}");
@@ -31046,7 +31167,7 @@ edges: []
 
         let run_id = "diff-agg";
         let state = test_state_with_dir(repo).await;
-        seed_run_with_node(&state, run_id, "impl-1", "code-mutating").await;
+        seed_run_with_node(&state, run_id, "impl-1", true).await;
 
         let wt_dir = repo.join(".pdo/runs").join(run_id).join("worktree");
         let pipeline_branch = format!("pdo/run-{run_id}");
@@ -31103,7 +31224,7 @@ edges: []
 
         let run_id = "diff-fork";
         let state = test_state_with_dir(repo).await;
-        seed_run_with_node(&state, run_id, "impl-1", "code-mutating").await;
+        seed_run_with_node(&state, run_id, "impl-1", true).await;
 
         let wt_dir = repo.join(".pdo/runs").join(run_id).join("worktree");
         let pipeline_branch = format!("pdo/run-{run_id}");
@@ -31222,7 +31343,7 @@ edges: []
                 "input": "test",
                 "fork_sha": fork_sha,
                 "node_defs": [
-                    { "id": "impl-1", "node_type": "code-mutating", "inputs": [], "outputs": [] }
+                    { "id": "impl-1", "node_type": "agent", "isolated_worktree": true, "inputs": [], "outputs": [] }
                 ],
                 "edges": []
             })),
@@ -31286,7 +31407,7 @@ edges: []
 
         let run_id = "diff-pdo";
         let state = test_state_with_dir(repo).await;
-        seed_run_with_node(&state, run_id, "impl-1", "code-mutating").await;
+        seed_run_with_node(&state, run_id, "impl-1", true).await;
 
         let wt_dir = repo.join(".pdo/runs").join(run_id).join("worktree");
         let pipeline_branch = format!("pdo/run-{run_id}");
@@ -31344,7 +31465,7 @@ edges: []
 
         let run_id = "diff-node";
         let state = test_state_with_dir(repo).await;
-        seed_run_with_node(&state, run_id, "impl-1", "code-mutating").await;
+        seed_run_with_node(&state, run_id, "impl-1", true).await;
 
         let wt_dir = repo.join(".pdo/runs").join(run_id).join("worktree");
         let pipeline_branch = format!("pdo/run-{run_id}");
@@ -31404,7 +31525,7 @@ edges: []
 
         let run_id = "diff-no-node";
         let state = test_state_with_dir(repo).await;
-        seed_run_with_node(&state, run_id, "impl-1", "code-mutating").await;
+        seed_run_with_node(&state, run_id, "impl-1", true).await;
 
         let wt_dir = repo.join(".pdo/runs").join(run_id).join("worktree");
         let pipeline_branch = format!("pdo/run-{run_id}");
@@ -32347,15 +32468,19 @@ edges: []
     /// one-node pipeline plus the four dir borrows. Returns owned values the
     /// caller keeps alive; the `SpawnContext` is built at the call site from
     /// borrows of these.
+    /// An `agent` node and its one-node pipeline. `isolated` (#653) is what
+    /// decides whether the spawn cuts a sub-worktree — the axis the retired
+    /// non-isolated / isolated types used to stand in for here.
     fn spawn_test_fixture(
         repo_root: &std::path::Path,
         node_id: &str,
-        node_type: pipeline::NodeType,
+        isolated: bool,
     ) -> (pipeline::PipelineDef, pipeline::NodeDef, std::path::PathBuf) {
         let node = pipeline::NodeDef {
+            isolated_worktree: Some(isolated),
             id: node_id.into(),
             name: node_id.into(),
-            node_type,
+            node_type: pipeline::NodeType::Agent,
             inputs: Vec::new(),
             outputs: Vec::new(),
             interactive: false,
@@ -32398,8 +32523,7 @@ edges: []
         let run_id = "spawn-unit-throttle";
         seed_run_for_node_control(&state, run_id, "spawn-unit").await;
 
-        let (pipeline, node, pipeline_path) =
-            spawn_test_fixture(tmp.path(), "worker", pipeline::NodeType::DocOnly);
+        let (pipeline, node, pipeline_path) = spawn_test_fixture(tmp.path(), "worker", false);
         let artifacts_dir = tmp.path().join("artifacts");
         let resolved_vars = HashMap::new();
         let ctx = SpawnContext {
@@ -32457,14 +32581,13 @@ edges: []
         let pipeline_branch = format!("pdo/run-{run_id}");
         create_worktree(repo, &wt_dir, &pipeline_branch, "HEAD").unwrap();
 
-        // Arm the one-shot spawn poison: the code-mutating spawn will create its
+        // Arm the one-shot spawn poison: the isolated spawn will create its
         // sub-worktree, then panic at the span head (before NodeStarted).
         state
             .panic_on_spawn
             .store(true, std::sync::atomic::Ordering::SeqCst);
 
-        let (pipeline, node, pipeline_path) =
-            spawn_test_fixture(repo, "worker", pipeline::NodeType::CodeMutating);
+        let (pipeline, node, pipeline_path) = spawn_test_fixture(repo, "worker", true);
         let artifacts_dir = wt_dir.join(".pdo").join("artifacts");
         let resolved_vars = HashMap::new();
         let ctx = SpawnContext {
@@ -32544,8 +32667,8 @@ edges: []
     /// *file* named `.pdo/prompts` where a directory is expected. `create_dir_all`
     /// returns `AlreadyExists` (os error 17) BEFORE tmux is ever invoked, for
     /// every node type — no real tmux, no debug poison. `commit` decides whether
-    /// the file is only on disk (a doc-only node runs straight in `worktree_dir`)
-    /// or committed onto HEAD (a code-mutating node's sub-worktree is a fresh
+    /// the file is only on disk (a non-isolated node runs straight in `worktree_dir`)
+    /// or committed onto HEAD (an isolated node's sub-worktree is a fresh
     /// checkout of the pipeline branch that must carry the collision file).
     fn plant_pdo_prompts_file(dir: &std::path::Path, commit: bool) {
         let pdo = dir.join(".pdo");
@@ -32590,7 +32713,7 @@ edges: []
     /// returns a lying `Spawned`. It appends `NodeFailed` (legal — the iteration
     /// is `Running`) THEN `RunFailed`, moving both node and run terminal with the
     /// TRUE cause (a tmux spawn failure), never the false `session_died` the
-    /// liveness sweep would have written ~30s later. A doc-only node owns no
+    /// liveness sweep would have written ~30s later. A non-isolated node owns no
     /// sub-worktree, so nothing is reaped.
     #[tokio::test]
     async fn spawn_node_tmux_err_fails_run_loud_no_worktree() {
@@ -32602,12 +32725,11 @@ edges: []
         let run_id = "spawn-unit-tmuxerr-noworktree";
         seed_run_for_node_control(&state, run_id, "spawn-unit").await;
 
-        // Plant the collision file directly in the doc-only node's working dir
+        // Plant the collision file directly in the non-isolated node's working dir
         // (= `worktree_dir`); no commit needed since it runs there in place.
         plant_pdo_prompts_file(repo, false);
 
-        let (pipeline, node, pipeline_path) =
-            spawn_test_fixture(repo, "worker", pipeline::NodeType::DocOnly);
+        let (pipeline, node, pipeline_path) = spawn_test_fixture(repo, "worker", false);
         let artifacts_dir = repo.join(".pdo").join("artifacts");
         let resolved_vars = HashMap::new();
         let ctx = SpawnContext {
@@ -32669,7 +32791,7 @@ edges: []
         );
     }
 
-    /// #508 (fresh sub-worktree → reap): a code-mutating node whose fresh
+    /// #508 (fresh sub-worktree → reap): an isolated node whose fresh
     /// sub-worktree this spawn created reaps that orphan (dir + branch) on a tmux
     /// spawn failure, exactly as the pre-start abort does — the run goes terminal
     /// with no leaked worktree.
@@ -32689,8 +32811,7 @@ edges: []
         let pipeline_branch = format!("pdo/run-{run_id}");
         create_worktree(repo, &wt_dir, &pipeline_branch, "HEAD").unwrap();
 
-        let (pipeline, node, pipeline_path) =
-            spawn_test_fixture(repo, "worker", pipeline::NodeType::CodeMutating);
+        let (pipeline, node, pipeline_path) = spawn_test_fixture(repo, "worker", true);
         let artifacts_dir = wt_dir.join(".pdo").join("artifacts");
         let resolved_vars = HashMap::new();
         let ctx = SpawnContext {
@@ -32790,8 +32911,7 @@ edges: []
             "precondition: the reused sub-worktree exists"
         );
 
-        let (pipeline, node, pipeline_path) =
-            spawn_test_fixture(repo, "worker", pipeline::NodeType::CodeMutating);
+        let (pipeline, node, pipeline_path) = spawn_test_fixture(repo, "worker", true);
         let artifacts_dir = wt_dir.join(".pdo").join("artifacts");
         let resolved_vars = HashMap::new();
         let ctx = SpawnContext {
@@ -32858,10 +32978,9 @@ edges: []
 
         let run_id = "spawn-unit-refuse";
         // Seeds RunStarted + NodeStarted worker iter-1 (iter-1 is live).
-        seed_run_with_node(&state, run_id, "worker", "doc-only").await;
+        seed_run_with_node(&state, run_id, "worker", false).await;
 
-        let (pipeline, node, pipeline_path) =
-            spawn_test_fixture(tmp.path(), "worker", pipeline::NodeType::DocOnly);
+        let (pipeline, node, pipeline_path) = spawn_test_fixture(tmp.path(), "worker", false);
         let artifacts_dir = tmp.path().join("artifacts");
         let resolved_vars = HashMap::new();
         let ctx = SpawnContext {
@@ -32955,8 +33074,7 @@ edges: []
         let run_id = "spawn-unit-sbx-pending";
         seed_sandboxed_run_mid_prep(&state, run_id, "spawn-unit").await;
 
-        let (pipeline, node, pipeline_path) =
-            spawn_test_fixture(tmp.path(), "worker", pipeline::NodeType::DocOnly);
+        let (pipeline, node, pipeline_path) = spawn_test_fixture(tmp.path(), "worker", false);
         let artifacts_dir = tmp.path().join("artifacts");
         let resolved_vars = HashMap::new();
         let ctx = SpawnContext {
@@ -33009,8 +33127,7 @@ edges: []
         // RunStarted with no `sandbox` key at all → SandboxMode::Off, prep = None.
         seed_run_for_node_control(&state, run_id, "spawn-unit").await;
 
-        let (pipeline, node, pipeline_path) =
-            spawn_test_fixture(tmp.path(), "worker", pipeline::NodeType::DocOnly);
+        let (pipeline, node, pipeline_path) = spawn_test_fixture(tmp.path(), "worker", false);
         let artifacts_dir = tmp.path().join("artifacts");
         let resolved_vars = HashMap::new();
         let ctx = SpawnContext {
@@ -33027,6 +33144,143 @@ edges: []
         assert!(
             matches!(outcome, SpawnOutcome::Spawned { .. }),
             "an `off` Run must spawn exactly as before the precondition, got {outcome:?}"
+        );
+    }
+
+    /// #653 / ADR-0060 — **placement**: an Agent works where its
+    /// `isolated_worktree` says, and the spawn FREEZES that answer onto
+    /// `NodeStarted`. Both values, one real git repo.
+    #[tokio::test]
+    async fn spawn_places_an_agent_by_its_isolation_and_freezes_it() {
+        for isolated in [false, true] {
+            let tmp = tempfile::tempdir().unwrap();
+            let repo = tmp.path();
+            init_test_repo(repo);
+            let state = test_state_with_dir(repo).await;
+
+            let run_id = if isolated { "iso-yes" } else { "iso-no" };
+            seed_run_for_node_control(&state, run_id, "spawn-unit").await;
+            let wt_dir = repo.join(".pdo/runs").join(run_id).join("worktree");
+            create_worktree(repo, &wt_dir, &format!("pdo/run-{run_id}"), "HEAD").unwrap();
+
+            let (pipeline, node, pipeline_path) = spawn_test_fixture(repo, "worker", isolated);
+            let artifacts_dir = wt_dir.join(".pdo").join("artifacts");
+            let resolved_vars = HashMap::new();
+            let ctx = SpawnContext {
+                pipeline: &pipeline,
+                run_id,
+                pipeline_path: &pipeline_path,
+                worktree_dir: &wt_dir,
+                artifacts_dir: &artifacts_dir,
+                resolved_vars: &resolved_vars,
+                repo_root: repo,
+            };
+            let outcome = spawn_node(SpawnDeps::from_state(&state), &ctx, &node, 1).await;
+            assert!(
+                matches!(outcome, SpawnOutcome::Spawned { .. }),
+                "isolated={isolated}: spawn must start, got {outcome:?}"
+            );
+
+            // The sub-worktree exists iff the node asked for one.
+            let sub_wt = sub_worktree_path(repo, run_id, "worker", 1);
+            assert_eq!(
+                sub_wt.exists(),
+                isolated,
+                "isolated={isolated}: sub-worktree presence must follow the node's own line"
+            );
+
+            // …and the answer is frozen on the start event, not re-derived later.
+            let events = load_events(&state.db, run_id).await.unwrap();
+            assert_eq!(
+                merge_action::frozen_isolation(&events, "worker", 1),
+                Some(isolated),
+                "isolated={isolated}: NodeStarted must record the isolation it launched with"
+            );
+            let run_state = event_log::project(&events).unwrap();
+            assert_eq!(
+                run_state.nodes["worker"].isolated_worktree,
+                Some(isolated),
+                "isolated={isolated}: the projection must expose the frozen value"
+            );
+        }
+    }
+
+    /// #653 / ADR-0060 — **the freeze bites**: once a NodeRun has started, a
+    /// document that now says the opposite does not move it. A re-spawn of the
+    /// same iteration reads the frozen answer, so recovery lands back in the
+    /// working directory the interrupted attempt left.
+    #[tokio::test]
+    async fn a_live_iteration_keeps_its_frozen_working_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+        let state = test_state_with_dir(repo).await;
+
+        let run_id = "iso-freeze";
+        seed_run_for_node_control(&state, run_id, "spawn-unit").await;
+        let wt_dir = repo.join(".pdo/runs").join(run_id).join("worktree");
+        create_worktree(repo, &wt_dir, &format!("pdo/run-{run_id}"), "HEAD").unwrap();
+
+        // First spawn: shared worktree.
+        let (pipeline, shared_node, pipeline_path) = spawn_test_fixture(repo, "worker", false);
+        let artifacts_dir = wt_dir.join(".pdo").join("artifacts");
+        let resolved_vars = HashMap::new();
+        let ctx = SpawnContext {
+            pipeline: &pipeline,
+            run_id,
+            pipeline_path: &pipeline_path,
+            worktree_dir: &wt_dir,
+            artifacts_dir: &artifacts_dir,
+            resolved_vars: &resolved_vars,
+            repo_root: repo,
+        };
+        spawn_node(SpawnDeps::from_state(&state), &ctx, &shared_node, 1).await;
+
+        // The author now flips the node to isolated and the SAME iteration is
+        // re-spawned (a restart). It must stay in the Run worktree.
+        let mut isolated_node = shared_node.clone();
+        isolated_node.isolated_worktree = Some(true);
+        spawn_node(SpawnDeps::from_state(&state), &ctx, &isolated_node, 1).await;
+
+        assert!(
+            !sub_worktree_path(repo, run_id, "worker", 1).exists(),
+            "an isolation edit must not fork a sub-worktree under a live iteration"
+        );
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert_eq!(
+            merge_action::frozen_isolation(&events, "worker", 1),
+            Some(false),
+            "the re-spawn must carry the ORIGINAL frozen isolation forward"
+        );
+
+        // The next iteration is a new NodeRun and reads the document afresh.
+        append_event(
+            &state,
+            &event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeCompleted,
+                node_id: Some("worker".into()),
+                iter: Some(1),
+                payload: None,
+            },
+        )
+        .await
+        .unwrap();
+        let outcome = spawn_node(SpawnDeps::from_state(&state), &ctx, &isolated_node, 2).await;
+        assert!(
+            matches!(outcome, SpawnOutcome::Spawned { .. }),
+            "iter 2 must spawn, got {outcome:?}"
+        );
+        assert_eq!(
+            merge_action::frozen_isolation(
+                &load_events(&state.db, run_id).await.unwrap(),
+                "worker",
+                2
+            ),
+            Some(true),
+            "a fresh iteration must pick up the edited isolation"
         );
     }
 
@@ -33051,7 +33305,7 @@ edges: []
         // artifact read; `worker` has no incoming edge, so it is a root the readiness
         // sweep reports ready from the very first tick.
         let yaml = format!(
-            "name: sbx-advance\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: doc-only\n    inputs:\n      - name: task\n    outputs:\n      - name: result\n"
+            "name: sbx-advance\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: agent\n    isolated_worktree: false\n    inputs:\n      - name: task\n    outputs:\n      - name: result\n"
         );
         let yaml = yaml.as_str();
         let run_dir = repo_root.join(".pdo").join("runs").join(run_id);
@@ -33183,14 +33437,16 @@ nodes:
       - name: user_prompt
   - id: worker
     name: Worker
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:
       - name: code
   - id: reviewer
     name: Reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: code
     outputs:
@@ -33303,7 +33559,8 @@ nodes:
       - name: user_prompt
   - id: worker
     name: Worker
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:
@@ -33366,7 +33623,8 @@ nodes:
       - name: user_prompt
   - id: worker
     name: Worker
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:
@@ -33426,7 +33684,8 @@ nodes:
       - name: user_prompt
   - id: worker
     name: Worker
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:
@@ -33611,7 +33870,7 @@ edges:
         seed_run_for_node_control(&state, run_id, "test-pipe").await;
         seed_node_started(&state, run_id, "worker", 1).await;
         // The resurrection branch is only reached when the node's working dir still
-        // exists (a doc-only node's dir is the run's pipeline worktree).
+        // exists (a non-isolated node's dir is the run's pipeline worktree).
         std::fs::create_dir_all(worktree_dir_for_run(repo_root, run_id)).unwrap();
 
         let started_before = load_events(&state.db, run_id)
@@ -33682,14 +33941,16 @@ nodes:
       - name: user_prompt
   - id: worker
     name: Worker
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:
       - name: code
   - id: reviewer
     name: Reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: code
     outputs:
@@ -33791,7 +34052,8 @@ nodes:
       - name: user_prompt
   - id: worker
     name: Worker
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:
@@ -34350,7 +34612,7 @@ edges:
         let pipelines_dir = tmp.path().join(".pdo").join("pipelines");
         std::fs::create_dir_all(&pipelines_dir).unwrap();
         let yaml = format!(
-            "name: dangling-pipe\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: doc-only\n    outputs:\n      - name: result\nedges:\n  - source: {{ node: worker, port: resullt }}\n    target: {{ node: end, port: result }}\n"
+            "name: dangling-pipe\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: agent\n    isolated_worktree: false\n    outputs:\n      - name: result\nedges:\n  - source: {{ node: worker, port: resullt }}\n    target: {{ node: end, port: result }}\n"
         );
         std::fs::write(pipelines_dir.join("dangling-pipe.yaml"), yaml).unwrap();
         // #470: the target repo is now checked FIRST in `create_run_inner`, so this
@@ -35422,7 +35684,7 @@ edges:
         let pipelines_dir = dir.join(".pdo").join("pipelines");
         std::fs::create_dir_all(&pipelines_dir).unwrap();
         let yaml = format!(
-            "name: {name}\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: doc-only\n    inputs:\n      - name: task\n    outputs:\n      - name: review\n        frontmatter:\n          verdict:\n            type: enum\n            allowed: [PASS, FAIL]\n"
+            "name: {name}\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: agent\n    isolated_worktree: false\n    inputs:\n      - name: task\n    outputs:\n      - name: review\n        frontmatter:\n          verdict:\n            type: enum\n            allowed: [PASS, FAIL]\n"
         );
         std::fs::write(pipelines_dir.join(format!("{name}.yaml")), yaml).unwrap();
     }
@@ -35598,11 +35860,11 @@ edges:
             .contains("output validation after retry"));
     }
 
-    /// New coverage: no test reached the doc-only immutability arm before #490. It
+    /// New coverage: no test reached the non-isolated immutability arm before #490. It
     /// needs a real git worktree with a dirty **tracked** file (an untracked artefact
     /// is ignored by the guard).
     #[tokio::test]
-    async fn doc_only_immutability_violation_is_409_not_200() {
+    async fn shared_worktree_immutability_violation_is_409_not_200() {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path();
         init_git_repo_for_refusal_tests(repo);
@@ -35614,7 +35876,11 @@ edges:
         let wt_dir = worktree_dir_for_run(repo, run_id);
         create_worktree(repo, &wt_dir, &format!("pdo/run-{run_id}"), "HEAD").unwrap();
         // Dirty a TRACKED file from inside the run's worktree.
-        std::fs::write(wt_dir.join("tracked.txt"), "mutated by a doc-only node\n").unwrap();
+        std::fs::write(
+            wt_dir.join("tracked.txt"),
+            "mutated by a non-isolated node\n",
+        )
+        .unwrap();
         assert!(worktree_has_tracked_changes(&wt_dir).unwrap());
 
         // `find_node_type` reads the PROJECTED node defs, not the YAML on disk, so
@@ -35630,7 +35896,7 @@ edges:
                 payload: Some(serde_json::json!({
                     "pipeline_name": pipe,
                     "node_defs": [
-                        { "id": "worker", "node_type": "doc-only", "inputs": [], "outputs": [] }
+                        { "id": "worker", "node_type": "agent", "isolated_worktree": false, "inputs": [], "outputs": [] }
                     ],
                     "edges": [],
                 })),
@@ -35702,7 +35968,7 @@ edges:
         std::fs::write(
             pipelines_dir.join(format!("{pipe}.yaml")),
             format!(
-                "name: {pipe}\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: impl_a\n    name: impl_a\n    type: code-mutating\n    inputs:\n      - name: task\n    outputs:\n      - name: patch\n  - id: impl_b\n    name: impl_b\n    type: code-mutating\n    inputs:\n      - name: task\n    outputs:\n      - name: patch\n"
+                "name: {pipe}\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: impl_a\n    name: impl_a\n    type: agent\n    isolated_worktree: true\n    inputs:\n      - name: task\n    outputs:\n      - name: patch\n  - id: impl_b\n    name: impl_b\n    type: agent\n    isolated_worktree: true\n    inputs:\n      - name: task\n    outputs:\n      - name: patch\n"
             ),
         )
         .unwrap();
@@ -35741,8 +36007,8 @@ edges:
                 payload: Some(serde_json::json!({
                     "pipeline_name": pipe,
                     "node_defs": [
-                        { "id": "impl_a", "node_type": "code-mutating", "inputs": [], "outputs": [] },
-                        { "id": "impl_b", "node_type": "code-mutating", "inputs": [], "outputs": [] },
+                        { "id": "impl_a", "node_type": "agent", "isolated_worktree": true, "inputs": [], "outputs": [] },
+                        { "id": "impl_b", "node_type": "agent", "isolated_worktree": true, "inputs": [], "outputs": [] },
                     ],
                     "edges": [],
                 })),
@@ -35884,7 +36150,7 @@ edges:
         std::fs::write(
             pipelines_dir.join(format!("{pipe}.yaml")),
             format!(
-                "name: {pipe}\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: ship\n    name: ship\n    type: code-mutating\n    inputs:\n      - name: task\n    outputs:\n      - name: patch\n"
+                "name: {pipe}\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: ship\n    name: ship\n    type: agent\n    isolated_worktree: true\n    inputs:\n      - name: task\n    outputs:\n      - name: patch\n"
             ),
         )
         .unwrap();
@@ -35943,7 +36209,7 @@ edges:
                 payload: Some(serde_json::json!({
                     "pipeline_name": pipe,
                     "node_defs": [
-                        { "id": "ship", "node_type": "code-mutating", "inputs": [], "outputs": [] },
+                        { "id": "ship", "node_type": "agent", "isolated_worktree": true, "inputs": [], "outputs": [] },
                     ],
                     "edges": [],
                 })),

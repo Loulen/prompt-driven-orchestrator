@@ -206,6 +206,7 @@ mod tests {
 
     fn simple_node(id: &str, node_type: pipeline::NodeType) -> pipeline::NodeDef {
         pipeline::NodeDef {
+            isolated_worktree: None,
             id: id.to_string(),
             name: id.to_string(),
             node_type,
@@ -224,6 +225,7 @@ mod tests {
 
     fn loop_node(id: &str, max_iter: i64) -> pipeline::NodeDef {
         pipeline::NodeDef {
+            isolated_worktree: None,
             id: id.to_string(),
             name: id.to_string(),
             node_type: pipeline::NodeType::Loop,
@@ -261,6 +263,7 @@ mod tests {
             state.nodes.insert(
                 id.to_string(),
                 event_log::NodeState {
+                    isolated_worktree: None,
                     harness: None,
                     cost: None,
                     node_id: id.to_string(),
@@ -283,10 +286,10 @@ mod tests {
     #[test]
     fn allows_deleting_pending_node() {
         let old = pipeline(vec![
-            simple_node("a", pipeline::NodeType::DocOnly),
-            simple_node("b", pipeline::NodeType::DocOnly),
+            simple_node("a", pipeline::NodeType::Agent),
+            simple_node("b", pipeline::NodeType::Agent),
         ]);
-        let new = pipeline(vec![simple_node("a", pipeline::NodeType::DocOnly)]);
+        let new = pipeline(vec![simple_node("a", pipeline::NodeType::Agent)]);
         let rs = run_state_with_nodes(vec![
             ("a", event_log::NodeStatus::Running),
             ("b", event_log::NodeStatus::Pending),
@@ -302,10 +305,10 @@ mod tests {
     #[test]
     fn rejects_deleting_running_node() {
         let old = pipeline(vec![
-            simple_node("a", pipeline::NodeType::DocOnly),
-            simple_node("b", pipeline::NodeType::DocOnly),
+            simple_node("a", pipeline::NodeType::Agent),
+            simple_node("b", pipeline::NodeType::Agent),
         ]);
-        let new = pipeline(vec![simple_node("b", pipeline::NodeType::DocOnly)]);
+        let new = pipeline(vec![simple_node("b", pipeline::NodeType::Agent)]);
         let rs = run_state_with_nodes(vec![
             ("a", event_log::NodeStatus::Running),
             ("b", event_log::NodeStatus::Pending),
@@ -320,10 +323,10 @@ mod tests {
     #[test]
     fn rejects_deleting_completed_node() {
         let old = pipeline(vec![
-            simple_node("a", pipeline::NodeType::DocOnly),
-            simple_node("b", pipeline::NodeType::DocOnly),
+            simple_node("a", pipeline::NodeType::Agent),
+            simple_node("b", pipeline::NodeType::Agent),
         ]);
-        let new = pipeline(vec![simple_node("b", pipeline::NodeType::DocOnly)]);
+        let new = pipeline(vec![simple_node("b", pipeline::NodeType::Agent)]);
         let rs = run_state_with_nodes(vec![
             ("a", event_log::NodeStatus::Completed),
             ("b", event_log::NodeStatus::Pending),
@@ -337,7 +340,7 @@ mod tests {
 
     #[test]
     fn rejects_deleting_failed_node() {
-        let old = pipeline(vec![simple_node("a", pipeline::NodeType::DocOnly)]);
+        let old = pipeline(vec![simple_node("a", pipeline::NodeType::Agent)]);
         let new = pipeline(vec![]);
         let rs = run_state_with_nodes(vec![("a", event_log::NodeStatus::Failed)]);
 
@@ -348,7 +351,7 @@ mod tests {
 
     #[test]
     fn rejects_deleting_awaiting_user_node() {
-        let old = pipeline(vec![simple_node("a", pipeline::NodeType::DocOnly)]);
+        let old = pipeline(vec![simple_node("a", pipeline::NodeType::Agent)]);
         let new = pipeline(vec![]);
         let rs = run_state_with_nodes(vec![("a", event_log::NodeStatus::AwaitingUser)]);
 
@@ -359,10 +362,10 @@ mod tests {
 
     #[test]
     fn allows_adding_new_nodes() {
-        let old = pipeline(vec![simple_node("a", pipeline::NodeType::DocOnly)]);
+        let old = pipeline(vec![simple_node("a", pipeline::NodeType::Agent)]);
         let new = pipeline(vec![
-            simple_node("a", pipeline::NodeType::DocOnly),
-            simple_node("b", pipeline::NodeType::CodeMutating),
+            simple_node("a", pipeline::NodeType::Agent),
+            simple_node("b", pipeline::NodeType::Agent),
         ]);
         let rs = run_state_with_nodes(vec![("a", event_log::NodeStatus::Running)]);
 
@@ -373,12 +376,12 @@ mod tests {
     #[test]
     fn allows_adding_new_edges() {
         let old = pipeline(vec![
-            simple_node("a", pipeline::NodeType::DocOnly),
-            simple_node("b", pipeline::NodeType::DocOnly),
+            simple_node("a", pipeline::NodeType::Agent),
+            simple_node("b", pipeline::NodeType::Agent),
         ]);
         let mut new = pipeline(vec![
-            simple_node("a", pipeline::NodeType::DocOnly),
-            simple_node("b", pipeline::NodeType::DocOnly),
+            simple_node("a", pipeline::NodeType::Agent),
+            simple_node("b", pipeline::NodeType::Agent),
         ]);
         new.edges.push(pipeline::EdgeDef {
             source: pipeline::EdgeEndpoint {
@@ -486,8 +489,8 @@ mod tests {
     #[test]
     fn multiple_rejections_reported() {
         let old = pipeline(vec![
-            simple_node("a", pipeline::NodeType::DocOnly),
-            simple_node("b", pipeline::NodeType::DocOnly),
+            simple_node("a", pipeline::NodeType::Agent),
+            simple_node("b", pipeline::NodeType::Agent),
             loop_node("loop-1", 5),
         ]);
         let new = pipeline(vec![loop_node("loop-1", 1)]);
@@ -524,8 +527,8 @@ mod tests {
 
     fn pipeline_with_region(region: pipeline::LoopRegion) -> pipeline::PipelineDef {
         let mut p = pipeline(vec![
-            simple_node("impl", pipeline::NodeType::CodeMutating),
-            simple_node("rev", pipeline::NodeType::DocOnly),
+            simple_node("impl", pipeline::NodeType::Agent),
+            simple_node("rev", pipeline::NodeType::Agent),
         ]);
         p.loops = vec![region];
         p
@@ -664,8 +667,8 @@ mod tests {
         // ADR-0007 (amended, #211/#206): a running node is immutable, including
         // its type — spawn used the live pipeline, `pdo complete` replays
         // the run snapshot; a mid-session type swap desyncs the two.
-        let old = pipeline(vec![simple_node("a", pipeline::NodeType::DocOnly)]);
-        let new = pipeline(vec![simple_node("a", pipeline::NodeType::CodeMutating)]);
+        let old = pipeline(vec![simple_node("a", pipeline::NodeType::Agent)]);
+        let new = pipeline(vec![simple_node("a", pipeline::NodeType::Script)]);
         let rs = run_state_with_nodes(vec![("a", event_log::NodeStatus::Running)]);
 
         let result = validate_run_mutation(&old, &new, &rs);
@@ -682,8 +685,8 @@ mod tests {
     fn rejects_changing_type_of_awaiting_user_node() {
         // An awaiting_user node still holds its tmux session — same invariant
         // as running.
-        let old = pipeline(vec![simple_node("a", pipeline::NodeType::DocOnly)]);
-        let new = pipeline(vec![simple_node("a", pipeline::NodeType::CodeMutating)]);
+        let old = pipeline(vec![simple_node("a", pipeline::NodeType::Agent)]);
+        let new = pipeline(vec![simple_node("a", pipeline::NodeType::Script)]);
         let rs = run_state_with_nodes(vec![("a", event_log::NodeStatus::AwaitingUser)]);
 
         let result = validate_run_mutation(&old, &new, &rs);
@@ -694,10 +697,10 @@ mod tests {
     #[test]
     fn rejects_retyping_running_script_node() {
         // #248 / ADR-0007(d): a live `script` node is immutable including its
-        // type — retyping it away (script → doc-only) mid-run would desync the
+        // type — retyping it away (script → agent) mid-run would desync the
         // live pipeline from the run snapshot exactly as for any other node.
         let old = pipeline(vec![simple_node("a", pipeline::NodeType::Script)]);
-        let new = pipeline(vec![simple_node("a", pipeline::NodeType::DocOnly)]);
+        let new = pipeline(vec![simple_node("a", pipeline::NodeType::Agent)]);
         let rs = run_state_with_nodes(vec![("a", event_log::NodeStatus::Running)]);
 
         let result = validate_run_mutation(&old, &new, &rs);
@@ -715,7 +718,7 @@ mod tests {
         // A not-yet-spawned script node has no session/snapshot to desync — its
         // type is freely editable before it runs.
         let old = pipeline(vec![simple_node("a", pipeline::NodeType::Script)]);
-        let new = pipeline(vec![simple_node("a", pipeline::NodeType::CodeMutating)]);
+        let new = pipeline(vec![simple_node("a", pipeline::NodeType::Agent)]);
         let rs = run_state_with_nodes(vec![("a", event_log::NodeStatus::Pending)]);
 
         let result = validate_run_mutation(&old, &new, &rs);
@@ -732,12 +735,12 @@ mod tests {
         // snapshot to desync — its type is freely editable; the scheduler will
         // spawn it from the live pipeline.
         let old = pipeline(vec![
-            simple_node("a", pipeline::NodeType::DocOnly),
-            simple_node("b", pipeline::NodeType::DocOnly),
+            simple_node("a", pipeline::NodeType::Agent),
+            simple_node("b", pipeline::NodeType::Agent),
         ]);
         let new = pipeline(vec![
-            simple_node("a", pipeline::NodeType::CodeMutating),
-            simple_node("b", pipeline::NodeType::CodeMutating),
+            simple_node("a", pipeline::NodeType::Script),
+            simple_node("b", pipeline::NodeType::Script),
         ]);
         // "a" pending in run state, "b" not in run state at all.
         let rs = run_state_with_nodes(vec![("a", event_log::NodeStatus::Pending)]);
@@ -753,8 +756,8 @@ mod tests {
     fn allows_changing_type_of_completed_node() {
         // A completed node holds no live session; it will not re-run this iter,
         // and a future lap re-spawns from the live pipeline consistently.
-        let old = pipeline(vec![simple_node("a", pipeline::NodeType::DocOnly)]);
-        let new = pipeline(vec![simple_node("a", pipeline::NodeType::CodeMutating)]);
+        let old = pipeline(vec![simple_node("a", pipeline::NodeType::Agent)]);
+        let new = pipeline(vec![simple_node("a", pipeline::NodeType::Script)]);
         let rs = run_state_with_nodes(vec![("a", event_log::NodeStatus::Completed)]);
 
         let result = validate_run_mutation(&old, &new, &rs);
@@ -764,10 +767,10 @@ mod tests {
     #[test]
     fn node_not_in_run_state_treated_as_pending() {
         let old = pipeline(vec![
-            simple_node("a", pipeline::NodeType::DocOnly),
-            simple_node("b", pipeline::NodeType::DocOnly),
+            simple_node("a", pipeline::NodeType::Agent),
+            simple_node("b", pipeline::NodeType::Agent),
         ]);
-        let new = pipeline(vec![simple_node("a", pipeline::NodeType::DocOnly)]);
+        let new = pipeline(vec![simple_node("a", pipeline::NodeType::Agent)]);
         let rs = run_state_with_nodes(vec![("a", event_log::NodeStatus::Running)]);
 
         let result = validate_run_mutation(&old, &new, &rs);

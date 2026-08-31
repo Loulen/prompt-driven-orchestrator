@@ -73,11 +73,11 @@ describe("Tooltip accessible name (#397)", () => {
 
   it("leaves a text button's visible label as its name (WCAG 2.5.3)", () => {
     renderWithProvider(
-      <Tooltip content="A node that edits source code in its own worktree.">
-        <button data-testid="t">code-mutating</button>
+      <Tooltip content="A Node that forks a sub-worktree of its own.">
+        <button data-testid="t">Isolated worktree</button>
       </Tooltip>,
     );
-    expect(screen.getByTestId("t")).toHaveAccessibleName("code-mutating");
+    expect(screen.getByTestId("t")).toHaveAccessibleName("Isolated worktree");
     expect(screen.getByTestId("t")).not.toHaveAttribute("aria-label");
   });
 

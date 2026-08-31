@@ -167,6 +167,7 @@ mod tests {
             run.nodes.insert(
                 (*id).into(),
                 NodeState {
+                    isolated_worktree: None,
                     harness: None,
                     cost: None,
                     node_id: (*id).into(),

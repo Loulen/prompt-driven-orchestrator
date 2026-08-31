@@ -35,7 +35,8 @@ nodes:
     view: { x: 0, y: 300 }
   - id: alpha
     name: alpha
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - { name: in, side: left }
     outputs:
@@ -43,7 +44,8 @@ nodes:
     view: { x: 240, y: 100 }
   - id: beta
     name: beta
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - { name: in, side: left }
     outputs:
@@ -51,7 +53,8 @@ nodes:
     view: { x: 240, y: 320 }
   - id: gamma
     name: gamma
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - { name: in, side: left }
     outputs:

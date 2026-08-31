@@ -1,7 +1,7 @@
 # Recipe — unattended disk janitor (#128 Track A, #480)
 
 **Problem.** Every Run forks one or more git worktrees under `.pdo/runs/<run-id>/`.
-A worktree of a JS repo carries a full `node_modules` (~1 GB); a code-mutating
+A worktree of a JS repo carries a full `node_modules` (~1 GB); an isolated
 node recompiles into its own `target/`. A machine that fires Triggers around the
 clock accumulates terminal-Run residue and slows daemon startup (recursive inotify
 watch setup over the accumulated checkouts).
@@ -27,9 +27,9 @@ Two pieces, **both now shipped as tracked artifacts** (they used to be prose her
    existing `cleanup_run` command. The Trigger fires it on a schedule so the
    residue is handled even when nobody is watching.
 
-Why a `script` node + Rust and **not** the earlier `doc-only` + `python3` sketch:
+Why a `script` node + Rust and **not** the earlier agent + `python3` sketch:
 the sandbox image ships **neither `jq` nor `python3`**, so a bash/JSON prompt is
-dead on arrival there; and a `doc-only` node spends an LLM turn on a purely
+dead on arrival there; and an `agent` node spends an LLM turn on a purely
 mechanical task and is non-deterministic. A `script` node running deterministic
 Rust (`pdo reap`) is testable end-to-end in CI with **zero stubbing** (ADR-0017),
 and the policy itself is a pure, unit-tested function (`reap_policy`).
@@ -153,7 +153,7 @@ curl -s -X POST "$PDO_DAEMON_URL/triggers" \
 ## 5. Out of scope here (tracked separately)
 
 The disk-fill *incidents* (`.pdo/runs` spiking to tens of GB) are dominated by
-`target/` directories inside **live** Runs — one per code-mutating sub-worktree, at
+`target/` directories inside **live** Runs — one per isolated sub-worktree, at
 the same commit — which are **never** reapable by construction (`is_terminal()`).
 The janitor closes the *terminal-Run residue* leak and removes the human from that
 loop; it does **not** shrink a running build's footprint. Sharing a cargo build

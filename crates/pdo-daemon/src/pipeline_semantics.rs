@@ -166,6 +166,13 @@ struct NodeProjection<'a> {
     /// content hash (absent key), so this field flags drift only when set.
     #[serde(skip_serializing_if = "Option::is_none")]
     auto_fail: Option<bool>,
+    /// Where the node's NodeRun works (#653, ADR-0060). Semantic: moving a node
+    /// between the Run worktree and one of its own changes what the pipeline
+    /// does — a parallel pair that shared a tree does not become the same
+    /// pipeline once one of them forks. `skip_serializing_if` keeps a structural
+    /// node (which carries no isolation) byte-identical to its pre-#653 hash.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    isolated_worktree: Option<bool>,
     inputs: Vec<PortProjection<'a>>,
     outputs: Vec<PortProjection<'a>>,
 }
@@ -186,6 +193,7 @@ impl<'a> NodeProjection<'a> {
             harnesses,
             agent_choice,
             auto_fail,
+            isolated_worktree,
         } = node;
         let _layout = view; // LAYOUT_FIELDS["node"]
         Self {
@@ -199,6 +207,7 @@ impl<'a> NodeProjection<'a> {
             max_iter: max_iter.as_ref().map(canon_yaml),
             over: over.as_deref(),
             auto_fail: *auto_fail,
+            isolated_worktree: *isolated_worktree,
             inputs: inputs.iter().map(PortProjection::of).collect(),
             outputs: outputs.iter().map(PortProjection::of).collect(),
         }
@@ -401,7 +410,7 @@ mod tests {
         format!(
             "name: drift-demo\nversion: '1.0'\nnodes:\n\
              - id: start\n  name: Start\n  type: start\n  outputs:\n  - name: user_prompt\n  view:\n    x: 300\n    y: 60\n\
-             - id: doer\n  name: Doer\n  type: doc-only\n  outputs:\n  - name: out\n  view:\n    x: {doer_x}\n    y: 260\n\
+             - id: doer\n  name: Doer\n  type: agent\n  isolated_worktree: false\n  outputs:\n  - name: out\n  view:\n    x: {doer_x}\n    y: 260\n\
              - id: end\n  name: End\n  type: end\n  inputs:\n  - name: result\n  view:\n    x: 300\n    y: 460\n\
              edges:\n\
              - source: {{node: start, port: user_prompt}}\n  target: {{node: doer, port: in}}\n  {edge_mode}\n\
@@ -481,7 +490,7 @@ mod tests {
             ),
             (
                 "per-node model",
-                base.replace("  type: doc-only", "  type: doc-only\n  model: opus"),
+                base.replace("  type: agent", "  type: agent\n  model: opus"),
             ),
             (
                 // #424. This list is maintained BY HAND — nothing in the build
@@ -491,15 +500,15 @@ mod tests {
                 // badge would never light up on an effort change: the user would
                 // launch a stale copy believing it current.
                 "per-node effort",
-                base.replace("  type: doc-only", "  type: doc-only\n  effort: low"),
+                base.replace("  type: agent", "  type: agent\n  effort: low"),
             ),
             (
                 // #550/ADR-0046: a pinned harness changes what runs the node, so it
                 // is a semantic change — the library drift badge and the diff see it.
                 "pin_harness",
                 base.replace(
-                    "  type: doc-only",
-                    "  type: doc-only\n  pin_harness: opencode",
+                    "  type: agent",
+                    "  type: agent\n  pin_harness: opencode",
                 ),
             ),
             (
@@ -509,8 +518,8 @@ mod tests {
                 // projection itself.
                 "harnesses map",
                 base.replace(
-                    "  type: doc-only",
-                    "  type: doc-only\n  harnesses:\n    claude:\n      model: opus",
+                    "  type: agent",
+                    "  type: agent\n  harnesses:\n    claude:\n      model: opus",
                 ),
             ),
             (
@@ -531,7 +540,7 @@ mod tests {
                 "added node",
                 base.replace(
                     "edges:",
-                    "- id: extra\n  name: Extra\n  type: doc-only\n  outputs:\n  - name: o\nedges:",
+                    "- id: extra\n  name: Extra\n  type: agent\n  isolated_worktree: false\n  outputs:\n  - name: o\nedges:",
                 ),
             ),
             (

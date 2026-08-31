@@ -78,7 +78,7 @@ function seedNoSelectionWithDiagnostics() {
           ],
         },
         prompts: {},
-        diagnostics: ["node 'reviewer' receives edges from 2 code-mutating nodes without a Merge"],
+        diagnostics: ["node 'reviewer' receives edges from 2 isolated nodes without a Merge"],
         dirty: false,
         externalDirty: false,
         libraryId: null,

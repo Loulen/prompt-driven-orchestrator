@@ -394,6 +394,7 @@ mod tests {
 
     fn make_node(id: &str, node_type: NodeType, inputs: &[&str], outputs: &[&str]) -> NodeDef {
         NodeDef {
+            isolated_worktree: None,
             id: id.into(),
             name: id.into(),
             node_type,
@@ -438,6 +439,7 @@ mod tests {
 
     fn make_loop_node(id: &str, max_iter: i64) -> NodeDef {
         NodeDef {
+            isolated_worktree: None,
             id: id.into(),
             name: id.into(),
             node_type: NodeType::Loop,
@@ -564,6 +566,7 @@ mod tests {
 
     fn completed_node(id: &str) -> NodeState {
         NodeState {
+            isolated_worktree: None,
             harness: None,
             cost: None,
             node_id: id.into(),
@@ -582,6 +585,7 @@ mod tests {
 
     fn running_node(id: &str) -> NodeState {
         NodeState {
+            isolated_worktree: None,
             harness: None,
             cost: None,
             node_id: id.into(),
@@ -604,9 +608,9 @@ mod tests {
     fn ready_nodes_skips_switch() {
         let pipeline = make_pipeline(
             vec![
-                make_node("upstream", NodeType::DocOnly, &["in"], &["out"]),
+                make_node("upstream", NodeType::Agent, &["in"], &["out"]),
                 make_node("sw", NodeType::Switch, &["in"], &["pass", "default"]),
-                make_node("downstream", NodeType::DocOnly, &["in"], &["out"]),
+                make_node("downstream", NodeType::Agent, &["in"], &["out"]),
             ],
             vec![
                 make_edge("upstream", "out", "sw", "in"),
@@ -633,8 +637,8 @@ mod tests {
         // completion alone. Otherwise the guarded branch would always fire.
         let pipeline = make_pipeline(
             vec![
-                make_node("classifier", NodeType::DocOnly, &["task"], &["triage"]),
-                make_node("hotfix", NodeType::CodeMutating, &["triage"], &["patch"]),
+                make_node("classifier", NodeType::Agent, &["task"], &["triage"]),
+                make_node("hotfix", NodeType::Agent, &["triage"], &["patch"]),
             ],
             vec![make_cond_edge(
                 "classifier",
@@ -662,8 +666,8 @@ mod tests {
     fn ready_nodes_skips_target_reached_only_by_else_edge() {
         let pipeline = make_pipeline(
             vec![
-                make_node("classifier", NodeType::DocOnly, &["task"], &["triage"]),
-                make_node("backlog", NodeType::DocOnly, &["triage"], &["note"]),
+                make_node("classifier", NodeType::Agent, &["task"], &["triage"]),
+                make_node("backlog", NodeType::Agent, &["triage"], &["note"]),
             ],
             vec![make_cond_edge(
                 "classifier",
@@ -693,8 +697,8 @@ mod tests {
         // a normal entry point once that upstream completes.
         let pipeline = make_pipeline(
             vec![
-                make_node("a", NodeType::DocOnly, &["task"], &["out"]),
-                make_node("b", NodeType::DocOnly, &["in"], &["out"]),
+                make_node("a", NodeType::Agent, &["task"], &["out"]),
+                make_node("b", NodeType::Agent, &["in"], &["out"]),
             ],
             vec![make_edge("a", "out", "b", "in")],
         );
@@ -710,8 +714,8 @@ mod tests {
     fn ready_nodes_linear_chain_first_ready() {
         let pipeline = make_pipeline(
             vec![
-                make_node("planner", NodeType::DocOnly, &["task"], &["plan"]),
-                make_node("implementer", NodeType::DocOnly, &["plan"], &["summary"]),
+                make_node("planner", NodeType::Agent, &["task"], &["plan"]),
+                make_node("implementer", NodeType::Agent, &["plan"], &["summary"]),
             ],
             vec![make_edge("planner", "plan", "implementer", "plan")],
         );
@@ -725,9 +729,9 @@ mod tests {
     fn ready_nodes_fan_in_waits_for_all() {
         let pipeline = make_pipeline(
             vec![
-                make_node("a", NodeType::DocOnly, &["task"], &["out"]),
-                make_node("b", NodeType::DocOnly, &["task"], &["out"]),
-                make_node("c", NodeType::DocOnly, &["in-a", "in-b"], &["out"]),
+                make_node("a", NodeType::Agent, &["task"], &["out"]),
+                make_node("b", NodeType::Agent, &["task"], &["out"]),
+                make_node("c", NodeType::Agent, &["in-a", "in-b"], &["out"]),
             ],
             vec![
                 make_edge("a", "out", "c", "in-a"),
@@ -749,7 +753,7 @@ mod tests {
         let pipeline = make_pipeline(
             vec![
                 make_loop_node("loop1", 5),
-                make_node("worker", NodeType::DocOnly, &["in"], &["out"]),
+                make_node("worker", NodeType::Agent, &["in"], &["out"]),
             ],
             vec![make_edge("loop1", "body", "worker", "in")],
         );
@@ -765,8 +769,8 @@ mod tests {
         let pipeline = make_pipeline(
             vec![
                 make_loop_node("loop1", 5),
-                make_node("a", NodeType::DocOnly, &["in"], &["out"]),
-                make_node("b", NodeType::DocOnly, &["in"], &["out"]),
+                make_node("a", NodeType::Agent, &["in"], &["out"]),
+                make_node("b", NodeType::Agent, &["in"], &["out"]),
                 make_node("sw", NodeType::Switch, &["in"], &["pass", "default"]),
             ],
             vec![
@@ -788,7 +792,7 @@ mod tests {
             vec![
                 make_loop_node("outer", 3),
                 make_loop_node("inner", 5),
-                make_node("inner_worker", NodeType::DocOnly, &["in"], &["out"]),
+                make_node("inner_worker", NodeType::Agent, &["in"], &["out"]),
             ],
             vec![
                 make_edge("outer", "body", "inner", "in"),
@@ -824,7 +828,7 @@ mod tests {
     #[test]
     fn body_subgraph_non_loop_node_returns_error() {
         let pipeline = make_pipeline(
-            vec![make_node("a", NodeType::DocOnly, &["in"], &["out"])],
+            vec![make_node("a", NodeType::Agent, &["in"], &["out"])],
             vec![],
         );
         assert_eq!(
@@ -838,8 +842,8 @@ mod tests {
         let pipeline = make_pipeline(
             vec![
                 make_loop_node("loop1", 5),
-                make_node("a", NodeType::DocOnly, &["in"], &["out"]),
-                make_node("b", NodeType::DocOnly, &["in"], &["out"]),
+                make_node("a", NodeType::Agent, &["in"], &["out"]),
+                make_node("b", NodeType::Agent, &["in"], &["out"]),
             ],
             vec![
                 make_edge("loop1", "body", "a", "in"),
@@ -858,8 +862,8 @@ mod tests {
         let pipeline = make_pipeline(
             vec![
                 make_loop_node("loop1", 5),
-                make_node("impl", NodeType::CodeMutating, &["in"], &["out"]),
-                make_node("reviewer", NodeType::DocOnly, &["in"], &["review"]),
+                make_node("impl", NodeType::Agent, &["in"], &["out"]),
+                make_node("reviewer", NodeType::Agent, &["in"], &["review"]),
                 make_node("sw", NodeType::Switch, &["in"], &["pass", "default"]),
             ],
             vec![
@@ -885,9 +889,9 @@ mod tests {
     fn downstream_linear_chain() {
         let pipeline = make_pipeline(
             vec![
-                make_node("a", NodeType::DocOnly, &["in"], &["out"]),
-                make_node("b", NodeType::DocOnly, &["in"], &["out"]),
-                make_node("c", NodeType::DocOnly, &["in"], &["out"]),
+                make_node("a", NodeType::Agent, &["in"], &["out"]),
+                make_node("b", NodeType::Agent, &["in"], &["out"]),
+                make_node("c", NodeType::Agent, &["in"], &["out"]),
             ],
             vec![
                 make_edge("a", "out", "b", "in"),
@@ -904,10 +908,10 @@ mod tests {
     fn downstream_branching_dag() {
         let pipeline = make_pipeline(
             vec![
-                make_node("a", NodeType::DocOnly, &["in"], &["out"]),
-                make_node("b", NodeType::DocOnly, &["in"], &["out"]),
-                make_node("c", NodeType::DocOnly, &["in"], &["out"]),
-                make_node("d", NodeType::DocOnly, &["in-b", "in-c"], &["out"]),
+                make_node("a", NodeType::Agent, &["in"], &["out"]),
+                make_node("b", NodeType::Agent, &["in"], &["out"]),
+                make_node("c", NodeType::Agent, &["in"], &["out"]),
+                make_node("d", NodeType::Agent, &["in-b", "in-c"], &["out"]),
             ],
             vec![
                 make_edge("a", "out", "b", "in"),
@@ -926,8 +930,8 @@ mod tests {
     fn downstream_from_leaf_is_empty() {
         let pipeline = make_pipeline(
             vec![
-                make_node("a", NodeType::DocOnly, &["in"], &["out"]),
-                make_node("b", NodeType::DocOnly, &["in"], &["out"]),
+                make_node("a", NodeType::Agent, &["in"], &["out"]),
+                make_node("b", NodeType::Agent, &["in"], &["out"]),
             ],
             vec![make_edge("a", "out", "b", "in")],
         );
@@ -941,9 +945,9 @@ mod tests {
         let pipeline = make_pipeline(
             vec![
                 make_loop_node("loop1", 5),
-                make_node("impl", NodeType::CodeMutating, &["in"], &["out"]),
-                make_node("reviewer", NodeType::DocOnly, &["in"], &["review"]),
-                make_node("downstream", NodeType::DocOnly, &["in"], &["out"]),
+                make_node("impl", NodeType::Agent, &["in"], &["out"]),
+                make_node("reviewer", NodeType::Agent, &["in"], &["review"]),
+                make_node("downstream", NodeType::Agent, &["in"], &["out"]),
             ],
             vec![
                 make_edge("loop1", "body", "impl", "in"),
@@ -970,14 +974,9 @@ mod tests {
         // walk with the forward slice only: `end`, never `impl`.
         let pipeline = make_pipeline(
             vec![
-                make_node(
-                    "impl",
-                    NodeType::CodeMutating,
-                    &["task", "review"],
-                    &["code"],
-                ),
-                make_node("rev", NodeType::DocOnly, &["code"], &["review"]),
-                make_node("end", NodeType::DocOnly, &["result"], &[]),
+                make_node("impl", NodeType::Agent, &["task", "review"], &["code"]),
+                make_node("rev", NodeType::Agent, &["code"], &["review"]),
+                make_node("end", NodeType::Agent, &["result"], &[]),
             ],
             vec![
                 make_edge("impl", "code", "rev", "code"),     // 0
@@ -1005,14 +1004,9 @@ mod tests {
         // regardless — the excluded back-edge only ever pointed back at `impl`.
         let pipeline = make_pipeline(
             vec![
-                make_node(
-                    "impl",
-                    NodeType::CodeMutating,
-                    &["task", "review"],
-                    &["code"],
-                ),
-                make_node("rev", NodeType::DocOnly, &["code"], &["review"]),
-                make_node("end", NodeType::DocOnly, &["result"], &[]),
+                make_node("impl", NodeType::Agent, &["task", "review"], &["code"]),
+                make_node("rev", NodeType::Agent, &["code"], &["review"]),
+                make_node("end", NodeType::Agent, &["result"], &[]),
             ],
             vec![
                 make_edge("impl", "code", "rev", "code"),     // 0
@@ -1034,8 +1028,8 @@ mod tests {
             vec![
                 make_loop_node("outer", 3),
                 make_loop_node("inner", 5),
-                make_node("worker", NodeType::DocOnly, &["in"], &["out"]),
-                make_node("final", NodeType::DocOnly, &["in"], &["out"]),
+                make_node("worker", NodeType::Agent, &["in"], &["out"]),
+                make_node("final", NodeType::Agent, &["in"], &["out"]),
             ],
             vec![
                 make_edge("outer", "body", "inner", "in"),
@@ -1064,9 +1058,9 @@ mod tests {
                     &["in"],
                     &["pass", "fail", "default"],
                 ),
-                make_node("pass-handler", NodeType::DocOnly, &["in"], &["out"]),
-                make_node("fail-handler", NodeType::DocOnly, &["in"], &["out"]),
-                make_node("merge", NodeType::DocOnly, &["in-p", "in-f"], &["out"]),
+                make_node("pass-handler", NodeType::Agent, &["in"], &["out"]),
+                make_node("fail-handler", NodeType::Agent, &["in"], &["out"]),
+                make_node("merge", NodeType::Agent, &["in-p", "in-f"], &["out"]),
             ],
             vec![
                 make_edge("sw", "pass", "pass-handler", "in"),
@@ -1088,8 +1082,8 @@ mod tests {
     fn downstream_does_not_include_start_node() {
         let pipeline = make_pipeline(
             vec![
-                make_node("a", NodeType::DocOnly, &["in"], &["out"]),
-                make_node("b", NodeType::DocOnly, &["in"], &["out"]),
+                make_node("a", NodeType::Agent, &["in"], &["out"]),
+                make_node("b", NodeType::Agent, &["in"], &["out"]),
             ],
             vec![
                 make_edge("a", "out", "b", "in"),
@@ -1108,9 +1102,9 @@ mod tests {
     fn nodes_remaining_all_pending() {
         let pipeline = make_pipeline(
             vec![
-                make_node("a", NodeType::DocOnly, &["in"], &["out"]),
-                make_node("b", NodeType::DocOnly, &["in"], &["out"]),
-                make_node("c", NodeType::DocOnly, &["in"], &["out"]),
+                make_node("a", NodeType::Agent, &["in"], &["out"]),
+                make_node("b", NodeType::Agent, &["in"], &["out"]),
+                make_node("c", NodeType::Agent, &["in"], &["out"]),
             ],
             vec![
                 make_edge("a", "out", "b", "in"),
@@ -1125,9 +1119,9 @@ mod tests {
     fn nodes_remaining_partial_completion() {
         let pipeline = make_pipeline(
             vec![
-                make_node("a", NodeType::DocOnly, &["in"], &["out"]),
-                make_node("b", NodeType::DocOnly, &["in"], &["out"]),
-                make_node("c", NodeType::DocOnly, &["in"], &["out"]),
+                make_node("a", NodeType::Agent, &["in"], &["out"]),
+                make_node("b", NodeType::Agent, &["in"], &["out"]),
+                make_node("c", NodeType::Agent, &["in"], &["out"]),
             ],
             vec![
                 make_edge("a", "out", "b", "in"),
@@ -1144,8 +1138,8 @@ mod tests {
     fn nodes_remaining_running_counts_as_remaining() {
         let pipeline = make_pipeline(
             vec![
-                make_node("a", NodeType::DocOnly, &["in"], &["out"]),
-                make_node("b", NodeType::DocOnly, &["in"], &["out"]),
+                make_node("a", NodeType::Agent, &["in"], &["out"]),
+                make_node("b", NodeType::Agent, &["in"], &["out"]),
             ],
             vec![make_edge("a", "out", "b", "in")],
         );
@@ -1159,8 +1153,8 @@ mod tests {
     fn nodes_remaining_all_completed() {
         let pipeline = make_pipeline(
             vec![
-                make_node("a", NodeType::DocOnly, &["in"], &["out"]),
-                make_node("b", NodeType::DocOnly, &["in"], &["out"]),
+                make_node("a", NodeType::Agent, &["in"], &["out"]),
+                make_node("b", NodeType::Agent, &["in"], &["out"]),
             ],
             vec![make_edge("a", "out", "b", "in")],
         );
@@ -1176,7 +1170,7 @@ mod tests {
         let pipeline = make_pipeline(
             vec![
                 make_node("start", NodeType::Start, &[], &["out"]),
-                make_node("worker", NodeType::DocOnly, &["in"], &["out"]),
+                make_node("worker", NodeType::Agent, &["in"], &["out"]),
                 make_node("end", NodeType::End, &["result"], &[]),
             ],
             vec![
@@ -1193,7 +1187,7 @@ mod tests {
         let pipeline = make_pipeline(
             vec![
                 make_loop_node("loop1", 5),
-                make_node("impl", NodeType::CodeMutating, &["in"], &["out"]),
+                make_node("impl", NodeType::Agent, &["in"], &["out"]),
                 make_node("sw", NodeType::Switch, &["in"], &["pass", "default"]),
             ],
             vec![
@@ -1217,8 +1211,8 @@ mod tests {
         // implementer -> reviewer -> implementer is one cycle of two members.
         let pipeline = make_pipeline(
             vec![
-                make_node("impl", NodeType::CodeMutating, &["review"], &["code"]),
-                make_node("rev", NodeType::DocOnly, &["code"], &["review"]),
+                make_node("impl", NodeType::Agent, &["review"], &["code"]),
+                make_node("rev", NodeType::Agent, &["code"], &["review"]),
             ],
             vec![
                 make_edge("impl", "code", "rev", "code"),
@@ -1237,14 +1231,9 @@ mod tests {
         // (ADR-0011 / #148: self-edge included).
         let pipeline = make_pipeline(
             vec![
-                make_node("a", NodeType::DocOnly, &["in"], &["out"]),
-                make_node(
-                    "worker",
-                    NodeType::CodeMutating,
-                    &["seed", "again"],
-                    &["out"],
-                ),
-                make_node("b", NodeType::DocOnly, &["in"], &["out"]),
+                make_node("a", NodeType::Agent, &["in"], &["out"]),
+                make_node("worker", NodeType::Agent, &["seed", "again"], &["out"]),
+                make_node("b", NodeType::Agent, &["in"], &["out"]),
             ],
             vec![
                 make_edge("a", "out", "worker", "seed"),
@@ -1263,9 +1252,9 @@ mod tests {
         // A pure DAG has no cycles — nothing to auto-materialize.
         let pipeline = make_pipeline(
             vec![
-                make_node("a", NodeType::DocOnly, &["in"], &["out"]),
-                make_node("b", NodeType::DocOnly, &["in"], &["out"]),
-                make_node("c", NodeType::DocOnly, &["in"], &["out"]),
+                make_node("a", NodeType::Agent, &["in"], &["out"]),
+                make_node("b", NodeType::Agent, &["in"], &["out"]),
+                make_node("c", NodeType::Agent, &["in"], &["out"]),
             ],
             vec![
                 make_edge("a", "out", "b", "in"),
@@ -1283,13 +1272,8 @@ mod tests {
         let pipeline = make_pipeline(
             vec![
                 make_node("start", NodeType::Start, &[], &["user_prompt"]),
-                make_node(
-                    "impl",
-                    NodeType::CodeMutating,
-                    &["task", "review"],
-                    &["code"],
-                ),
-                make_node("rev", NodeType::DocOnly, &["code"], &["review"]),
+                make_node("impl", NodeType::Agent, &["task", "review"], &["code"]),
+                make_node("rev", NodeType::Agent, &["code"], &["review"]),
             ],
             vec![
                 make_edge("start", "user_prompt", "impl", "task"),

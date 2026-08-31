@@ -112,7 +112,7 @@ describe("DiffSection", () => {
     expect(screen.getByText("No changes")).toBeInTheDocument();
   });
 
-  it("shows dropdown with completed code-mutating nodes", async () => {
+  it("shows dropdown with completed isolated nodes only (#653)", async () => {
     const run = makeRun({
       nodes: {
         "impl-1": makeNodeState({ node_id: "impl-1" }),
@@ -125,7 +125,8 @@ describe("DiffSection", () => {
         {
           id: "impl-1",
           name: "Implementer",
-          node_type: "code-mutating",
+          node_type: "agent",
+          isolated_worktree: true,
           view_x: 0,
           view_y: 0,
           inputs: [],
@@ -134,7 +135,8 @@ describe("DiffSection", () => {
         {
           id: "reviewer-1",
           name: "Reviewer",
-          node_type: "doc-only",
+          node_type: "agent",
+          isolated_worktree: false,
           view_x: 0,
           view_y: 0,
           inputs: [],
@@ -172,7 +174,8 @@ describe("DiffSection", () => {
         {
           id: "impl-1",
           name: "Implementer",
-          node_type: "code-mutating",
+          node_type: "agent",
+          isolated_worktree: true,
           view_x: 0,
           view_y: 0,
           inputs: [],

@@ -31,7 +31,8 @@ nodes:
       - name: user_prompt
   - id: alpha
     name: alpha
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: in
     outputs:

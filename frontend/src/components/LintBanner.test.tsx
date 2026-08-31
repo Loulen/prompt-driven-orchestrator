@@ -24,11 +24,11 @@ describe("LintBanner", () => {
   it("renders diagnostic messages", () => {
     render(
       <LintBanner
-        items={[lint("node 'reviewer' receives edges from 2 code-mutating nodes without a Merge")]}
+        items={[lint("node 'reviewer' receives edges from 2 isolated nodes without a Merge")]}
         onDismiss={noop}
       />,
     );
-    expect(screen.getByText(/code-mutating nodes without a Merge/)).toBeInTheDocument();
+    expect(screen.getByText(/isolated nodes without a Merge/)).toBeInTheDocument();
   });
 
   it("renders multiple diagnostics", () => {

@@ -41,6 +41,7 @@ mod tests {
 
     fn make_switch(outputs: Vec<Port>) -> NodeDef {
         NodeDef {
+            isolated_worktree: None,
             id: "sw".into(),
             name: "test-switch".into(),
             node_type: NodeType::Switch,

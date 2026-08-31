@@ -31,7 +31,8 @@ nodes:
     view: { x: 0, y: 200 }
   - id: reviewer
     name: reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: code
       - name: context
@@ -144,7 +145,7 @@ test("instantiating from library restores ports and frontmatter", async ({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         name: "reviewer",
-        type: "doc-only",
+        type: "agent",
         inputs: [
           { name: "code", repeated: false },
           { name: "context", repeated: true },

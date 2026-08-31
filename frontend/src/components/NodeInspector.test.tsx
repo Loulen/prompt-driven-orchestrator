@@ -67,7 +67,7 @@ vi.mock("../api", () => ({
   instantiateFromLibrary: vi.fn().mockResolvedValue({
     spec: {
       name: "reviewer",
-      type: "doc-only",
+      type: "agent",
       inputs: [],
       outputs: [],
       interactive: false,
@@ -93,7 +93,7 @@ function seedTabWithReviewer(dirty: boolean, prompt = "Review this code.") {
             {
               id: "rv1",
               name: "reviewer",
-              type: "doc-only",
+              type: "agent",
               interactive: false,
               inputs: [{ name: "in", repeated: false, side: "left" }],
               outputs: [{ name: "out", repeated: false, side: "right" }],
@@ -127,7 +127,7 @@ function seedPooledReviewPipeline() {
             {
               id: "sec",
               name: "security-reviewer",
-              type: "doc-only",
+              type: "agent",
               interactive: false,
               inputs: [],
               outputs: [{ name: "review", repeated: false, side: "right" }],
@@ -136,7 +136,7 @@ function seedPooledReviewPipeline() {
             {
               id: "perf",
               name: "perf-reviewer",
-              type: "doc-only",
+              type: "agent",
               interactive: false,
               inputs: [],
               outputs: [{ name: "review", repeated: false, side: "right" }],
@@ -145,7 +145,7 @@ function seedPooledReviewPipeline() {
             {
               id: "impl",
               name: "implementer",
-              type: "code-mutating",
+              type: "agent",
               interactive: false,
               inputs: [],
               outputs: [
@@ -228,7 +228,7 @@ describe("NodeInspector — script node surface (#248)", () => {
     expect(screen.queryByTestId("node-effort-option-low")).toBeNull();
   });
 
-  it("shows a static script type label, not the doc-only/code-mutating toggle", () => {
+  it("shows a static script type label (#248/#653: types are not toggles)", () => {
     seedTabWithScript();
     renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
     expect(screen.getByTestId("script-type-label")).toBeInTheDocument();
@@ -385,7 +385,7 @@ function seedSelfFeedPipeline() {
             {
               id: "cc1",
               name: "cycler",
-              type: "doc-only",
+              type: "agent",
               interactive: false,
               inputs: [],
               outputs: [{ name: "in", repeated: false, side: "right" }],
@@ -490,7 +490,7 @@ describe("NodeInspector StarButton — library save is independent of pipeline s
     expect(mockSave).toHaveBeenCalledTimes(1);
     expect(mockSave).toHaveBeenCalledWith({
       name: "reviewer",
-      type: "doc-only",
+      type: "agent",
       inputs: [{ name: "in", repeated: false, side: "left" }],
       outputs: [{ name: "out", repeated: false, side: "right" }],
       interactive: false,
@@ -540,7 +540,7 @@ describe("NodeInspector StarButton — library save is independent of pipeline s
   it("opens the popover when node is already synced with library", () => {
     const synced: LibraryEntry = {
       name: "reviewer",
-      type: "doc-only",
+      type: "agent",
       inputs: [{ name: "in", repeated: false, side: "left" }],
       outputs: [{ name: "out", repeated: false, side: "right" }],
       interactive: false,
@@ -574,7 +574,7 @@ function seedNode(node: Record<string, unknown>) {
             {
               id: "n1",
               name: "worker",
-              type: "doc-only",
+              type: "agent",
               interactive: false,
               inputs: [{ name: "in", repeated: false, side: "left" }],
               outputs: [{ name: "out", repeated: false, side: "right" }],
@@ -657,7 +657,7 @@ describe("NodeInspector — harness axis (#550, ADR-0046)", () => {
 describe("NodeInspector — the model field does not follow the selection (#617)", () => {
   function seedTwoNodes() {
     const base = {
-      type: "doc-only" as const,
+      type: "agent" as const,
       interactive: false,
       inputs: [],
       outputs: [{ name: "out", repeated: false, side: "right" as const }],
@@ -728,5 +728,77 @@ describe("NodeInspector — the model field does not follow the selection (#617)
     expect(cop.model ?? null).toBeNull();
     // …and the tab is not dirtied by a field the user only looked at.
     expect(useEditStore.getState().openTabs[0].dirty).toBe(false);
+  });
+});
+
+/**
+ * #653 / ADR-0060 — the Workspace section. Two named places, the resolved path
+ * underneath, and nothing at all on the types that carry no isolation.
+ */
+describe("NodeInspector — Workspace (#653)", () => {
+  it("shows a static agent type label instead of a type toggle", () => {
+    seedTabWithReviewer(false);
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    expect(screen.getByTestId("agent-type-label")).toBeInTheDocument();
+  });
+
+  it("preselects Isolated worktree for an agent that states nothing", () => {
+    seedTabWithReviewer(false);
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    expect(screen.getByTestId("workspace-isolated")).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByTestId("workspace-shared")).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("preselects Run worktree for a script that states nothing", () => {
+    seedTabWithScript();
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    expect(screen.getByTestId("workspace-shared")).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("writes the chosen value onto the node without touching its type", () => {
+    seedTabWithReviewer(false);
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    fireEvent.click(screen.getByTestId("workspace-shared"));
+    const node = useEditStore.getState().openTabs[0].pipeline.nodes[0];
+    expect(node.isolated_worktree).toBe(false);
+    expect(node.type).toBe("agent");
+  });
+
+  it("shows the resolved working directory and updates it on click", () => {
+    seedTabWithReviewer(false);
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    expect(screen.getByTestId("workspace-path")).toHaveTextContent(
+      ".pdo/runs/<run>/nodes/rv1/iter-<n>",
+    );
+    fireEvent.click(screen.getByTestId("workspace-shared"));
+    expect(screen.getByTestId("workspace-path")).toHaveTextContent(
+      ".pdo/runs/<run>/worktree",
+    );
+  });
+
+  it("shows the FROZEN value, read-only, once the NodeRun has started", () => {
+    // The document says isolated; the live iteration was spawned shared. Run mode
+    // shows where the Node actually works and refuses to move it.
+    seedTabWithReviewer(false);
+    renderInspector({
+      libraryEntries: [],
+      onLibraryChanged: () => {},
+      runNode: {
+        node_id: "rv1",
+        status: "running",
+        iter: 1,
+        started_at: null,
+        completed_at: null,
+        failure_reason: null,
+        iterations: [],
+        isolated_worktree: false,
+      },
+    });
+
+    expect(screen.getByTestId("workspace-shared")).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByTestId("workspace-isolated")).toBeDisabled();
+    expect(screen.getByTestId("workspace-frozen")).toBeInTheDocument();
   });
 });

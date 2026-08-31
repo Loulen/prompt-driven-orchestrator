@@ -22,7 +22,8 @@ nodes:
       - name: user_prompt
   - id: cccccccc
     name: on-ghost
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     pin_harness: ghost
     outputs:
       - name: out

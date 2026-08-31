@@ -19,7 +19,8 @@ nodes:
       - name: user_prompt
   - id: worker
     name: Worker
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:
@@ -126,12 +127,9 @@ async fn changing_type_of_live_node_is_rejected_with_message() {
     let run_id = create_run(&daemon).await;
     wait_for_node_status(&daemon.url(), &run_id, "worker", &["running"]).await;
 
-    // Same graph, but the worker's type flips doc-only -> code-mutating.
-    let yaml_with_type_change = PIPELINE_YAML.replace(
-        "    name: Worker\n    type: doc-only",
-        "    name: Worker\n    type: code-mutating",
-    );
-    assert!(yaml_with_type_change.contains("code-mutating"), "guard");
+    // Same graph, but the worker's type flips `agent` -> `script`.
+    let yaml_with_type_change = PIPELINE_YAML.replace("    type: agent", "    type: script");
+    assert!(yaml_with_type_change.contains("type: script"), "guard");
 
     let resp = reqwest::Client::new()
         .put(format!("{}/runs/{}/pipeline", daemon.url(), run_id))
@@ -156,6 +154,50 @@ async fn changing_type_of_live_node_is_rejected_with_message() {
     );
 }
 
+/// #653 / ADR-0060: isolation is NOT the type. Moving a live node's
+/// `isolated_worktree` is a legal edit — it is frozen at spawn, so it lands on
+/// the next launch instead of dragging a running session between worktrees. The
+/// mid-run edit policy must let it through where a type change is refused.
+#[tokio::test]
+async fn changing_isolation_of_live_node_is_accepted() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon).await;
+    wait_for_node_status(&daemon.url(), &run_id, "worker", &["running"]).await;
+
+    let yaml_with_isolation_change = PIPELINE_YAML.replace(
+        "    isolated_worktree: false",
+        "    isolated_worktree: true",
+    );
+    assert_ne!(yaml_with_isolation_change, PIPELINE_YAML, "guard");
+
+    let resp = reqwest::Client::new()
+        .put(format!("{}/runs/{}/pipeline", daemon.url(), run_id))
+        .json(&serde_json::json!({ "yaml": yaml_with_isolation_change, "prompts": {} }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        resp.status(),
+        200,
+        "an isolation edit applies to future NodeRuns and must not be rejected"
+    );
+
+    // And the live iteration is unmoved: its frozen answer still says shared.
+    let run: serde_json::Value = reqwest::Client::new()
+        .get(format!("{}/runs/{}", daemon.url(), run_id))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        run["nodes"]["worker"]["isolated_worktree"], false,
+        "the running NodeRun keeps the isolation it was spawned with; got {run}"
+    );
+}
+
 #[tokio::test]
 async fn adding_node_and_edge_mid_run_succeeds() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
@@ -172,7 +214,8 @@ nodes:
       - name: user_prompt
   - id: worker
     name: Worker
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:
@@ -180,7 +223,8 @@ nodes:
     view: { x: 200, y: 100 }
   - id: reviewer
     name: Reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: feedback
     view: { x: 400, y: 100 }
@@ -225,7 +269,8 @@ nodes:
       - name: user_prompt
   - id: worker
     name: Worker
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:
@@ -233,7 +278,8 @@ nodes:
     view: { x: 200, y: 100 }
   - id: reviewer
     name: Reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: feedback
     view: { x: 400, y: 100 }

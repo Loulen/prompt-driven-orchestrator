@@ -163,7 +163,7 @@ const NUDGE_PIPELINE = {
     {
       id: "triage",
       name: "Triage",
-      type: "doc-only" as const,
+      type: "agent" as const,
       interactive: false,
       inputs: [],
       outputs: [
@@ -178,7 +178,7 @@ const NUDGE_PIPELINE = {
     {
       id: "fixer",
       name: "Fixer",
-      type: "code-mutating" as const,
+      type: "agent" as const,
       interactive: false,
       inputs: [{ name: "in", repeated: false, side: "left" as const }],
       outputs: [],

@@ -64,6 +64,9 @@ export default function AddNodeFromYamlModal({
         inputs: result.spec.inputs.map((p) => libraryPortToPortDef(p, "left")),
         outputs: result.spec.outputs.map((p) => libraryPortToPortDef(p, "right")),
         interactive: result.spec.interactive,
+        // #653/ADR-0060: carry the pasted node's workspace through. Dropping it
+        // would silently fork a sub-worktree for a node that opted out.
+        isolated_worktree: result.spec.isolated_worktree ?? null,
         pin_harness: result.spec.pin_harness ?? null,
         harnesses: result.spec.harnesses ?? undefined,
         // Fallback flat values (a legacy library/export with no `harnesses` map);
@@ -121,7 +124,7 @@ export default function AddNodeFromYamlModal({
             setWarnings(null);
           }}
           disabled={warnings != null}
-          placeholder={"name: My node\ntype: doc-only\nprompt: |\n  ..."}
+          placeholder={"name: My node\ntype: agent\nisolated_worktree: false\nprompt: |\n  ..."}
           data-testid="add-node-yaml-textarea"
           className="mb-2 h-40 w-full resize-y rounded border border-line-strong bg-bg-3 px-2 py-1.5 font-mono text-fg outline-none focus:border-acc disabled:opacity-60"
           style={{ fontSize: "11px", lineHeight: "1.5" }}

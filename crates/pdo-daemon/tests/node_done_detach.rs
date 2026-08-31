@@ -25,7 +25,7 @@ use crate::common::TestDaemon;
 use tokio::io::AsyncWriteExt;
 
 const PIPELINE_NAME: &str = "detach-tail";
-// start → a → b → end; doc-only nodes so completion needs no sub-worktree merge.
+// start → a → b → end; non-isolated nodes so completion needs no sub-worktree merge.
 const PIPELINE_YAML: &str = r#"name: detach-tail
 version: "1.0"
 nodes:
@@ -36,14 +36,16 @@ nodes:
       - name: user_prompt
   - id: a
     name: a
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: in
     outputs:
       - name: out
   - id: b
     name: b
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: in
     outputs:
@@ -160,7 +162,7 @@ where
     }
 }
 
-/// Satisfy output validation for a doc-only node before `pdo complete`: write
+/// Satisfy output validation for a non-isolated node before `pdo complete`: write
 /// the artifact its declared `out` port expects, exactly where the agent would.
 fn write_out_artifact(daemon: &TestDaemon, run_id: &str, node_id: &str) {
     let dir = daemon

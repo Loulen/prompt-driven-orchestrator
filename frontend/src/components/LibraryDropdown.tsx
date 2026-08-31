@@ -8,8 +8,9 @@ import type { NodeDef, NodeType } from "../types";
 import { Tooltip } from "./ui/tooltip";
 
 const TYPE_ICONS: Record<string, string> = {
-  "code-mutating": "CM",
-  "doc-only": "DO",
+  // #653: one agentic type, one badge. The pair of `CM`/`DO` letters was the
+  // library's echo of the retired type split.
+  "agent": "AG",
 };
 
 export default function LibraryDropdown({

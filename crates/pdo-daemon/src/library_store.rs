@@ -1023,9 +1023,10 @@ mod tests {
 
     fn make_node(name: &str) -> pipeline::NodeDef {
         pipeline::NodeDef {
+            isolated_worktree: None,
             id: "test-id".to_string(),
             name: name.to_string(),
-            node_type: pipeline::NodeType::DocOnly,
+            node_type: pipeline::NodeType::Agent,
             inputs: vec![pipeline::Port {
                 name: "in".to_string(),
                 repeated: false,
@@ -1105,7 +1106,7 @@ mod tests {
 
             let entry1 = LibraryEntry {
                 name: "Alpha".to_string(),
-                node_type: pipeline::NodeType::DocOnly,
+                node_type: pipeline::NodeType::Agent,
                 inputs: vec![],
                 outputs: vec![],
                 interactive: false,
@@ -1153,7 +1154,7 @@ mod tests {
             // The real entry, parked at the collision slug.
             let entry = LibraryEntry {
                 name: "Typed Reviewer".to_string(),
-                node_type: pipeline::NodeType::DocOnly,
+                node_type: pipeline::NodeType::Agent,
                 inputs: vec![],
                 outputs: vec![],
                 interactive: false,
@@ -1211,7 +1212,7 @@ mod tests {
     fn yaml_round_trip_lossless() {
         let entry = LibraryEntry {
             name: "Complex Node".to_string(),
-            node_type: pipeline::NodeType::CodeMutating,
+            node_type: pipeline::NodeType::Agent,
             // #345/#296: a per-node model must round-trip losslessly.
             model: Some("opus".to_string()),
             // #424: and so must a per-node effort.
@@ -1280,7 +1281,7 @@ mod tests {
         // key, and must round-trip to None (#345/#296 — skip_serializing_if).
         let entry = LibraryEntry {
             name: "Plain".to_string(),
-            node_type: pipeline::NodeType::DocOnly,
+            node_type: pipeline::NodeType::Agent,
             inputs: vec![],
             outputs: vec![],
             interactive: false,
@@ -1315,7 +1316,7 @@ mod tests {
         // entry — the alternative is `diverged` forever (the #345 trap).
         let entry = LibraryEntry {
             name: "Plain".to_string(),
-            node_type: pipeline::NodeType::DocOnly,
+            node_type: pipeline::NodeType::Agent,
             inputs: vec![],
             outputs: vec![],
             interactive: false,
@@ -1370,7 +1371,7 @@ mod tests {
         with_temp_home(|| {
             let base = LibraryEntry {
                 name: String::new(),
-                node_type: pipeline::NodeType::DocOnly,
+                node_type: pipeline::NodeType::Agent,
                 inputs: vec![],
                 outputs: vec![],
                 interactive: false,
@@ -1409,7 +1410,7 @@ mod tests {
 
     fn sample_pipeline_yaml(name: &str) -> String {
         format!(
-            "name: {name}\nnodes:\n  - id: start\n    name: Start\n    type: start\n    outputs:\n      - name: user_prompt\n  - id: planner\n    name: Planner\n    type: doc-only\n    inputs:\n      - name: in\n    outputs:\n      - name: plan\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\nedges:\n  - source: {{ node: start, port: user_prompt }}\n    target: {{ node: planner, port: in }}\n  - source: {{ node: planner, port: plan }}\n    target: {{ node: end, port: result }}\n"
+            "name: {name}\nnodes:\n  - id: start\n    name: Start\n    type: start\n    outputs:\n      - name: user_prompt\n  - id: planner\n    name: Planner\n    type: agent\n    isolated_worktree: false\n    inputs:\n      - name: in\n    outputs:\n      - name: plan\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\nedges:\n  - source: {{ node: start, port: user_prompt }}\n    target: {{ node: planner, port: in }}\n  - source: {{ node: planner, port: plan }}\n    target: {{ node: end, port: result }}\n"
         )
     }
 
@@ -1694,7 +1695,7 @@ mod tests {
     fn json_round_trip_preserves_all_port_fields() {
         let entry = LibraryEntry {
             name: "Typed Node".to_string(),
-            node_type: pipeline::NodeType::DocOnly,
+            node_type: pipeline::NodeType::Agent,
             model: None,
             effort: None,
             inputs: vec![
@@ -1791,7 +1792,7 @@ mod tests {
         with_temp_home(|| {
             let entry = LibraryEntry {
                 name: "Schema Node".to_string(),
-                node_type: pipeline::NodeType::CodeMutating,
+                node_type: pipeline::NodeType::Agent,
                 model: None,
                 effort: None,
                 inputs: vec![pipeline::Port {
@@ -2221,7 +2222,7 @@ mod tests {
         format!(
             "name: {name}\nversion: '1.0'\nnodes:\n\
              - id: start\n  name: Start\n  type: start\n  outputs:\n  - name: user_prompt\n  view: {{x: 300, y: 60}}\n\
-             - id: planner\n  name: Planner\n  type: doc-only\n  outputs:\n  - name: plan\n  view: {{x: {planner_x}, y: 260}}\n\
+             - id: planner\n  name: Planner\n  type: agent\n  isolated_worktree: false\n  outputs:\n  - name: plan\n  view: {{x: {planner_x}, y: 260}}\n\
              - id: end\n  name: End\n  type: end\n  inputs:\n  - name: result\n  view: {{x: 300, y: 460}}\n\
              edges:\n\
              - source: {{node: start, port: user_prompt}}\n  target: {{node: planner, port: in}}\n\
@@ -2279,7 +2280,7 @@ mod tests {
         // Same document as `laid_out_pipeline("Demo", 300, "")`: indented block
         // sequences, double-quoted version, block-style `view`, keys reordered, and
         // port defaults spelled out instead of left to the parser.
-        let reserialized = "name: Demo\nversion: \"1.0\"\nnodes:\n  - id: start\n    type: start\n    name: Start\n    view:\n      y: 60\n      x: 300\n    outputs:\n      - name: user_prompt\n        repeated: false\n        side: right\n        port_type: markdown\n  - id: planner\n    type: doc-only\n    name: Planner\n    view:\n      y: 260\n      x: 300\n    outputs:\n      - name: plan\n        side: right\n  - id: end\n    type: end\n    name: End\n    view:\n      y: 460\n      x: 300\n    inputs:\n      - name: result\n        side: left\nedges:\n  - target: {node: planner, port: in}\n    source: {node: start, port: user_prompt}\n  - target: {node: end, port: result}\n    source: {node: planner, port: plan}\n";
+        let reserialized = "name: Demo\nversion: \"1.0\"\nnodes:\n  - id: start\n    type: start\n    name: Start\n    view:\n      y: 60\n      x: 300\n    outputs:\n      - name: user_prompt\n        repeated: false\n        side: right\n        port_type: markdown\n  - id: planner\n    type: agent\n    isolated_worktree: false\n    name: Planner\n    view:\n      y: 260\n      x: 300\n    outputs:\n      - name: plan\n        side: right\n  - id: end\n    type: end\n    name: End\n    view:\n      y: 460\n      x: 300\n    inputs:\n      - name: result\n        side: left\nedges:\n  - target: {node: planner, port: in}\n    source: {node: start, port: user_prompt}\n  - target: {node: end, port: result}\n    source: {node: planner, port: plan}\n";
         let prompts = HashMap::new();
         let handwritten = laid_out_pipeline("Demo", 300, "");
         assert_ne!(
@@ -2320,7 +2321,7 @@ mod tests {
             ),
             (
                 "per-node model",
-                base.replace("  type: doc-only", "  type: doc-only\n  model: opus"),
+                base.replace("  type: agent", "  type: agent\n  model: opus"),
             ),
             (
                 "edge condition",
@@ -2333,7 +2334,7 @@ mod tests {
                 "added node",
                 base.replace(
                     "edges:",
-                    "- id: extra\n  name: Extra\n  type: doc-only\n  outputs:\n  - name: o\nedges:",
+                    "- id: extra\n  name: Extra\n  type: agent\n  isolated_worktree: false\n  outputs:\n  - name: o\nedges:",
                 ),
             ),
             (

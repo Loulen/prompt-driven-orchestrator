@@ -20,7 +20,7 @@ vi.mock("../api", () => ({
   instantiateFromLibrary: vi.fn().mockResolvedValue({
     spec: {
       name: "Test",
-      type: "doc-only",
+      type: "agent",
       inputs: [],
       outputs: [],
       interactive: false,
@@ -36,7 +36,7 @@ vi.mock("../lib/nanoid", () => ({
 function makeEntry(name: string, prompt = "Some prompt"): LibraryEntry {
   return {
     name,
-    type: "doc-only",
+    type: "agent",
     inputs: [{ name: "in", repeated: false }],
     outputs: [{ name: "out", repeated: false }],
     interactive: false,

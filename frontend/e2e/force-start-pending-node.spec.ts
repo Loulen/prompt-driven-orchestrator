@@ -35,7 +35,8 @@ nodes:
     view: { x: 0, y: 100 }
   - id: worker-a
     name: Worker A
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: in
     outputs:
@@ -43,7 +44,8 @@ nodes:
     view: { x: 200, y: 100 }
   - id: worker-b
     name: Worker B
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: in
     outputs:

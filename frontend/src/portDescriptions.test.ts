@@ -16,12 +16,12 @@ describe("getPortDescription", () => {
 
   it("returns yaml description when no hardcoded match", () => {
     expect(
-      getPortDescription("doc-only", "input", "plan", "The implementation plan"),
+      getPortDescription("agent", "input", "plan", "The implementation plan"),
     ).toBe("The implementation plan");
   });
 
   it("returns port name as fallback", () => {
-    expect(getPortDescription("doc-only", "output", "review")).toBe("review");
+    expect(getPortDescription("agent", "output", "review")).toBe("review");
   });
 
   it("prefers hardcoded over yaml description", () => {

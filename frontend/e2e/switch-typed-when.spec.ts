@@ -35,7 +35,8 @@ nodes:
     view: { x: 200, y: 0 }
   - id: reviewer
     name: reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - { name: task, side: top }
     outputs:

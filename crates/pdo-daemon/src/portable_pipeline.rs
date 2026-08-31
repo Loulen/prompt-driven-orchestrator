@@ -172,6 +172,7 @@ mod tests {
 
     fn node(id: &str, name: &str, node_type: NodeType) -> NodeDef {
         NodeDef {
+            isolated_worktree: None,
             id: id.into(),
             name: name.into(),
             node_type,
@@ -202,7 +203,7 @@ mod tests {
         };
         let mut start = node("start", "Start", NodeType::Start);
         start.outputs.push(port("user_prompt"));
-        let mut worker = node("worker", "Worker", NodeType::DocOnly);
+        let mut worker = node("worker", "Worker", NodeType::Agent);
         worker.agent_choice = Some(AgentChoice::Profile {
             profile_id: "local-reviewer".into(),
         });

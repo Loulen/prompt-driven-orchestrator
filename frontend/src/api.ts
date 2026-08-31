@@ -1515,6 +1515,9 @@ export interface ParseNodeResult {
      *  model/effort re-homing onto `claude`. */
     pin_harness?: string | null;
     harnesses?: Record<string, { model?: string; effort?: string }> | null;
+    /** #653/ADR-0060: where the node works. `null` for the types that carry no
+     *  isolation (`merge`, `start`, `end`). */
+    isolated_worktree?: boolean | null;
     max_iter?: number | string | null;
     branches?: number | null;
   };

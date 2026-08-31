@@ -7,7 +7,7 @@ function makeNode(overrides: Partial<NodeDef> = {}): NodeDef {
   return {
     id: "n1",
     name: "Reviewer",
-    type: "doc-only",
+    type: "agent",
     inputs: [{ name: "code", repeated: false, side: "left" }],
     outputs: [{ name: "review", repeated: false, side: "right" }],
     interactive: false,
@@ -19,7 +19,7 @@ function makeNode(overrides: Partial<NodeDef> = {}): NodeDef {
 function makeEntry(overrides: Partial<LibraryEntry> = {}): LibraryEntry {
   return {
     name: "Reviewer",
-    type: "doc-only",
+    type: "agent",
     inputs: [{ name: "code", repeated: false, side: "left" }],
     outputs: [{ name: "review", repeated: false, side: "right" }],
     interactive: false,
@@ -53,7 +53,7 @@ describe("computeSyncState", () => {
   });
 
   it("returns diverged when type differs", () => {
-    const node = makeNode({ type: "code-mutating" });
+    const node = makeNode({ type: "script" });
     const entries = [makeEntry()];
     expect(computeSyncState(node, "You review code.", entries)).toBe("diverged");
   });

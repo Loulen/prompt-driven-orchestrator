@@ -1,14 +1,14 @@
 //! Layer 3a — sub-worktree survival integration tests for issues #32 and #489.
 //!
-//! Spawns a real TestDaemon with a code-mutating pipeline, creates a run,
-//! marks the code-mutating node done, then asserts:
+//! Spawns a real TestDaemon with an isolated-node pipeline, creates a run,
+//! marks the isolated node done, then asserts:
 //! - the sub-worktree directory still exists on disk
 //! - GET /runs/{run_id}/nodes/{node_id}/prompt?iter=1 returns 200
 //!
 //! #489 extends the file to the other half of "survives": a `restart_node` on the
 //! same node must re-spawn it **without destroying the dead session's uncommitted
 //! work**. That is the regression the whole issue is about, and this pipeline
-//! already has the only node class that can see it (`code-mutating`).
+//! already has the only node class that can see it (isolated).
 
 use crate::common::TestDaemon;
 
@@ -24,7 +24,8 @@ nodes:
       - name: user_prompt
   - id: impl-1
     name: impl-1
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     inputs:
       - name: task
     outputs:
@@ -191,7 +192,7 @@ where
     panic!("timed out waiting for {what}");
 }
 
-/// **THE #489 REGRESSION.** A `restart_node` on a `code-mutating` node whose
+/// **THE #489 REGRESSION.** A `restart_node` on an isolated node whose
 /// sub-worktree already exists must genuinely re-spawn it, and must not touch the
 /// work in flight.
 ///
@@ -386,7 +387,7 @@ async fn a_panic_on_a_reused_sub_worktree_destroys_nothing() {
     assert_eq!(git_out(&sub_wt_dir, &["rev-parse", "HEAD"]), head_before);
 }
 
-/// Layer 3a: after marking a code-mutating node done, the sub-worktree
+/// Layer 3a: after marking an isolated node done, the sub-worktree
 /// directory must still exist on disk and the prompt endpoint must return 200.
 #[tokio::test]
 async fn sub_worktree_survives_node_completion() {
@@ -456,7 +457,7 @@ async fn sub_worktree_survives_node_completion() {
     assert_eq!(
         resp.status(),
         200,
-        "prompt endpoint must return 200 for completed code-mutating node"
+        "prompt endpoint must return 200 for completed isolated node"
     );
 
     let body = resp.text().await.unwrap();

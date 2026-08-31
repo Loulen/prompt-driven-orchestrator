@@ -80,9 +80,9 @@ pub(crate) struct AugmentContext<'a> {
     #[allow(dead_code)]
     pub daemon_url: &'a str,
     pub foreach_context: Option<ForEachContext>,
-    /// For code-mutating / merge nodes: the per-iteration sub-worktree the
+    /// For isolated / merge nodes: the per-iteration sub-worktree the
     /// agent must edit in. Set to `None` for nodes that run directly in the
-    /// pipeline worktree (doc-only, switch, loop, etc.).
+    /// pipeline worktree (non-isolated, switch, loop, etc.).
     pub source_worktree_dir: Option<&'a Path>,
     pub input_images: Vec<String>,
     /// Whether the Start node's user prompt (`_input/output.md`) carries any
@@ -543,18 +543,15 @@ pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
     } else {
         let ext_list = IMAGE_EXTENSIONS.join(", .");
         for output in &outputs {
-            let instructions = matches!(
-                ctx.node.node_type,
-                NodeType::DocOnly | NodeType::CodeMutating
-            )
-            .then(|| {
-                ctx.node
-                    .outputs
-                    .iter()
-                    .find(|port| port.name == output.port_name)
-                    .and_then(|port| port.instructions.as_deref())
-            })
-            .flatten();
+            let instructions = (ctx.node.node_type == NodeType::Agent)
+                .then(|| {
+                    ctx.node
+                        .outputs
+                        .iter()
+                        .find(|port| port.name == output.port_name)
+                        .and_then(|port| port.instructions.as_deref())
+                })
+                .flatten();
             match output.port_type {
                 PortType::Image => {
                     preamble.push_str(&format!(
@@ -1014,7 +1011,7 @@ curl -X POST {daemon_url}/runs/{run_id}/commands \
 
 ### 5. restart_node
 
-Kill a NodeRun and re-spawn it on the **same iter** with a new session. On a `code-mutating` or `merge` node the sub-worktree is **reused in place**, so the dead session's uncommitted work is still there.
+Kill a NodeRun and re-spawn it on the **same iter** with a new session. On an isolated node the sub-worktree is **reused in place**, so the dead session's uncommitted work is still there.
 
 ```bash
 curl -X POST {daemon_url}/runs/{run_id}/commands \
@@ -1196,9 +1193,10 @@ mod tests {
             version: Some("1.0".into()),
             variables: HashMap::new(),
             nodes: vec![NodeDef {
+                isolated_worktree: None,
                 id: "planner".into(),
                 name: "planner".into(),
-                node_type: NodeType::DocOnly,
+                node_type: NodeType::Agent,
                 inputs: vec![Port {
                     name: "task".into(),
                     repeated: false,
@@ -1487,6 +1485,7 @@ mod tests {
     fn script_with_repeated_laps_pipeline() -> PipelineDef {
         let mut pipeline = sample_pipeline();
         pipeline.nodes.push(NodeDef {
+            isolated_worktree: None,
             id: "collector".into(),
             name: "collector".into(),
             node_type: NodeType::Script,
@@ -1610,9 +1609,10 @@ mod tests {
     fn edge_based_input_resolution() {
         let mut pipeline = sample_pipeline();
         pipeline.nodes.push(NodeDef {
+            isolated_worktree: None,
             id: "implementer".into(),
             name: "implementer".into(),
-            node_type: NodeType::CodeMutating,
+            node_type: NodeType::Agent,
             inputs: vec![Port {
                 name: "plan".into(),
                 repeated: false,
@@ -1692,9 +1692,10 @@ mod tests {
             ..Default::default()
         });
         pipeline.nodes.push(NodeDef {
+            isolated_worktree: None,
             id: "implementer".into(),
             name: "implementer".into(),
-            node_type: NodeType::CodeMutating,
+            node_type: NodeType::Agent,
             inputs: vec![],
             outputs: vec![],
             interactive: false,
@@ -1726,9 +1727,10 @@ mod tests {
         // the incoming edge. The preamble must still enumerate it.
         let mut pipeline = sample_pipeline();
         pipeline.nodes.push(NodeDef {
+            isolated_worktree: None,
             id: "implementer".into(),
             name: "implementer".into(),
-            node_type: NodeType::CodeMutating,
+            node_type: NodeType::Agent,
             inputs: vec![],
             outputs: vec![],
             interactive: false,
@@ -1774,9 +1776,10 @@ mod tests {
         // on a declared input port. planner → implementer, port `plans`.
         let mut pipeline = sample_pipeline();
         pipeline.nodes.push(NodeDef {
+            isolated_worktree: None,
             id: "implementer".into(),
             name: "implementer".into(),
-            node_type: NodeType::CodeMutating,
+            node_type: NodeType::Agent,
             inputs: vec![],
             outputs: vec![],
             interactive: false,
@@ -1918,9 +1921,10 @@ mod tests {
             variables: HashMap::new(),
             nodes: vec![
                 NodeDef {
+                    isolated_worktree: None,
                     id: "planner".into(),
                     name: "planner".into(),
-                    node_type: NodeType::DocOnly,
+                    node_type: NodeType::Agent,
                     inputs: vec![],
                     outputs: vec![Port {
                         name: "plan".into(),
@@ -1943,9 +1947,10 @@ mod tests {
                     auto_fail: None,
                 },
                 NodeDef {
+                    isolated_worktree: None,
                     id: "researcher".into(),
                     name: "researcher".into(),
-                    node_type: NodeType::DocOnly,
+                    node_type: NodeType::Agent,
                     inputs: vec![],
                     outputs: vec![Port {
                         name: "context".into(),
@@ -1968,9 +1973,10 @@ mod tests {
                     auto_fail: None,
                 },
                 NodeDef {
+                    isolated_worktree: None,
                     id: "implementer".into(),
                     name: "implementer".into(),
-                    node_type: NodeType::CodeMutating,
+                    node_type: NodeType::Agent,
                     inputs: vec![
                         Port {
                             name: "plan".into(),
@@ -2086,9 +2092,10 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![NodeDef {
+                isolated_worktree: None,
                 id: "reviewer".into(),
                 name: "reviewer".into(),
-                node_type: NodeType::DocOnly,
+                node_type: NodeType::Agent,
                 inputs: vec![Port {
                     name: "code".into(),
                     repeated: false,
@@ -2434,9 +2441,10 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![NodeDef {
+                isolated_worktree: None,
                 id: "designer".into(),
                 name: "designer".into(),
-                node_type: NodeType::DocOnly,
+                node_type: NodeType::Agent,
                 inputs: vec![],
                 outputs: vec![Port {
                     name: "screenshot".into(),
@@ -2489,9 +2497,10 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![NodeDef {
+                isolated_worktree: None,
                 id: "gallery".into(),
                 name: "gallery".into(),
-                node_type: NodeType::DocOnly,
+                node_type: NodeType::Agent,
                 inputs: vec![],
                 outputs: vec![Port {
                     name: "photos".into(),
@@ -2539,9 +2548,10 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![NodeDef {
+                isolated_worktree: None,
                 id: "node".into(),
                 name: "node".into(),
-                node_type: NodeType::DocOnly,
+                node_type: NodeType::Agent,
                 inputs: vec![],
                 outputs: vec![Port {
                     name: "img".into(),

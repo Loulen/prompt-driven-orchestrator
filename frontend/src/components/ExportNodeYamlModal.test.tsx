@@ -7,7 +7,7 @@ function node(overrides: Partial<NodeDef> = {}): NodeDef {
   return {
     id: "n1abc",
     name: "Writer",
-    type: "doc-only",
+    type: "agent",
     inputs: [],
     outputs: [{ name: "adr", repeated: false, side: "right" }],
     interactive: false,

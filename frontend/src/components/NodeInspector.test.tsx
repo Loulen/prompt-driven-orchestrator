@@ -3,7 +3,12 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import NodeInspector from "./NodeInspector";
 import type { LibraryEntry } from "../api";
-import { saveToLibrary, deleteFromLibrary, fetchSettings } from "../api";
+import {
+  saveToLibrary,
+  deleteFromLibrary,
+  fetchSettings,
+  instantiateFromLibrary,
+} from "../api";
 import { useEditStore } from "../stores/editStore";
 import { TooltipProvider } from "./ui/tooltip";
 
@@ -498,6 +503,9 @@ describe("NodeInspector StarButton — library save is independent of pipeline s
       model: null,
       // #424: effort-aware too; an effort-less node sends null.
       effort: null,
+      // #655: isolation-aware too — a node silent about its workspace stars on
+      // its type's resolved default, not on the silence.
+      isolated_worktree: true,
       prompt: "Review this code.",
     });
   });
@@ -535,6 +543,52 @@ describe("NodeInspector StarButton — library save is independent of pipeline s
       },
       { name: "empty", repeated: false, side: "right" },
     ]);
+  });
+
+  it("stars the node's chosen workspace, not its type's default (#655)", () => {
+    seedTabWithReviewer(false);
+    useEditStore.getState().openTabs[0].pipeline.nodes[0].isolated_worktree = false;
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    fireEvent.click(screen.getByTitle("Save to library"));
+
+    expect(mockSave.mock.calls[0][0].isolated_worktree).toBe(false);
+  });
+
+  it("resets the workspace from the library entry (#655)", async () => {
+    // The entry parks the Agent in the Run's worktree; resetting must put the
+    // node back there rather than on the `agent` default.
+    vi.mocked(instantiateFromLibrary).mockResolvedValueOnce({
+      spec: {
+        name: "reviewer",
+        type: "agent",
+        inputs: [],
+        outputs: [],
+        interactive: false,
+        isolated_worktree: false,
+      },
+      prompt: "Review this code.",
+    });
+    const diverged: LibraryEntry = {
+      name: "reviewer",
+      type: "agent",
+      inputs: [{ name: "in", repeated: false, side: "left" }],
+      outputs: [{ name: "out", repeated: false, side: "right" }],
+      interactive: false,
+      isolated_worktree: false,
+      prompt: "Review this code.",
+    };
+    seedTabWithReviewer(false, "Review this code.");
+    renderInspector({ libraryEntries: [diverged], onLibraryChanged: () => {} });
+
+    fireEvent.click(screen.getByTitle("In your library — out of sync"));
+    fireEvent.click(screen.getByText(/Reset from library/i));
+
+    await vi.waitFor(() => {
+      expect(
+        useEditStore.getState().openTabs[0].pipeline.nodes[0].isolated_worktree,
+      ).toBe(false);
+    });
   });
 
   it("opens the popover when node is already synced with library", () => {

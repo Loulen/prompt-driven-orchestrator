@@ -6374,13 +6374,15 @@ struct SaveToLibraryRequest {
     effort: Option<String>,
     #[serde(default)]
     prompt: String,
+    /// Where an instance of this entry works (#655/ADR-0060). Optional so a
+    /// client that omits it stars the node on its type's default (stamped by
+    /// `library_store::save`) instead of 400-ing — same posture as `model`.
+    #[serde(default)]
+    isolated_worktree: Option<bool>,
 }
 
-async fn save_to_library(
-    State(_state): State<Arc<AppState>>,
-    Json(req): Json<SaveToLibraryRequest>,
-) -> Response {
-    let entry = library_store::LibraryEntry {
+async fn save_to_library(Json(req): Json<SaveToLibraryRequest>) -> Response {
+    let mut entry = library_store::LibraryEntry {
         name: req.name,
         node_type: req.node_type,
         inputs: req.inputs,
@@ -6391,7 +6393,11 @@ async fn save_to_library(
         max_iter: None,
         branches: None,
         prompt: req.prompt,
+        isolated_worktree: req.isolated_worktree,
     };
+    // #655: stamp before saving AND before answering, so the 201 body shows the
+    // choice the library recorded rather than the silence the client sent.
+    entry.stamp_isolation();
 
     if let Err(e) = library_store::save(&entry) {
         return (
@@ -6433,6 +6439,12 @@ async fn instantiate_from_library(AxumPath(name): AxumPath<String>) -> Response 
                     // #424: same for the effort level — without it, instantiating
                     // drops the level and the fresh node reads `diverged` at once.
                     "effort": entry.effort,
+                    // #655/ADR-0060: restore the entry's workspace exactly. Left
+                    // out, the canvas would fall back to the type default and an
+                    // Agent starred in the Run's worktree would silently fork one
+                    // of its own on every instantiation. `null` for the types that
+                    // carry no isolation — the canvas leaves the key off those.
+                    "isolated_worktree": entry.isolated_worktree,
                 },
                 "prompt": prompt,
             }))
@@ -6594,20 +6606,15 @@ fn parse_node_spec(yaml: &str) -> Result<serde_json::Value, String> {
         .get("agent_choice")
         .map(yaml_value_to_json)
         .unwrap_or(serde_json::Value::Null);
-    // #653/ADR-0060: where the pasted node works. `normalize_node_value` above
-    // already stamped the type's default onto an `agent`/`script` that said
-    // nothing, so this is never a guess — and reading it here is what keeps a
-    // node that opted out of isolation from silently forking one on instantiation
-    // (the silent loss ADR-0001/#268 forbid). `null` for the types that carry no
-    // isolation, which the canvas then leaves off the node.
-    let isolated_worktree = value
-        .get(pipeline::ISOLATED_WORKTREE_KEY)
-        .and_then(serde_yaml::Value::as_bool);
-
     // 8. Deserialize the (normalized) map into a LibraryEntry. `prompt` defaults
     //    to empty (a structural node carries none); unknown fields are ignored.
-    let entry: library_store::LibraryEntry =
+    //    #655: `isolated_worktree` is a LibraryEntry field, so the pasted node's
+    //    workspace rides through the same door as the rest of it — and
+    //    `normalize_node_value` above already stamped the type default onto a
+    //    silent `agent`/`script`, so what comes out is never a guess.
+    let mut entry: library_store::LibraryEntry =
         serde_yaml::from_value(value).map_err(|e| format!("{e}"))?;
+    entry.stamp_isolation();
 
     Ok(serde_json::json!({
         "spec": {
@@ -6625,7 +6632,7 @@ fn parse_node_spec(yaml: &str) -> Result<serde_json::Value, String> {
             // #563: the node's agent-profile choice, carried verbatim.
             "agent_choice": agent_choice,
             // #653: where the node works.
-            "isolated_worktree": isolated_worktree,
+            "isolated_worktree": entry.isolated_worktree,
             "max_iter": entry.max_iter,
             "branches": entry.branches,
         },
@@ -17749,6 +17756,12 @@ mod tests {
                 serde_json::json!(false),
             ),
             ("name: n\ntype: start\n", serde_json::Value::Null),
+            // #655: a stray line on a type that carries no isolation is dropped,
+            // not round-tripped — a Merge is isolated by construction.
+            (
+                "name: n\ntype: merge\nisolated_worktree: false\n",
+                serde_json::Value::Null,
+            ),
         ] {
             let body = parse_node_spec(yaml).unwrap();
             assert_eq!(body["spec"]["isolated_worktree"], expected, "{yaml}");
@@ -30794,6 +30807,98 @@ edges: []
 
         // Cleanup
         let _ = library_store::delete("DraftReviewer");
+        if let Some(p) = prev_home {
+            std::env::set_var("HOME", p);
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// #655/ADR-0060 — the library round-trip that the Feature Path walks:
+    /// star a non-isolated Agent, then instantiate it somewhere else and get the
+    /// same workspace back. `POST /library` and `POST /library/{}/instantiate`
+    /// are both disk-only, so they are driven directly rather than through a
+    /// router (no AppState needed since `save_to_library` dropped its unused one).
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn library_round_trip_restores_the_entrys_workspace() {
+        let _guard = crate::library_store::HOME_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join(format!("pdo-lib-iso-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let prev_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &tmp);
+
+        async fn body_of(resp: Response) -> serde_json::Value {
+            serde_json::from_slice(
+                &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                    .await
+                    .unwrap(),
+            )
+            .unwrap()
+        }
+
+        // An Agent the author parked in the Run's worktree — the interesting case,
+        // because it is the one the type default would silently overwrite.
+        let saved = save_to_library(Json(
+            serde_json::from_value(serde_json::json!({
+                "name": "SharedScribe",
+                "type": "agent",
+                "inputs": [{"name": "in"}],
+                "outputs": [{"name": "out"}],
+                "interactive": false,
+                "isolated_worktree": false,
+                "prompt": "Write the note.",
+            }))
+            .unwrap(),
+        ))
+        .await;
+        assert_eq!(saved.status(), StatusCode::CREATED);
+        assert_eq!(body_of(saved).await["isolated_worktree"], false);
+
+        let spec =
+            body_of(instantiate_from_library(AxumPath("SharedScribe".to_string())).await).await;
+        assert_eq!(
+            spec["spec"]["isolated_worktree"], false,
+            "instantiating must restore the parked workspace, not the type default",
+        );
+
+        // A request that says nothing is stamped with the type's default rather
+        // than stored as a silence — so the entry always states where it works.
+        let saved = save_to_library(Json(
+            serde_json::from_value(serde_json::json!({
+                "name": "SilentScribe",
+                "type": "agent",
+                "prompt": "Write the note.",
+            }))
+            .unwrap(),
+        ))
+        .await;
+        assert_eq!(body_of(saved).await["isolated_worktree"], true);
+
+        // A type that carries no isolation reports `null`; the canvas leaves the
+        // key off such a node entirely.
+        let saved = save_to_library(Json(
+            serde_json::from_value(serde_json::json!({
+                "name": "Gatherer",
+                "type": "merge",
+                "isolated_worktree": false,
+                "prompt": "",
+            }))
+            .unwrap(),
+        ))
+        .await;
+        assert_eq!(
+            body_of(saved).await["isolated_worktree"],
+            serde_json::Value::Null
+        );
+        let spec = body_of(instantiate_from_library(AxumPath("Gatherer".to_string())).await).await;
+        assert_eq!(spec["spec"]["isolated_worktree"], serde_json::Value::Null);
+
+        for name in ["SharedScribe", "SilentScribe", "Gatherer"] {
+            let _ = library_store::delete(name);
+        }
         if let Some(p) = prev_home {
             std::env::set_var("HOME", p);
         }

@@ -3,6 +3,7 @@ import { fetchLibrary } from "../api";
 import type { LibraryEntry } from "../api";
 import type { NodeDef, PortDef } from "../types";
 import { deepEqual } from "../lib/deepEqual";
+import { nodeIsolation, resolveIsolation } from "../lib/nodeIsolation";
 
 export type LibrarySyncState = "outline" | "synced" | "diverged";
 
@@ -75,6 +76,11 @@ export function computeSyncState(
     // here, and this is the verdict the user actually SEES on the star. A missing
     // field reads `synced` while the two differ: bug #345, one field later.
     (entry.effort ?? null) === (node.effort ?? null) &&
+    // #655/ADR-0060: where the node works is part of its identity — two nodes
+    // that differ only by workspace are not the same content. Compared through
+    // `resolveIsolation` on both sides so a silence and a spelled-out default
+    // read alike (an entry saved before #655 states no line).
+    resolveIsolation(entry.type, entry.isolated_worktree) === nodeIsolation(node) &&
     entry.prompt === prompt &&
     portsMatch(node.inputs, entry.inputs) &&
     portsMatch(node.outputs, entry.outputs)

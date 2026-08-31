@@ -892,6 +892,8 @@ From scratch (« + Add node »), duplicate (clic droit), drag-drop depuis la bib
 
 La **bibliothèque de nodes** contient les nodes réutilisables qu'un utilisateur peut ajouter à une Pipeline. La réutilisation reste une aide à l'édition : un Document de pipeline transportable développe chaque node partagé en node ordinaire, sans recréer son appartenance à la bibliothèque sur l'instance cible.
 
+Une entrée `agent` ou `script` **énonce son isolation** (cf. *Isolation de Node*) comme elle énonce son harnais et ses ports : l'entrée porte le choix, l'instanciation le restitue tel quel, et une entrée écrite avant que le champ existe se lit au défaut de son type — jamais comme un silence. L'isolation entre donc dans l'**identité sémantique** de l'entrée : deux Nodes identiques au worktree près ne sont pas le même contenu, et l'étoile de synchronisation le dit. Une entrée `merge`, `start` ou `end` ne porte aucune ligne, un Merge étant isolé par construction.
+
 _Éviter_ : « pipeline de bibliothèque » — les Pipelines appartiennent au registre d'instance, pas à la bibliothèque.
 
 ### Registre de pipelines
@@ -927,3 +929,4 @@ Règle de récupération des prompts : string-literal sans interpolation → ver
 - L'**import de Pipeline PDO** interprète un Document de pipeline transportable et crée une Pipeline indépendante ; il partage la même modale que l'Import de workflow, mais constitue un mode distinct et fidèle.
 - Idiomes mappés : `agent()` → **Node**, `pipeline()` → boucle **`collection`**, `for`/`while` autour d'un `agent()` → boucle **`bounded`**, `if`/`return` gardé → **edge conditionnelle**, schémas JSON → **frontmatter de port de sortie**.
 - Un idiome hors sous-ensemble → **placeholder annoté**. Un `git merge` scripté → Node `agent` annoté, **pas** le Merge first-class (dont il excède le contrat).
+- Tout rôle importé — placeholder annoté compris — devient un Node `agent` **isolé**, et le brouillon écrit la ligne. L'import ne déduit jamais l'isolation du prompt, du nom du rôle, de ses sorties ni de son appartenance à une région `collection` : un workflow étranger n'a pas d'avis sur les worktrees, et en inventer un est précisément la devinette qu'ADR-0060 supprime. L'auteur arbitre ensuite sur le canvas.

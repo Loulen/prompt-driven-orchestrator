@@ -1830,6 +1830,65 @@ mod tests {
         assert!(collection[0].over.is_some(), "collection carries an `over`");
     }
 
+    /// #655/ADR-0060: every imported role is an isolated `agent`, and the YAML
+    /// says so out loud — a foreign workflow arrives without an opinion on
+    /// worktrees, and inventing one for it is the guesswork #653 retired.
+    #[test]
+    fn imported_roles_are_isolated_agents_and_the_yaml_says_so() {
+        let src = r#"agent(`Read the docs and summarise.`, { label: 'reader' })"#;
+        let (result, parsed) = import_and_parse(src, "t");
+        let node = parsed.nodes.iter().find(|n| n.name == "reader").unwrap();
+        assert_eq!(node.node_type, NodeType::Agent);
+        assert_eq!(node.isolated_worktree, Some(true));
+        assert!(
+            result.yaml_text.contains("isolated_worktree: true"),
+            "the emitted document must state the isolation:\n{}",
+            result.yaml_text
+        );
+    }
+
+    /// The four signals the pre-#653 importer used to sniff, plus the one #655
+    /// adds: a `collection` region. None of them may move the isolation — a
+    /// read-only-sounding prompt is still an isolated Agent.
+    #[test]
+    fn import_never_infers_isolation_from_prompt_name_outputs_or_collection() {
+        for (label, src) in [
+            (
+                "a read-only-sounding prompt",
+                r#"agent(`Only read the docs. Do not write, edit or commit anything.`, { label: 'reader' })"#,
+            ),
+            (
+                "a documentation-sounding name",
+                r#"agent(`work`, { label: 'docs-writer' })"#,
+            ),
+            (
+                "a schema'd output",
+                r#"agent(`work`, { label: 'reader', schema: { type: 'object', properties: { verdict: { type: 'string' } } } })"#,
+            ),
+            (
+                "a collection member",
+                r#"const items = []; await pipeline(items, (p) => agent(`per-item`, { label: 'reader' }))"#,
+            ),
+            (
+                "an annotated placeholder (N3)",
+                r#"const build = () => 'x'; agent(build(), { label: 'reader' })"#,
+            ),
+        ] {
+            let (_result, parsed) = import_and_parse(src, "t");
+            let node = parsed
+                .nodes
+                .iter()
+                .find(|n| n.node_type == NodeType::Agent)
+                .unwrap_or_else(|| panic!("{label}: no agent node"));
+            assert_eq!(node.node_type, NodeType::Agent, "{label}");
+            assert_eq!(
+                node.isolated_worktree,
+                Some(true),
+                "{label} must not move the isolation"
+            );
+        }
+    }
+
     #[test]
     fn if_equality_becomes_when_edge() {
         let src = r#"const r = await agent(`triage`, { label: 'triage' }); if (r.verdict === 'Bug') { return {} }"#;

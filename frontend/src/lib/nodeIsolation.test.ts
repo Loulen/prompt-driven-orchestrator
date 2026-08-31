@@ -1,8 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
+  WORKSPACE_CHOICES,
   carriesIsolation,
   isNodeIsolated,
   nodeIsolation,
+  resolveIsolation,
+  workspaceLabel,
   worktreePathFor,
 } from "./nodeIsolation";
 import type { NodeDef, NodeType } from "../types";
@@ -51,5 +54,30 @@ describe("nodeIsolation (#653 / ADR-0060)", () => {
   it("resolves the two working directories by node id", () => {
     expect(worktreePathFor("spec", true)).toBe(".pdo/runs/<run>/nodes/spec/iter-<n>");
     expect(worktreePathFor("spec", false)).toBe(".pdo/runs/<run>/worktree");
+  });
+});
+
+describe("resolveIsolation — the library's door (#655)", () => {
+  it("reads a stated value, else the type default", () => {
+    expect(resolveIsolation("agent", undefined)).toBe(true);
+    expect(resolveIsolation("agent", null)).toBe(true);
+    expect(resolveIsolation("agent", false)).toBe(false);
+    expect(resolveIsolation("script", undefined)).toBe(false);
+    expect(resolveIsolation("script", true)).toBe(true);
+  });
+
+  it("gives no isolation to a type that carries none, stated or not", () => {
+    // A library entry's `type` crosses the wire as a bare string, so an unknown
+    // type must resolve to `null` rather than to a guess.
+    for (const type of ["merge", "start", "end", "switch", "loop", "nonsense"]) {
+      expect(resolveIsolation(type, undefined)).toBeNull();
+      expect(resolveIsolation(type, true)).toBeNull();
+    }
+  });
+
+  it("names each workspace once, for every surface that shows one", () => {
+    expect(workspaceLabel(true)).toBe("Isolated worktree");
+    expect(workspaceLabel(false)).toBe("Run worktree");
+    expect(WORKSPACE_CHOICES.map((c) => c.isolated)).toEqual([true, false]);
   });
 });

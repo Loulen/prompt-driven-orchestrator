@@ -112,14 +112,22 @@ describe("DiffSection", () => {
     expect(screen.getByText("No changes")).toBeInTheDocument();
   });
 
-  it("shows dropdown with completed isolated nodes only (#653)", async () => {
+  it("lists every node that delivered changes, isolated or not (#654)", async () => {
     const run = makeRun({
       nodes: {
-        "impl-1": makeNodeState({ node_id: "impl-1" }),
+        // Isolated, delivered.
+        "impl-1": makeNodeState({
+          node_id: "impl-1",
+          delivery: { before: "aaa", after: "bbb" },
+        }),
+        // NON-isolated, delivered — the node the pre-#654 picker dropped.
         "reviewer-1": makeNodeState({
           node_id: "reviewer-1",
           status: "completed",
+          delivery: { before: "bbb", after: "ccc" },
         }),
+        // Isolated but delivered nothing: no diff to show.
+        "scribe-1": makeNodeState({ node_id: "scribe-1", status: "completed" }),
       },
       node_defs: [
         {
@@ -142,6 +150,16 @@ describe("DiffSection", () => {
           inputs: [],
           outputs: [],
         },
+        {
+          id: "scribe-1",
+          name: "Scribe",
+          node_type: "agent",
+          isolated_worktree: true,
+          view_x: 0,
+          view_y: 0,
+          inputs: [],
+          outputs: [],
+        },
       ],
     });
 
@@ -156,9 +174,10 @@ describe("DiffSection", () => {
     expect(select).toBeInTheDocument();
 
     const options = select.querySelectorAll("option");
-    expect(options.length).toBe(2);
+    expect(options.length).toBe(3);
     expect(options[0].textContent).toBe("Aggregate (all changes)");
     expect(options[1].textContent).toContain("Implementer");
+    expect(options[2].textContent).toContain("Reviewer");
   });
 
   it("fetches per-node diff when a node is selected", async () => {
@@ -168,7 +187,10 @@ describe("DiffSection", () => {
 
     const run = makeRun({
       nodes: {
-        "impl-1": makeNodeState({ node_id: "impl-1" }),
+        "impl-1": makeNodeState({
+          node_id: "impl-1",
+          delivery: { before: "aaa", after: "bbb" },
+        }),
       },
       node_defs: [
         {

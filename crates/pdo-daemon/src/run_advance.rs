@@ -634,7 +634,7 @@ mod tests {
         }
     }
 
-    /// A pipeline of root DocOnly nodes (no edges) — every node is immediately
+    /// A pipeline of root `agent` nodes (no edges) — every node is immediately
     /// ready, so `compute_ready_to_spawn` reflects pure declaration order.
     fn roots_pipeline(ids: &[&str]) -> PipelineDef {
         PipelineDef {
@@ -678,6 +678,7 @@ mod tests {
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
             missing_outputs: Vec::new(),
+            delivery: None,
         }
     }
 
@@ -697,6 +698,7 @@ mod tests {
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
             missing_outputs: Vec::new(),
+            delivery: None,
         }
     }
 
@@ -861,6 +863,7 @@ mod tests {
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
             missing_outputs: Vec::new(),
+            delivery: None,
         }
     }
 

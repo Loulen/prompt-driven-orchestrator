@@ -771,6 +771,10 @@ pub(crate) async fn spawn_node(
             daemon_url: &crate::sandbox_container::daemon_url(deps.port, run_sandboxed),
             foreach_context,
             source_worktree_dir: has_sub_worktree.then_some(working_dir.as_path()),
+            // #654: the same section, from the other isolation. This site only
+            // ever builds a preamble for a node that spawns a session, so the
+            // two are exhaustive and mutually exclusive.
+            shared_worktree_dir: (!has_sub_worktree).then_some(working_dir.as_path()),
             input_images,
             start_prompt_present,
             source_iters,

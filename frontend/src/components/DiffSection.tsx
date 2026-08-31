@@ -15,20 +15,13 @@ export default function DiffSection({ run }: Props) {
   const [selectedNode, setSelectedNode] = useState<string>("");
   const [collapsedFiles, setCollapsedFiles] = useState<Set<number>>(new Set());
 
-  // #653/ADR-0060: a per-node diff exists for a node that worked in a
-  // sub-worktree of its own — it has a branch to diff. Isolation, not the node's
-  // type, is what says so; the frozen value on the NodeRun wins over the
-  // snapshot, because that is where the iteration actually ran.
-  const isolatedNodes = useMemo(() => {
+  // #654/ADR-0060: a per-node diff exists for a NodeRun that DELIVERED changes —
+  // isolated or not, agent or script. What it delivered is the two run-branch
+  // tips it moved between, so the type and the isolation say nothing here; only
+  // the delivery does.
+  const deliveringNodes = useMemo(() => {
     if (!run) return [];
-    return run.node_defs.filter((nd) => {
-      const ns = run.nodes[nd.id];
-      const isolated =
-        ns?.isolated_worktree ??
-        nd.isolated_worktree ??
-        (nd.node_type === "agent" || nd.node_type === "merge");
-      return isolated && ns?.status === "completed";
-    });
+    return run.node_defs.filter((nd) => Boolean(run.nodes[nd.id]?.delivery));
   }, [run]);
 
   const files = useMemo(() => parseUnifiedDiff(diff), [diff]);
@@ -102,7 +95,7 @@ export default function DiffSection({ run }: Props) {
             </div>
           ) : (
             <>
-              {isolatedNodes.length > 0 && (
+              {deliveringNodes.length > 0 && (
                 <select
                   data-testid="diff-node-select"
                   value={selectedNode}
@@ -111,7 +104,7 @@ export default function DiffSection({ run }: Props) {
                   style={{ fontSize: "10.5px" }}
                 >
                   <option value="">Aggregate (all changes)</option>
-                  {isolatedNodes.map((nd) => (
+                  {deliveringNodes.map((nd) => (
                     <option key={nd.id} value={nd.id}>
                       {nd.name ?? nd.id}
                     </option>

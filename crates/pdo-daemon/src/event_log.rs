@@ -83,6 +83,16 @@ pub enum EventKind {
     /// projection materialises the node so the incident is visible. Wire form:
     /// `"node_interrupted"`.
     NodeInterrupted,
+    /// PDO delivered a NodeRun's work onto the Run's branch (#654 / ADR-0060):
+    /// its own commits kept, whatever it left behind committed under
+    /// `<node-id> iter-<N>: completed`, then merged back if it was isolated.
+    ///
+    /// Written **only when the branch actually moved** — a NodeRun that left
+    /// nothing writes no commit and no event — and always *before* the terminal
+    /// completion event, so "delivered, then done" is the order the log reads in.
+    /// Payload: `before` / `after`, the two Run-branch tips, projected onto
+    /// [`NodeState::delivery`]. Wire form: `"node_delivered"`.
+    NodeDelivered,
     MergeConflictDetected,
     /// A merge-back conflicted and was resolved **in the node's favour** instead of
     /// failing the Run (#503, ADR-0036): the node's branch had stopped being a
@@ -573,6 +583,28 @@ pub struct NodeState {
     /// byte-identical for any non-`script` failure.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub missing_outputs: Vec<String>,
+    /// #654/ADR-0060: what this NodeRun **delivered** onto the Run's branch — the
+    /// two tips its delivery moved the branch between, so `git diff before after`
+    /// is exactly its contribution.
+    ///
+    /// Present for any NodeRun that delivered changes, isolated or not; absent for
+    /// one that delivered nothing (no commit was written) and on any pre-#654 log.
+    /// It is the presence of *changes*, never the node's type or isolation, that
+    /// makes a per-node diff answerable — which is the whole point of recording it
+    /// here rather than re-deriving it from a `pdo/sub-*` branch that a
+    /// non-isolated NodeRun does not have.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<NodeDelivery>,
+}
+
+/// The two Run-branch tips one delivery moved between (#654 / ADR-0060).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NodeDelivery {
+    /// The Run branch's tip before the delivery.
+    pub before: String,
+    /// The Run branch's tip after it. Never equal to `before` — a delivery that
+    /// moved nothing records no event at all.
+    pub after: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1417,6 +1449,7 @@ pub(crate) fn project(events: &[Event]) -> Option<RunState> {
             | EventKind::NodeAwaitingUser
             | EventKind::NodeFailed
             | EventKind::NodeInterrupted
+            | EventKind::NodeDelivered
             | EventKind::NodeStopped
             | EventKind::NodeStale
             | EventKind::NodeInvalidated
@@ -1959,6 +1992,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                         frontmatter_retries: 0,
                         frontmatter_violations: Vec::new(),
                         missing_outputs: Vec::new(),
+                        delivery: None,
                     });
                 node.status = NodeStatus::Waiting;
                 node.iter = iter;
@@ -1996,6 +2030,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                         frontmatter_retries: 0,
                         frontmatter_violations: Vec::new(),
                         missing_outputs: Vec::new(),
+                        delivery: None,
                     });
                 node.status = NodeStatus::Running;
                 node.iter = iter;
@@ -2104,6 +2139,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                             frontmatter_retries: 0,
                             frontmatter_violations: Vec::new(),
                             missing_outputs: Vec::new(),
+                            delivery: None,
                         },
                     );
                 }
@@ -2219,6 +2255,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                         frontmatter_retries: 0,
                         frontmatter_violations: Vec::new(),
                         missing_outputs: Vec::new(),
+                        delivery: None,
                     });
                 // Node-level status derives from the LATEST iteration, mirroring
                 // the `NodeFailed` #196/#212 guard: interrupting an older iter
@@ -2300,6 +2337,26 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                 }
             }
         }
+        // #654 / ADR-0060: what the delivery put on the Run's branch. Read from
+        // the payload rather than re-derived, because the tips are the only trace
+        // of a non-isolated NodeRun's contribution — it owns no branch to diff.
+        // The last delivery for the node wins: a re-run of the same node delivers
+        // again, and the diff must show the latest one.
+        EventKind::NodeDelivered => {
+            if let (Some(node_id), Some(payload)) = (&event.node_id, &event.payload) {
+                if let Some(node) = state.nodes.get_mut(node_id) {
+                    if let (Some(before), Some(after)) = (
+                        payload.get("before").and_then(|v| v.as_str()),
+                        payload.get("after").and_then(|v| v.as_str()),
+                    ) {
+                        node.delivery = Some(NodeDelivery {
+                            before: before.to_string(),
+                            after: after.to_string(),
+                        });
+                    }
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -2346,6 +2403,7 @@ fn apply_switch_event(state: &mut RunState, event: &Event) {
                     frontmatter_retries: 0,
                     frontmatter_violations: Vec::new(),
                     missing_outputs: Vec::new(),
+                    delivery: None,
                 });
             node.status = NodeStatus::Completed;
             node.completed_at = Some(event.ts.clone());
@@ -3536,6 +3594,7 @@ mod tests {
             frontmatter_retries: 0,
             frontmatter_violations: vec![],
             missing_outputs: vec![],
+            delivery: None,
         };
         assert!(
             serde_json::to_value(&bare)
@@ -6500,6 +6559,7 @@ mod tests {
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
             missing_outputs: Vec::new(),
+            delivery: None,
         }
     }
 

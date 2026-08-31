@@ -83,6 +83,11 @@ nodes:
 either. There is no `doc-only` or `code-mutating` — a node's type names its
 execution role, never a guess about what it will touch.
 
+Either way, **never write git steps into a node's prompt**: the runtime keeps
+whatever a node committed itself, commits everything else it left behind, and
+merges an isolated NodeRun's worktree back — before the node is declared done and
+the downstream starts (#654 / ADR-0060).
+
 Work nodes (`agent` / `script`) have **emergent inputs**: an
 input port is created from each incoming edge and named after the edge's target
 port — you normally don't declare `inputs:` on them. Structural nodes

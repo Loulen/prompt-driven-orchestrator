@@ -34,13 +34,12 @@ pub(crate) enum CompletionRefusal {
     /// porte le slug : c'est ce qui rend le refus lisible côté client, qui relisait
     /// jusqu'ici *tout* `409` comme `missing_outputs`.
     CompletionRejected { message: String },
-    /// Commit/merge du sous-worktree en échec — panne, pas verdict, donc `500`.
-    MergeFailed { error: String },
+    /// La livraison (#654 / ADR-0060) a échoué — staging, commit ou merge. Panne,
+    /// pas verdict, donc `500`. Un `NodeInterrupted` est déjà appendé et le Run
+    /// est parqué `AwaitingUser` : le travail reste sur disque, intact.
+    DeliveryFailed { node_id: String, error: String },
     /// Conflit de merge ; `MergeConflictDetected` + `RunFailed` déjà appendés.
     MergeConflict { node_id: String },
-    /// Node non-isolated ayant sali des fichiers suivis ; `NodeFailed` +
-    /// `RunFailed` déjà appendés.
-    DocImmutabilityViolated { node_id: String },
     /// Ports de sortie déclarés sans artefact. Le node reste vivant.
     MissingOutputs { missing: Vec<String> },
     /// Fail-fast d'un node `script` (ADR-0017) ; `NodeFailed` + `RunFailed`
@@ -51,8 +50,8 @@ pub(crate) enum CompletionRefusal {
     FrontmatterRetryPending { violations: Vec<serde_json::Value> },
     /// Un nœud a modifié un fichier **suivi** d'un dépôt secondaire read-only
     /// (#465, ADR-0042). Garde de complétion, **pas** une panne : aucun événement
-    /// terminal n'est appendé (contrairement à `DocImmutabilityViolated`), le nœud
-    /// reste vivant, l'agent nettoie le secondaire (`git checkout`) et re-complète.
+    /// terminal n'est appendé (contrairement à `DeliveryFailed`), le nœud reste
+    /// vivant, l'agent nettoie le secondaire (`git checkout`) et re-complète.
     /// `recoverable:false` par choix de #465 — le read-only d'un secondaire est un
     /// contrat, non un retry de sortie ; le slug (jamais le seul statut) discrimine.
     SecondaryRepoDirtied { alias: String, message: String },
@@ -84,9 +83,8 @@ impl CompletionRefusal {
             Self::RunNotFound => "run_not_found",
             Self::Internal { .. } => "internal_error",
             Self::CompletionRejected { .. } => "completion_rejected",
-            Self::MergeFailed { .. } => "merge_failed",
+            Self::DeliveryFailed { .. } => "delivery_failed",
             Self::MergeConflict { .. } => "merge_conflict",
-            Self::DocImmutabilityViolated { .. } => "doc_violated_code_immutability",
             Self::MissingOutputs { .. } => "missing_outputs",
             Self::ScriptValidationFailed { .. } => "script_validation_failed",
             Self::FrontmatterRetryPending { .. } => "frontmatter_retry_pending",
@@ -125,12 +123,11 @@ impl CompletionRefusal {
             Self::RunForgotten { .. } => StatusCode::GONE,
             Self::RunNotFound => StatusCode::NOT_FOUND,
             // Pannes, pas verdicts.
-            Self::Internal { .. } | Self::MergeFailed { .. } | Self::AppendFailed { .. } => {
+            Self::Internal { .. } | Self::DeliveryFailed { .. } | Self::AppendFailed { .. } => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
             Self::CompletionRejected { .. }
             | Self::MergeConflict { .. }
-            | Self::DocImmutabilityViolated { .. }
             | Self::MissingOutputs { .. }
             | Self::ScriptValidationFailed { .. }
             | Self::FrontmatterRetryPending { .. }
@@ -152,15 +149,13 @@ impl CompletionRefusal {
             Self::RunNotFound => serde_json::json!({ "message": "run not found" }),
             Self::Internal { error } => serde_json::json!({ "message": error }),
             Self::CompletionRejected { message } => serde_json::json!({ "message": message }),
-            Self::MergeFailed { error } | Self::AppendFailed { error } => {
-                serde_json::json!({ "message": error })
-            }
+            Self::AppendFailed { error } => serde_json::json!({ "message": error }),
+            Self::DeliveryFailed { node_id, error } => serde_json::json!({
+                "message": format!("failed to deliver {node_id}'s work: {error}")
+            }),
             Self::MergeConflict { node_id } => {
                 serde_json::json!({ "message": format!("merge conflict on {node_id}") })
             }
-            Self::DocImmutabilityViolated { node_id } => serde_json::json!({
-                "message": format!("non-isolated node {node_id} violated code immutability")
-            }),
             Self::MissingOutputs { missing } => serde_json::json!({ "missing": missing }),
             Self::ScriptValidationFailed { detail } => serde_json::json!({ "detail": detail }),
             Self::FrontmatterRetryPending { violations }
@@ -189,13 +184,10 @@ impl CompletionRefusal {
             Self::RunNotFound => "run not found".into(),
             Self::Internal { error } => error.clone(),
             Self::CompletionRejected { message } => message.clone(),
-            Self::MergeFailed { error } => {
-                format!("commit/merge of the sub-worktree failed: {error}")
+            Self::DeliveryFailed { node_id, error } => {
+                format!("failed to deliver {node_id}'s work: {error}")
             }
             Self::MergeConflict { node_id } => format!("merge conflict on {node_id}"),
-            Self::DocImmutabilityViolated { node_id } => {
-                format!("non-isolated node {node_id} violated code immutability")
-            }
             Self::MissingOutputs { missing } => {
                 format!("missing declared outputs: {}", missing.join(", "))
             }
@@ -269,14 +261,12 @@ mod tests {
             CompletionRefusal::CompletionRejected {
                 message: "resume the run first".into(),
             },
-            CompletionRefusal::MergeFailed {
-                error: "boom".into(),
+            CompletionRefusal::DeliveryFailed {
+                node_id: "impl".into(),
+                error: "git add -A failed".into(),
             },
             CompletionRefusal::MergeConflict {
                 node_id: "impl".into(),
-            },
-            CompletionRefusal::DocImmutabilityViolated {
-                node_id: "scribe".into(),
             },
             CompletionRefusal::MissingOutputs {
                 missing: vec!["review".into()],
@@ -317,9 +307,8 @@ mod tests {
                 CompletionRefusal::RunNotFound => "RunNotFound",
                 CompletionRefusal::Internal { .. } => "Internal",
                 CompletionRefusal::CompletionRejected { .. } => "CompletionRejected",
-                CompletionRefusal::MergeFailed { .. } => "MergeFailed",
+                CompletionRefusal::DeliveryFailed { .. } => "DeliveryFailed",
                 CompletionRefusal::MergeConflict { .. } => "MergeConflict",
-                CompletionRefusal::DocImmutabilityViolated { .. } => "DocImmutabilityViolated",
                 CompletionRefusal::MissingOutputs { .. } => "MissingOutputs",
                 CompletionRefusal::ScriptValidationFailed { .. } => "ScriptValidationFailed",
                 CompletionRefusal::FrontmatterRetryPending { .. } => "FrontmatterRetryPending",
@@ -414,7 +403,10 @@ mod tests {
                 StatusCode::INTERNAL_SERVER_ERROR,
             ),
             (
-                CompletionRefusal::MergeFailed { error: "e".into() },
+                CompletionRefusal::DeliveryFailed {
+                    node_id: "n".into(),
+                    error: "e".into(),
+                },
                 StatusCode::INTERNAL_SERVER_ERROR,
             ),
             (

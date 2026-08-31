@@ -114,10 +114,9 @@ use tracing::{error, info, warn};
 #[cfg(test)]
 use crate::worktree_ops::{commit_and_merge_sub_worktree, create_sub_worktree};
 use crate::worktree_ops::{
-    commit_and_merge_sub_worktree_inner, create_secondary_snapshot, create_worktree,
-    remove_secondary_snapshot, rev_parse_verified, secondary_snapshot_path, sub_worktree_branch,
-    sub_worktree_path, validate_merge_resolution, worktree_dir_for_run,
-    worktree_has_tracked_changes, MergeResult,
+    create_secondary_snapshot, create_worktree, remove_secondary_snapshot, rev_parse_verified,
+    secondary_snapshot_path, sub_worktree_branch, sub_worktree_path, validate_merge_resolution,
+    worktree_dir_for_run, worktree_has_tracked_changes,
 };
 // #356: spawn primitive carved into `node_spawn`. Imported unqualified here so
 // the many construction sites (`SpawnContext { .. }`) need no per-site path
@@ -1005,8 +1004,10 @@ fn refusal_headline(slug: &str, body: &serde_json::Value) -> String {
             "your output frontmatter still did not match after the retry".into()
         }
         "script_validation_failed" => "this script node's declared outputs did not validate".into(),
-        "doc_violated_code_immutability" => {
-            "this node may not modify tracked files, and the worktree is dirty".into()
+        "delivery_failed" => {
+            "PDO could not deliver your work onto the run's branch — it is still on disk, \
+             untouched"
+                .into()
         }
         "merge_conflict" => "merging your sub-worktree into the pipeline branch conflicted".into(),
         "merge_resolution_failed" | "merge_resolver_failed" | "merge_resolver_spawned" => {
@@ -11124,11 +11125,30 @@ async fn node_diff(
         None => return (StatusCode::NOT_FOUND, "node not found").into_response(),
     };
 
-    let pipeline_branch = format!("pdo/run-{run_id}");
-    let sub_branch = sub_worktree_branch(&run_id, &node_id, node.iter);
+    // #654 / ADR-0060: the delivery is what a NodeRun contributed, so the diff is
+    // between the two Run-branch tips it moved between — the ONE answer that works
+    // for a non-isolated NodeRun (which owns no branch to diff) as well as for an
+    // isolated one. The type and the isolation never enter into it.
+    //
+    // The `pdo/sub-*` fallback is for a NodeRun that has not delivered yet: an
+    // isolated node still working, or a pre-#654 Run whose log carries no
+    // delivery. Its work is real and visible on its branch; it is just not on the
+    // Run's branch yet.
+    let (left, right) = match &node.delivery {
+        Some(d) => (d.before.clone(), d.after.clone()),
+        None => (
+            format!("pdo/run-{run_id}"),
+            sub_worktree_branch(&run_id, &node_id, node.iter),
+        ),
+    };
 
+    // `:(exclude).pdo/` mirrors `run_diff`: the blackboard artefacts are the Run's
+    // plumbing, not the node's contribution, and a delivery stages them like
+    // anything else the repo does not ignore (#654 — `.gitignore` is the target
+    // repo's policy, and PDO must not pretend otherwise at commit time; this is
+    // the *reading* surface).
     let output = match std::process::Command::new("git")
-        .args(["diff", &pipeline_branch, &sub_branch])
+        .args(["diff", &left, &right, "--", ".", ":(exclude).pdo/"])
         .current_dir(&state.repo_root)
         .output()
     {
@@ -12785,7 +12805,7 @@ async fn artifact(
 }
 
 /// Spawn the automatic merge resolver. **DEAD in production** since ADR-0006:
-/// reached only from `MergeResult::ConflictPendingResolution`, which is built only
+/// reached only from `DeliveryOutcome::ConflictPendingResolution`, which is built only
 /// under `keep_conflict == true`, which no production caller passes.
 ///
 /// Returns a typed refusal rather than a `Response` (#490, ADR-0035 §6): both its
@@ -13262,7 +13282,7 @@ async fn merge_resolver_done(state: &Arc<AppState>, run_id: &str) -> Response {
         Ok(false) => {}
         Err(e) => {
             return completion_refusal::refusal_response(
-                &completion_refusal::CompletionRefusal::MergeFailed {
+                &completion_refusal::CompletionRefusal::Internal {
                     error: format!("forgotten-run check failed: {e}"),
                 },
             );
@@ -13346,6 +13366,293 @@ fn secondary_repos_dirtied_refusal(
     None
 }
 
+/// **The** delivery of a NodeRun's work onto the Run's branch (#654 / ADR-0060).
+///
+/// Every completion path reaches this one function — `pdo complete`, the injected
+/// `Stop` hook, the liveness sweep's turn-end auto-completion, a human's *Mark
+/// complete* (`mark_node_done`) and a `script` node's own tail — and it runs
+/// **before** the terminal event is appended, therefore before any downstream node
+/// is dispatched: an isolated successor forked after this point sees a
+/// non-isolated predecessor's work.
+///
+/// PDO gives the Node no git instruction: it edits files, and the runtime delivers
+/// what it left. Whatever the node committed itself is kept as it is; whatever it
+/// left behind becomes one commit under `<node-id> iter-<N>: completed`, staged
+/// with `git add -A` semantics and the repo's own `.gitignore` as the only
+/// exclusion policy. An isolated NodeRun then has its sub-worktree merged back; a
+/// non-isolated one has already committed in place. Nothing left behind ⇒ no
+/// commit, no event, no empty commit.
+///
+/// `None` ⇒ the completion may carry on. `Some(refusal)` ⇒ it must stop, and every
+/// refusal built here has already appended its own parking events — the caller
+/// only projects it.
+#[allow(clippy::too_many_arguments)]
+async fn deliver_node_run(
+    state: &Arc<AppState>,
+    events: &[event_log::Event],
+    run_state: &event_log::RunState,
+    repo_root: &std::path::Path,
+    worktree_dir: &std::path::Path,
+    run_id: &str,
+    node_id: &str,
+    iter: i64,
+) -> Option<completion_refusal::CompletionRefusal> {
+    // #653/ADR-0060: where the NodeRun WORKED, read from its frozen isolation —
+    // not from a type that no longer implies a working directory.
+    let isolated = node_run_isolation(events, run_state, node_id, iter);
+    let node_worktree_dir = if isolated {
+        sub_worktree_path(repo_root, run_id, node_id, iter)
+    } else {
+        worktree_dir.to_path_buf()
+    };
+    let sub_branch = sub_worktree_branch(run_id, node_id, iter);
+
+    // An absent workspace is not a git failure. A Run whose worktree is gone —
+    // archived or cleaned up (ADR-0020) — has nothing to deliver in place, and
+    // parking the Run over it would punish a completion that arrives late through
+    // no fault of the node. Warn and let it through, exactly as the pre-#654
+    // cleanliness probe did. An ISOLATED NodeRun deliberately does not take this
+    // exit: its merge-back must still fail loudly if either worktree is missing,
+    // because that is #489's silent-loss guard.
+    if !isolated && !worktree_ops::is_git_worktree(worktree_dir) {
+        warn!(
+            "Run {run_id}: {} is not a git worktree — nothing to deliver for {node_id} iter-{iter}",
+            worktree_dir.display()
+        );
+        return None;
+    }
+
+    // #503 / ADR-0036: the commit an isolated sub-worktree was cut from, read off
+    // the log we already loaded. On a conflict, `worktree_ops` compares it to the
+    // pipeline branch's actual tip: still equal ⇒ the divergence is the run's own
+    // history rewritten by this node, and resolving in its favour drops nothing.
+    // No base recorded ⇒ no resolution.
+    let spawn_base = merge_action::spawn_base_sha(events, node_id, iter);
+
+    // The lock guards the *git operation*, not the nodes' work: two non-isolated
+    // NodeRuns still run side by side in the shared worktree with no runtime
+    // serialisation (ADR-0060). It only stops two deliveries from racing on the
+    // same index — which git would refuse anyway — and it is what makes "the first
+    // one to complete commits everything then visible" a statement rather than a
+    // coin toss.
+    let delivery = {
+        let _lock = state.merge_lock.lock().await;
+        worktree_ops::deliver_node_work(
+            worktree_dir,
+            &node_worktree_dir,
+            isolated,
+            &sub_branch,
+            node_id,
+            iter,
+            false,
+            spawn_base.as_deref(),
+        )
+    };
+
+    let outcome = match delivery {
+        Ok(o) => o,
+        Err(e) => {
+            // A staging, commit or merge failure is an infra give-up, never a
+            // business failure (ADR-0049): the node is `Interrupted`, the Run
+            // parks `AwaitingUser` with the reason, and the work stays on disk
+            // exactly where the node left it — nothing is reverted, nothing is
+            // cleaned.
+            let reason = format!("delivery_failed: could not deliver {node_id} iter-{iter}: {e:#}");
+            error!("{reason}");
+            let interrupt_event = event_log::Event {
+                id: None,
+                run_id: run_id.to_string(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeInterrupted,
+                node_id: Some(node_id.to_string()),
+                iter: Some(iter),
+                payload: Some(serde_json::json!({
+                    "reason": reason,
+                    "reason_code": "delivery_failed",
+                })),
+            };
+            let _ = append_event(state, &interrupt_event).await;
+            reap_dead_node_after_run_failure(
+                state,
+                repo_root,
+                run_id,
+                node_id,
+                iter,
+                !run_state.sandbox.is_off(),
+            );
+            return Some(completion_refusal::CompletionRefusal::DeliveryFailed {
+                node_id: node_id.to_string(),
+                error: format!("{e:#}"),
+            });
+        }
+    };
+
+    match outcome {
+        // The Run's branch carries the node's work — or the node left nothing and
+        // the branch did not move. Either way the completion continues; only the
+        // first case is worth an event, and that event is what makes the NodeRun's
+        // diff answerable whatever its type or isolation.
+        worktree_ops::DeliveryOutcome::Delivered(delivered) => {
+            if delivered.changed() {
+                let event = event_log::Event {
+                    id: None,
+                    run_id: run_id.to_string(),
+                    ts: event_log::now_iso(),
+                    kind: event_log::EventKind::NodeDelivered,
+                    node_id: Some(node_id.to_string()),
+                    iter: Some(iter),
+                    payload: Some(serde_json::json!({
+                        "before": delivered.before,
+                        "after": delivered.after,
+                        "isolated": isolated,
+                    })),
+                };
+                let _ = append_event(state, &event).await;
+            } else {
+                info!("Node {node_id} iter-{iter} delivered nothing — no commit taken");
+            }
+            None
+        }
+        // #503: not a failure — but PDO rewrote a branch, so it is logged with both
+        // tips, the resolution commit and the blast radius. The completion
+        // continues exactly as a clean merge would.
+        worktree_ops::DeliveryOutcome::ResolvedInNodeFavour(adoption) => {
+            let resolved = event_log::Event {
+                id: None,
+                run_id: run_id.to_string(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::MergeResolvedInNodeFavour,
+                node_id: Some(node_id.to_string()),
+                iter: Some(iter),
+                payload: Some(serde_json::json!({
+                    "reason": format!(
+                        "merge-back of {node_id} conflicted on {} file(s) and was resolved in \
+                         the node's favour",
+                        adoption.conflicting_files.len(),
+                    ),
+                    "rule": worktree_ops::ADOPTION_RULE,
+                    "pipeline_tip": adoption.pipeline_tip,
+                    "node_tip": adoption.node_tip,
+                    "merge_commit": adoption.merge_commit,
+                    "conflicting_files": adoption.conflicting_files,
+                })),
+            };
+            let _ = append_event(state, &resolved).await;
+            warn!(
+                "Run {run_id}: merge-back of {node_id} resolved in the node's favour \
+                 ({} conflicting file(s)); pipeline branch now at {} (#503)",
+                adoption.conflicting_files.len(),
+                adoption.merge_commit,
+            );
+            // The adoption moved the Run's branch too, so it delivered — and the
+            // node's diff must show what landed.
+            let delivered = event_log::Event {
+                id: None,
+                run_id: run_id.to_string(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeDelivered,
+                node_id: Some(node_id.to_string()),
+                iter: Some(iter),
+                payload: Some(serde_json::json!({
+                    "before": adoption.pipeline_tip,
+                    "after": adoption.merge_commit,
+                    "isolated": isolated,
+                })),
+            };
+            let _ = append_event(state, &delivered).await;
+            None
+        }
+        worktree_ops::DeliveryOutcome::Conflict(conflict) => {
+            let reason = format!(
+                "merge conflict on {node_id}: {} conflicting file(s) merging {} into the \
+                 pipeline branch at {}",
+                conflict.conflicting_files.len(),
+                short(&conflict.node_tip),
+                short(&conflict.pipeline_tip),
+            );
+            let conflict_event = event_log::Event {
+                id: None,
+                run_id: run_id.to_string(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::MergeConflictDetected,
+                node_id: Some(node_id.to_string()),
+                iter: Some(iter),
+                payload: Some(serde_json::json!({
+                    "reason": format!("conflict merging {node_id} into pipeline branch"),
+                    // #503 AC3/AC4: git's own report (stdout included — the half
+                    // that pre-#503 was dropped, and the only half a conflict
+                    // writes), the two tips, and the file list.
+                    "detail": conflict.detail,
+                    "pipeline_tip": conflict.pipeline_tip,
+                    "node_tip": conflict.node_tip,
+                    "conflicting_files": conflict.conflicting_files,
+                })),
+            };
+            let _ = append_event(state, &conflict_event).await;
+
+            // #503 AC5 / ADR-0049: the delivery just failed on a merge conflict — a
+            // runtime give-up, NOT a business failure. Mark the node `Interrupted`
+            // (not `Failed`): the run parks `AwaitingUser` with the reason (derived
+            // in `finalize`), never `RunFailed`. This still closes the window where
+            // the node stayed projected `running` for ever with a live session and
+            // a UI offering Stop/Retry; the worktree with the conflicting work is
+            // preserved for the human to resolve and reopen.
+            let node_interrupted = event_log::Event {
+                id: None,
+                run_id: run_id.to_string(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeInterrupted,
+                node_id: Some(node_id.to_string()),
+                iter: Some(iter),
+                // #601: prefix the refusal slug so `finalize` derives
+                // `awaiting_reason_code = merge_conflict` from the node.
+                payload: Some(serde_json::json!({
+                    "reason": format!("merge_conflict: {reason}"),
+                    "reason_code": "merge_conflict",
+                })),
+            };
+            let _ = append_event(state, &node_interrupted).await;
+
+            warn!("Merge conflict for node {node_id} in run {run_id}: {reason}");
+            reap_dead_node_after_run_failure(
+                state,
+                repo_root,
+                run_id,
+                node_id,
+                iter,
+                !run_state.sandbox.is_off(),
+            );
+            Some(completion_refusal::CompletionRefusal::MergeConflict {
+                node_id: node_id.to_string(),
+            })
+        }
+        worktree_ops::DeliveryOutcome::ConflictPendingResolution(conflict) => {
+            let conflict_event = event_log::Event {
+                id: None,
+                run_id: run_id.to_string(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::MergeConflictDetected,
+                node_id: Some(node_id.to_string()),
+                iter: Some(iter),
+                payload: Some(serde_json::json!({
+                    "reason": format!("conflict merging {node_id} into pipeline branch"),
+                    "detail": conflict.detail,
+                    "pipeline_tip": conflict.pipeline_tip,
+                    "node_tip": conflict.node_tip,
+                    "conflicting_files": conflict.conflicting_files,
+                })),
+            };
+            let _ = append_event(state, &conflict_event).await;
+
+            // DEAD in production (ADR-0035 §6): `keep_conflict` is never `true`, so
+            // `ConflictPendingResolution` is never built. The two resolver arms
+            // ride the type at zero test cost; removing the whole vestigial
+            // subsystem is ADR-0006 fallout, not this ticket.
+            Some(spawn_merge_resolver(state, run_id, node_id, iter, worktree_dir).await)
+        }
+    }
+}
+
 async fn complete_node_iteration(
     state: &Arc<AppState>,
     run_id: String,
@@ -13369,11 +13676,9 @@ async fn complete_node_iteration(
         }
         Ok(false) => {}
         Err(e) => {
-            return CompletionAttempt::refused(
-                completion_refusal::CompletionRefusal::MergeFailed {
-                    error: format!("forgotten-run check failed: {e}"),
-                },
-            );
+            return CompletionAttempt::refused(completion_refusal::CompletionRefusal::Internal {
+                error: format!("forgotten-run check failed: {e}"),
+            });
         }
     }
 
@@ -13437,223 +13742,21 @@ async fn complete_node_iteration(
         return CompletionAttempt::refused(refusal);
     }
 
-    // #653/ADR-0060: the completion path branches on where the NodeRun WORKED,
-    // read from its frozen isolation — not on a type that no longer implies a
-    // working directory. An isolated NodeRun merges its sub-worktree back; a
-    // non-isolated one is held to the shared worktree's cleanliness contract.
-    match node_run_isolation(&events, &pre_run_state, &node_id, iter) {
-        true => {
-            let sub_wt_dir = sub_worktree_path(&repo_root, &run_id, &node_id, iter);
-            let sub_branch = sub_worktree_branch(&run_id, &node_id, iter);
-
-            // #503 / ADR-0036: the commit this sub-worktree was cut from, read off
-            // the log we already loaded. On a conflict, `worktree_ops` compares it
-            // to the pipeline branch's actual tip: still equal ⇒ the divergence is
-            // the run's own history rewritten by this node, and resolving in its
-            // favour drops nothing. No base recorded ⇒ no resolution.
-            let spawn_base = merge_action::spawn_base_sha(&events, &node_id, iter);
-
-            let _lock = state.merge_lock.lock().await;
-            let merge_result = match commit_and_merge_sub_worktree_inner(
-                &sub_wt_dir,
-                &worktree_dir,
-                &sub_branch,
-                &node_id,
-                iter,
-                false,
-                spawn_base.as_deref(),
-            ) {
-                Ok(r) => r,
-                Err(e) => {
-                    error!("failed to commit/merge sub-worktree for {node_id}: {e}");
-                    return CompletionAttempt::refused(
-                        completion_refusal::CompletionRefusal::MergeFailed {
-                            error: e.to_string(),
-                        },
-                    );
-                }
-            };
-            match merge_result {
-                MergeResult::Success => {}
-                // #503: not a failure — but PDO rewrote a branch, so it is logged
-                // with both tips, the resolution commit and the blast radius. The
-                // completion continues exactly as a clean merge would.
-                MergeResult::ResolvedInNodeFavour(adoption) => {
-                    let resolved = event_log::Event {
-                        id: None,
-                        run_id: run_id.clone(),
-                        ts: event_log::now_iso(),
-                        kind: event_log::EventKind::MergeResolvedInNodeFavour,
-                        node_id: Some(node_id.clone()),
-                        iter: Some(iter),
-                        payload: Some(serde_json::json!({
-                            "reason": format!(
-                                "merge-back of {node_id} conflicted on {} file(s) and was \
-                                 resolved in the node's favour",
-                                adoption.conflicting_files.len(),
-                            ),
-                            "rule": worktree_ops::ADOPTION_RULE,
-                            "pipeline_tip": adoption.pipeline_tip,
-                            "node_tip": adoption.node_tip,
-                            "merge_commit": adoption.merge_commit,
-                            "conflicting_files": adoption.conflicting_files,
-                        })),
-                    };
-                    let _ = append_event(state, &resolved).await;
-                    warn!(
-                        "Run {run_id}: merge-back of {node_id} resolved in the node's favour \
-                         ({} conflicting file(s)); pipeline branch now at {} (#503)",
-                        adoption.conflicting_files.len(),
-                        adoption.merge_commit,
-                    );
-                }
-                MergeResult::Conflict(conflict) => {
-                    let reason = format!(
-                        "merge conflict on {node_id}: {} conflicting file(s) merging {} into the \
-                         pipeline branch at {}",
-                        conflict.conflicting_files.len(),
-                        short(&conflict.node_tip),
-                        short(&conflict.pipeline_tip),
-                    );
-                    let conflict_event = event_log::Event {
-                        id: None,
-                        run_id: run_id.clone(),
-                        ts: event_log::now_iso(),
-                        kind: event_log::EventKind::MergeConflictDetected,
-                        node_id: Some(node_id.clone()),
-                        iter: Some(iter),
-                        payload: Some(serde_json::json!({
-                            "reason": format!("conflict merging {node_id} into pipeline branch"),
-                            // #503 AC3/AC4: git's own report (stdout included — the
-                            // half that pre-#503 was dropped, and the only half a
-                            // conflict writes), the two tips, and the file list.
-                            "detail": conflict.detail,
-                            "pipeline_tip": conflict.pipeline_tip,
-                            "node_tip": conflict.node_tip,
-                            "conflicting_files": conflict.conflicting_files,
-                        })),
-                    };
-                    let _ = append_event(state, &conflict_event).await;
-
-                    // #503 AC5 / ADR-0049: the node's `pdo complete` just failed on
-                    // a merge conflict — a runtime give-up, NOT a business failure.
-                    // Mark the node `Interrupted` (not `Failed`): the run parks
-                    // `AwaitingUser` with the reason (derived in `finalize`), never
-                    // `RunFailed`. This still closes the window where the node stayed
-                    // projected `running` for ever with a live session and a UI
-                    // offering Stop/Retry; the worktree with the conflicting work is
-                    // preserved for the human to resolve and reopen.
-                    let node_interrupted = event_log::Event {
-                        id: None,
-                        run_id: run_id.clone(),
-                        ts: event_log::now_iso(),
-                        kind: event_log::EventKind::NodeInterrupted,
-                        node_id: Some(node_id.clone()),
-                        iter: Some(iter),
-                        // #601: prefix the refusal slug so `finalize` derives
-                        // `awaiting_reason_code = merge_conflict` from the node.
-                        payload: Some(serde_json::json!({
-                            "reason": format!("merge_conflict: {reason}"),
-                            "reason_code": "merge_conflict",
-                        })),
-                    };
-                    let _ = append_event(state, &node_interrupted).await;
-
-                    warn!("Merge conflict for node {node_id} in run {run_id}: {reason}");
-                    reap_dead_node_after_run_failure(
-                        state,
-                        &repo_root,
-                        &run_id,
-                        &node_id,
-                        iter,
-                        !pre_run_state.sandbox.is_off(),
-                    );
-                    return CompletionAttempt::refused(
-                        completion_refusal::CompletionRefusal::MergeConflict {
-                            node_id: node_id.clone(),
-                        },
-                    );
-                }
-                MergeResult::ConflictPendingResolution(conflict) => {
-                    let conflict_event = event_log::Event {
-                        id: None,
-                        run_id: run_id.clone(),
-                        ts: event_log::now_iso(),
-                        kind: event_log::EventKind::MergeConflictDetected,
-                        node_id: Some(node_id.clone()),
-                        iter: Some(iter),
-                        payload: Some(serde_json::json!({
-                            "reason": format!("conflict merging {node_id} into pipeline branch"),
-                            "detail": conflict.detail,
-                            "pipeline_tip": conflict.pipeline_tip,
-                            "node_tip": conflict.node_tip,
-                            "conflicting_files": conflict.conflicting_files,
-                        })),
-                    };
-                    let _ = append_event(state, &conflict_event).await;
-
-                    // DEAD in production (ADR-0035 §6): `keep_conflict` is never
-                    // `true`, so `ConflictPendingResolution` is never built. The two
-                    // resolver arms ride the new type at zero test cost; removing
-                    // the whole vestigial subsystem is ADR-0006 fallout, not this
-                    // bug fix.
-                    return CompletionAttempt::refused(
-                        spawn_merge_resolver(state, &run_id, &node_id, iter, &worktree_dir).await,
-                    );
-                }
-            }
-        }
-        // A non-isolated agent or script runs in the Run's shared worktree and
-        // must leave tracked files clean (untracked artifacts are fine — the
-        // guard ignores `??`). The sharp-tool caveat (a node that `git commit`s
-        // leaves a clean tree and passes) is documented in ADR-0017. #654 turns
-        // this refusal into an in-place delivery; until then a shared worktree
-        // keeps the contract it had.
-        false => match worktree_has_tracked_changes(&worktree_dir) {
-            Ok(true) => {
-                // ADR-0049: a completion refusal is a runtime give-up, not a
-                // deliberate failure — `Interrupted`, never `Failed`. The run
-                // parks `AwaitingUser` (derived in `finalize`) so the human can
-                // fix the tracked-file violation and reopen.
-                let interrupt_event = event_log::Event {
-                    id: None,
-                    run_id: run_id.clone(),
-                    ts: event_log::now_iso(),
-                    kind: event_log::EventKind::NodeInterrupted,
-                    node_id: Some(node_id.clone()),
-                    iter: Some(iter),
-                    payload: Some(serde_json::json!({
-                        "reason": format!(
-                            "doc_violated_code_immutability: non-isolated node {node_id} \
-                             violated code immutability (modified tracked files)"
-                        ),
-                        "reason_code": "doc_violated_code_immutability",
-                    })),
-                };
-                let _ = append_event(state, &interrupt_event).await;
-
-                warn!("Non-isolated node {node_id} modified tracked files in run {run_id}");
-                // Same leak as the merge-conflict path (#503 AC5): this refusal
-                // parks the Run, so the node's session has nothing left to do.
-                reap_dead_node_after_run_failure(
-                    state,
-                    &repo_root,
-                    &run_id,
-                    &node_id,
-                    iter,
-                    !pre_run_state.sandbox.is_off(),
-                );
-                return CompletionAttempt::refused(
-                    completion_refusal::CompletionRefusal::DocImmutabilityViolated {
-                        node_id: node_id.clone(),
-                    },
-                );
-            }
-            Ok(false) => {}
-            Err(e) => {
-                warn!("Could not check worktree cleanliness for {node_id}: {e}");
-            }
-        },
+    // #654 / ADR-0060: the ONE delivery every completion path goes through, run
+    // before the terminal event and therefore before any downstream spawn.
+    if let Some(refusal) = deliver_node_run(
+        state,
+        &events,
+        &pre_run_state,
+        &repo_root,
+        &worktree_dir,
+        &run_id,
+        &node_id,
+        iter,
+    )
+    .await
+    {
+        return CompletionAttempt::refused(refusal);
     }
 
     let pipeline_path =
@@ -17452,15 +17555,15 @@ fn short(sha: &str) -> &str {
 
 /// Reap the session of a node whose completion just killed the Run (#503 AC5).
 ///
-/// Called from the refusal paths that append `RunFailed` — a merge-back conflict
-/// and a non-isolated immutability violation. Those return a refusal *to a
-/// `pdo complete` running inside the very session being killed*, so the kill has
-/// to outlive this request: detached, exactly like `node_done`'s reap (#304,
-/// ADR-0023), or the response never reaches the CLI and #490's exit codes lose
-/// their meaning.
+/// Called from the refusal paths that park the Run — a merge-back conflict and a
+/// failed delivery (#654). Those return a refusal *to a `pdo complete` running
+/// inside the very session being killed*, so the kill has to outlive this request:
+/// detached, exactly like `node_done`'s reap (#304, ADR-0023), or the response
+/// never reaches the CLI and #490's exit codes lose their meaning.
 ///
-/// Not called on the `MergeFailed` error path: that one leaves the Run alive and
-/// the agent free to retry, so its session is still doing something.
+/// Not called on the still-your-turn refusals (a missing output, a frontmatter
+/// retry): those leave the Run alive and the agent free to fix and re-complete, so
+/// its session is still doing something.
 fn reap_dead_node_after_run_failure(
     state: &Arc<AppState>,
     repo_root: &std::path::Path,
@@ -22229,7 +22332,7 @@ mod tests {
         std::fs::write(sub_wt_dir.join("foo.rs"), "fn main() {}\n").unwrap();
         let result =
             commit_and_merge_sub_worktree(&sub_wt_dir, &wt_dir, &sub_branch, "impl-1", 1).unwrap();
-        assert!(matches!(result, MergeResult::Success));
+        assert!(matches!(result, worktree_ops::MergeResult::Success));
 
         // Sub-worktree must exist before cleanup (refs #32)
         assert!(sub_wt_dir.exists());
@@ -23407,6 +23510,7 @@ mod tests {
                 frontmatter_retries: 0,
                 frontmatter_violations: Vec::new(),
                 missing_outputs: Vec::new(),
+                delivery: None,
             },
         );
         rs
@@ -23626,6 +23730,7 @@ mod tests {
                 frontmatter_retries: 0,
                 frontmatter_violations: Vec::new(),
                 missing_outputs: Vec::new(),
+                delivery: None,
             },
         );
         // An open loop region (exhausted at max_iter, not done) awaiting a route.
@@ -23683,6 +23788,7 @@ mod tests {
                 frontmatter_retries: 0,
                 frontmatter_violations: Vec::new(),
                 missing_outputs: Vec::new(),
+                delivery: None,
             },
         );
         // Node `b` is throttled `Waiting`: ready but no admission slot yet. No
@@ -23705,6 +23811,7 @@ mod tests {
                 frontmatter_retries: 0,
                 frontmatter_violations: Vec::new(),
                 missing_outputs: Vec::new(),
+                delivery: None,
             },
         );
 
@@ -23941,6 +24048,7 @@ mod tests {
                     frontmatter_retries: 0,
                     frontmatter_violations: Vec::new(),
                     missing_outputs: Vec::new(),
+                    delivery: None,
                 },
             );
         }
@@ -27284,7 +27392,7 @@ edges:
         std::fs::write(sub_wt_dir.join("foo.rs"), "fn main() {}\n").unwrap();
         let result =
             commit_and_merge_sub_worktree(&sub_wt_dir, &wt_dir, &sub_branch, "impl-1", 1).unwrap();
-        assert!(matches!(result, MergeResult::Success));
+        assert!(matches!(result, worktree_ops::MergeResult::Success));
 
         // Prompt endpoint must return 200 for the completed iter
         let app = build_router(state);
@@ -35965,31 +36073,37 @@ edges:
             .contains("output validation after retry"));
     }
 
-    /// New coverage: no test reached the non-isolated immutability arm before #490. It
-    /// needs a real git worktree with a dirty **tracked** file (an untracked artefact
-    /// is ignored by the guard).
+    /// #654 / ADR-0060: the inverse of the pre-#654 test that lived here. A
+    /// non-isolated NodeRun that modifies a TRACKED file is no longer refused —
+    /// PDO commits its work onto the Run's branch and the completion goes
+    /// through, on `POST …/done` and on the `mark_node_done` command arm alike.
     #[tokio::test]
-    async fn shared_worktree_immutability_violation_is_409_not_200() {
+    async fn a_shared_worktree_node_that_dirties_a_tracked_file_is_delivered_not_refused() {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path();
         init_git_repo_for_refusal_tests(repo);
-        let pipe = "doc-immutability";
+        let pipe = "shared-delivery";
         write_pipeline_with_outputs(repo, pipe);
 
         let state = test_state_with_dir(repo).await;
-        let run_id = "doc-immutability-run";
+        let run_id = "shared-delivery-run";
         let wt_dir = worktree_dir_for_run(repo, run_id);
-        create_worktree(repo, &wt_dir, &format!("pdo/run-{run_id}"), "HEAD").unwrap();
-        // Dirty a TRACKED file from inside the run's worktree.
+        let pipeline_branch = format!("pdo/run-{run_id}");
+        create_worktree(repo, &wt_dir, &pipeline_branch, "HEAD").unwrap();
+        // A tracked file modified AND a brand-new untracked one: both are the
+        // node's work, and `git add -A` takes both.
         std::fs::write(
             wt_dir.join("tracked.txt"),
             "mutated by a non-isolated node\n",
         )
         .unwrap();
+        std::fs::write(wt_dir.join("brand_new.rs"), "pub fn added() {}\n").unwrap();
         assert!(worktree_has_tracked_changes(&wt_dir).unwrap());
+        write_artifact_for(repo, run_id, "worker", "summary", "s\n");
+        write_artifact_for(repo, run_id, "worker", "report", "r\n");
 
-        // `find_node_type` reads the PROJECTED node defs, not the YAML on disk, so
-        // the cleanliness arm is only reached when `RunStarted` carries them.
+        // The isolation is read from the PROJECTED node defs, so `RunStarted` has
+        // to carry them.
         for event in [
             event_log::Event {
                 id: None,
@@ -36019,45 +36133,143 @@ edges:
             append_event(&state, &event).await.unwrap();
         }
 
-        let (status, ct, raw) = done_triplet(&state, run_id, "worker", "{}").await;
-        assert_eq!((status, ct.as_str()), (StatusCode::CONFLICT, JSON_CT));
-        let body: serde_json::Value = serde_json::from_str(&raw).unwrap();
-        assert_eq!(body["error"], "doc_violated_code_immutability");
-        assert_eq!(body["recoverable"], false);
-        assert!(body["message"]
-            .as_str()
-            .unwrap()
-            .contains("code immutability"));
+        let (status, _, _) = done_triplet(&state, run_id, "worker", "{}").await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "a non-isolated node that edited files must complete, not be refused"
+        );
 
-        // ADR-0049: the refusal parks the run (NodeInterrupted → AwaitingUser),
-        // it never fails it.
+        // The commit landed on the Run's branch, under the deterministic message.
+        let log = std::process::Command::new("git")
+            .args(["log", "--format=%s", "-1", &pipeline_branch])
+            .current_dir(repo)
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&log.stdout).trim(),
+            "worker iter-1: completed"
+        );
+        // …and it carries BOTH the tracked edit and the new file.
+        let files = std::process::Command::new("git")
+            .args(["show", "--name-only", "--format=", &pipeline_branch])
+            .current_dir(repo)
+            .output()
+            .unwrap();
+        let files = String::from_utf8_lossy(&files.stdout);
+        assert!(
+            files.contains("tracked.txt") && files.contains("brand_new.rs"),
+            "the delivery commits every non-ignored change; got: {files}"
+        );
+
+        // The delivery is recorded, before the terminal event, with both tips.
+        let events = load_events(&state.db, run_id).await.unwrap();
+        let delivered_at = events
+            .iter()
+            .position(|e| e.kind == event_log::EventKind::NodeDelivered)
+            .expect("a delivery that moved the branch records NodeDelivered");
+        let completed_at = events
+            .iter()
+            .position(|e| e.kind == event_log::EventKind::NodeCompleted)
+            .expect("the node completed");
+        assert!(
+            delivered_at < completed_at,
+            "the delivery must precede the terminal event"
+        );
+        let projected = event_log::project(&events).unwrap();
+        let delivery = projected.nodes["worker"]
+            .delivery
+            .as_ref()
+            .expect("the projection carries the delivery");
+        assert_ne!(delivery.before, delivery.after);
+        assert!(!events
+            .iter()
+            .any(|e| e.kind == event_log::EventKind::NodeInterrupted));
+    }
+
+    /// #654: a NodeRun that left nothing takes NO commit — the Run's branch does
+    /// not move and no `NodeDelivered` is recorded.
+    #[tokio::test]
+    async fn a_node_that_left_nothing_takes_no_commit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_git_repo_for_refusal_tests(repo);
+        // No declared output port: this test is about the delivery, not about
+        // output validation.
+        let pipe = "shared-noop";
+        let pipelines_dir = repo.join(".pdo").join("pipelines");
+        std::fs::create_dir_all(&pipelines_dir).unwrap();
+        std::fs::write(
+            pipelines_dir.join(format!("{pipe}.yaml")),
+            format!(
+                "name: {pipe}\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: agent\n    isolated_worktree: false\n    inputs:\n      - name: task\nedges: []\n"
+            ),
+        )
+        .unwrap();
+
+        let state = test_state_with_dir(repo).await;
+        let run_id = "shared-noop-run";
+        let wt_dir = worktree_dir_for_run(repo, run_id);
+        let pipeline_branch = format!("pdo/run-{run_id}");
+        create_worktree(repo, &wt_dir, &pipeline_branch, "HEAD").unwrap();
+        let tip_before = std::process::Command::new("git")
+            .args(["rev-parse", &pipeline_branch])
+            .current_dir(repo)
+            .output()
+            .unwrap();
+        let tip_before = String::from_utf8_lossy(&tip_before.stdout)
+            .trim()
+            .to_string();
+
+        for event in [
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::RunStarted,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({
+                    "pipeline_name": pipe,
+                    "node_defs": [
+                        { "id": "worker", "node_type": "agent", "isolated_worktree": false, "inputs": [], "outputs": [] }
+                    ],
+                    "edges": [],
+                })),
+            },
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeStarted,
+                node_id: Some("worker".into()),
+                iter: Some(1),
+                payload: None,
+            },
+        ] {
+            append_event(&state, &event).await.unwrap();
+        }
+
+        let (status, _, _) = done_triplet(&state, run_id, "worker", "{}").await;
+        assert_eq!(status, StatusCode::OK);
+
+        let tip_after = std::process::Command::new("git")
+            .args(["rev-parse", &pipeline_branch])
+            .current_dir(repo)
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&tip_after.stdout).trim(),
+            tip_before,
+            "no change ⇒ no commit, empty or otherwise"
+        );
         let events = load_events(&state.db, run_id).await.unwrap();
         assert!(
             !events
                 .iter()
-                .any(|e| e.kind == event_log::EventKind::RunFailed),
-            "the runtime never fails the run on a completion refusal (ADR-0049)"
+                .any(|e| e.kind == event_log::EventKind::NodeDelivered),
+            "a no-op delivery records nothing"
         );
-        assert_eq!(
-            events
-                .iter()
-                .filter(|e| e.kind == event_log::EventKind::NodeInterrupted
-                    && e.node_id.as_deref() == Some("worker"))
-                .count(),
-            1
-        );
-        assert_eq!(
-            event_log::project(&events).unwrap().status,
-            event_log::RunStatus::AwaitingUser
-        );
-
-        // Route asymmetry, asserted rather than assumed (ADR-0035, accepted limit):
-        // the command arm runs neither the merge nor the cleanliness check, so it
-        // cannot reach this refusal — it falls straight through to output validation.
-        let (cmd_status, _, cmd_raw) = mark_done_triplet(&state, run_id, "worker").await;
-        let cmd_body: serde_json::Value = serde_json::from_str(&cmd_raw).unwrap();
-        assert_eq!(cmd_status, StatusCode::CONFLICT);
-        assert_ne!(cmd_body["error"], "doc_violated_code_immutability");
     }
 
     /// New coverage: no test reached the merge-conflict arm before #490 either. Two

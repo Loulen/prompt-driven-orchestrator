@@ -6,8 +6,8 @@
 //! so running an imported file's code would be an RCE, cf. #260) and the
 //! recognized idioms are rewired:
 //!
-//! - `agent(prompt, opts)` -> a regular node (`doc-only`, upgraded to
-//!   `code-mutating` on strong mutation keywords / `isolation: 'worktree'`).
+//! - `agent(prompt, opts)` -> an isolated `agent` node (#653): the import maps a
+//!   role, never a guess about what that role will touch.
 //! - `for` / `while` **whose body contains an `agent()`** -> a `bounded` loop
 //!   region; a plumbing loop (no `agent()` in the body) is left alone — the guard
 //!   that prevents a phantom `bounded` (ADR-0016).
@@ -446,12 +446,6 @@ impl Importer {
         // computed further down.
         let effort_expr = opts.and_then(|o| object_prop(o, "effort"));
         let effort = effort_expr.and_then(string_literal_value);
-        let isolation_wt = opts
-            .and_then(|o| object_prop(o, "isolation"))
-            .and_then(string_literal_value)
-            .as_deref()
-            == Some("worktree");
-
         let seed = label_static
             .clone()
             .filter(|s| !s.is_empty())
@@ -493,8 +487,6 @@ impl Importer {
             }
         };
 
-        let node_type = infer_node_type(&prompt_body, &display_name, isolation_wt);
-
         // Output port frontmatter from `opts.schema` (const ref or inline object).
         let frontmatter = opts.and_then(|o| object_prop(o, "schema")).and_then(|s| {
             let s = s.without_parentheses();
@@ -530,10 +522,16 @@ impl Importer {
             );
         }
 
+        // #653 / ADR-0060: an imported agent role is an isolated `agent`, full
+        // stop. The pre-#653 importer sniffed the prompt and the label for
+        // mutation keywords to pick between non-isolated and isolated; a
+        // guess about what a foreign prompt will touch is exactly the thing the
+        // explicit isolation line replaces.
         let node = NodeDef {
             id: id.clone(),
             name: display_name,
-            node_type,
+            node_type: NodeType::Agent,
+            isolated_worktree: Some(true),
             inputs: vec![plain_port("in")],
             outputs: vec![out_port],
             interactive: false,
@@ -799,18 +797,13 @@ impl Importer {
             return;
         }
         let mut new_cursor: Cursor = Vec::new();
-        let mut any_mutating = false;
+        let mut any_isolated = false;
         for a in agents {
             // Each sibling is entered from the same upstream sources (fan-out).
             let mut branch_cursor = entry_sources.clone();
             let id = self.emit_agent(a, &mut branch_cursor);
-            if self
-                .nodes
-                .last()
-                .map(|n| n.node_type == NodeType::CodeMutating)
-                == Some(true)
-            {
-                any_mutating = true;
+            if self.nodes.last().map(|n| n.is_isolated()) == Some(true) {
+                any_isolated = true;
             }
             new_cursor.push(Pending {
                 node: id,
@@ -819,8 +812,8 @@ impl Importer {
                 is_else: false,
             });
         }
-        if any_mutating {
-            self.warn("`parallel(...)` avec des nœuds code-mutating — envisage un nœud Merge en aval (lint info-only ADR-0006, pas d'auto-insertion)");
+        if any_isolated {
+            self.warn("`parallel(...)` avec des nœuds isolés — envisage un nœud Merge en aval (lint info-only ADR-0006, pas d'auto-insertion)");
         }
         *cursor = new_cursor;
     }
@@ -937,6 +930,7 @@ fn start_node() -> NodeDef {
         id: "start".into(),
         name: "Start".into(),
         node_type: NodeType::Start,
+        isolated_worktree: None,
         inputs: vec![],
         outputs: vec![plain_port("user_prompt")],
         interactive: false,
@@ -955,6 +949,7 @@ fn end_node(agent_count: usize) -> NodeDef {
         id: "end".into(),
         name: "End".into(),
         node_type: NodeType::End,
+        isolated_worktree: None,
         inputs: vec![plain_port("result")],
         outputs: vec![],
         interactive: false,
@@ -968,27 +963,6 @@ fn end_node(agent_count: usize) -> NodeDef {
         harnesses: Default::default(),
         agent_choice: None,
         auto_fail: None,
-    }
-}
-
-fn infer_node_type(prompt: &str, name: &str, isolation_worktree: bool) -> NodeType {
-    if isolation_worktree {
-        return NodeType::CodeMutating;
-    }
-    let hay = format!("{} {}", name.to_lowercase(), prompt.to_lowercase());
-    const MUTATION_KW: &[&str] = &[
-        "commit",
-        "git add",
-        "git merge",
-        "implémente",
-        "implemente",
-        "implement",
-        "worktree",
-    ];
-    if MUTATION_KW.iter().any(|k| hay.contains(k)) {
-        NodeType::CodeMutating
-    } else {
-        NodeType::DocOnly
     }
 }
 

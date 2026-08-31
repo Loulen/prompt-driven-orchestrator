@@ -18,9 +18,9 @@ export function TooltipProvider({ children }: { children: ReactNode }) {
 // now supplied here so the next icon button is born named.
 //
 // The rule is deliberately narrow — the tooltip text is borrowed as a name only
-// when the trigger cannot name itself. A text button (NodeInspector's
-// `code-mutating` / `doc-only` pills) keeps its visible label: replacing it with
-// a long tooltip sentence would break "label in name" (WCAG 2.5.3).
+// when the trigger cannot name itself. A text button (NodeInspector's Workspace
+// choices) keeps its visible label: replacing it with a long tooltip sentence
+// would break "label in name" (WCAG 2.5.3).
 const INTERACTIVE_TAGS = new Set(["button", "a"]);
 
 /** Text this element renders itself. Host elements are transparent (recurse); a

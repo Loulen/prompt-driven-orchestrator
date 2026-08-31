@@ -39,7 +39,8 @@ nodes:
     view: { x: 0, y: 200 }
   - id: upstream
     name: upstream
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: in
         side: left
@@ -52,7 +53,8 @@ nodes:
     view: { x: 250, y: 200 }
   - id: worker
     name: worker
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: in
         side: left

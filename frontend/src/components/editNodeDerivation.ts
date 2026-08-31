@@ -3,6 +3,7 @@ import { MarkerType } from "@xyflow/react";
 import type { EdgeWaypoint, LoopRegion, NodeStatus, NodeType, PipelineDef, PortSide, RunState, RunStatus } from "../types";
 import type { OrthogonalEdgeData } from "./OrthogonalEdge";
 import { anchorHandleId, isEmergentInputNode } from "../lib/anchorSide";
+import { isNodeIsolated } from "../lib/nodeIsolation";
 
 /**
  * A run "reaches its end" when it terminates successfully (`completed`). At
@@ -88,6 +89,12 @@ export function deriveEditNodes(
         label: n.name ?? n.id,
         nodeId: n.id,
         nodeType: n.type,
+        // #653/ADR-0060: the canvas marker's input. On a live Run the FROZEN
+        // answer wins — the marker has to say where the NodeRun works, and an
+        // edit that has not launched yet moved the document, not the session.
+        // `merge` renders through its own component, so this only ever answers
+        // for agent/script/structural.
+        isolated: runState?.nodes?.[n.id]?.isolated_worktree ?? isNodeIsolated(n),
         status,
         reached: markerReached(n.type, runState),
         // Input images uploaded with the run surface on the start marker only
@@ -427,7 +434,7 @@ export function edgeIndexFromId(edgeId: string): number | null {
  *   via `PortPill`, so the edge keeps its declared port name.
  * - Declared-port `edit` nodes (the End node's `result`) keep that declared,
  *   side-fixed handle — those ports are unaffected by anchoring (#168).
- * - Emergent work nodes (`doc-only` / `code-mutating`, ADR-0011 / #149) render
+ * - Emergent work nodes (`agent`, ADR-0011 / #149) render
  *   one body-covering target handle PER SIDE. The edge binds to the handle for
  *   its chosen `target_side` (#168) so the arrow anchors and routes from that
  *   side; absent a `target_side`, it binds to the left handle, reproducing the

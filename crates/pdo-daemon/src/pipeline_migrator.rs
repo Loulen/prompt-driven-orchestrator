@@ -106,7 +106,7 @@ fn needs_migration(yaml_value: &serde_yaml::Value) -> bool {
                 return true;
             }
         }
-        // Inputs are emergent (#149): a *regular* node (doc-only / code-mutating)
+        // Inputs are emergent (#149): a *regular* node (agent / script)
         // that still declares any input needs migration so the declared port is
         // dropped (and a `repeated` flag migrated onto its edge). Structural
         // nodes (for-each here; start/end/switch/loop/merge already `continue`d
@@ -166,7 +166,8 @@ nodes:
     view: { x: 100, y: 160 }
   - id: XBG5Cxkn
     name: implementer
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     inputs:
       - { name: task, side: left }
     outputs:
@@ -174,7 +175,8 @@ nodes:
     view: { x: 335, y: 249 }
   - id: Qws9KzRZ
     name: reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - { name: code, side: left }
     outputs:
@@ -664,8 +666,8 @@ fn body_terminal(
     (terminal, out_port)
 }
 
-/// #149: inputs are emergent. Strip declared `inputs` from regular (doc-only /
-/// code-mutating) nodes. Structural nodes (start/end/merge/loop/for-each) keep
+/// #149: inputs are emergent. Strip declared `inputs` from regular (non-isolated /
+/// isolated) nodes. Structural nodes (start/end/merge/loop/for-each) keep
 /// their required ports. Any `repeated: true` declared input is migrated onto
 /// the matching incoming edge so loop accumulation is preserved.
 fn drop_declared_inputs(doc: &mut serde_yaml::Value) {
@@ -1596,8 +1598,12 @@ pub(crate) fn migrate_stranded_flat_prompts(pipelines_dir: &Path) -> Result<usiz
     Ok(moved)
 }
 
-/// Detects fan-outs where 2+ code-mutating nodes share a common downstream
+/// Detects fan-outs where 2+ **isolated** nodes (#653) share a common downstream
 /// target but no Merge node sits between them and the target.
+///
+/// Isolation, not the node's type, is what makes a fan-out risky: two nodes that
+/// each fork a sub-worktree produce two branches nothing reconciles, while two
+/// nodes sharing the Run worktree already write to one tree.
 ///
 /// Returns info-only diagnostics (ADR-0001: non-blocking).
 // #494: exercised only by this module's unit tests since demotion; kept as a tested helper.
@@ -1605,10 +1611,10 @@ pub(crate) fn migrate_stranded_flat_prompts(pipelines_dir: &Path) -> Result<usiz
 pub(crate) fn lint_missing_merge(pipeline: &PipelineDef) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
 
-    let cm_ids: HashSet<&str> = pipeline
+    let isolated_ids: HashSet<&str> = pipeline
         .nodes
         .iter()
-        .filter(|n| n.node_type == NodeType::CodeMutating)
+        .filter(|n| n.node_type != NodeType::Merge && n.is_isolated())
         .map(|n| n.id.as_str())
         .collect();
 
@@ -1619,22 +1625,22 @@ pub(crate) fn lint_missing_merge(pipeline: &PipelineDef) -> Vec<Diagnostic> {
         .map(|n| n.id.as_str())
         .collect();
 
-    let mut target_cm_sources: HashMap<&str, Vec<&str>> = HashMap::new();
+    let mut target_isolated_sources: HashMap<&str, Vec<&str>> = HashMap::new();
 
     for edge in &pipeline.edges {
         let src = edge.source.node.as_str();
         let tgt = edge.target.node.as_str();
-        if cm_ids.contains(src) && !merge_ids.contains(tgt) {
-            target_cm_sources.entry(tgt).or_default().push(src);
+        if isolated_ids.contains(src) && !merge_ids.contains(tgt) {
+            target_isolated_sources.entry(tgt).or_default().push(src);
         }
     }
 
-    for (target_id, sources) in &target_cm_sources {
+    for (target_id, sources) in &target_isolated_sources {
         if sources.len() >= 2 {
             diagnostics.push(Diagnostic {
                 severity: Severity::Warning,
                 message: format!(
-                    "node '{}' receives edges from {} code-mutating nodes ({}) without a Merge node — \
+                    "node '{}' receives edges from {} isolated nodes ({}) without a Merge node — \
                      parallel code changes may conflict at merge time",
                     target_id,
                     sources.len(),
@@ -1694,7 +1700,8 @@ nodes:
       - name: user_prompt
   - id: aBcD1234
     name: implementer
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     outputs:
       - name: code
         side: right
@@ -1728,7 +1735,8 @@ nodes:
       - name: user_prompt
   - id: aBcD1234
     name: implementer
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     model: opus
     effort: low
     outputs:
@@ -1814,7 +1822,7 @@ edges: []
     #[test]
     fn drops_declared_inputs_on_regular_nodes() {
         // #149: inputs are emergent (derived from edges). The migrator strips the
-        // now-redundant declared `inputs` from doc-only / code-mutating nodes.
+        // now-redundant declared `inputs` from agent / script nodes.
         let yaml = r#"
 name: test
 version: "1.0"
@@ -1831,7 +1839,8 @@ nodes:
       - name: result
   - id: aBcD1234
     name: planner
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
         side: left
@@ -1888,13 +1897,15 @@ nodes:
       - name: result
   - id: aBcD1234
     name: reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: review
         side: right
   - id: eFgH5678
     name: implementer
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     inputs:
       - name: reviews
         side: left
@@ -1943,7 +1954,8 @@ name: review-loop
 version: "1.0"
 nodes:
   - id: implementer
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     prompt_file: .pdo/prompts/implementer.md
     inputs:
       - name: review
@@ -1951,7 +1963,8 @@ nodes:
       - name: code
     view: { x: 100, y: 160 }
   - id: reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     prompt_file: .pdo/prompts/reviewer.md
     inputs:
       - name: code
@@ -1997,7 +2010,8 @@ name: test
 version: "1.0"
 nodes:
   - id: worker
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs: []
     outputs:
       - name: out
@@ -2036,7 +2050,8 @@ name: demo
 version: "1.0"
 nodes:
   - id: agent
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     prompt_file: old/path/agent.md
     inputs: []
     outputs: []
@@ -2062,7 +2077,8 @@ version: "1.0"
 nodes:
   - id: aBcD1234
     name: worker
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
       - name: context
@@ -2111,7 +2127,8 @@ nodes:
       - name: result
   - id: aBcD1234
     name: worker
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: plan
         side: top
@@ -2131,7 +2148,7 @@ edges: []
         std::fs::create_dir_all(&old_prompt_dir).unwrap();
         std::fs::write(old_prompt_dir.join("mynode.md"), "hello prompt").unwrap();
 
-        let yaml = "name: test\nversion: '1.0'\nnodes:\n  - id: mynode\n    type: doc-only\n    prompt_file: old_prompts/mynode.md\n    inputs: []\n    outputs: []\nedges: []\n".to_string();
+        let yaml = "name: test\nversion: '1.0'\nnodes:\n  - id: mynode\n    type: agent\n    isolated_worktree: false\n    prompt_file: old_prompts/mynode.md\n    inputs: []\n    outputs: []\nedges: []\n".to_string();
         std::fs::write(&yaml_path, &yaml).unwrap();
 
         let migrated = migrate_pipeline_file(&yaml_path).unwrap();
@@ -2157,7 +2174,7 @@ edges: []
         std::fs::write(tmp.path().join("readme.md"), "# hi").unwrap();
         std::fs::write(
             tmp.path().join("pipe.yaml"),
-            "name: p\nversion: '1.0'\nnodes:\n  - id: n1\n    type: doc-only\n    inputs: []\n    outputs: []\nedges: []\n",
+            "name: p\nversion: '1.0'\nnodes:\n  - id: n1\n    type: agent\n    isolated_worktree: false\n    inputs: []\n    outputs: []\nedges: []\n",
         )
         .unwrap();
 
@@ -2242,7 +2259,8 @@ nodes:
       - name: user_prompt
   - id: aBcD1234
     name: worker
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
         side: left
@@ -2282,7 +2300,8 @@ nodes:
         side: right
   - id: aBcD1234
     name: reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: code
         side: left
@@ -2291,7 +2310,8 @@ nodes:
         side: right
   - id: eFgH5678
     name: implementer
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     inputs:
       - name: review
         side: left
@@ -2391,7 +2411,8 @@ nodes:
         side: right
   - id: reviewer1
     name: reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: code
         side: left
@@ -2440,11 +2461,12 @@ edges:
 
     use crate::pipeline::{EdgeDef, EdgeEndpoint, NodeDef, Port, PortSide, PortType};
 
-    fn make_cm_node(id: &str) -> NodeDef {
+    fn make_isolated_node(id: &str) -> NodeDef {
         NodeDef {
+            isolated_worktree: Some(true),
             id: id.into(),
             name: id.into(),
-            node_type: NodeType::CodeMutating,
+            node_type: NodeType::Agent,
             inputs: vec![Port {
                 name: "in".into(),
                 repeated: false,
@@ -2480,6 +2502,7 @@ edges:
 
     fn make_merge_node(id: &str) -> NodeDef {
         NodeDef {
+            isolated_worktree: None,
             id: id.into(),
             name: id.into(),
             node_type: NodeType::Merge,
@@ -2516,11 +2539,12 @@ edges:
         }
     }
 
-    fn make_doc_node(id: &str) -> NodeDef {
+    fn make_shared_node(id: &str) -> NodeDef {
         NodeDef {
+            isolated_worktree: Some(false),
             id: id.into(),
             name: id.into(),
-            node_type: NodeType::DocOnly,
+            node_type: NodeType::Agent,
             inputs: vec![Port {
                 name: "in".into(),
                 repeated: false,
@@ -2579,9 +2603,9 @@ edges:
             version: None,
             variables: HashMap::new(),
             nodes: vec![
-                make_cm_node("impl-a"),
-                make_cm_node("impl-b"),
-                make_doc_node("reviewer"),
+                make_isolated_node("impl-a"),
+                make_isolated_node("impl-b"),
+                make_shared_node("reviewer"),
             ],
             edges: vec![
                 make_edge("impl-a", "out", "reviewer", "in"),
@@ -2605,10 +2629,10 @@ edges:
             version: None,
             variables: HashMap::new(),
             nodes: vec![
-                make_cm_node("impl-a"),
-                make_cm_node("impl-b"),
+                make_isolated_node("impl-a"),
+                make_isolated_node("impl-b"),
                 make_merge_node("merger"),
-                make_doc_node("downstream"),
+                make_shared_node("downstream"),
             ],
             edges: vec![
                 make_edge("impl-a", "out", "merger", "branches"),
@@ -2633,7 +2657,7 @@ edges:
             name: "single-cm".into(),
             version: None,
             variables: HashMap::new(),
-            nodes: vec![make_cm_node("impl-a"), make_doc_node("reviewer")],
+            nodes: vec![make_isolated_node("impl-a"), make_shared_node("reviewer")],
             edges: vec![make_edge("impl-a", "out", "reviewer", "in")],
             loops: Vec::new(),
             notes: Vec::new(),
@@ -2644,15 +2668,15 @@ edges:
     }
 
     #[test]
-    fn lint_no_warning_for_doc_only_fan_out() {
+    fn lint_no_warning_for_shared_worktree_fan_out() {
         let pipeline = PipelineDef {
-            name: "doc-fan-out".into(),
+            name: "shared-worktree-fan-out".into(),
             version: None,
             variables: HashMap::new(),
             nodes: vec![
-                make_doc_node("plan-a"),
-                make_doc_node("plan-b"),
-                make_doc_node("summary"),
+                make_shared_node("plan-a"),
+                make_shared_node("plan-b"),
+                make_shared_node("summary"),
             ],
             edges: vec![
                 make_edge("plan-a", "out", "summary", "in"),
@@ -2685,7 +2709,8 @@ nodes:
         side: right
   - id: aBcD1234
     name: lister
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: plan
         side: right
@@ -2704,7 +2729,8 @@ nodes:
         side: right
   - id: wRkR5678
     name: worker
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     outputs:
       - name: out
         side: right
@@ -2754,7 +2780,8 @@ nodes:
         side: right
   - id: aBcD1234
     name: lister
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: plan
         side: right
@@ -2774,7 +2801,8 @@ nodes:
         side: right
   - id: wRkR5678
     name: worker
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     outputs:
       - name: out
         side: right
@@ -2861,7 +2889,8 @@ nodes:
         side: right
   - id: liStErAA
     name: lister
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: plan
         side: right
@@ -2881,7 +2910,8 @@ nodes:
         side: right
   - id: wRkRAAAA
     name: worker-a
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     outputs:
       - name: out
         side: right
@@ -2901,7 +2931,8 @@ nodes:
         side: right
   - id: wRkRBBBB
     name: worker-b
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     outputs:
       - name: out
         side: right
@@ -2956,7 +2987,8 @@ nodes:
         side: right
   - id: aBcD1234
     name: lister
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: plan
         side: right
@@ -2976,7 +3008,8 @@ nodes:
         side: right
   - id: wRkR5678
     name: worker
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     outputs:
       - name: out
         side: right
@@ -3011,7 +3044,8 @@ name: foreach-human-id
 version: "1.0"
 nodes:
   - id: lister
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: plan
         side: right
@@ -3030,7 +3064,8 @@ nodes:
       - name: done
         side: right
   - id: worker
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     outputs:
       - name: out
         side: right
@@ -3068,7 +3103,8 @@ name: loop-human-id
 version: "1.0"
 nodes:
   - id: feeder
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: plan
         side: right
@@ -3087,7 +3123,8 @@ nodes:
       - name: done
         side: right
   - id: fixer
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     outputs:
       - name: out
         side: right
@@ -3231,7 +3268,8 @@ nodes:
       - { name: user_prompt, side: right }
   - id: aaaa0001
     name: triage
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: out
         side: right
@@ -3249,7 +3287,8 @@ nodes:
       - { name: done, side: right }
   - id: aaaa0002
     name: fixer
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     outputs:
       - { name: out, side: right }
   - id: end
@@ -3385,7 +3424,7 @@ edges:
         yaml.push_str("\nversion: \"1.0\"\nnodes:\n");
         for id in node_ids {
             yaml.push_str(&format!(
-                "  - id: {id}\n    name: {id}\n    type: doc-only\n    outputs:\n      - name: out\n"
+                "  - id: {id}\n    name: {id}\n    type: agent\n    isolated_worktree: false\n    outputs:\n      - name: out\n"
             ));
         }
         yaml.push_str("edges: []\n");

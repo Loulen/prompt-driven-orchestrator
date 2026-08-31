@@ -27,7 +27,7 @@ import { generateNodeId } from "../lib/nanoid";
 import { collectionFanoutFields, collectionFanoutNudges, regionsDestroyedByEdgeRemoval } from "../lib/loopRegions";
 import DestroyLoopModal from "./DestroyLoopModal";
 import PortRow from "./PortRow";
-import { NodeTypeIcon, CodeDocMarker } from "./NodeTypeIcon";
+import { NodeTypeIcon, IsolationMarker } from "./NodeTypeIcon";
 import { NodeCard } from "./NodeCard";
 import { LoopRegionNode } from "./LoopRegionNode";
 import { NoteNode } from "./NoteNode";
@@ -109,7 +109,7 @@ export function EditNode({ data, id, selected }: NodeProps<Node<EditNodeData>>) 
   const inputImages =
     data.nodeType === "start" ? (data.inputImages ?? []) : [];
 
-  // Emergent work nodes (`doc-only`/`code-mutating`) anchor incoming edges by
+  // Emergent work nodes (non-isolated/isolated) anchor incoming edges by
   // drop position; declared-port nodes (End) keep their fixed side. Keyed on
   // node TYPE so a work node carrying a vestigial declared `in` still anchors by
   // drop (#175) rather than being mistaken for a fixed-side declared port.
@@ -188,7 +188,7 @@ export function EditNode({ data, id, selected }: NodeProps<Node<EditNodeData>>) 
           )}
         </span>
         <span className="font-medium text-fg">{data.label}</span>
-        <CodeDocMarker type={data.nodeType} />
+        <IsolationMarker isolated={data.isolated === true} />
         {data.loopBadge && (
           <span
             data-testid={data.loopBadge.kind === "collection" ? "collection-badge" : "loop-badge"}
@@ -249,7 +249,7 @@ const nodeTypes = { edit: EditNode, merge: MergeEditNode, loopRegion: LoopRegion
 const edgeTypes = { orthogonal: OrthogonalEdge };
 
 const DEFAULT_NODE_NAMES: Partial<Record<NodeType, string>> = {
-  "code-mutating": "implementer",
+  "agent": "implementer",
   "merge": "merge",
   "script": "script",
 };
@@ -715,8 +715,11 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
       case "script":
         // #248: a script node's inputs are emergent (edge-derived), like a work
         // node — it declares none. One default output for its `output.md`.
+        // #653: a new Script shares the Run worktree — the inverse default of an
+        // Agent, so lightweight runtime and artifact work stays lightweight.
         newNode = {
           id, name, type, interactive: false, view,
+          isolated_worktree: false,
           inputs: [],
           outputs: [{ name: "out", repeated: false, side: "right" }],
         };
@@ -724,6 +727,9 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
       default:
         newNode = {
           id, name, type, interactive: false, view,
+          // #653/ADR-0060: a new Agent is isolated. The safe placement is the
+          // default, and sharing the Run worktree is an explicit opt-out.
+          isolated_worktree: true,
           inputs: [{ name: "in", repeated: false, side: "left" }],
           outputs: [{ name: "out", repeated: false, side: "right" }],
         };

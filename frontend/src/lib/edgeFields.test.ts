@@ -12,7 +12,7 @@ function pipeline(): PipelineDef {
       {
         id: "reviewer",
         name: "reviewer",
-        type: "doc-only",
+        type: "agent",
         inputs: [{ name: "task", repeated: false }],
         outputs: [
           {
@@ -31,7 +31,7 @@ function pipeline(): PipelineDef {
       {
         id: "impl",
         name: "impl",
-        type: "code-mutating",
+        type: "agent",
         inputs: [{ name: "review", repeated: false }],
         outputs: [{ name: "diff", repeated: false }],
         interactive: false,

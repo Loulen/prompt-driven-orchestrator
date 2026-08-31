@@ -45,6 +45,14 @@ pub struct NodeDefInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     pub node_type: String,
+    /// Where this node works (#653, ADR-0060), as the Run's pipeline snapshot
+    /// froze it: `true` ⇒ its own sub-worktree, `false` ⇒ the Run worktree.
+    /// `None` for a type that carries no isolation (`merge` is isolated by
+    /// construction; structural nodes have no worktree of their own) and for a
+    /// pre-#653 snapshot. `skip_serializing_if` keeps the wire byte-identical
+    /// when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolated_worktree: Option<bool>,
     pub view_x: Option<f64>,
     pub view_y: Option<f64>,
     pub inputs: Vec<PortBrief>,
@@ -524,6 +532,14 @@ pub struct NodeState {
     /// snapshot; `skip_serializing_if` keeps the wire byte-identical when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness: Option<String>,
+    /// #653/ADR-0060: the isolation this NodeRun was **frozen** on at spawn,
+    /// read from the `NodeStarted` payload. This — not the current document — is
+    /// what says where the live iteration works, so editing the graph mid-run
+    /// never moves a running node between worktrees. `None` for a node that
+    /// never opened a `NodeStarted`, for a structural node, or for a pre-#653
+    /// snapshot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolated_worktree: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost: Option<NodeCost>,
     pub status: NodeStatus,
@@ -1930,6 +1946,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                     .entry(node_id.clone())
                     .or_insert_with(|| NodeState {
                         harness: None,
+                        isolated_worktree: None,
                         cost: None,
                         node_id: node_id.clone(),
                         status: NodeStatus::Waiting,
@@ -1966,6 +1983,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                     .entry(node_id.clone())
                     .or_insert_with(|| NodeState {
                         harness: None,
+                        isolated_worktree: None,
                         cost: None,
                         node_id: node_id.clone(),
                         status: NodeStatus::Running,
@@ -2004,6 +2022,18 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                     .filter(|s| !s.is_empty())
                 {
                     node.harness = Some(h.to_string());
+                }
+                // #653/ADR-0060: freeze where this NodeRun works, the same way.
+                // A re-spawn of the same iteration re-poses the frozen value
+                // rather than re-reading the (possibly edited) document, so the
+                // recovery path lands back in the working directory it left.
+                if let Some(isolated) = event
+                    .payload
+                    .as_ref()
+                    .and_then(|p| p.get("isolated_worktree"))
+                    .and_then(|v| v.as_bool())
+                {
+                    node.isolated_worktree = Some(isolated);
                 }
                 upsert_iteration(&mut node.iterations, iteration);
             }
@@ -2056,6 +2086,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                         node_id.clone(),
                         NodeState {
                             harness: None,
+                            isolated_worktree: None,
                             cost: None,
                             node_id: node_id.clone(),
                             status: done_status.clone(),
@@ -2175,6 +2206,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                     .entry(node_id.clone())
                     .or_insert_with(|| NodeState {
                         harness: None,
+                        isolated_worktree: None,
                         cost: None,
                         node_id: node_id.clone(),
                         status: NodeStatus::Interrupted,
@@ -2301,6 +2333,7 @@ fn apply_switch_event(state: &mut RunState, event: &Event) {
                 .entry(node_id.to_string())
                 .or_insert_with(|| NodeState {
                     harness: None,
+                    isolated_worktree: None,
                     cost: None,
                     node_id: node_id.to_string(),
                     status: NodeStatus::Completed,
@@ -3490,6 +3523,7 @@ mod tests {
         assert_eq!(value["harness"], "copilot");
         let bare = super::NodeState {
             harness: None,
+            isolated_worktree: None,
             cost: None,
             node_id: "x".into(),
             status: NodeStatus::Waiting,
@@ -4478,7 +4512,7 @@ mod tests {
 
     fn node_def(id: &str) -> serde_json::Value {
         serde_json::json!({
-            "id": id, "node_type": "doc-only",
+            "id": id, "node_type": "agent", "isolated_worktree": false,
             "inputs": [{"name": "task", "side": "left"}],
             "outputs": [{"name": "out", "side": "right"}]
         })
@@ -4628,7 +4662,7 @@ mod tests {
             EventKind::RunStarted,
             None,
             serde_json::json!({
-                "pipeline_name": "isolated",
+                "pipeline_name": "fan-out",
                 "input": "go",
                 "node_defs": [start_node_def(), end_node_def(), node_def("a"), node_def("b")],
                 "edges": [edge_info("start", "a"), edge_info("start", "b")],
@@ -6445,6 +6479,7 @@ mod tests {
     ) -> NodeState {
         NodeState {
             harness: None,
+            isolated_worktree: None,
             cost: None,
             node_id: id.to_string(),
             status,
@@ -7334,14 +7369,14 @@ mod tests {
             "node_defs": [
                 { "id": "start", "inputs": [], "node_type": "start", "outputs": [ { "name": "user_prompt", "side": "right" } ], "view_x": null, "view_y": null },
                 { "id": "end", "inputs": [ { "name": "result", "side": "left" } ], "node_type": "end", "outputs": [], "view_x": null, "view_y": null },
-                { "id": "planner", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "doc-only", "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
-                { "id": "worker", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "doc-only", "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
-                { "id": "auto", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "doc-only", "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
-                { "id": "stopped", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "doc-only", "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
-                { "id": "stale", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "doc-only", "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
-                { "id": "temp", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "doc-only", "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
-                { "id": "interactive", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "doc-only", "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
-                { "id": "sw", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "doc-only", "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null }
+                { "id": "planner", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
+                { "id": "worker", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
+                { "id": "auto", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
+                { "id": "stopped", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
+                { "id": "stale", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
+                { "id": "temp", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
+                { "id": "interactive", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
+                { "id": "sw", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null }
             ],
             "nodes": {
                 "auto": {

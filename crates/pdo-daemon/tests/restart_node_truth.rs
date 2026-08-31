@@ -19,8 +19,8 @@ use crate::common::TestDaemon;
 
 const PIPELINE_NAME: &str = "restart-truth";
 
-/// `planner` is `doc-only` (owns no sub-worktree — the positive control), `impl-1`
-/// is `code-mutating` (the only class #489 broke) and `runner` is a `script` node
+/// `planner` is non-isolated (owns no sub-worktree — the positive control), `impl-1`
+/// is isolated (the only class #489 broke) and `runner` is a `script` node
 /// whose body a test empties to provoke `SpawnOutcome::Failed`.
 const PIPELINE_YAML: &str = r#"name: restart-truth
 version: "1.0"
@@ -32,14 +32,16 @@ nodes:
       - name: user_prompt
   - id: planner
     name: planner
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:
       - name: plan
   - id: impl-1
     name: impl-1
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     inputs:
       - name: plan
     outputs:
@@ -268,13 +270,13 @@ fn kill_session(daemon: &TestDaemon, run_id: &str, node_id: &str, iter: i64) {
 // Spawned — the positive control
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// A `doc-only` node owns no sub-worktree, so it is the one class `restart_node`
+/// A non-isolated node owns no sub-worktree, so it is the one class `restart_node`
 /// always worked on. It is here as the control: the new body must report the real
 /// spawn, and the three sub-worktree fields must be present-and-empty rather than
 /// absent, so a client reading `body.base_sha` never gets `undefined` depending on
 /// the node's type.
 #[tokio::test]
-async fn restarting_a_doc_only_node_reports_the_spawn_it_really_did() {
+async fn restarting_a_non_isolated_node_reports_the_spawn_it_really_did() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let run_id = create_run(&daemon).await;
     wait_for_node_status(&daemon, &run_id, "planner", "running").await;
@@ -676,7 +678,7 @@ fn private_gitdir(sub_worktree_dir: &std::path::Path) -> std::path::PathBuf {
     std::path::PathBuf::from(raw)
 }
 
-/// **THE #516 end-to-end proof.** A `code-mutating` node killed mid git-operation
+/// **THE #516 end-to-end proof.** An isolated node killed mid git-operation
 /// leaves BOTH an `index.lock` and a `MERGE_HEAD` in its sub-worktree's private
 /// gitdir. `restart_node` must:
 ///
@@ -692,7 +694,7 @@ async fn a_restart_inventories_every_interrupted_git_op_and_routes_it_to_the_pre
     let run_id = create_run(&daemon).await;
     wait_for_node_status(&daemon, &run_id, "planner", "running").await;
 
-    // Complete `planner` so `impl-1` (the only code-mutating node) spawns and cuts
+    // Complete `planner` so `impl-1` (the only isolated node) spawns and cuts
     // its per-iteration sub-worktree.
     let plan_dir = daemon
         .repo_root()

@@ -50,7 +50,7 @@ edges:
     target: { node: end, port: result }
 "#;
 
-/// `start → worker → end` with a `code-mutating` worker. Under the daemon's
+/// `start → worker → end` with an isolated worker. Under the daemon's
 /// default `exec sleep 600` override the worker never completes, so the run
 /// stays `running` (live) — the negative case for the eligibility gate.
 const LIVE_YAML: &str = r#"name: shell-live
@@ -63,7 +63,8 @@ nodes:
       - name: user_prompt
   - id: worker
     name: worker
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     inputs:
       - name: in
     outputs:

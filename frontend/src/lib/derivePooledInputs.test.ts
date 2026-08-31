@@ -6,7 +6,7 @@ function node(id: string, extra: Partial<NodeDef> = {}): NodeDef {
   return {
     id,
     name: id,
-    type: "doc-only",
+    type: "agent",
     inputs: [],
     outputs: [],
     interactive: false,

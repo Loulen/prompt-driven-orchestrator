@@ -10,6 +10,33 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.47.0
+
+**`agent` remplace `doc-only` et `code-mutating` ; l'isolation devient explicite** (#653 ;
+ADR-0060). *Cassant.* Les deux anciens types nommaient un *effet* alors que le runtime n'y lisait
+qu'un répertoire de travail. Un seul type agentique subsiste, `agent`, et l'endroit où le NodeRun
+travaille s'écrit sur le Node : `isolated_worktree: true|false`.
+
+La rupture est franche — **ni alias, ni migrateur, ni diagnostic dédié**. `doc-only` et
+`code-mutating` prennent le chemin de n'importe quelle valeur invalide : coercition vers `agent`
+avec l'avertissement générique de type inconnu, donc un Node qui perd son sous-worktree sans le
+dire. **Les Pipelines existantes se convertissent à la main** : un ancien `doc-only` devient un
+`agent` avec `isolated_worktree: false`, un ancien `code-mutating` un `agent` avec
+`isolated_worktree: true`. Les Pipelines livrées dans ce dépôt sont réécrites ; **celles de
+l'instance (`~/.pdo/pipelines/`) ne le sont pas** — elles sont hors du dépôt.
+
+Le Document écrit toujours le choix pour un `agent` et un `script`, même à la valeur par défaut
+(Agent isolé, Script partagé) : on lit où le Node travaille au lieu de se rappeler un défaut.
+`merge` reste isolé d'office et n'expose aucun réglage ; `start` et `end` n'en portent aucun.
+L'isolation est **gelée au spawn du NodeRun** — une édition déplace le prochain lancement, jamais
+une exécution vivante, et une reprise retrouve le répertoire qu'elle avait quitté.
+
+Côté éditeur, l'inspecteur remplace le sélecteur de type par un type figé et une section
+« Workspace » qui nomme les deux lieux et affiche le répertoire résolu ; le canvas remplace les deux
+marqueurs `doc-only` / `code-mutating` par un glyphe de branche sur les Nodes qui forkent un
+worktree (l'`agent` isolé et le `merge`). L'import de workflow ne devine plus : un rôle importé
+devient un `agent` isolé, sans heuristique de prompt, de nom ni de sortie.
+
 ## 1.46.0
 
 **Les pipelines appartiennent à l'instance et voyagent par document** (#572 ; ADR-0059). *Cassant.*

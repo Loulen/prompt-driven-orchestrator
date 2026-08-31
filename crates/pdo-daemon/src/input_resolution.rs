@@ -203,6 +203,7 @@ mod tests {
     fn node_with_iterations(id: &str, iters: &[(i64, NodeStatus)]) -> NodeState {
         let (head_iter, head_status) = iters.last().cloned().unwrap_or((1, NodeStatus::Pending));
         NodeState {
+            isolated_worktree: None,
             harness: None,
             cost: None,
             node_id: id.to_string(),
@@ -439,6 +440,7 @@ mod tests {
 
     fn node_def(id: &str, node_type: crate::pipeline::NodeType) -> crate::pipeline::NodeDef {
         crate::pipeline::NodeDef {
+            isolated_worktree: None,
             id: id.into(),
             name: id.into(),
             node_type,
@@ -463,7 +465,7 @@ mod tests {
             variables: HashMap::new(),
             nodes: vec![
                 node_def("planner", source_type),
-                node_def("implementer", crate::pipeline::NodeType::CodeMutating),
+                node_def("implementer", crate::pipeline::NodeType::Agent),
             ],
             edges: vec![EdgeDef {
                 source: EdgeEndpoint {
@@ -511,7 +513,7 @@ mod tests {
         // latest-completed iter — no matter the consumer's own iter. This is the
         // one decision node_io_resolver used to get wrong (it read the consumer's
         // iter positionally); all three consumers now inherit this assertion.
-        let pipeline = wire_pipeline(false, crate::pipeline::NodeType::DocOnly);
+        let pipeline = wire_pipeline(false, crate::pipeline::NodeType::Agent);
         let state = state_with(vec![node_with_iterations(
             "planner",
             &[(1, NodeStatus::Failed), (2, NodeStatus::Completed)],
@@ -538,7 +540,7 @@ mod tests {
     fn resolve_consumer_inputs_repeated_pools_only_completed_iters() {
         // #353 within the unified seam: a repeated edge enumerates one concrete
         // path per COMPLETED source iter (iter-2 failed → quarantined), ascending.
-        let pipeline = wire_pipeline(true, crate::pipeline::NodeType::DocOnly);
+        let pipeline = wire_pipeline(true, crate::pipeline::NodeType::Agent);
         let state = state_with(vec![node_with_iterations(
             "planner",
             &[
@@ -585,7 +587,7 @@ mod tests {
         // Override/injection flows: nothing completed → the path points where the
         // artifact will appear (positional consumer_iter), preserving prior
         // behaviour for start_node-ahead-of-deps.
-        let pipeline = wire_pipeline(false, crate::pipeline::NodeType::DocOnly);
+        let pipeline = wire_pipeline(false, crate::pipeline::NodeType::Agent);
         let state = state_with(vec![node_with_iterations(
             "planner",
             &[(1, NodeStatus::Running)],

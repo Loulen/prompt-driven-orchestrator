@@ -6,7 +6,7 @@
 //! est inexprimable. Avant #489 le bras jetait le `SpawnOutcome` de `spawn_node`
 //! — pas même un `let _ =` — et répondait `200 {"ok":true}` sur les cinq issues,
 //! y compris `Failed`, y compris un `node_id` absent du pipeline, et y compris le
-//! cas où le sous-worktree existait déjà (100 % des nœuds `code-mutating`/`merge`).
+//! cas où le sous-worktree existait déjà (100 % des nœuds isolated).
 //!
 //! Patron cloné de `completion_refusal` (#490, ADR-0035), **pas le type** : celui-ci
 //! est un type tout-refus, sur lequel « jamais 2xx » est un prédicat global. Ici il

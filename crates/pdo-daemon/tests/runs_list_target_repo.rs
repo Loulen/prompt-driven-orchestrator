@@ -32,7 +32,8 @@ nodes:
       - name: user_prompt
   - id: worker
     name: worker
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:

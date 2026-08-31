@@ -97,7 +97,7 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
                 data-testid="add-menu-node"
                 className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
                 style={{ fontSize: "11.5px" }}
-                onClick={() => onAddNode("code-mutating")}
+                onClick={() => onAddNode("agent")}
               >
                 <Box size={13} className="shrink-0 text-fg-4" />
                 <span>Node</span>

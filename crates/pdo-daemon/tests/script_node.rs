@@ -172,7 +172,7 @@ async fn wait_for_node_status(
 #[tokio::test]
 async fn script_node_completes_on_exit_zero() {
     ensure_pdo_on_path();
-    // Body: write a sentinel (untracked → passes the doc-only-effect clean
+    // Body: write a sentinel (untracked → passes the shared-worktree clean
     // guard) and the declared output via $PDO_OUTPUT_OUT.
     let body = "#!/usr/bin/env bash\nset -euo pipefail\n\
         echo ok > SENTINEL_SCRIPT\n\

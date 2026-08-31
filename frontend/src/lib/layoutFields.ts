@@ -49,7 +49,10 @@ export const SEMANTIC_FIELDS: Record<SerializerScope, readonly string[]> = {
   // pipeline diff and the library content hash. What is load-bearing is their
   // ABSENCE from LAYOUT_FIELDS.node: that is what keeps `stripLayout` from dropping
   // them.
-  node: ["id", "name", "type", "interactive", "agent_choice", "pin_harness", "harnesses", "max_iter", "inputs", "outputs"] satisfies (keyof NodeDef)[],
+  // #653/ADR-0060: `isolated_worktree` is SEMANTIC — moving a node between the
+  // Run worktree and one of its own changes what the pipeline does, so the
+  // library star and the pipeline diff must both see it.
+  node: ["id", "name", "type", "interactive", "agent_choice", "pin_harness", "harnesses", "max_iter", "isolated_worktree", "inputs", "outputs"] satisfies (keyof NodeDef)[],
   // `side` is SEMANTIC today (emitted, not stripped) — deliberate, see #355 D5:
   // the node-library star already treats port side as identity, so the pipeline
   // diff must agree or the two stars contradict each other on the same edit.

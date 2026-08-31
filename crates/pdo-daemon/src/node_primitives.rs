@@ -241,8 +241,11 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
 
     let input_paths = resolve_inputs(params, node);
 
-    let has_sub_worktree = node.node_type == pipeline::NodeType::CodeMutating
-        || node.node_type == pipeline::NodeType::Merge;
+    // #653 / ADR-0060: where this NodeRun works, read off the document. Unlike
+    // `node_spawn`, this path never re-poses a live iteration — the
+    // `has_node_started_event` guard above already answered `AlreadyDone` for any
+    // iteration that has started — so there is no frozen value to prefer here.
+    let has_sub_worktree = node.is_isolated();
 
     // #503 / ADR-0036: the commit the sub-worktree was cut from, recorded on
     // `NodeStarted` below. Without it a merge-back conflict on this iteration can
@@ -518,6 +521,9 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         payload: Some(serde_json::json!({
             "prompt_preview": full_prompt.chars().take(500).collect::<String>(),
             "node_type": node_type_str(&node.node_type),
+            // #653/ADR-0060: FREEZE where this NodeRun works. Mirrors the
+            // `spawn_node` payload — every later reader asks this event.
+            "isolated_worktree": has_sub_worktree,
             "input_paths": input_paths,
             // #424: launch-time model + effort, **resolved**. Mirrors the
             // `spawn_node` payload; see the comment there for why the model is
@@ -532,7 +538,7 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
             // and every pre-#473 row. Mirrors the `spawn_node` payload.
             "session_id": session_id,
             // #503: the sub-worktree's base commit. Absent for a node with no
-            // sub-worktree (`doc-only`/`script`), which never merges back.
+            // sub-worktree (a non-isolated agent/script), which never merges back.
             "base_sha": spawn_base_sha,
         })),
     };
@@ -685,16 +691,7 @@ fn resolve_inputs(
 }
 
 fn node_type_str(nt: &pipeline::NodeType) -> &'static str {
-    match nt {
-        pipeline::NodeType::DocOnly => "doc-only",
-        pipeline::NodeType::CodeMutating => "code-mutating",
-        pipeline::NodeType::Start => "start",
-        pipeline::NodeType::End => "end",
-        pipeline::NodeType::Switch => "switch",
-        pipeline::NodeType::Loop => "loop",
-        pipeline::NodeType::Merge => "merge",
-        pipeline::NodeType::Script => "script",
-    }
+    nt.as_str()
 }
 
 // ---------------------------------------------------------------------------
@@ -933,6 +930,10 @@ mod tests {
 
     fn make_node(id: &str, node_type: NodeType, inputs: &[&str], outputs: &[&str]) -> NodeDef {
         NodeDef {
+            // #653: these fixtures exercise graph wiring, not worktrees — a
+            // shared-worktree node keeps them out of `git worktree add` on a
+            // scratch dir. Isolation-sensitive tests state `Some(true)`.
+            isolated_worktree: Some(false),
             id: id.into(),
             name: id.into(),
             node_type,
@@ -977,9 +978,10 @@ mod tests {
 
     fn make_node_with_repeated_input(id: &str, port_name: &str) -> NodeDef {
         NodeDef {
+            isolated_worktree: None,
             id: id.into(),
             name: id.into(),
-            node_type: NodeType::DocOnly,
+            node_type: NodeType::Agent,
             inputs: vec![Port {
                 name: port_name.into(),
                 repeated: true,
@@ -1037,6 +1039,7 @@ mod tests {
 
     fn running_node(id: &str, iter: i64) -> NodeState {
         NodeState {
+            isolated_worktree: None,
             harness: None,
             cost: None,
             node_id: id.into(),
@@ -1060,6 +1063,7 @@ mod tests {
 
     fn completed_node(id: &str, iter: i64) -> NodeState {
         NodeState {
+            isolated_worktree: None,
             harness: None,
             cost: None,
             node_id: id.into(),
@@ -1083,6 +1087,7 @@ mod tests {
 
     fn pending_node(id: &str) -> NodeState {
         NodeState {
+            isolated_worktree: None,
             harness: None,
             cost: None,
             node_id: id.into(),
@@ -1109,7 +1114,7 @@ mod tests {
             name: "test".into(),
             version: None,
             variables: HashMap::new(),
-            nodes: vec![make_node("worker", NodeType::DocOnly, &["task"], &["out"])],
+            nodes: vec![make_node("worker", NodeType::Agent, &["task"], &["out"])],
             edges: vec![],
             loops: Vec::new(),
             notes: Vec::new(),
@@ -1208,7 +1213,7 @@ mod tests {
             name: "test".into(),
             version: None,
             variables: HashMap::new(),
-            nodes: vec![make_node("worker", NodeType::DocOnly, &[], &["out"])],
+            nodes: vec![make_node("worker", NodeType::Agent, &[], &["out"])],
             edges: vec![],
             loops: Vec::new(),
             notes: Vec::new(),
@@ -1315,8 +1320,8 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![
-                make_node("planner", NodeType::DocOnly, &["task"], &["plan"]),
-                make_node("implementer", NodeType::DocOnly, &["plan"], &["summary"]),
+                make_node("planner", NodeType::Agent, &["task"], &["plan"]),
+                make_node("implementer", NodeType::Agent, &["plan"], &["summary"]),
             ],
             edges: vec![make_edge("planner", "plan", "implementer", "plan")],
             loops: Vec::new(),
@@ -1379,8 +1384,8 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![
-                make_node("planner", NodeType::DocOnly, &["task"], &["plan"]),
-                make_node("implementer", NodeType::DocOnly, &["plan"], &["summary"]),
+                make_node("planner", NodeType::Agent, &["task"], &["plan"]),
+                make_node("implementer", NodeType::Agent, &["plan"], &["summary"]),
             ],
             edges: vec![make_edge("planner", "plan", "implementer", "plan")],
             loops: Vec::new(),
@@ -1445,9 +1450,9 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![
-                make_node("up", NodeType::DocOnly, &["task"], &["code"]),
+                make_node("up", NodeType::Agent, &["task"], &["code"]),
                 // `impl` declares no inputs — the `code` input is emergent.
-                make_node("impl", NodeType::DocOnly, &[], &["out"]),
+                make_node("impl", NodeType::Agent, &[], &["out"]),
             ],
             edges: vec![make_edge("up", "code", "impl", "code")],
             loops: Vec::new(),
@@ -1504,8 +1509,8 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![
-                make_node("skipme", NodeType::DocOnly, &["task"], &["decl_out"]),
-                make_node("down", NodeType::DocOnly, &["edge_out"], &["z"]),
+                make_node("skipme", NodeType::Agent, &["task"], &["decl_out"]),
+                make_node("down", NodeType::Agent, &["edge_out"], &["z"]),
             ],
             // The outgoing edge reads a DIFFERENT source port than the declared one.
             edges: vec![make_edge("skipme", "edge_out", "down", "edge_out")],
@@ -1536,7 +1541,7 @@ mod tests {
             name: "test".into(),
             version: None,
             variables: HashMap::new(),
-            nodes: vec![make_node("lonely", NodeType::DocOnly, &["task"], &[])],
+            nodes: vec![make_node("lonely", NodeType::Agent, &["task"], &[])],
             edges: vec![],
             loops: Vec::new(),
             notes: Vec::new(),
@@ -1561,7 +1566,7 @@ mod tests {
             name: "test".into(),
             version: None,
             variables: HashMap::new(),
-            nodes: vec![make_node("entry", NodeType::DocOnly, &["task"], &["out"])],
+            nodes: vec![make_node("entry", NodeType::Agent, &["task"], &["out"])],
             edges: vec![],
             loops: Vec::new(),
             notes: Vec::new(),
@@ -1612,11 +1617,11 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![
-                make_node("planner", NodeType::DocOnly, &["task"], &["plan"]),
-                make_node("researcher", NodeType::DocOnly, &["task"], &["research"]),
+                make_node("planner", NodeType::Agent, &["task"], &["plan"]),
+                make_node("researcher", NodeType::Agent, &["task"], &["research"]),
                 make_node(
                     "implementer",
-                    NodeType::DocOnly,
+                    NodeType::Agent,
                     &["plan", "research"],
                     &["summary"],
                 ),
@@ -1678,6 +1683,7 @@ mod tests {
     fn completed_node_iters(id: &str, iters: &[(i64, NodeStatus)]) -> NodeState {
         let (head_iter, head_status) = iters.last().cloned().unwrap_or((1, NodeStatus::Pending));
         NodeState {
+            isolated_worktree: None,
             harness: None,
             cost: None,
             node_id: id.into(),
@@ -1713,7 +1719,7 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![
-                make_node("reviewer", NodeType::DocOnly, &["task"], &["review"]),
+                make_node("reviewer", NodeType::Agent, &["task"], &["review"]),
                 make_node_with_repeated_input("implementer", "reviews"),
             ],
             edges: vec![EdgeDef {
@@ -1792,8 +1798,8 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![
-                make_node("reviewer", NodeType::DocOnly, &["task"], &["review"]),
-                make_node("implementer", NodeType::DocOnly, &["review"], &["summary"]),
+                make_node("reviewer", NodeType::Agent, &["task"], &["review"]),
+                make_node("implementer", NodeType::Agent, &["review"], &["summary"]),
             ],
             edges: vec![make_edge("reviewer", "review", "implementer", "review")],
             loops: Vec::new(),
@@ -1857,8 +1863,8 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![
-                make_node("reviewer", NodeType::DocOnly, &["task"], &["review"]),
-                make_node("implementer", NodeType::DocOnly, &["review"], &["summary"]),
+                make_node("reviewer", NodeType::Agent, &["task"], &["review"]),
+                make_node("implementer", NodeType::Agent, &["review"], &["summary"]),
             ],
             edges: vec![make_edge("reviewer", "review", "implementer", "review")],
             loops: Vec::new(),
@@ -2136,7 +2142,7 @@ mod tests {
             name: "test".into(),
             version: None,
             variables: HashMap::new(),
-            nodes: vec![make_node("worker", NodeType::DocOnly, &["task"], &["out"])],
+            nodes: vec![make_node("worker", NodeType::Agent, &["task"], &["out"])],
             edges: vec![],
             loops: Vec::new(),
             notes: Vec::new(),

@@ -151,7 +151,7 @@ pub(crate) fn compute_run_cost_breakdown(
     run_id: &str,
     prices: &PriceTable,
 ) -> RunCostBreakdown {
-    let node_types: BTreeMap<String, String> = events
+    let node_defs: Vec<&serde_json::Value> = events
         .iter()
         .find(|event| event.kind == crate::event_log::EventKind::RunStarted)
         .and_then(|event| event.payload.as_ref())
@@ -159,11 +159,31 @@ pub(crate) fn compute_run_cost_breakdown(
         .and_then(|value| value.as_array())
         .into_iter()
         .flatten()
+        .collect();
+    let node_types: BTreeMap<String, String> = node_defs
+        .iter()
         .filter_map(|node| {
             Some((
                 node.get("id")?.as_str()?.to_string(),
                 node.get("node_type")?.as_str()?.to_string(),
             ))
+        })
+        .collect();
+    // #653/ADR-0060: which nodes work in a sub-worktree of their own, from the
+    // Run snapshot. Attribution asks this and not the node's type, because the
+    // type no longer says where the transcript's `cwd` will be.
+    let snapshot_isolation: BTreeMap<String, bool> = node_defs
+        .iter()
+        .filter_map(|node| {
+            let id = node.get("id")?.as_str()?.to_string();
+            let isolated = node
+                .get("isolated_worktree")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(matches!(
+                    node.get("node_type").and_then(serde_json::Value::as_str),
+                    Some("agent") | Some("merge")
+                ));
+            Some((id, isolated))
         })
         .collect();
     let node_type = |event: &crate::event_log::Event| {
@@ -180,6 +200,22 @@ pub(crate) fn compute_run_cost_breakdown(
                     .and_then(|id| node_types.get(id))
                     .cloned()
             })
+    };
+    // The NodeRun's FROZEN isolation, else the snapshot's answer for its node.
+    let isolated = |event: &crate::event_log::Event| {
+        event
+            .payload
+            .as_ref()
+            .and_then(|payload| payload.get("isolated_worktree"))
+            .and_then(serde_json::Value::as_bool)
+            .or_else(|| {
+                event
+                    .node_id
+                    .as_ref()
+                    .and_then(|id| snapshot_isolation.get(id))
+                    .copied()
+            })
+            .unwrap_or(false)
     };
     let mut executions = Vec::new();
     let mut seen_executions = HashSet::new();
@@ -212,8 +248,8 @@ pub(crate) fn compute_run_cost_breakdown(
         if !seen_executions.insert(identity) {
             continue;
         }
-        let kind = node_type(event);
-        let working_dir = if kind.as_deref() == Some("code-mutating") {
+        let is_isolated = isolated(event);
+        let working_dir = if is_isolated {
             event.node_id.as_deref().map(|node_id| {
                 crate::worktree_ops::sub_worktree_path(
                     repo_root,
@@ -229,7 +265,7 @@ pub(crate) fn compute_run_cost_breakdown(
             working_dir.map(|working_dir| claude_root.join(cc_project_dirname(&working_dir)));
         let legacy_claim = harness == crate::harness_registry::CLAUDE
             && session_id.is_none()
-            && kind.as_deref() == Some("code-mutating")
+            && is_isolated
             && project
                 .as_ref()
                 .is_some_and(|project| claimed_legacy_projects.insert(project.clone()));
@@ -237,7 +273,7 @@ pub(crate) fn compute_run_cost_breakdown(
             Some("missing node identity".to_string())
         } else if harness == crate::harness_registry::CLAUDE
             && session_id.is_none()
-            && kind.as_deref() == Some("code-mutating")
+            && is_isolated
             && !legacy_claim
         {
             Some("cost not separable from an earlier start in the same iteration".to_string())
@@ -1870,7 +1906,7 @@ mod tests {
             node_id: Some("worker".into()),
             iter: Some(1),
             payload: Some(serde_json::json!({
-                "node_type": "doc-only",
+                "node_type": "agent", "isolated_worktree": false,
                 "harness": "copilot",
                 "session_id": sid
             })),
@@ -1929,7 +1965,7 @@ mod tests {
             node_id: Some(node.into()),
             iter: Some(1),
             payload: Some(serde_json::json!({
-                "node_type":"code-mutating",
+                "node_type":"agent", "isolated_worktree":true,
                 "harness":harness,
                 "session_id":session_id
             })),
@@ -1968,7 +2004,7 @@ mod tests {
             kind: EventKind::NodeStarted,
             node_id: Some("worker".into()),
             iter: Some(1),
-            payload: Some(serde_json::json!({ "node_type":"doc-only" })),
+            payload: Some(serde_json::json!({ "node_type":"agent", "isolated_worktree":false })),
         };
 
         let breakdown = compute_run_cost_breakdown(
@@ -2027,7 +2063,7 @@ mod tests {
             node_id: Some("worker".into()),
             iter: Some(1),
             payload: Some(serde_json::json!({
-                "node_type": "code-mutating",
+                "node_type": "agent", "isolated_worktree": true,
                 "harness": "claude",
                 "session_id": "sid"
             })),
@@ -2075,7 +2111,7 @@ mod tests {
             node_id: Some("worker".into()),
             iter: Some(1),
             payload: Some(serde_json::json!({
-                "node_type": "code-mutating",
+                "node_type": "agent", "isolated_worktree": true,
                 "harness": "claude",
                 "session_id": sid
             })),
@@ -2243,13 +2279,13 @@ mod tests {
         let mut started = event(None, None);
         started.payload = Some(serde_json::json!({
             "node_defs": [
-                {"id":"legacy-agent","node_type":"doc-only"},
+                {"id":"legacy-agent","node_type":"agent", "isolated_worktree":false},
                 {"id":"deterministic","node_type":"script"}
             ]
         }));
         let events = vec![
             started,
-            event(Some("legacy-agent"), Some("doc-only")),
+            event(Some("legacy-agent"), Some("agent")),
             event(Some("deterministic"), None),
         ];
 
@@ -2317,7 +2353,7 @@ mod tests {
             "{\"type\":\"session.usage_checkpoint\",\"data\":{\"totalNanoAiu\":200000000000}}\n",
         )
         .unwrap();
-        let started = |node: &str, harness: &str, sid: &str, kind: &str| Event {
+        let started = |node: &str, harness: &str, sid: &str, isolated: bool| Event {
             id: None,
             run_id: run_id.into(),
             ts: crate::event_log::now_iso(),
@@ -2325,14 +2361,15 @@ mod tests {
             node_id: Some(node.into()),
             iter: Some(1),
             payload: Some(serde_json::json!({
-                "node_type": kind,
+                "node_type": "agent",
+                "isolated_worktree": isolated,
                 "harness": harness,
                 "session_id": sid
             })),
         };
         let events = vec![
-            started("claude-node", "claude", "sid-claude", "code-mutating"),
-            started("copilot-node", "copilot", "sid-copilot", "doc-only"),
+            started("claude-node", "claude", "sid-claude", true),
+            started("copilot-node", "copilot", "sid-copilot", false),
         ];
 
         let breakdown =
@@ -2376,7 +2413,7 @@ mod tests {
             node_id: Some("worker".into()),
             iter: Some(1),
             payload: Some(serde_json::json!({
-                "node_type":"doc-only",
+                "node_type":"agent", "isolated_worktree":false,
                 "harness":"copilot",
                 "session_id":"memo-session"
             })),

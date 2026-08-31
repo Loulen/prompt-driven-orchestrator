@@ -33,14 +33,16 @@ nodes:
       - name: user_prompt
   - id: impl
     name: impl
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:
       - name: code
   - id: rev
     name: rev
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: code
     outputs:

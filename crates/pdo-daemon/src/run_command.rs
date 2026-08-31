@@ -1524,7 +1524,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             // `CommandIssued`, THEN discovered the Run / the pipeline / the node, and
             // finally dropped `spawn_node`'s return without so much as a `let _ =`.
             // Every one of the five `SpawnOutcome`s answered `200 {"ok":true}` — and
-            // on a `code-mutating` / `merge` node the spawn failed 100% of the time
+            // on an isolated node the spawn failed 100% of the time
             // (`git worktree add -b` on a branch that already exists, exit 255),
             // which is the whole of #489: session dead, zero events, node still
             // projected `Running`, and 30 s later the liveness sweep inventing
@@ -1693,8 +1693,12 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             // knowable is paid for with a kill. `Absent` / `Reusable` / `Recyclable`
             // all proceed — `ensure_sub_worktree` handles each, and never destroys
             // work in flight.
-            let owns_sub_worktree = node.node_type == pipeline::NodeType::CodeMutating
-                || node.node_type == pipeline::NodeType::Merge;
+            // #653/ADR-0060: read the isolation FROZEN on this iteration, not the
+            // document's — the re-spawn below will land in the frozen directory,
+            // so probing the other one would classify a worktree nobody is about
+            // to use (and skip the one that matters).
+            let owns_sub_worktree = crate::merge_action::frozen_isolation(&events, &node_id, iter)
+                .unwrap_or(node.is_isolated());
             if owns_sub_worktree {
                 let sub_wt_dir =
                     crate::worktree_ops::sub_worktree_path(&repo_root, &run_id, &node_id, iter);
@@ -3252,6 +3256,7 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![NodeDef {
+                isolated_worktree: None,
                 id: "sw1".into(),
                 name: "switch".into(),
                 node_type: NodeType::Switch,
@@ -3319,9 +3324,10 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![NodeDef {
+                isolated_worktree: None,
                 id: "b".into(),
                 name: "b".into(),
-                node_type: NodeType::DocOnly,
+                node_type: NodeType::Agent,
                 inputs: vec![Port {
                     name: "in".into(),
                     repeated: false,

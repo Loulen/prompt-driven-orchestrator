@@ -92,8 +92,8 @@ describe("anchorHandleId / sideFromAnchorHandle round-trip", () => {
 
 describe("isEmergentInputNode", () => {
   it("treats work nodes and script as emergent-input (#149 / #248)", () => {
-    expect(isEmergentInputNode("doc-only")).toBe(true);
-    expect(isEmergentInputNode("code-mutating")).toBe(true);
+    expect(isEmergentInputNode("agent")).toBe(true);
+    expect(isEmergentInputNode("agent")).toBe(true);
     expect(isEmergentInputNode("script")).toBe(true);
   });
 

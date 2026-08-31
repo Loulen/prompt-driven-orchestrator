@@ -269,7 +269,7 @@ describe("useRightPaneRouter — runNode synthesis (#204)", () => {
           selectedRun: makeRun({
             status: "running",
             nodes: {},
-            node_defs: [{ id: "n2", node_type: "code-mutating" }] as never,
+            node_defs: [{ id: "n2", node_type: "agent" }] as never,
           }),
         }),
       ),
@@ -288,7 +288,7 @@ describe("useRightPaneRouter — runNode synthesis (#204)", () => {
           selectedRun: makeRun({
             status: "completed",
             nodes: {},
-            node_defs: [{ id: "n2", node_type: "code-mutating" }] as never,
+            node_defs: [{ id: "n2", node_type: "agent" }] as never,
           }),
         }),
       ),

@@ -44,7 +44,8 @@ nodes:
     view: { x: 100, y: 0 }
   - id: scroller
     name: scroller
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: in
     outputs:

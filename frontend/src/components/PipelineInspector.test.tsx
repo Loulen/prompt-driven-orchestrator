@@ -154,7 +154,7 @@ describe("PipelineInspector", () => {
     useEditStore.setState((s) => ({
       openTabs: s.openTabs.map((t) =>
         t.id === "p1"
-          ? { ...t, diagnostics: ["node 'reviewer' receives edges from 2 code-mutating nodes without a Merge"] }
+          ? { ...t, diagnostics: ["node 'reviewer' receives edges from 2 isolated nodes without a Merge"] }
           : t,
       ),
     }));

@@ -382,7 +382,7 @@ export default function App() {
     switch (editNodeType) {
       case "merge": return <MergeInspector />;
       // #248: `script` reuses NodeInspector, which shows the Script (bash) editor
-      // and hides the model field / doc-only↔code-mutating toggle for it.
+      // and hides the model field for it.
       // Without this case a script node would fall through and — before the
       // in-inspector conditionals — render the wrong (agent) surface.
       case "script":
@@ -391,6 +391,7 @@ export default function App() {
           libraryEntries={libraryEntries}
           onLibraryChanged={refreshLibrary}
           readOnly={isActiveRunArchived}
+          runNode={selection.id ? selectedRun?.nodes?.[selection.id] : null}
         />
       );
     }
@@ -703,6 +704,7 @@ export default function App() {
                     libraryEntries={libraryEntries}
                     onLibraryChanged={refreshLibrary}
                     readOnly={isActiveRunArchived}
+                    runNode={selection.id ? selectedRun?.nodes?.[selection.id] : null}
                   />
                 ) : selection.kind === "edge" ? (
                   <EdgeDetailPanel trigger={edgeTrigger} />

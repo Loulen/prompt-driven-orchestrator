@@ -11,7 +11,7 @@ async fn library_node_preserves_all_port_fields() {
 
     let payload = serde_json::json!({
         "name": "Typed Reviewer",
-        "type": "doc-only",
+        "type": "agent",
         "inputs": [
             {
                 "name": "code",

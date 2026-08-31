@@ -37,7 +37,7 @@ function okResult(overrides: Partial<ParseNodeResult> = {}): ParseNodeResult {
   return {
     spec: {
       name: "Imported",
-      type: "doc-only",
+      type: "agent",
       inputs: [],
       outputs: [{ name: "out", repeated: false, side: "right" }],
       interactive: false,
@@ -64,7 +64,7 @@ describe("AddNodeFromYamlModal (#345)", () => {
     render(<AddNodeFromYamlModal getDropPosition={drop} onClose={onClose} />);
 
     fireEvent.change(screen.getByTestId("add-node-yaml-textarea"), {
-      target: { value: "name: Imported\ntype: doc-only\n" },
+      target: { value: "name: Imported\ntype: agent\nisolated_worktree: false\n" },
     });
     fireEvent.click(screen.getByTestId("add-node-yaml-submit"));
 
@@ -79,11 +79,29 @@ describe("AddNodeFromYamlModal (#345)", () => {
     expect(st.selection).toEqual({ kind: "node", id: "fresh-node-id" });
   });
 
+  it("carries the pasted node's workspace onto the canvas (#653)", async () => {
+    // A node that opted OUT of isolation must not silently fork a sub-worktree
+    // once instantiated — the isolation line travels with the spec.
+    mockParse.mockResolvedValue(
+      okResult({ spec: { ...okResult().spec, isolated_worktree: false } }),
+    );
+    render(<AddNodeFromYamlModal getDropPosition={drop} onClose={() => {}} />);
+    fireEvent.change(screen.getByTestId("add-node-yaml-textarea"), {
+      target: { value: "name: Imported\ntype: agent\nisolated_worktree: false\n" },
+    });
+    fireEvent.click(screen.getByTestId("add-node-yaml-submit"));
+
+    await waitFor(() =>
+      expect(useEditStore.getState().openTabs[0].pipeline.nodes).toHaveLength(1),
+    );
+    expect(useEditStore.getState().openTabs[0].pipeline.nodes[0].isolated_worktree).toBe(false);
+  });
+
   it("the created node is undoable in one step", async () => {
     mockParse.mockResolvedValue(okResult());
     render(<AddNodeFromYamlModal getDropPosition={drop} onClose={() => {}} />);
     fireEvent.change(screen.getByTestId("add-node-yaml-textarea"), {
-      target: { value: "name: Imported\ntype: doc-only\n" },
+      target: { value: "name: Imported\ntype: agent\nisolated_worktree: false\n" },
     });
     fireEvent.click(screen.getByTestId("add-node-yaml-submit"));
     await waitFor(() => expect(useEditStore.getState().openTabs[0].pipeline.nodes).toHaveLength(1));
@@ -107,7 +125,7 @@ describe("AddNodeFromYamlModal (#345)", () => {
 
   it("warnings create the node AND show the amber list (does not auto-close)", async () => {
     mockParse.mockResolvedValue(
-      okResult({ warnings: ["node 'x': unknown node type 'bogus', defaulting to 'doc-only'"] }),
+      okResult({ warnings: ["node 'x': unknown node type 'bogus', defaulting to 'agent'"] }),
     );
     const onClose = vi.fn();
     render(<AddNodeFromYamlModal getDropPosition={drop} onClose={onClose} />);
@@ -123,7 +141,7 @@ describe("AddNodeFromYamlModal (#345)", () => {
 
   it("a .yaml upload fills the textarea from the file text", async () => {
     render(<AddNodeFromYamlModal getDropPosition={drop} onClose={() => {}} />);
-    const file = new File(["name: FromFile\ntype: doc-only\n"], "node.yaml", {
+    const file = new File(["name: FromFile\ntype: agent\nisolated_worktree: false\n"], "node.yaml", {
       type: "text/yaml",
     });
     fireEvent.change(screen.getByTestId("add-node-yaml-file"), { target: { files: [file] } });

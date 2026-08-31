@@ -77,7 +77,7 @@
 //!
 //! - **Pipeline Manager** orchestrates from the Run's own top-level working
 //!   directory ([`crate::worktree_ops::worktree_dir_for_run`]) — the same
-//!   directory every non-code-mutating Node also runs in (a code-mutating
+//!   directory every non-isolated Node also runs in (an isolated
 //!   Node gets its own disjoint [`crate::worktree_ops::sub_worktree_path`], so
 //!   it never collides). Every Claude `.jsonl` file in that directory that
 //!   isn't a known Node's own `session_id` is a Pipeline Manager candidate.
@@ -95,7 +95,7 @@
 //! role made no attributable Claude calls, or ran under a harness with no
 //! session-file source at all — Copilot's session store has no per-directory
 //! nesting to exclude from, so it can never resolve one). More than one
-//! candidate — or a shared directory containing a non-code-mutating,
+//! candidate — or a shared directory containing a non-isolated,
 //! non-script Claude Node with **no** recorded `session_id` at all, so it
 //! can't be excluded by name — is an ambiguous result, never guessed at by
 //! path or timing alone (issue: "Une session historique sans identité fiable
@@ -388,7 +388,7 @@ fn finish_pipeline(id: String, acc: PipelineAcc) -> PerformanceEntity {
 
 // --- Node identity/type resolution ---------------------------------------------
 
-fn node_defs_from_payload(payload: &Value) -> BTreeMap<String, (String, String)> {
+fn node_defs_from_payload(payload: &Value) -> BTreeMap<String, (String, String, bool)> {
     let mut defs = BTreeMap::new();
     if let Some(list) = payload.get("node_defs").and_then(|v| v.as_array()) {
         for def in list {
@@ -405,7 +405,13 @@ fn node_defs_from_payload(payload: &Value) -> BTreeMap<String, (String, String)>
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            defs.insert(id.to_string(), (name, node_type));
+            // #653/ADR-0060: where the node works. The snapshot states it for an
+            // `agent`/`script`; the type's default stands in for a pre-#653 Run.
+            let isolated = def
+                .get("isolated_worktree")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(matches!(node_type.as_str(), "agent" | "merge"));
+            defs.insert(id.to_string(), (name, node_type, isolated));
         }
     }
     defs
@@ -563,7 +569,8 @@ struct PendingNode {
     started_at: String,
     harness: String,
     session_id: Option<String>,
-    node_type: String,
+    /// Where the NodeRun works (#653) — its own sub-worktree, or the Run's.
+    isolated: bool,
 }
 
 /// A `MergeResolverStarted` awaiting its pairing `MergeResolverCompleted` —
@@ -694,6 +701,8 @@ fn check_root_once(
 #[derive(Debug, Clone)]
 struct NodeStartRecord {
     node_type: String,
+    /// Where the NodeRun works (#653) — its own sub-worktree, or the Run's.
+    isolated: bool,
     harness: String,
     session_id: Option<String>,
 }
@@ -1120,9 +1129,17 @@ fn fold_performance(
                     let node_type = event_payload
                         .and_then(|p| p.get("node_type"))
                         .and_then(|v| v.as_str())
-                        .or_else(|| node_defs.get(&node_id).map(|(_, ty)| ty.as_str()))
+                        .or_else(|| node_defs.get(&node_id).map(|(_, ty, _)| ty.as_str()))
                         .unwrap_or("")
                         .to_string();
+                    // #653/ADR-0060: the FROZEN isolation of this attempt, else
+                    // the snapshot's. This decides which directory its sessions
+                    // live in, which the type used to imply.
+                    let isolated = event_payload
+                        .and_then(|p| p.get("isolated_worktree"))
+                        .and_then(serde_json::Value::as_bool)
+                        .or_else(|| node_defs.get(&node_id).map(|(_, _, iso)| *iso))
+                        .unwrap_or(false);
                     let harness = event_payload
                         .and_then(|p| p.get("harness"))
                         .and_then(|v| v.as_str())
@@ -1139,6 +1156,7 @@ fn fold_performance(
                         .or_default()
                         .push(NodeStartRecord {
                             node_type: node_type.clone(),
+                            isolated,
                             harness: harness.clone(),
                             session_id: session_id.clone(),
                         });
@@ -1151,7 +1169,7 @@ fn fold_performance(
                             started_at: event.ts.clone(),
                             harness,
                             session_id,
-                            node_type,
+                            isolated,
                         },
                     );
                 }
@@ -1162,11 +1180,11 @@ fn fold_performance(
                     if let Some(p) = pending.remove(&(node_id.clone(), iter)) {
                         let node_name = node_defs
                             .get(&node_id)
-                            .map(|(name, _)| name.clone())
+                            .map(|(name, ..)| name.clone())
                             .unwrap_or_else(|| node_id.clone());
                         let node_acc = pipeline_acc.nodes.entry(node_id).or_default();
                         node_acc.name = node_name;
-                        let working_dir = if p.node_type == "code-mutating" {
+                        let working_dir = if p.isolated {
                             crate::worktree_ops::sub_worktree_path(
                                 &repo_root,
                                 &run_id,
@@ -1266,7 +1284,7 @@ fn fold_performance(
                             .collect();
                         let ambiguous = node_starts.values().flatten().any(|r| {
                             r.node_type != "script"
-                                && r.node_type != "code-mutating"
+                                && !r.isolated
                                 && r.harness == crate::harness_registry::CLAUDE
                                 && r.session_id.is_none()
                         });

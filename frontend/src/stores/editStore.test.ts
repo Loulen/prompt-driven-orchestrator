@@ -57,7 +57,7 @@ function makeNode(overrides: Partial<NodeDef> = {}): NodeDef {
   return {
     id: "default",
     name: "Default",
-    type: "doc-only",
+    type: "agent",
     inputs: [{ name: "in", repeated: false }],
     outputs: [{ name: "out", repeated: false }],
     interactive: false,
@@ -896,7 +896,7 @@ describe("serializePipeline (via save) emits structural node fields", () => {
   // bound on the `loops:` block (ADR-0011). So an ordinary node must serialize
   // clean, with no stray `max_iter` key.
   it("does not emit max_iter for a node without one", async () => {
-    const docNode = makeNode({ id: "doc1", type: "doc-only" });
+    const docNode = makeNode({ id: "doc1", type: "agent" });
     seedTabWithPipeline(makePipeline([docNode]));
 
     await useEditStore.getState().save("test-tab");
@@ -1191,7 +1191,7 @@ describe("mutations set dirty without auto-saving", () => {
 
     useEditStore.getState().addNode({
       id: "new-node",
-      type: "doc-only",
+      type: "agent",
       inputs: [],
       outputs: [],
       interactive: false,

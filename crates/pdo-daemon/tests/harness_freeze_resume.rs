@@ -1,6 +1,6 @@
 //! Layer 3a (#550, ADR-0046) — the harness axis, end to end through the daemon.
 //!
-//! A two-node `doc-only` pipeline: one node with no pin (⇒ the `claude` floor),
+//! A two-node non-isolated pipeline: one node with no pin (⇒ the `claude` floor),
 //! one `pin_harness: opencode`. Spawned through the **tmux command seam** (a
 //! harmless `sleep`, never a real agent), the test proves:
 //!   1. the resolved harness is **frozen** in each node's `NodeStarted` event, and
@@ -23,13 +23,15 @@ nodes:
       - name: user_prompt
   - id: aaaaaaaa
     name: on-claude
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: out
     view: { x: 200, y: 60 }
   - id: bbbbbbbb
     name: on-opencode
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     pin_harness: opencode
     outputs:
       - name: out

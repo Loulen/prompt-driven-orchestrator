@@ -21,7 +21,8 @@ nodes:
       - name: user_prompt
   - id: planner
     name: planner
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:
@@ -426,7 +427,8 @@ nodes:
       - name: user_prompt
   - id: planner
     name: planner
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:
@@ -434,7 +436,8 @@ nodes:
     view: { x: 100, y: 100 }
   - id: implementer
     name: implementer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: plan
     outputs:
@@ -497,7 +500,8 @@ nodes:
       - name: user_prompt
   - id: planner
     name: planner
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:
@@ -505,7 +509,8 @@ nodes:
     view: { x: 100, y: 100 }
   - id: implementer
     name: implementer
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     inputs:
       - name: plan
     outputs:
@@ -634,7 +639,8 @@ nodes:
       - name: user_prompt
   - id: planner
     name: planner
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:
@@ -642,7 +648,8 @@ nodes:
     view: { x: 100, y: 100 }
   - id: implementer
     name: implementer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: plan
     outputs:
@@ -738,7 +745,8 @@ nodes:
       - name: user_prompt
   - id: planner
     name: planner
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:

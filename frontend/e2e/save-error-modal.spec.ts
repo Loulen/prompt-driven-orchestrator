@@ -32,7 +32,8 @@ nodes:
     view: { x: 0, y: 100 }
   - id: alpha
     name: alpha
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     prompt_file: ${PIPELINE_NAME}.prompts/alpha.md
     inputs:
       - { name: in, side: left }

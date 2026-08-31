@@ -73,7 +73,7 @@ const PIPELINE = {
     {
       id: "worker",
       name: "Worker",
-      type: "doc-only" as const,
+      type: "agent" as const,
       interactive: false,
       inputs: [{ name: "task", repeated: false, side: "left" as const }],
       outputs: [{ name: "result", repeated: false, side: "right" as const }],

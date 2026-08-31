@@ -453,7 +453,7 @@ pub(crate) struct EnsuredSubWorktree {
 ///
 /// Replaces the bare `create_sub_worktree` at both production sites, which failed
 /// with exit 255 (`a branch named … already exists`) on **every** re-spawn of the
-/// same iteration, i.e. on every `restart_node` of a `code-mutating` or `merge`
+/// same iteration, i.e. on every `restart_node` of an isolated
 /// node.
 ///
 /// The contract, state by state:
@@ -870,7 +870,7 @@ fn unmerged_paths(worktree_dir: &std::path::Path) -> Vec<String> {
 ///
 /// - a dirty pipeline worktree would lose uncommitted tracked work to the
 ///   `git reset --hard` — `git merge` fails loudly where `reset --hard` destroys
-///   in silence. It can legitimately be dirty: a `doc-only`/`script` node in
+///   in silence. It can legitimately be dirty: a non-isolated node in
 ///   flight, the leftovers of a `doc_violated_code_immutability` (never reverted),
 ///   the Run shell, the resident `__manager__` agent.
 /// - unrelated histories: `git merge` also fails (`refusing to merge unrelated
@@ -1550,7 +1550,7 @@ mod tests {
         let node = rebased_terminal_node_repo(&tmp, true);
 
         // Something else lands on the pipeline branch after the sub-worktree was cut
-        // — a doc-only node committing its docs, say.
+        // — a non-isolated node committing its docs, say.
         std::fs::write(node.pipeline_wt.join("PLAN.md"), "# plan\n").unwrap();
         for args in [vec!["add", "-A"], vec!["commit", "-m", "docs: a plan"]] {
             assert!(std::process::Command::new("git")
@@ -1752,7 +1752,7 @@ mod tests {
     }
 
     #[test]
-    fn doc_only_clean_worktree_passes() {
+    fn shared_worktree_clean_passes() {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path();
         init_test_repo(repo);
@@ -1766,7 +1766,7 @@ mod tests {
     }
 
     #[test]
-    fn doc_only_dirty_worktree_detected() {
+    fn shared_worktree_dirty_detected() {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path();
         init_test_repo(repo);
@@ -1783,7 +1783,7 @@ mod tests {
     }
 
     #[test]
-    fn doc_only_untracked_files_not_flagged() {
+    fn shared_worktree_untracked_files_not_flagged() {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path();
         init_test_repo(repo);

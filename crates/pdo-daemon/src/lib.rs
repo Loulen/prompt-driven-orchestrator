@@ -5392,15 +5392,18 @@ async fn save_pipeline(
         return (StatusCode::NOT_FOUND, "pipeline not found").into_response();
     }
 
-    if let Err(e) = pipeline::parse_pipeline(&req.yaml) {
-        let (message, line) = parse_error_to_structured(&e);
-        let mut body =
-            serde_json::json!({ "error": format!("invalid YAML: {e}"), "message": message });
-        if let Some(l) = line {
-            body["line"] = serde_json::json!(l);
+    let saved = match pipeline::parse_pipeline(&req.yaml) {
+        Ok(parsed) => parsed.pipeline,
+        Err(e) => {
+            let (message, line) = parse_error_to_structured(&e);
+            let mut body =
+                serde_json::json!({ "error": format!("invalid YAML: {e}"), "message": message });
+            if let Some(l) = line {
+                body["line"] = serde_json::json!(l);
+            }
+            return (StatusCode::BAD_REQUEST, Json(body)).into_response();
         }
-        return (StatusCode::BAD_REQUEST, Json(body)).into_response();
-    }
+    };
 
     mark_self_write(&state.recent_writes, &path);
     if let Err(e) = std::fs::write(&path, &req.yaml) {
@@ -5422,6 +5425,7 @@ async fn save_pipeline(
             warn!("failed to write prompt for {node_id}: {e}");
         }
     }
+    prune_orphan_prompts(&state, &path, &saved);
 
     info!("Pipeline {pipeline_id} saved");
     (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
@@ -5493,6 +5497,26 @@ async fn create_pipeline(
 
 fn read_pipeline_prompts(path: &Path) -> HashMap<String, String> {
     read_prompts_from_dir(&path.with_extension("prompts"))
+}
+
+/// Delete the sidecar prompts of nodes the pipeline no longer defines.
+///
+/// A save carries the prompts of the nodes the editor still knows about and says
+/// nothing about the ones it dropped, so without this the `.md` of a deleted
+/// node survives forever: invisible in the UI, and enough to make the pipeline's
+/// portable document un-importable. The saved YAML is the authority — not the
+/// keys of the request, which are only the subset the client chose to send.
+fn prune_orphan_prompts(state: &AppState, path: &Path, saved: &pipeline::PipelineDef) {
+    let on_disk = read_pipeline_prompts(path);
+    let (_, orphans) = pipeline::split_live_prompts(saved, &on_disk);
+    for node_id in orphans {
+        let prompt_path = pipeline::canonical_prompt_path(path, &node_id);
+        mark_self_write(&state.recent_writes, &prompt_path);
+        match std::fs::remove_file(&prompt_path) {
+            Ok(()) => info!("Removed prompt of deleted node {node_id}"),
+            Err(e) => warn!("failed to remove prompt for deleted node {node_id}: {e}"),
+        }
+    }
 }
 
 fn read_prompts_from_dir(prompts_dir: &Path) -> HashMap<String, String> {
@@ -5584,12 +5608,15 @@ fn write_pipeline_atomically(
 
     let yaml = serde_yaml::to_string(pipeline).map_err(|e| format!("serialize pipeline: {e}"))?;
     pipeline::parse_pipeline(&yaml).map_err(|e| format!("pipeline: {e}"))?;
+    // Never seed a fresh registry entry with a leftover: duplicate copies
+    // the source sidecar dir wholesale, orphans included.
+    let (prompts, _) = pipeline::split_live_prompts(pipeline, prompts);
     let result = (|| {
         std::fs::write(&temp_path, yaml).map_err(|e| format!("write pipeline: {e}"))?;
 
         if !prompts.is_empty() {
             std::fs::create_dir(&temp_prompts).map_err(|e| format!("stage prompts: {e}"))?;
-            for (node_id, content) in prompts {
+            for (node_id, content) in &prompts {
                 std::fs::write(temp_prompts.join(format!("{node_id}.md")), content)
                     .map_err(|e| format!("write prompts.{node_id}: {e}"))?;
             }
@@ -5761,6 +5788,7 @@ async fn import_pipeline_document(
                 "id": id,
                 "scope": "instance",
                 "path": path.to_string_lossy(),
+                "warnings": interpreted.warnings,
             })),
         )
             .into_response(),

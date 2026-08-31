@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import UnifiedLeftPanel from "./UnifiedLeftPanel";
 import type { PipelineListEntry, RunListEntry, Trigger } from "../types";
 import type { LibraryPipelineEntry } from "../api";
-import { cleanupRun, deleteLibraryPipeline, deletePipeline, duplicateLibraryPipeline, fetchPipelines, importWorkflow, openRunShell, pauseRun, renameRun, resumeRun, retryAll } from "../api";
+import { cleanupRun, deleteLibraryPipeline, deletePipeline, duplicateLibraryPipeline, fetchPipelines, importPipelineDocument, importWorkflow, openRunShell, pauseRun, renameRun, resumeRun, retryAll } from "../api";
 import { useEditStore } from "../stores/editStore";
 
 const mockRenameRun = vi.mocked(renameRun);
@@ -19,6 +19,7 @@ const mockResumeRun = vi.mocked(resumeRun);
 const mockRetryAll = vi.mocked(retryAll);
 const mockCleanupRun = vi.mocked(cleanupRun);
 const mockImportWorkflow = vi.mocked(importWorkflow);
+const mockImportPipelineDocument = vi.mocked(importPipelineDocument);
 const originalOpenPipeline = useEditStore.getState().openPipeline;
 
 vi.mock("../api", () => ({
@@ -30,7 +31,9 @@ vi.mock("../api", () => ({
   renameRun: vi.fn().mockResolvedValue(undefined),
   createPipeline: vi.fn().mockResolvedValue({ id: "new-pipe", scope: "repo", path: "/tmp" }),
   duplicatePipeline: vi.fn().mockResolvedValue({ id: "copy", scope: "instance", path: "/tmp" }),
-  importPipelineDocument: vi.fn().mockResolvedValue({ id: "imported", scope: "instance", path: "/tmp" }),
+  importPipelineDocument: vi
+    .fn()
+    .mockResolvedValue({ id: "imported", scope: "instance", path: "/tmp", warnings: [] }),
   importWorkflow: vi.fn().mockResolvedValue({ id: "workflow", scope: "instance", warnings: [] }),
   deleteLibraryPipeline: vi.fn().mockResolvedValue(undefined),
   duplicateLibraryPipeline: vi
@@ -122,6 +125,44 @@ describe("portable pipeline import", () => {
 
     await waitFor(() => expect(openPipeline).toHaveBeenCalledWith("workflow-with-warnings"));
     expect(screen.getByText("parallel branch was flattened")).toBeInTheDocument();
+  });
+
+  // A PDO document carrying a prompt for a node it no longer defines is
+  // a leftover, not a corruption: the import goes through and says what it
+  // dropped, instead of the 400 that used to strand the user on the destination
+  // machine with an opaque node id and a YAML textarea.
+  it("opens a PDO import that dropped a stale prompt, and names what it dropped", async () => {
+    const openPipeline = vi.fn().mockResolvedValue(undefined);
+    useEditStore.setState({ openPipeline });
+    mockImportPipelineDocument.mockResolvedValue({
+      id: "document-with-warnings",
+      scope: "instance",
+      path: "/tmp/document-with-warnings.yaml",
+      warnings: ["prompts.FBKE6BhH: no such node in the document — prompt ignored"],
+    });
+
+    render(
+      <UnifiedLeftPanel
+        runs={[]}
+        selectedRunId={null}
+        onSelectRun={() => {}}
+        onNewRun={() => {}}
+        libraryPipelines={[]}
+        onLibraryPipelinesChanged={() => {}}
+      />,
+    );
+    await userEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
+    await userEvent.click(screen.getByTestId("import-workflow-button"));
+    fireEvent.change(screen.getByTestId("pipeline-document-input"), {
+      target: { value: "pdo_pipeline: 1\npipeline: {}\n" },
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Import" }));
+
+    await waitFor(() => expect(openPipeline).toHaveBeenCalledWith("document-with-warnings"));
+    expect(screen.getByTestId("import-workflow-warnings")).toHaveTextContent(
+      "prompts.FBKE6BhH",
+    );
+    expect(screen.getByText(/Imported with 1 warning:/)).toBeInTheDocument();
   });
 });
 

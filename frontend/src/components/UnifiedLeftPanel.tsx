@@ -1166,8 +1166,9 @@ function ImportWorkflowModal({
       await openPipeline(result.id);
       const w = "warnings" in result ? result.warnings ?? [] : [];
       if (w.length > 0) {
-        // Surface the lossy-translation diagnostics (ADR-0001) rather than
-        // silently closing — the annotation is the onboarding tutorial.
+        // Surface the diagnostics rather than silently closing: for a Claude
+        // workflow the lossy-translation annotation is the onboarding tutorial
+        // (ADR-0001); for a PDO document it says what the import dropped.
         setWarnings(w);
       } else {
         onClose();
@@ -1287,7 +1288,7 @@ function ImportWorkflowModal({
             data-testid="import-workflow-warnings"
           >
             <div className="mb-1 font-medium text-st-await">
-              Imported with {warnings.length} translation warning
+              Imported with {warnings.length} warning
               {warnings.length === 1 ? "" : "s"}:
             </div>
             <ul className="list-disc pl-4">

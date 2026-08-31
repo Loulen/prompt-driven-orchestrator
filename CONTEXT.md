@@ -899,7 +899,9 @@ Le **registre de pipelines** est l'ensemble des Pipelines possédées par une in
 Un **Document de pipeline transportable** est la représentation YAML versionnée et interprétable qui permet de copier une Pipeline entre instances. Il conserve au maximum le graphe, les boucles, le routage, la présentation, les notes, les prompts, les déclarations et valeurs par défaut de variables, et développe les nodes partagés en nodes ordinaires.
 
 Il ne transporte ni secrets, ni environnement, ni valeurs d'exécution, ni configuration d'instance. Un choix agentique lié à un profil d'instance redevient **Inherit** ; l'identité de la Pipeline est recréée à l'import. L'import est atomique, et un document invalide ou d'une version non prise en charge est refusé avec diagnostics.
-_Éviter_ : « YAML canonique » — le format interne peut séparer des contenus que le document rassemble ; le contrat est la fidélité maximale du round-trip, pas l'identité avec le stockage interne.
+
+**Un document produit par PDO est importable par PDO** : l'export ne peut pas émettre ce que l'import refuse, sinon la panne tombe sur la machine de destination — celle qui ne peut rien corriger. Les prompts vivent en fichiers annexes nommés par identifiant de node, et un node supprimé y laissait le sien : la clé morte rendait la Pipeline non transportable. L'invariant *clés ⊆ nodes* se tient donc partout où les prompts franchissent une frontière — sauvegarde, export, écriture au registre — et, à l'import, un prompt sans node est un **reliquat** qu'on écarte avec un avertissement, jamais un motif de refus. Reste fatale la seule clé qui ne peut pas être un nom de fichier : elle désigne un chemin, pas un node.
+_Éviter_ : « YAML canonique » — le format interne peut séparer des contenus que le document rassemble ; le contrat est la fidélité maximale du round-trip, pas l'identité avec le stockage interne. « Document corrompu » pour un reliquat de prompt — un reliquat se jette, une corruption se refuse.
 
 ---
 

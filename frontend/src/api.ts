@@ -1393,9 +1393,11 @@ export function fetchRunPipelineDocument(runId: string): Promise<string> {
   });
 }
 
+/// `warnings` carries the non-fatal diagnostics of the import — today, prompts
+/// dropped because they name a node the document does not define.
 export function importPipelineDocument(
   document: string,
-): Promise<{ id: string; scope: string; path: string }> {
+): Promise<{ id: string; scope: string; path: string; warnings: string[] }> {
   return request("POST", "/pipelines/import", {
     body: { document },
     label: "POST /pipelines/import",

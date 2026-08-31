@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
+use tracing::info;
 
 use crate::agent_choice::AgentChoice;
 use crate::pipeline::{self, PipelineDef};
@@ -20,6 +21,9 @@ struct PortablePipelineDocument {
 pub(crate) struct InterpretedDocument {
     pub pipeline: PipelineDef,
     pub prompts: HashMap<String, String>,
+    /// Non-fatal diagnostics — today, prompts dropped because they name a node
+    /// the document does not define.
+    pub warnings: Vec<String>,
 }
 
 fn make_portable(mut pipeline: PipelineDef) -> PipelineDef {
@@ -68,13 +72,22 @@ pub(crate) fn export(
     let canonical = pipeline::parse_pipeline(&yaml)
         .map_err(|e| format!("failed to validate portable pipeline: {e}"))?
         .pipeline;
+    // The exporter's contract has to be the importer's: the prompts come
+    // straight off a sidecar dir that can hold leftovers of deleted nodes, and
+    // emitting one produced a document PDO itself refuses to import.
+    let (live_prompts, orphans) = pipeline::split_live_prompts(&canonical, prompts);
+    if !orphans.is_empty() {
+        info!(
+            "portable export of '{}': dropped {} prompt(s) with no node: {}",
+            canonical.name,
+            orphans.len(),
+            orphans.join(", ")
+        );
+    }
     serde_yaml::to_string(&PortablePipelineDocument {
         pdo_pipeline: VERSION,
         pipeline: ordered_pipeline_value(canonical)?,
-        prompts: prompts
-            .iter()
-            .map(|(id, prompt)| (id.clone(), prompt.clone()))
-            .collect(),
+        prompts: live_prompts.into_iter().collect(),
     })
     .map_err(|e| format!("failed to serialize portable pipeline document: {e}"))
 }
@@ -132,12 +145,8 @@ pub(crate) fn interpret(source: &str) -> Result<InterpretedDocument, String> {
         return Err(format!("pipeline.edges: {}", dangling.join("; ")));
     }
 
-    let known_nodes = parsed
-        .pipeline
-        .nodes
-        .iter()
-        .map(|node| node.id.as_str())
-        .collect::<std::collections::HashSet<_>>();
+    // A key that cannot be a filename stays fatal: it is an attempt to write
+    // outside the sidecar dir, not a leftover.
     if let Some(unsafe_id) = document.prompts.keys().find(|node_id| {
         node_id.is_empty()
             || *node_id == "."
@@ -149,17 +158,21 @@ pub(crate) fn interpret(source: &str) -> Result<InterpretedDocument, String> {
             "prompts.{unsafe_id}: node id cannot be used as a prompt filename"
         ));
     }
-    if let Some(orphan) = document
-        .prompts
-        .keys()
-        .find(|node_id| !known_nodes.contains(node_id.as_str()))
-    {
-        return Err(format!("prompts.{orphan}: node does not exist"));
-    }
+
+    // A prompt naming no node, on the other hand, is a droppable leftover
+    // Rejecting the whole document over one made pipelines exported by
+    // older versions un-importable, on the machine least able to fix them.
+    let all_prompts = document.prompts.into_iter().collect::<HashMap<_, _>>();
+    let (prompts, orphans) = pipeline::split_live_prompts(&parsed.pipeline, &all_prompts);
+    let warnings = orphans
+        .iter()
+        .map(|node_id| format!("prompts.{node_id}: no such node in the document — prompt ignored"))
+        .collect();
 
     Ok(InterpretedDocument {
         pipeline: parsed.pipeline,
-        prompts: document.prompts.into_iter().collect(),
+        prompts,
+        warnings,
     })
 }
 
@@ -334,5 +347,45 @@ mod tests {
 
         assert!(error.contains("pipeline.edges"), "{error}");
         assert!(error.contains("non-existent node 'ghost'"), "{error}");
+    }
+
+    /// The export is the last place the "keys ⊆ nodes" invariant can be
+    /// restored before the document leaves the machine that can still fix it.
+    #[test]
+    fn export_drops_prompts_of_nodes_that_no_longer_exist() {
+        let mut prompts = HashMap::new();
+        prompts.insert("worker".into(), "Review carefully.".into());
+        prompts.insert("FBKE6BhH".into(), "Prompt of a deleted node.".into());
+
+        let document = super::export(&pipeline(), &prompts).unwrap();
+
+        assert!(!document.contains("FBKE6BhH"), "{document}");
+        assert!(document.contains("Review carefully."), "{document}");
+        let imported = super::interpret(&document).unwrap();
+        assert_eq!(imported.prompts.len(), 1);
+        assert!(imported.warnings.is_empty());
+    }
+
+    /// A document produced by an older PDO still carries the orphan. It
+    /// is a leftover, not a corruption: import it and say what was dropped.
+    #[test]
+    fn orphan_prompt_is_dropped_with_a_warning_instead_of_rejecting_the_document() {
+        let source = super::export(&pipeline(), &HashMap::new())
+            .unwrap()
+            .replace(
+                "prompts: {}",
+                "prompts:\n  FBKE6BhH: Prompt of a deleted node.",
+            );
+
+        let imported = super::interpret(&source).unwrap();
+
+        assert!(imported.prompts.is_empty());
+        assert_eq!(imported.warnings.len(), 1);
+        assert!(
+            imported.warnings[0].contains("prompts.FBKE6BhH"),
+            "{:?}",
+            imported.warnings
+        );
+        assert_eq!(imported.pipeline.nodes.len(), 3);
     }
 }

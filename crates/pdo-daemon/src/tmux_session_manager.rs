@@ -254,15 +254,45 @@ fn wrap_tail_in_docker_exec(
 /// before the tail. Agents pass `&[]`, so the emitted bytes are identical to the
 /// legacy command (the #296 byte-identity discipline) — only `script` nodes
 /// populate it with the `PDO_INPUT_*`/`PDO_OUTPUT_*`/… catalogue.
+///
+/// `session_path` is exported as the session `PATH` **before** every other export
+/// (#661 / ADR-0060, prolonging ADR-0055). The preflight (`binary_available`)
+/// resolves the harness on
+/// [`harness_probe_path`] — the user's *interactive* `PATH` — but a `bash -c` tail
+/// is neither interactive nor login, so it would otherwise run in the tmux server's
+/// inherited `PATH` (the systemd unit's), where a user-installed `claude` (native
+/// installer → `~/.local/bin`) is absent: `exit 127`, the lone window returns, the
+/// session (and its server) dies, and the liveness sweep mis-reports `session_died`
+/// naming tmux for a `PATH` fault (the mis-attribution ADR-0037 exists to prevent).
+/// Exporting the very `PATH` the probe resolved on closes that asymmetry. It runs on
+/// the **host** side of a `docker exec` wrapper (#447) so it never crosses into the
+/// container, and stays useful there for locating `docker` itself under a user
+/// prefix. An **empty** `session_path` emits nothing — never `export PATH=''`, which
+/// would erase the `PATH` and break even `bash`/`pdo` (also the byte-identity escape
+/// hatch for the legacy-shape goldens).
+// Every argument is an irreducible input to the wrapped command (identity, port,
+// session PATH, the two env layers, the tail); bundling them into a struct would
+// only move the list — same rationale as the spawn/build seams.
+#[allow(clippy::too_many_arguments)]
 fn wrap_with_env(
     run_id: &str,
     node_id: &str,
     iter: i64,
     daemon_port: u16,
+    session_path: &str,
     harness_env: &[(String, String)],
     extra_env: &[(String, String)],
     tail_cmd: &str,
 ) -> String {
+    // #661/ADR-0060: the session PATH export leads, so every later export and the
+    // tail resolve binaries where the preflight already found the harness. Empty ⇒
+    // no export (never `export PATH=''`); `sh_single_quote` survives an exotic dir
+    // name carrying a `'`, matching the other base exports.
+    let path_export = if session_path.is_empty() {
+        String::new()
+    } else {
+        format!("export PATH={} && ", sh_single_quote(session_path))
+    };
     // #550/AC #4: the harness env (CCR for `claude`) — `sh_quote_arg` keeps a safe
     // value like `1` bare, so `export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`
     // is byte-identical to the legacy hard-coded export.
@@ -276,7 +306,8 @@ fn wrap_with_env(
         .collect();
 
     let inner = format!(
-        "export PDO_RUN_ID={run_id_q} && \
+        "{path_export}\
+         export PDO_RUN_ID={run_id_q} && \
          export PDO_NODE_ID={node_id_q} && \
          export PDO_NODE_ITER={iter_q} && \
          export PDO_DAEMON_URL={daemon_url_q} && \
@@ -443,6 +474,7 @@ pub fn build_tmux_script(
     node_id: &str,
     iter: i64,
     daemon_port: u16,
+    session_path: &str,
     prompt_path: &Path,
     tmux_cmd_override: Option<&str>,
     tail: SessionTail<'_>,
@@ -519,6 +551,7 @@ pub fn build_tmux_script(
                 node_id,
                 iter,
                 daemon_port,
+                session_path,
                 &harness_env,
                 NO_ENV,
                 &docker_tail,
@@ -529,6 +562,7 @@ pub fn build_tmux_script(
             node_id,
             iter,
             daemon_port,
+            session_path,
             &harness_env,
             extra_env,
             &tail_cmd,
@@ -577,6 +611,7 @@ fn build_resume_script(
     node_id: &str,
     iter: i64,
     daemon_port: u16,
+    session_path: &str,
     descriptor: &crate::harness_registry::HarnessDescriptor,
     effort: Option<&str>,
     session_id: Option<&str>,
@@ -632,6 +667,7 @@ fn build_resume_script(
                 node_id,
                 iter,
                 daemon_port,
+                session_path,
                 &harness_env,
                 &[],
                 &docker_tail,
@@ -642,6 +678,7 @@ fn build_resume_script(
             node_id,
             iter,
             daemon_port,
+            session_path,
             &harness_env,
             &[],
             &tail_cmd,
@@ -737,11 +774,17 @@ pub fn spawn(
         None
     };
 
+    // #661/ADR-0055: resolve the session PATH at the impure spawn edge (cached
+    // `OnceLock`, so this is a cheap clone after the first probe) and thread it into
+    // the pure builder — the goldens stay hermetic, the live session inherits the
+    // very PATH the preflight resolved the harness on.
+    let session_path = harness_probe_path();
     let script = build_tmux_script(
         run_id,
         node_id,
         iter,
         daemon_port,
+        &session_path,
         &prompt_path,
         tmux_cmd_override,
         tail,
@@ -783,11 +826,17 @@ pub fn spawn_shell(
 ) -> Result<()> {
     // prompt_path is unused for `SessionTail::Shell` (bash has no prompt);
     // pass the working_dir as a harmless placeholder.
+    // #661/ADR-0055: a run shell exists to hand-type `claude`/`git`/`pdo`
+    // (CONTEXT.md §*Shell de run*), so it needs the interactive PATH just as much
+    // as an agent node — otherwise a typed `claude` hits the same `command not
+    // found` the service PATH produces.
+    let session_path = harness_probe_path();
     let script = build_tmux_script(
         run_id,
         "__shell__",
         0,
         daemon_port,
+        &session_path,
         working_dir,
         None,
         SessionTail::Shell,
@@ -861,11 +910,15 @@ pub fn spawn_libassist(
     let settings_path = prompt_path.with_file_name("settings.json");
     std::fs::write(&settings_path, LIBASSIST_HOOK_SETTINGS_JSON)?;
 
+    // #661/ADR-0055: the assistant is a `claude` REPL, so it needs the same
+    // interactive PATH the preflight resolves the binary on.
+    let session_path = harness_probe_path();
     let script = build_tmux_script(
         LIBASSIST_ENV_ID,
         LIBASSIST_ENV_ID,
         0,
         daemon_port,
+        &session_path,
         prompt_path,
         tmux_cmd_override,
         SessionTail::Agent {
@@ -940,11 +993,16 @@ pub fn resume(
     } else {
         None
     };
+    // #661/ADR-0055: a resumed session re-enters the same harness — thread the same
+    // interactive PATH the preflight resolves on, so a resurrected node does not hit
+    // the `command not found` a bare service PATH would produce.
+    let session_path = harness_probe_path();
     let script = build_resume_script(
         run_id,
         node_id,
         iter,
         daemon_port,
+        &session_path,
         descriptor,
         effort,
         session_id,
@@ -2044,6 +2102,11 @@ pub fn working_dir_for_node(
 mod tests {
     use super::*;
 
+    /// A fixed, non-empty session `PATH` for the builder goldens (#661).
+    /// Keeps them hermetic (no ambient shell probe) while exercising the
+    /// ADR-0055 `export PATH=…` the live spawn threads from `harness_probe_path`.
+    const TEST_SESSION_PATH: &str = "/home/u/.local/bin:/usr/bin:/bin";
+
     #[test]
     fn parse_node_session() {
         let name = "pdo-20260506-143000-a3f1b2c-solo-iter-1";
@@ -2925,6 +2988,7 @@ mod tests {
             "solo",
             1,
             5172,
+            TEST_SESSION_PATH,
             prompt_path,
             None,
             SessionTail::Agent {
@@ -2948,6 +3012,7 @@ mod tests {
             "solo",
             1,
             5172,
+            TEST_SESSION_PATH,
             prompt_path,
             Some("exec sleep 60"),
             SessionTail::Agent {
@@ -2963,6 +3028,125 @@ mod tests {
         assert!(!script.contains("claude"));
     }
 
+    /// #661/ADR-0055 — the fix. The session `PATH` is exported at the **head** of
+    /// the wrapper, before every `PDO_*` export and before the tail, so a `bash -c`
+    /// tail (neither interactive nor login) resolves the harness in the very `PATH`
+    /// the preflight (`binary_available`) found it on — not the tmux server's
+    /// inherited service `PATH`. Without it a user-installed `claude` (native
+    /// installer → `~/.local/bin`) is `command not found` → exit 127 → the lone
+    /// window returns → the session/server dies → the sweep mis-blames tmux.
+    #[test]
+    fn build_script_exports_session_path_before_everything() {
+        let prompt_path = Path::new("/tmp/test-prompt.md");
+        let script = build_tmux_script(
+            "run-abc",
+            "solo",
+            1,
+            5172,
+            "/home/u/.local/bin:/usr/bin:/bin",
+            prompt_path,
+            None,
+            SessionTail::Agent {
+                harness: &crate::harness_registry::claude(),
+                model: None,
+                effort: None,
+                session_id: None,
+            },
+            None,
+            None,
+        );
+        // Present and single-quoted, carrying the user prefix the service PATH lacks.
+        // `wrap_with_env` re-wraps the inner in `bash -c '…'`, so the single quotes
+        // around the value are rewritten as `'\''` (the same escaping `--model` uses).
+        assert!(
+            script.contains(r"export PATH='\''/home/u/.local/bin:/usr/bin:/bin'\'' &&"),
+            "session PATH must be exported at the head: {script}"
+        );
+        // It leads: PATH before the PDO_* exports, and those before the tail — so the
+        // tail (and any binary the exports touch) resolves on the exported PATH.
+        let path_at = script.find("export PATH=").expect("PATH export present");
+        let run_id_at = script
+            .find("export PDO_RUN_ID=")
+            .expect("PDO_RUN_ID export present");
+        let tail_at = script.find("exec claude").expect("claude tail present");
+        assert!(
+            path_at < run_id_at && run_id_at < tail_at,
+            "PATH export must precede the PDO_* exports and the tail: {script}"
+        );
+    }
+
+    /// #661 — an **empty** session PATH emits NO `export PATH`: never `export
+    /// PATH=''`, which would erase the PATH and break even `bash`/`pdo`. Doubles as
+    /// the byte-identity escape hatch — the inner still opens on `PDO_RUN_ID`, the
+    /// legacy shape.
+    #[test]
+    fn build_script_omits_path_export_when_session_path_empty() {
+        let prompt_path = Path::new("/tmp/test-prompt.md");
+        let script = build_tmux_script(
+            "run-abc",
+            "solo",
+            1,
+            5172,
+            "",
+            prompt_path,
+            None,
+            SessionTail::Agent {
+                harness: &crate::harness_registry::claude(),
+                model: None,
+                effort: None,
+                session_id: None,
+            },
+            None,
+            None,
+        );
+        assert!(
+            !script.contains("export PATH="),
+            "empty session PATH must emit no PATH export: {script}"
+        );
+        assert!(
+            script.starts_with("exec bash -c 'export PDO_RUN_ID="),
+            "legacy inner shape preserved when no session PATH: {script}"
+        );
+    }
+
+    /// #661 — a resumed session gets the same leading PATH export. A resurrected
+    /// node re-enters the same harness, so it must resolve `claude` where the
+    /// preflight did or it dies the identical `command not found` death.
+    #[test]
+    fn resume_script_exports_session_path_before_everything() {
+        let script = build_resume_script(
+            "r1",
+            "solo",
+            1,
+            6172,
+            "/home/u/.local/bin:/usr/bin:/bin",
+            &crate::harness_registry::claude(),
+            None,
+            Some("11111111-2222-3333-4444-555555555555"),
+            None,
+            None,
+            None,
+        );
+        assert!(
+            script.contains(r"export PATH='\''/home/u/.local/bin:/usr/bin:/bin'\'' &&"),
+            "resume must export the session PATH: {script}"
+        );
+        let path_at = script
+            .find("export PATH=")
+            .expect("PATH export present on resume");
+        let run_id_at = script
+            .find("export PDO_RUN_ID=")
+            .expect("PDO_RUN_ID export present");
+        assert!(
+            path_at < run_id_at,
+            "PATH export must lead on resume too: {script}"
+        );
+        assert!(
+            script.contains("--resume"),
+            "resume tail still renders: {script}"
+        );
+    }
+
     #[test]
     fn build_script_omits_model_when_none() {
         // #296: the `None` model path must reproduce the legacy command
@@ -2975,6 +3159,7 @@ mod tests {
             "solo",
             1,
             5172,
+            TEST_SESSION_PATH,
             prompt_path,
             None,
             SessionTail::Agent {
@@ -3012,6 +3197,7 @@ mod tests {
             "solo",
             1,
             5172,
+            TEST_SESSION_PATH,
             prompt_path,
             None,
             SessionTail::Agent {
@@ -3053,6 +3239,7 @@ mod tests {
             "solo",
             1,
             5172,
+            TEST_SESSION_PATH,
             prompt_path,
             None,
             SessionTail::Agent {
@@ -3083,6 +3270,7 @@ mod tests {
             "solo",
             1,
             5172,
+            TEST_SESSION_PATH,
             Path::new("/tmp/test-prompt.md"),
             None,
             SessionTail::Agent {
@@ -3172,6 +3360,7 @@ mod tests {
             "solo",
             1,
             5172,
+            TEST_SESSION_PATH,
             Path::new("/tmp/test-prompt.md"),
             None,
             SessionTail::Agent {
@@ -3196,6 +3385,7 @@ mod tests {
             "solo",
             1,
             5172,
+            TEST_SESSION_PATH,
             Path::new("/tmp/test-prompt.md"),
             None,
             SessionTail::Agent {
@@ -3317,6 +3507,7 @@ mod tests {
             "solo",
             1,
             5172,
+            TEST_SESSION_PATH,
             Path::new("/tmp/test-prompt.md"),
             None,
             SessionTail::Agent {
@@ -3419,6 +3610,7 @@ mod tests {
             "solo",
             1,
             5172,
+            TEST_SESSION_PATH,
             Path::new("/tmp/test-prompt.md"),
             None,
             SessionTail::Agent {
@@ -3451,6 +3643,7 @@ mod tests {
             "solo",
             1,
             5172,
+            TEST_SESSION_PATH,
             Path::new("/tmp/body.sh"),
             None,
             SessionTail::Script {
@@ -3476,6 +3669,7 @@ mod tests {
             "solo",
             1,
             6172,
+            TEST_SESSION_PATH,
             &crate::harness_registry::claude(),
             None,
             None,
@@ -3499,6 +3693,7 @@ mod tests {
             "solo",
             1,
             6172,
+            TEST_SESSION_PATH,
             &crate::harness_registry::claude(),
             Some("low"),
             None,
@@ -3630,6 +3825,7 @@ mod tests {
             "solo",
             1,
             5172,
+            TEST_SESSION_PATH,
             prompt_path,
             None,
             SessionTail::Script {
@@ -3732,6 +3928,7 @@ mod tests {
             "solo",
             1,
             5172,
+            TEST_SESSION_PATH,
             prompt_path,
             Some("exec sleep 99"),
             SessionTail::Script {
@@ -3772,6 +3969,7 @@ mod tests {
             "solo",
             1,
             5172,
+            TEST_SESSION_PATH,
             prompt_path,
             None,
             SessionTail::Script {
@@ -3811,6 +4009,7 @@ mod tests {
             "__shell__",
             0,
             5172,
+            TEST_SESSION_PATH,
             prompt_path,
             None,
             SessionTail::Shell,
@@ -3848,6 +4047,7 @@ mod tests {
             "__shell__",
             0,
             5172,
+            TEST_SESSION_PATH,
             prompt_path,
             Some("exec sleep 600"),
             SessionTail::Shell,
@@ -3989,6 +4189,7 @@ mod tests {
             "solo",
             1,
             6172,
+            TEST_SESSION_PATH,
             prompt_path,
             None,
             SessionTail::Agent {
@@ -4050,6 +4251,7 @@ mod tests {
             "solo",
             1,
             6172,
+            TEST_SESSION_PATH,
             prompt_path,
             None,
             SessionTail::Script {
@@ -4094,6 +4296,7 @@ mod tests {
             "__shell__",
             0,
             6172,
+            TEST_SESSION_PATH,
             wt,
             None,
             SessionTail::Shell,
@@ -4120,6 +4323,7 @@ mod tests {
             "n",
             1,
             5172,
+            TEST_SESSION_PATH,
             prompt_path,
             None,
             SessionTail::Agent {
@@ -4153,6 +4357,7 @@ mod tests {
             "solo",
             1,
             6172,
+            TEST_SESSION_PATH,
             &crate::harness_registry::claude(),
             None,
             None,
@@ -4172,6 +4377,7 @@ mod tests {
             "solo",
             1,
             6172,
+            TEST_SESSION_PATH,
             &crate::harness_registry::claude(),
             None,
             None,
@@ -4199,6 +4405,7 @@ mod tests {
             "solo",
             1,
             6172,
+            TEST_SESSION_PATH,
             &crate::harness_registry::claude(),
             None,
             Some(sid),
@@ -4225,6 +4432,7 @@ mod tests {
             "solo",
             1,
             6172,
+            TEST_SESSION_PATH,
             &crate::harness_registry::claude(),
             Some("low"),
             Some(sid),
@@ -4254,6 +4462,7 @@ mod tests {
             "solo",
             1,
             6172,
+            TEST_SESSION_PATH,
             &crate::harness_registry::copilot(),
             None,
             Some(sid),
@@ -4275,6 +4484,7 @@ mod tests {
             "solo",
             1,
             6172,
+            TEST_SESSION_PATH,
             &crate::harness_registry::copilot(),
             None,
             None,
@@ -4297,6 +4507,7 @@ mod tests {
             "solo",
             1,
             6172,
+            TEST_SESSION_PATH,
             &crate::harness_registry::claude(),
             None,
             Some(""),
@@ -4322,6 +4533,7 @@ mod tests {
                 "solo",
                 1,
                 6172,
+                TEST_SESSION_PATH,
                 &crate::harness_registry::claude(),
                 effort,
                 None,
@@ -4355,6 +4567,7 @@ mod tests {
             "solo",
             1,
             6172,
+            TEST_SESSION_PATH,
             &crate::harness_registry::claude(),
             Some("low"),
             None,
@@ -4383,6 +4596,7 @@ mod tests {
             "solo",
             1,
             6172,
+            TEST_SESSION_PATH,
             &crate::harness_registry::claude(),
             Some("low"),
             Some("11111111-2222-3333-4444-555555555555"),

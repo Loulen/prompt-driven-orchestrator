@@ -32,6 +32,7 @@ import type {
 // #550: the per-harness fold (pure, `../types`-only) — keeps this module pure.
 import { foldNodeIntoHarnesses } from "./harness";
 import { nodeIsolation } from "./nodeIsolation";
+import { hasProvisioningRules } from "./provisioning";
 
 /**
  * Drops the null-valued keys of every frontmatter declaration (#457).
@@ -112,12 +113,7 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
     }
     const harnesses = foldNodeIntoHarnesses(n);
     if (harnesses) node.harnesses = harnesses;
-    if (
-      n.provisioning &&
-      (n.provisioning.copy.length > 0 ||
-        n.provisioning.hardlink.length > 0 ||
-        n.provisioning.symlink.length > 0)
-    ) {
+    if (n.provisioning && hasProvisioningRules(n.provisioning)) {
       node.provisioning = n.provisioning;
     }
     // Legacy `type: loop` nodes (pre-region model, ADR-0011) carry a node-level
@@ -308,12 +304,7 @@ export function exportNodeAsYaml(node: NodeDef, prompt: string): string {
   }
   const harnesses = foldNodeIntoHarnesses(node);
   if (harnesses) obj.harnesses = harnesses;
-  if (
-    node.provisioning &&
-    (node.provisioning.copy.length > 0 ||
-      node.provisioning.hardlink.length > 0 ||
-      node.provisioning.symlink.length > 0)
-  ) {
+  if (node.provisioning && hasProvisioningRules(node.provisioning)) {
     obj.provisioning = node.provisioning;
   }
   // Legacy bounded-loop nodes carry a node-level `max_iter` the daemon still

@@ -355,6 +355,19 @@ export default function App() {
 
   const { activeTab: inspectorTab, setActiveTab: setInspectorTab } =
     useInspectorTab(editActiveTabId, isEditingRun);
+  const nodeInspectorProvisioningProps = {
+    provisioningRepository: isEditingRun ? selectedRun?.target_repo ?? "" : "",
+    provisioningFrozenAt:
+      isEditingRun && selection.id
+        ? selectedRun?.nodes[selection.id]?.started_at ?? undefined
+        : undefined,
+    inheritedProvisioning: isEditingRun
+      ? selectedRun?.provisioning_rules
+      : undefined,
+    provisioningGitRef:
+      isEditingRun && selectedRun ? `pdo/run-${selectedRun.run_id}` : "HEAD",
+    runNode: selection.id ? selectedRun?.nodes?.[selection.id] : null,
+  };
 
   // Both inspector panes are always rendered (with the inactive one hidden
   // via the `hidden` attribute) so that switching tabs does not unmount the
@@ -369,6 +382,9 @@ export default function App() {
           runId={selectedRun.run_id}
           isArchived={isArchived}
           nodeName={selectedRun.node_defs?.find((d) => d.id === selection.id)?.name}
+          provisioningRepository={selectedRun.target_repo ?? ""}
+          inheritedProvisioning={selectedRun.provisioning_rules}
+          provisioningGitRef={`pdo/run-${selectedRun.run_id}`}
         />
       );
     }
@@ -391,17 +407,7 @@ export default function App() {
           libraryEntries={libraryEntries}
           onLibraryChanged={refreshLibrary}
           readOnly={isActiveRunArchived}
-          provisioningRepository={isEditingRun ? selectedRun?.target_repo ?? "" : ""}
-          provisioningFrozenAt={
-            isEditingRun && selection.id
-              ? selectedRun?.nodes[selection.id]?.started_at ?? undefined
-              : undefined
-          }
-          inheritedProvisioning={isEditingRun ? selectedRun?.provisioning_rules : undefined}
-          provisioningGitRef={
-            isEditingRun && selectedRun ? `pdo/run-${selectedRun.run_id}` : "HEAD"
-          }
-          runNode={selection.id ? selectedRun?.nodes?.[selection.id] : null}
+          {...nodeInspectorProvisioningProps}
         />
       );
     }
@@ -714,17 +720,7 @@ export default function App() {
                     libraryEntries={libraryEntries}
                     onLibraryChanged={refreshLibrary}
                     readOnly={isActiveRunArchived}
-                    provisioningRepository={isEditingRun ? selectedRun?.target_repo ?? "" : ""}
-                    provisioningFrozenAt={
-                      isEditingRun && selection.id
-                        ? selectedRun?.nodes[selection.id]?.started_at ?? undefined
-                        : undefined
-                    }
-                    inheritedProvisioning={isEditingRun ? selectedRun?.provisioning_rules : undefined}
-                    provisioningGitRef={
-                      isEditingRun && selectedRun ? `pdo/run-${selectedRun.run_id}` : "HEAD"
-                    }
-                    runNode={selection.id ? selectedRun?.nodes?.[selection.id] : null}
+                    {...nodeInspectorProvisioningProps}
                   />
                 ) : selection.kind === "edge" ? (
                   <EdgeDetailPanel trigger={edgeTrigger} />

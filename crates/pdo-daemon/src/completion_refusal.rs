@@ -23,17 +23,26 @@ pub(crate) enum CompletionRefusal {
     /// Panne interne **avant** tout verdict (lecture du log, contrôle de tombstone).
     /// `500` : ce n'est pas un refus argumenté, c'est un daemon qui n'a pas pu
     /// décider — et c'est le seul cas où `pdo fail` reste le bon conseil.
-    Internal { error: String },
+    Internal {
+        error: String,
+    },
     /// Garde de transition (#212 / #354). La prose part dans `message`, `error`
     /// porte le slug : c'est ce qui rend le refus lisible côté client, qui relisait
     /// jusqu'ici *tout* `409` comme `missing_outputs`.
-    CompletionRejected { message: String },
+    CompletionRejected {
+        message: String,
+    },
     /// La livraison (#654 / ADR-0060) a échoué — staging, commit ou merge. Panne,
     /// pas verdict, donc `500`. Un `NodeInterrupted` est déjà appendé et le Run
     /// est parqué `AwaitingUser` : le travail reste sur disque, intact.
-    DeliveryFailed { node_id: String, error: String },
+    DeliveryFailed {
+        node_id: String,
+        error: String,
+    },
     /// Conflit de merge ; `MergeConflictDetected` + `RunFailed` déjà appendés.
-    MergeConflict { node_id: String },
+    MergeConflict {
+        node_id: String,
+    },
     /// Ports de sortie déclarés sans artefact. Le node reste vivant.
     MissingOutputs {
         missing: Vec<String>,

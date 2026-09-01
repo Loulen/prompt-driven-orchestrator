@@ -112,4 +112,20 @@ describe("ProvisioningRulesEditor", () => {
       "line-through",
     );
   });
+
+  it("stacks mode lists until its own container is wide enough for three columns", () => {
+    render(
+      <ProvisioningRulesEditor
+        level="run"
+        repository=""
+        rules={{ copy: [], hardlink: [], symlink: [] }}
+        onChange={() => {}}
+      />,
+    );
+
+    expect(screen.getByTestId("provisioning-mode-grid")).toHaveClass(
+      "grid-cols-1",
+      "@[520px]:grid-cols-3",
+    );
+  });
 });

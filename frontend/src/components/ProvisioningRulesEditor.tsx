@@ -155,7 +155,7 @@ export default function ProvisioningRulesEditor({
 
   return (
     <section
-      className="rounded-md border border-line bg-bg-3"
+      className="@container rounded-md border border-line bg-bg-3"
       data-testid={`provisioning-${level}`}
     >
       <div className="flex items-center justify-between border-b border-line px-3 py-2">
@@ -189,7 +189,10 @@ export default function ProvisioningRulesEditor({
       ))}
       {visibleError && <div role="alert" className="m-2 text-st-failed">{visibleError}</div>}
 
-      <div className="grid grid-cols-3 gap-2 p-2">
+      <div
+        className="grid grid-cols-1 gap-2 p-2 @[520px]:grid-cols-3"
+        data-testid="provisioning-mode-grid"
+      >
         {MODES.map(({ key, color }) => (
           <div key={key} className="overflow-hidden rounded border border-line">
             <div className="flex items-center gap-1.5 border-b border-line px-2 py-1.5 font-medium capitalize">

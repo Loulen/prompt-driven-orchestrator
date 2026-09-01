@@ -559,9 +559,9 @@ pub(crate) async fn spawn_node(
     // Routed to both the re-spawned node's preamble and the wire response.
     let mut interrupted_git_ops: Vec<String> = Vec::new();
     let node_provisioning = if has_sub_worktree {
-        let frozen = loaded.as_ref().and_then(|(events, _)| {
-            crate::provisioning::frozen_node_rules(events, &node.id, iter)
-        });
+        let frozen = loaded
+            .as_ref()
+            .and_then(|(events, _)| crate::provisioning::frozen_node_rules(events, &node.id, iter));
         match frozen {
             Some(rules) => rules,
             None => match crate::provisioning::node_rules_from_pipeline(

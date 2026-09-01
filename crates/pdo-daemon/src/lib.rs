@@ -5595,7 +5595,9 @@ fn pipeline_json_with_node_provisioning(
     let Some(source_nodes) = source.get("nodes").and_then(serde_yaml::Value::as_sequence) else {
         return Ok(json);
     };
-    let Some(response_nodes) = json.get_mut("nodes").and_then(serde_json::Value::as_array_mut)
+    let Some(response_nodes) = json
+        .get_mut("nodes")
+        .and_then(serde_json::Value::as_array_mut)
     else {
         return Ok(json);
     };
@@ -10425,10 +10427,7 @@ async fn get_run(
     }
 }
 
-fn inject_frozen_node_provisioning(
-    response: &mut serde_json::Value,
-    events: &[event_log::Event],
-) {
+fn inject_frozen_node_provisioning(response: &mut serde_json::Value, events: &[event_log::Event]) {
     let Some(nodes) = response
         .get_mut("nodes")
         .and_then(serde_json::Value::as_object_mut)

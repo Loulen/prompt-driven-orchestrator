@@ -25,6 +25,11 @@ const stopNodeMock = vi.fn().mockResolvedValue(undefined);
 const startNodeMock = vi.fn().mockResolvedValue({ ok: true, iter: 1 });
 const retryNodeMock = vi.fn().mockResolvedValue({ ok: true, iter: 2, invalidated: [] });
 const retryNodePreviewMock = vi.fn().mockResolvedValue({ downstream: [], affected_count: 0, with_artifacts: [] });
+const previewProvisioningMock = vi.fn().mockResolvedValue({
+  entries: [],
+  rules: [],
+  conflicts: [],
+});
 // #490: was `markNodeDone: vi.fn()` inline, which resolves `undefined` — so NO test
 // had ever exercised a *Mark complete* click. Made controllable so the verdict
 // branches can be driven. Vitest compares arity strictly, hence the spread.
@@ -39,6 +44,7 @@ vi.mock("../api", () => ({
   stopNode: (...args: unknown[]) => stopNodeMock(...args),
   retryNode: (...args: unknown[]) => retryNodeMock(...args),
   retryNodePreview: (...args: unknown[]) => retryNodePreviewMock(...args),
+  previewProvisioning: (...args: unknown[]) => previewProvisioningMock(...args),
   startNode: (...args: unknown[]) => startNodeMock(...args),
   attachSession: vi.fn(),
   artifactUrl: (runId: string, path: string) => `/runs/${runId}/artifact?path=${encodeURIComponent(path)}`,
@@ -128,6 +134,7 @@ describe("NodeDetailPanel", () => {
     fetchNodeIOMock.mockClear();
     killNodeMock.mockClear();
     restartNodeMock.mockClear();
+    previewProvisioningMock.mockClear();
     stopNodeMock.mockClear();
     startNodeMock.mockClear();
     retryNodeMock.mockClear();
@@ -168,6 +175,60 @@ describe("NodeDetailPanel", () => {
       expect(chip).toHaveTextContent(text);
       expect(chip.parentElement).toHaveTextContent(/ended .* · /);
       if (usd === null) expect(chip).not.toHaveTextContent("$0");
+    });
+
+    describe("frozen provisioning", () => {
+      it("shows the frozen recipe in the Run pane", async () => {
+        previewProvisioningMock.mockResolvedValue({
+          entries: [],
+          rules: [
+            {
+              scope: "isolated_node",
+              mode: "copy",
+              pattern: ".env",
+              paths: [".env"],
+              excluded_paths: [],
+              unmatched: false,
+            },
+          ],
+          conflicts: [],
+        });
+        render(
+          <NodeDetailPanel
+            node={makeNode({
+              isolated_worktree: true,
+              provisioning: { copy: [".env"], hardlink: [], symlink: [] },
+            })}
+            runId="run-1"
+            provisioningRepository="/repo"
+          />,
+        );
+
+        expect(await screen.findByTestId("provisioning-isolated_node")).toHaveTextContent(
+          "frozen at 2026-01-01T00:00:00Z",
+        );
+        expect(screen.getByLabelText("Copy patterns")).toHaveAttribute("readonly");
+      });
+
+      it("restarts the running isolated iteration and surfaces a refusal", async () => {
+        restartNodeMock.mockRejectedValueOnce(new Error("restart refused"));
+        render(
+          <TooltipProvider>
+            <NodeDetailPanel
+              node={makeNode({ isolated_worktree: true })}
+              runId="run-1"
+            />
+          </TooltipProvider>,
+        );
+
+        await act(async () => {
+          fireEvent.click(screen.getByTestId("restart-iteration-btn"));
+        });
+        expect(restartNodeMock).toHaveBeenCalledWith("run-1", "test-node", 1);
+        expect(screen.getByTestId("action-verdict")).toHaveTextContent(
+          "Restart refused — restart refused",
+        );
+      });
     });
 
     it("omits the cost chip when the projection has no cost", () => {

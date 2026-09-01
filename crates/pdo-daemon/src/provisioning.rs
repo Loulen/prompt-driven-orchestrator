@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -374,6 +375,7 @@ pub(crate) fn provision_missing(
         );
     }
 
+    let mut materialized = Vec::new();
     for entry in &plan.entries {
         let source = repository.join(&entry.relative_path);
         let target = worktree.join(&entry.relative_path);
@@ -417,8 +419,91 @@ pub(crate) fn provision_missing(
                 target.display()
             )
         })?;
+        materialized.push(entry.relative_path.clone());
+    }
+    record_materialized_paths(worktree, &materialized)?;
+    Ok(())
+}
+
+const MATERIALIZED_PATHS_FILE: &str = "pdo/provisioned-paths-v1";
+
+fn parse_materialized_paths(bytes: &[u8]) -> BTreeSet<Vec<u8>> {
+    bytes
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(<[u8]>::to_vec)
+        .collect()
+}
+
+fn provisioning_manifest_path(worktree: &Path) -> Result<Option<std::path::PathBuf>> {
+    let output = std::process::Command::new("git")
+        .args([
+            "rev-parse",
+            "--is-inside-work-tree",
+            "--git-path",
+            MATERIALIZED_PATHS_FILE,
+        ])
+        .current_dir(worktree)
+        .output()
+        .with_context(|| format!("locate Git metadata for {}", worktree.display()))?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let mut lines = output.stdout.split(|byte| *byte == b'\n');
+    if lines.next() != Some(b"true".as_slice()) {
+        return Ok(None);
+    }
+    let path = lines
+        .next()
+        .filter(|line| !line.is_empty())
+        .context("git rev-parse did not return a provisioning manifest path")?;
+    let path = std::path::PathBuf::from(String::from_utf8_lossy(path).into_owned());
+    Ok(Some(if path.is_absolute() {
+        path
+    } else {
+        worktree.join(path)
+    }))
+}
+
+fn record_materialized_paths(worktree: &Path, paths: &[String]) -> Result<()> {
+    let Some(manifest) = provisioning_manifest_path(worktree)? else {
+        return Ok(());
+    };
+    let mut materialized: BTreeSet<Vec<u8>> = match std::fs::read(&manifest) {
+        Ok(bytes) => parse_materialized_paths(&bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => BTreeSet::new(),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("read provisioning metadata {}", manifest.display()));
+        }
+    };
+    materialized.extend(paths.iter().map(|path| path.as_bytes().to_vec()));
+    if let Some(parent) = manifest.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create provisioning metadata {}", parent.display()))?;
+    }
+    let mut file = std::fs::File::create(&manifest)
+        .with_context(|| format!("write provisioning metadata {}", manifest.display()))?;
+    for path in materialized {
+        file.write_all(&path)?;
+        file.write_all(&[0])?;
     }
     Ok(())
+}
+
+pub(crate) fn materialized_paths(worktree: &Path) -> Result<Vec<Vec<u8>>> {
+    let Some(manifest) = provisioning_manifest_path(worktree)? else {
+        return Ok(Vec::new());
+    };
+    let bytes = match std::fs::read(&manifest) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("read provisioning metadata {}", manifest.display()));
+        }
+    };
+    Ok(parse_materialized_paths(&bytes).into_iter().collect())
 }
 
 pub(crate) fn provision_node_worktree(

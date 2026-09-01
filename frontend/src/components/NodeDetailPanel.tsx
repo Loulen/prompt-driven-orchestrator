@@ -9,7 +9,12 @@ import {
   Play,
   Maximize2,
 } from "lucide-react";
-import type { IterationInfo, NodeState, NodeStatus } from "../types";
+import type {
+  IterationInfo,
+  NodeState,
+  NodeStatus,
+  ScopedProvisioningRules,
+} from "../types";
 import { artifactUrl } from "../api";
 import type { PortIO, FileInfo } from "../api";
 import type { PortType } from "../types";
@@ -31,6 +36,11 @@ import type { ArtifactSource } from "./MarkdownArtifactModal";
 import ImageLightbox from "./ImageLightbox";
 import TmuxTerminal from "./TmuxTerminal";
 import { formatCostAmount, nodeCostTitle } from "../lib/costLabel";
+import ProvisioningRulesEditor from "./ProvisioningRulesEditor";
+import {
+  EMPTY_PROVISIONING_RULES,
+  hasProvisioningRules,
+} from "../lib/provisioning";
 
 const STATUS_LABELS: Record<NodeStatus, string> = {
   pending: "Pending",
@@ -50,6 +60,9 @@ interface Props {
   isArchived?: boolean;
   nodeName?: string | null;
   initialTerminalExpanded?: boolean;
+  provisioningRepository?: string;
+  inheritedProvisioning?: ScopedProvisioningRules[];
+  provisioningGitRef?: string;
 }
 
 // The terminal inset has three mutually exclusive display modes (#346):
@@ -215,6 +228,9 @@ export default function NodeDetailPanel({
   isArchived,
   nodeName,
   initialTerminalExpanded,
+  provisioningRepository = "",
+  inheritedProvisioning,
+  provisioningGitRef = "HEAD",
 }: Props) {
   const [modal, setModal] = useState<ModalState | null>(null);
   // Seed at mount only (no reactive effect on status): the issue trigger is
@@ -267,7 +283,7 @@ export default function NodeDetailPanel({
     start,
     markComplete,
     killStale,
-    restartStale,
+    restartIteration,
   } = useNodeRun(runId, node, selectedIter, {
     isArchived,
     onRetryStarted: showTerminalSplit,
@@ -377,6 +393,24 @@ export default function NodeDetailPanel({
         </div>
       </div>
 
+      {node.isolated_worktree &&
+        (hasProvisioningRules(node.provisioning ?? EMPTY_PROVISIONING_RULES) ||
+          (inheritedProvisioning?.some(({ rules }) => hasProvisioningRules(rules)) ??
+            false)) && (
+          <div className="border-b border-line p-2">
+            <ProvisioningRulesEditor
+              level="isolated_node"
+              repository={provisioningRepository}
+              rules={node.provisioning ?? EMPTY_PROVISIONING_RULES}
+              onChange={() => {}}
+              readOnly
+              frozenAt={node.started_at ?? undefined}
+              inherited={inheritedProvisioning}
+              gitRef={provisioningGitRef}
+            />
+          </div>
+        )}
+
       {!isArchived && (
         <div
           className="flex items-center gap-1.5 border-b border-line px-3 py-1.5"
@@ -396,6 +430,17 @@ export default function NodeDetailPanel({
             <Square size={10} />
             Stop
           </button>
+          {node.status === "running" && node.isolated_worktree && (
+            <button
+              data-testid="restart-iteration-btn"
+              onClick={restartIteration}
+              className={RETRY_BUTTON_CLASS}
+              style={RETRY_BUTTON_STYLE}
+            >
+              <RotateCcw size={10} />
+              Restart
+            </button>
+          )}
           {node.status === "pending" && (
             <button
               data-testid="start-btn"
@@ -422,7 +467,12 @@ export default function NodeDetailPanel({
         >
           <AlertCircle size={14} className="mt-0.5 shrink-0 text-st-failed" />
           <span className="text-st-failed" style={{ fontSize: "11.5px", fontWeight: 500 }}>
-            {actionVerdict.action === "retry" ? "Retry refused" : "Start refused"} —{" "}
+            {actionVerdict.action === "retry"
+              ? "Retry refused"
+              : actionVerdict.action === "restart"
+                ? "Restart refused"
+                : "Start refused"}{" "}
+            —{" "}
             {actionVerdict.message}
           </span>
         </div>
@@ -477,7 +527,7 @@ export default function NodeDetailPanel({
               </button>
               <button
                 data-testid="stale-retry-btn"
-                onClick={restartStale}
+                onClick={restartIteration}
                 className="flex cursor-pointer items-center gap-1 rounded border border-st-stale/40 bg-st-stale/10 px-1.5 py-0.5 text-st-stale transition-colors hover:bg-st-stale/20"
                 style={{ fontSize: "10.5px", fontWeight: 500 }}
               >

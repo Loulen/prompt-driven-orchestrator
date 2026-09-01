@@ -536,12 +536,19 @@ pub(crate) async fn spawn_node(
         }
     }
 
-    let has_sub_worktree = node.node_type == pipeline::NodeType::CodeMutating
-        || node.node_type == pipeline::NodeType::Merge;
+    // #653 / ADR-0060: where this NodeRun works. The FROZEN value wins over the
+    // document — a re-spawn of the same iteration (restart / invalidate) must
+    // land back in the directory the interrupted one left, even if the graph was
+    // edited in between (ADR-0007). Only a first spawn reads the node's own
+    // `isolated_worktree`, and that reading is what gets frozen below.
+    let has_sub_worktree = loaded
+        .as_ref()
+        .and_then(|(events, _)| merge_action::frozen_isolation(events, &node.id, iter))
+        .unwrap_or_else(|| node.is_isolated());
 
     // Track the sub-worktree + branch this spawn creates so an abort in the
     // panic-isolated span below can reap them (#279). `None` for nodes that own
-    // no worktree (doc-only / control nodes).
+    // no worktree (a non-isolated agent/script, control nodes).
     let mut orphan_to_reap: Option<(PathBuf, String)> = None;
     // #503 / ADR-0036: the commit the sub-worktree is cut from, recorded on
     // `NodeStarted`. It is the sole basis on which a later merge-back conflict may
@@ -551,6 +558,30 @@ pub(crate) async fn spawn_node(
     // #516: every interrupted git op left in a reused sub-worktree, in scan order.
     // Routed to both the re-spawned node's preamble and the wire response.
     let mut interrupted_git_ops: Vec<String> = Vec::new();
+    let node_provisioning = if has_sub_worktree {
+        let frozen = loaded.as_ref().and_then(|(events, _)| {
+            crate::provisioning::frozen_node_rules(events, &node.id, iter)
+        });
+        match frozen {
+            Some(rules) => rules,
+            None => match crate::provisioning::node_rules_from_pipeline(
+                spawn_ctx.pipeline_path,
+                &node.id,
+            ) {
+                Ok(rules) => rules,
+                Err(e) => {
+                    return SpawnOutcome::Failed {
+                        reason: format!(
+                            "provisioning failed for {}: {e:#}; no node was spawned",
+                            node.id
+                        ),
+                    };
+                }
+            },
+        }
+    } else {
+        crate::provisioning::ProvisioningRules::default()
+    };
     let working_dir = if has_sub_worktree {
         let sub_wt_dir = sub_worktree_path(spawn_ctx.repo_root, run_id, &node.id, iter);
         let sub_branch = sub_worktree_branch(run_id, &node.id, iter);
@@ -565,7 +596,7 @@ pub(crate) async fn spawn_node(
         // #489-B: `ensure_sub_worktree`, not `create_sub_worktree`. The bare create
         // replayed `git worktree add -b <branch>` on a branch that already existed
         // and failed with exit 255 on EVERY re-spawn of the same iteration — i.e. on
-        // every `restart_node` of a `code-mutating` / `merge` node, 100% of the time.
+        // every `restart_node` of an isolated node, 100% of the time.
         match ensure_sub_worktree(
             spawn_ctx.repo_root,
             &sub_wt_dir,
@@ -578,33 +609,16 @@ pub(crate) async fn spawn_node(
                 reused_sub_worktree = !ensured.created;
                 interrupted_git_ops = ensured.entry_state.interrupted_git_ops().to_vec();
                 if ensured.created {
-                    let provisioned = crate::provisioning::node_rules_from_pipeline(
-                        spawn_ctx.pipeline_path,
-                        &node.id,
-                    )
-                    .and_then(|node_provisioning| {
-                        let mut scoped = projected
-                            .map(|state| state.provisioning_rules.clone())
-                            .unwrap_or_default();
-                        if !node_provisioning.is_empty() {
-                            scoped.push(crate::provisioning::ScopedRules {
-                                scope: crate::provisioning::ProvisioningScope::IsolatedNode,
-                                rules: node_provisioning,
-                            });
-                        }
-                        crate::provisioning::resolve_at_git_ref(
-                            spawn_ctx.repo_root,
-                            &scoped,
-                            &pipeline_branch,
-                        )
-                    })
-                    .and_then(|plan| {
-                        crate::provisioning::provision_missing(
-                            spawn_ctx.repo_root,
-                            &sub_wt_dir,
-                            &plan,
-                        )
-                    });
+                    let inherited = projected
+                        .map(|state| state.provisioning_rules.as_slice())
+                        .unwrap_or_default();
+                    let provisioned = crate::provisioning::provision_node_worktree(
+                        spawn_ctx.repo_root,
+                        &sub_wt_dir,
+                        inherited,
+                        &node_provisioning,
+                        &pipeline_branch,
+                    );
                     if let Err(e) = provisioned {
                         let reason = format!(
                             "provisioning failed for {} in copy/link phase: {e:#}; no node was spawned",
@@ -806,6 +820,10 @@ pub(crate) async fn spawn_node(
             daemon_url: &crate::sandbox_container::daemon_url(deps.port, run_sandboxed),
             foreach_context,
             source_worktree_dir: has_sub_worktree.then_some(working_dir.as_path()),
+            // #654: the same section, from the other isolation. This site only
+            // ever builds a preamble for a node that spawns a session, so the
+            // two are exhaustive and mutually exclusive.
+            shared_worktree_dir: (!has_sub_worktree).then_some(working_dir.as_path()),
             input_images,
             start_prompt_present,
             source_iters,
@@ -842,16 +860,14 @@ pub(crate) async fn spawn_node(
             iter: Some(iter),
             payload: Some(serde_json::json!({
                 "prompt_preview": full_prompt.chars().take(500).collect::<String>(),
-                "node_type": match node.node_type {
-                    pipeline::NodeType::DocOnly => "doc-only",
-                    pipeline::NodeType::CodeMutating => "code-mutating",
-                    pipeline::NodeType::Start => "start",
-                    pipeline::NodeType::End => "end",
-                    pipeline::NodeType::Switch => "switch",
-                    pipeline::NodeType::Loop => "loop",
-                    pipeline::NodeType::Merge => "merge",
-                    pipeline::NodeType::Script => "script",
-                },
+                "node_type": node.node_type.as_str(),
+                // #653/ADR-0060: FREEZE where this NodeRun works. Every later
+                // reader — the re-spawn above, the restart probe, the completion
+                // path's merge-back decision — asks this event, never the
+                // document, so an isolation edit lands on the next launch and
+                // never under a live node's feet.
+                "isolated_worktree": has_sub_worktree,
+                "provisioning": node_provisioning,
                 // #424: the launch-time model and effort, **resolved** (post
                 // node → instance precedence, post empty-string collapse) — not
                 // the raw `NodeDef` values. This is what the resume path reads

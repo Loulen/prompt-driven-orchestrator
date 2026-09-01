@@ -32,6 +32,52 @@ pub(crate) struct LibraryEntry {
     /// `POST /nodes/parse` must accept a prompt-less node map.
     #[serde(default)]
     pub prompt: String,
+    /// Where an instance of this entry works (#655, ADR-0060). The library is
+    /// isolation-aware for the same reason it became model-aware in #345: an
+    /// entry that forgot the field would restore the *type default* on every
+    /// instantiation, silently forking a worktree for an Agent its author had
+    /// parked in the Run's — and the star would read `diverged` forever.
+    ///
+    /// Always `Some` for `agent`/`script` (stamped by [`normalized_isolation`]
+    /// on every read and write, so a pre-#655 file states its choice too), and
+    /// always `None` for the types that carry none. `skip_serializing_if` is
+    /// what keeps a starred Merge/Start/End file free of a line nobody may edit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolated_worktree: Option<bool>,
+}
+
+impl LibraryEntry {
+    /// This entry's isolation, made explicit (#655, ADR-0060).
+    ///
+    /// The type has the last word on *whether* there is a choice at all, and the
+    /// entry has the last word on *which* — the same precedence
+    /// `NodeDef::is_isolated` uses, so the library and the Document cannot read
+    /// one silence two ways. A stray value on a Merge is dropped rather than
+    /// round-tripped, mirroring `pipeline::stamp_isolation_default`.
+    fn normalized_isolation(&self) -> Option<bool> {
+        let default = self.node_type.default_isolation()?;
+        Some(self.isolated_worktree.unwrap_or(default))
+    }
+
+    /// Stamp [`normalized_isolation`] onto the entry. Every path that produces an
+    /// entry — a disk read, a star, a `POST /library` — runs this, so "an entry
+    /// states where it works" holds by construction instead of by convention.
+    pub(crate) fn stamp_isolation(&mut self) {
+        self.isolated_worktree = self.normalized_isolation();
+    }
+}
+
+/// Deserialize one library file and make its isolation explicit (#655).
+///
+/// The single door onto the on-disk format: `list`, `get`, `find_by_name` and
+/// `find_path_by_name` all read through it, so a pre-#655 entry (no
+/// `isolated_worktree` line) is seen by everything downstream as carrying its
+/// type's default — not as a silence that would read `diverged` against a node
+/// sitting on that very default.
+fn parse_entry(contents: &str) -> Option<LibraryEntry> {
+    let mut entry = serde_yaml::from_str::<LibraryEntry>(contents).ok()?;
+    entry.stamp_isolation();
+    Some(entry)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,7 +138,7 @@ pub(crate) fn list() -> Vec<LibraryEntry> {
             continue;
         }
         if let Ok(contents) = std::fs::read_to_string(&path) {
-            if let Ok(entry) = serde_yaml::from_str::<LibraryEntry>(&contents) {
+            if let Some(entry) = parse_entry(&contents) {
                 entries.push(entry);
             }
         }
@@ -109,7 +155,7 @@ pub(crate) fn get(name: &str) -> Option<LibraryEntry> {
     // `-N` suffix, and an unparseable slug file (0-byte remnant of an interrupted
     // write) must not shadow it — `list` would surface a name `get` 404s on.
     if let Ok(contents) = std::fs::read_to_string(&path) {
-        if let Ok(entry) = serde_yaml::from_str::<LibraryEntry>(&contents) {
+        if let Some(entry) = parse_entry(&contents) {
             if entry.name == name {
                 return Some(entry);
             }
@@ -126,7 +172,7 @@ fn find_by_name(dir: &Path, name: &str) -> Option<LibraryEntry> {
             continue;
         }
         if let Ok(contents) = std::fs::read_to_string(&path) {
-            if let Ok(lib_entry) = serde_yaml::from_str::<LibraryEntry>(&contents) {
+            if let Some(lib_entry) = parse_entry(&contents) {
                 if lib_entry.name == name {
                     return Some(lib_entry);
                 }
@@ -146,7 +192,12 @@ pub(crate) fn save(entry: &LibraryEntry) -> Result<(), String> {
         dir.join(format!("{slug}.yaml"))
     });
 
-    let yaml = serde_yaml::to_string(entry).map_err(|e| format!("serialization error: {e}"))?;
+    // #655: the file on disk states where the entry works, including at the
+    // type's default — the same discipline `normalize_node_value` applies to a
+    // pipeline Document, so a starred node and its library file read alike.
+    let mut entry = entry.clone();
+    entry.stamp_isolation();
+    let yaml = serde_yaml::to_string(&entry).map_err(|e| format!("serialization error: {e}"))?;
     std::fs::write(&path, yaml).map_err(|e| format!("write error: {e}"))?;
     Ok(())
 }
@@ -166,7 +217,7 @@ fn find_path_by_name(dir: &Path, name: &str) -> Option<PathBuf> {
     let direct = dir.join(format!("{slug}.yaml"));
     if direct.exists() {
         if let Ok(contents) = std::fs::read_to_string(&direct) {
-            if let Ok(entry) = serde_yaml::from_str::<LibraryEntry>(&contents) {
+            if let Some(entry) = parse_entry(&contents) {
                 if entry.name == name {
                     return Some(direct);
                 }
@@ -180,7 +231,7 @@ fn find_path_by_name(dir: &Path, name: &str) -> Option<PathBuf> {
             continue;
         }
         if let Ok(contents) = std::fs::read_to_string(&path) {
-            if let Ok(lib_entry) = serde_yaml::from_str::<LibraryEntry>(&contents) {
+            if let Some(lib_entry) = parse_entry(&contents) {
                 if lib_entry.name == name {
                     return Some(path);
                 }
@@ -193,7 +244,7 @@ fn find_path_by_name(dir: &Path, name: &str) -> Option<PathBuf> {
 // Only this module's unit tests call it; kept as a tested helper.
 #[allow(dead_code)]
 pub(crate) fn entry_from_node(node: &pipeline::NodeDef, prompt: &str) -> LibraryEntry {
-    LibraryEntry {
+    let mut entry = LibraryEntry {
         name: node.name.clone(),
         node_type: node.node_type.clone(),
         inputs: node.inputs.clone(),
@@ -212,7 +263,14 @@ pub(crate) fn entry_from_node(node: &pipeline::NodeDef, prompt: &str) -> Library
         max_iter: None,
         branches: None,
         prompt: prompt.to_string(),
-    }
+        // #655/ADR-0060: the node's workspace is part of what gets starred. Read
+        // through `stamp_isolation` below, so a node whose document is silent
+        // stars as its type's default rather than as a silence — otherwise the
+        // very node that produced the entry would read `diverged` against it.
+        isolated_worktree: node.isolated_worktree,
+    };
+    entry.stamp_isolation();
+    entry
 }
 
 // Only this module's unit tests call it; kept as a tested helper.
@@ -989,9 +1047,10 @@ mod tests {
 
     fn make_node(name: &str) -> pipeline::NodeDef {
         pipeline::NodeDef {
+            isolated_worktree: None,
             id: "test-id".to_string(),
             name: name.to_string(),
-            node_type: pipeline::NodeType::DocOnly,
+            node_type: pipeline::NodeType::Agent,
             inputs: vec![pipeline::Port {
                 name: "in".to_string(),
                 repeated: false,
@@ -1071,7 +1130,8 @@ mod tests {
 
             let entry1 = LibraryEntry {
                 name: "Alpha".to_string(),
-                node_type: pipeline::NodeType::DocOnly,
+                node_type: pipeline::NodeType::Agent,
+                isolated_worktree: Some(true),
                 inputs: vec![],
                 outputs: vec![],
                 interactive: false,
@@ -1115,7 +1175,8 @@ mod tests {
 
             let entry = LibraryEntry {
                 name: "Typed Reviewer".to_string(),
-                node_type: pipeline::NodeType::DocOnly,
+                node_type: pipeline::NodeType::Agent,
+                isolated_worktree: Some(true),
                 inputs: vec![],
                 outputs: vec![],
                 interactive: false,
@@ -1172,7 +1233,9 @@ mod tests {
     fn yaml_round_trip_lossless() {
         let entry = LibraryEntry {
             name: "Complex Node".to_string(),
-            node_type: pipeline::NodeType::CodeMutating,
+            node_type: pipeline::NodeType::Agent,
+            isolated_worktree: Some(true),
+            // #345/#296: a per-node model must round-trip losslessly.
             model: Some("opus".to_string()),
             effort: Some("low".to_string()),
             inputs: vec![
@@ -1238,7 +1301,8 @@ mod tests {
         // that does reads `diverged` against a library file that never had one.
         let entry = LibraryEntry {
             name: "Plain".to_string(),
-            node_type: pipeline::NodeType::DocOnly,
+            node_type: pipeline::NodeType::Agent,
+            isolated_worktree: Some(true),
             inputs: vec![],
             outputs: vec![],
             interactive: false,
@@ -1269,7 +1333,8 @@ mod tests {
         // library entry written before the key existed.
         let entry = LibraryEntry {
             name: "Plain".to_string(),
-            node_type: pipeline::NodeType::DocOnly,
+            node_type: pipeline::NodeType::Agent,
+            isolated_worktree: Some(true),
             inputs: vec![],
             outputs: vec![],
             interactive: false,
@@ -1317,12 +1382,126 @@ mod tests {
         });
     }
 
+    /// #655/ADR-0060: an entry states where it works, and the statement survives
+    /// the disk. Not "carries the field": a saved Agent parked in the Run's
+    /// worktree must come back parked there, or every instantiation would fork.
+    #[test]
+    fn isolation_round_trips_through_disk() {
+        with_temp_home(|| {
+            for (node_type, isolated) in [
+                (pipeline::NodeType::Agent, false),
+                (pipeline::NodeType::Agent, true),
+                (pipeline::NodeType::Script, true),
+                (pipeline::NodeType::Script, false),
+            ] {
+                let mut node = make_node("Traveller");
+                node.node_type = node_type.clone();
+                node.isolated_worktree = Some(isolated);
+                save(&entry_from_node(&node, "p")).unwrap();
+                assert_eq!(
+                    get("Traveller").unwrap().isolated_worktree,
+                    Some(isolated),
+                    "{node_type:?} isolated={isolated}"
+                );
+            }
+        });
+    }
+
+    /// The entry states its choice even when the node was silent about it — the
+    /// #345 discipline applied to isolation. A silence on disk would make the very
+    /// node that produced the entry read `diverged` against it.
+    #[test]
+    fn entry_from_node_stamps_the_type_default() {
+        let mut agent = make_node("Silent Agent");
+        assert_eq!(agent.isolated_worktree, None);
+        assert_eq!(
+            entry_from_node(&agent, "p").isolated_worktree,
+            Some(true),
+            "a silent agent stars as isolated"
+        );
+
+        agent.node_type = pipeline::NodeType::Script;
+        assert_eq!(
+            entry_from_node(&agent, "p").isolated_worktree,
+            Some(false),
+            "a silent script stars on the Run's worktree"
+        );
+
+        // A type that carries no isolation drops a stray value rather than
+        // round-tripping a line nobody may edit (mirrors `stamp_isolation_default`).
+        agent.node_type = pipeline::NodeType::Merge;
+        agent.isolated_worktree = Some(false);
+        assert_eq!(entry_from_node(&agent, "p").isolated_worktree, None);
+    }
+
+    /// A starred Merge/Start/End writes no isolation line at all.
+    #[test]
+    fn isolation_key_is_absent_for_types_that_carry_none() {
+        let mut node = make_node("Gatherer");
+        node.node_type = pipeline::NodeType::Merge;
+        let yaml = serde_yaml::to_string(&entry_from_node(&node, "p")).unwrap();
+        assert!(
+            !yaml.contains("isolated_worktree"),
+            "isolation leaked onto a Merge entry:\n{yaml}"
+        );
+    }
+
+    /// #655: two nodes that differ only by where they work are NOT the same
+    /// content — the star must say so. Same trap as #345/#424, one field later.
+    #[test]
+    fn sync_state_diverges_on_isolation_change() {
+        with_temp_home(|| {
+            let mut node = make_node("Worker");
+            node.isolated_worktree = Some(false);
+            save(&entry_from_node(&node, "prompt")).unwrap();
+            assert_eq!(sync_state(&node, "prompt"), SyncState::Synced);
+
+            node.isolated_worktree = Some(true);
+            assert_eq!(sync_state(&node, "prompt"), SyncState::Diverged);
+
+            // Going silent is going back to the Agent default (isolated), which
+            // still differs from the entry's explicit `false`.
+            node.isolated_worktree = None;
+            assert_eq!(sync_state(&node, "prompt"), SyncState::Diverged);
+        });
+    }
+
+    /// A pre-#655 entry file carries no isolation line. Reading it as a silence
+    /// would flip every already-starred node to `diverged` on upgrade, so the
+    /// read stamps the type's default instead — the same migration-free posture
+    /// `compute_drift` takes for pre-#395 hashes.
+    #[test]
+    fn pre_655_entry_reads_as_its_type_default() {
+        with_temp_home(|| {
+            let mut node = make_node("Legacy");
+            node.isolated_worktree = None;
+
+            // The pre-#655 file: today's entry with the isolation line removed.
+            let today = serde_yaml::to_string(&entry_from_node(&node, "p")).unwrap();
+            let legacy: String = today
+                .lines()
+                .filter(|l| !l.starts_with("isolated_worktree"))
+                .map(|l| format!("{l}\n"))
+                .collect();
+            assert_ne!(legacy, today, "the fixture must actually drop the line");
+
+            let dir = library_dir().unwrap();
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("legacy.yaml"), legacy).unwrap();
+
+            assert_eq!(get("Legacy").unwrap().isolated_worktree, Some(true));
+            assert_eq!(list()[0].isolated_worktree, Some(true));
+            assert_eq!(sync_state(&node, "p"), SyncState::Synced);
+        });
+    }
+
     #[test]
     fn list_is_sorted_alphabetically() {
         with_temp_home(|| {
             let base = LibraryEntry {
                 name: String::new(),
-                node_type: pipeline::NodeType::DocOnly,
+                node_type: pipeline::NodeType::Agent,
+                isolated_worktree: Some(true),
                 inputs: vec![],
                 outputs: vec![],
                 interactive: false,
@@ -1361,7 +1540,7 @@ mod tests {
 
     fn sample_pipeline_yaml(name: &str) -> String {
         format!(
-            "name: {name}\nnodes:\n  - id: start\n    name: Start\n    type: start\n    outputs:\n      - name: user_prompt\n  - id: planner\n    name: Planner\n    type: doc-only\n    inputs:\n      - name: in\n    outputs:\n      - name: plan\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\nedges:\n  - source: {{ node: start, port: user_prompt }}\n    target: {{ node: planner, port: in }}\n  - source: {{ node: planner, port: plan }}\n    target: {{ node: end, port: result }}\n"
+            "name: {name}\nnodes:\n  - id: start\n    name: Start\n    type: start\n    outputs:\n      - name: user_prompt\n  - id: planner\n    name: Planner\n    type: agent\n    isolated_worktree: false\n    inputs:\n      - name: in\n    outputs:\n      - name: plan\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\nedges:\n  - source: {{ node: start, port: user_prompt }}\n    target: {{ node: planner, port: in }}\n  - source: {{ node: planner, port: plan }}\n    target: {{ node: end, port: result }}\n"
         )
     }
 
@@ -1646,7 +1825,8 @@ mod tests {
     fn json_round_trip_preserves_all_port_fields() {
         let entry = LibraryEntry {
             name: "Typed Node".to_string(),
-            node_type: pipeline::NodeType::DocOnly,
+            node_type: pipeline::NodeType::Agent,
+            isolated_worktree: Some(true),
             model: None,
             effort: None,
             inputs: vec![
@@ -1743,7 +1923,8 @@ mod tests {
         with_temp_home(|| {
             let entry = LibraryEntry {
                 name: "Schema Node".to_string(),
-                node_type: pipeline::NodeType::CodeMutating,
+                node_type: pipeline::NodeType::Agent,
+                isolated_worktree: Some(true),
                 model: None,
                 effort: None,
                 inputs: vec![pipeline::Port {
@@ -2013,6 +2194,42 @@ mod tests {
         assert_ne!(h1, h2);
     }
 
+    /// #655/ADR-0060: isolation is content, so it moves the library's digest.
+    /// The star ignores layout (#355/#395) — but where a Node works is not
+    /// layout: a promoted pipeline whose Agent moves out of the Run's worktree
+    /// has drifted, and the badge has to say so.
+    #[test]
+    fn content_hash_changes_on_isolation_diff() {
+        let prompts = HashMap::new();
+        let shared = sample_pipeline_yaml("Same");
+        assert!(shared.contains("isolated_worktree: false"));
+        let forked = shared.replace("isolated_worktree: false", "isolated_worktree: true");
+        assert_ne!(
+            pipelines::content_hash(&shared, &prompts),
+            pipelines::content_hash(&forked, &prompts),
+            "two pipelines differing only by isolation are not the same content",
+        );
+    }
+
+    /// The other half of the same claim: a pipeline SILENT about isolation hashes
+    /// like one that spells out the default, because the parser stamps it. Without
+    /// this, saving a hand-written file from the canvas would read as drift.
+    #[test]
+    fn content_hash_ignores_a_silent_default() {
+        let prompts = HashMap::new();
+        let spelled = sample_pipeline_yaml("Same");
+        let silent = spelled.replace("    isolated_worktree: false\n", "");
+        assert_ne!(silent, spelled, "the fixture must actually drop the line");
+        // `agent` defaults to isolated, so the silence is only equivalent once the
+        // spelled-out value matches that default.
+        let spelled_default =
+            spelled.replace("isolated_worktree: false", "isolated_worktree: true");
+        assert_eq!(
+            pipelines::content_hash(&silent, &prompts),
+            pipelines::content_hash(&spelled_default, &prompts),
+        );
+    }
+
     #[test]
     fn content_hash_changes_on_prompt_diff() {
         let yaml = sample_pipeline_yaml("Same");
@@ -2171,7 +2388,7 @@ mod tests {
         format!(
             "name: {name}\nversion: '1.0'\nnodes:\n\
              - id: start\n  name: Start\n  type: start\n  outputs:\n  - name: user_prompt\n  view: {{x: 300, y: 60}}\n\
-             - id: planner\n  name: Planner\n  type: doc-only\n  outputs:\n  - name: plan\n  view: {{x: {planner_x}, y: 260}}\n\
+             - id: planner\n  name: Planner\n  type: agent\n  isolated_worktree: false\n  outputs:\n  - name: plan\n  view: {{x: {planner_x}, y: 260}}\n\
              - id: end\n  name: End\n  type: end\n  inputs:\n  - name: result\n  view: {{x: 300, y: 460}}\n\
              edges:\n\
              - source: {{node: start, port: user_prompt}}\n  target: {{node: planner, port: in}}\n\
@@ -2223,11 +2440,13 @@ mod tests {
 
     #[test]
     fn content_hash_ignores_serializer_reformatting() {
-        // A canvas save rewrites the *whole* file in the serializer's style, so on
-        // a hand-written pipeline the first trivial edit changes far more bytes
-        // than the node that moved. Same document as `laid_out_pipeline("Demo",
-        // 300, "")`, reserialized.
-        let reserialized = "name: Demo\nversion: \"1.0\"\nnodes:\n  - id: start\n    type: start\n    name: Start\n    view:\n      y: 60\n      x: 300\n    outputs:\n      - name: user_prompt\n        repeated: false\n        side: right\n        port_type: markdown\n  - id: planner\n    type: doc-only\n    name: Planner\n    view:\n      y: 260\n      x: 300\n    outputs:\n      - name: plan\n        side: right\n  - id: end\n    type: end\n    name: End\n    view:\n      y: 460\n      x: 300\n    inputs:\n      - name: result\n        side: left\nedges:\n  - target: {node: planner, port: in}\n    source: {node: start, port: user_prompt}\n  - target: {node: end, port: result}\n    source: {node: planner, port: plan}\n";
+        // The amplifier from the reproduction: a canvas save rewrites the *whole*
+        // file in the serializer's style, so on a hand-written pipeline the first
+        // trivial edit changes far more bytes than the node that moved.
+        // Same document as `laid_out_pipeline("Demo", 300, "")`: indented block
+        // sequences, double-quoted version, block-style `view`, keys reordered, and
+        // port defaults spelled out instead of left to the parser.
+        let reserialized = "name: Demo\nversion: \"1.0\"\nnodes:\n  - id: start\n    type: start\n    name: Start\n    view:\n      y: 60\n      x: 300\n    outputs:\n      - name: user_prompt\n        repeated: false\n        side: right\n        port_type: markdown\n  - id: planner\n    type: agent\n    isolated_worktree: false\n    name: Planner\n    view:\n      y: 260\n      x: 300\n    outputs:\n      - name: plan\n        side: right\n  - id: end\n    type: end\n    name: End\n    view:\n      y: 460\n      x: 300\n    inputs:\n      - name: result\n        side: left\nedges:\n  - target: {node: planner, port: in}\n    source: {node: start, port: user_prompt}\n  - target: {node: end, port: result}\n    source: {node: planner, port: plan}\n";
         let prompts = HashMap::new();
         let handwritten = laid_out_pipeline("Demo", 300, "");
         assert_ne!(
@@ -2267,7 +2486,7 @@ mod tests {
             ),
             (
                 "per-node model",
-                base.replace("  type: doc-only", "  type: doc-only\n  model: opus"),
+                base.replace("  type: agent", "  type: agent\n  model: opus"),
             ),
             (
                 "edge condition",
@@ -2280,7 +2499,7 @@ mod tests {
                 "added node",
                 base.replace(
                     "edges:",
-                    "- id: extra\n  name: Extra\n  type: doc-only\n  outputs:\n  - name: o\nedges:",
+                    "- id: extra\n  name: Extra\n  type: agent\n  isolated_worktree: false\n  outputs:\n  - name: o\nedges:",
                 ),
             ),
             (

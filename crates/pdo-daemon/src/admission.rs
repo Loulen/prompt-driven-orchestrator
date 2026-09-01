@@ -154,6 +154,7 @@ mod tests {
             run.nodes.insert(
                 (*id).into(),
                 NodeState {
+                    isolated_worktree: None,
                     harness: None,
                     cost: None,
                     node_id: (*id).into(),
@@ -167,6 +168,7 @@ mod tests {
                     frontmatter_retries: 0,
                     frontmatter_violations: Vec::new(),
                     missing_outputs: Vec::new(),
+                    delivery: None,
                 },
             );
         }

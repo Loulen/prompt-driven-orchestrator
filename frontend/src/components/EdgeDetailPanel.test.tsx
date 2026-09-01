@@ -9,7 +9,7 @@ function reviewer(): NodeDef {
   return {
     id: "reviewer",
     name: "reviewer",
-    type: "doc-only",
+    type: "agent",
     inputs: [{ name: "task", repeated: false, side: "left" }],
     outputs: [
       {
@@ -31,7 +31,7 @@ function impl(): NodeDef {
   return {
     id: "impl",
     name: "implementer",
-    type: "code-mutating",
+    type: "agent",
     inputs: [{ name: "review", repeated: false, side: "left" }],
     outputs: [{ name: "diff", repeated: false, side: "right" }],
     interactive: false,

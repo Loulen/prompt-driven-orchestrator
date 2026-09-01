@@ -53,7 +53,7 @@ const OUTPUT: Complete<PortDef> = {
 const NODE: Complete<NodeDef> = {
   id: "n1",
   name: "Node One",
-  type: "code-mutating",
+  type: "agent",
   inputs: [INPUT],
   outputs: [OUTPUT],
   interactive: true,
@@ -75,6 +75,9 @@ const NODE: Complete<NodeDef> = {
   harnesses: { claude: { model: "opus", effort: "low" } },
   agent_choice: { mode: "profile", profile_id: "deep-work" },
   provisioning: { copy: [".env"], hardlink: [], symlink: [] },
+  // #653/ADR-0060: same caveat again — the emission proof is in
+  // `serializePipeline.test.ts` ("an agent always writes its isolation line").
+  isolated_worktree: false,
 };
 const EDGE: Complete<EdgeDef> = {
   source: { node: "n1", port: "out" },

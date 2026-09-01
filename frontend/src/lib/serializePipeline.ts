@@ -31,6 +31,7 @@ import type {
 } from "../types";
 // #550: the per-harness fold (pure, `../types`-only) — keeps this module pure.
 import { foldNodeIntoHarnesses } from "./harness";
+import { nodeIsolation } from "./nodeIsolation";
 
 /**
  * Drops the null-valued keys of every frontmatter declaration (#457).
@@ -92,6 +93,12 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
       type: n.type,
     };
     if (n.interactive) node.interactive = true;
+    // #653/ADR-0060: where the node works, written UNCONDITIONALLY for an
+    // `agent`/`script` — even at the editor default. A document that omits the
+    // line makes the reader recall a default; one that states it does not. Never
+    // emitted for `merge` (isolated by construction) or a structural node.
+    const isolation = nodeIsolation(n);
+    if (isolation !== null) node.isolated_worktree = isolation;
     // #550/ADR-0046: the harness axis replaces flat `model:`/`effort:`. The pin is
     // emitted when set; the flat model/effort view is folded back into the
     // resolved harness's entry in the per-harness `harnesses` map, emitted only
@@ -291,6 +298,10 @@ export function exportNodeAsYaml(node: NodeDef, prompt: string): string {
     type: node.type,
   };
   if (node.interactive) obj.interactive = true;
+  // #653: same unconditional emit as `pipelineToYamlObject` — an exported node
+  // carries its worktree placement, so a re-import does not re-guess it.
+  const isolation = nodeIsolation(node);
+  if (isolation !== null) obj.isolated_worktree = isolation;
   if (node.pin_harness) obj.pin_harness = node.pin_harness;
   if (node.agent_choice && node.agent_choice.mode !== "inherit") {
     obj.agent_choice = node.agent_choice;
@@ -327,7 +338,15 @@ function dumpYaml(val: unknown, indent: number): string {
   if (typeof val === "boolean") return val ? "true" : "false";
   if (typeof val === "number") return String(val);
   if (typeof val === "string") {
-    if (val.includes("\n") || val.includes(":") || val.includes("#") || val.includes('"') || val === "") {
+    if (
+      val.includes("\n") ||
+      val.includes(":") ||
+      val.includes("#") ||
+      val.includes('"') ||
+      val === "" ||
+      /^[!&*[\]{},|>@`%]/.test(val) ||
+      /[[\]{},]/.test(val)
+    ) {
       return JSON.stringify(val);
     }
     if (/^\d/.test(val) || val === "true" || val === "false" || val === "null") {

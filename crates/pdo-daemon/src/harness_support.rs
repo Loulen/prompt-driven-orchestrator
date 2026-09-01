@@ -1,30 +1,25 @@
 //! The published support matrix — capability × harness, **rendered from the code
 //! that declares it** (#617, ADR-0045/0051).
 //!
-//! PDO's instrumentation is unequal on purpose: everything beyond launching a
-//! harness is a capability written harness by harness ([`crate::harness_probes`]).
-//! That inequality is only honest if it is **published** — which is this module.
+//! Everything beyond launching a harness is a capability written harness by
+//! harness ([`crate::harness_probes`]). This module publishes that matrix.
 //!
 //! The table has **one source of truth**: every ✅/❌ is read from
 //! [`crate::harness_probes::probes_for`] at render time, so adding a harness or a
 //! capability moves the table with no second edit, and `make check` fails if the
 //! committed block has drifted ([`check`]). Don't hand-write a cell.
 //!
-//! Two things cannot be read off the dispatch table, so they are declared here:
-//!
-//! - the **motive** of each absence ([`ABSENCES`]) — prose, not a boolean, and
-//!   enforced by [`tests::every_absence_on_the_floor_has_a_motive`] so the table
-//!   can never publish a bare ❌;
-//! - the **last validated version** of each binary
-//!   ([`crate::harness_registry::validated_version`]) — a documented bound, never a
-//!   guard: PDO launches on any installed version, silently (out of scope, #612).
+//! The **last validated version** of each binary cannot be read off the dispatch
+//! table, so [`crate::harness_registry::validated_version`] declares it. This is a
+//! documented bound, not a guard: PDO launches on any installed version (out of
+//! scope, #612).
 //!
 //! The *mechanism* behind a present capability is not declared here either: each
 //! capability enum labels its own variants (`CostSource::label`, …), so the table
 //! can never name a mechanism the code no longer dispatches to.
 
 use crate::harness_probes::probes_for;
-use crate::harness_registry::{embedded_floor, validated_version, COPILOT, OPENCODE};
+use crate::harness_registry::{embedded_floor, validated_version};
 
 /// The HTML comment opening the generated block in the README. Everything between
 /// this line and [`END_MARKER`] is owned by the generator.
@@ -74,30 +69,12 @@ impl Capability {
     /// actually costs them.
     pub(crate) fn blurb(self) -> &'static str {
         match self {
-            Capability::Cost => {
-                "Turn a Run into a dollar figure. Absent ⇒ the Run's cost reads \
-                                 \"—\" and names the harness, never `$0`"
-            }
-            Capability::Transcript => {
-                "Find the session's transcript on disk — what cost and end-of-turn read"
-            }
-            Capability::TurnEnd => {
-                "Complete a node by itself when its turn ends. Absent ⇒ the \
-                                    agent runs `pdo complete`, or you do"
-            }
-            Capability::UsageLimit => {
-                "Notice a session parked on the harness's usage-limit menu \
-                                       (informational, no recovery)"
-            }
-            Capability::Staging => {
-                "Hold a sandboxed session's staged home — credentials, \
-                                    settings, pre-granted trust"
-            }
-            Capability::ContextUsage => {
-                "Measure a session's context-window peak, in tokens, for Stats → \
-                                        Performance (#585). Absent ⇒ no Context column for the \
-                                        harness, never an invented reading"
-            }
+            Capability::Cost => "Show the Run cost",
+            Capability::Transcript => "Find the session transcript",
+            Capability::TurnEnd => "Complete a node when its turn ends",
+            Capability::UsageLimit => "Detect the harness usage-limit menu",
+            Capability::Staging => "Stage credentials, settings, and trust in a sandbox",
+            Capability::ContextUsage => "Show peak context-window usage",
         }
     }
 
@@ -117,76 +94,6 @@ impl Capability {
     }
 }
 
-/// Why an embedded harness is **absent** on a capability. Declared, because a
-/// motive is prose; enforced, because a missing entry fails a test rather than
-/// publishing a bare ❌.
-///
-/// A data-declared harness needs no row: it is absent on all six for one reason —
-/// PDO carries no code for it — and the block says that in a sentence.
-const ABSENCES: &[(&str, Capability, &str)] = &[
-    (
-        OPENCODE,
-        Capability::Cost,
-        "It writes its own per-message cost into a SQLite in four buckets that do not map onto \
-         `claude`'s. A cost is code, never a declared mini-language (ADR-0045), and nobody has \
-         written that code yet.",
-    ),
-    (
-        OPENCODE,
-        Capability::Transcript,
-        "It migrated its sessions into a SQLite and left months of dead JSON on disk. A store is \
-         not a contract, so PDO declares no resolution rather than read zeros off stale files.",
-    ),
-    (
-        OPENCODE,
-        Capability::TurnEnd,
-        "It exposes no end-of-turn signal PDO can read: its argv template carries no `{settings}` \
-         hole for a `Stop` hook, and it has no transcript for a sweep to tail (see above).",
-    ),
-    (
-        OPENCODE,
-        Capability::UsageLimit,
-        "The menu wording is `claude`'s. Matching another harness's pane against it would invent \
-         a state, and the probe triggers no recovery anyway (ADR-0012).",
-    ),
-    (
-        OPENCODE,
-        Capability::Staging,
-        "Configuring a harness is a documented prerequisite, not PDO code. A sandboxed Run on it \
-         holds by your image and the profile's `$HOME` exceptions, and PDO says so once, visibly.",
-    ),
-    (
-        OPENCODE,
-        Capability::ContextUsage,
-        "Its own SQLite reports token usage in four buckets that do not map onto `claude`'s \
-         (see Cost above), and it carries no transcript PDO can tail (see Transcript above) — a \
-         context peak is code, written per harness (#585), and nobody has written that code yet.",
-    ),
-    (
-        COPILOT,
-        Capability::UsageLimit,
-        "The menu wording is `claude`'s, its own documentation admits the textual anchor drifts \
-         each release, and the probe triggers no recovery (ADR-0012). Declaring it absent \
-         degrades nothing actionable.",
-    ),
-    (
-        COPILOT,
-        Capability::Staging,
-        "Configuring a harness is a documented prerequisite, not PDO code (ADR-0031). A sandboxed \
-         Run on it holds by your image and the profile's `$HOME` exceptions, and PDO says so \
-         once, visibly.",
-    ),
-];
-
-/// The declared motive for `harness` being absent on `capability`, or `None` when
-/// none was declared (which a test forbids for the embedded floor).
-pub(crate) fn absence_motive(harness: &str, capability: Capability) -> Option<&'static str> {
-    ABSENCES
-        .iter()
-        .find(|(h, c, _)| *h == harness && *c == capability)
-        .map(|(_, _, why)| *why)
-}
-
 /// Render the support block — everything that goes between the two markers.
 ///
 /// Pure: no IO, no clock. Harness axis = [`embedded_floor`] in declaration order,
@@ -201,10 +108,7 @@ pub fn render() -> String {
          run `make support-table`. `make check` fails if this block has drifted. -->\n\n",
     );
     out.push_str(
-        "PDO ships these harnesses compiled in. **Launching, attaching, resuming and completing a \
-         node work on every one of them.** Everything *beyond* launching is a **capability**, \
-         written harness by harness — and a harness that lacks one says so rather than quietly \
-         doing nothing.\n\n",
+        "PDO can launch, attach, resume, and complete nodes with every built-in harness.\n\n",
     );
 
     out.push_str("| Capability | What PDO does with it |");
@@ -221,7 +125,10 @@ pub fn render() -> String {
         out.push_str(&format!("| **{}** | {} |", cap.title(), cap.blurb()));
         for h in &harnesses {
             match cap.mechanism(h) {
-                Some(mechanism) => out.push_str(&format!(" ✅ {mechanism} |")),
+                Some(mechanism) => {
+                    let concise = mechanism.replace(" — ", ": ");
+                    out.push_str(&format!(" ✅ {concise} |"));
+                }
                 None => out.push_str(" ❌ |"),
             }
         }
@@ -229,36 +136,12 @@ pub fn render() -> String {
     }
 
     out.push_str(
-        "\nThe version beside each harness is the **last validated** one — the build PDO's \
-         knowledge of that harness was measured against. It is a documented bound, not a guard: \
-         PDO launches on whatever version you have installed and says nothing about the \
-         difference. It is written down because the same harness can sit on one machine twice, \
-         months apart, with different event schemas and different model lists — and an inventory \
-         taken against the wrong install is worse than no inventory.\n",
+        "\nEach header shows the last validated harness version; PDO does not enforce it.\n",
     );
 
-    let mut rows: Vec<(String, Capability)> = Vec::new();
-    for h in &harnesses {
-        for cap in Capability::ALL {
-            if cap.mechanism(h).is_none() {
-                rows.push((h.clone(), cap));
-            }
-        }
-    }
-    if !rows.is_empty() {
-        out.push_str("\nWhy a capability is absent:\n\n");
-        out.push_str("| Harness | Capability | Why |\n| --- | --- | --- |\n");
-        for (h, cap) in rows {
-            let why = absence_motive(&h, cap)
-                .unwrap_or("*(undocumented — this is a bug: see `harness_support::ABSENCES`)*");
-            out.push_str(&format!("| `{h}` | {} | {why} |\n", cap.title()));
-        }
-    }
-
     out.push_str(
-        "\nA harness **you** declare in `~/.pdo/harnesses/descriptors.yaml` carries no code, so it \
-         is absent on all six — it still launches, attaches, resumes, and completes when its \
-         agent runs `pdo complete`. That is a legitimate way to run a harness, not a broken one.\n\n",
+        "\nCustom descriptors in `~/.pdo/harnesses/descriptors.yaml` can launch, attach, resume, and \
+         complete nodes through `pdo complete`.\n\n",
     );
     out.push_str(END_MARKER);
     out.push('\n');
@@ -338,44 +221,7 @@ fn first_difference(committed: &str, expected: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::harness_registry::CLAUDE;
-
-    #[test]
-    fn every_absence_on_the_floor_has_a_motive() {
-        for d in embedded_floor() {
-            for cap in Capability::ALL {
-                if cap.mechanism(&d.name).is_none() {
-                    let why = absence_motive(&d.name, cap).unwrap_or_else(|| {
-                        panic!(
-                            "{} is absent on {} with no declared motive — add one to \
-                             harness_support::ABSENCES",
-                            d.name,
-                            cap.title()
-                        )
-                    });
-                    assert!(
-                        why.trim().len() > 20,
-                        "{} / {}: a motive must actually say something",
-                        d.name,
-                        cap.title()
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn no_motive_is_declared_for_a_capability_that_is_present() {
-        // A stale motive for a since-implemented capability is never rendered, so
-        // nothing but this catches the contradiction.
-        for (harness, cap, _) in ABSENCES {
-            assert!(
-                cap.mechanism(harness).is_none(),
-                "{harness} implements {} — remove its stale absence motive",
-                cap.title()
-            );
-        }
-    }
+    use crate::harness_registry::{CLAUDE, COPILOT, OPENCODE};
 
     #[test]
     fn the_matrix_reads_the_dispatch_table_not_a_hand_written_list() {
@@ -412,15 +258,9 @@ mod tests {
         for cap in Capability::ALL {
             assert!(block.contains(cap.title()), "{} missing", cap.title());
         }
-        assert!(block.contains("✅ derived — per-message token usage × the price table"));
+        assert!(block.contains("✅ derived: per-message token usage × the price table"));
         assert!(block.contains("❌"));
-        for (h, cap, why) in ABSENCES {
-            assert!(
-                block.contains(why),
-                "{h} / {} motive not published",
-                cap.title()
-            );
-        }
+        assert!(!block.contains("Why a capability is absent"));
         assert!(block.starts_with(BEGIN_MARKER));
         assert!(block.trim_end().ends_with(END_MARKER));
     }

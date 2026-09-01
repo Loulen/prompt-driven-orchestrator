@@ -11,7 +11,7 @@ function node(id: string, over: Partial<NodeDef> = {}): NodeDef {
   return {
     id,
     name: id,
-    type: "doc-only",
+    type: "agent",
     interactive: false,
     inputs: [],
     outputs: [],
@@ -324,7 +324,7 @@ describe("computePipelineSyncState", () => {
   it("ignores the entry's raw yaml formatting entirely", () => {
     const canvas = def();
     const library = entry(def(), {
-      yaml: '{ "name": "My Pipeline", "nodes": [ { "id": "a", "name": "a", "type": "doc-only" } ] }\n',
+      yaml: '{ "name": "My Pipeline", "nodes": [ { "id": "a", "name": "a", "type": "agent" } ] }\n',
     });
     const result = computePipelineSyncState(canvas, [library]);
     expect(result.state).toBe("synced");

@@ -20,7 +20,7 @@ function makePipeline(): PipelineDef {
       {
         id: "impl",
         name: "implementer",
-        type: "code-mutating",
+        type: "agent",
         inputs: [{ name: "in", repeated: false, side: "left" }],
         outputs: [{ name: "out", repeated: false, side: "right" }],
         interactive: false,
@@ -29,7 +29,7 @@ function makePipeline(): PipelineDef {
       {
         id: "sw1",
         name: "gate",
-        type: "doc-only",
+        type: "agent",
         inputs: [{ name: "in", repeated: false, side: "left" }],
         outputs: [
           { name: "branch", repeated: false, side: "right" },
@@ -41,7 +41,7 @@ function makePipeline(): PipelineDef {
       {
         id: "fe1",
         name: "fixer",
-        type: "code-mutating",
+        type: "agent",
         inputs: [{ name: "in", repeated: false, side: "left" }],
         outputs: [{ name: "fix", repeated: false, side: "right" }],
         interactive: false,
@@ -162,8 +162,8 @@ describe("markerReached", () => {
   it("is false for non-marker node types even on a completed run", () => {
     const run = runWith("completed");
     const others: NodeType[] = [
-      "doc-only",
-      "code-mutating",
+      "agent",
+      "agent",
       "merge",
     ];
     for (const t of others) expect(markerReached(t, run)).toBe(false);
@@ -209,7 +209,7 @@ describe("deriveEditNodes — start/end green-on-complete flag (issue #105, inli
         {
           id: "work",
           name: "implementer",
-          type: "code-mutating",
+          type: "agent",
           inputs: [{ name: "in", repeated: false, side: "left" }],
           outputs: [{ name: "out", repeated: false, side: "right" }],
           interactive: false,
@@ -339,7 +339,7 @@ describe("deriveEditEdges — condition pills always visible at midpoint (issue 
         {
           id: "classifier",
           name: "classifier",
-          type: "doc-only",
+          type: "agent",
           inputs: [{ name: "task", repeated: false, side: "left" }],
           outputs: [{ name: "triage", repeated: false, side: "right" }],
           interactive: false,
@@ -348,7 +348,7 @@ describe("deriveEditEdges — condition pills always visible at midpoint (issue 
         {
           id: "hotfix",
           name: "hotfix",
-          type: "code-mutating",
+          type: "agent",
           inputs: [{ name: "triage", repeated: false, side: "left" }],
           outputs: [{ name: "patch", repeated: false, side: "right" }],
           interactive: false,
@@ -357,7 +357,7 @@ describe("deriveEditEdges — condition pills always visible at midpoint (issue 
         {
           id: "backlog",
           name: "backlog",
-          type: "doc-only",
+          type: "agent",
           inputs: [{ name: "triage", repeated: false, side: "left" }],
           outputs: [{ name: "note", repeated: false, side: "right" }],
           interactive: false,
@@ -406,7 +406,7 @@ describe("deriveEditEdges — condition pills always visible at midpoint (issue 
         {
           id: "a",
           name: "a",
-          type: "doc-only",
+          type: "agent",
           inputs: [],
           outputs: [{ name: "out", repeated: false, side: "right" }],
           interactive: false,
@@ -415,7 +415,7 @@ describe("deriveEditEdges — condition pills always visible at midpoint (issue 
         {
           id: "b",
           name: "b",
-          type: "doc-only",
+          type: "agent",
           inputs: [{ name: "in", repeated: false, side: "left" }],
           outputs: [],
           interactive: false,
@@ -445,7 +445,7 @@ describe("deriveEditEdges — incoming edge anchor side (issue #168)", () => {
         {
           id: "src",
           name: "src",
-          type: "doc-only",
+          type: "agent",
           inputs: [],
           outputs: [{ name: "out", repeated: false, side: "right" }],
           interactive: false,
@@ -455,7 +455,7 @@ describe("deriveEditEdges — incoming edge anchor side (issue #168)", () => {
           id: "dst",
           name: "dst",
           // Emergent: no declared inputs, so the arrow lands on the body (#149).
-          type: "code-mutating",
+          type: "agent",
           inputs: [],
           outputs: [{ name: "out", repeated: false, side: "right" }],
           interactive: false,
@@ -507,7 +507,7 @@ describe("deriveLoopRegions — bounded region rendering (ADR-0011 / #148)", () 
         {
           id: "impl",
           name: "implementer",
-          type: "code-mutating",
+          type: "agent",
           inputs: [],
           outputs: [{ name: "code", repeated: false, side: "right" }],
           interactive: false,
@@ -516,7 +516,7 @@ describe("deriveLoopRegions — bounded region rendering (ADR-0011 / #148)", () 
         {
           id: "rev",
           name: "reviewer",
-          type: "doc-only",
+          type: "agent",
           inputs: [],
           outputs: [{ name: "review", repeated: false, side: "right" }],
           interactive: false,
@@ -611,7 +611,7 @@ describe("buildLoopRegionNodes — box behind, chrome above (#167 / #455)", () =
         {
           id: "impl",
           name: "implementer",
-          type: "code-mutating",
+          type: "agent",
           inputs: [],
           outputs: [{ name: "code", repeated: false, side: "right" }],
           interactive: false,
@@ -620,7 +620,7 @@ describe("buildLoopRegionNodes — box behind, chrome above (#167 / #455)", () =
         {
           id: "rev",
           name: "reviewer",
-          type: "doc-only",
+          type: "agent",
           inputs: [],
           outputs: [{ name: "review", repeated: false, side: "right" }],
           interactive: false,

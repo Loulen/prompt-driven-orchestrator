@@ -45,6 +45,14 @@ pub struct NodeDefInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     pub node_type: String,
+    /// Where this node works (#653, ADR-0060), as the Run's pipeline snapshot
+    /// froze it: `true` ⇒ its own sub-worktree, `false` ⇒ the Run worktree.
+    /// `None` for a type that carries no isolation (`merge` is isolated by
+    /// construction; structural nodes have no worktree of their own) and for a
+    /// pre-#653 snapshot. `skip_serializing_if` keeps the wire byte-identical
+    /// when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolated_worktree: Option<bool>,
     pub view_x: Option<f64>,
     pub view_y: Option<f64>,
     pub inputs: Vec<PortBrief>,
@@ -75,6 +83,16 @@ pub enum EventKind {
     /// projection materialises the node so the incident is visible. Wire form:
     /// `"node_interrupted"`.
     NodeInterrupted,
+    /// PDO delivered a NodeRun's work onto the Run's branch (#654 / ADR-0060):
+    /// its own commits kept, whatever it left behind committed under
+    /// `<node-id> iter-<N>: completed`, then merged back if it was isolated.
+    ///
+    /// Written **only when the branch actually moved** — a NodeRun that left
+    /// nothing writes no commit and no event — and always *before* the terminal
+    /// completion event, so "delivered, then done" is the order the log reads in.
+    /// Payload: `before` / `after`, the two Run-branch tips, projected onto
+    /// [`NodeState::delivery`]. Wire form: `"node_delivered"`.
+    NodeDelivered,
     MergeConflictDetected,
     /// A merge-back conflicted and was resolved **in the node's favour** instead of
     /// failing the Run (#503, ADR-0036): the node's branch had stopped being a
@@ -509,6 +527,14 @@ pub struct NodeState {
     /// snapshot; `skip_serializing_if` keeps the wire byte-identical when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness: Option<String>,
+    /// #653/ADR-0060: the isolation this NodeRun was **frozen** on at spawn,
+    /// read from the `NodeStarted` payload. This — not the current document — is
+    /// what says where the live iteration works, so editing the graph mid-run
+    /// never moves a running node between worktrees. `None` for a node that
+    /// never opened a `NodeStarted`, for a structural node, or for a pre-#653
+    /// snapshot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolated_worktree: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost: Option<NodeCost>,
     pub status: NodeStatus,
@@ -542,6 +568,28 @@ pub struct NodeState {
     /// byte-identical for any non-`script` failure.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub missing_outputs: Vec<String>,
+    /// #654/ADR-0060: what this NodeRun **delivered** onto the Run's branch — the
+    /// two tips its delivery moved the branch between, so `git diff before after`
+    /// is exactly its contribution.
+    ///
+    /// Present for any NodeRun that delivered changes, isolated or not; absent for
+    /// one that delivered nothing (no commit was written) and on any pre-#654 log.
+    /// It is the presence of *changes*, never the node's type or isolation, that
+    /// makes a per-node diff answerable — which is the whole point of recording it
+    /// here rather than re-deriving it from a `pdo/sub-*` branch that a
+    /// non-isolated NodeRun does not have.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<NodeDelivery>,
+}
+
+/// The two Run-branch tips one delivery moved between (#654 / ADR-0060).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NodeDelivery {
+    /// The Run branch's tip before the delivery.
+    pub before: String,
+    /// The Run branch's tip after it. Never equal to `before` — a delivery that
+    /// moved nothing records no event at all.
+    pub after: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1370,6 +1418,7 @@ pub(crate) fn project(events: &[Event]) -> Option<RunState> {
             | EventKind::NodeAwaitingUser
             | EventKind::NodeFailed
             | EventKind::NodeInterrupted
+            | EventKind::NodeDelivered
             | EventKind::NodeStopped
             | EventKind::NodeStale
             | EventKind::NodeInvalidated
@@ -1890,6 +1939,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                     .entry(node_id.clone())
                     .or_insert_with(|| NodeState {
                         harness: None,
+                        isolated_worktree: None,
                         cost: None,
                         node_id: node_id.clone(),
                         status: NodeStatus::Waiting,
@@ -1902,6 +1952,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                         frontmatter_retries: 0,
                         frontmatter_violations: Vec::new(),
                         missing_outputs: Vec::new(),
+                        delivery: None,
                     });
                 node.status = NodeStatus::Waiting;
                 node.iter = iter;
@@ -1926,6 +1977,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                     .entry(node_id.clone())
                     .or_insert_with(|| NodeState {
                         harness: None,
+                        isolated_worktree: None,
                         cost: None,
                         node_id: node_id.clone(),
                         status: NodeStatus::Running,
@@ -1938,6 +1990,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                         frontmatter_retries: 0,
                         frontmatter_violations: Vec::new(),
                         missing_outputs: Vec::new(),
+                        delivery: None,
                     });
                 node.status = NodeStatus::Running;
                 node.iter = iter;
@@ -1961,6 +2014,18 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                     .filter(|s| !s.is_empty())
                 {
                     node.harness = Some(h.to_string());
+                }
+                // #653/ADR-0060: freeze where this NodeRun works, the same way.
+                // A re-spawn of the same iteration re-poses the frozen value
+                // rather than re-reading the (possibly edited) document, so the
+                // recovery path lands back in the working directory it left.
+                if let Some(isolated) = event
+                    .payload
+                    .as_ref()
+                    .and_then(|p| p.get("isolated_worktree"))
+                    .and_then(|v| v.as_bool())
+                {
+                    node.isolated_worktree = Some(isolated);
                 }
                 upsert_iteration(&mut node.iterations, iteration);
             }
@@ -2006,6 +2071,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                         node_id.clone(),
                         NodeState {
                             harness: None,
+                            isolated_worktree: None,
                             cost: None,
                             node_id: node_id.clone(),
                             status: done_status.clone(),
@@ -2023,6 +2089,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                             frontmatter_retries: 0,
                             frontmatter_violations: Vec::new(),
                             missing_outputs: Vec::new(),
+                            delivery: None,
                         },
                     );
                 }
@@ -2123,6 +2190,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                     .entry(node_id.clone())
                     .or_insert_with(|| NodeState {
                         harness: None,
+                        isolated_worktree: None,
                         cost: None,
                         node_id: node_id.clone(),
                         status: NodeStatus::Interrupted,
@@ -2135,6 +2203,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                         frontmatter_retries: 0,
                         frontmatter_violations: Vec::new(),
                         missing_outputs: Vec::new(),
+                        delivery: None,
                     });
                 // Node-level status derives from the LATEST iteration, mirroring
                 // the `NodeFailed` #196/#212 guard: interrupting an older iter
@@ -2216,6 +2285,26 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                 }
             }
         }
+        // #654 / ADR-0060: what the delivery put on the Run's branch. Read from
+        // the payload rather than re-derived, because the tips are the only trace
+        // of a non-isolated NodeRun's contribution — it owns no branch to diff.
+        // The last delivery for the node wins: a re-run of the same node delivers
+        // again, and the diff must show the latest one.
+        EventKind::NodeDelivered => {
+            if let (Some(node_id), Some(payload)) = (&event.node_id, &event.payload) {
+                if let Some(node) = state.nodes.get_mut(node_id) {
+                    if let (Some(before), Some(after)) = (
+                        payload.get("before").and_then(|v| v.as_str()),
+                        payload.get("after").and_then(|v| v.as_str()),
+                    ) {
+                        node.delivery = Some(NodeDelivery {
+                            before: before.to_string(),
+                            after: after.to_string(),
+                        });
+                    }
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -2248,6 +2337,7 @@ fn apply_switch_event(state: &mut RunState, event: &Event) {
                 .entry(node_id.to_string())
                 .or_insert_with(|| NodeState {
                     harness: None,
+                    isolated_worktree: None,
                     cost: None,
                     node_id: node_id.to_string(),
                     status: NodeStatus::Completed,
@@ -2260,6 +2350,7 @@ fn apply_switch_event(state: &mut RunState, event: &Event) {
                     frontmatter_retries: 0,
                     frontmatter_violations: Vec::new(),
                     missing_outputs: Vec::new(),
+                    delivery: None,
                 });
             node.status = NodeStatus::Completed;
             node.completed_at = Some(event.ts.clone());
@@ -3400,6 +3491,7 @@ mod tests {
         assert_eq!(value["harness"], "copilot");
         let bare = super::NodeState {
             harness: None,
+            isolated_worktree: None,
             cost: None,
             node_id: "x".into(),
             status: NodeStatus::Waiting,
@@ -3412,6 +3504,7 @@ mod tests {
             frontmatter_retries: 0,
             frontmatter_violations: vec![],
             missing_outputs: vec![],
+            delivery: None,
         };
         assert!(
             serde_json::to_value(&bare)
@@ -4371,7 +4464,7 @@ mod tests {
 
     fn node_def(id: &str) -> serde_json::Value {
         serde_json::json!({
-            "id": id, "node_type": "doc-only",
+            "id": id, "node_type": "agent", "isolated_worktree": false,
             "inputs": [{"name": "task", "side": "left"}],
             "outputs": [{"name": "out", "side": "right"}]
         })
@@ -4521,7 +4614,7 @@ mod tests {
             EventKind::RunStarted,
             None,
             serde_json::json!({
-                "pipeline_name": "isolated",
+                "pipeline_name": "fan-out",
                 "input": "go",
                 "node_defs": [start_node_def(), end_node_def(), node_def("a"), node_def("b")],
                 "edges": [edge_info("start", "a"), edge_info("start", "b")],
@@ -6320,6 +6413,7 @@ mod tests {
     ) -> NodeState {
         NodeState {
             harness: None,
+            isolated_worktree: None,
             cost: None,
             node_id: id.to_string(),
             status,
@@ -6340,6 +6434,7 @@ mod tests {
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
             missing_outputs: Vec::new(),
+            delivery: None,
         }
     }
 
@@ -7205,14 +7300,14 @@ mod tests {
             "node_defs": [
                 { "id": "start", "inputs": [], "node_type": "start", "outputs": [ { "name": "user_prompt", "side": "right" } ], "view_x": null, "view_y": null },
                 { "id": "end", "inputs": [ { "name": "result", "side": "left" } ], "node_type": "end", "outputs": [], "view_x": null, "view_y": null },
-                { "id": "planner", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "doc-only", "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
-                { "id": "worker", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "doc-only", "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
-                { "id": "auto", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "doc-only", "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
-                { "id": "stopped", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "doc-only", "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
-                { "id": "stale", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "doc-only", "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
-                { "id": "temp", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "doc-only", "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
-                { "id": "interactive", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "doc-only", "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
-                { "id": "sw", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "doc-only", "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null }
+                { "id": "planner", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
+                { "id": "worker", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
+                { "id": "auto", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
+                { "id": "stopped", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
+                { "id": "stale", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
+                { "id": "temp", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
+                { "id": "interactive", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
+                { "id": "sw", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null }
             ],
             "nodes": {
                 "auto": {

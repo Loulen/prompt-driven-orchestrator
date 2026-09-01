@@ -36,7 +36,8 @@ nodes:
     view: { x: 0, y: 200 }
   - id: designer
     name: designer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     prompt_file: ${PIPELINE_NAME}.prompts/designer.md
     inputs:
       - { name: in, side: left }

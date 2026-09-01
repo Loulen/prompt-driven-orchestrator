@@ -337,7 +337,8 @@ nodes:
       - name: user_prompt
   - id: producer
     name: Producer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:
@@ -347,14 +348,16 @@ nodes:
             type: list
   - id: itemizer
     name: Itemizer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: plan
     outputs:
       - name: item_note
   - id: sibling
     name: Sibling
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: in
     outputs:

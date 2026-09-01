@@ -7,7 +7,7 @@ function makeNode(overrides: Partial<NodeDef> = {}): NodeDef {
   return {
     id: "n1",
     name: "Reviewer",
-    type: "doc-only",
+    type: "agent",
     inputs: [{ name: "code", repeated: false, side: "left" }],
     outputs: [{ name: "review", repeated: false, side: "right" }],
     interactive: false,
@@ -19,7 +19,7 @@ function makeNode(overrides: Partial<NodeDef> = {}): NodeDef {
 function makeEntry(overrides: Partial<LibraryEntry> = {}): LibraryEntry {
   return {
     name: "Reviewer",
-    type: "doc-only",
+    type: "agent",
     inputs: [{ name: "code", repeated: false, side: "left" }],
     outputs: [{ name: "review", repeated: false, side: "right" }],
     interactive: false,
@@ -53,7 +53,7 @@ describe("computeSyncState", () => {
   });
 
   it("returns diverged when type differs", () => {
-    const node = makeNode({ type: "code-mutating" });
+    const node = makeNode({ type: "script" });
     const entries = [makeEntry()];
     expect(computeSyncState(node, "You review code.", entries)).toBe("diverged");
   });
@@ -106,6 +106,37 @@ describe("computeSyncState", () => {
     const node = makeNode({ effort: null });
     const entries = [makeEntry()];
     expect(computeSyncState(node, "You review code.", entries)).toBe("synced");
+  });
+
+  it("returns diverged when the workspace differs (#655)", () => {
+    // Two Agents identical but for where they work are NOT the same content:
+    // one forks a sub-worktree, the other writes into the Run's. Same trap as
+    // #345/#424 — nothing but this comparison makes the star say so.
+    const node = makeNode({ isolated_worktree: false });
+    const entries = [makeEntry({ isolated_worktree: true })];
+    expect(computeSyncState(node, "You review code.", entries)).toBe("diverged");
+  });
+
+  it("returns synced when node and entry share the same workspace (#655)", () => {
+    const node = makeNode({ isolated_worktree: false });
+    const entries = [makeEntry({ isolated_worktree: false })];
+    expect(computeSyncState(node, "You review code.", entries)).toBe("synced");
+  });
+
+  it("treats a silent workspace as the type default on both sides (#655)", () => {
+    // A pre-#655 entry states no line, and a node can be silent too. Both mean
+    // "the Agent default", so the star must not read diverged on the silence.
+    expect(computeSyncState(makeNode(), "You review code.", [makeEntry()])).toBe("synced");
+    expect(
+      computeSyncState(makeNode(), "You review code.", [
+        makeEntry({ isolated_worktree: true }),
+      ]),
+    ).toBe("synced");
+    expect(
+      computeSyncState(makeNode({ isolated_worktree: false }), "You review code.", [
+        makeEntry(),
+      ]),
+    ).toBe("diverged");
   });
 
   it("returns diverged when interactive differs", () => {

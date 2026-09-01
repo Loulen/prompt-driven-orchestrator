@@ -3,9 +3,16 @@
 //! "Decompiles" a Claude Code dynamic workflow (`.claude/workflows/*.js`) into a
 //! **draft** PDO [`PipelineDef`].
 //!
-//! **Never execute the imported JS**, and never shell out to node/V8: the daemon
-//! binds `0.0.0.0`, so running an imported file's code would be an RCE. The `.js`
-//! is read as an AST via `oxc`.
+//! - `agent(prompt, opts)` -> an isolated `agent` node (#653): the import maps a
+//!   role, never a guess about what that role will touch.
+//! - `for` / `while` **whose body contains an `agent()`** -> a `bounded` loop
+//!   region; a plumbing loop (no `agent()` in the body) is left alone — the guard
+//!   that prevents a phantom `bounded` (ADR-0016).
+//! - `pipeline(items, s1, s2, …)` -> a `collection` loop region.
+//! - `parallel([…])` -> sibling fan-out edges.
+//! - `if (x OP v) { return / break }` guarding a spawn/return -> a conditional
+//!   `when:` edge (ADR-0002 grammar, ADR-0011 edge-centric routing).
+//! - `opts.schema = {…JSON schema…}` -> frontmatter on the node's output port.
 //!
 //! Prompt extraction has three tiers, referenced elsewhere as N1/N2/N3:
 //! - **N1** static string / no-substitution template -> body **verbatim**.
@@ -409,12 +416,6 @@ impl Importer {
         // which is only computed further down.
         let effort_expr = opts.and_then(|o| object_prop(o, "effort"));
         let effort = effort_expr.and_then(string_literal_value);
-        let isolation_wt = opts
-            .and_then(|o| object_prop(o, "isolation"))
-            .and_then(string_literal_value)
-            .as_deref()
-            == Some("worktree");
-
         let seed = label_static
             .clone()
             .filter(|s| !s.is_empty())
@@ -455,8 +456,7 @@ impl Importer {
             }
         };
 
-        let node_type = infer_node_type(&prompt_body, &display_name, isolation_wt);
-
+        // Output port frontmatter from `opts.schema` (const ref or inline object).
         let frontmatter = opts.and_then(|o| object_prop(o, "schema")).and_then(|s| {
             let s = s.without_parentheses();
             match s {
@@ -490,10 +490,16 @@ impl Importer {
             );
         }
 
+        // #653 / ADR-0060: an imported agent role is an isolated `agent`, full
+        // stop. The pre-#653 importer sniffed the prompt and the label for
+        // mutation keywords to pick between non-isolated and isolated; a
+        // guess about what a foreign prompt will touch is exactly the thing the
+        // explicit isolation line replaces.
         let node = NodeDef {
             id: id.clone(),
             name: display_name,
-            node_type,
+            node_type: NodeType::Agent,
+            isolated_worktree: Some(true),
             inputs: vec![plain_port("in")],
             outputs: vec![out_port],
             interactive: false,
@@ -750,18 +756,13 @@ impl Importer {
             return;
         }
         let mut new_cursor: Cursor = Vec::new();
-        let mut any_mutating = false;
+        let mut any_isolated = false;
         for a in agents {
             // Each sibling is entered from the same upstream sources (fan-out).
             let mut branch_cursor = entry_sources.clone();
             let id = self.emit_agent(a, &mut branch_cursor);
-            if self
-                .nodes
-                .last()
-                .map(|n| n.node_type == NodeType::CodeMutating)
-                == Some(true)
-            {
-                any_mutating = true;
+            if self.nodes.last().map(|n| n.is_isolated()) == Some(true) {
+                any_isolated = true;
             }
             new_cursor.push(Pending {
                 node: id,
@@ -770,8 +771,8 @@ impl Importer {
                 is_else: false,
             });
         }
-        if any_mutating {
-            self.warn("`parallel(...)` avec des nœuds code-mutating — envisage un nœud Merge en aval (lint info-only ADR-0006, pas d'auto-insertion)");
+        if any_isolated {
+            self.warn("`parallel(...)` avec des nœuds isolés — envisage un nœud Merge en aval (lint info-only ADR-0006, pas d'auto-insertion)");
         }
         *cursor = new_cursor;
     }
@@ -882,6 +883,7 @@ fn start_node() -> NodeDef {
         id: "start".into(),
         name: "Start".into(),
         node_type: NodeType::Start,
+        isolated_worktree: None,
         inputs: vec![],
         outputs: vec![plain_port("user_prompt")],
         interactive: false,
@@ -900,6 +902,7 @@ fn end_node(agent_count: usize) -> NodeDef {
         id: "end".into(),
         name: "End".into(),
         node_type: NodeType::End,
+        isolated_worktree: None,
         inputs: vec![plain_port("result")],
         outputs: vec![],
         interactive: false,
@@ -916,26 +919,9 @@ fn end_node(agent_count: usize) -> NodeDef {
     }
 }
 
-fn infer_node_type(prompt: &str, name: &str, isolation_worktree: bool) -> NodeType {
-    if isolation_worktree {
-        return NodeType::CodeMutating;
-    }
-    let hay = format!("{} {}", name.to_lowercase(), prompt.to_lowercase());
-    const MUTATION_KW: &[&str] = &[
-        "commit",
-        "git add",
-        "git merge",
-        "implémente",
-        "implemente",
-        "implement",
-        "worktree",
-    ];
-    if MUTATION_KW.iter().any(|k| hay.contains(k)) {
-        NodeType::CodeMutating
-    } else {
-        NodeType::DocOnly
-    }
-}
+// ---------------------------------------------------------------------------
+// meta name
+// ---------------------------------------------------------------------------
 
 fn extract_meta_name(stmts: &[Statement]) -> Option<String> {
     for stmt in stmts {
@@ -1766,6 +1752,65 @@ mod tests {
             .collect();
         assert_eq!(collection.len(), 1, "pipeline() -> one collection region");
         assert!(collection[0].over.is_some(), "collection carries an `over`");
+    }
+
+    /// #655/ADR-0060: every imported role is an isolated `agent`, and the YAML
+    /// says so out loud — a foreign workflow arrives without an opinion on
+    /// worktrees, and inventing one for it is the guesswork #653 retired.
+    #[test]
+    fn imported_roles_are_isolated_agents_and_the_yaml_says_so() {
+        let src = r#"agent(`Read the docs and summarise.`, { label: 'reader' })"#;
+        let (result, parsed) = import_and_parse(src, "t");
+        let node = parsed.nodes.iter().find(|n| n.name == "reader").unwrap();
+        assert_eq!(node.node_type, NodeType::Agent);
+        assert_eq!(node.isolated_worktree, Some(true));
+        assert!(
+            result.yaml_text.contains("isolated_worktree: true"),
+            "the emitted document must state the isolation:\n{}",
+            result.yaml_text
+        );
+    }
+
+    /// The four signals the pre-#653 importer used to sniff, plus the one #655
+    /// adds: a `collection` region. None of them may move the isolation — a
+    /// read-only-sounding prompt is still an isolated Agent.
+    #[test]
+    fn import_never_infers_isolation_from_prompt_name_outputs_or_collection() {
+        for (label, src) in [
+            (
+                "a read-only-sounding prompt",
+                r#"agent(`Only read the docs. Do not write, edit or commit anything.`, { label: 'reader' })"#,
+            ),
+            (
+                "a documentation-sounding name",
+                r#"agent(`work`, { label: 'docs-writer' })"#,
+            ),
+            (
+                "a schema'd output",
+                r#"agent(`work`, { label: 'reader', schema: { type: 'object', properties: { verdict: { type: 'string' } } } })"#,
+            ),
+            (
+                "a collection member",
+                r#"const items = []; await pipeline(items, (p) => agent(`per-item`, { label: 'reader' }))"#,
+            ),
+            (
+                "an annotated placeholder (N3)",
+                r#"const build = () => 'x'; agent(build(), { label: 'reader' })"#,
+            ),
+        ] {
+            let (_result, parsed) = import_and_parse(src, "t");
+            let node = parsed
+                .nodes
+                .iter()
+                .find(|n| n.node_type == NodeType::Agent)
+                .unwrap_or_else(|| panic!("{label}: no agent node"));
+            assert_eq!(node.node_type, NodeType::Agent, "{label}");
+            assert_eq!(
+                node.isolated_worktree,
+                Some(true),
+                "{label} must not move the isolation"
+            );
+        }
     }
 
     #[test]

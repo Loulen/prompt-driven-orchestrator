@@ -20,7 +20,7 @@ vi.mock("../api", () => ({
   instantiateFromLibrary: vi.fn().mockResolvedValue({
     spec: {
       name: "Test",
-      type: "doc-only",
+      type: "agent",
       inputs: [],
       outputs: [],
       interactive: false,
@@ -36,7 +36,7 @@ vi.mock("../lib/nanoid", () => ({
 function makeEntry(name: string, prompt = "Some prompt"): LibraryEntry {
   return {
     name,
-    type: "doc-only",
+    type: "agent",
     inputs: [{ name: "in", repeated: false }],
     outputs: [{ name: "out", repeated: false }],
     interactive: false,
@@ -134,5 +134,57 @@ describe("LibraryDropdown", () => {
     renderDropdown({ entries: [], onDelete: vi.fn() });
     fireEvent.click(screen.getByTestId("toolbar-library"));
     expect(screen.queryByTestId("library-add-node-from-yaml")).toBeNull();
+  });
+
+  // --- #655 / ADR-0060: the library is isolation-aware -----------------------
+
+  it("names each entry's workspace in the preview", () => {
+    const entries = [
+      makeEntry("Forker"),
+      { ...makeEntry("Sharer"), isolated_worktree: false },
+      { ...makeEntry("Gatherer"), type: "merge" },
+    ];
+    renderDropdown({ entries, onDelete: vi.fn() });
+    fireEvent.click(screen.getByTestId("toolbar-library"));
+
+    // A silent entry (pre-#655 on disk) still reads as the Agent default.
+    expect(screen.getByTestId("library-workspace-isolated")).toHaveTextContent(
+      "Isolated worktree",
+    );
+    expect(screen.getByTestId("library-workspace-shared")).toHaveTextContent("Run worktree");
+    // A Merge carries no workspace, so the row shows no label to argue with.
+    expect(screen.getAllByTestId(/^library-workspace-/)).toHaveLength(2);
+    // …and each row wears its type's canvas glyph rather than a two-letter
+    // badge that only knew `agent`.
+    expect(screen.getAllByTestId("node-icon-agent")).toHaveLength(2);
+    expect(screen.getByTestId("node-icon-merge")).toBeInTheDocument();
+  });
+
+  it("restores the entry's workspace onto the dropped node", async () => {
+    const { instantiateFromLibrary } = await import("../api");
+    vi.mocked(instantiateFromLibrary).mockResolvedValueOnce({
+      spec: {
+        name: "Sharer",
+        type: "agent",
+        inputs: [],
+        outputs: [],
+        interactive: false,
+        isolated_worktree: false,
+      },
+      prompt: "test prompt",
+    });
+
+    renderDropdown({ entries: [makeEntry("Sharer")], onDelete: vi.fn() });
+    fireEvent.click(screen.getByTestId("toolbar-library"));
+    fireEvent.mouseEnter(screen.getByText("Sharer").closest("div.group")!);
+    fireEvent.click(screen.getByTitle("Add to canvas"));
+
+    await vi.waitFor(() => {
+      const tab = useEditStore.getState().openTabs[0];
+      expect(tab.pipeline.nodes).toHaveLength(1);
+      // Not `undefined`: falling back to the type default would fork a
+      // sub-worktree for an Agent its author had parked in the Run's.
+      expect(tab.pipeline.nodes[0].isolated_worktree).toBe(false);
+    });
   });
 });

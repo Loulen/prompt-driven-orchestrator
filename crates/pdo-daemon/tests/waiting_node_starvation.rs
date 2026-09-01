@@ -29,7 +29,7 @@ use pdo_daemon::tmux_session_manager;
 
 const PIPELINE_NAME: &str = "starve";
 
-/// `start` fans out to two `doc-only` nodes that both go `Running` the instant a
+/// `start` fans out to two non-isolated nodes that both go `Running` the instant a
 /// Run is created — each consuming an admission slot — so a single Run of this
 /// pipeline saturates a cap of 2. `leader` alone feeds `end`; `leaf1` is a leaf,
 /// which is what lets us kill it while `leader` stays alive.
@@ -43,14 +43,16 @@ nodes:
       - name: user_prompt
   - id: leaf1
     name: leaf1
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:
       - name: plan
   - id: leader
     name: leader
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:

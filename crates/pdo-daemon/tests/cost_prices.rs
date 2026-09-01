@@ -40,7 +40,8 @@ nodes:
       - { name: user_prompt, side: bottom }
   - id: worker
     name: Worker
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - { name: in, side: top }
     outputs:

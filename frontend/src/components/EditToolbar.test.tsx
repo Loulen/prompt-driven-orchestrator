@@ -61,12 +61,12 @@ describe("EditToolbar", () => {
     expect(onAddNote).not.toHaveBeenCalled();
   });
 
-  it("dropdown Node item calls onAddNode with code-mutating (#307)", async () => {
+  it("dropdown Node item calls onAddNode with agent (#307/#653)", async () => {
     const user = userEvent.setup();
     renderToolbar();
     await user.click(screen.getByTestId("toolbar-add"));
     await user.click(await screen.findByTestId("add-menu-node"));
-    expect(onAddNode).toHaveBeenCalledWith("code-mutating");
+    expect(onAddNode).toHaveBeenCalledWith("agent");
     expect(onAddNote).not.toHaveBeenCalled();
   });
 

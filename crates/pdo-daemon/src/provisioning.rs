@@ -128,6 +128,7 @@ fn repository_paths(repository: &Path) -> Result<Vec<(String, bool)>> {
             }
             let ty = entry.file_type()?;
             if ty.is_dir() {
+                out.push((rel, true));
                 visit(root, &path, out)?;
             } else {
                 out.push((rel, false));
@@ -209,6 +210,9 @@ pub(crate) fn resolve_at_git_ref(
             let excluded = pattern.starts_with('!');
             let mut matched = Vec::new();
             for (path, is_dir) in &paths {
+                if *is_dir && (excluded || mode != ProvisioningMode::Symlink) {
+                    continue;
+                }
                 if matches_pattern(repository, pattern, path, *is_dir)? {
                     matched.push(path.clone());
                 }
@@ -298,6 +302,49 @@ pub(crate) fn resolve_at_git_ref(
         previews.extend(level_previews);
     }
 
+    let directory_paths: Vec<&str> = paths
+        .iter()
+        .filter_map(|(path, is_dir)| is_dir.then_some(path.as_str()))
+        .collect();
+    for directory in directory_paths {
+        let Some(directory_entry) = final_entries.get(directory).cloned() else {
+            continue;
+        };
+        if directory_entry.mode != ProvisioningMode::Symlink {
+            continue;
+        }
+        let prefix = format!("{directory}/");
+        let descendants: Vec<&str> = paths
+            .iter()
+            .filter_map(|(path, _)| path.starts_with(&prefix).then_some(path.as_str()))
+            .collect();
+        let can_link_directory = !descendants.is_empty()
+            && descendants.iter().all(|path| {
+                final_entries.get(*path).is_some_and(|entry| {
+                    entry.mode == ProvisioningMode::Symlink
+                        && entry.origin_scope == directory_entry.origin_scope
+                        && entry.pattern == directory_entry.pattern
+                        && !entry.provided_by_git
+                })
+            });
+        if can_link_directory {
+            final_entries.retain(|path, _| !path.starts_with(&prefix));
+            for preview in &mut previews {
+                if preview.scope == directory_entry.origin_scope
+                    && preview.mode == directory_entry.mode
+                    && preview.pattern == directory_entry.pattern
+                {
+                    preview.paths.retain(|path| !path.starts_with(&prefix));
+                }
+            }
+        } else {
+            final_entries.remove(directory);
+            for preview in &mut previews {
+                preview.paths.retain(|path| path != directory);
+            }
+        }
+    }
+
     Ok(ProvisioningPlan {
         entries: final_entries.into_values().collect(),
         rules: previews,
@@ -374,6 +421,45 @@ pub(crate) fn provision_missing(
     Ok(())
 }
 
+pub(crate) fn provision_node_worktree(
+    repository: &Path,
+    worktree: &Path,
+    inherited: &[ScopedRules],
+    node_rules: &ProvisioningRules,
+    git_ref: &str,
+) -> Result<()> {
+    let mut scoped = inherited.to_vec();
+    if !node_rules.is_empty() {
+        scoped.push(ScopedRules {
+            scope: ProvisioningScope::IsolatedNode,
+            rules: node_rules.clone(),
+        });
+    }
+    let plan = resolve_at_git_ref(repository, &scoped, git_ref)?;
+    provision_missing(repository, worktree, &plan)
+}
+
+pub(crate) fn frozen_node_rules(
+    events: &[crate::event_log::Event],
+    node_id: &str,
+    iter: i64,
+) -> Option<ProvisioningRules> {
+    events.iter().rev().find_map(|event| {
+        if event.kind != crate::event_log::EventKind::NodeStarted
+            || event.node_id.as_deref() != Some(node_id)
+            || event.iter != Some(iter)
+        {
+            return None;
+        }
+        event
+            .payload
+            .as_ref()
+            .and_then(|payload| payload.get("provisioning"))
+            .cloned()
+            .and_then(|rules| serde_json::from_value(rules).ok())
+    })
+}
+
 /// Read the node extension directly from the frozen pipeline document. Keeping
 /// provisioning as an extension avoids widening the heavily shared NodeDef
 /// runtime shape while still preserving it through YAML authoring.
@@ -381,8 +467,20 @@ pub(crate) fn node_rules_from_pipeline(
     pipeline_path: &Path,
     node_id: &str,
 ) -> Result<ProvisioningRules> {
-    let yaml = std::fs::read_to_string(pipeline_path)
-        .with_context(|| format!("read pipeline {}", pipeline_path.display()))?;
+    let yaml = match std::fs::read_to_string(pipeline_path) {
+        Ok(yaml) => yaml,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            tracing::warn!(
+                "pipeline {} is absent; node {node_id} has no provisioning extension",
+                pipeline_path.display()
+            );
+            return Ok(ProvisioningRules::default());
+        }
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("read pipeline {}", pipeline_path.display()));
+        }
+    };
     let document: serde_yaml::Value = serde_yaml::from_str(&yaml)
         .with_context(|| format!("parse pipeline {}", pipeline_path.display()))?;
     let Some(nodes) = document
@@ -540,6 +638,46 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn symlink_directory_pattern_creates_one_directory_link() {
+        let repo = tempfile::tempdir().unwrap();
+        let worktree = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(repo.path().join("node_modules/left-pad")).unwrap();
+        std::fs::write(
+            repo.path().join("node_modules/left-pad/index.js"),
+            "module.exports = 1;",
+        )
+        .unwrap();
+
+        let plan = resolve(
+            repo.path(),
+            &[ScopedRules {
+                scope: ProvisioningScope::Run,
+                rules: ProvisioningRules {
+                    symlink: vec!["node_modules".into()],
+                    ..Default::default()
+                },
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(
+            plan.entries
+                .iter()
+                .map(|entry| entry.relative_path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["node_modules"]
+        );
+        provision_missing(repo.path(), worktree.path(), &plan).unwrap();
+        assert!(
+            std::fs::symlink_metadata(worktree.path().join("node_modules"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+
     #[test]
     fn plan_marks_paths_already_provided_by_git() {
         let repo = tempfile::tempdir().unwrap();
@@ -628,5 +766,30 @@ mod tests {
                 .file_type()
                 .is_symlink()
         );
+    }
+
+    #[test]
+    fn frozen_node_rules_uses_the_started_iteration_recipe() {
+        let event = crate::event_log::Event {
+            id: None,
+            run_id: "run".into(),
+            ts: "2026-09-01T12:00:00Z".into(),
+            kind: crate::event_log::EventKind::NodeStarted,
+            node_id: Some("worker".into()),
+            iter: Some(2),
+            payload: Some(serde_json::json!({
+                "provisioning": {
+                    "copy": [".env"],
+                    "hardlink": [],
+                    "symlink": []
+                }
+            })),
+        };
+
+        assert_eq!(
+            frozen_node_rules(&[event], "worker", 2).unwrap().copy,
+            vec![".env"]
+        );
+        assert!(frozen_node_rules(&[], "worker", 2).is_none());
     }
 }

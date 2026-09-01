@@ -294,6 +294,7 @@ mod tests {
     fn run_state_with(node_id: &str, iters: &[(i64, NodeStatus)]) -> RunState {
         let (head_iter, head_status) = iters.last().cloned().unwrap_or((1, NodeStatus::Pending));
         let node = NodeState {
+            isolated_worktree: None,
             harness: None,
             cost: None,
             node_id: node_id.to_string(),
@@ -315,6 +316,7 @@ mod tests {
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
             missing_outputs: Vec::new(),
+            delivery: None,
         };
         let mut s = RunState::new("run-1".into(), "test".into());
         s.nodes.insert(node_id.to_string(), node);
@@ -328,9 +330,10 @@ mod tests {
             variables: HashMap::new(),
             nodes: vec![
                 NodeDef {
+                    isolated_worktree: None,
                     id: "planner".into(),
                     name: "planner".into(),
-                    node_type: NodeType::DocOnly,
+                    node_type: NodeType::Agent,
                     inputs: vec![Port {
                         name: "task".into(),
                         repeated: false,
@@ -363,9 +366,10 @@ mod tests {
                     auto_fail: None,
                 },
                 NodeDef {
+                    isolated_worktree: None,
                     id: "implementer".into(),
                     name: "implementer".into(),
-                    node_type: NodeType::CodeMutating,
+                    node_type: NodeType::Agent,
                     inputs: vec![Port {
                         name: "plan".into(),
                         repeated: false,
@@ -528,9 +532,10 @@ mod tests {
             variables: HashMap::new(),
             nodes: vec![
                 NodeDef {
+                    isolated_worktree: None,
                     id: "reviewer".into(),
                     name: "reviewer".into(),
-                    node_type: NodeType::DocOnly,
+                    node_type: NodeType::Agent,
                     inputs: vec![],
                     outputs: vec![Port {
                         name: "review".into(),
@@ -553,9 +558,10 @@ mod tests {
                     auto_fail: None,
                 },
                 NodeDef {
+                    isolated_worktree: None,
                     id: "implementer".into(),
                     name: "implementer".into(),
-                    node_type: NodeType::CodeMutating,
+                    node_type: NodeType::Agent,
                     inputs: vec![Port {
                         name: "reviews".into(),
                         repeated: true,
@@ -725,9 +731,10 @@ mod tests {
             variables: HashMap::new(),
             nodes: vec![
                 NodeDef {
+                    isolated_worktree: None,
                     id: "a".into(),
                     name: "a".into(),
-                    node_type: NodeType::DocOnly,
+                    node_type: NodeType::Agent,
                     inputs: vec![],
                     outputs: vec![Port {
                         name: "out".into(),
@@ -750,9 +757,10 @@ mod tests {
                     auto_fail: None,
                 },
                 NodeDef {
+                    isolated_worktree: None,
                     id: "b".into(),
                     name: "b".into(),
-                    node_type: NodeType::DocOnly,
+                    node_type: NodeType::Agent,
                     inputs: vec![],
                     outputs: vec![Port {
                         name: "out".into(),
@@ -775,9 +783,10 @@ mod tests {
                     auto_fail: None,
                 },
                 NodeDef {
+                    isolated_worktree: None,
                     id: "merger".into(),
                     name: "merger".into(),
-                    node_type: NodeType::DocOnly,
+                    node_type: NodeType::Agent,
                     inputs: vec![Port {
                         name: "docs".into(),
                         repeated: false,
@@ -868,9 +877,10 @@ mod tests {
             variables: HashMap::new(),
             nodes: vec![
                 NodeDef {
+                    isolated_worktree: None,
                     id: "planner".into(),
                     name: "planner".into(),
-                    node_type: NodeType::DocOnly,
+                    node_type: NodeType::Agent,
                     inputs: vec![],
                     outputs: vec![Port {
                         name: "plan".into(),
@@ -893,9 +903,11 @@ mod tests {
                     auto_fail: None,
                 },
                 NodeDef {
+                    isolated_worktree: None,
                     id: "implementer".into(),
                     name: "implementer".into(),
-                    node_type: NodeType::CodeMutating,
+                    node_type: NodeType::Agent,
+                    // Declares NO inputs — the input is emergent.
                     inputs: vec![],
                     outputs: vec![],
                     interactive: false,
@@ -951,9 +963,10 @@ mod tests {
         }
 
         let mk_node = |id: &str, has_out: bool| NodeDef {
+            isolated_worktree: None,
             id: id.into(),
             name: id.into(),
-            node_type: NodeType::DocOnly,
+            node_type: NodeType::Agent,
             inputs: vec![],
             outputs: if has_out {
                 vec![Port {
@@ -1035,9 +1048,10 @@ mod tests {
         }
 
         let mk_node = |id: &str, out: Option<&str>| NodeDef {
+            isolated_worktree: None,
             id: id.into(),
             name: id.into(),
-            node_type: NodeType::DocOnly,
+            node_type: NodeType::Agent,
             inputs: vec![],
             outputs: out
                 .map(|o| {
@@ -1124,9 +1138,10 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![NodeDef {
+                isolated_worktree: None,
                 id: "designer".into(),
                 name: "designer".into(),
-                node_type: NodeType::DocOnly,
+                node_type: NodeType::Agent,
                 inputs: vec![],
                 outputs: vec![Port {
                     name: "report".into(),

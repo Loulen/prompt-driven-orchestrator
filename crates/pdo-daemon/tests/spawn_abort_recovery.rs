@@ -6,7 +6,7 @@
 //!
 //! The abort is forced deterministically with the `PDO_DEBUG_PANIC_SPAWN`
 //! one-shot poison (armed per-daemon via `arm_spawn_panic`, no process-global
-//! env — #181). The entry node is `code-mutating` so the spawn creates a
+//! env — #181). The entry node is isolated so the spawn creates a
 //! sub-worktree to reap; arming the poison before `POST /runs` makes the
 //! entry-node spawn (the first and only `spawn_node` call) consume it. No tmux
 //! is required: the panic fires before the session spawn.
@@ -27,7 +27,8 @@ nodes:
       - name: user_prompt
   - id: worker
     name: worker
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     inputs:
       - name: in
     outputs:

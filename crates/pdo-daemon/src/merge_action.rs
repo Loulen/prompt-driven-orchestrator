@@ -1,5 +1,9 @@
-/// Pure decision logic for Merge node outcomes, plus the merge-back decision:
-/// *may a conflicting merge-back be resolved in the node's favour?*
+/// Pure decision logic for Merge node outcomes, plus the merge-back decision
+/// #503 needed: *may a conflicting merge-back be resolved in the node's favour?*
+///
+/// Given the result of attempting git merges on upstream isolated branches,
+/// determines whether the Merge node can auto-complete (no conflicts) or needs
+/// to spawn a Claude Code resolver session (conflicts detected).
 ///
 /// This module is the *decision* half of the split `worktree_ops` documents: the
 /// git **effect** (`MergeResult`, the shell-outs) lives there, the pure verdict
@@ -56,6 +60,32 @@ pub(crate) fn spawn_base_sha(events: &[Event], node_id: &str, iter: i64) -> Opti
         .map(str::trim)
         .filter(|sha| !sha.is_empty())
         .map(String::from)
+}
+
+/// The isolation FROZEN onto `(node_id, iter)` at spawn (#653, ADR-0060).
+///
+/// Anchored on the **last** `NodeStarted` for the pair, exactly like
+/// [`spawn_base_sha`] above: `restart_node` and `invalidate_nodes` re-spawn the
+/// same iteration, and the spawn path carries the frozen value forward onto the
+/// new event rather than re-reading the document. That is what makes "an
+/// isolation edit cannot move a running iteration" true — the re-spawn lands
+/// back in the working directory the interrupted one left.
+///
+/// `None` — the node never started, or a pre-#653 run whose events say nothing —
+/// means the caller falls back to the document's answer.
+pub(crate) fn frozen_isolation(events: &[Event], node_id: &str, iter: i64) -> Option<bool> {
+    events
+        .iter()
+        .rev()
+        .find(|e| {
+            e.kind == EventKind::NodeStarted
+                && e.node_id.as_deref() == Some(node_id)
+                && e.iter.unwrap_or(1) == iter
+        })?
+        .payload
+        .as_ref()?
+        .get("isolated_worktree")?
+        .as_bool()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

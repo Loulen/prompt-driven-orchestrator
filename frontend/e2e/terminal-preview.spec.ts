@@ -32,7 +32,8 @@ nodes:
     view: { x: 100, y: 0 }
   - id: echoer
     name: echoer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: in
     outputs:

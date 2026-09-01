@@ -452,7 +452,7 @@ pub(crate) struct EnsuredSubWorktree {
 ///
 /// Replaces the bare `create_sub_worktree` at both production sites, which failed
 /// with exit 255 (`a branch named … already exists`) on **every** re-spawn of the
-/// same iteration, i.e. on every `restart_node` of a `code-mutating` or `merge`
+/// same iteration, i.e. on every `restart_node` of an isolated
 /// node.
 ///
 /// The contract, state by state:
@@ -634,6 +634,191 @@ pub(crate) fn commit_and_merge_sub_worktree(
     )
 }
 
+/// The message PDO puts on the commit it creates for a NodeRun's leftover changes
+/// (#654 / ADR-0060). Deterministic, and the **only** thing PDO writes on it: no
+/// trailer, no author override — the delivery uses the configured git identity, so
+/// a repo's own hooks and conventions see an ordinary commit.
+pub(crate) fn delivery_commit_message(node_id: &str, iter: i64) -> String {
+    format!("{node_id} iter-{iter}: completed")
+}
+
+/// Stage everything git does not ignore and commit it under
+/// [`delivery_commit_message`], or answer `Ok(None)` when nothing was left to
+/// commit (#654 / ADR-0060).
+///
+/// Staging is plain `git add -A` with **no PDO-specific exclusion**: the target
+/// repo's `.gitignore` is the single exclusion policy, runtime paths included. A
+/// node that already committed its own work reaches this with a clean index and
+/// gets `None` — its commits are kept as they are, and no empty commit is ever
+/// written.
+///
+/// #489: the exit STATUS of `git add -A` is checked, not just the spawn. Discarding
+/// it loses the whole node's work in silence, and reusing a sub-worktree (#489-B)
+/// promotes that from latent to routine. The measured chain, with a leftover
+/// `index.lock`:
+///
+/// ```text
+/// git add -A                  -> exit 128  "Unable to create '…/index.lock': File exists"
+/// git diff --cached --quiet   -> exit 0    => NO COMMIT TAKEN
+/// git merge pdo/sub-…         -> "Already up to date."  exit 0
+/// => MergeResult::Success — the agent's file is ABSENT from the pipeline worktree
+/// ```
+///
+/// `pdo complete` answered `Success`, the Run went green, and 100% of the
+/// uncommitted work vanished with no conflict, no event and no trace — the silent
+/// loss ADR-0004 forbids. `bail!` here surfaces as
+/// `CompletionRefusal::DeliveryFailed`, which is loud and parks the Run.
+pub(crate) fn stage_and_commit(
+    worktree_dir: &std::path::Path,
+    node_id: &str,
+    iter: i64,
+) -> Result<Option<String>> {
+    let add_output = std::process::Command::new("git")
+        .args(["add", "-A"])
+        .current_dir(worktree_dir)
+        .output()
+        .with_context(|| format!("git add -A failed to run in {}", worktree_dir.display()))?;
+    if !add_output.status.success() {
+        anyhow::bail!(
+            "git add -A in {} failed, refusing to report a delivery that would drop the node's \
+             work: {}",
+            worktree_dir.display(),
+            git_report(&add_output)
+        );
+    }
+
+    let status_output = std::process::Command::new("git")
+        .args(["diff", "--cached", "--quiet"])
+        .current_dir(worktree_dir)
+        .output()
+        .context("git diff --cached failed")?;
+
+    // Exit 0 ⇒ the index matches HEAD ⇒ nothing left to deliver. No empty commit.
+    if status_output.status.success() {
+        return Ok(None);
+    }
+
+    let commit_msg = delivery_commit_message(node_id, iter);
+    let output = std::process::Command::new("git")
+        .args(["commit", "-m", &commit_msg])
+        .current_dir(worktree_dir)
+        .output()
+        .with_context(|| format!("git commit failed to run in {}", worktree_dir.display()))?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git commit in {} failed: {}",
+            worktree_dir.display(),
+            git_report(&output)
+        );
+    }
+
+    Ok(Some(rev_parse(worktree_dir, "HEAD")?))
+}
+
+/// What a delivery did to the Run's branch (#654 / ADR-0060).
+///
+/// `before == after` is the **no-op**: the NodeRun left nothing git could see, so
+/// the Run's branch did not move and no commit was written. Every other case is a
+/// delivery whose content is exactly `git diff before after` — which is what makes
+/// a per-NodeRun diff answerable without knowing whether the node was isolated.
+#[derive(Debug, Clone)]
+pub(crate) struct Delivered {
+    /// The Run branch's tip before the delivery.
+    pub before: String,
+    /// The Run branch's tip after it.
+    pub after: String,
+}
+
+impl Delivered {
+    /// Did the Run's branch actually move?
+    pub(crate) fn changed(&self) -> bool {
+        self.before != self.after
+    }
+}
+
+/// The outcome of the single delivery operation every completion path goes through
+/// (#654 / ADR-0060).
+///
+/// The conflict arms only ever come from an isolated NodeRun: a non-isolated one
+/// commits in place and has nothing to merge.
+#[derive(Debug)]
+pub(crate) enum DeliveryOutcome {
+    /// The work is on the Run's branch (possibly a no-op — see [`Delivered`]).
+    Delivered(Delivered),
+    /// The merge-back conflicted and was resolved in the node's favour (#503).
+    ResolvedInNodeFavour(MergeAdoption),
+    Conflict(MergeConflict),
+    ConflictPendingResolution(MergeConflict),
+}
+
+/// **The** delivery: keep the NodeRun's own commits, commit whatever it left
+/// behind, and put the result on the Run's branch (#654 / ADR-0060).
+///
+/// One operation for both isolations, because the difference is a *where*, not a
+/// *what*: an isolated NodeRun commits in its sub-worktree and its branch is then
+/// merged into the Run's; a non-isolated one commits directly in the Run's
+/// worktree. Both keep any commit the node made itself, both refuse to write an
+/// empty commit, and both stage under the repo's own `.gitignore` with no
+/// PDO-specific exclusion.
+///
+/// No serialisation is added for the shared worktree beyond what git itself needs:
+/// two non-isolated NodeRuns may run concurrently, and the first one here commits
+/// every non-ignored change then visible — under its own deterministic message.
+/// Isolation, not the runtime, is how an author buys reliable attribution.
+///
+/// `spawn_base`: the commit an isolated NodeRun's sub-worktree was cut from, per its
+/// `NodeStarted` (`merge_action::spawn_base_sha`). `None` — a pre-#503 Run, or a
+/// spawn that recorded none — forbids the #503 resolution: an unknown base is not a
+/// licence to rewrite a branch. Ignored when the NodeRun is not isolated.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn deliver_node_work(
+    run_worktree_dir: &std::path::Path,
+    node_worktree_dir: &std::path::Path,
+    isolated: bool,
+    sub_branch: &str,
+    node_id: &str,
+    iter: i64,
+    keep_conflict: bool,
+    spawn_base: Option<&str>,
+) -> Result<DeliveryOutcome> {
+    let before = rev_parse(run_worktree_dir, "HEAD")?;
+
+    if !isolated {
+        // In place: the node worked in the Run's worktree, so its commit IS the
+        // delivery. Nothing to merge, nothing to conflict with.
+        stage_and_commit(run_worktree_dir, node_id, iter)?;
+        let after = rev_parse(run_worktree_dir, "HEAD")?;
+        if before == after {
+            info!("Node {node_id} iter-{iter} left nothing to deliver in the run worktree");
+        } else {
+            info!("Delivered {node_id} iter-{iter} in place: {before} -> {after}");
+        }
+        return Ok(DeliveryOutcome::Delivered(Delivered { before, after }));
+    }
+
+    let merge = commit_and_merge_sub_worktree_inner(
+        node_worktree_dir,
+        run_worktree_dir,
+        sub_branch,
+        node_id,
+        iter,
+        keep_conflict,
+        spawn_base,
+    )?;
+
+    Ok(match merge {
+        MergeResult::Success => DeliveryOutcome::Delivered(Delivered {
+            after: rev_parse(run_worktree_dir, "HEAD")?,
+            before,
+        }),
+        MergeResult::ResolvedInNodeFavour(adoption) => {
+            DeliveryOutcome::ResolvedInNodeFavour(adoption)
+        }
+        MergeResult::Conflict(c) => DeliveryOutcome::Conflict(c),
+        MergeResult::ConflictPendingResolution(c) => DeliveryOutcome::ConflictPendingResolution(c),
+    })
+}
+
 /// `spawn_base`: the commit this sub-worktree was cut from, per its `NodeStarted`
 /// (`merge_action::spawn_base_sha`). `None` — a pre-#503 Run, or a spawn that
 /// recorded none — forbids the #503 resolution: an unknown base is not a licence to
@@ -647,56 +832,9 @@ pub(crate) fn commit_and_merge_sub_worktree_inner(
     keep_conflict: bool,
     spawn_base: Option<&str>,
 ) -> Result<MergeResult> {
-    // #489: the exit STATUS of `git add -A`, not just the spawn. Discarding it
-    // loses the whole node's work in silence, and reusing a sub-worktree (#489-B)
-    // promotes that from latent to routine. The measured chain, with a leftover
-    // `index.lock`:
-    //
-    // ```text
-    // git add -A                  -> exit 128  "Unable to create '…/index.lock': File exists"
-    // git diff --cached --quiet   -> exit 0    => NO COMMIT TAKEN
-    // git merge pdo/sub-…         -> "Already up to date."  exit 0
-    // => MergeResult::Success — the agent's file is ABSENT from the pipeline worktree
-    // ```
-    //
-    // `pdo complete` answered `Success`, the Run went green, and 100% of the
-    // uncommitted work vanished with no conflict, no event and no trace — the
-    // silent loss ADR-0004 forbids. Nothing in #503 fires either: no
-    // `MergeConflictDetected`, no `NodeFailed`, no `failure_reason`. `bail!` here
-    // surfaces as `CompletionRefusal::MergeFailed` (a 500 the caller already
-    // handles), which is loud.
-    let add_output = std::process::Command::new("git")
-        .args(["add", "-A"])
-        .current_dir(sub_worktree_dir)
-        .output()
-        .context("git add failed in sub-worktree")?;
-    if !add_output.status.success() {
-        anyhow::bail!(
-            "git add -A in sub-worktree failed, refusing to report a merge that would drop the \
-             node's work: {}",
-            git_report(&add_output)
-        );
-    }
-
-    let status_output = std::process::Command::new("git")
-        .args(["diff", "--cached", "--quiet"])
-        .current_dir(sub_worktree_dir)
-        .output()
-        .context("git diff --cached failed")?;
-
-    if !status_output.status.success() {
-        let commit_msg = format!("{node_id} iter-{iter}: completed");
-        let output = std::process::Command::new("git")
-            .args(["commit", "-m", &commit_msg])
-            .current_dir(sub_worktree_dir)
-            .output()
-            .context("git commit failed in sub-worktree")?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("git commit in sub-worktree failed: {stderr}");
-        }
-    }
+    // The node's own commits are kept; only what it left uncommitted becomes a
+    // commit here, and nothing at all when it left nothing (#654).
+    stage_and_commit(sub_worktree_dir, node_id, iter)?;
 
     // Both tips, read BEFORE the merge mutates either worktree (#503 AC4): a
     // post-mortem that has to rediscover these two SHAs by hand is the
@@ -866,9 +1004,9 @@ fn unmerged_paths(worktree_dir: &std::path::Path) -> Vec<String> {
 ///
 /// - a dirty pipeline worktree would lose uncommitted tracked work to the
 ///   `git reset --hard` — `git merge` fails loudly where `reset --hard` destroys
-///   in silence. It can legitimately be dirty: a `doc-only`/`script` node in
-///   flight, the leftovers of a `doc_violated_code_immutability` (never reverted),
-///   the Run shell, the resident `__manager__` agent.
+///   in silence. It can legitimately be dirty: a non-isolated node in flight
+///   (#654 — it works there and PDO delivers what it leaves), the Run shell, the
+///   resident `__manager__` agent.
 /// - unrelated histories: `git merge` also fails (`refusing to merge unrelated
 ///   histories`) when the two tips share no ancestor. That is not a diverged
 ///   pipeline branch, and adopting would replace the run's whole tree.
@@ -963,6 +1101,25 @@ fn resolve_in_node_favour(
     }
 
     Ok(merge_commit)
+}
+
+/// Is `dir` an existing directory inside a git working tree?
+///
+/// The precondition of a delivery (#654): a directory git knows nothing about has
+/// nothing to deliver, and that is not the same thing as a git operation failing
+/// inside a real worktree. Probed with git's own question rather than guessed from
+/// an error string.
+pub(crate) fn is_git_worktree(dir: &std::path::Path) -> bool {
+    if !dir.is_dir() {
+        return false;
+    }
+    std::process::Command::new("git")
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .current_dir(dir)
+        .output()
+        .is_ok_and(|out| {
+            out.status.success() && String::from_utf8_lossy(&out.stdout).trim() == "true"
+        })
 }
 
 pub(crate) fn worktree_has_tracked_changes(worktree_dir: &std::path::Path) -> Result<bool> {
@@ -1537,7 +1694,7 @@ mod tests {
         let node = rebased_terminal_node_repo(&tmp, true);
 
         // Something else lands on the pipeline branch after the sub-worktree was cut
-        // — a doc-only node committing its docs, say.
+        // — a non-isolated node committing its docs, say.
         std::fs::write(node.pipeline_wt.join("PLAN.md"), "# plan\n").unwrap();
         for args in [vec!["add", "-A"], vec!["commit", "-m", "docs: a plan"]] {
             assert!(std::process::Command::new("git")
@@ -1738,8 +1895,186 @@ mod tests {
         assert!(!adoption_allowed(repo, &ours, &alien, Some(&ours)).unwrap());
     }
 
+    // ── #654 / ADR-0060: the delivery primitive ─────────────────────────────
+
+    /// A tree with nothing to stage yields NO commit — the branch does not move.
     #[test]
-    fn doc_only_clean_worktree_passes() {
+    fn stage_and_commit_takes_no_empty_commit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+        let before = rev_parse(repo, "HEAD").unwrap();
+
+        assert_eq!(stage_and_commit(repo, "n", 1).unwrap(), None);
+        assert_eq!(rev_parse(repo, "HEAD").unwrap(), before);
+    }
+
+    /// `git add -A` semantics with the repo's `.gitignore` as the ONLY exclusion:
+    /// a new file, a modification and a deletion all go in, an ignored file does
+    /// not, and the message is the deterministic one.
+    #[test]
+    fn stage_and_commit_follows_add_dash_a_and_the_repo_gitignore() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(repo)
+                .output()
+                .unwrap()
+        };
+        std::fs::write(repo.join(".gitignore"), "ignored/\n").unwrap();
+        std::fs::write(repo.join("doomed.txt"), "bye\n").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-m", "base"]);
+
+        std::fs::write(repo.join("README.md"), "# changed\n").unwrap();
+        std::fs::remove_file(repo.join("doomed.txt")).unwrap();
+        std::fs::write(repo.join("added.rs"), "pub fn added() {}\n").unwrap();
+        std::fs::create_dir_all(repo.join("ignored")).unwrap();
+        std::fs::write(repo.join("ignored/noise.txt"), "noise\n").unwrap();
+
+        let sha = stage_and_commit(repo, "impl-1", 3).unwrap().unwrap();
+        assert_eq!(sha, rev_parse(repo, "HEAD").unwrap());
+
+        let subject = String::from_utf8_lossy(&git(&["log", "--format=%s", "-1"]).stdout)
+            .trim()
+            .to_string();
+        assert_eq!(subject, "impl-1 iter-3: completed");
+
+        let files = String::from_utf8_lossy(&git(&["show", "--name-status", "--format="]).stdout)
+            .to_string();
+        assert!(files.contains("M\tREADME.md"), "{files}");
+        assert!(files.contains("D\tdoomed.txt"), "{files}");
+        assert!(files.contains("A\tadded.rs"), "{files}");
+        assert!(
+            !files.contains("noise.txt"),
+            "an ignored file stays out: {files}"
+        );
+    }
+
+    /// #489: a staging failure is LOUD. A leftover `index.lock` makes `git add -A`
+    /// exit non-zero; the delivery must bail instead of reporting a success that
+    /// silently drops the node's work.
+    #[test]
+    fn stage_and_commit_bails_on_a_staging_failure() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+        std::fs::write(repo.join("work.rs"), "pub fn work() {}\n").unwrap();
+        std::fs::write(repo.join(".git/index.lock"), "").unwrap();
+
+        let err = stage_and_commit(repo, "n", 1).unwrap_err().to_string();
+        assert!(
+            err.contains("git add -A"),
+            "the error names the step: {err}"
+        );
+        assert!(
+            repo.join("work.rs").exists(),
+            "a failed delivery destroys nothing"
+        );
+    }
+
+    /// The non-isolated arm: the node worked in the Run's worktree, so its commit
+    /// IS the delivery — no merge, and the two reported tips bracket it.
+    #[test]
+    fn deliver_in_place_commits_on_the_run_branch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+
+        let run_id = "test-deliver-inplace";
+        let wt_dir = repo.join(".pdo/runs").join(run_id).join("worktree");
+        let pipeline_branch = format!("pdo/run-{run_id}");
+        create_worktree(repo, &wt_dir, &pipeline_branch, "HEAD").unwrap();
+        std::fs::write(wt_dir.join("shared.rs"), "pub fn shared() {}\n").unwrap();
+
+        let outcome = deliver_node_work(
+            &wt_dir, &wt_dir, false, "unused", "shared-1", 1, false, None,
+        )
+        .unwrap();
+        let DeliveryOutcome::Delivered(d) = outcome else {
+            panic!("a non-isolated delivery never conflicts");
+        };
+        assert!(d.changed());
+        assert_eq!(d.after, rev_parse(&wt_dir, "HEAD").unwrap());
+        assert_eq!(d.after, rev_parse(repo, &pipeline_branch).unwrap());
+    }
+
+    /// The no-op reports itself as one: same tip on both sides, no commit taken.
+    #[test]
+    fn deliver_in_place_on_a_clean_tree_is_a_no_op() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+
+        let run_id = "test-deliver-noop";
+        let wt_dir = repo.join(".pdo/runs").join(run_id).join("worktree");
+        create_worktree(repo, &wt_dir, &format!("pdo/run-{run_id}"), "HEAD").unwrap();
+
+        let outcome = deliver_node_work(
+            &wt_dir, &wt_dir, false, "unused", "shared-1", 1, false, None,
+        )
+        .unwrap();
+        let DeliveryOutcome::Delivered(d) = outcome else {
+            panic!("expected a delivery");
+        };
+        assert!(!d.changed(), "before == after ⇒ nothing was committed");
+    }
+
+    /// The isolated arm: commit in the sub-worktree, then merge it into the Run's
+    /// branch. The reported tips bracket the merge.
+    #[test]
+    fn deliver_isolated_commits_then_merges_back() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+
+        let run_id = "test-deliver-isolated";
+        let wt_dir = repo.join(".pdo/runs").join(run_id).join("worktree");
+        let pipeline_branch = format!("pdo/run-{run_id}");
+        create_worktree(repo, &wt_dir, &pipeline_branch, "HEAD").unwrap();
+        let sub_wt = sub_worktree_path(repo, run_id, "forked-1", 1);
+        let sub_branch = sub_worktree_branch(run_id, "forked-1", 1);
+        create_sub_worktree(repo, &sub_wt, &sub_branch, &pipeline_branch).unwrap();
+        std::fs::write(sub_wt.join("forked.rs"), "pub fn forked() {}\n").unwrap();
+
+        let outcome = deliver_node_work(
+            &wt_dir,
+            &sub_wt,
+            true,
+            &sub_branch,
+            "forked-1",
+            1,
+            false,
+            None,
+        )
+        .unwrap();
+        let DeliveryOutcome::Delivered(d) = outcome else {
+            panic!("a clean merge-back delivers");
+        };
+        assert!(d.changed());
+        assert!(wt_dir.join("forked.rs").exists());
+        assert_eq!(d.after, rev_parse(repo, &pipeline_branch).unwrap());
+    }
+
+    /// A directory git knows nothing about is not a worktree — the precondition
+    /// the runtime reads before deciding there is anything to deliver.
+    #[test]
+    fn is_git_worktree_answers_for_a_real_worktree_and_a_bare_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+        assert!(is_git_worktree(repo));
+
+        let orphan = tempfile::tempdir().unwrap();
+        assert!(!is_git_worktree(orphan.path()));
+        assert!(!is_git_worktree(&orphan.path().join("nope")));
+    }
+
+    #[test]
+    fn shared_worktree_clean_passes() {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path();
         init_test_repo(repo);
@@ -1753,7 +2088,7 @@ mod tests {
     }
 
     #[test]
-    fn doc_only_dirty_worktree_detected() {
+    fn shared_worktree_dirty_detected() {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path();
         init_test_repo(repo);
@@ -1770,7 +2105,7 @@ mod tests {
     }
 
     #[test]
-    fn doc_only_untracked_files_not_flagged() {
+    fn shared_worktree_untracked_files_not_flagged() {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path();
         init_test_repo(repo);

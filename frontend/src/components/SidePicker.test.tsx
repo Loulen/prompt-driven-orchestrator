@@ -53,7 +53,7 @@ describe("SidePicker retrofit in NodeInspector PortRow", () => {
     return {
       id: "n1",
       name: "test-node",
-      type: "doc-only",
+      type: "agent",
       inputs: [{ name: "in", repeated: false, side: "left" }],
       outputs: [{ name: "out", repeated: false, side: "right" }],
       interactive: false,

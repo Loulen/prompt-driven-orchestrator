@@ -25,7 +25,8 @@ nodes:
       - name: user_prompt
   - id: planner
     name: planner
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:

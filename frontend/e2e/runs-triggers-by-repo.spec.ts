@@ -36,7 +36,8 @@ nodes:
     view: { x: 0, y: 100 }
   - id: worker
     name: Worker
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     prompt_file: ${PIPELINE_NAME}.prompts/worker.md
     inputs:
       - name: task

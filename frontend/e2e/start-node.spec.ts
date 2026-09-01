@@ -32,7 +32,8 @@ nodes:
     view: { x: 0, y: 100 }
   - id: only
     name: only
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     prompt_file: ${PIPELINE_NAME}.prompts/only.md
     inputs:
       - name: task

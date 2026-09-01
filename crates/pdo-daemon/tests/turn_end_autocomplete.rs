@@ -8,7 +8,7 @@
 //! - with the setting **off**, a node that visibly finished its turn with valid
 //!   outputs is left alone (AC8);
 //! - with the setting **on**, that node is completed through the *same* body as
-//!   `POST …/done`, and a `code-mutating` node's commit lands on the pipeline
+//!   `POST …/done`, and an isolated node's commit lands on the pipeline
 //!   branch (AC9 — the §3 defect);
 //! - flipping the setting takes effect on the next sweep, no restart (AC10).
 //!
@@ -44,7 +44,8 @@ nodes:
       - name: user_prompt
   - id: worker
     name: worker
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: in
     outputs:
@@ -71,7 +72,8 @@ nodes:
       - name: user_prompt
   - id: worker
     name: worker
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     inputs:
       - name: in
     outputs:
@@ -781,13 +783,15 @@ async fn auto_done_with_missing_output_is_recoverable_and_records_nothing() {
     kill_session(&socket, &session);
 }
 
-/// The test that catches the defect of the old design: on a `code-mutating` node,
+// --- AC9: the §3 defect — the commit must reach the pipeline branch ----------
+
+/// The test that catches the defect of the old design: on an isolated node,
 /// auto-completion must go through the same body as `POST …/done` —
 /// `commit_and_merge_sub_worktree_inner` included — or the node records
 /// `Completed` with its work stranded on `pdo/sub-…` and the downstream gets
 /// nothing.
 #[tokio::test]
-async fn auto_completing_a_code_mutating_node_merges_its_commit() {
+async fn auto_completing_an_isolated_node_merges_its_commit() {
     if !tmux_available() {
         eprintln!("tmux not on PATH — skipping");
         return;
@@ -805,7 +809,7 @@ async fn auto_completing_a_code_mutating_node_merges_its_commit() {
     assert!(wait_for_session(&socket, &session, Duration::from_secs(5)).await);
 
     let worktree = home.join(".pdo/runs").join(&run_id).join("worktree");
-    // A code-mutating node works in its OWN sub-worktree, and that is the cwd its
+    // An isolated node works in its OWN sub-worktree, and that is the cwd its
     // transcript is keyed on.
     let sub_worktree = home
         .join(".pdo/runs")
@@ -845,7 +849,7 @@ async fn auto_completing_a_code_mutating_node_merges_its_commit() {
             .await
             .as_deref(),
         Some("completed"),
-        "the finished code-mutating node must auto-complete"
+        "the finished isolated node must auto-complete"
     );
     let kinds = event_kinds(&daemon.url(), &run_id).await;
     assert!(

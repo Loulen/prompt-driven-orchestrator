@@ -10,6 +10,91 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.49.0
+
+**Un seul contrat de livraison pour les Agents et les Scripts** (#654 ; ADR-0060). *Cassant.*
+Un Node ne reçoit plus aucune consigne Git : il modifie des fichiers, et le runtime livre ce
+qu'il laisse. À la complétion, PDO conserve les commits que le Node a pris lui-même, stage le
+reste avec la sémantique de `git add -A` et crée **un** commit `<node-id> iter-<N>: completed`
+sous l'identité Git configurée, sans trailer. Un Node isolé voit ensuite son sous-worktree
+mergé dans la branche du Run ; un Node non isolé a déjà commité sur place. Aucun changement
+restant ⇒ aucun commit, donc jamais de commit vide.
+
+Cette livraison est **une seule opération** que traversent les quatre chemins de complétion :
+la complétion automatique (hook `Stop` et veille de fin de tour), `pdo complete`, la complétion
+manuelle (`mark_node_done`) et la fin d'un Script. Elle s'exécute **avant** l'événement terminal,
+donc avant tout départ de l'aval : un Node isolé forké ensuite voit le travail d'un Node non
+isolé amont. La complétion manuelle ne faisait auparavant ni merge ni commit — l'asymétrie
+qu'ADR-0035 consignait comme limite acceptée disparaît.
+
+**Le refus `doc_violated_code_immutability` est supprimé, avec toutes ses surfaces.** Un Node non
+isolé qui modifie des fichiers suivis n'est plus refusé : son travail est livré. Le slug disparaît
+du corps de refus, de l'`awaiting_reason_code`, du message de `pdo complete` et du client. Le
+refus `merge_failed` est remplacé par **`delivery_failed`** (`500`), qui couvre désormais le
+staging, le commit et le merge : il appende un `NodeInterrupted`, parque le Run `awaiting_user`
+et **conserve le travail sur disque**, sans rien annuler ni nettoyer.
+
+**Le staging n'exclut rien.** PDO ne retire aucun de ses propres chemins runtime : le `.gitignore`
+du dépôt cible est l'unique politique d'exclusion. Un dépôt qui n'ignore que `.pdo/runs/` verra
+donc le blackboard (`.pdo/artifacts/`, `.pdo/prompts/`) entrer dans les commits de livraison de
+ses Nodes non isolés — ignorez `.pdo/` comme le fait ce dépôt.
+
+**Nouvel événement `node_delivered`** (`before` / `after`, les deux têtes de la branche du Run),
+projeté sur `nodes.<id>.delivery`. Le **diff par NodeRun** s'y appuie : il existe désormais pour
+tout Agent ou Script qui a livré des changements, isolé ou non, et n'est plus réservé aux Nodes
+qui possédaient une branche `pdo/sub-*`. Le sélecteur de diff de l'UI liste ce que les NodeRuns
+ont livré, plus ce qu'ils sont. Comme le diff du Run, il exclut `.pdo/`.
+
+**Posture d'outil tranchant conservée.** Plusieurs Nodes non isolés peuvent tourner en même temps :
+le runtime n'ajoute aucune sérialisation. Le premier qui complète commite tout l'état non ignoré
+alors visible, sous son propre message — l'isolation reste le moyen d'obtenir une attribution
+fiable.
+
+## 1.48.0
+
+**L'isolation voyage par la bibliothèque et par l'import** (#655 ; ADR-0060). Une entrée de
+bibliothèque `agent` ou `script` porte désormais `isolated_worktree`, l'instanciation le restitue
+tel quel, et l'aperçu de la bibliothèque nomme le workspace de chaque entrée. Sans ça, une entrée
+étoilée retombait sur le défaut de son type à chaque dépôt sur le canvas : un Agent garé dans le
+worktree du Run en forkait un à lui, en silence.
+
+L'isolation entre du même coup dans l'identité de l'entrée. **Conséquence à l'upgrade** : une
+entrée écrite avant cette version ne dit rien de son workspace ; elle se lit au défaut de son type
+(Agent isolé, Script partagé) — donc rien ne bouge pour la majorité des entrées, mais un Node que
+vous aviez sorti de son isolation lira `out of sync` face à son entrée jusqu'à ce que vous la
+mettiez à jour. C'est la divergence réelle, pas un faux positif.
+
+Import de workflow : tout rôle importé, placeholder annoté compris, devient un `agent` **isolé** et
+le brouillon écrit la ligne. L'import ne déduit jamais l'isolation du prompt, du nom du rôle, de ses
+sorties ni de son appartenance à une région `collection`.
+
+## 1.47.0
+
+**`agent` remplace `doc-only` et `code-mutating` ; l'isolation devient explicite** (#653 ;
+ADR-0060). *Cassant.* Les deux anciens types nommaient un *effet* alors que le runtime n'y lisait
+qu'un répertoire de travail. Un seul type agentique subsiste, `agent`, et l'endroit où le NodeRun
+travaille s'écrit sur le Node : `isolated_worktree: true|false`.
+
+La rupture est franche — **ni alias, ni migrateur, ni diagnostic dédié**. `doc-only` et
+`code-mutating` prennent le chemin de n'importe quelle valeur invalide : coercition vers `agent`
+avec l'avertissement générique de type inconnu, donc un Node qui perd son sous-worktree sans le
+dire. **Les Pipelines existantes se convertissent à la main** : un ancien `doc-only` devient un
+`agent` avec `isolated_worktree: false`, un ancien `code-mutating` un `agent` avec
+`isolated_worktree: true`. Les Pipelines livrées dans ce dépôt sont réécrites ; **celles de
+l'instance (`~/.pdo/pipelines/`) ne le sont pas** — elles sont hors du dépôt.
+
+Le Document écrit toujours le choix pour un `agent` et un `script`, même à la valeur par défaut
+(Agent isolé, Script partagé) : on lit où le Node travaille au lieu de se rappeler un défaut.
+`merge` reste isolé d'office et n'expose aucun réglage ; `start` et `end` n'en portent aucun.
+L'isolation est **gelée au spawn du NodeRun** — une édition déplace le prochain lancement, jamais
+une exécution vivante, et une reprise retrouve le répertoire qu'elle avait quitté.
+
+Côté éditeur, l'inspecteur remplace le sélecteur de type par un type figé et une section
+« Workspace » qui nomme les deux lieux et affiche le répertoire résolu ; le canvas remplace les deux
+marqueurs `doc-only` / `code-mutating` par un glyphe de branche sur les Nodes qui forkent un
+worktree (l'`agent` isolé et le `merge`). L'import de workflow ne devine plus : un rôle importé
+devient un `agent` isolé, sans heuristique de prompt, de nom ni de sortie.
+
 ## 1.46.0
 
 **Les pipelines appartiennent à l'instance et voyagent par document** (#572 ; ADR-0059). *Cassant.*

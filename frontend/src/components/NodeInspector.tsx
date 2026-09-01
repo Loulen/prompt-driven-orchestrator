@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect } from "react";
 import { Star } from "lucide-react";
 import { useEditStore } from "../stores/editStore";
-import type { NodeDef, NodeType, PortDef } from "../types";
+import type { NodeDef, NodeState, NodeType, PortDef } from "../types";
 import { SectionHead, Field } from "./InspectorPrimitives";
 import OutputPortCard from "./OutputPortCard";
+import { NodeTypeIcon } from "./NodeTypeIcon";
 import PooledInputRow from "./PooledInputRow";
 import { useHarnessCatalog } from "../hooks/useHarnessCatalog";
 import { useAgentProfiles } from "../hooks/useAgentProfiles";
@@ -12,6 +13,12 @@ import HarnessSelect from "./HarnessSelect";
 import ModelPicker from "./ModelPicker";
 import EffortPicker from "./EffortPicker";
 import { findHarnessOption, resolveEditorHarness } from "../lib/harness";
+import {
+  WORKSPACE_CHOICES,
+  carriesIsolation,
+  nodeIsolation,
+  worktreePathFor,
+} from "../lib/nodeIsolation";
 import DestroyLoopModal from "./DestroyLoopModal";
 import { derivePooledInputs } from "../lib/derivePooledInputs";
 import { regionsDestroyedByEdgeRemoval } from "../lib/loopRegions";
@@ -23,11 +30,11 @@ import type { LibrarySyncState } from "../hooks/useLibrary";
 import ProvisioningRulesEditor from "./ProvisioningRulesEditor";
 import { EMPTY_PROVISIONING_RULES } from "../lib/provisioning";
 
-const TYPE_TOOLTIPS: Record<string, string> = {
-  "code-mutating": "Receives a forked sub-worktree. Can edit, commit, and merge code.",
-  "doc-only": "Reads code in read-only. Only writes Markdown artifacts to the Blackboard.",
-};
 
+/**
+ * #653 / ADR-0060: the two places a NodeRun can work, named and described in one
+ * breath. A radio pair rather than a switch — "off" would name neither place.
+ */
 export default function NodeInspector({
   libraryEntries,
   onLibraryChanged,
@@ -36,9 +43,14 @@ export default function NodeInspector({
   provisioningFrozenAt,
   inheritedProvisioning,
   provisioningGitRef = "HEAD",
+  runNode,
 }: {
   libraryEntries: LibraryEntry[];
   onLibraryChanged: () => void;
+  /** #653: the live NodeRun's projected state, on a run canvas. Its frozen
+   *  `isolated_worktree` is what the Workspace section reads in run mode —
+   *  where the iteration ACTUALLY works, which an edit no longer moves. */
+  runNode?: NodeState | null;
   /** #339: hides the per-source input × — set for archived runs only
    * (mirrors the canvas readOnly, #315/ADR-0020). Scoped to the × alone;
    * the rest of the inspector's archived story is the #315 gap. */
@@ -60,6 +72,7 @@ export default function NodeInspector({
   const asideRef = useRef<HTMLElement>(null);
   const [highlightedPort, setHighlightedPort] = useState<string | null>(null);
   const [provisioningPreviewRepository, setProvisioningPreviewRepository] = useState("");
+  const [provisioningOpenFor, setProvisioningOpenFor] = useState<string | null>(null);
   // Pending destroy-loop confirmation (#339, mirrors EditCanvas #150): set when
   // deleting an input source would remove a bounded region's last cycle.
   const [pendingDestroy, setPendingDestroy] = useState<{
@@ -93,6 +106,7 @@ export default function NodeInspector({
   const { profiles: agentProfiles } = useAgentProfiles();
 
   if (!tab || !node) return null;
+  const provisioningOpen = provisioningOpenFor === node.id;
   const resolvedHarness = resolveEditorHarness(node);
   const harnessOption = findHarnessOption(harnessCatalog, resolvedHarness);
 
@@ -100,10 +114,17 @@ export default function NodeInspector({
   // not declared on the node. Same-named edges pool into one list input.
   const pooledInputs = derivePooledInputs(tab.pipeline, node.id);
 
-  // #248: a `script` node runs deterministic bash, not an agent — so its type is
-  // fixed (no doc-only↔code-mutating toggle), it has no model, and its "prompt"
-  // is a bash body whose I/O arrives as PDO_* env vars, not a prose preamble.
+  // #248: a `script` node runs deterministic bash, not an agent — so it has no
+  // model, and its "prompt" is a bash body whose I/O arrives as PDO_* env vars,
+  // not a prose preamble.
   const isScript = node.type === "script";
+  // #653/ADR-0060: the frozen isolation of the live NodeRun, when there is one.
+  // In run mode the Workspace choice becomes a *state*: a Node that changed
+  // working directory under its own feet would be silent corruption, so the
+  // section shows where the iteration actually works and stops being editable.
+  const frozenIsolation = runNode?.isolated_worktree;
+  const isolation = frozenIsolation ?? nodeIsolation(node);
+  const isolationFrozen = frozenIsolation != null;
 
   // #339: delete one contributing edge of a pooled input — the canonical
   // "delete an input" since inputs are emergent (#149/ADR-0011). Last-cycle
@@ -182,39 +203,114 @@ export default function NodeInspector({
           />
         </Field>
 
-        {/* Type */}
+        {/* Type — #653/ADR-0060: there is one agentic type, so this is a static
+            label like `script` already was. The pair of buttons it replaces
+            offered non-isolated/isolated, i.e. a working-directory choice
+            wearing a type's clothes; that choice now lives in Workspace below. */}
         <SectionHead title="Type" />
-        {isScript ? (
-          // #248: a script node's type is fixed. Show a static label rather than
-          // the doc-only↔code-mutating toggle (which can't even express "script"
-          // and would silently retype the node away on click).
-          <div
-            data-testid="script-type-label"
-            className="rounded border border-fg-4 bg-bg-3 px-2 py-1 font-medium text-fg"
-            style={{ fontSize: "10px" }}
-          >
-            script (deterministic bash)
-          </div>
-        ) : (
-          <div className="flex gap-1">
-            {(["code-mutating", "doc-only"] as NodeType[]).map((t) => (
-              <Tooltip key={t} content={TYPE_TOOLTIPS[t] ?? t}>
+        <div
+          data-testid={isScript ? "script-type-label" : "agent-type-label"}
+          className="flex items-center gap-2 rounded border border-fg-4 bg-bg-3 px-2 py-1 font-medium text-fg"
+          style={{ fontSize: "10px" }}
+        >
+          <NodeTypeIcon type={node.type} size={11} className="shrink-0 text-fg-3" />
+          <span>{isScript ? "script (deterministic bash)" : node.type}</span>
+        </div>
+
+        {/* Workspace — #653/ADR-0060: where this Node's NodeRun works. A pair of
+            named places, not a switch: the working directory is a choice between
+            two locations, not a feature you turn on. The resolved path underneath
+            is the point — the author reads where the Node will write instead of
+            deducing it. Absent on `merge` (isolated by construction) and on
+            Start/End, because a greyed control invites you to look for the way to
+            un-grey it. */}
+        {carriesIsolation(node.type) && isolation !== null && (
+          <>
+            <SectionHead title="Workspace" />
+            <div data-testid="workspace-choice" className="flex flex-col gap-1">
+              {WORKSPACE_CHOICES.map((choice) => (
                 <button
-                  onClick={() => handleField("type", t)}
-                  className={`flex-1 cursor-pointer rounded border px-2 py-1 font-medium transition-colors ${
-                    node.type === t
-                      ? t === "code-mutating"
-                        ? "border-acc bg-acc-bg text-acc"
-                        : "border-fg-4 bg-bg-3 text-fg"
-                      : "border-line-strong bg-bg-3 text-fg-4 hover:text-fg-3"
-                  }`}
-                  style={{ fontSize: "10px" }}
+                  key={String(choice.isolated)}
+                  data-testid={`workspace-${choice.isolated ? "isolated" : "shared"}`}
+                  aria-checked={isolation === choice.isolated}
+                  role="radio"
+                  disabled={isolationFrozen}
+                  onClick={() => handleField("isolated_worktree", choice.isolated)}
+                  className={`flex items-start gap-2 rounded border px-2 py-1.5 text-left transition-colors ${
+                    isolation === choice.isolated
+                      ? "border-acc bg-acc-bg"
+                      : "border-line-strong bg-bg-3 hover:border-fg-4"
+                  } ${isolationFrozen ? "cursor-default opacity-70" : "cursor-pointer"}`}
                 >
-                  {t}
+                  <span
+                    className={`mt-[3px] h-2.5 w-2.5 shrink-0 rounded-full border ${
+                      isolation === choice.isolated ? "border-acc bg-acc" : "border-fg-4"
+                    }`}
+                  />
+                  <span className="flex flex-col">
+                    <span
+                      className={`font-medium ${isolation === choice.isolated ? "text-acc" : "text-fg-2"}`}
+                      style={{ fontSize: "10.5px" }}
+                    >
+                      {choice.label}
+                    </span>
+                    <span className="text-fg-4" style={{ fontSize: "9.5px" }}>
+                      {choice.hint}
+                    </span>
+                  </span>
                 </button>
-              </Tooltip>
-            ))}
-          </div>
+              ))}
+            </div>
+            <span
+              data-testid="workspace-path"
+              className="break-all rounded border border-line bg-bg-3 px-2 py-1 font-mono text-fg-4"
+              style={{ fontSize: "9.5px" }}
+            >
+              {worktreePathFor(node.id, isolation)}
+            </span>
+            {isolationFrozen && (
+              <span data-testid="workspace-frozen" className="text-fg-4" style={{ fontSize: "9.5px" }}>
+                Frozen at spawn — an edit applies to the next NodeRun.
+              </span>
+            )}
+            {isolation && (
+              <>
+                <button
+                  type="button"
+                  aria-expanded={provisioningOpen}
+                  onClick={() => setProvisioningOpenFor(provisioningOpen ? null : node.id)}
+                  className="cursor-pointer rounded border border-line-strong bg-bg-3 px-2 py-1.5 text-left font-medium text-fg-2 hover:border-fg-4"
+                >
+                  {provisioningOpen ? "Hide provisioning" : "Configure provisioning"}
+                </button>
+                {provisioningOpen && (
+                  <>
+                    {!provisioningRepository && (
+                      <label className="block text-fg-3" style={{ fontSize: 10 }}>
+                        Resolve against
+                        <input
+                          value={provisioningPreviewRepository}
+                          onChange={(event) => setProvisioningPreviewRepository(event.target.value)}
+                          placeholder="/absolute/path/to/repository"
+                          className="mt-1 w-full rounded border border-line-strong bg-bg-3 px-2 py-1 font-mono text-fg outline-none focus:border-acc"
+                        />
+                      </label>
+                    )}
+                    <ProvisioningRulesEditor
+                      level="isolated_node"
+                      repository={provisioningRepository || provisioningPreviewRepository}
+                      rules={runNode?.provisioning ?? node.provisioning ?? EMPTY_PROVISIONING_RULES}
+                      onChange={(rules) => handleField("provisioning", rules)}
+                      readOnly={readOnly || !!provisioningFrozenAt}
+                      frozenAt={provisioningFrozenAt}
+                      inherited={inheritedProvisioning}
+                      gitRef={provisioningGitRef}
+                    />
+                  </>
+                )}
+              </>
+            )}
+          </>
         )}
 
         {/* Behavior */}
@@ -274,33 +370,6 @@ export default function NodeInspector({
                 disabled={!(harnessOption?.hasEffort ?? true)}
               />
             </div>
-          </>
-        )}
-
-        {(node.type === "code-mutating" || node.type === "merge") && (
-          <>
-            <SectionHead title="Isolated worktree provisioning" />
-            {!provisioningRepository && (
-              <label className="block text-fg-3" style={{ fontSize: 10 }}>
-                Resolve against
-                <input
-                  value={provisioningPreviewRepository}
-                  onChange={(event) => setProvisioningPreviewRepository(event.target.value)}
-                  placeholder="/absolute/path/to/repository"
-                  className="mt-1 w-full rounded border border-line-strong bg-bg-3 px-2 py-1 font-mono text-fg outline-none focus:border-acc"
-                />
-              </label>
-            )}
-            <ProvisioningRulesEditor
-              level="isolated_node"
-              repository={provisioningRepository || provisioningPreviewRepository}
-              rules={node.provisioning ?? EMPTY_PROVISIONING_RULES}
-              onChange={(rules) => handleField("provisioning", rules)}
-              readOnly={readOnly || !!provisioningFrozenAt}
-              frozenAt={provisioningFrozenAt}
-              inherited={inheritedProvisioning}
-              gitRef={provisioningGitRef}
-            />
           </>
         )}
 
@@ -366,7 +435,7 @@ export default function NodeInspector({
               onRemove={() => handleRemoveOutput(i)}
               schema={port.frontmatter}
               onSchemaChange={(fm) => handleUpdateOutput(i, { frontmatter: fm ?? null })}
-              allowInstructions={node.type === "doc-only" || node.type === "code-mutating"}
+              allowInstructions={node.type === "agent"}
             />
           ))}
         </div>
@@ -490,6 +559,10 @@ function StarButton({
       // annotation, so omitting a field here compiles fine — the star would just
       // read `diverged` forever.
       effort: node.effort ?? null,
+      // #655/ADR-0060: star where the node works, resolved (not raw) so a node
+      // sitting silently on its type's default stars on that default instead of
+      // on a silence — a silence would read `diverged` the instant it was saved.
+      isolated_worktree: nodeIsolation(node),
       prompt,
     };
   }
@@ -530,6 +603,9 @@ function StarButton({
         model: result.spec.model ?? null,
         // #424: and the effort level.
         effort: result.spec.effort ?? null,
+        // #655/ADR-0060: and the workspace — resetting to the library must put
+        // the node back where the entry says it works, not where its type would.
+        isolated_worktree: result.spec.isolated_worktree ?? null,
       });
       updatePromptFn(result.prompt);
       setPopoverOpen(false);

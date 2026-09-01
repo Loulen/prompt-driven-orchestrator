@@ -53,9 +53,10 @@ mod tests {
 
     fn make_node(id: &str, inputs: &[&str], outputs: &[&str]) -> NodeDef {
         NodeDef {
+            isolated_worktree: None,
             id: id.into(),
             name: id.into(),
-            node_type: NodeType::DocOnly,
+            node_type: NodeType::Agent,
             inputs: inputs
                 .iter()
                 .map(|n| Port {
@@ -119,6 +120,7 @@ mod tests {
 
     fn running_node(id: &str) -> NodeState {
         NodeState {
+            isolated_worktree: None,
             harness: None,
             cost: None,
             node_id: id.into(),
@@ -132,11 +134,13 @@ mod tests {
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
             missing_outputs: Vec::new(),
+            delivery: None,
         }
     }
 
     fn waiting_node(id: &str, iter: i64) -> NodeState {
         NodeState {
+            isolated_worktree: None,
             harness: None,
             cost: None,
             node_id: id.into(),
@@ -150,6 +154,7 @@ mod tests {
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
             missing_outputs: Vec::new(),
+            delivery: None,
         }
     }
 
@@ -180,6 +185,7 @@ mod tests {
 
     fn completed_node(id: &str) -> NodeState {
         NodeState {
+            isolated_worktree: None,
             harness: None,
             cost: None,
             node_id: id.into(),
@@ -193,6 +199,7 @@ mod tests {
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
             missing_outputs: Vec::new(),
+            delivery: None,
         }
     }
 

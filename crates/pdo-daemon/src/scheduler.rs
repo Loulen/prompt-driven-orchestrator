@@ -1550,9 +1550,10 @@ mod tests {
 
     fn make_node(id: &str, inputs: &[&str], outputs: &[&str]) -> NodeDef {
         NodeDef {
+            isolated_worktree: None,
             id: id.into(),
             name: id.into(),
-            node_type: NodeType::DocOnly,
+            node_type: NodeType::Agent,
             inputs: inputs
                 .iter()
                 .map(|n| Port {
@@ -1594,6 +1595,7 @@ mod tests {
 
     fn make_end_node() -> NodeDef {
         NodeDef {
+            isolated_worktree: None,
             id: "end".into(),
             name: "End".into(),
             node_type: NodeType::End,
@@ -1687,6 +1689,7 @@ mod tests {
 
     fn completed_node(id: &str) -> NodeState {
         NodeState {
+            isolated_worktree: None,
             harness: None,
             cost: None,
             node_id: id.into(),
@@ -1700,11 +1703,13 @@ mod tests {
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
             missing_outputs: Vec::new(),
+            delivery: None,
         }
     }
 
     fn completed_node_iter(id: &str, iter: i64) -> NodeState {
         NodeState {
+            isolated_worktree: None,
             harness: None,
             cost: None,
             node_id: id.into(),
@@ -1718,11 +1723,13 @@ mod tests {
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
             missing_outputs: Vec::new(),
+            delivery: None,
         }
     }
 
     fn running_node(id: &str) -> NodeState {
         NodeState {
+            isolated_worktree: None,
             harness: None,
             cost: None,
             node_id: id.into(),
@@ -1736,6 +1743,7 @@ mod tests {
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
             missing_outputs: Vec::new(),
+            delivery: None,
         }
     }
 
@@ -2883,6 +2891,7 @@ mod tests {
 
     fn make_switch_node(id: &str, branch_outputs: Vec<Port>) -> NodeDef {
         NodeDef {
+            isolated_worktree: None,
             id: id.into(),
             name: id.into(),
             node_type: NodeType::Switch,
@@ -3577,6 +3586,7 @@ mod tests {
 
     fn make_loop_node(id: &str, max_iter: i64) -> NodeDef {
         NodeDef {
+            isolated_worktree: None,
             id: id.into(),
             name: id.into(),
             node_type: NodeType::Loop,
@@ -4126,6 +4136,7 @@ mod tests {
 
     fn make_start_node(id: &str) -> NodeDef {
         NodeDef {
+            isolated_worktree: None,
             id: id.into(),
             name: id.into(),
             node_type: NodeType::Start,
@@ -4771,7 +4782,8 @@ nodes:
       - name: user_prompt
   - id: ab000001
     name: lister
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:
@@ -4781,7 +4793,8 @@ nodes:
             type: list
   - id: ab000003
     name: worker
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     inputs:
       - name: in
     outputs:
@@ -4870,14 +4883,16 @@ nodes:
       - name: user_prompt
   - id: ab000001
     name: lister
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:
       - name: plan
   - id: ab000003
     name: worker
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     inputs:
       - name: in
     outputs:

@@ -203,14 +203,36 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
 
     let input_paths = resolve_inputs(params, node);
 
-    let has_sub_worktree = node.node_type == pipeline::NodeType::CodeMutating
-        || node.node_type == pipeline::NodeType::Merge;
+    // #653 / ADR-0060: where this NodeRun works, read off the document. Unlike
+    // `node_spawn`, this path never re-poses a live iteration — the
+    // `has_node_started_event` guard above already answered `AlreadyDone` for any
+    // iteration that has started — so there is no frozen value to prefer here.
+    let has_sub_worktree = node.is_isolated();
 
     // ADR-0036: the commit the sub-worktree was cut from, recorded on
     // `NodeStarted` below. Without it a merge-back conflict on this iteration can
     // never be resolved in the node's favour. Record it on this path too, not just
     // in `node_spawn`.
     let mut spawn_base_sha: Option<String> = None;
+    let node_provisioning = if has_sub_worktree {
+        match crate::provisioning::node_rules_from_pipeline(params.pipeline_path, &node.id) {
+            Ok(rules) => rules,
+            Err(e) => {
+                return StartNodeResult {
+                    outcome: PrimitiveOutcome::Rejected {
+                        reason: format!(
+                            "provisioning failed for {}: {e:#}; no node was spawned",
+                            node.id
+                        ),
+                    },
+                    events: vec![],
+                    spawn: None,
+                };
+            }
+        }
+    } else {
+        crate::provisioning::ProvisioningRules::default()
+    };
     let working_dir = if has_sub_worktree {
         let sub_wt_dir =
             sub_worktree_path(params.repo_root, params.run_id, params.node_id, params.iter);
@@ -230,27 +252,13 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
             Ok(ensured) => {
                 spawn_base_sha = ensured.base_sha;
                 if ensured.created {
-                    if let Err(e) = crate::provisioning::node_rules_from_pipeline(
-                        params.pipeline_path,
-                        &node.id,
-                    )
-                    .and_then(|node_provisioning| {
-                        let mut scoped = params.run_state.provisioning_rules.clone();
-                        if !node_provisioning.is_empty() {
-                            scoped.push(crate::provisioning::ScopedRules {
-                                scope: crate::provisioning::ProvisioningScope::IsolatedNode,
-                                rules: node_provisioning,
-                            });
-                        }
-                        crate::provisioning::resolve_at_git_ref(
-                            params.repo_root,
-                            &scoped,
-                            &pipeline_branch,
-                        )
-                    })
-                    .and_then(|plan| {
-                        crate::provisioning::provision_missing(params.repo_root, &sub_wt_dir, &plan)
-                    }) {
+                    if let Err(e) = crate::provisioning::provision_node_worktree(
+                        params.repo_root,
+                        &sub_wt_dir,
+                        &params.run_state.provisioning_rules,
+                        &node_provisioning,
+                        &pipeline_branch,
+                    ) {
                         crate::worktree_ops::reap_orphan_sub_worktree(
                             params.repo_root,
                             &sub_wt_dir,
@@ -322,6 +330,10 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         daemon_url: &crate::sandbox_container::daemon_url(params.daemon_port, sandboxed),
         foreach_context: None,
         source_worktree_dir: has_sub_worktree.then_some(working_dir.as_path()),
+        // #654: the same section, from the other isolation. This site only
+        // ever builds a preamble for a node that spawns a session, so the
+        // two are exhaustive and mutually exclusive.
+        shared_worktree_dir: (!has_sub_worktree).then_some(working_dir.as_path()),
         input_images: Vec::new(),
         start_prompt_present,
         source_iters: crate::input_resolution::resolved_source_iters(
@@ -496,6 +508,10 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         payload: Some(serde_json::json!({
             "prompt_preview": full_prompt.chars().take(500).collect::<String>(),
             "node_type": node_type_str(&node.node_type),
+            // #653/ADR-0060: FREEZE where this NodeRun works. Mirrors the
+            // `spawn_node` payload — every later reader asks this event.
+            "isolated_worktree": has_sub_worktree,
+            "provisioning": node_provisioning,
             "input_paths": input_paths,
             // Launch-time model + effort, **resolved**. Mirrors the `spawn_node`
             // payload.
@@ -506,7 +522,8 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
             // Read back by the sweep (transcript resolution) and the resume path.
             // `null` for a script node and for legacy rows.
             "session_id": session_id,
-            // Absent for a node with no sub-worktree, which never merges back.
+            // #503: the sub-worktree's base commit. Absent for a node with no
+            // sub-worktree (a non-isolated agent/script), which never merges back.
             "base_sha": spawn_base_sha,
         })),
     };
@@ -610,10 +627,12 @@ fn resolve_inputs(
 
     let mut input_paths = HashMap::new();
 
-    // Don't key overrides off `node.inputs`: a `DocOnly`/`CodeMutating`/`Script`
-    // node declares none (its inputs are emergent from edges), so the operator's
-    // dummy input would be silently dropped on exactly those nodes. Inserting
-    // overrides first also makes them win over any edge resolution.
+    // #486 / #600: overrides win over any edge resolution AND cover **emergent**
+    // input ports. An `Agent`/`Script` node declares no `inputs`
+    // (its inputs are derived from incoming edges), so keying overrides only off
+    // `node.inputs` would silently drop an operator's dummy input on exactly those
+    // nodes. Insert every override first — the declared-port loop below then fills
+    // the rest without clobbering a port an override already set.
     if let Some(ov) = params.overrides.as_ref() {
         for (port, path) in ov {
             input_paths.insert(port.clone(), path.to_string_lossy().to_string());
@@ -643,16 +662,7 @@ fn resolve_inputs(
 }
 
 fn node_type_str(nt: &pipeline::NodeType) -> &'static str {
-    match nt {
-        pipeline::NodeType::DocOnly => "doc-only",
-        pipeline::NodeType::CodeMutating => "code-mutating",
-        pipeline::NodeType::Start => "start",
-        pipeline::NodeType::End => "end",
-        pipeline::NodeType::Switch => "switch",
-        pipeline::NodeType::Loop => "loop",
-        pipeline::NodeType::Merge => "merge",
-        pipeline::NodeType::Script => "script",
-    }
+    nt.as_str()
 }
 
 pub(crate) struct StopNodeParams<'a> {
@@ -862,6 +872,10 @@ mod tests {
 
     fn make_node(id: &str, node_type: NodeType, inputs: &[&str], outputs: &[&str]) -> NodeDef {
         NodeDef {
+            // #653: these fixtures exercise graph wiring, not worktrees — a
+            // shared-worktree node keeps them out of `git worktree add` on a
+            // scratch dir. Isolation-sensitive tests state `Some(true)`.
+            isolated_worktree: Some(false),
             id: id.into(),
             name: id.into(),
             node_type,
@@ -906,9 +920,10 @@ mod tests {
 
     fn make_node_with_repeated_input(id: &str, port_name: &str) -> NodeDef {
         NodeDef {
+            isolated_worktree: None,
             id: id.into(),
             name: id.into(),
-            node_type: NodeType::DocOnly,
+            node_type: NodeType::Agent,
             inputs: vec![Port {
                 name: port_name.into(),
                 repeated: true,
@@ -966,6 +981,7 @@ mod tests {
 
     fn running_node(id: &str, iter: i64) -> NodeState {
         NodeState {
+            isolated_worktree: None,
             harness: None,
             cost: None,
             node_id: id.into(),
@@ -984,11 +1000,13 @@ mod tests {
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
             missing_outputs: Vec::new(),
+            delivery: None,
         }
     }
 
     fn completed_node(id: &str, iter: i64) -> NodeState {
         NodeState {
+            isolated_worktree: None,
             harness: None,
             cost: None,
             node_id: id.into(),
@@ -1007,11 +1025,13 @@ mod tests {
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
             missing_outputs: Vec::new(),
+            delivery: None,
         }
     }
 
     fn pending_node(id: &str) -> NodeState {
         NodeState {
+            isolated_worktree: None,
             harness: None,
             cost: None,
             node_id: id.into(),
@@ -1025,6 +1045,7 @@ mod tests {
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
             missing_outputs: Vec::new(),
+            delivery: None,
         }
     }
 
@@ -1034,7 +1055,7 @@ mod tests {
             name: "test".into(),
             version: None,
             variables: HashMap::new(),
-            nodes: vec![make_node("worker", NodeType::DocOnly, &["task"], &["out"])],
+            nodes: vec![make_node("worker", NodeType::Agent, &["task"], &["out"])],
             edges: vec![],
             loops: Vec::new(),
             notes: Vec::new(),
@@ -1127,7 +1148,7 @@ mod tests {
             name: "test".into(),
             version: None,
             variables: HashMap::new(),
-            nodes: vec![make_node("worker", NodeType::DocOnly, &[], &["out"])],
+            nodes: vec![make_node("worker", NodeType::Agent, &[], &["out"])],
             edges: vec![],
             loops: Vec::new(),
             notes: Vec::new(),
@@ -1227,8 +1248,8 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![
-                make_node("planner", NodeType::DocOnly, &["task"], &["plan"]),
-                make_node("implementer", NodeType::DocOnly, &["plan"], &["summary"]),
+                make_node("planner", NodeType::Agent, &["task"], &["plan"]),
+                make_node("implementer", NodeType::Agent, &["plan"], &["summary"]),
             ],
             edges: vec![make_edge("planner", "plan", "implementer", "plan")],
             loops: Vec::new(),
@@ -1291,8 +1312,8 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![
-                make_node("planner", NodeType::DocOnly, &["task"], &["plan"]),
-                make_node("implementer", NodeType::DocOnly, &["plan"], &["summary"]),
+                make_node("planner", NodeType::Agent, &["task"], &["plan"]),
+                make_node("implementer", NodeType::Agent, &["plan"], &["summary"]),
             ],
             edges: vec![make_edge("planner", "plan", "implementer", "plan")],
             loops: Vec::new(),
@@ -1348,15 +1369,18 @@ mod tests {
 
     #[test]
     fn override_applies_to_an_emergent_input_port() {
-        // A DocOnly/CodeMutating node declares NO input ports, so an override keyed
-        // on the edge's target port must still attach.
+        // #486 / #600: an `agent` node declares NO input ports (its
+        // inputs are emergent from edges), so an override keyed on the edge's target
+        // port must still attach — otherwise the operator's dummy input is silently
+        // dropped on exactly those nodes.
         let pipeline = PipelineDef {
             name: "test".into(),
             version: None,
             variables: HashMap::new(),
             nodes: vec![
-                make_node("up", NodeType::DocOnly, &["task"], &["code"]),
-                make_node("impl", NodeType::DocOnly, &[], &["out"]),
+                make_node("up", NodeType::Agent, &["task"], &["code"]),
+                // `impl` declares no inputs — the `code` input is emergent.
+                make_node("impl", NodeType::Agent, &[], &["out"]),
             ],
             edges: vec![make_edge("up", "code", "impl", "code")],
             loops: Vec::new(),
@@ -1410,8 +1434,8 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![
-                make_node("skipme", NodeType::DocOnly, &["task"], &["decl_out"]),
-                make_node("down", NodeType::DocOnly, &["edge_out"], &["z"]),
+                make_node("skipme", NodeType::Agent, &["task"], &["decl_out"]),
+                make_node("down", NodeType::Agent, &["edge_out"], &["z"]),
             ],
             edges: vec![make_edge("skipme", "edge_out", "down", "edge_out")],
             loops: Vec::new(),
@@ -1439,7 +1463,7 @@ mod tests {
             name: "test".into(),
             version: None,
             variables: HashMap::new(),
-            nodes: vec![make_node("lonely", NodeType::DocOnly, &["task"], &[])],
+            nodes: vec![make_node("lonely", NodeType::Agent, &["task"], &[])],
             edges: vec![],
             loops: Vec::new(),
             notes: Vec::new(),
@@ -1464,7 +1488,7 @@ mod tests {
             name: "test".into(),
             version: None,
             variables: HashMap::new(),
-            nodes: vec![make_node("entry", NodeType::DocOnly, &["task"], &["out"])],
+            nodes: vec![make_node("entry", NodeType::Agent, &["task"], &["out"])],
             edges: vec![],
             loops: Vec::new(),
             notes: Vec::new(),
@@ -1515,11 +1539,11 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![
-                make_node("planner", NodeType::DocOnly, &["task"], &["plan"]),
-                make_node("researcher", NodeType::DocOnly, &["task"], &["research"]),
+                make_node("planner", NodeType::Agent, &["task"], &["plan"]),
+                make_node("researcher", NodeType::Agent, &["task"], &["research"]),
                 make_node(
                     "implementer",
-                    NodeType::DocOnly,
+                    NodeType::Agent,
                     &["plan", "research"],
                     &["summary"],
                 ),
@@ -1581,6 +1605,7 @@ mod tests {
     fn completed_node_iters(id: &str, iters: &[(i64, NodeStatus)]) -> NodeState {
         let (head_iter, head_status) = iters.last().cloned().unwrap_or((1, NodeStatus::Pending));
         NodeState {
+            isolated_worktree: None,
             harness: None,
             cost: None,
             node_id: id.into(),
@@ -1602,6 +1627,7 @@ mod tests {
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
             missing_outputs: Vec::new(),
+            delivery: None,
         }
     }
 
@@ -1615,7 +1641,7 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![
-                make_node("reviewer", NodeType::DocOnly, &["task"], &["review"]),
+                make_node("reviewer", NodeType::Agent, &["task"], &["review"]),
                 make_node_with_repeated_input("implementer", "reviews"),
             ],
             edges: vec![EdgeDef {
@@ -1693,8 +1719,8 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![
-                make_node("reviewer", NodeType::DocOnly, &["task"], &["review"]),
-                make_node("implementer", NodeType::DocOnly, &["review"], &["summary"]),
+                make_node("reviewer", NodeType::Agent, &["task"], &["review"]),
+                make_node("implementer", NodeType::Agent, &["review"], &["summary"]),
             ],
             edges: vec![make_edge("reviewer", "review", "implementer", "review")],
             loops: Vec::new(),
@@ -1757,8 +1783,8 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![
-                make_node("reviewer", NodeType::DocOnly, &["task"], &["review"]),
-                make_node("implementer", NodeType::DocOnly, &["review"], &["summary"]),
+                make_node("reviewer", NodeType::Agent, &["task"], &["review"]),
+                make_node("implementer", NodeType::Agent, &["review"], &["summary"]),
             ],
             edges: vec![make_edge("reviewer", "review", "implementer", "review")],
             loops: Vec::new(),
@@ -2020,7 +2046,7 @@ mod tests {
             name: "test".into(),
             version: None,
             variables: HashMap::new(),
-            nodes: vec![make_node("worker", NodeType::DocOnly, &["task"], &["out"])],
+            nodes: vec![make_node("worker", NodeType::Agent, &["task"], &["out"])],
             edges: vec![],
             loops: Vec::new(),
             notes: Vec::new(),

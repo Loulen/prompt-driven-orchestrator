@@ -4,7 +4,7 @@ import { useEditStore } from "../stores/editStore";
 import { STATUS_DOT } from "../nodeStyles";
 import { NodeCard } from "./NodeCard";
 import PortRow from "./PortRow";
-import { NodeTypeIcon } from "./NodeTypeIcon";
+import { NodeTypeIcon, IsolationMarker } from "./NodeTypeIcon";
 import { useIsDropTarget } from "./DragHighlightContext";
 
 interface MergeEditData {
@@ -38,6 +38,10 @@ export function MergeEditNode({ data, id, selected }: NodeProps<Node<MergeEditDa
       <div className="flex items-center gap-2">
         <NodeTypeIcon type="merge" size={14} className="shrink-0 text-acc" />
         <span className="font-medium text-fg">{data.label}</span>
+        {/* #653: a Merge is isolated by construction and carries the marker
+            anyway — unmarked, it would read as LESS isolated than the Agent
+            feeding it. Coherence of reading before economy of pixels. */}
+        <IsolationMarker isolated />
       </div>
       <div className="mt-0.5 font-mono text-fg-4" style={{ fontSize: "9px" }}>
         {data.nodeId}

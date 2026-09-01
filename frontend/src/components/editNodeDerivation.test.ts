@@ -52,7 +52,7 @@ describe("deriveEditEdges targetHandle anchoring (#149)", () => {
     // handle (legacy anchoring) — a real rendered handle, so xyflow keeps the
     // edge (no error 008).
     const p = pipeline(
-      [node("src", "doc-only", [], ["plan"]), node("dst", "code-mutating", [], ["code"])],
+      [node("src", "agent", [], ["plan"]), node("dst", "agent", [], ["code"])],
       [{ source: { node: "src", port: "plan" }, target: { node: "dst", port: "plan" } }],
     );
     const edges = deriveEditEdges(p);
@@ -62,7 +62,7 @@ describe("deriveEditEdges targetHandle anchoring (#149)", () => {
 
   it("keeps the declared port for the End node (it retains a `result` input handle)", () => {
     const p = pipeline(
-      [node("src", "doc-only", [], ["plan"]), node("end", "end", ["result"], [])],
+      [node("src", "agent", [], ["plan"]), node("end", "end", ["result"], [])],
       [{ source: { node: "src", port: "plan" }, target: { node: "end", port: "result" } }],
     );
     const edges = deriveEditEdges(p);
@@ -71,7 +71,7 @@ describe("deriveEditEdges targetHandle anchoring (#149)", () => {
 
   it("keeps the declared port for structural nodes (merge)", () => {
     const p = pipeline(
-      [node("src", "doc-only", [], ["plan"]), node("m", "merge", ["branches"], ["merged"])],
+      [node("src", "agent", [], ["plan"]), node("m", "merge", ["branches"], ["merged"])],
       [{ source: { node: "src", port: "plan" }, target: { node: "m", port: "branches" } }],
     );
     const edges = deriveEditEdges(p);
@@ -81,9 +81,9 @@ describe("deriveEditEdges targetHandle anchoring (#149)", () => {
   it("binds both same-named edges to a side body handle when they pool into one body input (default left)", () => {
     const p = pipeline(
       [
-        node("a", "doc-only", [], ["plan"]),
-        node("b", "doc-only", [], ["plan"]),
-        node("dst", "code-mutating", [], ["code"]),
+        node("a", "agent", [], ["plan"]),
+        node("b", "agent", [], ["plan"]),
+        node("dst", "agent", [], ["code"]),
       ],
       [
         { source: { node: "a", port: "plan" }, target: { node: "dst", port: "plan" } },
@@ -100,9 +100,9 @@ describe("deriveEditEdges targetHandle anchoring (#149)", () => {
     // sides; each keeps its own anchor.
     const p = pipeline(
       [
-        node("a", "doc-only", [], ["plan"]),
-        node("b", "doc-only", [], ["plan"]),
-        node("dst", "code-mutating", [], ["code"]),
+        node("a", "agent", [], ["plan"]),
+        node("b", "agent", [], ["plan"]),
+        node("dst", "agent", [], ["code"]),
       ],
       [
         { source: { node: "a", port: "plan" }, target: { node: "dst", port: "plan" }, target_side: "top" },
@@ -142,12 +142,12 @@ describe("deriveEditEdges — work node with a vestigial declared `in` still anc
         {
           id: "src",
           name: "src",
-          type: "doc-only",
+          type: "agent",
           inputs: [],
           outputs: [{ name: "plan", repeated: false, side: "right" as const }],
           interactive: false,
         },
-        workNode("dst", "code-mutating", ["code"]),
+        workNode("dst", "agent", ["code"]),
       ],
       edges: [
         {
@@ -198,7 +198,7 @@ describe("deriveLoopRegions — collection regions (#151)", () => {
     // renders as a compact badge on the member card with the fan-out glyph `⇉`,
     // NOT a box and NOT the `↻` loop glyph.
     const p = pipelineWith(
-      [node("fixer", "code-mutating", ["fix"])],
+      [node("fixer", "agent", ["fix"])],
       [{ id: "per-issue", kind: "collection", over: "issues", members: ["fixer"] }],
     );
     const regions = deriveLoopRegions(p, null);
@@ -217,7 +217,7 @@ describe("deriveLoopRegions — collection regions (#151)", () => {
 
   it("renders a multi-member collection as a box", () => {
     const p = pipelineWith(
-      [node("fix-a", "code-mutating", ["a"]), node("fix-b", "code-mutating", ["b"])],
+      [node("fix-a", "agent", ["a"]), node("fix-b", "agent", ["b"])],
       [{ id: "per-issue", kind: "collection", over: "issues", members: ["fix-a", "fix-b"] }],
     );
     const regions = deriveLoopRegions(p, null);
@@ -231,7 +231,7 @@ describe("deriveLoopRegions — collection regions (#151)", () => {
     // `⇉ ...` text, kind `collection`) so the canvas can render the compact badge
     // on the card rather than a box.
     const p = pipelineWith(
-      [node("fixer", "code-mutating", ["fix"])],
+      [node("fixer", "agent", ["fix"])],
       [{ id: "per-issue", kind: "collection", over: "issues", members: ["fixer"] }],
     );
     const cards = deriveEditNodes(p, null);
@@ -248,7 +248,7 @@ describe("deriveLoopRegions — collection regions (#151)", () => {
     // compact `↻ <counter>` badge — otherwise the loop is invisible on the
     // canvas. The glyph is the loop glyph, not the collection `⇉`.
     const p = pipelineWith(
-      [node("worker", "code-mutating", ["out"])],
+      [node("worker", "agent", ["out"])],
       [{ id: "spin", kind: "bounded", members: ["worker"], max_iter: 4 }],
     );
     const cards = deriveEditNodes(p, null);
@@ -302,7 +302,7 @@ describe("deriveLoopRegions — collection regions (#151)", () => {
 
   const collectionPipeline = () =>
     pipelineWith(
-      [node("fixer", "code-mutating", ["fix"])],
+      [node("fixer", "agent", ["fix"])],
       [{ id: "per-issue", kind: "collection", over: "issues", members: ["fixer"] }],
     );
 
@@ -333,7 +333,7 @@ describe("deriveLoopRegions — collection regions (#151)", () => {
 
   it("does not attach a loop badge to a node that is no member", () => {
     const p = pipelineWith(
-      [node("fixer", "code-mutating", ["fix"]), node("other", "doc-only", ["x"])],
+      [node("fixer", "agent", ["fix"]), node("other", "agent", ["x"])],
       [{ id: "per-issue", kind: "collection", over: "issues", members: ["fixer"] }],
     );
     const cards = deriveEditNodes(p, null);

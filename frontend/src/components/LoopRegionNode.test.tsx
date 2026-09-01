@@ -23,7 +23,7 @@ function makeNode(id: string): NodeDef {
   return {
     id,
     name: id,
-    type: "code-mutating",
+    type: "agent",
     inputs: [],
     outputs: [{ name: "out", repeated: false, side: "right" }],
     interactive: false,

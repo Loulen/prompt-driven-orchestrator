@@ -59,6 +59,8 @@ export default function ProvisioningRulesEditor({
   const [plan, setPlan] = useState<ProvisioningPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
   const serialized = useMemo(() => JSON.stringify(rules), [rules]);
+  const visiblePlan = repository.trim() ? plan : null;
+  const visibleError = repository.trim() ? error : null;
 
   useEffect(() => {
     if (!repository.trim()) {
@@ -93,28 +95,28 @@ export default function ProvisioningRulesEditor({
       hardlink: new Map(),
       symlink: new Map(),
     };
-    for (const rule of plan?.rules ?? []) {
+    for (const rule of visiblePlan?.rules ?? []) {
       result[rule.mode].set(
         rule.pattern,
         rule.paths.length + rule.excluded_paths.length,
       );
     }
     return result;
-  }, [plan]);
+  }, [visiblePlan]);
 
   const ruleCounts = useMemo(() => {
     const result = new Map<ProvisioningScope, number>();
     for (const scope of SCOPES) {
       result.set(
         scope,
-        (plan?.rules ?? []).filter((rule) => rule.scope === scope).length,
+        (visiblePlan?.rules ?? []).filter((rule) => rule.scope === scope).length,
       );
     }
-    if (!plan) {
+    if (!visiblePlan) {
       result.set(level, rules.copy.length + rules.hardlink.length + rules.symlink.length);
     }
     return result;
-  }, [level, plan, rules]);
+  }, [level, visiblePlan, rules]);
 
   const conflictingPatterns = useMemo(() => {
     const result: Record<ProvisioningMode, Set<string>> = {
@@ -122,9 +124,9 @@ export default function ProvisioningRulesEditor({
       hardlink: new Set(),
       symlink: new Set(),
     };
-    for (const conflict of plan?.conflicts ?? []) {
+    for (const conflict of visiblePlan?.conflicts ?? []) {
       if (conflict.scope !== level) continue;
-      for (const rule of plan?.rules ?? []) {
+      for (const rule of visiblePlan?.rules ?? []) {
         if (
           rule.scope === level &&
           conflict.modes.includes(rule.mode) &&
@@ -135,16 +137,16 @@ export default function ProvisioningRulesEditor({
       }
     }
     return result;
-  }, [level, plan]);
+  }, [level, visiblePlan]);
 
   const gitProvidedPaths = useMemo(
     () =>
       new Set(
-        (plan?.entries ?? [])
+        (visiblePlan?.entries ?? [])
           .filter((entry) => entry.provided_by_git)
           .map((entry) => entry.relative_path),
       ),
-    [plan],
+    [visiblePlan],
   );
 
   function update(mode: ProvisioningMode, text: string) {
@@ -175,7 +177,7 @@ export default function ProvisioningRulesEditor({
         )}
       </div>
 
-      {plan?.conflicts.map((conflict) => (
+      {visiblePlan?.conflicts.map((conflict) => (
         <div
           key={`${conflict.scope}-${conflict.relative_path}`}
           role="alert"
@@ -185,7 +187,7 @@ export default function ProvisioningRulesEditor({
           declared as {conflict.modes.join(" and ")}. Keep one.
         </div>
       ))}
-      {error && <div role="alert" className="m-2 text-st-failed">{error}</div>}
+      {visibleError && <div role="alert" className="m-2 text-st-failed">{visibleError}</div>}
 
       <div className="grid grid-cols-3 gap-2 p-2">
         {MODES.map(({ key, color }) => (
@@ -195,7 +197,7 @@ export default function ProvisioningRulesEditor({
               {key}
             </div>
             <div className="space-y-1 border-b border-line bg-bg-2 px-2 py-1.5">
-              {(plan?.rules ?? [])
+              {(visiblePlan?.rules ?? [])
                 .filter(
                   (rule) =>
                     rule.mode === key &&
@@ -218,7 +220,7 @@ export default function ProvisioningRulesEditor({
                     </div>
                   );
                 })}
-              {!plan?.rules.some(
+              {!visiblePlan?.rules.some(
                 (rule) =>
                   rule.mode === key &&
                   SCOPES.indexOf(rule.scope) < SCOPES.indexOf(level),
@@ -257,12 +259,12 @@ export default function ProvisioningRulesEditor({
         <div className="mb-1 font-medium uppercase tracking-wide text-fg-4" style={{ fontSize: 9 }}>
           Resolved plan · live
         </div>
-        {(plan?.rules ?? []).filter((rule) => rule.unmatched).map((rule) => (
+        {(visiblePlan?.rules ?? []).filter((rule) => rule.unmatched).map((rule) => (
           <div key={`${rule.scope}-${rule.mode}-${rule.pattern}`} className="mb-1 rounded bg-amber-950/30 px-2 py-1 text-amber-400">
             No match: {rule.pattern} · normal, the Run still starts
           </div>
         ))}
-        {(plan?.rules ?? []).map((rule) => (
+        {(visiblePlan?.rules ?? []).map((rule) => (
           <details
             key={`${rule.scope}-${rule.mode}-${rule.pattern}`}
             className="border-t border-line-soft py-1 font-mono"
@@ -288,7 +290,8 @@ export default function ProvisioningRulesEditor({
           </details>
         ))}
         <div className="mt-1 text-fg-4">
-          {plan?.entries.filter((entry) => !entry.provided_by_git).length ?? 0} paths added · 0 Git paths touched
+          {visiblePlan?.entries.filter((entry) => !entry.provided_by_git).length ?? 0} paths added ·{" "}
+          {visiblePlan?.entries.filter((entry) => entry.provided_by_git).length ?? 0} Git paths skipped
         </div>
       </div>
     </section>

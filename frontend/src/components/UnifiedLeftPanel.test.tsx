@@ -7,6 +7,7 @@ import type { PipelineListEntry, RunListEntry, Trigger } from "../types";
 import type { LibraryPipelineEntry } from "../api";
 import { cleanupRun, deleteLibraryPipeline, deletePipeline, duplicateLibraryPipeline, fetchPipelines, importPipelineDocument, importWorkflow, openRunShell, pauseRun, renameRun, resumeRun, retryAll } from "../api";
 import { useEditStore } from "../stores/editStore";
+import { useRecentReposStore } from "../stores/recentReposStore";
 
 const mockRenameRun = vi.mocked(renameRun);
 const mockDeletePipeline = vi.mocked(deletePipeline);
@@ -481,6 +482,16 @@ describe("UnifiedLeftPanel runs grouped by repo (#258)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Configure project" }));
     expect(screen.getByTestId("project-edit-modal")).toBeInTheDocument();
     expect(screen.getByTestId("project-members-list")).toHaveTextContent("/repos/foo");
+  });
+
+  it("opens project onboarding from a recent repository before the first Run", () => {
+    useRecentReposStore.setState({ recentRepos: ["/repos/fresh"] });
+    renderPanel({ runs: [] });
+
+    fireEvent.click(screen.getByRole("button", { name: "Configure project" }));
+
+    expect(screen.getByTestId("project-edit-modal")).toBeInTheDocument();
+    expect(screen.getByTestId("project-members-list")).toHaveTextContent("/repos/fresh");
   });
 
   it("renders one repo-group header per distinct repo, alphabetical, when ≥ 2 repos", () => {

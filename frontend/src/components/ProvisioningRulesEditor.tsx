@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { previewProvisioning } from "../api";
 import type {
   ProvisioningMode,
@@ -58,6 +58,7 @@ export default function ProvisioningRulesEditor({
 }) {
   const [plan, setPlan] = useState<ProvisioningPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const textareas = useRef<Partial<Record<ProvisioningMode, HTMLTextAreaElement>>>({});
   const serialized = useMemo(() => JSON.stringify(rules), [rules]);
   const visiblePlan = repository.trim() ? plan : null;
   const visibleError = repository.trim() ? error : null;
@@ -184,7 +185,17 @@ export default function ProvisioningRulesEditor({
           className="m-2 rounded border border-st-failed bg-red-950/30 px-2 py-1.5 text-st-failed"
         >
           Mode conflict in {LEVEL_LABELS[conflict.scope]} — {conflict.relative_path} is
-          declared as {conflict.modes.join(" and ")}. Keep one.
+          declared as {conflict.modes.join(" and ")}. Keep one.{" "}
+          {conflict.scope === level && (
+            <button
+              type="button"
+              aria-label={`Jump to ${conflict.relative_path} conflict`}
+              onClick={() => textareas.current[conflict.modes[0]]?.focus()}
+              className="underline underline-offset-2"
+            >
+              Jump to line
+            </button>
+          )}
         </div>
       ))}
       {visibleError && <div role="alert" className="m-2 text-st-failed">{visibleError}</div>}
@@ -214,7 +225,10 @@ export default function ProvisioningRulesEditor({
                     <div
                       key={`${rule.scope}-${rule.pattern}`}
                       className={`flex items-center justify-between font-mono text-fg-4 ${redeclared ? "line-through opacity-60" : ""}`}
-                      style={{ fontSize: 9 }}
+                      style={{
+                        fontSize: 9,
+                        textDecorationLine: redeclared ? "line-through" : "none",
+                      }}
                     >
                       <span className="truncate">{rule.pattern}</span>
                       <span className="ml-1 shrink-0 rounded bg-bg-4 px-1">
@@ -233,6 +247,10 @@ export default function ProvisioningRulesEditor({
             </div>
             <div className="relative">
               <textarea
+                ref={(element) => {
+                  if (element) textareas.current[key] = element;
+                  else delete textareas.current[key];
+                }}
                 aria-label={`${key[0].toUpperCase()}${key.slice(1)} patterns`}
                 value={rules[key].join("\n")}
                 onChange={(event) => update(key, event.target.value)}

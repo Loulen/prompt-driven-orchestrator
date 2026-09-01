@@ -704,6 +704,8 @@ export interface NodeState {
   isolated_worktree?: boolean;
   /** Node provisioning recipe frozen into this iteration's NodeStarted event. */
   provisioning?: ProvisioningRules;
+  /** Time this iteration's isolated worktree recipe was first materialized. */
+  provisioning_frozen_at?: string;
   /**
    * #654/ADR-0060: what this NodeRun DELIVERED onto the run's branch — the two
    * tips its delivery moved the branch between. Present for any NodeRun that

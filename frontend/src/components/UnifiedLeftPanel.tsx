@@ -5,6 +5,7 @@ import type { LibraryPipelineEntry } from "../api";
 import { cleanupRun, createPipeline, duplicatePipeline, forgetRun, importPipelineDocument, importWorkflow, openRunShell, pauseRun, renameRun, resumeRun, retryAll } from "../api";
 import { useEditStore } from "../stores/editStore";
 import { useSelectionStore } from "../stores/selectionStore";
+import { useRecentReposStore } from "../stores/recentReposStore";
 import { handleSelectionKeydown } from "../lib/selectionKeys";
 import { type BulkItem, type BulkOutcome } from "../lib/bulk";
 import { groupByProject, type ProjectRef } from "../lib/groupByRepo";
@@ -110,6 +111,7 @@ export default function UnifiedLeftPanel({
   const openPipeline = useEditStore((s) => s.openPipeline);
   const removePipeline = useEditStore((s) => s.removePipeline);
   const activeTabId = useEditStore((s) => s.activeTabId);
+  const recentRepos = useRecentReposStore((s) => s.recentRepos);
 
   // #577 — multi-select. The per-tab sets live in the shared store (so a tab's
   // count survives a switch as its badge); the pending bulk action is local.
@@ -512,9 +514,13 @@ export default function UnifiedLeftPanel({
   );
   const availableRepos = useMemo(() => {
     const set = new Set<string>();
+    for (const path of recentRepos) set.add(path);
     for (const r of runs) if (r.effective_repo) set.add(r.effective_repo);
+    for (const project of projects) {
+      for (const path of project.members) set.add(path);
+    }
     return [...set];
-  }, [runs]);
+  }, [projects, recentRepos, runs]);
 
   // Group the active Runs list by Projet (#552), falling back to the #258
   // per-path grouping when nothing is named; `null` ⇒ the flat list.
@@ -647,11 +653,19 @@ export default function UnifiedLeftPanel({
             style={{ fontSize: "11.5px" }}
           >
             Runs
-            {availableRepos.length === 1 && (
+            {availableRepos.length > 0 && (
               <button
                 type="button"
                 aria-label="Configure project"
                 onClick={() => {
+                  if (availableRepos.length > 1) {
+                    setProjectEditor({
+                      project: null,
+                      name: "Project",
+                      memberPaths: [],
+                    });
+                    return;
+                  }
                   const path = availableRepos[0];
                   const project = projectOf(path);
                   openProjectEditor(
@@ -678,7 +692,7 @@ export default function UnifiedLeftPanel({
             )}
             <button
               onClick={onNewRun}
-              className={`${availableRepos.length === 1 ? "ml-1.5" : "ml-auto"} flex cursor-pointer items-center gap-1 rounded bg-acc px-1.5 py-0.5 font-medium text-[#04140d] transition-colors hover:bg-acc-dim`}
+              className={`${availableRepos.length > 0 ? "ml-1.5" : "ml-auto"} flex cursor-pointer items-center gap-1 rounded bg-acc px-1.5 py-0.5 font-medium text-[#04140d] transition-colors hover:bg-acc-dim`}
               style={{ fontSize: "10.5px" }}
             >
               <Plus size={10} />

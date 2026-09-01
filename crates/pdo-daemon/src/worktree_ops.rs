@@ -57,10 +57,18 @@ pub(crate) fn reap_orphan_sub_worktree(
     if sub_worktree_dir.exists() {
         let _ = std::fs::remove_dir_all(sub_worktree_dir);
     }
+
     info!(
         "Reaped sub-worktree {} (branch {sub_branch}) — nothing of value was there (#279/#489)",
         sub_worktree_dir.display()
     );
+}
+
+pub(crate) fn reap_orphan_run_worktree(repo_root: &Path, worktree_dir: &Path, branch: &str) {
+    reap_orphan_sub_worktree(repo_root, worktree_dir, branch);
+    if let Some(run_dir) = worktree_dir.parent() {
+        let _ = std::fs::remove_dir(run_dir);
+    }
 }
 
 pub(crate) fn worktree_dir_for_run(repo_root: &Path, run_id: &str) -> PathBuf {
@@ -2478,6 +2486,21 @@ mod tests {
         assert!(
             String::from_utf8_lossy(&after.stdout).trim().is_empty(),
             "sub-branch must be deleted after reap"
+        );
+    }
+
+    #[test]
+    fn reap_orphan_run_worktree_removes_empty_run_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+
+        let worktree = worktree_dir_for_run(repo, "failed-run");
+        reap_orphan_run_worktree(repo, &worktree, "pdo/run-failed-run");
+
+        assert!(
+            !worktree.parent().unwrap().exists(),
+            "an aborted Run must not leave its empty directory behind"
         );
     }
 

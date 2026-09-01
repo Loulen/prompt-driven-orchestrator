@@ -8010,7 +8010,7 @@ async fn create_run_inner(
     if let Err(e) =
         provisioning::provision_missing(&run_repo_root, &worktree_dir, &provisioning_plan)
     {
-        crate::worktree_ops::reap_orphan_sub_worktree(&run_repo_root, &worktree_dir, &branch_name);
+        crate::worktree_ops::reap_orphan_run_worktree(&run_repo_root, &worktree_dir, &branch_name);
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             serde_json::json!({
@@ -8034,7 +8034,7 @@ async fn create_run_inner(
             for (repo, snapshot) in &created_secondary_snapshots {
                 remove_secondary_snapshot(Path::new(repo), snapshot);
             }
-            crate::worktree_ops::reap_orphan_sub_worktree(
+            crate::worktree_ops::reap_orphan_run_worktree(
                 &run_repo_root,
                 &worktree_dir,
                 &branch_name,
@@ -8054,7 +8054,7 @@ async fn create_run_inner(
         for (repo, snapshot) in &created_secondary_snapshots {
             remove_secondary_snapshot(Path::new(repo), snapshot);
         }
-        crate::worktree_ops::reap_orphan_sub_worktree(&run_repo_root, &worktree_dir, &branch_name);
+        crate::worktree_ops::reap_orphan_run_worktree(&run_repo_root, &worktree_dir, &branch_name);
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             serde_json::json!({ "error": "event log error" }),
@@ -10453,6 +10453,9 @@ fn inject_frozen_node_provisioning(response: &mut serde_json::Value, events: &[e
         };
         if node.get("iter").and_then(serde_json::Value::as_i64) == Some(iter) {
             node["provisioning"] = rules.clone();
+            if node.get("provisioning_frozen_at").is_none() {
+                node["provisioning_frozen_at"] = serde_json::Value::String(event.ts.clone());
+            }
         }
     }
 }
@@ -25304,6 +25307,17 @@ edges:
                     "provisioning": { "copy": ["frozen"], "hardlink": [], "symlink": [] }
                 })),
             },
+            event_log::Event {
+                id: None,
+                run_id: "run".into(),
+                ts: "2026-09-01T12:02:00Z".into(),
+                kind: event_log::EventKind::NodeStarted,
+                node_id: Some("worker".into()),
+                iter: Some(2),
+                payload: Some(serde_json::json!({
+                    "provisioning": { "copy": ["frozen"], "hardlink": [], "symlink": [] }
+                })),
+            },
         ];
 
         inject_frozen_node_provisioning(&mut response, &events);
@@ -25311,6 +25325,10 @@ edges:
         assert_eq!(
             response["nodes"]["worker"]["provisioning"]["copy"],
             serde_json::json!(["frozen"])
+        );
+        assert_eq!(
+            response["nodes"]["worker"]["provisioning_frozen_at"],
+            serde_json::json!("2026-09-01T12:01:00Z")
         );
     }
 

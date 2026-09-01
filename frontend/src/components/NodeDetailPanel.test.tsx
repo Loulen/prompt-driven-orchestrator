@@ -198,6 +198,7 @@ describe("NodeDetailPanel", () => {
             node={makeNode({
               isolated_worktree: true,
               provisioning: { copy: [".env"], hardlink: [], symlink: [] },
+              provisioning_frozen_at: "2025-12-31T23:58:00Z",
             })}
             runId="run-1"
             provisioningRepository="/repo"
@@ -205,7 +206,11 @@ describe("NodeDetailPanel", () => {
         );
 
         expect(await screen.findByTestId("provisioning-isolated_node")).toHaveTextContent(
-          "frozen at 2026-01-01T00:00:00Z",
+          `frozen at ${new Date("2025-12-31T23:58:00Z").toLocaleTimeString(undefined, {
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+          })}`,
         );
         expect(screen.getByLabelText("Copy patterns")).toHaveAttribute("readonly");
       });

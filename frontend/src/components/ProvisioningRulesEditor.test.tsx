@@ -113,6 +113,62 @@ describe("ProvisioningRulesEditor", () => {
     );
   });
 
+  it("makes overrides visible and lets a conflict jump to its first rule", async () => {
+    vi.mocked(previewProvisioning).mockResolvedValue({
+      entries: [],
+      rules: [
+        {
+          scope: "instance",
+          mode: "copy",
+          pattern: ".env",
+          paths: [".env"],
+          excluded_paths: [],
+          unmatched: false,
+        },
+        {
+          scope: "isolated_node",
+          mode: "copy",
+          pattern: ".env",
+          paths: [".env"],
+          excluded_paths: [],
+          unmatched: false,
+        },
+        {
+          scope: "isolated_node",
+          mode: "symlink",
+          pattern: ".env",
+          paths: [".env"],
+          excluded_paths: [],
+          unmatched: false,
+        },
+      ],
+      conflicts: [
+        {
+          scope: "isolated_node",
+          relative_path: ".env",
+          modes: ["copy", "symlink"],
+        },
+      ],
+    });
+
+    render(
+      <ProvisioningRulesEditor
+        level="isolated_node"
+        repository="/repo"
+        rules={{ copy: [".env"], hardlink: [], symlink: [".env"] }}
+        onChange={() => {}}
+      />,
+    );
+
+    const inherited = (await screen.findAllByText("Instance · 1")).find((element) =>
+      element.classList.contains("bg-bg-4"),
+    );
+    expect(inherited).toBeDefined();
+    expect(inherited!.parentElement).toHaveStyle({ textDecorationLine: "line-through" });
+    await userEvent.click(screen.getByRole("button", { name: "Jump to .env conflict" }));
+    expect(screen.getByLabelText("Copy patterns")).toHaveFocus();
+  });
+
   it("stacks mode lists until its own container is wide enough for three columns", () => {
     render(
       <ProvisioningRulesEditor

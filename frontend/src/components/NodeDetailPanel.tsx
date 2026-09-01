@@ -404,7 +404,11 @@ export default function NodeDetailPanel({
               rules={node.provisioning ?? EMPTY_PROVISIONING_RULES}
               onChange={() => {}}
               readOnly
-              frozenAt={node.started_at ?? undefined}
+              frozenAt={
+                node.provisioning_frozen_at
+                  ? formatTime(node.provisioning_frozen_at)
+                  : undefined
+              }
               inherited={inheritedProvisioning}
               gitRef={provisioningGitRef}
             />

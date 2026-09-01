@@ -22,7 +22,7 @@ Contrairement à : Liza (pipelines YAML), Langgraph (conditional edges + LLM-rou
 
 ## Node
 
-Unité atomique d'un Pipeline. Un **Node** représente un rôle. La plupart des nodes lancent un **harnais agentique** (cf. §*Harnais agentique*) à qui on confie un prompt système qui définit sa mission (Implementer, Planner, Reviewer, etc.). Un node **`script`** fait exception : il exécute du **bash déterministe fourni par l'auteur**, sans LLM (ADR-0017).
+Unité atomique d'un Pipeline. Un **Node** représente un rôle. Un Node **`agent`** lance un **harnais agentique** (cf. §*Harnais agentique*) à qui on confie un prompt système qui définit sa mission (Implementer, Planner, Reviewer, etc.). Un node **`script`** exécute du **bash déterministe fourni par l'auteur**, sans LLM (ADR-0017).
 
 Un Node se définit par :
 
@@ -35,7 +35,16 @@ Asymétrie assumée : le Node *connaît* ses sorties, *découvre* ses entrées a
 
 Distinct de :
 
-- **NodeRun** — l'exécution d'un Node au sein d'un Pipeline Run précis. Un NodeRun = une session tmux d'un harnais agentique dans un sous-worktree dédié, avec un statut (pending/running/done/failed).
+- **NodeRun** — l'exécution d'un Node au sein d'un Pipeline Run précis. Un NodeRun = une session tmux d'un harnais agentique, avec un statut (pending/running/done/failed). Son isolation de travail dépend du Node.
+
+### Isolation de Node
+
+L'**isolation de Node** choisit où un NodeRun travaille : dans un sous-worktree propre, ou directement dans le worktree partagé du Run. Un Node `agent` est isolé par défaut ; partager le worktree du Run est un opt-out explicite de l'auteur du Pipeline. Un Node `script` partage le worktree du Run par défaut et peut opter pour l'isolation. Le choix reste écrit dans les deux cas : le Document de pipeline dit toujours où le Node travaille, sans le déduire de son type ou de son livrable attendu.
+
+Un Node isolé peut travailler en parallèle sans partager son arbre de travail. Un Node non isolé évite le coût d'un sous-worktree ; s'il s'exécute en même temps qu'un autre Node non isolé, l'auteur accepte qu'ils partagent leurs modifications. PDO ne sérialise pas ce choix à sa place. À la complétion, PDO commite tout changement que Git n'ignore pas ; le dépôt cible porte la responsabilité d'ignorer les fichiers qu'il ne veut pas versionner. Deux Runs ne partagent jamais leur worktree, même lorsqu'ils exécutent la même Pipeline (ADR-0060).
+
+Le Node ne porte aucune responsabilité Git particulière : il modifie les fichiers nécessaires. PDO livre les commits existants et crée un commit déterministe s'il reste des changements, avant que le Node soit déclaré terminé et que l'aval démarre.
+_Éviter_ : « doc-only » et « code-mutating » ; « worktree par pipeline » pour le worktree partagé d'un Run.
 
 ### Harnais agentique
 
@@ -63,7 +72,7 @@ Le **modèle** dit *quel agent* tourne, le **niveau d'effort** *combien il réfl
 - **Le catalogue se lit d'abord dans la source *générée*** *(terme, ADR-0056)* : un binaire n'énumère pas forcément là où on regarde. Le catalogue a trois sources, par préférence décroissante — le **script de complétion** (`<binaire> completion bash`, généré à partir des choix que le CLI déclare, donc préféré), le **sujet d'aide des réglages** (`<binaire> help config`), puis `--help`. Chaque axe (modèles, efforts) appartient à la **source la mieux placée qui répond pour lui**. `--help` tourne en premier quand même, parce que c'est là qu'un CLI **déclare ses sous-commandes** : on n'exécute que celles qu'il annonce (`claude` n'a pas de `completion` et lit l'argv comme un prompt — la lancer à l'aveugle coûterait un timeout de cinq secondes dans une réponse `/settings`). Mesuré : le `--help` de copilot 1.0.80 énumère ses efforts mais décrit `--model` en prose — le lire seul faisait conclure « copilot n'a pas de catalogue » alors qu'il en a un (#629). _Éviter_ : « la source du catalogue » au singulier ; choisir la source par nom de harnais (l'échelle est harnais-agnostique).
 - **Effort demandé ≠ effort obtenu** : le flag exprime une **intention** — un niveau non supporté retombe en silence, un plafond d'organisation peut clamper, un skill/sous-agent peut surclasser le niveau de session. À lire comme un levier de déterminisme et de latence, pas un cadran de coût. _Éviter_ : « effort garanti », « effort du run », « mode économique », « modèle global », « modèle du run ».
 - **Sémantique, pas layout** : la carte entre dans le **diff sémantique** et le `content_hash` de la bibliothèque.
-- **S'applique aux nodes qui lancent un agent** (`doc-only`, `code-mutating`, `merge`), jamais à un node `script`.
+- **S'applique aux nodes qui lancent un agent** (`agent`, `merge`), jamais à un node `script`.
 - **Ce que la reprise conserve dépend du harnais** : sur `claude`, le modèle survit, l'effort non — PDO le re-pose depuis l'événement de démarrage, jamais depuis le YAML courant, qui a pu être édité entre-temps (#424, ADR-0007). Le YAML est la vérité au *spawn*, l'event log au *resume*.
 - **Défaut d'instance** (#347) : un modèle par harnais peut être posé daemon-wide (Configuration d'instance, ADR-0015).
 
@@ -82,19 +91,19 @@ _Éviter_ : « profil » seul (ambigu avec le profil de staging), « preset », 
 
 ### Node `script` — exécution déterministe (ADR-0017)
 
-Un node **`script`** exécute le bash de l'auteur au lieu de lancer Claude, dans une **session tmux** attachable comme tout NodeRun (ADR-0005) : exit 0 ⇒ `completed`, non-zéro ou timeout ⇒ `failed`. En v1 il est d'**effet doc-only** (tourne dans le worktree du Run, doit le laisser propre).
+Un node **`script`** exécute le bash de l'auteur au lieu de lancer Claude, dans une **session tmux** attachable comme tout NodeRun (ADR-0005) : exit 0 ⇒ `completed`, non-zéro ou timeout ⇒ `failed`. Il partage le worktree du Run par défaut et porte le même choix d'isolation qu'un `agent` (cf. *Isolation de Node*).
 
 - **I/O par variables d'environnement** (`PDO_INPUT_<PORT>`, `PDO_OUTPUT_<PORT>`, `PDO_ARTIFACTS_DIR`, `PDO_VAR_<NAME>`…) : un script ne lit pas le préambule prose. Il écrit lui-même ses outputs ; la validation d'outputs s'applique en **fail-fast** (pas de retry interactif — la session a quitté). Contrat de refus → ADR-0035.
 - **Corps** stocké dans le slot prompt du node. Un corps vide fait échouer le lancement (fail-loud).
 - **Ni `model` ni `effort`** (aucun agent lancé).
-- **Sharp tool** : même surface de confiance que le guard de Trigger et le bash d'un agent — le bash de l'auteur dans son propre pipeline. Un script doc-only qui commit laisse l'arbre propre : responsabilité de l'auteur.
+- **Sharp tool** : même surface de confiance que le guard de Trigger et le bash d'un agent — le bash de l'auteur dans son propre pipeline. Un script non isolé qui commit laisse l'arbre propre : responsabilité de l'auteur.
 
 ## Dataflow
 
 Modèle (A) — **document-first, code en side-channel** :
 
 - Les arêtes du DAG transportent **uniquement des documents** (artefacts markdown).
-- Le **code** vit dans la branche du Pipeline Run. Quand un NodeRun finit, son sous-worktree est mergé dans la branche du Pipeline Run. Le NodeRun suivant fork un nouveau sous-worktree depuis cet état.
+- Le **code** vit dans la branche du Pipeline Run. Quand un NodeRun isolé finit, son sous-worktree est mergé dans cette branche. Quand un NodeRun non isolé finit, ses changements non ignorés y sont committés directement. Un NodeRun isolé lancé ensuite fork depuis cet état.
 - Les wires de l'éditeur = dataflow documentaire intentionnel. L'état du code suit en arrière-plan.
 
 ---
@@ -109,7 +118,7 @@ Une edge porte une clause `when:` **optionnelle**. Sans clause, l'edge est incon
 
 ### Évaluation — multi-match, pas d'ordre
 
-À l'arrivée d'un artefact sur un output port, **toutes** les edges sortantes dont la clause est satisfaite **firent** — le flux peut fan-out vers plusieurs nœuds simultanément. Pas de `first-match-wins`. Si deux conditions se chevauchent, les deux branches partent : c'est voulu (ADR-0001, *sharp tool*) — le designer écrit des conditions disjointes pour un XOR, ou converge un fan-out `code-mutating` via un `Merge`. Une edge **`else`** fire **uniquement si aucune edge sœur** (même output port source) n'a matché.
+À l'arrivée d'un artefact sur un output port, **toutes** les edges sortantes dont la clause est satisfaite **firent** — le flux peut fan-out vers plusieurs nœuds simultanément. Pas de `first-match-wins`. Si deux conditions se chevauchent, les deux branches partent : c'est voulu (ADR-0001, *sharp tool*) — le designer écrit des conditions disjointes pour un XOR, ou converge un fan-out de Nodes isolés via un `Merge`. Une edge **`else`** fire **uniquement si aucune edge sœur** (même output port source) n'a matché.
 
 Feedback runtime : un nœud qui a firé passe au vert ; les edges déclenchées sont marquées sur le canvas.
 
@@ -151,7 +160,7 @@ Pourquoi une identité nommée plutôt qu'une détection de cycle pure : « quel
 
 - **Succès anticipé** : une edge forward conditionnelle quittant un membre (`verdict=PASS → end`).
 - **Épuisement** (`bounded`) : à `iter = max_iter`, la re-entry est plafonnée. Le designer **peut** câbler une sortie d'épuisement (`when: { iter: { gte: $max } }`). Sinon, la boucle entre dans un état **bloqué « exhausted — unrouted »** explicite (jamais de stall silencieux), routable par le Pipeline Manager. Pas d'auto-proceed implicite.
-- **`collection`** : **barrière** — les edges quittant la boucle firent **une seule fois, quand tous les items sont terminés**. Liste vide → barrière immédiate. Items `code-mutating` → chacun son sous-worktree, convergence via `Merge`.
+- **`collection`** : **barrière** — les edges quittant la boucle firent **une seule fois, quand tous les items sont terminés**. Liste vide → barrière immédiate. Items isolés → chacun son sous-worktree, convergence via `Merge`.
 
 ### Imbrication — différée
 
@@ -188,7 +197,7 @@ Une **Note** est une annotation de documentation **inerte** posée sur le canvas
 - **`view` = layout, pas sémantique** : deux pipelines ne différant que par leurs notes comparent égaux.
 - **Mutable pendant un Run** : inerte, aucune session à orphaner — jamais rejetée sur un Run actif (contraste avec la suppression d'un node non-`pending`, interdite par ADR-0007).
 
-_Éviter_ : « commentaire » (évoque un commentaire YAML `#` ou d'issue), « placeholder annoté » (qui est un **vrai** nœud `doc-only` produit par l'import de workflow, ADR-0016).
+_Éviter_ : « commentaire » (évoque un commentaire YAML `#` ou d'issue), « placeholder annoté » (qui est un **vrai** nœud `agent` produit par l'import de workflow, ADR-0016).
 
 ---
 
@@ -268,16 +277,13 @@ PDO **ne gère pas** les skills, sous-agents, plugins ou MCP d'un harnais. Ce qu
 
 ---
 
-## `code-mutating` vs `doc-only`
+## Placement d'un NodeRun
 
-Chaque Node est typé par son **effet sur le code** :
+Où travaille un NodeRun est écrit sur le Node (cf. *Isolation de Node*, ADR-0060), jamais déduit de son type. Un Node isolé reçoit un sous-worktree forké depuis la branche du Pipeline Run et le merge dans cette branche à sa complétion. Un Node non isolé travaille directement dans le worktree du Run.
 
-- **`code-mutating`** — Implementer, Refactorer, Merge. Reçoit un sous-worktree forké depuis la branche du Pipeline Run. Peut éditer/commit/merger. À la fin du NodeRun, son sous-worktree est mergé dans la branche du Pipeline Run.
-- **`doc-only`** — Planner, Reviewer, Architect. Pas de sous-worktree. Lit la branche du Pipeline Run en read-only. Écrit uniquement dans le Blackboard.
+Parallélisation : les Nodes non isolés sont gratis-parallèles et partagent leur arbre de travail ; les Nodes isolés parallèles voient leurs branches mergées séquentiellement à la fin (ordre de complétion).
 
-Garde-fou : à la fin d'un NodeRun `doc-only`, la branche du Pipeline Run doit rester intacte. Violation détectée ⇒ le NodeRun échoue.
-
-Parallélisation : les `doc-only` sont gratis-parallèles ; les `code-mutating` parallèles voient leurs branches mergées séquentiellement à la fin (ordre de complétion).
+Le choix est **gelé au spawn du NodeRun** : une édition du Document déplace le prochain lancement, jamais une exécution vivante (ADR-0007).
 
 ### Merge-back d'un sous-worktree (ADR-0036)
 
@@ -289,7 +295,7 @@ Le merge-back suppose que le tip de la branche pipeline reste un **ancêtre** de
 
 ## Merge — nœud first-class
 
-Le **`Merge`** est un nœud first-class du DAG, type `code-mutating`, à placer explicitement par le designer (ADR-0006). L'utilisateur dessine la convergence ; le runtime ne l'invente pas.
+Le **`Merge`** est un nœud first-class du DAG, isolé d'office et sans réglage, à placer explicitement par le designer (ADR-0006). L'utilisateur dessine la convergence ; le runtime ne l'invente pas.
 
 ### Forme
 
@@ -299,13 +305,13 @@ Le **`Merge`** est un nœud first-class du DAG, type `code-mutating`, à placer 
 ### Sémantique runtime
 
 1. **Barrière edge-centrée** (addendum ADR-0006) : le Merge est prêt quand toutes ses edges entrantes sont résolues — chacune a soit **firé**, soit est **morte** (producteur complété sans firer, ou lui-même mort) — et qu'au moins une a firé. Il consomme uniquement les branches firées. Un Merge dont toutes les branches sont mortes est lui-même mort et sauté tant que `End` reste atteignable ; sinon le Run **halt explicitement** (« unrouted »), jamais de stall silencieux.
-2. **Fork** d'un sous-worktree depuis la branche du Pipeline Run, **`git merge`** de chaque upstream `code-mutating`.
+2. **Fork** d'un sous-worktree depuis la branche du Pipeline Run, **`git merge`** de chaque upstream isolé.
 3. **Si conflit** → spawn Claude Code dans le sous-worktree, qui lit le Blackboard pour reconstituer les intentions, résout, commit, écrit le `merged.md`.
 4. **Si pas de conflit** → `merged.md` trivial, commit, sans LLM.
 
 ### Lint info-only
 
-Un fan-out `code-mutating` sans `Merge` downstream affiche un diagnostic info-only sur le canvas (ADR-0001 : pas bloquant). Le canvas est l'unique surface des diagnostics pipeline-wide (#63).
+Un fan-out de Nodes isolés sans `Merge` downstream affiche un diagnostic info-only sur le canvas (ADR-0001 : pas bloquant). Le canvas est l'unique surface des diagnostics pipeline-wide (#63).
 
 ---
 
@@ -564,7 +570,7 @@ Exposées comme `POST /runs/<id>/commands` :
 | `extend_cycle` | (Legacy, cycles hors région) — refusé sur un membre de région : utiliser `bump_region` |
 | `resume_run` | Relance le Run depuis l'état actuel (post-conflit résolu, etc.) |
 | `kill_node` | Tue un NodeRun en cours (le marque `failed`) |
-| `restart_node` | Re-spawn un NodeRun au **même `iter`** ; sur un nœud `code-mutating`/`merge`, le sous-worktree est réutilisé en place — le travail non commité survit (#489). Préconditions et refus → ADR-0037 |
+| `restart_node` | Re-spawn un NodeRun au **même `iter`** ; sur un nœud isolé, le sous-worktree est réutilisé en place — le travail non commité survit (#489). Préconditions et refus → ADR-0037 |
 | `mark_node_done` | Force la complétion (nœud `interactive`, ou récupération d'un failed corrigé à la main). Même corps que `pdo complete` : refus 409 nommé → ADR-0035 |
 | `inject_artifact` | Pose un artefact à la main dans le Blackboard |
 | `cleanup_run` | Supprime branches, worktrees, artefacts (archive d'abord — ADR-0020) |
@@ -825,6 +831,8 @@ La création **depuis un YAML** (#345) est le round-trip natif de l'*Export as Y
 
 La **bibliothèque de nodes** contient les nodes réutilisables qu'un utilisateur peut ajouter à une Pipeline. La réutilisation reste une aide à l'édition : un Document de pipeline transportable développe chaque node partagé en node ordinaire, sans recréer son appartenance à la bibliothèque sur l'instance cible.
 
+Une entrée `agent` ou `script` **énonce son isolation** (cf. *Isolation de Node*) comme elle énonce son harnais et ses ports : l'entrée porte le choix, l'instanciation le restitue tel quel, et une entrée écrite avant que le champ existe se lit au défaut de son type — jamais comme un silence. L'isolation entre donc dans l'**identité sémantique** de l'entrée : deux Nodes identiques au worktree près ne sont pas le même contenu, et l'étoile de synchronisation le dit. Une entrée `merge`, `start` ou `end` ne porte aucune ligne, un Merge étant isolé par construction.
+
 _Éviter_ : « pipeline de bibliothèque » — les Pipelines appartiennent au registre d'instance, pas à la bibliothèque.
 
 ### Registre de pipelines
@@ -851,7 +859,7 @@ Décompilation **avec perte** d'un workflow Claude Code (`.claude/workflows/*.js
 _Éviter_ : « conversion », « migration » — la **migration** réécrit du YAML PDO d'un ancien schéma vers le courant (même format) ; l'**import** traduit un format étranger.
 
 **Placeholder annoté** :
-Nœud `doc-only` dont le corps explique un idiome de workflow que l'import v1 ne matérialise pas. L'annotation **est** le tutoriel d'onboarding : elle nomme ce qu'un utilisateur PDO n'écrirait jamais à la main (gestion worktrees, boucle budgétaire — remplacés par des features plateforme) et le traduit en interaction délibérée. Distinct du *nom placeholder* d'un Run.
+Nœud `agent` dont le corps explique un idiome de workflow que l'import v1 ne matérialise pas. L'annotation **est** le tutoriel d'onboarding : elle nomme ce qu'un utilisateur PDO n'écrirait jamais à la main (gestion worktrees, boucle budgétaire — remplacés par des features plateforme) et le traduit en interaction délibérée. Distinct du *nom placeholder* d'un Run.
 
 **Extraction verbatim** :
 Règle de récupération des prompts : string-literal sans interpolation → verbatim ; template-literal avec `${…}` → texte statique verbatim + marqueurs câblables ; prompt sans texte statique → placeholder annoté.
@@ -861,4 +869,5 @@ Règle de récupération des prompts : string-literal sans interpolation → ver
 - Un **Import de workflow** produit un **brouillon de Pipeline** dans le registre.
 - L'**import de Pipeline PDO** interprète un Document de pipeline transportable et crée une Pipeline indépendante ; il partage la même modale que l'Import de workflow, mais constitue un mode distinct et fidèle.
 - Idiomes mappés : `agent()` → **Node**, `pipeline()` → boucle **`collection`**, `for`/`while` autour d'un `agent()` → boucle **`bounded`**, `if`/`return` gardé → **edge conditionnelle**, schémas JSON → **frontmatter de port de sortie**.
-- Un idiome hors sous-ensemble → **placeholder annoté**. Un `git merge` scripté → Node `code-mutating` annoté, **pas** le Merge first-class (dont il excède le contrat).
+- Un idiome hors sous-ensemble → **placeholder annoté**. Un `git merge` scripté → Node `agent` annoté, **pas** le Merge first-class (dont il excède le contrat).
+- Tout rôle importé — placeholder annoté compris — devient un Node `agent` **isolé**, et le brouillon écrit la ligne. L'import ne déduit jamais l'isolation du prompt, du nom du rôle, de ses sorties ni de son appartenance à une région `collection` : un workflow étranger n'a pas d'avis sur les worktrees, et en inventer un est précisément la devinette qu'ADR-0060 supprime. L'auteur arbitre ensuite sur le canvas.

@@ -559,9 +559,32 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             let pipeline_path = resolve_run_pipeline_path(&repo_root, &run_id, pipeline_name);
             let worktree_dir = worktree_dir_for_run(&repo_root, &run_id);
             let artifacts_dir = worktree_dir.join(".pdo").join("artifacts");
-            // The shared chokepoint: both surfaces project the refusal through this
-            // one function, which is what makes "a refusal is never a 2xx" cover
-            // `POST /commands` too.
+
+            // #654 / ADR-0060: the manual completion delivers like every other
+            // one. Pre-#654 this arm ran neither the merge-back nor any
+            // worktree check, so an interactive node marked complete from the UI
+            // left its sub-worktree stranded and its shared-worktree edits
+            // uncommitted — the asymmetry ADR-0035 recorded as an accepted limit
+            // and this ticket removes. Same single operation, same events, before
+            // the terminal append and therefore before the downstream spawn.
+            if let Some(refusal) = crate::deliver_node_run(
+                &state,
+                &events,
+                rs_ref,
+                &repo_root,
+                &worktree_dir,
+                &run_id,
+                &node_id,
+                iter,
+            )
+            .await
+            {
+                return completion_refusal::refusal_response(&refusal);
+            }
+
+            // The shared chokepoint (#490). Both surfaces project the refusal
+            // through the same single function, which is what makes "a refusal is
+            // never a 2xx" cover `POST /commands` too.
             if let Some(refusal) = check_output_validation_with_retry(
                 &state,
                 &pipeline_path,
@@ -1417,12 +1440,22 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
         }
         RunCommand::RestartNode { node_id, iter } => {
-            // ADR-0037: EVERY KNOWABLE CAUSE IS TESTED BEFORE THE KILL, AND THE
-            // `SpawnOutcome` IS READ. ADR-0025 §2's "validate before writing" extends
-            // to the KILL, not just the append — the probe order below is the
-            // contract. Killing first, then discovering a bad Run/pipeline/node,
-            // answered `200 {"ok":true}` over a dead session and a node still
-            // projected `Running`.
+            // #489 / ADR-0037 — EVERY KNOWABLE CAUSE IS TESTED BEFORE THE KILL, AND
+            // THE `SpawnOutcome` IS READ.
+            //
+            // Pre-#489 this arm killed the tmux session, appended its
+            // `CommandIssued`, THEN discovered the Run / the pipeline / the node, and
+            // finally dropped `spawn_node`'s return without so much as a `let _ =`.
+            // Every one of the five `SpawnOutcome`s answered `200 {"ok":true}` — and
+            // on an isolated node the spawn failed 100% of the time
+            // (`git worktree add -b` on a branch that already exists, exit 255),
+            // which is the whole of #489: session dead, zero events, node still
+            // projected `Running`, and 30 s later the liveness sweep inventing
+            // `session_died` — a false cause that sent operators after tmux for a git
+            // bug.
+            //
+            // ADR-0025 §2's "validate before writing" now extends to the KILL, not
+            // just the append. The order below is the contract.
 
             // PRE-KILL PROBE 1: the transition guard. NOT `load_projected`, same
             // reason as `mark_node_done`:
@@ -1560,11 +1593,18 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 );
             }
 
-            // PRE-KILL PROBE 6: is the sub-worktree someone else's? A pure `git`
-            // read, paid on ADR-0037 §3's terms: nothing knowable is paid for with a
-            // kill. `Absent` / `Reusable` / `Recyclable` all proceed.
-            let owns_sub_worktree = node.node_type == pipeline::NodeType::CodeMutating
-                || node.node_type == pipeline::NodeType::Merge;
+            // ── PRE-KILL PROBE 6: is the sub-worktree someone else's? (#489-B) ────
+            //
+            // A pure `git` read. The cost is accepted on ADR-0037 §3's terms: nothing
+            // knowable is paid for with a kill. `Absent` / `Reusable` / `Recyclable`
+            // all proceed — `ensure_sub_worktree` handles each, and never destroys
+            // work in flight.
+            // #653/ADR-0060: read the isolation FROZEN on this iteration, not the
+            // document's — the re-spawn below will land in the frozen directory,
+            // so probing the other one would classify a worktree nobody is about
+            // to use (and skip the one that matters).
+            let owns_sub_worktree = crate::merge_action::frozen_isolation(&events, &node_id, iter)
+                .unwrap_or(node.is_isolated());
             if owns_sub_worktree {
                 let sub_wt_dir =
                     crate::worktree_ops::sub_worktree_path(&repo_root, &run_id, &node_id, iter);
@@ -3048,6 +3088,7 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![NodeDef {
+                isolated_worktree: None,
                 id: "sw1".into(),
                 name: "switch".into(),
                 node_type: NodeType::Switch,
@@ -3115,9 +3156,10 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![NodeDef {
+                isolated_worktree: None,
                 id: "b".into(),
                 name: "b".into(),
-                node_type: NodeType::DocOnly,
+                node_type: NodeType::Agent,
                 inputs: vec![Port {
                     name: "in".into(),
                     repeated: false,

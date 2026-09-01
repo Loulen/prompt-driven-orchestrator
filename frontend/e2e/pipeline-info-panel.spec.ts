@@ -54,7 +54,8 @@ nodes:
     view: { x: 0, y: 100 }
   - id: worker
     name: worker
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: in
     outputs:
@@ -219,7 +220,7 @@ test("YAML tab shows serialized pipeline and updates on mutation (#69)", async (
 
   // Add a new node via toolbar. Since #307/#310 `toolbar-add` is a dropdown
   // (Node | Note) — open it, then pick "Node" (`add-menu-node`), which inserts a
-  // `code-mutating` node whose default name is "implementer" (node ids are random
+  // isolated node whose default name is "implementer" (node ids are random
   // nanoids, no longer `node-N`).
   await dismissConflictIfPresent(page);
   await page.getByTestId("toolbar-add").click();

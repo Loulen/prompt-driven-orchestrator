@@ -495,9 +495,10 @@ mod tests {
 
     fn doc_node(id: &str) -> NodeDef {
         NodeDef {
+            isolated_worktree: None,
             id: id.into(),
             name: id.into(),
-            node_type: NodeType::DocOnly,
+            node_type: NodeType::Agent,
             inputs: vec![Port {
                 name: "task".into(),
                 repeated: false,
@@ -531,8 +532,8 @@ mod tests {
         }
     }
 
-    /// No edges: every node is immediately ready, so `compute_ready_to_spawn`
-    /// reflects pure declaration order.
+    /// A pipeline of root `agent` nodes (no edges) — every node is immediately
+    /// ready, so `compute_ready_to_spawn` reflects pure declaration order.
     fn roots_pipeline(ids: &[&str]) -> PipelineDef {
         PipelineDef {
             name: "roots".into(),
@@ -548,9 +549,10 @@ mod tests {
 
     fn node_def_info(id: &str) -> NodeDefInfo {
         NodeDefInfo {
+            isolated_worktree: None,
             id: id.into(),
             name: None,
-            node_type: "doc-only".into(),
+            node_type: "agent".into(),
             view_x: None,
             view_y: None,
             inputs: Vec::new(),
@@ -560,6 +562,7 @@ mod tests {
 
     fn completed_node(id: &str) -> NodeState {
         NodeState {
+            isolated_worktree: None,
             harness: None,
             cost: None,
             node_id: id.into(),
@@ -573,11 +576,13 @@ mod tests {
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
             missing_outputs: Vec::new(),
+            delivery: None,
         }
     }
 
     fn running_node(id: &str) -> NodeState {
         NodeState {
+            isolated_worktree: None,
             harness: None,
             cost: None,
             node_id: id.into(),
@@ -591,6 +596,7 @@ mod tests {
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
             missing_outputs: Vec::new(),
+            delivery: None,
         }
     }
 
@@ -720,6 +726,7 @@ mod tests {
     fn node_iter(id: &str, iter: i64, status: NodeStatus) -> NodeState {
         let completed_at = (status == NodeStatus::Completed).then(|| "t1".to_string());
         NodeState {
+            isolated_worktree: None,
             harness: None,
             cost: None,
             node_id: id.into(),
@@ -738,6 +745,7 @@ mod tests {
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
             missing_outputs: Vec::new(),
+            delivery: None,
         }
     }
 

@@ -32,7 +32,8 @@ nodes:
     view: { x: 0, y: 200 }
   - id: dragger
     name: dragger
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     prompt_file: ${PIPELINE_NAME}.prompts/dragger.md
     inputs:
       - { name: in, side: left }

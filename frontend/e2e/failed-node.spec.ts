@@ -42,7 +42,8 @@ nodes:
     view: { x: 100, y: 0 }
   - id: worker
     name: worker
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - { name: task, side: top }
     outputs:

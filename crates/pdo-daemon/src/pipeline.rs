@@ -28,29 +28,60 @@ pub(crate) struct Diagnostic {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum NodeType {
-    DocOnly,
-    CodeMutating,
+    /// The one agentic node type (#653 / ADR-0060). It replaces the retired pair
+    /// of types, which named an *effect* while the runtime only ever read them as
+    /// a working-directory decision. Where the NodeRun works is now the node's
+    /// own `isolated_worktree` line, not a guess from its type.
+    Agent,
     Start,
     End,
     Switch,
     Loop,
     Merge,
-    /// Runs author-written bash deterministically instead of launching an agent
-    /// (ADR-0017): a tmux session whose tail is `timeout N bash <body>` — exit 0 ⇒
-    /// completes, non-zero/timeout ⇒ fails. Doc-only-effect: no sub-worktree, it
-    /// runs in the run's shared worktree.
+    /// A node that runs author-written bash deterministically instead of
+    /// launching Claude (#248 / ADR-0017). Runs in a tmux session (attachable
+    /// like any NodeRun) whose tail is `timeout N bash <body>`: exit 0 ⇒ node
+    /// completes, non-zero/timeout ⇒ node fails. Shares the Run worktree by
+    /// default and opts into isolation like any `agent` (#653).
     Script,
 }
 
 impl NodeType {
-    /// A *regular* node declares no inputs: they are emergent, derived from
-    /// incoming edges and named after the edge target port (ADR-0011). Structural
-    /// nodes (start/end/switch/loop/merge) keep their declared input ports.
+    /// A *regular* node (agent / script) declares no inputs: its inputs are
+    /// emergent, derived from incoming edges and named after the edge target
+    /// port (#149 / ADR-0011). Structural nodes (start/end/switch/loop/merge)
+    /// keep their required, declared input ports. A `script` node consumes whole
+    /// artifacts by edge just like a work node, so its inputs are emergent too
+    /// (#248).
     pub(crate) fn has_emergent_inputs(&self) -> bool {
-        matches!(
-            self,
-            NodeType::DocOnly | NodeType::CodeMutating | NodeType::Script
-        )
+        matches!(self, NodeType::Agent | NodeType::Script)
+    }
+
+    /// The isolation this type carries when the document says nothing (#653 /
+    /// ADR-0060): an `agent` is isolated, a `script` shares the Run worktree,
+    /// and every other type carries no isolation setting at all — `merge` is
+    /// isolated by construction, structural nodes never run in a worktree of
+    /// their own. `None` is what keeps `isolated_worktree` off a Merge/Start/End
+    /// document instead of writing a line nobody may edit.
+    pub(crate) fn default_isolation(&self) -> Option<bool> {
+        match self {
+            NodeType::Agent => Some(true),
+            NodeType::Script => Some(false),
+            _ => None,
+        }
+    }
+
+    /// The wire/YAML spelling of this type — the single place the strings live.
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            NodeType::Agent => "agent",
+            NodeType::Start => "start",
+            NodeType::End => "end",
+            NodeType::Switch => "switch",
+            NodeType::Loop => "loop",
+            NodeType::Merge => "merge",
+            NodeType::Script => "script",
+        }
     }
 }
 
@@ -184,6 +215,38 @@ pub(crate) struct NodeDef {
     /// node's `pdo fail`. Semantic, not layout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_fail: Option<bool>,
+    /// Where this node's NodeRun works (#653, ADR-0060). `true` ⇒ a sub-worktree
+    /// of its own; `false` ⇒ the Run's shared worktree. Carried only by `agent`
+    /// and `script`, where [`normalize_node_value`] fills the type's default
+    /// (`agent` isolated, `script` shared) so the parsed document ALWAYS states
+    /// the choice — including when it equals the default. `None` on `merge`
+    /// (isolated by construction) and on structural nodes (no worktree of their
+    /// own). Semantic, not layout: moving a node between worktrees changes what
+    /// the pipeline does, so it enters the diff and the library content hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolated_worktree: Option<bool>,
+}
+
+impl NodeDef {
+    /// Whether this node's NodeRun gets a sub-worktree of its own (#653,
+    /// ADR-0060). `merge` is isolated by construction and exposes no setting;
+    /// `agent`/`script` read their explicit line, falling back to the type's
+    /// default for a `NodeDef` built in code rather than parsed; every other
+    /// type runs in the Run worktree.
+    ///
+    /// This is the *document's* answer. A live NodeRun reads its FROZEN answer
+    /// off `NodeStarted` instead — editing the graph never moves a running
+    /// iteration between worktrees.
+    pub(crate) fn is_isolated(&self) -> bool {
+        match self.node_type {
+            NodeType::Merge => true,
+            NodeType::Agent | NodeType::Script => self
+                .isolated_worktree
+                .or_else(|| self.node_type.default_isolation())
+                .unwrap_or(false),
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -440,16 +503,17 @@ const KNOWN_TOP_LEVEL_KEYS: &[&str] = &[
 ];
 
 /// The node `type` strings the parser accepts verbatim. Anything else is coerced
-/// to `doc-only` with a warning (see `normalize_node_value`); `for-each`/`foreach`
+/// to `agent` with a warning (see `normalize_node_value`); `for-each`/`foreach`
 /// are refused outright (retired in ADR-0011).
+///
+/// #653 / ADR-0060: `doc-only` and `code-mutating` are GONE, with no alias and no
+/// migrator. They now take the same generic path as any other invalid value —
+/// coerced to `agent` with the unknown-type warning — because a bespoke
+/// diagnostic for a retired type is a compatibility branch by another name.
 pub(crate) const VALID_NODE_TYPES: &[&str] = &[
-    "doc-only",
-    "code-mutating",
-    "start",
-    "end",
-    "switch",
-    "loop",
-    "merge",
+    "agent", "start", "end", "switch", "loop", "merge",
+    // #248: without this, a `type: script` node is silently rewritten to
+    // `agent` with only a diagnostic (see the layer-1 test).
     "script",
 ];
 
@@ -460,10 +524,15 @@ pub(crate) const VALID_NODE_TYPES: &[&str] = &[
 /// for node-type handling:
 ///
 /// - `for-each` / `foreach` → hard `Err` (the type was removed in ADR-0011;
-///   coercing a fan-out to `doc-only` would run each item's work zero times).
-/// - missing `type` → default to `doc-only` (noisy warning).
-/// - unknown `type` → coerce to `doc-only` (noisy warning).
+///   coercing a fan-out to `agent` would run each item's work zero times).
+/// - missing `type` → default to `agent` (noisy warning).
+/// - unknown `type` → coerce to `agent` (noisy warning). This is the arm the
+///   retired `doc-only` / `code-mutating` now land in (#653).
 /// - a known type (incl. legacy `switch`/`loop`) → left untouched, no warning.
+///
+/// It then stamps the node's isolation default (#653): an `agent`/`script` with
+/// no `isolated_worktree` key gets its type's default written in, so a parsed
+/// document always states where the node works.
 ///
 /// A non-mapping value (e.g. a stray scalar in the `nodes:` list) is a no-op.
 pub(crate) fn normalize_node_value(
@@ -481,9 +550,9 @@ pub(crate) fn normalize_node_value(
         .to_string();
 
     match node_map.get(&type_key).and_then(|v| v.as_str()) {
-        // ForEach is RETIRED (ADR-0011): a hard refusal, not the warn+coerce
-        // below — rewriting a fan-out node to doc-only would run each item's work
-        // zero times.
+        // ForEach is RETIRED (ADR-0011 / #269): a hard refusal, not the
+        // warn+coerce below — silently rewriting a fan-out node to a work node
+        // would run each item's work zero times.
         Some(t @ ("for-each" | "foreach")) => {
             return Err(ParseError::MissingField(format!(
                 "node '{node_id}': node type '{t}' was removed (ADR-0011) — \
@@ -493,32 +562,71 @@ pub(crate) fn normalize_node_value(
         None => {
             diagnostics.push(Diagnostic {
                 severity: Severity::Warning,
-                message: format!("node '{node_id}': missing 'type', defaulting to 'doc-only'"),
+                message: format!("node '{node_id}': missing 'type', defaulting to 'agent'"),
             });
-            node_map.insert(type_key, serde_yaml::Value::String("doc-only".into()));
+            node_map.insert(type_key, serde_yaml::Value::String("agent".into()));
         }
         Some(t) if !VALID_NODE_TYPES.contains(&t) => {
             diagnostics.push(Diagnostic {
                 severity: Severity::Warning,
                 message: format!(
-                    "node '{node_id}': unknown node type '{t}', defaulting to 'doc-only'"
+                    "node '{node_id}': unknown node type '{t}', defaulting to 'agent'"
                 ),
             });
-            node_map.insert(type_key, serde_yaml::Value::String("doc-only".into()));
+            node_map.insert(type_key, serde_yaml::Value::String("agent".into()));
         }
         _ => {}
     }
 
-    // Fold a legacy flat `model:` / `effort:` into `harnesses.claude.*` so a parse
-    // is lossless even before the on-disk migrator has rewritten the file, keeping
-    // `harnesses` the single source the resolver reads.
+    stamp_isolation_default(node_map);
+
+    // #550: fold a legacy flat `model:` / `effort:` into `harnesses.claude.*` so
+    // that a parse is lossless even before the on-disk migrator has rewritten the
+    // file. The migrator persists the same fold; this is the in-memory safety net
+    // that keeps `harnesses` the single source the resolver reads.
     fold_flat_model_effort_into_harnesses(node_map);
 
     Ok(diagnostics)
 }
 
-/// Fold a node's legacy flat `model:` / `effort:` keys into
-/// `harnesses.claude.{model, effort}` (ADR-0046), removing the flat keys.
+/// The node key that says where a NodeRun works (#653, ADR-0060).
+pub(crate) const ISOLATED_WORKTREE_KEY: &str = "isolated_worktree";
+
+/// Write a node's isolation default into the raw YAML when the document is
+/// silent (#653, ADR-0060).
+///
+/// This is what makes "the Document always states the choice" true without
+/// asking every author to type the line: an `agent` with no `isolated_worktree`
+/// parses as isolated and *re-serializes* saying so. A type that carries no
+/// isolation (`merge`, `start`, `end`, `switch`, `loop`) has any stray key
+/// dropped rather than round-tripped — a Merge is isolated by construction, and
+/// a line nobody may edit would only invite someone to edit it.
+///
+/// Runs after the type normalization above, so it reads the coerced type.
+fn stamp_isolation_default(node_map: &mut serde_yaml::Mapping) {
+    let key = serde_yaml::Value::String(ISOLATED_WORKTREE_KEY.into());
+    let default = match node_map
+        .get(serde_yaml::Value::String("type".into()))
+        .and_then(|v| v.as_str())
+    {
+        Some("agent") => Some(true),
+        Some("script") => Some(false),
+        _ => None,
+    };
+    match default {
+        Some(value) => {
+            if !node_map.get(&key).map(|v| v.is_bool()).unwrap_or(false) {
+                node_map.insert(key, serde_yaml::Value::Bool(value));
+            }
+        }
+        None => {
+            node_map.remove(&key);
+        }
+    }
+}
+
+/// Fold a node's legacy flat `model:` / `effort:` keys (#296/#424) into
+/// `harnesses.claude.{model, effort}` (#550, ADR-0046), removing the flat keys.
 ///
 /// Shared by [`normalize_node_value`] and the pipeline migrator so both fold
 /// identically. Returns `true` iff the raw YAML changed — the migrator's
@@ -704,7 +812,7 @@ pub(crate) fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
     }
 
     for node in &pipeline.nodes {
-        if !matches!(node.node_type, NodeType::DocOnly | NodeType::CodeMutating) {
+        if node.node_type != NodeType::Agent {
             for port in node
                 .outputs
                 .iter()
@@ -1075,7 +1183,8 @@ nodes:
       - name: result
   - id: ab12cd34
     name: planner
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:
@@ -1096,7 +1205,7 @@ nodes:
             .find(|n| n.id == "ab12cd34")
             .unwrap();
         assert_eq!(node.name, "planner");
-        assert_eq!(node.node_type, NodeType::DocOnly);
+        assert_eq!(node.node_type, NodeType::Agent);
         assert_eq!(node.inputs.len(), 1);
         assert_eq!(node.inputs[0].name, "task");
         assert_eq!(node.outputs.len(), 1);
@@ -1112,7 +1221,8 @@ nodes:
 name: no-name
 nodes:
   - id: ab12cd34
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: in
     outputs:
@@ -1131,7 +1241,8 @@ name: old-style
 nodes:
   - id: ab12cd34
     name: worker
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     prompt_file: prompts/worker.md
     inputs:
       - name: in
@@ -1172,7 +1283,8 @@ nodes:
       - name: result
   - id: ab12cd34
     name: worker
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs: []
     outputs: []
 "#;
@@ -1193,7 +1305,8 @@ nodes:
       - name: user_prompt
   - id: ab12cd34
     name: worker
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs: []
     outputs: []
 "#;
@@ -1307,7 +1420,8 @@ name: with-halt
 nodes:
   - id: ab12cd34
     name: reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: review
 edges:
@@ -1327,7 +1441,8 @@ name: with-reason
 nodes:
   - id: ab12cd34
     name: reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: review
 edges:
@@ -1354,19 +1469,22 @@ name: conditional-edges
 nodes:
   - id: ab000001
     name: reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: review
   - id: ab000002
     name: implementer
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     inputs:
       - name: review
     outputs:
       - name: code
   - id: ab000003
     name: archiver
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: review
     outputs:
@@ -1404,7 +1522,8 @@ name: interactive-pipe
 nodes:
   - id: ab000001
     name: griller
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     interactive: true
     inputs:
       - name: task
@@ -1412,7 +1531,8 @@ nodes:
       - name: brief
   - id: ab000002
     name: worker
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     inputs:
       - name: brief
     outputs:
@@ -1528,14 +1648,16 @@ variables:
 nodes:
   - id: ab000001
     name: planner
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:
       - name: plan
   - id: ab000002
     name: implementer
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     inputs:
       - name: plan
     outputs:
@@ -1561,12 +1683,14 @@ name: dangling
 nodes:
   - id: ab000001
     name: planner
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: plan
   - id: ab000002
     name: implementer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
 edges:
   - source: { node: ab000001, port: plaan }
     target: { node: ab000002, port: spec }
@@ -1599,12 +1723,14 @@ name: dangling-node
 nodes:
   - id: ab000001
     name: planner
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: plan
   - id: ab000002
     name: implementer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
 edges:
   - source: { node: ab000001, port: plan }
     target: { node: ghost, port: plan }
@@ -1635,7 +1761,8 @@ nodes:
       - name: user_prompt
   - id: ab000001
     name: planner
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: plan
   - id: end
@@ -1667,7 +1794,8 @@ nodes:
       - name: user_prompt
   - id: ab000001
     name: worker
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: out
   - id: end
@@ -1709,7 +1837,8 @@ name: bad-edge
 nodes:
   - id: ab000001
     name: planner
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: plan
 edges:
@@ -1730,21 +1859,25 @@ edges:
 
     #[test]
     fn warns_on_source_port_typo_but_not_emergent_target() {
-        // Outputs stay declared, so a source-port typo still warns. Inputs on a
-        // regular node are emergent — any target port is valid by construction, so
-        // there must be no false-positive "target port not found".
+        // Outputs stay declared, so a source-port typo is still a warning. Inputs
+        // on a regular (agent / script) node are emergent (#149): the
+        // input is derived from the edge and named after the target port, so any
+        // target port is valid by construction — no false-positive "target port
+        // not found" diagnostic (regression guard for run-minimal / edit-and-save).
         let yaml = with_start_end(
             r#"
 name: bad-port
 nodes:
   - id: ab000001
     name: planner
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: plan
   - id: ab000002
     name: implementer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
 edges:
   - source: { node: ab000001, port: plaan }
     target: { node: ab000002, port: anything }
@@ -1779,7 +1912,8 @@ nodes:
       - name: user_prompt
   - id: ab000001
     name: only
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: out
   - id: end
@@ -1820,14 +1954,16 @@ name: cycle
 nodes:
   - id: ab000001
     name: implementer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: review
     outputs:
       - name: code
   - id: ab000002
     name: reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: code
     outputs:
@@ -1860,12 +1996,14 @@ name: with-region
 nodes:
   - id: ab000001
     name: implementer
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     outputs:
       - name: code
   - id: ab000002
     name: reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: review
 loops:
@@ -1897,7 +2035,8 @@ name: with-collection
 nodes:
   - id: ab000001
     name: triage
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: plan
         frontmatter:
@@ -1905,7 +2044,8 @@ nodes:
             type: list
   - id: ab000002
     name: fixer
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     outputs:
       - name: fix
 loops:
@@ -1939,7 +2079,8 @@ name: with-view
 nodes:
   - id: ab12cd34
     name: planner
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     view: { x: 100, y: 200 }
     outputs:
       - name: plan
@@ -1966,12 +2107,14 @@ name: conditional
 nodes:
   - id: ab000001
     name: reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: review
   - id: ab000002
     name: implementer
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     inputs:
       - name: review
     outputs:
@@ -1997,12 +2140,14 @@ name: repeated-edge
 nodes:
   - id: ab000001
     name: reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: review
   - id: ab000002
     name: implementer
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     outputs:
       - name: code
 edges:
@@ -2028,12 +2173,14 @@ name: routed-edge
 nodes:
   - id: ab000001
     name: reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: review
   - id: ab000002
     name: implementer
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     outputs:
       - name: code
 edges:
@@ -2071,12 +2218,14 @@ name: anchored-edge
 nodes:
   - id: ab000001
     name: planner
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: plan
   - id: ab000002
     name: implementer
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     outputs:
       - name: code
 edges:
@@ -2103,12 +2252,14 @@ name: unanchored-edge
 nodes:
   - id: ab000001
     name: planner
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: plan
   - id: ab000002
     name: implementer
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     outputs:
       - name: code
 edges:
@@ -2133,12 +2284,14 @@ name: auto-edge
 nodes:
   - id: ab000001
     name: planner
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: plan
   - id: ab000002
     name: implementer
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     outputs:
       - name: code
 edges:
@@ -2159,12 +2312,14 @@ name: plain-edge
 nodes:
   - id: ab000001
     name: planner
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: plan
   - id: ab000002
     name: implementer
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     outputs:
       - name: code
 edges:
@@ -2184,7 +2339,8 @@ name: multi-port
 nodes:
   - id: ab000001
     name: planner
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:
@@ -2192,7 +2348,8 @@ nodes:
       - name: task_list
   - id: ab000002
     name: implementer
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     inputs:
       - name: plan
       - name: task_list
@@ -2200,7 +2357,8 @@ nodes:
       - name: summary
   - id: ab000003
     name: reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: summary
     outputs:
@@ -2227,7 +2385,8 @@ name: with-schema
 nodes:
   - id: ab12cd34
     name: reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: code
     outputs:
@@ -2281,7 +2440,8 @@ name: sides-test
 nodes:
   - id: ab12cd34
     name: worker
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: left-in
         side: left
@@ -2329,7 +2489,8 @@ name: defaults-test
 nodes:
   - id: ab12cd34
     name: worker
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: a
       - name: b
@@ -2418,10 +2579,13 @@ nodes:
         assert_eq!(mg.outputs[0].name, "merged");
     }
 
-    /// The shipped `disk-janitor` pipeline must parse cleanly and keep `reap` a
-    /// `script` node — a silent degrade to `doc-only` would spend an LLM turn and
-    /// lose determinism. `serializer_round_trip` only asserts *if* a pipeline is
-    /// valid; this pins that it is.
+    // --- Script node tests (#248 / ADR-0017) ---
+
+    /// The shipped `disk-janitor` pipeline (#480, #128 Track A) must always parse
+    /// cleanly: the `reap` node stays a `script` node (a silent degrade to
+    /// non-isolated would spend an LLM turn and lose determinism) and no diagnostic
+    /// is error-severity. `serializer_round_trip` only asserts *if* a pipeline is
+    /// valid (it `continue`s past a non-200 GET); this pins that it *is*.
     #[test]
     fn shipped_disk_janitor_pipeline_is_valid() {
         let yaml = include_str!("../../../.pdo/pipelines/disk-janitor.yaml");
@@ -2491,9 +2655,9 @@ nodes:
     }
 
     #[test]
-    fn script_node_is_not_rewritten_to_doc_only() {
-        // Silent-failure guard: `script` must be in `valid_types`, else
-        // `parse_pipeline` degrades the node to `doc-only` with a diagnostic.
+    fn script_node_is_not_rewritten_to_agent() {
+        // ⚠️ silent-failure guard: `script` must be in `valid_types`, else
+        // `parse_pipeline` degrades the node to non-isolated with a diagnostic.
         let yaml = with_start_end(
             r#"
 name: script-not-rewritten
@@ -2513,7 +2677,7 @@ nodes:
         assert_eq!(
             node.node_type,
             NodeType::Script,
-            "must not degrade to doc-only"
+            "must not degrade to non-isolated"
         );
         assert!(
             !result
@@ -2533,6 +2697,7 @@ nodes:
     #[test]
     fn script_node_roundtrips_via_serde() {
         let node = NodeDef {
+            isolated_worktree: None,
             id: "s1".into(),
             name: "notify".into(),
             node_type: NodeType::Script,
@@ -2573,7 +2738,8 @@ name: legacy-pipeline
 nodes:
   - id: ab000001
     name: planner
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:
@@ -2605,7 +2771,8 @@ name: profile-pipeline
 nodes:
   - id: ab000001
     name: planner
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:
@@ -2643,7 +2810,8 @@ name: custom-pipeline
 nodes:
   - id: ab000001
     name: planner
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:
@@ -2772,7 +2940,8 @@ name: switch-test
 nodes:
   - id: reviewer
     name: Reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: review
         frontmatter:
@@ -2819,7 +2988,8 @@ name: switch-no-default
 nodes:
   - id: reviewer
     name: Reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: review
         frontmatter:
@@ -2861,7 +3031,8 @@ name: switch-explicit-default
 nodes:
   - id: reviewer
     name: Reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: review
         frontmatter:
@@ -3106,14 +3277,16 @@ nodes:
       - name: done
   - id: ab000002
     name: implementer
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     inputs:
       - name: task
     outputs:
       - name: code
   - id: ab000003
     name: reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: code
     outputs:
@@ -3192,12 +3365,14 @@ name: cyclic
 nodes:
   - id: ab000001
     name: implementer
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     outputs:
       - name: code
   - id: ab000002
     name: reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: review
 edges:
@@ -3243,12 +3418,14 @@ name: cyclic-declared
 nodes:
   - id: ab000001
     name: implementer
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     outputs:
       - name: code
   - id: ab000002
     name: reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: review
 edges:
@@ -3324,7 +3501,7 @@ loops:
         let types: Vec<&NodeType> = result.pipeline.nodes.iter().map(|n| &n.node_type).collect();
         assert!(types.contains(&&NodeType::Start));
         assert!(types.contains(&&NodeType::End));
-        assert!(types.contains(&&NodeType::DocOnly));
+        assert!(types.contains(&&NodeType::Agent));
     }
 
     #[test]
@@ -3335,7 +3512,8 @@ name: typed-switch
 nodes:
   - id: reviewer
     name: Reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: code
     outputs:
@@ -3402,7 +3580,8 @@ name: untyped-switch
 nodes:
   - id: reviewer
     name: Reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: code
     outputs:
@@ -3432,7 +3611,8 @@ name: bad-switch-when
 nodes:
   - id: reviewer
     name: Reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: code
     outputs:
@@ -3472,7 +3652,8 @@ name: untyped-upstream
 nodes:
   - id: reviewer
     name: Reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: code
     outputs:
@@ -3534,7 +3715,8 @@ name: valid-switch
 nodes:
   - id: reviewer
     name: Reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: code
     outputs:
@@ -3642,7 +3824,8 @@ name: not-a-switch
 nodes:
   - id: planner
     name: Planner
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:
@@ -3656,7 +3839,7 @@ nodes:
 
     #[test]
     fn foreach_node_type_is_refused_at_parse() {
-        // Not warn+coerce: silently rewriting a fan-out node to doc-only would
+        // Not warn+coerce: silently rewriting a fan-out node to non-isolated would
         // run each item's work zero times. The error names the migration path.
         for t in ["for-each", "foreach"] {
             let yaml = format!(
@@ -3705,7 +3888,7 @@ edges: []
             "{}",
             diags[0].message
         );
-        assert_eq!(type_str(&v).as_deref(), Some("doc-only"));
+        assert_eq!(type_str(&v).as_deref(), Some("agent"));
     }
 
     #[test]
@@ -3718,7 +3901,7 @@ edges: []
             "{}",
             diags[0].message
         );
-        assert_eq!(type_str(&v).as_deref(), Some("doc-only"));
+        assert_eq!(type_str(&v).as_deref(), Some("agent"));
     }
 
     #[test]
@@ -3729,6 +3912,177 @@ edges: []
             assert!(diags.is_empty(), "type {t} should not warn");
             assert_eq!(type_str(&v).as_deref(), Some(*t));
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // #653 / ADR-0060 — `agent` + explicit isolation
+    // -----------------------------------------------------------------------
+
+    fn isolation_of(v: &serde_yaml::Value) -> Option<Option<bool>> {
+        let map = v.as_mapping()?;
+        Some(
+            map.get(serde_yaml::Value::String(ISOLATED_WORKTREE_KEY.into()))
+                .map(|value| value.as_bool().expect("isolation must be a bool")),
+        )
+    }
+
+    #[test]
+    fn a_silent_agent_parses_isolated_and_says_so() {
+        // The editor default is `true`, and the parsed document STATES it: an
+        // author who never touched the control still reads where the node works.
+        let mut v = node_value("id: n1\nname: X\ntype: agent\n");
+        assert!(normalize_node_value(&mut v).unwrap().is_empty());
+        assert_eq!(isolation_of(&v), Some(Some(true)));
+    }
+
+    #[test]
+    fn a_silent_script_parses_shared_and_says_so() {
+        let mut v = node_value("id: n1\nname: X\ntype: script\n");
+        assert!(normalize_node_value(&mut v).unwrap().is_empty());
+        assert_eq!(isolation_of(&v), Some(Some(false)));
+    }
+
+    #[test]
+    fn an_explicit_isolation_is_never_overwritten() {
+        for (written, expected) in [("false", false), ("true", true)] {
+            for node_type in ["agent", "script"] {
+                let mut v = node_value(&format!(
+                    "id: n1\nname: X\ntype: {node_type}\nisolated_worktree: {written}\n"
+                ));
+                assert!(normalize_node_value(&mut v).unwrap().is_empty());
+                assert_eq!(
+                    isolation_of(&v),
+                    Some(Some(expected)),
+                    "{node_type} wrote {written}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn types_without_isolation_carry_no_line() {
+        // A Merge is isolated by construction and Start/End own no worktree —
+        // writing a line nobody may edit would only invite someone to edit it.
+        // A stray key is dropped rather than round-tripped.
+        for node_type in ["merge", "start", "end", "switch", "loop"] {
+            let mut v = node_value(&format!(
+                "id: n1\nname: X\ntype: {node_type}\nisolated_worktree: false\n"
+            ));
+            normalize_node_value(&mut v).unwrap();
+            assert_eq!(isolation_of(&v), Some(None), "type {node_type}");
+        }
+    }
+
+    #[test]
+    fn retired_types_fail_like_any_other_invalid_value() {
+        // #653: no alias, no migrator, no bespoke diagnostic. The two retired
+        // types take the generic unknown-type path — the message must not name
+        // them any differently than `bogus`.
+        for retired in ["doc-only", "code-mutating"] {
+            let mut v = node_value(&format!("id: n1\nname: X\ntype: {retired}\n"));
+            let diags = normalize_node_value(&mut v).unwrap();
+            assert_eq!(diags.len(), 1, "type {retired}");
+            assert_eq!(
+                diags[0].message,
+                format!("node 'n1': unknown node type '{retired}', defaulting to 'agent'")
+            );
+            assert_eq!(type_str(&v).as_deref(), Some("agent"));
+        }
+    }
+
+    #[test]
+    fn isolation_round_trips_through_the_pipeline_serializer() {
+        let yaml = "\
+name: iso
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: shared
+    name: Shared
+    type: agent
+    isolated_worktree: false
+  - id: forked
+    name: Forked
+    type: agent
+  - id: builder
+    name: Builder
+    type: script
+  - id: sandboxed
+    name: Sandboxed
+    type: script
+    isolated_worktree: true
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges: []
+";
+        let parsed = parse_pipeline(yaml).unwrap().pipeline;
+        let by_id = |id: &str| parsed.nodes.iter().find(|n| n.id == id).unwrap();
+        assert_eq!(by_id("shared").isolated_worktree, Some(false));
+        assert_eq!(by_id("forked").isolated_worktree, Some(true));
+        assert_eq!(by_id("builder").isolated_worktree, Some(false));
+        assert_eq!(by_id("sandboxed").isolated_worktree, Some(true));
+
+        // Re-serialize and re-parse: every agent/script still states its choice.
+        let out = serde_yaml::to_string(&parsed).unwrap();
+        assert_eq!(out.matches("isolated_worktree:").count(), 4, "{out}");
+        let again = parse_pipeline(&out).unwrap().pipeline;
+        for node in &again.nodes {
+            let original = parsed.nodes.iter().find(|n| n.id == node.id).unwrap();
+            assert_eq!(
+                node.isolated_worktree, original.isolated_worktree,
+                "{}",
+                node.id
+            );
+        }
+    }
+
+    #[test]
+    fn is_isolated_reads_the_line_and_merge_reads_nothing() {
+        let yaml = "\
+name: iso
+nodes:
+  - id: shared
+    name: Shared
+    type: agent
+    isolated_worktree: false
+  - id: forked
+    name: Forked
+    type: agent
+  - id: gather
+    name: Gather
+    type: merge
+    inputs:
+      - name: branches
+        repeated: true
+    outputs:
+      - name: merged
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges: []
+";
+        let parsed = parse_pipeline(yaml).unwrap().pipeline;
+        let by_id = |id: &str| parsed.nodes.iter().find(|n| n.id == id).unwrap();
+        assert!(!by_id("shared").is_isolated());
+        assert!(by_id("forked").is_isolated());
+        assert!(
+            by_id("gather").is_isolated(),
+            "a Merge is isolated by construction, with no line to read"
+        );
+        assert!(!by_id("start").is_isolated());
     }
 
     #[test]
@@ -3791,7 +4145,8 @@ name: per-node-model
 nodes:
   - id: ab000001
     name: implementer
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     model: opus
     outputs:
       - name: code
@@ -3840,7 +4195,8 @@ name: no-model
 nodes:
   - id: ab000001
     name: implementer
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     outputs:
       - name: code
 "#,
@@ -3870,14 +4226,16 @@ name: per-node-effort
 nodes:
   - id: ab000001
     name: implementer
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     model: opus
     effort: low
     outputs:
       - name: code
   - id: ab000002
     name: exotic
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     effort: turbo
     outputs:
       - name: notes
@@ -3927,7 +4285,8 @@ name: no-effort
 nodes:
   - id: ab000001
     name: implementer
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     outputs:
       - name: code
 "#,
@@ -3953,7 +4312,8 @@ name: frontmatter-rt
 nodes:
   - id: reviewer
     name: reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: code
     outputs:
@@ -3993,7 +4353,8 @@ name: switch-rt
 nodes:
   - id: reviewer
     name: reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: code
     outputs:
@@ -4046,7 +4407,8 @@ name: multi-when-rt
 nodes:
   - id: reviewer
     name: reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: code
     outputs:
@@ -4102,7 +4464,8 @@ nodes:
       - name: user_prompt
   - id: worker
     name: Worker
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:
@@ -4140,7 +4503,8 @@ nodes:
       - name: user_prompt
   - id: designer
     name: Designer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:
@@ -4189,7 +4553,8 @@ nodes:
       - name: user_prompt
   - id: designer
     name: Designer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:
@@ -4238,7 +4603,8 @@ nodes:
       - name: user_prompt
   - id: tester
     name: Tester
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: screens
         port_type: image_list
@@ -4395,14 +4761,16 @@ nodes:
       - name: user_prompt
   - id: ab000001
     name: implementer
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     inputs:
       - name: task
     outputs:
       - name: code
   - id: ab000002
     name: reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: code
     outputs:

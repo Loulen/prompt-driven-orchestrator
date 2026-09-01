@@ -101,28 +101,34 @@ describe("EditNode start/end markers — green-on-complete (issue #105, inline r
 });
 
 describe("EditNode slim card (issue #149)", () => {
-  function workProps(overrides: Partial<{ interactive: boolean }> = {}) {
+  function workProps(overrides: Partial<{ interactive: boolean; isolated: boolean }> = {}) {
     const data = {
       label: "rewrite_section",
       nodeId: "nd_4f2a",
-      nodeType: "code-mutating" as NodeType,
+      nodeType: "agent" as NodeType,
       status: "pending" as NodeStatus,
       reached: false,
       inputs: [],
       outputs: [{ name: "out", side: "right" as const }],
       interactive: overrides.interactive ?? false,
+      isolated: overrides.isolated ?? false,
     };
     return {
-      ...markerProps({ nodeType: "code-mutating" }),
+      ...markerProps({ nodeType: "agent" }),
       id: "nd_4f2a",
       data,
     } as unknown as Parameters<typeof EditNode>[0];
   }
 
-  it("shows the node name and the code/doc marker", () => {
-    render(<EditNode {...workProps()} />, { wrapper: Wrapper });
+  it("shows the node name and the isolation marker (#653)", () => {
+    render(<EditNode {...workProps({ isolated: true })} />, { wrapper: Wrapper });
     expect(screen.getByText("rewrite_section")).toBeTruthy();
-    expect(screen.getByTestId("code-doc-marker")).toBeTruthy();
+    expect(screen.getByTestId("isolation-marker")).toBeTruthy();
+  });
+
+  it("leaves a shared-worktree node unmarked (#653)", () => {
+    render(<EditNode {...workProps({ isolated: false })} />, { wrapper: Wrapper });
+    expect(screen.queryByTestId("isolation-marker")).toBeNull();
   });
 
   it("does not render the node id on the card", () => {
@@ -181,7 +187,7 @@ describe("EditNode emergent anchoring keyed on node type (issue #175)", () => {
     // edge could anchor by drop and they all snapped to the left. Anchoring is
     // keyed on node TYPE now, so the per-side anchors appear regardless.
     const { container } = render(
-      <EditNode {...nodeProps("code-mutating", [{ name: "in", side: "left" }])} />,
+      <EditNode {...nodeProps("agent", [{ name: "in", side: "left" }])} />,
       { wrapper: Wrapper },
     );
     const handleIds = Array.from(container.querySelectorAll(".react-flow__handle")).map((h) =>

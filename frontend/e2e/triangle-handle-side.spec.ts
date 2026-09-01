@@ -36,7 +36,8 @@ nodes:
     view: { x: 0, y: 100 }
   - id: checker
     name: checker
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     prompt_file: ${PIPELINE_NAME}.prompts/checker.md
     inputs:
       - name: task

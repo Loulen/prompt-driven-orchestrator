@@ -33,7 +33,8 @@ nodes:
     view: { x: 0, y: 0 }
   - id: impl1
     name: implementer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - { name: in, side: left }
     outputs:
@@ -41,7 +42,8 @@ nodes:
     view: { x: 200, y: 160 }
   - id: reviewer
     name: reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - { name: in, side: left }
     outputs:

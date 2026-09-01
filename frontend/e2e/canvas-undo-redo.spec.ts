@@ -33,7 +33,8 @@ nodes:
     view: { x: 0, y: 100 }
   - id: alpha
     name: alpha
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - { name: in, side: left }
     outputs:
@@ -41,7 +42,8 @@ nodes:
     view: { x: 250, y: 100 }
   - id: beta
     name: beta
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - { name: in, side: left }
     outputs:

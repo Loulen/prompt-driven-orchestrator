@@ -1,7 +1,7 @@
 //! Layer 3 (#552, ADR-0046) — the **Projet** tier of the harness axis, end to end
 //! through the daemon.
 //!
-//! A single unpinned `doc-only` node, spawned through the **tmux command seam** (a
+//! A single unpinned non-isolated node, spawned through the **tmux command seam** (a
 //! harmless `sleep`, never a real agent). With no node pin and no instance
 //! default, the only tier that can name a harness is the **Projet** of the Run's
 //! primary repo. The tests prove:
@@ -27,7 +27,8 @@ nodes:
       - name: user_prompt
   - id: aaaaaaaa
     name: worker
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     outputs:
       - name: out
     view: { x: 200, y: 60 }

@@ -295,9 +295,10 @@ mod tests {
 
     fn make_node(id: &str, outputs: Vec<Port>) -> NodeDef {
         NodeDef {
+            isolated_worktree: None,
             id: id.into(),
             name: id.into(),
-            node_type: NodeType::DocOnly,
+            node_type: NodeType::Agent,
             inputs: Vec::new(),
             outputs,
             interactive: false,

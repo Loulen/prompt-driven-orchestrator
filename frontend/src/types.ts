@@ -464,7 +464,9 @@ export interface UpdateSettingsRequest {
 // YAML into a region. `loop` was likewise removed in #171.
 // `script` (#248 / ADR-0017) runs author-written bash deterministically instead
 // of launching Claude; the FE union is not 1:1 with the backend enum.
-export type NodeType = "doc-only" | "code-mutating" | "start" | "end" | "merge" | "script";
+// `agent` (#653 / ADR-0060) replaces `doc-only` and `code-mutating`: the type
+// names the execution role, and where the NodeRun works is `isolated_worktree`.
+export type NodeType = "agent" | "start" | "end" | "merge" | "script";
 
 export interface RunListEntry {
   run_id: string;
@@ -649,7 +651,28 @@ export interface NodeState {
    * skip) or a pre-#616 daemon.
    */
   harness?: string;
+  /**
+   * #653/ADR-0060: where this NodeRun was FROZEN to work at spawn — `true` its
+   * own sub-worktree, `false` the Run's. This, not the document, is what the run
+   * inspector shows: editing the graph never moves a live iteration. Absent for a
+   * node that never started, a structural node, or a pre-#653 daemon.
+   */
+  isolated_worktree?: boolean;
+  /**
+   * #654/ADR-0060: what this NodeRun DELIVERED onto the run's branch — the two
+   * tips its delivery moved the branch between. Present for any NodeRun that
+   * delivered changes, isolated or not; absent for one that delivered nothing
+   * (no commit was written) and on a pre-#654 daemon. Its presence, never the
+   * node's type or isolation, is what says a per-node diff exists.
+   */
+  delivery?: NodeDelivery | null;
   cost?: NodeCost | null;
+}
+
+/** The two run-branch tips one delivery moved between (#654 / ADR-0060). */
+export interface NodeDelivery {
+  before: string;
+  after: string;
 }
 
 export interface EdgeInfo {
@@ -684,6 +707,8 @@ export interface NodeDefInfo {
   id: string;
   name?: string | null;
   node_type: NodeType;
+  /** #653: where the node works, as the Run's pipeline snapshot froze it. */
+  isolated_worktree?: boolean | null;
   view_x: number | null;
   view_y: number | null;
   inputs: PortBrief[];
@@ -1031,6 +1056,12 @@ export interface NodeDef {
   harnesses?: Record<string, HarnessSettings>;
   /** Atomic agent selection for this node. Missing/`inherit` continues precedence. */
   agent_choice?: AgentChoice | null;
+  /** #653/ADR-0060: where this node's NodeRun works — `true` a sub-worktree of
+   *  its own, `false` the Run's shared worktree. Carried by `agent` and `script`
+   *  only, and ALWAYS serialized for them (including at the default), so a
+   *  document never leaves the reader to guess. Absent on `merge` (isolated by
+   *  construction) and on structural nodes. */
+  isolated_worktree?: boolean | null;
 }
 
 export interface AgentCombination {

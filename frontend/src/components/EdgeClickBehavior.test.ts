@@ -27,7 +27,7 @@ function makeNode(overrides: Partial<NodeDef> = {}): NodeDef {
   return {
     id: "default",
     name: "Default",
-    type: "doc-only",
+    type: "agent",
     inputs: [{ name: "in", repeated: false }],
     outputs: [{ name: "out", repeated: false }],
     interactive: false,

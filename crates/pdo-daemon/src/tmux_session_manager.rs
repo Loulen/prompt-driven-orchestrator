@@ -87,7 +87,7 @@ pub enum SessionTail<'a> {
         /// <uuid>`). Claude Code names its transcript `<session_id>.jsonl`, so
         /// pinning it lets the liveness sweep resolve a node's transcript by
         /// *identity* instead of by the newest `.jsonl` in a cwd it shares with the
-        /// manager and any sibling non-`code-mutating`/`merge` node. `None` *or* an
+        /// manager and any sibling non-isolated node. `None` *or* an
         /// empty string ⇒ no `--session-id`, byte-identical legacy tail — the state
         /// for infra sessions (`__manager__` / `__merge_resolver__`) that own no
         /// `NodeStarted`, are never probed by the sweep and are never resumed.
@@ -546,7 +546,7 @@ pub fn build_tmux_script(
 /// id (recorded on `NodeStarted` at spawn), the tail is `claude --resume <uuid>`,
 /// which re-enters *this node's* transcript. The pre-#473 tail was a bare
 /// `--continue`, which re-enters "the most recent conversation of the cwd" — and
-/// for a non-`code-mutating`/`merge` node that cwd is the Run worktree, shared with
+/// for a non-isolated node that cwd is the Run worktree, shared with
 /// the manager's `claude` and any sibling non-CM node, so a resumed node could pick
 /// up the *manager's* (or a sibling's) conversation. `session_id` = `None` or empty
 /// (a pre-#473 row with no recorded id) falls back to that bare `--continue`,
@@ -2009,14 +2009,21 @@ pub fn apply_sweep(socket: &str, decisions: &[SweepDecision]) -> SweepTally {
 }
 
 /// Resolve the working_dir for a NodeRun given run context.
+/// Where a NodeRun's files live: its own sub-worktree when `isolated`, the Run's
+/// shared worktree otherwise (#653, ADR-0060).
+///
+/// Pre-#653 this keyed off the node *type* string (`code-mutating` ⇒ its own
+/// tree). Isolation is now a per-node choice that the type no longer implies, so
+/// callers pass the answer — frozen from `NodeStarted` for a live iteration,
+/// read off the document otherwise.
 pub fn working_dir_for_node(
     repo_root: &Path,
     run_id: &str,
     node_id: &str,
     iter: i64,
-    node_type: &str,
+    isolated: bool,
 ) -> PathBuf {
-    if node_type == "code-mutating" {
+    if isolated {
         repo_root
             .join(".pdo")
             .join("runs")

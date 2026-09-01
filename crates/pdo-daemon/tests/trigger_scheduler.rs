@@ -24,7 +24,8 @@ nodes:
       - name: user_prompt
   - id: solo
     name: solo
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: in
     outputs:

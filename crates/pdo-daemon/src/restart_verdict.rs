@@ -3,7 +3,10 @@
 //!
 //! Le type ne porte **aucun statut** : la projection ([`restart_response`]) en est
 //! la seule propriétaire, donc « un spawn demandé qui n'a pas eu lieu répond 2xx »
-//! est inexprimable.
+//! est inexprimable. Avant #489 le bras jetait le `SpawnOutcome` de `spawn_node`
+//! — pas même un `let _ =` — et répondait `200 {"ok":true}` sur les cinq issues,
+//! y compris `Failed`, y compris un `node_id` absent du pipeline, et y compris le
+//! cas où le sous-worktree existait déjà (100 % des nœuds isolated).
 //!
 //! Contrairement à `completion_refusal` (type tout-refus, invariant « jamais 2xx »),
 //! celui-ci mélange succès, sursis et refus : l'invariant est **une projection

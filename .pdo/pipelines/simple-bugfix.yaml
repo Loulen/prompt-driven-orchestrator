@@ -21,7 +21,8 @@ nodes:
     y: 517
 - id: 9LvO3oid
   name: Debugger
-  type: code-mutating
+  type: agent
+  isolated_worktree: true
   view:
     x: 529
     y: -10
@@ -43,7 +44,8 @@ nodes:
     port_type: image_list
 - id: KHFCO0US
   name: implementer
-  type: code-mutating
+  type: agent
+  isolated_worktree: true
   view:
     x: 1109
     y: -19
@@ -52,7 +54,8 @@ nodes:
     side: bottom
 - id: 9NOnrpKY
   name: Visual tester
-  type: code-mutating
+  type: agent
+  isolated_worktree: true
   view:
     x: 1152
     y: 371
@@ -71,7 +74,8 @@ nodes:
     port_type: image_list
 - id: mWllKR47
   name: Ship It
-  type: code-mutating
+  type: agent
+  isolated_worktree: true
   view:
     x: 748
     y: 399

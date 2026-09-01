@@ -15,7 +15,8 @@ nodes:
       - name: user_prompt
   - id: worker
     name: Worker
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:
@@ -143,7 +144,8 @@ nodes:
       - name: user_prompt
   - id: worker
     name: Worker
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:
@@ -151,7 +153,8 @@ nodes:
     view: { x: 200, y: 100 }
   - id: reviewer
     name: Reviewer
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: code
     outputs:
@@ -206,7 +209,8 @@ nodes:
       - name: user_prompt
   - id: worker
     name: Worker
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:
@@ -214,7 +218,8 @@ nodes:
     view: { x: 200, y: 100 }
   - id: pending-node
     name: PendingNode
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: data
     outputs:
@@ -251,7 +256,8 @@ nodes:
       - name: user_prompt
   - id: worker
     name: Worker
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
     outputs:

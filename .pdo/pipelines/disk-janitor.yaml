@@ -11,6 +11,7 @@ nodes:
   - id: reap
     name: Reclaim disk
     type: script
+    isolated_worktree: false
     outputs:
       - { name: out, side: bottom }
     view: { x: 120, y: 40 }

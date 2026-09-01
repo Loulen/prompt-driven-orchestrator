@@ -16,7 +16,7 @@ export const ANCHOR_SIDES: readonly PortSide[] = ["left", "right", "top", "botto
  * land anywhere on the node body and anchor on the side nearest the drop point,
  * rather than binding to a declared, fixed-side input handle.
  *
- * The work-node types (`doc-only`, `code-mutating`) are emergent. This is keyed
+ * The work-node type (`agent`) is emergent. This is keyed
  * on the node TYPE, not the declared input count: the #149 migration that drops
  * declared inputs was never carried through to node creation or the on-disk
  * pipeline YAMLs, so a work node frequently still carries a single vestigial
@@ -31,7 +31,7 @@ export const ANCHOR_SIDES: readonly PortSide[] = ["left", "right", "top", "botto
 export function isEmergentInputNode(type: NodeType): boolean {
   // #248: a `script` node consumes whole artifacts by edge like a work node, so
   // its inputs are emergent too — anchor incoming edges to the body by drop.
-  return type === "doc-only" || type === "code-mutating" || type === "script";
+  return type === "agent" || type === "script";
 }
 
 /**

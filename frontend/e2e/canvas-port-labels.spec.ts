@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 //
 // This spec seeds one node of each kind that still parses (legacy `switch`/
 // `loop` types migrate to generic agent nodes; `type: for-each` is hard-refused
-// since ADR-0011 — its slot here is a plain doc-only node with the same body/
+// since ADR-0011 — its slot here is a plain non-isolated node with the same body/
 // done port shape) and asserts: every output port renders
 // a dot, the merge input pill is present, hovering an output dot reveals its
 // label, and dragging from an output dot shows the dynamic edge label.
@@ -40,7 +40,8 @@ nodes:
     view: { x: 0, y: 200 }
   - id: planner
     name: Planner
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: task
         side: left
@@ -79,7 +80,8 @@ nodes:
     view: { x: 500, y: 300 }
   - id: fe1
     name: per-item
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: in
         side: left
@@ -104,7 +106,8 @@ nodes:
     view: { x: 750, y: 300 }
   - id: impl1
     name: implementer
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     inputs:
       - name: in
         side: left
@@ -152,7 +155,7 @@ test("every output port renders a dot and the merge input keeps its pill", async
 
   // Output ports render as dots (`port-output-<name>`). The seed declares 10
   // output ports across the node types: user_prompt, plan, pass, default,
-  // body, done (loop), body, done (per-item doc-only), merged, out.
+  // body, done (loop), body, done (per-item non-isolated), merged, out.
   const outputDots = page.locator('[data-testid^="port-output-"]');
   await expect(outputDots).toHaveCount(10, { timeout: 5_000 });
 

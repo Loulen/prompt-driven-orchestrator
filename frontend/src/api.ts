@@ -343,7 +343,7 @@ export type MarkNodeDoneRefusal =
   | "frontmatter_retry_pending"
   | "frontmatter_retry_exhausted"
   | "script_validation_failed"
-  | "doc_violated_code_immutability"
+  | "delivery_failed"
   | "merge_conflict"
   | "merge_resolution_failed"
   | "completion_rejected";
@@ -353,7 +353,7 @@ const KNOWN_REFUSALS: readonly string[] = [
   "frontmatter_retry_pending",
   "frontmatter_retry_exhausted",
   "script_validation_failed",
-  "doc_violated_code_immutability",
+  "delivery_failed",
   "merge_conflict",
   "merge_resolution_failed",
   "completion_rejected",
@@ -1413,6 +1413,10 @@ export interface LibraryEntry {
   max_iter?: number | null;
   branches?: number | null;
   prompt: string;
+  /** #655/ADR-0060: where an instance of this entry works. Always stated by the
+   * daemon for `agent`/`script` (stamped at the type's default when the entry
+   * predates #655); `null` for the types that carry no isolation. */
+  isolated_worktree?: boolean | null;
 }
 
 export function fetchLibrary(): Promise<LibraryEntry[]> {
@@ -1430,6 +1434,9 @@ export interface LibrarySaveSpec {
   /** Per-node effort override (#424). Omit/undefined ⇒ account default. */
   effort?: string | null;
   prompt: string;
+  /** #655/ADR-0060: where the starred node works. Omitted ⇒ the daemon stamps
+   * the type's default; `null` for a type that carries no isolation. */
+  isolated_worktree?: boolean | null;
 }
 
 export function saveToLibrary(spec: LibrarySaveSpec): Promise<LibraryEntry> {
@@ -1455,6 +1462,10 @@ export interface InstantiateResult {
     model?: string | null;
     /** Per-node effort override (#424). Null ⇒ account default. */
     effort?: string | null;
+    /** #655/ADR-0060: the entry's workspace, restored verbatim onto the new
+     * node. Dropping it would fall back to the type default and silently fork a
+     * worktree for an Agent starred in the Run's. */
+    isolated_worktree?: boolean | null;
   };
   prompt: string;
 }
@@ -1487,6 +1498,9 @@ export interface ParseNodeResult {
      *  model/effort re-homing onto `claude`. */
     pin_harness?: string | null;
     harnesses?: Record<string, { model?: string; effort?: string }> | null;
+    /** #653/ADR-0060: where the node works. `null` for the types that carry no
+     *  isolation (`merge`, `start`, `end`). */
+    isolated_worktree?: boolean | null;
     max_iter?: number | string | null;
     branches?: number | null;
   };

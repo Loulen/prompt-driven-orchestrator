@@ -11,10 +11,11 @@ import { fileURLToPath } from "node:url";
 // The backend still parses the legacy variants but migrates them onto generic
 // agent nodes, so they render with the agent icon and no code/doc marker.
 //
-// This spec seeds start + two generic agents (one doc-only, one code-mutating)
-// + merge + end and asserts: structural icons for start/end/merge, the agent
-// icon for the generics, no text pills, and exactly the two explicit code/doc
-// markers.
+// This spec seeds start + two Agents (one sharing the Run worktree, one
+// isolated) + merge + end and asserts: structural icons for start/end/merge, the
+// agent icon for both Agents, no text pills, and the isolation marker on exactly
+// the nodes that fork a worktree of their own (#653: the isolated Agent and the
+// Merge, which is isolated by construction).
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
@@ -35,7 +36,8 @@ nodes:
     view: { x: 0, y: 300 }
   - id: planner
     name: Planner
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: in
         side: left
@@ -45,7 +47,8 @@ nodes:
     view: { x: 250, y: 200 }
   - id: implementer
     name: Implementer
-    type: code-mutating
+    type: agent
+    isolated_worktree: true
     inputs:
       - name: in
         side: left
@@ -116,7 +119,7 @@ test("each node type renders its structural icon", async ({ page }) => {
   await expect(page.locator("[data-testid='node-icon-end']").first()).toBeVisible({ timeout: 3_000 });
   await expect(page.locator("[data-testid='node-icon-merge']").first()).toBeVisible({ timeout: 3_000 });
 
-  // Generic agent nodes (doc-only + code-mutating) render the agent icon.
+  // Both Agents render the agent icon, whatever their workspace.
   const agentIcons = page.locator("[data-testid='node-icon-agent']");
   await expect(agentIcons).toHaveCount(2, { timeout: 3_000 });
 
@@ -154,7 +157,7 @@ test("no text pills are present on any node", async ({ page }) => {
   }
 });
 
-test("code-mutating and doc-only markers are present and visually distinct", async ({
+test("the isolation marker rides only the nodes that fork a worktree (#653)", async ({
   page,
 }) => {
   await page.goto("/");
@@ -165,13 +168,18 @@ test("code-mutating and doc-only markers are present and visually distinct", asy
   await openPipelineForEdit(page, PIPELINE_NAME);
   await page.waitForTimeout(500);
 
-  // There should be exactly 2 code/doc markers (one per generic agent node)
-  const markers = page.locator("[data-testid='code-doc-marker']");
+  // Two markers: the isolated Agent, and the Merge (isolated by construction).
+  // The Agent that shares the Run worktree carries none — absence IS the signal.
+  const markers = page.locator("[data-testid='isolation-marker']");
   await expect(markers).toHaveCount(2, { timeout: 3_000 });
 
-  // One should be code-mutating, one should be doc-only
-  const codeMarker = page.locator("[data-testid='code-doc-marker'][data-marker-type='code-mutating']");
-  const docMarker = page.locator("[data-testid='code-doc-marker'][data-marker-type='doc-only']");
-  await expect(codeMarker).toHaveCount(1);
-  await expect(docMarker).toHaveCount(1);
+  await expect(
+    page.getByTestId("rf__node-implementer").getByTestId("isolation-marker"),
+  ).toHaveCount(1);
+  await expect(
+    page.getByTestId("rf__node-merger").getByTestId("isolation-marker"),
+  ).toHaveCount(1);
+  await expect(
+    page.getByTestId("rf__node-planner").getByTestId("isolation-marker"),
+  ).toHaveCount(0);
 });

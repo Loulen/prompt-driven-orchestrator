@@ -15,12 +15,13 @@ export default function DiffSection({ run }: Props) {
   const [selectedNode, setSelectedNode] = useState<string>("");
   const [collapsedFiles, setCollapsedFiles] = useState<Set<number>>(new Set());
 
-  const codeMutatingNodes = useMemo(() => {
+  // #654/ADR-0060: a per-node diff exists for a NodeRun that DELIVERED changes —
+  // isolated or not, agent or script. What it delivered is the two run-branch
+  // tips it moved between, so the type and the isolation say nothing here; only
+  // the delivery does.
+  const deliveringNodes = useMemo(() => {
     if (!run) return [];
-    return run.node_defs.filter((nd) => {
-      const ns = run.nodes[nd.id];
-      return nd.node_type === "code-mutating" && ns?.status === "completed";
-    });
+    return run.node_defs.filter((nd) => Boolean(run.nodes[nd.id]?.delivery));
   }, [run]);
 
   const files = useMemo(() => parseUnifiedDiff(diff), [diff]);
@@ -94,7 +95,7 @@ export default function DiffSection({ run }: Props) {
             </div>
           ) : (
             <>
-              {codeMutatingNodes.length > 0 && (
+              {deliveringNodes.length > 0 && (
                 <select
                   data-testid="diff-node-select"
                   value={selectedNode}
@@ -103,7 +104,7 @@ export default function DiffSection({ run }: Props) {
                   style={{ fontSize: "10.5px" }}
                 >
                   <option value="">Aggregate (all changes)</option>
-                  {codeMutatingNodes.map((nd) => (
+                  {deliveringNodes.map((nd) => (
                     <option key={nd.id} value={nd.id}>
                       {nd.name ?? nd.id}
                     </option>

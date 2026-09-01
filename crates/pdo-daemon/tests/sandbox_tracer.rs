@@ -316,7 +316,9 @@ async fn docker_unavailable_fails_run_with_no_host_spawn() {
 async fn off_run_never_invokes_docker() {
     ensure_pdo_on_path();
     let (_fake_dir, docker, log) = write_fake_docker();
-    // The sentinel is untracked, so it passes the doc-only-effect clean guard.
+    // A real body that writes its declared output and self-signals `pdo complete`
+    // on the host (off path). The sentinel is untracked → passes the
+    // shared-worktree clean guard.
     let daemon = TestDaemon::spawn_with_docker_override(
         seed(
             "#!/usr/bin/env bash\nset -euo pipefail\n\

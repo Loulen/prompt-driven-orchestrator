@@ -507,9 +507,10 @@ mod tests {
 
     fn node(id: &str, inputs: &[&str], outputs: &[&str]) -> NodeDef {
         NodeDef {
+            isolated_worktree: None,
             id: id.into(),
             name: id.into(),
-            node_type: NodeType::DocOnly,
+            node_type: NodeType::Agent,
             inputs: inputs
                 .iter()
                 .map(|n| Port {

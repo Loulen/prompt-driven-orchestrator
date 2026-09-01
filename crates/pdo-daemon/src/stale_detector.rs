@@ -346,7 +346,7 @@ pub fn encode_working_dir(dir: &Path) -> String {
 /// dir, so an exact-name lookup returns *this node's own* transcript regardless of
 /// how many other `.jsonl` files share the dir.
 ///
-/// This is the fix for the manager-vs-node collision: a non-`code-mutating`/`merge`
+/// This is the fix for the manager-vs-node collision: a non-isolated
 /// node's cwd is the Run worktree, which is also the manager's cwd (and every
 /// sibling non-CM node's), so one CC project dir holds several `.jsonl` and
 /// [`find_session_jsonl`]'s newest-mtime pick returns whichever was touched last —
@@ -497,7 +497,7 @@ pub fn validate_outputs(
 /// Only [`Detection::SessionDied`] has an event of its own here.
 /// [`Detection::TurnEnded`] deliberately produces **none** (#469 §3): appending a
 /// `NodeAutoCompleted` straight into the log was the defect of the old design —
-/// on a `code-mutating` / `merge` node it would record a `Completed` whose commit
+/// on an isolated node it would record a `Completed` whose commit
 /// stayed on the `pdo/sub-…` branch, with the downstream receiving nothing. Its
 /// terminal event is appended by the *shared node-completion body*, past the
 /// forgotten-run refusal, the completion guard and
@@ -554,7 +554,7 @@ pub trait NodeProbes {
     /// ([`session_jsonl_by_id`]) — the transcript named `<uuid>.jsonl`, this node's
     /// own — and only falls back to the newest-mtime pick ([`find_session_jsonl`])
     /// for a pre-#473 node with no recorded id. Without that, a
-    /// non-`code-mutating`/`merge` node shares its cwd (the Run worktree) with the
+    /// non-isolated node shares its cwd (the Run worktree) with the
     /// manager's `claude`, so the newest `.jsonl` was usually the manager's and the
     /// turn-end verdict was read off the wrong conversation.
     ///
@@ -1610,7 +1610,7 @@ SwapFree:         204800 kB
         let pipeline_path = tmp.path().join("pipeline.yaml");
         std::fs::write(
             &pipeline_path,
-            "name: test\nnodes:\n  - id: start\n    name: Start\n    type: start\n    inputs: []\n    outputs:\n      - name: user_prompt\n  - id: worker\n    name: Worker\n    type: doc-only\n    inputs:\n      - name: task\n    outputs: []\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\n    outputs: []\nedges:\n  - source: { node: start, port: user_prompt }\n    target: { node: worker, port: task }\n",
+            "name: test\nnodes:\n  - id: start\n    name: Start\n    type: start\n    inputs: []\n    outputs:\n      - name: user_prompt\n  - id: worker\n    name: Worker\n    type: agent\n    isolated_worktree: false\n    inputs:\n      - name: task\n    outputs: []\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\n    outputs: []\nedges:\n  - source: { node: start, port: user_prompt }\n    target: { node: worker, port: task }\n",
         )
         .unwrap();
 
@@ -1631,7 +1631,7 @@ SwapFree:         204800 kB
         let pipeline_path = tmp.path().join("pipeline.yaml");
         std::fs::write(
             &pipeline_path,
-            "name: test\nnodes:\n  - id: start\n    name: Start\n    type: start\n    inputs: []\n    outputs:\n      - name: user_prompt\n  - id: worker\n    name: Worker\n    type: doc-only\n    inputs:\n      - name: task\n    outputs:\n      - name: report\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\n    outputs: []\nedges:\n  - source: { node: start, port: user_prompt }\n    target: { node: worker, port: task }\n",
+            "name: test\nnodes:\n  - id: start\n    name: Start\n    type: start\n    inputs: []\n    outputs:\n      - name: user_prompt\n  - id: worker\n    name: Worker\n    type: agent\n    isolated_worktree: false\n    inputs:\n      - name: task\n    outputs:\n      - name: report\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\n    outputs: []\nedges:\n  - source: { node: start, port: user_prompt }\n    target: { node: worker, port: task }\n",
         )
         .unwrap();
 

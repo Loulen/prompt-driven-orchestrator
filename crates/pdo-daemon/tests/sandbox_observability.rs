@@ -32,7 +32,7 @@ use tempfile::TempDir;
 
 const NODE_ID: &str = "worker";
 
-/// `start → worker(doc-only, in→out) → end`. A doc-only node uses the agent tail
+/// `start → worker(non-isolated, in→out) → end`. A non-isolated node uses the agent tail
 /// so `tmux_cmd_override` (`exec sleep 600`) is honoured — the session stays
 /// alive for the live-run observability paths. Completing `worker` (with its
 /// `out` present) drives the whole run terminal.
@@ -46,7 +46,8 @@ nodes:
       - name: user_prompt
   - id: worker
     name: worker
-    type: doc-only
+    type: agent
+    isolated_worktree: false
     inputs:
       - name: in
     outputs:
@@ -265,7 +266,7 @@ async fn simulate_node_done(daemon: &TestDaemon, run_id: &str) {
     );
 }
 
-/// The Run's pipeline worktree (the doc-only worker's cwd — non-CM nodes run
+/// The Run's pipeline worktree (the non-isolated worker's cwd — non-isolated nodes run
 /// there). Both the cost prefix and the stale probe encode THIS path.
 fn worktree_dir(daemon: &TestDaemon, run_id: &str) -> PathBuf {
     daemon

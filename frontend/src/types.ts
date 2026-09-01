@@ -969,8 +969,6 @@ export interface PipelineVariableInfo {
   default: unknown;
 }
 
-// --- Launch targets ---
-
 /**
  * A branch the daemon offers as a Run source (#571). `name` is posted back as
  * `source_branch` **verbatim** — a remote-tracking ref keeps its `origin/`
@@ -983,8 +981,6 @@ export interface BranchRef {
   name: string;
   kind: "local" | "remote";
 }
-
-// --- Edit mode types ---
 
 export type PipelineScope = "instance" | "repo" | "user" | "library";
 
@@ -1223,7 +1219,6 @@ export interface PipelineDetail {
   diagnostics: string[];
 }
 
-// --- Instance stats cockpit (#377, ADR-0029) --------------------------------
 // Mirrors the daemon's `GET /stats/overview` (cheap indexed SQL) and
 // `GET /stats/cost` (memoized per-run cost, app-folded) payloads.
 

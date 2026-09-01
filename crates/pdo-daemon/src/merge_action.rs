@@ -176,9 +176,8 @@ mod tests {
         );
     }
 
-    /// Anchored on the LAST spawn of the iteration — the case where a re-spawn
-    /// genuinely re-cut the sub-worktree (`invalidate_nodes`, or a `restart_node`
-    /// whose worktree was `Recyclable`).
+    /// The case where a re-spawn genuinely re-cut the sub-worktree
+    /// (`invalidate_nodes`, or a `restart_node` whose worktree was `Recyclable`).
     #[test]
     fn a_respawn_of_the_same_iteration_wins() {
         let events = vec![
@@ -211,7 +210,6 @@ mod tests {
         );
     }
 
-    /// Iterations are separate bases: a loop lap must not read the previous lap's.
     #[test]
     fn each_iteration_carries_its_own_base() {
         let events = vec![
@@ -226,8 +224,6 @@ mod tests {
         );
     }
 
-    /// An unknown base is not a licence to rewrite a branch: a pre-#503 Run, a
-    /// spawn that recorded nothing, a blank value, or no spawn at all → `None`.
     #[test]
     fn an_unknown_base_stays_unknown() {
         let no_payload = vec![

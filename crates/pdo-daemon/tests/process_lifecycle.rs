@@ -96,8 +96,6 @@ fn git_init_with_commit(repo: &std::path::Path) -> anyhow::Result<()> {
 }
 
 async fn create_run(daemon: &TestDaemon) -> String {
-    // #470: name the daemon's own repo explicitly — it is no longer an implicit
-    // Run target (ADR-0033). Same semantics as before, now stated.
     let body = serde_json::json!({
         "pipeline": PIPELINE_NAME,
         "input": "test input",
@@ -159,7 +157,6 @@ async fn complete_worker(daemon: &TestDaemon, run_id: &str) {
     assert_eq!(resp.status(), 200, "node_done should succeed");
 }
 
-/// Fetch the projected status + failure_reason of `node` in `run_id`.
 async fn node_state(
     daemon_url: &str,
     run_id: &str,
@@ -199,7 +196,6 @@ async fn dead_session_marks_node_failed_with_session_cause() {
         "node session should appear after POST /runs"
     );
 
-    // Pre-condition: the node is Running with a live session.
     let (status, _) = node_state(&daemon.url(), &run_id, NODE_ID).await;
     assert_eq!(status.as_deref(), Some("running"));
 
@@ -211,7 +207,6 @@ async fn dead_session_marks_node_failed_with_session_cause() {
         "session should be dead after manual kill"
     );
 
-    // One detector cycle.
     daemon.run_stale_detection_tick().await;
 
     let (status, reason) = node_state(&daemon.url(), &run_id, NODE_ID).await;
@@ -264,7 +259,6 @@ async fn live_session_node_is_not_failed_by_detector() {
         .output();
 }
 
-/// Fetch the projected run-level status of `run_id`.
 async fn run_status(daemon_url: &str, run_id: &str) -> Option<String> {
     let resp = reqwest::Client::new()
         .get(format!("{daemon_url}/runs/{run_id}"))
@@ -296,7 +290,6 @@ async fn run_with_no_live_node_and_nothing_schedulable_is_reconciled_terminal() 
         "node session should appear after POST /runs"
     );
 
-    // The run is Running with one live node.
     assert_eq!(
         run_status(&daemon.url(), &run_id).await.as_deref(),
         Some("running")
@@ -445,7 +438,7 @@ async fn completed_node_session_is_reaped_and_pane_serves_snapshot() {
         "a completed node's session must be reaped on the terminal transition"
     );
 
-    // The snapshot file exists in the node dir (survives worktree removal).
+    // In the node dir, not the worktree: it must survive worktree removal.
     let snapshot = daemon
         .repo_root()
         .join(".pdo/runs")
@@ -478,8 +471,6 @@ async fn completed_node_session_is_reaped_and_pane_serves_snapshot() {
         "serving a snapshot must not resurrect the reaped session"
     );
 }
-
-// --- #488: `kill_node` is a terminal path too — it must reap, not kill bare ---
 
 /// Painted into every node pane by the tmux command override, so a snapshot
 /// taken BEFORE the kill can be told apart from an empty one. The default spawn
@@ -717,8 +708,6 @@ async fn kill_node_writes_the_snapshot_under_the_runs_target_repo() {
         .contains(KILL_MARKER));
 }
 
-// --- #251: stale sweep panic isolation + liveness health ---
-
 async fn get_stale_health(daemon: &TestDaemon) -> serde_json::Value {
     reqwest::Client::new()
         .get(format!("{}/stale/health", daemon.url()))
@@ -819,7 +808,6 @@ async fn stale_health_reports_last_tick_and_advances() {
         "health must report the configured sweep interval"
     );
 
-    // Drive a sweep; last_tick_at becomes non-null.
     daemon.run_stale_detection_tick().await;
     let t1 = get_stale_health(&daemon).await["last_tick_at"]
         .as_str()
@@ -840,8 +828,6 @@ async fn stale_health_reports_last_tick_and_advances() {
         "last_tick_at must advance across sweeps: {t1} then {t2}"
     );
 }
-
-// --- #290: blocked-on-usage-limit menu detection (observability only) ---
 
 /// The Claude Code usage-limit interactive menu, painted verbatim into the node
 /// pane by the tmux command override (literal `\n` so `printf` renders newlines).
@@ -907,10 +893,8 @@ async fn usage_limit_menu_is_flagged_and_node_stays_running() {
     let (status, _) = node_state(&daemon.url(), &run_id, NODE_ID).await;
     assert_eq!(status.as_deref(), Some("running"));
 
-    // One detector sweep observes the menu.
     daemon.run_stale_detection_tick().await;
 
-    // Surfaced on the gauge …
     let health = get_stale_health(&daemon).await;
     assert_eq!(
         health["blocked_on_limit"].as_i64(),
@@ -927,7 +911,6 @@ async fn usage_limit_menu_is_flagged_and_node_stays_running() {
         "a menu-blocked node must NOT be failed/staled — observability only"
     );
 
-    // … and exactly one durable event records the episode.
     let events = blocked_on_limit_events(&daemon.url(), &run_id, NODE_ID, 1).await;
     assert_eq!(
         events.len(),

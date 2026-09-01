@@ -2,29 +2,23 @@
 //! wire (#490, ADR-0035).
 //!
 //! Le type ne porte **aucun statut** : la projection ([`refusal_response`]) en est
-//! la seule propriétaire, donc « un refus qui répond 2xx » est inexprimable. C'est
-//! l'invariant du ticket, posé comme propriété du type et non comme liste de bras
-//! à relire — huit des dix-neuf sorties du chemin de complétion répondaient `200`
-//! sur un refus, dont quatre après avoir appendé `RunFailed`.
+//! la seule propriétaire, donc « un refus qui répond 2xx » est inexprimable.
 //!
-//! Les **deux** appelants du corps de complétion (`POST …/nodes/:id/done` et
-//! `POST /runs/:id/commands` `kind=mark_node_done`) passent par la même
-//! projection : c'est ce qui fait que l'invariant couvre les deux surfaces, là où
-//! un garde posé sur `CompletionAttempt` n'aurait couvert que la première (le bras
-//! `mark_node_done` n'en construit jamais).
+//! N'attachez pas le garde à `CompletionAttempt` : le bras `mark_node_done` de
+//! `POST /runs/:id/commands` n'en construit jamais, et l'invariant ne couvrirait
+//! que `POST …/nodes/:id/done`. Les deux appelants passent par la projection.
 
 use axum::{http::StatusCode, response::IntoResponse, response::Response, Json};
 
-/// La cause d'un refus de complétion, avec son détail verbatim d'avant #490.
-///
 /// `Clone` parce que le corps partagé rend la variante à ses deux appelants et que
 /// l'un d'eux la loge avant de la projeter.
 #[derive(Debug, Clone)]
 pub(crate) enum CompletionRefusal {
     /// Run tombstoné (#328 / ADR-0024). Garde son `410` : « jamais 2xx » ne veut
     /// pas dire « toujours 409 ».
-    RunForgotten { run_id: String },
-    /// La projection ne rend aucun Run pour cet id — cible inconnue, `404`.
+    RunForgotten {
+        run_id: String,
+    },
     RunNotFound,
     /// Panne interne **avant** tout verdict (lecture du log, contrôle de tombstone).
     /// `500` : ce n'est pas un refus argumenté, c'est un daemon qui n'a pas pu
@@ -41,27 +35,42 @@ pub(crate) enum CompletionRefusal {
     /// Conflit de merge ; `MergeConflictDetected` + `RunFailed` déjà appendés.
     MergeConflict { node_id: String },
     /// Ports de sortie déclarés sans artefact. Le node reste vivant.
-    MissingOutputs { missing: Vec<String> },
+    MissingOutputs {
+        missing: Vec<String>,
+    },
     /// Fail-fast d'un node `script` (ADR-0017) ; `NodeFailed` + `RunFailed`
     /// appendés. Le `detail` reste **imbriqué** : aplatir rendrait la trace
     /// d'audit indistinguable d'un échec après retry (ADR-0035 §5).
-    ScriptValidationFailed { detail: serde_json::Value },
+    ScriptValidationFailed {
+        detail: serde_json::Value,
+    },
     /// Mismatch de frontmatter, message correctif envoyé, node toujours `running`.
-    FrontmatterRetryPending { violations: Vec<serde_json::Value> },
+    FrontmatterRetryPending {
+        violations: Vec<serde_json::Value>,
+    },
     /// Un nœud a modifié un fichier **suivi** d'un dépôt secondaire read-only
     /// (#465, ADR-0042). Garde de complétion, **pas** une panne : aucun événement
     /// terminal n'est appendé (contrairement à `DeliveryFailed`), le nœud reste
     /// vivant, l'agent nettoie le secondaire (`git checkout`) et re-complète.
     /// `recoverable:false` par choix de #465 — le read-only d'un secondaire est un
     /// contrat, non un retry de sortie ; le slug (jamais le seul statut) discrimine.
-    SecondaryRepoDirtied { alias: String, message: String },
+    SecondaryRepoDirtied {
+        alias: String,
+        message: String,
+    },
     /// Mismatch après l'unique retry ; `NodeFailed` + `RunFailed` appendés.
-    FrontmatterRetryExhausted { violations: Vec<serde_json::Value> },
+    FrontmatterRetryExhausted {
+        violations: Vec<serde_json::Value>,
+    },
     /// L'événement terminal n'a pas pu être appendé — panne, `500`.
-    AppendFailed { error: String },
+    AppendFailed {
+        error: String,
+    },
     /// Résolveur de merge : la résolution n'est pas valide ; `MergeResolverFailed`
     /// + `RunFailed` appendés.
-    MergeResolutionFailed { reason: String },
+    MergeResolutionFailed {
+        reason: String,
+    },
     /// Résolveur de merge spawné. **INATTEIGNABLE** en production :
     /// `MergeResult::ConflictPendingResolution` n'est construit que sous
     /// `keep_conflict == true`, qu'aucun appelant de production ne passe, et
@@ -69,14 +78,18 @@ pub(crate) enum CompletionRefusal {
     /// de la retombée d'ADR-0006, qui supprimera le sous-système entier — coût de
     /// test nul ici, et le supprimer sous un fix de bug mélangerait deux
     /// intentions (ADR-0035 §6).
-    MergeResolverSpawned { node_id: String },
+    MergeResolverSpawned {
+        node_id: String,
+    },
     /// Résolveur de merge : le spawn a échoué. **INATTEIGNABLE**, cf. ci-dessus.
-    MergeResolverFailed { reason: String },
+    MergeResolverFailed {
+        reason: String,
+    },
 }
 
 impl CompletionRefusal {
-    /// Le slug stable sur lequel les clients discriminent. **Jamais** le statut :
-    /// un statut n'a pas assez de bits pour neuf causes.
+    /// Le slug stable sur lequel les clients discriminent — **jamais** le statut,
+    /// qui n'a pas assez de bits pour toutes les causes.
     pub(crate) fn slug(&self) -> &'static str {
         match self {
             Self::RunForgotten { .. } => "run_forgotten",
@@ -100,10 +113,6 @@ impl CompletionRefusal {
     /// Est-ce encore le tour de l'appelant ? `false` ⇒ le daemon a déjà enregistré
     /// une issue terminale : l'appelant ne doit **rien** appender de plus, et
     /// surtout pas enchaîner `pdo fail`.
-    ///
-    /// Deux variantes seulement laissent le node vivant, et ce sont les deux bras
-    /// du même `match` sur `ValidationError` qui n'appendent aucun événement
-    /// d'échec.
     pub(crate) fn recoverable(&self) -> bool {
         matches!(
             self,
@@ -111,12 +120,8 @@ impl CompletionRefusal {
         )
     }
 
-    /// Statut HTTP. Énumération fermée, **jamais** `2xx` — c'est ici que
-    /// l'invariant se tient, et `a_refusal_never_projects_to_a_2xx` le prouve
-    /// variante par variante.
-    ///
-    /// Volontairement **sans joker** : ajouter une variante ne compile plus tant
-    /// qu'on n'a pas décidé de son statut (patron du dispatch d'`event_log`).
+    /// Statut HTTP, **jamais** `2xx`. Volontairement **sans joker** : ajouter une
+    /// variante ne compile plus tant qu'on n'a pas décidé de son statut.
     fn status(&self) -> StatusCode {
         match self {
             // ADR-0024 §3 : le tombstone garde son 410.
@@ -139,8 +144,8 @@ impl CompletionRefusal {
         }
     }
 
-    /// Le détail spécifique, **verbatim celui d'avant #490** : aucun champ renommé,
-    /// aucun champ aplati. Fusionné à plat dans le corps par [`refusal_response`].
+    /// Le détail spécifique, **verbatim celui d'avant #490** : ne renommez et
+    /// n'aplatissez aucun champ. Fusionné à plat par [`refusal_response`].
     fn detail(&self) -> serde_json::Value {
         match self {
             Self::RunForgotten { run_id } => {
@@ -215,10 +220,8 @@ impl CompletionRefusal {
     }
 }
 
-/// L'**unique** projection d'un refus vers HTTP.
-///
-/// Les deux appelants du chemin de complétion passent par elle — c'est ce qui fait
-/// que l'invariant couvre `POST …/done` *et* `POST /runs/:id/commands`.
+/// L'**unique** projection d'un refus vers HTTP : les deux appelants du chemin de
+/// complétion passent par elle.
 ///
 /// Prend une **référence** : le refus est aussi logué par son appelant, et
 /// `Response` (128 octets) rendu par valeur dans un `Result::Err` déclencherait
@@ -248,7 +251,7 @@ mod tests {
 
     /// Un échantillon par variante, produit derrière un `match` **exhaustif sans
     /// joker** : ajouter une variante à `CompletionRefusal` sans l'échantillonner
-    /// ici ne compile plus. Même garde-fou que le dispatch d'`event_log`.
+    /// ici ne compile plus.
     fn every_refusal() -> Vec<CompletionRefusal> {
         let all = vec![
             CompletionRefusal::RunForgotten {
@@ -329,8 +332,6 @@ mod tests {
         all
     }
 
-    /// **L'invariant du ticket, en une boucle.** Et il couvre les deux surfaces,
-    /// puisque les deux appelants passent par `refusal_response`.
     #[test]
     fn a_refusal_never_projects_to_a_2xx() {
         for r in every_refusal() {
@@ -373,9 +374,7 @@ mod tests {
         }
     }
 
-    /// `recoverable: true` veut dire « rien de terminal n'a été enregistré ». Les
-    /// deux seules variantes qui laissent le node vivant sont épinglées ici, parce
-    /// que c'est la valeur dont dépend le choix entre exit `3` et exit `4`.
+    /// `recoverable` arbitre entre exit `3` et exit `4` de `pdo complete`.
     #[test]
     fn only_the_two_still_your_turn_refusals_are_recoverable() {
         for r in every_refusal() {
@@ -388,8 +387,7 @@ mod tests {
         }
     }
 
-    /// « Jamais `2xx` » **≠** « toujours `409` » : le tombstone d'ADR-0024, la
-    /// cible inconnue et les deux pannes gardent leur statut historique.
+    /// « Jamais `2xx` » **≠** « toujours `409` ».
     #[test]
     fn non_conflict_statuses_are_preserved() {
         let cases = [
@@ -453,9 +451,8 @@ mod tests {
         assert_eq!(exhausted["violations"][0]["field"], "verdict");
     }
 
-    /// La prose du garde de transition part dans `message`, jamais dans `error` :
-    /// c'est ce qui laissait le client relire *tout* `409` comme `missing_outputs`
-    /// avec une liste vide, donc n'afficher **rien**.
+    /// Sinon le client relit le `409` comme `missing_outputs` à liste vide et
+    /// n'affiche **rien**.
     #[tokio::test]
     async fn the_transition_guard_prose_lands_in_message() {
         let r = CompletionRefusal::CompletionRejected {

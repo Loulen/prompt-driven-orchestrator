@@ -360,8 +360,6 @@ describe("EditToolbar undo/redo buttons (ADR-0014 / #226)", () => {
   });
 });
 
-// --- #598 / ADR-0049: the finished-run action group (Variant A) --------------
-
 describe("EditToolbar finished-run group (#598)", () => {
   function renderToolbar(props: Partial<ComponentProps<typeof EditToolbar>> = {}) {
     return render(

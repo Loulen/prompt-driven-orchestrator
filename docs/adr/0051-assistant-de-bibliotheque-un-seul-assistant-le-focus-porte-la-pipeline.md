@@ -1,16 +1,16 @@
 # Assistant de bibliothèque : un seul assistant, le focus porte la pipeline
 
-> Statut : **accepted** (grilling du 2026-08-27, issue #594). **Amende ADR-0048** : ses décisions 1
-> (session keyée sur la pipeline), 3 (create-on-open / reap-on-leave) et 4 (jamais reapée par le
-> sweep) sont remplacées par celles ci-dessous ; le reste d'ADR-0048 (mécanisme de session, write-on-save,
-> pas de MCP custom) tient. Vocabulaire : CONTEXT.md §*Assistant de bibliothèque*.
+Sans cet ADR, un agent garderait un assistant `claude` par pipeline, dont la durée de vie est celle
+de l'onglet affiché — jetant la conversation à chaque aller-retour entre deux templates, et laissant
+fuir la session quand le navigateur se recharge.
 
-L'assistant livré par #302 était **un `claude` par pipeline**, dont la durée de vie était celle de
-l'onglet **Assistant** affiché. À l'usage, ça ne colle pas au travail réel : on édite une pipeline,
-on va en voir une autre, on revient — et à chaque aller-retour on jetait la conversation pour en
-rallumer une qui ne savait rien. Le propriétaire l'a résumé en quatre reproches (#594), dont deux
-qui se contredisent en apparence : « reap trop lent » et « ne pas reap tant qu'on édite ». Ils ne se
-contredisent pas : ils disent que **l'unité de durée de vie était la mauvaise**.
+> Statut : **accepted** (grilling du 2026-08-27, issue #594). **Amende ADR-0048** : ses décisions 1,
+> 3 et 4 sont remplacées par celles ci-dessous ; le reste d'ADR-0048 (mécanisme de session,
+> write-on-save, pas de MCP custom) tient. Vocabulaire : CONTEXT.md §*Assistant de bibliothèque*.
+
+Le propriétaire a résumé le problème en deux reproches qui se contredisent en apparence : « reap trop
+lent » et « ne pas reap tant qu'on édite ». Ils disent la même chose : **l'unité de durée de vie
+était la mauvaise**.
 
 ## Ce qu'on décide
 
@@ -23,43 +23,34 @@ contredisent pas : ils disent que **l'unité de durée de vie était la mauvaise
    il dit à l'assistant sur quoi il travaille, et il dit au sweep si un humain est encore là.
 
 3. **La conscience de la pipeline ouverte est un `UserPromptSubmit` hook, pas une consigne de
-   prompt.** Le hook lit le focus et l'injecte dans le contexte à *chaque* message — donc sans
-   dépendre de la discipline du modèle. Le primer garde la consigne équivalente en clair, parce que
-   le hook n'existe que sur un harnais qui expose `--settings` (le `claude` de la registry, pas
-   `opencode` ni `pi`) : sur les autres, la consigne est le seul mécanisme, et on l'assume dégradée
-   plutôt qu'absente. Même discipline qu'ADR-0043 : on pose un hook via `--settings`, on ne ship pas
-   de MCP custom (ADR-0048 §5 tient).
+   prompt.** Le hook lit le focus et l'injecte à *chaque* message — donc sans dépendre de la
+   discipline du modèle. Le primer garde la consigne équivalente en clair, parce que le hook n'existe
+   que sur un harnais qui expose `--settings` : sur les autres, la consigne est le seul mécanisme, et
+   on l'assume dégradée plutôt qu'absente. Même discipline qu'ADR-0043 : un hook via `--settings`,
+   pas de MCP custom.
 
 4. **Le reap est conditionné à l'absence de l'humain, plus à l'affichage d'un onglet.** Trois
-   verdicts, dans cet ordre : une session **attachée** (un terminal ouvert dans un navigateur) n'est
-   jamais tuée ; un focus **frais** (l'utilisateur est sur une vue d'édition, même sans l'onglet
-   Assistant affiché) n'est jamais tué ; sinon le sweep la tue après une TTL d'inactivité courte
-   (défaut 120 s, sur la cadence existante du reaper). Le `DELETE` explicite reste, mais déclenché
-   quand on quitte **toute** vue d'édition — plus quand on quitte l'onglet.
+   verdicts, dans cet ordre : une session **attachée** n'est jamais tuée ; un focus **frais**
+   (l'utilisateur est sur une vue d'édition, même sans l'onglet Assistant affiché) n'est jamais tué ;
+   sinon le sweep la tue après une TTL d'inactivité courte (défaut 120 s). Le `DELETE` explicite
+   reste, mais déclenché quand on quitte **toute** vue d'édition.
 
 ## Pourquoi pas les alternatives
 
-- **Garder l'exemption inconditionnelle du sweep (ADR-0048 §4) et se contenter d'accélérer le
-  `DELETE`.** Le journal du daemon dit que le `DELETE` n'est déjà pas lent : sur les huit sessions
-  assistant enregistrées depuis la livraison, chaque `Spawned` a son `Reaped` apparié, la plus
-  longue ayant vécu 6 min 55 s **avec son WebSocket PTY ouvert de bout en bout** — donc affichée. Le
-  seul cas réellement cassé est ailleurs et n'est pas lent mais **non borné** : React ne joue pas ses
-  cleanups au déchargement du document, donc un reload ou une fermeture d'onglet n'envoie jamais le
-  `DELETE`, et rien d'autre ne reapait un `pdo-libassist-*`. Sans filet côté serveur, la session
-  survit jusqu'au prochain open+leave de la même pipeline, c'est-à-dire potentiellement jamais.
-  C'est cette absence de filet qui coûte l'exemption inconditionnelle.
-- **Déduire la présence de l'attachement tmux seul.** `#{session_attached}` est un signal serveur
-  honnête et gratuit, mais il ne répond pas à la question du propriétaire : on veut survivre *pendant
-  qu'on édite*, y compris quand l'onglet Assistant n'est pas affiché — et le panneau info se ferme
-  tout seul à chaque changement d'onglet d'édition, donc l'attachement tombe. Il reste comme
-  garde-fou (verdict 1), pas comme oracle.
-- **Une présence sur le WebSocket d'événements.** Il faudrait le rendre bidirectionnel pour des
-  faits qu'un `PUT` HTTP transporte déjà, et la mort d'un pair TCP à moitié fermé se constate en
-  minutes : latence de reap non prédictible.
-- **Injecter la pipeline courante dans la REPL par `tmux send-keys`.** C'est le seul précédent
-  existant d'injection (la boucle corrective de frontmatter), et il ne vaut que pour un agent qu'on
-  sait au repos : si l'utilisateur est en train de taper, le `send-keys ... Enter` s'insère dans sa
-  phrase et la soumet. On ne pousse pas dans une REPL qu'un humain pilote.
+- **Garder l'exemption inconditionnelle du sweep (ADR-0048 §4) et accélérer le `DELETE`.** Mesuré :
+  le `DELETE` n'est pas lent (huit sessions enregistrées, chaque `Spawned` apparié à son `Reaped`).
+  Le seul cas cassé n'est pas lent mais **non borné** : React ne joue pas ses cleanups au
+  déchargement du document, donc un reload ou une fermeture d'onglet n'envoie jamais le `DELETE`, et
+  rien d'autre ne reapait un `pdo-libassist-*`. C'est cette absence de filet qui coûte l'exemption.
+- **Déduire la présence de l'attachement tmux seul.** `#{session_attached}` est honnête et gratuit,
+  mais on veut survivre *pendant qu'on édite*, y compris quand l'onglet Assistant n'est pas affiché —
+  et le panneau info se ferme à chaque changement d'onglet, donc l'attachement tombe. Il reste
+  garde-fou (verdict 1), pas oracle.
+- **Une présence sur le WebSocket d'événements.** Il faudrait le rendre bidirectionnel pour des faits
+  qu'un `PUT` HTTP transporte déjà, et la mort d'un pair TCP à moitié fermé se constate en minutes.
+- **Injecter la pipeline courante dans la REPL par `tmux send-keys`.** Le seul précédent d'injection
+  ne vaut que pour un agent qu'on sait au repos : si l'utilisateur tape, le `send-keys … Enter`
+  s'insère dans sa phrase et la soumet. On ne pousse pas dans une REPL qu'un humain pilote.
 - **Détecter la soumission d'un message en reniflant le flux PTY.** Le pont est un tuyau bête par
   décision (ADR-0021) ; un `\r` ne distingue pas un message soumis d'un Entrée dans une boîte de
   dialogue, d'un collage entre crochets ou d'un Shift+Entrée.
@@ -67,29 +58,25 @@ contredisent pas : ils disent que **l'unité de durée de vie était la mauvaise
 ## Conséquences
 
 - **Une seule conversation, donc un seul historique**, partagé entre toutes les templates : c'est le
-  gain (le contexte survit à un aller-retour) et le coût (pas d'isolation entre deux pipelines qu'on
-  édite en alternance ; on l'accepte, l'assistant a le focus à chaque message pour se resituer).
-- **La fuite au redémarrage-du-daemon-onglet-fermé** qu'ADR-0048 assumait disparaît : le sweep
-  reprend la main sur cette session, focus périmé = mort.
+  gain (le contexte survit à un aller-retour) et le coût (pas d'isolation entre deux pipelines
+  éditées en alternance ; l'assistant a le focus à chaque message pour se resituer).
+- **La fuite au redémarrage-du-daemon-onglet-fermé** qu'ADR-0048 assumait disparaît : focus périmé =
+  mort.
 - **Le cwd de l'assistant était faux** pour un onglet de scope `repo` ou `user` (il pointait sur le
   *library store*, où le `<id>.yaml` annoncé par le primer n'existe pas). En sortant la pipeline du
-  cwd, le bug disparaît : le focus porte le chemin absolu du fichier réellement ouvert.
+  cwd, le bug disparaît.
 - **Le save de l'assistant ne nomme plus rien** — ni id, ni scope : `POST /sessions/libassist/save`
-  écrit dans le fichier que le focus désigne. La première version demandait à l'assistant de
-  réémettre le scope du focus vers `POST /library/pipelines`, et c'était intenable : cet endpoint lit
-  `scope` dans le vocabulaire du *library store* (`.pdo/library/pipelines/`), pas dans celui d'un
-  onglet d'édition (`.pdo/pipelines/`). Un assistant parfaitement obéissant écrivait donc un doublon
-  dans l'autre arbre, laissait le fichier édité intact, et annonçait « Sauvé » (FP-6 de #594).
-  Supprimer l'argument supprime la classe de bug : le daemon a résolu le chemin absolu au moment où
-  l'UI a déclaré son focus, et il est le seul à connaître les deux vocabulaires. Il diffuse
-  lui-même le `pipeline_changed` qui fait relire le canvas — le watcher de fichiers ne peut pas s'en
-  charger (il ignore ses propres écritures, et ne surveille pas le library store).
+  écrit dans le fichier que le focus désigne. La première version faisait réémettre le scope vers
+  `POST /library/pipelines`, intenable : cet endpoint lit `scope` dans le vocabulaire du *library
+  store*, pas dans celui d'un onglet d'édition ; un assistant parfaitement obéissant écrivait un
+  doublon dans l'autre arbre et annonçait « Sauvé » (FP-6). Supprimer l'argument supprime la classe
+  de bug : le daemon est le seul à connaître les deux vocabulaires. Il diffuse lui-même le
+  `pipeline_changed` qui fait relire le canvas — le watcher de fichiers ne peut pas s'en charger (il
+  ignore ses propres écritures et ne surveille pas le library store).
 - **Le `DELETE` vide le focus par le même geste.** « Plus aucune vue d'édition ouverte » est le seul
   fait que les deux portent, et le séparer les faisait diverger : sur `pagehide` on ne peut envoyer
   qu'une requête `keepalive`, donc la session mourait et le focus restait — `GET …/focus` nommait une
   template que personne n'avait plus ouverte, d'un âge croissant sans borne.
 - **« Quitter toute vue d'édition » se lit sur les onglets ouverts, pas sur l'onglet actif.** Aller
   voir un Run pendant qu'une template reste ouverte n'est pas quitter l'édition ; y reaper la session
-  coûterait la conversation, c'est-à-dire exactement le reproche à l'origine de l'issue. Le focus
-  continue alors de nommer la dernière template éditée (l'onglet Assistant n'est de toute façon pas
-  proposé sur un Run), et le heartbeat continue de tourner.
+  coûterait la conversation, c'est-à-dire le reproche à l'origine de l'issue.

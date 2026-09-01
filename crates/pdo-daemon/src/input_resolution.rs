@@ -431,11 +431,8 @@ mod tests {
         assert_eq!(resolved.get("reviewer"), Some(&Vec::<i64>::new()));
     }
 
-    // -----------------------------------------------------------------------
-    // resolve_consumer_inputs — THE single edge-walk all three consumers
-    // (node_io_resolver, prompt_augmenter, node_primitives) project over (#370).
-    // Asserting the iteration decision here asserts it for every consumer.
-    // -----------------------------------------------------------------------
+    // Asserting the iteration decision on this seam asserts it for all three
+    // consumers (node_io_resolver, prompt_augmenter, node_primitives).
 
     use std::path::{Path, PathBuf};
 

@@ -98,8 +98,6 @@ const FIXTURE_TURN_ENDED: &str = include_str!("fixtures/turn_state/turn_ended.js
 /// 214 s later. Parses as `InToolCall` — alive, whatever the silence.
 const FIXTURE_IN_TOOL_CALL: &str = include_str!("fixtures/turn_state/in_tool_call.jsonl");
 
-// --- harness -----------------------------------------------------------------
-
 fn tmux_available() -> bool {
     std::process::Command::new("tmux")
         .arg("-V")
@@ -131,7 +129,6 @@ fn git(repo: &std::path::Path, args: &[&str]) -> anyhow::Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// Seed the repo with both pipelines and an initial commit.
 fn seed(repo: &std::path::Path) -> anyhow::Result<()> {
     let pipelines_dir = repo.join(".pdo").join("pipelines");
     std::fs::create_dir_all(&pipelines_dir)?;
@@ -170,7 +167,6 @@ fn seed(repo: &std::path::Path) -> anyhow::Result<()> {
 }
 
 async fn create_run(daemon: &TestDaemon, pipeline: &str) -> String {
-    // #470: the target repo is required at the create boundary (ADR-0033).
     let body = serde_json::json!({
         "pipeline": pipeline,
         "input": "test input",
@@ -301,8 +297,6 @@ fn kill_session(socket: &str, session: &str) {
         .args(["-L", socket, "kill-session", "-t", session])
         .output();
 }
-
-// --- AC1 / AC2: silence is not death ----------------------------------------
 
 /// The bug. A node silent far past the old 120 s threshold — because it is inside
 /// a `docker build` — must stay `Running`, and the Run must stay `Running`. No
@@ -468,8 +462,6 @@ async fn session_death_is_still_detected() {
     );
 }
 
-// --- AC8 / AC10: the setting ------------------------------------------------
-
 /// AC8 + AC10 in one Run, because they are two halves of the same statement: the
 /// box decides, and it decides *live*.
 ///
@@ -517,7 +509,6 @@ async fn the_setting_gates_completion_and_takes_effect_on_the_next_sweep() {
     let sid = daemon.pinned_session_id(&run_id, NODE_ID).await;
     plant_transcript(&home, &worktree, &sid, FIXTURE_TURN_ENDED, settled());
 
-    // --- box unchecked: nothing happens (AC8) ---
     daemon.run_stale_detection_tick().await;
     assert_eq!(
         node_status(&daemon.url(), &run_id, NODE_ID)
@@ -534,7 +525,6 @@ async fn the_setting_gates_completion_and_takes_effect_on_the_next_sweep() {
         "saw {kinds:?}"
     );
 
-    // --- tick the box; NO restart (AC10) ---
     set_autocomplete(&daemon.url(), true).await;
     daemon.run_stale_detection_tick().await;
 
@@ -567,8 +557,6 @@ async fn the_setting_gates_completion_and_takes_effect_on_the_next_sweep() {
         "and not both; saw {kinds:?}"
     );
 }
-
-// --- #433 / ADR-0043: the Stop hook's `pdo complete --auto` wire path ---------
 
 /// POST `…/done` with `{ "iter": …, "auto": … }`, the exact body
 /// `pdo complete --auto` sends. Returns the HTTP status.

@@ -8,22 +8,9 @@
 //! only reader of `AppState`), then the core ([`ensure_ready`], [`cleanup`]) works
 //! from explicit values only — mirroring the pure-module discipline.
 //!
-//! What this module wires:
-//! - [`ensure_ready`] — stage the Claude home once, ensure the image, ensure the
-//!   container is up. Called at create-time (eager fail-fast), `boot_recovery`
-//!   (reconcile a live sandboxed Run), `open_run_shell` (resurrect), and
-//!   `resume_run` (re-arm a terminal Run after a host reboot, #408 D5). Sync and
-//!   possibly long (`docker build` on the first machine run) → async callers wrap
-//!   it in `spawn_blocking`.
-//! - [`cleanup`] — merge the transcripts back, destroy the container, then purge
-//!   the staging at `cleanup_run`.
-//! - [`transcripts_root`] / [`merge_back_best_effort`] — the observability seam
-//!   (#408, ADR-0030 pt 9): cost ([`crate::run_cost`]) and stale-detection
-//!   ([`crate::stale_detector`]) read a sandboxed Run's transcripts from its
-//!   staged home while it is live, and `merge_back` lands them in `~/.claude`
-//!   at the terminal transition (via [`merge_back_best_effort`], the
-//!   `append_event` chokepoint) and again at `cleanup_run` (via [`cleanup`],
-//!   before `teardown`). session-death detection stays transcript-independent.
+//! Callers of [`ensure_ready`]: create-time (eager fail-fast), `boot_recovery`
+//! (reconcile a live sandboxed Run), `open_run_shell` (resurrect), and `resume_run`
+//! (re-arm a terminal Run after a host reboot, #408 D5).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -766,7 +753,6 @@ mod tests {
             sandbox_staging::staged_claude_json(&ctx.sandbox_root, "r1").is_file(),
             "minimal staging writes a .claude.json"
         );
-        // Docker was probed for image + container (present → no build/create).
         let lines = log_lines(&log);
         assert!(lines.contains(&"image".to_string()), "image inspected");
         assert!(lines.contains(&"container".to_string()), "container probed");
@@ -857,7 +843,6 @@ mod tests {
         let (docker, log) = write_fake_docker(tmp.path());
         let home_root = tmp.path().join("home");
         let sandbox_root = tmp.path().join("sandbox");
-        // Seed a staging dir to be torn down.
         std::fs::create_dir_all(sandbox_staging::staged_claude_home(&sandbox_root, "r1")).unwrap();
         assert!(sandbox_staging::staging_dir_for_run(&sandbox_root, "r1").exists());
 
@@ -909,8 +894,6 @@ mod tests {
             log_lines(&log)
         );
     }
-
-    // --- #468: the frozen profile env ------------------------------------------
 
     fn run_state_with_env(env: Option<BTreeMap<String, String>>) -> RunState {
         let mut rs = RunState::new("r1".to_string(), "p".to_string());
@@ -997,8 +980,6 @@ mod tests {
             "a profile without env must pose nothing; log: {lines2:?}"
         );
     }
-
-    // --- #467: the frozen profile image source ---------------------------------
 
     fn run_state_with_image(image: Option<sandbox_image::ProfileImage>) -> RunState {
         let mut rs = RunState::new("r1".to_string(), "p".to_string());
@@ -1167,15 +1148,12 @@ mod tests {
         );
     }
 
-    // --- #408: cleanup harvests transcripts before teardown --------------------
-
     #[test]
     fn cleanup_merges_transcripts_before_purging_staging() {
         let tmp = tempfile::tempdir().unwrap();
         let (docker, _log) = write_fake_docker(tmp.path());
         let home_root = tmp.path().join("home");
         let sandbox_root = tmp.path().join("sandbox");
-        // Seed a staged transcript under one encoded project dir.
         let staged_projects =
             sandbox_staging::staged_claude_home(&sandbox_root, "r1").join("projects");
         let proj = staged_projects.join("-enc-worktree");
@@ -1191,21 +1169,17 @@ mod tests {
             },
         );
 
-        // merge_back landed the transcript in the host projects dir …
         assert!(
             home_root
                 .join(".claude/projects/-enc-worktree/s.jsonl")
                 .is_file(),
             "cleanup must merge transcripts to the host BEFORE teardown"
         );
-        // … and teardown then purged the staging.
         assert!(
             !sandbox_staging::staging_dir_for_run(&sandbox_root, "r1").exists(),
             "cleanup purges the staging after the merge"
         );
     }
-
-    // --- #408: transcripts_root seam (3 arms + root-invariance) ----------------
 
     #[test]
     fn transcripts_root_off_is_always_host() {

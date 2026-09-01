@@ -14,8 +14,6 @@
 
 use crate::common::TestDaemon;
 
-// --- cribbed from crates/pdo-daemon/tests/admission_concurrency.rs ---
-
 const PIPELINE_NAME: &str = "diff-solo";
 const PIPELINE_YAML: &str = r#"name: diff-solo
 version: "1.0"

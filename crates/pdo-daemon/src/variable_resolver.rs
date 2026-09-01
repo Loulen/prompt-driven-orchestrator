@@ -65,8 +65,6 @@ mod tests {
         serde_yaml::Value::Bool(b)
     }
 
-    // --- resolve_variables: literal passthrough ---
-
     #[test]
     fn literal_int_passthrough() {
         let defaults: HashMap<String, serde_yaml::Value> =
@@ -102,8 +100,6 @@ mod tests {
         let resolved = resolve_variables(&defaults, &overrides);
         assert_eq!(resolved["verbose"], val_b(true));
     }
-
-    // --- resolve_variables: override precedence ---
 
     #[test]
     fn run_override_takes_precedence_over_pipeline_default() {
@@ -141,8 +137,6 @@ mod tests {
         let resolved = resolve_variables(&defaults, &overrides);
         assert_eq!(resolved["max_iter"], val_s("unlimited"));
     }
-
-    // --- resolve_value: $<var> resolution ---
 
     #[test]
     fn resolves_dollar_var_to_value() {
@@ -185,8 +179,6 @@ mod tests {
         let result = resolve_value(&operand, &vars).unwrap();
         assert_eq!(result, val_s("strict"));
     }
-
-    // --- resolve_variables: empty inputs ---
 
     #[test]
     fn empty_defaults_and_overrides() {

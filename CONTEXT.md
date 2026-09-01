@@ -116,16 +116,6 @@ Modèle (A) — **document-first, code en side-channel** :
 
 Une edge porte une clause `when:` **optionnelle**. Sans clause, l'edge est inconditionnelle.
 
-```yaml
-edges:
-  - source: { node: reviewer, port: review }
-    target: { node: implementer, port: task }
-    when: { verdict: { in: [FAIL, NEEDS_WORK] } }
-  - source: { node: reviewer, port: review }
-    target: { node: end, port: result }
-    when: { verdict: { eq: PASS } }
-```
-
 ### Évaluation — multi-match, pas d'ordre
 
 À l'arrivée d'un artefact sur un output port, **toutes** les edges sortantes dont la clause est satisfaite **firent** — le flux peut fan-out vers plusieurs nœuds simultanément. Pas de `first-match-wins`. Si deux conditions se chevauchent, les deux branches partent : c'est voulu (ADR-0001, *sharp tool*) — le designer écrit des conditions disjointes pour un XOR, ou converge un fan-out de Nodes isolés via un `Merge`. Une edge **`else`** fire **uniquement si aucune edge sœur** (même output port source) n'a matché.
@@ -149,18 +139,6 @@ Une boucle est une **entrée nommée du bloc `loops:`** du YAML, qui référence
 Pourquoi une identité nommée plutôt qu'une détection de cycle pure : « quelle edge est *la* back-edge » est une propriété topologique globale qui bascule quand on édite le graphe ailleurs. Un **id stable** sort cette identité de la topologie, stabilise la persistance du bound, et ouvre les boucles imbriquées. Cf. ADR-0011.
 
 ### Forme
-
-```yaml
-loops:
-  - id: review-loop
-    kind: bounded          # compteur borné, séquentiel
-    members: [implementer, reviewer]
-    max_iter: 3
-  - id: per-issue
-    kind: collection       # fan-out parallèle data-driven
-    members: [fixer]       # ≥ 1 membre — souvent un seul nœud
-    over: issues           # champ liste dans l'artefact entrant
-```
 
 - `members` : **liste explicite d'ids de nœuds, ≥ 1** (jamais spatial — déplacer un nœud hors de la boîte ne le retire pas de la boucle). Une boucle n'est pas nécessairement un sous-graphe : un seul membre est légal et fréquent (`collection` à un membre = un fan-out par item ; `bounded` à un membre = self-edge jusqu'à `max_iter`).
 - **Entrée** = le membre ayant une in-edge depuis un non-membre. **Re-entry** = une edge d'un membre vers cette entrée.
@@ -254,15 +232,6 @@ Un Node peut **déclarer le schéma de frontmatter attendu** sur chacun de ses o
 
 Types supportés v1 : `enum` (avec `allowed`), `int`, `string`, `bool`, `list` (de strings). Si un cas concret force plus, on étend.
 
-```yaml
-outputs:
-  - name: review
-    frontmatter:
-      verdict: { type: enum, allowed: [PASS, FAIL] }
-      score: { type: int }
-      issues: { type: list }
-```
-
 **Pas de typage côté input** — l'agent fait du best-effort sur ce qu'il reçoit. Asymétrie volontaire : l'output est un contrat de production mécaniquement vérifiable ; l'input est un contexte que l'agent interprète.
 
 ### Validation à la complétion + fallback tmux
@@ -284,12 +253,6 @@ Le 2xx de `pdo complete` (et `fail`/`skip`) signifie « ton événement terminal
 ## Variables pipeline
 
 Une pipeline déclare au niveau racine un bloc `variables:` — paires nom/valeur typées référençables dans toute clause `when:` via `$<name>`.
-
-```yaml
-variables:
-  max_iter_review: 5
-  min_quality_score: 7
-```
 
 **Override au lancement d'un Run** : `POST /runs` peut inclure un objet `variables:` qui écrase les valeurs déclarées. Pas d'expressions calculées — uniquement des littéraux ; la logique reste dans les `when:`.
 
@@ -472,7 +435,7 @@ Quatre métriques dans le panneau d'info (#100, #272) :
 
 ### Statistiques d'instance (cockpit, #377)
 
-Surface **Stats** superposée en pleine fenêtre, avec navigation latérale et période commune aux sections : agrégats **transverses** filtrables par période (runs/erreurs/sessions, fires par pipeline, coûts), à distinguer des Statistiques de Run. Sessions et Cost ventilent les harnais dans des barres empilées par période et dans un tableau hiérarchique Pipeline → Nodes ; Cost affiche total et moyenne, tandis que Sessions porte les nombres d'exécutions. Les noms visibles suffisent, l'interface n'expose pas leurs identifiants techniques. Une lecture secondaire reprend la même hiérarchie par Projet → Pipelines → Nodes ; un Run sans Projet nommé porte le nom de son dépôt primaire. Les sessions propres au Run forment la ligne **Infrastructure**, tandis que les subagents appartiennent au Node parent (ADR-0058) ; un coût impossible à rattacher reste dans **Non attribué**, jamais dans une catégorie inventée. Une exécution de Node est un démarrage, donc chaque tour de boucle et chaque redémarrage compte séparément dans la moyenne. La période sélectionne les Runs démarrés dans sa fenêtre et inclut toutes leurs exécutions et leur coût complet. Une moyenne de coût ne porte que sur les exécutions au coût lisible ; elle garde le préfixe `~`, et son détail donne la couverture. Le marqueur `†` reste réservé à une borne basse incomplète. Un harnais n'est absent du tableau que s'il n'a aucune exécution sur la période ; un coût inconnu reste visible comme « — », jamais comme `$0`. Les événements antérieurs au multi-harnais sont attribués à `claude`, seul harnais agentique alors disponible ; les Nodes `script` restent hors compte. Les couleurs sont stables par nom de harnais, avec `copilot` en bleu et `claude` en orange. Le calcul ne se rafraîchit pas en arrière-plan : l'utilisateur déclenche **Refresh** et voit l'heure du dernier calcul. Les tarifs vivent dans le panneau secondaire **Pricing details**, avec leur synchronisation, la table résolue et ses avertissements. Les agrégats sont dérivés à la lecture, **jamais matérialisés** (ADR-0029), et restent exprimés en USD.
+Surface **Stats** superposée en pleine fenêtre, avec navigation latérale et période commune aux sections : agrégats **transverses** filtrables par période (runs/erreurs/sessions, fires par pipeline, coûts), à distinguer des Statistiques de Run. Sessions et Cost ventilent les harnais dans des barres empilées par période et dans un tableau hiérarchique Pipeline → Nodes ; Cost affiche total et moyenne, tandis que Sessions porte les nombres d'exécutions. Les noms visibles suffisent, l'interface n'expose pas leurs identifiants techniques. Une lecture secondaire reprend la même hiérarchie par Projet → Pipelines → Nodes ; un Run sans Projet nommé porte le nom de son dépôt primaire. Les sessions propres au Run forment la ligne **Infrastructure**, tandis que les subagents appartiennent au Node parent (ADR-0058) ; un coût impossible à rattacher reste dans **Non attribué**, jamais dans une catégorie inventée. Une exécution de Node est un démarrage, donc chaque tour de boucle et chaque redémarrage compte séparément dans la moyenne. La période sélectionne les Runs démarrés dans sa fenêtre et inclut toutes leurs exécutions et leur coût complet. Une moyenne de coût ne porte que sur les exécutions au coût lisible ; elle garde le préfixe `~`, et son détail donne la couverture. Le marqueur `†` reste réservé à une borne basse incomplète. Un harnais n'est absent du tableau que s'il n'a aucune exécution sur la période ; un coût inconnu reste visible comme « — », jamais comme `$0`. Les événements antérieurs au multi-harnais sont attribués à `claude`, seul harnais agentique alors disponible ; les Nodes `script` restent hors compte. Les couleurs sont stables par nom de harnais. Le calcul ne se rafraîchit pas en arrière-plan : l'utilisateur déclenche **Refresh** et voit l'heure du dernier calcul. Les tarifs vivent dans le panneau secondaire **Pricing details**, avec leur synchronisation, la table résolue et ses avertissements. Les agrégats sont dérivés à la lecture, **jamais matérialisés** (ADR-0029), et restent exprimés en USD.
 
 ### Diff de Run (surface de relecture)
 
@@ -575,7 +538,6 @@ _Éviter_ : « le log » sans qualifier lequel des trois.
 
 ### UI — onglet Triggers
 
-- **Ligne** : status dot, nom, pipeline, badge repo, planning lisible, toggle enable/disable, next/last fire. **Panneau détail** : config + historique des fires avec raison.
 - **Run now** (ADR-0027) = un **fire de première classe** partageant verbatim le chemin cron : guard exécuté, overlap honoré, ligne d'audit écrite, `next_fire_at` intact (le heartbeat possède le planning). Un skip guard/overlap est un 200 honnête (ADR-0025).
 - **Tester le guard (dry-run)** (#350/#351) : exécute la commande de guard **sans aucun effet de bord** — aucun Run, aucune ligne d'audit. À distinguer de Run now (fire réel).
 - **Trigger désactivé** (par-ligne) : grisé, ne fire pas ; la ré-activation repart au prochain slot.
@@ -713,7 +675,7 @@ Posture **fail-fast pour ce que le runtime sait** : toute divergence constatée 
 
 ### Pont UI ↔ tmux : terminal inline xterm.js
 
-ADR-0005. **Terminal interactif inline** dans le panneau de détail du nœud (WebSocket ↔ PTY ↔ `tmux attach`), bidirectionnel, temps réel. Icônes : **agrandir** (plein cadre) et **détacher** (fallback opt-in vers une fenêtre OS native — escape hatch).
+ADR-0005. **Terminal interactif inline** dans le panneau de détail du nœud (WebSocket ↔ PTY ↔ `tmux attach`), bidirectionnel, temps réel. **Détacher** vers une fenêtre OS native reste un fallback opt-in (escape hatch), jamais le chemin principal.
 
 - **« Agrandir » est toujours un geste utilisateur explicite** (#270) : ni la sélection d'un nœud ni l'auto-snap n'agrandit d'eux-mêmes.
 - **Trois états d'affichage** (#346) : `split` (défaut d'une node vivante), `agrandi` (geste), `réduit` (défaut au clic sur une node à session terminée — les outputs priment). Défaut au **montage**, pas de repli réactif.
@@ -803,32 +765,13 @@ PDO est un **atelier de production de code** ; la conception de pipelines est un
 
 ### Layout 3 panneaux
 
-- **Gauche — Liste à trois onglets** `Runs | Triggers | Library`. Runs : les actifs en haut (regroupés par repo si ≥ 2), puis une section « Archived » repliable et plate (regroupement de **vue**, jamais un delete). Un Run créé par un Trigger porte un badge de provenance cliquable.
-- **Centre — Canvas du graphe**, toujours interactif. Contexte Run : highlight des nœuds en cours, overlay flottant (run-id, status, actions).
-- **Droite — Détail du nœud sélectionné** : terminal inline, inputs résolus (+ viewer markdown), outputs produits, prompt initial tel que reçu, bouton Mark complete, formulaire d'édition du node.
+Liste (Runs / Triggers / Library) à gauche, canvas au centre, détail du nœud sélectionné à droite. La section « Archived » de la liste des Runs est un regroupement de **vue**, jamais un delete.
 
 ### Toolbar — bouton info pipeline
 
 L'icône `i` ouvre un panneau **info pipeline** : nom, statut, variables, bouton favoriter. Si la pipeline tourne, le terminal manager y prend la place dominante ; sur une **template** de bibliothèque, un onglet **Assistant** héberge le copilote d'authoring (ADR-0048 / ADR-0051), et un glyphe « agent » dans la toolbar y saute directement (côté run, le même chemin mène au Manager — #302). Realtime via WebSocket : chaque événement de l'event log push une update vers l'UI.
 
-### Workflow utilisateur typique
-
-1. **Monitor** : voir ses Runs actifs, débugger via le manager ou en attachant directement.
-2. **Lancer un Run** : « + New Run », sélecteur de pipeline (bibliothèque) + input + overrides de variables.
-3. **Créer une pipeline** : « + New Pipeline » → canvas vierge.
-4. **Modifier une pipeline** : clic dans la liste, on édite. Pas de toggle.
-5. **Modifier pendant un Run** : clic sur le Run, le canvas affiche le run-snapshot, on édite à chaud.
-
 ### Status icon par Run
-
-| Status | Couleur / icône |
-|---|---|
-| `running` | bleu pulsant |
-| `awaiting_user` | jaune |
-| `done` | vert plein |
-| `blocked` | orange |
-| `failed` | rouge |
-| `archived` | gris |
 
 Le point ne peut pas être **tout** le signal (#503) : un Run non vert projette la **raison** de son événement terminal, qui titre le point dans la liste et s'affiche dans le panneau du Run — le premier endroit où l'on arrive en cliquant un point rouge.
 
@@ -848,11 +791,7 @@ Pas de notifications système v1. Le status icon suffit. Si ça manque, opt-in p
 
 ## Stack technique
 
-Choix et pourquoi → ADR-0003. Daemon **Rust** (Tokio, Axum, SQLite/sqlx, `notify`, serde_yaml) ; frontend **React + Vite** (canvas **xyflow**, shadcn/ui, Zustand + TanStack Query), embarqué dans le binaire du daemon.
-
-### Distribution
-
-Binaires pré-buildés sur GitHub Releases, packaging piloté par **`dist`** (ex-cargo-dist) : installeur shell (`curl … pdo-installer.sh | sh`) + **formule Homebrew** (tap `Loulen/homebrew-tap`, `brew install Loulen/tap/pdo`). Le job GHCR des images sandbox est sorti dans son propre workflow (`sandbox-image.yml`), découplé de la release binaire. Plus tard : AUR ; auto-update in-app (report volontaire) ; wrapper Tauri en v2.
+Choix et pourquoi → ADR-0003. Daemon **Rust**, frontend **React + Vite** (canvas **xyflow**) **embarqué dans le binaire du daemon**.
 
 ### Service unit persistant (ADR-0019)
 
@@ -884,7 +823,7 @@ Un **onglet de pipeline** = un document ouvert dans la zone centrale (un `Pipeli
 
 ### Création d'un nouveau nœud
 
-From scratch (« + Add node »), duplicate (clic droit), drag-drop depuis la bibliothèque, ou **depuis un YAML** (#345 : coller/charger une définition, round-trip natif du *Export as YAML…* — à ne pas confondre avec l'*Import de workflow*, format étranger avec perte, ADR-0016). **Pas de library de templates PDO-shipped** (ADR-0001 : pas d'opinion vendor sur « à quoi ressemble un Implementer »).
+La création **depuis un YAML** (#345) est le round-trip natif de l'*Export as YAML…* — à ne pas confondre avec l'*Import de workflow*, format étranger avec perte (ADR-0016). **Pas de library de templates PDO-shipped** (ADR-0001 : pas d'opinion vendor sur « à quoi ressemble un Implementer »).
 
 ---
 
@@ -907,7 +846,9 @@ Le **registre de pipelines** est l'ensemble des Pipelines possédées par une in
 Un **Document de pipeline transportable** est la représentation YAML versionnée et interprétable qui permet de copier une Pipeline entre instances. Il conserve au maximum le graphe, les boucles, le routage, la présentation, les notes, les prompts, les déclarations et valeurs par défaut de variables, et développe les nodes partagés en nodes ordinaires.
 
 Il ne transporte ni secrets, ni environnement, ni valeurs d'exécution, ni configuration d'instance. Un choix agentique lié à un profil d'instance redevient **Inherit** ; l'identité de la Pipeline est recréée à l'import. L'import est atomique, et un document invalide ou d'une version non prise en charge est refusé avec diagnostics.
-_Éviter_ : « YAML canonique » — le format interne peut séparer des contenus que le document rassemble ; le contrat est la fidélité maximale du round-trip, pas l'identité avec le stockage interne.
+
+**Un document produit par PDO est importable par PDO** : l'export ne peut pas émettre ce que l'import refuse, sinon la panne tombe sur la machine de destination — celle qui ne peut rien corriger. Les prompts vivent en fichiers annexes nommés par identifiant de node, et un node supprimé y laissait le sien : la clé morte rendait la Pipeline non transportable. L'invariant *clés ⊆ nodes* se tient donc partout où les prompts franchissent une frontière — sauvegarde, export, écriture au registre — et, à l'import, un prompt sans node est un **reliquat** qu'on écarte avec un avertissement, jamais un motif de refus. Reste fatale la seule clé qui ne peut pas être un nom de fichier : elle désigne un chemin, pas un node.
+_Éviter_ : « YAML canonique » — le format interne peut séparer des contenus que le document rassemble ; le contrat est la fidélité maximale du round-trip, pas l'identité avec le stockage interne. « Document corrompu » pour un reliquat de prompt — un reliquat se jette, une corruption se refuse.
 
 ---
 

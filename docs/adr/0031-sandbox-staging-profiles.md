@@ -1,15 +1,18 @@
 # ADR-0031 — Profils de staging (home, environnement et image d'un Run sandboxé)
 
-> Statut : accepted (grilling du 2026-07-24, PRD #403 ; §1 réalisé en #426, §2-§7 en #432, §8 en
-> #468, §9 en #467/#471). Vocabulaire : CONTEXT.md § « Sandbox ». Complète ADR-0030 (modèle
-> d'exécution) : ADR-0030 dit *où* tourne un Run sandboxé, celle-ci dit *avec quoi* — home stagé,
-> environnement, image. Le nom de stockage `sandbox_profiles` est conservé malgré ce périmètre
-> élargi : le renommer coûterait une repointe des trois stockages qui comparent son nom pour un
-> gain de prose.
+Sans cette ADR, on traiterait le contenu du *staged Claude home* comme une constante Rust et le mode
+sandbox comme le seul levier — c'est-à-dire qu'un pipeline ayant besoin des skills mais pas des serveurs
+MCP paierait ~1 Go par Run ou perdrait tout, et qu'aucun Run sandboxé n'aurait accès à ce qui vit hors
+de `~/.claude` (identité git, auth `gh`).
 
-Le contenu du *staged Claude home* cesse d'être une constante Rust invisible. Il devient un
-**profil de staging** : une liste nommée, éditable, sélectionnable par Run et par Trigger — qui
-porte aussi l'environnement du conteneur (§8) et sa source d'image (§9).
+> Statut : accepted (PRD #403 ; amendements repliés dans le corps). Complète
+> ADR-0030 : celle-là dit *où* tourne un Run sandboxé, celle-ci *avec quoi*. Le nom de stockage
+> `sandbox_profiles` est conservé malgré ce périmètre élargi : le renommer coûterait une repointe des
+> trois stockages qui comparent son nom pour un gain de prose.
+
+Le contenu du *staged Claude home* devient un **profil de staging** : une liste nommée, éditable,
+sélectionnable par Run et par Trigger — qui porte aussi l'environnement du conteneur (§8) et sa source
+d'image (§9).
 
 ## Ce qu'on décide
 
@@ -122,20 +125,6 @@ porte aussi l'environnement du conteneur (§8) et sa source d'image (§9).
    Consommateur direct : la variante d'image chrome-dev (#466) devient sélectionnable **par
    profil** au lieu de l'être pour toute l'instance.
 
-## Pourquoi (ce que le mode seul ne pouvait pas faire)
-
-Le mode est un interrupteur à deux positions qui décide de *tout* d'un coup — skills, plugins,
-agents, commands, settings, `.md` globaux. Or le poste de coût est **un seul** de ces éléments :
-`full` pèse ~1 Go par Run, dominé par les `node_modules` des plugins, et le staging n'est purgé
-qu'au `cleanup_run`. Un pipeline qui a besoin des skills mais pas des serveurs MCP n'avait aucune
-option : il payait 1 Go ou il perdait tout. Sur une instance à Triggers horaires, ce choix binaire
-alimente directement la récurrence disque connue.
-
-Symétriquement, le staging ne pouvait transporter que du `~/.claude`, alors que ce qui manque à un
-Run sandboxé pour faire le travail réel est ailleurs dans `$HOME` : l'identité git est globale
-(`~/.gitconfig`), l'auth `gh` vit dans `~/.config/gh`. Le profil résout les deux besoins avec un
-seul concept.
-
 ## Alternatives écartées
 
 - **Extras seulement, sans décochage.** Simple, mais ne règle pas le poste de coût — le seul
@@ -190,39 +179,23 @@ seul concept.
   fait échouer ses Runs. C'est le prix explicite du ref libre, écrit dans l'éditeur à l'endroit du
   choix.
 
-## Relations
-
-- **ADR-0030** — modèle d'exécution ; porte les mounts d'exception `$HOME`, l'échec fort, et
-  (pt 7) toute la rationale image, y compris ce qu'un ref registry explicite abandonne.
-- **ADR-0015** — précédence des réglages d'instance ; les défauts virtuels `minimal`/`full` en sont
-  l'application à une valeur non scalaire.
-- **ADR-0001** — outil tranchant, pas outil sûr : fonde le choix « autoriser + avertir » (§3).
-- **#403** — PRD Sandbox ; **#466** — la variante chrome-dev, consommateur direct de §9 ;
-  **#447** — « un fait, un propriétaire », le précédent des clés réservées de §8.
-
-## Amendements (#432, à la livraison)
+## Amendements (#432)
 
 ### A1 — §6 : un Run d'avant les profils relit le défaut vivant
 
-Une ligne de la table de décision au replay contrevient au gel, **sciemment** : un payload
-`RunStarted` qui porte un nom de profil virtuel **sans** liste gelée fait re-résoudre le défaut
-virtuel maintenant. Ce cas n'est atteignable que pour un Run créé par un daemon pré-#432, dont le
-staging a été purgé, puis repris. Les deux alternatives sont pires : `RunFailed` sur un Run
-parfaitement résoluble, ou figer dans le Rust pour toujours le défaut tel qu'il était — ce qui
-contredirait §2. Un nom d'**utilisateur** sans liste gelée échoue dur (injoignable par
-construction : le chokepoint écrit les deux clés ou aucune).
+Un payload `RunStarted` qui porte un nom de profil virtuel **sans** liste gelée fait re-résoudre le
+défaut virtuel maintenant — entorse **sciemment** consentie au gel. Ce cas n'est atteignable que pour un
+Run créé par un daemon pré-#432, dont le staging a été purgé, puis repris. Les deux alternatives sont
+pires : `RunFailed` sur un Run parfaitement résoluble, ou figer dans le Rust pour toujours le défaut tel
+qu'il était — ce qui contredirait §2. Un nom d'**utilisateur** sans liste gelée échoue dur.
 
-### A2 — le critère « `git config --global` modifie la copie stagée » était faux
+### A2 — `$HOME` n'est pas inscriptible dans le conteneur
 
-Le corps de #432 affirmait que `git config --global` depuis le conteneur modifie la copie stagée.
-Vérifié en Docker réel : **faux** — `$HOME` n'existe pas dans l'image (l'image de base livre un
-autre home), donc Docker le crée comme parent des mounts, possédé par root. `git config --global`
-n'écrit pas en place : il crée un lock-file puis renomme, et le rename exige un `$HOME`
-inscriptible → permission refusée. Condition pré-existante, pas une régression des profils. Le
-critère est reformulé en deux affirmations vraies et testées : (1) le `~/.gitconfig` de l'hôte
-n'est **jamais** muté — doublement garanti (copie-puis-mount de §4, et l'échec net ci-dessus) ;
-(2) une écriture du conteneur sous `$HOME` atterrit dans la copie stagée — vraie pour une entrée
-répertoire (inscriptible), seul le motif *lock-file-puis-rename* est bloqué. Rendre `$HOME`
-inscriptible dans le conteneur est un arbitrage produit (il toucherait les identity mounts
-d'ADR-0030 §1) : hors périmètre de #432, à ficher en suivi. Sans lui, `git config --global`,
-`gh auth login` et tout outil qui crée un dotfile *nouveau* échouent dans le conteneur.
+`git config --global` depuis le conteneur ne modifie **pas** la copie stagée : `$HOME` n'existe pas dans
+l'image (l'image de base livre un autre home), donc Docker le crée comme parent des mounts, possédé par
+root ; le motif *lock-file-puis-rename* échoue alors en permission refusée. Condition pré-existante, pas
+une régression des profils. Ce qui est vrai : (1) le `~/.gitconfig` de l'hôte n'est **jamais** muté —
+doublement garanti (copie-puis-mount de §4, et l'échec ci-dessus) ; (2) une écriture du conteneur sous
+`$HOME` atterrit dans la copie stagée, pour une entrée répertoire inscriptible. Rendre `$HOME`
+inscriptible toucherait les identity mounts d'ADR-0030 §1 : arbitrage produit à part. Sans lui,
+`git config --global`, `gh auth login` et tout outil qui crée un dotfile *nouveau* échouent.

@@ -1,39 +1,30 @@
 //! Ce qu'un `node_retry` a réellement fait, et comment ça se projette sur le wire
-//! (#487 — applique ADR-0037 + ADR-0035 §3, sans ADR neuve).
+//! (#487 — applique ADR-0037 + ADR-0035 §3).
 //!
-//! Patron cloné de [`crate::restart_verdict`] (#489, ADR-0037), **pas le type** : la
-//! coordination sur #487 est explicite là-dessus — les variantes de `RestartVerdict`
-//! sont adossées à la surface *restart* (`SubWorktreeOccupied`, la sonde même-`iter`,
-//! le `session_killed` d'un kill pré-spawn), et *retry* est un autre geste (table-rase :
-//! `stop` + `invalidate_nodes` + re-spawn — à `iter+1` pour un nœud simple, au **même
-//! `iter`** pour un membre de boucle bornée, dont l'`iter` EST l'index de lap).
-//! L'invariant clonable n'est donc pas
-//! le type mais celui que #489 a épinglé : **un spawn demandé qui n'a pas eu lieu ne se
-//! projette jamais en `2xx`** — une projection totale, variante par variante.
+//! Ne réutilisez pas `RestartVerdict` : ses variantes sont adossées à la surface
+//! *restart* (`SubWorktreeOccupied`, la sonde même-`iter`, le `session_killed` d'un
+//! kill pré-spawn), et *retry* est un autre geste (table-rase : `stop` +
+//! `invalidate_nodes` + re-spawn — à `iter+1` pour un nœud simple, au **même `iter`**
+//! pour un membre de boucle bornée, dont l'`iter` EST l'index de lap). Ce qui se clone
+//! est l'invariant de #489 : **un spawn demandé qui n'a pas eu lieu ne se projette
+//! jamais en `2xx`**.
 //!
-//! Avant #487 le handler renvoyait `200 {"ok":true}` inconditionnellement — y compris
-//! quand il spawnait une session `claude` orpheline sur un Run terminal et n'appendait
-//! **rien** au log. Ce type rend ce mensonge inexprimable.
-//!
-//! La forme de succès garde `iter` et `invalidated` **au niveau racine** : le contrat
-//! historique de la route (`{ok, iter, invalidated}`) que le canvas et son client
-//! lisent déjà. Les champs neufs (`spawned`, `reused_sub_worktree`, `base_sha`,
-//! `interrupted_git_ops`) s'ajoutent à côté, jamais à la place.
+//! La forme de succès garde `iter` et `invalidated` **au niveau racine** : contrat
+//! historique de la route que le canvas et son client lisent déjà. Les champs neufs
+//! s'ajoutent à côté, jamais à la place.
 
 use axum::{http::StatusCode, response::IntoResponse, response::Response, Json};
 
-/// Le verdict d'un `node_retry`. Une variante par sortie observable du handler.
+/// Une variante par sortie observable du handler.
 #[derive(Debug, Clone)]
 pub(crate) enum RetryVerdict {
-    /// Le nœud a été re-spawné (à `iter+1` pour un nœud simple, au même `iter` pour un
-    /// membre de boucle bornée) : un `NodeStarted` est au log et une session tmux a été
-    /// lancée (via la primitive de référence `node_spawn::spawn_node`).
+    /// Re-spawné : un `NodeStarted` est au log et une session tmux tourne.
     Spawned {
         node_id: String,
         iter: i64,
-        /// Les nœuds aval dont ce retry a invalidé les artefacts — la liste que le
-        /// canvas a toujours affichée. Triée. (L'auto-invalidation du nœud lui-même
-        /// est un événement au log, pas une entrée de cette liste, comme avant #487.)
+        /// Les nœuds **aval** dont ce retry a invalidé les artefacts, triés.
+        /// L'auto-invalidation du nœud lui-même reste un événement au log, hors
+        /// de cette liste : le canvas l'affiche telle quelle.
         invalidated: Vec<String>,
         /// Le sous-worktree existait déjà sur la bonne branche et a été réutilisé en
         /// place (#489-B). Toujours `false` pour un nœud sans sous-worktree.
@@ -44,15 +35,14 @@ pub(crate) enum RetryVerdict {
         /// dans l'ordre du scan (#516). `[]` sur une coupe fraîche ou sans sous-worktree.
         interrupted_git_ops: Vec<String>,
     },
-    /// Le cap d'admission a mis le nœud en file : `spawn_node` a appendé un
-    /// `NodeWaiting` qui a flippé le nœud à `Waiting`, et `retry_waiting_nodes` le
-    /// reprend. **Reste `2xx`, et ce n'est pas un `noop`** (ADR-0037 §2) : une
-    /// réservation qui a changé le statut du nœud n'est pas un « rien fait ».
+    /// Le cap d'admission a mis le nœud en file (`NodeWaiting` appendé,
+    /// `retry_waiting_nodes` le reprend). **Reste `2xx`, et ce n'est pas un `noop`**
+    /// (ADR-0037 §2) : une réservation qui a changé le statut du nœud n'est pas un
+    /// « rien fait ».
     Waiting {
         reason: String,
         invalidated: Vec<String>,
     },
-    /// Refus argumenté. Le statut appartient au refus.
     Refused(RetryRefusal),
     /// `SpawnOutcome::Failed` : pas un refus, une panne → `500`.
     Broken {
@@ -63,12 +53,10 @@ pub(crate) enum RetryVerdict {
     },
 }
 
-/// Pourquoi un `node_retry` a été refusé.
 #[derive(Debug, Clone)]
 pub(crate) enum RetryRefusal {
-    /// Refus du garde de transition (#212). **UN** slug (`retry_refused`), la prose du
-    /// garde dans `message`, jamais discriminé (même posture que
-    /// `RestartRefusal::RestartRejected`). Deux points d'émission :
+    /// Refus du garde de transition (#212). Ne discriminez pas : **UN** slug
+    /// (`retry_refused`), la prose du garde dans `message`. Deux points d'émission :
     /// - la **sonde de tête** `retry_run_precondition` (Run terminal/pausé → « resume
     ///   the run first ») — le seul point qui ferme l'incident production #496 ;
     /// - `spawn_node` sur la course (le Run est devenu terminal entre la sonde et le
@@ -103,8 +91,7 @@ impl RetryRefusal {
     /// pas décidé de son statut.
     fn status(&self) -> StatusCode {
         match self {
-            // Une cible absente du pipeline est une requête malformée, pas un conflit
-            // d'état.
+            // Requête malformée, pas un conflit d'état.
             Self::NodeNotFound { .. } => StatusCode::BAD_REQUEST,
             Self::RetryRejected { .. } | Self::SandboxPrepNotReady { .. } => StatusCode::CONFLICT,
         }
@@ -136,7 +123,6 @@ impl RetryRefusal {
         }
     }
 
-    /// Raison lisible pour le log.
     pub(crate) fn reason(&self) -> String {
         match self {
             Self::RetryRejected { message, .. } | Self::SandboxPrepNotReady { message, .. } => {
@@ -149,7 +135,7 @@ impl RetryRefusal {
     }
 }
 
-/// L'**unique** projection d'un verdict de retry vers HTTP. Prend une **référence** :
+/// L'**unique** projection d'un verdict vers HTTP. Prend une **référence** :
 /// le verdict est aussi logué par l'appelant, et rendre `Response` par valeur dans un
 /// `Result::Err` déclencherait `clippy::result_large_err` (traité `-D warnings` en CI).
 pub(crate) fn retry_response(v: &RetryVerdict) -> Response {
@@ -168,8 +154,8 @@ pub(crate) fn retry_response(v: &RetryVerdict) -> Response {
                 // Contrat historique de la route, préservé pour le canvas + son client.
                 "iter": iter,
                 "invalidated": invalidated,
-                // Vocabulaire ADR-0025, aligné sur `restart_response` : une liste de
-                // paires, pas un booléen.
+                // Vocabulaire ADR-0025, aligné sur `restart_response` : une liste
+                // de paires, pas un booléen.
                 "spawned": [{ "node_id": node_id, "iter": iter }],
                 "reused_sub_worktree": reused_sub_worktree,
                 "base_sha": base_sha,
@@ -194,8 +180,8 @@ pub(crate) fn retry_response(v: &RetryVerdict) -> Response {
             let mut body = serde_json::json!({
                 "error": r.slug(),
                 // Uniformément `true` sur les refus de cette route (ADR-0037 §4) :
-                // aucun refus n'enregistre d'issue terminale. La forme est déclarée
-                // transversale par ADR-0035 §3 ; le champ redevient informatif sur le 500.
+                // aucun refus n'enregistre d'issue terminale. Le champ ne redevient
+                // informatif que sur le 500.
                 "recoverable": true,
                 "session_killed": r.session_killed(),
             });
@@ -231,7 +217,7 @@ mod tests {
 
     /// Un échantillon par variante, produit derrière un `match` **exhaustif sans
     /// joker** : ajouter une variante à `RetryVerdict` sans l'échantillonner ici ne
-    /// compile plus. Même garde-fou que `every_restart_verdict()` (#489).
+    /// compile plus.
     fn every_retry_verdict() -> Vec<RetryVerdict> {
         let all = vec![
             RetryVerdict::Spawned {
@@ -289,9 +275,8 @@ mod tests {
         all
     }
 
-    /// **L'invariant du ticket.** Pas « jamais 2xx » (`RetryVerdict` mêle succès,
-    /// sursis et pannes) mais la **totalité de la projection** : `Spawned`/`Waiting`
-    /// sont `2xx`, tout le reste ne l'est jamais.
+    /// Pas « jamais 2xx » (`RetryVerdict` mêle succès, sursis et pannes) mais la
+    /// **totalité** de la projection.
     #[test]
     fn a_spawn_that_did_not_happen_never_projects_to_a_2xx() {
         for v in every_retry_verdict() {
@@ -375,7 +360,6 @@ mod tests {
         serde_json::from_slice(&bytes).expect("retry body is JSON")
     }
 
-    /// Chaque refus porte son slug exact, `recoverable`, et `session_killed`.
     #[tokio::test]
     async fn every_refusal_body_carries_slug_recoverable_and_session_killed() {
         for v in every_retry_verdict() {
@@ -389,9 +373,8 @@ mod tests {
         }
     }
 
-    /// La prose du garde part dans `message`, jamais dans `error` — et le slug
-    /// `retry_refused` ne contient PAS « resume » : un client discrimine sur le slug,
-    /// affiche la prose. C'est le contrat ADR-0035 §3 que le volet frontend consomme.
+    /// Un client discrimine sur le slug et affiche la prose (ADR-0035 §3, contrat
+    /// consommé par le frontend) : le slug ne doit donc pas porter « resume ».
     #[tokio::test]
     async fn the_head_probe_prose_lands_in_message_not_error() {
         let body = body_of(&RetryVerdict::Refused(RetryRefusal::RetryRejected {
@@ -408,9 +391,8 @@ mod tests {
             .contains("resume the run first"));
     }
 
-    /// `Spawned` préserve le contrat racine `{iter, invalidated}` **et** ajoute les
-    /// champs neufs — un client pré-#487 lisant `body.iter` / `body.invalidated`
-    /// continue de marcher.
+    /// Un client pré-#487 lisant `body.iter` / `body.invalidated` doit continuer de
+    /// marcher.
     #[tokio::test]
     async fn spawned_keeps_the_root_iter_and_invalidated_contract() {
         let body = body_of(&RetryVerdict::Spawned {
@@ -438,9 +420,8 @@ mod tests {
         );
     }
 
-    /// `Waiting` est un `2xx` et n'est pas un `noop` (ADR-0037 §2) — et il porte
-    /// quand même la liste `invalidated` (les artefacts ont bien été purgés avant que
-    /// le cap ne mette le nœud en file).
+    /// Il porte quand même `invalidated` : les artefacts ont été purgés avant que
+    /// le cap ne mette le nœud en file (ADR-0037 §2).
     #[tokio::test]
     async fn waiting_is_a_2xx_and_not_a_noop() {
         let body = body_of(&RetryVerdict::Waiting {
@@ -458,8 +439,7 @@ mod tests {
         );
     }
 
-    /// `recoverable` dérive de `run_failed` sur la panne — le seul endroit de la route
-    /// où le champ porte un bit.
+    /// Le seul endroit de la route où `recoverable` porte un bit.
     #[tokio::test]
     async fn broken_derives_recoverable_from_run_failed() {
         for run_failed in [true, false] {
@@ -475,8 +455,6 @@ mod tests {
         }
     }
 
-    /// `node_not_found` est un 400 (requête malformée), pas un 409, et son corps nomme
-    /// la cible.
     #[tokio::test]
     async fn node_not_found_is_a_400_naming_the_target() {
         let v = RetryVerdict::Refused(RetryRefusal::NodeNotFound {

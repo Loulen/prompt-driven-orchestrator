@@ -65,8 +65,6 @@ use anyhow::Result;
 use serde::Serialize;
 use sqlx::{Row, SqlitePool};
 
-// -- vocabulary --------------------------------------------------------------
-
 /// The virtual default that carries the full replica of the host `~/.claude`.
 pub(crate) const FULL_PROFILE: &str = "full";
 /// The virtual default that carries **nothing** in its own right: `minimal` *is* the
@@ -262,8 +260,6 @@ const FLOOR_OWNED_PATHS: &[&str] = &[
     ".claude/projects",
 ];
 
-// -- pure: the classifier ----------------------------------------------------
-
 /// Where an entry lands in the staging. The SINGLE classifier shared by the copy view
 /// and the mount view (see the module header, idea 2).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -293,8 +289,6 @@ pub(crate) fn landing(entry: &str) -> Landing<'_> {
     }
     Landing::HomeExtra { rel: entry }
 }
-
-// -- pure: names -------------------------------------------------------------
 
 /// Grammar: `^[a-z0-9][a-z0-9-]{0,31}$`, trimmed first then checked **strictly**.
 ///
@@ -333,8 +327,6 @@ pub(crate) fn validate_profile_name(raw: &str) -> Result<String, String> {
     }
     Ok(name.to_string())
 }
-
-// -- pure: entries -----------------------------------------------------------
 
 /// Validate and **normalise** one user-authored entry (an *extra*).
 ///
@@ -499,8 +491,6 @@ fn collapse_nested(sorted: Vec<String>) -> Vec<String> {
     out
 }
 
-// -- pure: environment variables (#468, ADR-0031 §8) -------------------------
-
 /// Longest accepted env key. Not a POSIX limit (there is none) — a guard against a paste
 /// accident turning a whole `.env` file into one key.
 pub(crate) const MAX_ENV_KEY_LEN: usize = 128;
@@ -580,8 +570,6 @@ pub(crate) fn validate_env_value(key: &str, raw: &str) -> Result<String, String>
     }
     Ok(raw.to_string())
 }
-
-// -- pure: image source (#467, ADR-0031 §9) ----------------------------------
 
 /// Longest accepted registry ref. Not a Docker limit (a ref is bounded by its components, and
 /// 255 per name component at that) — a guard against a paste accident dropping a whole
@@ -680,8 +668,6 @@ pub(crate) fn validate_profile_image(
 pub(crate) fn env_names(env: &BTreeMap<String, String>) -> String {
     env.keys().cloned().collect::<Vec<_>>().join(", ")
 }
-
-// -- store: the persisted diff ------------------------------------------------
 
 /// A materialised profile row: the user's **intention**, never the effective list.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -979,8 +965,6 @@ mod tests {
         items.iter().map(|s| s.to_string()).collect()
     }
 
-    // -- the golden that anchors the whole slice -----------------------------
-
     /// `resolve_entry_list(full, [], [])` must equal what the pre-#432 constant staged,
     /// entry for entry. This is the one test that proves "profiles" did not silently
     /// change the default staging.
@@ -1013,8 +997,6 @@ mod tests {
         assert!(base.is_empty());
         assert!(resolve_entry_list(&base, &[], &[]).entries.is_empty());
     }
-
-    // -- landing(): the single classifier ------------------------------------
 
     /// GOLDEN, load-bearing: `.claude.json` is the SIBLING, never under `claude-home/`.
     /// Filed there it would surface at `$HOME/.claude/.claude.json`, where Claude Code
@@ -1061,8 +1043,6 @@ mod tests {
             }
         );
     }
-
-    // -- resolve_entry_list --------------------------------------------------
 
     #[test]
     fn disabling_an_entry_removes_it() {
@@ -1123,8 +1103,6 @@ mod tests {
         assert_eq!(got.entries, v(&[".gitconfig"]));
     }
 
-    // -- validate_profile_name ----------------------------------------------
-
     #[test]
     fn profile_names_accept_the_grammar() {
         for ok in ["full", "minimal", "full-no-mcp", "a", "0", "x9-y"] {
@@ -1160,8 +1138,6 @@ mod tests {
         assert!(validate_profile_name(&too_long).is_err());
         assert!(validate_profile_name(&"a".repeat(MAX_PROFILE_NAME_LEN)).is_ok());
     }
-
-    // -- validate_entry ------------------------------------------------------
 
     #[test]
     fn entries_normalise_to_a_canonical_relative_path() {
@@ -1209,8 +1185,6 @@ mod tests {
         assert!(base_entries(FULL_PROFILE).contains(&".claude/*.md"));
         assert!(validate_entry(".claude/*.md").is_err());
     }
-
-    // -- validate_env_key / validate_env_value (#468) ------------------------
 
     #[test]
     fn env_keys_accept_the_portable_shell_subset() {
@@ -1301,8 +1275,6 @@ mod tests {
         }
         assert_eq!(env_names(&BTreeMap::new()), "");
     }
-
-    // -- validate_profile_image (#467) ---------------------------------------
 
     #[test]
     fn a_profile_dockerfile_must_be_an_absolute_path_and_is_trimmed() {

@@ -239,19 +239,14 @@ WantedBy=default.target
             Path::new("/repo"),
             "/x:/opt/node/bin:/usr/bin",
         );
-        // KillMode=process — keeps the child tmux server alive across restart (#234).
         assert!(
             unit.contains("KillMode=process"),
             "missing KillMode=process"
         );
-        // ExecStart points at THIS binary + the `daemon` subcommand.
         assert!(unit.contains("ExecStart=/x/pdo daemon"));
-        // WorkingDirectory — daemon derives repo_root from cwd.
         assert!(unit.contains("WorkingDirectory=/repo"));
-        // Port + PATH.
         assert!(unit.contains("Environment=PDO_PORT=5172"));
         assert!(unit.contains("Environment=PATH=/x:/opt/node/bin:/usr/bin"));
-        // Restart policy + install target.
         assert!(unit.contains("Restart=on-failure"));
         assert!(unit.contains("RestartSec=3"));
         assert!(unit.contains("WantedBy=default.target"));
@@ -267,15 +262,12 @@ WantedBy=default.target
             "/Users/u/.local/bin:/opt/node/bin:/usr/bin",
         );
         assert!(plist.contains("<key>Label</key><string>com.pdo.daemon</string>"));
-        // AbandonProcessGroup — the KillMode=process analog (tmux survives).
         assert!(plist.contains("<key>AbandonProcessGroup</key><true/>"));
         assert!(plist.contains("<key>RunAtLoad</key><true/>"));
         assert!(plist.contains("<key>KeepAlive</key><true/>"));
-        // ProgramArguments launches this binary's `daemon` subcommand.
         assert!(plist.contains(
             "<array><string>/Users/u/.local/bin/pdo</string><string>daemon</string></array>"
         ));
-        // Load-bearing env: PDO_PORT, PATH (incl. node dir), HOME; and WorkingDirectory.
         assert!(plist.contains("<key>PDO_PORT</key><string>6160</string>"));
         assert!(plist.contains(
             "<key>PATH</key><string>/Users/u/.local/bin:/opt/node/bin:/usr/bin</string>"

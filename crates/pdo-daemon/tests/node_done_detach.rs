@@ -144,7 +144,6 @@ async fn run_status(daemon: &TestDaemon, run_id: &str) -> Option<String> {
         .map(String::from)
 }
 
-/// Poll the run's events until `pred` matches one, or time out.
 async fn wait_for_event<F>(daemon: &TestDaemon, run_id: &str, what: &str, pred: F)
 where
     F: Fn(&serde_json::Value) -> bool,
@@ -224,7 +223,6 @@ async fn node_done_survives_client_disconnect_and_spawns_successor() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let run_id = create_run(&daemon).await;
 
-    // Entry node `a` is spawned by run creation.
     wait_for_event(&daemon, &run_id, "node_started for a", |e| {
         e["kind"] == "node_started" && e["node_id"] == "a"
     })

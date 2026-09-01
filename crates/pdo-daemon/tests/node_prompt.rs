@@ -146,7 +146,6 @@ async fn prompt_endpoint_returns_augmented_prompt_after_run_creation() {
     assert!(instructions > output);
     assert!(body.contains("Include remaining risks."));
 
-    // Clean up tmux session if it was created
     let session_name = format!("pdo-{run_id}-{NODE_ID}-iter-1");
     let _ = std::process::Command::new("tmux")
         .args(["kill-session", "-t", &session_name])
@@ -158,7 +157,6 @@ async fn prompt_endpoint_returns_augmented_prompt_after_run_creation() {
 async fn prompt_endpoint_returns_404_before_spawn() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
 
-    // Don't create a run — just query a nonexistent one
     let resp = reqwest::get(format!(
         "{}/runs/nonexistent-run/nodes/{}/prompt?iter=1",
         daemon.url(),

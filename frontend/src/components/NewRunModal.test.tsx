@@ -1073,8 +1073,6 @@ describe("NewRunModal — Trigger mode (#160)", () => {
     });
   });
 
-  // --- #239: bounded-allow overlap control ---
-
   it("reveals the max-concurrent input only when the allow checkbox is checked", async () => {
     await selectPipelineAndRepo();
     fireEvent.click(screen.getByTestId("mode-trigger"));
@@ -1735,8 +1733,6 @@ describe("NewRunModal — sandbox selector (#410)", () => {
       );
     });
   });
-
-  // -- #432: the options are DATA, and a vanished profile is a tombstone -------
 
   it("lists off plus every staging profile the daemon serves", async () => {
     vi.mocked(fetchSettings).mockResolvedValue(

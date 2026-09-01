@@ -1,35 +1,23 @@
 //! The single interpreter of `SchedulerAction` effects (#357).
 //!
 //! ADR-0009 splits scheduling into **decision** and **effect**. The pure
-//! producers in `scheduler.rs` (`evaluate_outgoing_edges_full`,
-//! `evaluate_loop_body_completion`, `evaluate_collection_barrier`,
-//! `seed_pending_loops`) compute a `Vec<SchedulerAction>` without touching the
-//! world. *Executing* that list — spawning a node, emitting a
-//! completion/halt/switch/loop/collection event, depositing collection items —
-//! used to be copy-pasted across three drivers: `handle_node_completion`
-//! (3 loops), `re_evaluate_after_command` (3 loops), and the loop-seed match in
-//! `run_advance::advance_run`. Adding an effect to one variant meant editing up
-//! to seven `match` blocks, and the one real divergence between the copies (a
-//! spawn dedup guard) was a silent drift rather than a visible parameter.
-//!
-//! This module owns that effect exactly once:
+//! producers in `scheduler.rs` compute a `Vec<SchedulerAction>` without touching
+//! the world; this module executes that list, exactly once, for the three drivers
+//! (`handle_node_completion`, `re_evaluate_after_command`, the loop-seed match in
+//! `run_advance::advance_run`) that used to copy it.
 //!
 //! - [`interpret`] runs ONE [`SchedulerAction`] as a linear sequence of Layer-2
-//!   primitives (`spawn_node`, the `emit_*` event sinks,
-//!   `passthrough_switch_artifact`, `deposit_collection_items`). It NEVER
-//!   re-enters the scheduler (no call to `advance_run` / `re_evaluate_after_command`
-//!   / itself, no reload/re-projection — that stays in the drivers), so it is a
-//!   Layer-3 convenience seam, not a fourth scheduling entry point.
-//! - [`admit_spawn`] is the *pure* core that carries the sole historical
-//!   divergence between the drivers as a typed argument ([`SpawnDedup`]) instead
-//!   of a silently-desynchronised code copy. It is unit-tested here without a
-//!   daemon.
+//!   primitives. It NEVER re-enters the scheduler (no `advance_run` /
+//!   `re_evaluate_after_command` / self call, no reload/re-projection — that stays
+//!   in the drivers), so it is a convenience seam, not a fourth scheduling entry
+//!   point.
+//! - [`admit_spawn`] carries the sole divergence between the drivers as a typed
+//!   argument ([`SpawnDedup`]) instead of a silently-desynchronised code copy.
 //!
-//! Behaviour preservation is strict: this is a carve, not a fix. The latent
-//! same-iter double-spawn on the completion path (see the
-//! `nonloop_node_respawned_per_loop_lap` incident) is *frozen* behind
-//! [`SpawnDedup::InternalOnly`], not corrected — unifying the two paths onto
-//! `GuardSuperfluous` is a behaviour change tracked as a separate follow-up.
+//! Don't unify the two policies onto `GuardSuperfluous`: the latent same-iter
+//! double-spawn on the completion path (the `nonloop_node_respawned_per_loop_lap`
+//! incident) is deliberately *frozen* behind [`SpawnDedup::InternalOnly`], and
+//! fixing it is a behaviour change tracked as a separate follow-up.
 
 use crate::event_log::{self, RunState};
 use crate::node_spawn::{spawn_node, SpawnContext, SpawnDeps, SpawnOutcome};
@@ -41,17 +29,12 @@ use crate::{
 };
 
 /// Whether to re-apply the scheduler-side spawn dedup
-/// ([`transition_guard::spawn_superfluous`]) before executing a `Spawn`.
+/// ([`transition_guard::spawn_superfluous`]) before executing a `Spawn`. This is
+/// the ONLY behavioural divergence between the three drivers.
 ///
-/// This is the ONLY behavioural divergence between the three drivers, now a
-/// visible typed argument instead of a code copy (#357).
-///
-/// NB: deliberately NOT named `AdmissionPolicy` (as the issue text proposed).
-/// "admission" is already a loaded term in this crate — it is the *concurrent
-/// session cap* (`admission.rs`, `SpawnDeps::admission_lock`, CONTEXT.md §749).
-/// The guard controlled here is `spawn_superfluous` (a redundant spawn
-/// proposal), a distinct concept from "is a session slot free"; naming it
-/// `AdmissionPolicy` would conflate the two.
+/// Don't rename this to `AdmissionPolicy`: "admission" already means the
+/// *concurrent session cap* in this crate (`admission.rs`,
+/// `SpawnDeps::admission_lock`, CONTEXT.md §749), a distinct concept.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SpawnDedup {
     /// Re-evaluation paths (`resume_run`, `extend_cycle`, region routes): reject
@@ -73,11 +56,8 @@ pub(crate) enum SpawnAdmission {
 }
 
 /// PURE decision: should this `Spawn { node_id, iter }` proceed under `policy`?
-///
-/// Delegates the real logic to the existing pure
-/// [`transition_guard::spawn_superfluous`]. No `AppState`, no IO, no async —
-/// this is the exact point where the two policies diverge, so it carries the
-/// net test (`skip vs restart`).
+/// No `AppState`, no IO, no async — this is the exact point where the two
+/// policies diverge, so it carries the net test (`skip vs restart`).
 pub(crate) fn admit_spawn(
     policy: SpawnDedup,
     run_state: &RunState,
@@ -126,9 +106,7 @@ pub(crate) enum ActionOutcome {
     Interrupted { message: String },
 }
 
-/// Interpret ONE [`SchedulerAction`]. A linear sequence of Layer-2 primitives
-/// that NEVER re-enters the scheduler (no `advance_run` / `re_evaluate` / self
-/// call, no reload/re-projection — those stay in the drivers). ADR-0009.
+/// Interpret ONE [`SchedulerAction`], never re-entering the scheduler (ADR-0009).
 ///
 /// `run_state` is the driver's per-pass snapshot (INV-2) and is *never* reloaded
 /// or re-projected here. `source_iter` is consulted only by `SwitchRouted`
@@ -179,10 +157,9 @@ pub(crate) async fn interpret(
             message,
         } => {
             // ADR-0049: `unrouted` parks the run `AwaitingUser`, never terminal.
-            // `RunInterrupted` carries the diagnostic as a machine `reason_code`
-            // AND human `reason` (#601), the shape `run_event_reason` /
-            // `run_event_reason_code` read into `awaiting_reason` /
-            // `awaiting_reason_code`.
+            // The payload carries both a machine `reason_code` and a human
+            // `reason` (#601), the shape `run_event_reason{,_code}` reads into
+            // `awaiting_reason{,_code}`.
             emit_run_event(
                 state,
                 run_id,
@@ -240,8 +217,6 @@ mod tests {
     use super::*;
     use crate::event_log::{now_iso, project, Event, EventKind};
 
-    // Fixtures mirror transition_guard.rs's test helpers: build a lifecycle
-    // event, then project a list of them into a RunState.
     fn ev(kind: EventKind, node_id: Option<&str>, iter: Option<i64>) -> Event {
         let payload = if kind == EventKind::RunStarted {
             Some(serde_json::json!({ "pipeline_name": "test" }))
@@ -265,10 +240,8 @@ mod tests {
 
     #[test]
     fn same_iter_live_respawn_skipped_under_guard_admitted_under_internal() {
-        // x is live at iter 1. GuardSuperfluous (re-eval paths) skips a re-spawn;
-        // InternalOnly (completion/advance) admits it (spawn_node's own guard
-        // then treats same-iter-live as a legal restart). This IS the frozen
-        // divergence (INV-1).
+        // This IS the frozen divergence (INV-1): under InternalOnly, spawn_node's
+        // own guard treats same-iter-live as a legal restart.
         let state = state_from(&[
             ev(EventKind::RunStarted, None, None),
             ev(EventKind::NodeStarted, Some("x"), Some(1)),
@@ -285,8 +258,7 @@ mod tests {
 
     #[test]
     fn completed_iter_skipped_but_fresh_lap_admitted_under_guard() {
-        // x completed iter 1: re-spawning iter 1 is superfluous, but a fresh lap
-        // at iter 2 is legitimate work (extend_cycle / region laps).
+        // A fresh lap at iter 2 is legitimate work (extend_cycle / region laps).
         let state = state_from(&[
             ev(EventKind::RunStarted, None, None),
             ev(EventKind::NodeStarted, Some("x"), Some(1)),
@@ -304,25 +276,24 @@ mod tests {
 
     #[test]
     fn internal_only_admits_regardless_of_liveness_or_completion() {
-        // InternalOnly re-applies NO scheduler dedup — every proposal is admitted
-        // at this layer, and spawn_node's transition guard is the sole net. This
-        // locks the "no guard on the completion/advance paths" half of INV-1.
+        // Locks the "no guard on the completion/advance paths" half of INV-1:
+        // spawn_node's transition guard is the sole net.
         let state = state_from(&[
             ev(EventKind::RunStarted, None, None),
             ev(EventKind::NodeStarted, Some("x"), Some(2)),
             ev(EventKind::NodeCompleted, Some("done"), Some(1)),
         ]);
-        // Another iter live (GuardSuperfluous would skip): admitted here.
+        // Another iter live (GuardSuperfluous would skip).
         assert_eq!(
             admit_spawn(SpawnDedup::InternalOnly, &state, "x", 3),
             SpawnAdmission::Admit
         );
-        // Same iter live (legal restart downstream): admitted here.
+        // Same iter live (legal restart downstream).
         assert_eq!(
             admit_spawn(SpawnDedup::InternalOnly, &state, "x", 2),
             SpawnAdmission::Admit
         );
-        // Already-completed iter (GuardSuperfluous would skip): admitted here.
+        // Already-completed iter (GuardSuperfluous would skip).
         assert_eq!(
             admit_spawn(SpawnDedup::InternalOnly, &state, "done", 1),
             SpawnAdmission::Admit
@@ -331,7 +302,6 @@ mod tests {
 
     #[test]
     fn guard_admits_fresh_node() {
-        // A never-seen node under GuardSuperfluous is genuine missing work.
         let state = state_from(&[ev(EventKind::RunStarted, None, None)]);
         assert_eq!(
             admit_spawn(SpawnDedup::GuardSuperfluous, &state, "fresh", 1),
@@ -339,29 +309,18 @@ mod tests {
         );
     }
 
-    // ---------------------------------------------------------------------
-    // #453 — THE SEAM: N `Spawn` on the same node → guard → projected state
-    // ---------------------------------------------------------------------
+    // #453 — THE SEAM: N `Spawn` on the same node → guard → projected state.
     //
     // A collection region fans its entry out with `Spawn { entry, iter: 1..=N }`
-    // in ONE burst, and the drivers `await` those actions one at a time.
-    // `interpret` never re-projects (INV-2), but `spawn_node` does: it reloads
-    // the run state and runs a `NodeStarted` guard probe before any side effect.
-    // So lap 2's probe meets lap 1's freshly-appended `NodeStarted` — and until
-    // #453 the guard refused it as "iter 1 is still live: refusing concurrent
-    // iter 2", deterministically, 1 ms after the fan-out started.
+    // in ONE burst, awaited one at a time. `interpret` never re-projects (INV-2),
+    // but `spawn_node` does: lap 2's guard probe meets lap 1's freshly-appended
+    // `NodeStarted`, and until #453 the guard refused it as "iter 1 is still
+    // live: refusing concurrent iter 2".
     //
-    // Both halves were already unit-tested and both were right on their own:
-    // `handle_collection_entry` produced N `Spawn`s (green), and `validate_start`
-    // refused a concurrent iteration (green, its contract since #212). The bug
-    // lived only where the interpreter runs them in sequence, which nothing
-    // covered. That is why these tests replay the *composition* — real scheduler
-    // actions, real payload builder, real projection, real guard — instead of
-    // asserting on either half.
-    //
-    // What is faked: only tmux and the DB. `replay_spawn_seam` performs exactly
-    // the two steps `spawn_node` performs before it touches the world (project
-    // the log, probe the guard) and appends the same `NodeStarted` reservation.
+    // Both halves were unit-tested and both were right on their own; the bug
+    // lived only in their sequencing. Hence these tests replay the *composition*
+    // — real scheduler actions, real payload builder, real projection, real
+    // guard — rather than asserting on either half.
 
     use crate::scheduler::{self, SchedulerAction};
     use std::collections::HashMap;
@@ -436,10 +395,9 @@ loops:
 
     /// Run the fan-out of `topics` through the REAL scheduler and return the
     /// event log it would produce, plus every guard refusal met on the way.
-    ///
-    /// Mirrors the production sequence: `evaluate_outgoing_edges_full` on the
-    /// producer's completion → for each action, either emit the collection event
-    /// (via the emitter's own payload builder) or replay the spawn seam.
+    /// Only tmux and the DB are faked: the `Spawn` arm performs exactly the two
+    /// steps `spawn_node` takes before touching the world (project the log, probe
+    /// the guard) and appends the same `NodeStarted` reservation.
     fn replay_fanout(topics: &[&str]) -> (Vec<Event>, Vec<String>) {
         let pipeline = crate::pipeline::parse_pipeline(COLLECTION_YAML)
             .expect("fixture parses")
@@ -482,13 +440,11 @@ loops:
                     ));
                 }
                 SchedulerAction::Spawn { node_id, iter } => {
-                    // === the seam: exactly what spawn_node does up front ===
                     let projected = project(&events).expect("projected");
                     let probe = ev(EventKind::NodeStarted, Some(node_id), Some(*iter));
                     match transition_guard::validate_transition(Some(&projected), &probe) {
                         transition_guard::Verdict::Allow => events.push(probe),
                         transition_guard::Verdict::NoOp { reason } => refusals.push(reason),
-                        // #515: the reject cause is typed; record its prose.
                         transition_guard::Verdict::Reject { reason } => {
                             refusals.push(reason.to_string())
                         }
@@ -526,8 +482,8 @@ loops:
 
     #[test]
     fn collection_fanout_scales_past_two_laps() {
-        // 3 items produced TWO refusals before the fix (iter 2 and iter 3), so
-        // the bug was never about the second lap specifically.
+        // 3 items produced TWO refusals before the fix, so the bug was never
+        // about the second lap specifically.
         let (events, refusals) = replay_fanout(&["alpha", "beta", "gamma"]);
         assert!(refusals.is_empty(), "refused: {refusals:?}");
         assert_eq!(live_iters(&events, "itemizer"), vec![1, 2, 3]);

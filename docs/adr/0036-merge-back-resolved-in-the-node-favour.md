@@ -1,7 +1,12 @@
 # ADR-0036 — Le merge-back se résout en faveur du nœud quand la divergence est l'histoire du Run réécrite par lui
 
-> Statut : accepted (issue #503, reproduite le 2026-07-31). Vocabulaire : CONTEXT.md § « Merge-back
-> d'un sous-worktree ». **Ne touche pas à ADR-0006** : le résolveur automatique de conflit reste
+Sans cette ADR, on tenterait de reconnaître « même travail, ré-écrit » par un garde de **contenu**
+(blobs égaux, chemins contenus, tree-sémantique) — les trois sont mesurés faux sur le cas réel, et le
+troisième est même inatteignable par symétrie du conflit. Ou bien on résoudrait par
+`reset --hard <branche du nœud>`, ce qui rendrait des commits inatteignables et casserait la boot
+recovery. Ni le compilateur ni les tests ne signalent l'un ou l'autre.
+
+> Statut : accepted (#503). **Ne touche pas à ADR-0006** : le résolveur automatique de conflit reste
 > retiré, et cette décision ne *résout* rien — elle refuse d'inventer un merge là où il n'y a rien
 > à merger. **Ne touche pas à ADR-0035** : le refus de complétion reste un `409` nommé ; on réduit
 > le nombre de cas qui doivent en produire un. **Amende ADR-0012(a)** sur un point : le runtime ne
@@ -31,30 +36,15 @@ pendant le Run — ce qui arrive dès qu'un Run concurrent livre — l'agent se 
 PR propre. Le rebase **ré-écrit** les commits du Run : les deux branches portent alors chacune sa
 propre copie du même travail, construites indépendamment.
 
-Occurrence du 2026-07-30, Run `20260730-150012-9a79d52` (#490) :
+Sur l'occurrence de référence, les deux branches portaient chacune sa copie du même correctif, la
+merge-base était la base du Run, et 20 fichiers conflictaient. Le merge-back a échoué, le Run est passé
+`failed` — alors que le diff entre le tip du nœud et le squash de sa PR est **vide** : la livraison
+avait réussi. PDO tenait toutes les preuves du succès au moment où il déclarait l'échec (port de sortie
+rempli et validé, le merge-back tournant strictement après). Le verdict du Run n'était pas dérivé de
+l'issue du travail, mais de la comptabilité interne de PDO.
 
-```
-branche du nœud   7420eee  fix(#490)! … — 1.6.0
-                  f9f971e  feat(#427) … — 1.5.0 (#500)   ← atterri sur main pendant le Run
-                  f6f4630  refactor(#236) … — 1.4.1      ← base du Run
-
-branche pipeline  2563fa0  fix(#490)! … — 1.5.0          ← le MÊME correctif, sa propre copie
-                  f6f4630
-
-merge-base(pipeline, nœud) = f6f4630 → 20 fichiers en conflit
-```
-
-Le merge-back a donc échoué, le Run est passé `failed` — alors que le diff entre le tip du nœud et
-le squash de sa PR est **vide** : la livraison avait réussi. PDO tenait toutes les preuves du succès
-au moment où il déclarait l'échec (port de sortie rempli et validé, le merge-back tournant
-strictement après). Le verdict du Run n'était pas dérivé de l'issue du travail, mais de la
-comptabilité interne de PDO.
-
-Deux défauts collatéraux sur la même occurrence : l'événement de conflit était vide depuis toujours
-(le rapport de git était lu au mauvais endroit), et le nœud en conflit restait projeté `running`,
-session vivante ~24 h après le `run_failed`, invisible des deux filets de liveness. Fréquence :
-**1 occurrence en 445 Runs terminaux**. C'est un défaut de **confiance**, pas une panne : le coût
-réel est que les 38 autres `run_failed` deviennent suspects, et qu'aucune surface ne disait
+Fréquence : **1 occurrence en 445 Runs terminaux**. C'est un défaut de **confiance**, pas une panne :
+le coût réel est que les autres `run_failed` deviennent suspects, et qu'aucune surface ne disait
 pourquoi.
 
 ## Ce qu'on décide

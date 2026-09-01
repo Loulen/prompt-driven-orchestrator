@@ -101,6 +101,9 @@ mod node_prompt;
 #[path = "notes_round_trip.rs"]
 mod notes_round_trip;
 
+#[path = "pipeline_prompt_orphans.rs"]
+mod pipeline_prompt_orphans;
+
 #[path = "process_lifecycle.rs"]
 mod process_lifecycle;
 

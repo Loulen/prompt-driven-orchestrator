@@ -2,31 +2,19 @@
 //! that declares it** (#617, ADR-0045/0051).
 //!
 //! PDO's instrumentation is unequal on purpose: everything beyond launching a
-//! harness is a capability written harness by harness ([`crate::harness_probes`]),
-//! and a harness that cannot do something says so rather than pretending. That
-//! inequality is only honest if it is **published**. This module is where it gets
-//! published.
+//! harness is a capability written harness by harness ([`crate::harness_probes`]).
+//! That inequality is only honest if it is **published** — which is this module.
 //!
-//! ## Why it is generated
+//! The table has **one source of truth**: every ✅/❌ is read from
+//! [`crate::harness_probes::probes_for`] at render time, so adding a harness or a
+//! capability moves the table with no second edit, and `make check` fails if the
+//! committed block has drifted ([`check`]). Don't hand-write a cell.
 //!
-//! A hand-written table is wrong the first time a capability is added, and it is
-//! exactly the kind of documentation nobody re-reads. So the table has **one source
-//! of truth**: the ✅/❌ of every cell is read from
-//! [`crate::harness_probes::probes_for`] at render time. Adding a harness, adding a
-//! capability, or flipping one from present to absent moves the table with no
-//! second edit — and `make check` fails if the committed block has drifted from
-//! what this renders ([`check`]).
+//! Two things cannot be read off the dispatch table, so they are declared here:
 //!
-//! ## What is declared here, and what is enforced
-//!
-//! Two things cannot be read off the dispatch table, so they are declared:
-//!
-//! - the **motive** of each absence ([`ABSENCES`]) — "why not" is prose, not a
-//!   boolean. It is not left to discipline either:
-//!   [`tests::every_absence_on_the_floor_has_a_motive`] fails if any embedded
-//!   harness is absent on a capability with nothing to say about it. That is the
-//!   ticket's promise made structural — "what is unsupported is documented", by
-//!   construction rather than by care;
+//! - the **motive** of each absence ([`ABSENCES`]) — prose, not a boolean, and
+//!   enforced by [`tests::every_absence_on_the_floor_has_a_motive`] so the table
+//!   can never publish a bare ❌;
 //! - the **last validated version** of each binary
 //!   ([`crate::harness_registry::validated_version`]) — a documented bound, never a
 //!   guard: PDO launches on any installed version, silently (out of scope, #612).
@@ -41,7 +29,6 @@ use crate::harness_registry::{embedded_floor, validated_version, COPILOT, OPENCO
 /// The HTML comment opening the generated block in the README. Everything between
 /// this line and [`END_MARKER`] is owned by the generator.
 pub const BEGIN_MARKER: &str = "<!-- support-table:begin -->";
-/// The HTML comment closing the generated block.
 pub const END_MARKER: &str = "<!-- support-table:end -->";
 
 /// One of the six capabilities the support table publishes, in publication order.
@@ -202,10 +189,8 @@ pub(crate) fn absence_motive(harness: &str, capability: Capability) -> Option<&'
 
 /// Render the support block — everything that goes between the two markers.
 ///
-/// Pure: no IO, no clock. The harness axis is [`embedded_floor`] in declaration
-/// order; the capability axis is [`Capability::ALL`]; every cell is read from the
-/// dispatch table. Nothing here can be edited into a lie without the render moving
-/// with it — which is what [`check`] then enforces on the committed file.
+/// Pure: no IO, no clock. Harness axis = [`embedded_floor`] in declaration order,
+/// capability axis = [`Capability::ALL`], every cell read from the dispatch table.
 pub fn render() -> String {
     let harnesses: Vec<String> = embedded_floor().into_iter().map(|d| d.name).collect();
 
@@ -222,7 +207,6 @@ pub fn render() -> String {
          doing nothing.\n\n",
     );
 
-    // --- the matrix ---------------------------------------------------------
     out.push_str("| Capability | What PDO does with it |");
     for h in &harnesses {
         out.push_str(&format!(" `{h}` {} |", validated_version(h).unwrap_or("—")));
@@ -253,7 +237,6 @@ pub fn render() -> String {
          taken against the wrong install is worse than no inventory.\n",
     );
 
-    // --- the absences and their motives -------------------------------------
     let mut rows: Vec<(String, Capability)> = Vec::new();
     for h in &harnesses {
         for cap in Capability::ALL {
@@ -298,8 +281,8 @@ pub fn splice(document: &str, block: &str) -> Result<String, String> {
 
 /// Whether the block committed in `document` still matches what [`render`] emits.
 ///
-/// `Ok(())` on agreement. `Err(message)` **names the drift** — which is the whole
-/// point: a diff that only says "differs" sends the reader back to guessing.
+/// `Err(message)` **names the drift**: a diff that only says "differs" sends the
+/// reader back to guessing.
 pub fn check(document: &str) -> Result<(), String> {
     let block = render();
     let (start, end) = locate(document)?;
@@ -359,9 +342,6 @@ mod tests {
 
     #[test]
     fn every_absence_on_the_floor_has_a_motive() {
-        // The ticket's promise, made structural: "what is unsupported is
-        // documented". Declare a harness, or flip a capability off, and this test
-        // fails until the motive is written — the table can never publish a bare ❌.
         for d in embedded_floor() {
             for cap in Capability::ALL {
                 if cap.mechanism(&d.name).is_none() {
@@ -386,9 +366,8 @@ mod tests {
 
     #[test]
     fn no_motive_is_declared_for_a_capability_that_is_present() {
-        // The other half: a stale motive for a capability that has since been
-        // implemented would publish a contradiction. Nothing renders it, so this
-        // catches it at the declaration.
+        // A stale motive for a since-implemented capability is never rendered, so
+        // nothing but this catches the contradiction.
         for (harness, cap, _) in ABSENCES {
             assert!(
                 cap.mechanism(harness).is_none(),
@@ -400,9 +379,8 @@ mod tests {
 
     #[test]
     fn the_matrix_reads_the_dispatch_table_not_a_hand_written_list() {
-        // claude: six present. copilot: four present, two absent. opencode: none.
-        // These are read through `mechanism`, so this test pins the *wiring*, not a
-        // duplicate of the capability declaration.
+        // Read through `mechanism`, so this pins the *wiring* rather than
+        // duplicating the capability declaration.
         assert!(Capability::ALL
             .iter()
             .all(|c| c.mechanism(CLAUDE).is_some()));
@@ -414,7 +392,6 @@ mod tests {
         assert!(Capability::ALL
             .iter()
             .all(|c| c.mechanism(OPENCODE).is_none()));
-        // A harness PDO carries no code for: absent on all six, no per-name code.
         assert!(Capability::ALL
             .iter()
             .all(|c| c.mechanism("my-custom-harness").is_none()));
@@ -435,11 +412,8 @@ mod tests {
         for cap in Capability::ALL {
             assert!(block.contains(cap.title()), "{} missing", cap.title());
         }
-        // A present cell names its mechanism; an absent one is a bare ❌ whose
-        // motive lives in the second table.
         assert!(block.contains("✅ derived — per-message token usage × the price table"));
         assert!(block.contains("❌"));
-        // Every absence motive is published.
         for (h, cap, why) in ABSENCES {
             assert!(
                 block.contains(why),
@@ -462,8 +436,6 @@ mod tests {
 
     #[test]
     fn check_names_the_drift_when_the_committed_table_lies() {
-        // FP step 2: edit the table by hand so it lies → the check fails, naming
-        // the drift rather than only reporting a difference.
         let doc = format!("# Title\n\n{}\n", render().trim_end());
         let lying = doc.replace("❌ |", "✅ everything |");
         assert_ne!(lying, doc, "the fixture must actually differ");
@@ -475,8 +447,6 @@ mod tests {
 
     #[test]
     fn splice_replaces_the_block_and_leaves_the_rest_untouched() {
-        // FP step 3: regenerating puts the table back to what the code declares,
-        // without touching a byte of prose around it.
         let doc = format!(
             "# Title\n\n## Support\n\n{}\n\n## Prerequisites\n\nkeep me\n",
             "<!-- support-table:begin -->\nstale nonsense\n<!-- support-table:end -->"
@@ -490,12 +460,10 @@ mod tests {
 
     #[test]
     fn splice_and_check_refuse_a_document_with_no_markers() {
-        // Never rewrite a document PDO cannot locate the block in.
         let err = splice("# no markers here\n", &render()).expect_err("must refuse");
         assert!(err.contains("missing"), "{err}");
         let err = check("# no markers here\n").expect_err("must refuse");
         assert!(err.contains("missing"), "{err}");
-        // Opened but never closed.
         let err = check("<!-- support-table:begin -->\nrows\n").expect_err("must refuse");
         assert!(err.contains("unterminated"), "{err}");
     }

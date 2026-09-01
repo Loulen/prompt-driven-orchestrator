@@ -47,11 +47,8 @@
 ///
 /// This is a **constant**, not an estimate: it does not degrade the honesty of the
 /// harness's own figure, and it makes a reported cost additive with a derived one
-/// (both in dollars). It is a datum to watch — the billing unit changed once (the
-/// premium request ceased to be the only tier — but it is unique and published,
-/// where a price table is a catalogue.
+/// (both in dollars). Watch it — the billing unit has changed once already.
 const USD_PER_AIU: f64 = 0.01;
-/// Nano prefix: 1 AIU = 1e9 nano-AIU.
 const NANO_PER_AIU: f64 = 1e9;
 
 /// Convert a cumulative `totalNanoAiu` reading to USD by the published constant
@@ -121,12 +118,11 @@ fn turn_marker(ty: &str) -> Option<TurnMarker> {
 }
 
 /// Whether this journal `tail` shows a **finished turn** — `copilot`'s end-of-turn
-/// signature (ADR-0043 / #615). True iff the last turn marker in the tail is an
-/// `assistant.turn_end`: a trailing `assistant.turn_start` (a turn in flight) or a
-/// trailing `session.error` (a hard failure the harness would exit 0 on) both
-/// answer `false`, so no node is auto-completed while working, nor mistaken for
-/// finished after an error. Usage / shutdown / info events that follow a turn-end
-/// are ignored — they do not un-finish the turn.
+/// signature (ADR-0043). True iff the LAST turn marker is an `assistant.turn_end`:
+/// a trailing `assistant.turn_start` (turn in flight) or a trailing `session.error`
+/// (a hard failure the harness exits 0 on) both answer `false`, so no node is
+/// auto-completed while working, nor mistaken for finished after an error. Usage /
+/// shutdown / info events after a turn-end are ignored — they do not un-finish it.
 pub(crate) fn turn_ended(tail: &str) -> bool {
     let mut last: Option<TurnMarker> = None;
     for raw in tail.lines() {
@@ -146,10 +142,9 @@ pub(crate) fn turn_ended(tail: &str) -> bool {
 }
 
 /// Whether this journal `tail` trails on a **hard error** — a `session.error` that
-/// is the last turn marker (ADR-0052 / #615). This is the journal-borne error the
-/// harness's exit code (zero) cannot report. Callers use it to say the failure
-/// *as such*, rather than reading it off a code that lies. `Some(message)` carries
-/// the error text (best-effort), `None` when the last marker is not an error.
+/// is the last turn marker (ADR-0052). This is the journal-borne error the
+/// harness's exit code (zero) cannot report, so callers must not read the failure
+/// off that code. `Some(message)` carries the error text (best-effort).
 pub(crate) fn hard_error(tail: &str) -> Option<String> {
     let mut last_error_msg: Option<String> = None;
     let mut last_is_error = false;
@@ -196,8 +191,6 @@ mod tests {
     const SHUTDOWN: &str = r#"{"type":"session.shutdown","data":{"shutdownType":"routine","totalNanoAiu":2823580000}}"#;
     const HARD_ERR: &str = r#"{"type":"session.error","data":{"errorType":"query","message":"Failed to get response from the AI model; retried 5 times"}}"#;
 
-    // --- the published-constant conversion (ADR-0052) ---
-
     #[test]
     fn nano_aiu_converts_by_the_published_constant() {
         // 2 823 580 000 nano-AIU = 2.82358 AIU = 2.82358 cents = $0.0282358.
@@ -209,20 +202,18 @@ mod tests {
 
     #[test]
     fn reported_cost_reads_the_max_total_and_is_none_when_absent() {
-        // A live journal: turn-end + a checkpoint → a cost while the node runs.
+        // A checkpoint gives a cost while the node still runs, not only at shutdown.
         let live = format!("{TURN_START}\n{TURN_END}\n{CHECKPOINT}\n");
         assert!((reported_cost_usd(&live).unwrap() - 0.0282358).abs() < 1e-12);
-        // A shutdown carries the same cumulative total — the max is unchanged.
         let done = format!("{live}{SHUTDOWN}\n");
         assert!((reported_cost_usd(&done).unwrap() - 0.0282358).abs() < 1e-12);
-        // A journal with no usage event yet → None, not Some(0.0).
+        // None, not Some(0.0): "no reading" is not "a reading of zero".
         assert!(reported_cost_usd(&format!("{TURN_START}\n")).is_none());
         assert!(reported_cost_usd("").is_none());
     }
 
     #[test]
     fn reported_cost_takes_the_largest_reading_across_growing_checkpoints() {
-        // Two turns: the cumulative total grows; the latest (largest) is the cost.
         let cp1 = r#"{"type":"session.usage_checkpoint","data":{"totalNanoAiu":1000000000}}"#;
         let cp2 = r#"{"type":"session.usage_checkpoint","data":{"totalNanoAiu":5000000000}}"#;
         let journal = format!("{TURN_START}\n{TURN_END}\n{cp1}\n{TURN_START}\n{TURN_END}\n{cp2}\n");
@@ -231,11 +222,8 @@ mod tests {
         );
     }
 
-    // --- end of turn ---
-
     #[test]
     fn turn_end_is_the_last_turn_marker() {
-        // A finished turn, whether or not usage/shutdown trail it.
         assert!(turn_ended(&format!("{TURN_START}\n{TURN_END}\n")));
         assert!(turn_ended(&format!(
             "{TURN_START}\n{TURN_END}\n{CHECKPOINT}\n"
@@ -247,9 +235,7 @@ mod tests {
 
     #[test]
     fn a_turn_in_flight_is_not_ended() {
-        // A turn started and not yet ended → the node is working, not finished.
         assert!(!turn_ended(&format!("{TURN_END}\n{TURN_START}\n")));
-        // No turn marker at all → not ended.
         assert!(!turn_ended(CHECKPOINT));
         assert!(!turn_ended(""));
     }
@@ -264,8 +250,6 @@ mod tests {
             "an errored turn is not a finished turn"
         );
     }
-
-    // --- hard error ---
 
     #[test]
     fn hard_error_is_recognised_from_the_journal_not_the_exit_code() {

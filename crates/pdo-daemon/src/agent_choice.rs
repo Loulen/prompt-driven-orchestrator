@@ -311,8 +311,6 @@ mod tests {
         }
     }
 
-    // ---- floor -----------------------------------------------------------
-
     #[test]
     fn every_tier_transparent_resolves_to_the_default_profile() {
         let tiers = Tiers::default();
@@ -323,8 +321,6 @@ mod tests {
         assert_eq!(r.tier, Tier::Default);
         assert!(r.warnings.is_empty());
     }
-
-    // ---- each tier's AgentChoice wins in turn, atomically -----------------
 
     #[test]
     fn node_profile_choice_wins_over_everything_coarser() {
@@ -418,8 +414,6 @@ mod tests {
         assert_eq!(r.tier, Tier::Instance);
     }
 
-    // ---- Inherit is fully transparent -------------------------------------
-
     #[test]
     fn inherit_at_every_finer_tier_falls_through_to_the_winning_coarser_one() {
         let mut profiles = profiles_with_default();
@@ -438,8 +432,6 @@ mod tests {
         let r = resolve(&tiers, &profiles, DEFAULT_ID);
         assert_eq!(r.tier, Tier::Project);
     }
-
-    // ---- a missing profile reference warns then behaves as Inherit --------
 
     #[test]
     fn missing_profile_at_node_warns_and_falls_through_to_run() {
@@ -507,8 +499,6 @@ mod tests {
         assert_eq!(r.warnings.len(), 1);
     }
 
-    // ---- legacy-only tiers behave byte-identically to `harness_resolver` ---
-
     #[test]
     fn no_agent_choice_anywhere_reproduces_the_pre_563_harness_resolver_exactly() {
         let mut entries = BTreeMap::new();
@@ -573,8 +563,6 @@ mod tests {
         assert_eq!(r.combo.harness, CLAUDE);
     }
 
-    // ---- an explicit tier's combo never merges with a coarser tier's ------
-
     #[test]
     fn a_custom_node_combo_never_merges_with_the_instance_defaults() {
         let mut default_models = BTreeMap::new();
@@ -593,8 +581,6 @@ mod tests {
         assert_eq!(r.combo.model, None, "Custom is atomic — no instance leak");
     }
 
-    // ---- blank Custom harness / blank Profile id are transparent -----------
-
     #[test]
     fn a_custom_with_blank_harness_is_treated_as_inherit() {
         let node_choice = AgentChoice::Custom {
@@ -612,8 +598,6 @@ mod tests {
         assert_eq!(r.combo.model, None);
         assert_eq!(r.via, Via::Legacy);
     }
-
-    // ---- infra sessions: Run → instance → Default, no Node/Projet ---------
 
     #[test]
     fn infra_follows_the_runs_explicit_choice_model_and_effort_included() {
@@ -671,8 +655,6 @@ mod tests {
         assert_eq!(r2.combo.harness, OPENCODE);
         assert_eq!(r2.tier, Tier::Instance);
     }
-
-    // ---- serde shape: `mode`-tagged, round trips -----------------------
 
     #[test]
     fn agent_choice_serde_round_trips_all_three_modes() {

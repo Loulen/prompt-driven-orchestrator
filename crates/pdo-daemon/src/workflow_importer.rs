@@ -1,10 +1,7 @@
-//! Claude Code workflow importer (#155 / ADR-0016).
+//! Claude Code workflow importer (ADR-0016).
 //!
 //! "Decompiles" a Claude Code dynamic workflow (`.claude/workflows/*.js`) into a
-//! **draft** PDO [`PipelineDef`] — never executing the imported JS. The `.js` is
-//! parsed to an AST with `oxc` (no V8/node subprocess: the daemon binds `0.0.0.0`,
-//! so running an imported file's code would be an RCE, cf. #260) and the
-//! recognized idioms are rewired:
+//! **draft** PDO [`PipelineDef`].
 //!
 //! - `agent(prompt, opts)` -> an isolated `agent` node (#653): the import maps a
 //!   role, never a guess about what that role will touch.
@@ -17,18 +14,16 @@
 //!   `when:` edge (ADR-0002 grammar, ADR-0011 edge-centric routing).
 //! - `opts.schema = {…JSON schema…}` -> frontmatter on the node's output port.
 //!
-//! Prompt extraction is the core value (three tiers):
+//! Prompt extraction has three tiers, referenced elsewhere as N1/N2/N3:
 //! - **N1** static string / no-substitution template -> body **verbatim**.
 //! - **N2** template with `${…}` -> static quasis kept verbatim, each hole a
 //!   `⟨input: …⟩` marker (never a live token).
 //! - **N3** no static text at all (helper return, bare identifier) -> an annotated
 //!   placeholder body + a warning.
 //!
-//! Anything outside the recognized subset (nested loops, budget guards,
-//! `try/finally`, cross-lap accumulation) degrades to an annotated placeholder or
-//! a `warnings` entry — the import must **succeed without crashing** and produce a
-//! usable draft, never panic. Onboarding, not fidelity: "import the wiring, flag
-//! the rest".
+//! Anything outside the recognized subset degrades to an annotated placeholder or
+//! a `warnings` entry: the import must **succeed without crashing** and produce a
+//! usable draft, never panic. Onboarding, not fidelity.
 
 use std::collections::{HashMap, HashSet};
 
@@ -49,8 +44,8 @@ use crate::pipeline::{
 /// resolved to a literal — matches [`crate::loop_region::DEFAULT_MAX_ITER`].
 const DEFAULT_MAX_ITER: i64 = 5;
 
-/// Recursion / size guards. The daemon is LAN-reachable (#260); a pathological
-/// `.js` must not blow the stack or produce an unbounded pipeline.
+/// Recursion / size guards. The daemon is LAN-reachable; a pathological `.js`
+/// must not blow the stack or produce an unbounded pipeline.
 const MAX_DEPTH: u32 = 256;
 const MAX_NODES: usize = 512;
 
@@ -59,12 +54,11 @@ const MAX_NODES: usize = 512;
 pub(crate) struct ImportResult {
     /// Pipeline display name (from `meta.name`, else the suggested/stem name).
     pub name: String,
-    /// The constructed pipeline serialized to YAML (a fresh draft — not a source
-    /// to preserve, so serializing is correct here, unlike editing an entry).
+    /// The constructed pipeline serialized to YAML. Serializing is fine here: a
+    /// fresh draft has no source formatting to preserve, unlike an edited entry.
     pub yaml_text: String,
     /// node_id -> prompt body, for `library_store::pipelines::save`.
     pub prompts: HashMap<String, String>,
-    /// Lossy-translation diagnostics ("idiom not mapped -> placeholder", etc.).
     pub warnings: Vec<Diagnostic>,
 }
 
@@ -80,18 +74,14 @@ pub(crate) fn import_workflow_js(
     // `export`). `.mjs()` is module JavaScript; no path needed.
     let source_type = SourceType::mjs();
     let ret = Parser::new(&allocator, source, source_type).parse();
-    // Security-sensible import: refuse anything without a usable AST rather than
-    // best-effort over a partial tree. `panicked` ⇒ the parser bailed (no tree).
+    // Refuse a partial tree rather than best-effort over it: this input is
+    // untrusted. `panicked` ⇒ the parser bailed, so there is no usable AST.
     if ret.panicked {
         return Err(format!(
             "JS parse error ({} diagnostic(s)) — the file is not valid JavaScript",
             ret.errors.len()
         ));
     }
-    // A Claude Code workflow runs inside the harness's async wrapper, so a
-    // top-level `return`/`await` is legal there even though a bare ES module
-    // flags it (recoverable — the AST is still complete). Tolerate exactly that
-    // class; any *other* parse error means the file is not a workflow we can read.
     if let Some(other) = ret
         .errors
         .iter()
@@ -102,14 +92,12 @@ pub(crate) fn import_workflow_js(
 
     let body = &ret.program.body;
 
-    // Pass 1 — resolve top-level literal constants (numbers, JSON-schema objects,
-    // args-derived bindings) so `max_iter`/`schema`/provenance can be resolved.
+    // Must precede the walk: `max_iter`/`schema`/provenance resolve against these.
     let mut consts = Consts::default();
     collect_consts(body, &mut consts, 0);
 
     let name = extract_meta_name(body).unwrap_or_else(|| suggested_name.to_string());
 
-    // Pass 2 — walk the program, materializing nodes/edges/loops/prompts.
     let mut imp = Importer::new(consts);
     let mut cursor: Cursor = vec![Pending::start()];
     imp.walk_block(body, &mut cursor, 0);
@@ -127,8 +115,7 @@ pub(crate) fn import_workflow_js(
     })
 }
 
-// `into_pipeline` consumes fields; take prompts before that to avoid a partial
-// move dance. Small helper keeps the public fn readable.
+// `into_pipeline` consumes fields; take prompts first to avoid a partial move.
 fn imp_take_prompts(imp: &mut Importer) -> HashMap<String, String> {
     std::mem::take(&mut imp.prompts)
 }
@@ -142,14 +129,11 @@ fn is_tolerated_parse_error(msg: &str) -> bool {
     lower.contains("return") || lower.contains("await")
 }
 
-// ---------------------------------------------------------------------------
-// deterministic id (FNV-1a, copied from pipeline_migrator so a re-import of the
-// same source is idempotent — same seed => same 8-char id).
-// ---------------------------------------------------------------------------
-
 const NANOID_ALPHABET: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 const NANOID_LEN: usize = 8;
 
+/// FNV-1a, matching `pipeline_migrator`. Don't swap in a random id: re-importing
+/// the same source must yield the same node ids.
 fn deterministic_id(seed: &str) -> String {
     let mut hash: u64 = 0xcbf29ce484222325;
     for b in seed.as_bytes() {
@@ -164,10 +148,7 @@ fn deterministic_id(seed: &str) -> String {
     out
 }
 
-// ---------------------------------------------------------------------------
-// Resolved constants (fully owned — no AST borrows stored).
-// ---------------------------------------------------------------------------
-
+/// Resolved constants — fully owned, so no AST borrow outlives the allocator.
 #[derive(Default)]
 struct Consts {
     numbers: HashMap<String, f64>,
@@ -204,7 +185,6 @@ fn collect_consts(stmts: &[Statement], consts: &mut Consts, depth: u32) {
                     }
                 }
             }
-            // `export const meta = …` etc.
             Statement::ExportNamedDeclaration(e) => {
                 if let Some(Declaration::VariableDeclaration(decl)) = &e.declaration {
                     for d in &decl.declarations {
@@ -253,10 +233,6 @@ fn collect_consts(stmts: &[Statement], consts: &mut Consts, depth: u32) {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// The importer: owns all output; reads `Consts` by value.
-// ---------------------------------------------------------------------------
 
 /// A pending source endpoint feeding the next node's `in` port.
 #[derive(Clone)]
@@ -337,8 +313,6 @@ impl Importer {
         self.used_ids.insert(id.clone());
         id
     }
-
-    // --- statement walking ------------------------------------------------
 
     fn walk_block(&mut self, stmts: &[Statement], cursor: &mut Cursor, depth: u32) {
         if depth > MAX_DEPTH {
@@ -431,8 +405,6 @@ impl Importer {
         // Anything else (log/phase/assignment/plain data) contributes no node.
     }
 
-    // --- agent node -------------------------------------------------------
-
     fn emit_agent(&mut self, call: &CallExpression, cursor: &mut Cursor) -> String {
         let opts = call.arguments.get(1).and_then(|a| a.as_expression());
         let label = opts.and_then(|o| object_prop(o, "label"));
@@ -440,10 +412,8 @@ impl Importer {
         let model = opts
             .and_then(|o| object_prop(o, "model"))
             .and_then(string_literal_value);
-        // `agent(prompt, {effort})` exists in the source vocabulary just like
-        // `model`, so it maps straight onto `NodeDef.effort` (#424). Kept as the
-        // raw expression here: the warning below needs `display_name`, which is
-        // computed further down.
+        // Kept as the raw expression: the warning below needs `display_name`,
+        // which is only computed further down.
         let effort_expr = opts.and_then(|o| object_prop(o, "effort"));
         let effort = effort_expr.and_then(string_literal_value);
         let seed = label_static
@@ -460,15 +430,14 @@ impl Importer {
             .unwrap_or_else(|| id.clone());
 
         // A computed effort (`{effort: lvl}`) can't be resolved without executing
-        // the script, so the level is lost. Announce it rather than dropping it in
-        // silence (ADR-0001, clarification #268).
+        // the script, so it IS lost — announce it rather than dropping it in
+        // silence (ADR-0001).
         if effort_expr.is_some() && effort.is_none() {
             self.warn(format!(
                 "nœud '{display_name}': `effort` calculé (non littéral) — niveau d'effort non importé, à repositionner dans l'inspecteur (#424)"
             ));
         }
 
-        // Prompt extraction (N1/N2/N3).
         let prompt_arg = call.arguments.first().and_then(|a| a.as_expression());
         let (prompt_body, has_static, refs) = match prompt_arg {
             Some(e) => render_prompt(e),
@@ -511,8 +480,7 @@ impl Importer {
         };
         out_port.frontmatter = frontmatter;
 
-        // #550: the imported `model` / `effort` land under `harnesses.claude`
-        // (workflow import stays claude-only, ADR-0016). Only materialise an entry
+        // Workflow import stays claude-only (ADR-0016). Only materialise an entry
         // when at least one is present, so a plain node keeps an empty map.
         let mut harnesses = std::collections::BTreeMap::new();
         if model.is_some() || effort.is_some() {
@@ -549,7 +517,6 @@ impl Importer {
         self.nodes.push(node);
         self.prompts.insert(id.clone(), prompt_body);
 
-        // Wire chain edges from the cursor into this node.
         for p in cursor.iter() {
             self.add_edge(&p.node, &p.port, &id, "in", p.when.clone(), p.is_else);
         }
@@ -578,8 +545,6 @@ impl Importer {
         }];
         id
     }
-
-    // --- loops ------------------------------------------------------------
 
     fn walk_loop(&mut self, body: &Statement, bound: MaxIter, cursor: &mut Cursor, depth: u32) {
         if !stmt_has_agent(body, 0) {
@@ -681,12 +646,10 @@ impl Importer {
         if let Statement::IfStatement(i) = stmt {
             let exit = guarded_exit(&i.consequent);
             if exit == GuardExit::Break && !if_has_agent(i) {
-                // Record the break predicate as the loop's exit guard.
                 if let Some(frame) = self.loop_stack.last_mut() {
                     if frame.break_when.is_none() {
                         if let Some(pred) = extract_predicate(&i.test) {
                             frame.break_when = Some(pred.when_value());
-                            // Resolve the break source from the predicate object.
                             let src = pred
                                 .object
                                 .as_ref()
@@ -700,8 +663,6 @@ impl Importer {
         }
         self.walk_stmt(stmt, cursor, depth);
     }
-
-    // --- conditional edges (`if` guarding a return) -----------------------
 
     fn walk_if(&mut self, i: &oxc_ast::ast::IfStatement, cursor: &mut Cursor, depth: u32) {
         let exit = guarded_exit(&i.consequent);
@@ -735,8 +696,6 @@ impl Importer {
             }
         }
     }
-
-    // --- pipeline() / parallel() -----------------------------------------
 
     fn handle_pipeline(&mut self, call: &CallExpression, cursor: &mut Cursor, _depth: u32) {
         // pipeline(items, stage1, stage2, …): each stage is a callback whose body
@@ -817,8 +776,6 @@ impl Importer {
         }
         *cursor = new_cursor;
     }
-
-    // --- edges / finalize -------------------------------------------------
 
     fn add_edge(
         &mut self,
@@ -906,10 +863,6 @@ impl Importer {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// node builders
-// ---------------------------------------------------------------------------
 
 fn plain_port(name: &str) -> Port {
     Port {
@@ -1000,10 +953,6 @@ fn extract_meta_name(stmts: &[Statement]) -> Option<String> {
     None
 }
 
-// ---------------------------------------------------------------------------
-// prompt rendering (N1/N2/N3)
-// ---------------------------------------------------------------------------
-
 /// Render a prompt expression. Returns `(body, has_static, interpolation_refs)`
 /// where `has_static` is true if any static string/quasi text was found and
 /// `interpolation_refs` names the `${…}` holes (for provenance edges).
@@ -1089,10 +1038,6 @@ fn describe_expr(expr: &Expression) -> String {
         _ => "expr".to_string(),
     }
 }
-
-// ---------------------------------------------------------------------------
-// predicates (`if` test -> when clause)
-// ---------------------------------------------------------------------------
 
 struct Predicate {
     object: Option<String>,
@@ -1204,10 +1149,6 @@ fn literal_to_yaml(expr: &Expression) -> Option<serde_yaml::Value> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// max_iter resolution
-// ---------------------------------------------------------------------------
-
 enum MaxIter {
     Value(i64),
     Unresolved,
@@ -1260,10 +1201,6 @@ fn resolve_number(expr: &Expression, consts: &Consts) -> Option<f64> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// schema object -> frontmatter
-// ---------------------------------------------------------------------------
-
 fn object_to_frontmatter(obj: &ObjectExpression) -> HashMap<String, FrontmatterFieldDecl> {
     let mut fm = HashMap::new();
     let Some(props) = object_prop_obj(obj, "properties") else {
@@ -1312,10 +1249,6 @@ fn map_json_type(ty: &str) -> String {
     }
     .to_string()
 }
-
-// ---------------------------------------------------------------------------
-// small AST helpers
-// ---------------------------------------------------------------------------
 
 /// Look up a property by static name on an object literal expression.
 fn object_prop<'a>(expr: &'a Expression<'a>, key: &str) -> Option<&'a Expression<'a>> {
@@ -1436,8 +1369,6 @@ fn as_named_call<'a>(expr: &'a Expression<'a>, name: &str) -> Option<&'a CallExp
     }
     None
 }
-
-// --- deep agent scan (for loop guard, pipeline/parallel stages) ------------
 
 fn stmt_has_agent(stmt: &Statement, depth: u32) -> bool {
     if depth > MAX_DEPTH {
@@ -1591,8 +1522,6 @@ fn collect_agents_in_stmt<'a>(
     }
 }
 
-// --- if-guard exit detection ----------------------------------------------
-
 #[derive(PartialEq, Eq)]
 enum GuardExit {
     Return,
@@ -1702,8 +1631,6 @@ mod tests {
             .collect()
     }
 
-    // --- targeted units ---------------------------------------------------
-
     #[test]
     fn n1_static_literal_extracted_verbatim() {
         let src = r#"agent(`Do the thing exactly.`, { label: 'worker' })"#;
@@ -1740,12 +1667,10 @@ mod tests {
 
     #[test]
     fn agent_opts_effort_and_model_land_on_the_node() {
-        // #424: `agent(prompt, {effort})` exists in the source vocabulary, exactly
-        // like `model` — so it maps onto `NodeDef.effort` instead of being dropped.
         let src = r#"agent(`work`, { label: 'w', model: 'opus', effort: 'low' }); agent(`plain`, { label: 'p' })"#;
         let (result, parsed) = import_and_parse(src, "t");
         let node = |name: &str| parsed.nodes.iter().find(|n| n.name == name).unwrap();
-        // #550: imported model/effort land under `harnesses.claude` (claude-only import).
+        // Imported model/effort land under `harnesses.claude` (claude-only import).
         let claude = |name: &str| node(name).harnesses.get("claude").cloned();
         assert_eq!(claude("w").and_then(|e| e.effort).as_deref(), Some("low"));
         assert_eq!(claude("w").and_then(|e| e.model).as_deref(), Some("opus"));
@@ -1772,8 +1697,7 @@ mod tests {
     #[test]
     fn computed_agent_effort_warns_instead_of_vanishing() {
         // A non-literal level can't be resolved without executing the script, so
-        // it IS lost — announce it (ADR-0001, clarification #268) rather than
-        // dropping it in silence.
+        // it IS lost — announce it (ADR-0001) rather than dropping it in silence.
         let src = r#"const lvl = 'low'; agent(`work`, { label: 'w', effort: lvl })"#;
         let (result, parsed) = import_and_parse(src, "t");
         // A computed (non-literal) effort is lost, so the node carries no claude entry.

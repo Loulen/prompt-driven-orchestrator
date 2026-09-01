@@ -8,10 +8,6 @@ use crate::pipeline::{self, PipelineDef};
 use crate::worktree_ops::{ensure_sub_worktree, sub_worktree_branch, sub_worktree_path};
 use crate::{blackboard, harness_registry, harness_resolver, tmux_session_manager};
 
-// ---------------------------------------------------------------------------
-// Result types
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum PrimitiveOutcome {
@@ -19,10 +15,6 @@ pub(crate) enum PrimitiveOutcome {
     AlreadyDone,
     Rejected { reason: String },
 }
-
-// ---------------------------------------------------------------------------
-// start_node
-// ---------------------------------------------------------------------------
 
 pub(crate) struct StartNodeParams<'a> {
     pub run_id: &'a str,
@@ -37,69 +29,47 @@ pub(crate) struct StartNodeParams<'a> {
     pub pipeline_path: &'a Path,
     pub resolved_vars: &'a HashMap<String, serde_yaml::Value>,
     pub daemon_port: u16,
-    /// Per-daemon override for the `claude …` tail of the spawned tmux script.
-    /// Threaded from `AppState.tmux_cmd_override`; `None` → real claude (#181).
+    /// `None` → real claude.
     pub tmux_cmd_override: Option<&'a str>,
-    /// Per-daemon `docker` binary override for the sandbox wiring (#407), threaded
-    /// from `AppState.docker_cmd_override`; `None` → real `docker`. Used only when
-    /// `run_state.sandbox != off` to wrap the tail into the Run's container.
+    /// `None` → real `docker`. Used only when `run_state.sandbox != off`.
     pub docker_cmd_override: Option<&'a str>,
-    /// Instance-wide default model, already resolved `stored → env → None` by the
-    /// caller (#347). `start_node` is sync and DB-less, so the async force-spawn
-    /// / retry callers resolve it and pass it in; the node's own `model:` still
-    /// wins over it via [`tmux_session_manager::resolve_node_model`].
-    pub default_model: Option<String>,
-    /// Instance default **harness**, already resolved `stored → env → None` by the
-    /// caller (#550, ADR-0046). Same DB-less contract as [`Self::default_model`]:
-    /// feeds the `instance` tier of [`harness_resolver`]; the node's `pin_harness`
+    /// Instance-wide default model, pre-resolved by the caller: `start_node` is
+    /// sync and DB-less, so it cannot read it itself. The node's own `model:`
     /// still wins over it.
+    pub default_model: Option<String>,
+    /// Instance default **harness** (ADR-0046). Same DB-less contract as
+    /// [`Self::default_model`]; the node's `pin_harness` still wins over it.
     pub default_harness: Option<String>,
-    /// Instance per-harness default model map, resolved fresh by the caller (#550).
-    /// Feeds the fallback tier of the model resolution for the winning harness.
+    /// Fallback tier of the model resolution for the winning harness.
     pub default_harness_models: std::collections::BTreeMap<String, String>,
-    /// The harness carried by the **Projet** of this Run's primary repo, resolved
-    /// by the caller (#552, ADR-0046). Same DB-less contract as
-    /// [`Self::default_harness`]: `start_node` is sync, so the async caller looks
-    /// up `project_store::harness_for_path` on the Run's effective repo and passes
-    /// the result in. Feeds the `project` tier of [`harness_resolver`], between the
-    /// Run and the instance default. `None` ⇒ the primary is in no Projet (or its
-    /// Projet carries no harness), so the tier is transparent. Resolved from the
-    /// **primary** repo only, so a secondary (ADR-0042) never sways it.
+    /// The harness carried by the **Projet** of this Run's primary repo (ADR-0046),
+    /// pre-resolved like [`Self::default_harness`]. Feeds the `project` tier,
+    /// between the Run and the instance default; `None` makes the tier transparent.
+    /// Resolve it from the **primary** repo only, so a secondary (ADR-0042) never
+    /// sways it.
     pub project_harness: Option<String>,
-    /// Turn-end auto-completion, already resolved `stored → env → default` by the
-    /// caller (#433, ADR-0043). Same DB-less contract as [`Self::default_model`]:
-    /// the async caller reads [`crate::stored_autocomplete_turn_end`] and passes
-    /// the bare setting in; `start_node` then ANDs `!is_script` so a `script` node
-    /// never arms the `Stop` hook. Wiring this here (not only in `spawn_node`)
-    /// keeps a manual force-spawn honouring the instance default — the same
-    /// silent-bug class the `default_model` comment warns about (#347).
+    /// Turn-end auto-completion (ADR-0043), pre-resolved like
+    /// [`Self::default_model`]. `start_node` ANDs `!is_script` so a `script` node
+    /// never arms the `Stop` hook. Must be wired here as well as in `spawn_node`,
+    /// or a manual force-spawn silently ignores the instance default.
     pub inject_hook: bool,
-    /// The harness registry to resolve the winning harness name against (#614,
-    /// correctif 4). `Some` ⇒ the **disk tier** is honoured (embedded floor merged
-    /// with `~/.pdo/harnesses/descriptors.yaml`), so a force-spawn / Start-button
-    /// relaunch reaches a user-declared harness exactly like the scheduler's
-    /// `spawn_node` does — these commands stop being reserved to embedded harnesses.
-    /// `None` ⇒ the embedded floor only (the DB-less test default, and the pre-#614
-    /// behaviour). Borrowed: the async caller loads it once and passes a ref.
+    /// The harness registry to resolve the winning harness name against. `Some`
+    /// honours the **disk tier**, so a force-spawn reaches a user-declared harness
+    /// exactly like the scheduler does; `None` is the embedded floor only.
     pub harness_registry: Option<&'a harness_registry::HarnessRegistry>,
 }
 
 /// Everything needed to launch the node's tmux session, once its reservation has
 /// been appended (#485, ADR-0038).
 ///
-/// **Why this type exists at all.** Before #485 this primitive spawned the
-/// session itself and only *then* handed `NodeStarted` back for the caller to
-/// append — so between the two there was a live tmux session with no reservation
-/// in the event log, which is precisely the state the orphan sweep kills on
-/// sight. The window was unreachable by accident (a kill needed the append
-/// latency to exceed the sweep's 21 s snapshot build), and reordering the sweep's
-/// observations makes that snapshot cheap — which would have reopened the window
-/// silently. So the order has to become a property of the *type*: the primitive
-/// returns an intention, the caller appends first and executes second, and the
-/// wrong order is not expressible.
+/// **Why this type exists at all.** A live tmux session with no reservation in
+/// the event log is exactly the state the orphan sweep kills on sight. Making the
+/// spawn an *intention* the caller executes only after the append puts that order
+/// in the type, so the wrong order is not expressible. Don't collapse it back
+/// into a direct spawn.
 ///
-/// Owns its data (`String`/`PathBuf`) because [`tmux_session_manager::SessionTail`]
-/// and [`tmux_session_manager::SandboxWrap`] borrow — they are rebuilt inside
+/// Owns its data because [`tmux_session_manager::SessionTail`] and
+/// [`tmux_session_manager::SandboxWrap`] borrow; both are rebuilt in
 /// [`StartNodeSpawn::execute`].
 pub(crate) struct StartNodeSpawn {
     session_name: String,
@@ -112,9 +82,7 @@ pub(crate) struct StartNodeSpawn {
     tmux_cmd_override: Option<String>,
     tail: StartNodeTail,
     sandbox: Option<StartNodeSandbox>,
-    /// #433 / ADR-0043: arm the turn-end `Stop` hook (already ANDed with
-    /// `!is_script` in [`start_node`]). Threaded into
-    /// [`tmux_session_manager::spawn`] at [`StartNodeSpawn::execute`].
+    /// Arm the turn-end `Stop` hook (already ANDed with `!is_script`).
     inject_hook: bool,
 }
 
@@ -122,16 +90,12 @@ pub(crate) struct StartNodeSpawn {
 /// cannot be carried across the append.
 enum StartNodeTail {
     Agent {
-        /// #550: the resolved harness descriptor (owned; `execute` borrows it into
-        /// [`tmux_session_manager::SessionTail::Agent`]). Boxed (#614) so the wide
-        /// descriptor — grown by the resume fields — does not bloat every
-        /// `StartNodeTail` (`clippy::large_enum_variant`).
+        /// The resolved harness descriptor. Boxed so the wide descriptor does not
+        /// bloat every `StartNodeTail` (`clippy::large_enum_variant`).
         harness: Box<harness_registry::HarnessDescriptor>,
         model: Option<String>,
         effort: Option<String>,
-        /// #473: the pinned Claude Code session id (owned mirror of
-        /// [`tmux_session_manager::SessionTail::Agent::session_id`]). `None` for a
-        /// script node — it launches no `claude`.
+        /// The pinned Claude Code session id. `None` for a script node.
         session_id: Option<String>,
     },
     Script {
@@ -140,9 +104,9 @@ enum StartNodeTail {
     },
 }
 
-/// Owned mirror of [`tmux_session_manager::SandboxWrap`] (#407). `marker` and
-/// `workdir` are not stored: they are always the session name and the working
-/// dir, which [`StartNodeSpawn`] already owns.
+/// Owned mirror of [`tmux_session_manager::SandboxWrap`]. `marker` and `workdir`
+/// are not stored: they are always the session name and the working dir, which
+/// [`StartNodeSpawn`] already owns.
 struct StartNodeSandbox {
     docker_bin: String,
     uid: u32,
@@ -151,12 +115,11 @@ struct StartNodeSandbox {
 
 impl StartNodeSpawn {
     /// Launch the session. **Call this only after the `NodeStarted` event has been
-    /// appended** (#485, ADR-0038) — see the type's doc-comment.
+    /// appended** (ADR-0038) — see the type's doc-comment.
     ///
     /// The deliberate trade: if the append succeeds and this fails, the run has a
-    /// `NodeStarted` with no session. That is exactly what `spawn_node` has always
-    /// done, and since #469 (ADR-0032) session death is a loud verdict — so a
-    /// silent failure is exchanged for a visible one. That is the right way round.
+    /// `NodeStarted` with no session — a *visible* failure (ADR-0032 makes session
+    /// death loud) rather than the silent orphan of the other order.
     pub(crate) fn execute(&self) -> anyhow::Result<()> {
         let tail = match &self.tail {
             StartNodeTail::Agent {
@@ -206,9 +169,8 @@ impl StartNodeSpawn {
 pub(crate) struct StartNodeResult {
     pub outcome: PrimitiveOutcome,
     pub events: Vec<event_log::Event>,
-    /// The session to launch, or `None` when there is nothing to launch
-    /// (`AlreadyDone` / `Rejected`). Execute it **after** appending `events`
-    /// (#485, ADR-0038).
+    /// The session to launch, or `None` when there is nothing to launch. Execute
+    /// it **after** appending `events` (ADR-0038).
     pub spawn: Option<StartNodeSpawn>,
 }
 
@@ -247,11 +209,10 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
     // iteration that has started — so there is no frozen value to prefer here.
     let has_sub_worktree = node.is_isolated();
 
-    // #503 / ADR-0036: the commit the sub-worktree was cut from, recorded on
+    // ADR-0036: the commit the sub-worktree was cut from, recorded on
     // `NodeStarted` below. Without it a merge-back conflict on this iteration can
-    // never be resolved in the node's favour — which is exactly why this path
-    // records it too, not just `node_spawn`: `restart_node` / `start_node` go
-    // through here, and an iteration with no base is an iteration with no recourse.
+    // never be resolved in the node's favour. Record it on this path too, not just
+    // in `node_spawn`.
     let mut spawn_base_sha: Option<String> = None;
     let working_dir = if has_sub_worktree {
         let sub_wt_dir =
@@ -259,12 +220,9 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         let sub_branch = sub_worktree_branch(params.run_id, params.node_id, params.iter);
         let pipeline_branch = format!("pdo/run-{}", params.run_id);
 
-        // #489-B: the shared primitive, so a leftover branch ref from a reaped or
-        // invalidated iteration no longer wedges this path either (#498). No
-        // `previous_base_sha` to carry: `has_node_started_event` above already
-        // returned `AlreadyDone` for any iteration that has started, so the
-        // `Reusable` arm is unreachable from here — this site only ever creates or
-        // recycles, and both report the SHA of their own cut.
+        // No `previous_base_sha` to carry: `has_node_started_event` above already
+        // returned `AlreadyDone` for any started iteration, so the `Reusable` arm
+        // is unreachable here — this site only creates or recycles.
         match ensure_sub_worktree(
             params.repo_root,
             &sub_wt_dir,
@@ -291,9 +249,8 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
     let canonical_path = pipeline::canonical_prompt_path(params.pipeline_path, params.node_id);
     let role_prompt = std::fs::read_to_string(&canonical_path).unwrap_or_default();
 
-    // Precompute the Start-prompt-present bool here too: the manual start/retry
-    // endpoints produce the entry-node preamble, so they must read it as well
-    // (#274). Same gating and error posture as the live spawn site.
+    // The manual start/retry endpoints produce the entry-node preamble, so they
+    // must read this too — same gating and error posture as the live spawn site.
     let start_prompt_present = if params.pipeline.prompt_required {
         false
     } else {
@@ -312,12 +269,9 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         }
     };
 
-    // #447: same single resolver as the manager preamble and `PDO_DAEMON_URL`. A
-    // sandboxed node's session execs into the container, where `localhost` is the
-    // container. NOTE: `AugmentContext.daemon_url` currently has no consumer — no
-    // node preamble prints it — so this is defensive, not the fix for the observed
-    // symptom (that one is the manager, `lib.rs`). Resolving it here means a future
-    // node preamble that does print it inherits the correct URL instead of the bug.
+    // A sandboxed node's session execs into the container, where `localhost` is
+    // the container — hence the same resolver as the manager preamble. Defensive:
+    // no node preamble prints `AugmentContext.daemon_url` yet.
     let sandboxed = !params.run_state.sandbox.is_off();
 
     let aug_ctx = crate::prompt_augmenter::AugmentContext {
@@ -347,40 +301,34 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
             params.run_state,
             params.node_id,
         ),
-        // #465: read-only secondary repos, resolved to absolute snapshot paths for
-        // injection (the sub-worktree does not inherit the snapshot files).
+        // Absolute snapshot paths: the sub-worktree does not inherit the snapshot
+        // files.
         secondary_repos: crate::prompt_augmenter::secondary_repo_contexts(
             params.repo_root,
             params.run_id,
             &params.run_state.target_repos,
         ),
-        // #516: constant by construction on this path. `start_node` passes
-        // `previous_base_sha=None` and `has_node_started_event` already returned
-        // `AlreadyDone` for any started iteration, so the `Reusable` arm of
-        // `ensure_sub_worktree` is unreachable here — this site only ever creates or
-        // recycles, never reuses. No interrupted-op notice is routed.
+        // Constant by construction here: the `Reusable` arm of
+        // `ensure_sub_worktree` is unreachable on this path, so no interrupted-op
+        // notice is ever routed.
         reused_sub_worktree: false,
         interrupted_git_ops: &[],
-        // #599 AC1: this path only ever runs for an iteration that was NOT started
-        // before (`has_node_started_event` returned `AlreadyDone` otherwise), so no
-        // partial output can survive here — the restart-with-artifacts section is a
-        // re-spawn concern, handled in `node_spawn`.
+        // This path only runs for a never-started iteration, so no partial output
+        // can survive; restart-with-artifacts is `node_spawn`'s concern.
         partial_outputs: &[],
     };
 
     let full_prompt = crate::prompt_augmenter::build_full_prompt(&aug_ctx, &role_prompt);
 
-    // A `script` node (#248 / ADR-0017) runs the author's bash instead of Claude:
-    // its I/O arrives as env vars (a script can't read the prose preamble) and
-    // its declared output dirs must exist before the body's `>` redirect runs.
-    // Critically, the file `bash` executes must be the RAW body, not the
-    // augmented prompt — the preamble is prose an agent reads, not runnable bash.
+    // A `script` node (ADR-0017) runs the author's bash instead of Claude: its I/O
+    // arrives as env vars (a script can't read the prose preamble) and its declared
+    // output dirs must exist before the body's `>` redirect runs. The file `bash`
+    // executes must be the RAW body, never the augmented prompt.
     let is_script = node.node_type == pipeline::NodeType::Script;
 
-    // #248 / ADR-0017: an empty script body would `bash <empty>` → exit 0 → a
-    // silent no-op that masquerades as success. `create_run` refuses this at
-    // launch; guard the manual force-spawn / restart door here too (this
-    // primitive backs the `start_node` command, #204) so the hole stays closed.
+    // An empty script body would `bash <empty>` → exit 0 → a silent no-op that
+    // masquerades as success. `create_run` refuses it at launch; this guards the
+    // manual force-spawn / restart door.
     if is_script && role_prompt.trim().is_empty() {
         return StartNodeResult {
             outcome: PrimitiveOutcome::Rejected {
@@ -402,16 +350,13 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
     } else {
         Vec::new()
     };
-    // #550/ADR-0046: resolve the harness (mirrors `node_spawn`), reading model +
-    // effort from the winning harness's entry. `params.default_harness` /
-    // `default_harness_models` are the instance tier, resolved DB-lessly by the
-    // caller. A `script` node resolves no harness.
+    // ADR-0046 harness resolution; mirrors `node_spawn`. A `script` node resolves
+    // no harness.
     let resolved_harness = if is_script {
         None
     } else {
-        // Fold the legacy single `default_model` under `claude` when the per-harness
-        // map is silent for it — the same back-compat fold `stored_default_harness_models`
-        // does, kept here so this DB-less primitive is self-contained given its inputs.
+        // Back-compat fold, mirroring `stored_default_harness_models`: keep it here
+        // so this primitive stays self-contained given its inputs.
         let mut default_models = params.default_harness_models.clone();
         if !default_models.contains_key(harness_registry::CLAUDE) {
             if let Some(m) = params.default_model.as_deref().filter(|s| !s.is_empty()) {
@@ -420,13 +365,9 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         }
         let tiers = harness_resolver::HarnessTiers {
             node_pin: node.pin_harness.as_deref(),
-            // #551: the Run tier — the harness frozen in this Run's `RunStarted`, read
-            // from the projected state the caller already holds. A pinned node ignores
-            // it; a free node follows it (ADR-0046). Mirrors `node_spawn`.
+            // The Run tier: the harness frozen in this Run's `RunStarted`.
             run: params.run_state.harness.as_deref(),
-            // #552: the Projet of the Run's primary repo, resolved DB-lessly by
-            // the caller (an empty string never wins a tier — the `Some("")` trap
-            // of #347).
+            // An empty string must never win a tier (the `Some("")` trap).
             project: params.project_harness.as_deref().filter(|s| !s.is_empty()),
             instance_default: params.default_harness.as_deref(),
         };
@@ -438,10 +379,8 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
     };
     let harness_descriptor = match &resolved_harness {
         None => None,
-        // #614 (correctif 4): resolve the name against the disk tier when the
-        // caller supplied a loaded registry (force-spawn / Start), else the
-        // embedded floor (the DB-less default). Either way, an unresolvable name is
-        // a rejection that names it — never a silent claude fallback.
+        // An unresolvable name must be a rejection that names it — never a silent
+        // claude fallback.
         Some(r) => {
             let resolved = match params.harness_registry {
                 Some(reg) => reg.resolve(&r.harness),
@@ -464,8 +403,7 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
             }
         }
     };
-    // AC #10: a missing harness binary is a spawn that cannot happen — reject
-    // (never a 2xx), naming the harness. Skipped under the test seam.
+    // A missing harness binary is a spawn that cannot happen: reject, never a 2xx.
     if let Some(d) = &harness_descriptor {
         if params.tmux_cmd_override.is_none() && !tmux_session_manager::binary_available(&d.binary)
         {
@@ -487,12 +425,11 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
             };
         }
     }
-    // #347/#424/#550: model + effort come from the resolved harness's entry, used
-    // by both the tail and the `NodeStarted` payload (which records what the flags
-    // carried — what the resume path reads back to re-pose `--effort`).
+    // Model + effort feed both the tail and the `NodeStarted` payload, which the
+    // resume path reads back to re-pose `--effort`.
     let resolved_model = resolved_harness.as_ref().and_then(|r| r.model.clone());
     let resolved_effort = resolved_harness.as_ref().and_then(|r| r.effort.clone());
-    // #473/#550: pin a session id only for a harness that can honour it (`claude`).
+    // Pin a session id only for a harness that can honour it (`claude`).
     let session_id: Option<String> = harness_descriptor
         .as_ref()
         .filter(|d| d.pins_session_id())
@@ -529,17 +466,14 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
             // `spawn_node` payload — every later reader asks this event.
             "isolated_worktree": has_sub_worktree,
             "input_paths": input_paths,
-            // #424: launch-time model + effort, **resolved**. Mirrors the
-            // `spawn_node` payload; see the comment there for why the model is
-            // recorded even though nothing reads it back yet.
+            // Launch-time model + effort, **resolved**. Mirrors the `spawn_node`
+            // payload.
             "model": resolved_model.as_deref(),
             "effort": resolved_effort.as_deref(),
-            // #550/ADR-0046: the harness resolved at spawn, FROZEN so the resume
-            // path re-poses what was launched (ADR-0007). Mirrors `spawn_node`.
+            // FROZEN so the resume path re-poses what was launched (ADR-0007).
             "harness": resolved_harness.as_ref().map(|r| r.harness.as_str()),
-            // #473: the pinned Claude Code session id — read back by the sweep
-            // (transcript resolution) and the resume path. `null` for a script node
-            // and every pre-#473 row. Mirrors the `spawn_node` payload.
+            // Read back by the sweep (transcript resolution) and the resume path.
+            // `null` for a script node and for legacy rows.
             "session_id": session_id,
             // #503: the sub-worktree's base commit. Absent for a node with no
             // sub-worktree (a non-isolated agent/script), which never merges back.
@@ -549,19 +483,9 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
 
     let session_name =
         tmux_session_manager::node_session_name(params.run_id, params.node_id, params.iter);
-    // #485 / ADR-0038: this is where the session USED to be spawned — before the
-    // caller had appended the `NodeStarted` built just above. That order left a
-    // live tmux session with no reservation in the event log, which is exactly the
-    // state the orphan sweep kills as an orphan (and which a failed append, only
-    // an `error!` at both call sites, left behind for good). This primitive is
-    // synchronous and DB-less by contract, so it cannot append; it hands back an
-    // *intention* the caller executes **after** the append instead. **Do not add a
-    // spawn path that bypasses that order** — the reaper's "absent ⇒ orphan"
-    // verdict is only sound because no session can exist before its reservation.
-    //
-    // #407: the sandbox wrap is rebuilt inside `StartNodeSpawn::execute` (manual
-    // force-spawn / retry door, #204); its marker is always the session name,
-    // which the targeted `/proc` kill path scans for.
+    // **Do not add a spawn path that spawns before the caller appends
+    // `NodeStarted`** (ADR-0038): the reaper's "absent ⇒ orphan" verdict is only
+    // sound because no session can exist before its reservation.
     let sandbox = sandboxed.then(|| StartNodeSandbox {
         docker_bin: params.docker_cmd_override.unwrap_or("docker").to_string(),
         uid: crate::sandbox_container::host_uid(),
@@ -578,8 +502,7 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         tmux_cmd_override: params.tmux_cmd_override.map(str::to_string),
         tail,
         sandbox,
-        // #433 / ADR-0043: the operator's setting, gated by `!is_script` — a script
-        // node runs bash, never `claude`, so it can carry no `Stop` hook.
+        // Gated by `!is_script`: a script node runs bash, so it carries no hook.
         inject_hook: params.inject_hook && !is_script,
     };
 
@@ -624,14 +547,11 @@ fn resolve_inputs(
     params: &StartNodeParams<'_>,
     node: &pipeline::NodeDef,
 ) -> HashMap<String, String> {
-    // Project over the single edge-walk (#370): the iteration decision (source's
-    // latest-COMPLETED iter for a single wire, COMPLETED iters for a `repeated`
-    // pool — never a raw `iter-*` disk glob, #353) lives in
-    // `input_resolution::resolve_consumer_inputs`, not re-derived here. This
-    // path is keyed on the node's DECLARED inputs (the forensic `NodeStarted`
-    // payload is a per-declared-port, mono-value map) and layers overrides + the
-    // entry-node `task` fallback on top; a `repeated` pool flattens to a
-    // `\n`-joined string.
+    // Don't re-derive the iteration decision here: it lives in
+    // `input_resolution::resolve_consumer_inputs` (latest-COMPLETED iter for a
+    // single wire, COMPLETED iters for a `repeated` pool — never a raw `iter-*`
+    // disk glob). This path only layers overrides and the entry-node `task`
+    // fallback on top; a `repeated` pool flattens to a `\n`-joined string.
     let source_iters = crate::input_resolution::resolved_source_iters(
         params.pipeline,
         params.run_state,
@@ -698,10 +618,6 @@ fn node_type_str(nt: &pipeline::NodeType) -> &'static str {
     nt.as_str()
 }
 
-// ---------------------------------------------------------------------------
-// stop_node
-// ---------------------------------------------------------------------------
-
 pub(crate) struct StopNodeParams<'a> {
     pub run_id: &'a str,
     pub node_id: &'a str,
@@ -709,7 +625,6 @@ pub(crate) struct StopNodeParams<'a> {
     pub tmux_socket: &'a str,
 }
 
-// #494: some fields are asserted on only by this module's unit tests since demotion.
 #[allow(dead_code)]
 pub(crate) struct StopNodeResult {
     pub outcome: PrimitiveOutcome,
@@ -740,17 +655,12 @@ pub(crate) fn stop_node(params: &StopNodeParams<'_>) -> StopNodeResult {
     }
 }
 
-// ---------------------------------------------------------------------------
-// invalidate_nodes
-// ---------------------------------------------------------------------------
-
 pub(crate) struct InvalidateNodesParams<'a> {
     pub run_id: &'a str,
     pub node_ids: &'a [String],
     pub artifacts_dir: &'a Path,
 }
 
-// #494: some fields are asserted on only by this module's unit tests since demotion.
 #[allow(dead_code)]
 pub(crate) struct InvalidateNodesResult {
     pub outcome: PrimitiveOutcome,
@@ -800,10 +710,6 @@ pub(crate) fn invalidate_nodes(params: &InvalidateNodesParams<'_>) -> Invalidate
     }
 }
 
-// ---------------------------------------------------------------------------
-// inject_outputs
-// ---------------------------------------------------------------------------
-
 pub(crate) struct InjectOutputsParams<'a> {
     pub(crate) node_id: &'a str,
     pub(crate) iter: i64,
@@ -811,14 +717,12 @@ pub(crate) struct InjectOutputsParams<'a> {
     pub(crate) artifacts_dir: &'a Path,
 }
 
-// #494: fields are asserted on only by this module's unit tests since demotion.
 #[allow(dead_code)]
 pub(crate) struct InjectOutputsResult {
     pub(crate) outcome: PrimitiveOutcome,
     pub(crate) written_paths: Vec<PathBuf>,
 }
 
-// #494: exercised only by this module's unit tests since demotion; kept as a tested helper.
 #[allow(dead_code)]
 pub(crate) fn inject_outputs(params: &InjectOutputsParams<'_>) -> InjectOutputsResult {
     if params.artifacts.is_empty() {
@@ -861,20 +765,11 @@ pub(crate) fn inject_outputs(params: &InjectOutputsParams<'_>) -> InjectOutputsR
     }
 }
 
-// ---------------------------------------------------------------------------
-// skip outputs (#600)
-// ---------------------------------------------------------------------------
-
 /// Deposits a *skipped* node's outputs so a downstream resolver finds a concrete
-/// (if empty) artifact rather than a missing file that reads as "not produced"
-/// (#600). The port set is every declared output port plus every distinct source
-/// port the node's outgoing edges read; a node with neither still gets a single
-/// default `output` port. Each port is written empty by default, or with the
-/// operator's per-port `overrides` content.
-///
-/// Shared by the `skip_node` command (operator skip local) and the reachability
-/// auto-skip (a structurally-unreachable node), so both deposit outputs the same
-/// way. Returns the written port names, or the first write error.
+/// (if empty) artifact rather than a missing file that reads as "not produced".
+/// The port set is every declared output port plus every distinct source port the
+/// node's outgoing edges read; a node with neither still gets a single default
+/// `output` port.
 pub(crate) fn write_skip_outputs(
     pipeline: &PipelineDef,
     node_id: &str,
@@ -919,10 +814,6 @@ pub(crate) fn write_skip_outputs(
         _ => Ok(ports),
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -1111,10 +1002,6 @@ mod tests {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // start_node — idempotency
-    // -----------------------------------------------------------------------
-
     #[test]
     fn start_node_already_started_returns_already_done() {
         let pipeline = PipelineDef {
@@ -1208,14 +1095,8 @@ mod tests {
         assert!(matches!(result.outcome, PrimitiveOutcome::Rejected { .. }));
     }
 
-    // -----------------------------------------------------------------------
-    // start_node — turn-end Stop hook (#433 / ADR-0043)
-    // -----------------------------------------------------------------------
-
     #[test]
     fn start_node_arms_the_stop_hook_for_an_agent_when_enabled() {
-        // An agent node started with the setting on carries the hook into its
-        // spawn intention, which `execute` threads on to `tmux_session_manager`.
         let pipeline = PipelineDef {
             name: "test".into(),
             version: None,
@@ -1263,8 +1144,7 @@ mod tests {
 
     #[test]
     fn start_node_never_arms_the_stop_hook_for_a_script() {
-        // Immunity: even with the setting on, a `script` node (bash, no `claude`)
-        // must never carry the hook — the `params.inject_hook && !is_script` guard.
+        // A `script` node must never carry the hook, whatever the setting says.
         let pipeline = PipelineDef {
             name: "test".into(),
             version: None,
@@ -1279,8 +1159,6 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let artifacts_dir = tmp.path().join("artifacts");
         std::fs::create_dir_all(&artifacts_dir).unwrap();
-        // A `script` node needs a non-empty body to reach `Executed` (an empty body
-        // is rejected as a silent no-op).
         let pipeline_path = tmp.path().join("pipeline.yaml");
         let body_file = crate::pipeline::canonical_prompt_path(&pipeline_path, "builder");
         std::fs::create_dir_all(body_file.parent().unwrap()).unwrap();
@@ -1315,10 +1193,6 @@ mod tests {
             "a script node must never arm the Stop hook"
         );
     }
-
-    // -----------------------------------------------------------------------
-    // start_node — input resolution
-    // -----------------------------------------------------------------------
 
     #[test]
     fn start_node_resolves_inputs_from_blackboard() {
@@ -1508,9 +1382,6 @@ mod tests {
 
     #[test]
     fn write_skip_outputs_deposits_empty_declared_and_edge_ports() {
-        // #600: a skipped node deposits an artifact for every declared output port
-        // and every distinct source port its outgoing edges read, empty by default,
-        // so a downstream resolver finds a concrete file.
         let pipeline = PipelineDef {
             name: "test".into(),
             version: None,
@@ -1519,7 +1390,6 @@ mod tests {
                 make_node("skipme", NodeType::Agent, &["task"], &["decl_out"]),
                 make_node("down", NodeType::Agent, &["edge_out"], &["z"]),
             ],
-            // The outgoing edge reads a DIFFERENT source port than the declared one.
             edges: vec![make_edge("skipme", "edge_out", "down", "edge_out")],
             loops: Vec::new(),
             notes: Vec::new(),
@@ -1542,8 +1412,6 @@ mod tests {
 
     #[test]
     fn write_skip_outputs_uses_override_content_and_a_default_port() {
-        // A node with no declared outputs and no edges still gets a single default
-        // `output` port; an override supplies its content.
         let pipeline = PipelineDef {
             name: "test".into(),
             version: None,
@@ -1718,10 +1586,9 @@ mod tests {
 
     #[test]
     fn start_node_resolves_repeated_port_via_projection() {
-        // #353: a `repeated` edge resolves (in the forensic NodeStarted payload)
-        // to the concrete completed-iteration paths from the projection, NOT a
-        // raw `iter-*` glob. `repeated` is read off the EDGE (#149), and the
-        // reviewer's failed iter-2 is quarantined even though it may be on disk.
+        // A `repeated` edge resolves to concrete completed-iteration paths, NOT a
+        // raw `iter-*` glob; `repeated` is read off the EDGE, and a failed iter is
+        // quarantined even when its files are on disk.
         let pipeline = PipelineDef {
             name: "test".into(),
             version: None,
@@ -1795,7 +1662,6 @@ mod tests {
             !reviews_path.contains("iter-2"),
             "failed iter-2 is quarantined: {reviews_path}"
         );
-        // The two paths are newline-joined (mono-value forensic HashMap).
         assert_eq!(reviews_path.lines().count(), 2);
     }
 
@@ -1862,10 +1728,9 @@ mod tests {
 
     #[test]
     fn resolve_inputs_reads_latest_completed_not_failed_iter() {
-        // #370 guard (the node_primitives projection): a non-repeated
-        // cross-iteration edge whose source FAILED at iter-1 then COMPLETED at
-        // iter-2 must record iter-2 in the forensic payload — never the failed
-        // iter-1, and never the consumer's positional iter.
+        // A non-repeated cross-iteration edge whose source failed at iter-1 then
+        // completed at iter-2 must record iter-2 — never the failed iter-1, and
+        // never the consumer's positional iter.
         let pipeline = PipelineDef {
             name: "test".into(),
             version: None,
@@ -1933,10 +1798,6 @@ mod tests {
         );
     }
 
-    // -----------------------------------------------------------------------
-    // stop_node
-    // -----------------------------------------------------------------------
-
     #[test]
     fn stop_node_emits_node_stopped_event() {
         let params = StopNodeParams {
@@ -1975,10 +1836,6 @@ mod tests {
             assert_ne!(event.kind, EventKind::RunFailed);
         }
     }
-
-    // -----------------------------------------------------------------------
-    // invalidate_nodes
-    // -----------------------------------------------------------------------
 
     #[test]
     fn invalidate_nodes_resets_to_pending_and_deletes_artifacts() {
@@ -2048,10 +1905,6 @@ mod tests {
         assert_eq!(result.events[0].kind, EventKind::NodeInvalidated);
         assert!(result.deleted_dirs.is_empty());
     }
-
-    // -----------------------------------------------------------------------
-    // inject_outputs
-    // -----------------------------------------------------------------------
 
     #[test]
     fn inject_outputs_writes_files_to_port_directory() {
@@ -2139,10 +1992,6 @@ mod tests {
         .unwrap();
         assert_eq!(content, "new content");
     }
-
-    // -----------------------------------------------------------------------
-    // Idempotency edge cases
-    // -----------------------------------------------------------------------
 
     #[test]
     fn double_start_returns_already_done() {

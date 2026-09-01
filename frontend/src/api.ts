@@ -149,7 +149,6 @@ export function fetchSessions(): Promise<DaemonStatus> {
   return request<DaemonStatus>("GET", "/sessions");
 }
 
-/** Instance-wide settings, per knob (#129, ADR-0015). */
 export function fetchSettings(): Promise<InstanceSettings> {
   return request<InstanceSettings>("GET", "/settings");
 }
@@ -197,7 +196,6 @@ export function fetchAgentProfileReferents(id: string): Promise<AgentProfileRefe
   );
 }
 
-// --- Staging profiles (#432, ADR-0031 §2-§7) --------------------------------
 //
 // A separate REST resource, NOT part of the grouped `PUT /settings`: a profile is a ROW,
 // not a `{effective, source, stored, env, default}` knob. That is exactly why the editor's
@@ -584,8 +582,6 @@ export function fetchPrompt(
   );
 }
 
-// --- Node IO ---
-
 export interface FileInfo {
   path: string;
   exists: boolean;
@@ -698,24 +694,16 @@ export function createRun(req: CreateRunRequest): Promise<CreateRunResponse> {
     form.append("variables", JSON.stringify(req.variables));
     if (req.pipeline_id) form.append("pipeline_id", req.pipeline_id);
     if (req.target_repo) form.append("target_repo", req.target_repo);
-    // #465: the multi-repo list rides the multipart create as a JSON field (mirrors
-    // `variables`), so a Run created WITH attached images keeps its secondaries.
+    // Every field of the JSON path must be mirrored here: a field the multipart
+    // branch omits is silently dropped for a Run created WITH attached images.
+    // Non-scalars ride as JSON strings, bools as stringified bools.
     if (req.target_repos && req.target_repos.length > 0)
       form.append("target_repos", JSON.stringify(req.target_repos));
     if (req.source_branch) form.append("source_branch", req.source_branch);
     if (req.name) form.append("name", req.name);
-    // #410: thread the explicit sandbox mode through the multipart path too, so a
-    // sandboxed Run created WITH attached images keeps its mode (the daemon's
-    // multipart parser reads this field).
     if (req.sandbox) form.append("sandbox", req.sandbox);
-    // #551: thread the explicit harness through the multipart path too, so a Run created
-    // WITH attached images keeps its harness choice (the daemon's multipart parser reads
-    // this field). Omitted when blank — the Run then names no harness.
     if (req.harness) form.append("harness", req.harness);
     if (req.agent_choice) form.append("agent_choice", JSON.stringify(req.agent_choice));
-    // #338: thread the explicit auto-naming choice through the multipart path too, so an
-    // unchecked "Auto-generated" box is honoured on a create WITH attached images. Sent as
-    // a stringified bool; only when the caller made a choice (it always does from the modal).
     if (req.auto_name !== undefined) form.append("auto_name", String(req.auto_name));
     for (const file of req.images!) {
       form.append("images", file, file.name);
@@ -779,8 +767,6 @@ export async function editRunRepos(
     status: resp.status,
   };
 }
-
-// --- Triggers (#160) ---
 
 export interface CreateTriggerRequest {
   name: string;
@@ -866,14 +852,10 @@ export function updateTrigger(
   );
 }
 
-// --- Projets (#552, ADR-0046) ---
-
-/** All Projets with their members (`GET /projects`). */
 export function fetchProjects(): Promise<Project[]> {
   return request<Project[]>("GET", "/projects");
 }
 
-/** Materialise a Projet from a bare name (`POST /projects`). */
 export function createProject(name: string): Promise<Project> {
   return request<Project>("POST", "/projects", {
     body: { name },
@@ -915,7 +897,6 @@ export function addProjectMember(projectId: string, path: string): Promise<Proje
   );
 }
 
-/** Detach a member path from a Projet (`DELETE /projects/{id}/members`). */
 export function removeProjectMember(projectId: string, path: string): Promise<Project> {
   return request<Project>(
     "DELETE",
@@ -924,7 +905,6 @@ export function removeProjectMember(projectId: string, path: string): Promise<Pr
   );
 }
 
-/** Delete a Projet and its memberships (`DELETE /projects/{id}`). */
 export function deleteProject(projectId: string): Promise<void> {
   return request<void>("DELETE", `/projects/${encodeURIComponent(projectId)}`, {
     responseMode: "void",
@@ -1020,8 +1000,6 @@ export function testGuard(
   );
 }
 
-// --- Repo validation and branch listing ---
-
 export interface ValidateRepoResponse {
   valid: boolean;
   error?: string;
@@ -1049,8 +1027,6 @@ export function listBranches(repoPath: string): Promise<BranchRef[]> {
 export function fetchRecentRepos(): Promise<string[]> {
   return request<string[]>("GET", "/repos/recent");
 }
-
-// --- Filesystem explorer (#131, generalised in #431) ---
 
 export interface BrowseEntry {
   name: string;
@@ -1293,8 +1269,6 @@ export function forgetRun(runId: string): Promise<void> {
   );
 }
 
-// --- Run-scoped pipeline ---
-
 // #550/ADR-0046: the daemon returns each node's per-harness `harnesses` map; the
 // editor's pickers edit a flat `model`/`effort` view of the RESOLVED harness. Fold
 // on the way in so the existing UI + library sync keep working; `serializePipeline`
@@ -1329,8 +1303,6 @@ export function saveRunPipeline(
     { body: { yaml, prompts }, responseMode: "void", label: `PUT /runs/${runId}/pipeline` },
   );
 }
-
-// --- Pipeline CRUD ---
 
 // Pin an operation to a single store. Without it the daemon resolves a bare id
 // repo-then-user, so a `library` (or `user`) entry colliding with a same-named
@@ -1393,16 +1365,16 @@ export function fetchRunPipelineDocument(runId: string): Promise<string> {
   });
 }
 
+/// `warnings` carries the non-fatal diagnostics of the import — today, prompts
+/// dropped because they name a node the document does not define.
 export function importPipelineDocument(
   document: string,
-): Promise<{ id: string; scope: string; path: string }> {
+): Promise<{ id: string; scope: string; path: string; warnings: string[] }> {
   return request("POST", "/pipelines/import", {
     body: { document },
     label: "POST /pipelines/import",
   });
 }
-
-// --- Library API ---
 
 export interface LibraryPort {
   name: string;
@@ -1564,8 +1536,6 @@ export async function deletePipeline(id: string, scope?: string): Promise<void> 
   if (!resp.ok) throw new ApiError(`DELETE /pipelines/${id} failed: ${resp.status}`, { status: resp.status });
 }
 
-// --- Library Pipelines API ---
-
 export type LibraryPipelineScope = "repo" | "user";
 
 export interface LibraryPipelineEntry {
@@ -1645,8 +1615,6 @@ export function duplicateLibraryPipeline(
     `/library/pipelines/${encodeURIComponent(id)}/duplicate`,
   );
 }
-
-// --- Diff API ---
 
 export function fetchRunDiff(runId: string): Promise<string> {
   return request<string>(

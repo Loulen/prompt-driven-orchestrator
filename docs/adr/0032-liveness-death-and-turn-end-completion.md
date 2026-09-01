@@ -1,37 +1,28 @@
 # ADR-0032 — Liveness : la mort de session est le seul verdict terminal, la complétion se déclenche sur fin de tour
 
-> Statut : accepted (grilling du 2026-07-29, issue #469). Vocabulaire : CONTEXT.md § « Cycle de vie
-> process — résilience ». Amende **ADR-0012** (autonomie méritée : le réglage §2 en est l'application)
-> et **#214** (invariant terminal : *surfacer* et *tuer* redeviennent distincts pour un nœud vivant).
-> Clôt **#373 Unit B** en won't-do (§3). Remplace la conception mtime de **#123**.
+Sans cette ADR, on garderait un seuil d'inactivité (mtime du transcript) pour déclarer un nœud mort, et
+on tuerait des nœuds sains : le seuil n'est pas mal calibré, il est structurellement incapable. Rien
+dans le code ne dit qu'un nœud sain reste silencieux plusieurs minutes d'affilée.
+
+> Statut : accepted (#469). Amende **ADR-0012** (le réglage §2 est l'application de l'autonomie
+> méritée) et **#214** (*surfacer* et *tuer* redeviennent distincts pour un nœud vivant). Clôt
+> **#373 Unit B** en won't-do (§3). Remplace la conception mtime de **#123**.
 >
-> **Amendé par ADR-0038 (#485).** « La mort de session est exacte par construction » vaut pour le
-> *détecteur* et était fausse pour le *reaper* : celui-ci **fabriquait** la mort que le détecteur
-> observait ensuite fidèlement, sous un `session_died` parfaitement crédible. Le verdict terminal
-> reste le bon ; ce qu'il faut lire avec lui, c'est **qui** a tué la session.
+> **Amendé par ADR-0038.** « Exact par construction » vaut pour le *détecteur* et était faux pour le
+> *reaper*, qui **fabriquait** la mort que le détecteur observait ensuite fidèlement. Le verdict
+> terminal reste le bon ; ce qu'il faut lire avec lui, c'est **qui** a tué la session.
 >
 > **Amendé par ADR-0045.** « La mort de session est le seul verdict terminal » cesse d'être un constat
-> sur Claude Code pour devenir un **critère d'éligibilité** d'un harnais agentique : un harnais qui sort
-> en fin de travail rendrait ce verdict indiscernable d'un succès, donc il est refusé.
+> sur Claude Code pour devenir un **critère d'éligibilité** d'un harnais : un harnais qui sort en fin
+> de travail rendrait ce verdict indiscernable d'un succès, donc il est refusé.
 >
-> **Amendé par ADR-0043 (#433).** La complétion sur fin de tour (§2) gagne un substrat de livraison
-> **primaire, event-driven, côté agent** : un hook `Stop` de Claude Code, injecté par le runtime, qui
-> exécute `pdo complete --auto` à chaque fin de tour. Le balayage daemon décrit ci-dessous en devient
-> le **repli**. Politique (opt-in, décochée par défaut), les deux gardes et le chemin partagé sont
-> inchangés — seule la *livraison* gagne un second substrat, gaté sur le même réglage.
+> **Amendé par ADR-0043.** Le §2 gagne un substrat de livraison **primaire, event-driven, côté
+> agent** (hook `Stop` exécutant `pdo complete --auto`) ; le balayage daemon en devient le **repli**.
+> Politique, gardes et chemin partagé inchangés.
 >
-> **Amendé par #473 (résolution du transcript par identité de session, 1.22.0).** Le §2 lisait « *son*
-> transcript » ; le code lisait en réalité le `.jsonl` le plus récent du dossier projet CC, résolu par
-> **cwd**. Or un nœud ni `code-mutating` ni `merge` tourne dans le worktree du Run, qui est **aussi** le
-> cwd de la session manager — un seul dossier, plusieurs transcripts, la sonde prenait le dernier touché
-> (souvent celui du manager). Voir « Résolution du transcript » ci-dessous.
->
-> **Amendé par ADR-0049 et ADR-0050 (spec résilience, 2026-08-24).** Le §1 tient pour la
-> *détection* (la mort de session reste le seul verdict de liveness), mais sa **conséquence
-> change** : un incident infra (mort de session, boot recovery, spawn-abort) ne produit plus
-> `NodeFailed → RunFailed` mais un `Interrupted` non terminal (ADR-0049), et un spawn avorté côté
-> scheduler appende désormais un événement au lieu de figer le run `running` (ADR-0050). Voir aussi
-> l'amendement du §3 ci-dessous : un état terminal n'est plus un verrou.
+> **Amendé par ADR-0049 et ADR-0050.** Le §1 tient pour la *détection*, mais sa **conséquence
+> change** : un incident infra ne produit plus `NodeFailed → RunFailed` mais un `Interrupted` non
+> terminal, et un spawn avorté appende un événement au lieu de figer le run `running`.
 
 Trois décisions durables, arbitrées sur deux réponses du owner : *on veut détecter Mort, pas un seuil
 qui ne serait pas robuste* ; *un faux positif ne doit pas coûter un Run*.
@@ -138,23 +129,15 @@ avec `CompletionSource::TurnEnded`. Sans cela, sur un nœud `code-mutating`/`mer
 projeté comme une complétion, déjà couvert par la même garde) — pour que le log dise que la complétion
 est automatique.
 
-**Résolution du transcript : par identité de session, jamais par cwd (#473).** « *Son* transcript »
-n'est pas ce que le code mesurait : la sonde encodait le **cwd** puis prenait le `.jsonl` de mtime
-maximale du dossier projet CC. Un nœud ni `code-mutating` ni `merge` partage ce cwd (le worktree du
-Run) avec la session manager — donc un dossier, plusieurs `.jsonl`, et le plus récent est **souvent
-celui du manager**. La même racine frappait `claude --continue` au resume (`build_resume_script`),
-toujours actif même case décochée : un nœud non-CM respawné reprenait « la conv. la plus récente du
-cwd » = potentiellement celle du manager ou d'un nœud frère. Correctif : **PDO épingle un `sessionId`
-au spawn** (`claude --session-id <uuid>`, enregistré sur `NodeStarted`) ; CC nomme son transcript
-`<uuid>.jsonl`, donc la sonde résout par **nom exact** (`session_jsonl_by_id`) et le resume cible ce
-transcript-là (`--resume <uuid>`). Les infra sessions (`__manager__` / `__merge_resolver__`) restent
-sans id : elles n'ont pas de `NodeStarted`, ne sont jamais sondées ni reprises — et résoudre chaque
-nœud par *son* id suffit à ignorer leur transcript partagé. Les nœuds `code-mutating`/`merge` étaient
-déjà immunisés (sous-worktree dédié, dossier non partagé) ; ils reçoivent un id quand même, par
-uniformité. Une ligne d'avant #473 (aucun id enregistré) retombe proprement sur l'ancienne résolution
-mtime et le `--continue` positionnel — aucune migration. **L'invariant byte-identité du tail** (#296 /
-#347 / #424) ne vaut donc plus pour un nœud agent : chaque tail porte désormais `--session-id`. Il est
-conservé pour le cas `None` (infra sessions) et la parité host≡sandbox reste entière.
+**Résolution du transcript : par identité de session, jamais par cwd (#473).** Résoudre « *son*
+transcript » par cwd est faux : un nœud ni `code-mutating` ni `merge` partage le worktree du Run avec la
+session manager — un dossier, plusieurs `.jsonl`, et le plus récent est **souvent celui du manager**. La
+même racine frappait `claude --continue` au resume, actif même case décochée. Correctif : **PDO épingle
+un `sessionId` au spawn** (`--session-id <uuid>`, enregistré sur `NodeStarted`), la sonde résout par nom
+exact et le resume cible ce transcript-là. Les infra sessions restent sans id : elles n'ont pas de
+`NodeStarted`, ne sont jamais sondées ni reprises. Une ligne d'avant #473 retombe sur l'ancienne
+résolution mtime — aucune migration. **L'invariant byte-identité du tail** ne vaut donc plus pour un nœud
+agent ; il est conservé pour le cas `None`, et la parité host≡sandbox reste entière.
 
 ### 3. #373 Unit B est fermé en won't-do
 
@@ -194,11 +177,5 @@ conclure sur ce qu'il ne sait pas. Un nœud immobile reste `Running`, avec sa se
 pane lisible — l'humain garde Stop et Retry. La contradiction relevée par #469 ne change donc pas de
 camp en silence ; elle est arbitrée, et c'est le seuil qui perd.
 
-## Antériorité
-
-#123 (conception mtime), #180 (surfacer, pas tuer), #214 (invariant terminal, amendé ici), #251
-(idle-stall après retry API), #279 (la même constante côté spawn), #290 (blocage sur menu de limite),
-#373 (réactivation du chemin mtime — Unit A a rendu le seuil vivant six jours avant #469, Unit B fermé
-ici), ADR-0004 (l'adversité se ferme en couche ≥ 3), ADR-0012 (autonomie méritée), ADR-0015 (patron du
-réglage), ADR-0017 (le tail auto-signalant des nœuds `script`, qui explique leur immunité :
-pas de `claude`, donc pas de transcript, donc `Unknown`).
+Les nœuds `script` (ADR-0017) sont immunisés de §2 par construction : pas de `claude`, donc pas de
+transcript, donc `Unknown`.

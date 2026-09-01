@@ -1,23 +1,9 @@
-//! Layer 3a — sandbox tracer bullet (#407, slice D of PRD #403).
+//! Layer 3a — sandbox run-advance wiring.
 //!
 //! Drives `POST /runs` against a **real daemon** with a **fake `docker`** (via
 //! `docker_cmd_override`) and a tempdir-scoped sandbox home (via
 //! `sandbox_home_override`), so no test needs Docker, touches the real `$HOME`,
-//! or launches real claude. Asserts the run-advance wiring:
-//!   1. a `minimal` run projects `sandbox=minimal`, prep runs (`create`+`start`), the
-//!      node tail is wrapped (`docker exec … pdo-sbx-<run>`), and the run completes;
-//!   2. Docker unavailable → `RunFailed`, ZERO host spawn (no `NodeStarted`);
-//!   3. an `off` run invokes docker NOT AT ALL (argv log empty) and completes on
-//!      the host, byte-for-byte as before;
-//!   4. `cleanup_run` removes the container (`rm -f pdo-sbx-<run>`) + purges staging;
-//!   5. `boot_recovery` re-ensures a live sandboxed run's container;
-//!   6. killing a sandboxed node issues a targeted in-container `docker exec` kill
-//!      carrying the session marker — and **exactly one** of them (#488: the reap
-//!      contains the kill, so keeping the old bare kill alongside would double it);
-//!   7. the **manager preamble text** names the daemon by the hostname reachable from
-//!      the side it will run on — the gateway when sandboxed, `localhost` when `off`
-//!      (#447). The preamble file is written before tmux is invoked, so this is
-//!      assertable without a real claude.
+//! or launches real claude.
 //!
 //! The real end-to-end run (a live container, `pdo complete` from inside it) is
 //! the Layer-5 job — a fake `docker exec` cannot run the node's body, so tests
@@ -34,8 +20,6 @@ use tempfile::TempDir;
 
 const NODE_ID: &str = "notify";
 
-/// `start → notify(script, output `out`) → end`, with `end` fed from `notify.out`,
-/// so completing `notify` (with its output present) drives the whole run terminal.
 const PIPELINE_YAML: &str = r#"name: sbx-cycle
 version: "1.0"
 nodes:
@@ -96,11 +80,8 @@ fn seed(body: &str) -> impl FnOnce(&Path) -> anyhow::Result<()> {
     }
 }
 
-/// Write a fake `docker` into a test-owned dir and return `(dir, docker_path, log)`.
-/// Logs every invocation's argv (one line per arg) to `argv.log`. Canned:
-/// `image inspect` → present (exit 0, no build); `container inspect` → ABSENT
-/// (exit 1 + sentinel), so `ensure_running` does `create` + `start`; every other
-/// subcommand exits 0. `sq` single-quotes the embedded log path.
+/// A fake `docker` logging every argv to `argv.log`. `container inspect` must report
+/// ABSENT, so `ensure_running` does `create` + `start` and the mounts get logged.
 fn write_fake_docker() -> (TempDir, String, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let bin = dir.path().join("fake-docker");
@@ -125,9 +106,7 @@ fn log_text(log: &Path) -> String {
     std::fs::read_to_string(log).unwrap_or_default()
 }
 
-/// `POST /runs` with an optional `sandbox` mode. Returns the new run id.
 async fn start_run(daemon: &TestDaemon, sandbox: Option<&str>) -> String {
-    // #470: the target repo is required at the create boundary (ADR-0033).
     let mut body = serde_json::json!({
         "pipeline": "sbx-cycle",
         "input": "hello",
@@ -213,9 +192,9 @@ async fn post_command(
         .unwrap()
 }
 
-/// Simulate the container writing the node's declared output to the shared mount
-/// (host path == container path). Written on the host before the simulated
-/// `pdo complete` so node-done's output validation passes.
+/// Stands in for the container writing the node's declared output to the shared mount
+/// (host path == container path). Must precede the simulated `pdo complete`, or
+/// node-done's output validation rejects it.
 fn write_node_output(daemon: &TestDaemon, run_id: &str, content: &str) {
     let out = daemon
         .repo_root()
@@ -245,8 +224,6 @@ async fn simulate_node_done(daemon: &TestDaemon, run_id: &str) {
     );
 }
 
-// -- Test 1: minimal run wires end-to-end ------------------------------------
-
 #[tokio::test]
 async fn minimal_run_prepares_wraps_and_completes() {
     ensure_pdo_on_path();
@@ -258,14 +235,12 @@ async fn minimal_run_prepares_wraps_and_completes() {
 
     let run_id = start_run(&daemon, Some("minimal")).await;
 
-    // (a) The mode is projected onto the Run from RunStarted.
     let run = get_run(&daemon, &run_id).await;
     assert_eq!(
         run["sandbox"], "minimal",
         "run must project sandbox=minimal: {run}"
     );
 
-    // (b) Eager prep created + started the container (ensure_ready).
     assert!(
         wait_until(|| {
             let t = log_text(&log);
@@ -276,7 +251,6 @@ async fn minimal_run_prepares_wraps_and_completes() {
         log_text(&log)
     );
 
-    // (c) The node's tail was wrapped: a `docker exec … pdo-sbx-<run>` launched it.
     assert!(
         wait_until(|| {
             let t = log_text(&log);
@@ -287,16 +261,12 @@ async fn minimal_run_prepares_wraps_and_completes() {
         log_text(&log)
     );
 
-    // (d) The node reaches Running (NodeStarted appended after prep OK). The
-    // container would write its output to the shared mount then call `pdo
-    // complete`; we simulate both (write the output on the host = same path, then
-    // POST node-done) and assert the whole run reaches `completed`.
     let run = wait_node_status(&daemon, &run_id, "running").await;
     assert_eq!(run["nodes"][NODE_ID]["status"], "running", "run: {run}");
 
-    // (d-bis) #426 G3: with no host `~/.claude` at all, the floor SYNTHESISES the
-    // staged `settings.json` down to the single bypass key — otherwise the session
-    // would stall on the bypass-permissions prompt with nobody watching.
+    // Floor guarantee G3: with no host `~/.claude` at all, the staged `settings.json`
+    // is SYNTHESISED down to the bypass key — otherwise the session stalls on the
+    // bypass-permissions prompt with nobody watching.
     let home = staged_home(&daemon, &run_id);
     let settings: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(home.join("settings.json")).unwrap())
@@ -316,8 +286,6 @@ async fn minimal_run_prepares_wraps_and_completes() {
     );
 }
 
-// -- Test 2: Docker unavailable → RunFailed, no host spawn -------------------
-
 #[tokio::test]
 async fn docker_unavailable_fails_run_with_no_host_spawn() {
     ensure_pdo_on_path();
@@ -336,15 +304,13 @@ async fn docker_unavailable_fails_run_with_no_host_spawn() {
         run["status"], "failed",
         "a sandboxed run must fail loud when Docker is unavailable: {run}"
     );
-    // ZERO host spawn: the node was never started (no host fallback).
+    // No host fallback: the node must never start.
     assert!(
         run["nodes"].get(NODE_ID).is_none()
             || run["nodes"][NODE_ID]["status"] == serde_json::Value::Null,
         "no NodeStarted — the sandboxed node must NOT fall back to a host spawn: {run}"
     );
 }
-
-// -- Test 3: off run invokes no docker, completes on the host ----------------
 
 #[tokio::test]
 async fn off_run_never_invokes_docker() {
@@ -364,7 +330,6 @@ async fn off_run_never_invokes_docker() {
     .await
     .unwrap();
 
-    // No `sandbox` param → Off → host execution.
     let run_id = start_run(&daemon, None).await;
     let run = wait_run_status(&daemon, &run_id, "completed").await;
     assert_eq!(
@@ -373,15 +338,12 @@ async fn off_run_never_invokes_docker() {
     );
     assert_eq!(run["sandbox"], "off", "default mode is off: {run}");
 
-    // Docker was NEVER invoked on the off parcours.
     assert_eq!(
         log_text(&log),
         "",
         "the `off` path must not invoke docker at all"
     );
 }
-
-// -- Test 4: cleanup_run removes the container + purges staging ---------------
 
 #[tokio::test]
 async fn cleanup_run_removes_container_and_staging() {
@@ -398,7 +360,6 @@ async fn cleanup_run_removes_container_and_staging() {
     simulate_node_done(&daemon, &run_id).await;
     wait_run_status(&daemon, &run_id, "completed").await;
 
-    // Staging landed under the tempdir home override (hermetic).
     let staging = daemon.repo_root().join(".pdo/sandbox").join(&run_id);
     assert!(
         wait_until(|| staging.exists()).await,
@@ -414,7 +375,6 @@ async fn cleanup_run_removes_container_and_staging() {
     assert!(resp.status().is_success(), "cleanup_run should archive");
     wait_run_status(&daemon, &run_id, "archived").await;
 
-    // The container was removed and the staging purged.
     assert!(
         log_text(&log).contains(&format!("pdo-sbx-{run_id}")) && log_text(&log).contains("rm"),
         "cleanup must `docker rm -f pdo-sbx-{run_id}`; log:\n{}",
@@ -425,8 +385,6 @@ async fn cleanup_run_removes_container_and_staging() {
         "cleanup must purge the staging dir: {staging:?}"
     );
 }
-
-// -- Test 5: boot_recovery re-ensures a live sandboxed container -------------
 
 #[tokio::test]
 async fn boot_recovery_reensures_sandbox_container() {
@@ -440,8 +398,6 @@ async fn boot_recovery_reensures_sandbox_container() {
     let run_id = start_run(&daemon, Some("minimal")).await;
     let count_creates = |log: &Path| log_text(log).lines().filter(|l| *l == "create").count();
 
-    // Wait for the first prep to create+start (so the run is live), targeting
-    // this run's container.
     assert!(
         wait_until(|| {
             let t = log_text(&log);
@@ -453,7 +409,6 @@ async fn boot_recovery_reensures_sandbox_container() {
     );
     let creates_before = count_creates(&log);
 
-    // Boot recovery reconciles the live sandboxed run — re-ensures the container.
     daemon.run_boot_recovery_tick().await;
 
     assert!(
@@ -462,8 +417,6 @@ async fn boot_recovery_reensures_sandbox_container() {
         log_text(&log)
     );
 }
-
-// -- Test 6: killing a sandboxed node targets the container ------------------
 
 #[tokio::test]
 async fn kill_node_targets_the_container() {
@@ -494,11 +447,9 @@ async fn kill_node_targets_the_container() {
     );
 }
 
-/// #488: the reap CONTAINS the in-container kill. Keeping the old
-/// `kill_session_best_effort` alongside it would double the `docker exec` without
-/// any test catching it — `kill_node_targets_the_container` looks for a marker the
-/// SPAWN already writes (via its `-e`), so it would pass either way. This test
-/// counts, so it discriminates.
+/// The reap CONTAINS the in-container kill; keeping a bare `kill_session_best_effort`
+/// alongside it would double the `docker exec`. `kill_node_targets_the_container` cannot
+/// catch that — it looks for a marker the SPAWN already writes — so this test COUNTS.
 #[tokio::test]
 async fn kill_node_issues_exactly_one_in_container_kill() {
     ensure_pdo_on_path();
@@ -519,8 +470,8 @@ async fn kill_node_issues_exactly_one_in_container_kill() {
     .await;
     assert!(resp.status().is_success(), "kill_node should succeed");
 
-    // The tail of `kill_one_liner` (sandbox_container.rs) — emitted by the kill
-    // path and by it alone, so it counts the `docker exec` kills exactly.
+    // The tail of `kill_one_liner` (sandbox_container.rs), emitted by the kill path
+    // and by it alone, so counting it counts the kills exactly.
     const KILL_ONELINER_TAIL: &str = "k TERM; sleep 2; k KILL";
 
     assert!(
@@ -536,8 +487,6 @@ async fn kill_node_issues_exactly_one_in_container_kill() {
     );
 }
 
-// -- #409: mode `full` de bout en bout ---------------------------------------
-//
 // The harness collocates `home_root == host_home == repo_root == tempdir`
 // (`sandbox_home_override`), so the fake host `~/.claude` lives at
 // `<repo>/.claude`. It is fabricated AFTER spawn (untracked, out of the seed
@@ -556,11 +505,8 @@ const ORG_BASELINE: &str = r#"{"org":"baseline"}"#;
 /// guarantee G3 of the staging floor (#426).
 const BYPASS_PERMISSIONS_KEY: &str = "skipDangerousModePermissionPrompt";
 
-/// Fabricate a realistic host `~/.claude` (+ sibling `.claude.json`) under `home`.
-/// Mirrors the unit `sandbox_staging::fabricate_home`: allowlist dirs/files, an
-/// INTRA-tree symlink, an ESCAPING symlink to `~/.agents` (deref target, #409 D2),
-/// 0600 creds, bulky host state that must be EXCLUDED, a pre-existing host
-/// transcript under `projects/`, and a profile `.claude.json` with `oauthAccount`.
+/// A realistic host `~/.claude` (+ sibling `.claude.json`) under `home`. Deliberate
+/// mirror of the unit fixture `sandbox_staging::fabricate_home`; keep them in step.
 fn fabricate_host_claude(home: &Path) {
     let claude = home.join(".claude");
     let write = |p: PathBuf, c: &str| {
@@ -572,17 +518,15 @@ fn fabricate_host_claude(home: &Path) {
         std::fs::write(&p, c).unwrap();
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode)).unwrap();
     };
-    // Allowlist dirs.
     write(claude.join("skills/foo/skill.md"), "# skill\n");
     write_mode(
         claude.join("skills/foo/run.sh"),
         "#!/bin/sh\necho hi\n",
         0o755,
     );
-    // INTRA-tree symlink (stays a link).
     std::os::unix::fs::symlink("skill.md", claude.join("skills/foo/link.md")).unwrap();
-    // ESCAPING skill → ~/.agents/skills/esc (outside ~/.claude): must be
-    // dereferenced into the staged tree, else it dangles in the container.
+    // Escapes ~/.claude: must be dereferenced into the staged tree, or it dangles
+    // inside the container.
     write(
         home.join(".agents/skills/esc/SKILL.md"),
         "# escaped skill\n",
@@ -592,13 +536,10 @@ fn fabricate_host_claude(home: &Path) {
     write(claude.join("agents/a.md"), "agent\n");
     write(claude.join("commands/c.md"), "cmd\n");
     write(claude.join("output-styles/s.md"), "style\n");
-    // Allowlist files (hooks live inside settings.json).
     write(claude.join("settings.json"), r#"{"hooks":{"Stop":[]}}"#);
     write(claude.join("settings.local.json"), r#"{"local":true}"#);
-    // Org managed-settings baseline (#426): OUTSIDE the `full` allowlist — the
-    // staging floor is its single writer, in BOTH modes. Deliberate mirror of the
-    // unit fixture `sandbox_staging::tests::fabricate_home`; keep them in step.
-    // Stand-in content: the real file carries an org OTEL bearer.
+    // OUTSIDE the `full` allowlist: the staging floor is its single writer, in BOTH
+    // modes. Stand-in content — the real host file carries an org OTEL bearer.
     write(claude.join(ORG_BASELINE_FILE), ORG_BASELINE);
     write_mode(
         claude.join(".credentials.json"),
@@ -607,28 +548,23 @@ fn fabricate_host_claude(home: &Path) {
     );
     write(claude.join("CLAUDE.md"), "# global\n");
     write(claude.join("RTK.md"), "# rtk\n");
-    // Bulky host state — must stay EXCLUDED from the staging.
+    // Must stay EXCLUDED from the staging.
     write(claude.join("history.jsonl"), "{\"cmd\":\"ls\"}\n");
     write(claude.join("file-history/big.bin"), "xxxxxxxxxx");
     write(claude.join("session-env/env-1/data"), "junk");
-    // Pre-existing host transcript — `prepare` must NOT copy it.
+    // `prepare` must NOT copy this.
     write(
         claude.join("projects/-enc-host/old.jsonl"),
         "{\"host\":1}\n",
     );
-    // Sibling profile `.claude.json` (PII-bearing; `full` stages it, the floor
-    // then merges onboarding + trust into it).
+    // PII-bearing: `full` stages it, then the floor merges onboarding + trust into it.
     write(
         home.join(".claude.json"),
         r#"{"host":"profile","oauthAccount":{"x":1}}"#,
     );
-    // #432: host files OUTSIDE `~/.claude` that a staging profile may declare as
-    // extras. Present here even though the default `full` profile does NOT carry them —
-    // that is the point: `full_never_mounts_the_real_host_claude` and
-    // `full_completes_without_host_config_writeback` assert they are neither mounted nor
-    // written, so a future slice that starts staging them by default trips those tests.
-    // Deliberate mirror of the unit fixture `sandbox_staging::tests::fabricate_home` and
-    // of `sandbox_profiles::fabricate_host_home`; keep the three in step.
+    // Host files OUTSIDE `~/.claude` that a profile MAY declare as extras. Present even
+    // though the default `full` does not carry them: that is the point — a future slice
+    // that starts staging them by default trips the two tests below.
     write(
         home.join(".gitconfig"),
         "[user]\n\tname = Host User\n\temail = host@example.com\n",
@@ -639,8 +575,6 @@ fn fabricate_host_claude(home: &Path) {
     );
 }
 
-/// The staged Claude home of a run under the tempdir override
-/// (`<repo>/.pdo/sandbox/<run>/claude-home`).
 fn staged_home(daemon: &TestDaemon, run_id: &str) -> PathBuf {
     daemon
         .repo_root()
@@ -649,7 +583,6 @@ fn staged_home(daemon: &TestDaemon, run_id: &str) -> PathBuf {
         .join("claude-home")
 }
 
-/// The staged `.claude.json` sibling (`<repo>/.pdo/sandbox/<run>/.claude.json`).
 fn staged_json(daemon: &TestDaemon, run_id: &str) -> PathBuf {
     daemon
         .repo_root()
@@ -658,7 +591,6 @@ fn staged_json(daemon: &TestDaemon, run_id: &str) -> PathBuf {
         .join(".claude.json")
 }
 
-/// Every `-v` mount spec (the arg following each `-v`) in the fake-docker argv log.
 fn mount_specs(log: &Path) -> Vec<String> {
     let lines: Vec<String> = log_text(log).lines().map(str::to_string).collect();
     let mut specs = Vec::new();
@@ -672,8 +604,6 @@ fn mount_specs(log: &Path) -> Vec<String> {
     }
     specs
 }
-
-// -- Test 7: full stages the allowlist (deref + trust) and completes ---------
 
 #[tokio::test]
 async fn full_run_stages_allowlist_and_completes() {
@@ -692,7 +622,7 @@ async fn full_run_stages_allowlist_and_completes() {
         "run must project sandbox=full: {run}"
     );
 
-    // Node reaches Running ⇒ eager prep (incl. the full walk + the floor) is done.
+    // Running ⇒ eager prep (the full walk + the floor) is done.
     let run = wait_node_status(&daemon, &run_id, "running").await;
     assert_eq!(run["nodes"][NODE_ID]["status"], "running", "run: {run}");
 
@@ -702,14 +632,12 @@ async fn full_run_stages_allowlist_and_completes() {
         "staged settings.json should exist once the node is running"
     );
 
-    // Allowlist dirs staged.
     assert!(home.join("skills/foo/skill.md").is_file());
     assert!(home.join("plugins/bar/plugin.json").is_file());
     assert!(home.join("agents/a.md").is_file());
     assert!(home.join("commands/c.md").is_file());
     assert!(home.join("output-styles/s.md").is_file());
-    // #409 D2: the escaping skill is DEREFERENCED into a regular file (not a
-    // dangling symlink) — exercised through the real prep path, not just a unit.
+    // The escaping skill must be a regular file, not a dangling symlink.
     let esc = home.join("skills/esc/SKILL.md");
     assert!(
         std::fs::symlink_metadata(&esc)
@@ -723,16 +651,15 @@ async fn full_run_stages_allowlist_and_completes() {
     assert!(std::fs::read_to_string(home.join("settings.json"))
         .unwrap()
         .contains("hooks"));
-    // #426 G2: the org managed-settings baseline is staged VERBATIM — through the
-    // daemon's real prep path, not just the unit. It lives OUTSIDE the `full`
-    // allowlist: the floor is its single writer.
+    // Floor guarantee G2: the org baseline is staged VERBATIM though it lives OUTSIDE
+    // the `full` allowlist — the floor is its single writer.
     assert_eq!(
         std::fs::read_to_string(home.join(ORG_BASELINE_FILE)).unwrap(),
         ORG_BASELINE,
         "the org managed-settings baseline must be staged byte-for-byte"
     );
-    // #426 G3: the bypass key is MERGED into the copied host settings — the hooks
-    // survive (a naive overwrite would drop them).
+    // Floor guarantee G3: the bypass key is MERGED, so the host hooks survive; a naive
+    // overwrite would drop them.
     let staged_settings: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(home.join("settings.json")).unwrap())
             .unwrap();
@@ -750,8 +677,7 @@ async fn full_run_stages_allowlist_and_completes() {
     assert!(home.join("CLAUDE.md").is_file());
     assert!(home.join("RTK.md").is_file());
 
-    // `.claude.json` sibling (OUTSIDE claude-home/): host profile preserved verbatim
-    // + trust seeded for the Run's repo_root (#409 D5).
+    // The `.claude.json` sibling lives OUTSIDE claude-home/.
     let staged = staged_json(&daemon, &run_id);
     let json: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&staged).unwrap()).unwrap();
@@ -771,25 +697,18 @@ async fn full_run_stages_allowlist_and_completes() {
         ".claude.json must NOT live inside claude-home/"
     );
 
-    // projects/ staged EMPTY (host transcripts never copied).
     assert!(home.join("projects").is_dir());
     assert_eq!(std::fs::read_dir(home.join("projects")).unwrap().count(), 0);
 
-    // Drive the run terminal (simulate the container's output + `pdo complete`).
     write_node_output(&daemon, &run_id, "full output\n");
     simulate_node_done(&daemon, &run_id).await;
     let run = wait_run_status(&daemon, &run_id, "completed").await;
     assert_eq!(run["status"], "completed", "full run must complete: {run}");
 }
 
-// -- Test 7-bis (#426): minimal against a FABRICATED host — the floor's fork ---
-//
-// The only layer-3 test that drives `minimal` with a real host `~/.claude` present.
-// That is exactly where the floor's copy-vs-synthesis fork lives: `remote-settings`
-// is COPIED in both modes (G2), while `settings.json` is SYNTHESISED in `minimal`
-// even though a rich host file sits right there (G3). Without a fabricated host, G2
-// would take its no-op branch in every layer-3 test.
-
+/// The only layer-3 test driving `minimal` with a real host `~/.claude` present, which is
+/// where the floor's copy-vs-synthesis fork lives. Without a fabricated host, G2 takes its
+/// no-op branch in every layer-3 test.
 #[tokio::test]
 async fn minimal_run_stages_the_floor_against_a_fabricated_host() {
     ensure_pdo_on_path();
@@ -809,15 +728,15 @@ async fn minimal_run_stages_the_floor_against_a_fabricated_host() {
         "staging should be seeded once the node is running"
     );
 
-    // (a) G2 — COPY branch: the org baseline is staged even in `minimal`.
+    // G2, COPY branch: the org baseline is staged even in `minimal`.
     assert_eq!(
         std::fs::read_to_string(home.join(ORG_BASELINE_FILE)).unwrap(),
         ORG_BASELINE,
         "the floor stages the org baseline in `minimal` too"
     );
 
-    // (b) G3 — SYNTHESIS branch: the host `settings.json` carries `hooks`, the staged
-    // one carries the bypass key and NOTHING of the host.
+    // G3, SYNTHESIS branch: the host `settings.json` carries `hooks`; the staged one
+    // must carry the bypass key and NOTHING of the host.
     let settings: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(home.join("settings.json")).unwrap())
             .unwrap();
@@ -827,12 +746,11 @@ async fn minimal_run_stages_the_floor_against_a_fabricated_host() {
         "`minimal` synthesises settings.json — it never copies the host's: {settings}"
     );
 
-    // (c) `minimal` really is minimal: nothing from the `full` profile leaked in.
+    // Nothing from the `full` profile may leak in.
     assert!(!home.join("skills").exists());
     assert!(!home.join("plugins").exists());
     assert!(!home.join("CLAUDE.md").exists());
 
-    // (d) The host `.claude` is untouched (no write-back through the floor).
     let host_settings = daemon.repo_root().join(".claude/settings.json");
     assert_eq!(
         std::fs::read_to_string(&host_settings).unwrap(),
@@ -848,8 +766,6 @@ async fn minimal_run_stages_the_floor_against_a_fabricated_host() {
         "minimal run must complete: {run}"
     );
 }
-
-// -- Test 8: full excludes projects/ and bulky host state --------------------
 
 #[tokio::test]
 async fn full_excludes_projects_and_bulky_host_state() {
@@ -870,17 +786,14 @@ async fn full_excludes_projects_and_bulky_host_state() {
         "staging should be seeded once the node is running"
     );
 
-    // Bulky/transient host state is NEVER staged (allowlist, not denylist).
+    // Allowlist, not denylist.
     assert!(!home.join("history.jsonl").exists());
     assert!(!home.join("file-history").exists());
     assert!(!home.join("session-env").exists());
-    // Host transcripts are never copied by prepare; projects/ is created EMPTY.
     assert!(!home.join("projects/-enc-host/old.jsonl").exists());
     assert!(home.join("projects").is_dir());
     assert_eq!(std::fs::read_dir(home.join("projects")).unwrap().count(), 0);
 }
-
-// -- Test 9: the real host ~/.claude is never a mount SOURCE -----------------
 
 #[tokio::test]
 async fn full_never_mounts_the_real_host_claude() {
@@ -893,7 +806,6 @@ async fn full_never_mounts_the_real_host_claude() {
     fabricate_host_claude(daemon.repo_root());
 
     let run_id = start_run(&daemon, Some("full")).await;
-    // `container inspect` → ABSENT → ensure_running does `create` (mounts logged).
     assert!(
         wait_until(|| log_text(&log).contains("create")).await,
         "prep must `docker create` the container; log:\n{}",
@@ -904,7 +816,6 @@ async fn full_never_mounts_the_real_host_claude() {
     let host_claude = daemon.repo_root().join(".claude");
     let host_json = daemon.repo_root().join(".claude.json");
 
-    // Positive: the STAGED home is mounted at <repo>/.claude — source = staging.
     let expected_home_mount = format!(
         "{}:{}:rw",
         staged_home(&daemon, &run_id).display(),
@@ -915,14 +826,10 @@ async fn full_never_mounts_the_real_host_claude() {
         "staged home must mount to <repo>/.claude (source = staging); specs={specs:?}"
     );
 
-    // Negative (load-bearing): NO mount has ANY real host config path as its SOURCE.
-    // Widened in #432 from "not the real `.claude`" to "no real host path at all", now
-    // that a profile can name entries outside `~/.claude`: ADR-0031 §4 says such an entry
-    // is COPIED then mounted, never bind-mounted from the host.
-    //
-    // Inspect the source SEGMENT (split ':'), never `contains` — the mount TARGETS
-    // legitimately ARE host paths here (override home == repo_root), so a substring check
-    // would false-positive on every spec.
+    // ADR-0031 §4: an entry outside `~/.claude` is COPIED then mounted, never bind-mounted
+    // from the host. Inspect the source SEGMENT (split ':'), never `contains` — the mount
+    // TARGETS legitimately ARE host paths here, so a substring check false-positives on
+    // every spec.
     let host_gitconfig = daemon.repo_root().join(".gitconfig");
     let host_gh = daemon.repo_root().join(".config/gh");
     for spec in &specs {
@@ -935,16 +842,14 @@ async fn full_never_mounts_the_real_host_claude() {
             );
         }
     }
-    // And the `full` default declares nothing outside `~/.claude`, so the queue is empty:
-    // exactly the 4 fixed mounts, argv byte-identical to #406.
+    // The `full` default declares nothing outside `~/.claude`, so the extra-mount queue is
+    // empty: exactly the 4 fixed mounts.
     assert_eq!(
         specs.len(),
         4,
         "`full` must add no `$HOME`-exception mount; specs={specs:?}"
     );
 }
-
-// -- Test 10: no host config write-back; transcripts DO flow back ------------
 
 #[tokio::test]
 async fn full_completes_without_host_config_writeback() {
@@ -958,11 +863,9 @@ async fn full_completes_without_host_config_writeback() {
 
     let host_claude = daemon.repo_root().join(".claude");
     let host_json = daemon.repo_root().join(".claude.json");
-    // #432: `~/.gitconfig` rides along. It is the file ADR-0031 §4 names explicitly — an
-    // agent that hits `unable to auto-detect email address` very naturally reaches for
-    // `git config --global`, and a direct bind would have it rewrite the user's identity.
+    // `~/.gitconfig` rides along: an agent hitting `unable to auto-detect email address`
+    // reaches for `git config --global`, and a direct bind would rewrite the user's identity.
     let host_gitconfig = daemon.repo_root().join(".gitconfig");
-    // Snapshot the host config BEFORE the run (bytes, load-bearing).
     let settings_before = std::fs::read(host_claude.join("settings.json")).unwrap();
     let json_before = std::fs::read(&host_json).unwrap();
     let gitconfig_before = std::fs::read(&host_gitconfig).unwrap();
@@ -979,8 +882,7 @@ async fn full_completes_without_host_config_writeback() {
         "staging must exist before cleanup: {staging:?}"
     );
 
-    // Plant a transcript in the staged projects/ sink: the cleanup merge_back must
-    // land it on the host (positive), while config stays untouched (negative).
+    // The cleanup merge_back must land this on the host while config stays untouched.
     let staged_proj = staged_home(&daemon, &run_id).join("projects/-enc-test");
     std::fs::create_dir_all(&staged_proj).unwrap();
     std::fs::write(staged_proj.join("t.jsonl"), "{\"line\":1}\n").unwrap();
@@ -994,8 +896,8 @@ async fn full_completes_without_host_config_writeback() {
     assert!(resp.status().is_success(), "cleanup_run should archive");
     wait_run_status(&daemon, &run_id, "archived").await;
 
-    // AC: NO config write ever comes back to the host. Copy + trust seeding all
-    // land in the STAGED tree; the host config stays byte-identical.
+    // Copy + trust seeding all land in the STAGED tree; the host config stays
+    // byte-identical.
     assert_eq!(
         std::fs::read(host_claude.join("settings.json")).unwrap(),
         settings_before,
@@ -1011,32 +913,24 @@ async fn full_completes_without_host_config_writeback() {
         gitconfig_before,
         "host ~/.gitconfig must be byte-identical (ADR-0031 §4: copy, never bind)"
     );
-    // Positive counterpart: transcripts DO merge back to the host projects dir.
+    // Transcripts, by contrast, DO merge back.
     assert!(
         host_claude.join("projects/-enc-test/t.jsonl").is_file(),
         "merge_back must land staged transcripts on the host"
     );
-    // And the staging is purged.
     assert!(
         !staging.exists(),
         "cleanup must purge the staging dir: {staging:?}"
     );
 }
 
-// -- #411/#471: which acquisition path a Run takes (pull vs build) -----------
-//
-// Like `write_fake_docker` but cans `image inspect` → ABSENT (exit 1), so
-// `ensure_image` proceeds past the fast-path to acquire the image: a `docker pull`
-// for the hash-derived image at the seeded location, or a `docker build` when the
-// resolved Dockerfile is somewhere else. Every other subcommand — `pull`, `tag`,
-// `build`, `container`(create+start), `exec`, `rm` — exits 0.
-//
-// #471 removed the `image_source` / `dockerfile_path` settings these tests used to PUT, so what
-// drives the choice here is the **staging profile**. The "dockerfile mode never pulls" property
-// (the `ImageSource::Dockerfile` branch) is pinned by `sandbox_image::dockerfile_mode_never_pulls`
-// as a unit test against the same kind of fake docker; at this layer the only remaining
-// instance-wide way to reach it is the daemon's environment, which a shared test process cannot
-// set without racing every sibling test in this file.
+/// Like `write_fake_docker` but `image inspect` reports ABSENT, so `ensure_image` proceeds
+/// past the fast path and the acquisition (pull vs build) becomes observable.
+///
+/// The choice is driven by the **staging profile**. The `ImageSource::Dockerfile` branch's
+/// "never pulls" property is pinned by the `sandbox_image` unit test instead: at this layer
+/// the only instance-wide way to reach it is the daemon's environment, which a shared test
+/// process cannot set without racing every sibling test in this file.
 fn write_fake_docker_image_absent() -> (TempDir, String, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let bin = dir.path().join("fake-docker");
@@ -1057,9 +951,8 @@ fn write_fake_docker_image_absent() -> (TempDir, String, PathBuf) {
     (dir, bin.to_str().unwrap().to_string(), log)
 }
 
-/// `PUT /settings/sandbox-profiles/{name}` posing an image source, the ONLY way to choose a Run's
-/// image since #471. `minimal` is the profile every test here launches with, and a bare `image`
-/// upsert materialises it with an empty diff — which is what `minimal` already resolves to.
+/// Posing an image source on a profile is the ONLY way to choose a Run's image. A bare `image`
+/// upsert materialises `minimal` with an empty diff, which is what it already resolves to.
 async fn put_profile_image(daemon: &TestDaemon, name: &str, image: serde_json::Value) {
     let resp = reqwest::Client::new()
         .put(format!("{}/settings/sandbox-profiles/{name}", daemon.url()))
@@ -1080,16 +973,12 @@ async fn put_profile_image(daemon: &TestDaemon, name: &str, image: serde_json::V
     );
 }
 
-/// Whether a docker subcommand keyword appears as a standalone argv line (`$1`).
 fn log_has_subcommand(log: &Path, name: &str) -> bool {
     log_text(log).lines().any(|l| l == name)
 }
 
-// -- Test 11: the built-in default pulls the image (no build on a successful pull) --
-
-/// The profile default of #471 (`sandbox_profile::DEFAULT_PROFILE_IMAGE`) is registry-pulled and
-/// hash-derived, so this needs no setup at all any more — which is the point: on an untouched
-/// instance, a sandboxed Run pulls.
+/// `DEFAULT_PROFILE_IMAGE` is registry-pulled and hash-derived, so this needs no setup —
+/// which is the point: on an untouched instance, a sandboxed Run pulls.
 #[tokio::test]
 async fn the_default_profile_image_pulls_the_sandbox_image() {
     ensure_pdo_on_path();
@@ -1099,16 +988,15 @@ async fn the_default_profile_image_pulls_the_sandbox_image() {
             .await
             .unwrap();
 
-    // No PUT: `minimal` poses no image, and the profile default decides.
+    // No PUT: `minimal` poses no image, so the profile default decides.
     let _run_id = start_run(&daemon, Some("minimal")).await;
 
-    // ensure_image (image absent) attempts a pull before any build.
     assert!(
         wait_until(|| log_has_subcommand(&log, "pull")).await,
         "a profile posing no image must `docker pull` the hash-derived image; log:\n{}",
         log_text(&log)
     );
-    // The fake pull succeeds (exit 0) → retag → NO fallback build.
+    // The fake pull succeeds, so there must be no fallback build.
     assert!(
         !log_has_subcommand(&log, "build"),
         "a successful pull must NOT fall back to a local build; log:\n{}",
@@ -1116,12 +1004,9 @@ async fn the_default_profile_image_pulls_the_sandbox_image() {
     );
 }
 
-// -- #431/#467: a profile's Dockerfile drives the -f flag AND skips the pull ---
-
-/// Argv of the `docker build` invocation in the log. Exactly 6 args
-/// (`build -t <tag> -f <dockerfile> <context>`), so we slice a fixed window rather
-/// than "to the end" — unlike the in-module helper, the build is NOT the last
-/// invocation here (the container create/start/exec follow it).
+/// Argv of the `docker build` invocation. A fixed 6-arg window rather than "to the end":
+/// unlike the in-module helper, the build is NOT the last invocation here (create/start/exec
+/// follow it).
 fn build_argv(log: &Path) -> Vec<String> {
     let content = log_text(log);
     let lines: Vec<String> = content.lines().map(str::to_string).collect();
@@ -1131,8 +1016,7 @@ fn build_argv(log: &Path) -> Vec<String> {
     }
 }
 
-/// Every event of the Run, from `GET /runs/<id>/events` — where a `RunFailed`'s
-/// `reason` lives (the Run projection carries no reason field).
+/// A `RunFailed`'s `reason` lives here, not on the Run projection.
 async fn run_events(daemon: &TestDaemon, run_id: &str) -> Vec<serde_json::Value> {
     reqwest::get(format!("{}/runs/{run_id}/events", daemon.url()))
         .await
@@ -1142,9 +1026,8 @@ async fn run_events(daemon: &TestDaemon, run_id: &str) -> Vec<serde_json::Value>
         .unwrap()
 }
 
-/// The 12-hex content hash of `bytes`, the way `release.yml` and `sandbox_image`
-/// both compute it (`sha256sum | cut -c1-12`). Shelled out on purpose: it proves
-/// the daemon's Rust hash matches the canonical CI recipe, not just itself.
+/// The 12-hex content hash, shelled out on purpose: it proves the daemon's Rust hash
+/// matches the canonical CI recipe (`sha256sum | cut -c1-12`), not just itself.
 fn content_tag(bytes: &[u8]) -> String {
     use std::io::Write;
     let mut child = Command::new("sha256sum")
@@ -1158,9 +1041,7 @@ fn content_tag(bytes: &[u8]) -> String {
     format!("pdo-sandbox:h-{}", &hex[..12])
 }
 
-/// The `-f` flag, the content tag, the empty build context and the skipped pull, all from a
-/// Dockerfile a **profile** points at (#467). Since #471 that is the only way to point at one from
-/// the UI, and the "no pull" half is non-vacuous precisely because the source is still the
+/// The "no pull" half is non-vacuous precisely because the source is still the
 /// registry-pulling default: what suppresses the pull is the LOCATION predicate, not a mode.
 #[tokio::test]
 async fn a_profile_dockerfile_builds_from_it_without_pulling() {
@@ -1171,9 +1052,7 @@ async fn a_profile_dockerfile_builds_from_it_without_pulling() {
             .await
             .unwrap();
 
-    // A self-contained custom Dockerfile (no COPY: the build context is empty by
-    // design, ADR-0030 §5 as amended). Lives inside the daemon's repo — the use case
-    // the issue targets (versioned with the team's repo).
+    // Self-contained (no COPY): the build context is empty by design, ADR-0030 §5.
     let custom = daemon.repo_root().join("docker").join("sbx.Dockerfile");
     std::fs::create_dir_all(custom.parent().unwrap()).unwrap();
     let custom_bytes: &[u8] = b"FROM ubuntu:24.04\nRUN echo fp-431 custom dockerfile\n";
@@ -1193,9 +1072,8 @@ async fn a_profile_dockerfile_builds_from_it_without_pulling() {
         "a custom Dockerfile must be built locally; log:\n{}",
         log_text(&log)
     );
-    // THE assertion: the registry-pulling default is in force, yet no pull — the hash of a
-    // custom Dockerfile cannot exist upstream (the fake pull would have SUCCEEDED, so this is a
-    // real signal). And no retag either, since there was nothing to retag.
+    // The registry-pulling default is in force, yet no pull: the hash of a custom Dockerfile
+    // cannot exist upstream. The fake pull would have SUCCEEDED, so this is a real signal.
     assert!(
         !log_has_subcommand(&log, "pull"),
         "a custom Dockerfile must skip the GHCR pull; log:\n{}",
@@ -1208,13 +1086,11 @@ async fn a_profile_dockerfile_builds_from_it_without_pulling() {
     );
 
     let argv = build_argv(&log);
-    // `-f` is exactly the custom path…
     assert_eq!(
         argv.iter().position(|a| a == "-f").map(|i| &argv[i + 1]),
         Some(&custom.display().to_string()),
         "`docker build -f` must point at the resolved custom Dockerfile; argv: {argv:?}"
     );
-    // …the tag is the hash of ITS bytes, differing from the seeded default's…
     let custom_tag = content_tag(custom_bytes);
     let seeded_bytes = std::fs::read(daemon.repo_root().join(".pdo/sandbox/Dockerfile"))
         .expect("the seed must still land at the default path");
@@ -1228,8 +1104,8 @@ async fn a_profile_dockerfile_builds_from_it_without_pulling() {
         Some(&custom_tag),
         "the tag must be the content hash of the CUSTOM Dockerfile; argv: {argv:?}"
     );
-    // …and the build context is still the dedicated EMPTY dir, never sandbox_root and
-    // never the repo (D8 / ADR-0030 §5).
+    // The build context must stay the dedicated EMPTY dir, never sandbox_root and never
+    // the repo (ADR-0030 §5).
     let ctx = argv.last().unwrap();
     assert_eq!(
         ctx,
@@ -1241,7 +1117,6 @@ async fn a_profile_dockerfile_builds_from_it_without_pulling() {
         "the build context stays <sandbox_root>/.build-ctx; argv: {argv:?}"
     );
 
-    // The custom Dockerfile was never overwritten by the seed.
     assert_eq!(
         std::fs::read(&custom).unwrap(),
         custom_bytes,
@@ -1251,9 +1126,9 @@ async fn a_profile_dockerfile_builds_from_it_without_pulling() {
 
 #[tokio::test]
 async fn a_profile_dockerfile_that_vanished_fails_the_run_naming_path_and_tier() {
-    // Realistic TOCTOU: the path passes the profile write's existence gate, then disappears
-    // before the run. The prep must fail LOUD (ADR-0030 pt 4) — never silently build
-    // the seeded default, which would mean running an image the team never versioned.
+    // TOCTOU: the path passes the profile write's existence gate, then disappears before
+    // the run. The prep must fail LOUD (ADR-0030 pt 4) rather than silently build the
+    // seeded default — that would run an image the team never versioned.
     ensure_pdo_on_path();
     let (_fake_dir, docker, log) = write_fake_docker_image_absent();
     let daemon =
@@ -1271,7 +1146,6 @@ async fn a_profile_dockerfile_that_vanished_fails_the_run_naming_path_and_tier()
     )
     .await;
 
-    // …and now it's gone.
     std::fs::remove_file(&custom).unwrap();
 
     let run_id = start_run(&daemon, Some("minimal")).await;
@@ -1281,7 +1155,6 @@ async fn a_profile_dockerfile_that_vanished_fails_the_run_naming_path_and_tier()
         "a vanished Dockerfile must fail the run, never fall back: {run}"
     );
 
-    // The reason lives on the `run_failed` event, not on the Run projection.
     let evs = run_events(&daemon, &run_id).await;
     let failed = evs
         .iter()
@@ -1300,15 +1173,13 @@ async fn a_profile_dockerfile_that_vanished_fails_the_run_naming_path_and_tier()
         reason.contains("staging profile"),
         "…and send the user to the profile, the only place that path can be fixed: {reason}"
     );
-    // The bail precedes the fast-path AND the build: nothing was built.
+    // The bail must precede the fast path AND the build.
     assert!(
         !log_has_subcommand(&log, "build"),
         "no build must be attempted for an unnameable image; log:\n{}",
         log_text(&log)
     );
 }
-
-// -- #410: run-level exposure + sources of config ----------------------------
 
 async fn get_settings_json(daemon: &TestDaemon) -> serde_json::Value {
     reqwest::get(format!("{}/settings", daemon.url()))
@@ -1319,7 +1190,6 @@ async fn get_settings_json(daemon: &TestDaemon) -> serde_json::Value {
         .unwrap()
 }
 
-/// `PUT /settings {"default_sandbox": <mode>}` against the real daemon.
 async fn put_default_sandbox(daemon: &TestDaemon, mode: &str) {
     let resp = reqwest::Client::new()
         .put(format!("{}/settings", daemon.url()))
@@ -1334,10 +1204,9 @@ async fn put_default_sandbox(daemon: &TestDaemon, mode: &str) {
     );
 }
 
-/// `POST /triggers` with an optional per-Trigger `sandbox` mode. Returns the id.
 /// A non-empty `input_template` keeps the prompt-required reject rule satisfied.
+/// A Trigger is a Run template, so it needs its own target repo (ADR-0033).
 async fn create_trigger(daemon: &TestDaemon, sandbox: Option<&str>) -> String {
-    // #470: a Trigger is a Run template — no target repo, no Trigger (ADR-0033).
     let mut body = serde_json::json!({
         "name": "sbx-trigger",
         "pipeline_id": "sbx-cycle",
@@ -1365,8 +1234,6 @@ async fn create_trigger(daemon: &TestDaemon, sandbox: Option<&str>) -> String {
         .to_string()
 }
 
-/// Fire a trigger by forcing it due and running one scheduler tick, then return the
-/// resulting Run's id (the run whose `triggered_by` matches). Polls `GET /runs`.
 async fn fire_trigger_and_get_run(daemon: &TestDaemon, trigger_id: &str) -> String {
     daemon.force_trigger_due(trigger_id).await;
     daemon.run_trigger_tick().await;
@@ -1386,13 +1253,10 @@ async fn fire_trigger_and_get_run(daemon: &TestDaemon, trigger_id: &str) -> Stri
     panic!("trigger {trigger_id} must have produced a Run within the deadline");
 }
 
-// -- Test 13: GET /settings surfaces Docker availability (advisory probe) -----
-
 #[tokio::test]
 async fn get_settings_reports_docker_available_with_working_fake() {
     ensure_pdo_on_path();
-    // The standard fake docker answers `version` (via the `*) exit 0` arm) → the
-    // probe reports available.
+    // The standard fake docker answers `version` via its `*) exit 0` arm.
     let (_fake_dir, docker, _log) = write_fake_docker();
     let daemon =
         TestDaemon::spawn_with_docker_override(seed("#!/usr/bin/env bash\ntrue\n"), docker)
@@ -1431,8 +1295,6 @@ async fn get_settings_reports_docker_unavailable_when_binary_absent() {
     );
 }
 
-// -- Test 14: a per-Trigger sandbox mode fires sandboxed Runs -----------------
-
 #[tokio::test]
 async fn trigger_with_sandbox_minimal_fires_minimal_run() {
     ensure_pdo_on_path();
@@ -1452,8 +1314,6 @@ async fn trigger_with_sandbox_minimal_fires_minimal_run() {
     );
 }
 
-// -- Test 15: a null-sandbox Trigger defers to the instance default -----------
-
 #[tokio::test]
 async fn trigger_without_sandbox_defers_to_instance_default() {
     ensure_pdo_on_path();
@@ -1463,7 +1323,6 @@ async fn trigger_without_sandbox_defers_to_instance_default() {
             .await
             .unwrap();
 
-    // Instance default = full; the Trigger carries no sandbox → it inherits.
     put_default_sandbox(&daemon, "full").await;
     let trigger_id = create_trigger(&daemon, None).await;
     let run_id = fire_trigger_and_get_run(&daemon, &trigger_id).await;
@@ -1475,21 +1334,15 @@ async fn trigger_without_sandbox_defers_to_instance_default() {
     );
 }
 
-// -- Test 16 (#445): the watcher may not spawn into a container that isn't up --
+// The bug this section pins: `create_run`'s detached prep task waits for `ensure_ready`
+// before advancing the Run, but the pipeline watcher did not. inotify reports the FIRST
+// read of a fresh `<run>/pipeline.yaml` as an external modification, so merely opening the
+// Run in the UI woke `handle_run_pipeline_modifications` mid-prep, which called the same
+// advance path with no precondition — and the node's tail `docker exec`ed into a container
+// that did not exist yet.
 //
-// The reported failure, reproduced through the production trigger. `create_run`'s
-// detached prep task waits for `ensure_ready` before advancing the Run, but the
-// pipeline watcher did not: the FIRST read of a fresh `<run>/pipeline.yaml` is
-// reported by inotify as an external modification, so merely opening the Run in the
-// UI woke `handle_run_pipeline_modifications` mid-prep, which called the same
-// advance path with no precondition. The node's tail `docker exec`ed into a
-// container that did not exist yet — exit 1 in ~30 ms, the tmux window's command
-// ended, and ~25 s later the stale detector rendered `session_died`.
-//
-// A fake `docker` whose `create` SLEEPS gives a deterministic prep window (the real
-// trigger is ~1 GB of `~/.claude` staging, measured at 83-87 s for a 2 GB profile).
-// Under the same fixture the pre-#445 daemon appends `node_started` while
-// `sandbox_prep` is still `pending`, which is exactly what this asserts against.
+// A fake `docker` whose `create` SLEEPS gives a deterministic prep window; in production
+// the window is ~1 GB of `~/.claude` staging (83-87 s measured for a 2 GB profile).
 
 /// Like [`write_fake_docker`] but `create` sleeps `secs` first, holding the Run in
 /// `sandbox_prep = pending` long enough to fire a watcher event inside the window.
@@ -1537,8 +1390,8 @@ async fn wait_for_event_kind(
 #[tokio::test]
 async fn watcher_advance_mid_prep_never_spawns_and_is_replayed() {
     ensure_pdo_on_path();
-    // 6s: comfortably longer than the watcher's ~1s debounce plus the round trips
-    // below, so the `pipeline_modified` advance provably lands inside the window.
+    // Longer than the watcher's ~1s debounce plus the round trips below, so the
+    // `pipeline_modified` advance provably lands inside the prep window.
     let (_fake_dir, docker, log) = write_slow_create_docker(6);
     let daemon =
         TestDaemon::spawn_with_docker_override(seed("#!/usr/bin/env bash\ntrue\n"), docker)
@@ -1547,7 +1400,6 @@ async fn watcher_advance_mid_prep_never_spawns_and_is_replayed() {
 
     let run_id = start_run(&daemon, Some("full")).await;
 
-    // The prep has started and is blocked in `docker create`.
     assert!(
         wait_for_event_kind(
             &daemon,
@@ -1564,9 +1416,8 @@ async fn watcher_advance_mid_prep_never_spawns_and_is_replayed() {
         "precondition: the Run must be mid-prep for this test to mean anything: {run}"
     );
 
-    // Wake the watcher exactly as the UI does — an external touch of the run-scoped
-    // YAML. In production this is a *read*; a write is the same event to the daemon
-    // and is what a test can trigger deterministically.
+    // In production the UI's *read* wakes the watcher; a write is the same event to the
+    // daemon and is what a test can trigger deterministically.
     let yaml_path = daemon
         .repo_root()
         .join(".pdo")
@@ -1590,7 +1441,7 @@ async fn watcher_advance_mid_prep_never_spawns_and_is_replayed() {
          proves nothing about the spawn path it drives"
     );
 
-    // THE ASSERTION. The watcher-driven advance ran; the container is still absent.
+    // The watcher-driven advance ran, yet the container is still absent.
     let events = run_events(&daemon, &run_id).await;
     let prep_ready_seen = events.iter().any(|e| e["kind"] == "sandbox_prep_ready");
     assert!(
@@ -1608,7 +1459,7 @@ async fn watcher_advance_mid_prep_never_spawns_and_is_replayed() {
         "and the Run must still be alive, not failed"
     );
 
-    // THE OTHER HALF: the deferred spawn is replayed once the container is up.
+    // The deferred spawn is replayed once the container is up.
     assert!(
         wait_for_event_kind(
             &daemon,
@@ -1627,7 +1478,6 @@ async fn watcher_advance_mid_prep_never_spawns_and_is_replayed() {
          otherwise wedge for ever: {run}"
     );
 
-    // And it entered the container, not the host.
     let t = log_text(&log);
     assert!(
         t.contains("exec") && t.contains(&format!("pdo-sbx-{run_id}")),
@@ -1635,11 +1485,8 @@ async fn watcher_advance_mid_prep_never_spawns_and_is_replayed() {
     );
 }
 
-// -- Test 12: the manager preamble carries the URL of the side it runs on (#447)
-
-/// The manager's runtime preamble as written to disk by `tmux_session_manager::spawn`
-/// (`<worktree>/.pdo/prompts/__manager__-iter-0.md`). Written *before* tmux is
-/// invoked, so it exists whether or not the harmless tail actually started.
+/// The manager's runtime preamble, written by `tmux_session_manager::spawn` *before* tmux is
+/// invoked — so it exists whether or not the harmless tail actually started.
 fn manager_preamble_path(daemon: &TestDaemon, run_id: &str) -> PathBuf {
     daemon
         .repo_root()
@@ -1658,16 +1505,12 @@ async fn read_manager_preamble(daemon: &TestDaemon, run_id: &str) -> String {
     std::fs::read_to_string(&path).unwrap()
 }
 
-/// #447: a sandboxed manager execs into the Run's container, where `localhost` is
-/// the container — so the `curl` lines of its own preamble must name the host
-/// gateway. Before the fix the text said `localhost:<port>`, the manager obeyed it,
-/// got connection-refused on every call, and reported "the daemon is down" on a
-/// perfectly healthy daemon — losing its whole command surface (starting with the
-/// `rename_run` its preamble demands as a first action).
+/// A sandboxed manager execs into the Run's container, where `localhost` is the container —
+/// so the `curl` lines of its own preamble must name the host gateway, or every call gets
+/// connection-refused and the manager reports "the daemon is down" on a healthy daemon.
 ///
-/// The assertion that matters is the ABSENCE of `localhost:<port>`: a preamble that
-/// merely *mentions* the gateway somewhere while still printing host-only `curl`
-/// commands reproduces the bug exactly.
+/// The assertion that matters is the ABSENCE of `localhost:<port>`: a preamble that merely
+/// *mentions* the gateway while still printing host-only `curl` commands reproduces the bug.
 #[tokio::test]
 async fn sandboxed_manager_preamble_uses_the_container_side_url() {
     ensure_pdo_on_path();
@@ -1678,7 +1521,6 @@ async fn sandboxed_manager_preamble_uses_the_container_side_url() {
             .unwrap();
 
     let run_id = start_run(&daemon, Some("minimal")).await;
-    // The manager is spawned by the prep task, right after `sandbox_prep_ready`.
     wait_node_status(&daemon, &run_id, "running").await;
 
     let port = daemon.addr.port();
@@ -1696,7 +1538,7 @@ async fn sandboxed_manager_preamble_uses_the_container_side_url() {
          to the container itself, so every command fails and the manager concludes \
          the daemon is dead:\n{preamble}"
     );
-    // The command endpoint specifically: this is the surface the bug removed.
+    // The command endpoint is the surface the bug removed.
     assert!(
         preamble.contains(&format!(
             "POST http://host.docker.internal:{port}/runs/{run_id}/commands"
@@ -1705,8 +1547,8 @@ async fn sandboxed_manager_preamble_uses_the_container_side_url() {
     );
 }
 
-/// Non-regression twin: an `off` Run's manager runs on the host, so its preamble
-/// must stay exactly as it was — `localhost`, and no gateway hostname anywhere.
+/// An `off` Run's manager runs on the host, so its preamble must stay `localhost` with no
+/// gateway hostname anywhere.
 #[tokio::test]
 async fn off_run_manager_preamble_stays_on_localhost() {
     ensure_pdo_on_path();
@@ -1728,7 +1570,6 @@ async fn off_run_manager_preamble_stays_on_localhost() {
         !preamble.contains("host.docker.internal"),
         "the host path must never be handed the container-only hostname:\n{preamble}"
     );
-    // And the `off` parcours still never touches docker.
     assert_eq!(
         log_text(&log),
         "",
@@ -1736,11 +1577,8 @@ async fn off_run_manager_preamble_stays_on_localhost() {
     );
 }
 
-// -- Test 13: the host uid gets a named identity inside the container (#414) ---
-
-/// The `argv.log` window of the identity `docker exec` (#414). The `0:0` line is its
-/// UNIQUE witness: every other invocation of the fake docker either carries no `--user`
-/// at all or carries the host `<uid>:<gid>`, never root.
+/// The `argv.log` window of the identity `docker exec`. The `0:0` line is its UNIQUE witness:
+/// every other invocation carries no `--user` at all, or the host `<uid>:<gid>`, never root.
 fn identity_exec_argv(log: &Path) -> Option<Vec<String>> {
     let content = log_text(log);
     let lines: Vec<String> = content.lines().map(str::to_string).collect();
@@ -1749,28 +1587,24 @@ fn identity_exec_argv(log: &Path) -> Option<Vec<String>> {
     Some(lines[at..(at + 7).min(lines.len())].to_vec())
 }
 
-/// #414: a container runs as `--user <uid>:<gid>` NUMERIC, and `ubuntu:24.04` only knows
-/// uid 1000. On any other host uid, `sudo` calls `getpwuid()` before applying NOPASSWD and
-/// gives up ("you do not exist in the passwd database") — the agent loses `apt install`,
-/// which is the entire reason the image ships `sudo`. So the prep runs one
-/// `docker exec --user 0:0` right after the `start` that APPENDS the missing lines to the
-/// image's REAL `/etc/passwd` and `/etc/group`, behind a `getent` guard.
+/// A container runs as `--user <uid>:<gid>` NUMERIC, and `ubuntu:24.04` only knows uid 1000.
+/// On any other host uid, `sudo` calls `getpwuid()` before applying NOPASSWD and gives up
+/// ("you do not exist in the passwd database"), costing the agent `apt install`. Hence one
+/// `docker exec --user 0:0` right after the `start`, appending the missing lines to the
+/// image's REAL `/etc/passwd` and `/etc/group` behind a `getent` guard.
 ///
-/// The daemon here runs under the live host uid, so this asserts the SHAPE, never a uid
-/// value: the argv, the guard, the two appends, the `*` password field, and the home field
-/// — which must be the harness's `sandbox_home_override`, i.e. the very path the create
-/// posed as `-e HOME=`. `getent`, `~` and the environment naming three different
-/// directories is precisely the class of bug this pins.
+/// The daemon runs under the live host uid, so this asserts the SHAPE, never a uid value.
+/// The home field must be the very path the create posed as `-e HOME=`: `getent`, `~` and
+/// the environment naming three different directories is the class of bug this pins.
 ///
-/// Includes its own negative control (an `off` Run adds no such exec), stronger than
-/// re-reading `off_run_never_invokes_docker`: it proves the injection is gated by the mode
-/// on a daemon that HAS just performed one.
+/// The negative control is stronger than re-reading `off_run_never_invokes_docker`: it
+/// proves the injection is gated by the mode on a daemon that HAS just performed one.
 #[tokio::test]
 async fn sandbox_prep_identifies_the_host_uid_in_the_container() {
     ensure_pdo_on_path();
     let (_fake_dir, docker, log) = write_fake_docker();
-    // A body that writes its declared output on the host, so the `off` half of this test
-    // (the negative control) completes for real instead of failing output validation.
+    // Writes its declared output on the host, so the negative control completes for real
+    // instead of failing output validation.
     let daemon = TestDaemon::spawn_with_docker_override(
         seed(
             "#!/usr/bin/env bash\nset -euo pipefail\n\
@@ -1789,8 +1623,8 @@ async fn sandbox_prep_identifies_the_host_uid_in_the_container() {
     );
     let argv = identity_exec_argv(&log).unwrap();
 
-    // (a) The argv: root, this Run's container, `sh -c <script>`. No `-e` (a session
-    // marker here would make the first targeted kill take this exec down too), no tty.
+    // No `-e`: a session marker here would make the first targeted kill take this exec
+    // down too.
     assert_eq!(
         &argv[..6],
         &[
@@ -1805,7 +1639,6 @@ async fn sandbox_prep_identifies_the_host_uid_in_the_container() {
         log_text(&log)
     );
 
-    // (b) The script: guarded, appending, `*` in the password field.
     let script = &argv[6];
     for needle in [
         "getent passwd ",
@@ -1819,15 +1652,14 @@ async fn sandbox_prep_identifies_the_host_uid_in_the_container() {
             "the identity script must contain `{needle}`: {script}"
         );
     }
-    // The home field IS the `-e HOME=` of the create (the harness collocates
-    // host_home == repo_root via `sandbox_home_override`).
+    // The home field IS the `-e HOME=` of the create.
     let home = daemon.repo_root().display().to_string();
     assert!(
         script.contains(&format!("PDO sandbox:{home}:/bin/bash")),
         "the injected home must be the container's `$HOME` ({home}): {script}"
     );
 
-    // (c) It runs AFTER the start — an exec into a container that is not up yet fails.
+    // Must run AFTER the start: an exec into a container that is not up yet fails.
     let content = log_text(&log);
     let lines: Vec<&str> = content.lines().collect();
     let start_at = lines
@@ -1843,7 +1675,7 @@ async fn sandbox_prep_identifies_the_host_uid_in_the_container() {
         "the identity exec must follow `docker start`; log:\n{content}"
     );
 
-    // (d) Negative control on the SAME daemon: an `off` Run adds no identity exec.
+    // Negative control on the SAME daemon.
     let identity_execs = |log: &Path| log_text(log).lines().filter(|l| *l == "0:0").count();
     let before = identity_execs(&log);
     let off_id = start_run(&daemon, None).await;
@@ -1857,18 +1689,17 @@ async fn sandbox_prep_identifies_the_host_uid_in_the_container() {
     );
 }
 
-/// #489 / ADR-0037 — `restart_node` mid-prep is a `409`, raised **before** the kill.
+/// ADR-0037 — `restart_node` mid-prep is a `409`, raised **before** the kill.
 ///
-/// The `sandbox_spawn_block` precondition (#445) used to be discovered only inside
-/// `spawn_node`, i.e. after the arm had already killed the tmux session and appended
-/// its `CommandIssued` — and the caller was then told `200 {"ok":true}` because the
-/// `SpawnOutcome::Deferred` was thrown away. The predicate is pure, so #489 evaluates
-/// it at the head of the arm: no session dies for a container that is still building.
+/// The `sandbox_spawn_block` precondition used to be discovered only inside `spawn_node`,
+/// i.e. after the arm had already killed the tmux session and appended its `CommandIssued`,
+/// and the caller was then told `200 {"ok":true}` because the `SpawnOutcome::Deferred` was
+/// thrown away. The predicate is pure, so it is evaluated at the head of the arm: no session
+/// dies for a container that is still building.
 #[tokio::test]
 async fn restart_node_mid_prep_is_refused_before_anything_is_touched() {
     ensure_pdo_on_path();
-    // 6s: comfortably longer than the round trips below, so the restart provably
-    // lands inside the prep window.
+    // Longer than the round trips below, so the restart provably lands inside the window.
     let (_fake_dir, docker, _log) = write_slow_create_docker(6);
     let daemon =
         TestDaemon::spawn_with_docker_override(seed("#!/usr/bin/env bash\ntrue\n"), docker)
@@ -1907,10 +1738,9 @@ async fn restart_node_mid_prep_is_refused_before_anything_is_touched() {
     assert_eq!(status, 409, "{body}");
     assert_eq!(body["error"], "sandbox_prep_not_ready", "{body}");
     assert_eq!(body["recoverable"], true, "{body}");
-    // THE point: the probe runs ahead of the kill, so nothing was destroyed.
+    // The probe runs ahead of the kill, so nothing was destroyed.
     assert_eq!(body["session_killed"], false, "{body}");
 
-    // …and nothing was written either.
     let after = run_events(&daemon, &run_id).await;
     assert!(
         !after

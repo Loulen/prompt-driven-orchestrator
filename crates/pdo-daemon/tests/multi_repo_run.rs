@@ -1,10 +1,5 @@
-//! Layer 3a — proves issue #114: multi-repo run creation with target_repo and
-//! source_branch selection. Validates:
-//! - POST /runs accepts and validates target_repo (rejects non-git dirs)
-//! - POST /runs accepts and validates source_branch (rejects missing branches)
-//! - create_worktree branches from the selected source_branch
-//! - Run artifacts live under <target_repo>/.pdo/runs/<run-id>/
-//! - GET /repos/branches returns branches for a given repo path
+//! Layer 3a — multi-repo run creation: `target_repo` / `source_branch` selection
+//! (#114) and mid-run edits of the secondary list (#465).
 
 use std::process::Command;
 
@@ -132,8 +127,6 @@ fn seed_daemon_repo(repo: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-// --- #465 slice 2 helpers: mid-run repo-list edit -----------------------------
-
 /// Create a mono-repo Run against the daemon's own repo and return its id. The Run
 /// is `running` the moment `POST /runs` returns (RunStarted is appended before the
 /// response), so a `PATCH …/repos` right after edits a LIVE Run.
@@ -196,8 +189,6 @@ fn registered_worktree_count(secondary: &std::path::Path) -> usize {
         .matches("worktree ")
         .count()
 }
-
-// --- Tests ---
 
 #[tokio::test]
 async fn create_run_rejects_nonexistent_target_repo() {
@@ -341,14 +332,12 @@ async fn create_run_with_valid_target_repo_and_source_branch() {
     let json: serde_json::Value = resp.json().await.unwrap();
     let run_id = json["run_id"].as_str().unwrap();
 
-    // Artifacts should be under <target_repo>/.pdo/runs/<run-id>/
     let run_dir = target_repo.path().join(".pdo").join("runs").join(run_id);
     assert!(run_dir.exists(), "run dir must exist under target_repo");
 
     let worktree_dir = run_dir.join("worktree");
     assert!(worktree_dir.exists(), "worktree must exist");
 
-    // Verify worktree was branched from feature-branch, not HEAD
     let output = Command::new("git")
         .args(["log", "--oneline", "-1"])
         .current_dir(&worktree_dir)
@@ -356,7 +345,6 @@ async fn create_run_with_valid_target_repo_and_source_branch() {
         .unwrap();
     assert!(output.status.success());
 
-    // The run state should include target_repo and source_branch
     let run_resp = reqwest::get(format!("{}/runs/{}", daemon.url(), run_id))
         .await
         .unwrap();
@@ -410,7 +398,6 @@ async fn create_run_without_target_repo_is_refused() {
         "the error must name the field: {json:?}"
     );
 
-    // Nothing was created: no Run in the list...
     let runs: Vec<serde_json::Value> = reqwest::get(format!("{}/runs", daemon.url()))
         .await
         .unwrap()
@@ -422,7 +409,6 @@ async fn create_run_without_target_repo_is_refused() {
         "no Run may be created on refusal: {runs:?}"
     );
 
-    // ...and — the incident itself — no worktree scaffolding under the daemon root.
     // The `.pdo/runs` directory itself exists from boot (the pipeline watcher
     // creates it to watch run-scoped edits), so what must be empty is its contents.
     let runs_dir = daemon.repo_root().join(".pdo").join("runs");
@@ -491,7 +477,6 @@ async fn list_branches_endpoint_returns_remote_branches_with_kind() {
             .map(|b| b["kind"].as_str().unwrap_or_default().to_string())
     };
 
-    // Locals surface as local; the remote-only branch surfaces as remote.
     assert_eq!(kind_of("main").as_deref(), Some("local"), "{branches:?}");
     assert_eq!(
         kind_of("local-branch").as_deref(),
@@ -504,7 +489,6 @@ async fn list_branches_endpoint_returns_remote_branches_with_kind() {
         "{branches:?}"
     );
 
-    // origin/main (twin of local main) is deduped; the symref never appears.
     assert!(
         kind_of("origin/main").is_none(),
         "dedup failed: {branches:?}"
@@ -518,7 +502,6 @@ async fn list_branches_endpoint_returns_remote_branches_with_kind() {
         "bare origin leaked: {branches:?}"
     );
 
-    // Every local precedes every remote.
     let first_remote = branches
         .iter()
         .position(|b| b["kind"].as_str() == Some("remote"));
@@ -565,7 +548,6 @@ async fn create_run_from_a_remote_only_branch_creates_the_worktree() {
         .unwrap()
         .to_string();
 
-    // The worktree was cut from origin/feature-remote-only: its tip is that ref's tip.
     let worktree = work
         .path()
         .join(".pdo")
@@ -589,7 +571,6 @@ async fn create_run_from_a_remote_only_branch_creates_the_worktree() {
         "worktree HEAD must equal the remote-tracking ref's tip"
     );
 
-    // NO local branch `feature-remote-only` was materialised in the target repo.
     let local = Command::new("git")
         .args(["branch", "--list", "feature-remote-only"])
         .current_dir(work.path())
@@ -600,7 +581,6 @@ async fn create_run_from_a_remote_only_branch_creates_the_worktree() {
         "no local branch may be created from a remote-only source"
     );
 
-    // The source_branch is stored verbatim, prefix and all.
     let run_state: serde_json::Value = reqwest::get(format!("{}/runs/{}", daemon.url(), run_id))
         .await
         .unwrap()
@@ -701,8 +681,6 @@ async fn validate_repo_endpoint_rejects_non_git() {
     assert!(json["error"].as_str().is_some());
 }
 
-// --- #465 slice 2: mid-run edit of the secondary list -------------------------
-
 /// A live mono-repo Run grows a secondary: the pin projects, the snapshot is on disk
 /// at the frozen SHA with a detached HEAD, and the secondary repo registers it.
 #[tokio::test]
@@ -738,7 +716,6 @@ async fn edit_add_secondary_mid_run() {
         "the snapshot dir must be materialised on disk"
     );
 
-    // Detached HEAD, pinned at the frozen SHA.
     let head = Command::new("git")
         .args(["rev-parse", "HEAD"])
         .current_dir(&snap)
@@ -746,7 +723,6 @@ async fn edit_add_secondary_mid_run() {
         .unwrap();
     assert_eq!(String::from_utf8_lossy(&head.stdout).trim(), sha);
 
-    // The secondary now has two registered worktrees (itself + the detached snapshot).
     assert_eq!(
         registered_worktree_count(secondary.path()),
         2,
@@ -794,7 +770,6 @@ async fn edit_add_secondary_carries_read_only_flag() {
     let repos = state["target_repos"].as_array().unwrap();
     assert_eq!(repos.len(), 2, "both pins must project");
 
-    // The read-only pin carries the flag; the default one omits it (writable).
     let ro_pin = repos
         .iter()
         .find(|p| p["repo"] == serde_json::json!(ro.path().to_str().unwrap()))
@@ -895,7 +870,6 @@ async fn edit_rejects_primary_and_duplicate() {
     let daemon = TestDaemon::spawn(seed_daemon_repo).await.unwrap();
     let run_id = create_mono_run(&daemon).await;
 
-    // Adding the primary as its own secondary → 400.
     let self_ref = patch_repos(
         &daemon,
         &run_id,
@@ -906,7 +880,6 @@ async fn edit_rejects_primary_and_duplicate() {
     let body: serde_json::Value = self_ref.json().await.unwrap();
     assert_eq!(body["error"], "secondary_is_primary");
 
-    // Adding the same secondary that is already pinned → 409.
     let secondary = tempfile::tempdir().unwrap();
     make_secondary_repo(secondary.path());
     let path = secondary.path().to_str().unwrap();
@@ -951,7 +924,6 @@ async fn edit_bad_branch_leaves_no_trace() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["error"], "bad_secondary_repo");
 
-    // No snapshot was materialised, and the projection is still mono-repo.
     let repos_dir = daemon
         .repo_root()
         .join(".pdo")
@@ -1135,7 +1107,6 @@ async fn cleanup_removes_all_snapshots_disk_scan() {
     .await;
     assert_eq!(drop.status(), 200);
 
-    // Both secondaries currently register their snapshot.
     assert_eq!(registered_worktree_count(active.path()), 2);
     assert_eq!(registered_worktree_count(removed.path()), 2);
 

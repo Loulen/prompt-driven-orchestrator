@@ -1,14 +1,12 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-// Mock ResizeObserver
 globalThis.ResizeObserver = class {
   observe() {}
   unobserve() {}
   disconnect() {}
 };
 
-// Track WebSocket instances for assertions
 const wsInstances: MockWebSocket[] = [];
 
 class MockWebSocket {
@@ -200,7 +198,6 @@ describe("TmuxTerminal", () => {
 
   it("sends resize message on WebSocket open", async () => {
     render(<TmuxTerminal session="pdo-run1-impl-iter-1" />);
-    // Wait for async open event
     await new Promise((r) => setTimeout(r, 10));
 
     const ws = wsInstances[0];

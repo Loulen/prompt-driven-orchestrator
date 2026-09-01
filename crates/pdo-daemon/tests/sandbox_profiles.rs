@@ -1,51 +1,10 @@
-//! Layer 3a — staging profiles (#432, slice K of PRD #403; ADR-0031 §2-§7).
+//! Layer 3a — staging profiles (ADR-0031 §2-§8).
 //!
 //! Same harness as `sandbox_tracer`: a **real daemon**, a **fake `docker`** (via
 //! `docker_cmd_override`) and a tempdir-scoped sandbox home (via
 //! `sandbox_home_override`, which moves the `.claude` SOURCE, the staging ROOT *and* the
 //! container's `HOME` in one go). No test needs Docker, touches the real `$HOME`, or
 //! launches real claude.
-//!
-//! What is pinned here, one acceptance criterion per test:
-//!  1. a profile with `.claude/plugins` unchecked, assigned to a **Trigger**, stages
-//!     without `plugins/` (AC1);
-//!  2. `.gitconfig` as an extra is **copied** into `<staging>/home/` and bind-mounted at
-//!     `$HOME/.gitconfig` (AC2), and the host file is never a mount SOURCE (AC3);
-//!  3. an entry under `.claude/` produces **no** extra `-v` (AC4);
-//!  4. an absolute / `..` / floor-owned / glob entry is a **400 at write** (AC5);
-//!  5. editing a profile after a Run started does not change its staging, and a boot
-//!     recovery replays the **frozen** list identically (AC6);
-//!  6. an unknown profile fails hard at create, at a Trigger fire, and at boot recovery —
-//!     never silently `off` or on another profile (AC7);
-//!  7. unedited `full`/`minimal` have **no row**; editing materialises a **diff**, so a
-//!     default enriched by a later version stays visible (AC8);
-//!  8. unchecking `.claude/settings.json` still starts (the floor re-synthesises it, AC9);
-//!  9. deleting a referenced profile can list its referents first (AC10).
-//!
-//! ## #468 — per-profile environment
-//!
-//! Four more, at the bottom of the file:
-//!  10. a profile's `env` lands as `-e KEY=value` at `docker create`, and a profile
-//!      **without** env poses nothing extra (the negative control is mandatory: asserting
-//!      only the positive half would pass against a fake that echoed its own argv);
-//!  11. a PUT naming `HOME` / `PDO_DAEMON_URL` / `PDO_RUN_ID` is a **400 naming the key**;
-//!  12. editing the env of a **multi-node** Run in flight changes nothing for its NEXT
-//!      node — a single-node Run would prove nothing, since the container is created once;
-//!  13. an unreadable frozen `sandbox_env` is a hard `RunFailed`, never a silent "no env".
-//!
-//! ## #467 — per-profile image source
-//!
-//! Five more, at the very bottom:
-//!  14. two profiles, one on a Dockerfile and one on an explicit registry ref, put two
-//!      concurrent Runs in **two different images** — the layer-3 stand-in for
-//!      `docker inspect --format '{{.Config.Image}}'` being the image arg of `docker create`;
-//!  15. a profile that poses **nothing** keeps the content-addressed tag and grows the payload by
-//!      not one key (AC4's layer-3 half; the byte-identical argv is pinned in `sandbox_run`);
-//!  16. an unreachable explicit ref fails the Run with a reason **naming the ref**, and launches
-//!      **no `docker build`** (AC3);
-//!  17. editing a **multi-node** Run's profile image changes nothing for its next node (AC2);
-//!  18. the write-time refusals: a relative path, a path that does not exist, an unknown `kind`,
-//!      a ref starting with `-`.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -57,8 +16,6 @@ use tempfile::TempDir;
 
 const NODE_ID: &str = "notify";
 
-/// `start → notify(script, output `out`) → end` — same shape as the tracer's, so
-/// completing `notify` drives the whole run terminal.
 const PIPELINE_YAML: &str = r#"name: sbx-cycle
 version: "1.0"
 nodes:
@@ -105,9 +62,8 @@ fn git_init_with_commit(repo: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `start → notify → notify2 → end` (#468). A SECOND node is what makes "editing the env
-/// mid-Run does not change the next node" a real assertion: with one node the container is
-/// created once and nothing could have changed anyway.
+/// A SECOND node is what makes "editing the env mid-Run does not change the next node" a real
+/// assertion: with one node the container is created once and nothing could have changed anyway.
 const PIPELINE_TWO_NODES_YAML: &str = r#"name: sbx-two
 version: "1.0"
 nodes:
@@ -144,7 +100,6 @@ const PIPELINE_NAME: &str = "sbx-cycle";
 const TWO_NODE_PIPELINE_NAME: &str = "sbx-two";
 const NODE_ID_2: &str = "notify2";
 
-/// Write one pipeline yaml + a trivial prompt per script node.
 fn write_pipeline(repo: &Path, name: &str, yaml: &str, nodes: &[&str]) -> anyhow::Result<()> {
     let pipelines_dir = repo.join(".pdo").join("pipelines");
     std::fs::create_dir_all(&pipelines_dir)?;
@@ -168,7 +123,6 @@ fn seed() -> impl FnOnce(&Path) -> anyhow::Result<()> {
     }
 }
 
-/// Both pipelines, so a test can pick the two-node one without a second harness (#468).
 fn seed_with_two_node_pipeline() -> impl FnOnce(&Path) -> anyhow::Result<()> {
     move |repo: &Path| {
         write_pipeline(repo, PIPELINE_NAME, PIPELINE_YAML, &[NODE_ID])?;
@@ -183,9 +137,8 @@ fn seed_with_two_node_pipeline() -> impl FnOnce(&Path) -> anyhow::Result<()> {
     }
 }
 
-/// Fake `docker`: logs argv, `image inspect` → present, `container inspect` → ABSENT
-/// (so `ensure_running` does `create` + `start`, which is what makes the mount queue
-/// observable), everything else exit 0.
+/// Fake `docker`. `container inspect` must report ABSENT, so `ensure_running` does
+/// `create` + `start` and the mount queue becomes observable.
 fn write_fake_docker() -> (TempDir, String, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let bin = dir.path().join("fake-docker");
@@ -206,9 +159,9 @@ fn write_fake_docker() -> (TempDir, String, PathBuf) {
     (dir, bin.to_str().unwrap().to_string(), log)
 }
 
-/// Like [`write_fake_docker`] but the image is **absent** and `pull` **fails** (#467) — the
-/// unreachable-ref case. `build` still exits 0, so "no build was launched" is a real signal: were
-/// a build attempted, it would SUCCEED and the Run would start.
+/// Like [`write_fake_docker`] but the image is **absent** and `pull` **fails**. `build` still
+/// exits 0, so "no build was launched" is a real signal: were a build attempted, it would
+/// SUCCEED and the Run would start.
 fn write_fake_docker_failing_pull() -> (TempDir, String, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let bin = dir.path().join("fake-docker");
@@ -234,7 +187,6 @@ fn log_text(log: &Path) -> String {
     std::fs::read_to_string(log).unwrap_or_default()
 }
 
-/// Every arg that follows `flag` in the fake-docker argv log.
 fn args_after(log: &Path, flag: &str) -> Vec<String> {
     let lines: Vec<String> = log_text(log).lines().map(str::to_string).collect();
     let mut specs = Vec::new();
@@ -249,32 +201,29 @@ fn args_after(log: &Path, flag: &str) -> Vec<String> {
     specs
 }
 
-/// Every `-v` mount spec in the fake-docker argv log.
 fn mount_specs(log: &Path) -> Vec<String> {
     args_after(log, "-v")
 }
 
-/// Every `-e KEY=VALUE` in the fake-docker argv log (#468) — the layer-3 stand-in for
+/// Every `-e KEY=VALUE` in the argv log — the layer-3 stand-in for
 /// `docker inspect --format '{{.Config.Env}}'`, which needs a real daemon.
 ///
-/// Covers `create` AND every `exec`: that is deliberate, because "the profile env must not
-/// leak into the per-node `docker exec`" is as much a property as "it must reach the
-/// create". Tests that care about one or the other filter on the key.
+/// Covers `create` AND every `exec` on purpose: "the profile env must not leak into the
+/// per-node `docker exec`" is as much a property as "it must reach the create". Tests that
+/// care about one or the other filter on the key.
 fn env_specs(log: &Path) -> Vec<String> {
     args_after(log, "-e")
 }
 
-/// How many `docker create` invocations the fake logged.
 fn create_count(log: &Path) -> usize {
     log_text(log).lines().filter(|l| *l == "create").count()
 }
 
-/// The image ref of every `docker create` in the log (#467) — the layer-3 stand-in for
+/// The image ref of every `docker create` — the layer-3 stand-in for
 /// `docker inspect --format '{{.Config.Image}}'`, which needs a real daemon.
 ///
-/// Keyed on the argv shape `create … <image> sleep infinity`: the image is the arg right before
-/// `sleep`. That is not a coincidence to be defended in a comment — Docker *forces* it (after the
-/// image, everything is the command), and `sandbox_container`'s golden test pins it.
+/// Keyed on `create … <image> sleep infinity`: Docker forces the image to be the last arg
+/// before the command.
 fn create_images(log: &Path) -> Vec<String> {
     let lines: Vec<String> = log_text(log).lines().map(str::to_string).collect();
     lines
@@ -285,10 +234,8 @@ fn create_images(log: &Path) -> Vec<String> {
         .collect()
 }
 
-/// A realistic host `$HOME`: a `~/.claude` with the allowlist content, plus the two
-/// **`$HOME` exception** fixtures this slice exists for — `~/.gitconfig` (the identity a
-/// committing agent needs) and `~/.config/gh` (a multi-segment DIRECTORY entry, which is
-/// the case that proves the `.config` parent is not created root-owned).
+/// A realistic host `$HOME`. `~/.config/gh` is deliberately multi-segment and a DIRECTORY:
+/// it is the case that proves the `.config` parent is not created root-owned.
 fn fabricate_host_home(home: &Path) {
     let claude = home.join(".claude");
     let write = |p: PathBuf, c: &str| {
@@ -318,7 +265,6 @@ fn fabricate_host_home(home: &Path) {
         home.join(".claude.json"),
         r#"{"host":"profile","oauthAccount":{"x":1}}"#,
     );
-    // -- the `$HOME` exception fixtures (#432) --
     write(home.join(".gitconfig"), HOST_GITCONFIG);
     write(
         home.join(".config/gh/hosts.yml"),
@@ -336,7 +282,6 @@ fn staged_home(daemon: &TestDaemon, run_id: &str) -> PathBuf {
     staging_root(daemon, run_id).join("claude-home")
 }
 
-/// `<staging>/home` — the `$HOME`-exception copies.
 fn staged_extras(daemon: &TestDaemon, run_id: &str) -> PathBuf {
     staging_root(daemon, run_id).join("home")
 }
@@ -392,8 +337,7 @@ async fn wait_run_status(daemon: &TestDaemon, run_id: &str, expected: &str) -> s
     last
 }
 
-/// #431 trap, worth restating: a Run's failure `reason` lives on `GET /runs/<id>/events`,
-/// NOT on `GET /runs/<id>`.
+/// A Run's failure `reason` lives on `GET /runs/<id>/events`, NOT on `GET /runs/<id>`.
 async fn run_events(daemon: &TestDaemon, run_id: &str) -> Vec<serde_json::Value> {
     reqwest::get(format!("{}/runs/{run_id}/events", daemon.url()))
         .await
@@ -428,7 +372,6 @@ async fn post_run_of(
     pipeline: &str,
     sandbox: Option<&str>,
 ) -> reqwest::Response {
-    // #470: the target repo is required at the create boundary (ADR-0033).
     let mut body = serde_json::json!({
         "pipeline": pipeline,
         "input": "hello",
@@ -458,7 +401,6 @@ async fn start_run_of(daemon: &TestDaemon, pipeline: &str, sandbox: Option<&str>
         .to_string()
 }
 
-/// `PUT /settings/sandbox-profiles/<name>` with an explicit diff.
 async fn put_profile(
     daemon: &TestDaemon,
     name: &str,
@@ -468,8 +410,7 @@ async fn put_profile(
     put_profile_full(daemon, name, disabled, extras, &[]).await
 }
 
-/// Like [`put_profile`] but with an `env` map too (#468). The body is a FULL replacement,
-/// so an empty slice here really does mean "no environment".
+/// The body is a FULL replacement, so an empty `env` slice really does mean "no environment".
 async fn put_profile_full(
     daemon: &TestDaemon,
     name: &str,
@@ -493,9 +434,6 @@ async fn put_profile_full(
     .await
 }
 
-/// `PUT /settings/sandbox-profiles/<name>` with a hand-written body — the seam the #467 tests
-/// need, since `image` is a tagged object rather than a flat list and a malformed one is half the
-/// point.
 async fn put_profile_body(
     daemon: &TestDaemon,
     name: &str,
@@ -509,7 +447,6 @@ async fn put_profile_body(
         .unwrap()
 }
 
-/// `PUT` a profile whose only interesting field is its image source (#467).
 async fn put_profile_image(
     daemon: &TestDaemon,
     name: &str,
@@ -523,10 +460,9 @@ async fn put_profile_image(
     .await
 }
 
-/// A self-contained Dockerfile VARIANT on disk, whose filename drives the image NAME (#466) and
-/// whose bytes drive the tag. Returns `(path, expected local ref)` — the expected ref is computed
-/// the way the daemon computes it, in the one place a test may duplicate it: `sha256[..12]` of the
-/// exact bytes, which is also the CI-canonical form (`sha256sum | cut -c1-12`).
+/// A Dockerfile VARIANT on disk: its filename drives the image NAME, its bytes the tag.
+/// Returns `(path, expected local ref)`; the ref duplicates the daemon's formula
+/// (`sha256[..12]` of the exact bytes) on purpose — this is the one place allowed to.
 fn write_variant_dockerfile(dir: &Path, variant: &str, marker: &str) -> (PathBuf, String) {
     let path = dir.join(format!("Dockerfile.{variant}"));
     let bytes = format!("FROM ubuntu:24.04\nRUN echo {marker}\n");
@@ -561,10 +497,11 @@ async fn put_default_sandbox(daemon: &TestDaemon, value: &str) -> reqwest::Respo
 }
 
 /// Create a Trigger with a `sandbox` value, due far in the future (the test forces it).
+///
+/// A Trigger is a Run template, so it needs its own target repo (ADR-0033).
 async fn create_trigger(daemon: &TestDaemon, name: &str, sandbox: &str) -> reqwest::Response {
     reqwest::Client::new()
         .post(format!("{}/triggers", daemon.url()))
-        // #470: a Trigger is a Run template — no target repo, no Trigger (ADR-0033).
         .json(&serde_json::json!({
             "name": name,
             "pipeline_id": "sbx-cycle",
@@ -648,12 +585,8 @@ async fn wait_node_status_for(
     last
 }
 
-// -- AC1: a profile with plugins unchecked, on a Trigger -----------------------
-
-/// The headline acceptance criterion. `full-sans-plugins` (diff
-/// `disabled: [".claude/plugins"]`) is assigned to a **Trigger**; firing it stages
-/// everything else and NOT `plugins/` — an order of magnitude less on disk, since
-/// `plugins/*/node_modules` is the measured cost centre.
+/// A diff of `disabled: [".claude/plugins"]`, assigned to a **Trigger**; firing it stages
+/// everything else and NOT `plugins/`.
 #[tokio::test]
 async fn a_profile_with_plugins_unchecked_stages_without_them_through_a_trigger() {
     ensure_pdo_on_path();
@@ -685,7 +618,6 @@ async fn a_profile_with_plugins_unchecked_stages_without_them_through_a_trigger(
     daemon.force_trigger_due(&trigger_id).await;
     daemon.run_trigger_tick().await;
 
-    // The fired Run is the only one; find it through the fire history.
     let fires = fire_history(&daemon, &trigger_id).await;
     let run_id = fires
         .iter()
@@ -698,7 +630,7 @@ async fn a_profile_with_plugins_unchecked_stages_without_them_through_a_trigger(
         run["sandbox"], "full-sans-plugins",
         "the Run must carry the profile NAME: {run}"
     );
-    // The frozen list is on the Run too — that is what makes an edit non-retroactive.
+    // The frozen list is what makes a later edit non-retroactive.
     let frozen: Vec<String> = run["sandbox_entries"]
         .as_array()
         .unwrap_or_else(|| panic!("the Run must freeze its entry list: {run}"))
@@ -718,22 +650,18 @@ async fn a_profile_with_plugins_unchecked_stages_without_them_through_a_trigger(
         !home.join("plugins").exists(),
         "the unchecked entry must NOT be staged"
     );
-    // Everything else still is — the diff removed one line, not the profile.
+    // The diff removed one line, not the profile.
     assert!(home.join("skills/foo/skill.md").is_file());
     assert!(home.join("agents/a.md").is_file());
     assert!(home.join("CLAUDE.md").is_file());
 }
 
-// -- AC2 + AC3: the `$HOME` exception mounts ---------------------------------
-
-/// `.gitconfig` as an extra: the host file is **copied** into `<staging>/home/` and
-/// bind-mounted rw at `$HOME/.gitconfig`, so a `git commit` inside the container runs
-/// under the host identity. The negative half is what ADR-0031 §4 exists for: the host
-/// path is never a mount SOURCE, so no container write can reach it.
+/// The negative half is what ADR-0031 §4 exists for: the host path is never a mount SOURCE,
+/// so no container write can reach it.
 ///
-/// A multi-segment DIRECTORY entry (`.config/gh`) rides along, because it is the case
-/// where a missing source would have Docker create `<staging>/home/.config` root-owned
-/// and leave the staging permanently undeletable (mount rule M1).
+/// The multi-segment DIRECTORY entry (`.config/gh`) rides along because a missing source
+/// would have Docker create `<staging>/home/.config` root-owned, leaving the staging
+/// permanently undeletable (mount rule M1).
 #[tokio::test]
 async fn an_extra_is_copied_into_the_staging_and_mounted_never_bound_from_the_host() {
     ensure_pdo_on_path();
@@ -758,7 +686,6 @@ async fn an_extra_is_copied_into_the_staging_and_mounted_never_bound_from_the_ho
         log_text(&log)
     );
 
-    // (a) COPIED, not referenced: the content matches the host, at the staged path.
     let staged_git = staged_extras(&daemon, &run_id).join(".gitconfig");
     assert!(
         wait_until(|| staged_git.is_file()).await,
@@ -773,7 +700,7 @@ async fn an_extra_is_copied_into_the_staging_and_mounted_never_bound_from_the_ho
         .join(".config/gh/hosts.yml")
         .is_file());
 
-    // (b) MOUNTED rw at the container's `$HOME/<rel>` (host_home == repo_root here).
+    // host_home == repo_root in this harness.
     let specs = mount_specs(&log);
     let expect_git = format!(
         "{}:{}:rw",
@@ -794,10 +721,8 @@ async fn an_extra_is_copied_into_the_staging_and_mounted_never_bound_from_the_ho
         "the staged directory extra must be mounted too; specs={specs:?}"
     );
 
-    // (c) THE NEGATIVE, load-bearing: no mount SOURCE is a real host path. Compare the
-    // source SEGMENT, never `contains` — the mount TARGETS legitimately are host paths
-    // (`sandbox_home_override == repo_root` in this harness), so a substring check would
-    // false-positive on every single spec.
+    // Compare the source SEGMENT, never `contains`: the mount TARGETS legitimately are host
+    // paths here, so a substring check would false-positive on every single spec.
     for spec in &specs {
         let source = spec.split(':').next().unwrap_or(spec);
         for forbidden in [
@@ -814,11 +739,8 @@ async fn an_extra_is_copied_into_the_staging_and_mounted_never_bound_from_the_ho
         }
     }
 
-    // (d) And the host file is byte-identical after the Run — nothing wrote back.
-    // `docker create` appearing in the log only proves prep began; the node may still
-    // be `preparing` when we ask it to complete, which the transition guard rejects
-    // (409). Wait for `running` first, as every other completion in this file does —
-    // otherwise the done races prep and flakes under a loaded, parallel test run.
+    // Wait for `running` before completing: `docker create` in the log only proves prep
+    // began, and a `preparing` node rejects the done with a 409 under a loaded test run.
     wait_node_status(&daemon, &run_id, "running").await;
     write_node_output(&daemon, &run_id, "done\n");
     simulate_node_done(&daemon, &run_id).await;
@@ -830,17 +752,11 @@ async fn an_extra_is_copied_into_the_staging_and_mounted_never_bound_from_the_ho
     );
 }
 
-/// The positive half of "a container write lands in the staged copy": simulate the
-/// container writing THROUGH the mount (host path == staged path from the container's
-/// point of view) and assert the host original is still intact.
-///
-/// Proven on a **directory** entry, deliberately. `git config --global` — the operation
-/// the issue's AC3 named — cannot work here and it is NOT this slice's fault: `$HOME`
-/// does not exist inside the image (`ubuntu:24.04` ships `/home/ubuntu`, not
-/// `/home/<host user>`), so Docker creates it root-owned `0755` as the parent of the
-/// mounts, and `git config` needs a writable `$HOME` for its lock-file-then-rename. That
-/// is a pre-existing condition since #406, already true for `full` today; making `$HOME`
-/// writable touches the ADR-0030 §1 identity mounts and is a follow-up.
+/// Proven on a **directory** entry rather than via `git config --global`, which cannot work
+/// here: `$HOME` does not exist inside the image (`ubuntu:24.04` ships `/home/ubuntu`), so
+/// Docker creates it root-owned `0755` as the mounts' parent, and `git config` needs a
+/// writable `$HOME` for its lock-then-rename. Making `$HOME` writable touches the ADR-0030
+/// §1 identity mounts and is a follow-up.
 #[tokio::test]
 async fn a_write_under_a_staged_directory_entry_stays_in_the_staging() {
     ensure_pdo_on_path();
@@ -862,8 +778,7 @@ async fn a_write_under_a_staged_directory_entry_stays_in_the_staging() {
     let staged_gh = staged_extras(&daemon, &run_id).join(".config/gh");
     assert!(wait_until(|| staged_gh.join("hosts.yml").is_file()).await);
 
-    // The container refreshes its `gh` token: it writes into the mount, i.e. the staged
-    // copy. The mount is rw and carries the STAGED source's ownership, so this succeeds.
+    // Stand-in for the container refreshing its `gh` token through the rw mount.
     std::fs::write(
         staged_gh.join("hosts.yml"),
         "github.com:\n  user: refreshed\n",
@@ -877,12 +792,9 @@ async fn a_write_under_a_staged_directory_entry_stays_in_the_staging() {
     );
 }
 
-// -- AC4: an entry under `.claude/` produces no extra `-v` --------------------
-
-/// Not a special case — a consequence of the single `landing()` classifier. `.claude/…`
-/// is already served by the fixed `claude-home` mount, so it must add nothing to the
-/// queue; and with NO `$HOME`-exception entry the argv is byte-identical to #406, which
-/// is exactly the "accommodate, don't freeze" property the golden test pins in-crate.
+/// `.claude/…` is already served by the fixed `claude-home` mount, so it must add nothing to
+/// the queue; with NO `$HOME`-exception entry the argv stays byte-identical to the pre-profile
+/// one, which the in-crate golden test pins.
 #[tokio::test]
 async fn an_entry_under_claude_adds_no_mount() {
     ensure_pdo_on_path();
@@ -892,8 +804,7 @@ async fn an_entry_under_claude_adds_no_mount() {
         .unwrap();
     fabricate_host_home(daemon.repo_root());
 
-    // A profile whose only edit is under `.claude/` — plus a redundant extra ALSO under
-    // `.claude/`, so both the default and the extra paths are exercised.
+    // A redundant extra ALSO under `.claude/`, so both the default and extra paths run.
     assert_eq!(
         put_profile(
             &daemon,
@@ -919,8 +830,6 @@ async fn an_entry_under_claude_adds_no_mount() {
         "no `$HOME` exception ⇒ no <staging>/home at all"
     );
 }
-
-// -- AC5: entry validation at write time --------------------------------------
 
 #[tokio::test]
 async fn a_bad_entry_is_rejected_at_profile_write() {
@@ -954,12 +863,10 @@ async fn a_bad_entry_is_rejected_at_profile_write() {
         );
     }
 
-    // …and a path that simply does not exist under $HOME — an early UX gate, with the
-    // picker to hand (necessary, never sufficient: `prepare` warns-and-skips later).
+    // A nonexistent path is an early UX gate only: `prepare` warns-and-skips later.
     let resp = put_profile(&daemon, "probe", &[], &[".nope-not-here"]).await;
     assert_eq!(resp.status(), 400);
 
-    // Nothing was persisted by any of the refusals.
     let listed: serde_json::Value =
         reqwest::get(format!("{}/settings/sandbox-profiles", daemon.url()))
             .await
@@ -976,12 +883,12 @@ async fn a_bad_entry_is_rejected_at_profile_write() {
         "a rejected write must persist nothing: {listed}"
     );
 
-    // A contradictory diff is refused too: resolving it silently would freeze into
-    // `RunStarted` a winner the user never picked.
+    // A contradictory diff: resolving it silently would freeze into `RunStarted` a winner
+    // the user never picked.
     let resp = put_profile(&daemon, "probe", &[".claude/skills"], &[".claude/skills"]).await;
     assert_eq!(resp.status(), 400);
 
-    // A sensitive prefix, by contrast, is ALLOWED (ADR-0031 §3: warn, don't forbid).
+    // ADR-0031 §3: warn, don't forbid.
     std::fs::create_dir_all(daemon.repo_root().join(".ssh")).unwrap();
     std::fs::write(daemon.repo_root().join(".ssh/id_ed25519"), "key\n").unwrap();
     let resp = put_profile(&daemon, "risky", &[], &[".ssh"]).await;
@@ -997,12 +904,8 @@ async fn a_bad_entry_is_rejected_at_profile_write() {
     assert_eq!(ssh["sensitive"], serde_json::json!(true), "{view}");
 }
 
-// -- AC6: the freeze ----------------------------------------------------------
-
-/// Editing a profile after a Run has started must not change that Run's staging, and a
-/// daemon restart must replay the **frozen** list identically (ADR-0031 §6). Without the
-/// freeze, a restarted daemon would produce an incoherent home between two nodes of the
-/// same Run — with `plugins/` physically present despite being unchecked.
+/// ADR-0031 §6. Without the freeze, a restarted daemon would produce an incoherent home
+/// between two nodes of the same Run — `plugins/` physically present despite being unchecked.
 #[tokio::test]
 async fn editing_a_profile_does_not_change_a_running_runs_staging() {
     ensure_pdo_on_path();
@@ -1012,7 +915,6 @@ async fn editing_a_profile_does_not_change_a_running_runs_staging() {
         .unwrap();
     fabricate_host_home(daemon.repo_root());
 
-    // Start from a profile that DOES carry plugins.
     assert_eq!(put_profile(&daemon, "frozen", &[], &[]).await.status(), 200);
     let run_id = start_run(&daemon, Some("frozen")).await;
     wait_node_status(&daemon, &run_id, "running").await;
@@ -1027,7 +929,7 @@ async fn editing_a_profile_does_not_change_a_running_runs_staging() {
         .collect();
     assert!(frozen_before.iter().any(|e| e == ".claude/plugins"));
 
-    // Now uncheck plugins AND add an extra. The live Run must see neither.
+    // The live Run must see neither the uncheck nor the added extra.
     assert_eq!(
         put_profile(&daemon, "frozen", &[".claude/plugins"], &[".gitconfig"])
             .await
@@ -1035,9 +937,8 @@ async fn editing_a_profile_does_not_change_a_running_runs_staging() {
         200
     );
 
-    // Force a SECOND `ensure_ready` for the same Run through boot recovery. `prepare` is
-    // gated on the staging dir existing, so it does not re-run — and `extra_mounts` is
-    // derived from the FROZEN list, so no `.gitconfig` mount appears either.
+    // A SECOND `ensure_ready` for the same Run. `prepare` is gated on the staging dir
+    // existing so it does not re-run, and `extra_mounts` derives from the FROZEN list.
     daemon.run_boot_recovery_tick().await;
 
     let run = get_run(&daemon, &run_id).await;
@@ -1066,9 +967,8 @@ async fn editing_a_profile_does_not_change_a_running_runs_staging() {
     );
 }
 
-/// The other half of the freeze: a Run whose profile has been **deleted** since it
-/// started still replays, because the list — not the name — is what `prepare` consumes.
-/// Surviving that is the whole point.
+/// A Run whose profile was **deleted** still replays: the list, not the name, is what
+/// `prepare` consumes.
 #[tokio::test]
 async fn boot_recovery_replays_a_frozen_list_whose_profile_was_deleted() {
     ensure_pdo_on_path();
@@ -1113,8 +1013,6 @@ async fn boot_recovery_replays_a_frozen_list_whose_profile_was_deleted() {
     );
 }
 
-// -- AC7: an unknown profile fails hard, everywhere ---------------------------
-
 #[tokio::test]
 async fn an_unknown_profile_is_a_400_at_create() {
     ensure_pdo_on_path();
@@ -1133,7 +1031,6 @@ async fn an_unknown_profile_is_a_400_at_create() {
         "the error must name the profile: {body}"
     );
 
-    // Strictly nothing happened: no Run, no worktree, no docker call.
     let runs: serde_json::Value = reqwest::get(format!("{}/runs", daemon.url()))
         .await
         .unwrap()
@@ -1145,9 +1042,8 @@ async fn an_unknown_profile_is_a_400_at_create() {
     assert_eq!(log_text(&log), "", "docker must not be invoked");
 }
 
-/// A Trigger pointing at a vanished profile: the fire is **visibly** in error, and it
-/// produces no Run at all. Zero new code paid for this — `fire_one_trigger`'s existing
-/// `Err` arm turns the 400's message into the history line.
+/// A Trigger pointing at a vanished profile: the fire is **visibly** in error and produces no
+/// Run at all.
 #[tokio::test]
 async fn an_unknown_profile_makes_a_trigger_fire_visibly_fail() {
     ensure_pdo_on_path();
@@ -1157,8 +1053,8 @@ async fn an_unknown_profile_makes_a_trigger_fire_visibly_fail() {
         .unwrap();
     fabricate_host_home(daemon.repo_root());
 
-    // Create the profile, point a Trigger at it, then delete it — the only way to get a
-    // dangling reference, since the write-time gate refuses an unknown name up front.
+    // Create-then-delete is the only way to a dangling reference: the write-time gate
+    // refuses an unknown name up front.
     assert_eq!(
         put_profile(&daemon, "vanishing", &[], &[]).await.status(),
         200
@@ -1201,9 +1097,8 @@ async fn an_unknown_profile_makes_a_trigger_fire_visibly_fail() {
     );
     assert!(last["run_id"].is_null(), "no Run may be created: {last}");
 
-    // The Trigger is NOT dangled: `next_fire_at` survives, so recreating the profile
-    // heals it. A `Dangling` transition would have erased the schedule for something the
-    // user can fix in ten seconds.
+    // `next_fire_at` must survive, so recreating the profile heals the Trigger; a `Dangling`
+    // transition would erase the schedule for something the user can fix in ten seconds.
     let trig: serde_json::Value = reqwest::get(format!("{}/triggers/{trigger_id}", daemon.url()))
         .await
         .unwrap()
@@ -1216,9 +1111,8 @@ async fn an_unknown_profile_makes_a_trigger_fire_visibly_fail() {
     );
 }
 
-/// The instance default naming a vanished profile: a Run that falls back to it fails with
-/// a message that names the TIER, and `GET /settings` discloses the dangling reference so
-/// the user can see it before launching anything.
+/// A Run falling back to a vanished instance default fails with a message naming the TIER,
+/// and `GET /settings` discloses the dangling reference before anything is launched.
 #[tokio::test]
 async fn an_unknown_instance_default_is_a_distinct_400_and_is_disclosed() {
     ensure_pdo_on_path();
@@ -1228,7 +1122,7 @@ async fn an_unknown_instance_default_is_a_distinct_400_and_is_disclosed() {
         .unwrap();
     fabricate_host_home(daemon.repo_root());
 
-    // The write gate refuses an unknown name, so go through create-then-delete.
+    // The write gate refuses an unknown name, hence create-then-delete.
     assert_eq!(put_profile(&daemon, "gone", &[], &[]).await.status(), 200);
     assert_eq!(put_default_sandbox(&daemon, "gone").await.status(), 200);
     assert_eq!(
@@ -1241,8 +1135,8 @@ async fn an_unknown_instance_default_is_a_distinct_400_and_is_disclosed() {
         204
     );
 
-    // Disclosed, with a reason (the env tier passes through no validator at all, so this
-    // is the only honest place to say it).
+    // The env tier passes through no validator at all, so the settings view is the only
+    // place this can be disclosed.
     let settings = get_settings(&daemon).await;
     assert_eq!(settings["default_sandbox"]["effective"], "gone");
     assert!(
@@ -1254,8 +1148,7 @@ async fn an_unknown_instance_default_is_a_distinct_400_and_is_disclosed() {
         settings["default_sandbox"]
     );
 
-    // A Run with no explicit tier falls back to it → 400 naming the tier, NOT a silent
-    // demotion to `off` and NOT another profile.
+    // NOT a silent demotion to `off`, and NOT another profile.
     let resp = post_run(&daemon, None).await;
     assert_eq!(resp.status(), 400);
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -1265,7 +1158,7 @@ async fn an_unknown_instance_default_is_a_distinct_400_and_is_disclosed() {
         "the message must name the losing tier: {body}"
     );
 
-    // …and an explicit tier that DOES resolve is unaffected: only the WINNER is resolved.
+    // Only the WINNER is resolved, so an explicit tier is unaffected.
     let resp = post_run(&daemon, Some("off")).await;
     assert_eq!(
         resp.status(),
@@ -1274,9 +1167,7 @@ async fn an_unknown_instance_default_is_a_distinct_400_and_is_disclosed() {
     );
 }
 
-/// A `sandbox_entries` payload that cannot be read is a **hard** `RunFailed` at boot
-/// recovery, with the raw value in the reason — never a silent re-resolve, which would
-/// change what the nodes that already launched saw.
+/// Never a silent re-resolve: that would change what the nodes already launched saw.
 #[tokio::test]
 async fn an_unreadable_frozen_list_fails_the_run_at_boot_recovery() {
     ensure_pdo_on_path();
@@ -1289,9 +1180,8 @@ async fn an_unreadable_frozen_list_fails_the_run_at_boot_recovery() {
     let run_id = start_run(&daemon, Some("full")).await;
     wait_node_status(&daemon, &run_id, "running").await;
 
-    // Corrupt the frozen list in the event log, the way a hand-edited DB or a future
-    // encoder bug would. Straight SQL against the daemon's own SQLite file — no `sqlite3`
-    // CLI, which is not a build dependency of this repo.
+    // Corrupt the frozen list the way a hand-edited DB or a future encoder bug would.
+    // Straight SQL: `sqlite3` is not a build dependency of this repo.
     let db_path = daemon.repo_root().join(".pdo").join("pdo.db");
     let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", db_path.display()))
         .await
@@ -1322,14 +1212,11 @@ async fn an_unreadable_frozen_list_fails_the_run_at_boot_recovery() {
     );
     let run = wait_run_status(&daemon, &run_id, "failed").await;
     assert_eq!(run["status"], "failed", "{run}");
-    // #431 trap: the reason lives on /events, not on /runs/<id>.
     assert!(
         reason.contains("42") && reason.contains("unreadable"),
         "the reason must carry the offending raw value: {reason}"
     );
 }
-
-// -- AC8: virtual defaults, and the diff (not a snapshot) ---------------------
 
 #[tokio::test]
 async fn unedited_defaults_have_no_row_and_editing_stores_a_diff() {
@@ -1340,7 +1227,6 @@ async fn unedited_defaults_have_no_row_and_editing_stores_a_diff() {
         .unwrap();
     fabricate_host_home(daemon.repo_root());
 
-    // Both virtual defaults resolve with NO row.
     for name in ["full", "minimal"] {
         let view: serde_json::Value = get_profile(&daemon, name).await.json().await.unwrap();
         assert_eq!(view["virtual"], serde_json::json!(true), "{name}: {view}");
@@ -1351,9 +1237,8 @@ async fn unedited_defaults_have_no_row_and_editing_stores_a_diff() {
         );
         assert!(view["updated_at"].is_null(), "{name}: {view}");
     }
-    // `minimal` IS the floor: an empty entry list, plus the read-only floor block —
-    // without which the screen looks broken and the user wrongly concludes the container
-    // starts with no credentials.
+    // `minimal` IS the floor. Without the read-only floor block the screen looks broken and
+    // the user wrongly concludes the container starts with no credentials.
     let minimal: serde_json::Value = get_profile(&daemon, "minimal").await.json().await.unwrap();
     assert_eq!(minimal["resolved"], serde_json::json!([]));
     assert!(
@@ -1361,7 +1246,6 @@ async fn unedited_defaults_have_no_row_and_editing_stores_a_diff() {
         "the floor block must be present and read-only: {minimal}"
     );
 
-    // Editing `full` MATERIALISES it, and stores the DIFF — not a snapshot.
     let view: serde_json::Value = put_profile(&daemon, "full", &[".claude/plugins"], &[])
         .await
         .json()
@@ -1378,8 +1262,8 @@ async fn unedited_defaults_have_no_row_and_editing_stores_a_diff() {
         view["extras"].as_array().unwrap().is_empty(),
         "the row holds the intention, not the effective list: {view}"
     );
-    // The snapshot test: the resolved list still carries every OTHER default entry, so a
-    // future release that adds one would be seen by this profile too.
+    // The resolved list keeps every OTHER default entry, so a future release that adds one
+    // is seen by this profile too.
     let resolved: Vec<&str> = view["resolved"]
         .as_array()
         .unwrap()
@@ -1390,7 +1274,7 @@ async fn unedited_defaults_have_no_row_and_editing_stores_a_diff() {
     assert!(resolved.contains(&".claude/*.md"));
     assert!(!resolved.contains(&".claude/plugins"));
 
-    // Deleting an edited default reverts it to virtual (it does not disappear).
+    // Deleting an edited default reverts it to virtual rather than removing it.
     assert_eq!(
         reqwest::Client::new()
             .delete(format!("{}/settings/sandbox-profiles/full", daemon.url()))
@@ -1408,8 +1292,8 @@ async fn unedited_defaults_have_no_row_and_editing_stores_a_diff() {
         .iter()
         .any(|e| e == ".claude/plugins"));
 
-    // A `disabled` naming an entry THIS version does not have is remembered as inactive,
-    // not rejected — ADR-0031 §2's forward-compatibility clause.
+    // ADR-0031 §2 forward compatibility: a `disabled` naming an entry THIS version lacks is
+    // remembered as inactive, not rejected.
     let view: serde_json::Value = put_profile(&daemon, "minimal", &[".claude/plugins"], &[])
         .await
         .json()
@@ -1423,12 +1307,8 @@ async fn unedited_defaults_have_no_row_and_editing_stores_a_diff() {
     assert_eq!(view["resolved"], serde_json::json!([]));
 }
 
-// -- AC9: the floor holds when a class-(b) entry is unchecked ------------------
-
-/// Unchecking `.claude/settings.json` must NOT block the Run: the floor re-synthesises a
-/// one-key `settings.json` carrying the permissions bypass. This is the case that makes
-/// ADR-0031 §1 state the floor as *guarantees* rather than as *files* — a user whose host
-/// hooks do not exist in the container must get the synthesis, not a refusal.
+/// The floor re-synthesises a one-key `settings.json` carrying the permissions bypass. This
+/// is why ADR-0031 §1 states the floor as *guarantees* rather than as *files*.
 #[tokio::test]
 async fn unchecking_settings_json_still_starts_thanks_to_the_floor() {
     ensure_pdo_on_path();
@@ -1463,7 +1343,6 @@ async fn unchecking_settings_json_still_starts_thanks_to_the_floor() {
         serde_json::json!({ "skipDangerousModePermissionPrompt": true }),
         "SYNTHESISED, not copied: the host's `hooks` must not be there: {settings}"
     );
-    // The other floor guarantees hold too.
     assert!(staged_home(&daemon, &run_id)
         .join(".credentials.json")
         .is_file());
@@ -1475,12 +1354,10 @@ async fn unchecking_settings_json_still_starts_thanks_to_the_floor() {
     assert_eq!(run["status"], "completed", "{run}");
 }
 
-// -- AC10: referents before deletion ------------------------------------------
-
-/// The dialog cannot be built client-side: `RunListEntry` does not carry `sandbox` (only
-/// the full `RunState` does), so a browser would need N requests. And the third class is
-/// the one that matters most: live Runs already froze their list and are **unaffected**,
-/// while the instance default and Triggers are NOT repointed and their next Run fails.
+/// The dialog cannot be built client-side: `RunListEntry` does not carry `sandbox` (only the
+/// full `RunState` does), so a browser would need N requests. The three classes differ: live
+/// Runs already froze their list and are unaffected, while the instance default and Triggers
+/// are NOT repointed and their next Run fails.
 #[tokio::test]
 async fn referents_lists_the_three_classes_before_a_delete() {
     ensure_pdo_on_path();
@@ -1524,8 +1401,7 @@ async fn referents_lists_the_three_classes_before_a_delete() {
         "the live Run must be listed (as unaffected): {refs}"
     );
 
-    // A profile nobody references reports three empties, not a 404 — the dialog must be
-    // able to say "nothing points at this".
+    // Three empties, not a 404: the dialog must be able to say "nothing points at this".
     assert_eq!(put_profile(&daemon, "lonely", &[], &[]).await.status(), 200);
     let refs: serde_json::Value = reqwest::get(format!(
         "{}/settings/sandbox-profiles/lonely/referents",
@@ -1541,11 +1417,8 @@ async fn referents_lists_the_three_classes_before_a_delete() {
     assert!(refs["runs"].as_array().unwrap().is_empty());
 }
 
-// -- the settings surface -----------------------------------------------------
-
-/// `GET /settings` gains exactly two things: the profile NAME list (never entry lists —
-/// this is the launch dialog's hot path) and the host `$HOME`, which the editor needs to
-/// turn the explorer's absolute pick into a `$HOME`-relative entry.
+/// NAMES only, never entry lists: this is the launch dialog's hot path. `home` is what the
+/// editor needs to turn the explorer's absolute pick into a `$HOME`-relative entry.
 #[tokio::test]
 async fn get_settings_exposes_profile_names_and_home() {
     ensure_pdo_on_path();
@@ -1569,14 +1442,12 @@ async fn get_settings_exposes_profile_names_and_home() {
         vec![("custom", false), ("full", true), ("minimal", true)],
         "sorted, virtuals ∪ materialised, flagged: {settings}"
     );
-    // NAMES ONLY — the contract, so a future slice does not start serving entry lists on
-    // the launch dialog's hot path.
     for p in settings["sandbox_profiles"].as_array().unwrap() {
         assert!(p.get("entries").is_none(), "names only: {p}");
         assert!(p.get("resolved").is_none(), "names only: {p}");
     }
-    // `home` honours `sandbox_home_override` — otherwise the editor and the daemon would
-    // disagree about what "under $HOME" means.
+    // `home` must honour `sandbox_home_override`, or the editor and the daemon disagree
+    // about what "under $HOME" means.
     assert_eq!(
         settings["home"].as_str().unwrap(),
         daemon.repo_root().to_string_lossy(),
@@ -1584,9 +1455,9 @@ async fn get_settings_exposes_profile_names_and_home() {
     );
 }
 
-/// The name grammar, at the edge. `off` and a blank name are reserved (they are the
-/// "no sandbox" token and the *clear* sentinel), and an uppercase name is refused rather
-/// than folded — folding would have the UI hunt through a list it displays in lowercase.
+/// `off` and a blank name are reserved (the "no sandbox" token and the *clear* sentinel).
+/// An uppercase name is refused rather than folded: folding would have the UI hunt through a
+/// list it displays in lowercase.
 #[tokio::test]
 async fn profile_name_grammar_is_enforced_at_the_edge() {
     ensure_pdo_on_path();
@@ -1599,7 +1470,7 @@ async fn profile_name_grammar_is_enforced_at_the_edge() {
         let resp = put_profile(&daemon, bad, &[], &[]).await;
         assert_eq!(resp.status(), 400, "`{bad}` must be refused");
     }
-    // `full` / `minimal` ARE allowed — creating them is what materialises them.
+    // `full` / `minimal` ARE allowed: creating them is what materialises them.
     for ok in ["full", "minimal", "full-no-mcp", "a9"] {
         assert_eq!(
             put_profile(&daemon, ok, &[], &[]).await.status(),
@@ -1607,17 +1478,13 @@ async fn profile_name_grammar_is_enforced_at_the_edge() {
             "{ok}"
         );
     }
-    // A `disabled` that is not a built-in default entry is refused: unchecking is for
-    // defaults, dropping is for extras, and conflating them makes the diff ambiguous.
+    // Unchecking is for defaults, dropping is for extras; conflating them would make the
+    // diff ambiguous.
     let resp = put_profile(&daemon, "full-no-mcp", &[".gitconfig"], &[]).await;
     assert_eq!(resp.status(), 400);
 }
 
-// =============================================================================
-// #468 — per-profile environment (ADR-0031 §8)
-// =============================================================================
-
-/// The four `-e` PDO poses itself, so a test can assert "and nothing else".
+/// The `-e` PDO poses itself, so a test can assert "and nothing else".
 const RUN_CONSTANT_ENV_PREFIXES: &[&str] = &[
     "HOME=",
     "PDO_DAEMON_URL=",
@@ -1625,15 +1492,9 @@ const RUN_CONSTANT_ENV_PREFIXES: &[&str] = &[
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=",
 ];
 
-/// AC1, **both halves**. A profile with `env: {FOO: bar}` poses `-e FOO=bar` at
-/// `docker create`; a Run on a profile **without** env does not. The negative control is
-/// not optional: asserting only the positive half would pass just as well against a fake
-/// docker that echoed whatever it was handed, or against a daemon that posed every
-/// profile's env to every Run.
-///
-/// Layer 3a reads the fake's argv log rather than `docker inspect --format
-/// '{{.Config.Env}}'` — same bytes, no real daemon needed. The real `docker inspect` is
-/// the manual check recorded on the issue.
+/// The negative control is not optional: asserting only the positive half would pass just
+/// as well against a fake docker that echoed whatever it was handed, or against a daemon
+/// that posed every profile's env to every Run.
 #[tokio::test]
 async fn a_profiles_env_is_posed_at_create_and_only_for_that_profile() {
     ensure_pdo_on_path();
@@ -1649,8 +1510,7 @@ async fn a_profiles_env_is_posed_at_create_and_only_for_that_profile() {
             .status(),
         200
     );
-    // The profile with no env at all — the negative control, created in the same daemon so
-    // nothing but the profile differs between the two Runs.
+    // The negative control, in the same daemon so nothing but the profile differs.
     assert_eq!(
         put_profile_full(&daemon, "no-env", &[], &[], &[])
             .await
@@ -1658,21 +1518,18 @@ async fn a_profiles_env_is_posed_at_create_and_only_for_that_profile() {
         200
     );
 
-    // (a) POSITIVE.
     let with = start_run_of(&daemon, PIPELINE_NAME, Some("with-env")).await;
     assert!(
         wait_until(|| env_specs(&log).iter().any(|e| e == "FOO=bar")).await,
         "the profile env must be posed at create; env={:?}",
         env_specs(&log)
     );
-    // Frozen on the Run too — that is what makes an edit non-retroactive.
     let run = get_run(&daemon, &with).await;
     assert_eq!(
         run["sandbox_env"]["FOO"], "bar",
         "the Run must freeze the env: {run}"
     );
 
-    // (b) NEGATIVE CONTROL: a second Run, other profile, same daemon and same fake.
     std::fs::write(
         std::path::Path::new(&log),
         "", // truncate so the second Run's argv is unambiguous
@@ -1689,7 +1546,7 @@ async fn a_profiles_env_is_posed_at_create_and_only_for_that_profile() {
         !env.iter().any(|e| e.starts_with("FOO=")),
         "a Run on a profile WITHOUT env must not carry another profile's env; env={env:?}"
     );
-    // AC5 restated at layer 3: the only `-e` are the ones PDO owns.
+    // The only `-e` left are the ones PDO owns.
     for spec in &env {
         assert!(
             RUN_CONSTANT_ENV_PREFIXES
@@ -1705,7 +1562,6 @@ async fn a_profiles_env_is_posed_at_create_and_only_for_that_profile() {
             "unexpected `-e {spec}` for a profile with no env; env={env:?}"
         );
     }
-    // And its frozen payload carries no env key at all (the back-compat shape).
     let run = get_run(&daemon, &without).await;
     assert!(
         run.get("sandbox_env").is_none(),
@@ -1713,7 +1569,6 @@ async fn a_profiles_env_is_posed_at_create_and_only_for_that_profile() {
     );
 }
 
-/// AC2. The three run-constant keys are a **400 naming the key**, never a silent skip.
 /// A silent skip would leave an editor that shows `HOME` set and a container where it is
 /// not; a `HOME` that DID land would break the `.claude` and `.claude.json` mounts at once,
 /// since both are computed from it.
@@ -1736,7 +1591,6 @@ async fn a_run_constant_env_key_is_a_400_that_names_it() {
             "the 400 must NAME the offending key, got: {body}"
         );
     }
-    // The malformed and the illegible are refused too — same 400, same naming.
     for (key, value) in [
         ("9LEADING_DIGIT", "x"),
         ("WITH-DASH", "x"),
@@ -1747,14 +1601,13 @@ async fn a_run_constant_env_key_is_a_400_that_names_it() {
         let resp = put_profile_full(&daemon, "probe", &[], &[], &[(key, value)]).await;
         assert_eq!(resp.status(), 400, "`{key}`={value:?} must be refused");
     }
-    // Nothing was written: a refused PUT must not half-materialise the profile.
     assert_eq!(
         get_profile(&daemon, "probe").await.status(),
         404,
         "a rejected PUT must not create the row"
     );
 
-    // …and a legal one goes through, so the refusals above are not a blanket "env is broken".
+    // A legal one goes through, so the refusals above are not a blanket "env is broken".
     let resp = put_profile_full(
         &daemon,
         "probe",
@@ -1783,12 +1636,9 @@ async fn a_run_constant_env_key_is_a_400_that_names_it() {
     );
 }
 
-/// AC3, on a **multi-node** Run — the point the issue insists on. Editing the env of a
-/// profile while a Run is alive must change nothing for that Run's NEXT node. A single-node
-/// Run proves nothing.
-///
-/// The env survives for the next node through **three** independent mechanisms, and this
-/// test walks all three, because each closes a hole the others do not:
+/// Must be a **multi-node** Run: a single-node one proves nothing, since the container is
+/// created once. The env survives for the next node through three independent mechanisms,
+/// and this test walks all three, because each closes a hole the others do not:
 ///
 /// 1. **One container per Run.** The second node enters by `docker exec`, not by a second
 ///    `create` — so it inherits the environment of the container the first node created.
@@ -1832,7 +1682,7 @@ async fn editing_the_env_does_not_change_a_live_multi_node_runs_next_node() {
         log_text(&log)
     );
 
-    // Now edit the env (change one variable, add another) while the Run is alive.
+    // Edit the env while the Run is alive.
     assert_eq!(
         put_profile_full(
             &daemon,
@@ -1867,14 +1717,12 @@ async fn editing_the_env_does_not_change_a_live_multi_node_runs_next_node() {
         log_text(&log)
     );
 
-    // The frozen payload is untouched…
     let run = get_run(&daemon, &run_id).await;
     assert_eq!(run["sandbox_env"]["FOO"], "before", "{run}");
     assert!(
         run["sandbox_env"].get("ADDED").is_none(),
         "an env added AFTER the Run started must not appear on it: {run}"
     );
-    // …and NOTHING the daemon posed, at any point, carries the edited values.
     let env = env_specs(&log);
     assert!(
         env.iter().any(|e| e == "FOO=before"),
@@ -1894,16 +1742,14 @@ async fn editing_the_env_does_not_change_a_live_multi_node_runs_next_node() {
         "the re-derivation must replay the frozen env, not fail"
     );
 
-    // A Run started AFTER the edit does get the new env — the freeze is per-Run, not a
-    // one-off snapshot of the profile.
+    // The freeze is per-Run, not a one-off snapshot of the profile.
     let fresh = start_run_of(&daemon, PIPELINE_NAME, Some("evolving")).await;
     let fresh_run = get_run(&daemon, &fresh).await;
     assert_eq!(fresh_run["sandbox_env"]["FOO"], "after", "{fresh_run}");
     assert_eq!(fresh_run["sandbox_env"]["ADDED"], "yes", "{fresh_run}");
 }
 
-/// The hard-error arm, twin of `an_unreadable_frozen_list_fails_the_run_at_boot_recovery`:
-/// an unreadable `sandbox_env` is a `RunFailed` naming the raw value, never a silent "no
+/// An unreadable `sandbox_env` is a `RunFailed` naming the raw value, never a silent "no
 /// env" — which would start the container without the variables its MCP servers need and
 /// look like a plugin bug.
 #[tokio::test]
@@ -1925,6 +1771,7 @@ async fn an_unreadable_frozen_env_fails_the_run_at_boot_recovery() {
     wait_node_status(&daemon, &run_id, "running").await;
 
     // Corrupt the frozen env the way a hand-edited DB or a future encoder bug would.
+    // Straight SQL: `sqlite3` is not a build dependency of this repo.
     let db_path = daemon.repo_root().join(".pdo").join("pdo.db");
     let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", db_path.display()))
         .await
@@ -1951,22 +1798,15 @@ async fn an_unreadable_frozen_env_fails_the_run_at_boot_recovery() {
     );
     let run = wait_run_status(&daemon, &run_id, "failed").await;
     assert_eq!(run["status"], "failed", "{run}");
-    // #431 trap: the reason lives on /events, not on /runs/<id>.
     assert!(
         reason.contains("42") && reason.contains("unreadable"),
         "the reason must carry the offending raw value: {reason}"
     );
 }
 
-// -- #467 : la source d'image appartient au profil de staging ------------------
-
-/// AC1. Two named profiles, one `kind: dockerfile` on a Dockerfile variant, one `kind: registry`
-/// on an explicit ref. Two Runs, **each in its own image** — proven on the image arg of
-/// `docker create`, which is what `docker inspect --format '{{.Config.Image}}'` would report.
-///
-/// Both halves matter, and neither would pass alone: the Dockerfile half proves the profile beats
-/// the built-in default *and* carries the #466 variant NAME, while the registry half proves an
-/// explicit ref is used verbatim rather than re-tagged under `pdo-sandbox:h-…`.
+/// Neither half would pass alone: the Dockerfile half proves the profile beats the built-in
+/// default *and* carries the variant NAME, the registry half that an explicit ref is used
+/// verbatim rather than re-tagged under `pdo-sandbox:h-…`.
 #[tokio::test]
 async fn two_profiles_put_two_concurrent_runs_in_two_different_images() {
     ensure_pdo_on_path();
@@ -1997,12 +1837,10 @@ async fn two_profiles_put_two_concurrent_runs_in_two_different_images() {
     )
     .await;
     assert_eq!(resp.status(), 200);
-    // The view serves it back, so the editor needs no refetch and the round-trip is pinned.
     let view: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(view["image"]["kind"], "registry", "{view}");
     assert_eq!(view["image"]["ref"], explicit_ref, "{view}");
 
-    // Two Runs, concurrently, on the same daemon and the same fake docker.
     let run_df = start_run_of(&daemon, PIPELINE_NAME, Some("on-dockerfile")).await;
     let run_reg = start_run_of(&daemon, PIPELINE_NAME, Some("on-registry")).await;
 
@@ -2029,7 +1867,7 @@ async fn two_profiles_put_two_concurrent_runs_in_two_different_images() {
         "two profiles, two images; images={images:?}"
     );
 
-    // …and each Run froze its own source, which is what makes the two independent.
+    // Each Run froze its own source, which is what makes the two independent.
     let a = get_run(&daemon, &run_df).await;
     assert_eq!(a["sandbox_image"]["kind"], "dockerfile", "{a}");
     assert_eq!(
@@ -2041,8 +1879,8 @@ async fn two_profiles_put_two_concurrent_runs_in_two_different_images() {
     assert_eq!(b["sandbox_image"]["kind"], "registry", "{b}");
     assert_eq!(b["sandbox_image"]["ref"], explicit_ref, "{b}");
 
-    // No build, no pull: the fake reports the image present, and the fast-path precedes both on
-    // BOTH branches. This is the offline-safe reuse property, restated at layer 3.
+    // Offline-safe reuse: the fake reports the image present, and the fast path precedes
+    // build AND pull on both branches.
     assert!(
         !log_text(&log).lines().any(|l| l == "build" || l == "pull"),
         "a locally present image must skip build AND pull on both branches; log:\n{}",
@@ -2050,10 +1888,9 @@ async fn two_profiles_put_two_concurrent_runs_in_two_different_images() {
     );
 }
 
-/// AC4's layer-3 half: a profile that poses **nothing** is bit-for-bit the pre-#467 behaviour —
-/// the content-addressed `pdo-sandbox:h-…` tag, and a `run_started` payload that does not grow by
-/// one key. (The byte-identical `docker create` argv is pinned as a unit test in `sandbox_run`,
-/// where two contexts can be compared verbatim.)
+/// A profile that poses **nothing** keeps the content-addressed `pdo-sandbox:h-…` tag and a
+/// `run_started` payload that does not grow by one key. (The byte-identical `docker create`
+/// argv is pinned as a unit test in `sandbox_run`, where two contexts compare verbatim.)
 #[tokio::test]
 async fn a_profile_without_an_image_source_keeps_the_content_addressed_tag() {
     ensure_pdo_on_path();
@@ -2063,7 +1900,7 @@ async fn a_profile_without_an_image_source_keeps_the_content_addressed_tag() {
         .unwrap();
     fabricate_host_home(daemon.repo_root());
 
-    // A materialised profile — so this is "poses no image", not "has no row".
+    // Materialised on purpose — this is "poses no image", not "has no row".
     assert_eq!(
         put_profile(&daemon, "plain", &[".claude/plugins"], &[])
             .await
@@ -2095,7 +1932,7 @@ async fn a_profile_without_an_image_source_keeps_the_content_addressed_tag() {
     );
 }
 
-/// AC3. An explicit ref that cannot be pulled fails the Run with a reason **naming the ref**, and
+/// An explicit ref that cannot be pulled fails the Run with a reason **naming the ref**, and
 /// launches **no `docker build`**. The fake's `build` exits 0, so a build would have SUCCEEDED and
 /// the Run would have started in an unrelated image — its absence is the assertion.
 #[tokio::test]
@@ -2123,7 +1960,6 @@ async fn an_unreachable_explicit_ref_fails_the_run_and_never_builds() {
     let run = wait_run_status(&daemon, &run_id, "failed").await;
     assert_eq!(run["status"], "failed", "{run}");
 
-    // #431 trap: the prep reason lives on /events, not on /runs/<id>.
     let reason = sandbox_prep_failure(&daemon, &run_id)
         .await
         .unwrap_or_default();
@@ -2148,11 +1984,10 @@ async fn an_unreachable_explicit_ref_fails_the_run_and_never_builds() {
     );
 }
 
-/// AC2, on a **multi-node** Run — the point the issue insists on. Editing a profile's image while
-/// a Run is alive must change nothing for that Run's next node. A single-node Run would prove
-/// nothing: the container is created once, so there would be no second occasion to get it wrong.
+/// Must be a **multi-node** Run: with one node the container is created once, so there is no
+/// second occasion to get it wrong.
 ///
-/// Same three mechanisms as the #468 env twin, walked in the same order: one container per Run
+/// Same three mechanisms as the env twin, walked in the same order: one container per Run
 /// (the next node enters by `docker exec`), the frozen payload (so a boot-recovery re-creation
 /// re-derives the SAME image), and Docker itself (`docker start` never re-evaluates a
 /// pre-existing container's image any more than its env).
@@ -2201,8 +2036,7 @@ async fn editing_a_profiles_image_does_not_change_a_live_multi_node_run() {
         .status(),
         200
     );
-    // A second edit, back to a registry ref, so the final state differs from the frozen one in
-    // VALUE as well as kind.
+    // Back to a registry ref, so the final state differs from the frozen one in VALUE too.
     assert_eq!(
         put_profile_image(
             &daemon,
@@ -2251,15 +2085,14 @@ async fn editing_a_profiles_image_does_not_change_a_live_multi_node_run() {
         "the re-derivation must replay the frozen source, not fail"
     );
 
-    // A Run started AFTER the edits does get the new source — the freeze is per-Run, not a
-    // one-off snapshot of the profile.
+    // The freeze is per-Run, not a one-off snapshot of the profile.
     let fresh = start_run_of(&daemon, PIPELINE_NAME, Some("evolving-image")).await;
     let fresh_run = get_run(&daemon, &fresh).await;
     assert_eq!(fresh_run["sandbox_image"]["ref"], after, "{fresh_run}");
 }
 
-/// The write-time refusals (#467). Each one is a 400 that names the offending value, and none of
-/// them half-materialises the profile — the same contract as every other field of this PUT.
+/// Each refusal names the offending value and half-materialises nothing — the same contract
+/// as every other field of this PUT.
 #[tokio::test]
 async fn a_bad_image_source_is_rejected_at_profile_write() {
     ensure_pdo_on_path();
@@ -2299,7 +2132,7 @@ async fn a_bad_image_source_is_rejected_at_profile_write() {
         "a rejected PUT must not create the row"
     );
 
-    // …and the legal forms go through, so the refusals above are not a blanket "image is broken".
+    // The legal forms go through, so the refusals above are not a blanket "image is broken".
     let (variant, _) = write_variant_dockerfile(daemon.repo_root(), "ok", "ok");
     for good in [
         serde_json::json!({ "kind": "dockerfile", "path": variant.display().to_string() }),

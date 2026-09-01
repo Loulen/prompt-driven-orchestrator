@@ -33,10 +33,6 @@ pub const DEFAULT_SESSION_CAP: usize = 20;
 
 /// Whether a new NodeRun session may be admitted given the current count of
 /// live sessions and the configured cap.
-///
-/// Mirrors the spec's `live_sessions + 1 > cap` back-pressure rule: admit only
-/// while spawning one more session stays within the cap (equivalently, while a
-/// free slot remains).
 pub fn can_admit(live_sessions: usize, cap: usize) -> bool {
     live_sessions < cap
 }
@@ -47,13 +43,11 @@ pub fn can_admit(live_sessions: usize, cap: usize) -> bool {
 /// `stored` is the instance-wide setting persisted via the settings page (or
 /// `None` when unset). A stored value `>= 1` wins; otherwise the env var
 /// [`SESSION_CAP_ENV`] (if a positive integer) applies; otherwise
-/// [`DEFAULT_SESSION_CAP`]. A zero/negative stored or env value is ignored — a
-/// cap of 0 would deadlock every Run (`can_admit` = `live < cap`).
+/// [`DEFAULT_SESSION_CAP`]. A zero stored or env value is ignored — a cap of 0
+/// would deadlock every Run (`can_admit` = `live < cap`).
 ///
 /// The module stays pure: the caller loads the stored value (from
-/// `instance_config`) and passes it in. [`configured_cap`] is the
-/// `stored = None` shorthand, preserving the env-only behaviour every existing
-/// test relies on.
+/// `instance_config`) and passes it in.
 pub fn configured_cap_with(stored: Option<usize>) -> usize {
     stored
         .filter(|&n| n >= 1)
@@ -62,9 +56,6 @@ pub fn configured_cap_with(stored: Option<usize>) -> usize {
 }
 
 /// The configured global session cap from the env var alone (`stored = None`).
-///
-/// Retained so existing call sites and tests that never touch the store keep
-/// their exact behaviour.
 pub fn configured_cap() -> usize {
     configured_cap_with(None)
 }
@@ -91,10 +82,8 @@ pub fn env_cap() -> Option<usize> {
 /// admission slot. Counting such phantoms permanently leaked a slot from the
 /// global cap (#215).
 ///
-/// Within a live Run, a NodeRun session is "live" while its node is `Running`
-/// or `AwaitingUser` (an interactive node keeps its tmux session attachable
-/// indefinitely). Nodes that are `Pending`, `Waiting`, `Completed`, `Failed`,
-/// `Stopped` or `Stale` hold no session and do not count.
+/// `AwaitingUser` still counts: an interactive node keeps its tmux session
+/// attachable indefinitely.
 ///
 /// Pipeline Manager sessions are not represented as nodes in the run state, so
 /// they are excluded by construction.
@@ -110,8 +99,6 @@ pub fn count_live_node_sessions<'a>(runs: impl IntoIterator<Item = &'a RunState>
 /// concurrent Runs of the same pipeline both carry an `implementer` at `iter 1` —
 /// and a Run-blind exclusion would discount the *other* Run's live session, letting
 /// the cap be exceeded. That is the very collapse this module exists to prevent.
-///
-/// `iter` is an `i64`, as everywhere else in the event log.
 pub struct SlotExclusion<'a> {
     pub run_id: &'a str,
     pub node_id: &'a str,
@@ -316,8 +303,6 @@ mod tests {
         }
     }
 
-    // ── #489-C : the self-slot exclusion ─────────────────────────────────────
-
     fn run_with_node_at_iter(
         run_id: &str,
         node_id: &str,
@@ -350,11 +335,8 @@ mod tests {
         );
     }
 
-    /// **The over-admission bug the key closes.** The count is global across Runs
-    /// while node ids are local to a pipeline, so two concurrent Runs of the same
-    /// pipeline both carry an `implementer` at `iter 1`. A `(node_id, iter)` key
-    /// would discount the OTHER Run's live session and let the cap be exceeded —
-    /// exactly the collapse this module exists to prevent.
+    /// The over-admission bug the full triple closes: a `(node_id, iter)` key would
+    /// discount the OTHER Run's live session and let the cap be exceeded.
     #[test]
     fn the_exclusion_never_discounts_another_runs_session() {
         let a = run_with_node_at_iter("run-a", "implementer", NodeStatus::Running, 1);
@@ -393,8 +375,7 @@ mod tests {
         );
     }
 
-    /// A `Waiting` node holds no session, so there is nothing to exclude — and the
-    /// exclusion must not conjure a slot out of it.
+    /// A `Waiting` node holds no session: the exclusion must not conjure a slot.
     #[test]
     fn excluding_a_session_less_node_changes_nothing() {
         let run = run_with_node_at_iter("r1", "impl", NodeStatus::Waiting, 1);
@@ -412,9 +393,8 @@ mod tests {
         );
     }
 
-    /// `None` is byte-for-byte the historical count — what `GET /sessions` and every
-    /// other reader keeps calling, because an observability endpoint must report the
-    /// TRUE count.
+    /// `None` is byte-for-byte the historical count: `GET /sessions` and other
+    /// observability readers must report the TRUE count.
     #[test]
     fn no_exclusion_is_the_historical_count() {
         let r1 = run_with_nodes("r1", &[("a", NodeStatus::Running)]);
@@ -430,19 +410,16 @@ mod tests {
 
     #[test]
     fn admits_while_a_free_slot_remains() {
-        // 7 live, cap 10 -> the 8th session fits.
         assert!(can_admit(7, 10));
     }
 
     #[test]
     fn rejects_once_the_cap_is_reached() {
-        // 10 live, cap 10 -> the 11th would exceed the cap.
         assert!(!can_admit(10, 10));
     }
 
     #[test]
     fn admits_the_session_that_fills_the_last_slot() {
-        // 9 live, cap 10 -> the 10th session exactly fills the cap.
         assert!(can_admit(9, 10));
     }
 }

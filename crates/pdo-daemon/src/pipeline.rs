@@ -100,9 +100,8 @@ pub(crate) enum PortType {
     Markdown,
     Image,
     ImageList,
-    /// #333: a rendered, static HTML artifact (`output.html`). A leaf review
-    /// surface displayed in a sandboxed iframe (no JS), never consumed
-    /// downstream in v1 (ADR-0028).
+    /// A rendered, static HTML artifact (`output.html`): a leaf review surface
+    /// shown in a sandboxed iframe (no JS), never consumed downstream (ADR-0028).
     Html,
 }
 
@@ -155,13 +154,11 @@ pub(crate) struct Port {
         skip_serializing_if = "Option::is_none"
     )]
     pub instructions: Option<String>,
-    /// `required: true` marks an **input** port whose artifact must arrive for the
-    /// node to run (ADR-0011 / #589 / #600). When every edge feeding a required
-    /// port is structurally dead — its producing branch was not taken (either/or) —
-    /// the reachability sweep **auto-skips** the node with a reason rather than
-    /// leaving it to hang forever waiting on an input that can never come. Absent
-    /// (the default) leaves the node subject only to the whole-node deadness rule
-    /// (every incoming edge dead). Semantic (drives auto-skip), not layout.
+    /// Marks an **input** port whose artifact must arrive for the node to run
+    /// (ADR-0011). When every edge feeding it is structurally dead, the
+    /// reachability sweep auto-skips the node rather than hanging on an input that
+    /// can never come. Absent leaves the node subject only to the whole-node
+    /// deadness rule. Semantic, not layout.
     #[serde(default, skip_serializing_if = "is_false")]
     pub required: bool,
 }
@@ -189,42 +186,33 @@ pub(crate) struct NodeDef {
     pub max_iter: Option<serde_yaml::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub over: Option<String>,
-    /// Optional pinned harness (#550, ADR-0046): the harness this node **requires**
-    /// (`claude`, `opencode`). A pin both selects the harness and shields it from
-    /// every coarser tier (Run / Projet / instance). Absent ⇒ the node follows the
-    /// tier above (in this slice: instance default, else the `claude` floor).
-    /// Free-text pass-through (ADR-0001: no closed enum). Semantic, not layout.
+    /// The harness this node **requires** (ADR-0046). A pin both selects the
+    /// harness and shields it from every coarser tier (Run / Projet / instance);
+    /// absent ⇒ follow the tier above. Free-text pass-through, no closed enum
+    /// (ADR-0001). Semantic, not layout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin_harness: Option<String>,
-    /// Per-harness settings map (#550, ADR-0046): `harnesses.<name> = {model,
-    /// effort}`. The model and effort are **not** axes with their own precedence —
-    /// they are read from the entry of the *winning* harness, so the same node
-    /// stays executable on `claude` and `opencode` instead of launching every node
-    /// with a slug the other harness rejects. This replaces the flat `model:` /
-    /// `effort:` of #296/#424, which the pipeline migrator folds into
+    /// Per-harness settings (ADR-0046): `harnesses.<name> = {model, effort}`. Model
+    /// and effort are NOT precedence axes of their own — they are read from the
+    /// *winning* harness's entry, so the node stays executable on every harness
+    /// instead of being launched with a slug the other one rejects. Replaces the
+    /// legacy flat `model:`/`effort:`, which the migrator folds into
     /// `harnesses.claude.*`.
     ///
-    /// `BTreeMap` for a deterministic serialization + canonical form. Semantic, not
-    /// layout — included in the pipeline diff and the library content hash
-    /// (`pipeline_semantics`).
+    /// `BTreeMap` for deterministic serialization. Semantic, not layout — included
+    /// in the pipeline diff and the library content hash.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub harnesses: BTreeMap<String, crate::harness_resolver::HarnessEntry>,
-    /// The node's own tier of the agentic-profile union (#563, ADR-0057):
-    /// `Inherit` (absent, the default — continue `Run → Projet → instance →
-    /// Default`), a named `Profile` reference, or an inline `Custom` combo.
-    /// When this is `Some(Profile | Custom)` it supplies harness, model and
-    /// effort atomically and [`pin_harness`]/[`harnesses`] above are NOT
-    /// consulted for this node (ADR-0057 ¶1: Custom "ne réactive pas l'ancien
-    /// résolveur"). Absent, or `Some(Inherit)`, preserves the pre-#563 legacy
-    /// behaviour exactly (`pin_harness` + `harnesses`) — no pipeline is migrated
-    /// automatically (#563, out of scope). Semantic, not layout.
+    /// The node's tier of the agentic-profile union (ADR-0057). `Some(Profile |
+    /// Custom)` supplies harness, model and effort atomically, and
+    /// [`pin_harness`]/[`harnesses`] are then NOT consulted (ADR-0057 ¶1: Custom
+    /// "ne réactive pas l'ancien résolveur"). Absent or `Some(Inherit)` preserves
+    /// the legacy behaviour exactly. Semantic, not layout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_choice: Option<crate::agent_choice::AgentChoice>,
-    /// Optional `auto_fail` preference for this node (ADR-0049): the **finest**
-    /// tier of [`crate::auto_fail::resolve_auto_fail`] (`node → Run → Projet →
-    /// instance`). `Some(true)`/`Some(false)` overrides every coarser tier for a
-    /// node's own `pdo fail`; `None` (absent) makes the node defer to the Run /
-    /// Projet / instance. Semantic, not layout.
+    /// The **finest** tier of [`crate::auto_fail::resolve_auto_fail`] (`node → Run
+    /// → Projet → instance`): `Some(_)` overrides every coarser tier for this
+    /// node's `pdo fail`. Semantic, not layout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_fail: Option<bool>,
     /// Where this node's NodeRun works (#653, ADR-0060). `true` ⇒ a sub-worktree
@@ -378,14 +366,13 @@ pub(crate) struct LoopRegion {
     pub over: Option<String>,
 }
 
-/// An inert canvas note (#307 / ADR-0018): a documentation post-it laid on the
-/// canvas. It has no title, no port, no edge; it is never spawned, lives outside
-/// the DAG and the runtime. It travels with the shared pipeline file but is
-/// *layout, not semantics* — excluded from the semantic pipeline-diff (the
-/// synced/diverged star does not move when a note is created/moved/edited/deleted).
+/// An inert canvas note (ADR-0018): no port, no edge, never spawned, outside the
+/// DAG and the runtime. Layout, not semantics — excluded from the semantic
+/// pipeline-diff.
+///
 /// The Rust field is MANDATORY: the frontend rehydrates from the daemon-parsed
-/// `PipelineDef`, never the raw YAML — without this field serde would drop the
-/// note silently and it would vanish on reload (#307 / lesson #296).
+/// `PipelineDef`, never the raw YAML, so without it serde drops the note silently
+/// and it vanishes on reload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Note {
     pub id: String,
@@ -641,13 +628,12 @@ fn stamp_isolation_default(node_map: &mut serde_yaml::Mapping) {
 /// Fold a node's legacy flat `model:` / `effort:` keys (#296/#424) into
 /// `harnesses.claude.{model, effort}` (#550, ADR-0046), removing the flat keys.
 ///
-/// Shared by [`normalize_node_value`] (lossless in-memory parse) and the pipeline
-/// migrator (persisted rewrite), so both fold identically. Returns `true` iff it
-/// removed a flat key — i.e. the raw YAML changed — which is what the migrator's
-/// `needs_migration` guard keys off.
+/// Shared by [`normalize_node_value`] and the pipeline migrator so both fold
+/// identically. Returns `true` iff the raw YAML changed — the migrator's
+/// `needs_migration` guard keys off it.
 ///
-/// An explicit `harnesses.claude` entry is authoritative: a flat value fills a
-/// slot only when the map has none, so a second run is a no-op (idempotent).
+/// An explicit `harnesses.claude` entry is authoritative: a flat value fills a slot
+/// only when the map has none, so a second run is a no-op.
 pub(crate) fn fold_flat_model_effort_into_harnesses(node_map: &mut serde_yaml::Mapping) -> bool {
     let removed_model = node_map.remove(serde_yaml::Value::String("model".into()));
     let removed_effort = node_map.remove(serde_yaml::Value::String("effort".into()));
@@ -732,14 +718,9 @@ pub(crate) fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
         .and_then(|v| v.as_sequence_mut())
     {
         for node_val in nodes.iter_mut() {
-            // Per-node type normalization, shared with `POST /nodes/parse` (#345).
             diagnostics.extend(normalize_node_value(node_val)?);
         }
     }
-
-    // Conditional routing lives on the edge: an edge may carry a `when:` clause
-    // and/or an `else: true` marker (ADR-0011, supersedes #45's Switch-port
-    // placement). No prescriptive validation here (ADR-0001 sharp tool).
 
     let mut pipeline: PipelineDef = serde_yaml::from_value(raw.clone())?;
 
@@ -861,9 +842,7 @@ pub(crate) fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
         }
     }
 
-    // Dangling edge references stay info-only warnings at parse/edit time
-    // (ADR-0001 sharp tool); run launch turns the same findings into refusals
-    // via `dangling_edge_references` (#211 / #206).
+    // Warnings here, refusals at run launch: see `dangling_edge_references`.
     for message in dangling_edge_references(&pipeline) {
         diagnostics.push(Diagnostic {
             severity: Severity::Warning,
@@ -871,7 +850,6 @@ pub(crate) fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
         });
     }
 
-    // Validate start/end node constraints
     let start_nodes: Vec<&NodeDef> = pipeline
         .nodes
         .iter()
@@ -922,32 +900,22 @@ pub(crate) fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
 
     validate_switch_when_clauses(&pipeline)?;
 
-    // ── Bounded-region auto-materialization (ADR-0011 clause (b) / #396) ──────
+    // Auto-materialize bounded regions here, at the model boundary rather than in
+    // the editor's `addEdge` (ADR-0011 clause (b)): every reader funnels through
+    // this function, so a cycle that arrived any other way (hand-written file,
+    // imported workflow, a mere reopen) still gets a lap counter and an `Exhausted`
+    // halt instead of running unbounded through the generic forward-spawn path.
     //
-    // A `bounded` loop is born by auto-detection of a cycle, "pour qu'aucun cycle
-    // ne soit accidentellement non-borné". That invariant belongs to the model
-    // boundary, not to a canvas gesture: before #396 it was applied only by the
-    // editor's `addEdge`, so a cycle that arrived any other way (a file written by
-    // hand, an imported workflow, a pipeline merely *reopened*) rendered without a
-    // region — no `↻` header, no editable `max_iter` — and, worse, ran through the
-    // scheduler's generic forward-spawn path with no lap counter and no
-    // `Exhausted` halt: an unbounded cycle.
-    //
-    // Materializing here fixes both faces at once, because every reader funnels
-    // through this function: the editor's `GET /pipelines/<id>`, the run snapshot
-    // re-read on each advance, the library twin used by the synced/diverged star.
-    // Derived, never written: the file on disk is untouched (opening a pipeline
-    // does not dirty it), and the id is a pure function of the member set, so
-    // repeated parses agree and the region's lap counter keeps its identity.
+    // Derived, never written: the file on disk stays untouched, and the id is a
+    // pure function of the member set, so repeated parses agree and the region's
+    // lap counter keeps its identity.
     pipeline
         .loops
         .extend(crate::loop_region::materialize_missing_regions(&pipeline));
 
-    // Legacy control nodes are the carve-out above (a `type: loop` node governs
-    // its own laps, so no region is materialized over it). Say so out loud rather
-    // than leaving the canvas silently unable to render the loop: `pdo migrate`
-    // dissolves them into the edge-conditional + `loops:` model, reading the real
-    // bound off the node instead of inventing DEFAULT_MAX_ITER (#396).
+    // Legacy control nodes are the carve-out above (a `type: loop` node governs its
+    // own laps, so no region is materialized over it). Warn rather than leave the
+    // canvas silently unable to render the loop.
     let legacy: Vec<String> = pipeline
         .nodes
         .iter()
@@ -962,9 +930,8 @@ pub(crate) fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
         })
         .collect();
     if !legacy.is_empty() {
-        // The `max_iter` tail is added only when a loop node is actually present:
-        // a `switch`-only pipeline has no bound to edit, and a diagnostic that
-        // names a control the user cannot find is its own small lie.
+        // Only mention `max_iter` when a loop node exists: a `switch`-only pipeline
+        // has no bound to edit, and naming a control the user cannot find misleads.
         let has_loop = pipeline.nodes.iter().any(|n| n.node_type == NodeType::Loop);
         diagnostics.push(Diagnostic {
             severity: Severity::Warning,
@@ -988,18 +955,15 @@ pub(crate) fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
     })
 }
 
-/// Dangling references in a pipeline: an edge endpoint naming a node that
-/// does not exist, a port not declared on its node, or a loop-region member
-/// naming a non-existent node (#269). Emergent inputs are
-/// exempt — the target port of an edge landing on a *regular* node names the
-/// emergent input and is valid by construction (#149 / ADR-0011).
+/// Dangling references: an edge endpoint naming a missing node, a port not
+/// declared on its node, or a loop-region member naming a missing node. Emergent
+/// inputs are exempt — an edge target port on a *regular* node names the emergent
+/// input and is valid by construction (ADR-0011).
 ///
-/// At edit time these stay info-only warnings (ADR-0001 sharp tool: the editor
-/// never blocks). At **run launch** they become refusals (#211 / #206): a run
-/// started over a dangling reference is guaranteed to stall silently mid-run,
-/// so rejecting it is a runtime-coherence invariant, not prescriptive
-/// validation. Each message names the edge (both endpoints) and the missing
-/// node or port.
+/// Warnings at edit time (ADR-0001 sharp tool: the editor never blocks), refusals
+/// at run launch — a run over a dangling reference is guaranteed to stall silently
+/// mid-run, so rejecting it is a runtime-coherence invariant, not prescriptive
+/// validation.
 pub(crate) fn dangling_edge_references(pipeline: &PipelineDef) -> Vec<String> {
     let node_ids: HashSet<&str> = pipeline.nodes.iter().map(|n| n.id.as_str()).collect();
 
@@ -1045,10 +1009,8 @@ pub(crate) fn dangling_edge_references(pipeline: &PipelineDef) -> Vec<String> {
         }
     }
 
-    // A loop-region member naming a non-existent node is the same class of
-    // dangling reference: the region silently no-ops at runtime (its gates
-    // never match any node). Seen in the wild when `pdo migrate` re-idified
-    // nodes without remapping `loops[].members` (#269).
+    // A region member naming a missing node is the same class of dangling
+    // reference: the region silently no-ops at runtime, its gates matching no node.
     for region in &pipeline.loops {
         for member in &region.members {
             if !node_ids.contains(member.as_str()) {
@@ -1113,10 +1075,9 @@ fn validate_switch_when_clauses(pipeline: &PipelineDef) -> Result<(), ParseError
     Ok(())
 }
 
-/// Given a pipeline and a switch node ID, resolve the frontmatter schema
-/// declared on the upstream output port connected to the switch's `in` port.
-/// Returns `None` if: the node isn't a switch, no edge connects to `in`,
-/// or the upstream output port has no frontmatter schema.
+/// The frontmatter schema declared on the upstream output port feeding a switch's
+/// `in` port. `None` when the node isn't a switch, nothing connects to `in`, or the
+/// upstream port declares no schema.
 pub(crate) fn resolve_switch_upstream_schema(
     pipeline: &PipelineDef,
     switch_node_id: &str,
@@ -1135,6 +1096,36 @@ pub(crate) fn resolve_switch_upstream_schema(
         .iter()
         .find(|p| p.name == edge.source.port)?;
     source_port.frontmatter.clone()
+}
+
+/// Split a prompt map into the entries whose key is a live node and the ids of
+/// those that are not.
+///
+/// The sidecar prompt dir is keyed by node id and outlives the nodes it was
+/// written for: delete a node and its `.md` stays on disk. Every consumer that
+/// validates a pipeline against its prompts — the portable-document importer
+/// above all — requires *keys ⊆ nodes*, so apply this wherever prompts cross a
+/// boundary and that invariant holds by construction rather than by luck.
+pub(crate) fn split_live_prompts(
+    pipeline: &PipelineDef,
+    prompts: &HashMap<String, String>,
+) -> (HashMap<String, String>, Vec<String>) {
+    let live = pipeline
+        .nodes
+        .iter()
+        .map(|node| node.id.as_str())
+        .collect::<HashSet<_>>();
+    let mut kept = HashMap::with_capacity(prompts.len());
+    let mut orphans = Vec::new();
+    for (node_id, content) in prompts {
+        if live.contains(node_id.as_str()) {
+            kept.insert(node_id.clone(), content.clone());
+        } else {
+            orphans.push(node_id.clone());
+        }
+    }
+    orphans.sort();
+    (kept, orphans)
 }
 
 pub(crate) fn canonical_prompt_path(pipeline_path: &Path, node_id: &str) -> std::path::PathBuf {
@@ -1517,7 +1508,6 @@ edges:
         assert!(fallback.when.is_none(), "else edge carries no when:");
         assert!(fallback.is_else, "second edge should be an else edge");
 
-        // Round-trips: re-serialize, re-parse — no drift on the conditional fields.
         let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
         let reparsed = parse_pipeline(&serialized).unwrap();
         assert!(reparsed.pipeline.edges[0].when.is_some());
@@ -1685,9 +1675,8 @@ edges:
 
     #[test]
     fn dangling_edge_references_names_the_edge_and_the_port() {
-        // #211 / #206 — a source-port typo is a dangling reference; the message
-        // must name both the edge and the missing port so a run launch can be
-        // refused with an actionable error instead of a silent mid-run stall.
+        // A source-port typo is a dangling reference; the message names both the
+        // edge and the missing port so a launch refusal is actionable.
         let yaml = with_start_end(
             r#"
 name: dangling
@@ -1793,9 +1782,8 @@ edges:
 
     #[test]
     fn dangling_references_flag_unknown_loop_member() {
-        // #269: a loop-region member naming a non-existent node makes the
-        // region silently no-op at runtime — same class as a dangling edge.
-        // Parse-time warning, launch-time refusal (both call this fn).
+        // A region member naming a missing node makes the region silently no-op at
+        // runtime — same class as a dangling edge.
         let yaml = r#"
 name: orphan-region
 nodes:
@@ -1835,7 +1823,6 @@ loops:
             "unexpected message: {}",
             errors[0]
         );
-        // And it surfaces as a parse-time warning too.
         assert!(result
             .diagnostics
             .iter()
@@ -2002,9 +1989,7 @@ edges:
 
     #[test]
     fn parses_bounded_loop_region_block() {
-        // ADR-0011 / #148: a loop is a named entry of the `loops:` block —
-        // `id` + `kind: bounded` + `members` (>=1) + `max_iter`. It is no longer
-        // a node.
+        // A loop is a named entry of the `loops:` block, no longer a node.
         let yaml = with_start_end(
             r#"
 name: with-region
@@ -2042,10 +2027,8 @@ loops:
 
     #[test]
     fn parses_collection_loop_region_block_and_round_trips() {
-        // ADR-0011 / #151: a collection loop region (ex-ForEach) is a named entry
-        // of the `loops:` block — `id` + `kind: collection` + `over: <field>` +
-        // `members` (>=1). It carries no `max_iter` (the lap count is the
-        // collection size). The `over` driver and `kind` must round-trip.
+        // A collection region carries no `max_iter` — the lap count is the
+        // collection size. The `over` driver and `kind` must round-trip.
         let yaml = with_start_end(
             r#"
 name: with-collection
@@ -2081,7 +2064,6 @@ loops:
         assert_eq!(region.members, vec!["ab000002"]);
         assert_eq!(region.max_iter, None);
 
-        // Round-trips: re-serialize, re-parse — the collection driver survives.
         let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
         let reparsed = parse_pipeline(&serialized).unwrap();
         let r = &reparsed.pipeline.loops[0];
@@ -2150,9 +2132,8 @@ edges:
 
     #[test]
     fn parses_repeated_flag_on_edge() {
-        // `repeated` is an edge property (ADR-0011 / #149): it marks an edge whose
-        // source artifact accumulates across iterations (glob `iter-*`). It lives
-        // on the edge, not on a declared input port.
+        // `repeated` is an edge property, not a declared input port: it marks an
+        // edge whose source artifact accumulates across iterations.
         let yaml = with_start_end(
             r#"
 name: repeated-edge
@@ -2177,7 +2158,6 @@ edges:
         );
         let result = parse_pipeline(&yaml).unwrap();
         assert!(result.pipeline.edges[0].repeated);
-        // Round-trips: re-serializing keeps the flag.
         let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
         let reparsed: PipelineDef = serde_yaml::from_str(&serialized).unwrap();
         assert!(reparsed.edges[0].repeated);
@@ -2185,9 +2165,8 @@ edges:
 
     #[test]
     fn parses_manual_edge_routing_and_round_trips() {
-        // #154: manual routing (mode + absolute waypoints) persists in the
-        // pipeline file so a shared workflow carries its arrows. The daemon
-        // parses and re-serializes them without drift.
+        // Manual routing persists in the pipeline file so a shared workflow carries
+        // its arrows; the daemon must re-serialize it without drift.
         let yaml = with_start_end(
             r#"
 name: routed-edge
@@ -2222,7 +2201,6 @@ edges:
         assert_eq!(wp[0].y, 40.0);
         assert_eq!(wp[1].y, 220.0);
 
-        // Round-trips: re-serialize, re-parse — routing survives.
         let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
         let reparsed: PipelineDef = serde_yaml::from_str(&serialized).unwrap();
         let redge = &reparsed.edges[0];
@@ -2232,9 +2210,8 @@ edges:
 
     #[test]
     fn parses_edge_target_side_and_round_trips() {
-        // #168: the incoming-edge anchor side is layout — it persists in the
-        // file so a shared workflow keeps its arrow arrival sides, and the
-        // daemon parses + re-serializes it without drift.
+        // The incoming-edge anchor side is layout, but persisted so a shared
+        // workflow keeps its arrow arrival sides.
         let yaml = with_start_end(
             r#"
 name: anchored-edge
@@ -2260,7 +2237,6 @@ edges:
         let result = parse_pipeline(&yaml).unwrap();
         assert_eq!(result.pipeline.edges[0].target_side, Some(PortSide::Top));
 
-        // Round-trips: re-serialize, re-parse — the anchor side survives.
         let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
         let reparsed: PipelineDef = serde_yaml::from_str(&serialized).unwrap();
         assert_eq!(reparsed.edges[0].target_side, Some(PortSide::Top));
@@ -2533,13 +2509,9 @@ nodes:
             .find(|n| n.id == "ab12cd34")
             .unwrap();
 
-        // Omitted input defaults to left
         assert_eq!(node.inputs[0].side, Some(PortSide::Left));
-        // Explicit side preserved
         assert_eq!(node.inputs[1].side, Some(PortSide::Top));
-        // Omitted output defaults to right
         assert_eq!(node.outputs[0].side, Some(PortSide::Right));
-        // Explicit side preserved
         assert_eq!(node.outputs[1].side, Some(PortSide::Bottom));
     }
 
@@ -2575,8 +2547,6 @@ nodes:
             "/runs/run-1/pipeline.prompts/ab12cd34.md"
         );
     }
-
-    // --- Merge node tests (issue #61) ---
 
     #[test]
     fn parses_merge_node() {
@@ -2758,9 +2728,8 @@ nodes:
         assert_eq!(back.node_type, NodeType::Script);
     }
 
-    /// #563/ADR-0057: a node with no `agent_choice:` key at all parses to
-    /// `None` and re-serializes without the key — the byte-identical
-    /// no-migration contract the resolver's own tests pin from the other side.
+    /// A node with no `agent_choice:` key parses to `None` and re-serializes
+    /// without the key — the byte-identical no-migration contract (ADR-0057).
     #[test]
     fn node_without_agent_choice_key_parses_to_none_and_omits_it_on_reserialize() {
         let yaml = with_start_end(
@@ -2792,9 +2761,8 @@ nodes:
         );
     }
 
-    /// #563/ADR-0057: a node's `agent_choice: {mode: profile, profile_id: ...}`
-    /// parses into the matching [`crate::agent_choice::AgentChoice::Profile`]
-    /// and round-trips through YAML unchanged.
+    /// `agent_choice: {mode: profile, ...}` parses into
+    /// [`crate::agent_choice::AgentChoice::Profile`] and round-trips unchanged.
     #[test]
     fn node_agent_choice_profile_reference_round_trips() {
         let yaml = with_start_end(
@@ -2832,10 +2800,8 @@ nodes:
         assert_eq!(back.agent_choice, node.agent_choice);
     }
 
-    /// #563/ADR-0057: a node's `agent_choice: {mode: custom, harness, model,
-    /// effort}` parses atomically — no field is read from `harnesses`/
-    /// `pin_harness` even if both are also present (ADR-0057 ¶1: Custom does
-    /// not reactivate the old per-harness resolver).
+    /// `agent_choice: {mode: custom, ...}` parses atomically — no field is read
+    /// from `harnesses`/`pin_harness` even when both are present (ADR-0057 ¶1).
     #[test]
     fn node_agent_choice_custom_round_trips_and_coexists_with_legacy_fields() {
         let yaml = with_start_end(
@@ -2965,8 +2931,6 @@ nodes: []
         let result = parse_pipeline(&yaml).unwrap();
         assert_eq!(result.pipeline.name, "with-old-field");
     }
-
-    // --- Switch node tests (issue #46) ---
 
     #[test]
     fn parses_switch_node_with_when_on_outputs() {
@@ -3150,8 +3114,6 @@ nodes:
         );
     }
 
-    // --- Loop node tests (issue #46) ---
-
     #[test]
     fn parses_loop_node_with_max_iter() {
         let yaml = with_start_end(
@@ -3290,8 +3252,6 @@ nodes:
         );
     }
 
-    // --- Round-trip test (issue #46) ---
-
     #[test]
     fn round_trip_loop_switch_pipeline() {
         let yaml = r#"
@@ -3388,7 +3348,6 @@ edges:
             .unwrap();
         assert_eq!(switch_node.outputs.len(), 2);
 
-        // Re-serialize and re-parse — no drift
         let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
         let result2 = parse_pipeline(&serialized).unwrap();
         assert_eq!(result2.pipeline.name, result.pipeline.name);
@@ -3396,17 +3355,10 @@ edges:
         assert_eq!(result2.pipeline.edges.len(), result.pipeline.edges.len());
     }
 
-    // --- Existing variants unchanged (issue #46) ---
-
-    // --- Bounded-region auto-materialization at the parse boundary (#396) ---
-
     #[test]
     fn parse_materializes_a_region_for_an_undeclared_cycle() {
-        // ADR-0011 (b): a cycle is never accidentally unbounded. Before #396 this
-        // was applied only by the editor's `addEdge`, so a cycle that arrived any
-        // other way — hand-written file, imported workflow, or simply a pipeline
-        // reopened — parsed region-less: no `↻` header and no editable `max_iter`
-        // on the canvas, and no lap counter in the scheduler.
+        // ADR-0011 (b): a cycle is never accidentally unbounded, whatever route it
+        // arrived by — hand-written file, imported workflow, or a mere reopen.
         let yaml = with_start_end(
             r#"
 name: cyclic
@@ -3448,7 +3400,6 @@ edges:
             parse_pipeline(&yaml).unwrap().pipeline.loops[0].id,
             region.id
         );
-        // Materialization is not a complaint — it is the documented default.
         assert!(
             result.diagnostics.is_empty(),
             "a plain cycle must parse clean: {:?}",
@@ -3501,10 +3452,9 @@ loops:
 
     #[test]
     fn parse_diagnoses_legacy_control_nodes_instead_of_wrapping_them() {
-        // A `type: loop` node keeps its own bound and its own scheduler path, so no
-        // region is derived over its cycle (that would run one loop on two counters
-        // and show DEFAULT_MAX_ITER where the engine uses 3). The parse says what to
-        // do about it rather than leaving the canvas mutely region-less (#396).
+        // A `type: loop` node keeps its own bound and scheduler path, so no region
+        // is derived over its cycle — that would run one loop on two counters and
+        // show DEFAULT_MAX_ITER where the engine uses 3.
         let result = parse_pipeline(crate::pipeline_migrator::LEGACY_REVIEW_LOOP_YAML).unwrap();
         assert!(
             result.pipeline.loops.is_empty(),
@@ -3526,10 +3476,8 @@ loops:
 
     #[test]
     fn parse_fixture_review_loop_yaml() {
-        // The seed fixture is post-ADR-0011 since #396 (it shipped with a
-        // `type: loop` + `type: switch` pair the canvas could not draw, which is
-        // why its `max_iter` was unreachable): conditional edges plus a named
-        // bounded region, no legacy control node.
+        // The seed fixture is post-ADR-0011: conditional edges plus a named bounded
+        // region, no legacy control node.
         let yaml = include_str!("../../../.pdo/pipelines/review-loop.yaml");
         let result = parse_pipeline(yaml).unwrap();
         assert_eq!(result.pipeline.name, "review-loop");
@@ -3555,8 +3503,6 @@ loops:
         assert!(types.contains(&&NodeType::End));
         assert!(types.contains(&&NodeType::Agent));
     }
-
-    // --- Switch upstream schema resolution tests (issue #64) ---
 
     #[test]
     fn resolve_switch_upstream_schema_returns_schema_when_connected() {
@@ -3656,8 +3602,6 @@ edges:
         let schema = resolve_switch_upstream_schema(&result.pipeline, "gate");
         assert!(schema.is_none());
     }
-
-    // --- Switch when-clause validation tests (issue #64) ---
 
     #[test]
     fn rejects_switch_when_field_not_in_upstream_schema() {
@@ -3893,8 +3837,6 @@ nodes:
         assert!(schema.is_none());
     }
 
-    // --- ForEach retirement (ADR-0011 / #269, ex-issue #60/#65) ---
-
     #[test]
     fn foreach_node_type_is_refused_at_parse() {
         // Not warn+coerce: silently rewriting a fan-out node to non-isolated would
@@ -3924,9 +3866,6 @@ edges: []
             );
         }
     }
-
-    // --- normalize_node_value: the per-node pass shared by parse_pipeline and
-    // the single-node `POST /nodes/parse` endpoint (#345). ---
 
     fn node_value(yaml: &str) -> serde_yaml::Value {
         serde_yaml::from_str(yaml).unwrap()
@@ -4171,9 +4110,8 @@ edges: []
 
     #[test]
     fn normalize_node_value_matches_parse_pipeline_diagnostic() {
-        // Golden: the factored per-node pass emits exactly the diagnostic the
-        // full pipeline parse emits for the same node — single source of truth,
-        // so the refactor is behaviour-preserving.
+        // The per-node pass must emit exactly the diagnostic the full pipeline
+        // parse emits for the same node — one source of truth.
         let mut node = node_value("id: n1\nname: X\ntype: bogus\n");
         let node_diags = normalize_node_value(&mut node).unwrap();
         let yaml = with_start_end(
@@ -4201,8 +4139,6 @@ edges: []
 
     #[test]
     fn parses_node_model_and_round_trips() {
-        // #296: an agent-spawning node may carry a `model:` override. It parses
-        // into `NodeDef.model` and survives a serialize → re-parse round-trip.
         let yaml = with_start_end(
             r#"
 name: per-node-model
@@ -4223,7 +4159,7 @@ nodes:
             .iter()
             .find(|n| n.id == "ab000001")
             .unwrap();
-        // #550: a flat `model:` is folded into `harnesses.claude.model` on parse.
+        // A flat `model:` is folded into `harnesses.claude.model` on parse.
         assert_eq!(
             node.harnesses
                 .get("claude")
@@ -4231,7 +4167,6 @@ nodes:
             Some("opus")
         );
 
-        // Round-trips: re-serialize, re-parse — the model survives (now under the map).
         let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
         let result2 = parse_pipeline(&serialized).unwrap();
         let node2 = result2
@@ -4251,9 +4186,9 @@ nodes:
 
     #[test]
     fn node_model_defaults_to_none() {
-        // A node with no `model:` parses to `None` and is never serialized —
-        // the absence gate that keeps an unset node byte-identical to a library
-        // twin with no model (#296, the "diverged forever" guard).
+        // A node with no `model:` parses to `None` and is never serialized — the
+        // absence gate that keeps an unset node byte-identical to a library twin
+        // with no model (the "diverged forever" guard).
         let yaml = with_start_end(
             r#"
 name: no-model
@@ -4282,10 +4217,9 @@ nodes:
 
     #[test]
     fn parses_node_effort_and_round_trips() {
-        // #424: an agent-spawning node may carry an `effort:` override. It parses
-        // into `NodeDef.effort` and survives a serialize → re-parse round-trip.
-        // Pass-through, deliberately not an enum: a value the wire does not know
-        // must reach `claude` verbatim rather than fail the whole pipeline parse.
+        // `effort:` is pass-through, deliberately not an enum: a value the wire
+        // does not know must reach the harness verbatim rather than fail the whole
+        // pipeline parse.
         let yaml = with_start_end(
             r#"
 name: per-node-effort
@@ -4308,7 +4242,7 @@ nodes:
 "#,
         );
         let result = parse_pipeline(&yaml).unwrap();
-        // #550: flat `effort:` is folded into `harnesses.claude.effort` on parse.
+        // A flat `effort:` is folded into `harnesses.claude.effort` on parse.
         let find = |p: &PipelineDef, id: &str| {
             p.nodes
                 .iter()
@@ -4316,7 +4250,6 @@ nodes:
                 .and_then(|n| n.harnesses.get("claude").and_then(|e| e.effort.clone()))
         };
         assert_eq!(find(&result.pipeline, "ab000001").as_deref(), Some("low"));
-        // Orthogonal to the model — both land, neither clobbers the other.
         assert_eq!(
             result
                 .pipeline
@@ -4332,7 +4265,6 @@ nodes:
         // An unknown level parses fine (pass-through, no closed enum).
         assert_eq!(find(&result.pipeline, "ab000002").as_deref(), Some("turbo"));
 
-        // Round-trips: re-serialize, re-parse — both efforts survive.
         let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
         let result2 = parse_pipeline(&serialized).unwrap();
         assert_eq!(find(&result2.pipeline, "ab000001").as_deref(), Some("low"));
@@ -4344,10 +4276,9 @@ nodes:
 
     #[test]
     fn node_effort_defaults_to_none() {
-        // #424: a node with no `effort:` parses to `None` and is never serialized
-        // — the absence gate that keeps an unset node byte-identical to a library
-        // twin with no effort (the #345 "diverged forever" trap), and that keeps
-        // the launch command byte-identical to the legacy path.
+        // A node with no `effort:` parses to `None` and is never serialized — the
+        // absence gate that keeps an unset node byte-identical to a library twin
+        // with no effort, and the launch command identical to the legacy path.
         let yaml = with_start_end(
             r#"
 name: no-effort
@@ -4521,8 +4452,6 @@ edges:
         assert!(when.as_mapping().unwrap().len() >= 2);
     }
 
-    // --- port_type deserialization ---
-
     #[test]
     fn port_type_defaults_to_markdown() {
         let yaml = r#"
@@ -4612,9 +4541,8 @@ edges:
 
     #[test]
     fn port_type_html_deserializes_and_round_trips() {
-        // #333: a `port_type: html` output survives load → save. The daemon read
-        // path maps it to PortType::Html (not the markdown default), and the
-        // serde snake_case rename emits it back as the bare scalar `html`.
+        // A `port_type: html` output survives load → save: mapped to PortType::Html
+        // (not the markdown default) and emitted back as the bare scalar `html`.
         let yaml = r#"
 name: test
 nodes:
@@ -4662,10 +4590,9 @@ edges:
 
     #[test]
     fn port_type_image_list_deserializes_on_input_port() {
-        // Regression for the "image list ports not persisted" bug: the frontend
-        // serializer now emits `port_type: image_list` on INPUT ports too (e.g.
-        // the Tester node's `screens` input). Confirm the daemon read path
-        // round-trips it to PortType::ImageList rather than the markdown default.
+        // The frontend emits `port_type: image_list` on INPUT ports too; the daemon
+        // read path must round-trip it to PortType::ImageList, not the markdown
+        // default.
         let yaml = r#"
 name: test
 nodes:
@@ -4714,8 +4641,6 @@ edges:
         assert_eq!(tester.outputs[1].port_type, PortType::Markdown);
     }
 
-    // --- prompt_required (#158) ---
-
     #[test]
     fn prompt_required_defaults_to_true_when_absent() {
         let yaml = with_start_end(
@@ -4762,8 +4687,8 @@ nodes: []
 
     #[test]
     fn prompt_required_false_emits_no_unknown_field_diagnostic() {
-        // #183: prompt_required is a legitimate PipelineDef field; the
-        // unknown-field lint must not warn about it.
+        // prompt_required is a legitimate field; the unknown-field lint must not
+        // warn about it.
         let yaml = with_start_end(
             r#"
 name: optional-prompt
@@ -4818,10 +4743,9 @@ nodes: []
 
     #[test]
     fn known_keys_cover_serialized_pipeline() {
-        // Drift guard for #183: every top-level key PipelineDef can serialize
-        // must be in KNOWN_TOP_LEVEL_KEYS, or the lint false-positives on the
-        // next freshly added field (the way #158 forgot prompt_required).
-        // Fixture sets every optional field to a non-default value so all
+        // Drift guard: every top-level key PipelineDef can serialize must be in
+        // KNOWN_TOP_LEVEL_KEYS, or the lint false-positives on the next added field.
+        // The fixture sets every optional field to a non-default value so all
         // skip_serializing_if fields are actually emitted.
         let yaml = r#"
 name: full-fixture

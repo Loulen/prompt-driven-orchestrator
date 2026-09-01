@@ -133,7 +133,6 @@ async fn successive_external_edits_each_emit_pipeline_changed() {
     let mut ws = daemon.connect_ws().await.unwrap();
     let _ = ws.next().await.unwrap().unwrap();
 
-    // First external edit
     std::fs::write(pipeline_path(daemon.repo_root()), EXTERNALLY_MODIFIED_YAML).unwrap();
     let evt1 = next_pipeline_changed_for(&mut ws, PIPELINE_NAME, Duration::from_secs(4))
         .await
@@ -143,7 +142,6 @@ async fn successive_external_edits_each_emit_pipeline_changed() {
     // Wait for debounce to settle before second edit
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    // Second external edit (revert to original)
     std::fs::write(pipeline_path(daemon.repo_root()), INITIAL_YAML).unwrap();
     let evt2 = next_pipeline_changed_for(&mut ws, PIPELINE_NAME, Duration::from_secs(4))
         .await

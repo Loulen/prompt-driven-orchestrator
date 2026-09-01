@@ -1,6 +1,6 @@
-// #494 / ADR-0039: the daemon is a single crate of sibling modules. A `pub`
-// item with no consumer outside its own file is a leak — this lint flags it so
-// `clippy -D warnings` in CI keeps the crate's surface from re-widening.
+// Don't drop this lint (ADR-0039): the daemon is one crate of sibling modules, so
+// a `pub` item with no consumer outside its file is a leak, and only this warning
+// (with `clippy -D warnings`) keeps the crate surface from re-widening.
 #![warn(unreachable_pub)]
 
 pub mod admission;
@@ -108,9 +108,11 @@ use tokio::sync::broadcast;
 use tokio::time;
 use tracing::{error, info, warn};
 
-// `create_sub_worktree` is now referenced only from tests here (its production
-// caller `spawn_node` moved to `node_spawn` in #356), so it joins the test-only
-// import to keep the non-test build warning-clean.
+use crate::node_spawn::SpawnContext;
+#[cfg(test)]
+use crate::node_spawn::{spawn_node, SpawnDeps, SpawnOutcome};
+use crate::run_command::run_command;
+use crate::scheduler_interpreter::{ActionOutcome, SpawnDedup};
 #[cfg(test)]
 use crate::worktree_ops::{commit_and_merge_sub_worktree, create_sub_worktree};
 use crate::worktree_ops::{
@@ -118,22 +120,6 @@ use crate::worktree_ops::{
     secondary_snapshot_path, sub_worktree_branch, sub_worktree_path, validate_merge_resolution,
     worktree_dir_for_run, worktree_has_tracked_changes,
 };
-// #356: spawn primitive carved into `node_spawn`. Imported unqualified here so
-// the many construction sites (`SpawnContext { .. }`) need no per-site path
-// churn.
-use crate::node_spawn::SpawnContext;
-// #236: the production `spawn_node` call sites left with the command dispatcher
-// (`run_command.rs`), so the primitive and its two verdict types are reached
-// only from the tests below — same test-only import shape as
-// `create_sub_worktree` above, to keep the non-test build warning-clean.
-#[cfg(test)]
-use crate::node_spawn::{spawn_node, SpawnDeps, SpawnOutcome};
-// #236: the command dispatcher lives in its own module now. Imported unqualified
-// so the route line stays `post(run_command)` and `grep "fn run_command"` still
-// lands on the handler. The module sits in the type namespace and the function
-// in the value namespace, so the shared name is not a collision.
-use crate::run_command::run_command;
-use crate::scheduler_interpreter::{ActionOutcome, SpawnDedup};
 
 const DEFAULT_PORT: u16 = 5172;
 const DEFAULT_DAEMON_URL: &str = "http://localhost:5172";
@@ -163,10 +149,9 @@ pub enum Commands {
     },
     /// Signal that the current NodeRun has completed successfully
     Complete {
-        /// Runtime-initiated completion on turn end (#433, ADR-0043): set by the
-        /// injected `Stop` hook, never by an agent typing `pdo complete`. Records
-        /// `NodeAutoCompleted` (source `StopHook`) so the log says the completion
-        /// was automatic. Additive — the `0/3/4/1` exit-code contract is unchanged.
+        /// Runtime-initiated completion on turn end: set by the injected `Stop`
+        /// hook, never by an agent typing `pdo complete`. Records
+        /// `NodeAutoCompleted` (source `StopHook`).
         #[arg(long)]
         auto: bool,
     },
@@ -175,21 +160,17 @@ pub enum Commands {
         #[arg(long)]
         reason: String,
     },
-    /// Graceful no-op (#245): there is legitimately nothing to do, so end the
-    /// run as `skipped` instead of `failed`. Use when a node cannot do its work
-    /// because the input/pool is empty (e.g. an auto-issue selector whose
-    /// eligible issues were all claimed between guard-eval and node-run), NOT
-    /// for genuine errors — reserve `fail` for those.
+    /// Graceful no-op: there is legitimately nothing to do, so end the run as
+    /// `skipped` instead of `failed`. Use when the input/pool is empty, NOT for
+    /// genuine errors — reserve `fail` for those.
     Skip {
         #[arg(long)]
         reason: String,
     },
-    /// Migrate legacy pipeline YAMLs on disk (#269, ADR-0011): dissolve
+    /// Migrate legacy pipeline YAMLs on disk (ADR-0011): dissolve
     /// `type: for-each` (and other retired control nodes) into `loops:`
-    /// regions, rewiring edges. An explicit one-shot — never auto-run at load,
-    /// so a migration is always a deliberate, reviewable act. A real run
-    /// writes a `.bak` backup beside each migrated file; `--dry-run` only
-    /// reports what would change.
+    /// regions, rewiring edges. Never auto-run at load — a migration is always
+    /// a deliberate act. A real run writes a `.bak` beside each migrated file.
     Migrate {
         /// Migrate only this directory of pipeline YAMLs. Default: the repo's
         /// `.pdo/pipelines`, `~/.pdo/pipelines`, and the library store.
@@ -199,16 +180,12 @@ pub enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Reclaim disk from old terminal Runs surfaced by `GET /runs/reapable`
-    /// (#480, #128 Track A). Applies a graded-TTL policy ([`reap_policy`]) and
-    /// archives each match via the existing `cleanup_run` command.
+    /// Reclaim disk from old terminal Runs surfaced by `GET /runs/reapable`.
+    /// Applies a graded-TTL policy ([`reap_policy`]) and archives each match via
+    /// the existing `cleanup_run` command.
     ///
-    /// A blocking one-shot (like `Complete`/`Migrate`) that talks to the daemon
-    /// over HTTP — deterministic Rust, so the shipped `disk-janitor` pipeline can
-    /// drive it from a `script` node (ADR-0017) with zero LLM turn and full CI
-    /// coverage. The deletion's *origin* stays a pipeline/CLI action, never the
-    /// runtime itself (ADR-0012a: « le runtime ne déclenche jamais d'action
-    /// durable de lui-même »).
+    /// Driven from a pipeline `script` node, never by the runtime itself
+    /// (ADR-0012a: the runtime never triggers a durable action on its own).
     Reap {
         /// Print only the number of Runs the policy would reclaim, then exit 0.
         /// A Trigger guard can gate on it: `[ "$(pdo reap --count)" -gt 0 ]`.
@@ -217,50 +194,43 @@ pub enum Commands {
         /// Show the reclaim plan without archiving anything.
         #[arg(long)]
         dry_run: bool,
-        /// TTL in hours for `completed` Runs (default 24). Tighten under disk
-        /// pressure, e.g. `--ttl-hours 1`.
+        /// TTL in hours for `completed` Runs (default 24).
         #[arg(long)]
         ttl_hours: Option<i64>,
         /// TTL in hours for `failed`/`halted`/`skipped` Runs — post-mortem
         /// evidence, held longer but bounded (default 72).
         #[arg(long)]
         terminal_ttl_hours: Option<i64>,
-        /// Wall-clock budget in seconds for issuing reclaims (default 40).
-        /// `cleanup_run` is synchronous and a `script` node is killed at
-        /// `SCRIPT_TIMEOUT_SECS` (60s); past the budget the janitor stops
-        /// starting new reclaims and still exits 0, leaving the rest for the next
-        /// fire rather than failing (a failed janitor Run leaks its own worktree).
+        /// Wall-clock budget in seconds for issuing reclaims (default 40). Must
+        /// stay under `SCRIPT_TIMEOUT_SECS` (60s), which kills the janitor's
+        /// `script` node; past the budget the janitor stops and still exits 0,
+        /// because a failed janitor Run leaks its own worktree.
         #[arg(long, default_value_t = 40)]
         budget_secs: u64,
     },
-    /// Manage the persistent OS service unit for the daemon (#156, ADR-0019).
+    /// Manage the persistent OS service unit for the daemon (ADR-0019).
     ///
     /// Installs the daemon as a `systemd --user` unit (Linux) or a launchd
-    /// LaunchAgent (macOS, best-effort) so it starts at boot and survives
-    /// logout — turning "Triggers only fire while you're logged in" into a
-    /// reliable unattended orchestrator (resolves the ADR-0012 v1 limitation).
+    /// LaunchAgent (macOS, best-effort) so it starts at boot and survives logout.
     Service {
         #[command(subcommand)]
         action: ServiceAction,
     },
-    /// Print the documentation PDO generates from its own code (#617).
+    /// Print the documentation PDO generates from its own code.
     Docs {
         #[command(subcommand)]
         action: DocsAction,
     },
 }
 
-/// Actions for `pdo docs` (#617). A blocking one-shot like `Migrate` — pure
-/// rendering plus, for `--write`, one file rewrite. No daemon, no tokio.
 #[derive(Subcommand, Debug)]
 pub enum DocsAction {
     /// The harness support matrix — which capability each harness has, what is
     /// absent and why, and the last validated version of each binary.
     ///
-    /// Rendered from the capability declaration in `harness_probes.rs`, which is
-    /// its only source of truth. With no flag it prints the block; `--check` fails
-    /// (exit 1) if the block committed in the target file has drifted from what the
-    /// code declares, and `--write` puts it back.
+    /// Rendered from the capability declaration in `harness_probes.rs`, its only
+    /// source of truth. `--check` fails (exit 1) if the block committed in the
+    /// target file has drifted from the code; `--write` puts it back.
     SupportTable {
         /// Fail if the block in the target file has drifted from the code.
         #[arg(long)]
@@ -274,19 +244,15 @@ pub enum DocsAction {
     },
 }
 
-/// Actions for `pdo service` (#156, D2). A new top-level subcommand rather than
-/// flags on `Daemon`: every existing verb is one-shot → one `run_*` fn, whereas
-/// `Daemon` builds a tokio runtime and blocks forever. `Service` is a blocking
-/// one-shot like `Complete`/`Fail`/`Skip` — no tokio runtime.
 #[derive(Subcommand, Debug)]
 pub enum ServiceAction {
     /// Generate + enable the service unit so the daemon starts at boot / survives logout.
     Install {
         #[arg(short, long, env = "PDO_PORT", default_value_t = DEFAULT_PORT)]
         port: u16,
-        /// Print the unit file + the exact commands, make NO changes (safe
-        /// preview / test seam). Still probes the port so the conflict guard is
-        /// visible, but performs zero writes and runs no `systemctl`.
+        /// Print the unit file + the exact commands, make NO changes. Still
+        /// probes the port so the conflict guard is visible, but performs zero
+        /// writes and runs no `systemctl`.
         #[arg(long)]
         dry_run: bool,
     },
@@ -303,180 +269,135 @@ struct AppState {
     repo_root: PathBuf,
     port: u16,
     merge_lock: tokio::sync::Mutex<()>,
-    /// Serializes admission so the slot check is atomic check-and-reserve
-    /// (#213). A spawn holds this from the moment it counts live sessions until
-    /// it has appended the reservation event (`NodeStarted` / `NodeWaiting`),
-    /// after which the projected state already reflects the new session and the
-    /// next spawn's count sees it. Without it, concurrent spawns (retries of
-    /// `waiting` nodes across runs) can all observe the same free slot and
-    /// overshoot the cap.
+    /// Serializes admission so the slot check is atomic check-and-reserve. A
+    /// spawn holds this from the moment it counts live sessions until it has
+    /// appended the reservation event (`NodeStarted` / `NodeWaiting`). Without
+    /// it, concurrent spawns all observe the same free slot and overshoot the cap.
     admission_lock: tokio::sync::Mutex<()>,
     /// Serializes Trigger scheduler ticks. A tick is read-decide-write
-    /// (`due_triggers` → guard subprocess → `set_next_fire`) with an await on
-    /// the guard in the middle; two concurrent ticks (the 30 s background loop
-    /// and the `run_trigger_tick` test seam) can otherwise both see the same
-    /// Trigger as due and double-fire it.
+    /// (`due_triggers` → guard subprocess → `set_next_fire`) with an await in the
+    /// middle; two concurrent ticks would both see the same Trigger as due and
+    /// double-fire it.
     trigger_tick_lock: tokio::sync::Mutex<()>,
-    /// Paths the daemon has just written. The pipeline watcher consults this map
-    /// and suppresses `pipeline_changed` broadcasts for paths it sees within the
-    /// TTL window — that's how we tell our own writes apart from external ones
-    /// (vim, git checkout, future Pipeline Manager) without ignoring the latter.
+    /// Paths the daemon has just written. The pipeline watcher suppresses
+    /// `pipeline_changed` broadcasts for paths seen within the TTL window — that
+    /// is how our own writes are told apart from external ones (vim, git
+    /// checkout) without ignoring the latter.
     recent_writes: Arc<Mutex<HashMap<PathBuf, Instant>>>,
     /// Live handle to the pipeline file watcher. Run dirs are watched
     /// individually and non-recursively (see `pipeline_watcher::watch_run_dir`),
     /// so run creation must register each new run dir here.
     run_watcher: Arc<Mutex<Option<pipeline_watcher::PipelineDebouncer>>>,
     /// Per-daemon override for the `claude …` tail of spawned tmux scripts.
-    /// `None` in production (real claude); `Some(cmd)` in tests, seeded via
-    /// [`DaemonConfig`] by `TestDaemon::spawn`, so no test ever launches real
-    /// claude and no `std::env::set_var` race can clobber it (#181).
+    /// `None` in production; `Some(cmd)` in tests, seeded via [`DaemonConfig`] —
+    /// never process-global env, which parallel test daemons would race on.
     tmux_cmd_override: Option<String>,
     /// Per-daemon override for the `docker` binary the sandbox wiring shells out
-    /// to (#407). `None` in production (real `docker`); `Some(cmd)` in the
-    /// layer-3 harness. Seeded via [`DaemonConfig`], mirroring `tmux_cmd_override`
-    /// (#181) — never a process-global `std::env` read in the hot path.
+    /// to. Seeded via [`DaemonConfig`], never a process-global `std::env` read.
     docker_cmd_override: Option<String>,
-    /// Per-daemon sandbox home-root override (#407). `None` in production (real
-    /// `$HOME`); `Some(dir)` in the layer-3 harness so staging lands under the
+    /// Per-daemon sandbox home-root override, so layer-3 staging lands under the
     /// test's tempdir. Seeded via [`DaemonConfig`].
     sandbox_home_override: Option<PathBuf>,
     /// Epoch-millis of the **start** of the most recent Trigger scheduler tick,
-    /// or `0` if it has never ticked. Process-lifetime only (a restart resets it
-    /// *and* revives the scheduler). Surfaced by `GET /triggers/health` so a
-    /// dead/stalled scheduler is observable instead of silent (#222). Written at
-    /// tick start so a wedged tick freezes the value; an isolated panic still
-    /// advances it (the loop is alive).
+    /// or `0` if it has never ticked. Written at tick start so a wedged tick
+    /// freezes the value; an isolated panic still advances it (the loop is
+    /// alive). Surfaced by `GET /triggers/health`.
     last_trigger_tick_ms: Arc<std::sync::atomic::AtomicI64>,
-    /// Debug-only fault-injection knob (#222): when a due Trigger's name matches,
-    /// its tick `panic!`s, exercising the scheduler's panic isolation. `None` in
-    /// production unless `PDO_DEBUG_PANIC_TRIGGER` is set; tests seed it
-    /// per-daemon via [`DaemonConfig`] (never process-global env — #181).
+    /// Debug-only fault injection: when a due Trigger's name matches, its tick
+    /// `panic!`s, exercising the scheduler's panic isolation. Per-daemon, never
+    /// process-global env.
     panic_on_trigger_name: Option<String>,
     /// Epoch-millis of the **start** of the most recent stale-detection sweep, or
-    /// `0` if it has never swept. Process-lifetime only (a restart resets it *and*
-    /// revives the sweep). Surfaced by `GET /stale/health` so a dead/stalled stale
-    /// detector is observable instead of silent (#251) — the sibling of
-    /// `last_trigger_tick_ms` (#222). Written at sweep start so a wedged sweep
-    /// freezes the value; an isolated panic still advances it (the loop is alive).
+    /// `0` if it has never swept. Written at sweep start so a wedged sweep
+    /// freezes the value; an isolated panic still advances it. Surfaced by
+    /// `GET /stale/health`.
     last_stale_tick_ms: Arc<std::sync::atomic::AtomicI64>,
-    /// Count of live nodes observed blocked on Claude Code's usage-limit
-    /// interactive menu, as of the most recent stale-detection sweep (#290).
-    /// Recomputed each sweep (leak-free — a node that leaves the live set is
-    /// simply not recounted), `0` if none. Process-lifetime; surfaced by
-    /// `GET /stale/health` next to the heartbeat. Observability-only: the sweep
-    /// never changes a flagged node's status (Slice 1).
+    /// Count of live nodes blocked on Claude Code's usage-limit menu as of the
+    /// most recent sweep. A *level*: recomputed each sweep, so a node leaving the
+    /// live set is simply not recounted. Observability-only — the sweep never
+    /// changes a flagged node's status.
     blocked_on_limit: Arc<std::sync::atomic::AtomicI64>,
-    /// Epoch-millis of the most recent orphan-sweep pass, or `0` if it has never
-    /// swept (#485). Its own gauge, **not** merged into `/stale/health`: that is
-    /// the stale detector's 30 s heartbeat, and the reaper is a different 60 s
-    /// loop — sharing the field would be a naming lie waiting to happen.
-    /// Surfaced by `GET /sessions` as `reaper.last_sweep_at`.
+    /// Epoch-millis of the most recent orphan-sweep pass. Kept out of
+    /// `/stale/health` on purpose: that gauge is the stale detector's 30 s
+    /// heartbeat, the reaper is a separate 60 s loop. Surfaced by `GET /sessions`
+    /// as `reaper.last_sweep_at`.
     reaper_last_sweep_ms: Arc<std::sync::atomic::AtomicI64>,
-    /// Sessions killed by the orphan sweep **since this daemon booted** (#485) —
-    /// a monotonic counter, not a per-pass gauge. A kill is an *event*: counting
-    /// it is the only way the surface can answer "did the reaper kill my node?"
-    /// minutes after the fact. Resetting it each pass made the answer ~always
-    /// `0`, since the pass that kills is followed within seconds by an idle one.
-    /// Contrast `blocked_on_limit`, a genuine *level* that must be recomputed.
-    /// Not persisted — a restart resets it, and `journalctl` remains the record.
+    /// Sessions killed by the orphan sweep **since this daemon booted** — a
+    /// cumulative counter, not a per-pass gauge. Don't reset it each pass: the
+    /// killing pass is followed within seconds by an idle one, so the surface
+    /// would read `0` whenever anyone asked. Contrast `blocked_on_limit`, a
+    /// genuine level.
     reaper_killed: Arc<std::sync::atomic::AtomicI64>,
-    /// Of those, how many were killed on an **absence** verdict — an absent run,
-    /// an absent node, or an unparseable session name (#485). Split out from
-    /// `reaper_killed` on purpose: a single counter cannot carry reasons, and
-    /// after #485 this is the class that became a "can no longer happen" on a
-    /// live session. Being cumulative is what makes "it must stay flat" a
-    /// checkable claim: flat now means *never incremented*, not *idle last pass*.
+    /// Of those, how many were killed on an **absence** verdict — absent run,
+    /// absent node, or an unparseable session name. Split out because a single
+    /// counter cannot carry reasons, and cumulative because that is what makes
+    /// "it must stay flat" checkable: flat means *never incremented*, not *idle
+    /// last pass*.
     reaper_killed_for_absent_run: Arc<std::sync::atomic::AtomicI64>,
-    /// Debug-only fault-injection knob (#251): a one-shot poison pill. When armed
-    /// (`true`), the next stale sweep `panic!`s, then disarms itself (`swap`) —
-    /// exercising the sweep's panic isolation and proving the *next* sweep
-    /// recovers. `false` in production unless `PDO_DEBUG_PANIC_STALE` arms it at
-    /// boot; tests arm it *post-boot* via [`DaemonHandle::arm_stale_panic`] so the
-    /// immediate startup sweep doesn't consume it first. An `Arc<AtomicBool>` (not
-    /// process-global env) so parallel test daemons never race (#181).
+    /// Debug-only one-shot poison pill: the next stale sweep `panic!`s, then
+    /// disarms itself, proving the *next* sweep recovers. Tests arm it
+    /// *post-boot* via [`DaemonHandle::arm_stale_panic`] — the immediate startup
+    /// sweep would otherwise consume it first.
     panic_on_stale_sweep: Arc<std::sync::atomic::AtomicBool>,
-    /// Debug-only fault-injection knob (#279): a one-shot poison pill. When armed
-    /// (`true`), the next `spawn_node` panics inside its post-worktree span, then
-    /// disarms itself (`swap`) — exercising the spawn window's `catch_unwind`
-    /// isolation, proving the orphaned sub-worktree is reaped and the run is
-    /// failed *loud* (`RunFailed`) instead of wedging `Running` forever. `false`
-    /// in production unless `PDO_DEBUG_PANIC_SPAWN` arms it at boot; tests arm it
-    /// *post-boot* via [`DaemonHandle::arm_spawn_panic`] so the run's entry-node
-    /// spawn can be targeted deterministically. An `Arc<AtomicBool>` (not
-    /// process-global env) so parallel test daemons never race (#181).
+    /// Debug-only one-shot poison pill: the next `spawn_node` panics inside its
+    /// post-worktree span, then disarms itself, exercising the spawn window's
+    /// `catch_unwind` (orphaned sub-worktree reaped, run failed loud instead of
+    /// wedging `Running`). Tests arm it *post-boot* via
+    /// [`DaemonHandle::arm_spawn_panic`] to target the entry-node spawn.
     panic_on_spawn: Arc<std::sync::atomic::AtomicBool>,
-    /// Test-only gate (#304): when armed, the detached terminal tail (reap +
-    /// run-advance spawned by `node_done`/`node_fail`/`node_skip`) parks at its
-    /// head until [`DaemonHandle::release_node_done_gate`] fires. Sits as the
-    /// FIRST instruction of the detached future, so it encodes the DETACH-vs-
-    /// inline divergence the regression test discriminates on: inline (pre-fix)
-    /// the wait lives in the request future and a client disconnect cancels it —
-    /// the advance is lost; detached it survives the drop and resumes on
-    /// release. Unarmed (production): a pure no-op. Sibling of `panic_on_spawn`
-    /// (#279) — per-daemon, never process-global env (#181).
+    /// Test-only gate: when armed, the detached terminal tail (reap + run-advance
+    /// spawned by `node_done`/`node_fail`/`node_skip`) parks until
+    /// [`DaemonHandle::release_node_done_gate`] fires. Don't move it off the FIRST
+    /// instruction of the detached future: its position is what encodes the
+    /// detach-vs-inline divergence the regression test discriminates on (inline,
+    /// a client disconnect cancels the wait and the advance is lost).
     node_done_tail_gate: Arc<tokio::sync::Notify>,
     /// Whether the tail gate is currently armed. See [`Self::node_done_tail_gate`].
     node_done_tail_gate_armed: Arc<std::sync::atomic::AtomicBool>,
-    /// Persistent-service health (#156, D5), computed once at boot and cached
-    /// here so the polled `GET /sessions` pays zero subprocess cost per request.
-    /// Surfaced as the `service` object on `/sessions`; drives the status bar's
-    /// `ephemeral` pill.
+    /// Persistent-service health, computed once at boot and cached so the polled
+    /// `GET /sessions` pays zero subprocess cost per request.
     service_health: Arc<ServiceHealth>,
-    /// TTL cache (~10 s) of the Docker availability probe (#410), surfaced as
-    /// `sandbox_docker` on `GET /settings` so the NewRunModal can gray out
-    /// `full`/`minimal` when Docker is unreachable. Lazily refreshed by
-    /// `build_settings_view` when stale — never boot-once (a user may start Docker
-    /// mid-session) and never per-fetch (a `PUT` of an unrelated knob would pay a
-    /// docker round-trip). The refresh runs under `spawn_blocking` + a short
-    /// `timeout`, so a cold Docker daemon never hangs the `/settings` response.
+    /// TTL cache (~10 s) of the Docker availability probe, surfaced as
+    /// `sandbox_docker` on `GET /settings`. Lazily refreshed when stale — not
+    /// boot-once (a user may start Docker mid-session) and not per-fetch (a `PUT`
+    /// of an unrelated knob would pay a docker round-trip). The refresh runs under
+    /// `spawn_blocking` + a short `timeout`, so a cold Docker daemon never hangs
+    /// the `/settings` response.
     docker_probe_cache: Arc<tokio::sync::Mutex<Option<(Instant, sandbox_image::DockerProbe)>>>,
-    /// Per-harness offered-catalogue cache (#616, ADR-0053 §3), keyed by harness
-    /// name. Each entry stamps the moment it was last version-checked and the
-    /// [`harness_catalogue::CachedCatalogue`] read (models, efforts, and the version
-    /// they came from). The freshness contract: at most one `--version` re-check per
-    /// harness per [`CATALOGUE_VERSION_TTL`] window, and a full `--help` re-probe
-    /// only when that version has changed — so an auto-updating binary is followed
-    /// without a restart, at a bounded subprocess cost on the `/settings` path.
-    /// Populated eagerly at boot (a sibling of the price refresh) and lazily on the
-    /// first `/settings` fetch. Never persisted: a probe is cheap and the truth is
-    /// on disk, so a restart simply re-reads it.
+    /// Per-harness offered-catalogue cache (ADR-0053 §3), keyed by harness name.
+    /// Freshness contract: at most one `--version` re-check per harness per
+    /// [`CATALOGUE_VERSION_TTL`] window, and a full `--help` re-probe only when
+    /// that version changed — so an auto-updating binary is followed without a
+    /// restart, at bounded subprocess cost on the `/settings` path. Never
+    /// persisted: the truth is on disk, so a restart just re-reads it.
     harness_catalogue_cache:
         Arc<tokio::sync::Mutex<HashMap<String, (Instant, harness_catalogue::CachedCatalogue)>>>,
-    /// Serializes price syncs (#427). Unlike `trigger_tick_lock`, which *serializes*
-    /// because both triggers (cron and manual) are legitimate and must both land, a
-    /// second concurrent price sync brings nothing — so this is taken with
-    /// `try_lock` and a failure answers **409**, the `admission_lock` posture
-    /// (`lib.rs` `admission_lock` + 409). The boot refresh takes the same lock and,
-    /// failing to get it, gives up silently: a manual sync is in flight and does
-    /// strictly better.
+    /// Serializes price syncs. Unlike `trigger_tick_lock`, which serializes
+    /// because both triggers must land, a second concurrent price sync brings
+    /// nothing — so take it with `try_lock` and answer **409** on failure. The
+    /// boot refresh takes the same lock and, failing, gives up silently: a manual
+    /// sync is in flight and does strictly better.
     price_sync_lock: tokio::sync::Mutex<()>,
-    /// Price-source URL override (#427). `None` in production →
-    /// [`price_table::PRICE_SOURCE_URL_DEFAULT`]. Seeded per-daemon via
-    /// [`DaemonConfig`] so a layer-3 test points the fetch at its own fixture
-    /// server, never at models.dev and never through a process-global env.
+    /// Price-source URL override; `None` →
+    /// [`price_table::PRICE_SOURCE_URL_DEFAULT`]. Seeded per-daemon so a layer-3
+    /// test points the fetch at its own fixture server, never at models.dev.
     price_source_url: Option<String>,
-    /// Whether the boot pass may refresh the fetched tier (#427). See
+    /// Whether the boot pass may refresh the fetched tier. See
     /// [`DaemonConfig::price_refresh_at_boot`].
     price_refresh_at_boot: bool,
-    /// Extra WebSocket Origin allowlist entries from `PDO_ALLOWED_WS_ORIGINS`
-    /// (#564), already parsed + normalised at boot. Shared by BOTH WS upgrades
-    /// (`/ws` and `/sessions/{id}/pty`) via [`pty_bridge::check_origin`]; the
-    /// four localhost defaults are always added on top. See
-    /// [`DaemonConfig::allowed_ws_origins`].
+    /// Extra WebSocket Origin allowlist entries from `PDO_ALLOWED_WS_ORIGINS`,
+    /// parsed + normalised at boot. Shared by BOTH WS upgrades (`/ws` and
+    /// `/sessions/{id}/pty`) via [`pty_bridge::check_origin`]; the four localhost
+    /// defaults are always added on top.
     allowed_ws_origins: Vec<String>,
     /// Which pipeline template the UI currently has open for editing, and when it
-    /// last said so (#594, ADR-0051 §2). `None` = no edit view open.
+    /// last said so (ADR-0051 §2). `None` = no edit view open.
     ///
-    /// In memory and process-lifetime on purpose. It is a **presence** signal, not
-    /// a fact about the project: persisting it would resurrect, on the next boot,
-    /// a claim that someone was editing — the exact false-keep this issue exists to
-    /// remove. A restart forgets it, the UI re-declares within 20 s, and in between
-    /// the assistant is a session nobody is attached to, which is precisely what
-    /// the sweep should reap.
-    ///
-    /// Read twice, for two different questions: *what* is open (the assistant's
-    /// per-message context) and *whether anyone is still there* (the sweep's second
-    /// verdict).
+    /// Don't persist it: this is a **presence** signal, not a fact about the
+    /// project, so a persisted value would resurrect on the next boot a claim that
+    /// someone was editing. A restart forgets it, the UI re-declares within 20 s,
+    /// and in between the assistant is a session nobody is attached to — precisely
+    /// what the sweep should reap.
     libassist_focus: Mutex<Option<LibassistFocus>>,
 }
 
@@ -493,8 +414,8 @@ struct LibassistFocus {
 }
 
 impl AppState {
-    /// Tmux socket name (`-L <name>`) scoped to this daemon's port.
-    /// Every tmux call from this daemon goes through this socket.
+    /// Tmux socket name (`-L <name>`) scoped to this daemon's port. Every tmux
+    /// call from this daemon must go through it, or parallel daemons collide.
     fn tmux_socket(&self) -> String {
         tmux_session_manager::tmux_socket_name(self.port)
     }
@@ -530,10 +451,9 @@ struct CreateRunRequest {
     pipeline_id: Option<String>,
     #[serde(default)]
     target_repo: Option<String>,
-    /// Secondary repos to associate with this Run in read-only (#465, ADR-0042).
-    /// `#[serde(default)]` → an omitted field means "mono-repo", which is every
-    /// legacy client. When present, `target_repos[0]` is the **primary** and must
-    /// agree with `target_repo`; `[1..]` are the read-only secondaries. Absent list
+    /// Secondary repos to associate with this Run (ADR-0042). An omitted field
+    /// means "mono-repo". When present, `target_repos[0]` is the **primary** and
+    /// must agree with `target_repo`; `[1..]` are the secondaries. An absent list
     /// with a `target_repo` set is normalised to `[{target_repo}]` at the create
     /// chokepoint, so downstream always sees `[0]` = primary.
     #[serde(default)]
@@ -546,68 +466,54 @@ struct CreateRunRequest {
     /// the trigger scheduler; absent for manual runs.
     #[serde(default)]
     triggered_by: Option<String>,
-    /// Isolation mode for this Run (#403 / #407 / #410). `Option`, NOT
-    /// `SandboxMode`: `#[serde(default)]` → `None` distinguishes an **omitted** field
-    /// (defer to trigger/instance default) from an **explicit** `"off"` (which nothing
-    /// may override upward). This distinction is the fix that makes the "précédence"
-    /// AC satisfiable — see [`event_log::effective_sandbox`]. The chokepoint
-    /// (`create_run_inner`) resolves it once against the fresh instance default.
+    /// Isolation mode for this Run. Don't collapse to `SandboxMode`: `None` must
+    /// stay distinguishable from an explicit `"off"` (omitted defers to the
+    /// trigger/instance default; explicit `off` may not be overridden upward) —
+    /// see [`event_log::effective_sandbox`]. `create_run_inner` resolves it once
+    /// against the fresh instance default.
     #[serde(default)]
     sandbox: Option<event_log::SandboxMode>,
-    /// The agentic harness this Run chooses (#551, ADR-0046) — the `run` tier of the
-    /// precedence chain `nœud → Run → Projet → instance → plancher (claude)`. Free
-    /// text (ADR-0045: PDO does not validate a harness name; an unknown one fails fast
-    /// at spawn, naming it). `#[serde(default)]` → an omitted/`null`/blank field means
-    /// "the Run names no harness", so each free node resolves through the instance
-    /// default and the floor — byte-identical to the pre-#551 shape. Frozen into
-    /// `RunStarted` at the create chokepoint (same immutability as `sandbox`); a
-    /// pinned node still ignores it. A Trigger fire folds its stored harness in here
-    /// (a Run has a single origin), so "Run now" and a cron tick produce the same one.
+    /// The agentic harness this Run chooses (ADR-0046) — the `run` tier of
+    /// `nœud → Run → Projet → instance → plancher (claude)`. Free text
+    /// (ADR-0045: PDO never validates a harness name; an unknown one fails fast
+    /// at spawn, naming it). Omitted/`null`/blank means the Run names no harness.
+    /// Frozen into `RunStarted` at the create chokepoint; a pinned node ignores
+    /// it. A Trigger fire folds its stored harness in here, so "Run now" and a
+    /// cron tick produce the same one.
     #[serde(default)]
     harness: Option<String>,
-    /// The Run tier of the agentic-profile union (#563, ADR-0057) — the
-    /// counterpart of [`Self::harness`], but as the full exclusive union
-    /// (`Inherit`/`Profile`/`Custom`), atomically supplying harness, model and
-    /// effort. `None`/`Inherit` ⇒ the Run states no choice, so `harness` above
-    /// (and the tiers below it) still decide — byte-identical to the pre-#563
-    /// shape. `Some(Profile | Custom)` wins outright at this tier (never
-    /// merges with `harness`) and is frozen into `RunStarted`, same immutability
-    /// discipline as `harness`. A Trigger fire folds its stored choice in here.
+    /// The Run tier of the agentic-profile union (ADR-0057) — the counterpart of
+    /// [`Self::harness`], as the exclusive union (`Inherit`/`Profile`/`Custom`)
+    /// atomically supplying harness, model and effort. `None`/`Inherit` ⇒ the Run
+    /// states no choice, so `harness` above still decides. `Some(Profile |
+    /// Custom)` wins outright at this tier and never merges with `harness`.
     #[serde(default)]
     agent_choice: Option<crate::agent_choice::AgentChoice>,
-    /// Whether the manager auto-names this Run (#338). `Option`, NOT `bool`:
-    /// `#[serde(default)]` → `None` is an **omitted** field, which resolves
-    /// back-compatibly by the presence of `name` (a supplied `name` with no flag
-    /// keeps the name, exactly as before this field existed); `Some(b)` is an
-    /// explicit choice that wins. The UI always sends the flag; the CLI / bare API
-    /// need not. Resolved once at the create chokepoint against the FRESH instance
-    /// default — see [`prompt_augmenter::default_auto_name_with`].
+    /// Whether the manager auto-names this Run. Don't collapse to `bool`: `None`
+    /// (omitted) must resolve by the presence of `name`, so a supplied `name` with
+    /// no flag keeps the name; `Some(b)` is an explicit choice that wins.
+    /// Resolved at the create chokepoint against the FRESH instance default — see
+    /// [`prompt_augmenter::default_auto_name_with`].
     #[serde(default)]
     auto_name: Option<bool>,
     /// The Run's `auto_fail` preference (ADR-0049) — the `run` tier of `node →
-    /// Run → Projet → instance`. `Option<bool>`: `None` (omitted) means the Run
-    /// states no preference, so a node `pdo fail` resolves through the project /
-    /// instance tiers. Frozen into `RunStarted` at the create chokepoint (same
-    /// immutability as `harness`). A Trigger fire folds its stored value in here.
+    /// Run → Projet → instance`. `None` means the Run states no preference, so a
+    /// node `pdo fail` resolves through the project / instance tiers. Frozen into
+    /// `RunStarted` at the create chokepoint.
     #[serde(default)]
     auto_fail: Option<bool>,
 }
 
 /// The top-level keys `POST /runs` accepts, kept in lock-step with
-/// [`CreateRunRequest`] (the test `create_run_known_fields_cover_the_struct` pins
-/// that a payload of exactly these keys deserializes clean, so a new field can't
-/// be added to the struct without being allowed here).
+/// [`CreateRunRequest`].
 ///
-/// #601 — at this **write boundary** an unknown field is a client mistake we
-/// surface (`400` naming it, before any effect), not a key silently dropped: the
-/// symptom the issue names is a `target_repos` thrown away in silence, launching
-/// the run mono-repo. This is the same doctrine as ADR-0033's required
-/// `target_repo`, and deliberately **narrower** than the crate-wide "ignore
-/// unknown fields" convention (ADR-0015 #471) — that convention governs
-/// forward-compatible *config documents* read by an older binary, a different
-/// concern from an API request a client just typed. Hence explicit validation
-/// here rather than a blanket `#[serde(deny_unknown_fields)]`, which the crate
-/// deliberately never uses and whose generic serde message is less actionable.
+/// At this **write boundary** an unknown field is a client mistake we surface
+/// (`400` naming it, before any effect), not a key silently dropped — a
+/// `target_repos` typo used to launch the run mono-repo in silence. Deliberately
+/// **narrower** than the crate-wide "ignore unknown fields" convention
+/// (ADR-0015), which governs forward-compatible *config documents* read by an
+/// older binary. Hence explicit validation rather than
+/// `#[serde(deny_unknown_fields)]`, whose generic message is less actionable.
 const CREATE_RUN_FIELDS: &[&str] = &[
     "pipeline",
     "input",
@@ -625,10 +531,9 @@ const CREATE_RUN_FIELDS: &[&str] = &[
     "auto_fail",
 ];
 
-/// Reject a `POST /runs` JSON body carrying a top-level key the API does not know
-/// (#601): `Err((400, {error}))` naming the first unknown field and listing the
-/// accepted set. A non-object body is left for the typed deserialize to reject
-/// (its `invalid JSON` message is already actionable).
+/// Reject a `POST /runs` body carrying an unknown top-level key. A non-object
+/// body is left for the typed deserialize to reject — its `invalid JSON` message
+/// is already actionable.
 fn reject_unknown_create_run_fields(
     body: &serde_json::Value,
 ) -> Result<(), (StatusCode, serde_json::Value)> {
@@ -651,15 +556,11 @@ fn reject_unknown_create_run_fields(
     Ok(())
 }
 
-/// One repo line of a multi-repo create request (#465, ADR-0042/0047).
+/// One repo line of a multi-repo create request (ADR-0042/0047).
 ///
-/// The wire shape the front sends per row: a `repo` path, an optional
-/// `base_branch` (default `HEAD`, the LOCAL ref — there is no fetch), and an
-/// optional `read_only` opt-in (default `false` ⇒ writable, ADR-0047). Index
-/// `[0]` is the primary; `[1..]` become secondary snapshots (writable unless
-/// `read_only`). This input is shared by create, `PATCH /runs/{id}/repos`
-/// (`add`) and the trigger `target_repos` blob — one field covers every write
-/// surface.
+/// `base_branch` defaults to `HEAD`, the LOCAL ref — there is no fetch. Index
+/// `[0]` is the primary; `[1..]` become secondary snapshots. Shared by create,
+/// `PATCH /runs/{id}/repos` (`add`) and the trigger `target_repos` blob.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct TargetRepoInput {
     repo: String,
@@ -669,22 +570,18 @@ struct TargetRepoInput {
     read_only: bool,
 }
 
-/// serde `skip_serializing_if` helper (ADR-0047): a writable pin serialises
-/// without a `read_only` key, byte-identical to a pre-flag input.
 fn is_false(b: &bool) -> bool {
     !*b
 }
 
-/// Body of `PATCH /runs/{run_id}/repos` — the mid-run edit of a Run's read-only
-/// secondary list (#465 slice 2, ADR-0042).
+/// Body of `PATCH /runs/{run_id}/repos` — the mid-run edit of a Run's secondary
+/// list (ADR-0042).
 ///
-/// A dedicated endpoint, NOT a new `kind` of `POST /runs/{id}/commands`: a command's
-/// payload is a bag of scalars frozen byte-for-byte, whereas a list edit needs the
-/// `add` / `remove` arrays. Both fields `#[serde(default)]`, so an empty body is a
-/// legal no-op `200`. `add` entries are exactly the secondary rows of a create
-/// (`repo` + optional `base_branch`); `remove` names aliases. The primary
-/// (`target_repos[0]` at create) is never in either — it has no alias, so a `remove`
-/// cannot reach it and an `add` equal to it is refused (`secondary_is_primary`).
+/// A dedicated endpoint, not a `kind` of `POST /runs/{id}/commands`: a command's
+/// payload is a bag of scalars frozen byte-for-byte, whereas a list edit needs
+/// arrays. An empty body is a legal no-op `200`. The primary is never reachable
+/// from either array — it has no alias, so `remove` cannot name it and an `add`
+/// equal to it is refused (`secondary_is_primary`).
 #[derive(Deserialize, Debug, Default)]
 struct PatchRunReposRequest {
     #[serde(default)]
@@ -703,21 +600,18 @@ struct RunListEntry {
     run_id: String,
     pipeline_name: String,
     status: event_log::RunStatus,
-    /// Display-only "no forward progress" overlay (#180): true when the run has
-    /// no running/waiting node and a stale node, so its dot renders amber even
+    /// Display-only "no forward progress" overlay: true when the run has no
+    /// running/waiting node and a stale node, so its dot renders amber even
     /// though `status` stays `running`. Derived per read by `event_log::is_stalled`.
     stalled: bool,
     started_at: Option<String>,
-    /// Why the Run ended non-green (#503). Carried on the *list* entry so the red
-    /// dot has something to say: pre-#503 the entire failure signal in this list
-    /// was a coloured dot with no text anywhere behind it.
+    /// Why the Run ended non-green. Carried on the *list* entry so the red dot has
+    /// something to say.
     #[serde(skip_serializing_if = "Option::is_none")]
     failure_reason: Option<String>,
     /// Why the Run is parked `AwaitingUser` on an **incident** (ADR-0049), and its
-    /// machine slug (#601). Carried on the *list* entry for the same reason as
-    /// `failure_reason`: a manager watching the cockpit list must see *why* a run
-    /// is parked without opening the detail (FP #1). `None` for an interactive
-    /// wait (that carries no incident reason).
+    /// machine slug. On the list entry for the same reason as `failure_reason`.
+    /// `None` for an interactive wait, which carries no incident reason.
     #[serde(skip_serializing_if = "Option::is_none")]
     awaiting_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -727,23 +621,18 @@ struct RunListEntry {
     /// Provenance: the Trigger that created this Run, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     triggered_by: Option<String>,
-    /// Resolved target repo for "group by project" (#258): the run's `target_repo`,
-    /// or the daemon's `repo_root` when unset (`effective_repo_root`). Always
-    /// concrete and always emitted; the client groups the Runs list by this key.
-    ///
-    /// #470/ADR-0033: "when unset" now means "for a run recorded before the create
-    /// boundary was hardened" — this is a READ and its fallback stays forever.
+    /// Resolved target repo for "group by project": the run's `target_repo`, or
+    /// the daemon's `repo_root` when unset. Only runs predating the hardened
+    /// create boundary (ADR-0033) can be unset — this is a READ, so keep the
+    /// fallback forever.
     effective_repo: String,
 }
 
 /// A Trigger as returned by `GET /triggers`, wrapping the raw stored Trigger with
-/// a resolved `effective_repo` for the "group by project" view (#258). The raw
-/// `trigger.target_repo` stays untouched (it drives the row badge, the detail
-/// panel, and the Run-now pre-fill); `effective_repo` resolves a null target to
-/// the daemon's `repo_root` purely so the client can group by a concrete path.
-///
-/// #470/ADR-0033: only rows predating the hardened write boundary can carry a null
-/// target. The resolution here is read-side and permanent.
+/// a resolved `effective_repo` for the "group by project" view. Don't fold it into
+/// `trigger.target_repo`: the raw value drives the row badge, the detail panel and
+/// the Run-now pre-fill, while this one exists purely so the client can group by a
+/// concrete path.
 #[derive(Serialize)]
 struct TriggerListEntry {
     #[serde(flatten)]
@@ -751,40 +640,38 @@ struct TriggerListEntry {
     effective_repo: String,
 }
 
-/// Body of `POST /projects` — materialise a Projet from a bare name (#552). The
-/// only path that creates a `projects` row from a name; membership and the
-/// harness are attached afterwards, so a Projet begins empty and harness-less.
+/// Body of `POST /projects` — the only path that creates a `projects` row from a
+/// name. Membership and the harness are attached afterwards, so a Projet begins
+/// empty and harness-less.
 #[derive(Deserialize)]
 struct CreateProjectRequest {
     name: String,
 }
 
 /// Body of `PATCH /projects/{id}` — rename the Projet and/or (re)set the harness
-/// it carries (#552). `harness` is a double-`Option` (mirror of
-/// `UpdateTrigger.sandbox`): **absent** leaves it untouched, `null` clears it,
-/// a string sets it. An empty string clears it too (the `Some("")` trap of #347).
+/// it carries. `harness` is a double-`Option`: **absent** leaves it untouched,
+/// `null` clears it, a string sets it. An empty string clears it too — don't let
+/// `Some("")` through as a harness name.
 #[derive(Deserialize)]
 struct PatchProjectRequest {
     #[serde(default)]
     name: Option<String>,
     #[serde(default, deserialize_with = "deserialize_double_option")]
     harness: Option<Option<String>>,
-    /// The Projet's `AgentChoice` (#563, ADR-0057), same double-`Option` shape as
-    /// `harness`: **absent** leaves it untouched, `null` clears it (falls through to
-    /// the legacy `harness` field, itself falling through to the instance tier), an
-    /// object sets it.
+    /// The Projet's `AgentChoice` (ADR-0057), same double-`Option` shape as
+    /// `harness`. `null` clears it, falling through to the legacy `harness` field
+    /// and then to the instance tier.
     #[serde(default, deserialize_with = "deserialize_double_option")]
     agent_choice: Option<Option<crate::agent_choice::AgentChoice>>,
-    /// The Projet's `auto_fail` (ADR-0049) — same double-`Option` shape as
-    /// `harness`: **absent** leaves it untouched, `null` clears it (states no
-    /// preference), a bool sets it.
+    /// The Projet's `auto_fail` (ADR-0049), same double-`Option` shape as
+    /// `harness`; `null` states no preference.
     #[serde(default, deserialize_with = "deserialize_double_option")]
     auto_fail: Option<Option<bool>>,
 }
 
 /// Body of `POST` / `DELETE /projects/{id}/members` — one member path, compared
 /// **verbatim** (ADR-0033). The attach enforces at-most-one membership before any
-/// write; a path owned by another Projet is a 409 naming the owner (#552).
+/// write; a path owned by another Projet is a 409 naming the owner.
 #[derive(Deserialize)]
 struct ProjectMemberRequest {
     path: String,
@@ -800,11 +687,10 @@ struct PipelineVariableInfo {
 struct NodeDoneRequest {
     #[serde(default)]
     iter: Option<i64>,
-    /// #433: `true` when the completion was initiated by the injected `Stop` hook
-    /// on turn end rather than by the agent (`pdo complete --auto`). Selects
-    /// [`CompletionSource::StopHook`] → `NodeAutoCompleted`. `#[serde(default)]`
-    /// keeps the legacy body (`{ "iter": … }`) and an older `pdo complete`
-    /// deserialising as `false`.
+    /// `true` when the completion came from the injected `Stop` hook on turn end
+    /// rather than from the agent. Selects [`CompletionSource::StopHook`] →
+    /// `NodeAutoCompleted`. Keep `#[serde(default)]`: an older `pdo complete`
+    /// sends the legacy body (`{ "iter": … }`) and must deserialise as `false`.
     #[serde(default)]
     auto: bool,
 }
@@ -855,31 +741,26 @@ fn cli_node_iter() -> i64 {
 }
 
 /// Exit code of `pdo complete` when the completion was **refused and the node is
-/// still yours** (#490, ADR-0035 §4): fix the artefacts and call it again. Nothing
+/// still yours** (ADR-0035 §4): fix the artefacts and call it again. Nothing
 /// terminal is recorded, so `pdo fail` would be wrong.
 pub const EXIT_REFUSED_RECOVERABLE: u8 = 3;
-/// Exit code of `pdo complete` when the completion was **refused and the runtime has
-/// already ruled** (#490, ADR-0035 §4). The daemon appended the terminal event
+/// Exit code of `pdo complete` when the completion was **refused and the runtime
+/// has already ruled** (ADR-0035 §4). The daemon appended the terminal event
 /// itself; `pdo fail` would double it — and `RunFailed` is not guarded, so the
-/// second one lands with a false reason.
-///
-/// This code exists for a `||` in a `script` node's bash tail (see
-/// `tmux_session_manager::build_script_tail`), which was dead code while every
-/// refusal answered `200`. The code is only worth anything because the tail tests
-/// it.
+/// second one lands with a false reason. Read by a `||` in a `script` node's bash
+/// tail (`tmux_session_manager::build_script_tail`).
 pub const EXIT_REFUSED_TERMINAL: u8 = 4;
 
 /// `pdo complete` — signal that this node iteration is done.
 ///
-/// Returns an [`ExitCode`](std::process::ExitCode) rather than a `Result` because it
-/// is the one subcommand with a **public exit-code contract** (#490, ADR-0035 §4):
-/// `0` granted or legal duplicate · `3` refused, still your turn · `4` refused, the
-/// runtime already ruled · `1` breakdown. Those codes live in pipeline authors' bash
-/// (ADR-0001, sharp tool), so they are as much an API as the wire shape.
+/// Returns an [`ExitCode`](std::process::ExitCode) rather than a `Result` because
+/// this subcommand has a **public exit-code contract** (ADR-0035 §4): `0` granted
+/// or legal duplicate · `3` refused, still your turn · `4` refused, the runtime
+/// already ruled · `1` breakdown. Those codes live in pipeline authors' bash, so
+/// they are as much an API as the wire shape.
 ///
-/// Deliberately **not** `std::process::exit`: that skips the `reqwest` client's
-/// destructors and breaks the symmetry with the other subcommands. Returning the
-/// code lets `main` stay a dispatcher.
+/// Don't reach for `std::process::exit`: it skips the `reqwest` client's
+/// destructors and breaks the symmetry with the other subcommands.
 pub fn run_complete(auto: bool) -> std::process::ExitCode {
     let rid = match cli_run_id() {
         Ok(v) => v,
@@ -905,9 +786,8 @@ pub fn run_complete(auto: bool) -> std::process::ExitCode {
 
     let status = resp.status();
     let raw = resp.text().unwrap_or_default();
-    // The success body of `POST …/done` is the bare text `ok`, so a parse failure is
-    // expected there and must not be treated as a breakdown (#491 owns the
-    // asymmetry). `Value::Null` stands in for "no readable body".
+    // The success body of `POST …/done` is the bare text `ok`, so a parse failure
+    // is expected there and must not be treated as a breakdown.
     let body: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
 
     if status.is_success() {
@@ -931,8 +811,6 @@ pub fn run_complete(auto: bool) -> std::process::ExitCode {
     if status.is_server_error() {
         return complete_breakdown(&format!("daemon returned {status}: {raw}"));
     }
-    // A body we cannot read cannot be discriminated, so it is a breakdown too —
-    // never a silent success.
     let Some(slug) = body.get("error").and_then(|v| v.as_str()) else {
         return complete_breakdown(&format!(
             "daemon returned {status} with an unreadable body: {raw}"
@@ -951,8 +829,8 @@ pub fn run_complete(auto: bool) -> std::process::ExitCode {
              The daemon has already recorded the terminal event. `resume_run` is the only lever.\n",
             refusal_headline(slug, &body)
         )),
-        // No `recoverable` key: an older daemon, or a refusal that predates the
-        // contract. Say so instead of guessing which side of the fence we are on.
+        // No `recoverable` key: an older daemon. Say so instead of guessing which
+        // side of the fence we are on.
         None => out.push_str(&format!(
             "pdo complete REFUSED — {} (daemon returned {status} without a `recoverable` \
              flag, so whether the node is still yours is unknown).\n",
@@ -1108,10 +986,9 @@ pub fn run_fail(reason: String) -> Result<()> {
     Ok(())
 }
 
-/// Graceful no-op (#245): mark the current node done-but-skipped and end the run
-/// as `skipped` rather than `failed`. Short-circuits downstream (the run reaches
-/// no `end` node) so a fired-into-an-empty-pool run stays out of the failure
-/// signal.
+/// Graceful no-op: mark the current node done-but-skipped and end the run as
+/// `skipped` rather than `failed`. Short-circuits downstream (the run reaches no
+/// `end` node) so a fired-into-an-empty-pool run stays out of the failure signal.
 pub fn run_skip(reason: String) -> Result<()> {
     let url = cli_daemon_url();
     let rid = cli_run_id()?;
@@ -1136,13 +1013,10 @@ pub fn run_skip(reason: String) -> Result<()> {
     Ok(())
 }
 
-/// One-shot `pdo docs` (#617): render the documentation PDO generates from its own
-/// code, and — with `--check` — refuse a committed copy that has drifted from it.
-///
-/// Blocking, no tokio, no daemon: the support matrix is a pure function of the
-/// capability declaration ([`harness_support::render`]), so this is rendering plus
-/// at most one file rewrite. `--check` is what `make check` runs, which is what
-/// makes "the table cannot lie" true by construction rather than by discipline.
+/// One-shot `pdo docs`: render the documentation PDO generates from its own code,
+/// and — with `--check` — refuse a committed copy that has drifted from it.
+/// `--check` is what `make check` runs, which is what makes "the table cannot lie"
+/// true by construction rather than by discipline.
 pub fn run_docs(action: DocsAction) -> Result<()> {
     let DocsAction::SupportTable { check, write, file } = action;
     let block = harness_support::render();
@@ -1164,8 +1038,6 @@ pub fn run_docs(action: DocsAction) -> Result<()> {
                 );
                 Ok(())
             }
-            // `bail!` rather than a bespoke exit code: `make check` only needs
-            // non-zero, and the message is where the value is (it names the drift).
             Err(why) => anyhow::bail!("{}: {why}", file.display()),
         };
     }
@@ -1185,12 +1057,10 @@ pub fn run_docs(action: DocsAction) -> Result<()> {
     Ok(())
 }
 
-/// One-shot `pdo migrate` (#269, ADR-0011): walks the pipeline stores and
-/// dissolves legacy control-node YAML (Switch/Loop/ForEach) into the
-/// edge-conditional + `loops:` region model via
-/// [`pipeline_migrator::migrate_pipeline_yaml`]. Blocking, no tokio (mirrors
-/// `run_complete`). Backups: a real migration first copies the original to
-/// `<file>.bak` so the change is trivially reversible.
+/// One-shot `pdo migrate` (ADR-0011): walks the pipeline stores and dissolves
+/// legacy control-node YAML (Switch/Loop/ForEach) into the edge-conditional +
+/// `loops:` region model via [`pipeline_migrator::migrate_pipeline_yaml`]. A real
+/// migration first copies the original to `<file>.bak`.
 pub fn run_migrate(dir: Option<std::path::PathBuf>, dry_run: bool) -> Result<()> {
     let dirs: Vec<PathBuf> = match dir {
         Some(d) => vec![d],
@@ -1286,10 +1156,6 @@ pub fn run_migrate(dir: Option<std::path::PathBuf>, dry_run: bool) -> Result<()>
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// `pdo reap` (#480, #128 Track A) — the disk-janitor's mechanical half.
-// ---------------------------------------------------------------------------
-
 /// Human-readable byte size for reap reports (binary units, one decimal).
 fn human_bytes(n: u64) -> String {
     const KB: f64 = 1024.0;
@@ -1321,21 +1187,16 @@ fn reap_status_label(status: &event_log::RunStatus) -> &'static str {
     }
 }
 
-/// One-shot `pdo reap` (#480): the mechanical, deterministic half of the disk
-/// janitor. Lists `GET /runs/reapable?size=true`, runs the pure
-/// [`reap_policy`] over it, and — unless `--count`/`--dry-run` — archives each
-/// selected Run via `POST /runs/{id}/commands {"kind":"cleanup_run"}`.
+/// One-shot `pdo reap`: the deterministic half of the disk janitor. Lists
+/// `GET /runs/reapable?size=true`, runs the pure [`reap_policy`] over it, and —
+/// unless `--count`/`--dry-run` — archives each selected Run via
+/// `POST /runs/{id}/commands {"kind":"cleanup_run"}`.
 ///
-/// Blocking, no tokio (mirrors `run_complete`/`run_migrate`): it uses
-/// `reqwest::blocking`. The daemon URL comes from `PDO_DAEMON_URL` (injected into
-/// every node session) or the built-in default.
-///
-/// **Exit semantics.** Failure to *list* is fatal (a broken URL that silently
-/// no-ops forever is worse than a visible node failure). Per-run reclaim errors
-/// and a wall-clock cutoff are **not** fatal — the function still returns `Ok`
-/// (exit 0), because a failed janitor Run would leave its *own* worktree behind,
-/// which a `completed`-only policy never reclaims → monotone residue. Progress is
-/// reported honestly; the rest waits for the next fire.
+/// **Exit semantics.** Failure to *list* is fatal: a broken URL that silently
+/// no-ops forever is worse than a visible node failure. Per-run reclaim errors and
+/// a wall-clock cutoff must NOT be fatal — a failed janitor Run leaves its own
+/// worktree behind, which a `completed`-only policy never reclaims, so the residue
+/// grows monotonically. The rest waits for the next fire.
 pub fn run_reap(
     count: bool,
     dry_run: bool,
@@ -1347,7 +1208,6 @@ pub fn run_reap(
     let client = reqwest::blocking::Client::new();
     let listing = format!("{url}/runs/reapable?size=true");
 
-    // `?size=true` so the plan can order biggest-first and report bytes.
     let list_runs = |client: &reqwest::blocking::Client| -> Result<Vec<reap_policy::ReapableRun>> {
         client
             .get(&listing)
@@ -1371,7 +1231,6 @@ pub fn run_reap(
 
     let plan = policy.plan(&runs);
 
-    // Guard mode: just the count. Exit 0 either way — the caller reads stdout.
     if count {
         println!("{}", plan.reclaim.len());
         return Ok(());
@@ -1427,11 +1286,9 @@ pub fn run_reap(
                 let status = resp.status();
                 let code = status.as_u16();
                 let body = resp.text().unwrap_or_default();
-                // A bare `200` is not proof here (a mistyped path 200s the SPA
-                // shell, and `cleanup_run` swallows fs/git errors) — assert on the
-                // body. `409` = archived between listing and now (benign no-op).
-                // Either way the command was accepted; the re-list below is what
-                // actually confirms the bytes left.
+                // Don't trust a bare `200`: a mistyped path 200s the SPA shell and
+                // `cleanup_run` swallows fs/git errors, so assert on the body.
+                // `409` = archived between listing and now, a benign no-op.
                 if code == 409 || (code == 200 && body.contains("\"archived\"")) {
                     reclaimed_ids.push(d.run_id.clone());
                 } else {
@@ -1469,18 +1326,13 @@ pub fn run_reap(
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// `pdo service {install|uninstall|status}` (#156, ADR-0019)
-// ---------------------------------------------------------------------------
-
-/// What the port-conflict pre-flight probe found on `127.0.0.1:<port>` (#156, D1).
+/// What the port-conflict pre-flight probe found on `127.0.0.1:<port>`.
 ///
 /// Two daemons can never share a port (`run_daemon` binds with no `SO_REUSEADDR`
-/// / retry — an `EADDRINUSE` propagates and the process exits), so an enabled
-/// unit whose ExecStart daemon collides with an already-bound port would
-/// crash-loop under `Restart=on-failure`. The guard classifies the port so
-/// `install` can refuse loudly or degrade to idempotent instead of blindly
-/// enabling a doomed unit.
+/// / retry — an `EADDRINUSE` propagates and the process exits), so an enabled unit
+/// colliding with an already-bound port would crash-loop under
+/// `Restart=on-failure`. Classify the port so `install` refuses loudly or degrades
+/// to idempotent instead of enabling a doomed unit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PortState {
     /// Nothing is listening — safe to enable + start.
@@ -1501,14 +1353,12 @@ struct CmdOutcome {
     stderr: String,
 }
 
-/// Injectable side-effect surface for `pdo service` (#156, D4).
+/// Injectable side-effect surface for `pdo service`.
 ///
-/// Mirrors the `tmux_cmd_override` seam philosophy (#181): production uses the
-/// real implementations, tests use a recording fake so no real
-/// `systemctl`/`launchctl` ever runs and no `~/.config` is touched (ADR-0004
-/// line 29 — host-mutating acts stay out of the automated suite). Everything
-/// non-hermetic (exe/cwd/home/user lookup, port probe, file write, command
-/// spawn) funnels through this trait.
+/// Everything non-hermetic (exe/cwd/home/user lookup, port probe, file write,
+/// command spawn) must funnel through this trait, so the suite never runs a real
+/// `systemctl`/`launchctl` or touches `~/.config` (ADR-0004: host-mutating acts
+/// stay out of the automated suite).
 trait ServiceEnv {
     /// Absolute path of the running `pdo` binary — the unit's `ExecStart`.
     fn current_exe(&self) -> Result<PathBuf>;
@@ -1522,7 +1372,7 @@ trait ServiceEnv {
     fn home(&self) -> Result<PathBuf>;
     /// `$USER` — for `loginctl enable-linger $USER`.
     fn user(&self) -> Result<String>;
-    /// Classify `127.0.0.1:<port>` for the conflict guard (D1).
+    /// Classify `127.0.0.1:<port>` for the conflict guard.
     fn probe_port(&self, port: u16) -> PortState;
     /// Write a unit/plist file, creating parent dirs.
     fn write_file(&self, path: &Path, contents: &str) -> Result<()>;
@@ -1571,8 +1421,6 @@ impl ServiceEnv for RealServiceEnv {
     fn probe_port(&self, port: u16) -> PortState {
         use std::net::TcpStream;
         let addr = SocketAddr::from(([127, 0, 0, 1], port));
-        // A refused connection means the port is free. Anything else means
-        // something is listening; identify whether it's a PDO daemon.
         if TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_err() {
             return PortState::Free;
         }
@@ -1597,7 +1445,6 @@ impl ServiceEnv for RealServiceEnv {
                     PortState::Foreign
                 }
             }
-            // Something is listening but it isn't a healthy PDO daemon.
             _ => PortState::Foreign,
         }
     }
@@ -1632,18 +1479,14 @@ impl ServiceEnv for RealServiceEnv {
     }
 }
 
-/// Entry point for `Commands::Service` (#156). A blocking one-shot — no tokio
-/// runtime — dispatched from `main.rs` like `Complete`/`Fail`/`Skip`.
 pub fn run_service(action: ServiceAction) -> Result<()> {
     let mut out = std::io::stdout();
     run_service_with(action, &RealServiceEnv, &mut out)
 }
 
-/// Core `pdo service` logic against an injected [`ServiceEnv`] and output sink.
-///
-/// Split from [`run_service`] so tests drive it with a recording fake (asserting
-/// the exact argv sequence + written-file bytes) and a captured buffer (asserting
-/// `--dry-run` output), never touching real systemd or `~/.config`.
+/// Core `pdo service` logic against an injected [`ServiceEnv`] and output sink —
+/// the seam that lets tests assert argv sequence and written bytes without
+/// touching real systemd or `~/.config`.
 fn run_service_with(
     action: ServiceAction,
     env: &dyn ServiceEnv,
@@ -1688,7 +1531,7 @@ fn describe_port_state(port: u16, state: &PortState) -> String {
     }
 }
 
-/// `pdo service install` — Linux systemd `--user` path (#156, D3/D4).
+/// `pdo service install` — Linux systemd `--user` path.
 fn service_install_systemd(
     env: &dyn ServiceEnv,
     out: &mut dyn std::io::Write,
@@ -1705,9 +1548,8 @@ fn service_install_systemd(
     let unit = service_unit::render_systemd_unit(&exe, port, &working_dir, &path_env);
     let state = env.probe_port(port);
 
-    // The ordered enable command plan (also printed under --dry-run). The final
-    // `enable` gains `--now` only when the port is free — never start a
-    // competitor onto a port a PDO daemon already owns (D1).
+    // `--now` only when the port is free: never start a competitor onto a port a
+    // PDO daemon already owns.
     let start_now = state == PortState::Free;
     let enable_args: &[&str] = if start_now {
         &["--user", "enable", "--now", "pdo"]
@@ -1749,7 +1591,6 @@ fn service_install_systemd(
         return Ok(());
     }
 
-    // Real install: refuse loudly on a foreign port (would crash-loop).
     if state == PortState::Foreign {
         anyhow::bail!(
             "refusing to install: {}. The enabled unit's daemon would crash-loop on \
@@ -1771,8 +1612,7 @@ fn service_install_systemd(
 
     run_checked(env, out, "systemctl", &["--user", "daemon-reload"])?;
 
-    // `enable-linger` lets the user's units run without a login (no reboot-death,
-    // no logout-death). Self-linger needs no sudo from an active session; on a
+    // `enable-linger` lets the user's units run without a login. On a
     // hardened/headless box it can fail — degrade with a hint, don't abort.
     match env.run_cmd("loginctl", &["enable-linger", &user]) {
         Ok(o) if o.success => writeln!(out, "loginctl enable-linger {user}: ok")?,
@@ -1809,8 +1649,7 @@ fn service_uninstall_systemd(env: &dyn ServiceEnv, out: &mut dyn std::io::Write)
     let config_home = env.config_home()?;
     let unit_path = service_unit::systemd_unit_path(&config_home);
 
-    // `disable --now` stops + disables; tolerate a non-zero exit (unit may be
-    // absent) so uninstall is idempotent.
+    // Tolerate a non-zero exit (the unit may be absent) so uninstall is idempotent.
     match env.run_cmd("systemctl", &["--user", "disable", "--now", "pdo"]) {
         Ok(o) if o.success => writeln!(out, "systemctl --user disable --now pdo: ok")?,
         Ok(o) => writeln!(
@@ -1847,7 +1686,7 @@ fn service_status_systemd(env: &dyn ServiceEnv, out: &mut dyn std::io::Write) ->
     Ok(())
 }
 
-/// `pdo service install` — macOS launchd LaunchAgent path (#156, D6).
+/// `pdo service install` — macOS launchd LaunchAgent path.
 /// **Best-effort / untested on the Linux CI box** (generation is golden-tested).
 fn service_install_launchd(
     env: &dyn ServiceEnv,
@@ -1927,7 +1766,7 @@ fn service_install_launchd(
     };
     let target = format!("gui/{uid}");
     let bootout_target = format!("{target}/{label}");
-    // bootstrap is not idempotent — bootout first (ignore error), then bootstrap.
+    // Bootstrap is not idempotent — bootout first (ignore error), then bootstrap.
     let _ = env.run_cmd("launchctl", &["bootout", &bootout_target]);
     run_checked(
         env,
@@ -2020,42 +1859,36 @@ impl DaemonHandle {
         run_trigger_scheduler_tick_supervised(&self.state).await;
     }
 
-    /// Run a single stale-detection sweep synchronously (#213). Lets
-    /// integration tests drive liveness detection (dead session -> node Failed)
-    /// deterministically instead of waiting for the ~30 s background interval.
+    /// Run a single stale-detection sweep synchronously. Lets integration tests
+    /// drive liveness detection (dead session -> node Failed) deterministically
+    /// instead of waiting for the ~30 s background interval.
     pub async fn run_stale_detection_tick(&self) {
         run_stale_detection_supervised(&self.state).await;
     }
 
-    /// Run the boot-recovery reconciliation pass synchronously (#213). The
-    /// daemon runs this once at startup; the seam lets integration tests drive
-    /// it deterministically (orphaned Running node -> Failed at boot).
+    /// Run the boot-recovery reconciliation pass synchronously. The daemon runs
+    /// this once at startup; the seam lets integration tests drive it
+    /// deterministically (orphaned Running node -> Failed at boot).
     pub async fn run_boot_recovery_tick(&self) {
         boot_recovery::run_boot_recovery(&self.state).await;
     }
 
-    /// Run the boot price-table refresh synchronously (#427). Sibling of
-    /// [`Self::run_boot_recovery_tick`]: production spawns this DETACHED at
-    /// startup, and a test must never race a detached task. Honours all three
-    /// gates (config flag, cache must already exist, 24 h staleness), so a test
-    /// can prove "absent cache → zero request" with the same code production runs.
+    /// Run the boot price-table refresh synchronously. Production spawns it
+    /// DETACHED at startup, and a test must never race a detached task. Honours
+    /// all three gates (config flag, cache must already exist, 24 h staleness).
     pub async fn run_price_refresh_tick(&self) {
         refresh_prices_at_boot(&self.state).await;
     }
 
-    /// Warm the harness-catalogue cache synchronously (#616, ADR-0053 §3). Sibling
-    /// of [`Self::run_price_refresh_tick`]: production spawns this DETACHED at boot,
-    /// so a test drives it here instead of racing the detached task. Same code path
-    /// as boot, so a test can prove "installed harness → catalogue cached, version
-    /// recorded".
+    /// Warm the harness-catalogue cache synchronously. Production spawns it
+    /// DETACHED at boot, so a test drives it here instead of racing that task.
     pub async fn run_catalogue_probe_tick(&self) {
         probe_harness_catalogues_at_boot(&self.state).await;
     }
 
-    /// Run a single orphan-sweep (reaper) pass synchronously. Lets integration
-    /// tests drive session reaping deterministically instead of racing the
-    /// ~60 s background interval + process-global TTL env (#316). Resolves the
-    /// TTL exactly like the background loop (`stored → env → default`).
+    /// Run a single orphan-sweep (reaper) pass synchronously, instead of racing
+    /// the ~60 s background interval. Resolves the TTL exactly like the background
+    /// loop (`stored → env → default`).
     pub async fn run_orphan_sweep_tick(&self) {
         let socket = self.state.tmux_socket();
         let ttls = resolve_sweep_ttls(&self.state.db).await;
@@ -2064,44 +1897,35 @@ impl DaemonHandle {
         }
     }
 
-    /// Arm the one-shot stale-sweep poison (#251): the next [`run_stale_detection`]
-    /// — driven by [`Self::run_stale_detection_tick`] or the background loop —
-    /// panics, then disarms itself. Test seam only; lets a test arm the poison
-    /// *after* boot (so the immediate startup sweep doesn't consume it) and prove
-    /// the panic is isolated and the next sweep recovers. Production arms this
-    /// once at boot via `PDO_DEBUG_PANIC_STALE`.
+    /// Arm the one-shot stale-sweep poison: the next [`run_stale_detection`]
+    /// panics, then disarms itself. Arm it *after* boot, or the immediate startup
+    /// sweep consumes it first.
     pub fn arm_stale_panic(&self) {
         self.state
             .panic_on_stale_sweep
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// Arm the one-shot spawn poison (#279): the next [`spawn_node`] panics
-    /// inside its post-worktree span, then disarms itself. Test seam only; lets
-    /// a test prove the spawn window's `catch_unwind` isolation reaps the
-    /// orphaned sub-worktree and fails the run loud (`RunFailed`) rather than
-    /// leaving it wedged `Running` with no live node. Arm *after* boot so the
-    /// run's entry-node spawn can be targeted. Production arms this once at boot
-    /// via `PDO_DEBUG_PANIC_SPAWN`.
+    /// Arm the one-shot spawn poison: the next [`spawn_node`] panics inside its
+    /// post-worktree span, then disarms itself. Arm it *after* boot so the run's
+    /// entry-node spawn can be targeted.
     pub fn arm_spawn_panic(&self) {
         self.state
             .panic_on_spawn
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// Arm the terminal-tail gate (#304): the detached tail spawned by the next
+    /// Arm the terminal-tail gate: the detached tail spawned by the next
     /// `node_done`/`node_fail`/`node_skip` parks at its head until
-    /// [`Self::release_node_done_gate`]. Test seam only — lets a test hold the
-    /// run-advance open while it drops the client connection mid-window, then
-    /// prove the advance still happens (DETACH) instead of being cancelled
-    /// (inline / reorder-only). No-op in production (never armed).
+    /// [`Self::release_node_done_gate`], so a test can drop the client connection
+    /// mid-window and prove the advance still happens.
     pub fn arm_node_done_gate(&self) {
         self.state
             .node_done_tail_gate_armed
             .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
-    /// Release the terminal-tail gate (#304): disarm, then wake every tail
+    /// Release the terminal-tail gate: disarm, then wake every tail
     /// parked at the gate. See [`Self::arm_node_done_gate`].
     pub fn release_node_done_gate(&self) {
         self.state
@@ -2122,13 +1946,12 @@ impl DaemonHandle {
         .await;
     }
 
-    /// Seed a Trigger row whose `target_repo` is NULL — a **pre-#470 record**.
+    /// Seed a Trigger row whose `target_repo` is NULL — a legacy record.
     ///
-    /// Test seam only, and it exists because the API can no longer produce one:
-    /// `POST /triggers` refuses an unnamed repo (ADR-0033). Layer-3a tests still
-    /// need such a row, both to prove the read side keeps resolving it and to
-    /// prove the fire path now refuses it *before* running its guard. Bypassing
-    /// the handler is the point, not a shortcut.
+    /// Bypassing the handler is the point, not a shortcut: `POST /triggers`
+    /// refuses an unnamed repo (ADR-0033), so the API can no longer produce this
+    /// shape, yet the read side must keep resolving it and the fire path must
+    /// refuse it before running its guard.
     pub async fn seed_legacy_trigger_without_target_repo(
         &self,
         name: &str,
@@ -2164,7 +1987,7 @@ impl DaemonHandle {
     }
 
     /// Seed a `run_started` event whose payload carries **no** `target_repo` — a
-    /// pre-#470 Run record. Same rationale as
+    /// legacy Run record. Same rationale as
     /// [`Self::seed_legacy_trigger_without_target_repo`]: `POST /runs` refuses
     /// this shape now, but the read side must keep resolving it forever.
     pub async fn seed_legacy_run_without_target_repo(&self, run_id: &str, pipeline_name: &str) {
@@ -2187,18 +2010,15 @@ impl DaemonHandle {
     }
 }
 
-/// Persistent-service health for the status bar (#156, ADR-0019, D5).
+/// Persistent-service health for the status bar (ADR-0019).
 ///
 /// Computed **once at daemon boot** and cached in [`AppState`], so the polled
-/// `GET /sessions` pays zero subprocess cost per request and needs no new
-/// vite-proxy whitelist entry (folding this into `/sessions` mirrors the
-/// version-field decision, CONTEXT.md). Serialized as the `service` object on
-/// `/sessions`.
+/// `GET /sessions` pays zero subprocess cost per request. Serialized as the
+/// `service` object on `/sessions`.
 ///
-/// **Accepted v1 staleness:** because install happens out-of-process, if a user
-/// installs the service while a *non-service* daemon is already running, that
-/// daemon's cached value stays stale until its next restart. The normal flow is
-/// install-then-run, so this is acceptable (documented in ADR-0019).
+/// **Accepted staleness:** install happens out-of-process, so a daemon already
+/// running when the service is installed keeps a stale value until it restarts.
+/// The normal flow is install-then-run (ADR-0019).
 #[derive(Debug, Clone, Serialize)]
 struct ServiceHealth {
     /// How THIS process was launched, best-effort from env markers:
@@ -2214,12 +2034,9 @@ struct ServiceHealth {
     persistent: Option<bool>,
 }
 
-/// Forced service-health observation (#156, D5), armed by `PDO_SERVICE_HEALTH`.
-///
-/// A debug/observation seam (sibling of `PDO_DEBUG_PANIC_*`), `None` in prod
-/// (real detection). It exists so the `ephemeral` status-bar branch is
-/// demonstrable in a real browser on a box where an enabled `pdo.service`
-/// already exists — the prod dev box — without touching the real unit (FP-156).
+/// Forced service-health observation, armed by `PDO_SERVICE_HEALTH`. Makes the
+/// `ephemeral` status-bar branch demonstrable in a real browser on a box where an
+/// enabled `pdo.service` already exists, without touching the real unit.
 #[derive(Debug, Clone, Copy)]
 pub enum ServiceHealthOverride {
     Persistent,
@@ -2243,8 +2060,6 @@ impl ServiceHealthOverride {
             Self::Ephemeral => Some(false),
             Self::Unknown => None,
         };
-        // Keep the *real* supervisor hint even when forcing the persistence bit —
-        // only `persistent` is under test control.
         ServiceHealth {
             supervisor: detect_supervisor().to_string(),
             persistent,
@@ -2252,7 +2067,6 @@ impl ServiceHealthOverride {
     }
 }
 
-/// Compute the real [`ServiceHealth`] once at boot (#156, D5).
 fn compute_service_health() -> ServiceHealth {
     ServiceHealth {
         supervisor: detect_supervisor().to_string(),
@@ -2260,9 +2074,8 @@ fn compute_service_health() -> ServiceHealth {
     }
 }
 
-/// Best-effort detection of how this process was launched (#156, D5).
-/// Env markers only — treat as a hint. `launchd` wins first (macOS), then the
-/// systemd markers; anything else is `none`.
+/// Best-effort detection of how this process was launched. Env markers only —
+/// treat as a hint, since they are inheritable.
 fn detect_supervisor() -> &'static str {
     if std::env::var_os("XPC_SERVICE_NAME").is_some() {
         "launchd"
@@ -2277,22 +2090,19 @@ fn detect_supervisor() -> &'static str {
 }
 
 /// Is an enabled `pdo` service unit present — "will a daemon come back after
-/// reboot?" (#156, D5). `None` when unknown/unsupported; never an error.
+/// reboot?" `None` when unknown/unsupported; never an error.
 fn detect_persistent() -> Option<bool> {
     if cfg!(target_os = "macos") {
-        // Best-effort: the LaunchAgent plist's presence. `null` is acceptable
-        // in v1 if $HOME is unset.
         let home = std::env::var_os("HOME").map(PathBuf::from)?;
         return Some(service_unit::launchd_plist_path(&home).exists());
     }
     detect_systemd_enabled()
 }
 
-/// `systemctl --user is-enabled pdo.service`, timeout-guarded (#156, D5).
+/// `systemctl --user is-enabled pdo.service`, timeout-guarded.
 ///
-/// Runs on a detached thread so a wedged systemctl can't block boot past ~1s;
-/// on timeout / spawn failure / any non-`enabled` state we degrade to `None`
-/// (unknown) or `Some(false)`, never an error. Called once at boot.
+/// Runs on a detached thread so a wedged systemctl can't block boot past ~1s; on
+/// timeout / spawn failure it degrades to `None`, never an error.
 fn detect_systemd_enabled() -> Option<bool> {
     use std::sync::mpsc;
     let (tx, rx) = mpsc::channel();
@@ -2306,16 +2116,14 @@ fn detect_systemd_enabled() -> Option<bool> {
         Ok(Ok(output)) => {
             let stdout = String::from_utf8_lossy(&output.stdout);
             match stdout.trim() {
-                // `enabled` / `enabled-runtime` → a daemon returns at boot.
                 "enabled" | "enabled-runtime" => Some(true),
                 // Any other reported state (disabled/static/masked/not-found…)
                 // means it will NOT come back → ephemeral.
                 s if !s.is_empty() => Some(false),
-                // Empty output with a spawn we can't classify → unknown.
                 _ => None,
             }
         }
-        // systemctl absent (spawn error) or wedged (timeout) → unknown.
+        // Systemctl absent (spawn error) or wedged (timeout) → unknown.
         Ok(Err(_)) | Err(_) => None,
     }
 }
@@ -2323,9 +2131,8 @@ fn detect_systemd_enabled() -> Option<bool> {
 /// Boot-time configuration for a daemon instance.
 ///
 /// Carries the knobs that must be decided *per daemon* rather than read from
-/// process-global env in the hot path. Production builds this from the
-/// environment ([`DaemonConfig::from_env`]); tests construct it directly so two
-/// daemons in the same test process can't race on a shared env var (#181).
+/// process-global env in the hot path — two daemons in the same test process
+/// would otherwise race on a shared env var.
 #[derive(Debug, Clone, Default)]
 pub struct DaemonConfig {
     /// Replaces the `claude …` tail in spawned tmux scripts when `Some`. Tests
@@ -2333,71 +2140,47 @@ pub struct DaemonConfig {
     /// command instead of launching a real `claude` process. `None` →
     /// production default (real claude).
     pub tmux_cmd_override: Option<String>,
-    /// Debug-only chaos knob (#222): when a due Trigger's name matches, its
-    /// scheduler tick panics, so a test (or the Layer-5 scenario) can prove the
-    /// panic is isolated and the next tick recovers. `None` in production unless
-    /// `PDO_DEBUG_PANIC_TRIGGER` is set.
+    /// Debug-only chaos knob: when a due Trigger's name matches, its scheduler
+    /// tick panics, so a test can prove the panic is isolated and the next tick
+    /// recovers. Armed in production only by `PDO_DEBUG_PANIC_TRIGGER`.
     pub panic_on_trigger_name: Option<String>,
-    /// Debug-only chaos knob (#251): when `true`, the next stale-detection sweep
-    /// panics (one-shot, then disarms), so a test can prove the sweep's panic is
-    /// isolated and the next sweep recovers. `false` in production unless
-    /// `PDO_DEBUG_PANIC_STALE` is set.
+    /// Debug-only chaos knob: the next stale-detection sweep panics (one-shot,
+    /// then disarms). Armed in production only by `PDO_DEBUG_PANIC_STALE`.
     pub panic_on_stale_sweep: bool,
-    /// Debug-only chaos knob (#279): when `true`, the next `spawn_node` panics
-    /// inside its post-worktree span (one-shot, then disarms), so a test can
-    /// prove the spawn window's `catch_unwind` isolation reaps the orphaned
-    /// sub-worktree and fails the run loud. `false` in production unless
-    /// `PDO_DEBUG_PANIC_SPAWN` is set.
+    /// Debug-only chaos knob: the next `spawn_node` panics inside its
+    /// post-worktree span (one-shot, then disarms), so a test can prove the
+    /// `catch_unwind` reaps the orphaned sub-worktree and fails the run loud.
+    /// Armed in production only by `PDO_DEBUG_PANIC_SPAWN`.
     pub panic_on_spawn: bool,
-    /// Forced service-health observation (#156, D5): `Some` overrides the
-    /// boot-time detection so the status-bar `ephemeral`/`persistent` branches
-    /// are demonstrable without real systemd. `None` in production (real
-    /// detection). Armed by `PDO_SERVICE_HEALTH` (`persistent`|`ephemeral`|
-    /// `unknown`); tests set it directly.
+    /// Forced service-health observation: `Some` overrides the boot-time
+    /// detection so the status-bar `ephemeral`/`persistent` branches are
+    /// demonstrable without real systemd. Armed by `PDO_SERVICE_HEALTH`.
     pub service_health_override: Option<ServiceHealthOverride>,
-    /// Per-daemon override for the `docker` binary invoked by the sandbox wiring
-    /// (#407). Mirrors `tmux_cmd_override` (#181): `None` in production (real
-    /// `docker`); `Some(cmd)` in the layer-3 harness points every sandbox docker
-    /// call at a fake executable, so no test needs a real daemon or a global
-    /// `std::env::set_var` race. Read once at boot from
+    /// Per-daemon override for the `docker` binary invoked by the sandbox wiring,
+    /// so no test needs a real docker daemon. Read once at boot from
     /// [`sandbox_image::DOCKER_CMD_OVERRIDE_ENV`].
     pub docker_cmd_override: Option<String>,
-    /// Per-daemon override for the sandbox **home root** (#407 testability seam).
-    /// `None` in production → the real `$HOME` (staging under `$HOME/.pdo/sandbox`,
-    /// `.claude` copied from `$HOME/.claude`). `Some(dir)` points staging + the
-    /// `.claude` source + the container-home mount at `dir` instead, so a layer-3
-    /// test stages under its own tempdir and never touches the real home. Read
-    /// once at boot from `PDO_SANDBOX_HOME_OVERRIDE`.
+    /// Per-daemon override for the sandbox **home root**. `None` → the real
+    /// `$HOME` (staging under `$HOME/.pdo/sandbox`, `.claude` copied from
+    /// `$HOME/.claude`). `Some(dir)` points staging, the `.claude` source and the
+    /// container-home mount at `dir`, so a test never touches the real home.
     pub sandbox_home_override: Option<PathBuf>,
-    /// Price-source URL (#427, ADR-0034). `None` in production →
-    /// [`price_table::PRICE_SOURCE_URL_DEFAULT`]. `Some(url)` points the fetch at a
-    /// local server: the seam that makes the sync testable at layer 3 and playable
-    /// at layer 5 without depending on models.dev. Read once at boot from
-    /// `PDO_PRICE_SOURCE_URL`. Same charter as `docker_cmd_override` (#407) and
-    /// `PDO_TMUX_CMD_OVERRIDE` (#181) — never a process-global env read.
+    /// Price-source URL (ADR-0034); `None` →
+    /// [`price_table::PRICE_SOURCE_URL_DEFAULT`]. `Some(url)` points the fetch at
+    /// a local server, so the sync is testable without depending on models.dev.
     pub price_source_url: Option<String>,
-    /// Refresh the fetched price tier at startup (#427). `true` in production,
-    /// `false` in the six `tests/common/mod.rs` literals that don't test price
-    /// sync (the seventh, `spawn_with_price_source`, sets it `true`). Even armed it fetches
-    /// ONLY if `fetched.json` already exists and is over 24 h old: no egress before
-    /// the user has clicked "Sync costs" once (ADR-0034 — the click IS the consent).
+    /// Refresh the fetched price tier at startup. Even armed it fetches ONLY if
+    /// `fetched.json` already exists and is over 24 h old: no egress before the
+    /// user has clicked "Sync costs" once (ADR-0034 — the click IS the consent).
     /// `PDO_PRICE_SYNC=off|0|""` disarms it.
     pub price_refresh_at_boot: bool,
-    /// Run the ~30 s background Trigger-scheduler loop (#450). `true` in
-    /// production (the loop fires due Triggers on a heartbeat, and
-    /// `tokio::time::interval` runs its FIRST tick immediately, so boot catches
-    /// up any missed slot at once). `false` in the layer-3 test literals: those
-    /// tests drive firing deterministically through
-    /// [`DaemonHandle::run_trigger_tick`], and that immediate boot tick races the
-    /// seam — reading `paused`/`due_triggers` and firing (or not) a Run out from
-    /// under a test's `force_trigger_due` + `run_trigger_tick`, which is the
-    /// contention flake behind #450 and the whole family of trigger-scheduler
-    /// tests it poisons under load. Disabling only the background loop leaves the
-    /// deterministic seam as the sole tick; the production TOCTOU it exposed is
-    /// fixed independently in `run_trigger_scheduler_tick` (a last-moment re-read
-    /// of the pause kill-switch), so neutralising the loop here masks nothing.
-    /// Same charter as `price_refresh_at_boot`: true in prod, false in the
-    /// `tests/common/mod.rs` literals — never a process-global env read (#181).
+    /// Run the ~30 s background Trigger-scheduler loop. `true` in production;
+    /// `false` in the layer-3 test literals, because `tokio::time::interval` fires
+    /// its FIRST tick immediately and that boot tick races the deterministic
+    /// [`DaemonHandle::run_trigger_tick`] seam, firing (or not) a Run out from
+    /// under a test's `force_trigger_due`. Disabling the loop masks nothing: the
+    /// production TOCTOU it exposed is fixed separately in
+    /// `run_trigger_scheduler_tick` by re-reading the pause kill-switch late.
     pub run_trigger_scheduler_loop: bool,
     /// **Nested (no-cleanup) mode**: suppress the boot orphan sweep, the periodic
     /// reaper, boot recovery and the stale detector, leaving the daemon completely
@@ -2405,46 +2188,34 @@ pub struct DaemonConfig {
     /// (`PDO_NODE_ID` — a sub-claude context — or `PDO_DAEMON_NO_CLEANUP`), which
     /// [`DaemonConfig::from_env`] resolves once at boot via [`nested_daemon_from`].
     ///
-    /// It is a config field and not an env read at boot precisely because the
-    /// alternative was a **cross-test race** (#181 charter, same as
-    /// `tmux_cmd_override`): a test binary holds several daemons, and the two
-    /// `pty_bridge` tests each wrapped their `spawn` in
-    /// `set_var`/`remove_var("PDO_DAEMON_NO_CLEANUP")`. A sibling's `remove_var`
-    /// landing inside the other's in-flight `serve_with_config` booted that daemon
-    /// with cleanup ARMED; its reaper then killed the out-of-band `pdo-pty-test-*`
-    /// session as an unrecognised name (no TTL on that arm), and the attached
-    /// client printed `[exited]` instead of the echo. Per-daemon config cannot
-    /// interleave.
+    /// Don't turn this back into an env read at boot: a test binary holds several
+    /// daemons, and a sibling's `remove_var("PDO_DAEMON_NO_CLEANUP")` landing
+    /// inside another's in-flight `serve_with_config` booted that daemon with
+    /// cleanup ARMED, whose reaper then killed an out-of-band session. Per-daemon
+    /// config cannot interleave.
     pub nested_daemon: bool,
-    /// Extra exact WebSocket Origin allowlist entries (#564), parsed once at boot
+    /// Extra exact WebSocket Origin allowlist entries, parsed once at boot
     /// from [`pty_bridge::ALLOWED_WS_ORIGINS_ENV`] (`PDO_ALLOWED_WS_ORIGINS`).
     ///
-    /// **Why it exists.** Both WS upgrades — `/ws` (dashboard events) and
-    /// `/sessions/{id}/pty` (terminal) — reject any browser `Origin` outside
-    /// `localhost`/`127.0.0.1:<port>` as a DNS-rebinding / CSWSH guard. Behind a
-    /// reverse proxy or an ALB on a public domain the browser sends
-    /// `Origin: https://pdo.example.tld`, so the terminal and event stream die
-    /// with a 403. This list lets an operator name those public origins.
+    /// Both WS upgrades — `/ws` and `/sessions/{id}/pty` — reject any browser
+    /// `Origin` outside `localhost`/`127.0.0.1:<port>` as a DNS-rebinding / CSWSH
+    /// guard. Behind a reverse proxy on a public domain that kills the terminal
+    /// and event stream with a 403; this list lets an operator name those origins.
     ///
-    /// **Additive, never a replacement (D2).** These entries ADD to the four
-    /// localhost defaults; the loopback origins always keep working (operator
-    /// debugging, Playwright's `127.0.0.1` baseURL). Empty (unset or blank) is
-    /// exactly the historical localhost-only behaviour.
+    /// **Additive, never a replacement.** These entries ADD to the four localhost
+    /// defaults; the loopback origins must keep working.
     ///
-    /// **Exact-match, no wildcards (D3).** Each entry is one origin as the browser
-    /// sends it (`scheme://host[:port]`), compared case-insensitively. `*` / globs
-    /// are not interpreted.
+    /// **Exact-match, no wildcards.** Each entry is one origin as the browser
+    /// sends it (`scheme://host[:port]`), compared case-insensitively.
     ///
-    /// **Env-only, deliberately NOT a UI/instance setting (D7).** The daemon's
-    /// HTTP surface is unauthenticated, so an Origin allowlist editable through
-    /// the UI would be self-disarmable by the very attacker it blocks (ADR-0015's
-    /// `stored → env → default` precedence is knowingly not applied here).
+    /// **Env-only, deliberately NOT a UI/instance setting.** The daemon's HTTP
+    /// surface is unauthenticated, so an allowlist editable through the UI would
+    /// be self-disarmable by the very attacker it blocks — ADR-0015's
+    /// `stored → env → default` precedence is knowingly not applied here.
     ///
-    /// **Dev note.** The new `/ws` check would break `make dev` (Vite serves the
-    /// UI from `:5173`, a different origin). That is fixed on the FRONTEND with
-    /// `rewriteWsOrigin` in `vite.config.ts` — never by baking `5173` into the
-    /// binary's defaults, which would let any page on that port attach a PTY in
-    /// production. Empty in every `tests/common/mod.rs` literal.
+    /// Don't bake Vite's `:5173` into the defaults to make `make dev` work: that
+    /// would let any page on that port attach a PTY in production. It is fixed on
+    /// the frontend with `rewriteWsOrigin` in `vite.config.ts`.
     pub allowed_ws_origins: Vec<String>,
 }
 
@@ -2464,64 +2235,48 @@ pub(crate) fn nested_daemon_from(node_id: Option<&str>, no_cleanup: Option<&str>
 impl DaemonConfig {
     /// Build config from the environment — the production / CLI daemon path.
     ///
-    /// Reads [`tmux_session_manager::TMUX_CMD_OVERRIDE_ENV`] exactly once, here
-    /// at boot, preserving the documented env seam for an operator launching a
-    /// real `pdo daemon` while keeping that read out of the spawn hot path.
+    /// Reads every env seam exactly once, here at boot, keeping those reads out
+    /// of the hot paths.
     pub fn from_env() -> Self {
         Self {
             tmux_cmd_override: std::env::var(tmux_session_manager::TMUX_CMD_OVERRIDE_ENV).ok(),
-            // Debug-only chaos knob (#222); mirrors the PDO_TMUX_CMD_OVERRIDE
-            // precedent — read once at boot, off unless explicitly set.
             panic_on_trigger_name: std::env::var("PDO_DEBUG_PANIC_TRIGGER").ok(),
-            // Debug-only chaos knob (#251), sibling of PDO_DEBUG_PANIC_TRIGGER.
-            // Truthy (set and not "" / "0") arms the one-shot stale poison.
             panic_on_stale_sweep: std::env::var("PDO_DEBUG_PANIC_STALE")
                 .map(|v| !v.is_empty() && v != "0")
                 .unwrap_or(false),
-            // Debug-only chaos knob (#279), sibling of PDO_DEBUG_PANIC_STALE.
-            // Truthy (set and not "" / "0") arms the one-shot spawn poison.
             panic_on_spawn: std::env::var("PDO_DEBUG_PANIC_SPAWN")
                 .map(|v| !v.is_empty() && v != "0")
                 .unwrap_or(false),
-            // Observation seam (#156, D5): force the reported service health.
-            // `None`/unset in prod (real detection); invalid values are ignored.
+            // Invalid values are ignored rather than fatal.
             service_health_override: std::env::var("PDO_SERVICE_HEALTH")
                 .ok()
                 .and_then(|v| ServiceHealthOverride::parse(&v)),
-            // Sandbox docker seam (#407), sibling of PDO_TMUX_CMD_OVERRIDE — read
-            // once at boot, `None`/unset in prod (real docker).
             docker_cmd_override: std::env::var(sandbox_image::DOCKER_CMD_OVERRIDE_ENV).ok(),
-            // Sandbox home-root seam (#407) — `None`/unset in prod (real $HOME).
             sandbox_home_override: std::env::var("PDO_SANDBOX_HOME_OVERRIDE")
                 .ok()
                 .filter(|s| !s.is_empty())
                 .map(PathBuf::from),
-            // Price-source seam (#427), sibling of PDO_DOCKER_CMD_OVERRIDE.
             price_source_url: std::env::var("PDO_PRICE_SOURCE_URL")
                 .ok()
                 .filter(|s| !s.is_empty()),
-            // The crate's ONE opt-OUT env, and deliberately so: a feature that must
-            // work out of the box cannot be armed by an env var, and the real opt-in
-            // is the first click (ADR-0034 — the boot pass only ever REFRESHES an
+            // The crate's ONE opt-OUT env, deliberately: a feature that must work
+            // out of the box cannot be armed by an env var, and the real opt-in is
+            // the first click (ADR-0034 — the boot pass only ever REFRESHES an
             // existing cache, it never creates one).
             price_refresh_at_boot: std::env::var("PDO_PRICE_SYNC")
                 .map(|v| !v.is_empty() && v != "0" && v != "off")
                 .unwrap_or(true),
-            // #450: production always runs the background scheduler heartbeat.
-            // No env seam — the loop is core daemon behaviour, only the layer-3
-            // test literals opt out (deterministic tick seam).
+            // No env seam: the loop is core daemon behaviour; only the layer-3
+            // test literals opt out.
             run_trigger_scheduler_loop: true,
-            // The ONE place either env var is read. `serve_with_config` consumes
-            // the resolved boolean, so a test can pick the posture per daemon
-            // instead of racing every sibling on a process-global (#181).
+            // The ONE place either env var is read; `serve_with_config` consumes
+            // the resolved boolean, so tests pick the posture per daemon.
             nested_daemon: nested_daemon_from(
                 std::env::var("PDO_NODE_ID").ok().as_deref(),
                 std::env::var("PDO_DAEMON_NO_CLEANUP").ok().as_deref(),
             ),
-            // WS Origin allowlist extension (#564) — the ONE read of
-            // PDO_ALLOWED_WS_ORIGINS, here at boot. Parsing is pure (see
-            // `pty_bridge::parse_allowed_origins`); an unset or blank value
-            // yields an empty list, i.e. localhost-only, unchanged behaviour.
+            // The ONE read of PDO_ALLOWED_WS_ORIGINS. Unset or blank yields an
+            // empty list, i.e. localhost-only.
             allowed_ws_origins: std::env::var(pty_bridge::ALLOWED_WS_ORIGINS_ENV)
                 .map(|v| pty_bridge::parse_allowed_origins(&v))
                 .unwrap_or_default(),
@@ -2553,19 +2308,16 @@ pub async fn serve_with_config(
 
     init_db(&db).await?;
 
-    // #471: say ONCE, here, that a stored `image_source` / `dockerfile_path` is now inert. After
-    // the schema is up (the reader PRAGMA-probes the columns) and before anything can consume a
-    // setting — this is the only moment where "one line per boot" is a fact rather than a hope.
+    // Must sit after the schema is up (the reader PRAGMA-probes the columns) and
+    // before anything can consume a setting — the only moment where "one line per
+    // boot" is a fact rather than a hope.
     warn_about_retired_sandbox_settings(&db).await;
 
-    // #231: one-shot migration of prompts stranded in the flat
-    // `<repo>/.pdo/pipelines/prompts/` dir by the old run-scoped sync into each
-    // pipeline's canonical `<stem>.prompts/` dir. Runs before the file watcher
-    // attaches so the moves don't surface as spurious pipeline-modified events.
-    // A pure filesystem fix-up — unrelated to tmux, so it is not gated on
-    // `nested_daemon`. Scoped to the repo store (where the bug stranded prompts,
-    // and what the daemon owns); the writer fix + readers are store-agnostic, so
-    // any user-store pipeline self-heals on its next save.
+    // One-shot migration of prompts stranded in the flat
+    // `<repo>/.pdo/pipelines/prompts/` dir into each pipeline's canonical
+    // `<stem>.prompts/` dir. Must run BEFORE the file watcher attaches, or the
+    // moves surface as spurious pipeline-modified events. Not gated on
+    // `nested_daemon`: it is a pure filesystem fix-up, unrelated to tmux.
     {
         let repo_pipelines = repo_root.join(".pdo").join("pipelines");
         match pipeline_migrator::migrate_stranded_flat_prompts(&repo_pipelines) {
@@ -2605,21 +2357,15 @@ pub async fn serve_with_config(
         .local_addr()
         .context("failed to read bound local addr")?;
 
-    // Service health is computed ONCE here at boot (#156, D5) — real detection,
-    // or the forced observation value when `PDO_SERVICE_HEALTH` is set — and
-    // cached in `AppState`, so `GET /sessions` never shells out per poll.
+    // Computed ONCE at boot and cached in `AppState`, so `GET /sessions` never
+    // shells out per poll.
     let service_health = Arc::new(match config.service_health_override {
         Some(o) => o.into_health(),
         None => compute_service_health(),
     });
 
-    // #450: capture the background-scheduler switch before `config` is consumed
-    // into `AppState` below. `true` in prod, `false` in the layer-3 test literals
-    // (see `DaemonConfig::run_trigger_scheduler_loop`).
+    // Captured before `config` is consumed into `AppState` below.
     let run_trigger_scheduler_loop = config.run_trigger_scheduler_loop;
-
-    // Same capture, same reason (see `DaemonConfig::nested_daemon`): the cleanup
-    // posture is decided by the caller, not re-read from process-global env here.
     let nested_daemon = config.nested_daemon;
 
     let state = Arc::new(AppState {
@@ -2655,23 +2401,13 @@ pub async fn serve_with_config(
         price_sync_lock: tokio::sync::Mutex::new(()),
         price_source_url: config.price_source_url,
         price_refresh_at_boot: config.price_refresh_at_boot,
-        // WS Origin allowlist extension (#564). Moved in last; `config` is fully
-        // consumed by this literal. The boot summary/lint below reads it back off
-        // `state`, so no pre-literal clone is needed.
         allowed_ws_origins: config.allowed_ws_origins,
         libassist_focus: Mutex::new(None),
     });
 
-    // The orphan sweep — and every other tmux call this daemon makes —
-    // is scoped to its own private socket (`pdo-<port>`) so we can
-    // never reach into another daemon's tmux state on the same host.
-    //
-    // A nested daemon suppresses every cleanup pathway: a Tester or
-    // Implementer that accidentally runs `pdo daemon` can't trigger
-    // reaper-based kills, even on its own socket. The daemon still serves
-    // HTTP and accepts explicit `cleanup_run` calls — only the *automatic*
-    // sweeps go away. The decision is `config.nested_daemon`, resolved from
-    // env ONCE in `DaemonConfig::from_env`, never re-read here (#181).
+    // A nested daemon suppresses every AUTOMATIC cleanup pathway, so a Tester or
+    // Implementer that accidentally runs `pdo daemon` can't trigger reaper-based
+    // kills. It still serves HTTP and accepts explicit `cleanup_run` calls.
     if nested_daemon {
         warn!(
             "PDO daemon in nested (no-cleanup) mode — \
@@ -2684,10 +2420,8 @@ pub async fn serve_with_config(
             warn!("Orphan sweep at boot failed: {e}");
         }
 
-        // Boot recovery (#213): reconcile persisted run state against the live
-        // process world — fail-fast on orphaned Running nodes and surface
-        // git/event-log divergence. Suppressed for a nested daemon (it stays
-        // passive on tmux state, same as the sweep/reaper).
+        // Reconcile persisted run state against the live process world: fail-fast
+        // on orphaned Running nodes and surface git/event-log divergence.
         boot_recovery::run_boot_recovery(&state).await;
     }
 
@@ -2695,14 +2429,10 @@ pub async fn serve_with_config(
 
     info!("PDO daemon listening on http://{bound_addr}");
 
-    // WS Origin allowlist summary + lint (#564, D8). Only speak up when the
-    // operator actually configured extras — silence is the localhost-only
-    // default. A malformed entry is KEPT (never fail-fast: the check is a nominal
-    // protective path, and a remote client shouldn't be able to crash the boot),
-    // but flagged, because once a public domain is configured a typo in
-    // PDO_ALLOWED_WS_ORIGINS is the #1 cause of a dead terminal/dashboard — and
-    // the 403 itself is otherwise mute. Mirrors the "ignore-if-invalid" posture
-    // of PDO_SERVICE_HEALTH.
+    // Only speak up when the operator configured extras — silence is the
+    // localhost-only default. A malformed entry is KEPT, never fail-fast: a
+    // remote client must not be able to crash the boot. It is flagged because a
+    // typo here is the top cause of a dead terminal, and the 403 is otherwise mute.
     if !state.allowed_ws_origins.is_empty() {
         info!(
             "WS Origin allowlist extended with {} operator origin(s): {} \
@@ -2711,10 +2441,8 @@ pub async fn serve_with_config(
             state.allowed_ws_origins.join(", ")
         );
         for entry in &state.allowed_ws_origins {
-            // An origin is `scheme://host[:port]` with no path. Flag anything that
-            // lacks an http(s) scheme, carries a wildcard, or has a '/' past the
-            // "://" (a path) — the trailing slash of a bare origin is already
-            // stripped by `parse_allowed_origins`.
+            // An origin is `scheme://host[:port]` with no path. The trailing slash
+            // of a bare origin is already stripped by `parse_allowed_origins`.
             let after_scheme = entry
                 .strip_prefix("https://")
                 .or_else(|| entry.strip_prefix("http://"));
@@ -2732,8 +2460,6 @@ pub async fn serve_with_config(
         }
     }
 
-    // Spawn reaper background task — unless we're a nested daemon, in
-    // which case we stay completely passive on tmux state.
     let _reaper_handle = if nested_daemon {
         None
     } else {
@@ -2744,14 +2470,12 @@ pub async fn serve_with_config(
             let mut tick = time::interval(interval);
             loop {
                 tick.tick().await;
-                // Resolve the TTLs *inside* the loop, not once at boot (#129,
-                // ADR-0015 D5): a `PUT /settings` must take effect on the next
-                // sweep without a restart. The stored value (if any) wins over
-                // the env var, which wins over the default.
+                // Resolve the TTLs *inside* the loop, not once at boot: a
+                // `PUT /settings` must take effect on the next sweep without a
+                // restart (ADR-0015, `stored → env → default`).
                 let ttls = resolve_sweep_ttls(&reaper_state.db).await;
-                // Panic-isolated like the trigger/stale sweeps (#251 "rule of
-                // three"): a panic in one sweep tick must not silently kill the
-                // reaper loop and leave sessions un-reaped for the daemon's life.
+                // Panic-isolated: a panic in one tick must not silently kill the
+                // loop and leave sessions un-reaped for the daemon's life.
                 let st = reaper_state.clone();
                 let socket = socket.clone();
                 run_isolated("reaper", async move {
@@ -2786,13 +2510,8 @@ pub async fn serve_with_config(
         }))
     };
 
-    // Background task: Trigger scheduler (sibling of reaper/stale). Fires due
-    // Triggers on a ~30s tick. Best-effort: only runs while the daemon lives,
-    // forward-only (no backfill of missed slots). Suppressed in a nested daemon
-    // for the same reason the reaper is — a sub-claude must stay passive — and in
-    // the layer-3 test harness (#450), where the immediate-first-tick boot tick
-    // would race the deterministic `run_trigger_tick` seam. Production sets
-    // `run_trigger_scheduler_loop = true`, so the boot catch-up is unchanged.
+    // Fires due Triggers on a ~30s tick. Best-effort: only runs while the daemon
+    // lives, forward-only — no backfill of missed slots.
     let _trigger_handle = if nested_daemon || !run_trigger_scheduler_loop {
         None
     } else {
@@ -2817,12 +2536,10 @@ pub async fn serve_with_config(
         Ok(())
     });
 
-    // Price-table refresh (#427, ADR-0034). DETACHED and posted AFTER
-    // `tokio::spawn(axum::serve(...))`, never `.await`ed before `build_router` —
-    // unlike `boot_recovery`. A `.await` here would delay the first `accept()`
-    // behind a DNS timeout, and `tests/smoke.sh` polls `/runs` for up to 30 s so it
-    // would go green while masking exactly that. Wrapped in `run_isolated`, the
-    // shared spine of the daemon's otherwise-unsupervised sweeps.
+    // Must stay DETACHED and posted AFTER `tokio::spawn(axum::serve(...))`, never
+    // `.await`ed before `build_router`: a `.await` here delays the first
+    // `accept()` behind a DNS timeout, and `tests/smoke.sh` polls `/runs` for 30 s
+    // so it would go green while masking exactly that.
     {
         let price_state = state.clone();
         tokio::spawn(async move {
@@ -2833,11 +2550,9 @@ pub async fn serve_with_config(
         });
     }
 
-    // #616/ADR-0053 §3: warm the harness-catalogue cache at boot, a sibling of the
-    // price refresh and detached for the same reason — probing every installed
-    // harness's `--help`/`--version` must not delay the first `accept()`. The first
-    // `/settings` fetch then answers from warm cache; an auto-update afterwards is
-    // caught by the version re-check behind that fetch.
+    // Warm the harness-catalogue cache at boot, detached for the same reason as
+    // the price refresh: probing every harness's `--help`/`--version` must not
+    // delay the first `accept()`.
     {
         let catalogue_state = state.clone();
         tokio::spawn(async move {
@@ -2861,8 +2576,6 @@ pub async fn run_daemon(port: u16) -> Result<()> {
     let handle = serve(addr, repo_root).await?;
     handle.task.await.context("daemon task join error")?
 }
-
-// --- Repo endpoints ---
 
 #[derive(Deserialize)]
 struct RepoPathQuery {
@@ -2935,29 +2648,19 @@ async fn repos_recent(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
-// --- GET /fs/browse (issue #131, renamed + generalised in #431): filesystem explorer ---
+// GET /fs/browse — read-only, single-level filesystem explorer.
 //
-// Lists one directory level at a time so the webapp can browse and pick a path
-// visually. Two consumers today: the New-Run modal's repo picker (dirs only — the
-// pre-#431 behaviour, bit for bit, under the flag defaults) and the settings
-// Dockerfile picker (`files=true&hidden=true`). Read-only, single-level, no
-// recursion.
-//
-// Exposure, stated exactly (the pre-#431 comment claimed the opposite on both
-// counts): the daemon binds `0.0.0.0` (not `127.0.0.1`), and #260 is CLOSED, not
-// deferred — the LAN reachability is assumed by the owner, so this surface has no
-// authentication and any LAN peer can enumerate, one level per request, whatever the
-// daemon's uid can traverse. #431's two flags widen that enumeration from directory
-// names to **file names** — never to file CONTENTS: this handler emits names, a path
-// and three booleans, and has no read path at all. The right boundary is
-// authenticating the whole HTTP surface, which is a separate piece of work; a partial
-// mitigation invented here would be worse than none (a false sense of a boundary) and
-// would break the staging-profile entry picker, whose entries live in `$HOME` dotfiles.
+// Exposure, stated exactly: the daemon binds `0.0.0.0`, and the LAN reachability is
+// assumed by the owner, so this surface has no authentication and any LAN peer can
+// enumerate, one level per request, whatever the daemon's uid can traverse. It emits
+// names, a path and three booleans — never file CONTENTS, and it has no read path at
+// all. Don't invent a partial mitigation here: it would give a false sense of a
+// boundary and break the staging-profile picker, whose entries live in `$HOME`
+// dotfiles. The right boundary is authenticating the whole HTTP surface.
 
-/// Listing cap, applied **per genre** with directories claiming the budget first
-/// (#431). A single shared budget would let files starve directories, which is a
-/// functional failure of the picker rather than a cosmetic one: 50 000 files and two
-/// subdirectories in `~/Downloads` would yield zero navigable rows.
+/// Listing cap, applied **per genre** with directories claiming the budget first.
+/// Don't make it one shared budget: files would starve directories, and 50 000 files
+/// beside two subdirectories in `~/Downloads` would yield zero navigable rows.
 const BROWSE_CAP: usize = 1000;
 
 #[derive(Deserialize)]
@@ -2967,19 +2670,16 @@ struct BrowseQuery {
     /// bug (→ 400).
     #[serde(default)]
     path: Option<String>,
-    /// List regular files alongside the navigable directories (#431). Default `false`
-    /// ≡ the pre-#431 dirs-only listing.
+    /// List regular files alongside the navigable directories.
     ///
     /// **Wire vocabulary is strict**: axum's `Query` goes through `serde_urlencoded` →
     /// `str::parse::<bool>()`, so only the lowercase literals `true` / `false` are
-    /// accepted. A valueless `?files`, `?files=1`, `?files=yes` or `?files=TRUE` is a
-    /// `400` with a `text/plain` body (`Failed to deserialize query string: …`), NOT a
-    /// silent `false`. Pinned by `browse_query_rejects_valueless_and_non_literal_flags`.
+    /// accepted. A valueless `?files`, `?files=1` or `?files=TRUE` is a `400`, NOT a
+    /// silent `false`.
     #[serde(default)]
     files: bool,
-    /// Show dot-entries (`.claude`, `.pdo`, …) (#431). Default `false` ≡ the pre-#431
-    /// filter. Needed by the Dockerfile picker, whose default lives at
-    /// `~/.pdo/sandbox/Dockerfile`. Same strict `true`/`false` wire vocabulary as
+    /// Show dot-entries (`.claude`, `.pdo`, …). Needed by the Dockerfile picker, whose
+    /// default lives at `~/.pdo/sandbox/Dockerfile`. Same strict wire vocabulary as
     /// [`BrowseQuery::files`].
     #[serde(default)]
     hidden: bool,
@@ -2994,27 +2694,16 @@ struct BrowseEntry {
     /// Cheap `.git`-presence hint (NOT a `git rev-parse` subprocess). A hint, not a
     /// gate: every folder stays pickable and the authoritative validation runs at
     /// selection time via `/repos/validate` (ADR-0001 — sharp tool, not safe tool).
-    /// Computed for directories only (#431); hard `false` for a file, where it has no
-    /// meaning — the JSON is unchanged (`/x/notes.txt/.git` already probed `false` via
-    /// `ENOTDIR`), we just spare one `stat(2)` per entry on a listing that is refetched
-    /// on every navigation click.
+    /// Hard `false` for a file, where it has no meaning.
     is_git_repo: bool,
     is_symlink: bool,
-    /// `true` for a directory (symlinks FOLLOWED), `false` for a regular file (#431).
-    /// Always emitted, including under the dirs-only default where it is invariably
-    /// `true`, so an entry's shape never depends on the query.
-    ///
-    /// Declaration order is NOT load-bearing here, contrary to what this comment used to
-    /// claim: `fs_browse` builds its envelope with `json!`, which runs every entry through
-    /// `serde_json::to_value`, and `serde_json` is built without `preserve_order` — so each
-    /// entry lands in a `BTreeMap` and reaches the wire with its keys sorted
-    /// alphabetically (`is_dir` FIRST), whatever the order below. Pre-#431 responses went
-    /// through the same path and were already sorted, so the only wire delta remains the
-    /// added key — the AC holds, but by key-order irrelevance (RFC 8259), not by a trick.
+    /// `true` for a directory (symlinks FOLLOWED), `false` for a regular file. Always
+    /// emitted, including under the dirs-only default where it is invariably `true`,
+    /// so an entry's shape never depends on the query.
     is_dir: bool,
 }
 
-/// What a `read_dir` child is, for the purposes of this listing (#431).
+/// What a `read_dir` child is, for the purposes of this listing.
 #[derive(Debug, PartialEq, Eq)]
 enum EntryKind {
     Dir,
@@ -3024,15 +2713,11 @@ enum EntryKind {
 }
 
 /// Classify one child. `meta` is [`std::fs::metadata`] (which **follows** symlinks);
-/// `None` means unclassifiable (broken link, `ELOOP`) → `Skip`, exactly as before #431.
+/// `None` means unclassifiable (broken link, `ELOOP`) → `Skip`.
 ///
-/// The set of **discarded** entries is unchanged by #431; the flag only ADDS regular
-/// files. Special files (fifo / socket / device) are neither a dir nor a regular file →
-/// `Skip` in both modes, because nothing downstream can consume one: every consumer of
-/// a picked path resolves it (`/repos/validate`, this issue's Dockerfile-path
-/// resolver), so the row would be unpickable by construction — and a fifo handed to
-/// `ensure_image` is a read that blocks forever. Surfacing a dangling link as
-/// `is_dir: false` would be a lie by omission too (it is not a file either).
+/// Special files (fifo / socket / device) `Skip` in both modes: nothing downstream can
+/// consume one — every consumer resolves the picked path, so the row would be
+/// unpickable by construction, and a fifo handed to `ensure_image` blocks forever.
 fn classify_browse_entry(meta: Option<&std::fs::Metadata>, include_files: bool) -> EntryKind {
     match meta {
         None => EntryKind::Skip,
@@ -3042,20 +2727,16 @@ fn classify_browse_entry(meta: Option<&std::fs::Metadata>, include_files: bool) 
     }
 }
 
-/// Merge the two genre buckets into the response list: each bucket sorted
-/// case-insensitively, directories first, **directories claim the budget first**, total
-/// `<= cap` (#431).
+/// Merge the two genre buckets: each sorted case-insensitively, directories first,
+/// **directories claim the budget first**, total `<= cap`.
 ///
 /// `truncated` is `total > cap`, which is why the caller collects at most `cap + 1` per
-/// genre: a `(cap + 1)`th survivor is all `truncated` needs. Under the flag defaults
-/// `files` is empty, so this is arithmetically the pre-#431 `sort_by_key(name) +
-/// truncate(cap)`.
+/// genre — a `(cap + 1)`th survivor is all `truncated` needs.
 fn merge_browse_entries(
     mut dirs: Vec<BrowseEntry>,
     mut files: Vec<BrowseEntry>,
     cap: usize,
 ) -> (Vec<BrowseEntry>, bool) {
-    // Case-insensitive, stable sort within each genre (ties keep read_dir order).
     dirs.sort_by_key(|a| a.name.to_lowercase());
     files.sort_by_key(|a| a.name.to_lowercase());
     let truncated = dirs.len() + files.len() > cap;
@@ -3070,8 +2751,7 @@ fn merge_browse_entries(
 enum BrowseRootError {
     /// `path` was provided but is not absolute (caller bug → 400).
     Relative,
-    /// No directory in the default chain (`$HOME → repo_root → /`) exists as a
-    /// directory (pathological → 500). `/` virtually always exists, so this is rare.
+    /// No directory in the default chain (`$HOME → repo_root → /`) exists (→ 500).
     NoDefault,
 }
 
@@ -3093,9 +2773,8 @@ fn default_chain(home: Option<&Path>, repo_root: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Resolve the directory to list. Pure w.r.t. the environment: `home`/`repo_root` are
-/// injected (never reads the real `$HOME`) so it stays deterministic under cargo's
-/// parallel test threads (ADR-0004).
+/// Resolve the directory to list. `home`/`repo_root` are injected rather than read
+/// from the real env, so it stays deterministic under cargo's parallel test threads.
 fn resolve_browse_root(
     path: Option<&str>,
     home: Option<&Path>,
@@ -3110,7 +2789,6 @@ fn resolve_browse_root(
             if pb.is_dir() {
                 Ok(pb)
             } else if pb.is_file() {
-                // A file path → list its parent (the user pointed inside a folder).
                 Ok(pb.parent().map(Path::to_path_buf).unwrap_or(pb))
             } else {
                 // Non-existent (e.g. a stale/half-typed combobox value) → clamp to the
@@ -3132,9 +2810,6 @@ fn browse_io_label(e: &std::io::Error) -> &'static str {
 }
 
 async fn fs_browse(State(state): State<Arc<AppState>>, Query(q): Query<BrowseQuery>) -> Response {
-    // The repo's idiom for the home dir — there is no `dirs` crate (cf.
-    // stale_detector.rs). Injected into the pure resolver so the handler stays a thin
-    // shell over testable logic.
     let home = std::env::var("HOME").ok().map(PathBuf::from);
     let resolved = match resolve_browse_root(q.path.as_deref(), home.as_deref(), &state.repo_root) {
         Ok(p) => p,
@@ -3156,11 +2831,10 @@ async fn fs_browse(State(state): State<Arc<AppState>>, Query(q): Query<BrowseQue
         }
     };
 
-    // Canonicalize the requested dir ONLY (resolves `..`, cleans the path, surfaces
-    // ELOOP/NotFound). Children are NOT re-canonicalized — that would collapse
-    // symlinks and show a path the user didn't click. On failure (the dir vanished
-    // since the is_dir check, or a symlink loop) fall back to the un-canonicalized
-    // path so the read_dir below produces a clean in-body error, never a 500/panic.
+    // Canonicalize the requested dir ONLY. Don't re-canonicalize children: that
+    // collapses symlinks and shows a path the user didn't click. On failure fall back
+    // to the un-canonicalized path so `read_dir` below produces a clean in-body error
+    // rather than a 500.
     let canonical_dir = std::fs::canonicalize(&resolved).unwrap_or(resolved);
     let parent = canonical_dir
         .parent()
@@ -3170,7 +2844,7 @@ async fn fs_browse(State(state): State<Arc<AppState>>, Query(q): Query<BrowseQue
         Ok(rd) => rd,
         Err(e) => {
             // Navigable-but-unlistable (EACCES, etc.): 200 with an in-body error and
-            // the breadcrumb preserved, so the user is never stranded on a blank pane.
+            // the breadcrumb preserved, so the user is never stranded.
             return Json(serde_json::json!({
                 "path": canonical_dir.to_string_lossy(),
                 "parent": parent,
@@ -3182,9 +2856,8 @@ async fn fs_browse(State(state): State<Arc<AppState>>, Query(q): Query<BrowseQue
         }
     };
 
-    // Two genre buckets, each collecting at most `BROWSE_CAP + 1` entries: a
-    // (CAP+1)th survivor is all `truncated` needs, and stopping there keeps the
-    // dirs-only default path arithmetically identical to pre-#431.
+    // Each bucket collects at most `BROWSE_CAP + 1`: a (CAP+1)th survivor is all
+    // `truncated` needs.
     let mut dirs: Vec<BrowseEntry> = Vec::new();
     let mut files: Vec<BrowseEntry> = Vec::new();
     for child in read {
@@ -3196,11 +2869,9 @@ async fn fs_browse(State(state): State<Arc<AppState>>, Query(q): Query<BrowseQue
         if !q.hidden && name.starts_with('.') {
             continue; // dot-entries hidden unless `?hidden=true`; `.`/`..` never yielded
         }
-        // `file_type()` does NOT follow the link (cheap lstat) → correct for the flag.
         let is_symlink = child.file_type().map(|t| t.is_symlink()).unwrap_or(false);
-        // TRAP: `DirEntry::metadata()` lstat's (no follow) and would report every
-        // symlinked dir as non-dir. The FREE `std::fs::metadata` FOLLOWS the link —
-        // use it for the is-dir decision. Broken link / loop → Err → None → Skip.
+        // Don't use `DirEntry::metadata()`: it lstat's, so every symlinked dir would
+        // report as non-dir. The free `std::fs::metadata` FOLLOWS the link.
         let meta = std::fs::metadata(child.path()).ok();
         let kind = classify_browse_entry(meta.as_ref(), q.files);
         if kind == EntryKind::Skip {
@@ -3208,8 +2879,6 @@ async fn fs_browse(State(state): State<Arc<AppState>>, Query(q): Query<BrowseQue
         }
         let is_dir = kind == EntryKind::Dir;
         let entry_path = canonical_dir.join(&name);
-        // Dirs only: `.git` inside a regular file is meaningless (and already probed
-        // `false` via ENOTDIR), so skip the syscall entirely.
         let is_git_repo = is_dir && entry_path.join(".git").exists();
         let entry = BrowseEntry {
             name,
@@ -3222,20 +2891,17 @@ async fn fs_browse(State(state): State<Arc<AppState>>, Query(q): Query<BrowseQue
         if bucket.len() <= BROWSE_CAP {
             bucket.push(entry);
         }
-        // Early-stop, GATED on whether we are still collecting files: under the
-        // defaults `files` stays empty forever, so without the `!q.files` arm a
-        // directory with > CAP subdirectories would now be walked in full instead of
-        // stopping at CAP+1 — a perf regression on the default path.
+        // The `!q.files` arm is load-bearing: without it, `files` staying empty under
+        // the defaults means a directory with > CAP subdirectories is walked in full
+        // instead of stopping at CAP+1.
         if dirs.len() > BROWSE_CAP && (!q.files || files.len() > BROWSE_CAP) {
             break;
         }
     }
 
-    // Dirs-then-files, case-insensitive within each genre, dirs claiming the budget
-    // first. NOTE (pre-existing, not fixed here): when the early-stop fires, the
-    // collected CAP+1 entries are in arbitrary `read_dir` order, so the sort keeps the
-    // alphabetically-first CAP *of an arbitrary sample* — inherent to capping without a
-    // global sort.
+    // Known limitation: when the early-stop fires, the collected CAP+1 entries are in
+    // arbitrary `read_dir` order, so the sort keeps the alphabetically-first CAP *of an
+    // arbitrary sample*. Inherent to capping without a global sort.
     let (entries, truncated) = merge_browse_entries(dirs, files, BROWSE_CAP);
 
     Json(serde_json::json!({
@@ -3248,8 +2914,6 @@ async fn fs_browse(State(state): State<Arc<AppState>>, Query(q): Query<BrowseQue
     .into_response()
 }
 
-// --- Trigger endpoints ---
-
 #[derive(Deserialize)]
 struct CreateTriggerRequest {
     name: String,
@@ -3257,9 +2921,8 @@ struct CreateTriggerRequest {
     pipeline_id: String,
     #[serde(default)]
     target_repo: Option<String>,
-    /// Read-only secondary repos to associate with fired Runs (#465, ADR-0042).
-    /// Stored on the Trigger as raw JSON TEXT and forwarded at fire time. Absent →
-    /// mono-repo fire.
+    /// Secondary repos to associate with fired Runs (ADR-0042). Stored as raw JSON
+    /// TEXT and forwarded at fire time. Absent → mono-repo fire.
     #[serde(default)]
     target_repos: Vec<TargetRepoInput>,
     #[serde(default)]
@@ -3274,29 +2937,28 @@ struct CreateTriggerRequest {
     guard_command: Option<String>,
     #[serde(default = "default_overlap_policy")]
     overlap_policy: String,
-    /// Bounded-`allow` ceiling (#239): max simultaneous live Runs. `None` =
-    /// unbounded. Inert unless `overlap_policy == "allow"`.
+    /// Bounded-`allow` ceiling: max simultaneous live Runs. `None` = unbounded.
+    /// Inert unless `overlap_policy == "allow"`.
     #[serde(default)]
     max_concurrent: Option<i64>,
-    /// Per-Trigger sandbox mode (#410): `"off"` | `"full"` | `"minimal"`, or absent/`null`
-    /// to inherit the instance default. Read at fire time and folded into the create
+    /// Per-Trigger sandbox mode: `"off"` | `"full"` | `"minimal"`, or absent/`null` to
+    /// inherit the instance default. Read at fire time and folded into the create
     /// request's explicit tier.
     #[serde(default)]
     sandbox: Option<String>,
-    /// Per-Trigger harness (#551, ADR-0046): a harness name, or absent/`null`/blank to
-    /// inherit the instance default. Read at fire time and folded into the fired Run's
-    /// harness (there is no separate Trigger tier). Free text — no validation (ADR-0045).
+    /// Per-Trigger harness (ADR-0046): a harness name, or absent/`null`/blank to
+    /// inherit the instance default. Folded at fire time into the fired Run's harness —
+    /// there is no separate Trigger tier. Free text, no validation (ADR-0045).
     #[serde(default)]
     harness: Option<String>,
-    /// Per-Trigger `AgentChoice` (#563, ADR-0057): `Inherit`/absent falls through to
-    /// the legacy `harness` field above (itself falling through to the Run/Project/
-    /// Instance tiers); `Profile`/`Custom` is folded into the fired Run's explicit
-    /// tier at fire time, same posture as `harness`.
+    /// Per-Trigger `AgentChoice` (ADR-0057): `Inherit`/absent falls through to the
+    /// legacy `harness` field above; `Profile`/`Custom` is folded into the fired Run's
+    /// explicit tier at fire time.
     #[serde(default)]
     agent_choice: Option<crate::agent_choice::AgentChoice>,
-    /// Whether Runs this Trigger fires are auto-named (#338). Seeded from the instance
-    /// default in the create modal and frozen on the row; `#[serde(default)]` → `true`
-    /// so an older client that omits the field keeps the pre-#338 auto-naming behaviour.
+    /// Whether Runs this Trigger fires are auto-named. Seeded from the instance
+    /// default in the create modal and frozen on the row; defaults to `true` so an
+    /// older client that omits the field keeps auto-naming.
     #[serde(default = "default_true")]
     auto_name: bool,
 }
@@ -3305,25 +2967,20 @@ fn default_overlap_policy() -> String {
     "skip".to_string()
 }
 
-/// serde default for the flat `auto_name` bool on trigger create (#338): an omitted
-/// field means "auto-name", matching the `NOT NULL DEFAULT 1` column and the built-in
-/// resolver default.
+/// Matches the `NOT NULL DEFAULT 1` column and the built-in resolver default.
 fn default_true() -> bool {
     true
 }
 
-/// The SHARED existence gate for any `sandbox` reference a client can store (#432,
-/// ADR-0031 §7): the per-Trigger mode (create + patch) and the instance
-/// `default_sandbox`. `""` is the *clear* sentinel and `off` means "no sandbox", so both
-/// are always valid; anything else must name a profile that resolves — one of the two
-/// virtual defaults, or a materialised row.
+/// The SHARED existence gate for any `sandbox` reference a client can store (ADR-0031
+/// §7). `""` is the *clear* sentinel and `off` means "no sandbox", so both are always
+/// valid; anything else must name a profile that resolves.
 ///
-/// A **write-time** gate, deliberately not the authoritative one (the create-run
-/// chokepoint is, and it re-resolves at every fire). It exists so the error lands where
-/// the user can fix it, at the moment they typed it — same posture as the `is_file()` check
-/// on a profile's Dockerfile. The `env` tier (`PDO_DEFAULT_SANDBOX`) never
-/// passes through here at all, which is why `build_settings_view` also discloses a
-/// `reason` on `default_sandbox`.
+/// A **write-time** gate, deliberately not the authoritative one — the create-run
+/// chokepoint is, and it re-resolves at every fire. This one exists so the error lands
+/// where the user can fix it. The `env` tier (`PDO_DEFAULT_SANDBOX`) never passes
+/// through here, which is why `build_settings_view` also discloses a `reason` on
+/// `default_sandbox`.
 async fn validate_sandbox_ref(db: &sqlx::SqlitePool, raw: &str) -> Result<(), String> {
     let Some(mode) = event_log::SandboxMode::parse(raw) else {
         return Ok(()); // "" / whitespace = the clear sentinel
@@ -3343,10 +3000,9 @@ async fn validate_sandbox_ref(db: &sqlx::SqlitePool, raw: &str) -> Result<(), St
     }
 }
 
-/// Validate a `max_concurrent` cap (#239): when present it must be >= 1. `None`
-/// (unbounded) is always valid. Shared by create and patch so the rule can't
-/// drift between them. A cap set while `overlap_policy == "skip"` is accepted —
-/// it stays inert (the frontend nulls it; the API is lenient).
+/// Validate a `max_concurrent` cap: when present it must be >= 1. Shared by create
+/// and patch so the rule can't drift between them. A cap set while
+/// `overlap_policy == "skip"` is accepted and stays inert.
 fn validate_max_concurrent(v: Option<i64>) -> Result<(), &'static str> {
     match v {
         Some(n) if n < 1 => Err("max_concurrent must be >= 1"),
@@ -3354,12 +3010,10 @@ fn validate_max_concurrent(v: Option<i64>) -> Result<(), &'static str> {
     }
 }
 
-/// Deserialize a double-`Option` PATCH field so a present `null` maps to
-/// `Some(None)` (explicit "clear to NULL"), distinct from absent → `None`
-/// ("leave untouched"). serde's default for `Option<Option<T>>` collapses both to
-/// `None`; this helper — only invoked when the key is present — recovers the
-/// three-way distinction. #239 needs it: editing a bounded `allow` Trigger back to
-/// blank must clear the stored cap to unbounded, not silently keep the old value.
+/// Deserialize a double-`Option` PATCH field so a present `null` maps to `Some(None)`
+/// ("clear to NULL"), distinct from absent → `None` ("leave untouched"). serde's
+/// default for `Option<Option<T>>` collapses both to `None`; this helper is only
+/// invoked when the key is present, which is what recovers the three-way distinction.
 fn deserialize_double_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -3368,9 +3022,8 @@ where
     Ok(Some(Option::<T>::deserialize(deserializer)?))
 }
 
-/// Body of `POST /triggers/guard/test` (#350): the guard command *as currently
-/// typed in the New-trigger tab* (the Trigger need not be saved) plus an optional
-/// target repo. No trigger id — this is inline, pre-save.
+/// Body of `POST /triggers/guard/test`: the guard command *as currently typed in the
+/// New-trigger tab* plus an optional target repo. No trigger id — this is pre-save.
 #[derive(serde::Deserialize)]
 struct GuardTestRequest {
     guard_command: String,
@@ -3378,11 +3031,9 @@ struct GuardTestRequest {
     target_repo: Option<String>,
 }
 
-/// Response of `POST /triggers/guard/test` (#350): a 1:1 projection of
-/// [`fire_decision::GuardResult`]. `outcome` is `"pass" | "skip" | "error"`; the
-/// would-fire / would-skip verdict is composed client-side from it. `exit_code`
-/// is `Some(0)` on pass, the real code on skip, and `None` on error (spawn
-/// failure or timeout).
+/// Response of `POST /triggers/guard/test`: a 1:1 projection of
+/// [`fire_decision::GuardResult`]. The would-fire / would-skip verdict is composed
+/// client-side from `outcome`. `exit_code` is `None` on error (spawn failure/timeout).
 #[derive(serde::Serialize)]
 struct GuardTestResponse {
     outcome: &'static str,
@@ -3396,7 +3047,6 @@ impl From<fire_decision::GuardResult> for GuardTestResponse {
     fn from(r: fire_decision::GuardResult) -> Self {
         use fire_decision::GuardResult::*;
         match r {
-            // Pass ≡ exit 0 by definition; expose 0 so the UI can show it.
             Pass { stdout } => Self {
                 outcome: "pass",
                 stdout,
@@ -3426,28 +3076,17 @@ impl From<fire_decision::GuardResult> for GuardTestResponse {
     }
 }
 
-/// `POST /triggers/guard/test` — dry-run a Trigger guard command (#350).
+/// `POST /triggers/guard/test` — dry-run a Trigger guard command.
 ///
-/// The opposite pole of "Run now" (ADR-0027 addendum) on the "execute a
-/// Trigger's guard" axis: it runs the guard *as currently typed in the
-/// New-trigger tab* — the Trigger need not be saved — through the **pure**
-/// [`guard_runner::run_guard`] seam and stops at the verdict. It has **zero side
-/// effects**: no Run spawned, no `trigger_fires` row written, no `next_fire_at`
-/// recompute, no tick lock, no overlap gate. The endpoint is *guard-faithful*
-/// (maps [`fire_decision::GuardResult`] 1:1); the would-fire / would-skip verdict
-/// is composed client-side from `outcome`.
-///
-/// Zero-side-effect invariant: this handler calls ONLY `required_target_repo`,
-/// `instance_config::get`, `guard_runner::guard_timeout_with`, and
+/// Zero-side-effect invariant: this handler must call ONLY `required_target_repo`,
+/// `instance_config::get`, `guard_runner::guard_timeout_with` and
 /// `guard_runner::run_guard`. It must never route through `fire_one_trigger`,
-/// `plan_tick`, `create_run_inner`, `trigger_store::*`, or
-/// `record_and_broadcast_fire`.
+/// `plan_tick`, `create_run_inner`, `trigger_store::*` or `record_and_broadcast_fire`
+/// — no Run spawned, no `trigger_fires` row, no `next_fire_at` recompute.
 async fn guard_test(
     State(state): State<Arc<AppState>>,
     Json(req): Json<GuardTestRequest>,
 ) -> Response {
-    // Empty command → 400 (mirror of the `cmd.trim().is_empty()` guard-gate in
-    // `fire_one_trigger`).
     if req.guard_command.trim().is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -3456,9 +3095,8 @@ async fn guard_test(
             .into_response();
     }
 
-    // #470: same rule as a real fire — a guard must never execute in a
-    // repository nobody named. The dry-run is for an unsaved Trigger, but it
-    // runs the same arbitrary `sh -c`.
+    // Same rule as a real fire: a guard must never execute in a repository nobody
+    // named. The dry-run is pre-save, but it runs the same arbitrary `sh -c`.
     let cwd = match required_target_repo(req.target_repo.as_deref()) {
         Ok(p) => p,
         Err(msg) => {
@@ -3470,9 +3108,9 @@ async fn guard_test(
         }
     };
 
-    // Guard-faithful timeout: same `stored → env → default` precedence a real
-    // fire uses (#129, ADR-0015), so a dry-run reflects the bound the scheduler
-    // would actually apply. Stored is seconds; the env seam is ms.
+    // Same `stored → env → default` precedence a real fire uses (ADR-0015), so the
+    // dry-run reflects the bound the scheduler would apply. Stored is seconds; the env
+    // seam is ms.
     let stored_secs = instance_config::get(&state.db)
         .await
         .ok()
@@ -3480,7 +3118,6 @@ async fn guard_test(
         .map(|n| n as u64);
     let timeout = guard_runner::guard_timeout_with(stored_secs);
 
-    // The ONLY call: the pure seam. Nothing that spawns a Run or writes history.
     let result = guard_runner::run_guard(req.guard_command.trim(), &cwd, timeout).await;
     Json(GuardTestResponse::from(result)).into_response()
 }
@@ -3498,8 +3135,7 @@ async fn create_trigger(
             .into_response();
     }
 
-    // Validate the cron expression up front (Sharp tool: fail loud at config
-    // time, not at 3am).
+    // Fail loud at config time, not at 3am (ADR-0001).
     let schedule = match cron_schedule::CronSchedule::parse(&req.cron) {
         Ok(s) => s,
         Err(e) => {
@@ -3511,7 +3147,6 @@ async fn create_trigger(
         }
     };
 
-    // A bounded-allow cap, when present, must be >= 1 (#239).
     if let Err(msg) = validate_max_concurrent(req.max_concurrent) {
         return (
             StatusCode::BAD_REQUEST,
@@ -3520,7 +3155,6 @@ async fn create_trigger(
             .into_response();
     }
 
-    // A per-Trigger sandbox reference, when present, must resolve (#410/#432).
     if let Some(raw) = req.sandbox.as_deref() {
         if let Err(msg) = validate_sandbox_ref(&state.db, raw).await {
             return (
@@ -3531,7 +3165,6 @@ async fn create_trigger(
         }
     }
 
-    // Resolve the target pipeline and its prompt_required flag.
     let yaml =
         std::fs::read_to_string(resolve_pipeline_path(&state.repo_root, &req.pipeline_id)).ok();
     let yaml = match yaml {
@@ -3557,9 +3190,8 @@ async fn create_trigger(
         }
     };
 
-    // Server-side fire_decision reject rule: an empty resolvable input on a
-    // prompt-required pipeline (cron-only: no guard, so the only source is the
-    // input template) is a misconfiguration — refuse at creation.
+    // A cron-only Trigger has no guard, so the input template is the only input
+    // source: empty + prompt-required is a misconfiguration. Refuse at creation.
     if req.guard_command.as_deref().unwrap_or("").trim().is_empty()
         && req.input_template.trim().is_empty()
         && prompt_required
@@ -3574,8 +3206,8 @@ async fn create_trigger(
             .into_response();
     }
 
-    // #470: a Trigger is a Run template (ADR-0012(b) — « template de Run = charge
-    // d'un POST /runs »), so it cannot be valid without a target repo.
+    // A Trigger is a Run template (ADR-0012b), so it cannot be valid without a
+    // target repo.
     let target_repo = match required_target_repo(req.target_repo.as_deref()) {
         Ok(p) => p.to_string_lossy().into_owned(),
         Err(msg) => {
@@ -3587,10 +3219,9 @@ async fn create_trigger(
         }
     };
 
-    // The first fire, via the single recompute seam (#372, invariant #222):
-    // `NewTrigger.next_fire_at` is a flat `Option<String>`, so flatten the
-    // `Some(Some(_))` the `Create` arm returns (`Some(None)` = impossible cron →
-    // stays dormant, exactly as before).
+    // The first fire, via the single recompute seam. `NewTrigger.next_fire_at` is a
+    // flat `Option<String>`, so flatten what `Create` returns; `Some(None)` = an
+    // impossible cron, which stays dormant.
     let now = chrono::Utc::now();
     let next_fire_at = trigger_scheduler::recompute_next_fire(
         now,
@@ -3605,7 +3236,6 @@ async fn create_trigger(
         pipeline_id: req.pipeline_id,
         pipeline_name,
         target_repo: Some(target_repo),
-        // #465: persist the secondary list as raw JSON TEXT (empty → NULL/mono-repo).
         target_repos: if req.target_repos.is_empty() {
             None
         } else {
@@ -3622,19 +3252,16 @@ async fn create_trigger(
             "skip".to_string()
         },
         max_concurrent: req.max_concurrent,
-        // #410: normalise `Some("")` to `None` (inherit the instance default), so an
-        // empty selector value never persists as a bogus stored mode.
+        // Normalise `Some("")` to `None` (inherit the instance default), so an empty
+        // selector value never persists as a bogus stored mode.
         sandbox: req.sandbox.filter(|s| !s.trim().is_empty()),
-        // #551: same normalisation for the harness — a blank selector value inherits the
-        // instance default at fire time rather than persisting as a harness named "".
+        // Same normalisation for the harness: a blank value must inherit at fire time
+        // rather than persist as a harness named "".
         harness: req.harness.filter(|s| !s.trim().is_empty()),
-        // #563: fold the request's `AgentChoice` straight through — `None`/`Inherit`/
-        // a blank `Custom`/`Profile` payload are all already transparent inside
-        // `agent_choice::resolve`, so no extra normalisation is needed here (unlike
-        // the flat-string `harness` field above).
+        // No normalisation needed: `None`/`Inherit`/blank payloads are already
+        // transparent inside `agent_choice::resolve`.
         agent_choice: req.agent_choice,
-        // #338: freeze the auto-naming choice on the row (seeded from the instance
-        // default in the modal). No re-resolution at fire time — the runtime never
+        // Frozen on the row, never re-resolved at fire time — the runtime never
         // decides autonomy (ADR-0012 frontier).
         auto_name: req.auto_name,
         next_fire_at,
@@ -3646,7 +3273,7 @@ async fn create_trigger(
                 "type": "trigger_created",
                 "trigger_id": trigger.id,
             }));
-            // #507: audit AFTER the row committed (§2·B — never over-report).
+            // Audit AFTER the row committed (ADR-0044 §2·B — never over-report).
             audit_log::record_best_effort(
                 &state.db,
                 audit_log::NewAuditEntry {
@@ -3675,15 +3302,12 @@ async fn create_trigger(
 async fn list_triggers(State(state): State<Arc<AppState>>) -> Response {
     match trigger_store::list(&state.db).await {
         Ok(triggers) => {
-            // Resolve each Trigger's repo for the "group by project" view (#258):
-            // a null `target_repo` resolves to the daemon's own repo_root. The raw
+            // Read-side fallback only, and it stays: historical rows legitimately
+            // carry a null repo (the write boundary now refuses one), and the "no
+            // Unassigned bucket" invariant depends on resolving them here. Do NOT
+            // symmetrise it with `create_trigger`/`patch_trigger`. The raw
             // `target_repo` is left untouched so the badge / detail / Run-now
             // pre-fill keep showing only what the user actually set.
-            //
-            // #470/ADR-0033: this fallback is READ-side and stays. Historical rows
-            // legitimately carry a null repo (the write boundary now refuses one),
-            // and the "no Unassigned bucket" invariant depends on resolving them
-            // here. Do NOT symmetrise this with `create_trigger`/`patch_trigger`.
             let repo_root = state.repo_root.to_string_lossy().into_owned();
             let entries: Vec<TriggerListEntry> = triggers
                 .into_iter()
@@ -3713,9 +3337,8 @@ async fn delete_trigger(
     AxumPath(trigger_id): AxumPath<String>,
     actor: audit_log::Actor,
 ) -> Response {
-    // #507: `trigger_store::delete` returns `bool`, never the row — so read the
-    // "before" snapshot HERE, before it is gone, or the audit of a delete
-    // degrades to a dead UUID. Best-effort (a read miss → `None`).
+    // Read the "before" snapshot HERE, before the row is gone: `delete` returns
+    // `bool`, never the row, so a later read would leave the audit a dead UUID.
     let before = trigger_store::get(&state.db, &trigger_id)
         .await
         .ok()
@@ -3778,17 +3401,15 @@ async fn get_trigger(
     }
 }
 
-/// A partial Trigger edit (#162). Every field is optional; absent fields are
-/// left untouched. `enabled` toggles activation; the config fields cover the
-/// schedule, input template, and overlap policy per the acceptance criteria,
-/// plus name/repo/branch/guard/variables for completeness.
+/// A partial Trigger edit. Every field is optional; absent fields are left
+/// untouched.
 #[derive(Deserialize)]
 struct PatchTriggerRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     name: Option<String>,
-    /// Repoint the Trigger to a different library pipeline (#230). Validated
-    /// against the library/repo before applying; the denormalised display name
-    /// and a revived next-fire follow from it.
+    /// Repoint the Trigger to a different library pipeline. Validated against the
+    /// library/repo before applying; the denormalised display name and a revived
+    /// next-fire follow from it.
     #[serde(default)]
     pipeline_id: Option<String>,
     #[serde(default)]
@@ -3799,16 +3420,15 @@ struct PatchTriggerRequest {
     input_template: Option<String>,
     #[serde(default)]
     overlap_policy: Option<String>,
-    /// #470: double-wrapped AND custom-deserialized, unlike its siblings below.
-    /// The point is to make the explicit CLEAR (`"target_repo": null`) *reachable*
-    /// so it can be REFUSED: with plain `#[serde(default)]` a present-`null`
-    /// collapses to `None` and the clear was a silent no-op — the UI has been
-    /// sending exactly that on every Trigger save (`NewRunModal.tsx`).
+    /// Double-wrapped AND custom-deserialized, unlike its plain siblings below: the
+    /// point is to make the explicit CLEAR (`"target_repo": null`) *reachable* so it
+    /// can be REFUSED. With plain `#[serde(default)]` a present-`null` collapses to
+    /// `None` and the clear is a silent no-op, which is what the UI was sending on
+    /// every Trigger save.
     #[serde(default, deserialize_with = "deserialize_double_option")]
     target_repo: Option<Option<String>>,
-    /// #465: the read-only secondary list, double-wrapped like `target_repo`: absent
-    /// = leave, present `null`/`[]` = clear to mono-repo, an array = set. Stored on the
-    /// row as raw JSON TEXT; forwarded and re-frozen at fire time.
+    /// The secondary list, double-wrapped like `target_repo`: absent = leave, present
+    /// `null`/`[]` = clear to mono-repo, an array = set. Stored as raw JSON TEXT.
     #[serde(default, deserialize_with = "deserialize_double_option")]
     target_repos: Option<Option<Vec<TargetRepoInput>>>,
     #[serde(default)]
@@ -3817,35 +3437,27 @@ struct PatchTriggerRequest {
     guard_command: Option<Option<String>>,
     #[serde(default)]
     variables: Option<HashMap<String, serde_yaml::Value>>,
-    /// Bounded-`allow` ceiling (#239), double-wrapped: absent = leave, present
-    /// `null` = clear to unbounded, `n` = set. The custom deserializer is what
-    /// makes the present-`null` → `Some(None)` distinction reachable from JSON
-    /// (`source_branch` / `guard_command` above still use plain `#[serde(default)]`,
-    /// where present-`null` collapses to `None` and cannot clear).
+    /// Bounded-`allow` ceiling, double-wrapped: absent = leave, present `null` =
+    /// clear to unbounded, `n` = set. `source_branch` / `guard_command` above keep
+    /// plain `#[serde(default)]`, where present-`null` collapses and cannot clear.
     #[serde(default, deserialize_with = "deserialize_double_option")]
     max_concurrent: Option<Option<i64>>,
-    /// Per-Trigger sandbox mode (#410), double-wrapped like `max_concurrent`: absent =
-    /// leave, present `null` = clear back to inheriting the instance default, `"mode"`
-    /// = set. The custom deserializer makes present-`null` → `Some(None)` reachable
-    /// from JSON — that is what lets the UI reset a Trigger to "use the instance default".
+    /// Per-Trigger sandbox mode, double-wrapped like `max_concurrent`: present `null`
+    /// clears back to inheriting the instance default, which is how the UI offers
+    /// "use the instance default".
     #[serde(default, deserialize_with = "deserialize_double_option")]
     sandbox: Option<Option<String>>,
-    /// Per-Trigger harness (#551), double-wrapped like `sandbox`: absent = leave, present
-    /// `null` = clear back to inheriting the instance default, `"name"` = set. The custom
-    /// deserializer makes present-`null` → `Some(None)` reachable from JSON — what lets the
-    /// UI reset a Trigger to "use the instance default".
+    /// Per-Trigger harness, double-wrapped like `sandbox`; present `null` clears back
+    /// to inheriting the instance default.
     #[serde(default, deserialize_with = "deserialize_double_option")]
     harness: Option<Option<String>>,
-    /// Per-Trigger `AgentChoice` (#563), double-wrapped like `harness`: absent = leave,
-    /// present `null` = clear back to inheriting the legacy `harness` field, an object
-    /// = set. The custom deserializer makes present-`null` → `Some(None)` reachable
-    /// from JSON.
+    /// Per-Trigger `AgentChoice`, double-wrapped like `harness`; present `null` clears
+    /// back to inheriting the legacy `harness` field.
     #[serde(default, deserialize_with = "deserialize_double_option")]
     agent_choice: Option<Option<crate::agent_choice::AgentChoice>>,
-    /// Auto-naming toggle (#338), a FLAT `Option<bool>` like `enabled` — NOT
-    /// double-wrapped like `sandbox`/`max_concurrent`. There is no "inherit" state to
-    /// clear back to: a Trigger's autonomy is a plain on/off. `None` leaves it,
-    /// `Some(v)` sets it.
+    /// Auto-naming toggle — a FLAT `Option<bool>`, deliberately not double-wrapped:
+    /// there is no "inherit" state to clear back to, a Trigger's autonomy is a plain
+    /// on/off.
     #[serde(default)]
     auto_name: Option<bool>,
 }
@@ -3856,7 +3468,6 @@ async fn patch_trigger(
     actor: audit_log::Actor,
     Json(req): Json<PatchTriggerRequest>,
 ) -> Response {
-    // The Trigger must exist.
     let existing = match trigger_store::get(&state.db, &trigger_id).await {
         Ok(Some(t)) => t,
         Ok(None) => {
@@ -3876,7 +3487,6 @@ async fn patch_trigger(
         }
     };
 
-    // Name, when supplied, must not be blank (Sharp tool: fail at edit time).
     if let Some(ref name) = req.name {
         if name.trim().is_empty() {
             return (
@@ -3887,12 +3497,10 @@ async fn patch_trigger(
         }
     }
 
-    // One `now` for the whole request (#372): a combined enable + cron-edit +
-    // repoint PATCH must recompute every slot against the same instant.
+    // One `now` for the whole request: a combined enable + cron-edit + repoint PATCH
+    // must recompute every slot against the same instant.
     let now = chrono::Utc::now();
 
-    // A schedule edit re-validates the cron and recomputes the next fire forward
-    // through the single recompute seam (#372).
     let mut next_fire_at: Option<Option<String>> = None;
     if let Some(ref cron) = req.cron {
         match cron_schedule::CronSchedule::parse(cron) {
@@ -3912,11 +3520,8 @@ async fn patch_trigger(
         }
     }
 
-    // A pipeline repoint (#230): the target must exist. Resolve and parse its
-    // YAML to capture the display name (denormalised on the row) and the
-    // prompt_required flag (used by the reject rule below). A no-op repoint to
-    // the same id is ignored. Without this, serde silently dropped `pipeline_id`
-    // and a Trigger could never be moved off a wrong or renamed pipeline.
+    // Parse the target's YAML to capture the display name (denormalised on the row)
+    // and the prompt_required flag the reject rule below needs.
     let mut repoint: Option<(String, String)> = None;
     let mut repoint_prompt_required: Option<bool> = None;
     if let Some(ref new_pid) = req.pipeline_id {
@@ -3949,9 +3554,8 @@ async fn patch_trigger(
                 }
             }
             // Revive the next fire from the existing cron unless a schedule edit
-            // already recomputed it, so a Trigger that went dormant on a
-            // pipeline-id rename comes back to life on repoint instead of
-            // staying dead (Sharp tool; ADR-0012).
+            // already recomputed it, so a Trigger that went dormant on a pipeline-id
+            // rename comes back to life on repoint instead of staying dead.
             if next_fire_at.is_none() {
                 if let Ok(schedule) = cron_schedule::CronSchedule::parse(&existing.cron) {
                     next_fire_at = trigger_scheduler::recompute_next_fire(
@@ -3963,15 +3567,13 @@ async fn patch_trigger(
         }
     }
 
-    // Re-activating a disabled Trigger recomputes next_fire_at FORWARD from now
-    // (missed slot SKIPPED, no catch-up — decision B, ADR-0012 amended, #372).
-    // Before #372 the enable path only flipped the bit and left next_fire_at
-    // frozen in the past, so the next tick saw a stale-due slot and fired an
-    // implicit catch-up. `enabling` is the disabled→enabled front only: an
-    // `{enabled:true}` on an already-live Trigger must not shift its schedule.
-    // The `next_fire_at.is_none()` guard is load-bearing: a combined
-    // enable + cron-edit / enable + repoint already recomputed forward off the
-    // *new* schedule above; without the guard, Enable would overwrite it with
+    // Re-activating a disabled Trigger recomputes next_fire_at FORWARD from now:
+    // the missed slot is SKIPPED, no catch-up (ADR-0012 amended). Merely flipping
+    // the bit leaves next_fire_at frozen in the past and the next tick fires an
+    // implicit catch-up. `enabling` is the disabled→enabled front ONLY: an
+    // `{enabled:true}` on an already-live Trigger must not shift its schedule. The
+    // `next_fire_at.is_none()` guard is load-bearing — a combined enable + cron-edit
+    // already recomputed off the *new* schedule, and Enable would overwrite it with
     // the *existing* cron.
     let enabling = !existing.enabled && req.enabled == Some(true);
     if enabling && next_fire_at.is_none() {
@@ -3981,16 +3583,11 @@ async fn patch_trigger(
                 trigger_scheduler::Transition::Enable(&schedule),
             );
         }
-        // A non-parseable existing.cron (should not happen — validated on write)
-        // leaves next_fire_at untouched: the Trigger stays dormant (correct).
     }
 
-    // #470: PATCH stays a partial merge — an ABSENT `target_repo` leaves the
-    // stored value untouched (that is what makes `{"enabled": true}` from the
-    // list toggle a legal body). What is refused is an explicit CLEAR: `null`
-    // (reachable since the double-option wiring) or a blank string. Before
-    // #470 a `null` here was silently swallowed by serde into a no-op, so
-    // blanking the repo field in the UI appeared to work and did nothing.
+    // PATCH stays a partial merge: an ABSENT `target_repo` leaves the stored value
+    // untouched, which is what makes `{"enabled": true}` a legal body. What is
+    // refused is an explicit CLEAR (`null` or a blank string).
     let mut validated_target_repo: Option<Option<String>> = None;
     if let Some(ref edit) = req.target_repo {
         match required_target_repo(edit.as_deref()) {
@@ -4005,7 +3602,6 @@ async fn patch_trigger(
         }
     }
 
-    // Validate a max_concurrent edit (Some(Some(n)) sets; Some(None) clears) (#239).
     if let Some(Some(n)) = req.max_concurrent {
         if let Err(msg) = validate_max_concurrent(Some(n)) {
             return (
@@ -4016,8 +3612,7 @@ async fn patch_trigger(
         }
     }
 
-    // Validate a sandbox edit (Some(Some(mode)) sets; Some(None) clears to inherit)
-    // (#410/#432 — same shared existence gate as create and `PUT /settings`).
+    // Same shared existence gate as create and `PUT /settings`.
     if let Some(Some(ref mode)) = req.sandbox {
         if let Err(msg) = validate_sandbox_ref(&state.db, mode).await {
             return (
@@ -4028,9 +3623,7 @@ async fn patch_trigger(
         }
     }
 
-    // Re-apply the fire_decision reject rule against the *resulting* config: if
-    // the pipeline requires a prompt and the edit would leave neither a guard
-    // nor an input template, refuse (mirrors create-time validation).
+    // Re-apply the create-time reject rule against the *resulting* config.
     let resulting_guard = match &req.guard_command {
         Some(g) => g.clone(),
         None => existing.guard_command.clone(),
@@ -4039,8 +3632,7 @@ async fn patch_trigger(
         .input_template
         .clone()
         .unwrap_or_else(|| existing.input_template.clone());
-    // When repointing, the reject rule must judge the *new* pipeline's
-    // prompt_required, not the old one's.
+    // When repointing, judge the *new* pipeline's prompt_required, not the old one's.
     let prompt_required =
         repoint_prompt_required.unwrap_or_else(|| trigger_prompt_required(&state, &existing));
     if prompt_required
@@ -4061,12 +3653,10 @@ async fn patch_trigger(
         name: req.name,
         pipeline_id: repoint.as_ref().map(|(id, _)| id.clone()),
         pipeline_name: repoint.as_ref().map(|(_, name)| name.clone()),
-        // #470: the trimmed, validated path — never the raw field. `None` here
-        // means "absent from the body", i.e. leave the stored value alone.
+        // The trimmed, validated path — never the raw field.
         target_repo: validated_target_repo,
-        // #465: map the request's `Option<Option<Vec<..>>>` to the stored raw-JSON
-        // `Option<Option<String>>`. Absent → leave; present `null`/`[]` → clear to
-        // mono-repo (`Some(None)`); a non-empty array → the serialized JSON.
+        // Absent → leave; present `null`/`[]` → clear to mono-repo; a non-empty array
+        // → the serialized JSON.
         target_repos: req.target_repos.map(|inner| {
             inner
                 .filter(|list| !list.is_empty())
@@ -4087,27 +3677,17 @@ async fn patch_trigger(
             }
         }),
         max_concurrent: req.max_concurrent,
-        // #410: `Some(Some(mode))` sets, `Some(None)` clears back to inheriting the
-        // instance default, `None` leaves it. The FE maps the "use instance default"
-        // option to `null`, so an empty string never reaches here.
         sandbox: req.sandbox,
-        // #551: `Some(Some(name))` sets, `Some(None)` clears to inherit, `None` leaves it.
-        // Normalise a stray `Some(Some(""))` to a clean clear (`Some(None)`) so a blank
-        // never persists as a harness named "" (defence in depth; the FE sends `null`).
+        // Normalise a stray `Some(Some(""))` to a clean clear, so a blank never
+        // persists as a harness named "".
         harness: req
             .harness
             .map(|inner| inner.filter(|s| !s.trim().is_empty())),
-        // #563: `Some(Some(choice))` sets, `Some(None)` clears back to inheriting the
-        // legacy `harness` field, `None` leaves it. Passed straight through, matching
-        // the `agent_choice::resolve` transparency of `None`/`Inherit`/blank payloads.
         agent_choice: req.agent_choice,
-        // #338: flat toggle — `Some(v)` sets, `None` leaves. No clear state.
         auto_name: req.auto_name,
         next_fire_at,
-        // Fold the enable/disable toggle into the single UpdateTrigger write
-        // (#372): the enable bit and the forward next_fire_at land in one atomic
-        // UPDATE, closing the window where enabled=1 could persist with a stale
-        // (past) next_fire_at.
+        // The enable bit and the forward next_fire_at must land in ONE atomic UPDATE,
+        // or enabled=1 can persist with a stale (past) next_fire_at.
         enabled: req.enabled,
     };
 
@@ -4126,9 +3706,9 @@ async fn patch_trigger(
                 "type": "trigger_updated",
                 "trigger_id": trigger_id,
             }));
-            // #507: persist BOTH snapshots (§2·D) — "a patch happened" cannot tell
-            // a manual `enabled:false` (the #505 gesture) from a cron edit unless
-            // before→after is on the row. `existing` (:3391) is still borrowed-only.
+            // Persist BOTH snapshots (ADR-0044 §2·D): "a patch happened" cannot tell
+            // a manual `enabled:false` from a cron edit unless before→after is on the
+            // row.
             audit_log::record_best_effort(
                 &state.db,
                 audit_log::NewAuditEntry {
@@ -4168,12 +3748,9 @@ async fn list_trigger_fires(
     }
 }
 
-/// `GET /audit` — the out-of-Run audit feed (#507, ADR-0044). All filters are
-/// OPTIONAL: with none, a global newest-first feed (the #505 posture — you
-/// discover *which* target in the flow, you do not know it up front). `from`/`to`
-/// bound a half-open `[from, to)` ISO-8601 window; `target_kind`/`target_id`
-/// narrow to one target; `limit` defaults to 200. `house` param style mirrors
-/// `stats.rs`.
+/// `GET /audit` — the out-of-Run audit feed (ADR-0044). All filters are OPTIONAL;
+/// with none, a global newest-first feed. `from`/`to` bound a half-open
+/// `[from, to)` ISO-8601 window.
 #[derive(Debug, Deserialize)]
 struct AuditQuery {
     #[serde(default)]
@@ -4203,7 +3780,6 @@ async fn get_audit(State(state): State<Arc<AppState>>, Query(q): Query<AuditQuer
     )
     .await
     {
-        // Bare JSON array, newest-first — same shape as `list_trigger_fires`.
         Ok(rows) => Json(rows).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -4213,14 +3789,13 @@ async fn get_audit(State(state): State<Arc<AppState>>, Query(q): Query<AuditQuer
     }
 }
 
-/// `POST /triggers/{id}/fire` — a manual "Run now" fire (#341, ADR-0027). A
-/// first-class fire: same guard, same overlap gate, same `trigger_fires` audit
-/// row (`source = "manual"`), same `triggered_by` provenance — but
-/// `next_fire_at` is left untouched (the cron heartbeat owns the schedule).
+/// `POST /triggers/{id}/fire` — a manual "Run now" fire (ADR-0027). A first-class
+/// fire: same guard, same overlap gate, same `trigger_fires` audit row
+/// (`source = "manual"`), same `triggered_by` provenance — but `next_fire_at` is
+/// left untouched, because the cron heartbeat owns the schedule.
 ///
-/// Truthful contract (ADR-0025): 404 unknown trigger; 409 when disabled or on
-/// a broken pipeline/repo reference (before any effect, no audit row);
-/// otherwise `200 {ok, fired, run_id?, outcome?, reason?}` — a guard/overlap
+/// Contract (ADR-0025): 404 unknown; 409 disabled or broken reference, before any
+/// effect and with no audit row; otherwise `200 {ok, fired, …}` — a guard/overlap
 /// skip is an honest 200, not an error.
 async fn fire_trigger_now(
     State(state): State<Arc<AppState>>,
@@ -4245,9 +3820,9 @@ async fn fire_trigger_now(
         }
     };
 
-    // Disabled ⇒ explicit 409 before any effect — no fire, no audit row. A
-    // human click on a paused trigger deserves a truthful refusal, not a
-    // silent skip (ADR-0025); `decide()`'s silent no-op stays cron-only.
+    // Disabled ⇒ explicit 409 before any effect. A human click on a paused trigger
+    // deserves a truthful refusal, not a silent skip (ADR-0025); `decide()`'s silent
+    // no-op stays cron-only.
     if !trigger.enabled {
         return (
             StatusCode::CONFLICT,
@@ -4258,8 +3833,8 @@ async fn fire_trigger_now(
             .into_response();
     }
 
-    // A dangling pipeline/repo reference: refuse explicitly rather than record
-    // an error outcome — the cron path keeps its own (audited) treatment.
+    // Refuse explicitly rather than record an error outcome — the cron path keeps
+    // its own audited treatment.
     if let Some(reason) = trigger_dangling_reason(&state, &trigger) {
         return (
             StatusCode::CONFLICT,
@@ -4268,8 +3843,8 @@ async fn fire_trigger_now(
             .into_response();
     }
 
-    // Serialize with the cron tick so a manual fire and a tick can't race the
-    // same overlap window.
+    // Serialize with the cron tick, or a manual fire and a tick race the same
+    // overlap window.
     let _tick = state.trigger_tick_lock.lock().await;
     let now = chrono::Utc::now();
     let record =
@@ -4289,8 +3864,8 @@ async fn fire_trigger_now(
             "reason": r.reason,
         }))
         .into_response(),
-        // Unreachable for a manual fire (due is forced, enabled was checked),
-        // but stay truthful rather than panic if the decision core evolves.
+        // Unreachable today (due is forced, enabled was checked); stay truthful
+        // rather than panic if the decision core evolves.
         None => Json(serde_json::json!({
             "ok": true,
             "fired": false,
@@ -4301,6 +3876,12 @@ async fn fire_trigger_now(
     }
 }
 
+/// ROUTER TRAP: any NEW top-level path prefix (`/nodes`, `/stats`, `/fs`, `/audit`,
+/// `/projects`, …) also needs its own entry in the vite dev proxy whitelist
+/// (`frontend/vite.config.ts`). Without it a dev-mode request answers 200 with the
+/// SPA shell and any smoke test lies. Sub-paths of an already-proxied prefix are
+/// free (the proxy key is a prefix), and a static segment beside a `{param}` in the
+/// same subtree is fine — axum 0.8 prefers the static one.
 fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/ws", get(ws_handler))
@@ -4322,8 +3903,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/pipelines", post(create_pipeline))
         .route("/runs", post(create_run))
         .route("/runs", get(list_runs))
-        // #128 Track A: read-only surfacing of terminal, non-archived runs whose
-        // worktree(s) still occupy disk. Static path wins over `/runs/{run_id}`.
+        // Static path — must stay declared before `/runs/{run_id}`.
         .route("/runs/reapable", get(list_reapable_runs))
         .route("/sessions", get(sessions))
         .route("/runs/{run_id}", get(get_run).delete(forget_run))
@@ -4365,39 +3945,28 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/sessions/{session_id}/attach", post(session_attach))
         .route("/sessions/{run_id}/manager/attach", post(manager_attach))
         .route("/sessions/{run_id}/shell", post(open_run_shell))
-        // #302 / ADR-0048, reshaped by #594 / ADR-0051 — the library pipeline
-        // authoring assistant. **No pipeline id in the path any more**: there is
-        // one assistant for the whole daemon. `POST` is create-if-absent (spawn the
-        // `claude` REPL and return its session name to attach via the PTY bridge);
-        // `DELETE` reaps it when the user leaves every edit view.
-        //
-        // A static segment where `/sessions/{session_id}/…` takes a parameter —
-        // the `/runs/reapable` vs `/runs/{run_id}` precedent (above). Both stay
-        // under the already-proxied `/sessions` prefix, so no vite proxy edit (#345).
+        // The library pipeline authoring assistant (ADR-0051). No pipeline id in the
+        // path: there is ONE assistant for the whole daemon. `POST` is
+        // create-if-absent; `DELETE` reaps it when the user leaves every edit view.
         .route(
             "/sessions/libassist",
             post(open_library_assistant).delete(close_library_assistant),
         )
-        // The assistant's focus (#594, ADR-0051 §2): which template the UI has
-        // open. `PUT` is also the UI's liveness heartbeat — it is what tells the
-        // sweep a human is still editing — and `GET` is what the assistant's
-        // `UserPromptSubmit` hook reads before every message.
+        // Which template the UI has open (ADR-0051 §2). `PUT` doubles as the UI's
+        // liveness heartbeat — it is what tells the sweep a human is still editing —
+        // and `GET` is what the assistant's `UserPromptSubmit` hook reads.
         .route(
             "/sessions/libassist/focus",
             axum::routing::put(put_libassist_focus).get(get_libassist_focus),
         )
-        // The assistant's one write path (#594, ADR-0051). Deliberately takes no
-        // id and no scope: the focus already names the file, and every way of
-        // naming it again is a way of naming the wrong one — the word "scope"
-        // means `.pdo/pipelines/` on an edit tab and `.pdo/library/pipelines/` in
-        // the library store, and the assistant cannot tell which is being asked of
-        // it.
+        // The assistant's one write path. Deliberately takes no id and no scope: the
+        // focus already names the file, and "scope" means `.pdo/pipelines/` on an
+        // edit tab but `.pdo/library/pipelines/` in the library store, so any second
+        // naming is a way of naming the wrong file.
         .route("/sessions/libassist/save", post(save_libassist_focused))
         .route("/library", get(list_library))
         .route("/library", post(save_to_library))
-        // #345 — parse a single node's YAML into a canvas-instantiable spec.
-        // Disk-free; NEW top-level `/nodes` prefix ⇒ added to the vite proxy
-        // whitelist (frontend/vite.config.ts) so dev POSTs don't 404 as SPA.
+        // Parse a single node's YAML into a canvas-instantiable spec. Disk-free.
         .route("/nodes/parse", post(parse_node_yaml))
         .route(
             "/library/{name}",
@@ -4414,55 +3983,28 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/repos/branches", get(repos_branches))
         .route("/repos/validate", get(repos_validate))
         .route("/repos/recent", get(repos_recent))
-        // Filesystem explorer (#131, renamed `/repos/browse` → `/fs/browse` in #431:
-        // nothing about it is repo-specific — it also serves the settings Dockerfile
-        // picker). `/fs` is a NEW top-level prefix, so it REQUIRES its own entry in the
-        // vite proxy whitelist (`frontend/vite.config.ts`) — same trap as `/nodes`
-        // (#345) and `/stats` (#377): without it a dev `GET /fs/browse` answers 200 with
-        // the SPA and any smoke test would lie.
+        // Filesystem explorer — not repo-specific (it also serves the settings
+        // Dockerfile picker), hence `/fs` rather than `/repos/browse`.
         .route("/fs/browse", get(fs_browse))
         .route("/triggers", get(list_triggers).post(create_trigger))
-        // Static segment beside the `{trigger_id}` param: axum 0.8 allows this
-        // (cf. `/library/pipelines` next to `/library/{name}/…`), and the
-        // `/triggers` proxy prefix already covers it — no vite proxy edit (#222).
         .route("/triggers/health", get(triggers_health))
-        // #350: dry-run a guard command without any side effects — the opposite
-        // pole of "Run now" (ADR-0027 addendum). The static `guard/test` segment
-        // sits beside the `{trigger_id}` param: axum 0.8 / matchit 0.8 prefers a
-        // static segment over a param in the same subtree (like `/triggers/health`
-        // beside `{trigger_id}`), so there is no route conflict, and the
-        // `/triggers` proxy prefix already covers it — no vite proxy edit.
+        // Dry-run a guard command with no side effects — the opposite pole of "Run
+        // now" (ADR-0027 addendum).
         .route("/triggers/guard/test", post(guard_test))
-        // #348: global Trigger kill-switch. Static segment beside the
-        // `{trigger_id}` param and under the already-proxied `/triggers` prefix —
-        // no vite proxy edit (same as `/triggers/health` and `/triggers/guard/test`).
+        // Global Trigger kill-switch.
         .route("/triggers/pause", post(pause_triggers))
-        // Stale-detector liveness (#251), sibling of `/triggers/health`. New
-        // top-level `/stale` prefix → added to the vite dev proxy whitelist so a
-        // dev-mode GET hits the daemon instead of the SPA fallback.
+        // Stale-detector liveness, sibling of `/triggers/health`.
         .route("/stale/health", get(stale_health))
-        // Instance-wide settings (#129, ADR-0015). New top-level `/settings`
-        // prefix → added to the vite dev proxy whitelist so a dev-mode GET hits
-        // the daemon instead of the SPA fallback. `GET` returns the per-field
-        // {effective, source, stored, env, default} view; `PUT` writes the
-        // stored tier (fail-fast validation).
+        // Instance-wide settings (ADR-0015). `GET` returns the per-field
+        // {effective, source, stored, env, default} view; `PUT` writes the stored
+        // tier, with fail-fast validation.
         .route("/settings", get(get_settings).put(put_settings))
-        // Staging profiles (#432, ADR-0031 §2-§7). Deliberately UNDER `/settings`
-        // rather than a new top-level prefix: the vite proxy key is a PREFIX, so
-        // `'/settings': daemonTarget` already covers every sub-path — no proxy edit,
-        // and none of the traps `/nodes` (#345), `/stats` (#377) and `/fs` (#431) each
-        // paid, where a missing proxy line makes a dev GET answer 200 with the SPA.
-        // Static-segment-beside-a-param is fine in axum 0.8 (precedents:
-        // `/triggers/health`, `/library/pipelines/{id}/duplicate`).
+        // Staging profiles (ADR-0031 §2-§7) sit UNDER `/settings` as a routing
+        // decision only. It is NOT a claim about the schema: profiles are ROWS, not
+        // an {effective, source, stored, env, default} knob, and they must NOT be
+        // folded into `build_settings_view` beyond the name list.
         //
-        // The shared prefix is a **routing** decision, NOT a claim about the schema:
-        // profiles are ROWS, not a `{effective, source, stored, env, default}` knob, and
-        // they must NOT be folded into `build_settings_view` beyond the name list.
-        // Price sync (#427, ADR-0034). Under `/settings` for exactly the reason
-        // above — the vite proxy key is a prefix, so no proxy edit — and a static
-        // verb segment under a named sub-resource is the router's most frequent
-        // gesture (`/triggers/{id}/fire`, `/triggers/pause`, `/pipelines/{id}/promote`).
-        // The ONLY route in the crate that reaches the network.
+        // Price sync (ADR-0034) — the ONLY route in the crate that reaches the network.
         .route("/settings/cost-prices/sync", post(sync_cost_prices))
         .route(
             "/settings/agent-profiles",
@@ -4489,28 +4031,19 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/settings/sandbox-profiles/{name}/referents",
             get(get_sandbox_profile_referents),
         )
-        // Instance stats cockpit (#377, ADR-0029). New top-level `/stats` prefix
-        // → added to the vite dev proxy whitelist so a dev-mode GET hits the
-        // daemon instead of the SPA fallback. `overview` is cheap indexed SQL;
-        // `cost` fans the memoized per-run cost over the visible period (lazy,
-        // fetched only when the cost tab is shown).
+        // Instance stats cockpit (ADR-0029). `overview` is cheap indexed SQL; `cost`
+        // fans the memoized per-run cost over the visible period, so it is fetched
+        // lazily, only when the cost tab is shown.
         .route("/stats/overview", get(stats::stats_overview))
         .route("/stats/cost", get(stats::stats_cost))
         .route(
             "/stats/performance",
             get(stats_performance::stats_performance),
         )
-        // Out-of-Run audit feed (#507, ADR-0044). NEW top-level `/audit` prefix
-        // → added to the vite dev proxy whitelist (frontend/vite.config.ts) so a
-        // dev-mode GET hits the daemon instead of the SPA fallback (same trap as
-        // `/nodes` #345, `/stats` #377, `/fs` #431).
+        // Out-of-Run audit feed (ADR-0044).
         .route("/audit", get(get_audit))
-        // Projets (#552, ADR-0046) — the group-header pencil's CRUD and the middle
-        // tier of the harness axis. NEW top-level `/projects` prefix → added to the
-        // vite dev proxy whitelist (frontend/vite.config.ts) so a dev-mode GET hits
-        // the daemon, not the SPA fallback (same trap as `/audit` #507). The
-        // members sub-resource is a static segment under the param — axum 0.8
-        // allows it (cf. `/triggers/{id}/fires`).
+        // Projets (ADR-0046) — the group-header pencil's CRUD and the middle tier of
+        // the harness axis.
         .route("/projects", get(list_projects).post(create_project))
         .route(
             "/projects/{project_id}",
@@ -4525,22 +4058,15 @@ fn build_router(state: Arc<AppState>) -> Router {
             get(get_trigger).patch(patch_trigger).delete(delete_trigger),
         )
         .route("/triggers/{trigger_id}/fires", get(list_trigger_fires))
-        // #341: manual "Run now" = a first-class fire. Static segment under the
-        // `/triggers` proxy prefix — no vite proxy edit.
+        // Manual "Run now" — a first-class fire.
         .route("/triggers/{trigger_id}/fire", post(fire_trigger_now))
         .fallback(static_handler)
         .with_state(state)
 }
 
-// --- Projets (#552, ADR-0046) ---
-//
 // A Projet is the middle tier of the harness axis and a named grouping of member
 // repo paths. Nothing is seeded: a row exists only once a human names a group or
-// attaches a setting (ADR-0046). The lists group by Projet client-side; these
-// endpoints are the CRUD behind the group-header pencil. `/projects` is a NEW
-// top-level prefix → it has its own entry in the vite dev proxy whitelist
-// (`frontend/vite.config.ts`), same trap as `/nodes` (#345) / `/stats` (#377) /
-// `/audit` (#507).
+// attaches a setting (ADR-0046).
 
 fn project_list_error() -> Response {
     (
@@ -4606,8 +4132,7 @@ async fn patch_project(
     AxumPath(project_id): AxumPath<String>,
     Json(req): Json<PatchProjectRequest>,
 ) -> Response {
-    // The Projet must exist first — a PATCH never materialises one (only the
-    // pencil's create does, via POST /projects).
+    // A PATCH never materialises a Projet — only `POST /projects` does.
     match project_store::get(&state.db, &project_id).await {
         Ok(Some(_)) => {}
         Ok(None) => return (StatusCode::NOT_FOUND, "no such project").into_response(),
@@ -4630,9 +4155,8 @@ async fn patch_project(
             return project_list_error();
         }
     }
-    // Double-`Option`: `Some(_)` means the field was present. `Some(None)` and
-    // `Some(Some(""))` both clear; `Some(Some(h))` sets. `set_harness` normalises
-    // the empty string to NULL itself (#347).
+    // Double-`Option`: `Some(None)` and `Some(Some(""))` both clear; `Some(Some(h))`
+    // sets. `set_harness` normalises the empty string to NULL itself.
     if let Some(harness) = req.harness {
         let harness = harness.as_deref();
         if let Err(e) = project_store::set_harness(&state.db, &project_id, harness).await {
@@ -4640,8 +4164,8 @@ async fn patch_project(
             return project_list_error();
         }
     }
-    // Same double-`Option` semantics as `harness` (#563): `Some(None)` clears the
-    // AgentChoice (falling through to the legacy `harness` field), `Some(Some(c))` sets it.
+    // Same double-`Option` semantics as `harness`: `Some(None)` clears the
+    // AgentChoice, falling through to the legacy `harness` field.
     if let Some(agent_choice) = req.agent_choice {
         if let Err(e) = project_store::set_agent_choice(&state.db, &project_id, agent_choice).await
         {
@@ -4706,7 +4230,6 @@ async fn add_project_member(
         )
             .into_response();
     }
-    // The target Projet must exist (materialised by the pencil's create).
     match project_store::get(&state.db, &project_id).await {
         Ok(Some(_)) => {}
         Ok(None) => return (StatusCode::NOT_FOUND, "no such project").into_response(),
@@ -4726,8 +4249,8 @@ async fn add_project_member(
                 _ => StatusCode::NO_CONTENT.into_response(),
             }
         }
-        // AC: a path already owned by another Projet is refused BEFORE any effect,
-        // and the refusal NAMES the owner (409, so the pencil can say which one).
+        // A path already owned by another Projet is refused BEFORE any effect, and
+        // the refusal NAMES the owner so the pencil can say which one.
         Ok(project_store::AddMember::Refused {
             owner_id,
             owner_name,
@@ -4759,7 +4282,6 @@ async fn remove_project_member(
     match project_store::owner_of(&state.db, path).await {
         Ok(Some(owner)) if owner.id == project_id => {}
         Ok(_) => {
-            // Not a member of this Projet (or of any) — nothing to do.
             return match project_store::get(&state.db, &project_id).await {
                 Ok(Some(p)) => Json(p).into_response(),
                 Ok(None) => (StatusCode::NOT_FOUND, "no such project").into_response(),
@@ -4804,24 +4326,21 @@ async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
     .await
     .context("failed to create events table")?;
 
-    // #377 / ADR-0029: the daemon's first index. `GET /stats/overview` runs
-    // `WHERE kind = ? AND ts >= ? AND ts < ? GROUP BY strftime(...)` over
-    // `events`; the composite `(kind, ts)` is leftmost-prefix optimal for it.
-    // `CREATE INDEX IF NOT EXISTS` is natively idempotent, so it needs no PRAGMA
-    // guard (unlike the `ALTER … ADD COLUMN` migrations in `trigger_store`).
+    // `GET /stats/overview` runs `WHERE kind = ? AND ts >= ? AND ts < ? GROUP BY
+    // strftime(...)`; the composite `(kind, ts)` is leftmost-prefix optimal for it.
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_events_kind_ts ON events(kind, ts)")
         .execute(db)
         .await
         .context("failed to create idx_events_kind_ts")?;
-    // #638 / ADR-0029: after the indexed `run_started` cohort lookup, Sessions
-    // joins only each selected Run's `node_started` rows in append order.
+    // After the indexed `run_started` cohort lookup, Sessions joins only each
+    // selected Run's `node_started` rows in append order.
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_events_run_kind_id ON events(run_id, kind, id)")
         .execute(db)
         .await
         .context("failed to create idx_events_run_kind_id")?;
 
-    // #328 / ADR-0024: tombstones for forgotten runs — a run_id present here
-    // can never receive events again (guard in `append_event`).
+    // Tombstones for forgotten runs (ADR-0024): a run_id present here can never
+    // receive events again — the guard is in `append_event`.
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS forgotten_runs (
             run_id TEXT PRIMARY KEY,
@@ -4840,30 +4359,24 @@ async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
         .await
         .context("failed to create instance_config table")?;
 
-    // #432: staging profiles. A brand-new table with NO seed row — `minimal` and
-    // `full` are virtual defaults (ADR-0031 §2), so an untouched install has zero
-    // rows here and still resolves both names.
+    // NO seed row: `minimal` and `full` are virtual defaults (ADR-0031 §2), so an
+    // untouched install has zero rows here and still resolves both names.
     sandbox_profile::init(db)
         .await
         .context("failed to create sandbox_profiles table")?;
 
-    // #507 / ADR-0044: the third journal — out-of-Run config mutations. Sibling
-    // store, its own `audit_log` table, no `run_id`. `CREATE TABLE IF NOT
-    // EXISTS`, no ALTER, no backfill.
+    // The third journal (ADR-0044): out-of-Run config mutations, no `run_id`.
     audit_log::init(db)
         .await
         .context("failed to create audit_log table")?;
 
-    // #552 / ADR-0046: Projets — the middle tier of the harness axis. Brand-new
-    // tables, materialised on demand (nothing seeded), same `CREATE TABLE IF NOT
-    // EXISTS` idiom as `sandbox_profiles` / `audit_log`.
+    // Materialised on demand — nothing seeded.
     project_store::init(db)
         .await
         .context("failed to create project tables")?;
 
-    // #563 / ADR-0057: agent profiles — instance-scoped, named harness+model+effort
-    // combinations. Unlike `project_store`, this table IS seeded: the reserved
-    // `Default` profile must exist on every instance, immediately (#563 AC10).
+    // Unlike `project_store`, this table IS seeded: the reserved `Default` profile
+    // must exist on every instance, immediately.
     agent_profile::init(db)
         .await
         .context("failed to create agent_profiles table")?;
@@ -4871,21 +4384,17 @@ async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
     Ok(())
 }
 
-/// Append an event (with the #212 transition-guard backstop) taking only the
-/// two side-effects the append actually touches — the DB pool and the event
-/// broadcast sink — instead of the whole `AppState`. This is the injectable
-/// core (#356): `spawn_node`, which holds a narrow `SpawnDeps` rather than
-/// `&AppState`, appends through it, while the ~130 in-process callers keep using
-/// the [`append_event`] wrapper below (behaviour identical).
+/// Append an event, taking only the two side-effects the append touches — the DB
+/// pool and the broadcast sink — instead of the whole `AppState`, so `spawn_node`
+/// can append through its narrow `SpawnDeps`.
 pub(crate) async fn append_event_with(
     db: &sqlx::SqlitePool,
     event_tx: &broadcast::Sender<event_log::Event>,
     event: &event_log::Event,
 ) -> Result<()> {
-    // Transition guard backstop (#212): every lifecycle append is validated
-    // against the freshly projected state, so no emitter — present or future —
-    // can bypass the guard. Emitters with side effects (spawn, merge) must
-    // ALSO pre-validate before acting; this backstop only protects the log.
+    // Transition-guard BACKSTOP: every lifecycle append is validated against the
+    // freshly projected state, so no emitter can bypass the guard. It protects only
+    // the log — emitters with side effects (spawn, merge) must ALSO pre-validate.
     if matches!(
         event.kind,
         event_log::EventKind::NodeStarted
@@ -4917,8 +4426,8 @@ pub(crate) async fn append_event_with(
         .to_string();
     let payload_str = event.payload.as_ref().map(|p| p.to_string());
 
-    // #328 / ADR-0024: refuse ALL kinds for a tombstoned run in the same
-    // statement as the insert (no TOCTOU window against a concurrent forget).
+    // Refuse a tombstoned run in the SAME statement as the insert, or a concurrent
+    // forget opens a TOCTOU window (ADR-0024).
     let result = sqlx::query(
         "INSERT INTO events (run_id, ts, kind, node_id, iter, payload)
          SELECT ?, ?, ?, ?, ?, ?
@@ -4943,18 +4452,16 @@ pub(crate) async fn append_event_with(
     Ok(())
 }
 
-/// Thin `AppState` wrapper over [`append_event_with`] — the name every
-/// in-process caller already uses. The db-only core exists so `spawn_node`
-/// (#356) can append through a narrow `SpawnDeps` without the full `AppState`.
+/// Thin `AppState` wrapper over [`append_event_with`] — the name every in-process
+/// caller uses.
 ///
-/// #408: this wrapper is also the single chokepoint for the terminal
-/// `merge_back` — the ~14 emitters of the 4 terminal Run events (§3.B of the
-/// plan) all funnel through here, and only here is `&AppState` available. After a
-/// SUCCESSFUL append of a terminal event, a sandboxed Run's staged transcripts
-/// are merged into `~/.claude/projects/` so cost + stale-detection see them once
-/// the staging is eventually purged. [`sandbox_run::merge_back_best_effort`] fires
-/// the walk on a detached task, so it never adds latency or a failure mode to the
-/// terminal transition (ADR-0023); it is idempotent, so a double-fire is safe.
+/// It is also the single chokepoint for the terminal `merge_back`: every emitter of
+/// the four terminal Run events funnels through here, and only here is `&AppState`
+/// available. After a SUCCESSFUL terminal append, a sandboxed Run's staged
+/// transcripts are merged into `~/.claude/projects/` so cost + stale-detection see
+/// them once the staging is purged. The walk runs detached, so it never adds latency
+/// or a failure mode to the terminal transition; it is idempotent, so a double-fire
+/// is safe.
 async fn append_event(state: &AppState, event: &event_log::Event) -> Result<()> {
     append_event_with(&state.db, &state.event_tx, event).await?;
     if matches!(
@@ -4969,7 +4476,7 @@ async fn append_event(state: &AppState, event: &event_log::Event) -> Result<()> 
     Ok(())
 }
 
-/// #328 / ADR-0024: check whether a run_id has been tombstoned by forget.
+/// Whether a run_id has been tombstoned by forget (ADR-0024).
 async fn run_is_forgotten(db: &sqlx::SqlitePool, run_id: &str) -> Result<bool> {
     let row: Option<(i64,)> =
         sqlx::query_as("SELECT 1 FROM forgotten_runs WHERE run_id = ? LIMIT 1")
@@ -5123,20 +4630,15 @@ async fn load_all_run_ids(db: &sqlx::SqlitePool) -> Result<Vec<String>> {
     Ok(rows.into_iter().map(|r| r.0).collect())
 }
 
-/// Count the live NodeRun sessions across *all* runs (admission control, #159).
-///
-/// Projects every run from the event log and delegates the count to
-/// [`admission::count_live_node_sessions`]. Pipeline Manager sessions are not
-/// nodes, so they are excluded by construction.
+/// Count the live NodeRun sessions across *all* runs (admission control). Pipeline
+/// Manager sessions are not nodes, so they are excluded by construction.
 async fn count_global_live_sessions(db: &sqlx::SqlitePool) -> usize {
     count_global_live_sessions_excluding(db, None).await
 }
 
 /// [`count_global_live_sessions`], minus the one slot the calling spawn is taking
-/// back (#489-C).
-///
-/// Only `spawn_node`'s admission gate passes an exclusion. `GET /sessions` and every
-/// other reader keeps calling the plain form — an observability endpoint must report
+/// back. Only `spawn_node`'s admission gate may pass an exclusion: every other
+/// reader must call the plain form, because an observability endpoint has to report
 /// the **true** count.
 async fn count_global_live_sessions_excluding(
     db: &sqlx::SqlitePool,
@@ -5160,12 +4662,10 @@ async fn count_global_live_sessions_excluding(
     admission::count_live_node_sessions_excluding(states.iter(), exclude)
 }
 
-/// The stored session cap from `instance_config`, as a `usize`, or `None` when
-/// unset or unreadable (#129, ADR-0015). Feeds
-/// [`admission::configured_cap_with`] so every admission read honours the
-/// `stored → env → default` precedence with the setting resolved fresh — a
-/// UI change takes effect on the next spawn, no restart. A DB read error falls
-/// back to `None` (env/default) rather than failing the caller.
+/// The stored session cap from `instance_config`, resolved FRESH so a UI change
+/// takes effect on the next spawn with no restart (ADR-0015,
+/// `stored → env → default`). A DB read error falls back to `None` rather than
+/// failing the caller.
 async fn stored_session_cap(db: &sqlx::SqlitePool) -> Option<usize> {
     instance_config::get(db)
         .await
@@ -5174,11 +4674,9 @@ async fn stored_session_cap(db: &sqlx::SqlitePool) -> Option<usize> {
         .map(|n| n as usize)
 }
 
-/// The instance-wide default model, resolved `stored → env → None` from a
-/// *fresh* read of `instance_config` (#347, ADR-0015). Feeds
-/// [`tmux_session_manager::resolve_node_model`] at every spawn seam so a
-/// `PUT /settings` takes effect on the next node with no restart. A DB read
-/// error falls back to `None` (env/account default) rather than failing spawn.
+/// The instance-wide default model, resolved `stored → env → None` from a *fresh*
+/// read so a `PUT /settings` takes effect on the next node with no restart. A DB
+/// read error falls back to `None` rather than failing the spawn.
 async fn stored_default_model(db: &sqlx::SqlitePool) -> Option<String> {
     let stored = instance_config::get(db)
         .await
@@ -5187,10 +4685,9 @@ async fn stored_default_model(db: &sqlx::SqlitePool) -> Option<String> {
     tmux_session_manager::default_model_with(stored)
 }
 
-/// The instance-wide default **harness**, resolved `stored → env → None` from a
-/// *fresh* read of `instance_config` (#550, ADR-0046). Feeds the `instance` tier
-/// of [`harness_resolver`] at every spawn seam so a `PUT /settings` takes effect
-/// on the next node with no restart. `None` ⇒ the resolver's `claude` floor.
+/// The instance-wide default **harness**, the `instance` tier of
+/// [`harness_resolver`], resolved from a *fresh* read at every spawn seam.
+/// `None` ⇒ the resolver's `claude` floor.
 async fn stored_default_harness(db: &sqlx::SqlitePool) -> Option<String> {
     let stored = instance_config::get(db)
         .await
@@ -5199,11 +4696,9 @@ async fn stored_default_harness(db: &sqlx::SqlitePool) -> Option<String> {
     tmux_session_manager::default_harness_with(stored)
 }
 
-/// The per-harness default model map for the resolver (#550, ADR-0046), from a
-/// *fresh* read of `instance_config`. The stored `default_harness_model` map, with
-/// the legacy single instance default (`default_model` stored/env) folded under
-/// `claude` when the map is silent for it — so a pre-#550 setup keeps working
-/// unchanged. A DB read error yields an empty map (fall through to no default).
+/// The per-harness default model map for the resolver, from a *fresh* read. The
+/// legacy single instance default (`default_model`) is folded under `claude` when
+/// the map is silent for it, so an older setup keeps working unchanged.
 async fn stored_default_harness_models(
     db: &sqlx::SqlitePool,
 ) -> std::collections::BTreeMap<String, String> {
@@ -5222,12 +4717,9 @@ async fn stored_default_harness_models(
     map
 }
 
-/// Resolve turn-end auto-completion the way the liveness sweep does, from a
-/// *fresh* read of `instance_config` (#433, ADR-0043). Consulted at every agent
-/// spawn/resume seam so injecting the `Stop` hook tracks a `PUT /settings` with
-/// no restart — parity with [`stored_default_model`]. The hook and the sweep are
-/// one policy, one setting (ADR-0043): there is deliberately no second toggle. A
-/// DB read error resolves through the env/default tiers (never fails a spawn).
+/// Resolve turn-end auto-completion the way the liveness sweep does, from a *fresh*
+/// read. The hook and the sweep are one policy on ONE setting (ADR-0043) — there is
+/// deliberately no second toggle.
 async fn stored_autocomplete_turn_end(db: &sqlx::SqlitePool) -> bool {
     let stored = instance_config::get(db)
         .await
@@ -5236,13 +4728,9 @@ async fn stored_autocomplete_turn_end(db: &sqlx::SqlitePool) -> bool {
     stale_detector::autocomplete_turn_end_with(stored)
 }
 
-// --- Trigger scheduler ---
-
-/// How many of the Trigger's *own* Runs are still live (#239). Scans projected
-/// Run state for runs carrying this `triggered_by` whose status is live. A
-/// finished/failed Run drops out of the count, freeing a slot — exactly the
-/// "max simultaneous *live*" semantics, with no new state to track. Same O(runs)
-/// projection scan as before, just without the short-circuit.
+/// How many of the Trigger's *own* Runs are still live. A finished Run drops out of
+/// the count and frees a slot, which is what makes "max simultaneous live" hold with
+/// no extra state to track.
 async fn trigger_live_run_count(db: &sqlx::SqlitePool, trigger_id: &str) -> usize {
     let run_ids = match load_all_run_ids(db).await {
         Ok(ids) => ids,
@@ -5288,42 +4776,35 @@ fn trigger_prompt_required(state: &AppState, trigger: &trigger_store::Trigger) -
     }
 }
 
-/// Check a Trigger's external references before firing. Returns an error reason
-/// if the pipeline or the target repo is dangling (deleted/renamed since the
-/// Trigger was created), so the scheduler can surface an error outcome and stop
-/// firing rather than rot silently (*Sharp tool*; ADR-0012).
+/// Check a Trigger's external references before firing, so the scheduler surfaces
+/// an error outcome and stops firing rather than rotting silently.
 fn trigger_dangling_reason(state: &AppState, trigger: &trigger_store::Trigger) -> Option<String> {
     if trigger_pipeline_yaml(state, trigger).is_none() {
         return Some(format!("pipeline not found: {}", trigger.pipeline_id));
     }
-    // #470: a null/blank target repo is a dangling reference, not a fallback.
-    // Refusing HERE rather than at `create_run_inner` buys three things a 400 at
-    // the chokepoint cannot: the guard command never runs (5 of the 9 live
-    // Triggers have guards with real side effects — `git pull`, `gh issue list`
-    // — which would otherwise execute in the unnamed daemon repo), the
-    // `Dangling` transition NULLs `next_fire_at` so the Trigger goes dormant
-    // instead of emitting one red row per tick forever, and `POST
-    // /triggers/:id/fire` answers 409 with a UI banner instead of a
-    // `200 {fired:false}` the operator has to go find in the fire history.
+    // A null/blank target repo is a dangling reference, not a fallback. Refuse HERE
+    // rather than at `create_run_inner`, for three things a chokepoint 400 cannot
+    // buy: the guard command never runs (guards do `git pull` / `gh issue list`,
+    // which would execute in the unnamed daemon repo), the `Dangling` transition
+    // NULLs `next_fire_at` so the Trigger goes dormant instead of emitting one red
+    // row per tick forever, and `POST /triggers/:id/fire` answers 409 with a banner
+    // instead of a `200 {fired:false}` buried in the fire history.
     if let Err(msg) = required_target_repo(trigger.target_repo.as_deref()) {
         return Some(msg);
     }
     None
 }
 
-/// Run one tick of a background sweep under panic isolation. The future is driven
-/// on its own `tokio::spawn` task, so a panic inside it is contained at that
-/// boundary: the caller — a periodic background loop *or* a synchronous test seam
-/// — returns normally instead of unwinding, and the next tick recovers. This is
-/// the shared spine of the daemon's three otherwise-unsupervised sweeps (the
-/// "rule of three"): the Trigger scheduler (#222), the stale detector and the
-/// reaper (#251). Run bare in a `loop { tick().await }`, any one of them would
-/// have a single panic silently and permanently kill the task — and for the stale
-/// detector that means *all* stall / idle / session-death detection goes dark for
-/// the daemon's remaining life, with nothing logged (the root cause of the silent
-/// idle-stall, #251). Routing every tick through here turns a panic into a
-/// one-tick blip the loop survives. (`tokio::sync::Mutex` does not poison, so any
-/// per-tick lock is released cleanly on unwind.)
+/// Run one tick of a background sweep under panic isolation — the shared spine of
+/// the daemon's three otherwise-unsupervised sweeps (Trigger scheduler, stale
+/// detector, reaper).
+///
+/// Don't run any of them bare in a `loop { tick().await }`: a single panic silently
+/// and permanently kills the task, and for the stale detector that means all stall /
+/// idle / session-death detection goes dark for the daemon's remaining life with
+/// nothing logged. Driving the future on its own `tokio::spawn` contains the panic at
+/// that boundary, so the caller returns normally and the next tick recovers.
+/// (`tokio::sync::Mutex` does not poison, so a per-tick lock is released on unwind.)
 async fn run_isolated<F>(label: &str, fut: F)
 where
     F: std::future::Future<Output = ()> + Send + 'static,
@@ -5335,12 +4816,9 @@ where
     }
 }
 
-/// Run one Trigger scheduler tick under panic isolation (#222). The ~30 s
-/// background loop *and* the [`DaemonHandle::run_trigger_tick`] test seam both go
-/// through here, so production and the synchronous test path behave identically:
-/// a panicking tick returns normally, the loop keeps ticking, and the next tick
-/// recomputes `due_triggers` and recovers any unfired Triggers (forward-only,
-/// ADR-0012).
+/// Run one Trigger scheduler tick under panic isolation. The ~30 s background loop
+/// *and* the [`DaemonHandle::run_trigger_tick`] test seam both go through here, so
+/// production and the synchronous test path behave identically.
 async fn run_trigger_scheduler_tick_supervised(state: &Arc<AppState>) {
     let tick_state = state.clone();
     run_isolated("trigger scheduler", async move {
@@ -5349,13 +4827,10 @@ async fn run_trigger_scheduler_tick_supervised(state: &Arc<AppState>) {
     .await;
 }
 
-/// Run one stale-detection sweep under panic isolation (#251). The ~30 s
-/// background loop *and* the [`DaemonHandle::run_stale_detection_tick`] test seam
-/// both go through here, mirroring the Trigger scheduler: a panicking sweep is
-/// contained, the loop survives, and the next sweep recovers. Without this a
-/// single panic in `run_stale_detection` (a stray `unwrap`, a `project` edge, a
-/// path mishap) silently disables stall / idle / session-death detection
-/// daemon-wide — the root-cause-agnostic fix for the silent idle-stall (#251).
+/// Run one stale-detection sweep under panic isolation. The ~30 s background loop
+/// *and* the [`DaemonHandle::run_stale_detection_tick`] test seam both go through
+/// here, so a single stray panic cannot silently disable stall / idle /
+/// session-death detection daemon-wide.
 async fn run_stale_detection_supervised(state: &Arc<AppState>) {
     let sweep_state = state.clone();
     run_isolated("stale detector", async move {
@@ -5364,9 +4839,9 @@ async fn run_stale_detection_supervised(state: &Arc<AppState>) {
     .await;
 }
 
-/// Park until the terminal-tail gate is released (#304, test seam). Unarmed
-/// (production): returns immediately. The re-check between creating the
-/// `Notified` and awaiting it closes the release-vs-register race.
+/// Park until the terminal-tail gate is released (test seam; a no-op unarmed). The
+/// re-check between creating the `Notified` and awaiting it closes the
+/// release-vs-register race.
 async fn wait_node_done_tail_gate(state: &AppState) {
     while state
         .node_done_tail_gate_armed
@@ -5384,20 +4859,19 @@ async fn wait_node_done_tail_gate(state: &AppState) {
 }
 
 /// Detach the post-terminal-event tail of a CLI terminal handler
-/// (`node_done` / `node_fail` / `node_skip`) onto its own task (#304,
-/// ADR-0023). The `pdo` CLI runs *inside the node's own tmux session*, and the
-/// tail's first act is to reap that session — killing the HTTP client of the
-/// in-flight request. hyper then cancels the request future at its next
-/// `.await`, silently dropping the successor spawn / end-port finalization /
-/// `RunFailed`/`RunSkipped` append. Spawning the tail decouples it from the
-/// request future, so no client disconnect (self-inflicted or otherwise) can
-/// cancel the advance.
+/// (`node_done` / `node_fail` / `node_skip`) onto its own task.
 ///
-/// The tail carries its own panic isolation: a panic after the successor's
-/// `NodeStarted` or inside the completion gate escapes the #279 reconciler, and
-/// a bare `tokio::spawn` would swallow it into a never-awaited `JoinError`. So
-/// a panic is logged AND surfaced as `RunFailed` — never a silent stall
-/// (ADR-0004). `run_isolated` is not reused here: it only logs.
+/// The tail MUST NOT run inline in the request future: the `pdo` CLI runs inside the
+/// node's own tmux session, and the tail's first act is to reap that session —
+/// killing the HTTP client of the in-flight request. hyper then cancels the request
+/// future at its next `.await`, silently dropping the successor spawn, the end-port
+/// finalization and the `RunFailed`/`RunSkipped` append.
+///
+/// The tail carries its OWN panic isolation rather than reusing `run_isolated`,
+/// which only logs: a panic after the successor's `NodeStarted` or inside the
+/// completion gate escapes the spawn reconciler, and a bare `tokio::spawn` would
+/// swallow it into a never-awaited `JoinError`. Here it is logged AND surfaced as
+/// `RunFailed`, never a silent stall.
 fn detach_terminal_tail<F>(
     label: &'static str,
     state: Arc<AppState>,
@@ -5408,9 +4882,8 @@ fn detach_terminal_tail<F>(
     F: std::future::Future<Output = ()> + Send + 'static,
 {
     tokio::spawn(async move {
-        // Test gate (#304): MUST be the first instruction of the detached task
-        // — inline (pre-fix) this wait sat in the request future and the client
-        // disconnect cancelled it; here it survives the drop. No-op unarmed.
+        // MUST be the first instruction of the detached task: that position is what
+        // makes the test discriminate detached from inline. No-op unarmed.
         wait_node_done_tail_gate(&state).await;
         let outcome =
             futures_util::future::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(fut)).await;
@@ -5438,29 +4911,22 @@ fn detach_terminal_tail<F>(
 /// Run one scheduler tick: fire every due Trigger that the decision admits,
 /// recording every significant outcome and recomputing each next fire.
 async fn run_trigger_scheduler_tick(state: &Arc<AppState>) {
-    // At most one tick in flight: see `AppState::trigger_tick_lock`.
     let _tick = state.trigger_tick_lock.lock().await;
     let now = chrono::Utc::now();
-    // Record liveness at tick start (#222): a wedged tick freezes this; an
-    // isolated panic still advanced it, so `GET /triggers/health` answers "is the
+    // Record liveness at tick START: a wedged tick then freezes the value, while an
+    // isolated panic has already advanced it, so `/triggers/health` answers "is the
     // loop alive?".
     state
         .last_trigger_tick_ms
         .store(now.timestamp_millis(), std::sync::atomic::Ordering::Relaxed);
 
-    // #348 global kill-switch: skip the whole fire loop while paused. Read FRESH
-    // from the DB each tick so a `POST /triggers/pause` takes effect on the next
-    // tick without a restart (same fresh-read posture as the guard-timeout read in
-    // `fire_one_trigger`). Liveness (stored above) still advances — paused ≠ dead,
-    // so `GET /triggers/health` stays truthful. Because `due_triggers` is never
-    // called while paused, `next_fire_at` is left frozen in the past; on unpause
-    // the very next ordinary tick sees it `≤ now` and fires each due Trigger
-    // once, then recomputes forward — a one-shot catch-up identical to the first
-    // tick at daemon boot (ADR-0012 addendum #348), with NO dedicated code and NO
-    // `Transition` variant. Fail-OPEN on a DB read error: the same failure would
-    // also break the `due_triggers()` call just below (which already returns), so
-    // the choice is practically moot; open matches the scheduler's best-effort
-    // "default to firing" posture.
+    // Global kill-switch: skip the whole fire loop while paused. Read FRESH each
+    // tick so `POST /triggers/pause` takes effect without a restart. Liveness above
+    // still advances — paused ≠ dead. Because `due_triggers` is never called while
+    // paused, `next_fire_at` stays frozen in the past, so on unpause the next
+    // ordinary tick fires each due Trigger once and recomputes forward: a one-shot
+    // catch-up with NO dedicated code and NO `Transition` variant. Fail-OPEN on a
+    // read error, matching the scheduler's best-effort posture.
     if instance_config::triggers_paused(&state.db)
         .await
         .unwrap_or(false)
@@ -5478,23 +4944,15 @@ async fn run_trigger_scheduler_tick(state: &Arc<AppState>) {
     };
 
     for trigger in due {
-        // #450 TOCTOU close: re-read the #348 kill-switch at the last moment,
-        // just before touching any Trigger state. The tick-start read above is
-        // stale by now — `due_triggers` suspends on a DB round-trip, and neither
-        // `POST /triggers/pause` nor the `force_trigger_due` seam takes
-        // `trigger_tick_lock` (a blocking lock held across the guard subprocess
-        // would make the brake hang ~guard-timeout — a brake that hangs is no
-        // brake). So a pause that lands during that suspension is invisible to
-        // the tick-start read, and without this re-read a tick already inside
-        // its critical section would still fire a Run *after* the operator
-        // paused (the exact window the boot tick loses in
-        // `unpause_does_forward_only_one_shot_catchup` under CI contention).
-        // Bail the whole tick, mirroring the tick-start gate: `next_fire_at` is
-        // left frozen in the past (no `due_triggers`/dangling clear/fire touches
-        // it here), so the one-shot catch-up on unpause is preserved with no
-        // dedicated code. Fail-OPEN on a read error, same posture as the
-        // tick-start read. "Run now" (Manual) never reaches this Cron path, so
-        // it stays exempt from the pause.
+        // TOCTOU close: re-read the kill-switch at the last moment. The tick-start
+        // read is stale by now — `due_triggers` suspends on a DB round-trip, and
+        // `POST /triggers/pause` deliberately does NOT take `trigger_tick_lock` (a
+        // lock held across the guard subprocess would make the brake hang for
+        // ~guard-timeout, and a brake that hangs is no brake). Without this re-read a
+        // tick inside its critical section still fires a Run AFTER the operator
+        // paused. Bail the whole tick: `next_fire_at` stays frozen, preserving the
+        // one-shot catch-up. Fail-OPEN, same posture as above. "Run now" never
+        // reaches this Cron path, so it stays exempt.
         if instance_config::triggers_paused(&state.db)
             .await
             .unwrap_or(false)
@@ -5502,7 +4960,6 @@ async fn run_trigger_scheduler_tick(state: &Arc<AppState>) {
             return;
         }
 
-        // Debug-only fault injection (#222): prove the tick's panic is isolated.
         if state.panic_on_trigger_name.as_deref() == Some(trigger.name.as_str()) {
             panic!(
                 "PDO_DEBUG_PANIC_TRIGGER fault injection (#222): trigger {}",
@@ -5510,10 +4967,8 @@ async fn run_trigger_scheduler_tick(state: &Arc<AppState>) {
             );
         }
 
-        // A dangling pipeline/repo reference: surface an error outcome and stop
-        // firing (clear next_fire) rather than rot silently or auto-delete. The
-        // clear goes through the single recompute seam (#372, `Dangling` arm →
-        // `Some(None)` → NULL).
+        // Surface an error outcome and stop firing (clear next_fire) rather than rot
+        // silently or auto-delete. The clear goes through the single recompute seam.
         if let Some(reason) = trigger_dangling_reason(state, &trigger) {
             let cleared = trigger_scheduler::recompute_next_fire(
                 now,
@@ -5538,15 +4993,12 @@ async fn run_trigger_scheduler_tick(state: &Arc<AppState>) {
     }
 }
 
-/// Evaluate and (maybe) fire one Trigger — the shared spine of the cron tick
-/// and the manual "Run now" endpoint (#341, ADR-0027). Runs the guard, honours
-/// the overlap gate, creates the Run with `triggered_by` provenance, and
-/// persists + broadcasts the audit row. On `Cron` the next fire is recomputed
-/// (forward-only); on `Manual` `next_fire_at` is left untouched — the cron
-/// heartbeat owns the schedule, a 14:32 click must not shift the 15:00 slot.
+/// Evaluate and (maybe) fire one Trigger — the shared spine of the cron tick and
+/// the manual "Run now" endpoint (ADR-0027). On `Cron` the next fire is recomputed
+/// forward; on `Manual` `next_fire_at` is left untouched, because the cron heartbeat
+/// owns the schedule and a 14:32 click must not shift the 15:00 slot.
 ///
-/// Returns the persisted audit record (with `run_id` filled on a fire), or
-/// `None` when the evaluation was a silent no-op.
+/// `None` means the evaluation was a silent no-op.
 async fn fire_one_trigger(
     state: &Arc<AppState>,
     trigger: &trigger_store::Trigger,
@@ -5556,11 +5008,9 @@ async fn fire_one_trigger(
     let live_count = trigger_live_run_count(&state.db, &trigger.id).await;
     let prompt_required = trigger_prompt_required(state, trigger);
 
-    // Run the guard (if any) off the tick, bounded by a hard timeout, but
-    // only when overlap wouldn't already skip — never spend a guard run on a
-    // tick we'd skip anyway. Route this through the same `overlap_ceiling`
-    // the decision core uses (#239) so the guard-gate can never drift from
-    // the fire decision (fire past the cap, or waste a guard run at it).
+    // Only run the guard when overlap wouldn't already skip — never spend a guard
+    // run on a tick we'd skip anyway. Route it through the same `overlap_ceiling`
+    // the decision core uses, or the guard-gate drifts from the fire decision.
     let overlap = if trigger.overlap_policy == "allow" {
         fire_decision::OverlapPolicy::Allow
     } else {
@@ -5571,12 +5021,11 @@ async fn fire_one_trigger(
             .is_some_and(|ceiling| live_count >= ceiling);
     let guard = match (&trigger.guard_command, overlap_skips) {
         (Some(cmd), false) if !cmd.trim().is_empty() => {
-            // #470: guaranteed present — `trigger_dangling_reason` refused the
-            // fire upstream if it were not. No fallback to the daemon root.
+            // Guaranteed present: `trigger_dangling_reason` refused the fire upstream
+            // otherwise. No fallback to the daemon root.
             let cwd = PathBuf::from(trigger.target_repo.as_deref().unwrap_or_default());
-            // Resolve the timeout fresh each tick, `stored → env → default`
-            // (#129, ADR-0015): a settings change takes effect on the next
-            // tick without a restart. Stored is seconds; the env seam is ms.
+            // Resolve the timeout fresh each tick so a settings change takes effect
+            // without a restart. Stored is seconds; the env seam is ms.
             let stored_secs = instance_config::get(&state.db)
                 .await
                 .ok()
@@ -5591,12 +5040,8 @@ async fn fire_one_trigger(
     let plan =
         trigger_scheduler::plan_tick(trigger, now, live_count, guard, prompt_required, source);
 
-    // Who owns next_fire_at on this fire (#372): a cron tick advances it forward
-    // (the `CronTick` arm, already folded into `plan.next_fire_at`); a manual
-    // "Run now" leaves it intact (the `ManualFire` arm — #341, ADR-0027: a 14:32
-    // click must not shift the 15:00 slot). Routing the manual case through the
-    // recompute seam keeps the leave-vs-advance rule in the one exhaustive match
-    // rather than an ad-hoc branch.
+    // Route the manual case through the recompute seam too, so the leave-vs-advance
+    // rule stays in the one exhaustive match rather than an ad-hoc branch.
     let next_write: Option<Option<String>> = match source {
         trigger_scheduler::FireSource::Cron => Some(plan.next_fire_at.clone()),
         trigger_scheduler::FireSource::Manual => {
@@ -5621,10 +5066,8 @@ async fn fire_one_trigger(
                 variables: trigger_variables(trigger),
                 pipeline_id: Some(trigger.pipeline_id.clone()),
                 target_repo: trigger.target_repo.clone(),
-                // #465 (ADR-0042): forward the Trigger's frozen secondary list. Stored
-                // as raw JSON TEXT (trigger_store stays decoupled from lib types); a
-                // blank/absent/malformed value defers to a mono-repo fire. `[0]` still
-                // being the primary, the chokepoint reconciles it with `target_repo`.
+                // Stored as raw JSON TEXT so `trigger_store` stays decoupled from lib
+                // types; a blank/absent/malformed value defers to a mono-repo fire.
                 target_repos: trigger
                     .target_repos
                     .as_deref()
@@ -5634,41 +5077,25 @@ async fn fire_one_trigger(
                 source_branch: trigger.source_branch.clone(),
                 name: None,
                 triggered_by: Some(trigger.id.clone()),
-                // #410: fold the Trigger's stored mode into the request's explicit
-                // tier. A Run has a single origin (a trigger fire is never also a
-                // run-level choice), so this is the sole non-`None` tier here; the
-                // chokepoint's `effective_sandbox(req.sandbox, None, default)` then
-                // resolves it against the instance default. A blank/absent stored value
-                // defers to the instance default.
-                //
-                // #432: no unparseable-token `warn!` any more — `parse` is syntactic, so
-                // a stored `copy` now reads as the profile NAME `copy`, and the chokepoint
-                // 400s it by name. That 400's message becomes this fire's `FireRecord`
-                // reason (the `Err` arm below), which is visibly red in the Trigger
-                // history — the fail-hard ADR-0031 §7 asks for, with zero new code.
+                // A Run has a single origin, so the Trigger's stored mode IS the
+                // request's explicit tier. `parse` is syntactic, so an unknown token
+                // reads as a profile NAME and the chokepoint 400s it by name; that
+                // message becomes this fire's `FireRecord` reason, visibly red in the
+                // Trigger history (ADR-0031 §7).
                 sandbox: trigger
                     .sandbox
                     .as_deref()
                     .and_then(event_log::SandboxMode::parse),
-                // #551 (ADR-0046): the Trigger carries the harness IN its Run template —
-                // there is no separate Trigger tier. Fold the stored harness into the
-                // create request's `run` choice, so a cron tick and a "Run now" (both
-                // route through here) freeze the SAME harness. A blank/absent stored
-                // value defers to the instance default. No validation (ADR-0045).
+                // The Trigger carries the harness IN its Run template — there is no
+                // separate Trigger tier. Both a cron tick and a "Run now" route through
+                // here, so they freeze the SAME harness.
                 harness: trigger.harness.clone(),
-                // #563: fold the Trigger's stored `AgentChoice` into the create
-                // request's explicit Run tier, same posture as `harness` above —
-                // a cron tick and a "Run now" freeze the SAME choice.
                 agent_choice: trigger.agent_choice.clone(),
-                // #338: pass the Trigger's frozen auto-naming choice as the explicit
-                // tier. `Some(b)` wins the chokepoint resolution unconditionally, so a
-                // fire with `auto_name=false` keeps a stable per-id name and the manager
-                // is never told to rename — covers cron AND manual fire in one line.
+                // `Some(b)` wins the chokepoint resolution unconditionally, so a fire
+                // with `auto_name=false` keeps a stable per-id name.
                 auto_name: Some(trigger.auto_name),
-                // ADR-0049: there is no separate Trigger tier for `auto_fail`
-                // (node → Run → Projet → instance). A trigger fire states no
-                // run-level preference, so a node `pdo fail` resolves through the
-                // project / instance tiers.
+                // No Trigger tier for `auto_fail` (ADR-0049): a fire states no
+                // run-level preference, so `pdo fail` resolves through project/instance.
                 auto_fail: None,
             };
             let record = match create_run_inner(state, req, Vec::new()).await {
@@ -5770,8 +5197,6 @@ impl EventRow {
     }
 }
 
-// --- Pipeline CRUD ---
-
 #[derive(Serialize)]
 struct PipelineListEntry {
     id: String,
@@ -5781,8 +5206,8 @@ struct PipelineListEntry {
     node_count: usize,
     modified: Option<String>,
     variables: HashMap<String, PipelineVariableInfo>,
-    /// Whether a manual Run must supply a non-empty prompt (#158). Surfaced so
-    /// the New Run modal can make the prompt field optional.
+    /// Whether a manual Run must supply a non-empty prompt. Surfaced so the New Run
+    /// modal can make the prompt field optional.
     prompt_required: bool,
 }
 
@@ -5968,15 +5393,18 @@ async fn save_pipeline(
         return (StatusCode::NOT_FOUND, "pipeline not found").into_response();
     }
 
-    if let Err(e) = pipeline::parse_pipeline(&req.yaml) {
-        let (message, line) = parse_error_to_structured(&e);
-        let mut body =
-            serde_json::json!({ "error": format!("invalid YAML: {e}"), "message": message });
-        if let Some(l) = line {
-            body["line"] = serde_json::json!(l);
+    let saved = match pipeline::parse_pipeline(&req.yaml) {
+        Ok(parsed) => parsed.pipeline,
+        Err(e) => {
+            let (message, line) = parse_error_to_structured(&e);
+            let mut body =
+                serde_json::json!({ "error": format!("invalid YAML: {e}"), "message": message });
+            if let Some(l) = line {
+                body["line"] = serde_json::json!(l);
+            }
+            return (StatusCode::BAD_REQUEST, Json(body)).into_response();
         }
-        return (StatusCode::BAD_REQUEST, Json(body)).into_response();
-    }
+    };
 
     mark_self_write(&state.recent_writes, &path);
     if let Err(e) = std::fs::write(&path, &req.yaml) {
@@ -5998,6 +5426,7 @@ async fn save_pipeline(
             warn!("failed to write prompt for {node_id}: {e}");
         }
     }
+    prune_orphan_prompts(&state, &path, &saved);
 
     info!("Pipeline {pipeline_id} saved");
     (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
@@ -6069,6 +5498,26 @@ async fn create_pipeline(
 
 fn read_pipeline_prompts(path: &Path) -> HashMap<String, String> {
     read_prompts_from_dir(&path.with_extension("prompts"))
+}
+
+/// Delete the sidecar prompts of nodes the pipeline no longer defines.
+///
+/// A save carries the prompts of the nodes the editor still knows about and says
+/// nothing about the ones it dropped, so without this the `.md` of a deleted
+/// node survives forever: invisible in the UI, and enough to make the pipeline's
+/// portable document un-importable. The saved YAML is the authority — not the
+/// keys of the request, which are only the subset the client chose to send.
+fn prune_orphan_prompts(state: &AppState, path: &Path, saved: &pipeline::PipelineDef) {
+    let on_disk = read_pipeline_prompts(path);
+    let (_, orphans) = pipeline::split_live_prompts(saved, &on_disk);
+    for node_id in orphans {
+        let prompt_path = pipeline::canonical_prompt_path(path, &node_id);
+        mark_self_write(&state.recent_writes, &prompt_path);
+        match std::fs::remove_file(&prompt_path) {
+            Ok(()) => info!("Removed prompt of deleted node {node_id}"),
+            Err(e) => warn!("failed to remove prompt for deleted node {node_id}: {e}"),
+        }
+    }
 }
 
 fn read_prompts_from_dir(prompts_dir: &Path) -> HashMap<String, String> {
@@ -6160,12 +5609,15 @@ fn write_pipeline_atomically(
 
     let yaml = serde_yaml::to_string(pipeline).map_err(|e| format!("serialize pipeline: {e}"))?;
     pipeline::parse_pipeline(&yaml).map_err(|e| format!("pipeline: {e}"))?;
+    // Never seed a fresh registry entry with a leftover: duplicate copies
+    // the source sidecar dir wholesale, orphans included.
+    let (prompts, _) = pipeline::split_live_prompts(pipeline, prompts);
     let result = (|| {
         std::fs::write(&temp_path, yaml).map_err(|e| format!("write pipeline: {e}"))?;
 
         if !prompts.is_empty() {
             std::fs::create_dir(&temp_prompts).map_err(|e| format!("stage prompts: {e}"))?;
-            for (node_id, content) in prompts {
+            for (node_id, content) in &prompts {
                 std::fs::write(temp_prompts.join(format!("{node_id}.md")), content)
                     .map_err(|e| format!("write prompts.{node_id}: {e}"))?;
             }
@@ -6337,6 +5789,7 @@ async fn import_pipeline_document(
                 "id": id,
                 "scope": "instance",
                 "path": path.to_string_lossy(),
+                "warnings": interpreted.warnings,
             })),
         )
             .into_response(),
@@ -6365,12 +5818,11 @@ struct SaveToLibraryRequest {
     outputs: Vec<pipeline::Port>,
     #[serde(default)]
     interactive: bool,
-    /// Per-node model override (#345/#296). Optional so a pre-#345 client that
-    /// omits it still stars a node (as model-less), rather than 400-ing.
+    /// Per-node model override. Optional so a client that omits it stars the node
+    /// as model-less rather than 400-ing.
     #[serde(default)]
     model: Option<String>,
-    /// Per-node reasoning-effort override (#424). Optional for the same reason:
-    /// a client that omits it stars the node as effort-less instead of 400-ing.
+    /// Per-node reasoning-effort override. Optional for the same reason.
     #[serde(default)]
     effort: Option<String>,
     #[serde(default)]
@@ -6434,11 +5886,9 @@ async fn instantiate_from_library(AxumPath(name): AxumPath<String>) -> Response 
                     "inputs": entry.inputs,
                     "outputs": entry.outputs,
                     "interactive": entry.interactive,
-                    // #345/#296: carry the per-node model so instantiating a
-                    // library node restores its override, not the default.
+                    // Carry model + effort, or instantiating drops the overrides and
+                    // the fresh node reads `diverged` at once.
                     "model": entry.model,
-                    // #424: same for the effort level — without it, instantiating
-                    // drops the level and the fresh node reads `diverged` at once.
                     "effort": entry.effort,
                     // #655/ADR-0060: restore the entry's workspace exactly. Left
                     // out, the canvas would fall back to the type default and an
@@ -6455,17 +5905,17 @@ async fn instantiate_from_library(AxumPath(name): AxumPath<String>) -> Response 
     }
 }
 
-/// Request body for `POST /nodes/parse` (#345): the raw YAML text of a single
-/// node (from a paste or an uploaded `.yaml`). Same field feeds both channels.
+/// Request body for `POST /nodes/parse`: the raw YAML text of a single node.
 #[derive(serde::Deserialize)]
 struct ParseNodeRequest {
     yaml: String,
 }
 
-/// Node-library `LibraryEntry` fields plus the two identity/layout keys the
-/// canvas instantiation intentionally regenerates (`id`) or re-centres (`view`).
-/// Any *other* root key is surfaced as an ignored-field warning (ADR-0001/#268:
-/// no silent loss). Kept in sync with `library_store::LibraryEntry`.
+/// Node-library `LibraryEntry` fields plus the two identity/layout keys the canvas
+/// regenerates (`id`) or re-centres (`view`). Any *other* root key is surfaced as
+/// an ignored-field warning (ADR-0001: no silent loss). A field missing from this
+/// list is reported as ignored even when it parses fine — a false loss report.
+/// Keep it in sync with `library_store::LibraryEntry`.
 const KNOWN_NODE_KEYS: &[&str] = &[
     "name",
     "type",
@@ -6473,21 +5923,15 @@ const KNOWN_NODE_KEYS: &[&str] = &[
     "outputs",
     "interactive",
     "model",
-    // #424. Without this entry, a node YAML carrying `effort:` — which parses
-    // perfectly — would be announced as `unknown field 'effort' (ignored)`: the
-    // exact silent loss ADR-0001/#268 forbids, reported where none happened.
     "effort",
     "max_iter",
     "branches",
     "prompt",
-    // #550/ADR-0046: the harness axis. `model`/`effort` above stay accepted (a
-    // pasted flat pair is folded into `harnesses.claude` by `normalize_node_value`).
+    // The harness axis. `model`/`effort` above stay accepted — a pasted flat pair
+    // is folded into `harnesses.claude` by `normalize_node_value`.
     "pin_harness",
     "harnesses",
-    // #563/ADR-0057: the node's agent-profile choice (Inherit/Profile/Custom).
-    // Not yet surfaced in `LibraryEntry` (a #345-style follow-up), but a pasted
-    // node carrying it must not be told it is "unknown field ... (ignored)"
-    // when parse_node_spec silently keeps it off the library entry.
+    // Carried by `parse_node_spec` but not a `LibraryEntry` field.
     "agent_choice",
     // #653/ADR-0060: where the node works. `normalize_node_value` stamps the
     // type's default onto every `agent`/`script`, so this key is present on
@@ -6507,28 +5951,21 @@ fn node_parse_error(msg: impl Into<String>) -> Response {
         .into_response()
 }
 
-/// Pure core of `POST /nodes/parse` (#345), split from the axum handler so it is
-/// unit-testable without a router/AppState (the endpoint is disk-free and
-/// stateless). Returns the JSON body on success; `Err(msg)` is the verbatim
-/// 400 `{error}` message.
+/// Pure core of `POST /nodes/parse`, split from the axum handler so it is
+/// unit-testable without a router/AppState. `Err(msg)` is the verbatim 400 message.
 ///
-/// This is the daemon-side locus the node import reuses — the front carries no
-/// YAML parser, so this keeps a single source of truth (serde structs +
-/// `pipeline::normalize_node_value`) for node coercion. It never reads/writes
-/// the node library and never calls `parse_pipeline` (which requires a top-level
-/// `name:` AND a `nodes:` list).
+/// The single source of truth for node coercion (serde structs +
+/// `pipeline::normalize_node_value`) — the front carries no YAML parser. It never
+/// touches the node library and never calls `parse_pipeline`, which requires a
+/// top-level `name:` AND a `nodes:` list.
 ///
-/// Hard failures (`Err`): invalid YAML, non-mapping root, a whole pipeline
-/// pasted by mistake, missing `name`, retired `for-each`. Soft losses
-/// (defaulted/coerced type, ignored unknown keys) ride back in `warnings[]` with
-/// the node still produced — mirroring `/library/import`.
+/// Hard failures: invalid YAML, non-mapping root, a whole pipeline pasted by
+/// mistake, missing `name`, retired `for-each`. Soft losses ride back in
+/// `warnings[]` with the node still produced.
 fn parse_node_spec(yaml: &str) -> Result<serde_json::Value, String> {
-    // 1. YAML syntax. A parse error is a hard failure (verbatim serde message).
     let mut value: serde_yaml::Value =
         serde_yaml::from_str(yaml).map_err(|e| format!("invalid YAML: {e}"))?;
 
-    // 2. Root must be a mapping — a node is a map. A bare scalar/sequence gets a
-    //    clear message instead of a downstream serde type error.
     let Some(map) = value.as_mapping() else {
         return Err(
             "expected a single node definition (a YAML mapping), got a non-mapping document"
@@ -6536,9 +5973,8 @@ fn parse_node_spec(yaml: &str) -> Result<serde_json::Value, String> {
         );
     };
 
-    // 3. Whole-pipeline-pasted-by-mistake: a `nodes:` or `edges:` root is a
-    //    pipeline, not a node. Reject with a clear message rather than serde's
-    //    cryptic "missing field `type`" (D3 / validation matrix).
+    // Reject a whole pipeline here, or serde reports a cryptic "missing field
+    // `type`" instead.
     if map.contains_key(serde_yaml::Value::String("nodes".into()))
         || map.contains_key(serde_yaml::Value::String("edges".into()))
     {
@@ -6549,8 +5985,6 @@ fn parse_node_spec(yaml: &str) -> Result<serde_json::Value, String> {
         );
     }
 
-    // 4. `name` is the node's identity — a hard requirement, checked here for a
-    //    clean message (serde would otherwise say "missing field `name`").
     if map.get(serde_yaml::Value::String("name".into())).is_none() {
         return Err("missing required field: name".to_string());
     }
@@ -6563,7 +5997,7 @@ fn parse_node_spec(yaml: &str) -> Result<serde_json::Value, String> {
         .map(|d| d.message)
         .collect();
 
-    // 6. Surface every root key serde will silently ignore (ADR-0001/#268).
+    // Surface every root key serde will silently ignore (ADR-0001).
     if let Some(m) = value.as_mapping() {
         for key in m.keys() {
             if let Some(k) = key.as_str() {
@@ -6574,11 +6008,10 @@ fn parse_node_spec(yaml: &str) -> Result<serde_json::Value, String> {
         }
     }
 
-    // 7. #550/ADR-0046: read the harness axis off the (folded) value before it is
-    //    consumed. `normalize_node_value` above folded any flat `model:`/`effort:`
-    //    into `harnesses.claude`, so the claude entry is the source for the
-    //    (claude-aware) `spec.model`/`spec.effort` the node library shows — and the
-    //    full `harnesses` map + `pin_harness` ride through for the harness UI.
+    // Read the harness axis off the value BEFORE the deserialize below consumes it.
+    // `normalize_node_value` folded any flat `model:`/`effort:` into
+    // `harnesses.claude`, so the claude entry is the source for `spec.model`/
+    // `spec.effort`.
     let claude = value
         .get("harnesses")
         .and_then(|h| h.get(harness_registry::CLAUDE));
@@ -6598,11 +6031,8 @@ fn parse_node_spec(yaml: &str) -> Result<serde_json::Value, String> {
         .get("harnesses")
         .map(yaml_value_to_json)
         .unwrap_or(serde_json::Value::Null);
-    // #563/ADR-0057: the node's agent-profile choice rides through verbatim (as
-    // JSON) — same "carried, not interpreted" posture as `harnesses` above. It
-    // is not (yet) a `LibraryEntry` field, so it must be read off the raw value
-    // here or it would silently vanish through the `LibraryEntry` deserialize
-    // below.
+    // Carried verbatim, not interpreted. Not a `LibraryEntry` field, so it must be
+    // read off the raw value here or the deserialize below silently drops it.
     let agent_choice = value
         .get("agent_choice")
         .map(yaml_value_to_json)
@@ -6624,13 +6054,11 @@ fn parse_node_spec(yaml: &str) -> Result<serde_json::Value, String> {
             "inputs": entry.inputs,
             "outputs": entry.outputs,
             "interactive": entry.interactive,
-            // Claude-aware view (#345) — derived from the folded harnesses map.
+            // Claude-aware view, derived from the folded harnesses map.
             "model": claude_model,
             "effort": claude_effort,
-            // #550: the harness axis, for the pin selector + per-harness UI.
             "pin_harness": pin_harness,
             "harnesses": harnesses,
-            // #563: the node's agent-profile choice, carried verbatim.
             "agent_choice": agent_choice,
             // #653: where the node works.
             "isolated_worktree": entry.isolated_worktree,
@@ -6642,8 +6070,6 @@ fn parse_node_spec(yaml: &str) -> Result<serde_json::Value, String> {
     }))
 }
 
-/// `POST /nodes/parse` (#345 / ADR-0016): thin axum wrapper over
-/// `parse_node_spec` — 200 with `{spec, prompt, warnings}` or 400 `{error}`.
 async fn parse_node_yaml(Json(req): Json<ParseNodeRequest>) -> Response {
     match parse_node_spec(&req.yaml) {
         Ok(body) => Json(body).into_response(),
@@ -6651,11 +6077,10 @@ async fn parse_node_yaml(Json(req): Json<ParseNodeRequest>) -> Response {
     }
 }
 
-/// Request body for `POST /library/import` (#155): the raw `.js` source plus the
-/// original filename (used only for the fallback pipeline name and error
-/// messages). Transport is a browser file selector -> `File.text()` -> JSON, so
-/// the daemon never reads `~/.claude/workflows` off disk (host-agnostic; the
-/// daemon binds `0.0.0.0`).
+/// Request body for `POST /library/import`: the raw `.js` source plus the original
+/// filename (used only for the fallback name and error messages). The content
+/// arrives over the wire, so the daemon never reads `~/.claude/workflows` off disk
+/// — it binds `0.0.0.0` and must stay host-agnostic.
 #[derive(serde::Deserialize)]
 struct ImportWorkflowRequest {
     filename: String,
@@ -6746,10 +6171,9 @@ async fn delete_pipeline(
             let Some(run_state) = event_log::project(&events) else {
                 continue;
             };
-            // NOTE: a third "active run" predicate, distinct from
-            // `RunStatus::is_terminal()` (which also treats Failed/Skipped/
-            // Halted as non-active). Whether this should be a named method is an
-            // open question (#237 follow-up F3).
+            // A third "active run" predicate, deliberately distinct from
+            // `RunStatus::is_terminal()`, which also treats Failed/Skipped/Halted as
+            // non-active.
             if run_state.pipeline_name == pipeline_id
                 && run_state.status != event_log::RunStatus::Completed
                 && run_state.status != event_log::RunStatus::Archived
@@ -6790,8 +6214,8 @@ async fn delete_pipeline(
 // --- API handlers ---
 
 /// Deposits one `_item.md` per lap under the collection entry's artifact dir
-/// (ADR-0011 / #269): `<artifacts>/<entry>/iter-N/_item.md` with `item / iter /
-/// total` frontmatter, so each spawned lap reads its own item.
+/// (ADR-0011): `<artifacts>/<entry>/iter-N/_item.md` with `item / iter / total`
+/// frontmatter, so each spawned lap reads its own item.
 fn deposit_collection_items(
     artifacts_dir: &std::path::Path,
     entry_node_id: &str,
@@ -6815,13 +6239,8 @@ fn deposit_collection_items(
     }
 }
 
-/// Extract a human-readable message from a caught panic payload.
-/// `std::panic`'s default payload is a `&str` or `String`; anything else is
-/// opaque, so we fall back to a generic label.
-///
-/// `pub(crate)` since #356: `node_spawn::spawn_node` reaches it for the caught
-/// spawn-window panic (it shares this with `detach_terminal_tail`, so it stays
-/// in lib.rs rather than moving into the spawn module).
+/// Extract a human-readable message from a caught panic payload. `std::panic`'s
+/// default payload is a `&str` or `String`; anything else is opaque.
 pub(crate) fn panic_payload_message(panic: &(dyn std::any::Any + Send)) -> String {
     if let Some(s) = panic.downcast_ref::<&str>() {
         (*s).to_string()
@@ -6870,10 +6289,9 @@ pub(crate) async fn handle_node_completion(
     let frontmatter_fields =
         resolve_source_frontmatter(&pipeline, completed_node_id, source_iter, &artifacts_dir);
 
-    // Per-node frontmatter for every completed producer, so convergence
-    // suppression (ADR-0011) can re-evaluate the conditional edges of upstream
-    // producers (e.g. a classifier whose `else` branch was suppressed) and avoid
-    // a silent stall at a `Merge` fed by that suppressed branch.
+    // Per-node frontmatter for EVERY completed producer, not just the source: it is
+    // what lets convergence suppression (ADR-0011) re-evaluate upstream conditional
+    // edges and avoid a silent stall at a `Merge` fed by a suppressed branch.
     let frontmatter_by_node = resolve_completed_frontmatter(&pipeline, run_state, &artifacts_dir);
 
     let actions = scheduler::evaluate_outgoing_edges_full(
@@ -6895,10 +6313,9 @@ pub(crate) async fn handle_node_completion(
         repo_root: &repo_root,
     };
 
-    // Pass 1 runs on the caller's `run_state` snapshot (INV-2) under
-    // `InternalOnly`: the completion path applies NO scheduler-side dedup — a
-    // same-iter-live spawn is a legal restart inside `spawn_node`'s own guard.
-    // This freezes the latent double-spawn (INV-1); it is not a fix.
+    // Pass 1 runs on the caller's `run_state` snapshot under `InternalOnly`: the
+    // completion path applies NO scheduler-side dedup, because a same-iter-live
+    // spawn is a legal restart inside `spawn_node`'s own guard.
     for action in &actions {
         match scheduler_interpreter::interpret(
             state,
@@ -6910,22 +6327,20 @@ pub(crate) async fn handle_node_completion(
         )
         .await
         {
-            // INV-4: a terminal action unwinds the WHOLE driver, not just this loop.
+            // A terminal action unwinds the WHOLE driver, not just this loop.
             ActionOutcome::Completed
             | ActionOutcome::Halted { .. }
             | ActionOutcome::Interrupted { .. } => return,
-            // Fire-and-forget: the spawn outcome is dropped. `SpawnSkipped` is
-            // unreachable under `InternalOnly` (`admit_spawn` always admits).
+            // `SpawnSkipped` is unreachable under `InternalOnly`.
             ActionOutcome::Spawned { .. }
             | ActionOutcome::Progressed
             | ActionOutcome::SpawnSkipped { .. } => {}
         }
     }
 
-    // Pass 1 above may have appended events (e.g. LoopBreakReceived from an
-    // edge into a loop). Re-project so pass 2 sees the fresh state — without
-    // this, evaluate_loop_body_completion races against its own predecessors
-    // and advances the loop one extra iteration after a break.
+    // Pass 1 may have appended events (e.g. LoopBreakReceived). Re-project, or
+    // `evaluate_loop_body_completion` races its own predecessors and advances the
+    // loop one extra iteration after a break.
     let Some((fresh_events, fresh_run_state)) = reload_run_state(state, run_id).await else {
         return;
     };
@@ -6940,7 +6355,6 @@ pub(crate) async fn handle_node_completion(
         repo_root: &repo_root,
     };
 
-    // Check loop body completion for all loop nodes
     for loop_node in pipeline
         .nodes
         .iter()
@@ -6952,12 +6366,8 @@ pub(crate) async fn handle_node_completion(
             &loop_node.id,
             &fresh_resolved_vars,
         );
-        // Pass 2 runs on the reloaded `fresh_run_state` (INV-2).
-        // `evaluate_loop_body_completion` only emits Spawn / Loop* today, so the
-        // total `interpret` routes each to the right sink and the old
-        // `_ => emit_loop_action` fallthrough is subsumed (and made strictly more
-        // correct). `source_iter` is irrelevant here (SwitchRouted is never
-        // produced); it is forwarded verbatim.
+        // Pass 2 runs on the reloaded `fresh_run_state`. `source_iter` is irrelevant
+        // here (SwitchRouted is never produced) and is forwarded verbatim.
         for action in &loop_actions {
             match scheduler_interpreter::interpret(
                 state,
@@ -6979,7 +6389,6 @@ pub(crate) async fn handle_node_completion(
         }
     }
 
-    // Check the barrier of every collection region (ADR-0011 / #269)
     for region in pipeline
         .loops
         .iter()
@@ -6987,9 +6396,6 @@ pub(crate) async fn handle_node_completion(
     {
         let collection_actions =
             scheduler::evaluate_collection_barrier(&pipeline, &fresh_run_state, region);
-        // `evaluate_collection_barrier` only emits CollectionDone today; the total
-        // `interpret` routes it through `emit_collection_action` exactly as the
-        // old `_ => emit_collection_action` fallthrough did.
         for action in &collection_actions {
             match scheduler_interpreter::interpret(
                 state,
@@ -7012,9 +6418,8 @@ pub(crate) async fn handle_node_completion(
     }
 }
 
-/// Reload events and re-project the run state, taking only the DB pool it needs
-/// (#356) so `spawn_node`'s narrow `SpawnDeps` can re-project without the full
-/// `AppState`. The [`reload_run_state`] wrapper below is what most callers use.
+/// Reload events and re-project the run state, taking only the DB pool so
+/// `spawn_node`'s narrow `SpawnDeps` can re-project without the full `AppState`.
 pub(crate) async fn reload_run_state_with(
     db: &sqlx::SqlitePool,
     run_id: &str,
@@ -7060,33 +6465,20 @@ async fn reload_run_state(
 /// appended after a forget (`event_log.rs`, #328). Either way `404` is the
 /// right answer; a Run that exists always has its `RunStarted` first.
 ///
-/// `Box<Response>` rather than `Response`: `size_of::<Response>()` is 128, which
-/// is exactly the `clippy::result_large_err` threshold, and CI runs
-/// `-D warnings`. There is not one `Result<_, Response>` in this crate — see
-/// the same note on `completion_head_gate`.
+/// `Box<Response>` rather than `Response`: `size_of::<Response>()` is 128, exactly
+/// the `clippy::result_large_err` threshold, and CI runs `-D warnings`.
 ///
-/// **Opt-in per call site, never a global preamble.** The load-and-project
-/// blocks that deliberately do NOT route here — folding them in would change a
-/// wire contract silently:
-///   * in `run_command.rs`: `mark_node_done` and the `restart_node` guard probe
-///     both want the raw `Option<RunState>`, because their guard maps
-///     `None -> Allow` on purpose; `inject_artifact` degrades to
-///     `state.repo_root` and never answers 4xx/5xx (the one arm designed to work
-///     BEFORE the Run exists); the two `reload_run_state` sandbox probes treat
-///     `Err` and `None` alike, as "no container to kill";
-///   * here in `lib.rs`, the quasi-twins that answer a DIFFERENT wire shape: the
-///     `404`-in-JSON surfaces (`save_run_pipeline`, `force_spawn_node`,
-///     `node_stop`, `node_retry`, `node_retry_preview`); `node_retry`'s second
-///     projection (`None -> 500 "projection failed after invalidation"`);
-///     `get_run_pipeline` (`None` tolerated, different 404 message);
-///     `get_run_events` (never projects — an unknown run is `200 []`); `get_run`
-///     and `run_diff` (same contract, different syntactic shape); and the
-///     `list_*` / `delete_pipeline` filter loops that project in bulk.
+/// **Opt-in per call site, never a global preamble.** Several load-and-project
+/// blocks deliberately do NOT route here, and folding them in would silently change
+/// a wire contract: the ones wanting the raw `Option<RunState>` because their guard
+/// maps `None -> Allow`; `inject_artifact`, designed to work BEFORE the Run exists;
+/// the sandbox probes, which treat `Err` and `None` alike as "no container to kill";
+/// and the quasi-twins answering a different shape (`404`-in-JSON,
+/// `get_run_events`'s `200 []` for an unknown run, the bulk-projecting filter loops).
 ///
-/// Do NOT absorb the `410` tombstone check either: ADR-0024 §3 places that gate
-/// at exactly three boundaries — `run_command`, `node_done`, and
-/// `PATCH /runs/{id}/repos` (#465) — and folding it in would silently flip every
-/// GET reaching here from `404` to `410`.
+/// Do NOT absorb the `410` tombstone check either: ADR-0024 §3 places that gate at
+/// exactly three boundaries, and folding it in would flip every GET reaching here
+/// from `404` to `410`.
 async fn load_projected(
     state: &AppState,
     run_id: &str,
@@ -7094,8 +6486,8 @@ async fn load_projected(
     let events = match load_events(&state.db, run_id).await {
         Ok(e) => e,
         Err(e) => {
-            // #491/#601: error bodies are JSON, so a front `.catch(() => null)`
-            // on `resp.json()` can read the reason instead of swallowing text.
+            // Error bodies are JSON, so a front `.catch(() => null)` on
+            // `resp.json()` can read the reason instead of swallowing text.
             return Err(Box::new(
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -7117,22 +6509,18 @@ async fn load_projected(
     }
 }
 
-/// Thin shim over the single-pass advancement tick now owned by
-/// [`run_advance::advance_run`] (#235). Kept under its original name so the many
-/// call sites (node-done, mark-node-done, pipeline-modification, run start) need
-/// no churn; the sequence itself lives in exactly one place.
+/// Thin shim over the single-pass advancement tick owned by
+/// [`run_advance::advance_run`].
 async fn spawn_ready_after_event(state: &AppState, run_id: &str) {
     run_advance::advance_run(state, run_id).await;
 }
 
-/// Re-drive nodes throttled into `waiting` by the session cap, across *all*
-/// runs (admission control, #159).
+/// Re-drive nodes throttled into `waiting` by the session cap, across *all* runs.
 ///
-/// Called whenever a slot may have freed (a node completed/failed/stopped, or a
-/// run ended). Because the cap is daemon-wide, a slot freed in one Run can let a
-/// `waiting` node in a *different* Run start, so this scans every run.
-/// `spawn_node` re-checks admission per node, so a node that still can't get a
-/// slot simply stays `waiting`.
+/// Called whenever a slot may have freed. The cap is daemon-wide, so a slot freed
+/// in one Run can let a `waiting` node in a *different* Run start — hence the scan
+/// over every run. `spawn_node` re-checks admission per node, so a node that still
+/// can't get a slot simply stays `waiting`.
 pub(crate) async fn retry_waiting_nodes(state: &AppState) {
     let run_ids = match load_all_run_ids(&state.db).await {
         Ok(ids) => ids,
@@ -7177,49 +6565,35 @@ pub(crate) async fn retry_waiting_nodes(state: &AppState) {
             resolved_vars: &resolved_vars,
             repo_root: &repo_root,
         };
-        // Shares the spawn loop with `advance_run`, but keeps `waiting_nodes`
-        // as the ready set and stays out of `maybe_complete_run`: this is an
-        // all-runs admission sweep, and `RunCompleted` is not de-duped — only
-        // the per-run single-pass path may emit it (#235).
+        // Shares the spawn loop with `advance_run` but must stay out of
+        // `maybe_complete_run`: `RunCompleted` is not de-duped, and only the per-run
+        // single-pass path may emit it.
         run_advance::spawn_each(state, &spawn_ctx, &waiting).await;
     }
 }
 
-/// Idle window (#279) after which a `Running` run with a ready-to-spawn node but
-/// no live node is treated as a silent spawn-abort rather than a node about to
-/// be driven. `advance_run` starts a ready node within milliseconds of it
-/// becoming ready; if the run has instead sat idle this long with the node never
-/// started, the event-driven spawn aborted (a panic, or a dropped completion
-/// future) and nothing will re-drive it.
+/// Idle window after which a `Running` run with a ready-to-spawn node but no live
+/// node is treated as a silent spawn-abort rather than a node about to be driven.
 ///
-/// It bounds **an event-driven spawn**, which is milliseconds of work: worktree
-/// creation plus a `tmux new-session`. Two minutes is three orders of magnitude
-/// of headroom over that, and — unlike the threshold it used to be aligned with —
-/// it is never compared against *an agent's* silence, so a long tool call cannot
-/// trip it. (It used to be documented as "matching
-/// `stale_detector::STALE_THRESHOLD` so the daemon's two idle notions agree";
-/// #469 deleted that constant precisely because measuring an agent by a duration
-/// does not work, and the alignment was never the reason this number is right.
-/// Do not "re-align" it on anything.)
+/// It bounds **an event-driven spawn** — worktree creation plus a `tmux
+/// new-session`, milliseconds of work — so two minutes is three orders of magnitude
+/// of headroom. Do NOT "re-align" it on any agent-silence threshold: it is never
+/// compared against an agent's silence, and measuring an agent by a duration is
+/// exactly what this codebase abandoned.
 const SPAWN_STALL_GRACE_SECS: i64 = 120;
 
-/// Idle window (#445) after which a sandboxed Run stuck at `sandbox_prep = pending` is
+/// Idle window after which a sandboxed Run stuck at `sandbox_prep = pending` is
 /// treated as a lost preparation rather than one still working.
 ///
-/// Deliberately an order of magnitude above [`SPAWN_STALL_GRACE_SECS`], because the two
-/// measure different things: 120 s bounds an *event-driven spawn*, which is milliseconds
-/// of work, while this bounds staging up to a couple of gigabytes of `~/.claude` plus a
-/// cold `docker build` — measured at 83-87 s for a 2 GB profile with a warm image, and
-/// legitimately minutes on the first build of a machine. 15 minutes is comfortably past
-/// any healthy prep and still short enough that a Run whose prep task died with a
-/// previous daemon is reported the same hour rather than sitting `Running` for ever.
+/// Deliberately an order of magnitude above [`SPAWN_STALL_GRACE_SECS`]: the two
+/// measure different things. This one bounds staging up to a couple of gigabytes of
+/// `~/.claude` plus a cold `docker build` — 83-87 s for a 2 GB profile with a warm
+/// image, and legitimately minutes on a machine's first build.
 const SANDBOX_PREP_STALL_GRACE_SECS: i64 = 900;
 
 /// Seconds elapsed since the run's most recent event, or `None` when no event
-/// carries a parseable RFC3339 timestamp. The most recent event has the
-/// *smallest* age, so this is the `min` over ages — i.e. "how long since the run
-/// last did anything". Used by [`reconcile_run_level_stall`] to tell a node
-/// about to be driven (idle ≈ 0) from one silently wedged (#279).
+/// carries a parseable RFC3339 timestamp. The most recent event has the *smallest*
+/// age, hence the `min` — the name says `max` because it is the largest timestamp.
 fn max_event_age_secs(events: &[event_log::Event]) -> Option<i64> {
     let now = chrono::Utc::now();
     events
@@ -7229,18 +6603,10 @@ fn max_event_age_secs(events: &[event_log::Event]) -> Option<i64> {
         .min()
 }
 
-/// Reconcile a run that is silently stalled at the **run level** (#214): no
-/// live node, nothing the scheduler can spawn, yet still `Running`. Loads the
-/// pipeline and the real scheduler outputs, runs [`run_stall_reason`], and on a
-/// stall appends a `RunInterrupted` with the run-level cause — parking the run
-/// `AwaitingUser`, **never `RunFailed`** (ADR-0049: the runtime never declares
-/// forfeit of its own initiative). A no-op for runs that can still make progress
-/// (or are already terminal).
-///
-/// Called from the periodic stale sweep and from boot recovery — the two paths
-/// where a run can be observed wedged after a node turned terminal with no
-/// downstream to drive (an Interrupted/Failed/Stale entry, a crash before
-/// downstream spawn).
+/// Reconcile a run silently stalled at the **run level**: no live node, nothing the
+/// scheduler can spawn, yet still `Running`. On a stall it appends a
+/// `RunInterrupted`, parking the run `AwaitingUser` and **never `RunFailed`**
+/// (ADR-0049: the runtime never declares forfeit of its own initiative).
 async fn reconcile_run_level_stall(state: &AppState, run_id: &str) {
     let Some((events, run_state)) = reload_run_state(state, run_id).await else {
         return;
@@ -7263,10 +6629,6 @@ async fn reconcile_run_level_stall(state: &AppState, run_id: &str) {
     let ready = scheduler_dispatcher::compute_ready_to_spawn(&pipeline, &run_state);
     let loop_seed = scheduler::seed_pending_loops(&pipeline, &run_state, &resolved_vars);
 
-    // Seconds since the run's most recent event. A ready-to-spawn node with no
-    // live node should be driven by `advance_run` within milliseconds; if the
-    // run has instead gone idle past the grace window, the event-driven spawn
-    // silently aborted (#279) and nothing will re-drive it.
     let idle_secs = max_event_age_secs(&events);
 
     let Some(reason) = run_stall_reason(&pipeline, &run_state, &ready, &loop_seed, idle_secs)
@@ -7281,44 +6643,30 @@ async fn reconcile_run_level_stall(state: &AppState, run_id: &str) {
         kind: event_log::EventKind::RunInterrupted,
         node_id: None,
         iter: None,
-        // #601: `run_stalled` machine slug + prose (the prose already opens with
-        // `run_stalled:`, so the two agree). Every non-advancement carries a code.
+        // Every non-advancement carries a machine slug beside its prose.
         payload: Some(event_log::interrupt_payload("run_stalled", reason.clone())),
     };
     // `RunInterrupted` is inert on an already-terminal run (its reducer gates on
-    // `is_live`), so a run that finished organically since the snapshot above is
-    // left untouched.
+    // `is_live`), so a run that finished since the snapshot is left untouched.
     if let Err(e) = append_event(state, &run_interrupted).await {
         error!("reconcile_run_level_stall: failed to park run {run_id}: {e}");
     } else {
         warn!("Run {run_id} reconciled to AwaitingUser (interrupted) — {reason}");
-        // Freed slots: re-drive throttled `waiting` nodes in other runs (#159).
+        // Freed slots: re-drive throttled `waiting` nodes in other runs.
         retry_waiting_nodes(state).await;
     }
 }
 
 /// Decide whether a `Running` run is **stuck in a terminal-but-unreconciled
-/// state** (#214, sprint invariant). A run is stuck when it has no node that
-/// can drive it forward and the scheduler can produce no new work, yet it is
-/// not `all completed` (that case is `maybe_complete_run`'s job). The remaining
-/// possibility is a run wedged behind a Failed/Stale node whose downstream can
-/// never be scheduled — a silent run-level stall the invariant forbids.
+/// state**: no node that can drive it forward, no new work the scheduler can
+/// produce, yet not `all completed` (that case is `maybe_complete_run`'s job).
 ///
-/// Returns `Some(reason)` to be recorded as the `RunFailed` cause, or `None`
-/// when the run still has a path forward (a live node, a schedulable node, a
-/// loop to seed) or is legitimately awaiting a human (`AwaitingUser`).
+/// `None` when the run still has a path forward, or is legitimately awaiting a
+/// human. `idle_secs` distinguishes a node *about to be driven* (idle ≈ 0) from one
+/// silently wedged.
 ///
-/// `idle_secs` is the seconds elapsed since the run's most recent event (`None`
-/// if unknown). It distinguishes a node *about to be driven* (idle ≈ 0) from one
-/// silently wedged (#279): a ready-to-spawn node with no live node should be
-/// started by `advance_run` within milliseconds — if instead the run has sat
-/// idle past [`SPAWN_STALL_GRACE_SECS`] with the node never started, the
-/// event-driven spawn aborted and nothing will re-drive it.
-///
-/// Pure over the already-computed scheduler outputs (`ready` from
-/// [`scheduler_dispatcher::compute_ready_to_spawn`], `loop_seed` from
-/// [`scheduler::seed_pending_loops`]) so the schedulability oracle is the real
-/// scheduler and this never drifts from it.
+/// Pure over the already-computed scheduler outputs, so the schedulability oracle
+/// IS the real scheduler and this can never drift from it.
 fn run_stall_reason(
     pipeline: &pipeline::PipelineDef,
     run_state: &event_log::RunState,
@@ -7327,13 +6675,13 @@ fn run_stall_reason(
     idle_secs: Option<i64>,
 ) -> Option<String> {
     // Only a Running run can silently stall. AwaitingUser is a legitimate live
-    // state (waiting on a human); Paused/Halted/terminal need no reconciliation.
+    // state; Paused/Halted/terminal need no reconciliation.
     if run_state.status != event_log::RunStatus::Running {
         return None;
     }
 
-    // A live node (or an in-flight merge resolver) means the run can still
-    // advance organically — never reconcile under it.
+    // A live node or an in-flight merge resolver means the run can still advance
+    // organically — never reconcile under it.
     let has_live_node = run_state.nodes.values().any(|n| n.status.can_progress());
     let resolver_active = run_state
         .merge_resolver
@@ -7343,21 +6691,16 @@ fn run_stall_reason(
         return None;
     }
 
-    // (#445) A sandboxed Run between `SandboxPrepStarted` and `SandboxPrepReady` looks
-    // EXACTLY like a #279 silent spawn-abort: a ready node, no live node, and — since
-    // the prep emits no event of its own while it works — an idle clock that ticks up
-    // for the whole prep. It is not one: `spawn_node` is deliberately deferring, and
-    // `SandboxPrepReady` will replay it. Staging ~2 GB of `~/.claude` plus a cold
-    // `docker build` overruns the 120 s spawn-stall window comfortably, so without this
-    // arm the reconciler would kill precisely the slow Runs the precondition just saved.
+    // A sandboxed Run between `SandboxPrepStarted` and `SandboxPrepReady` looks
+    // EXACTLY like a silent spawn-abort — ready node, no live node, and an idle clock
+    // ticking up because the prep emits no event while it works. It is not one:
+    // `spawn_node` is deliberately deferring and `SandboxPrepReady` will replay it,
+    // and a cold `docker build` overruns the 120 s window comfortably.
     //
-    // Deferring for ever would only trade a false failure for a silent stall, which
-    // ADR-0004 forbids just as strongly — so this is a LONGER grace, not an exemption:
-    // past it, the prep task is genuinely gone (killed with a previous daemon, panicked
-    // outside its catch) and the Run is failed with a cause that names the sandbox
-    // rather than blaming tmux. Placed before the `ready` / `loop_seed` arms because it
-    // explains the whole class: while the prep is pending NOTHING in this Run can start,
-    // whatever the scheduler proposes.
+    // A LONGER grace, NOT an exemption: deferring for ever would trade a false failure
+    // for a silent stall. Must come before the `ready` / `loop_seed` arms, because it
+    // explains the whole class — while the prep is pending NOTHING in this Run can
+    // start, whatever the scheduler proposes.
     if let Some(block) = run_state.sandbox_spawn_block() {
         if idle_secs.is_some_and(|s| s >= SANDBOX_PREP_STALL_GRACE_SECS) {
             return Some(format!(
@@ -7370,16 +6713,13 @@ fn run_stall_reason(
         return None;
     }
 
-    // (#279, Layer 2) A node the scheduler can spawn but no live node to run it.
+    // A node the scheduler can spawn but no live node to run it.
     // `compute_ready_to_spawn` only returns nodes with NO state (or a Completed
-    // loop-back), so a node here that an `advance_run` reached would already be
-    // `Running` or (cap-throttled) `Waiting` — never still "ready". Its presence
-    // means `advance_run` never completed for it. In normal operation that gap
-    // is closed within milliseconds; if the run has instead gone idle past the
-    // grace window, the spawn silently aborted (a panic the catch in `spawn_node`
-    // somehow missed, or — the case Layer 1 can't catch — a dropped completion
-    // future). Fail loud rather than wedge `Running` forever. Below the grace
-    // window we defer: `advance_run` is about to drive it.
+    // loop-back), so a node an `advance_run` reached would already be `Running` or
+    // `Waiting` — never still "ready". Its presence means `advance_run` never
+    // completed for it. Past the grace window the spawn silently aborted (a panic
+    // `spawn_node`'s catch missed, or a dropped completion future); below it, defer,
+    // because `advance_run` is about to drive it.
     if !ready.is_empty() {
         if idle_secs.is_some_and(|s| s >= SPAWN_STALL_GRACE_SECS) {
             let mut names: Vec<&str> = ready.iter().map(|r| r.node_id.as_str()).collect();
@@ -7395,30 +6735,21 @@ fn run_stall_reason(
         return None;
     }
 
-    // The scheduler can still seed a loop: that is the scheduler's / Pipeline
-    // Manager's to drive (and an exhausted-unrouted region is deferred just
-    // below). Not a fail-fast stall.
+    // The scheduler can still seed a loop — not a stall.
     if !loop_seed.is_empty() {
         return None;
     }
 
-    // (#453) An open collection region with no live node is the shape the
-    // previous comment at the bottom of this function called "a scheduler-shape
-    // we have not characterised": every node projects Pending or Completed, no
-    // session is alive, `ready` is empty (the barrier target is correctly
-    // not-ready), and `is_stalled` says `false` for ever because nothing will
-    // ever be marked `Stale` — the liveness sweep only inspects live tmux
-    // sessions and there are none.
+    // Laps of an open collection region that were never started: the barrier can
+    // never fire, so `should_complete_run` can never complete the run, and nothing
+    // will ever mark a node `Stale` (the liveness sweep only inspects live tmux
+    // sessions, and there are none).
     //
-    // It IS characterised now: laps of the region were never started, so the
-    // barrier can never fire, so `should_complete_run` can never complete the
-    // run. Deliberately NOT folded into the `open_region` arm below: an open
-    // loop/foreach is deferred because the Pipeline Manager can unstick it by
-    // id, whereas a collection region exposes no such recovery — nothing
-    // re-proposes a missing lap, so deferring here would be the silent stall
-    // ADR-0004 forbids. Same idle grace as the #279 arm above, so a fan-out
-    // burst caught mid-flight (items deposited, laps about to spawn) is never
-    // mistaken for a wedge.
+    // Deliberately NOT folded into the `open_region` arm below: an open loop/foreach
+    // is deferred because the Pipeline Manager can unstick it by id, whereas nothing
+    // re-proposes a missing lap — deferring here would be a silent stall. Same idle
+    // grace as the arm above, so a fan-out burst caught mid-flight is never mistaken
+    // for a wedge.
     let missing_laps: Vec<String> = run_state
         .collection_states
         .values()
@@ -7444,38 +6775,28 @@ fn run_stall_reason(
         return None;
     }
 
-    // An open (not-`done`) region of ANY kind is the Pipeline Manager's domain:
-    // an exhausted-unrouted region is surfaced as a Halt to be routed by id
-    // (manager-unstick-loop), not a fail-fast stall. Never auto-fail under one —
-    // that would steal the manager's recovery path. (Our event-driven Halt is
-    // not re-derivable from the cold projection here, so we defer rather than
-    // risk a false RunFailed on a routable region.)
+    // An open (not-`done`) region of ANY kind is the Pipeline Manager's domain: an
+    // exhausted-unrouted region is surfaced as a Halt to be routed by id. Never
+    // auto-fail under one — that would steal the manager's recovery path, and the
+    // event-driven Halt is not re-derivable from this cold projection.
     //
-    // #601 — **exhaustive by construction**: this defers on `has_open_region`,
-    // which iterates every `RegionStateKind` (loop / foreach / collection). A new
-    // region-state map added to `RunState` becomes a new variant that
-    // `RegionStateKind::open_ids` must classify or fail to compile, so a future
-    // region kind can never silently fall through to the blocker scan below and
-    // reopen the #453 frozen-run-as-`stalled=false` hole. The collection *wedge*
-    // (laps that never started) is deliberately caught above with its own idle
-    // grace — this defer only covers a region still making legitimate progress.
+    // **Exhaustive by construction**: `has_open_region` iterates every
+    // `RegionStateKind`, so a new region-state map on `RunState` becomes a variant
+    // `RegionStateKind::open_ids` must classify or fail to compile. A future region
+    // kind can therefore never silently fall through to the blocker scan below.
     if run_state.has_open_region() {
         return None;
     }
 
-    // All pipeline nodes Completed is the success case handled by
-    // `maybe_complete_run`; do not steal it here.
+    // All nodes Completed is `maybe_complete_run`'s success case — don't steal it.
     let pipeline_node_ids: Vec<String> = pipeline.nodes.iter().map(|n| n.id.clone()).collect();
     if run_state.all_nodes_completed(&pipeline_node_ids) {
         return None;
     }
 
-    // Fail-fast only on a concrete blocker: at least one node in a terminal but
-    // non-Completed state (Failed/Stale/Stopped) whose downstream can never be
-    // scheduled. Without such a blocker we cannot attribute a cause, so we defer
-    // rather than guess — a run with only Pending/Completed nodes and nothing
-    // schedulable is a scheduler-shape we have not characterised, not a known
-    // unrecoverable stall.
+    // Fail-fast only on a CONCRETE blocker: a node in a terminal but non-Completed
+    // state whose downstream can never be scheduled. Without one there is no cause
+    // to attribute, so defer rather than guess.
     let mut blockers: Vec<&str> = run_state
         .nodes
         .values()
@@ -7573,10 +6894,9 @@ fn resolve_source_frontmatter(
     fields
 }
 
-/// Resolves the output frontmatter of every Completed node in `run_state`,
-/// keyed by node id. Used to feed convergence suppression (ADR-0011) so a
-/// `Merge` does not stall on a branch that an upstream conditional/`else` edge
-/// permanently suppressed.
+/// Output frontmatter of every settled node in `run_state`, keyed by node id.
+/// Feeds convergence suppression (ADR-0011) so a `Merge` does not stall on a branch
+/// an upstream conditional/`else` edge permanently suppressed.
 fn resolve_completed_frontmatter(
     pipeline: &pipeline::PipelineDef,
     run_state: &event_log::RunState,
@@ -7584,9 +6904,8 @@ fn resolve_completed_frontmatter(
 ) -> HashMap<String, HashMap<String, serde_yaml::Value>> {
     let mut by_node = HashMap::new();
     for (node_id, node_state) in &run_state.nodes {
-        // #620: a `Skipped` node counts as a settled producer here too — it wrote
-        // an (empty) artifact, so it resolves to empty frontmatter exactly as it
-        // did when a skip projected `Completed`.
+        // A `Skipped` node counts as a settled producer: it wrote an empty artifact,
+        // so it resolves to empty frontmatter.
         if !node_state.status.is_settled_complete() {
             continue;
         }
@@ -7629,31 +6948,13 @@ async fn parse_multipart_create_run(
     let mut variables: HashMap<String, serde_yaml::Value> = HashMap::new();
     let mut pipeline_id = None;
     let mut target_repo = None;
-    // #465: the multi-repo list rides the multipart create (browser create with
-    // attached images) as a single JSON field, mirroring `variables`. Empty/absent →
-    // mono-repo. Parsed into the same `Vec<TargetRepoInput>` the JSON path deserializes.
     let mut target_repos: Vec<TargetRepoInput> = Vec::new();
     let mut source_branch = None;
     let mut name = None;
-    // #410: an explicit sandbox mode may ride the multipart (browser) create when
-    // images are attached. Parsed into `Option<SandboxMode>` so an omitted field
-    // defers to the trigger/instance default at the chokepoint. An unknown token is
-    // treated as unset (defensive; the FE only ever sends valid variants).
     let mut sandbox: Option<event_log::SandboxMode> = None;
-    // #551: an explicit harness may ride the multipart (browser) create when images
-    // are attached, so a harness choice is honoured on that path too. `None` when the
-    // field is absent/blank — the chokepoint then freezes nothing and the Run resolves
-    // through the instance default and the floor.
     let mut harness: Option<String> = None;
     let mut agent_choice: Option<crate::agent_choice::AgentChoice> = None;
-    // #338: an explicit auto-naming choice may ride the multipart (browser) create
-    // when images are attached, so an unchecked "Auto-generated" box is honoured on
-    // that path too. `None` when the field is absent — the chokepoint then resolves
-    // back-compat by the presence of `name`.
     let mut auto_name: Option<bool> = None;
-    // ADR-0049: an explicit `auto_fail` may ride the multipart create. `None`
-    // when absent — the chokepoint freezes nothing and the Run defers to the
-    // project / instance tiers.
     let mut auto_fail: Option<bool> = None;
     let mut images = Vec::new();
 
@@ -7705,8 +7006,8 @@ async fn parse_multipart_create_run(
                 }
             }
             "target_repos" => {
-                // #465: a JSON array of {repo, base_branch?}. Empty string → leave the
-                // default empty Vec (mono-repo). Malformed JSON is a 400, like `variables`.
+                // A JSON array of {repo, base_branch?}. Empty → mono-repo; malformed
+                // JSON is a 400, like `variables`.
                 let text = field
                     .text()
                     .await
@@ -7735,11 +7036,9 @@ async fn parse_multipart_create_run(
                 }
             }
             "sandbox" => {
-                // #410: parse the explicit mode off the multipart form. Empty → leave
-                // `None` (defer to trigger/instance default). #432: `parse` is syntactic
-                // now, so a non-`off` token becomes `Profile(name)` and an unknown NAME
-                // is a hard 400 at the chokepoint — no longer silently demoted to the
-                // instance default (ADR-0031 §7).
+                // `parse` is syntactic, so a non-`off` token becomes `Profile(name)`
+                // and an unknown NAME is a hard 400 at the chokepoint rather than a
+                // silent demotion to the instance default (ADR-0031 §7).
                 let v = field
                     .text()
                     .await
@@ -7749,8 +7048,7 @@ async fn parse_multipart_create_run(
                 }
             }
             "harness" => {
-                // #551: the explicit harness threaded off the multipart form. Empty →
-                // leave `None` (the Run names no harness). No validation (ADR-0045).
+                // No validation (ADR-0045).
                 let v = field
                     .text()
                     .await
@@ -7772,9 +7070,8 @@ async fn parse_multipart_create_run(
                 }
             }
             "auto_name" => {
-                // #338: an explicit flag off the multipart form. Reuses the shared
-                // boolean parser; an unrecognised token leaves `None` (defer to the
-                // name-presence back-compat resolution at the chokepoint).
+                // An unrecognised token leaves `None`, deferring to the chokepoint's
+                // name-presence resolution.
                 let v = field
                     .text()
                     .await
@@ -7784,7 +7081,6 @@ async fn parse_multipart_create_run(
                 }
             }
             "auto_fail" => {
-                // ADR-0049: an explicit `auto_fail` flag off the multipart form.
                 let v = field
                     .text()
                     .await
@@ -7809,9 +7105,9 @@ async fn parse_multipart_create_run(
                     data: data.to_vec(),
                 });
             }
-            // #601: an unknown form field is a client mistake, named — not
-            // silently dropped (the symmetric fix to the JSON path). `images` is
-            // the multipart-only field; the rest mirror `CREATE_RUN_FIELDS`.
+            // An unknown form field is a client mistake, named — never silently
+            // dropped. `images` is the multipart-only field; the rest mirror
+            // `CREATE_RUN_FIELDS`.
             other => {
                 return Err(format!(
                     "unknown field `{other}` in POST /runs multipart body; accepted fields: {}, images",
@@ -7831,16 +7127,10 @@ async fn parse_multipart_create_run(
         source_branch,
         name,
         triggered_by: None,
-        // #410: the explicit sandbox mode threaded off the multipart form (browser
-        // create with attached images). `None` when the field is absent — the
-        // chokepoint then defers to the trigger/instance default.
         sandbox,
-        // #551: the explicit harness threaded off the multipart form.
         harness,
         agent_choice,
-        // #338: the explicit auto-naming choice threaded off the multipart form.
         auto_name,
-        // ADR-0049: the explicit auto_fail choice threaded off the multipart form.
         auto_fail,
     };
     Ok((req, images))
@@ -7886,9 +7176,8 @@ async fn create_run(State(state): State<Arc<AppState>>, req: axum::extract::Requ
                     .into_response();
             }
         };
-        // #601: parse to a Value first so an unknown top-level field is a named
-        // `400` (before any effect), not a silently-dropped key. Then deserialize
-        // the validated object into the typed request.
+        // Parse to a `Value` FIRST so an unknown top-level field is a named `400`
+        // before any effect, not a silently-dropped key.
         let value: serde_json::Value = match serde_json::from_slice(&body) {
             Ok(v) => v,
             Err(e) => {
@@ -7918,11 +7207,9 @@ async fn create_run(State(state): State<Arc<AppState>>, req: axum::extract::Requ
     create_run_core(&state, parsed_req, images).await
 }
 
-/// Validate the user input against the pipeline's `prompt_required` flag (#158).
-///
-/// A prompt-required pipeline (the default) rejects whitespace-only input; a
-/// prompt-optional pipeline accepts empty input (the entry node sources its own
-/// work) and treats a provided prompt as additional info.
+/// Validate the user input against the pipeline's `prompt_required` flag. A
+/// prompt-optional pipeline accepts empty input — its entry node sources its own
+/// work — and treats a provided prompt as additional info.
 fn validate_run_input(prompt_required: bool, input: &str) -> Result<(), String> {
     if prompt_required && input.trim().is_empty() {
         return Err("this pipeline requires a prompt: input must not be empty".to_string());
@@ -7930,32 +7217,26 @@ fn validate_run_input(prompt_required: bool, input: &str) -> Result<(), String> 
     Ok(())
 }
 
-/// Deterministic placeholder display name for a run created with neither a
-/// user-supplied name nor any input to summarise (the prompt-less / unattended
-/// case, #184). Derived from the run-id's own `YYYYMMDD-HHMMSS` timestamp prefix
-/// — no extra clock read, so it is deterministic and matches the run-id. run-ids
-/// are always `YYYYMMDD-HHMMSS-xxxxxxx` (≥ 23 ASCII chars), so `[..15]` is the
-/// timestamp and cannot panic on a char boundary.
+/// Deterministic placeholder display name for a run with neither a user-supplied
+/// name nor any input to summarise. Derived from the run-id's own timestamp prefix
+/// rather than a fresh clock read, so it matches the run-id. run-ids are always
+/// `YYYYMMDD-HHMMSS-xxxxxxx` (≥ 23 ASCII chars), so `[..15]` cannot panic on a char
+/// boundary.
 fn placeholder_run_name(run_id: &str) -> String {
     format!("Untitled run {}", &run_id[..15])
 }
 
-/// Decide how the daemon should treat naming for a run at spawn (#184, #338).
+/// Decide how the daemon should treat naming for a run at spawn.
 ///
-/// `auto_name` is the resolved autonomy decision (see the resolution at the create
-/// chokepoint). When it is `false` the manager is never instructed to rename — the
-/// caller keeps whatever name it supplied, or a stable placeholder if it supplied
-/// none. When it is `true` the pre-#338 behaviour holds, gated on `input` (NOT on
-/// the pipeline's `prompt_required` flag): an empty input means there is nothing to
-/// summarise yet, so the daemon sets a deterministic placeholder and the manager
-/// renames best-effort later; a non-empty input lets the manager derive the name
-/// immediately from `_input`.
+/// `auto_name == false` ⇒ the manager is never instructed to rename. The `true`
+/// branch is gated on `input`, NOT on the pipeline's `prompt_required` flag: an
+/// empty input means there is nothing to summarise yet, so the daemon sets a
+/// deterministic placeholder and the manager renames best-effort later.
 ///
-/// Note that with `auto_name == false` the branch no longer looks at `name`: the
-/// display name is chosen by the caller (`create_run_inner`), and this hint only
-/// governs whether the manager is *told to rename*. A blank name under `false` still
-/// yields `UserProvided` — a stable placeholder with no rename instruction — which
-/// is exactly what the Trigger case needs.
+/// This hint only governs whether the manager is *told to rename* — the display name
+/// itself is chosen by `create_run_inner`. Hence the `false` branch ignoring `name`:
+/// a blank name still yields `UserProvided`, a stable placeholder with no rename
+/// instruction, which is what the Trigger case needs.
 fn run_name_hint(
     auto_name: bool,
     _name: Option<&str>,
@@ -7990,15 +7271,14 @@ async fn create_run_inner(
     req: CreateRunRequest,
     images: Vec<ImageFile>,
 ) -> Result<String, (StatusCode, serde_json::Value)> {
-    // #470: the target repo is a REQUIRED input at the creation boundary. The
-    // daemon's own `repo_root` stays its storage root (pipelines, library,
-    // prompts) but is never again an implicit Run target — a Run must not mutate
-    // code in a repository nobody named. Read-side resolution keeps its fallback
-    // for historical runs (`effective_repo_root`); see ADR-0033.
-    // #465 (ADR-0042): the primary is `target_repos[0]` when the client speaks the
-    // multi-repo shape, else the legacy scalar `target_repo`. We normalise to the
-    // scalar here so the ENTIRE downstream primary path (worktree, merge-back, cost,
-    // ADR-0033) is byte-for-byte unchanged — the array only ever ADDS secondaries.
+    // The target repo is REQUIRED at the creation boundary (ADR-0033): the daemon's
+    // own `repo_root` stays its storage root but is never an implicit Run target, or
+    // a Run mutates code in a repository nobody named. The read side keeps its
+    // fallback for historical runs (`effective_repo_root`).
+    //
+    // Normalise the multi-repo shape down to the scalar here, so the ENTIRE
+    // downstream primary path (worktree, merge-back, cost) stays unchanged and the
+    // array only ever ADDS secondaries.
     let effective_target_repo: Option<String> = req
         .target_repo
         .clone()
@@ -8016,10 +7296,9 @@ async fn create_run_inner(
         }
     };
 
-    // Validate source_branch if provided. The primary's base branch is the scalar
-    // `source_branch` when present, else `target_repos[0].base_branch` (#465): row 0
-    // of the multi-repo modal carries the primary's branch in the same field the
-    // secondaries use.
+    // The primary's base branch is the scalar `source_branch` when present, else
+    // `target_repos[0].base_branch`: row 0 of the multi-repo modal carries the
+    // primary's branch in the same field the secondaries use.
     let effective_source_branch: Option<String> = req
         .source_branch
         .clone()
@@ -8039,13 +7318,10 @@ async fn create_run_inner(
         "HEAD"
     };
 
-    // #465 (ADR-0042): resolve the read-only secondary repos into frozen pins. The
-    // request's `target_repos` list is `[0]` = primary (already validated above as
-    // `run_repo_root`), `[1..]` = secondaries. Absent/primary-only → mono-repo, empty
-    // Vec, and the payload/events stay byte-identical to a legacy create. Each
-    // secondary is validated (absolute + git) and its base ref resolved to a single
-    // commit NOW — no fetch, so the base is the operator's LOCAL ref (default HEAD).
-    // Resolving before `append_event`/`create_worktree` keeps "a bad repo → no Run".
+    // Resolve the secondary repos into frozen pins (ADR-0042). Each is validated
+    // (absolute + git) and its base ref resolved to a single commit NOW — no fetch,
+    // so the base is the operator's LOCAL ref. Must resolve BEFORE
+    // `append_event`/`create_worktree`, or "a bad repo → no Run" stops holding.
     let secondary_pins = match resolve_secondary_pins(&run_repo_root, &req.target_repos) {
         Ok(pins) => pins,
         Err(msg) => {
@@ -8093,10 +7369,9 @@ async fn create_run_inner(
 
     let pipeline = parse_result.pipeline;
 
-    // Refuse the launch on dangling edge references (#211 / #206). At edit time
-    // these are info-only warnings (ADR-0001); at launch they are runtime-
-    // coherence invariants — a run started over a dangling port is guaranteed
-    // to stall silently mid-run. No run is created.
+    // Dangling edge references are info-only warnings at EDIT time (ADR-0001) but
+    // hard refusals at launch: a run started over a dangling port is guaranteed to
+    // stall silently mid-run.
     let dangling = pipeline::dangling_edge_references(&pipeline);
     if !dangling.is_empty() {
         return Err((
@@ -8110,10 +7385,8 @@ async fn create_run_inner(
         ));
     }
 
-    // Refuse the launch on an empty `script` body (#248 / ADR-0017). A `script`
-    // node runs `bash <body>`; an empty body exits 0 and masquerades as success —
-    // a silent no-op with no error anywhere. Fail loud at launch, like a dangling
-    // edge, so the author fixes it before the run starts (no run is created).
+    // A `script` node runs `bash <body>`, and an empty body exits 0 — a silent
+    // no-op masquerading as success. Fail loud at launch, before any run exists.
     let empty_scripts: Vec<String> = pipeline
         .nodes
         .iter()
@@ -8138,21 +7411,17 @@ async fn create_run_inner(
         ));
     }
 
-    // Empty input is allowed only for prompt-optional pipelines (#158).
     if let Err(msg) = validate_run_input(pipeline.prompt_required, &req.input) {
         return Err((StatusCode::BAD_REQUEST, serde_json::json!({ "error": msg })));
     }
 
     let run_id = event_log::generate_run_id();
 
-    // #417: freeze the run's fork point NOW, from the same local `source_ref` that
-    // `create_worktree` will cut the run branch from below, so a later HEAD move in the
-    // shared checkout can never displace the LOC/diff base and sweep in phantom line
-    // counts. `rev_parse_verified` resolves the LOCAL ref (no fetch, `^{commit}`-verified),
-    // mirroring `resolve_secondary_pins` — and, like it, resolving BEFORE `append_event`
-    // keeps the current event ordering (no reorder around `create_worktree`). A resolve
-    // failure is non-fatal: it degrades to the `source_branch`/`HEAD` fallback ladder at
-    // read time (`run_diff_base`) and must never block run creation.
+    // Freeze the fork point NOW, from the same local `source_ref` `create_worktree`
+    // will cut the run branch from, or a later HEAD move in the shared checkout
+    // displaces the LOC/diff base and sweeps in phantom line counts. A resolve
+    // failure is non-fatal — it degrades to the `source_branch`/`HEAD` fallback
+    // ladder at read time and must never block run creation.
     let fork_sha = match crate::worktree_ops::rev_parse_verified(&run_repo_root, source_ref) {
         Ok(sha) => Some(sha),
         Err(e) => {
@@ -8161,16 +7430,12 @@ async fn create_run_inner(
         }
     };
 
-    // #410 CHOKEPOINT: resolve the effective sandbox mode ONCE, here, where the JSON,
-    // multipart, and trigger-fire create paths converge — just before the mode is
-    // frozen into `RunStarted`. `req.sandbox` already carries either the explicit
-    // run-level choice (JSON/multipart) OR the trigger's mode (folded in at fire time,
-    // Slice C — a Run has a single origin), so the trigger arm stays `None` in
-    // production; the 3-arg resolver is still the canonical precedence chain, exercised
-    // by the layer-1 test. `default_sandbox` is read FRESH from the DB at the edge, so a
-    // `PUT /settings` bites on the very
-    // next create with no restart. Absent everywhere → `Off` → the payload and events
-    // stay byte-identical to the legacy host path.
+    // CHOKEPOINT: resolve the effective sandbox mode ONCE, here, where the JSON,
+    // multipart and trigger-fire paths converge, just before the mode is frozen into
+    // `RunStarted`. `req.sandbox` already carries either the explicit run-level
+    // choice or the trigger's mode (a Run has a single origin), so the trigger arm
+    // stays `None` in production. `default_sandbox` is read FRESH so a
+    // `PUT /settings` bites on the next create with no restart.
     let stored_default = instance_config::get(&state.db)
         .await
         .ok()
@@ -8195,13 +7460,13 @@ async fn create_run_inner(
     // `fire_one_trigger`'s `Err((_, body))` arm already turns this 400's message into a
     // `FireRecord { outcome: "error", reason }` that the history renders red — which is
     // why the wording below is the deliverable, not an afterthought.
-    // #468: the profile's env is frozen at the SAME resolve, for the same reason and with
+    // the profile's env is frozen at the SAME resolve, for the same reason and with
     // the same consequence — editing it afterwards cannot rewrite what this Run's container
     // was created with. One `resolve` feeds both keys; two reads could straddle a
     // concurrent PUT and freeze a list from one revision with an env from another.
-    // #467: and its image SOURCE, at the same resolve, for the same reason — a Run must not have
-    // its image swapped under it because someone edited the profile, or two of its nodes could
-    // land in two different images (ADR-0031 §6/§9).
+    // The image SOURCE is resolved at the same moment, for the same reason: a Run must
+    // not have its image swapped under it by a profile edit, or two of its nodes land
+    // in two different images (ADR-0031 §6/§9).
     let mut sandbox_env: std::collections::BTreeMap<String, String> = Default::default();
     let mut sandbox_image_src: Option<sandbox_image::ProfileImage> = None;
     let sandbox_entries: Option<Vec<String>> = match sandbox.profile() {
@@ -8269,49 +7534,36 @@ async fn create_run_inner(
     if let Some(vars) = variables_json {
         run_payload["variables"] = vars;
     }
-    // #470: always present now — the create boundary refuses a blank/absent
-    // target, so we persist the single canonical (trimmed, validated) path
-    // rather than the raw field. Historical events keep their legitimate
-    // `null`; the read side resolves those (ADR-0033).
+    // Persist the canonical (trimmed, validated) path, never the raw field. Historical
+    // events keep their legitimate `null`; the read side resolves those (ADR-0033).
     run_payload["target_repo"] = serde_json::json!(run_repo_root.to_string_lossy());
-    // #465 (ADR-0042): carry the frozen secondary pins, but ONLY when there is at
-    // least one — a mono-repo Run writes no `target_repos` key, keeping its payload
-    // byte-identical to the historical (and absent-key → empty-Vec) shape. Each pin
-    // is {repo, alias, sha, base_branch}; the snapshots are materialised on disk
-    // just after `create_worktree`, below.
+    // Carry the frozen secondary pins ONLY when there is at least one, so a mono-repo
+    // Run's payload stays byte-identical to the historical shape.
     if !secondary_pins.is_empty() {
         run_payload["target_repos"] = serde_json::json!(secondary_pins);
     }
-    // #407/#410: carry the RESOLVED isolation mode only when it is NOT `off`, so `off`
-    // payloads stay byte-identical to the historical shape (back-compat: absence → Off).
-    // #432: `sandbox_entries` is a SIBLING key, written in the same breath — the two are
-    // written together or not at all, which is the invariant that makes the replay table
-    // decidable (a `sandbox` with no entries can only mean "pre-profiles daemon").
-    // Nesting them (`sandbox: {name, entries}`) is disqualified by permanent
-    // back-compat: every historical payload carries `"sandbox": "full"` as a bare
-    // string, so both readers would have to accept `String | Object` for ever.
+    // Carry the RESOLVED isolation mode only when it is NOT `off`, so `off` payloads
+    // stay byte-identical (absence → Off). `sandbox_entries` is a SIBLING key written
+    // in the same breath: written together or not at all is what makes the replay
+    // table decidable — a `sandbox` with no entries can only mean an older daemon.
+    // Don't nest them as `sandbox: {name, entries}`: every historical payload carries
+    // `"sandbox": "full"` as a bare string, so both readers would have to accept
+    // `String | Object` for ever.
     if !sandbox.is_off() {
         run_payload["sandbox"] = serde_json::json!(sandbox);
         run_payload["sandbox_entries"] = serde_json::json!(sandbox_entries
             .as_ref()
             .expect("a non-off sandbox always resolves an entry list at this chokepoint"));
-        // #468: `sandbox_env` is a third sibling key — but written ONLY when non-empty, and
-        // that asymmetry with `sandbox_entries` is deliberate. `sandbox_entries` has to be
-        // unconditional because an empty entry list is a legitimate resolution (`minimal`),
-        // so absence had to mean "pre-#432 daemon" and nothing else. For the env there is
-        // nothing to distinguish: a pre-#468 daemon could pose no profile env at all, so an
-        // absent key and an empty map describe the same container. Writing `{}` on every
-        // sandboxed Run would change the payload shape for every existing profile in
-        // exchange for no new information. See `RunState::sandbox_env`.
+        // Written ONLY when non-empty, and the asymmetry with `sandbox_entries` is
+        // deliberate: an empty entry LIST is a legitimate resolution (`minimal`), so
+        // absence there had to mean "older daemon". For the env there is nothing to
+        // distinguish — an absent key and an empty map describe the same container.
         if !sandbox_env.is_empty() {
             run_payload["sandbox_env"] = serde_json::json!(sandbox_env);
         }
-        // #467: `sandbox_image` is a fourth sibling key, written ONLY when the profile poses an
-        // image source — same asymmetry as `sandbox_env`, same reason. An absent key means "the
-        // profile posed none", which is indistinguishable from "a pre-#467 daemon wrote this
-        // payload" precisely because both resolve the same way: the profile default of #471
-        // (`sandbox_profile::DEFAULT_PROFILE_IMAGE`, plus the two env vars). Writing `null` on
-        // every sandboxed Run would grow every existing payload for no information.
+        // Same asymmetry as `sandbox_env`: an absent key means "the profile posed
+        // none", indistinguishable from an older daemon precisely because both resolve
+        // the same way, to `sandbox_profile::DEFAULT_PROFILE_IMAGE`.
         if let Some(image) = &sandbox_image_src {
             run_payload["sandbox_image"] = serde_json::json!(image);
         }
@@ -8319,23 +7571,17 @@ async fn create_run_inner(
     if let Some(ref branch) = effective_source_branch {
         run_payload["source_branch"] = serde_json::json!(branch);
     }
-    // #417: FREEZE the resolved fork point into `RunStarted`, next to `source_branch`.
-    // Written whenever the local ref resolved (every new Run in practice); a resolve
-    // failure leaves it absent → the read-side `run_diff_base` ladder recovers via
-    // `source_branch`, then `HEAD`. Absent key on replay → `None` (back-compat).
+    // FREEZE the resolved fork point into `RunStarted`. A resolve failure leaves it
+    // absent, and the read-side `run_diff_base` ladder recovers via `source_branch`,
+    // then `HEAD`.
     if let Some(ref fs) = fork_sha {
         run_payload["fork_sha"] = serde_json::json!(fs);
     }
-    // #551 (ADR-0046): FREEZE the Run's harness choice into `RunStarted`, the same
-    // immutability posture as `sandbox` above — editing the pipeline or the instance
-    // default afterwards can never re-decide a Run in flight. Written ONLY for a
-    // non-blank choice, so a Run that names no harness keeps its payload byte-identical
-    // to the pre-#551 shape (absent key → `None` → resolve through the instance default
-    // and the floor). A blank/whitespace value is normalised to absent here, so the
-    // `Some("")` trap of #347 can never persist. `req.harness` already carries the Run's
-    // single-origin choice: a manual create's field, or a Trigger fire's folded harness.
-    // No validation (ADR-0045): an unknown name fails fast at the first node spawn,
-    // naming it — never here, never silently.
+    // FREEZE the Run's harness choice into `RunStarted`, same immutability posture as
+    // `sandbox` above: editing the pipeline or the instance default afterwards must
+    // never re-decide a Run in flight. Blank/whitespace is normalised to absent, so
+    // `Some("")` can never persist as a harness name. No validation (ADR-0045): an
+    // unknown name fails fast at the first node spawn, naming it.
     if let Some(h) = req
         .harness
         .as_deref()
@@ -8344,12 +7590,10 @@ async fn create_run_inner(
     {
         run_payload["harness"] = serde_json::json!(h);
     }
-    // #563 (ADR-0057): FREEZE the Run's `AgentChoice` into `RunStarted`, same
-    // immutability posture as `harness` above — resolved and frozen ATOMICALLY at
-    // spawn, never re-decided by a later profile edit or resume (ADR-0057 ¶4).
-    // Written ONLY for an explicit (non-`Inherit`) choice with a non-blank payload,
-    // so a Run that states none keeps its payload byte-identical to the pre-#563
-    // shape (absent key → `None` → `harness` above still decides the Run tier).
+    // FREEZE the Run's `AgentChoice` ATOMICALLY at spawn (ADR-0057 ¶4) — never
+    // re-decided by a later profile edit or resume. Written ONLY for an explicit
+    // choice with a non-blank payload, so a Run that states none lets `harness` above
+    // decide the Run tier.
     let explicit_agent_choice = match &req.agent_choice {
         Some(crate::agent_choice::AgentChoice::Custom { harness, .. })
             if !harness.trim().is_empty() =>
@@ -8366,22 +7610,18 @@ async fn create_run_inner(
     if let Some(choice) = explicit_agent_choice {
         run_payload["agent_choice"] = serde_json::to_value(choice).unwrap_or_default();
     }
-    // ADR-0049: FREEZE the Run's `auto_fail` choice into `RunStarted`, same
-    // immutability posture as `harness`. Written ONLY when the Run states a
-    // preference, so a Run that states none keeps its payload byte-identical
-    // (absent key → `None` → resolve through the project / instance tiers).
+    // FREEZE the Run's `auto_fail` choice (ADR-0049), same immutability posture as
+    // `harness`. Absent ⇒ resolve through the project / instance tiers.
     if let Some(af) = req.auto_fail {
         run_payload["auto_fail"] = serde_json::json!(af);
     }
-    // Auto-naming autonomy decision (#338, ADR-0015). Resolved ONCE here, at the
-    // same chokepoint as the sandbox default, and read FRESH from the DB so a
-    // `PUT /settings` bites on the very next create with no restart (never cached at
-    // boot — the reaper-TTL trap of ADR-0015).
+    // Resolved ONCE here, at the same chokepoint as the sandbox default, and read
+    // FRESH so a `PUT /settings` bites on the next create. Never cache it at boot
+    // (the reaper-TTL trap of ADR-0015).
     //
-    // Back-compat is load-bearing: an omitted flag (`None`) with a supplied `name`
-    // must keep that name (`false`), so the CLI / bare API / every pre-#338 caller
-    // that passes a `name` without the new flag is unaffected. Only an omitted flag
-    // AND no name consults the instance default. An explicit `Some(b)` always wins.
+    // The back-compat ordering is load-bearing: an omitted flag WITH a supplied `name`
+    // must keep that name, so a caller passing `name` without the flag is unaffected.
+    // Only an omitted flag AND no name consults the instance default.
     let auto_name = match req.auto_name {
         Some(b) => b,
         None => {
@@ -8397,18 +7637,13 @@ async fn create_run_inner(
         }
     };
 
-    // Naming decision (#184, #338), shared between the payload write here and the
-    // manager spawn below so they can never disagree. With auto-naming OFF the Run
-    // keeps its supplied name, or a stable per-id placeholder when none was given
-    // (the manager is NOT told to rename); with it ON, an empty input gets a
-    // deterministic placeholder (the prompt-less case) and a non-empty input is left
-    // unnamed so the manager derives it.
+    // Shared between the payload write here and the manager spawn below, so the two
+    // can never disagree.
     let name_hint = run_name_hint(auto_name, req.name.as_deref(), &req.input);
     let display_name: Option<String> = match name_hint {
-        // #338: UserProvided now also covers the auto_name=false case. If no name was
-        // supplied, fall back to the stable placeholder so a Trigger with autonomy off
-        // does not leave every fire sharing one blank name — WITHOUT re-arming the
-        // rename instruction (that lives in the hint, still `UserProvided` here).
+        // With no supplied name, fall back to the stable placeholder so a Trigger with
+        // autonomy off does not leave every fire sharing one blank name — WITHOUT
+        // re-arming the rename instruction, which lives in the hint.
         prompt_augmenter::RunNameHint::UserProvided => Some(match req.name.as_deref() {
             Some(n) if !n.trim().is_empty() => n.to_string(),
             _ => placeholder_run_name(&run_id),
@@ -8424,10 +7659,8 @@ async fn create_run_inner(
             run_payload["triggered_by"] = serde_json::json!(trigger_id);
         }
     }
-    // #377: carry the library pipeline id in the payload (mirrors `triggered_by`)
-    // so aggregated "by pipeline" stats survive a pipeline rename (#230). The
-    // consumer falls back to `pipeline_name` when this is absent (historical
-    // runs, bare-API/multipart creates without a library id, retries).
+    // Carry the library pipeline id so aggregated "by pipeline" stats survive a
+    // pipeline rename. The consumer falls back to `pipeline_name` when absent.
     if let Some(ref pid) = req.pipeline_id {
         if !pid.is_empty() {
             run_payload["pipeline_id"] = serde_json::json!(pid);
@@ -8456,7 +7689,7 @@ async fn create_run_inner(
         ));
     }
 
-    // Create worktree — artifacts live under <target_repo>/.pdo/runs/<run-id>/
+    // Artifacts live under <target_repo>/.pdo/runs/<run-id>/.
     let worktree_dir = worktree_dir_for_run(&run_repo_root, &run_id);
     let branch_name = format!("pdo/run-{run_id}");
 
@@ -8468,13 +7701,11 @@ async fn create_run_inner(
         ));
     }
 
-    // #465 (ADR-0042): materialise each secondary as a detached, pinned snapshot,
-    // a THIRD sibling of `worktree/`/`nodes/` under the Run dir. Done at Run start
-    // (not per-node spawn) → the reap surface stays minimal (no secondary analogue
-    // of `reap_orphan_sub_worktree`). Living under `run_repo_root` means the sandbox
-    // sees them at an identical path with no new mount. A failure here fails the Run
-    // loud (the pin is already in `RunStarted`; a Run whose secondary snapshot is
-    // missing would silently starve every node that reads it).
+    // Materialise each secondary as a detached, pinned snapshot beside
+    // `worktree/`/`nodes/`. At Run start, NOT per-node spawn, so the reap surface
+    // stays minimal; under `run_repo_root`, so the sandbox sees them at an identical
+    // path with no new mount. A failure fails the Run loud: the pin is already in
+    // `RunStarted`, and a missing snapshot would silently starve every node reading it.
     for pin in &secondary_pins {
         let dest = secondary_snapshot_path(&run_repo_root, &run_id, &pin.alias);
         if let Err(e) = create_secondary_snapshot(Path::new(&pin.repo), &dest, &pin.sha) {
@@ -8488,14 +7719,12 @@ async fn create_run_inner(
         }
     }
 
-    // Copy pipeline YAML + prompts to run-scoped location (always in target repo)
     if let Err(e) = copy_pipeline_to_run(&run_repo_root, &pipeline_path, &run_id) {
         error!("failed to copy pipeline to run dir: {e}");
     } else if run_repo_root == state.repo_root {
-        // Register the new run dir with the file watcher (run dirs are watched
-        // individually and non-recursively). Runs created in another target
-        // repo live outside this daemon's watch root and stay unwatched — the
-        // watcher's run-id detection is rooted at `state.repo_root` anyway.
+        // Run dirs are watched individually and non-recursively, so each new one must
+        // be registered. Runs in another target repo stay unwatched — the watcher's
+        // run-id detection is rooted at `state.repo_root`.
         let mut guard = state.run_watcher.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(debouncer) = guard.as_mut() {
             if let Some(run_dir) = run_scoped_pipeline_path(&run_repo_root, &run_id).parent() {
@@ -8504,7 +7733,7 @@ async fn create_run_inner(
         }
     }
 
-    // Write _input/output.md (directory-based artifact, ADR-0010)
+    // Directory-based artifact (ADR-0010).
     let artifacts_dir = worktree_dir.join(".pdo").join("artifacts");
     let input_dir = artifacts_dir.join("_input");
     if let Err(e) = std::fs::create_dir_all(&input_dir) {
@@ -8515,7 +7744,6 @@ async fn create_run_inner(
         error!("failed to write _input/output.md: {e}");
     }
 
-    // Write uploaded images to _input/ alongside output.md
     for image in &images {
         let image_path = input_dir.join(&image.filename);
         if let Err(e) = std::fs::write(&image_path, &image.data) {
@@ -8524,25 +7752,22 @@ async fn create_run_inner(
     }
 
     if sandbox.is_off() {
-        // Historical host path — inline, byte-identical to pre-#407. NO docker.
+        // Host path — inline, no docker.
         spawn_ready_after_event(state, &run_id).await;
         spawn_manager_session(state, &run_id, &worktree_dir, name_hint, false).await;
     } else {
-        // #407 D3/D4: eager fail-fast prep on a detached, panic-isolated task
-        // (mirror ADR-0023 — the 201 must not block on a first-run `docker
-        // build`). Image + container + staging are guaranteed BEFORE the first
-        // node/manager spawn; any Docker unavailability → `RunFailed`, ZERO host
-        // spawn (never a silent host fallback for a sandboxed Run's work, US-16).
+        // Eager fail-fast prep on a detached task: the 201 must not block on a
+        // first-run `docker build` (ADR-0023). Image + container + staging are
+        // guaranteed BEFORE the first node/manager spawn, and any Docker
+        // unavailability is a `RunFailed` with ZERO host spawn — never a silent host
+        // fallback for a sandboxed Run's work.
         let task_state = state.clone();
         let task_run_id = run_id.clone();
         let task_worktree = worktree_dir.clone();
         tokio::spawn(async move {
-            // #410: image-prep visibility. Informational, non-terminal — emitted at
-            // the HEAD of the detached task (before the long `ensure_ready`) so the UI
-            // shows "préparation du sandbox…" instead of a seemingly-stuck Run. Only
-            // reachable in this `sandbox != off` branch, so the `off` path stays
-            // byte-identical. Broadcast + `refreshRun` ride the `append_event`
-            // chokepoint for free.
+            // Emitted at the HEAD of the detached task, before the long
+            // `ensure_ready`, so the UI shows "préparation du sandbox…" instead of a
+            // seemingly-stuck Run.
             emit_run_event(
                 &task_state,
                 &task_run_id,
@@ -8550,8 +7775,7 @@ async fn create_run_inner(
                 None,
             )
             .await;
-            // Build the sandbox context from the just-projected Run (mode is
-            // immutable). A vanished/half-projected state → fail loud.
+            // A vanished/half-projected state → fail loud.
             let ctx = match reload_run_state(&task_state, &task_run_id).await {
                 Some((_, rs)) => match sandbox_run::context_from_state(&task_state, &rs).await {
                     Ok(ctx) => ctx,
@@ -8575,28 +7799,20 @@ async fn create_run_inner(
                     return;
                 }
             };
-            // `ensure_ready` is blocking (docker build/probe) → run it under
-            // `spawn_blocking`, which also isolates its panic into a `JoinError`.
+            // `ensure_ready` blocks on docker build/probe, so it must run under
+            // `spawn_blocking` — which also isolates its panic into a `JoinError`.
             match tokio::task::spawn_blocking(move || sandbox_run::ensure_ready(&ctx)).await {
                 Ok(Ok(())) => {
-                    // #445: the Run may have gone terminal WHILE the prep ran (a stop /
-                    // kill, or — before the spawn precondition existed — the very
-                    // `session_died` this prep caused). Emitting `SandboxPrepReady` and
-                    // spawning into a dead Run leaves a container nobody will ever exec
-                    // into, so abandon instead: no event, no node, no manager, and the
-                    // container is removed. Idempotent — a later `resume_run` re-runs
-                    // `ensure_ready` and recreates it.
+                    // The Run may have gone terminal WHILE the prep ran. Emitting
+                    // `SandboxPrepReady` and spawning into a dead Run would leave a
+                    // container nobody can exec into, so abandon instead. Idempotent —
+                    // a later `resume_run` re-runs `ensure_ready`.
                     if abandon_prep_if_run_is_terminal(&task_state, &task_run_id).await {
                         return;
                     }
-                    // #410: image ready, container about to receive the first session.
                     // Emitted just before the spawn so the prep banner clears exactly
-                    // when work can start. A failed prep emits `RunFailed` instead (no
-                    // dedicated failed-prep event).
-                    //
-                    // #445: this pair — the event, then the advance — is now the single
-                    // REPLAY point for every spawn `spawn_node` deferred while the prep
-                    // was in flight, which is why `mark_sandbox_prep_ready` owns it.
+                    // when work can start. This pair — event, then advance — is the
+                    // single REPLAY point for every spawn deferred while the prep ran.
                     mark_sandbox_prep_ready(&task_state, &task_run_id).await;
                     spawn_ready_after_event(&task_state, &task_run_id).await;
                     spawn_manager_session(
@@ -8633,46 +7849,34 @@ async fn create_run_inner(
     Ok(run_id)
 }
 
-/// Record that a sandboxed Run's container is up (#410 `SandboxPrepReady`), which
-/// since #445 is also the moment the spawns deferred by
-/// [`event_log::RunState::sandbox_spawn_block`] become legal.
+/// Record that a sandboxed Run's container is up — also the moment the spawns
+/// deferred by [`event_log::RunState::sandbox_spawn_block`] become legal.
 ///
-/// The event is the ONLY thing that lifts the spawn precondition, so every path that
-/// makes the container real must go through here: the create-time prep task, `resume_run`
-/// re-arming a terminal Run, and boot recovery reconciling a live one. Without this a Run
-/// whose prep completed outside the create path (daemon restart mid-prep, resume of a
-/// Run that failed *during* its prep) would keep a `pending` projection for ever and
-/// every spawn would be deferred for ever — the deadlock the precondition must not
-/// create.
+/// This event is the ONLY thing that lifts the spawn precondition, so every path that
+/// makes the container real MUST go through here: the create-time prep task,
+/// `resume_run` re-arming a terminal Run, and boot recovery reconciling a live one.
+/// A Run whose prep completed outside the create path would otherwise keep a
+/// `pending` projection for ever and defer every spawn for ever.
 ///
-/// Idempotent: the projection assigns `Ready`, so a second call is a no-op in effect.
-/// It deliberately does NOT advance the Run — the create path pairs it with
-/// `spawn_ready_after_event`, `resume_run` with `re_evaluate_after_command`, and boot
-/// recovery with its own reconciliation, and folding an advance in here would make this
-/// a scheduling entry point (ADR-0009).
+/// Idempotent. It deliberately does NOT advance the Run — each caller pairs it with
+/// its own advance, and folding one in here would make this a scheduling entry point
+/// (ADR-0009).
 pub(crate) async fn mark_sandbox_prep_ready(state: &AppState, run_id: &str) {
     emit_run_event(state, run_id, event_log::EventKind::SandboxPrepReady, None).await;
 }
 
-/// Abandon a just-finished sandbox prep whose Run went terminal while it ran (#445),
-/// returning whether it abandoned.
+/// Abandon a just-finished sandbox prep whose Run went terminal while it ran,
+/// returning whether it abandoned. Without it, `container Created` can land tens of
+/// seconds after `run_failed` and `sandbox_prep_ready` be emitted on a corpse.
 ///
-/// The observed damage this closes: on a Run killed by the spawn race, `container
-/// Created` landed 27-35 s *after* `run_failed`, then `sandbox_prep_ready` was emitted
-/// on a terminal Run — a container nobody can ever exec into, plus a prep-ready banner
-/// on a corpse. The spawn precondition removes the cause; this removes the residue for
-/// the cases that remain legitimate (the user stops or kills a Run mid-prep).
-///
-/// Removes the container (`docker rm -f`, idempotent and best-effort) but deliberately
-/// KEEPS the staging: staging is purged by `cleanup_run` at archive, and destroying it
-/// here would also destroy the transcripts `merge_back` harvests. The in-flight
-/// filesystem walk itself is not interrupted — `sandbox_staging::prepare` is a sync walk
-/// in a pure module with no cancellation seam — so a Run stopped mid-staging still pays
-/// for the copy already under way. Bounded and inert: no container, no event, no spawn.
+/// Removes the container but deliberately KEEPS the staging: staging is purged by
+/// `cleanup_run` at archive, and destroying it here would also destroy the
+/// transcripts `merge_back` harvests. The in-flight filesystem walk is not
+/// interrupted — `sandbox_staging::prepare` is a sync walk with no cancellation seam.
 async fn abandon_prep_if_run_is_terminal(state: &AppState, run_id: &str) -> bool {
     let Some((_, run_state)) = reload_run_state(state, run_id).await else {
-        // No projection at all: the Run was forgotten (#328) under the prep. Same
-        // verdict — nothing may be spawned, and the container must not linger.
+        // No projection at all: the Run was forgotten under the prep. Same verdict —
+        // nothing may be spawned, and the container must not linger.
         warn!("Run {run_id}: sandbox prep finished for a run with no projected state — abandoning");
         remove_sandbox_container_best_effort(state, run_id);
         return true;
@@ -8689,8 +7893,7 @@ async fn abandon_prep_if_run_is_terminal(state: &AppState, run_id: &str) -> bool
     true
 }
 
-/// `docker rm -f pdo-sbx-<run_id>` on a blocking thread, best-effort (#445). Split out
-/// so the abandonment path reads as one line and never blocks the executor.
+/// `docker rm -f pdo-sbx-<run_id>` on a blocking thread, best-effort.
 fn remove_sandbox_container_best_effort(state: &AppState, run_id: &str) {
     let docker_bin = state
         .docker_cmd_override
@@ -8706,10 +7909,9 @@ fn remove_sandbox_container_best_effort(state: &AppState, run_id: &str) {
     });
 }
 
-/// Fail a sandboxed Run *loud* when its eager prep can't complete (#407 D4).
-/// `RunFailed` is terminal + unguarded (mirror `fail_spawn_before_start`): a Run
-/// whose container never came up must move terminal, never wedge `Running` with
-/// no live node — and NEVER fall back to a host spawn.
+/// Fail a sandboxed Run *loud* when its eager prep can't complete. A Run whose
+/// container never came up must move terminal, never wedge `Running` with no live
+/// node — and NEVER fall back to a host spawn.
 pub(crate) async fn fail_run_sandbox_prep(state: &AppState, run_id: &str, reason: &str) {
     error!("Run {run_id}: sandbox prep failed — {reason}");
     let run_failed = event_log::Event {
@@ -8728,13 +7930,10 @@ pub(crate) async fn fail_run_sandbox_prep(state: &AppState, run_id: &str, reason
 
 /// Spawn the Run's Pipeline Manager session.
 ///
-/// **Its only reservation is `RunStarted`** (#485, ADR-0038): the orphan sweep
-/// resolves a `pdo-mgr-<run>` session against the *run*, not a node, so a manager
-/// spawned for a run whose `RunStarted` never landed is an orphan the sweep will
-/// legitimately kill — and it would be right to. Conformant by construction
-/// today: `create_run` appends `RunStarted` and `return Err`s on failure, well
-/// before either spawn site here (host, or the detached sandbox task). Keep it
-/// that way.
+/// **Its only reservation is `RunStarted`** (ADR-0038): the orphan sweep resolves a
+/// `pdo-mgr-<run>` session against the *run*, not a node, so a manager spawned for a
+/// run whose `RunStarted` never landed is an orphan the sweep will legitimately kill.
+/// Keep every spawn site downstream of a successful `RunStarted` append.
 async fn spawn_manager_session(
     state: &AppState,
     run_id: &str,
@@ -8742,11 +7941,10 @@ async fn spawn_manager_session(
     name_hint: prompt_augmenter::RunNameHint,
     sandboxed: bool,
 ) {
-    // #447: the URL must be the one reachable from the side this manager will run
-    // on. A sandboxed manager execs into the Run's container, where `localhost` is
-    // the container — every `curl` of its own preamble hit nothing, and the manager
-    // reported the daemon dead (falsely, and with confidence) instead of issuing its
-    // commands. `sandboxed` is already in hand two lines below for the `SandboxWrap`.
+    // The URL must be reachable from the side this manager runs on. A sandboxed
+    // manager execs into the Run's container, where `localhost` is the container, so a
+    // host URL makes every `curl` of its own preamble hit nothing and the manager
+    // report the daemon dead.
     let daemon_url = sandbox_container::daemon_url(state.port, sandboxed);
 
     let static_prompt = std::fs::read_to_string(
@@ -8762,8 +7960,7 @@ async fn spawn_manager_session(
         prompt_augmenter::build_manager_prompt(run_id, &daemon_url, &static_prompt, name_hint);
 
     let session_name = tmux_session_manager::manager_session_name(run_id);
-    // #407: the manager runs inside the Run's container too when sandboxed. Marker
-    // = the manager session name; workdir = the pipeline worktree.
+    // The manager runs inside the Run's container too when sandboxed.
     let sandbox_wrap = sandboxed.then(|| tmux_session_manager::SandboxWrap {
         docker_bin: state.docker_cmd_override.as_deref().unwrap_or("docker"),
         uid: sandbox_container::host_uid(),
@@ -8771,15 +7968,11 @@ async fn spawn_manager_session(
         marker: &session_name,
         workdir: worktree_dir,
     });
-    // #551/ADR-0046: the manager follows the harness OF THE RUN — `Run → instance →
-    // floor`, no node tier and (deliberately) no model/effort. So "ce Run tourne sur
-    // X" holds with no exception to remember: an A/B on a new harness exercises the
-    // manager too. When the Run named no harness AND the instance default is unset,
-    // this resolves to the `claude` floor — byte-identical to the legacy manager
-    // launch. An unknown name (only reachable via an unvalidated Run choice, ADR-0045)
-    // falls back to `claude` with a warning rather than failing the whole Run here:
-    // the first NODE spawn is where an unknown harness fails fast (ADR-0037), and the
-    // manager is a best-effort assist that must not itself wedge the Run.
+    // The manager follows the harness OF THE RUN — `Run → instance → floor`, no node
+    // tier and deliberately no model/effort — so "this Run runs on X" holds with no
+    // exception. An unknown name falls back to `claude` with a warning rather than
+    // failing the Run: the first NODE spawn is where an unknown harness fails fast
+    // (ADR-0037), and the manager is a best-effort assist that must not wedge the Run.
     let run_state = reload_run_state(state, run_id)
         .await
         .map(|(_, state)| state);
@@ -8796,9 +7989,8 @@ async fn spawn_manager_session(
         agent_profile::DEFAULT_PROFILE_ID,
     );
     let manager_harness_name = manager_agent.combo.harness.clone();
-    // #614 (correctif 3): resolve against the DISK TIER, so "this Run runs on X" is
-    // true even when X is a user-declared harness — the manager follows the Run's
-    // frozen harness through the same registry the node spawns resolve against.
+    // Resolve against the DISK TIER, through the same registry the node spawns use,
+    // so "this Run runs on X" holds even when X is a user-declared harness.
     let harness_home_root = sandbox_run::sandbox_home_roots(state)
         .map(|(home, _)| home)
         .unwrap_or_default();
@@ -8820,12 +8012,10 @@ async fn spawn_manager_session(
         0,
         state.port,
         state.tmux_cmd_override.as_deref(),
-        // manager has no NodeDef — always an agent at the account default (#296),
-        // and for the same reason no effort level either (#424). No pinned session
-        // id either (#473): the manager owns no `NodeStarted`, the sweep never
-        // probes it and it is never resumed, so it keeps the legacy id-less launch —
-        // and resolving nodes by their own id is precisely what stops the manager's
-        // transcript, which shares this cwd, from being read as a node's.
+        // No pinned session id: the manager owns no `NodeStarted`, the sweep never
+        // probes it and it is never resumed. Resolving nodes by their own id is
+        // precisely what stops the manager's transcript, which shares this cwd, from
+        // being read as a node's.
         tmux_session_manager::SessionTail::Agent {
             harness: &manager_harness,
             model: manager_agent.combo.model.as_deref(),
@@ -8833,8 +8023,8 @@ async fn spawn_manager_session(
             session_id: None,
         },
         sandbox_wrap.as_ref(),
-        // #433 / ADR-0043: the manager is an infra session, not a pipeline node —
-        // it never calls `pdo complete`, so it gets no turn-end `Stop` hook.
+        // The manager is an infra session, not a pipeline node — it never calls
+        // `pdo complete`, so it gets no turn-end `Stop` hook.
         false,
     ) {
         error!("failed to spawn manager tmux session: {e}");
@@ -8872,24 +8062,15 @@ fn yaml_value_to_json(val: &serde_yaml::Value) -> serde_json::Value {
     }
 }
 
-/// `GET /sessions` — the live NodeRun-session count, the configured cap, the
-/// daemon version, the persistent-service health, and the orphan-sweep gauge, for
-/// the bottom status bar (admission control #159, version display #139, service
-/// persistence #156, reaper observability #485).
-/// Manager sessions are excluded by construction (they are not nodes). The
-/// `service` object is computed once at boot and cached in `AppState`, so this
-/// polled endpoint stays subprocess-free (#156, D5).
+/// `GET /sessions` — live NodeRun-session count, configured cap, daemon version,
+/// persistent-service health and orphan-sweep gauge, for the bottom status bar.
+/// Manager sessions are excluded by construction (they are not nodes), and the
+/// `service` object is cached at boot so this polled endpoint stays subprocess-free.
 ///
-/// Also carries the orphan-sweep gauge (#485, ADR-0038) as an additional JSON
-/// field rather than a dedicated route — the convention this project already
-/// states for `version`, and it keeps the vite dev-proxy whitelist unchanged
-/// (`/sessions` is already proxied). Before #485 a reaper kill was visible
-/// *only* in `journalctl`, which ADR-0034 names as this product's recurrent
-/// failure mode. The two counters are **cumulative since boot**, so "the reaper
-/// killed something" survives long enough to be read; what the gauge deliberately
-/// does **not** answer is "who killed *my* node", since it is instance-wide — a
-/// per-run answer needs an event, which waits on an events UI that does not exist
-/// yet, and `journalctl` still holds the per-session detail.
+/// The reaper counters are **cumulative since boot**, so "the reaper killed
+/// something" survives long enough to be read. The gauge deliberately does NOT
+/// answer "who killed *my* node": it is instance-wide, and a per-run answer needs an
+/// event plus an events UI that does not exist yet.
 async fn sessions(State(state): State<Arc<AppState>>) -> Response {
     let live = count_global_live_sessions(&state.db).await;
     let cap = admission::configured_cap_with(stored_session_cap(&state.db).await);
@@ -8913,13 +8094,11 @@ async fn sessions(State(state): State<Arc<AppState>>) -> Response {
     .into_response()
 }
 
-/// One knob's `stored → env → default` disclosure for `GET /settings` (#129,
-/// ADR-0015, D6): `effective` is the value the daemon actually uses (produced by
-/// the same resolver), `source` names the winning tier, and `stored`/`env`/
-/// `default` expose each tier so the UI can *reveal* a shadowed env var instead
-/// of ignoring it. Values are in the knob's canonical unit (count for the cap,
-/// seconds for the TTL and guard timeout) — except the guard's `env`, which is
-/// the raw `PDO_GUARD_TIMEOUT_MS` value in milliseconds (the env seam's unit).
+/// One knob's `stored → env → default` disclosure for `GET /settings` (ADR-0015):
+/// `effective` is what the daemon actually uses, produced by the same resolver, and
+/// each tier is exposed so the UI can *reveal* a shadowed env var instead of ignoring
+/// it. Values are in the knob's canonical unit — except the guard's `env`, which is
+/// the raw `PDO_GUARD_TIMEOUT_MS` in milliseconds, the env seam's own unit.
 fn settings_field(
     effective: i64,
     source: &str,
@@ -8936,11 +8115,9 @@ fn settings_field(
     })
 }
 
-/// String sibling of [`settings_field`] for the `default_model` knob (#347).
-/// Same `{effective, source, stored, env, default}` shape, but every tier is a
-/// string-or-null: there is no baked-in default model, so `default` is always
-/// `null` (the account default = no `--model`) and `source` is `"default"` when
-/// neither stored nor env is set.
+/// String sibling of [`settings_field`]. Every tier is a string-or-null: there is no
+/// baked-in default model, so `default` is always `null` (the account default = no
+/// `--model`).
 fn settings_field_str(
     effective: Option<&str>,
     source: &str,
@@ -8956,9 +8133,8 @@ fn settings_field_str(
     })
 }
 
-/// Boolean sibling of [`settings_field`] for a checkbox knob (#469
-/// `autocomplete_turn_end`). Same `{effective, source, stored, env, default}`
-/// shape; every tier is a bool-or-null, and `default` is a real value (`false`).
+/// Boolean sibling of [`settings_field`] for a checkbox knob. Unlike
+/// [`settings_field_str`], `default` is a real value.
 fn settings_field_bool(
     effective: bool,
     source: &str,
@@ -8975,22 +8151,17 @@ fn settings_field_bool(
     })
 }
 
-/// TTL of the Docker availability probe cache (#410). ~10 s: long enough that a
-/// burst of `/settings` fetches (modal open, a `PUT`) pays at most one docker
-/// round-trip, short enough that a user who starts Docker mid-session sees `full`/
-/// `minimal` un-gray within seconds.
+/// TTL of the Docker availability probe cache: long enough that a burst of
+/// `/settings` fetches pays at most one docker round-trip, short enough that a user
+/// who starts Docker mid-session sees `full`/`minimal` un-gray within seconds.
 const DOCKER_PROBE_TTL: Duration = Duration::from_secs(10);
-/// Hard cap on how long the probe may block the `/settings` response (#410). A cold
-/// or wedged Docker daemon must never hang the settings page — on timeout we report
-/// `available: false` for this fetch and re-probe on the next.
+/// Hard cap on how long the probe may block the `/settings` response: a cold or
+/// wedged Docker daemon must never hang the settings page.
 const DOCKER_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Return the cached Docker availability probe, refreshing it under `spawn_blocking`
-/// with a short `timeout` when the cache is empty or older than [`DOCKER_PROBE_TTL`]
-/// (#410). Never shells out on the runtime thread; a timeout yields an
-/// `available: false` result (advisory only — the run-advance fail-fast stays the
-/// authoritative gate). Mirrors the `docker_bin` edge-resolution of the rest of the
-/// sandbox wiring.
+/// with a short `timeout` when stale. Never shells out on the runtime thread. The
+/// result is advisory only — the run-advance fail-fast stays the authoritative gate.
 async fn docker_probe_cached(state: &AppState) -> sandbox_image::DockerProbe {
     let mut guard = state.docker_probe_cache.lock().await;
     if let Some((at, probe)) = guard.as_ref() {
@@ -9023,23 +8194,17 @@ async fn docker_probe_cached(state: &AppState) -> sandbox_image::DockerProbe {
 }
 
 /// How often a harness binary's **version** is re-checked behind a `/settings`
-/// fetch (#616, ADR-0053 §3). Long enough that a burst of settings reads pays at
-/// most one `--version` subprocess per harness; short enough that an auto-update is
-/// noticed within the minute, no restart. The full `--help` re-probe runs only when
-/// the version actually changed, so the steady-state cost is one cheap `--version`
-/// per harness per window.
+/// fetch. Long enough that a burst of settings reads pays at most one `--version`
+/// subprocess per harness; short enough that an auto-update is noticed within the
+/// minute, with no restart.
 const CATALOGUE_VERSION_TTL: Duration = Duration::from_secs(60);
 
-/// Env var that overrides [`CATALOGUE_VERSION_TTL`], in milliseconds. Exists so a
-/// test can prove the re-probe-on-version-change contract (ADR-0053 §3) in
-/// milliseconds instead of waiting out the production minute; ops may also shorten it
-/// on a machine whose harnesses auto-update aggressively. An unparseable value is
-/// ignored — a typo must not disable the cache.
+/// Env var that overrides [`CATALOGUE_VERSION_TTL`], in milliseconds. An unparseable
+/// value is ignored — a typo must not disable the cache.
 pub const CATALOGUE_VERSION_TTL_MS_ENV: &str = "PDO_CATALOGUE_VERSION_TTL_MS";
 
-/// The effective version re-check window: [`CATALOGUE_VERSION_TTL_MS_ENV`] if it
-/// parses, else [`CATALOGUE_VERSION_TTL`]. Read per call (not cached in a `OnceLock`)
-/// so a test that sets the var after the daemon booted still sees it.
+/// The effective version re-check window. Read per call, NOT cached in a
+/// `OnceLock`, so a test setting the var after boot still sees it.
 fn catalogue_version_ttl() -> Duration {
     std::env::var(CATALOGUE_VERSION_TTL_MS_ENV)
         .ok()
@@ -9049,8 +8214,8 @@ fn catalogue_version_ttl() -> Duration {
 }
 
 /// Return `harness`'s offered catalogue (models + efforts + the version they were
-/// read from), from the cache when fresh, else by (re)probing `binary` (#616,
-/// ADR-0053 §3). The freshness protocol, per harness:
+/// read from), from the cache when fresh, else by (re)probing `binary`
+/// (ADR-0053 §3). The freshness protocol, per harness:
 ///
 /// 1. A cache entry younger than [`CATALOGUE_VERSION_TTL`] is returned as-is — a
 ///    burst of `/settings` reads pays no subprocess at all.
@@ -9075,14 +8240,12 @@ async fn catalogue_for(
         }
     }
 
-    // Past the TTL (or never probed): re-read the version off the runtime thread.
     let bin = binary.to_string();
     let version = tokio::task::spawn_blocking(move || tmux_session_manager::probe_version(&bin))
         .await
         .ok()
         .flatten();
 
-    // Version unchanged ⇒ the catalogue is still current; restamp, skip --help.
     if let Some((_, cached)) = guard.get(harness) {
         if cached.version == version {
             let refreshed = cached.clone();
@@ -9091,7 +8254,6 @@ async fn catalogue_for(
         }
     }
 
-    // First probe or a changed version ⇒ re-read and parse the catalogue.
     let bin = binary.to_string();
     let catalogue =
         tokio::task::spawn_blocking(move || tmux_session_manager::probe_catalogue(&bin))
@@ -9102,12 +8264,9 @@ async fn catalogue_for(
     cached
 }
 
-/// Probe every installed harness's catalogue once, populating the cache (#616,
-/// ADR-0053 §3). Wired as a detached boot task (a sibling of the price refresh) so
-/// the first `/settings` fetch answers from warm cache rather than paying the
-/// subprocess cost inline. Reads the registry from the host `$HOME` (the same tier
-/// the settings view resolves); a harness whose binary is absent is skipped — no
-/// probe, an empty offer, the free-text field.
+/// Probe every installed harness's catalogue once, populating the cache, so the
+/// first `/settings` fetch answers warm. A harness whose binary is absent is skipped
+/// — no probe, an empty offer, the free-text field.
 async fn probe_harness_catalogues_at_boot(state: &Arc<AppState>) {
     let registry = match sandbox_run::sandbox_home_roots(state).ok().map(|(h, _)| h) {
         Some(home) => harness_registry::HarnessRegistry::load(&home),
@@ -9120,17 +8279,14 @@ async fn probe_harness_catalogues_at_boot(state: &Arc<AppState>) {
     }
 }
 
-/// Build the `GET /settings` view: per knob, the effective value, the winning
-/// tier, and every tier's raw value (#129, ADR-0015). The `effective` value is
-/// computed by each knob's own resolver, so it can never drift from what the
-/// daemon uses at spawn / sweep / tick time. Also folds in the advisory
-/// `sandbox_docker` probe (#410) so the NewRunModal fetches the default AND Docker
-/// availability in one round-trip.
+/// Build the `GET /settings` view: per knob, the effective value, the winning tier,
+/// and every tier's raw value (ADR-0015). Each `effective` MUST be computed by that
+/// knob's own resolver, or the page drifts from what the daemon uses at spawn /
+/// sweep / tick time.
 async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx::Error> {
     let db = &state.db;
     let cfg = instance_config::get(db).await?;
 
-    // --- session cap (count) ---
     let cap_default = admission::DEFAULT_SESSION_CAP as i64;
     let cap_stored_wins = cfg.session_cap.filter(|&n| n >= 1);
     let cap_env = admission::env_cap().map(|n| n as i64);
@@ -9143,7 +8299,6 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
         "default"
     };
 
-    // --- reaper TTL (seconds) ---
     let ttl_default = tmux_session_manager::DEFAULT_REAPER_TTL.as_secs() as i64;
     let ttl_stored_wins = cfg.reaper_ttl_secs.filter(|&n| n >= 1);
     let ttl_env = tmux_session_manager::env_reaper_ttl_secs().map(|n| n as i64);
@@ -9157,7 +8312,6 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
         "default"
     };
 
-    // --- library assistant idle TTL (seconds) (#594, ADR-0051) ---
     let lat_default = tmux_session_manager::DEFAULT_LIBASSIST_IDLE_TTL.as_secs() as i64;
     let lat_stored_wins = cfg.libassist_idle_ttl_secs.filter(|&n| n >= 1);
     let lat_env = tmux_session_manager::env_libassist_idle_ttl_secs().map(|n| n as i64);
@@ -9173,7 +8327,7 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
         "default"
     };
 
-    // --- guard timeout (seconds; the env seam is milliseconds) ---
+    // The env seam is milliseconds; everything else here is seconds.
     let guard_default = guard_runner::GUARD_TIMEOUT_SECS as i64;
     let guard_stored_wins = cfg.guard_timeout_secs.filter(|&n| (1..=600).contains(&n));
     let guard_env_ms = guard_runner::env_guard_timeout_ms().map(|n| n as i64);
@@ -9187,7 +8341,6 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
         "default"
     };
 
-    // --- default model (string; no baked-in default) (#347) ---
     // The empty-string filter mirrors the resolver: a `""` stored/env value is
     // treated as unset, so it never wins the tier or discloses a bogus value.
     let dm_stored = cfg.default_model.as_deref().filter(|s| !s.is_empty());
@@ -9198,12 +8351,11 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
     } else if dm_env.is_some() {
         "env"
     } else {
-        // effective=null, default=null ⇒ the account default (no --model).
+        // Effective=null, default=null ⇒ the account default (no --model).
         "default"
     };
 
-    // --- default harness (#550, ADR-0046) — same `stored → env → floor` shape as
-    // `default_model`. `effective`=null ⇒ the `claude` floor applies at resolve. ---
+    // `effective`=null ⇒ the `claude` floor applies at resolve time.
     let dh_stored = cfg.default_harness.as_deref().filter(|s| !s.is_empty());
     let dh_env = tmux_session_manager::env_default_harness();
     let dh_effective = tmux_session_manager::default_harness_with(cfg.default_harness.clone());
@@ -9214,9 +8366,8 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
     } else {
         "default"
     };
-    // The per-harness default model map (#550): disclosed verbatim (the stored map)
-    // plus the legacy `PDO_DEFAULT_MODEL` env folded under `claude`, so the screen
-    // shows exactly what the resolver's `instance` tier will read.
+    // The stored map plus the legacy `PDO_DEFAULT_MODEL` env folded under `claude`,
+    // so the screen shows exactly what the resolver's `instance` tier will read.
     let dhm_stored = cfg.default_harness_model.clone();
     let mut dhm_effective = dhm_stored.clone();
     if !dhm_effective.contains_key(harness_registry::CLAUDE) {
@@ -9225,12 +8376,10 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
         }
     }
 
-    // --- default sandbox mode (enum ; built-in default `off`) (#410) ---
-    // The empty-string filter treats a stored `""` as unset, and `effective` is computed by
-    // the SAME resolver the create-run chokepoint consumes, so the disclosed value can never
-    // drift (#373). Since #471 this is the ONLY sandbox knob on this screen: what a sandboxed
-    // Run *is* — its image, its home content, its env — belongs to the staging profile, one
-    // axis per screen.
+    // `effective` is computed by the SAME resolver the create-run chokepoint consumes,
+    // so the disclosed value cannot drift. This is the ONLY sandbox knob on this
+    // screen: what a sandboxed Run *is* — image, home content, env — belongs to the
+    // staging profile.
     let sbx_stored = cfg.default_sandbox.as_deref().filter(|s| !s.is_empty());
     let sbx_env = event_log::DEFAULT_SANDBOX_ENV;
     let sbx_env_val = std::env::var(sbx_env)
@@ -9246,11 +8395,10 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
     } else {
         "default"
     };
-    // #432: the winning tier may name a staging profile that does not exist, and every
-    // Run it would produce dies with a 400. `put_settings` gates the *stored* tier, but
-    // the **env** tier (`PDO_DEFAULT_SANDBOX`) passes through no validator at all by
-    // construction — so the only honest place to surface it is here, as an advisory
-    // `reason` beside the value (mirror of `sandbox_docker.reason`).
+    // The winning tier may name a staging profile that does not exist, and every Run
+    // it produces dies with a 400. `put_settings` gates the *stored* tier, but the
+    // **env** tier passes through no validator by construction — so the only honest
+    // place to surface it is here, as an advisory `reason` beside the value.
     let sbx_reason = match sbx_effective.profile() {
         None => None,
         Some(name) => match sandbox_profile::exists(db, name).await {
@@ -9263,10 +8411,8 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
         },
     };
 
-    // --- turn-end auto-completion (bool ; built-in default `false`) (#469) ---
-    // `effective` comes from the SAME resolver the sweep consumes, so what the page
-    // discloses can never drift from what the daemon does (lesson of #373). Stored
-    // is `0`/`1`; both are a stored *decision* and both win over the env.
+    // `effective` comes from the SAME resolver the sweep consumes. Stored is `0`/`1`;
+    // both are a stored *decision* and both win over the env.
     let ate_stored = cfg.autocomplete_turn_end.map(|v| v != 0);
     let ate_env = stale_detector::env_autocomplete_turn_end();
     let ate_effective = stale_detector::autocomplete_turn_end_with(cfg.autocomplete_turn_end);
@@ -9278,10 +8424,8 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
         "default"
     };
 
-    // --- default auto-naming (bool ; built-in default `true`) (#338) ---
-    // Same discipline as `autocomplete_turn_end`: `effective` comes from the SAME
-    // resolver the create chokepoint consumes, so the disclosed default can never drift
-    // from what a nameless Run actually gets. Stored `0`/`1` both win over the env.
+    // Same discipline as `autocomplete_turn_end`, against the create chokepoint's
+    // resolver.
     let dan_stored = cfg.default_auto_name.map(|v| v != 0);
     let dan_env = prompt_augmenter::env_default_auto_name();
     let dan_effective = prompt_augmenter::default_auto_name_with(cfg.default_auto_name);
@@ -9293,10 +8437,7 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
         "default"
     };
 
-    // --- auto_fail default (bool ; built-in default `false`) (ADR-0049) ---
-    // Same discipline as `autocomplete_turn_end`: `effective` comes from the SAME
-    // resolver `resolve_run_auto_fail` consumes for the instance tier, so the
-    // disclosed default cannot drift from what a node `pdo fail` actually gets.
+    // Same discipline, against `resolve_run_auto_fail`'s instance tier.
     let af_stored = cfg.auto_fail.map(|v| v != 0);
     let af_env = std::env::var(instance_config::AUTO_FAIL_ENV).ok().map(|s| {
         let t = s.trim();
@@ -9314,25 +8455,21 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
         "default"
     };
 
-    // --- advisory Docker availability probe (#410) ---
-    // Folded into `GET /settings` (NOT a settings_field: no stored/env/default tier)
-    // so the modal learns the default AND whether Docker can run a sandbox in ONE
-    // fetch. Advisory: it grays out `full`/`minimal`, but the run-advance fail-fast
+    // Not a `settings_field` — it has no stored/env/default tier. Folded in here so
+    // the modal learns the default AND whether Docker can run a sandbox in ONE fetch.
+    // Advisory: it grays out `full`/`minimal`, but the run-advance fail-fast
     // (ADR-0030 pt 4) stays the authoritative gate.
     let docker_probe = docker_probe_cached(state).await;
 
-    // --- staging profiles: NAMES ONLY, plus the host $HOME (#432) ---
     // NAMES ONLY is part of the contract, not an oversight: this payload is on the hot
-    // path of the launch dialog (which fetches settings on every open). Serving resolved
-    // entry lists here would make a future slice quietly pay a per-profile fold for a
-    // `<select>` that needs three strings. The editor reads
-    // `GET /settings/sandbox-profiles` for the rest.
+    // path of the launch dialog, which fetches settings on every open. Serving resolved
+    // entry lists here would make a `<select>` that needs three strings pay a
+    // per-profile fold. The editor reads `GET /settings/sandbox-profiles` for the rest.
     //
-    // `home` is an observed FACT (shape of `sandbox_image`/`sandbox_docker`, no tier):
-    // `onPick` from the filesystem explorer yields an ABSOLUTE path while an entry is
-    // RELATIVE to `$HOME`, and no endpoint exposed `$HOME` before this. It MUST honour
-    // `sandbox_home_override` — otherwise the layer-3 harness and the daemon would
-    // disagree about what "under $HOME" means.
+    // `home` is an observed FACT, not a tier: the filesystem explorer yields ABSOLUTE
+    // paths while a profile entry is RELATIVE to `$HOME`. It MUST honour
+    // `sandbox_home_override`, or the layer-3 harness and the daemon disagree about
+    // what "under $HOME" means.
     let profile_names = sandbox_profile::list_names(db).await?;
     let sandbox_profiles: Vec<serde_json::Value> = profile_names
         .iter()
@@ -9343,22 +8480,16 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
         .as_ref()
         .map(|h| h.to_string_lossy().into_owned());
 
-    // --- price table: an observed STATE, not a settings knob (#427) ---
-    // NOT a `settings_field`: there is no stored / env / default tier here, only
-    // which of the three price tiers won. Shape of `sandbox_docker` (#410) and
-    // motive of #432: a hand-edited file passes through NO validator by
-    // construction, so the only honest place to surface a refused row is here, as
-    // an advisory `reason` beside the facts. `journalctl` alone is this product's
-    // recurring failure mode (#497, #485).
+    // An observed STATE, not a settings knob: no stored/env/default tier, only which
+    // of the three price tiers won. A hand-edited file passes through NO validator by
+    // construction, so the only honest place to surface a refused row is here, as an
+    // advisory `reason`.
     //
-    // Both paths are ALWAYS reported, even when neither file exists — nothing is
-    // ever seeded (that would freeze a snapshot, ADR-0031 §2), so naming the paths
-    // IS the entire discoverability story.
+    // Both paths are ALWAYS reported, even when neither file exists — nothing is ever
+    // seeded (ADR-0031 §2), so naming the paths IS the entire discoverability story.
     //
-    // The resolved read view (winning tier + `$/MTok` per family, #528) is NOT
-    // here: it lives on `/stats/cost`, beside the "Sync costs" action in the
-    // Stats → Cost tab, so pressing sync and reading what PDO can price happen in
-    // one place. See `stats::stats_cost` / `stats::ResolvedPriceRow`.
+    // The resolved read view lives on `/stats/cost` instead, beside the "Sync costs"
+    // action, so pressing sync and reading what PDO can price happen in one place.
     let price_table_view = match &host_home_path {
         Some(home) => {
             let table = price_table::PriceTable::load(home);
@@ -9370,12 +8501,11 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
                 "fetched_at": table.fetched_at(),
                 "fetched_rows": table.fetched_rows(),
                 "manual_keys": table.manual_keys(),
-                // The SAME string the loader logs — one pure constructor, so the page
-                // and the journal can never disagree.
+                // The SAME string the loader logs, so the page and the journal cannot
+                // disagree.
                 "reason": table.diagnostic(),
             })
         }
-        // HOME unset: the paths are unknowable, and saying so beats inventing one.
         None => serde_json::json!({
             "manual_path": null,
             "fetched_path": null,
@@ -9388,23 +8518,15 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
         }),
     };
 
-    // --- harness descriptors: the disk tier, surfaced (#553, ADR-0045) ---
-    // Same posture as `price_table` above: a hand-edited descriptor file passes
-    // through NO validator (ADR-0001), so the only honest place to say a descriptor
-    // is inert or refused is here, beside the facts. `names` lists what actually
-    // resolves (floor merged with disk), so a user learns their declared harness
-    // "appeared"; `reason` carries the SAME string the loader logs. The path is
-    // ALWAYS reported so the user knows where to write — nothing is ever seeded.
-    // #586: each resolved harness carries its provenance (`source`) and whether its
-    // binary resolves on `$PATH` (`installed`). The registry is pure — it yields the
-    // name/source/binary; `binary_available` (the same probe the spawn seam runs)
-    // decides `installed` here, beside the environment, so the picker greys a
-    // harness that would only fail-fast at launch.
-    // #616/ADR-0053: each entry now also carries the offer deduced from the binary —
-    // its `models`, its `efforts`, the served `has_effort` fact (so the client greys
-    // the effort picker off a served truth, not a hard-coded map), and the `version`
-    // the offer was read at. An uninstalled harness carries an empty offer (no probe)
-    // — the free-text fallback, a declared absence.
+    // The disk descriptor tier (ADR-0045), same posture as `price_table` above: a
+    // hand-edited descriptor file passes through NO validator, so the only honest
+    // place to say a descriptor is inert or refused is here. The path is ALWAYS
+    // reported so the user knows where to write — nothing is ever seeded.
+    //
+    // The registry is pure (name/source/binary); `binary_available` — the same probe
+    // the spawn seam runs — decides `installed` HERE, beside the environment, so the
+    // picker greys a harness that would only fail-fast at launch. An uninstalled
+    // harness carries an empty offer: the free-text fallback, a declared absence.
     let registry = match &host_home_path {
         Some(home) => harness_registry::HarnessRegistry::load(home),
         None => harness_registry::HarnessRegistry::builtin(),
@@ -9418,9 +8540,9 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
             harness_catalogue::CachedCatalogue::default()
         };
         // The served effort-axis fact: the binary enumerates effort stops, OR the
-        // launch template carries an `{effort}` hole (a harness that takes effort but
-        // prints no list still offers the axis). Either way it is a fact the daemon
-        // owns and serves, replacing the client's hard-coded `HARNESS_HAS_EFFORT`.
+        // launch template carries an `{effort}` hole — a harness that takes effort but
+        // prints no list still offers the axis. Served, so the client needs no
+        // hard-coded map.
         let has_effort_hole = registry
             .resolve(&h.name)
             .map(|d| d.has_effort_hole())
@@ -9461,25 +8583,21 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
     Ok(serde_json::json!({
         "session_cap": settings_field(cap_effective, cap_source, cfg.session_cap, cap_env, cap_default),
         "reaper_ttl_secs": settings_field(ttl_effective, ttl_source, cfg.reaper_ttl_secs, ttl_env, ttl_default),
-        // #594: the assistant's own idle TTL. Its own knob and not a reuse of
-        // `reaper_ttl_secs` — that one bounds a completed node's session (1 h),
-        // this one bounds a REPL nobody is using (120 s).
+        // Its own knob, deliberately not a reuse of `reaper_ttl_secs`: that one bounds
+        // a completed node's session (1 h), this one a REPL nobody is using (120 s).
         "libassist_idle_ttl_secs": settings_field(lat_effective, lat_source, cfg.libassist_idle_ttl_secs, lat_env, lat_default),
         "guard_timeout_secs": settings_field(guard_effective, guard_source, cfg.guard_timeout_secs, guard_env_ms, guard_default),
         "default_model": settings_field_str(dm_effective.as_deref(), dm_source, dm_stored, dm_env.as_deref()),
-        // #550/ADR-0046: the harness axis. `default_harness` is a plain
-        // stored→env→floor string field; `default_harness_model` is a per-harness
-        // map, disclosed as {effective, stored} so the screen shows both what is
-        // set and what the resolver will read (env fold under claude included).
+        // `default_harness_model` is a per-harness map, disclosed as
+        // {effective, stored} so the screen shows both what is set and what the
+        // resolver will read.
         "default_harness": settings_field_str(dh_effective.as_deref(), dh_source, dh_stored, dh_env.as_deref()),
         "default_harness_model": {
             "effective": dhm_effective,
             "stored": dhm_stored,
         },
         "agent_choice": cfg.agent_choice,
-        // #553/ADR-0045: the disk descriptor tier — which harnesses resolve (floor
-        // ∪ disk), the file path, and any inert/refused descriptor named. The
-        // settings surface is where a broken descriptor is ALWAYS said.
+        // The settings surface is where a broken descriptor is ALWAYS said.
         "harness_descriptors": harness_descriptors_view,
         "default_sandbox": {
             "effective": sbx_effective.as_str(),
@@ -9487,15 +8605,13 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
             "stored": sbx_stored,
             "env": sbx_env_val,
             "default": event_log::SandboxMode::OFF_WIRE,
-            // #432: additive sixth key, `null` when the winning tier resolves. Only
-            // `default_sandbox` carries it — it is the one enum knob whose value space
-            // is open (a profile name), hence the one that can point at nothing.
+            // `null` when the winning tier resolves. Only `default_sandbox` carries a
+            // `reason`: it is the one enum knob whose value space is open (a profile
+            // name), hence the one that can point at nothing.
             "reason": sbx_reason,
         },
-        // #432: names only (see the note above), and the host `$HOME` as an observed fact.
         "sandbox_profiles": sandbox_profiles,
         "home": host_home,
-        // #427, ADR-0034: which price tiers are in force, and what is inert.
         "price_table": price_table_view,
         "sandbox_docker": {
             "available": docker_probe.available,
@@ -9516,8 +8632,8 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
             dan_env,
             prompt_augmenter::DEFAULT_AUTO_NAME_DEFAULT,
         ),
-        // ADR-0049: the global tier of `auto_fail`. Default `false` — an agent
-        // `pdo fail` parks the run for a human to confirm.
+        // The global tier of `auto_fail`. Default `false`: an agent `pdo fail` parks
+        // the run for a human to confirm.
         "auto_fail": settings_field_bool(af_effective, af_source, af_stored, af_env, false),
         "updated_at": cfg.updated_at,
     }))
@@ -9534,12 +8650,10 @@ fn price_source_url(state: &AppState) -> String {
 
 /// The host home the price files live under, or a message explaining why there is
 /// none. Prices are an **instance** concept: even for a sandboxed Run this is the
-/// HOST home (the #408 seam moves the transcript root, not this one).
+/// HOST home — the sandbox seam moves the transcript root, not this one.
 ///
 /// Returns the *message*, not a `Response`: `Result<_, Response>` trips
-/// `clippy::result_large_err` (a `Response` is 128 bytes, exactly the threshold)
-/// and the CI is `-D warnings`. House convention is `Option<Response>`, or a small
-/// error the caller renders — which is what this does.
+/// `clippy::result_large_err` and CI is `-D warnings`.
 fn price_home_root(state: &AppState) -> Result<PathBuf, String> {
     sandbox_run::sandbox_home_roots(state)
         .map(|(home, _)| home)
@@ -9558,7 +8672,7 @@ struct PriceSyncOutcome {
 }
 
 /// Diff a freshly normalised fetched tier against the table currently in force.
-/// PURE. `changed` is keyed on the RAW fetched rows, not on effective prices: a
+/// PURE. `changed` is keyed on the RAW fetched rows, NOT on effective prices: a
 /// shadowed key whose source price moved is a real change to the fetched tier even
 /// though nothing a user sees moves.
 fn diff_price_sync(
@@ -9576,11 +8690,9 @@ fn diff_price_sync(
     for (key, fresh_price) in fresh {
         let shadowed = before.tier_of(key) == Some(price_table::PriceTier::Manual);
         if shadowed {
-            // Said, never hidden: a sync cannot silently erase a hand correction.
             out.shadowed_by_manual.push(key.clone());
         }
         let effective_before = before.price_for(key);
-        // What this key will resolve to once written: manual still wins.
         let effective_after = if shadowed {
             effective_before
         } else {
@@ -9596,25 +8708,20 @@ fn diff_price_sync(
 }
 
 /// `POST /settings/cost-prices/sync` — fetch the remote price source and rewrite
-/// the fetched tier (#427, ADR-0034).
+/// the fetched tier (ADR-0034).
 ///
-/// Deliberately UNDER `/settings` rather than a new top-level prefix: the vite
-/// proxy key is a PREFIX, so this needs no `vite.config.ts` edit and avoids the
-/// trap `/nodes` (#345), `/stats` (#377) and `/fs` (#431) each paid. NOT a
-/// `POST /runs/:id/commands` kind — that dispatcher is run-scoped, and a price sync
-/// touches neither the event log nor a Run projection (the `CONTEXT.md:794`
-/// criterion). NOT under `/stats` either: ADR-0029 makes that a read-derivation
-/// surface.
+/// NOT a `POST /runs/:id/commands` kind: that dispatcher is run-scoped, and a price
+/// sync touches neither the event log nor a Run projection. NOT under `/stats`
+/// either — ADR-0029 makes that a read-derivation surface.
 ///
-/// Codes: **409** a sync is already in flight · **502** source unreachable /
-/// timeout / broken JSON / empty harvest, and **nothing is written** · **500** a
-/// disk write failed · **200** otherwise, with `noop: true` + `reason` when the
-/// table did not move (ADR-0025 forbids a blind `{ok:true}`).
+/// Codes: **409** a sync is already in flight · **502** source unreachable / broken
+/// JSON / empty harvest, and **nothing is written** · **500** a disk write failed ·
+/// **200** otherwise, with `noop: true` + `reason` when the table did not move
+/// (ADR-0025 forbids a blind `{ok:true}`).
 ///
-/// The 502 is the crate's first, and on purpose: classing a network cut as a 500
-/// would file it as a daemon defect, contradicting ADR-0022's honest-labelling
-/// posture. ADR-0030:107-112 settles the shape — an explicitly requested effect
-/// that fails is a HARD error that NAMES the source, never a silent fallback.
+/// The 502 is deliberate: classing a network cut as a 500 would file it as a daemon
+/// defect. An explicitly requested effect that fails is a HARD error that NAMES the
+/// source, never a silent fallback (ADR-0030).
 async fn sync_cost_prices(State(state): State<Arc<AppState>>) -> Response {
     let home_root = match price_home_root(&state) {
         Ok(h) => h,
@@ -9626,8 +8733,8 @@ async fn sync_cost_prices(State(state): State<Arc<AppState>>) -> Response {
                 .into_response();
         }
     };
-    // `try_lock`, not `.lock()`: a second click brings nothing, and ADR-0025 wants
-    // us to say so rather than queue silently.
+    // `try_lock`, not `.lock()`: a second click brings nothing, and ADR-0025 wants it
+    // said rather than queued silently.
     let Ok(_guard) = state.price_sync_lock.try_lock() else {
         return (
             StatusCode::CONFLICT,
@@ -9637,7 +8744,6 @@ async fn sync_cost_prices(State(state): State<Arc<AppState>>) -> Response {
     };
 
     let url = price_source_url(&state);
-    // The table BEFORE, so the report can name what actually moves.
     let before = price_table::PriceTable::load(&home_root);
 
     let body = match price_table::fetch_source(&url).await {
@@ -9675,8 +8781,8 @@ async fn sync_cost_prices(State(state): State<Arc<AppState>>) -> Response {
         .collect();
 
     if !outcome.changed {
-        // Nothing to write, so nothing is written — which also leaves the table's
-        // fingerprint alone and keeps the cost-breakdown memo warm for every Run.
+        // Nothing to write, so nothing is written — which leaves the table's
+        // fingerprint alone and keeps the cost-breakdown memo warm.
         return Json(serde_json::json!({
             "ok": true,
             "noop": true,
@@ -9707,8 +8813,8 @@ async fn sync_cost_prices(State(state): State<Arc<AppState>>) -> Response {
             .into_response();
     }
 
-    // Same shape as `pause_triggers`: tell every connected client the table moved,
-    // so an open Stats modal is not the only thing that knows.
+    // Tell every connected client the table moved, so an open Stats modal is not the
+    // only thing that knows.
     let _ = state.pipeline_tx.send(serde_json::json!({
         "type": "cost_prices_synced",
         "rows": outcome.rows,
@@ -9728,23 +8834,18 @@ async fn sync_cost_prices(State(state): State<Arc<AppState>>) -> Response {
     .into_response()
 }
 
-/// Refresh the fetched price tier if — and only if — it already exists and is
-/// stale (#427, ADR-0034). Driven at boot as a DETACHED task and by the
-/// [`DaemonHandle::run_price_refresh_tick`] test seam, so production and the
-/// synchronous test path are the same code.
+/// Refresh the fetched price tier if — and only if — it already exists and is stale
+/// (ADR-0034).
 ///
-/// Three gates, in this order, and each is load-bearing:
-/// 1. the config flag (`PDO_PRICE_SYNC` in production, `false` in the test literals);
+/// Three gates, in this order, each load-bearing:
+/// 1. the config flag;
 /// 2. **`fetched.json` must already exist** — the boot pass REFRESHES, it never
-///    seeds, so there is no egress before the user's first explicit click. Happy
-///    side effect: the 240 integration daemons boot from a fresh `HOME`, hence no
-///    cache, hence no network even when the flag is armed;
+///    seeds, so there is no egress before the user's first explicit click (which
+///    also keeps the integration daemons, booting from a fresh `HOME`, offline);
 /// 3. it must be older than [`price_table::PRICE_REFRESH_MAX_AGE`].
 ///
-/// Failure regime is `boot_recovery.rs:161-168`'s: a `warn!`, never fatal. A daemon
-/// restarted by systemd can legitimately come up before the network is ready
-/// (`service_unit.rs` emits `After=network-online.target` but nothing guarantees
-/// DNS), and a boot must not fail on that.
+/// A failure is a `warn!`, never fatal: a daemon restarted by systemd can come up
+/// before DNS is ready, and a boot must not fail on that.
 async fn refresh_prices_at_boot(state: &Arc<AppState>) {
     if !state.price_refresh_at_boot {
         return;
@@ -9754,8 +8855,8 @@ async fn refresh_prices_at_boot(state: &Arc<AppState>) {
     };
     let (_, fetched_path) = price_table::PriceTable::paths(&home_root);
     if !fetched_path.exists() {
-        // Gate 2. The user has never synced; asking the network now would be an
-        // egress they did not consent to.
+        // The user has never synced; asking the network now would be an egress they
+        // did not consent to.
         return;
     }
     let table = price_table::PriceTable::load(&home_root);
@@ -9770,11 +8871,11 @@ async fn refresh_prices_at_boot(state: &Arc<AppState>) {
             }
         }
         // An unparseable `fetched_at` falls through and refreshes: a cache whose
-        // vintage we cannot read is exactly one worth re-fetching.
+        // vintage cannot be read is one worth re-fetching.
     }
 
-    // Same lock as the button. Losing the race means a manual sync is running,
-    // which does strictly better — give up without a word.
+    // Same lock as the button. Losing the race means a manual sync is running, which
+    // does strictly better — give up without a word.
     let Ok(_guard) = state.price_sync_lock.try_lock() else {
         return;
     };
@@ -9806,8 +8907,8 @@ async fn refresh_prices_at_boot(state: &Arc<AppState>) {
 }
 
 /// `GET /settings` — the instance-wide config, per knob, as
-/// `{effective, source, stored, env, default}` (#129, ADR-0015). `GET /sessions`
-/// stays the lean status-bar view; this is the settings page's rich view.
+/// `{effective, source, stored, env, default}` (ADR-0015). `GET /sessions` stays the
+/// lean status-bar view.
 async fn get_settings(State(state): State<Arc<AppState>>) -> Response {
     match build_settings_view(&state).await {
         Ok(view) => Json(view).into_response(),
@@ -9819,18 +8920,16 @@ async fn get_settings(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
-/// The ONE boot line #471 owes a user whose database still holds `image_source` or
-/// `dockerfile_path`: those values are now **inert**, and a value that stops mattering must never
-/// do so in silence (same principle as #470).
+/// The ONE boot line owed to a user whose database still holds `image_source` or
+/// `dockerfile_path`: those values are now **inert**, and a value that stops
+/// mattering must never do so in silence.
 ///
-/// Pure so it can be pinned by a test rather than by squinting at a terminal, and it returns
-/// `Option` rather than logging so "nothing stored ⇒ nothing said" is a property of the value, not
-/// of a branch at the call site. ONE line for both columns: two lines for one obsolete decision
-/// would read like two problems.
+/// Returns `Option` rather than logging, so "nothing stored ⇒ nothing said" is a
+/// property of the value, not of a branch at the call site. ONE line for both
+/// columns: two lines for one obsolete decision would read like two problems.
 ///
-/// `profile_hint` is the profile a Run currently falls back to, when the instance default names
-/// one — the concrete thing to go and edit. `None` (`off`, or an unreadable config) degrades to
-/// naming the screen instead of a profile, which is still actionable.
+/// `profile_hint` is the profile a Run currently falls back to — the concrete thing
+/// to go and edit. `None` degrades to naming the screen instead.
 fn retired_sandbox_settings_warning(
     stored: &[(&'static str, String)],
     profile_hint: Option<&str>,
@@ -9860,9 +8959,9 @@ fn retired_sandbox_settings_warning(
     ))
 }
 
-/// Say the above ONCE per boot, right after the schema is up. Best-effort by construction: a DB
-/// read failure here must not stop a daemon from starting over a message about a setting that is
-/// already inert.
+/// Say the above ONCE per boot, right after the schema is up. Best-effort: a DB read
+/// failure here must not stop a daemon from starting over a message about a setting
+/// that is already inert.
 async fn warn_about_retired_sandbox_settings(db: &sqlx::SqlitePool) {
     let stored = match instance_config::retired_sandbox_image_values(db).await {
         Ok(stored) => stored,
@@ -9881,12 +8980,9 @@ async fn warn_about_retired_sandbox_settings(db: &sqlx::SqlitePool) {
     }
 }
 
-/// The message a `PUT /settings` gets for a field #471 removed. Pure, so the exact wording is
-/// pinned by a unit test rather than by whoever reads the 400 in a browser first.
-///
-/// It has to answer the only question the caller now has — *where did it go?* — which is why it
-/// names the profile editor AND the surviving env var. A bare "unknown field" would be technically
-/// true and useless.
+/// The message a `PUT /settings` gets for a retired field. It has to answer the only
+/// question the caller has — *where did it go?* — hence naming the profile editor AND
+/// the surviving env var; a bare "unknown field" would be true and useless.
 fn retired_setting_message(field: &str, env_var: &str) -> String {
     format!(
         "`{field}` is no longer an instance-wide setting: a staging profile's own image source \
@@ -9895,18 +8991,16 @@ fn retired_setting_message(field: &str, env_var: &str) -> String {
     )
 }
 
-/// `PUT /settings` — persist the stored tier of one or more knobs, then return
-/// the recomputed [`build_settings_view`] so the UI shows the new
-/// effective/source without a second round-trip (#129, ADR-0015, D6). Validation
-/// is fail-fast (D7): a cap `< 1`, a TTL `< 1`, or a guard timeout outside
-/// `[1, 600]` s is rejected `400` before anything is persisted — no silent
-/// default like the env parser.
+/// `PUT /settings` — persist the stored tier of one or more knobs, then return the
+/// recomputed [`build_settings_view`] so the UI shows the new effective/source
+/// without a second round-trip (ADR-0015). Validation is fail-fast: an out-of-range
+/// value is a `400` before anything is persisted — never a silent default like the
+/// env parser.
 ///
 /// The body is taken as raw JSON rather than straight into
-/// [`instance_config::UpdateInstanceConfig`] for ONE reason (#471): a field this endpoint has
-/// *retired* must 400 **naming itself**, not be silently ignored by serde and answered 200 as
-/// though it had been applied. Letting the extractor deserialise would also turn every type error
-/// into axum's opaque 422; going through `from_value` here makes both a 400 with a message.
+/// [`instance_config::UpdateInstanceConfig`] for ONE reason: a *retired* field must
+/// 400 **naming itself**, not be silently ignored by serde and answered 200 as though
+/// applied. It also turns axum's opaque 422 on a type error into a 400 with a message.
 async fn put_settings(
     State(state): State<Arc<AppState>>,
     Json(body): Json<serde_json::Value>,
@@ -9918,8 +9012,8 @@ async fn put_settings(
         )
             .into_response()
     };
-    // #471: the two retired sandbox-image knobs. Checked BEFORE parsing, so the answer is about
-    // the field the caller sent rather than about the shape of the struct that no longer has it.
+    // Checked BEFORE parsing, so the answer is about the field the caller sent rather
+    // than about the shape of the struct that no longer has it.
     for (field, env_var) in instance_config::RETIRED_SANDBOX_IMAGE_COLUMNS {
         if body.get(field).is_some() {
             return bad(&retired_setting_message(field, env_var));
@@ -9950,19 +9044,16 @@ async fn put_settings(
         }
     }
     if let Some(s) = req.default_sandbox.as_deref() {
-        // "" = clear sentinel (accepted, normalised to NULL by `update`); anything else
-        // must be `off` or a staging profile that RESOLVES → 400 otherwise (fail-fast,
-        // no silent default) (#410/#432). Same shared gate as the Trigger surfaces.
+        // "" = clear sentinel; anything else must be `off` or a staging profile that
+        // RESOLVES. Same shared gate as the Trigger surfaces.
         if let Err(msg) = validate_sandbox_ref(&state.db, s).await {
             return bad(&msg);
         }
     }
     if let Some(h) = req.default_harness.as_deref() {
-        // #614 (correctif 10): "" = clear sentinel (accepted); anything else must
-        // RESOLVE against the registry (embedded floor merged with the disk tier),
-        // exactly as the default sandbox must above. A default harness that resolves
-        // to nothing would break EVERY subsequent spawn that falls through to it —
-        // so it is refused at registration, fail-fast, never a silent broken default.
+        // "" = clear sentinel; anything else must RESOLVE against the registry. A
+        // default harness that resolves to nothing would break EVERY spawn that falls
+        // through to it, so it is refused at registration.
         if !h.is_empty() {
             let home_root = sandbox_run::sandbox_home_roots(&state)
                 .map(|(home, _)| home)
@@ -9995,8 +9086,6 @@ async fn put_settings(
             .into_response(),
     }
 }
-
-// --- Agent profiles (#563, ADR-0057) ---------------------------------------
 
 #[derive(Deserialize)]
 struct WriteAgentProfileRequest {
@@ -10195,18 +9284,12 @@ async fn get_agent_profile_referents(
     .into_response()
 }
 
-// --- Staging profiles (#432, ADR-0031 §2-§7) --------------------------------
-
-/// Serialise one resolved entry for the editor: the path, what it points at, whether it
-/// comes from the built-in default or the user's extras, whether it is currently on, and
-/// the server-owned advisories.
+/// Serialise one resolved entry for the editor.
 ///
-/// Advisories are computed **here, server-side** — deliberately. Deriving the ≈1 GB
-/// warning or the sensitivity flag in the client would re-open exactly the drift #373
-/// cost us, and the size figure is a measurement recorded in `sandbox_staging`, not
-/// something a browser can know. `exists` is one `symlink_metadata` per entry (≤ a dozen
-/// per profile) — nothing like the recursive `plugins/**/node_modules` walk the settings
-/// handler explicitly budgets against.
+/// Advisories are computed **server-side** deliberately: deriving the size warning or
+/// the sensitivity flag in the client would re-open the drift this codebase has paid
+/// for before, and the size figure is a measurement recorded in `sandbox_staging`,
+/// not something a browser can know. `exists` is one `symlink_metadata` per entry.
 fn sandbox_entry_view(
     home_root: Option<&std::path::Path>,
     path: &str,
@@ -10216,7 +9299,6 @@ fn sandbox_entry_view(
     let sensitive = sandbox_profile::SENSITIVE_PREFIXES
         .iter()
         .any(|p| path == *p || path.starts_with(&format!("{p}/")));
-    // A glob is never stat-ed: the pattern itself is not a path.
     let is_glob = default_entry.is_some_and(|d| d.kind == sandbox_profile::EntryKind::Glob);
     let on_disk = match (home_root, is_glob) {
         (Some(home), false) => Some(home.join(path)),
@@ -10227,8 +9309,8 @@ fn sandbox_entry_view(
         .map(|p| std::fs::symlink_metadata(p).is_ok());
     let kind = match default_entry.map(|d| d.kind) {
         Some(k) => k,
-        // An extra's kind is an OBSERVED fact — the picker knows it, but the stored diff
-        // does not, and re-deriving it here keeps the row honest after a `rm -rf`.
+        // An extra's kind is an OBSERVED fact: the stored diff does not carry it, and
+        // re-deriving it here keeps the row honest after a `rm -rf`.
         None => match on_disk.as_ref().map(|p| p.is_dir()) {
             Some(true) => sandbox_profile::EntryKind::Dir,
             _ => sandbox_profile::EntryKind::File,
@@ -10252,8 +9334,8 @@ fn sandbox_profile_view(
     profile: &sandbox_profile::ResolvedProfile,
 ) -> serde_json::Value {
     let base = sandbox_profile::base_entries(&profile.name);
-    // Default entries first, in the constant's own reading order (NOT sorted): the editor
-    // shows a stable checklist, and reordering it on every edit would be hostile.
+    // Default entries first, in the constant's own reading order — NOT sorted, or the
+    // editor's checklist reorders on every edit.
     let mut entries: Vec<serde_json::Value> = sandbox_profile::DEFAULT_FULL_ENTRIES
         .iter()
         .filter(|d| base.contains(&d.path))
@@ -10262,7 +9344,6 @@ fn sandbox_profile_view(
             sandbox_entry_view(home_root, d.path, Some(d), enabled)
         })
         .collect();
-    // Then the extras, in stored order.
     for extra in &profile.extras {
         let enabled = profile.resolved.entries.iter().any(|e| e == extra);
         entries.push(sandbox_entry_view(home_root, extra, None, enabled));
@@ -10277,32 +9358,29 @@ fn sandbox_profile_view(
         "materialised": profile.materialised,
         "disabled": profile.disabled,
         "extras": profile.extras,
-        // The FROZEN-shaped list: exactly what a Run created now would stage.
+        // Exactly what a Run created now would stage.
         "resolved": profile.resolved.entries,
         "entries": entries,
         // Signalled no-ops, never errors (ADR-0031 §2): the default may lose an entry
-        // tomorrow, and a `disabled` for an entry this version does not have yet must be
-        // remembered.
+        // tomorrow, and a `disabled` for an entry this version lacks must be remembered.
         "redundant_extras": profile.resolved.redundant_extras,
         "inactive_disabled": profile.resolved.inactive_disabled,
         "floor": floor,
         "sensitive_prefixes": sandbox_profile::SENSITIVE_PREFIXES,
-        // #468: the env posed at `docker create`, VALUES INCLUDED. This is not a secret
-        // store and the UI says so in as many words: the values already sit in clear in
-        // SQLite, in the Run's frozen `run_started` payload and in `docker inspect
-        // --format '{{.Config.Env}}'`. Masking them here would be theatre — and worse,
-        // it would let someone believe PDO is protecting them. The one place they must
-        // NOT appear is the daemon log (`sandbox_profile::env_names`), because the systemd
-        // journal outlives the Run and the profile.
+        // The env posed at `docker create`, VALUES INCLUDED. This is not a secret store
+        // and the UI says so: the values already sit in clear in SQLite, in the Run's
+        // frozen `run_started` payload and in `docker inspect`. Masking them here would
+        // be theatre that let someone believe PDO is protecting them. The one place
+        // they must NOT appear is the daemon log (`sandbox_profile::env_names`),
+        // because the journal outlives the Run and the profile.
         "env": profile.env,
-        // The keys PDO poses itself and therefore refuses (`HOME`, `PDO_DAEMON_URL`,
-        // `PDO_RUN_ID`). Server-owned, like every other derived label here (#373): the
-        // editor greys them out instead of hard-coding a parallel list that would drift
-        // the day a fourth run-constant appears.
+        // The keys PDO poses itself and therefore refuses. Server-owned, so the editor
+        // greys them out instead of hard-coding a parallel list that would drift the
+        // day a fourth run-constant appears.
         "reserved_env_keys": sandbox_container::RUN_CONSTANT_ENV_KEYS,
-        // #467: where this profile's container image comes from, or `null` when it poses nothing
-        // and the profile default decides (#471). `null` and absent are the same answer here, and
-        // the editor renders both as "default".
+        // Where this profile's container image comes from, or `null` when it poses
+        // nothing and the profile default decides. `null` and absent are the same
+        // answer here; the editor renders both as "default".
         "image": profile.image,
         "updated_at": profile.updated_at,
     })
@@ -10327,7 +9405,6 @@ async fn list_sandbox_profiles(State(state): State<Arc<AppState>>) -> Response {
     for (name, _) in &names {
         match sandbox_profile::resolve(&state.db, name).await {
             Ok(Some(p)) => out.push(sandbox_profile_view(home_root.as_deref(), &p)),
-            // Unreachable: the name came from the same store one statement ago.
             Ok(None) => warn!("sandbox profile `{name}` vanished mid-list"),
             Err(e) => {
                 error!("failed to resolve sandbox profile `{name}`: {e}");
@@ -10376,51 +9453,44 @@ struct UpsertSandboxProfileRequest {
     disabled: Vec<String>,
     #[serde(default)]
     extras: Vec<String>,
-    /// Environment variables posed at `docker create` (#468, ADR-0031 §8). A FULL
-    /// replacement like the two lists above — an absent key clears the env rather than
+    /// Environment variables posed at `docker create` (ADR-0031 §8). A FULL
+    /// replacement like the two lists above — an absent key CLEARS the env rather than
     /// leaving it alone, which is what makes "remove a variable" expressible at all.
     #[serde(default)]
     env: std::collections::BTreeMap<String, String>,
-    /// Where this profile's image comes from (#467, ADR-0031 §9), or absent/`null` to pose
-    /// nothing and let the profile default decide (#471). A FULL replacement like every other
-    /// field: omitting it CLEARS the profile's image source, which is what makes "go back to the
+    /// Where this profile's image comes from (ADR-0031 §9), or absent/`null` to pose
+    /// nothing and let the profile default decide. A FULL replacement like every other
+    /// field: omitting it CLEARS the image source, which is what makes "go back to the
     /// default image" expressible at all.
     ///
-    /// Typed rather than a `serde_json::Value`: an unknown `kind` is then rejected by serde
-    /// itself, with a message that names the offending token and the two it expects, before this
-    /// handler runs at all — the same reason `off` is refused by the name grammar rather than by
-    /// a lookup that would fail later.
+    /// Typed rather than a `serde_json::Value`, so an unknown `kind` is rejected by
+    /// serde itself — naming the offending token and the two it expects — before this
+    /// handler runs at all.
     #[serde(default)]
     image: Option<sandbox_image::ProfileImage>,
 }
 
 /// `PUT /settings/sandbox-profiles/{name}` — upsert the diff.
 ///
-/// `upsert` and not create-then-update: the caller cannot know whether `full` already has
-/// a row, and ADR-0031 §2 says editing it *is* what materialises one.
+/// `upsert` and not create-then-update: the caller cannot know whether `full` already
+/// has a row, and ADR-0031 §2 says editing it *is* what materialises one.
 ///
 /// Validation, all fail-fast before anything is written:
 /// - the name against the grammar (`off` and `""` reserved, no case folding);
-/// - each `extras` path through [`sandbox_profile::validate_entry`] — absolute, `..`,
-///   backslash, NUL, glob, `.claude` bare, `.pdo`, and the three floor-owned paths are
-///   rejected — and it must **exist under `$HOME` right now**, an early UX gate in the
-///   same spirit as the Dockerfile-path gate below (necessary, never sufficient: `prepare`
-///   warns-and-skips, and mount rule M1 handles a path that vanishes later);
-/// - each `disabled` name by **membership in the built-in default**, which is also what
-///   makes the default's `.claude/*.md` glob unauthorable by hand;
-/// - `extras ∩ disabled = ∅`. A contradictory intention resolved silently would freeze
-///   into `RunStarted` a winner the user never picked;
-/// - each `env` key and value (#468) — the grammar, and the three run-constant keys PDO
-///   poses itself, which are a **400 naming the key**, never a silent skip. The precedent
-///   and the reason are the `PDO_DAEMON_URL` guard in `sandbox_container`'s `docker exec`
-///   loop ("a re-passed `-e` would clobber the gateway"); the asymmetry is that a skip is
-///   tolerable inside a code path nobody reads, and indefensible in a form the user just
-///   filled in. Silently dropping `HOME` would leave an editor that shows it set and a
-///   container where it is not — and a `HOME` that DID land would break the `.claude` and
-///   `.claude.json` mounts at once.
-/// - the `image` source (#467) — an absolute path for `kind: dockerfile`, **which must exist**
-///   (an early UX gate, not the authoritative one), and a pullable-looking ref for
-///   `kind: registry`, which is deliberately NOT probed: see the comment at the check.
+/// - each `extras` path through [`sandbox_profile::validate_entry`], and it must
+///   **exist under `$HOME` right now** — an early UX gate, necessary but never
+///   sufficient, since `prepare` warns-and-skips a path that vanishes later;
+/// - each `disabled` name by **membership in the built-in default**, which is also
+///   what makes the default's `.claude/*.md` glob unauthorable by hand;
+/// - `extras ∩ disabled = ∅`. A contradictory intention resolved silently would
+///   freeze into `RunStarted` a winner the user never picked;
+/// - each `env` key and value, including the run-constant keys PDO poses itself,
+///   which are a **400 naming the key**, never a silent skip: silently dropping
+///   `HOME` would leave an editor that shows it set and a container where it is not,
+///   and a `HOME` that DID land would break the `.claude` mounts at once;
+/// - the `image` source — an absolute path for `kind: dockerfile`, **which must
+///   exist**, and a pullable-looking ref for `kind: registry`, deliberately NOT
+///   probed (see the comment at the check).
 async fn put_sandbox_profile(
     State(state): State<Arc<AppState>>,
     AxumPath(name): AxumPath<String>,
@@ -10441,7 +9511,6 @@ async fn put_sandbox_profile(
 
     let home_root = sandbox_run::sandbox_home_roots(&state).ok().map(|(h, _)| h);
 
-    // Extras: validate → normalise → (exists under $HOME) → sort → dedup.
     let mut extras: Vec<String> = Vec::with_capacity(req.extras.len());
     for raw in &req.extras {
         let norm = match sandbox_profile::validate_entry(raw) {
@@ -10464,8 +9533,8 @@ async fn put_sandbox_profile(
     }
     extras.sort();
 
-    // Disabled: validated by MEMBERSHIP in the authored default, not by `validate_entry`.
-    // Two consequences, both wanted: the default's `.claude/*.md` glob is uncheckable but
+    // Validated by MEMBERSHIP in the authored default, not by `validate_entry`. Two
+    // consequences, both wanted: the default's `.claude/*.md` glob is uncheckable but
     // never hand-writable, and an *extra* can only be removed by dropping it from
     // `extras` — unchecking is for defaults only, which keeps the diff unambiguous.
     let mut disabled: Vec<String> = Vec::with_capacity(req.disabled.len());
@@ -10495,11 +9564,10 @@ async fn put_sandbox_profile(
         ));
     }
 
-    // Env (#468): key grammar + the three reserved run-constants + value legibility. The
-    // normalised key is what gets stored, so `  FOO  ` and `FOO` cannot become two rows
-    // that render identically. A collision after trimming is a 400 for the same reason the
-    // `extras ∩ disabled` clash is: resolving it silently would freeze a winner the user
-    // never picked.
+    // The NORMALISED key is what gets stored, so `  FOO  ` and `FOO` cannot become two
+    // rows that render identically. A collision after trimming is a 400 for the same
+    // reason the `extras ∩ disabled` clash is: resolving it silently would freeze a
+    // winner the user never picked.
     let mut env: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
     for (raw_key, raw_value) in &req.env {
         let key = match sandbox_profile::validate_env_key(raw_key) {
@@ -10518,17 +9586,15 @@ async fn put_sandbox_profile(
         }
     }
 
-    // Image source (#467): the grammar first (pure, in `sandbox_profile`), then — for a
-    // Dockerfile — an early existence gate. Necessary, never sufficient: the authoritative check
-    // is `ensure_image`'s `is_file()` bail at prep time (the file can vanish, or sit on a volume
-    // that is not mounted yet). Catching it here turns "the Run died three minutes in" into "the
-    // form said no".
+    // The grammar first, then — for a Dockerfile — an early existence gate. Necessary,
+    // never sufficient: the authoritative check is `ensure_image`'s `is_file()` bail at
+    // prep time, since the file can vanish or sit on an unmounted volume. Catching it
+    // here turns "the Run died three minutes in" into "the form said no".
     //
-    // A registry ref gets NO such gate, and that asymmetry is the point of the field: PDO cannot
-    // check that a ref resolves without a network round-trip inside a PUT handler, and cannot
-    // check that the image contains `claude` at all. Whoever supplies the ref owns that (ADR-0030
-    // pt 7 as amended by #467) — which is also why a failed pull is a hard error rather than a
-    // silent build.
+    // A registry ref gets NO such gate, and the asymmetry is the point: PDO cannot check
+    // that a ref resolves without a network round-trip inside a PUT handler, nor that
+    // the image contains an agent at all. Whoever supplies the ref owns that (ADR-0030
+    // pt 7) — which is also why a failed pull is a hard error rather than a silent build.
     let image = match req.image.as_ref() {
         None => None,
         Some(raw) => match sandbox_profile::validate_profile_image(raw) {
@@ -10566,11 +9632,10 @@ async fn put_sandbox_profile(
 
 /// `DELETE /settings/sandbox-profiles/{name}` — drop the materialised row.
 ///
-/// **Unconditional** (ADR-0031 §7: a *soft* guard-rail, no referential integrity in the
-/// database). Deleting an edited `full`/`minimal` reverts it to its virtual default;
-/// deleting a user profile makes every future Run that references it fail loud. Neither
-/// repoints anything — which is precisely what the referents dialog must say before the
-/// user confirms.
+/// **Unconditional** (ADR-0031 §7: a *soft* guard-rail, no referential integrity in
+/// the database). Deleting an edited `full`/`minimal` reverts it to its virtual
+/// default; deleting a user profile makes every future Run referencing it fail loud.
+/// Neither repoints anything — which the referents dialog must say before confirming.
 async fn delete_sandbox_profile(
     State(state): State<Arc<AppState>>,
     AxumPath(name): AxumPath<String>,
@@ -10599,8 +9664,8 @@ async fn delete_sandbox_profile(
 ///
 /// Server-side because the frontend **cannot** derive the third class: `RunListEntry`
 /// does not carry `sandbox` (only the full `RunState` does), so a client would need N
-/// requests. Three classes, and the distinction between the first two and the third is
-/// the whole point of the dialog:
+/// requests. The distinction between the first two classes and the third is the whole
+/// point of the dialog:
 /// - `instance_default` / `triggers` — deleting will NOT repoint them, and the next Run
 ///   they produce **fails**; it does not fall back to a default;
 /// - `runs` — live Runs that already froze their entry list at start (ADR-0031 §6) and
@@ -10609,8 +9674,8 @@ async fn get_sandbox_profile_referents(
     State(state): State<Arc<AppState>>,
     AxumPath(name): AxumPath<String>,
 ) -> Response {
-    // Instance default: the RESOLVED tier, so a stored value shadowed by `PDO_DEFAULT_SANDBOX`
-    // is not reported as a referent when it is not the one that wins.
+    // The RESOLVED tier, so a stored value shadowed by the env is not reported as a
+    // referent when it is not the one that wins.
     let stored_default = instance_config::get(&state.db)
         .await
         .ok()
@@ -10637,9 +9702,9 @@ async fn get_sandbox_profile_referents(
         }
     };
 
-    // Live Runs: one indexed pass over `run_started` payloads, excluding any run that
-    // already emitted a terminal event. Cheaper than projecting each run, and terminality
-    // is exactly "a terminal event exists" for this purpose.
+    // One indexed pass over `run_started` payloads, excluding any run that already
+    // emitted a terminal event. Cheaper than projecting each run, and terminality is
+    // exactly "a terminal event exists" for this purpose.
     let rows: Result<Vec<(String, String)>, _> = sqlx::query_as(
         "SELECT e.run_id, e.payload FROM events e \
          WHERE e.kind = 'run_started' AND e.payload IS NOT NULL \
@@ -10686,27 +9751,21 @@ struct PauseTriggersRequest {
     paused: bool,
 }
 
-/// `POST /triggers/pause` — flip the global Trigger kill-switch (#348).
+/// `POST /triggers/pause` — flip the global Trigger kill-switch.
 ///
-/// Persists `triggers_paused` on `instance_config` (a daemon-wide scheduler
-/// gate, outside the `/settings` machinery) and broadcasts a `triggers_paused`
-/// WS event so every client — this tab, a second tab, the CLI — reflects the
-/// flip live (there is no trigger polling). Mirrors the broadcast idiom of
-/// `record_and_broadcast_fire`. Idempotent: re-sending the same value is a
-/// harmless no-op re-render. No auth, net-neutral: the same surface as
-/// `POST /triggers` (ADR-0027 addendum #350). The per-Trigger `enabled` flag is
-/// never touched — pause and per-Trigger disable are orthogonal channels, which
-/// is what makes "restore the prior state on unpause" free.
+/// Persists `triggers_paused` on `instance_config` (a daemon-wide scheduler gate,
+/// outside the `/settings` machinery) and broadcasts a WS event, because there is no
+/// trigger polling and a second tab would otherwise never learn. Idempotent.
 ///
-/// Contract: `200 { ok, paused }`; `500 { error }` on a DB write failure.
+/// The per-Trigger `enabled` flag is never touched: pause and per-Trigger disable are
+/// orthogonal channels, which is what makes "restore the prior state on unpause" free.
 async fn pause_triggers(
     State(state): State<Arc<AppState>>,
     actor: audit_log::Actor,
     Json(req): Json<PauseTriggersRequest>,
 ) -> Response {
-    // #507: this endpoint writes blind (no prior read) — capture the "before" flag
-    // first, or the audit entry cannot show the direction of the flip. The single
-    // `POST /triggers/pause` handles pause AND resume; `req.paused` captures both.
+    // This endpoint writes blind, so capture the "before" flag first or the audit
+    // entry cannot show the direction of the flip.
     let before = instance_config::triggers_paused(&state.db).await.ok();
     match instance_config::set_triggers_paused(&state.db, req.paused).await {
         Ok(()) => {
@@ -10736,12 +9795,9 @@ async fn pause_triggers(
     }
 }
 
-/// `GET /triggers/health` — scheduler liveness (#222). Reports `last_tick_at`
-/// (ISO-8601 millis of the most recent tick start, or `null` if it has never
-/// ticked), the configured tick interval, and the global pause flag (#348), so a
-/// dead/stalled Trigger scheduler — or a deliberately-paused one — is observable
-/// instead of silently dormant. Additive sub-route under the `/triggers` prefix
-/// (already proxied) — does not touch the `/triggers` array.
+/// `GET /triggers/health` — scheduler liveness: the most recent tick start, the
+/// configured interval, and the global pause flag, so a dead/stalled scheduler — or
+/// a deliberately-paused one — is observable instead of silently dormant.
 async fn triggers_health(State(state): State<Arc<AppState>>) -> Response {
     let ms = state
         .last_trigger_tick_ms
@@ -10750,9 +9806,8 @@ async fn triggers_health(State(state): State<Arc<AppState>>) -> Response {
         .then(|| chrono::DateTime::from_timestamp_millis(ms))
         .flatten()
         .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
-    // Fail-open on a DB read error (report `false`), matching the tick gate — a
-    // paused daemon must never look "dead", and a genuinely-broken DB surfaces on
-    // the very next tick anyway.
+    // Fail-open on a DB read error, matching the tick gate: a paused daemon must
+    // never look "dead", and a genuinely-broken DB surfaces on the next tick anyway.
     let paused = instance_config::triggers_paused(&state.db)
         .await
         .unwrap_or(false);
@@ -10764,13 +9819,9 @@ async fn triggers_health(State(state): State<Arc<AppState>>) -> Response {
     .into_response()
 }
 
-/// `GET /stale/health` — stale-detector liveness (#251). Reports `last_tick_at`
-/// (ISO-8601 millis of the most recent sweep start, or `null` if it has never
-/// swept) and the configured sweep interval, so a dead/stalled stale detector is
-/// observable instead of silent. This is the diagnostic that, on the next
-/// idle-stall recurrence, distinguishes a *dead sweep* (heartbeat frozen) from a
-/// per-node probe miss (heartbeat advancing). Sibling of `GET /triggers/health`
-/// (#222); new `/stale` prefix is whitelisted in the vite dev proxy.
+/// `GET /stale/health` — stale-detector liveness. On an idle-stall recurrence this
+/// is what distinguishes a *dead sweep* (heartbeat frozen) from a per-node probe miss
+/// (heartbeat advancing).
 async fn stale_health(State(state): State<Arc<AppState>>) -> Response {
     let ms = state
         .last_stale_tick_ms
@@ -10782,8 +9833,8 @@ async fn stale_health(State(state): State<Arc<AppState>>) -> Response {
     Json(serde_json::json!({
         "last_tick_at": last_tick_at,
         "tick_interval_secs": stale_detector::STALE_TICK_INTERVAL_SECS,
-        // #290: how many live nodes were found stuck on Claude Code's usage-limit
-        // menu as of the last sweep (observability-only; the node stays Running).
+        // Live nodes found stuck on Claude Code's usage-limit menu as of the last
+        // sweep. Observability-only — the node stays Running.
         "blocked_on_limit": state
             .blocked_on_limit
             .load(std::sync::atomic::Ordering::Relaxed),
@@ -10807,8 +9858,8 @@ async fn list_runs(State(state): State<Arc<AppState>>) -> Response {
         };
         if let Some(run_state) = event_log::project(&events) {
             let stalled = event_log::is_stalled(&run_state);
-            // Compute the resolved repo before moving `run_state`'s fields into
-            // the struct literal — `effective_repo_root` borrows `&run_state`.
+            // Must be computed before `run_state`'s fields move into the literal:
+            // `effective_repo_root` borrows `&run_state`.
             let effective_repo = effective_repo_root(&state, &run_state)
                 .to_string_lossy()
                 .into_owned();
@@ -10831,19 +9882,18 @@ async fn list_runs(State(state): State<Arc<AppState>>) -> Response {
     Json(runs).into_response()
 }
 
-/// One entry of `GET /runs/reapable` (#128 Track A): a terminal, non-archived
-/// run whose on-disk worktree(s) still exist and can be reclaimed via the
-/// explicit `cleanup_run` command.
+/// One entry of `GET /runs/reapable`: a terminal, non-archived run whose on-disk
+/// worktree(s) still exist and can be reclaimed via the explicit `cleanup_run`
+/// command.
 #[derive(Serialize)]
 struct ReapableEntry {
     run_id: String,
     pipeline_name: String,
-    /// The run's terminal status (`completed`/`failed`/`halted`/`skipped`).
-    /// Surfacing is read-only and does NOT pre-filter failures — the consumer
-    /// (e.g. the disk-janitor recipe) applies its own status policy.
+    /// The run's terminal status. Deliberately NOT pre-filtered — the consumer
+    /// applies its own status policy.
     status: event_log::RunStatus,
-    /// ISO timestamp of the terminal transition (projection sets it for every
-    /// terminal status). The age a janitor TTL policy compares against.
+    /// ISO timestamp of the terminal transition — the age a janitor TTL policy
+    /// compares against.
     #[serde(skip_serializing_if = "Option::is_none")]
     completed_at: Option<String>,
     /// Seconds since `completed_at` (`None` when it is absent/unparseable), so a
@@ -10870,11 +9920,10 @@ struct ReapableQuery {
     size: bool,
 }
 
-/// Best-effort recursive byte size of a directory tree, summing regular-file
-/// lengths (apparent size). Symlinks are not followed (so it cannot cycle).
-/// Returns `None` only when the root does not exist; per-entry I/O errors are
-/// skipped. Used solely behind `?size=true` on `GET /runs/reapable` because a
-/// run worktree can hold a full `node_modules`, so it is opt-in.
+/// Best-effort recursive byte size of a directory tree (apparent size). Symlinks are
+/// not followed, so it cannot cycle. `None` only when the root does not exist;
+/// per-entry I/O errors are skipped. Opt-in behind `?size=true` because a run
+/// worktree can hold a full `node_modules`.
 fn dir_size_bytes(root: &Path) -> Option<u64> {
     if !root.exists() {
         return None;
@@ -10905,18 +9954,14 @@ fn dir_size_bytes(root: &Path) -> Option<u64> {
 }
 
 /// GET /runs/reapable — read-only surfacing of terminal runs whose on-disk
-/// worktree(s) still exist, so a human or a janitor pipeline can reclaim the
-/// disk via the explicit `cleanup_run` command (#128, Track A).
+/// worktree(s) still exist, so a human or a janitor pipeline can reclaim the disk via
+/// the explicit `cleanup_run` command.
 ///
-/// DOCTRINE (ADR-0012(a)): this endpoint NEVER deletes anything. The runtime
-/// only *surfaces* candidates; performing the irreversible teardown (worktree +
-/// branch removal) stays a pipeline/human action. The companion recipe at
-/// `docs/recipes/disk-janitor.md` wires this to a cron Trigger so the disk-fill
-/// is solved unattended while the deletion's *origin* stays in the pipeline.
+/// DOCTRINE (ADR-0012a): this endpoint NEVER deletes anything. It only *surfaces*
+/// candidates; the irreversible teardown stays a pipeline/human action.
 ///
-/// A run is emitted iff it is terminal (`is_terminal()` — the complement of
-/// `is_live()`) AND not already `Archived` (archived runs had their disk
-/// reclaimed) AND a `worktree/` or `nodes/` dir still exists under its run dir.
+/// A run is emitted iff it is terminal AND not already `Archived` AND a `worktree/`
+/// or `nodes/` dir still exists under its run dir.
 async fn list_reapable_runs(
     State(state): State<Arc<AppState>>,
     Query(q): Query<ReapableQuery>,
@@ -10939,8 +9984,7 @@ async fn list_reapable_runs(
             continue;
         };
 
-        // Eligible = terminal AND not already reclaimed. `Archived` is terminal
-        // too, so `is_terminal()` alone is not enough — exclude it explicitly.
+        // `Archived` is terminal too, so `is_terminal()` alone is not enough.
         let eligible =
             run_state.status.is_terminal() && run_state.status != event_log::RunStatus::Archived;
         if !eligible {
@@ -10954,8 +9998,7 @@ async fn list_reapable_runs(
             continue;
         }
 
-        // Age from the terminal transition; `completed_at` is borrowed here,
-        // then moved into the entry below (compute before the move).
+        // `completed_at` is borrowed here and moved into the entry below.
         let age_secs = run_state
             .completed_at
             .as_deref()
@@ -11000,9 +10043,9 @@ async fn get_run(
     match event_log::project(&events) {
         Some(mut run_state) => {
             let repo_root = effective_repo_root(&state, &run_state);
-            // #408: read the cost transcripts from the sandboxed Run's staged home
-            // while it is live, `~/.claude/projects/` otherwise. HOME absent →
-            // degrade to the host root (never fail a read).
+            // Read the cost transcripts from the sandboxed Run's staged home while
+            // it is live, `~/.claude/projects/` otherwise. HOME absent → degrade to
+            // the host root; never fail a read.
             let (home_root, sandbox_root) =
                 sandbox_run::sandbox_home_roots(&state).unwrap_or_else(|_| {
                     let home = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default());
@@ -11015,16 +10058,15 @@ async fn get_run(
                 &home_root,
                 &sandbox_root,
             );
-            // #427: resolve the three price tiers ONCE, here at the edge, next to
-            // the roots this request already resolved. Two `fs::read` of a few KB —
-            // deliberately not an `AppState` cache and never a `OnceLock`, which
-            // would make a daemon restart mandatory to change a price and so annul
-            // ADR-0034. Note the seam asymmetry: prices come from `home_root` (the
-            // HOST home — prices are an instance concept), while transcripts come
-            // from `projects_root` (the #408 seam, which moves for a sandboxed Run).
+            // Resolve the three price tiers ONCE, here at the edge. Deliberately NOT
+            // an `AppState` cache and never a `OnceLock`: either would make a daemon
+            // restart mandatory to change a price, annulling ADR-0034. Note the seam
+            // asymmetry — prices come from `home_root` (the HOST home, since prices
+            // are an instance concept) while transcripts come from `projects_root`,
+            // which moves for a sandboxed Run.
             let prices = price_table::PriceTable::load(&home_root);
-            // #615: the copilot reported-cost slice reads its session journals from
-            // the host `.copilot/session-state/` (copilot has no staging floor).
+            // Copilot has no staging floor, so its session journals are read from the
+            // host `.copilot/session-state/`.
             let copilot_root = sandbox_run::copilot_store_root(&home_root);
             augment_run_state_from_disk(
                 &mut run_state,
@@ -11054,8 +10096,6 @@ async fn get_run_events(
     Json(events).into_response()
 }
 
-// --- Diff endpoints ---
-
 async fn run_diff(
     State(state): State<Arc<AppState>>,
     AxumPath(run_id): AxumPath<String>,
@@ -11073,11 +10113,11 @@ async fn run_diff(
     };
 
     let pipeline_branch = format!("pdo/run-{run_id}");
-    // #417: base on the Run's frozen fork point (`run_diff_base`: `fork_sha` → recorded
-    // `source_branch` → `HEAD`), NOT the shared checkout's wandering HEAD — otherwise a
-    // checkout parked on a divergent branch sweeps in phantom files. Three-dot (merge-base
-    // = fork point) so main's advance after the fork does not surface as phantom deletions;
-    // `:(exclude).pdo/` drops the blackboard artefacts. Mirrors compute_run_loc. #376/#417.
+    // Base on the Run's frozen fork point, NOT the shared checkout's wandering HEAD:
+    // a checkout parked on a divergent branch would sweep in phantom files. Three-dot
+    // (merge-base = fork point) so main's advance after the fork does not surface as
+    // phantom deletions; `:(exclude).pdo/` drops the blackboard artefacts. Mirrors
+    // `compute_run_loc`.
     let base = run_diff_base(&run_state);
     let range = format!("{base}...{pipeline_branch}");
     let output = match std::process::Command::new("git")
@@ -11178,8 +10218,6 @@ async fn node_diff(
     (StatusCode::OK, diff.into_owned()).into_response()
 }
 
-// --- Run-scoped pipeline modification handler ---
-
 async fn handle_run_pipeline_modifications(
     state: Arc<AppState>,
     mut rx: tokio::sync::mpsc::UnboundedReceiver<pipeline_watcher::RunPipelineModified>,
@@ -11206,15 +10244,12 @@ async fn handle_run_pipeline_modifications(
     }
 }
 
-// --- Run-scoped pipeline GET / PUT ---
-
 async fn get_run_pipeline(
     State(state): State<Arc<AppState>>,
     AxumPath(run_id): AxumPath<String>,
 ) -> Response {
-    // #315: resolve against the durable store when the run is archived (its
-    // repo-local worktree + pipeline.yaml are gone), against the live run dir
-    // otherwise. Everything downstream (parse, prompts, JSON shape) is unchanged.
+    // Resolve against the durable store when the run is archived — its repo-local
+    // worktree and pipeline.yaml are gone — against the live run dir otherwise.
     let run_state = match load_events(&state.db, &run_id).await {
         Ok(events) => event_log::project(&events),
         Err(_) => None,
@@ -11377,7 +10412,7 @@ async fn save_run_pipeline(
     let old_pipeline = match pipeline::parse_pipeline(&old_yaml) {
         Ok(r) => r.pipeline,
         Err(_) => {
-            // Old pipeline unparseable — skip validation, allow overwrite
+            // Old pipeline unparseable: skip validation, allow the overwrite.
             new_pipeline.clone()
         }
     };
@@ -11455,9 +10490,9 @@ fn sync_run_pipeline_to_template(
         return;
     }
 
-    // #231: write each prompt to the canonical `<dir>/<stem>.prompts/<id>.md`
-    // location every reader consults — NOT a flat `<dir>/prompts/<id>.md` dir
-    // (which no reader looks in, silently swallowing run-scoped prompt edits).
+    // Write each prompt to the canonical `<dir>/<stem>.prompts/<id>.md` location every
+    // reader consults. NOT a flat `<dir>/prompts/<id>.md` dir: no reader looks there,
+    // so run-scoped prompt edits vanish in silence.
     for (node_id, content) in prompts {
         let prompt_path = pipeline::canonical_prompt_path(&template_path, node_id);
         if let Some(parent) = prompt_path.parent() {
@@ -11475,14 +10510,11 @@ fn sync_run_pipeline_to_template(
     );
 }
 
-// --- Stale detection ---
-
-/// Gather best-effort diagnostic context the moment a node session is found
-/// dead (#234). All I/O lives here (the impure sweep layer); the pure shaping
-/// into the event payload is [`stale_detector::SessionDeathDiagnostics`]. The
-/// most discriminating fact is `tmux_server_alive`: a dead server means the
-/// whole socket collapsed and every session under it died at once, rather than
-/// this one node dying in isolation.
+/// Gather best-effort diagnostic context the moment a node session is found dead.
+/// All I/O lives here; the pure shaping into the event payload is
+/// [`stale_detector::SessionDeathDiagnostics`]. The most discriminating fact is
+/// `tmux_server_alive`: a dead server means the whole socket collapsed and every
+/// session under it died at once, rather than this one node dying in isolation.
 fn gather_session_death_diagnostics(
     socket: &str,
     run_id: &str,
@@ -11508,36 +10540,30 @@ fn gather_session_death_diagnostics(
         mem_available_kb,
         swap_free_kb,
         correlated_deaths,
-        // #615: filled by `assess_node` after this impure gather, from the harness's
-        // journal (this function does the tmux/proc reads only).
+        // Filled by `assess_node` after this impure gather; this function does the
+        // tmux/proc reads only.
         harness_error: None,
     }
 }
 
-/// Sweep-time [`stale_detector::NodeProbes`] adapter (#373): binds one running
-/// node's tmux + filesystem context so [`stale_detector::assess_node`] can run
-/// the whole detection pipeline with real I/O injected. Every method is a
-/// side-effect-free read; the sweep itself performs the reap/spawn side effects
-/// keyed off the returned detection.
+/// Sweep-time [`stale_detector::NodeProbes`] adapter: binds one running node's tmux
+/// and filesystem context so [`stale_detector::assess_node`] can run the whole
+/// detection pipeline with real I/O injected. Every method MUST stay a
+/// side-effect-free read; the sweep performs the reap/spawn side effects itself.
 struct SweepNodeProbes<'a> {
     socket: &'a str,
     session_name: &'a str,
     working_dir: &'a Path,
-    /// The Claude Code `projects/` root to read this node's transcript from (#408
-    /// observability seam): the sandboxed Run's staged home while it is live,
-    /// `~/.claude/projects/` otherwise. Resolved once per Run in the sweep via
-    /// [`sandbox_run::transcripts_root`]; the encoded cwd segment is still derived
-    /// from `working_dir` (the single source of truth), never re-encoded here.
+    /// The transcript store root: the sandboxed Run's staged home while it is live,
+    /// the host root otherwise. The encoded cwd segment is still derived from
+    /// `working_dir`, the single source of truth, never re-encoded here.
     projects_root: &'a Path,
-    /// #473: the Claude Code session id this node's iteration was launched with,
-    /// read back from its latest `NodeStarted` payload. `Some` ⇒ resolve the
-    /// transcript by identity (`<uuid>.jsonl`); `None` (a pre-#473 row / a script
-    /// node) ⇒ the legacy newest-mtime fallback.
+    /// The agent session id this iteration was launched with, from its latest
+    /// `NodeStarted` payload. `Some` ⇒ resolve the transcript by identity; `None`
+    /// (a legacy row, a script node) ⇒ the newest-mtime fallback.
     session_id: Option<&'a str>,
-    /// #613/ADR-0051: the node's frozen-at-spawn harness. Transcript resolution
-    /// dispatches on it — `claude`'s `<uuid>.jsonl` / newest-mtime for `claude`,
-    /// nothing for a harness whose store PDO cannot map — so this adapter never
-    /// hardcodes claude's resolution for a foreign harness.
+    /// The node's frozen-at-spawn harness. Transcript resolution dispatches on it,
+    /// so this adapter never applies claude's resolution to a foreign harness.
     harness: &'a str,
     pipeline_path: &'a Path,
     artifacts_dir: &'a Path,
@@ -11553,11 +10579,8 @@ impl stale_detector::NodeProbes for SweepNodeProbes<'_> {
     }
 
     fn transcript_tail(&self) -> Option<stale_detector::TranscriptTail> {
-        // #613/ADR-0051: dispatch transcript resolution to the resolved harness's
-        // implementation. `claude` resolves by pinned session identity (this node's
-        // own `<uuid>.jsonl`, #473) or the legacy newest-mtime fallback; a
-        // data-declared harness resolves `None` and no tail is read. The byte-read
-        // of the resolved path is generic (`read_transcript_tail`).
+        // Dispatch to the resolved harness's own implementation: a data-declared
+        // harness resolves `None` and no tail is read.
         harness_probes::resolve_transcript(
             self.harness,
             self.projects_root,
@@ -11592,23 +10615,20 @@ impl stale_detector::NodeProbes for SweepNodeProbes<'_> {
     }
 }
 
-// Takes `&Arc<AppState>` (not `&AppState`) since #469: the turn-end arm calls the
-// shared node-completion body, whose detached tail (#304, ADR-0023) must own a
-// clone of the state that outlives this sweep.
+// Takes `&Arc<AppState>`, not `&AppState`: the turn-end arm calls the shared
+// node-completion body, whose detached tail must own a clone of the state that
+// outlives this sweep.
 async fn run_stale_detection(state: &Arc<AppState>) {
-    // Record liveness at sweep start (#251): a wedged sweep freezes this value
-    // while an isolated panic still advances it, so `GET /stale/health` answers
-    // "is the sweep loop alive?". Mirrors the Trigger scheduler heartbeat (#222).
+    // Record liveness at sweep START: a wedged sweep then freezes the value while an
+    // isolated panic has already advanced it, so `/stale/health` answers "is the
+    // sweep loop alive?".
     state.last_stale_tick_ms.store(
         chrono::Utc::now().timestamp_millis(),
         std::sync::atomic::Ordering::Relaxed,
     );
 
-    // Debug-only fault injection (#251): a one-shot poison pill. Armed via
-    // `PDO_DEBUG_PANIC_STALE` (or per-daemon test config), it panics the first
-    // sweep after arming and disarms itself, so a regression test can prove the
-    // panic is isolated and the next sweep recovers. Checked *after* the heartbeat
-    // so the test can also assert liveness advanced through a panicking sweep.
+    // One-shot poison pill. Checked *after* the heartbeat, so a test can assert
+    // liveness advanced through a panicking sweep.
     if state
         .panic_on_stale_sweep
         .swap(false, std::sync::atomic::Ordering::Relaxed)
@@ -11627,10 +10647,8 @@ async fn run_stale_detection(state: &Arc<AppState>) {
     let socket = state.tmux_socket();
     let now = std::time::SystemTime::now();
 
-    // #408: resolve the sandbox home roots once for the whole sweep. HOME absent
-    // must NOT abort the sweep (unlike `context_from_state` at create, which
-    // fails loud) — degrade to the host `~/.claude` root and log. `off` runs
-    // ignore `sandbox_root` anyway (the seam returns the host root for them).
+    // Resolved once for the whole sweep. HOME absent must NOT abort the sweep,
+    // unlike `context_from_state` at create — degrade to the host root and log.
     let (home_root, sandbox_root) = match sandbox_run::sandbox_home_roots(state) {
         Ok(r) => r,
         Err(e) => {
@@ -11643,19 +10661,14 @@ async fn run_stale_detection(state: &Arc<AppState>) {
         }
     };
 
-    // #290 (Slice 1, observability only): count of live nodes found stuck on
-    // Claude Code's usage-limit menu across this whole sweep. Recomputed each
-    // sweep (leak-free — a node that leaves the live set drops out naturally);
-    // published to the `blocked_on_limit` gauge after the loop.
+    // Recomputed each sweep, so a node leaving the live set drops out naturally.
+    // Published to the `blocked_on_limit` gauge after the loop.
     let mut blocked_on_limit_count: i64 = 0;
 
-    // #469 §4: resolve turn-end auto-completion ONCE PER SWEEP, `stored → env →
-    // default(false)`. Inside the loop and not at boot (same posture as the
-    // reaper TTL, #129 / ADR-0015 D5), so ticking the box takes effect within one
-    // sweep interval without restarting the daemon — and one read per sweep, not
-    // one per node. A DB read error degrades the *stored* tier to unset (env →
-    // default(false) then decide), never to an assumed "on": the failure mode of
-    // guessing "on" is a terminal action nobody asked for.
+    // Resolved ONCE PER SWEEP, not at boot, so ticking the box takes effect within
+    // one sweep interval with no restart — and one read per sweep, not one per node.
+    // A DB read error degrades the *stored* tier to unset, never to an assumed "on":
+    // guessing "on" would take a terminal action nobody asked for.
     let autocomplete_turn_end = stale_detector::autocomplete_turn_end_with(
         instance_config::get(&state.db)
             .await
@@ -11684,19 +10697,17 @@ async fn run_stale_detection(state: &Arc<AppState>) {
         let artifacts_dir = worktree_dir.join(".pdo").join("artifacts");
         let pipeline_path = resolve_run_pipeline_path(&repo_root, run_id, &run_state.pipeline_name);
 
-        // #408: the Claude Code `projects/` root this Run's transcripts live under
-        // — the staged home while a sandboxed Run is live, `~/.claude/projects/`
-        // otherwise. The per-node encoded dirname is still derived from the
-        // node's `working_dir` inside the probe; the seam only swaps the base.
+        // The staged home while a sandboxed Run is live, the host root otherwise.
+        // The per-node encoded dirname is still derived from the node's
+        // `working_dir` inside the probe; this seam only swaps the base.
         let projects_root = sandbox_run::transcripts_root(
             !run_state.sandbox.is_off(),
             run_id,
             &home_root,
             &sandbox_root,
         );
-        // #615: copilot resolves its transcript from its own session-state store
-        // (host `.copilot/session-state/`, no staging floor), not claude's projects
-        // root. Picked per node below by the frozen harness.
+        // Copilot has no staging floor, so it resolves its transcript from the host
+        // `.copilot/session-state/`. Picked per node below by the frozen harness.
         let copilot_root = sandbox_run::copilot_store_root(&home_root);
 
         let running = stale_detector::running_nodes(&run_state);
@@ -11711,27 +10722,19 @@ async fn run_stale_detection(state: &Arc<AppState>) {
 
             let session_name = tmux_session_manager::node_session_name(run_id, node_id, *iter);
 
-            // #473: the session id this iteration was launched with (its latest
-            // `NodeStarted`), so the probe resolves the transcript by identity.
-            // `None` for a script node or a pre-#473 row ⇒ legacy newest-mtime pick.
+            // The session id this iteration was launched with, so the probe resolves
+            // the transcript by identity. `None` ⇒ legacy newest-mtime pick.
             let launch_session_id = find_launch_session_id(&events, node_id, *iter);
 
-            // #373: the whole probe → gate → decide → events → diagnostics →
-            // usage-limit-dedup pipeline lives in `assess_node`, with all tmux +
-            // filesystem I/O injected via this adapter. The sweep only appends
-            // the returned events and runs the reap/spawn side effects below.
-            // #553/#613: the node's FROZEN-at-spawn harness (ADR-0046), never the
-            // current YAML. `None` (a script node, a pre-#550 row) is the `claude`
-            // floor. Every capability — transcript resolution, turn-end, usage-limit
-            // — dispatches on this name (ADR-0051): `claude`'s implementation for
-            // `claude`, a data-declared harness's own (or nothing) otherwise. So the
-            // sweep never reads another harness's store with claude's parser.
+            // The node's FROZEN-at-spawn harness (ADR-0046), never the current YAML.
+            // Every capability — transcript resolution, turn-end, usage-limit —
+            // dispatches on this name, so the sweep never reads another harness's
+            // store with claude's parser.
             let node_harness = find_launch_harness(&events, node_id, *iter)
                 .unwrap_or_else(|| harness_registry::CLAUDE.to_string());
 
-            // #615: the transcript store root is the resolved harness's own —
-            // copilot's session-state store, else claude's projects root. The
-            // per-harness `resolve_transcript` (ADR-0051) joins the right leaf.
+            // The store ROOT is the resolved harness's own; the per-harness
+            // `resolve_transcript` joins the right leaf.
             let node_store_root: &Path = if node_harness == harness_registry::COPILOT {
                 &copilot_root
             } else {
@@ -11769,12 +10772,9 @@ async fn run_stale_detection(state: &Arc<AppState>) {
             }
 
             for event in &assessment.events {
-                // Transition guard (#212): append_event re-validates against the
-                // freshly projected state, so a node that terminated organically
-                // since this loop's snapshot never receives a late NodeFailed
-                // (dropped as a no-op). The informational NodeBlockedOnLimit
-                // marker is not a lifecycle transition and passes straight
-                // through.
+                // `append_event` re-validates against the freshly projected state, so
+                // a node that terminated organically since this loop's snapshot never
+                // receives a late NodeFailed.
                 if let Err(e) = append_event(state, event).await {
                     error!("Stale detector: failed to append event: {e}");
                 }
@@ -11792,9 +10792,9 @@ async fn run_stale_detection(state: &Arc<AppState>) {
                         diag.mem_available_kb,
                         diag.swap_free_kb,
                     );
-                    // The session is already gone; reaping captures whatever
-                    // remains (usually nothing) and is a no-op otherwise. Its
-                    // slot freed. Re-drive throttled `waiting` nodes (#159).
+                    // The session is already gone; reaping captures whatever remains
+                    // and is a no-op otherwise. Its slot is freed, so re-drive
+                    // throttled `waiting` nodes.
                     reap_node_session(
                         state,
                         &repo_root,
@@ -11821,9 +10821,8 @@ async fn run_stale_detection(state: &Arc<AppState>) {
                     )
                     .await
                     {
-                        // Reads the VARIANT, never the status — which is exactly
-                        // why #469 is indemn to #490's status change. The response
-                        // is still dropped; only the log line differs.
+                        // Reads the VARIANT, never the status, so a change to the
+                        // wire status cannot silently reroute this.
                         CompletionAttempt::Completed => info!(
                             "Stale detector: node {node_id} in run {run_id} — agent finished its \
                              turn without signalling; auto-completed (#469)"
@@ -11844,67 +10843,56 @@ async fn run_stale_detection(state: &Arc<AppState>) {
             }
         }
 
-        // #214: after node-level detection, a run may now have no live node and
-        // nothing schedulable (e.g. a node just turned Failed with no downstream
-        // to drive). Reconcile such a run-level stall to terminal so it never sits
-        // Running forever (sprint invariant). Re-reads fresh state so it observes
-        // any failure just appended above.
+        // After node-level detection a run may have no live node and nothing
+        // schedulable. Re-reads fresh state so it observes any failure appended above.
         //
         // Safe under a turn-end auto-completion whose detached tail has not yet
-        // spawned the successor (#469): `run_stall_reason` returns `None` for
-        // "all nodes Completed" (that is `maybe_complete_run`'s), and the
-        // ready-but-not-driven arm needs `idle_secs >= SPAWN_STALL_GRACE_SECS`,
-        // which the `NodeAutoCompleted` we just appended resets to ~0.
+        // spawned the successor: `run_stall_reason` returns `None` for "all nodes
+        // Completed", and its ready-but-not-driven arm needs
+        // `idle_secs >= SPAWN_STALL_GRACE_SECS`, which the `NodeAutoCompleted` just
+        // appended resets to ~0.
         reconcile_run_level_stall(state, run_id).await;
     }
 
-    // #290: publish the per-sweep count of usage-limit-blocked nodes. Recomputed
-    // from scratch each sweep, so a node that completed/failed since last sweep
-    // simply isn't recounted — no stale set to prune. Surfaced on `/stale/health`.
+    // Recomputed from scratch each sweep, so a node that completed since the last
+    // one simply isn't recounted — no stale set to prune.
     state
         .blocked_on_limit
         .store(blocked_on_limit_count, std::sync::atomic::Ordering::Relaxed);
 }
 
-// --- Orphan sweep / reaper ---
+// One orphan-sweep pass: inventory tmux, resolve owners, decide, kill.
+//
+// **THE ORDER OF THE FIRST TWO STEPS IS LOAD-BEARING (ADR-0038).** The sweep's
+// "absent" verdict is never true on its own — it is true *relative to two
+// observations*, the tmux inventory and the event-log read. Snapshot-then-list
+// killed a session born in between: live in tmux, missing from a snapshot that
+// predated it, so `nodes.get(node_id)` → `None` → killed, in one case 150 ms after
+// its own spawn.
+//
+// The correct order is sound because **the log only grows**: an absence
+// observed *after* the inventory implies absence *at* the inventory, so a
+// session missing from the log we read here cannot have existed when we listed
+// — it is simply not in `names`, and it gets judged on the next pass with its
+// reservation visible. Monotonicity works in this direction only; the reverse
+// order has no symmetric proof. Do not "tidy" this into snapshot-then-list.
+//
+// The window is not one instruction: it is one SQLite read per run, so it **grows
+// with the age of the instance**. The boot-time caller never sees it (it runs
+// before `build_router`, so no spawn is concurrent); only the periodic reaper races
+// live spawns.
+//
+// Finally, this function's correctness rests on a precondition it cannot enforce —
+// **no tmux session exists before the event that reserves it is durably appended**.
+// `node_spawn::spawn_node`, `node_primitives::start_node`'s callers and
+// `spawn_manager_session` all own that half; the reaper is only its consumer.
 
-/// One orphan-sweep pass: inventory tmux, resolve owners, decide, kill.
-///
-/// **THE ORDER OF THE FIRST TWO STEPS IS LOAD-BEARING (#485, ADR-0038).** The
-/// sweep's "absent" verdict is never true on its own — it is true *relative to
-/// two observations*, the tmux inventory and the event-log read. Before #485
-/// they ran in the other order (snapshot the whole log, then list tmux), so a
-/// session born in between was live in tmux and missing from a snapshot that
-/// predated it: `nodes.get(node_id)` → `None` → killed, in one case 150 ms after
-/// its own spawn, and the liveness sweep then reported the death it had caused as
-/// `session_died` with `tmux_server_alive=true`. Two runs were lost in one night.
-///
-/// The correct order is sound because **the log only grows**: an absence
-/// observed *after* the inventory implies absence *at* the inventory, so a
-/// session missing from the log we read here cannot have existed when we listed
-/// — it is simply not in `names`, and it gets judged on the next pass with its
-/// reservation visible. Monotonicity works in this direction only; the reverse
-/// order has no symmetric proof. Do not "tidy" this into snapshot-then-list.
-///
-/// The window was never one instruction: it was one SQLite read per run
-/// (`load_all_run_ids` + `load_events` per id, 437 round-trips on a 5-connection
-/// pool — 21 s measured), so it **grew with the age of the instance**. The
-/// boot-time caller never saw it (it runs before `build_router`, so no spawn is
-/// concurrent); only the periodic reaper races live spawns, which is why the old
-/// doc-comment claiming "at daemon boot" kept the defect invisible for so long.
-///
-/// Finally: this function's correctness rests on a precondition it cannot
-/// enforce — **no tmux session exists before the event that reserves it is
-/// durably appended**. `node_spawn::spawn_node`, `node_primitives::start_node`'s
-/// callers and `spawn_manager_session` all own that half; the reaper is only its
-/// consumer.
-/// Resolve both sweep TTLs at their `stored → env → default` precedence (#129,
-/// ADR-0015; #594 for the second one).
+/// Resolve both sweep TTLs at their `stored → env → default` precedence (ADR-0015).
 ///
 /// The single point all three sweep callers go through — the boot pass, the 60 s
-/// reaper loop, and the test seam — so a stored knob can never take effect on one
-/// path and not another. A DB read that fails degrades to the env/default tiers
-/// rather than aborting the pass: a sweep that does not run reaps nothing at all.
+/// reaper loop and the test seam — so a stored knob can never take effect on one path
+/// and not another. A failed DB read degrades to the env/default tiers rather than
+/// aborting the pass: a sweep that does not run reaps nothing at all.
 async fn resolve_sweep_ttls(db: &sqlx::SqlitePool) -> tmux_session_manager::SweepTtls {
     let cfg = instance_config::get(db).await.ok();
     tmux_session_manager::SweepTtls {
@@ -11926,38 +10914,31 @@ async fn run_orphan_sweep(
     socket: &str,
     ttls: tmux_session_manager::SweepTtls,
 ) -> Result<()> {
-    // (1) EDGE FIRST — the tmux inventory. Sorted into a `Vec` so kill order and
-    //     log order are deterministic (`list_pdo_sessions` returns a `HashSet`).
+    // (1) EDGE FIRST — the tmux inventory. Sorted so kill order and log order are
+    //     deterministic (`list_pdo_sessions` returns a `HashSet`).
     let mut names: Vec<String> = tmux_session_manager::list_pdo_sessions(socket)
         .into_iter()
         .collect();
     names.sort();
 
-    // (2) ONE clock for the whole pass, taken right after the inventory and
-    //     before any read — byte-identical TTL behaviour to the pre-#485 order
-    //     (which took it on the line after `list_pdo_sessions`), rather than "a
-    //     bit more aggressive because the reads took 4 s".
+    // (2) ONE clock for the whole pass, taken right after the inventory and before
+    //     any read, so the TTLs are not "a bit more aggressive because the reads
+    //     took 4 s".
     let now = chrono::Utc::now();
 
     // (3) EDGE SECOND — project ONLY the runs that actually hold a live session.
-    //     The lookup's domain is `{ run_id | ∃ live session }` by construction,
-    //     so `load_all_run_ids` + project-everything was dead weight: this
-    //     removes the sweep's N+1 as a side effect of the reordering, not as a
-    //     performance patch (the other eight `load_all_run_ids` callers really do
-    //     need every run — see #493).
+    //     The lookup's domain is `{ run_id | ∃ live session }` by construction.
     //
     //     The `?` on `load_events` is load-bearing and must NOT be swallowed into
-    //     `None`: a pool timeout — exactly what the #485 journal showed
-    //     (`aquired_after_secs=3.944`) — would read a live run as "absent" and
-    //     kill its session. Propagating is fail-closed: both production callers
-    //     only `warn!`, so an aborted pass reaps *nothing* and retries in 60 s.
-    //     `load_events` never errors on an unknown run_id (it is a `fetch_all`:
-    //     zero rows = `Ok(vec![])` → `project` → `None` → absent → killed, which
-    //     is what `reaper_kills_shell_of_absent_run` already pins).
-    // #594: the library assistant's two presence facts, read in this same pass and
-    // against the same `now` as everything else (the one-clock discipline above).
-    // The focus is a cheap in-memory read; `is_attached` is one tmux call, and only
-    // for the assistant — the other arms have an owning Run to judge them by.
+    //     `None`: a pool timeout would read a live run as "absent" and kill its
+    //     session. Propagating is fail-closed — both production callers only `warn!`,
+    //     so an aborted pass reaps *nothing* and retries in 60 s. `load_events` never
+    //     errors on an unknown run_id (zero rows = `Ok(vec![])` → `project` → `None`
+    //     → absent → killed, which is the intended verdict).
+    //
+    //     The library assistant's presence facts are read in this same pass, against
+    //     the same `now` — the one-clock discipline above. `is_attached` is one tmux
+    //     call and only for the assistant; the other arms have an owning Run.
     let focus_at = read_libassist_focus(state).map(|f| f.at);
 
     let mut inputs: Vec<tmux_session_manager::SweepInput> = Vec::with_capacity(names.len());
@@ -11968,11 +10949,9 @@ async fn run_orphan_sweep(
         let mut attached = false;
         let mut focus_age = None;
         let info = match &parsed {
-            // Unparseable name: no lookup at all, exactly as before.
             None => None,
-            // #302/#594: a library assistant owns no Run — there is nothing to
-            // project. It is judged on human presence instead, so fill those two
-            // fields here rather than looking up a run that does not exist.
+            // A library assistant owns no Run, so there is nothing to project. It is
+            // judged on human presence instead.
             Some(tmux_session_manager::ParsedSession::LibAssist) => {
                 attached = tmux_session_manager::is_attached(socket, &session_name);
                 focus_age = focus_at.map(|at| {
@@ -11993,14 +10972,13 @@ async fn run_orphan_sweep(
                     tmux_session_manager::ParsedSession::NodeRun {
                         run_id, node_id, ..
                     } => (run_id.as_str(), node_id.as_str()),
-                    // Handled by the arm above; unreachable here.
                     tmux_session_manager::ParsedSession::LibAssist => unreachable!(),
                 };
                 if !projected.contains_key(run_id) {
                     let events = load_events(&state.db, run_id).await?;
-                    // Keep the `if let Some(..)` shape: synthesising an empty
-                    // `RunState` for a fragmentary log (#328 — events with no
-                    // `RunStarted`) would turn "absent" into "keep".
+                    // Keep the `Option`: synthesising an empty `RunState` for a
+                    // fragmentary log (events with no `RunStarted`) would turn
+                    // "absent" into "keep".
                     projected.insert(run_id.to_string(), event_log::project(&events));
                 }
                 projected
@@ -12021,22 +10999,16 @@ async fn run_orphan_sweep(
     // (4) PURE — no tmux, no DB, no clock inside.
     let decisions = tmux_session_manager::decide_sweep(&inputs, ttls, now);
 
-    // (5) EDGE — log + kill. Nothing has been killed before this point, so a DB
-    //     error in (3) aborts the pass having reaped nothing: the same
-    //     all-or-nothing property the old snapshot phase had.
+    // (5) EDGE — log + kill. Nothing is killed before this point, so a DB error in
+    //     (3) aborts the pass having reaped nothing.
     let tally = tmux_session_manager::apply_sweep(socket, &decisions);
 
-    // #485: publish the pass's tally for `GET /sessions`. The counters ACCUMULATE
-    // (`fetch_add`, not `store`): a per-pass gauge answers "did the *last* pass
-    // kill?", which is ~always "no" — the pass that kills is followed within
-    // seconds by an idle one that overwrites the count with 0, so an operator
-    // asking "did the reaper kill my node?" reads `0` however fast they look.
-    // `blocked_on_limit` (#290) is a *level* (how many nodes are blocked right
-    // now) and is rightly recomputed; a kill is an **event**, and events are
-    // counted, never levelled. Cumulative-since-boot also makes the tally
-    // independent of *which* pass did the killing, which a per-pass store made
-    // racy to observe at all (the periodic loop's first tick fires immediately,
-    // so it and an explicit sweep can trade places under load).
+    // The counters ACCUMULATE (`fetch_add`, not `store`): a per-pass gauge answers
+    // "did the *last* pass kill?", which is ~always "no" — the killing pass is
+    // followed within seconds by an idle one that overwrites the count with 0.
+    // Contrast `blocked_on_limit`, a genuine *level*. Cumulative also makes the tally
+    // independent of *which* pass killed, which a per-pass store made racy to observe
+    // at all under load.
     let ord = std::sync::atomic::Ordering::Relaxed;
     state
         .reaper_last_sweep_ms
@@ -12049,13 +11021,12 @@ async fn run_orphan_sweep(
     Ok(())
 }
 
-/// The reaper's facts about one session's owner — the pre-#485 lookup closure
-/// (`lib.rs:9308-9350`), logic **unchanged**, now called *after* the inventory.
+/// The reaper's facts about one session's owner, resolved *after* the inventory.
 ///
 /// Lives here rather than in `tmux_session_manager` so that deep module keeps its
 /// zero dependency on `event_log`; [`tmux_session_manager::NodeRunInfo`] exists
-/// precisely as the decoupled facts type. `None` = absent from the log, which is
-/// the sweep's kill arm.
+/// precisely as the decoupled facts type. `None` = absent from the log, which is the
+/// sweep's kill arm.
 fn reaper_info_for(
     run_state: &event_log::RunState,
     node_id: &str,
@@ -12073,11 +11044,10 @@ fn reaper_info_for(
         });
     }
 
-    // #316: the run shell is not a projected node — resolve it against
-    // the run itself (mirror of `__manager__`). Without this branch,
-    // `run_state.nodes.get("__shell__")` is None → the sweep would kill
-    // the shell as "absent" on every pass. The Shell sweep arm ignores
-    // `completed_at` (no TTL), so only `is_archived` is load-bearing.
+    // The run shell is not a projected node, so it resolves against the run itself.
+    // Without this branch `nodes.get("__shell__")` is None and the sweep kills the
+    // shell as "absent" on every pass. The Shell arm ignores `completed_at`, so only
+    // `is_archived` is load-bearing.
     if node_id == "__shell__" {
         return Some(tmux_session_manager::NodeRunInfo {
             completed_at: run_state
@@ -12102,31 +11072,26 @@ fn reaper_info_for(
     })
 }
 
-// --- Pane endpoint ---
-
 #[derive(Serialize)]
 struct PaneResponse {
     content: String,
     session_name: String,
     resumed: bool,
     stale: bool,
-    /// Provenance of `content` (#205): `"live"` (captured from a running
-    /// session), `"resumed"` (a dead latest-iter session was re-attached), or
-    /// `"snapshot"` (the persisted post-mortem pane of a reaped terminal node).
+    /// Provenance of `content`: `"live"`, `"resumed"` (a dead latest-iter session
+    /// was re-attached), or `"snapshot"` (the persisted post-mortem pane).
     source: &'static str,
 }
 
-/// The outcome of an in-place session **re-attach** — ADR-0049 §3 recovery
-/// mechanism (a): resume the SAME agent session in the node's existing
-/// sub-worktree on the harness's resume tail (`claude --continue`), without
-/// re-driving the run. Shared by the pane endpoint ([`node_pane`]) and the
-/// `recover_node` command (#599): the two renderings differ (a `PaneResponse`
-/// vs a recovery verdict) but the resume mechanics — script exclusion, the
-/// `can_resume()` gate (ADR-0045), the admission reservation and the
-/// resurrection `NodeStarted` trace (#487 §3) — must not.
+/// The outcome of an in-place session **re-attach** (ADR-0049 §3a): resume the SAME
+/// agent session in the node's existing sub-worktree on the harness's resume tail,
+/// without re-driving the run. Shared by [`node_pane`] and `recover_node`: the two
+/// renderings differ, but the resume mechanics — script exclusion, the
+/// `can_resume()` gate, the admission reservation, the resurrection `NodeStarted`
+/// trace — must not.
 pub(crate) enum ReattachOutcome {
     /// A `script` node is deterministic bash, never an LLM session — not
-    /// re-attachable (#248 / ADR-0017).
+    /// re-attachable (ADR-0017).
     ScriptNode,
     /// The node's working directory is gone; nothing to re-enter.
     WorkingDirMissing,
@@ -12134,17 +11099,15 @@ pub(crate) enum ReattachOutcome {
     /// ADR-0045). The optimal path is unavailable — the caller falls back
     /// (`recover_node` → restart-with-artifacts, AC #9 / `node_pane` → snapshot).
     CannotResume,
-    /// The harness FROZEN at spawn no longer resolves — its embedded name was
-    /// dropped, or its disk descriptor was removed/renamed (#614, correctif 2).
-    /// PDO **refuses** rather than relaunch `claude` in this node's worktree: a
-    /// silent fallback would run a different agent than the one the node was
-    /// started on, corrupting its transcript and its cost attribution. The caller
-    /// surfaces the refusal, naming the missing harness.
+    /// The harness FROZEN at spawn no longer resolves. PDO **refuses** rather than
+    /// relaunch `claude` in this node's worktree: a silent fallback would run a
+    /// different agent than the node was started on, corrupting its transcript and
+    /// its cost attribution.
     FrozenHarnessGone { harness: String },
-    /// The session cap refused the re-attach (a re-attach IS a (re)spawn, #487 §3).
+    /// The session cap refused the re-attach — a re-attach IS a (re)spawn.
     CapReached { live: usize, cap: usize },
     /// The `NodeStarted` resurrection trace was refused (e.g. a terminal Run) — do
-    /// NOT launch a session the event log has no room for (#487).
+    /// NOT launch a session the event log has no room for.
     TraceRefused { error: String },
     /// `tmux_session_manager::resume` itself failed.
     ResumeFailed { error: String },
@@ -12155,11 +11118,9 @@ pub(crate) enum ReattachOutcome {
 /// Re-attach a node's dead-but-non-terminal session in place (ADR-0049 §3(a)).
 ///
 /// Pure of the *response* shape: it performs the resume mechanics and returns a
-/// [`ReattachOutcome`] the caller renders. The gates below are the ones #487 §3
-/// established for resurrection — the session cap and a `NodeStarted` trace — and
-/// the `can_resume()` gate ADR-0045 requires. The caller must have already ruled
-/// out a live/terminal iteration; this is only reached for the latest,
-/// non-terminal, non-pending iteration.
+/// [`ReattachOutcome`] the caller renders. The caller must have already ruled out a
+/// live/terminal iteration — this is only reached for the latest, non-terminal,
+/// non-pending one.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn reattach_node_session(
     state: &AppState,
@@ -12190,7 +11151,7 @@ pub(crate) async fn reattach_node_session(
         return ReattachOutcome::WorkingDirMissing;
     }
 
-    // #407: a resumed sandboxed session re-enters its container (6th tail path).
+    // A resumed sandboxed session re-enters its container.
     let sandbox_wrap = (!run_state.sandbox.is_off()).then(|| tmux_session_manager::SandboxWrap {
         docker_bin: state.docker_cmd_override.as_deref().unwrap_or("docker"),
         uid: sandbox_container::host_uid(),
@@ -12198,16 +11159,14 @@ pub(crate) async fn reattach_node_session(
         marker: session_name,
         workdir: &working_dir,
     });
-    // #424: a resume restores the model but loses the effort level — re-pose the
-    // level the node was LAUNCHED with. #473: resume by the pinned session id.
+    // A resume restores the model but loses the effort level, so re-pose the level
+    // the node was LAUNCHED with, and resume by the pinned session id.
     let launch_effort = find_launch_effort(events, node_id, iter);
     let launch_session_id = find_launch_session_id(events, node_id, iter);
-    // #550/#553/ADR-0046: re-pose the harness FROZEN at spawn, resolved against the
-    // embedded floor MERGED with the disk descriptor tier. #614 (correctif 2): a
-    // name that WAS frozen but no longer resolves REFUSES — never a silent `claude`
-    // relaunch, which would run a different agent in this node's worktree. A row
-    // with NO frozen harness (pre-#550, a legacy resume) keeps the `claude` floor,
-    // byte-identical to the legacy resume.
+    // Re-pose the harness FROZEN at spawn, resolved against the embedded floor merged
+    // with the disk descriptor tier. A name that WAS frozen but no longer resolves
+    // REFUSES — never a silent `claude` relaunch, which would run a different agent in
+    // this node's worktree. A row with NO frozen harness keeps the `claude` floor.
     let launch_harness = find_launch_harness(events, node_id, iter);
     let harness_home_root = sandbox_run::sandbox_home_roots(state)
         .map(|(home, _)| home)
@@ -12225,16 +11184,16 @@ pub(crate) async fn reattach_node_session(
         }
         None => harness_registry::claude(),
     };
-    // AC #9 / ADR-0045: a harness with no resume tail cannot be re-attached.
+    // A harness with no resume tail cannot be re-attached (ADR-0045).
     if !descriptor.can_resume() {
         return ReattachOutcome::CannotResume;
     }
-    // #433 / ADR-0043 (D7): re-resolve turn-end auto-completion FRESH.
+    // Re-resolve turn-end auto-completion FRESH.
     let inject_hook = stored_autocomplete_turn_end(&state.db).await;
 
-    // #487 §3 — a resurrection IS a (re)spawn: pass the admission gate and leave a
-    // `NodeStarted` trace, holding the lock across check-and-reserve then dropping
-    // it before the (slower) tmux relaunch, exactly as `spawn_node` orders it.
+    // A resurrection IS a (re)spawn: pass the admission gate and leave a
+    // `NodeStarted` trace, holding the lock across check-and-reserve then dropping it
+    // before the slower tmux relaunch, exactly as `spawn_node` orders it.
     let admission_guard = state.admission_lock.lock().await;
     let cap = admission::configured_cap_with(stored_session_cap(&state.db).await);
     let live = count_global_live_sessions_excluding(
@@ -12261,7 +11220,7 @@ pub(crate) async fn reattach_node_session(
     };
     if let Err(e) = append_event(state, &resurrection_started).await {
         // The guard also enforces run-liveness on this append; a refusal means the
-        // event log has no room for this session — do not launch it (#487).
+        // event log has no room for this session, so do not launch it.
         drop(admission_guard);
         return ReattachOutcome::TraceRefused {
             error: e.to_string(),
@@ -12325,10 +11284,9 @@ async fn node_pane(
         .into_response();
     }
 
-    // Reaped terminal node (#205): the session is gone but we persisted a pane
-    // snapshot on the terminal transition. Serve it flagged `snapshot` — and
-    // never resurrect the session for a terminal iteration (the
-    // one-live-iteration invariant must not be violated by a pane request).
+    // Reaped terminal node: the session is gone but a pane snapshot was persisted on
+    // the terminal transition. Never resurrect the session for a terminal iteration —
+    // a pane request must not violate the one-live-iteration invariant.
     let iter_is_terminal = node_state
         .iterations
         .iter()
@@ -12359,10 +11317,8 @@ async fn node_pane(
     }
 
     if is_latest_iter && !iter_is_terminal && node_state.status != event_log::NodeStatus::Pending {
-        // The resume mechanics (#248 script exclusion, the `can_resume()` gate, the
-        // #487 §3 admission reservation and resurrection trace) live in the shared
-        // `reattach_node_session` — the `recover_node` command drives the same seam
-        // (#599). This handler only renders the outcome as a `PaneResponse`.
+        // The resume mechanics live in the shared `reattach_node_session`, which
+        // `recover_node` drives too. This handler only renders the outcome.
         let snapshot_or = |msg: &str| -> (String, &'static str) {
             let snapshot_path = pane_snapshot_path(&repo_root, &run_id, &node_id, iter);
             match std::fs::read_to_string(&snapshot_path) {
@@ -12382,7 +11338,7 @@ async fn node_pane(
         )
         .await;
         match outcome {
-            // #248 / ADR-0017: a script session can't be "continued" — snapshot it.
+            // A script session can't be "continued" — snapshot it.
             ReattachOutcome::ScriptNode => {
                 let (content, source) = snapshot_or("Script session no longer available");
                 return Json(PaneResponse {
@@ -12394,8 +11350,8 @@ async fn node_pane(
                 })
                 .into_response();
             }
-            // AC #9: a harness with no resume mechanism serves its snapshot, never a
-            // resume error (the same branch as a `script` node).
+            // A harness with no resume mechanism serves its snapshot, never a resume
+            // error — the same branch as a `script` node.
             ReattachOutcome::CannotResume => {
                 let (content, source) = snapshot_or("Session no longer available");
                 return Json(PaneResponse {
@@ -12407,8 +11363,8 @@ async fn node_pane(
                 })
                 .into_response();
             }
-            // #614 (correctif 2): the frozen harness no longer resolves — refuse,
-            // naming it, rather than relaunch `claude` in this node's worktree.
+            // The frozen harness no longer resolves: refuse, naming it, rather than
+            // relaunch `claude` in this node's worktree.
             ReattachOutcome::FrozenHarnessGone { harness } => {
                 warn!(
                     "node_pane: refusing to resurrect {node_id} iter {iter} in {run_id} — its \
@@ -12466,11 +11422,9 @@ async fn node_pane(
                 })
                 .into_response();
             }
-            // Working dir gone → fall through to the placeholder below (stale reads
-            // `!is_latest_iter`, i.e. `false` here — the pre-#599 behaviour).
+            // Working dir gone → fall through to the placeholder below.
             ReattachOutcome::WorkingDirMissing => {}
             ReattachOutcome::Resumed => {
-                // Give the resumed session a moment to initialize.
                 tokio::time::sleep(Duration::from_millis(500)).await;
                 let content = tmux_session_manager::capture(&socket, &session_name)
                     .unwrap_or_else(|| "Connecting...".to_string());
@@ -12486,7 +11440,6 @@ async fn node_pane(
         }
     }
 
-    // Not latest iter or working_dir gone — return placeholder
     Json(PaneResponse {
         content: "Session no longer available".to_string(),
         session_name,
@@ -12497,16 +11450,13 @@ async fn node_pane(
     .into_response()
 }
 
-/// The effort level a node's iteration was **launched** with (#424), read back
-/// from its `NodeStarted` payload.
+/// The effort level a node's iteration was **launched** with, read back from its
+/// `NodeStarted` payload.
 ///
-/// The event log is the source of truth here, deliberately **not** the current
-/// YAML: ADR-0007 makes a live node's in-flight iteration immutable to edits, so
-/// re-resolving from the pipeline would make resume the single path that applies a
-/// mid-iteration edit. The payload is schemaless (`Option<serde_json::Value>` in a
-/// `payload JSON` column, parsed best-effort), so a missing key — every historical
-/// row, and every node launched without an effort — simply yields `None`, i.e. a
-/// bare `--continue`, byte-identical to the legacy tail. No migration involved.
+/// The event log is the source of truth here, deliberately **not** the current YAML:
+/// ADR-0007 makes a live node's in-flight iteration immutable to edits, so
+/// re-resolving from the pipeline would make resume the one path that applies a
+/// mid-iteration edit. A missing key yields `None`, i.e. a bare `--continue`.
 fn find_launch_effort(events: &[event_log::Event], node_id: &str, iter: i64) -> Option<String> {
     events
         .iter()
@@ -12523,16 +11473,12 @@ fn find_launch_effort(events: &[event_log::Event], node_id: &str, iter: i64) -> 
         .map(|s| s.to_string())
 }
 
-/// The Claude Code session id a node's iteration was launched with (#473), read
-/// back from the **latest** `NodeStarted` payload for `(node_id, iter)`.
+/// The agent session id a node's iteration was launched with, from the **latest**
+/// `NodeStarted` payload for `(node_id, iter)`.
 ///
-/// `.rev().find(...)` takes the most recent `NodeStarted`, so a `restart_node`
-/// that re-spawned the same iteration (a legal same-iter restart) resolves to the
-/// *fresh* id it pinned, not the dead session's. The event log is the source of
-/// truth here for the same reason as [`find_launch_effort`]: ADR-0007 makes a live
-/// iteration immutable to YAML edits. A missing key — every pre-#473 row, every
-/// script node, every infra session — yields `None`, i.e. the legacy newest-mtime
-/// transcript resolution and a bare `--continue` on resume. No migration.
+/// `.rev()` is load-bearing: a `restart_node` that re-spawned the same iteration
+/// must resolve to the *fresh* id it pinned, not the dead session's. A missing key
+/// yields `None`, i.e. newest-mtime transcript resolution and a bare `--continue`.
 fn find_launch_session_id(events: &[event_log::Event], node_id: &str, iter: i64) -> Option<String> {
     events
         .iter()
@@ -12549,11 +11495,10 @@ fn find_launch_session_id(events: &[event_log::Event], node_id: &str, iter: i64)
         .map(|s| s.to_string())
 }
 
-/// The harness a node's iteration was **launched** with (#550, ADR-0046), read
-/// back from its `NodeStarted` payload — never re-resolved from the current YAML
-/// or the tiers above (ADR-0007: a live iteration is immutable to edits). A
-/// missing key (every pre-#550 row, every infra session) yields `None`, which the
-/// resume seam treats as the `claude` floor — byte-identical to the legacy tail.
+/// The harness a node's iteration was **launched** with (ADR-0046), from its
+/// `NodeStarted` payload — never re-resolved from the current YAML or the tiers
+/// above (ADR-0007: a live iteration is immutable to edits). A missing key yields
+/// `None`, which the resume seam treats as the `claude` floor.
 fn find_launch_harness(events: &[event_log::Event], node_id: &str, iter: i64) -> Option<String> {
     events
         .iter()
@@ -12570,14 +11515,12 @@ fn find_launch_harness(events: &[event_log::Event], node_id: &str, iter: i64) ->
         .map(|s| s.to_string())
 }
 
-/// The **latest** `NodeStarted` payload for `(node_id, iter)`, cloned whole (#487
-/// §3). The `/pane` resurrection appends a fresh `NodeStarted` to leave a
-/// log trace; reusing the original payload keeps the resurrected session's
-/// `session_id` / `harness` / `effort` / `base_sha` intact, so the resume seam, the
-/// orphan sweep and cost read the same facts they did at launch — a bare re-marker
-/// with an empty payload would strand the transcript id on the next resume. `None`
-/// (no prior `NodeStarted`, or it carried no payload) appends a payload-less marker,
-/// which is still a legal same-iter restart the guard accepts.
+/// The **latest** `NodeStarted` payload for `(node_id, iter)`, cloned whole.
+///
+/// The `/pane` resurrection appends a fresh `NodeStarted` as a log trace, and REUSING
+/// the original payload is what keeps `session_id` / `harness` / `effort` /
+/// `base_sha` intact — a bare re-marker with an empty payload would strand the
+/// transcript id on the next resume.
 fn find_launch_node_started_payload(
     events: &[event_log::Event],
     node_id: &str,
@@ -12678,8 +11621,6 @@ async fn node_prompt(
     }
 }
 
-// --- Node IO endpoint ---
-
 async fn node_io(
     State(state): State<Arc<AppState>>,
     AxumPath((run_id, node_id)): AxumPath<(String, String)>,
@@ -12698,10 +11639,9 @@ async fn node_io(
         return (StatusCode::NOT_FOUND, "node not found in run").into_response();
     }
 
-    // #315: an archived run reads its pipeline + artifacts from the durable
-    // store; a live run from its worktree. `node_io_resolver::resolve` is
-    // unchanged — it gets a real parsed PipelineDef (it needs port_type/repeated,
-    // which the event-log projection does not carry).
+    // An archived run reads its pipeline + artifacts from the durable store, a live
+    // run from its worktree. `node_io_resolver::resolve` needs a real parsed
+    // `PipelineDef` — it reads port_type/repeated, which the projection lacks.
     let yaml_path = archived_or_live_pipeline_yaml(&state, &run_state, &run_id);
     let pipeline = match std::fs::read_to_string(&yaml_path)
         .ok()
@@ -12719,14 +11659,11 @@ async fn node_io(
 
     let artifacts_dir = archived_or_live_artifacts_dir(&state, &run_state, &run_id);
 
-    // #353: the resolver reads `repeated` pools through the projection (already
-    // projected above, valid for live + archived runs), so a failed iteration's
-    // artifact on disk is never surfaced as resolvable.
+    // The resolver reads `repeated` pools through the projection, so a failed
+    // iteration's artifact on disk is never surfaced as resolvable.
     let io = node_io_resolver::resolve(&pipeline, &artifacts_dir, &node_id, iter, &run_state);
     Json(io).into_response()
 }
-
-// --- Artifact endpoint ---
 
 #[derive(Deserialize)]
 struct ArtifactQuery {
@@ -12743,10 +11680,9 @@ async fn artifact(
         Err(resp) => return *resp,
     };
 
-    // #315: serve from the durable store for an archived run (worktree gone),
-    // from the live worktree otherwise. The `.canonicalize()` guard below still
-    // holds against whichever base we resolve — the durable dir physically
-    // exists when preservation succeeded.
+    // Serve from the durable store for an archived run (worktree gone), from the
+    // live worktree otherwise. The `.canonicalize()` guard below holds against
+    // whichever base is resolved.
     let artifacts_dir = archived_or_live_artifacts_dir(&state, &run_state, &run_id);
 
     let requested = Path::new(&query.path);
@@ -12778,14 +11714,10 @@ async fn artifact(
         Some("jpg" | "jpeg") => "image/jpeg",
         Some("webp") => "image/webp",
         Some("gif") => "image/gif",
-        // #333 / ADR-0028: an `.html` artifact (html output port) DELIBERATELY
-        // falls through to `text/markdown`. Do NOT add `Some("html") =>
-        // "text/html"`: serving agent-authored HTML as a top-level document at
-        // the daemon origin (127.0.0.1, no auth, no CSP) would let it execute
-        // arbitrary script. The html artifact is only ever rendered client-side
-        // in a sandboxed iframe. The `.html → text/markdown` invariant is
-        // locked by the `artifact_serves_html_as_text_markdown_never_text_html`
-        // regression test.
+        // An `.html` artifact DELIBERATELY falls through to `text/markdown`. Do NOT
+        // add `Some("html") => "text/html"` (ADR-0028): serving agent-authored HTML as
+        // a top-level document at the daemon origin — no auth, no CSP — would let it
+        // execute arbitrary script. It is only ever rendered in a sandboxed iframe.
         _ => "text/markdown",
     };
 
@@ -12808,9 +11740,8 @@ async fn artifact(
 /// reached only from `DeliveryOutcome::ConflictPendingResolution`, which is built only
 /// under `keep_conflict == true`, which no production caller passes.
 ///
-/// Returns a typed refusal rather than a `Response` (#490, ADR-0035 §6): both its
-/// outcomes — spawned, and spawn-failed — describe a completion that was **not**
-/// granted, and both used to answer `200`.
+/// Returns a typed refusal rather than a `Response` (ADR-0035 §6): both outcomes —
+/// spawned, and spawn-failed — describe a completion that was **not** granted.
 async fn spawn_merge_resolver(
     state: &AppState,
     run_id: &str,
@@ -12821,10 +11752,8 @@ async fn spawn_merge_resolver(
     let prompt = load_merge_resolver_prompt(&state.repo_root);
     let session_name = tmux_session_manager::node_session_name(run_id, MERGE_RESOLVER_NODE_ID, 1);
 
-    // #407/#551: the merge resolver runs inside the Run's container when sandboxed
-    // AND on the harness OF THE RUN. Project both from the SAME (immutable) reload —
-    // the mode defaults to `off`, the harness to `None`, if the state can't be
-    // reloaded.
+    // The merge resolver runs inside the Run's container when sandboxed AND on the
+    // harness OF THE RUN. Project both from the SAME reload.
     let (sandbox_mode, run_harness, run_agent_choice) = reload_run_state(state, run_id)
         .await
         .map(|(_, s)| (s.sandbox, s.harness, s.agent_choice))
@@ -12852,10 +11781,9 @@ async fn spawn_merge_resolver(
         marker: &session_name,
         workdir: worktree_dir,
     });
-    // #551/ADR-0046: the merge resolver follows the harness OF THE RUN, exactly like
-    // the manager — `Run → instance → floor`, no node tier, no model/effort. Unknown
-    // name (unvalidated Run choice, ADR-0045) falls back to `claude` with a warning:
-    // the resolver is dead in production since ADR-0006, so this is defence in depth.
+    // Follows the harness OF THE RUN, exactly like the manager: `Run → instance →
+    // floor`, no node tier, no model/effort. An unknown name falls back to `claude`
+    // with a warning.
     let config = instance_config::get(&state.db).await.ok();
     let profiles = agent_profile::snapshot(&state.db).await.unwrap_or_default();
     let resolver_agent = agent_choice::resolve_infra(
@@ -12869,7 +11797,7 @@ async fn spawn_merge_resolver(
         agent_profile::DEFAULT_PROFILE_ID,
     );
     let resolver_harness_name = resolver_agent.combo.harness.clone();
-    // #614 (correctif 3): resolve against the DISK TIER, like the manager.
+    // Resolve against the DISK TIER, like the manager.
     let resolver_home_root = sandbox_run::sandbox_home_roots(state)
         .map(|(home, _)| home)
         .unwrap_or_default();
@@ -12891,11 +11819,9 @@ async fn spawn_merge_resolver(
         1,
         state.port,
         state.tmux_cmd_override.as_deref(),
-        // __merge_resolver__ has no NodeDef — agent at the account default (#296),
-        // hence no effort level either (#424), and no pinned session id (#473): it
-        // owns no `NodeStarted` and is neither probed nor resumed. NOT to be
-        // confused with a `merge` NODE, which is a regular NodeDef routed through
-        // `spawn_node` and DOES carry an effort and a pinned id.
+        // No pinned session id: `__merge_resolver__` owns no `NodeStarted` and is
+        // neither probed nor resumed. NOT to be confused with a `merge` NODE, which is
+        // a regular NodeDef routed through `spawn_node` and DOES carry a pinned id.
         tmux_session_manager::SessionTail::Agent {
             harness: &resolver_harness,
             model: resolver_agent.combo.model.as_deref(),
@@ -12903,8 +11829,8 @@ async fn spawn_merge_resolver(
             session_id: None,
         },
         sandbox_wrap.as_ref(),
-        // #433 / ADR-0043: the merge resolver is an infra session (its `…/done` is
-        // handled by a distinct branch, not `complete_node_iteration`) — no hook.
+        // An infra session: its `…/done` is handled by a distinct branch, not
+        // `complete_node_iteration`, so it gets no turn-end hook.
         false,
     ) {
         error!("failed to spawn merge resolver tmux session: {e}");
@@ -12989,8 +11915,7 @@ async fn handle_merge_resolver_done(
         let _ = append_event(state, &run_interrupted).await;
 
         warn!("Merge resolver failed for run {run_id}: {reason}");
-        // #490 / ADR-0035: `409` with the slug, not the historical `200`. The
-        // resolution was refused and `RunFailed` is already appended.
+        // `409` with the slug, never a `200`: the resolution was refused (ADR-0035).
         return completion_refusal::refusal_response(
             &completion_refusal::CompletionRefusal::MergeResolutionFailed { reason },
         );
@@ -13009,8 +11934,6 @@ async fn handle_merge_resolver_done(
 
     info!("Merge resolver completed for run {run_id}");
 
-    // Re-evaluate the run: the conflicting node's merge is resolved.
-    // Emit NodeCompleted for the original conflicting node and continue scheduling.
     if let Some(ref mr) = pre_run_state.merge_resolver {
         let original_node_id = &mr.conflicting_node_id;
         let original_iter = mr.iter;
@@ -13028,10 +11951,8 @@ async fn handle_merge_resolver_done(
             error!("failed to append node_completed for resolved node: {e}");
         }
 
-        // Shared post-`NodeCompleted` tail (#275). `completed_node_id` is the
-        // ORIGINAL conflicting node — whose `NodeCompleted` we just appended for
-        // the resolved work — not the `__merge_resolver__` route param; fire its
-        // edges, advance, re-drive waiters, then the single completion gate.
+        // `completed_node_id` is the ORIGINAL conflicting node, NOT the
+        // `__merge_resolver__` route param.
         run_advance::complete_node(
             state,
             run_id,
@@ -13045,14 +11966,12 @@ async fn handle_merge_resolver_done(
     (StatusCode::OK, "ok").into_response()
 }
 
-/// What the shared completion head decided, in the two shapes an HTTP caller has
-/// to answer differently (#490, ADR-0035).
+/// What the shared completion head decided, in the two shapes an HTTP caller must
+/// answer differently (ADR-0035).
 ///
-/// The split matters: a **no-op is a legal duplicate and stays a `2xx`**
-/// (`transition_guard`: "do not surface an error"), a **reject is a refusal and is
-/// never a `2xx`**. Collapsing them — which the pre-#490 `Option<Response>` did,
-/// by handing back a pre-projected response the caller could not tell apart — is
-/// exactly what made the invariant inexpressible.
+/// Don't collapse the two: a **no-op is a legal duplicate and stays a `2xx`**, a
+/// **reject is a refusal and is never a `2xx`**. Handing back a pre-projected
+/// response the caller cannot tell apart is what made the invariant inexpressible.
 pub(crate) enum CompletionHeadStop {
     /// Valid but nothing to do. `200 {"ok":true,"noop":true,"reason":…}`, exit `0`.
     NoOp { reason: String },
@@ -13064,7 +11983,6 @@ pub(crate) enum CompletionHeadStop {
 }
 
 impl CompletionHeadStop {
-    /// The HTTP shape. `NoOp` keeps its pre-#490 body byte for byte.
     fn into_response(self) -> Response {
         match self {
             CompletionHeadStop::NoOp { reason } => (
@@ -13083,11 +12001,10 @@ impl CompletionHeadStop {
 /// the three completion handlers (`node_done`, `mark_node_done`, `node_skip`) so
 /// the wire shape + log line live once.
 ///
-/// Returns the **typed** stop rather than a `Response`: the reject arm's prose now
-/// travels in `message` under the `completion_rejected` slug (ADR-0035 §3), which
-/// is what lets a client tell "resume the run first" apart from "your outputs are
-/// missing" — it used to read *every* `409` on this path as `missing_outputs` with
-/// an empty list, and therefore displayed nothing at all.
+/// Returns the **typed** stop rather than a `Response`: the reject arm's prose
+/// travels in `message` under the `completion_rejected` slug (ADR-0035 §3), which is
+/// what lets a client tell "resume the run first" apart from "your outputs are
+/// missing" instead of reading every `409` here as an empty `missing_outputs`.
 fn completion_head_gate(
     head: run_advance::CompletionHead,
     caller: &str,
@@ -13112,27 +12029,22 @@ fn completion_head_gate(
     }
 }
 
-/// Who is asking for a node iteration to be completed (#469 §3).
+/// Who is asking for a node iteration to be completed.
 ///
-/// The **only** thing it changes is the kind of the terminal event appended.
-/// Every check, side effect and tail below is byte-identical for both, which is
-/// the point: the sweep cannot drift from `POST …/done` because it *is*
-/// `POST …/done`.
+/// The **only** thing it changes is the kind of the terminal event appended. Every
+/// check, side effect and tail is identical, which is the point: the sweep cannot
+/// drift from `POST …/done` because it *is* `POST …/done`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CompletionSource {
     /// The agent called `pdo complete` (`POST /runs/…/nodes/…/done`).
     Explicit,
-    /// The liveness sweep constated the end of the agent's turn (#469 §2) and
-    /// turn-end auto-completion is enabled. Records `NodeAutoCompleted`, so the
-    /// log says the completion was automatic.
+    /// The liveness sweep observed the end of the agent's turn and turn-end
+    /// auto-completion is enabled. Records `NodeAutoCompleted`.
     TurnEnded,
-    /// The injected `Stop` hook ran `pdo complete --auto` on turn end (#433,
-    /// ADR-0043 — the *primary*, event-driven substrate; `TurnEnded` is the
-    /// daemon-sweep fallback). Records `NodeAutoCompleted` like `TurnEnded` — the
-    /// completion was automatic, not an agent decision — but its log label
-    /// distinguishes the hook (`auto:stop_hook`) from the sweep
-    /// (`auto:turn_ended`). The two are idempotent: whichever arrives second gets
-    /// a `NoOp`.
+    /// The injected `Stop` hook ran `pdo complete --auto` on turn end — the
+    /// *primary*, event-driven substrate (ADR-0043); `TurnEnded` is the daemon-sweep
+    /// fallback. Records `NodeAutoCompleted` like `TurnEnded`, differing only in the
+    /// log label. The two are idempotent: whichever arrives second gets a `NoOp`.
     StopHook,
 }
 
@@ -13144,8 +12056,7 @@ impl CompletionSource {
         match self {
             CompletionSource::Explicit => event_log::EventKind::NodeCompleted,
             CompletionSource::TurnEnded => event_log::EventKind::NodeAutoCompleted,
-            // #433: the hook completion is automatic too — reuse the SAME event
-            // kind (no new projection/transition-guard arm, no ADR-0032 regression).
+            // Reuse the SAME event kind: no new projection / transition-guard arm.
             CompletionSource::StopHook => event_log::EventKind::NodeAutoCompleted,
         }
     }
@@ -13160,23 +12071,21 @@ impl CompletionSource {
     }
 }
 
-/// What one pass through [`complete_node_iteration`] did (#469 §3, #490 §1).
+/// What one pass through [`complete_node_iteration`] did.
 ///
-/// **Three** variants since #490, and the third one is the point: `Aborted` used to
-/// conflate three different things — a refusal, a legal no-op, and (at the merge
-/// resolver site) an outright *success* wrapped in the failure variant. That
-/// conflation is why "an aborted attempt is never a 2xx" was false by construction.
-/// With `Refused` carrying a [`completion_refusal::CompletionRefusal`] — a type
-/// that owns no status — the invariant is total and enforced by the compiler.
+/// Don't collapse these three: a single "aborted" variant conflated a refusal, a
+/// legal no-op and — at the merge-resolver site — an outright *success*, which is why
+/// "an aborted attempt is never a 2xx" used to be false by construction. `Refused`
+/// carries a [`completion_refusal::CompletionRefusal`], a type that owns no status,
+/// so the invariant is enforced by the compiler.
 pub(crate) enum CompletionAttempt {
-    /// The terminal event is appended (durable) and the tail is scheduled. The
-    /// `2xx` an HTTP caller gets means exactly that, not "advanced" (ADR-0023).
+    /// The terminal event is appended (durable) and the tail is scheduled. The `2xx`
+    /// an HTTP caller gets means exactly that, NOT "advanced" (ADR-0023).
     Completed,
-    /// Valid, but nothing to do: a legal duplicate on an already-terminal node.
-    /// The **only** non-`Completed` variant allowed a `2xx` — cf. ADR-0025 §3 and
-    /// `transition_guard`: "legal duplicate […] do not surface an error". A
-    /// puzzled agent that re-runs `pdo complete` must not read "refused" and then
-    /// chain `pdo fail`; on a `script` node its tail would do it unprompted.
+    /// Valid, but nothing to do: a legal duplicate on an already-terminal node. The
+    /// **only** non-`Completed` variant allowed a `2xx` — a puzzled agent re-running
+    /// `pdo complete` must not read "refused" and chain `pdo fail`, which on a
+    /// `script` node its tail would do unprompted.
     NoOp { reason: String },
     /// The completion is not granted. `Refused ⇒ never 2xx`, by construction: the
     /// carried refusal has no status of its own, and `refusal_response` is the only
@@ -13193,7 +12102,7 @@ impl CompletionAttempt {
     }
 
     /// The log-friendly cause, for the liveness sweep — which reads the *variant*,
-    /// never the status, and is therefore indemn to #490 (#469 / ADR-0032).
+    /// never the status.
     fn reason(&self) -> String {
         match self {
             CompletionAttempt::Completed => "completed".into(),
@@ -13231,25 +12140,20 @@ async fn node_done(
     AxumPath((run_id, node_id)): AxumPath<(String, String)>,
     body: Option<Json<NodeDoneRequest>>,
 ) -> Response {
-    // #433: read `iter` and `auto` together before `body` is consumed. `auto`
-    // selects the completion source (`StopHook` ⇒ `NodeAutoCompleted`); a legacy
-    // body without the field deserialises `auto = false` ⇒ `Explicit`, unchanged.
+    // Read `iter` and `auto` together before `body` is consumed. A legacy body
+    // without the field deserialises `auto = false` ⇒ `Explicit`.
     let (iter, auto) = body
         .map(|Json(b)| (b.iter.unwrap_or(1), b.auto))
         .unwrap_or((1, false));
 
-    // #490 / ADR-0035 §6: `__merge_resolver__` is handled HERE, hoisted out of the
-    // shared body. It was the one site where the shared body's failure variant
-    // wrapped a complete *success* — the resolver handler appends `NodeCompleted`
-    // and calls `run_advance::complete_node`, and its `200 "ok"` is pinned by
-    // `merge_resolver_done_records_original_node_and_completes_once`. That is what
-    // kept "a stopped-short attempt is never a 2xx" from being a total invariant.
-    // Hoisting also removes the transition-guard bypass the branch performed by
-    // sitting *before* the guard.
+    // `__merge_resolver__` is handled HERE, hoisted out of the shared body
+    // (ADR-0035 §6): it was the one site whose "stopped short" was a complete
+    // *success*, which kept "a stopped-short attempt is never a 2xx" from being a
+    // total invariant. Hoisting also removes the transition-guard bypass the branch
+    // performed by sitting *before* the guard.
     //
-    // Safe: the liveness sweep is the other caller of the shared body and can never
-    // reach this id — no resolver session is ever spawned, since `keep_conflict` is
-    // never `true` in production and ADR-0006 removed the automatic resolver.
+    // Safe: the liveness sweep, the other caller of the shared body, can never reach
+    // this id — no resolver session is ever spawned (ADR-0006).
     if node_id == MERGE_RESOLVER_NODE_ID {
         return merge_resolver_done(&state, &run_id).await;
     }
@@ -13264,12 +12168,10 @@ async fn node_done(
         .into_response()
 }
 
-/// The `__merge_resolver__` half of `POST …/nodes/:id/done` (#490, ADR-0035 §6).
+/// The `__merge_resolver__` half of `POST …/nodes/:id/done` (ADR-0035 §6).
 ///
-/// Keeps the pre-hoist preamble in its original order — forgotten-run tombstone
-/// (#328 / ADR-0024) **before** any side effect, then load + project — and hands off
-/// to [`handle_merge_resolver_done`], whose wire shape (including `200 "ok"` on
-/// success) is preserved verbatim.
+/// Order matters: the forgotten-run tombstone check (ADR-0024) must come **before**
+/// any side effect, then load + project.
 async fn merge_resolver_done(state: &Arc<AppState>, run_id: &str) -> Response {
     match run_is_forgotten(&state.db, run_id).await {
         Ok(true) => {
@@ -13302,35 +12204,22 @@ async fn merge_resolver_done(state: &Arc<AppState>, run_id: &str) -> Response {
 /// The shared node-completion body: everything `POST …/done` does, for either
 /// caller (#469 §3).
 ///
-/// Returns [`CompletionAttempt`] rather than a `Response` so the sweep is not
-/// forced to read HTTP status codes to know what happened — and, since #490, so
-/// that no branch *can* answer a refusal with a `2xx`: the variant carries a
-/// [`completion_refusal::CompletionRefusal`], which owns no status, and the single
-/// projection gives it one. The handler stays a thin adapter and the two callers
-/// still cannot disagree about which branches stop short.
+/// The read-only guard for secondary repos, as a pure probe (ADR-0042).
 ///
-/// `MERGE_RESOLVER_NODE_ID` is **not** handled here any more: #490 (ADR-0035 §6)
-/// hoisted it into [`node_done`], because it was the one branch whose "stopped
-/// short" was in fact a complete success. The sweep never reaches it either way.
-/// #465 (ADR-0042): the read-only guard for secondary repos, as a pure probe.
-///
-/// Returns the FIRST secondary whose snapshot has uncommitted **tracked** changes,
-/// as a non-terminal [`completion_refusal::CompletionRefusal::SecondaryRepoDirtied`]
-/// (409). `worktree_has_tracked_changes` ignores `??`, so untracked scratch files are
-/// tolerated (the tester relies on this polarity). A transient git error fails OPEN
-/// (warn + skip) rather than blocking a legitimate completion. `None` (and no work)
-/// for a mono-repo Run. Called at the completion edge, never from `transition_guard`.
+/// Returns the FIRST secondary whose snapshot has uncommitted **tracked** changes.
+/// `worktree_has_tracked_changes` ignores `??`, so untracked scratch is tolerated. A
+/// transient git error fails OPEN (warn + skip) rather than blocking a legitimate
+/// completion. Called at the completion edge, never from `transition_guard`, which is
+/// pure and IO-free.
 fn secondary_repos_dirtied_refusal(
     repo_root: &Path,
     run_id: &str,
     run_state: &event_log::RunState,
 ) -> Option<completion_refusal::CompletionRefusal> {
     for pin in &run_state.target_repos {
-        // ADR-0047: the guard is now conditional. A writable secondary (the
-        // default, `read_only == false`) is *meant* to be modified/committed —
-        // its dirty tracked tree is not a refusal. Only a read-only opt-in still
-        // enforces read-only-context semantics. This `continue` is the single
-        // switch that turns "writing is refused" into "writing is offered".
+        // A writable secondary (the default) is *meant* to be modified, so its dirty
+        // tracked tree is not a refusal. This `continue` is the single switch that
+        // turns "writing is refused" into "writing is offered" (ADR-0047).
         if !pin.read_only {
             continue;
         }
@@ -13662,12 +12551,11 @@ async fn complete_node_iteration(
 ) -> CompletionAttempt {
     let caller = source.label();
 
-    // #328 / ADR-0024: refuse completions for a forgotten run BEFORE any side
-    // effect (sub-worktree merge in particular).
+    // Refuse completions for a forgotten run BEFORE any side effect — the
+    // sub-worktree merge in particular (ADR-0024).
     match run_is_forgotten(&state.db, &run_id).await {
         Ok(true) => {
-            // ADR-0024 §3 keeps its `410`: "never a 2xx" does not mean "always a
-            // 409".
+            // ADR-0024 §3 keeps its `410`: "never a 2xx" is not "always a 409".
             return CompletionAttempt::refused(
                 completion_refusal::CompletionRefusal::RunForgotten {
                     run_id: run_id.clone(),
@@ -13682,12 +12570,11 @@ async fn complete_node_iteration(
         }
     }
 
-    // Post-#205: a node's tmux session is snapshot-then-killed *immediately* at
-    // its terminal transition (see the "#205" reaps below), so post-mortem
-    // preview survives via the persisted pane snapshot, not a lingering session.
-    // The reaper TTL is now only an escaped-session backstop, not the primary
-    // kill path. `cleanup_run` additionally removes the worktree/branches on
-    // demand; the runtime never deletes those on its own (ADR-0012(a), #128).
+    // A node's tmux session is snapshot-then-killed *immediately* at its terminal
+    // transition (the reaps below), so post-mortem preview survives via the persisted
+    // snapshot, not a lingering session. The reaper TTL is only an escaped-session
+    // backstop. `cleanup_run` removes worktree/branches on demand; the runtime never
+    // deletes those on its own (ADR-0012a).
 
     let events = match load_events(&state.db, &run_id).await {
         Ok(e) => e,
@@ -13714,16 +12601,13 @@ async fn complete_node_iteration(
     // completion is a no-op — it must not merge again nor re-trigger downstream
     // spawns. The pure decision lives in the shared head.
     //
-    // This is also the gate that made the pre-#469 `Stale` verdict irrecoverable:
-    // it admits only `Running`/`AwaitingUser`/`Failed`, so a latched-`Stale` node's
-    // eventual `pdo complete` was refused with its work already on disk. Nothing
-    // marks a live node `Stale` any more, so the agent of a long tool call is
+    // This gate admits only `Running`/`AwaitingUser`/`Failed`, so a latched-`Stale`
+    // node's eventual `pdo complete` would be refused with its work already on disk.
+    // Nothing marks a live node `Stale` any more, so the agent of a long tool call is
     // still `Running` here and its late completion is accepted.
     let head = run_advance::evaluate_completion_head(Some(&pre_run_state), &run_id, &node_id, iter);
-    // The head's two stops map to the two *different* variants #490 split apart: a
-    // legal duplicate stays a `2xx` no-op, a reject is a refusal. Carrying the typed
-    // stop instead of a pre-projected `Response` also removes the double projection
-    // the pre-#490 code performed here.
+    // The head's two stops map to two *different* variants: a legal duplicate stays a
+    // `2xx` no-op, a reject is a refusal.
     if let Some(stop) = completion_head_gate(head, caller, &run_id, &node_id, iter) {
         return match stop {
             CompletionHeadStop::NoOp { reason } => CompletionAttempt::NoOp { reason },
@@ -13731,13 +12615,9 @@ async fn complete_node_iteration(
         };
     }
 
-    // #465 (ADR-0042): read-only guard for secondary repos. A node that wrote to a
-    // TRACKED file of a secondary snapshot is refused 409 `secondary_repo_dirtied`
-    // HERE — at the completion edge, after the transition gate but BEFORE any merge
-    // or terminal event. Non-terminal by design: the node stays alive, so once the
-    // agent reverts the tracked change (`git checkout`) and re-completes, the guard
-    // passes. Untracked scratch is tolerated (the probe ignores `??`). No-op for a
-    // mono-repo Run. Deliberately NOT in `transition_guard` (which is pure/IO-free).
+    // Must sit here: after the transition gate but BEFORE any merge or terminal
+    // event. Non-terminal by design — the node stays alive, so once the agent reverts
+    // the tracked change and re-completes, the guard passes.
     if let Some(refusal) = secondary_repos_dirtied_refusal(&repo_root, &run_id, &pre_run_state) {
         return CompletionAttempt::refused(refusal);
     }
@@ -13762,12 +12642,10 @@ async fn complete_node_iteration(
     let pipeline_path =
         resolve_run_pipeline_path(&repo_root, &run_id, &pre_run_state.pipeline_name);
     let artifacts_dir = worktree_dir.join(".pdo").join("artifacts");
-    // Reached on the auto path too, and not redundant with the sweep's own
-    // outputs guard: that guard read the artifacts a moment earlier, this one is
-    // the authority (and owns the frontmatter corrective loop, #36). In practice
-    // it passes — the sweep only proposes `TurnEnded` when validation already
-    // succeeded — but if the two ever disagree the answer is `node_done`'s, not a
-    // second opinion.
+    // Reached on the auto path too, and NOT redundant with the sweep's own outputs
+    // guard: that guard read the artifacts a moment earlier, this one is the authority
+    // and owns the frontmatter corrective loop. If the two ever disagree the answer is
+    // this one's.
     if let Some(refusal) = check_output_validation_with_retry(
         state,
         &pipeline_path,
@@ -13786,10 +12664,9 @@ async fn complete_node_iteration(
         id: None,
         run_id: run_id.clone(),
         ts: event_log::now_iso(),
-        // #469 §3: `NodeAutoCompleted` on the sweep path — already projected as a
-        // completion and already covered by the same guard, but the log must say
-        // the completion was automatic. Deliberately NOT a `source` field in the
-        // payload (see `node_done_completion_has_no_source_payload`).
+        // `NodeAutoCompleted` on the sweep path — same projection, same guard, but
+        // the log must say the completion was automatic. Deliberately the event KIND
+        // and not a `source` field in the payload.
         kind: source.event_kind(),
         node_id: Some(node_id.clone()),
         iter: Some(iter),
@@ -13802,27 +12679,22 @@ async fn complete_node_iteration(
         });
     }
 
-    // Detached tail (#304, ADR-0023): the reap below kills the very tmux
-    // session `pdo complete` runs in, closing this request's client socket —
-    // inline, hyper would cancel this future at its next `.await` and silently
-    // drop the advance (successor spawn / end-port finalization). Everything
-    // past the durable terminal append runs on its own task; the 2xx means
-    // "terminal event recorded, advance scheduled", not "advanced".
+    // Detached tail (ADR-0023): the reap below kills the very tmux session
+    // `pdo complete` runs in, closing this request's client socket — inline, hyper
+    // would cancel this future at its next `.await` and silently drop the advance.
+    // The 2xx means "terminal event recorded, advance scheduled", not "advanced".
     //
-    // On the auto path there is no client socket to lose, but the reap is exactly
-    // as load-bearing: it is what finally kills the REPL the finished agent is
-    // still sitting in. Detaching it too keeps the two paths one path.
+    // On the auto path there is no client socket to lose, but detaching it too keeps
+    // the two paths one path.
     let tail_state = state.clone();
     let tail_run = run_id.clone();
     let tail_node = node_id.clone();
-    // #407/#432: whether this Run is sandboxed, for the targeted container kill. A
-    // `bool`, not the mode: the mode owns a String since profiles landed, and this value
-    // is captured into a detached `async move` where a reference cannot live.
+    // A `bool`, not the mode: the mode owns a String, and this value is captured into
+    // a detached `async move` where a reference cannot live.
     let tail_sandbox = !pre_run_state.sandbox.is_off();
     detach_terminal_tail(caller, state.clone(), run_id, node_id, async move {
-        // Reap on terminal state (#205): snapshot the pane then kill the session,
-        // so a completed node never holds a live session toward the tmux-collapse
-        // point (#77/#78). Post-mortem inspection survives via the snapshot.
+        // Snapshot the pane then kill the session, so a completed node never holds a
+        // live session toward the tmux-collapse point.
         reap_node_session(
             &tail_state,
             &repo_root,
@@ -13832,10 +12704,8 @@ async fn complete_node_iteration(
             tail_sandbox,
         );
 
-        // Shared post-completion tail (#275): fire this node's edges, advance the
-        // run, re-drive throttled waiters, then the single completion gate. Everything
-        // above — guard, node-type merge / cleanliness check, output validation, the
-        // terminal append — is the head, untouched.
+        // Fire this node's edges, advance the run, re-drive throttled waiters, then
+        // the single completion gate.
         match run_advance::complete_node(
             &tail_state,
             &tail_run,
@@ -13871,7 +12741,7 @@ async fn resolve_run_auto_fail(
 ) -> bool {
     let repo_root = effective_repo_root(state, run_state);
 
-    // node tier: parse the run-scoped pipeline and read this node's `auto_fail`.
+    // Node tier: parse the run-scoped pipeline and read this node's `auto_fail`.
     let node = {
         let pipeline_path =
             resolve_run_pipeline_path(&repo_root, &run_state.run_id, &run_state.pipeline_name);
@@ -13888,7 +12758,7 @@ async fn resolve_run_auto_fail(
             })
     };
 
-    // project tier: the Projet owning the run's primary repo (compared verbatim,
+    // Project tier: the Projet owning the run's primary repo (compared verbatim,
     // like the harness tier). Falls back to the daemon repo root when the run
     // carries no explicit target (ADR-0033 read-side resolution).
     let primary_repo = run_state
@@ -13899,7 +12769,7 @@ async fn resolve_run_auto_fail(
         .await
         .unwrap_or(None);
 
-    // instance tier: stored → env → false.
+    // Instance tier: stored → env → false.
     let instance = instance_config::get(&state.db)
         .await
         .map(|c| instance_config::resolve_instance_auto_fail(c.auto_fail))
@@ -13913,12 +12783,11 @@ async fn resolve_run_auto_fail(
     })
 }
 
-/// Embed a re-open in a **targeted** human command (AC7 / ADR-0049): retry /
-/// restart / start / complete / inject on a terminal (or incident-parked) Run
-/// re-open it **atomically** — one round-trip, no "resume then act" race, no
-/// re-fail window. This is the human's own gesture re-opening the Run (ADR-0009
-/// amended: a node button never reopens *of the runtime's initiative*, but the
-/// human's targeted command may embed the reopen).
+/// Embed a re-open in a **targeted** human command (ADR-0049): retry / restart /
+/// start / complete / inject on a terminal (or incident-parked) Run re-open it
+/// **atomically** — one round-trip, no "resume then act" race, no re-fail window.
+/// This is the human's own gesture reopening the Run; the runtime never reopens of
+/// its own initiative (ADR-0009 amended).
 ///
 /// If the Run needs re-opening (terminal & non-archived, or `AwaitingUser` on an
 /// incident), it appends the same `reopen_run` `CommandIssued` the global reopen
@@ -13960,15 +12829,13 @@ async fn node_fail(
 ) -> Response {
     let iter = req.iter.unwrap_or(1);
 
-    // ADR-0049 / AC5: resolve `auto_fail` (node → Run → Projet → instance)
-    // BEFORE the terminal append, so the tail knows whether this deliberate
-    // agent `pdo fail` terminalises the run (`RunFailed`) or parks it
-    // `AwaitingUser` (`RunInterrupted`) for a human to confirm. The NodeFailed
-    // itself is unconditional — the agent's own iteration genuinely failed.
+    // Resolve `auto_fail` BEFORE the terminal append, so the tail knows whether this
+    // deliberate `pdo fail` terminalises the run or parks it `AwaitingUser`. The
+    // `NodeFailed` itself is unconditional — the agent's iteration genuinely failed.
     let auto_fail_run = match reload_run_state(&state, &run_id).await {
         Some((_, rs)) => resolve_run_auto_fail(&state, &rs, &node_id).await,
-        // No projected state (run not found / forgotten): default to the safe
-        // park behaviour; the terminal append below is a no-op anyway.
+        // No projected state: default to the safe park behaviour; the terminal
+        // append below is a no-op anyway.
         None => false,
     };
 
@@ -13986,19 +12853,17 @@ async fn node_fail(
         return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
     }
 
-    // Detached tail (#304, ADR-0023): same self-cancellation window as
-    // `node_done` — the reap kills `pdo fail`'s own session; inline, the
-    // `RunFailed` append below could be silently dropped, leaving the run
-    // `running` forever with a Failed node.
+    // Same self-cancellation window as `node_done`: the reap kills `pdo fail`'s own
+    // session, so inline the `RunFailed` append below could be silently dropped,
+    // leaving the run `running` forever with a Failed node.
     let tail_state = state.clone();
     let tail_run = run_id.clone();
     let tail_node = node_id.clone();
     let reason = req.reason.clone();
     detach_terminal_tail("node_fail", state.clone(), run_id, node_id, async move {
-        // Reap on terminal state (#205): snapshot the pane then kill the session.
-        // Post-mortem inspection of the failed node survives via the snapshot.
-        // #407: capture repo_root AND the immutable sandbox mode from the same
-        // projection (the targeted container kill needs the mode).
+        // Snapshot the pane then kill the session; post-mortem inspection survives
+        // via the snapshot. Capture repo_root AND the sandbox mode from the SAME
+        // projection — the targeted container kill needs the mode.
         let (repo_root, tail_sandbox) = match load_events(&tail_state.db, &tail_run).await {
             Ok(evs) => event_log::project(&evs)
                 .map(|s| (effective_repo_root(&tail_state, &s), !s.sandbox.is_off()))
@@ -14014,11 +12879,9 @@ async fn node_fail(
             tail_sandbox,
         );
 
-        // ADR-0049 / AC5: an agent `pdo fail` terminalises the run to `Failed`
-        // ONLY when `auto_fail` is opted in (node → Run → Projet → instance).
-        // Otherwise it parks the run `AwaitingUser` (`RunInterrupted`), the
-        // human confirms the failure. Only the agent `pdo fail` honours this
-        // opt-in — every runtime give-up parks regardless.
+        // An agent `pdo fail` terminalises the run to `Failed` ONLY when `auto_fail`
+        // is opted in; otherwise it parks `AwaitingUser` for a human to confirm. Only
+        // the agent `pdo fail` honours the opt-in — every runtime give-up parks.
         let run_event = if auto_fail_run {
             event_log::Event {
                 id: None,
@@ -14049,8 +12912,7 @@ async fn node_fail(
             error!("failed to append run terminal/park event: {e}");
         }
 
-        // Whether failed or parked, the node's session was reaped, freeing a
-        // slot. Re-drive throttled `waiting` nodes in other runs (#159).
+        // Failed or parked, the node's session was reaped and freed a slot.
         retry_waiting_nodes(&tail_state).await;
 
         info!("Node {tail_node} failed in run {tail_run} (auto_fail={auto_fail_run})");
@@ -14058,13 +12920,11 @@ async fn node_fail(
     (StatusCode::OK, "ok").into_response()
 }
 
-/// Graceful no-op (#245). A node that legitimately has nothing to do (e.g. an
-/// auto-issue selector whose eligible pool emptied between guard-eval and
-/// node-run) calls `pdo skip --reason …` instead of `pdo fail`. The node is
-/// recorded as completed (it ran and reached a decision) and the run ends in the
-/// distinct terminal state `Skipped` — short-circuiting downstream so no bogus
-/// input is propagated, and keeping the failure signal honest. Reserve `fail`
-/// for genuine errors.
+/// Graceful no-op. A node that legitimately has nothing to do calls
+/// `pdo skip --reason …` instead of `pdo fail`. The node is recorded as completed —
+/// it ran and reached a decision — and the run ends in the distinct terminal state
+/// `Skipped`, short-circuiting downstream so no bogus input propagates and the
+/// failure signal stays honest.
 async fn node_skip(
     State(state): State<Arc<AppState>>,
     AxumPath((run_id, node_id)): AxumPath<(String, String)>,
@@ -14077,12 +12937,9 @@ async fn node_skip(
         Err(resp) => return *resp,
     };
 
-    // Same guard as a completion (#212, #354): the skip terminalizes the node as
-    // Completed, so a duplicate skip / a skip on a terminal run must be
-    // rejected/no-op'd exactly like `node_done`, never double-appended. Shared
-    // head — same pure decision as `node_done` and `mark_node_done`, and therefore
-    // the same body shape since #490: a skip refused by the guard now names itself
-    // `completion_rejected` too, which is coherent — it is the same verdict.
+    // Same guard as a completion: the skip terminalizes the node as Completed, so a
+    // duplicate skip must be rejected/no-op'd exactly like `node_done`, never
+    // double-appended.
     if let Some(stop) = completion_head_gate(
         run_advance::evaluate_completion_head(Some(&pre_run_state), &run_id, &node_id, iter),
         "node_skip",
@@ -14093,10 +12950,9 @@ async fn node_skip(
         return stop.into_response();
     }
 
-    // Terminalize the node as Completed with a no-op marker. A graceful no-op
-    // produced no outputs and made no code changes, so — unlike `node_done` —
-    // we deliberately skip the sub-worktree merge and output validation: there
-    // is nothing to merge or validate, and the run will not reach downstream.
+    // A graceful no-op produced no outputs and made no code changes, so — unlike
+    // `node_done` — the sub-worktree merge and output validation are deliberately
+    // skipped: there is nothing to merge or validate.
     let node_completed = event_log::Event {
         id: None,
         run_id: run_id.clone(),
@@ -14110,10 +12966,8 @@ async fn node_skip(
         return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
     }
 
-    // Detached tail (#304, ADR-0023): same self-cancellation window as
-    // `node_done` — the reap kills `pdo skip`'s own session; inline, the
-    // `RunSkipped` append below could be silently dropped, leaving the run
-    // `running` forever.
+    // Same self-cancellation window as `node_done`: the reap kills `pdo skip`'s own
+    // session, so inline the `RunSkipped` append below could be silently dropped.
     let repo_root = effective_repo_root(&state, &pre_run_state);
     let tail_state = state.clone();
     let tail_run = run_id.clone();
@@ -14121,7 +12975,6 @@ async fn node_skip(
     let reason = req.reason.clone();
     let tail_sandbox = !pre_run_state.sandbox.is_off();
     detach_terminal_tail("node_skip", state.clone(), run_id, node_id, async move {
-        // Reap on terminal state (#205): snapshot the pane then kill the session.
         reap_node_session(
             &tail_state,
             &repo_root,
@@ -14131,10 +12984,8 @@ async fn node_skip(
             tail_sandbox,
         );
 
-        // End the run as a graceful no-op (#245) — distinct from RunFailed. This
-        // short-circuits downstream: `spawn_ready_after_event` only spawns for a
-        // Running/AwaitingUser run, so no downstream node is dispatched on a
-        // now-`Skipped` run.
+        // Distinct from RunFailed, and it short-circuits downstream:
+        // `spawn_ready_after_event` only spawns for a Running/AwaitingUser run.
         let run_skipped = event_log::Event {
             id: None,
             run_id: tail_run.clone(),
@@ -14148,8 +12999,7 @@ async fn node_skip(
             error!("failed to append run_skipped: {e}");
         }
 
-        // The run ended: its other NodeRun sessions (if any) will be reaped, freeing
-        // slots. Re-drive throttled `waiting` nodes in other runs (#159).
+        // The run ended, so its other sessions will be reaped and free slots.
         retry_waiting_nodes(&tail_state).await;
 
         info!("Node {tail_node} skipped (graceful no-op) in run {tail_run}: {reason}");
@@ -14161,10 +13011,10 @@ async fn node_skip(
         .into_response()
 }
 
-/// REST entry point for the UI **Start** button (#204): force-spawn `node_id`
-/// out of dependency order. A thin wrapper — all logic and guards live in the
-/// shared [`force_spawn_node`] helper, which the `start_node` manager
-/// `/commands` kind also calls, so the two consumers can never drift.
+/// REST entry point for the UI **Start** button: force-spawn `node_id` out of
+/// dependency order. A thin wrapper — the logic and guards live in the shared
+/// [`force_spawn_node`], which the `start_node` `/commands` kind also calls, so the
+/// two consumers cannot drift.
 async fn node_start(
     State(state): State<Arc<AppState>>,
     AxumPath((run_id, node_id)): AxumPath<(String, String)>,
@@ -14173,12 +13023,11 @@ async fn node_start(
 }
 
 /// Writes each per-port inline-content override to an artifact under the node's
-/// iteration dir and returns the port-keyed `PathBuf` map `start_node` consumes
-/// (#486 / #600). This is what lets a `start_node`/`skip_node` supply a **dummy
-/// input** (or a skipped node's default output) without the upstream having
-/// produced: the resolver reads these paths in place of the edge-resolved ones. A
-/// per-port write failure is skipped with a `warn!` (sharp tool, ADR-0001) rather
-/// than failing the whole spawn.
+/// iteration dir and returns the port-keyed map `start_node` consumes. This is what
+/// lets a `start_node`/`skip_node` supply a **dummy input** without the upstream
+/// having produced: the resolver reads these paths in place of the edge-resolved
+/// ones. A per-port write failure is skipped with a `warn!` (ADR-0001) rather than
+/// failing the whole spawn.
 fn materialize_override_inputs(
     artifacts_dir: &std::path::Path,
     node_id: &str,
@@ -14207,33 +13056,21 @@ fn materialize_override_inputs(
     out
 }
 
-/// Force-spawn a node now, without waiting for its upstream producers to
-/// complete (#204). The single implementation behind both consumers: the UI
-/// **Start** button (REST `POST .../nodes/{node}/start` → [`node_start`]) and
-/// the Pipeline Manager `start_node` `/commands` kind. Keeping the body here
-/// means the guards below live in exactly one place.
+/// Force-spawn a node now, without waiting for its upstream producers. The single
+/// implementation behind both consumers: the UI **Start** button and the Pipeline
+/// Manager `start_node` `/commands` kind, so the guards live in exactly one place.
 ///
 /// Guards run **before** any side effect, in order:
 ///  - run must exist (`404`) and the node must not already be `Running` (`409`);
-///  - **D4 (orphan-session fix):** the derived `NodeStarted` is pre-validated
-///    through [`transition_guard`] *before* anything is spawned. Since #485 the
-///    primitive no longer spawns at all — it returns a `StartNodeSpawn` this
-///    handler executes *after* the append — so the pre-validation is now belt and
-///    braces rather than the only thing standing between a refused start and an
-///    orphan session (plus a lying `200`). Keep it: it is what makes the refusal
-///    a `409` here instead of an `error!` swallowed by the append loop below, and
-///    the guard it calls is the same one `append_event` uses as a backstop.
-///    `RunStatus::is_live()` is deliberately
-///    *not* the predicate: it admits `Paused`, which the append backstop
-///    (`run_accepts_lifecycle` = `Running`/`AwaitingUser`) rejects — that gap
-///    would orphan a session on a paused run. Pre-validating the actual event
-///    with the same guard the backstop uses keeps the two in lockstep and also
-///    refuses a concurrent live iteration. Mirrors `spawn_node`'s own probe.
-///  - **D5 (cap fail-fast):** acquire `admission_lock` and reject with `409` if
-///    spawning one more session would exceed the global cap (#77/#78). The lock
-///    is held across the spawn + append so the check-and-reserve is atomic, as
-///    `spawn_node` does. Force-spawn fails fast rather than queueing to
-///    `waiting` — "start now" must not silently defer.
+///  - the derived `NodeStarted` is pre-validated through [`transition_guard`], which
+///    is what makes the refusal a `409` here instead of an `error!` swallowed by the
+///    append loop below. `RunStatus::is_live()` is deliberately *not* the predicate:
+///    it admits `Paused`, which the append backstop rejects, and that gap would
+///    orphan a session on a paused run. Pre-validating the actual event with the same
+///    guard the backstop uses keeps the two in lockstep.
+///  - `admission_lock` is held across the spawn + append so the cap check is an
+///    atomic check-and-reserve, as `spawn_node` does. Force-spawn fails fast rather
+///    than queueing to `waiting` — "start now" must not silently defer.
 async fn force_spawn_node(
     state: &Arc<AppState>,
     run_id: &str,
@@ -14257,10 +13094,8 @@ async fn force_spawn_node(
         }
     };
 
-    // AC7 / ADR-0049: a Start on a terminal (or incident-parked) Run re-opens it
-    // atomically — the same human-gesture re-open the global `reopen_run` uses —
-    // so the button drives the Run instead of the pre-résilience "resume first"
-    // refusal. Runs before the guards below so they see a live Run.
+    // A Start on a terminal (or incident-parked) Run re-opens it atomically
+    // (ADR-0049). Must run before the guards below, so they see a live Run.
     let run_state = match embed_reopen_for_targeted_command(state, run_id, run_state).await {
         Ok(s) => s,
         Err(e) => {
@@ -14284,12 +13119,10 @@ async fn force_spawn_node(
         .map(|ns| ns.iter + 1)
         .unwrap_or(1);
 
-    // #445: the SECOND spawn path. This one does not route through `spawn_node` (it
-    // drives `node_primitives::start_node`), so it needs the sandbox precondition
-    // stated again — the same `docker exec` on a container that does not exist yet
-    // would die the same way. 409 rather than a silent defer: "start now" must not
-    // queue, and the operator who pressed the button deserves to read why (mirrors the
-    // session-cap arm below, which fails fast for exactly that reason).
+    // This path drives `node_primitives::start_node`, not `spawn_node`, so it needs
+    // the sandbox precondition stated AGAIN — the same `docker exec` on a container
+    // that does not exist yet would die the same way. 409 rather than a silent defer:
+    // "start now" must not queue.
     if let Some(reason) = run_state.sandbox_spawn_block() {
         return (
             StatusCode::CONFLICT,
@@ -14298,9 +13131,8 @@ async fn force_spawn_node(
             .into_response();
     }
 
-    // D4 (#204): pre-validate the start against the SAME transition guard that
-    // backstops `append_event`, BEFORE the primitive spawns a tmux session — so
-    // a start refused by the backstop never leaves an orphan session behind.
+    // Pre-validate against the SAME transition guard that backstops `append_event`,
+    // BEFORE any tmux session exists, so a refused start leaves no orphan session.
     let started_probe = event_log::Event {
         id: None,
         run_id: run_id.to_string(),
@@ -14320,7 +13152,6 @@ async fn force_spawn_node(
                 .into_response();
         }
         transition_guard::Verdict::Reject { reason } => {
-            // #515: the typed cause renders to the same prose in the body.
             return (
                 StatusCode::CONFLICT,
                 Json(serde_json::json!({ "error": reason.to_string() })),
@@ -14358,19 +13189,15 @@ async fn force_spawn_node(
     let artifacts_dir = worktree_dir.join(".pdo").join("artifacts");
     let resolved_vars = resolve_run_variables(&pipeline_def, &events);
 
-    // #486 / #600: materialize any operator-supplied per-port overrides into
-    // artifacts and hand `start_node` the resolved paths, so the node runs on the
-    // dummy input(s) even though its upstream never produced.
+    // Materialize any operator-supplied per-port overrides into artifacts, so the
+    // node runs on the dummy input(s) even though its upstream never produced.
     let override_paths = overrides
         .map(|ov| materialize_override_inputs(&artifacts_dir, node_id, iter, ov))
         .filter(|m| !m.is_empty());
 
-    // #614 (correctif 4): resolve the winning harness against the DISK TIER, so a
-    // manual force-spawn / Start reaches a user-declared harness exactly like the
-    // scheduler's `spawn_node` does — these commands stop being reserved to
-    // embedded harnesses. Bound before `params` so the borrow outlives `start_node`.
-    // Absent HOME degrades to the embedded floor (`load` returns the floor when the
-    // file is unreadable).
+    // Resolve against the DISK TIER, so a manual Start reaches a user-declared
+    // harness exactly like the scheduler's `spawn_node` does. Bound before `params`
+    // so the borrow outlives `start_node`. Absent HOME degrades to the embedded floor.
     let harness_home_root = sandbox_run::sandbox_home_roots(state)
         .map(|(home, _)| home)
         .unwrap_or_default();
@@ -14391,35 +13218,27 @@ async fn force_spawn_node(
         daemon_port: state.port,
         tmux_cmd_override: state.tmux_cmd_override.as_deref(),
         docker_cmd_override: state.docker_cmd_override.as_deref(),
-        // #347: resolve fresh so a force-spawn honours the instance default too
-        // (wiring only one seam would leave this path at the account default —
-        // a silent bug visible only on a manual force-spawn).
+        // Resolve fresh so a force-spawn honours the instance default too: wiring
+        // only the scheduler seam leaves this path at the account default, a silent
+        // bug visible only on a manual force-spawn.
         default_model: stored_default_model(&state.db).await,
-        // #550/ADR-0046: same fresh-resolution discipline for the harness axis.
         default_harness: stored_default_harness(&state.db).await,
         default_harness_models: stored_default_harness_models(&state.db).await,
-        // #552/ADR-0046: the Projet tier — the harness carried by the Projet that
-        // owns this Run's primary (effective) repo. Resolved fresh here so a manual
-        // force-spawn honours a Projet setting attached mid-Run, like the model /
-        // harness defaults above. A DB error degrades to a transparent tier.
+        // The Projet tier, resolved fresh so a manual force-spawn honours a Projet
+        // setting attached mid-Run. A DB error degrades to a transparent tier.
         project_harness: project_store::harness_for_path(&state.db, &repo_root.to_string_lossy())
             .await
             .ok()
             .flatten(),
-        // #433 / ADR-0043: same reasoning as `default_model` — resolve turn-end
-        // auto-completion fresh so a force-spawned node arms the `Stop` hook when
-        // the setting is on, instead of silently missing it on this seam alone.
+        // Same reasoning as `default_model`: resolve fresh, or a force-spawned node
+        // silently misses the `Stop` hook on this seam alone.
         inject_hook: stored_autocomplete_turn_end(&state.db).await,
-        // #614 (correctif 4): honour the disk tier on this manual seam too.
         harness_registry: Some(&harness_registry),
     };
 
-    // D5 (#204): admission cap as an atomic check-and-reserve. Hold the lock
-    // from the count until the reservation event is appended — exactly as
-    // `spawn_node` does — so concurrent force-spawns can't both claim the same
-    // free slot and overshoot the cap toward the tmux-server collapse point
-    // (#77/#78). Force-spawn fails fast at the cap instead of queueing to
-    // `waiting`, which would defeat "start now".
+    // Hold the lock from the count until the reservation event is appended — exactly
+    // as `spawn_node` does — or concurrent force-spawns both claim the same free slot
+    // and overshoot the cap toward the tmux-server collapse point.
     let _admission_guard = state.admission_lock.lock().await;
     let cap = admission::configured_cap_with(stored_session_cap(&state.db).await);
     let live = count_global_live_sessions(&state.db).await;
@@ -14443,13 +13262,10 @@ async fn force_spawn_node(
         }
     }
 
-    // #485 / ADR-0038: reserve, THEN spawn. The primitive used to spawn the
-    // session itself and hand the reservation back, so between the two calls a
-    // live session had no `NodeStarted` in the log — and the orphan sweep kills
-    // exactly that. Appending first also means a rejected append no longer leaves
-    // an orphan session; the residual risk (append landed, spawn failed) is what
-    // `spawn_node` has always carried, and #469/ADR-0032 makes a missing session a
-    // loud verdict rather than a silent one.
+    // Reserve, THEN spawn (ADR-0038). Spawning first leaves a live session with no
+    // `NodeStarted` in the log, and the orphan sweep kills exactly that. Appending
+    // first also means a rejected append leaves no orphan session; the residual risk
+    // (append landed, spawn failed) is what `spawn_node` has always carried.
     if let Some(spawn) = &result.spawn {
         if let Err(e) = spawn.execute() {
             error!("failed to spawn tmux session: {e}");
@@ -14519,9 +13335,8 @@ async fn node_stop(
 
     let iter = ns.iter;
 
-    // Reap on terminal state (#205): snapshot the pane BEFORE the session is
-    // killed, so the stopped node's post-mortem pane survives. `stop_node`
-    // kills the session too (idempotent — reap already killed it).
+    // Snapshot the pane BEFORE the session is killed, so the stopped node's
+    // post-mortem pane survives. `stop_node` kills the session too, idempotently.
     let repo_root = effective_repo_root(&state, &run_state);
     reap_node_session(
         &state,
@@ -14547,8 +13362,7 @@ async fn node_stop(
         }
     }
 
-    // Stopping a running node freed its session slot. Re-drive throttled
-    // `waiting` nodes across all runs (#159).
+    // Stopping a running node freed its session slot.
     retry_waiting_nodes(&state).await;
 
     info!("node_stop: stopped {node_id} iter {iter} in run {run_id}");
@@ -14557,33 +13371,22 @@ async fn node_stop(
 
 /// Retry / Play (`POST /runs/{id}/nodes/{node}/retry`, the canvas Retry button).
 ///
-/// #487 — this handler used to carry **none** of the guarantees a spawn
-/// carries. On a terminal Run a click spawned an orphan `claude` session, leaked a
-/// sub-worktree + branch, invalidated the node out of the projection with nothing
-/// to replace it (frozen `pending` for ever, #496), appended **zero** events, and
-/// answered a lying `200 {"ok":true}`. Three fixes, in order:
+/// Three things hold this handler together, and each is load-bearing:
 ///
 /// 1. **Head probe** ([`transition_guard::retry_run_precondition`]) — the FIRST
-///    gesture, before the stop and before the two `invalidate_nodes`. It is
-///    load-bearing that it is first: `NodeInvalidated` is not a lifecycle transition
-///    (the guard never refuses it), so a probe placed any later would leave the
-///    self-invalidation committed — the exact freeze above. Run-liveness ALONE, not
-///    a synthetic `NodeStarted` (#489's trap: retry re-spawns a Running/Completed
-///    node, both of which `validate_start` refuses). Plus the #445 sandbox
-///    precondition, also pre-side-effect. A refused Run is a `409`, "resume the run
-///    first" — never an implicit resume (ADR-0009 forbids a node button flipping
-///    `RunStatus`).
-/// 2. **Route the (re)spawn through [`node_spawn::spawn_node`]** — the reference
-///    primitive (addendum #236 to ADR-0009) — instead of the legacy
-///    `node_primitives::start_node`, so the transition guard, the sandbox
-///    precondition, the atomic admission cap, and the #279 orphan-reap-on-abort all
-///    come for free. The head probe above does NOT replace it — it is what makes the
-///    common refusal a clean `409` with zero side effects rather than a race lost
-///    deeper in.
-/// 3. **Map the [`node_spawn::SpawnOutcome`] truthfully** ([`retry_verdict`]) —
-///    `Spawned` / `Waiting` / `Refused` / `Broken` — instead of the unconditional
-///    `200`. The success body keeps the historical `{iter, invalidated}` root
-///    contract the canvas reads.
+///    gesture, before the stop and before the two `invalidate_nodes`. Being first is
+///    the point: `NodeInvalidated` is not a lifecycle transition, so the guard never
+///    refuses it, and a probe placed any later would leave the self-invalidation
+///    committed — freezing the node `pending` for ever. The predicate is
+///    run-liveness ALONE, not a synthetic `NodeStarted`: retry re-spawns a
+///    Running/Completed node, both of which `validate_start` refuses.
+/// 2. **Route the (re)spawn through [`node_spawn::spawn_node`]**, the reference
+///    primitive (ADR-0009 addendum), not the legacy `node_primitives::start_node`,
+///    so the transition guard, the sandbox precondition, the atomic admission cap and
+///    the orphan-reap-on-abort all come for free.
+/// 3. **Map the [`node_spawn::SpawnOutcome`] truthfully** ([`retry_verdict`]) rather
+///    than answering an unconditional `200`. The success body keeps the historical
+///    `{iter, invalidated}` root contract the canvas reads.
 async fn node_retry(
     State(state): State<Arc<AppState>>,
     AxumPath((run_id, node_id)): AxumPath<(String, String)>,
@@ -14605,19 +13408,14 @@ async fn node_retry(
         }
     };
 
-    // Captured BEFORE any invalidation OR re-open so the retry's target iteration
-    // is derived from the live lap, not a reset-to-1 iteration (the #498
-    // branch-collision trap): both the self-invalidation below and the re-open's
-    // interrupted-node drop remove the node from the projection, so re-deriving the
-    // iter afterwards would read 1. The loop-aware choice between "re-run the same
-    // lap" and "advance to the next iteration" is made once the pipeline is parsed
-    // (`next_iter`, below); here we only need the pre-invalidation lap index.
+    // Captured BEFORE any invalidation OR re-open: both the self-invalidation below
+    // and the re-open's interrupted-node drop remove the node from the projection, so
+    // re-deriving the iter afterwards would read 1 and collide branch names.
     let current_iter = run_state.nodes.get(&node_id).map(|ns| ns.iter).unwrap_or(1);
 
-    // ── AC7 / ADR-0049: embed the re-open. A retry on a terminal (or
-    //    incident-parked) Run re-opens it atomically here, BEFORE the liveness
-    //    probe below sees it — replacing the pre-résilience "resume the run first"
-    //    409. The human's retry IS the re-open gesture (ADR-0009 amended).
+    // A retry on a terminal (or incident-parked) Run re-opens it atomically here,
+    // BEFORE the liveness probe below sees it. The human's retry IS the re-open
+    // gesture (ADR-0009 amended).
     let run_state = match embed_reopen_for_targeted_command(&state, &run_id, run_state).await {
         Ok(s) => s,
         Err(e) => {
@@ -14625,12 +13423,9 @@ async fn node_retry(
         }
     };
 
-    // ── HEAD PROBE 1 (#487): run-liveness. The FIRST gesture — a refusal here leaves
-    //    ZERO side effects (nothing stopped, nothing invalidated). See the doc above
-    //    for why this must precede the invalidations, and why the predicate is
-    //    run-liveness alone rather than a synthetic `NodeStarted`. The iter passed
-    //    here feeds the refusal template only (the predicate ignores it, and a refusal
-    //    means nothing spawns), so the pre-parse `current_iter + 1` is fine.
+    // HEAD PROBE 1 — run-liveness. The FIRST gesture: a refusal here leaves ZERO side
+    // effects. The iter feeds the refusal template only, so the pre-parse
+    // `current_iter + 1` is fine.
     if let Some(reason) =
         transition_guard::retry_run_precondition(&run_state, &node_id, current_iter + 1)
     {
@@ -14645,10 +13440,9 @@ async fn node_retry(
         return retry_verdict::retry_response(&retry_verdict::RetryVerdict::Refused(refusal));
     }
 
-    // ── HEAD PROBE 2 (#445): the sandbox precondition, also before any side effect —
-    //    a not-`ready` container would make the spawn `docker exec` into a name that
-    //    does not exist yet. Carried again inside `spawn_node` (belt and braces,
-    //    exactly as `force_spawn_node` states it here and `spawn_node` re-checks it).
+    // HEAD PROBE 2 — the sandbox precondition, also before any side effect: a
+    // not-`ready` container would make the spawn `docker exec` into a name that does
+    // not exist yet. Re-checked inside `spawn_node`.
     if let Some(reason) = run_state.sandbox_spawn_block() {
         let refusal = retry_verdict::RetryRefusal::SandboxPrepNotReady {
             message: reason,
@@ -14686,9 +13480,9 @@ async fn node_retry(
     };
     let pipeline_def = parse_result.pipeline;
 
-    // ── HEAD PROBE 3: the target must be in the Run's pipeline snapshot — `spawn_node`
-    //    needs the `NodeDef`. Also pre-side-effect, so an unknown id is a clean 400
-    //    (mirrors `restart_node`'s `NodeNotFound`), never a session killed for nothing.
+    // HEAD PROBE 3 — the target must be in the Run's pipeline snapshot, since
+    // `spawn_node` needs the `NodeDef`. Also pre-side-effect, so an unknown id is a
+    // clean refusal, never a session killed for nothing.
     let Some(node) = pipeline_def.nodes.iter().find(|n| n.id == node_id).cloned() else {
         let refusal = retry_verdict::RetryRefusal::NodeNotFound {
             node_id: node_id.clone(),
@@ -14700,8 +13494,8 @@ async fn node_retry(
     let worktree_dir = worktree_dir_for_run(&repo_root, &run_id);
     let artifacts_dir = worktree_dir.join(".pdo").join("artifacts");
 
-    // ── FROM HERE ON THERE ARE SIDE EFFECTS ── (the Run is provably live, the sandbox
-    //    is ready, and the target exists) ──────────────────────────────────────────
+    // FROM HERE ON THERE ARE SIDE EFFECTS: the Run is provably live, the sandbox is
+    // ready, and the target exists.
 
     if run_state
         .nodes
@@ -14722,15 +13516,13 @@ async fn node_retry(
         }
     }
 
-    // Retry is loop-aware. A node's `iter` inside a bounded region IS the lap
-    // index, so the recipe splits (see CONTEXT.md "Contrôles de Run"):
-    //  ① iteration — a region member re-runs the SAME lap (`current_iter`), never
-    //     `current_iter + 1`; bumping it would forge a phantom lap and drag the
-    //     region toward its `max_iter`. A plain node still advances to `iter + 1`.
-    //  ② invalidation — the downstream walk skips the region's re-entry (back)
-    //     edges, so it resets only the lap's forward slice (and what genuinely
-    //     leaves the loop), never an earlier member of the same lap whose output
-    //     is already validated.
+    // Retry is loop-aware, because a node's `iter` inside a bounded region IS the lap
+    // index:
+    //  ① a region member re-runs the SAME lap, never `current_iter + 1` — bumping it
+    //     would forge a phantom lap and drag the region toward its `max_iter`;
+    //  ② the downstream walk skips the region's re-entry edges, so it resets only the
+    //     lap's forward slice, never an earlier member of the same lap whose output is
+    //     already validated.
     let next_iter = if loop_region::bounded_region_for_member(&pipeline_def, &node_id).is_some() {
         current_iter
     } else {
@@ -14755,7 +13547,6 @@ async fn node_retry(
         }
     }
 
-    // Invalidate self separately so its state resets for the re-spawn below.
     let self_inv = node_primitives::InvalidateNodesParams {
         run_id: &run_id,
         node_ids: std::slice::from_ref(&node_id),
@@ -14768,9 +13559,8 @@ async fn node_retry(
         }
     }
 
-    // Reload so the spawn's own re-projection + `resolve_run_variables` see the
-    // invalidated state. (`spawn_node` re-projects internally for its guard/cap; we
-    // still need fresh events for the resolved variables it consumes.)
+    // Reload so `resolve_run_variables` sees the invalidated state. `spawn_node`
+    // re-projects internally for its guard/cap, but not for these variables.
     let events = match load_events(&state.db, &run_id).await {
         Ok(e) => e,
         Err(e) => {
@@ -14779,9 +13569,8 @@ async fn node_retry(
     };
     let resolved_vars = resolve_run_variables(&pipeline_def, &events);
 
-    // Route the (re)spawn through the reference primitive. Every guarantee
-    // `force_spawn_node` re-codes by hand (guard, sandbox, atomic cap, orphan reap)
-    // is carried here — see the doc above and the addendum #236 to ADR-0009.
+    // Route the (re)spawn through the reference primitive: every guarantee
+    // `force_spawn_node` re-codes by hand is carried here.
     let spawn_ctx = node_spawn::SpawnContext {
         pipeline: &pipeline_def,
         run_id: &run_id,
@@ -14815,9 +13604,8 @@ async fn node_retry(
             base_sha,
             interrupted_git_ops,
         },
-        // A `NodeWaiting` was appended and it flipped the node to `Waiting`;
-        // `retry_waiting_nodes` genuinely re-drives it. 2xx, and NOT a noop
-        // (ADR-0037 §2) — the same truth `restart_node` tells.
+        // A `NodeWaiting` was appended and `retry_waiting_nodes` genuinely re-drives
+        // it: a 2xx, and NOT a noop (ADR-0037 §2).
         node_spawn::SpawnOutcome::Throttled => retry_verdict::RetryVerdict::Waiting {
             reason: format!(
                 "node {node_id} iter {next_iter} is queued behind the session cap: it will \
@@ -14825,9 +13613,9 @@ async fn node_retry(
             ),
             invalidated,
         },
-        // Both of these are races: the head probes passed, then `spawn_node`
-        // re-evaluated against a fresher projection. A running node was stopped +
-        // invalidated first, hence `session_killed`.
+        // Both are races: the head probes passed, then `spawn_node` re-evaluated
+        // against a fresher projection. A running node was stopped + invalidated
+        // first, hence `session_killed`.
         node_spawn::SpawnOutcome::Deferred { reason } => {
             retry_verdict::RetryVerdict::Refused(retry_verdict::RetryRefusal::SandboxPrepNotReady {
                 message: reason,
@@ -14840,9 +13628,9 @@ async fn node_retry(
                 session_killed: true,
             })
         }
-        // A panne, not a verdict → 500. `run_failed` is re-PROJECTED, never guessed
-        // (the producers of `Failed` disagree on whether `RunFailed` is on the log),
-        // and a 500 routes the CLI toward `pdo fail` — bad advice if it already is.
+        // A breakdown, not a verdict → 500. `run_failed` is re-PROJECTED, never
+        // guessed: the producers of `Failed` disagree on whether `RunFailed` is on the
+        // log, and a 500 routes the CLI toward `pdo fail` — bad advice if it already is.
         node_spawn::SpawnOutcome::Failed { reason } => {
             let run_failed = reload_run_state(&state, &run_id)
                 .await
@@ -14907,9 +13695,8 @@ async fn node_retry_preview(
     let worktree_dir = worktree_dir_for_run(&repo_root, &run_id);
     let artifacts_dir = worktree_dir.join(".pdo").join("artifacts");
 
-    // Mirror `node_retry`'s loop-aware invalidation: the preview must promise
-    // exactly what the retry will reset — the lap's forward slice, not an earlier
-    // same-lap member reached through a region's back-edge.
+    // Must mirror `node_retry`'s loop-aware invalidation exactly, or the preview
+    // promises something the retry will not do.
     let excluded_edges = loop_region::bounded_reentry_edges(&pipeline_def);
     let mut downstream: Vec<String> =
         graph_resolver::downstream_subgraph_excluding(&pipeline_def, &node_id, &excluded_edges)
@@ -14932,8 +13719,6 @@ async fn node_retry_preview(
     )
         .into_response()
 }
-
-// --- Session attach ---
 
 #[derive(Serialize)]
 struct AttachResponse {
@@ -15008,12 +13793,11 @@ async fn manager_attach(
     }
 }
 
-/// Response of `POST /sessions/{run_id}/shell` (#316 / ADR-0021).
+/// Response of `POST /sessions/{run_id}/shell` (ADR-0021).
 ///
-/// `created` distinguishes a freshly-spawned shell from a re-attach of the
-/// existing one (create-if-absent). The client attaches to `session` via the
-/// existing `WS /sessions/<session>/pty` bridge — this endpoint never spawns an
-/// OS terminal (ADR-0005: inline xterm.js is primary).
+/// `created` distinguishes a freshly-spawned shell from a re-attach. The client
+/// attaches via the `WS /sessions/<session>/pty` bridge — this endpoint never spawns
+/// an OS terminal (ADR-0005: inline xterm.js is primary).
 #[derive(Serialize)]
 struct ShellResponse {
     ok: bool,
@@ -15021,14 +13805,11 @@ struct ShellResponse {
     created: bool,
 }
 
-/// Open (or re-attach) an ad-hoc bash shell in a terminal run's pipeline
-/// worktree (#316 / ADR-0021).
+/// Open (or re-attach) an ad-hoc bash shell in a terminal run's pipeline worktree.
 ///
-/// Create-if-absent, one shell per Run (`pdo-shell-<run_id>`). The server is the
-/// source of truth for eligibility (the client can't see the worktree path):
-/// `409` unless the run is terminal, non-archived, and its pipeline worktree
-/// still exists on disk (the *Reapable run* predicate, tightened onto the
-/// precise `worktree/` dir); `404` if the run is unknown.
+/// Create-if-absent, one shell per Run. The SERVER is the source of truth for
+/// eligibility, because the client cannot see the worktree path: `409` unless the run
+/// is terminal, non-archived, and its pipeline worktree still exists on disk.
 async fn open_run_shell(
     State(state): State<Arc<AppState>>,
     AxumPath(run_id): AxumPath<String>,
@@ -15038,10 +13819,8 @@ async fn open_run_shell(
         Err(resp) => return *resp,
     };
 
-    // Server-side eligibility gate = "Reapable run" (terminal ∧ non-archived ∧
-    // pipeline worktree present). A live run is refused because a stray edit in
-    // its worktree would break the daemon's `git merge` on node completion; an
-    // archived run has no worktree left (ADR-0020).
+    // A live run is refused because a stray edit in its worktree would break the
+    // daemon's `git merge` on node completion; an archived run has no worktree left.
     let repo_root = effective_repo_root(&state, &run_state);
     let worktree = worktree_dir_for_run(&repo_root, &run_id);
     let eligible = run_state.status.is_terminal()
@@ -15060,10 +13839,9 @@ async fn open_run_shell(
     let session = tmux_session_manager::shell_session_name(&run_id);
     let socket = state.tmux_socket();
 
-    // Create-if-absent, race-free (create-then-verify-on-failure): a concurrent
-    // POST may win the `new-session` (tmux rejects the duplicate); on our spawn
-    // failure, re-test existence — if the session is now there, the other POST
-    // created it, so this is a benign re-attach.
+    // Create-then-verify-on-failure: a concurrent POST may win the `new-session`
+    // (tmux rejects the duplicate), so on a spawn failure re-test existence — if the
+    // session is now there, this is a benign re-attach.
     if tmux_session_manager::session_exists(&socket, &session) {
         return (
             StatusCode::OK,
@@ -15076,11 +13854,10 @@ async fn open_run_shell(
             .into_response();
     }
 
-    // #407 D11: a sandboxed run's shell must enter its container. The container
-    // lives from create to cleanup_run (= archive), coextensive with shell
-    // eligibility — EXCEPT after a host reboot, where boot_recovery skips terminal
-    // runs, so the container may be down. Resurrect it here, or fail EXPLICITLY —
-    // never fall back to a silent host bash.
+    // A sandboxed run's shell must enter its container. The container's lifetime is
+    // coextensive with shell eligibility EXCEPT after a host reboot, where boot
+    // recovery skips terminal runs. Resurrect it here, or fail EXPLICITLY — never
+    // fall back to a silent host bash.
     if !run_state.sandbox.is_off() {
         let prep = match sandbox_run::context_from_state(&state, &run_state).await {
             Ok(ctx) => tokio::task::spawn_blocking(move || sandbox_run::ensure_ready(&ctx))
@@ -15099,8 +13876,6 @@ async fn open_run_shell(
         }
     }
 
-    // #407: the run shell enters the Run's container when sandboxed. Marker =
-    // the shell session name; workdir = the pipeline worktree.
     let sandbox_wrap = (!run_state.sandbox.is_off()).then(|| tmux_session_manager::SandboxWrap {
         docker_bin: state.docker_cmd_override.as_deref().unwrap_or("docker"),
         uid: sandbox_container::host_uid(),
@@ -15150,11 +13925,7 @@ async fn open_run_shell(
     }
 }
 
-/// Response of `POST /sessions/libassist` (#302 / ADR-0048, #594 / ADR-0051).
-///
-/// Same shape as [`ShellResponse`]: `created` distinguishes a freshly-spawned
-/// assistant from a re-attach of the existing one (create-if-absent). The client
-/// attaches to `session` via the existing `WS /sessions/<session>/pty` bridge.
+/// Response of `POST /sessions/libassist`. Same shape as [`ShellResponse`].
 #[derive(Serialize)]
 struct LibassistResponse {
     ok: bool,
@@ -15162,16 +13933,13 @@ struct LibassistResponse {
     created: bool,
 }
 
-/// The assistant's cwd: the repo's template directory (#594, ADR-0051 §1).
+/// The assistant's cwd: the repo's template directory (ADR-0051 §1).
 ///
-/// Not the *library store* it used to be. An edit tab of scope `repo` or `user`
-/// edits a file under `.pdo/pipelines/`, while `library_store::pipelines::scope_dir`
-/// answers `.pdo/library/pipelines/` — two different meanings of the word "scope",
-/// which is why the assistant used to be launched in a directory where the file
-/// its primer named did not exist. With one shared session there is no per-open
-/// scope left to honour anyway: the cwd is now a fixed, browsable folder of real
-/// in-house examples, and the file actually being edited arrives by absolute path
-/// through the focus.
+/// NOT the library store: an edit tab of scope `repo`/`user` edits a file under
+/// `.pdo/pipelines/`, while `library_store::pipelines::scope_dir` answers
+/// `.pdo/library/pipelines/`. Confusing the two words launched the assistant in a
+/// directory where the file its primer named did not exist. The file actually being
+/// edited arrives by absolute path through the focus.
 fn libassist_cwd(repo_root: &std::path::Path) -> PathBuf {
     repo_root.join(".pdo").join("pipelines")
 }
@@ -15182,24 +13950,20 @@ fn libassist_state_dir(repo_root: &std::path::Path) -> PathBuf {
     repo_root.join(".pdo").join(".libassist")
 }
 
-/// Open (or re-attach) the library pipeline authoring assistant (#302 / ADR-0048,
-/// #594 / ADR-0051).
+/// Open (or re-attach) the library pipeline authoring assistant (ADR-0051).
 ///
-/// Create-if-absent, **one assistant for the whole daemon** — a `claude` REPL in
-/// the repo's templates directory. Unlike the run shell there is no run to gate
-/// on: the assistant acts before/outside any Run. Its system prompt is primed with
-/// the pipeline-YAML format and the library endpoints, and its `UserPromptSubmit`
-/// hook re-injects the open template on every message, so nothing about *which*
-/// template is being edited is frozen here at spawn time.
+/// Create-if-absent, **one assistant for the whole daemon**. Unlike the run shell
+/// there is no run to gate on — the assistant acts outside any Run. Nothing about
+/// *which* template is being edited is frozen at spawn time: the `UserPromptSubmit`
+/// hook re-injects the open template on every message.
 ///
-/// The session persists across a PTY/tab close (`claude` does not exit on EOF).
-/// The sibling `DELETE` reaps it when the user leaves every edit view; the orphan
-/// sweep's idle arm is the backstop for the case no `DELETE` can cover (a reload).
+/// The session persists across a PTY/tab close. The sibling `DELETE` reaps it when
+/// the user leaves every edit view; the orphan sweep's idle arm is the backstop for
+/// the case no `DELETE` can cover, a browser reload.
 async fn open_library_assistant(State(state): State<Arc<AppState>>) -> Response {
     let cwd = libassist_cwd(&state.repo_root);
-    // The assistant's cwd must exist for `tmux new-session -c` to succeed. A repo
-    // with no templates yet has no `pipelines/` dir; create it so the assistant can
-    // author the very first one.
+    // The cwd must exist for `tmux new-session -c` to succeed, and a repo with no
+    // templates yet has no `pipelines/` dir.
     if let Err(e) = std::fs::create_dir_all(&cwd) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -15211,8 +13975,7 @@ async fn open_library_assistant(State(state): State<Arc<AppState>>) -> Response 
     let session = tmux_session_manager::libassist_session_name().to_string();
     let socket = state.tmux_socket();
 
-    // Create-if-absent, race-free (create-then-verify-on-failure), mirroring
-    // `open_run_shell`.
+    // Create-then-verify-on-failure, mirroring `open_run_shell`.
     if tmux_session_manager::session_exists(&socket, &session) {
         return (
             StatusCode::OK,
@@ -15237,11 +14000,10 @@ async fn open_library_assistant(State(state): State<Arc<AppState>>) -> Response 
     .unwrap_or_default();
     let full_prompt = prompt_augmenter::build_library_assistant_prompt(&daemon_url, &static_prompt);
 
-    // Infra harness (no Run harness to follow): instance default, else the `claude`
-    // floor — mirror of the manager/merge-resolver resolution.
+    // Infra harness — no Run to follow: instance default, else the `claude` floor.
     let default_harness = stored_default_harness(&state.db).await;
     let harness_name = harness_resolver::resolve_infra_harness(None, default_harness.as_deref());
-    // #614 (correctif 3): resolve against the DISK TIER, like the manager/resolver.
+    // Resolve against the DISK TIER, like the manager/resolver.
     let libassist_home_root = sandbox_run::sandbox_home_roots(&state)
         .map(|(home, _)| home)
         .unwrap_or_default();
@@ -15253,11 +14015,10 @@ async fn open_library_assistant(State(state): State<Arc<AppState>>) -> Response 
             );
             harness_registry::claude()
         });
-    // ADR-0051 §3: the per-message focus hook rides on `--settings`, a hole only
-    // the `claude` launch template has. On another harness the token is dropped
-    // silently, and the primer's fetch-the-focus instruction becomes the only
-    // mechanism. Say so once, at spawn, rather than letting the degradation be
-    // discovered from an assistant that keeps guessing the wrong template.
+    // The per-message focus hook rides on `--settings`, a hole only the `claude`
+    // launch template has. On another harness the token is dropped silently and the
+    // primer's fetch-the-focus instruction becomes the only mechanism — say so once,
+    // at spawn, rather than let it be discovered from an assistant guessing wrong.
     if !harness.can_inject_hooks() {
         warn!(
             "library assistant on harness '{}': its launch template has no {{settings}} hole, \
@@ -15268,9 +14029,8 @@ async fn open_library_assistant(State(state): State<Arc<AppState>>) -> Response 
         );
     }
 
-    // Keep the primer OUT of the user-facing templates dir: it and the hook
-    // settings live in a sibling `.libassist/`. No id in the name any more —
-    // there is one assistant.
+    // Keep the primer OUT of the user-facing templates dir: it and the hook settings
+    // live in a sibling `.libassist/`.
     let prompt_path = libassist_state_dir(&state.repo_root).join("assistant.md");
 
     match tmux_session_manager::spawn_libassist(
@@ -15319,25 +14079,20 @@ async fn open_library_assistant(State(state): State<Arc<AppState>>) -> Response 
     }
 }
 
-/// Reap the library pipeline authoring assistant (#302 / ADR-0048, #594 /
-/// ADR-0051).
+/// Reap the library pipeline authoring assistant.
 ///
-/// Fired when the user leaves **every** pipeline edit view — not when they leave
-/// the Assistant *tab*, which is what made the assistant unusable: the info panel
-/// closes by itself on each edit-tab switch (#385), so tab-leave reaped the
-/// conversation on every round trip between two templates.
+/// Fired when the user leaves **every** pipeline edit view — NOT when they leave the
+/// Assistant *tab*: the info panel closes by itself on each edit-tab switch, so
+/// tab-leave would reap the conversation on every round trip between two templates.
 ///
-/// Best-effort — killing an absent session is a no-op, so a double-leave or a race
-/// is harmless. `reaped` tells the client whether a session was actually there.
-/// It is deliberately **not** the only reap path: a browser reload runs no React
-/// cleanup and so sends no `DELETE` at all, which is what the sweep's idle arm
-/// covers.
+/// Best-effort — killing an absent session is a no-op. Deliberately not the only
+/// reap path: a browser reload runs no React cleanup and sends no `DELETE`, which is
+/// what the sweep's idle arm covers.
 ///
-/// **Clears the focus by the same gesture.** "No edit view is open" is the one
-/// fact both carry, and splitting it across two calls made them diverge: the
-/// `pagehide` path can only afford a single `keepalive` request, so it reaped the
-/// session and left the focus behind — `GET …/focus` then named a template nobody
-/// had open, with an age growing without bound.
+/// **Clears the focus by the same gesture.** "No edit view is open" is one fact, and
+/// splitting it across two calls made them diverge: the `pagehide` path can only
+/// afford a single `keepalive` request, so it reaped the session and left the focus
+/// behind, naming a template nobody had open with an age growing without bound.
 async fn close_library_assistant(State(state): State<Arc<AppState>>) -> Response {
     let session = tmux_session_manager::libassist_session_name();
     let socket = state.tmux_socket();
@@ -15346,8 +14101,7 @@ async fn close_library_assistant(State(state): State<Arc<AppState>>) -> Response
     tmux_session_manager::kill(&socket, session);
     if existed {
         // `kill` swallows tmux's exit code, so corroborate rather than claim: a
-        // "Reaped" line for a session that is still alive would send the next
-        // investigation down the wrong path.
+        // "Reaped" line for a session still alive misdirects the next investigation.
         if tmux_session_manager::session_exists(&socket, session) {
             warn!("Failed to reap library assistant {session}: the tmux session is still alive");
         } else {
@@ -15361,7 +14115,7 @@ async fn close_library_assistant(State(state): State<Arc<AppState>>) -> Response
         .into_response()
 }
 
-/// Body of `PUT /sessions/libassist/focus` (#594, ADR-0051 §2).
+/// Body of `PUT /sessions/libassist/focus` (ADR-0051 §2).
 #[derive(Deserialize)]
 struct LibassistFocusRequest {
     /// The template being edited, or `null` to clear the focus (the user left
@@ -15370,14 +14124,13 @@ struct LibassistFocusRequest {
 }
 
 /// Resolve the absolute YAML path of a focused template — **the daemon's job, not
-/// the client's** (#594, ADR-0051).
+/// the client's**.
 ///
-/// The word "scope" means two different things in this codebase: an edit tab's
-/// `repo`/`user` point at `.pdo/pipelines/`, while the library store's
-/// [`library_store::pipelines::Scope`] points at `.pdo/library/pipelines/`. A
-/// frontend that built the path itself would have to know which vocabulary
-/// applies where — and getting that wrong is exactly the bug that gave the
-/// assistant a cwd where the file it was told to read did not exist.
+/// "scope" means two different things here: an edit tab's `repo`/`user` point at
+/// `.pdo/pipelines/`, the library store's [`library_store::pipelines::Scope`] at
+/// `.pdo/library/pipelines/`. A frontend building the path itself has to know which
+/// vocabulary applies where, and getting that wrong is what gave the assistant a cwd
+/// where the file it was told to read did not exist.
 ///
 /// `None` for a template that has no file yet (never saved) and for a path that
 /// does not exist: a legitimate state, not an error.
@@ -15387,16 +14140,15 @@ fn resolve_focus_path(repo_root: &std::path::Path, pipeline_id: &str) -> Option<
 }
 
 /// Declare (or clear) which template the UI is editing — and, by the same token,
-/// that a human is still there (#594, ADR-0051 §2).
+/// that a human is still there (ADR-0051 §2).
 ///
-/// The UI repeats this every 20 s while an edit view is open. That repetition is
-/// load-bearing twice over: it is how the assistant learns the current template
-/// on the next message, and it is how the orphan sweep knows not to reap a session
-/// out from under someone who is editing with the Assistant tab hidden.
+/// The UI repeats this every 20 s while an edit view is open, and the repetition is
+/// load-bearing twice over: it is how the assistant learns the current template on
+/// the next message, and how the orphan sweep knows not to reap a session out from
+/// under someone editing with the Assistant tab hidden.
 ///
 /// **Never spawns the assistant.** Declaring a focus is not asking for a REPL;
-/// auto-spawn was ruled out by ADR-0048 (too eager, too expensive) and nothing
-/// here revisits it.
+/// auto-spawn was ruled out by ADR-0048.
 async fn put_libassist_focus(
     State(state): State<Arc<AppState>>,
     Json(req): Json<LibassistFocusRequest>,
@@ -15406,9 +14158,8 @@ async fn put_libassist_focus(
         return Json(serde_json::json!({ "ok": true, "pipeline_id": null })).into_response();
     };
 
-    // An id that resolves to no file is NOT an error: a template can be open in
-    // the canvas and not yet saved. Store the focus with a null path and let the
-    // assistant read the id.
+    // An id that resolves to no file is NOT an error: a template can be open in the
+    // canvas and not yet saved.
     let path = resolve_focus_path(&state.repo_root, &pipeline_id);
     let focus = LibassistFocus {
         pipeline_id,
@@ -15421,13 +14172,11 @@ async fn put_libassist_focus(
 }
 
 /// Read the current focus — the endpoint the assistant's `UserPromptSubmit` hook
-/// curls before every message (#594, ADR-0051 §3).
+/// curls before every message (ADR-0051 §3).
 ///
-/// `?format=text` renders one plain sentence instead of JSON. That form exists for
-/// the hook: its stdout is appended verbatim to the turn's context, and asking a
-/// tmux session to have `jq` on its PATH to make JSON readable would be a
-/// dependency we do not control. The daemon owns the wording, which is right — it
-/// owns the vocabulary.
+/// `?format=text` renders one plain sentence instead of JSON, for the hook: its
+/// stdout is appended verbatim to the turn's context, and requiring `jq` on the
+/// session's PATH would be a dependency we do not control.
 async fn get_libassist_focus(
     State(state): State<Arc<AppState>>,
     Query(q): Query<FormatQuery>,
@@ -15452,9 +14201,8 @@ struct FormatQuery {
     format: Option<String>,
 }
 
-/// Lock-poisoning-tolerant read of the focus, mirroring [`mark_self_write`]: a
-/// panic while holding this lock must not make the assistant permanently
-/// un-reapable.
+/// Lock-poisoning-tolerant, mirroring [`mark_self_write`]: a panic while holding
+/// this lock must not make the assistant permanently un-reapable.
 fn read_libassist_focus(state: &AppState) -> Option<LibassistFocus> {
     match state.libassist_focus.lock() {
         Ok(g) => g.clone(),
@@ -15491,12 +14239,11 @@ fn libassist_focus_json(
 
 /// The one-line rendering injected into the assistant's context on every message.
 ///
-/// Names the save endpoint, and names it as the *only* one. The assistant used to
-/// be told to echo the focus scope back to `POST /library/pipelines`, which reads
-/// that word in the library store's vocabulary: a `repo` template "saved" that way
-/// landed in `.pdo/library/pipelines/` as a duplicate while the edited file never
-/// moved, and the assistant announced success. `POST /sessions/libassist/save`
-/// takes no scope at all — the daemon already knows the file.
+/// Names the save endpoint, and names it as the *only* one. Echoing the focus scope
+/// back to `POST /library/pipelines` reads that word in the library store's
+/// vocabulary, so a `repo` template "saved" that way lands in
+/// `.pdo/library/pipelines/` as a duplicate while the edited file never moves — and
+/// the assistant announces success.
 fn libassist_focus_text(focus: Option<&LibassistFocus>) -> String {
     match focus {
         None => "PDO — aucune pipeline ouverte dans l'UI pour l'instant. Ne devine pas de \
@@ -15518,8 +14265,8 @@ fn libassist_focus_text(focus: Option<&LibassistFocus>) -> String {
     }
 }
 
-/// Body of `POST /sessions/libassist/save` (#594 / ADR-0051): the whole template,
-/// and nothing that says *where*.
+/// Body of `POST /sessions/libassist/save`: the whole template, and nothing that
+/// says *where*.
 #[derive(Deserialize)]
 struct LibassistSaveRequest {
     yaml: String,
@@ -15528,22 +14275,18 @@ struct LibassistSaveRequest {
 }
 
 /// Persist the template the UI has open — **the focus names the target, the
-/// assistant does not** (#594 / ADR-0051).
+/// assistant does not** (ADR-0051).
 ///
-/// This endpoint exists because the previous one could not be used correctly. The
-/// assistant was told to save through `POST /library/pipelines`, passing the focus
-/// scope; that endpoint reads `scope` in the *library store's* vocabulary
-/// (`.pdo/library/pipelines/`), while an edit tab's `repo`/`user` mean
-/// `.pdo/pipelines/`. The two words look identical and point at different trees,
-/// so a faithful assistant wrote a duplicate into the wrong store, left the edited
-/// file untouched, and reported success.
+/// Don't reintroduce a scope argument. `POST /library/pipelines` reads `scope` in the
+/// *library store's* vocabulary (`.pdo/library/pipelines/`) while an edit tab's
+/// `repo`/`user` mean `.pdo/pipelines/`: the two words look identical and point at
+/// different trees, so a faithful assistant wrote a duplicate into the wrong store,
+/// left the edited file untouched, and reported success. Taking no argument removes
+/// the class of bug — the daemon already resolved the absolute path at focus time,
+/// and it is the only party that knows both vocabularies.
 ///
-/// Removing the argument removes the class of bug: there is nothing left to get
-/// wrong. The daemon already resolved the absolute path when the UI declared its
-/// focus, and it is the only party that knows both vocabularies.
-///
-/// `409` when no template is open: saving into a guess is exactly what this whole
-/// mechanism exists to prevent.
+/// `409` when no template is open: saving into a guess is what this mechanism exists
+/// to prevent.
 async fn save_libassist_focused(
     State(state): State<Arc<AppState>>,
     Json(req): Json<LibassistSaveRequest>,
@@ -15560,7 +14303,7 @@ async fn save_libassist_focused(
     };
 
     // Same gate as `PUT /pipelines/{id}`: a template that does not parse must not
-    // reach disk, where it would break the canvas the user is looking at.
+    // reach disk, where it breaks the canvas the user is looking at.
     if let Err(e) = pipeline::parse_pipeline(&req.yaml) {
         let (message, line) = parse_error_to_structured(&e);
         let mut body =
@@ -15620,14 +14363,12 @@ async fn save_libassist_focused(
 }
 
 fn detect_terminal() -> String {
-    // PDO_TERMINAL env var overrides
     if let Ok(t) = std::env::var("PDO_TERMINAL") {
         if !t.is_empty() {
             return t;
         }
     }
 
-    // Heuristic: check TERM_PROGRAM
     if let Ok(tp) = std::env::var("TERM_PROGRAM") {
         let tp_lower = tp.to_lowercase();
         if tp_lower.contains("kitty") {
@@ -15641,12 +14382,10 @@ fn detect_terminal() -> String {
         }
     }
 
-    // OS heuristic
     if cfg!(target_os = "macos") {
         return "open -a Terminal".into();
     }
 
-    // Linux: check for common terminals in PATH
     for candidate in &["kitty", "alacritty", "gnome-terminal", "konsole", "xterm"] {
         if which_exists(candidate) {
             return (*candidate).into();
@@ -15675,8 +14414,8 @@ fn spawn_terminal_attach(terminal: &str, socket: &str, session_name: &str) -> Re
 
     let escaped_name = shell_escape(session_name);
     let escaped_socket = shell_escape(socket);
-    // Always attach via the daemon's private socket so the user's terminal
-    // pop-out reaches the right tmux server, even when other daemons run.
+    // Always attach via the daemon's private socket, or the pop-out reaches another
+    // daemon's tmux server.
     let tmux_cmd = format!("tmux -L {escaped_socket} attach -t {escaped_name}");
 
     let mut command = std::process::Command::new(cmd);
@@ -15699,8 +14438,6 @@ fn spawn_terminal_attach(terminal: &str, socket: &str, session_name: &str) -> Re
             command.args(["-e", &tmux_cmd]);
         }
         "open" => {
-            // macOS: open -a Terminal <script>
-            // We create a temp script that attaches
             let script = format!("#!/bin/bash\n{tmux_cmd}\n");
             let script_path = std::env::temp_dir().join(format!("pdo-attach-{session_name}.sh"));
             std::fs::write(&script_path, &script)?;
@@ -15729,7 +14466,6 @@ async fn cleanup_run(state: &AppState, run_id: &str) -> Response {
     };
 
     if run_state.status == event_log::RunStatus::Archived {
-        // #491/#601: JSON body so the front reads the reason (was text/plain).
         return (
             StatusCode::CONFLICT,
             Json(serde_json::json!({ "error": "run is already archived" })),
@@ -15745,18 +14481,16 @@ async fn cleanup_run(state: &AppState, run_id: &str) -> Response {
     }
     let mgr_session = tmux_session_manager::manager_session_name(run_id);
     tmux_session_manager::kill(&socket, &mgr_session);
-    // #316: kill any ad-hoc run shell before the worktree is torn down.
+    // Kill any ad-hoc run shell before the worktree is torn down.
     let shell_session = tmux_session_manager::shell_session_name(run_id);
     tmux_session_manager::kill(&socket, &shell_session);
 
-    // #407 D9 + #408 D-4: merge the transcripts back, then destroy the sandbox
-    // container + purge its staging, all BEFORE any `git worktree remove` below —
-    // the container bind-mounts the repo, so a live worktree removal under it
-    // would hit a busy mount. The tmux sessions were killed just above, so the
-    // staging is quiescent for the merge. `cleanup` merges first ("harvest before
-    // purge"), capturing any post-terminal growth (resume, late subagent flushes)
-    // the detached terminal merge missed; idempotent, so the double-merge is safe.
-    // Best-effort. No-op for `off`.
+    // Merge the transcripts back, then destroy the container and purge its staging,
+    // all BEFORE any `git worktree remove` below: the container bind-mounts the repo,
+    // so removing a live worktree under it hits a busy mount. The tmux sessions were
+    // killed just above, so the staging is quiescent. `cleanup` merges FIRST —
+    // harvest before purge — capturing post-terminal growth the detached terminal
+    // merge missed; idempotent, so the double-merge is safe.
     if !run_state.sandbox.is_off() {
         match sandbox_run::sandbox_home_roots(state) {
             Ok((home_root, sandbox_root)) => sandbox_run::cleanup(
@@ -15774,14 +14508,13 @@ async fn cleanup_run(state: &AppState, run_id: &str) -> Response {
     let repo_root = effective_repo_root(state, &run_state);
     let run_dir = repo_root.join(".pdo").join("runs").join(run_id);
 
-    // #315 / ADR-0020: copy the run's outputs to the durable global store BEFORE
-    // any worktree is destroyed below, so an archived run stays inspectable (its
-    // canvas + node outputs). Ordering is load-bearing: `git worktree remove`
-    // wipes `worktree/.pdo/artifacts` well before the `remove_dir_all(&run_dir)`
-    // at the end, so this must run first. Best-effort — never aborts archival.
+    // Copy the run's outputs to the durable store BEFORE any worktree is destroyed,
+    // so an archived run stays inspectable (ADR-0020). Ordering is load-bearing:
+    // `git worktree remove` wipes `worktree/.pdo/artifacts` well before the
+    // `remove_dir_all(&run_dir)` at the end.
     preserve_run_outputs_on_archive(&repo_root, &run_dir, run_id);
 
-    // Remove sub-worktrees (nodes/) before the main worktree
+    // Sub-worktrees (nodes/) must go before the main worktree.
     let nodes_dir = run_dir.join("nodes");
     if nodes_dir.exists() {
         for node_entry in std::fs::read_dir(&nodes_dir)
@@ -15823,7 +14556,6 @@ async fn cleanup_run(state: &AppState, run_id: &str) -> Response {
         }
     }
 
-    // Remove all branches for this run (pipeline branch + sub-worktree branches)
     for pattern in [format!("pdo/run-{run_id}"), format!("pdo/sub-{run_id}*")] {
         let branch_output = std::process::Command::new("git")
             .args(["branch", "--list", &pattern])
@@ -15843,20 +14575,16 @@ async fn cleanup_run(state: &AppState, run_id: &str) -> Response {
         }
     }
 
-    // #465 slice 2 (ADR-0042): tear down every secondary snapshot BEFORE
-    // `remove_dir_all` — and, critically, from inside the SECONDARY repo. The
-    // `--detach` registration lives in the secondary's `.git`, OUTSIDE `repo_root`, so
-    // `remove_dir_all(run_dir)` below cannot clear it; without the per-secondary
-    // `prune`, every multi-repo Run leaks a dangling registration (the #498 class) and
-    // a future `worktree add` at the same path fails 255.
+    // Tear down every secondary snapshot BEFORE `remove_dir_all`, and from inside the
+    // SECONDARY repo: the `--detach` registration lives in the secondary's `.git`,
+    // OUTSIDE `repo_root`, so `remove_dir_all(run_dir)` cannot clear it. Without the
+    // per-secondary `prune`, every multi-repo Run leaks a dangling registration and a
+    // future `worktree add` at the same path fails 255.
     //
-    // DISK-DRIVEN, not projection-driven: the scan covers snapshots the projection no
-    // longer lists — a secondary REMOVED mid-run keeps its snapshot on disk until now
-    // (decision 5, deferred teardown), and an ORPHAN snapshot (created, its event
-    // never appended on a crash) has no pin at all. Iterating `target_repos` would
-    // skip both and leak them. The owning secondary is resolved from each snapshot's
-    // own `.git` pointer. Best-effort throughout — a moved/missing secondary is a warn
-    // + skip, never a cleanup that fails.
+    // DISK-DRIVEN, not projection-driven: the scan must cover snapshots the projection
+    // no longer lists — a secondary removed mid-run keeps its snapshot until now, and
+    // an orphan snapshot whose event never landed has no pin at all. Iterating
+    // `target_repos` would skip and leak both.
     let repos_dir = secondary_repos_dir(&repo_root, run_id);
     for entry in std::fs::read_dir(&repos_dir)
         .into_iter()
@@ -15909,13 +14637,10 @@ async fn cleanup_run(state: &AppState, run_id: &str) -> Response {
         .into_response()
 }
 
-/// DELETE /runs/{run_id} — permanently forget an archived run.
-///
-/// Removes every event log row for the run. The run will no longer appear in
-/// listings, projections, or post-mortem queries. Only allowed once the run
-/// is `Archived` (i.e. `cleanup_run` has already torn down its worktrees and
-/// branches), so we never strand on-disk state by deleting events for a live
-/// run.
+/// DELETE /runs/{run_id} — permanently forget an archived run, removing every event
+/// log row. Only allowed once the run is `Archived`, i.e. `cleanup_run` has already
+/// torn down its worktrees and branches, or deleting the events would strand the
+/// on-disk state.
 async fn forget_run(
     State(state): State<Arc<AppState>>,
     AxumPath(run_id): AxumPath<String>,
@@ -15933,8 +14658,8 @@ async fn forget_run(
             .into_response();
     }
 
-    // #328 / ADR-0024: tombstone + purge in one transaction — a late writer
-    // must never observe "events gone, no tombstone yet" and resurrect the run.
+    // Tombstone + purge in ONE transaction: a late writer must never observe "events
+    // gone, no tombstone yet" and resurrect the run (ADR-0024).
     let purge = async {
         let mut tx = state.db.begin().await?;
         sqlx::query("INSERT OR IGNORE INTO forgotten_runs (run_id, forgotten_at) VALUES (?, ?)")
@@ -15954,8 +14679,8 @@ async fn forget_run(
         return (StatusCode::INTERNAL_SERVER_ERROR, "event log error").into_response();
     }
 
-    // A forgotten run has nothing left to recover: reap its manager/shell
-    // sessions so they can't keep POSTing commands. Best-effort.
+    // A forgotten run has nothing left to recover: reap its manager/shell sessions so
+    // they can't keep POSTing commands.
     let socket = state.tmux_socket();
     for session in [
         tmux_session_manager::manager_session_name(&run_id),
@@ -15964,10 +14689,9 @@ async fn forget_run(
         tmux_session_manager::kill(&socket, &session);
     }
 
-    // #315 / ADR-0020: forget also reclaims the durable output store — without
-    // this, the outputs preserved on archive leak forever once a run is
-    // forgotten, contradicting forget's "the run vanishes entirely" contract.
-    // Best-effort: a missing dir (never archived, or already gone) is not an error.
+    // Forget also reclaims the durable output store, or the outputs preserved on
+    // archive leak forever and contradict forget's "the run vanishes entirely"
+    // contract. A missing dir is not an error.
     if let Some(durable) = durable_run_dir(&run_id) {
         if let Err(e) = std::fs::remove_dir_all(&durable) {
             if e.kind() != std::io::ErrorKind::NotFound {
@@ -15981,10 +14705,8 @@ async fn forget_run(
 
     info!("Run {run_id} forgotten (event log purged)");
 
-    // Notify connected websocket clients so the runs list refreshes. We piggy-back
-    // on the pipeline-broadcast channel because the event channel only carries
-    // typed `event_log::Event` records — and we just deleted every event for
-    // this run, so there's nothing meaningful to project.
+    // Piggy-back on the pipeline-broadcast channel: the event channel only carries
+    // typed `event_log::Event` records, and every event for this run was just deleted.
     let _ = state.pipeline_tx.send(serde_json::json!({
         "type": "run_forgotten",
         "run_id": run_id,
@@ -15997,19 +14719,15 @@ async fn forget_run(
         .into_response()
 }
 
-// --- WebSocket handler with event broadcasting ---
-
 async fn ws_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
-    // #564: `/ws` streams every event of every Run to any subscriber — until now
-    // with NO Origin guard, so any web page open in the operator's browser could
-    // silently subscribe and exfiltrate repos/prompts/verdicts. Apply the same
-    // DNS-rebinding/CSWSH guard the PTY bridge already has (shared allowlist).
-    // `headers` must precede `ws`: the upgrade extractor consumes the request, so
-    // it stays last (axum 0.8), mirroring `session_pty_handler`.
+    // `/ws` streams every event of every Run to any subscriber, so without this guard
+    // any web page open in the operator's browser could subscribe and exfiltrate
+    // repos/prompts/verdicts. `headers` MUST precede `ws`: the upgrade extractor
+    // consumes the request, so it stays last (axum 0.8).
     if !pty_bridge::check_origin(&headers, state.port, &state.allowed_ws_origins) {
         warn!(
             "Rejected /ws WebSocket upgrade: Origin not allowed ({})",
@@ -16090,22 +14808,16 @@ fn unix_timestamp_secs() -> String {
     format!("{secs}.{millis:03}")
 }
 
-// --- Target repo validation ---
-
-/// The message every write boundary returns when no target repo was named
-/// (#470). Actionable on purpose: the caller must learn *what* to pass, not
-/// merely that something is missing.
+/// The message every write boundary returns when no target repo was named.
+/// Actionable on purpose: the caller must learn *what* to pass.
 const TARGET_REPO_REQUIRED: &str = "target_repo is required: name the absolute path of the git \
     repository this must work in — the daemon's own working directory is not a default";
 
-/// Resolve a **required** target repo at a write boundary (#470).
+/// Resolve a **required** target repo at a write boundary (ADR-0033).
 ///
-/// Trims once and uses the trimmed value as the canonical one: absent, empty or
-/// whitespace-only is refused by name, anything else goes through
-/// `validate_target_repo`. This is the single source of the rule for
-/// `create_run_inner`, `create_trigger`, `patch_trigger` and `guard_test` — the
-/// read side (`effective_repo_root`) deliberately does NOT use it and keeps its
-/// fallback for historical runs. See ADR-0033.
+/// Trims once and treats the trimmed value as canonical. The single source of the
+/// rule for every write surface; the read side (`effective_repo_root`) deliberately
+/// does NOT use it and keeps its fallback for historical runs.
 fn required_target_repo(field: Option<&str>) -> Result<PathBuf, String> {
     match field.map(str::trim) {
         Some(p) if !p.is_empty() => validate_target_repo(p),
@@ -16133,17 +14845,13 @@ fn validate_target_repo(path: &str) -> Result<PathBuf, String> {
     }
 }
 
-/// Accept exactly a local branch OR a remote-tracking ref as a Run source (#571),
-/// probing each namespace with an exact-ref lookup.
+/// Accept exactly a local branch OR a remote-tracking ref as a Run source, probing
+/// each namespace with an exact-ref lookup.
 ///
-/// Two `git show-ref --verify` probes replace the old `git branch --list <b>`,
-/// which had two holes closed here at once: it is blind to remote-tracking refs,
-/// AND it treats its argument as a glob (`mai*` matches `main`). `show-ref
-/// --verify` takes a full refname literally — no globbing. Deliberately NOT
-/// widened to any commit-ish (`rev-parse` would accept SHAs and tags): the
-/// contract is a *branch*, and `git worktree add -b … <ref>` accepts a
-/// remote-tracking ref as its start point unchanged (no fetch, no local branch
-/// materialised — decision #571).
+/// Don't go back to `git branch --list <b>`: it is blind to remote-tracking refs AND
+/// treats its argument as a glob (`mai*` matches `main`). `show-ref --verify` takes a
+/// full refname literally. Deliberately NOT widened to any commit-ish — `rev-parse`
+/// would accept SHAs and tags, and the contract is a *branch*.
 fn validate_source_branch(repo: &Path, branch: &str) -> Result<(), String> {
     for fullref in [
         format!("refs/heads/{branch}"),
@@ -16155,8 +14863,7 @@ fn validate_source_branch(repo: &Path, branch: &str) -> Result<(), String> {
             .output();
         match output {
             Ok(o) if o.status.success() => return Ok(()),
-            // Ref absent in this namespace (exit 1, no output under --quiet): try
-            // the next namespace before giving up.
+            // Ref absent in this namespace: try the next before giving up.
             Ok(_) => {}
             Err(e) => return Err(format!("failed to run git: {e}")),
         }
@@ -16169,17 +14876,13 @@ fn validate_source_branch(repo: &Path, branch: &str) -> Result<(), String> {
     ))
 }
 
-/// Validate and freeze the read-only secondary repos of a multi-repo create
-/// (#465, ADR-0042).
+/// Validate and freeze the secondary repos of a multi-repo create (ADR-0042).
 ///
-/// `inputs` is the full `target_repos` list as the client sent it: `[0]` is the
-/// primary (already validated as `primary_root`; only cross-checked here for
-/// self-reference), `[1..]` the secondaries. Returns one [`event_log::RepoPin`]
-/// per secondary, each with `sha` resolved NOW against the local `base_branch`
-/// (default `HEAD`, no fetch) and an `alias` disambiguated on basename collision.
-/// An empty or primary-only list yields an empty Vec — the Run is mono-repo.
+/// `inputs` is the full `target_repos` list: `[0]` is the primary, `[1..]` the
+/// secondaries. Each `sha` is resolved NOW against the local `base_branch` (default
+/// `HEAD`, no fetch) and each `alias` disambiguated on basename collision.
 ///
-/// Fails the whole create (400) on the first bad secondary — resolving here, before
+/// Fails the whole create on the FIRST bad secondary — resolving here, before
 /// `RunStarted` and `create_worktree`, keeps the "a bad repo → no Run" guarantee.
 fn resolve_secondary_pins(
     primary_root: &Path,
@@ -16194,10 +14897,8 @@ fn resolve_secondary_pins(
     let mut seen_canon: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     let mut used_aliases: std::collections::HashSet<String> = std::collections::HashSet::new();
     for input in &inputs[1..] {
-        // #465 slice 2: both the create path and `patch_run_repos` freeze a secondary
-        // through this ONE helper, so the two surfaces cannot drift (the #509 "second
-        // divergent site" class). The create path surfaces its typed refusal as the
-        // legacy 400 string it always returned.
+        // Both the create path and `patch_run_repos` freeze a secondary through this
+        // ONE helper, so the two surfaces cannot drift.
         let pin =
             resolve_one_secondary_pin(input, &primary_canon, &mut seen_canon, &mut used_aliases)
                 .map_err(|r| r.message())?;
@@ -16207,27 +14908,23 @@ fn resolve_secondary_pins(
 }
 
 /// Canonicalize for comparison, falling back to the path itself when it cannot be
-/// resolved (a repo that has just been validated should canonicalize; the fallback
-/// only matters for the exotic race where it disappears between checks). Shared by
-/// both the create and the mid-run edit paths so "is this the primary / a dup?" is
-/// answered identically on both.
+/// resolved. Shared by the create and mid-run edit paths so "is this the primary / a
+/// dup?" is answered identically on both.
 fn canonical_or_self(p: &Path) -> PathBuf {
     std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
 }
 
 /// Validate and freeze **one** secondary repo into a [`event_log::RepoPin`] — the
-/// single per-repo validator both `resolve_secondary_pins` (Run create) and
-/// [`patch_run_repos`] (mid-run edit) route through (#465 slice 2, ADR-0042).
+/// single per-repo validator both `resolve_secondary_pins` and [`patch_run_repos`]
+/// route through (ADR-0042).
 ///
-/// `seen_canon` and `used_aliases` are the caller's running sets: the create path
-/// seeds them empty and grows them across `[1..]`; the edit path seeds them from the
-/// Run's SURVIVING secondaries **and the snapshot folders present on disk** (so a
-/// removed-but-persistent snapshot's alias is never reused). Both mutate them here,
-/// which is what keeps a batch internally collision-free.
+/// `seen_canon` and `used_aliases` are the caller's running sets: create seeds them
+/// empty, the edit path seeds them from the Run's SURVIVING secondaries **and the
+/// snapshot folders present on disk**, so a removed-but-persistent snapshot's alias
+/// is never reused. Mutating them here is what keeps a batch collision-free.
 ///
-/// Fails fast with a typed [`repo_edit_refusal::RepoEditRefusal`] and writes nothing
-/// to disk — the caller decides whether to project it (edit path) or flatten it to a
-/// 400 string (create path).
+/// Writes nothing to disk, so the caller decides whether to project the typed refusal
+/// or flatten it to a 400 string.
 fn resolve_one_secondary_pin(
     input: &TargetRepoInput,
     primary_canon: &Path,
@@ -16243,13 +14940,11 @@ fn resolve_one_secondary_pin(
     let repo_display = repo.to_string_lossy().to_string();
     let repo_canon = canonical_or_self(&repo);
     // A repo cannot be its own secondary: a self-snapshot registers a detached
-    // worktree inside the repo it snapshots and buys nothing (the nodes already work
-    // in the primary).
+    // worktree inside the repo it snapshots and buys nothing.
     if repo_canon == primary_canon {
         return Err(RepoEditRefusal::SelfReference { repo: repo_display });
     }
-    // A repo already listed (in this batch, or — on the edit path — already an active
-    // secondary of the Run) would produce two snapshots fighting over one alias.
+    // A repo already listed would produce two snapshots fighting over one alias.
     if !seen_canon.insert(repo_canon) {
         return Err(RepoEditRefusal::RepoAlreadyPinned { repo: repo_display });
     }
@@ -16269,19 +14964,16 @@ fn resolve_one_secondary_pin(
         alias,
         sha,
         base_branch: base.map(str::to_string),
-        // ADR-0047: the opt-in read-only flag flows straight from the input.
-        // Both construction paths (create via `resolve_secondary_pins`, mid-run
-        // edit via `patch_run_repos`) route through here, so the flag can never
-        // diverge between the two surfaces.
+        // Both construction paths route through here, so the flag cannot diverge
+        // between the two surfaces.
         read_only: input.read_only,
     })
 }
 
-/// A filesystem-safe, collision-free directory name for a secondary snapshot
-/// (#465). Starts from the repo's basename and appends `-2`, `-3`, … until unused.
-/// `used` accumulates across the call so two secondaries of the same basename get
-/// distinct aliases — the snapshot paths (`.pdo/runs/<id>/repos/<alias>/`) must
-/// never collide, or one snapshot would clobber another.
+/// A filesystem-safe, collision-free directory name for a secondary snapshot. Starts
+/// from the repo's basename and appends `-2`, `-3`, … until unused. `used` must
+/// accumulate across the call: the snapshot paths must never collide, or one snapshot
+/// clobbers another.
 fn disambiguate_alias(repo: &Path, used: &mut std::collections::HashSet<String>) -> String {
     let base = repo
         .file_name()
@@ -16310,12 +15002,11 @@ fn secondary_repos_dir(repo_root: &Path, run_id: &str) -> PathBuf {
         .join("repos")
 }
 
-/// The snapshot folder names present on disk under `<run_dir>/repos/` (#465 slice 2).
+/// The snapshot folder names present on disk under `<run_dir>/repos/`.
 ///
 /// The DISK is the source of truth for taken aliases: a removed-but-persistent
-/// snapshot (decision 5 — the teardown is deferred to cleanup) still owns its folder
-/// name, so a later `add` must not reuse it or `git worktree add` would fail on the
-/// existing directory. Best-effort — a missing `repos/` yields an empty list.
+/// snapshot (its teardown is deferred to cleanup) still owns its folder name, so a
+/// later `add` reusing it makes `git worktree add` fail on the existing directory.
 fn existing_snapshot_dir_names(repo_root: &Path, run_id: &str) -> Vec<String> {
     std::fs::read_dir(secondary_repos_dir(repo_root, run_id))
         .into_iter()
@@ -16326,9 +15017,9 @@ fn existing_snapshot_dir_names(repo_root: &Path, run_id: &str) -> Vec<String> {
         .collect()
 }
 
-/// Resolve the **secondary repo** that owns a detached snapshot at `snapshot_dir`
-/// (#465 slice 2), so [`remove_secondary_snapshot`] can `prune` its registration
-/// from inside it. Two roads, git-authoritative first:
+/// Resolve the **secondary repo** that owns a detached snapshot at `snapshot_dir`,
+/// so [`remove_secondary_snapshot`] can `prune` its registration from inside it. Two
+/// roads, git-authoritative first:
 ///
 /// - `git -C <snapshot> rev-parse --path-format=absolute --git-common-dir` returns
 ///   the secondary's shared `.git`; its parent is the repo root.
@@ -16353,7 +15044,6 @@ fn snapshot_owning_secondary(snapshot_dir: &Path) -> Option<PathBuf> {
             }
         }
     }
-    // Fallback: read the worktree's `.git` pointer file directly.
     let pointer = std::fs::read_to_string(snapshot_dir.join(".git")).ok()?;
     let raw = pointer.lines().next()?.strip_prefix("gitdir:")?.trim();
     let gitdir = Path::new(raw);
@@ -16364,20 +15054,16 @@ fn snapshot_owning_secondary(snapshot_dir: &Path) -> Option<PathBuf> {
     (!root.as_os_str().is_empty()).then_some(root)
 }
 
-/// `PATCH /runs/{run_id}/repos` — add / remove read-only secondary repos on a **live**
-/// Run (#465 slice 2, ADR-0042).
+/// `PATCH /runs/{run_id}/repos` — add / remove secondary repos on a **live** Run
+/// (ADR-0042).
 ///
-/// Additive to the slice-1 snapshot model: no merge-back, no `base_sha`, no
-/// `commit-tree`. The one slice-1 invariant it relaxes is that `RunState.target_repos`
-/// is frozen at `RunStarted` — it now also moves on `RunReposEdited`. The contract is
-/// **spawn-time visibility**: an edit affects nodes launched AFTER it; already-live
-/// nodes keep the context frozen at their spawn (preamble + `PDO_SECONDARY_REPOS` are
-/// written once at launch and never re-read).
+/// `RunState.target_repos` is frozen at `RunStarted` and now also moves on
+/// `RunReposEdited`. The contract is **spawn-time visibility**: an edit affects nodes
+/// launched AFTER it, and already-live nodes keep the context frozen at their spawn —
+/// preamble and `PDO_SECONDARY_REPOS` are written once at launch and never re-read.
 ///
-/// Order mirrors `run_command`: forgotten (410) → project (404) → terminal (409,
-/// #221) → validate removes+adds → materialise adds → append → reproject. Returns
-/// `Option<Response>` convention throughout (typed [`repo_edit_refusal`]), never
-/// `Result<_, axum::Response>` (clippy `result_large_err`, CI `-D warnings`).
+/// Order mirrors `run_command`: forgotten (410) → project (404) → terminal (409) →
+/// validate removes+adds → materialise adds → append → reproject.
 async fn patch_run_repos(
     State(state): State<Arc<AppState>>,
     AxumPath(run_id): AxumPath<String>,
@@ -16385,7 +15071,7 @@ async fn patch_run_repos(
 ) -> Response {
     use repo_edit_refusal::{repo_edit_refusal_response, RepoEditRefusal};
 
-    // (1) #328 / ADR-0024: a forgotten Run is a tombstone — 410 before any side effect.
+    // (1) A forgotten Run is a tombstone — 410 before any side effect.
     match run_is_forgotten(&state.db, &run_id).await {
         Ok(true) => {
             return repo_edit_refusal_response(&RepoEditRefusal::RunForgotten { run_id });
@@ -16398,20 +15084,18 @@ async fn patch_run_repos(
         }
     }
 
-    // (2) Project — 404 if the log renders no Run.
     let Some((_, run_state)) = reload_run_state(&state, &run_id).await else {
         return repo_edit_refusal_response(&RepoEditRefusal::RunNotFound);
     };
 
-    // (3) #221 (double guard, handler half): a terminal Run's list is frozen for good.
+    // (3) A terminal Run's list is frozen for good.
     if run_state.status.is_terminal() {
         return repo_edit_refusal_response(&RepoEditRefusal::RunTerminal {
             status: run_state.status,
         });
     }
 
-    // An empty edit is a no-op — return the current projection without touching the
-    // log (the "empty body = 200" contract).
+    // An empty edit is a no-op: return the current projection without touching the log.
     if req.add.is_empty() && req.remove.is_empty() {
         return (StatusCode::OK, Json(run_state)).into_response();
     }
@@ -16419,8 +15103,8 @@ async fn patch_run_repos(
     let repo_root = effective_repo_root(&state, &run_state);
     let primary_canon = canonical_or_self(&repo_root);
 
-    // (4) Removals first, by alias. An absent alias is a silent no-op (idempotent —
-    // the UI removes by displayed alias, and a double-click must not 404).
+    // (4) Removals first, by alias. An absent alias is a silent no-op: the UI removes
+    //     by displayed alias, and a double-click must not 404.
     let remove_set: std::collections::HashSet<&str> = req
         .remove
         .iter()
@@ -16434,11 +15118,10 @@ async fn patch_run_repos(
         .cloned()
         .collect();
 
-    // (5) Seed the disambiguation sets from the SURVIVING pins (so a re-add of a
-    // still-pinned repo is refused, and its alias is not reused) AND from the folders
-    // present on disk (so a removed-but-persistent snapshot's alias is not reused
-    // either — the alias-collision-after-remove-readd trap). `seen_canon` is seeded
-    // ONLY from survivors, so a repo just removed in this same request may be re-added.
+    // (5) Seed the disambiguation sets from the SURVIVING pins AND from the folders
+    //     present on disk, so a removed-but-persistent snapshot's alias is not reused.
+    //     `seen_canon` is seeded ONLY from survivors, so a repo removed in this same
+    //     request may be re-added.
     let mut seen_canon: std::collections::HashSet<PathBuf> = active
         .iter()
         .map(|p| canonical_or_self(Path::new(&p.repo)))
@@ -16449,8 +15132,8 @@ async fn patch_run_repos(
         used_aliases.insert(name);
     }
 
-    // (6) Validate every add BEFORE writing anything to disk — a bad repo yields no
-    // snapshot and no event (fail-fast, mirror of the create boundary).
+    // (6) Validate every add BEFORE writing anything to disk, so a bad repo yields no
+    //     snapshot and no event.
     let mut new_pins: Vec<event_log::RepoPin> = Vec::new();
     for input in &req.add {
         match resolve_one_secondary_pin(input, &primary_canon, &mut seen_canon, &mut used_aliases) {
@@ -16459,11 +15142,9 @@ async fn patch_run_repos(
         }
     }
 
-    // (7) Materialise each add — a detached snapshot under `<run_dir>/repos/<alias>`,
-    // visible in-sandbox through the existing `repo_root:rw` mount (0 new mount). Done
-    // BEFORE any append, so the log can never carry a pin whose snapshot is missing. A
-    // failure here is a 500 (panne), and a snapshot orphaned by a later add's failure
-    // is reaped by the disk-driven `cleanup_run` and invisible to the projection.
+    // (7) Materialise each add BEFORE any append, so the log can never carry a pin
+    //     whose snapshot is missing. A snapshot orphaned by a later add's failure is
+    //     reaped by the disk-driven `cleanup_run` and invisible to the projection.
     for pin in &new_pins {
         let dest = secondary_snapshot_path(&repo_root, &run_id, &pin.alias);
         if let Err(e) = create_secondary_snapshot(Path::new(&pin.repo), &dest, &pin.sha) {
@@ -16475,12 +15156,10 @@ async fn patch_run_repos(
         }
     }
 
-    // The new active list = (current − removed) + added.
     active.extend(new_pins);
 
-    // If nothing actually changed (removes hit no alias, no adds), skip the append —
-    // the empty-body no-op, generalised. Adds always change the list (each gets a
-    // fresh alias), so this only short-circuits genuine no-ops.
+    // Skip the append when nothing actually changed. Adds always change the list
+    // (each gets a fresh alias), so this only short-circuits genuine no-ops.
     let before: Vec<&str> = run_state
         .target_repos
         .iter()
@@ -16491,7 +15170,6 @@ async fn patch_run_repos(
         return (StatusCode::OK, Json(run_state)).into_response();
     }
 
-    // (8) Append the whole re-frozen active list as one `RunReposEdited` event.
     let event = event_log::Event {
         id: None,
         run_id: run_id.clone(),
@@ -16508,7 +15186,6 @@ async fn patch_run_repos(
         });
     }
 
-    // (9) 200 with the reprojected RunState so the UI refreshes in one round-trip.
     match reload_run_state(&state, &run_id).await {
         Some((_, refreshed)) => (StatusCode::OK, Json(refreshed)).into_response(),
         None => repo_edit_refusal_response(&RepoEditRefusal::Internal {
@@ -16517,11 +15194,11 @@ async fn patch_run_repos(
     }
 }
 
-/// A branch offered as a Run source (#571): a local branch or a remote-tracking
-/// ref. `name` is the exact string the client posts back as `source_branch` — a
-/// remote-tracking ref keeps its `origin/` prefix. Never re-derive locality by
-/// string surgery: a *local* branch may legitimately be named `origin/x`, so
-/// `kind` (classified from the full refname) is the only authoritative signal.
+/// A branch offered as a Run source: a local branch or a remote-tracking ref. `name`
+/// is the exact string the client posts back as `source_branch`, so a remote-tracking
+/// ref keeps its `origin/` prefix. NEVER re-derive locality by string surgery: a
+/// *local* branch may legitimately be named `origin/x`, so `kind` — classified from
+/// the full refname — is the only authoritative signal.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct BranchEntry {
     name: String,
@@ -16574,26 +15251,23 @@ fn strip_remote_prefix(short: &str, remotes: &[String]) -> String {
     short.to_string()
 }
 
-/// List the branches a Run can be cut from: local branches AND remote-tracking
-/// refs (#571). Everything is resolved **locally, without a single `git fetch`**
-/// (ADR-0034/0042) — freshness of the tracking refs is the operator's own
-/// concern.
+/// List the branches a Run can be cut from: local branches AND remote-tracking refs.
+/// Everything is resolved **locally, without a single `git fetch`** — freshness of
+/// the tracking refs is the operator's own concern.
 ///
-/// Uses `git for-each-ref` rather than `git branch -a`, which has three verified
-/// traps: a `(HEAD detached at …)` pseudo-entry in detached HEAD, sensitivity to
-/// the operator's `branch.sort`, and porcelain. The `%(symref)` column is the
-/// only robust discriminant of `origin/HEAD` (which otherwise appears as a bare
-/// `origin` entry).
+/// Don't go back to `git branch -a`: it emits a `(HEAD detached at …)` pseudo-entry,
+/// obeys the operator's `branch.sort`, and is porcelain. The `%(symref)` column is the
+/// only robust discriminant of `origin/HEAD`, which otherwise appears as a bare
+/// `origin` entry.
 ///
-/// A remote-tracking ref whose bare name (its `<remote>/` prefix removed) already
-/// exists as a local branch is dropped unconditionally — no divergence test — on
-/// the VS Code / gh convention that the local branch is what the user
-/// manipulates. Remote-vs-remote twins (`origin/foo` + `upstream/foo`) are BOTH
-/// kept: two remotes may point at different SHAs, so merging them would lie.
+/// A remote-tracking ref whose bare name already exists as a local branch is dropped
+/// unconditionally — no divergence test — on the convention that the local branch is
+/// what the user manipulates. Remote-vs-remote twins (`origin/foo` + `upstream/foo`)
+/// are BOTH kept: two remotes may point at different SHAs, so merging them would lie.
 ///
-/// Locals (alpha) come before remotes (alpha) via an explicit partition — never
-/// lean on `refs/heads` < `refs/remotes` lexical luck, since the first entry may
-/// become the client's default and a local `main` must win.
+/// Locals before remotes via an EXPLICIT partition — never lean on
+/// `refs/heads` < `refs/remotes` lexical luck, since the first entry may become the
+/// client's default and a local `main` must win.
 fn list_branches(repo: &Path) -> Result<Vec<BranchEntry>, String> {
     let remotes = git_remote_names(repo)?;
 
@@ -16618,7 +15292,6 @@ fn list_branches(repo: &Path) -> Result<Vec<BranchEntry>, String> {
     let stdout = String::from_utf8_lossy(&stdout);
 
     let mut locals: Vec<BranchEntry> = Vec::new();
-    // (short name, bare name) — bare name only for the local-twin dedup below.
     let mut remote_pairs: Vec<(String, String)> = Vec::new();
     let mut local_names: std::collections::HashSet<String> = std::collections::HashSet::new();
 
@@ -16627,13 +15300,11 @@ fn list_branches(repo: &Path) -> Result<Vec<BranchEntry>, String> {
         let refname = fields.next().unwrap_or("");
         let short = fields.next().unwrap_or("");
         let symref = fields.next().unwrap_or("");
-        // A non-empty symref is a symbolic ref (e.g. `origin/HEAD`), never a branch.
         if !symref.is_empty() {
             continue;
         }
-        // Classify by the FULL refname prefix, never the short name: a local
-        // branch literally named `origin/ambig` lives under refs/heads/ and must
-        // list as local.
+        // Classify by the FULL refname prefix, never the short name: a local branch
+        // literally named `origin/ambig` lives under refs/heads/ and must list local.
         if refname.starts_with("refs/heads/") {
             local_names.insert(short.to_string());
             locals.push(BranchEntry {
@@ -16665,16 +15336,14 @@ fn list_branches(repo: &Path) -> Result<Vec<BranchEntry>, String> {
 
 /// Resolve the repository a Run works in, for a **projected** `RunState`.
 ///
-/// The fallback to the daemon's `repo_root` is deliberate and permanent (#470,
-/// ADR-0033): `run_started` events written BEFORE the create boundary was
-/// hardened legitimately carry `target_repo: null` (≈ 46 of 101 dev runs), and
-/// every caller here is a READ — run detail, cost (ADR-0022/0029), archive paths
-/// (ADR-0020), liveness sweeps, worktree teardown. Making this fallible or
-/// removing the fallback would break re-reading the whole history.
+/// The fallback to the daemon's `repo_root` is deliberate and permanent (ADR-0033):
+/// `run_started` events written before the create boundary was hardened legitimately
+/// carry `target_repo: null`, and every caller here is a READ. Making this fallible
+/// or removing the fallback would break re-reading the whole history.
 ///
-/// Do NOT "restore symmetry" with the create boundary: the asymmetry IS the
-/// design. `target_repo` is required where there is a caller to answer 400 to,
-/// and resolved where there is only a past record to interpret.
+/// Do NOT "restore symmetry" with the create boundary: the asymmetry IS the design.
+/// `target_repo` is required where there is a caller to answer 400 to, and resolved
+/// where there is only a past record to interpret.
 fn effective_repo_root(state: &AppState, run_state: &event_log::RunState) -> PathBuf {
     run_state
         .target_repo
@@ -16682,8 +15351,6 @@ fn effective_repo_root(state: &AppState, run_state: &event_log::RunState) -> Pat
         .map(PathBuf::from)
         .unwrap_or_else(|| state.repo_root.clone())
 }
-
-// --- Pipeline path resolution ---
 
 fn run_scoped_pipeline_path(repo_root: &std::path::Path, run_id: &str) -> PathBuf {
     repo_root
@@ -16701,10 +15368,9 @@ fn run_scoped_prompts_dir(repo_root: &std::path::Path, run_id: &str) -> PathBuf 
         .join("pipeline.prompts")
 }
 
-/// Recursively copy `src` into `dst` (creating `dst` and parents). Plain files
-/// and subdirectories only — the artifacts tree the callers copy holds
-/// `output.md` files plus optional images, with no symlinks or nested `.git`
-/// (verified, #315/ADR-0020). Returns the first IO error encountered.
+/// Recursively copy `src` into `dst`. Plain files and subdirectories ONLY — sound
+/// because the artifacts tree the callers copy holds `output.md` files plus optional
+/// images, with no symlinks or nested `.git`.
 fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dst)?;
     for entry in std::fs::read_dir(src)? {
@@ -16721,15 +15387,13 @@ fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result
     Ok(())
 }
 
-/// #315 / ADR-0020 — preserve a run's durable outputs (`artifacts/`,
-/// `pipeline.yaml`, `pipeline.prompts/`) from the soon-to-be-destroyed repo-local
-/// `run_dir` into the durable global store `~/.pdo/runs/<id>/`, so an archived
-/// run stays inspectable (its canvas + node outputs).
+/// Preserve a run's durable outputs from the soon-to-be-destroyed repo-local
+/// `run_dir` into `~/.pdo/runs/<id>/`, so an archived run stays inspectable
+/// (ADR-0020).
 ///
-/// Best-effort throughout: a missing `$HOME`, the pathological `repo == $HOME`
-/// case, or any copy IO error is logged and swallowed — archival MUST still
-/// succeed and append `RunArchived`. Called from `cleanup_run` **before** the
-/// worktree is destroyed (that is the whole point — copy first, delete after).
+/// Best-effort throughout: any failure is logged and swallowed, because archival MUST
+/// still succeed and append `RunArchived`. Called from `cleanup_run` **before** the
+/// worktree is destroyed — copy first, delete after.
 fn preserve_run_outputs_on_archive(
     repo_root: &std::path::Path,
     run_dir: &std::path::Path,
@@ -16740,10 +15404,9 @@ fn preserve_run_outputs_on_archive(
         return;
     };
 
-    // Pathological guard: if the target repo *is* $HOME, then
-    // `run_dir == ~/.pdo/runs/<id> == durable` and the copy would sit inside the
-    // tree `remove_dir_all(run_dir)` is about to delete. Skip it. A repo merely
-    // *under* $HOME (`~/projects/foo`) is disjoint and fine.
+    // If the target repo *is* $HOME then `run_dir == durable`, and the copy would sit
+    // inside the tree `remove_dir_all(run_dir)` is about to delete. A repo merely
+    // *under* $HOME is disjoint and fine.
     let repo_is_home = match (
         repo_root.canonicalize(),
         dirs_next_home().and_then(|h| h.canonicalize().ok()),
@@ -16762,9 +15425,8 @@ fn preserve_run_outputs_on_archive(
     let src_yaml = run_dir.join("pipeline.yaml");
     let src_prompts = run_dir.join("pipeline.prompts");
 
-    // Nothing on disk to preserve (e.g. an in-memory test run, or a worktree
-    // already gone). Return WITHOUT creating an empty durable dir — otherwise a
-    // no-op archive would litter `~/.pdo/runs/` with hollow directories.
+    // Nothing on disk to preserve. Return WITHOUT creating an empty durable dir, or a
+    // no-op archive litters `~/.pdo/runs/` with hollow directories.
     if !src_artifacts.is_dir() && !src_yaml.is_file() && !src_prompts.is_dir() {
         return;
     }
@@ -16777,21 +15439,18 @@ fn preserve_run_outputs_on_archive(
         return;
     }
 
-    // artifacts/ (the Blackboard) — recursive.
     if src_artifacts.is_dir() {
         if let Err(e) = copy_dir_all(&src_artifacts, &durable.join("artifacts")) {
             warn!("#315: failed to preserve artifacts for run {run_id}: {e}");
         }
     }
 
-    // pipeline.yaml — single file.
     if src_yaml.is_file() {
         if let Err(e) = std::fs::copy(&src_yaml, durable.join("pipeline.yaml")) {
             warn!("#315: failed to preserve pipeline.yaml for run {run_id}: {e}");
         }
     }
 
-    // pipeline.prompts/ — recursive, optional.
     if src_prompts.is_dir() {
         if let Err(e) = copy_dir_all(&src_prompts, &durable.join("pipeline.prompts")) {
             warn!("#315: failed to preserve pipeline.prompts for run {run_id}: {e}");
@@ -16799,8 +15458,8 @@ fn preserve_run_outputs_on_archive(
     }
 }
 
-/// #315 — resolve a run's artifacts dir: the durable global store when the run is
-/// `Archived` (its repo-local worktree is gone), the live worktree otherwise.
+/// A run's artifacts dir: the durable global store when the run is `Archived` (its
+/// repo-local worktree is gone), the live worktree otherwise.
 fn archived_or_live_artifacts_dir(
     state: &AppState,
     run_state: &event_log::RunState,
@@ -16817,8 +15476,8 @@ fn archived_or_live_artifacts_dir(
         .join("artifacts")
 }
 
-/// #315 — resolve a run's `pipeline.yaml`: durable store when `Archived`, else the
-/// live run-scoped path.
+/// A run's `pipeline.yaml`: durable store when `Archived`, else the live run-scoped
+/// path.
 fn archived_or_live_pipeline_yaml(
     state: &AppState,
     run_state: &event_log::RunState,
@@ -16833,8 +15492,7 @@ fn archived_or_live_pipeline_yaml(
     run_scoped_pipeline_path(&repo_root, run_id)
 }
 
-/// #315 — resolve a run's prompts dir: durable store when `Archived`, else the
-/// live run-scoped path.
+/// A run's prompts dir: durable store when `Archived`, else the live run-scoped path.
 fn archived_or_live_prompts_dir(
     state: &AppState,
     run_state: &event_log::RunState,
@@ -16868,9 +15526,9 @@ fn copy_pipeline_to_run(
         .parent()
         .unwrap_or(std::path::Path::new("."))
         .join(format!("{stem}.prompts"));
-    // Always create the prompts dir — even when the template has none — so the
-    // file watcher can attach to it at run creation (it is watched
-    // non-recursively and there is no later hook to pick it up).
+    // Always create the prompts dir, even when the template has none, so the file
+    // watcher can attach at run creation: it watches non-recursively and there is no
+    // later hook to pick the dir up.
     let dest_prompts = run_scoped_prompts_dir(repo_root, run_id);
     std::fs::create_dir_all(&dest_prompts).context("create prompts dir")?;
     if src_prompts.is_dir() {
@@ -16890,13 +15548,12 @@ fn copy_pipeline_to_run(
     Ok(())
 }
 
-/// Parse `git diff --numstat` output into a [`LocStat`] (issue #100).
+/// Parse `git diff --numstat` output into a [`LocStat`].
 ///
-/// numstat rows are `added\tdeleted\tpath`. For **binary** files git emits `-`
-/// in the count columns: we skip their +/- contribution but still count the
-/// file. A blank/short line (no path) is not a numstat row and is ignored. An
-/// empty input yields `{0, 0, 0}` — the caller distinguishes that (clean diff,
-/// `Some`) from an uncomputable diff (`None`).
+/// numstat rows are `added\tdeleted\tpath`. For **binary** files git emits `-` in
+/// the count columns, so their +/- contribution is skipped but the file is still
+/// counted. An empty input yields `{0, 0, 0}` — the caller distinguishes that clean
+/// diff from an uncomputable one (`None`).
 fn parse_numstat(stdout: &str) -> event_log::LocStat {
     let mut insertions = 0u64;
     let mut deletions = 0u64;
@@ -16905,13 +15562,11 @@ fn parse_numstat(stdout: &str) -> event_log::LocStat {
         let mut cols = line.splitn(3, '\t');
         let added = cols.next().unwrap_or("");
         let deleted = cols.next().unwrap_or("");
-        // A valid numstat row has a third (path) column; otherwise it is not a
-        // numstat line (e.g. a blank trailing line).
+        // A valid numstat row has a third (path) column.
         if cols.next().is_none() {
             continue;
         }
         files_changed += 1;
-        // Binary files report `-`; `parse` fails and contributes nothing.
         if let Ok(a) = added.parse::<u64>() {
             insertions += a;
         }
@@ -16926,14 +15581,14 @@ fn parse_numstat(stdout: &str) -> event_log::LocStat {
     }
 }
 
-/// The base ref for a Run's "what changed" diff (#417): the frozen fork SHA, else the
-/// recorded source branch (legacy runs — the 3-dot merge-base still recovers the fork
-/// point), else `HEAD` (baseless legacy runs — today's behaviour, kept byte-identical).
-/// Uniform 3-dot at the call sites: because `pdo/run-<id>` is cut from `fork_sha` and only
-/// gains commits on top, `merge-base(fork_sha, run) == fork_sha`, so the same range form is
-/// correct for all three tiers and never re-introduces the wandering-HEAD defect for a run
-/// that recorded a base. NB: this is the Run's fork point, NOT the per-node
-/// `NodeStarted.base_sha` (sub-worktree ← pipeline branch, ADR-0036).
+/// The base ref for a Run's "what changed" diff: the frozen fork SHA, else the
+/// recorded source branch, else `HEAD`.
+///
+/// The call sites use a uniform 3-dot range: because `pdo/run-<id>` is cut from
+/// `fork_sha` and only gains commits on top, `merge-base(fork_sha, run) == fork_sha`,
+/// so one range form is correct for all three tiers and never re-introduces the
+/// wandering-HEAD defect. NB: this is the Run's fork point, NOT the per-node
+/// `NodeStarted.base_sha` (ADR-0036).
 fn run_diff_base(run_state: &event_log::RunState) -> &str {
     run_state
         .fork_sha
@@ -16942,16 +15597,14 @@ fn run_diff_base(run_state: &event_log::RunState) -> &str {
         .unwrap_or("HEAD")
 }
 
-/// Lines changed for a Run, from `git diff --numstat <base>...pdo/run-<id>` with
-/// `.pdo/` excluded (issue #100). Returns `None` when the diff is uncomputable
-/// (git missing, not a repo, run branch gone after cleanup) so the UI renders
-/// "—"; a successful but empty diff returns `Some({0, 0, 0})` → UI "0".
+/// Lines changed for a Run, with `.pdo/` excluded. `None` when the diff is
+/// uncomputable (git missing, not a repo, run branch gone after cleanup) so the UI
+/// renders "—"; a successful but empty diff returns `Some({0, 0, 0})`.
 ///
-/// `base_ref` is the Run's stable fork point (`run_diff_base`, #417), not the shared
-/// checkout's `HEAD`. Uses a **three-dot** range so the base is the merge-base (the
-/// run's fork point): the count stays correct even as `main` advances past the fork
-/// (two-dot would drift and report later main commits as deletions), AND a checkout
-/// parked on a divergent branch can no longer displace it (#417).
+/// `base_ref` must be the Run's stable fork point, not the shared checkout's `HEAD`.
+/// The **three-dot** range makes the base the merge-base, so the count stays correct
+/// as `main` advances past the fork — two-dot would report later main commits as
+/// deletions.
 fn compute_run_loc(
     repo_root: &std::path::Path,
     run_id: &str,
@@ -16959,16 +15612,14 @@ fn compute_run_loc(
 ) -> Option<event_log::LocStat> {
     let range = format!("{base_ref}...pdo/run-{run_id}");
     let output = std::process::Command::new("git")
-        // `:(exclude).pdo/` is a literal pathspec argv element (no shell). `.pdo/`
-        // is gitignored here, but the exclusion is defensive for external target
-        // repos that may commit it.
+        // `:(exclude).pdo/` is a literal pathspec argv element, no shell. `.pdo/` is
+        // gitignored here, but external target repos may commit it.
         .args(["diff", "--numstat", &range, "--", ".", ":(exclude).pdo/"])
         .current_dir(repo_root)
         .output()
         .ok()?;
 
     if !output.status.success() {
-        // Missing run branch (`unknown revision`), not a repo, etc. → "—".
         return None;
     }
 
@@ -16984,12 +15635,11 @@ fn augment_run_state_from_disk(
     repo_root: &std::path::Path,
     prices: &price_table::PriceTable,
 ) {
-    // LOC is independent of the run YAML: the run branch lives in `repo_root`,
-    // not the run dir, so a missing/unparseable YAML must not suppress an
-    // otherwise-valid LOC. Compute it before the YAML early-return below.
-    // #417: base the diff on the Run's frozen fork point (`run_diff_base`), not the
-    // shared checkout's wandering HEAD. Resolve the base into an owned `String` first so
-    // the immutable borrow of `run_state` ends before the mutable assignment to `.loc`.
+    // LOC is independent of the run YAML: the run branch lives in `repo_root`, not
+    // the run dir, so a missing/unparseable YAML must not suppress an otherwise-valid
+    // LOC — hence computing it before the YAML early-return below. The base is
+    // resolved into an owned `String` so the immutable borrow of `run_state` ends
+    // before the mutable assignment to `.loc`.
     let base = run_diff_base(run_state).to_string();
     run_state.loc = compute_run_loc(repo_root, &run_state.run_id, &base);
     let breakdown = run_cost::compute_run_cost_breakdown_cached(
@@ -17313,16 +15963,15 @@ fn resolve_run_pipeline_path(
     }
 }
 
-/// The **shared chokepoint** of the completion path (#490, ADR-0035): the one
-/// function both `POST …/nodes/:id/done` and the `mark_node_done` command arm
-/// reach. It owns the side effects (`append_event`, `send_keys`) and returns a
-/// **typed refusal**, never a pre-projected `Response` — projection belongs to
-/// `completion_refusal::refusal_response` alone, which is what makes "a refusal is
-/// never a 2xx" a property of the type rather than a list of arms to re-read.
+/// The **shared chokepoint** of the completion path (ADR-0035): the one function
+/// both `POST …/nodes/:id/done` and the `mark_node_done` command arm reach. It owns
+/// the side effects and returns a **typed refusal**, never a pre-projected
+/// `Response` — projection belongs to `completion_refusal::refusal_response` alone,
+/// which is what makes "a refusal is never a 2xx" a property of the type rather than
+/// a list of arms to re-read.
 ///
-/// `Option<CompletionRefusal>` (not `Result<_, Response>`): `Response` is 128
-/// bytes, exactly the `clippy::result_large_err` threshold the CI treats as an
-/// error, and the largest refusal variant is ~40 bytes.
+/// `Option<CompletionRefusal>` and not `Result<_, Response>`: `Response` is 128
+/// bytes, exactly the `clippy::result_large_err` threshold CI treats as an error.
 async fn check_output_validation_with_retry(
     state: &AppState,
     pipeline_path: &std::path::Path,
@@ -17340,11 +15989,9 @@ async fn check_output_validation_with_retry(
         return None;
     };
 
-    // A `script` node (#248 / ADR-0017) has already exited by the time this runs
-    // — there is no live agent to nudge. So any validation failure is terminal:
-    // fail-fast (mirror the exhausted-retry branch) instead of the interactive
-    // corrective loop, which would `send-keys` into a dead session and strand the
-    // node behind a bare 409.
+    // A `script` node has already exited by the time this runs, so there is no live
+    // agent to nudge: any validation failure is terminal. The interactive corrective
+    // loop would `send-keys` into a dead session and strand the node behind a 409.
     let is_script = parse_result
         .pipeline
         .nodes
@@ -17365,10 +16012,8 @@ async fn check_output_validation_with_retry(
                 serde_json::json!({ "kind": "frontmatter_mismatch", "violations": details })
             }
         };
-        // ADR-0049 / AC11: a real output-validation miss is a runtime give-up,
-        // not a business failure — `Interrupted`, never `Failed`. The run parks
-        // `AwaitingUser` with the diagnostic (derived in `finalize`), so a human
-        // can supply the missing output and reopen.
+        // An output-validation miss is a runtime give-up, not a business failure:
+        // `Interrupted`, never `Failed` (ADR-0049).
         let interrupt_event = event_log::Event {
             id: None,
             run_id: run_id.to_string(),
@@ -17414,9 +16059,8 @@ async fn check_output_validation_with_retry(
                 .collect();
 
             if retries >= 1 {
-                // ADR-0049: the corrective loop is exhausted, but a validation
-                // miss is a runtime give-up — `Interrupted`, never `Failed`. The
-                // run parks `AwaitingUser` (derived in `finalize`).
+                // The corrective loop is exhausted, but a validation miss is still a
+                // runtime give-up: `Interrupted`, never `Failed` (ADR-0049).
                 let interrupt_event = event_log::Event {
                     id: None,
                     run_id: run_id.to_string(),
@@ -17474,17 +16118,14 @@ fn dirs_next_home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
 }
 
-/// Durable, repo-independent home for a run's preserved outputs (#315, ADR-0020).
-/// Under `$HOME`, so it survives `cleanup_run`'s
-/// `remove_dir_all(<repo>/.pdo/runs/<id>)`. `None` when `$HOME` is unset →
-/// callers skip best-effort, never fail teardown.
+/// Durable, repo-independent home for a run's preserved outputs (ADR-0020). Under
+/// `$HOME`, so it survives `cleanup_run`'s `remove_dir_all(<repo>/.pdo/runs/<id>)`.
+/// `None` when `$HOME` is unset — callers skip, never fail teardown.
 fn durable_run_dir(run_id: &str) -> Option<PathBuf> {
     dirs_next_home().map(|home| home.join(".pdo").join("runs").join(run_id))
 }
 
-// --- Git worktree ---
-
-/// Path to the persisted pane snapshot for a terminal NodeRun iteration (#205).
+/// Path to the persisted pane snapshot for a terminal NodeRun iteration.
 ///
 /// Lives in the run's node dir — NOT inside the per-iter sub-worktree — so the
 /// post-mortem pane survives worktree removal and the session reap.
@@ -17503,15 +16144,12 @@ fn pane_snapshot_path(
         .join(format!("pane-iter-{iter}.snapshot"))
 }
 
-/// Reap a NodeRun's tmux session on its terminal transition (#205).
+/// Reap a NodeRun's tmux session on its terminal transition.
 ///
-/// Persists a pane snapshot under the run's node dir (so post-mortem inspection
-/// — a PDO differentiator — keeps working after the session is gone), then
-/// kills the session. Best-effort: a missing session (already reaped, never
-/// spawned) is a silent no-op; a capture/write failure still proceeds to kill
-/// so a terminal node never leaks a live session toward the tmux-collapse
-/// point (#77/#78). Honours the one-live-iteration invariant by freeing the
-/// session the moment the iteration is terminal.
+/// Persists a pane snapshot under the run's node dir — so post-mortem inspection
+/// keeps working after the session is gone — then kills the session. A capture/write
+/// failure MUST still proceed to the kill, or a terminal node leaks a live session
+/// toward the tmux-collapse point.
 fn reap_node_session(
     state: &AppState,
     repo_root: &std::path::Path,
@@ -17534,10 +16172,9 @@ fn reap_node_session(
     }
 
     tmux_session_manager::kill(&socket, &session);
-    // #407 D8: killing the tmux-side `docker exec` client leaves the container
-    // process (reparented onto PID 1) alive — double it with a targeted in-
-    // container kill that scans `/proc` for this session's marker. Best-effort,
-    // no-op for `off`. Marker == the session name (so the /proc scan hits it).
+    // Killing the tmux-side `docker exec` client leaves the container process
+    // (reparented onto PID 1) alive, so double it with a targeted in-container kill
+    // that scans `/proc` for this session's marker. No-op for `off`.
     sandbox_run::kill_session_best_effort(
         state.docker_cmd_override.as_deref().unwrap_or("docker"),
         sandboxed,
@@ -17553,7 +16190,7 @@ fn short(sha: &str) -> &str {
     sha.get(..7).unwrap_or(sha)
 }
 
-/// Reap the session of a node whose completion just killed the Run (#503 AC5).
+/// Reap the session of a node whose completion just killed the Run.
 ///
 /// Called from the refusal paths that park the Run — a merge-back conflict and a
 /// failed delivery (#654). Those return a refusal *to a `pdo complete` running
@@ -17590,8 +16227,7 @@ fn reap_dead_node_after_run_failure(
                 iter,
                 sandboxed,
             );
-            // The run is dead: its slot is free, so re-drive nodes throttled by the
-            // session cap in other runs (#159), like every other terminal path does.
+            // The run is dead, so its slot is free.
             retry_waiting_nodes(&tail_state).await;
         },
     );
@@ -17608,7 +16244,6 @@ fn load_merge_resolver_prompt(repo_root: &std::path::Path) -> String {
     std::fs::read_to_string(&path).unwrap_or_else(|_| FALLBACK_MERGE_RESOLVER_PROMPT.to_string())
 }
 
-// Re-export tmux_session_manager public items that existing tests reference.
 pub use guard_runner::GUARD_TIMEOUT_MS_OVERRIDE_ENV;
 pub use tmux_session_manager::{build_tmux_script, TMUX_CMD_OVERRIDE_ENV};
 
@@ -17788,7 +16423,7 @@ mod tests {
         );
     }
 
-    // --- The nested-daemon (no-cleanup) posture resolver ---
+    // The nested-daemon (no-cleanup) posture resolver
     //
     // The truth table used to be inlined in `serve_with_config` as two
     // `std::env::var` reads, which made it untestable except by mutating
@@ -17824,7 +16459,7 @@ mod tests {
         assert!(nested_daemon_from(None, Some("1")));
     }
 
-    // --- POST /nodes/parse (#345): single-node YAML → canvas-instantiable spec.
+    // --- POST /nodes/parse: single-node YAML → canvas-instantiable spec.
     // The core (`parse_node_spec`) is a pure fn, so most cases test it directly;
     // two router oneshots confirm the route is actually mounted (the FP's
     // headline "404 blocking" risk) and maps Ok/Err to 200/400. ---
@@ -18048,7 +16683,7 @@ mod tests {
 
     #[test]
     fn parse_node_spec_effort_round_trips() {
-        // #424: the only test that catches the `json!` spec in `parse_node_spec`
+        // The only test that catches the `json!` spec in `parse_node_spec`
         // dropping the effort — the macro compiles perfectly without the key, so
         // *Add node from YAML…* would silently create an effort-less node.
         let body = parse_node_spec(
@@ -18073,7 +16708,7 @@ mod tests {
 
     #[test]
     fn parse_node_spec_unknown_effort_level_passes_through() {
-        // #424: the wire is free-text. A level the curated UI set does not know
+        // The wire is free-text. A level the curated UI set does not know
         // must reach the spec verbatim, not be dropped or coerced (the picker
         // renders it in a dedicated pass-through segment).
         let body =
@@ -18139,7 +16774,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
-    // --- POST /triggers/guard/test (#350): dry-run a guard, zero side effects.
+    // --- POST /triggers/guard/test: dry-run a guard, zero side effects.
     // Router oneshots prove the route is mounted (the FP's "404 blocking" risk)
     // and maps the pass / empty-command / absent-repo / bad-repo branches to
     // 200 / 400 / 400 / 400 (#470 added the absent-repo refusal). Deeper
@@ -18150,7 +16785,7 @@ mod tests {
     #[tokio::test]
     async fn guard_test_route_is_mounted_and_returns_pass() {
         let state = test_state().await;
-        // #470: the dry-run now demands a named repo, like a real fire.
+        // The dry-run now demands a named repo, like a real fire.
         let repo = state.repo_root.to_string_lossy().into_owned();
         let app = build_router(state);
         let resp = app
@@ -18227,7 +16862,7 @@ mod tests {
 
     #[tokio::test]
     async fn guard_test_without_target_repo_is_400() {
-        // #470: the dry-run executes an arbitrary `sh -c`. Its "zero side effects"
+        // The dry-run executes an arbitrary `sh -c`. Its "zero side effects"
         // invariant is about not creating a Run — it says nothing about what the
         // command does. So it must refuse an unnamed repo like a real fire does,
         // instead of running in the daemon's own working directory.
@@ -18283,7 +16918,7 @@ mod tests {
             run_watcher: Arc::new(Mutex::new(None)),
             // Self-destructing no-op: should any test POST /runs and reach the
             // spawn path, the node session runs `true` and exits immediately —
-            // never real claude, never a lingering session (#181).
+            // never real claude, never a lingering session.
             tmux_cmd_override: Some("exec true".to_string()),
             docker_cmd_override: None,
             sandbox_home_override: None,
@@ -18298,7 +16933,7 @@ mod tests {
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
             node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            // Neutral default (#156): tests that assert the `/sessions` service
+            // Neutral default: tests that assert the `/sessions` service
             // field build their own state via `test_state_with_service_health`.
             service_health: Arc::new(ServiceHealth {
                 supervisor: "none".to_string(),
@@ -18789,7 +17424,7 @@ mod tests {
         assert!(!body["resolved"].as_array().unwrap().is_empty());
     }
 
-    /// `GET /stats/performance` (#585) — the whole shape in one cohort: success-only
+    /// `GET /stats/performance` — the whole shape in one cohort: success-only
     /// filtering (a loop lap, a stopped-then-restarted attempt, a script node, a
     /// failed Run, a failed merge-resolver attempt all excluded/retained per the
     /// issue's rules), stable Pipeline/Node identity with "latest name wins",
@@ -19372,7 +18007,7 @@ mod tests {
             .iter()
             .find(|h| h["harness"] == "claude")
             .unwrap();
-        // perf-r1's Run resolves a session (measured); perf-r3's Run leaves no
+        // Perf-r1's Run resolves a session (measured); perf-r3's Run leaves no
         // attributable session in its own top-level worktree (absent, but
         // coverage survives: expected still counts it).
         assert_eq!(pm_claude["context"]["measured"], 1);
@@ -20243,7 +18878,7 @@ mod tests {
         })
     }
 
-    /// The shared spine of the panic-isolated sweeps (#222/#251): a panic inside
+    /// The shared spine of the panic-isolated sweeps: a panic inside
     /// the driven future is contained at the `tokio::spawn` boundary, so the
     /// `.await` returns normally instead of unwinding the caller — and a normal
     /// future still runs to completion through the same path. Reaching the
@@ -20344,7 +18979,7 @@ mod tests {
         assert!(runs.is_empty());
     }
 
-    // --- GET /runs/reapable (#128 Track A) -----------------------------------
+    // GET /runs/reapable (#128 Track A)
     //
     // Read-only surfacing of terminal runs whose on-disk worktree(s) still
     // exist, so a human or a janitor pipeline can reclaim the disk via the
@@ -20462,7 +19097,7 @@ mod tests {
         );
     }
 
-    /// End-to-end janitor loop (#480): a real `/runs/reapable?size=true`
+    /// End-to-end janitor loop: a real `/runs/reapable?size=true`
     /// response parses into `reap_policy::ReapableRun`, the pure policy selects
     /// the terminal run, and `cleanup_run` archives it so a re-list is empty.
     /// Ties the two independently-tested halves — endpoint shape and pure policy
@@ -20720,7 +19355,7 @@ mod tests {
 
     #[tokio::test]
     async fn sessions_endpoint_reports_live_count_and_cap() {
-        // The status-bar counter (#159) reads `GET /sessions`: the live
+        // The status-bar counter reads `GET /sessions`: the live
         // NodeRun-session count and the configured cap. A single running node
         // counts as one live session.
         let state = test_state().await;
@@ -20964,7 +19599,7 @@ mod tests {
     }
 
     /// The terminal tails of `node_done`/`node_fail`/`node_skip` are DETACHED
-    /// (#304, ADR-0023): the response returns before the run has advanced.
+    /// (ADR-0023): the response returns before the run has advanced.
     /// Tests that drive those handlers must poll to quiescence instead of
     /// asserting synchronously after the response.
     async fn wait_run_status(
@@ -21176,7 +19811,7 @@ mod tests {
         // ADR-0049 / AC5: with `auto_fail` unset (the default), an agent `pdo fail`
         // parks the run `AwaitingUser` for a human to confirm — NOT `Failed`. The
         // node itself is `Failed` (the agent deliberately failed its iteration).
-        // The run-level park append lives in the detached tail (#304) — poll.
+        // The run-level park append lives in the detached tail — poll.
         let run_state = wait_run_status(&state, run_id, event_log::RunStatus::AwaitingUser).await;
         assert_eq!(
             run_state.nodes["worker"].status,
@@ -21238,7 +19873,7 @@ mod tests {
 
     #[tokio::test]
     async fn node_skip_returns_404_for_nonexistent_run() {
-        // #493: pin the 404 BEFORE routing `node_skip` through `load_projected`.
+        // Pin the 404 BEFORE routing `node_skip` through `load_projected`.
         // The body is mandatory (`NodeSkipRequest.reason` has no default): without
         // it the response would be a 422 Json rejection, not the 404 under test.
         let state = test_state().await;
@@ -21261,7 +19896,7 @@ mod tests {
 
     #[tokio::test]
     async fn node_skip_marks_run_skipped_not_failed() {
-        // #245: a graceful no-op terminalizes the node as Completed and the run
+        // A graceful no-op terminalizes the node as Completed and the run
         // as Skipped — never Failed, and downstream is short-circuited.
         let state = test_state().await;
 
@@ -21303,7 +19938,7 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::OK);
 
-        // The RunSkipped append lives in the detached tail (#304) — poll.
+        // The RunSkipped append lives in the detached tail — poll.
         let run_state = wait_run_status(&state, run_id, event_log::RunStatus::Skipped).await;
         let events = load_events(&state.db, run_id).await.unwrap();
         assert_ne!(run_state.status, event_log::RunStatus::Failed);
@@ -21405,7 +20040,7 @@ mod tests {
         // The first skip terminalizes the run (Skipped). A second skip is then
         // rejected by the transition guard (409 — "run is Skipped, resume
         // first"), exactly like a duplicate `pdo complete` on a terminal run
-        // (#212). Crucially, it must NEVER double-append RunSkipped/NodeCompleted.
+        //. Crucially, it must NEVER double-append RunSkipped/NodeCompleted.
         let state = test_state().await;
 
         let run_id = "test-skip-idem";
@@ -21451,7 +20086,7 @@ mod tests {
         };
 
         assert_eq!(skip().await.unwrap().status(), StatusCode::OK);
-        // The RunSkipped append lives in the detached tail (#304): wait for the
+        // The RunSkipped append lives in the detached tail: wait for the
         // run to actually turn terminal before probing the duplicate.
         wait_run_status(&state, run_id, event_log::RunStatus::Skipped).await;
         // Second skip: rejected because the run is already terminal (Skipped).
@@ -21522,7 +20157,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_run_payload_carries_sessions_spawned_and_cost() {
-        // #100/#272: GET /runs/:id exposes `sessions_spawned` (a number). Both
+        // GET /runs/:id exposes `sessions_spawned` (a number). Both
         // `loc` and `cost` are derived-on-read and omitted here — the seeded run
         // has no `pdo/run-<id>` branch and no `~/.claude` transcript dir, so each
         // renders "—" in the UI (absent, not `Some(0)`). The positive-path cost
@@ -21738,7 +20373,7 @@ mod tests {
         assert!(events.is_empty(), "event log must be empty after forget");
         assert!(event_log::project(&events).is_none());
 
-        // #328: forget is durable — a late writer cannot resurrect the run.
+        // Forget is durable — a late writer cannot resurrect the run.
         let late = event_log::Event {
             id: None,
             run_id: run_id.to_string(),
@@ -22064,7 +20699,7 @@ mod tests {
         assert!(entry.get("name").is_none() || entry["name"].is_null());
     }
 
-    /// #503: the Runs list is where a user first meets a failure, and the entire
+    /// The Runs list is where a user first meets a failure, and the entire
     /// signal there was a coloured dot. Every `run_failed` had always carried a
     /// `reason`; nothing read it, so nothing could title the dot.
     #[tokio::test]
@@ -22394,8 +21029,6 @@ mod tests {
         let run_state = event_log::project(&events).unwrap();
         assert_eq!(run_state.status, event_log::RunStatus::Archived);
     }
-
-    // ---- #315 / ADR-0020: archive preserves outputs to the durable store ----
 
     /// Shared POST-cleanup helper for the #315 tests. Returns the HTTP status so
     /// callers assert the archive succeeded.
@@ -22829,18 +21462,15 @@ mod tests {
         assert_eq!(payload["node_id"], "griller");
     }
 
-    // --- #275: node-completion tail convergence (`complete_node`) --------------
+    // Node-completion tail convergence: the *observable* behaviour `complete_node`
+    // must preserve across all three entrypoints (`node_done`, the `mark_node_done`
+    // command arm, `handle_merge_resolver_done`).
     //
-    // These pin the *observable* completion behavior the `complete_node` carve
-    // must preserve across all three entrypoints (`node_done`, the
-    // `mark_node_done` command arm, and `handle_merge_resolver_done`). Written
-    // FIRST (ADR-0004) and kept green *unchanged* through the extraction — that
-    // invariance is the behavior-preservation proof. The headline invariant is
-    // exactly-one `RunCompleted` per run: `append_event` does NOT de-dup it
-    // (`run_advance.rs` module doc), so a regression that double-routes
-    // completion would surface here. Each test runs in the gate-only harness (no
-    // pipeline file), so `handle_node_completion` / `advance_run` no-op on the
-    // missing pipeline and the shared completion gate is exercised in isolation.
+    // The headline invariant is exactly-one `RunCompleted` per run: `append_event`
+    // does NOT de-dup it, so a regression that double-routes completion surfaces here.
+    // Each test runs in the gate-only harness (no pipeline file), so
+    // `handle_node_completion` / `advance_run` no-op and the shared completion gate is
+    // exercised in isolation.
 
     fn count_run_completed(events: &[event_log::Event]) -> usize {
         events
@@ -22887,7 +21517,7 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        // The completion gate runs in the detached tail (#304) — poll to
+        // The completion gate runs in the detached tail — poll to
         // terminal, then assert the exactly-once invariant on the final log.
         wait_run_status(&state, run_id, event_log::RunStatus::Completed).await;
         let events = load_events(&state.db, run_id).await.unwrap();
@@ -23223,7 +21853,7 @@ mod tests {
             }
         }
 
-        // flag=false (node_done): does NOT complete while `holder` still awaits.
+        // Flag=false (node_done): does NOT complete while `holder` still awaits.
         let state = test_state().await;
         seed(&state, "c275-flag-false").await;
         let resp = build_router(state.clone())
@@ -23249,7 +21879,7 @@ mod tests {
             event_log::RunStatus::AwaitingUser
         );
 
-        // flag=true (mark_node_done): completes despite the awaiting `holder`.
+        // Flag=true (mark_node_done): completes despite the awaiting `holder`.
         let state = test_state().await;
         seed(&state, "c275-flag-true").await;
         let resp = build_router(state.clone())
@@ -23533,8 +22163,6 @@ mod tests {
         );
     }
 
-    // --- run_stall_reason (run-level stall reconciliation, #214) ---
-
     fn doc_node_def(id: &str) -> pipeline::NodeDef {
         pipeline::NodeDef {
             isolated_worktree: None,
@@ -23686,19 +22314,14 @@ mod tests {
 
     #[test]
     fn run_stall_reason_never_flags_a_run_with_an_open_loop_region_awaiting_a_route() {
-        // A bounded region that exhausted "unrouted" is surfaced as a Halt
-        // (RunStatus::Halted) the Pipeline Manager can route by id
-        // (manager-unstick-loop scenario). But if such a run is observed while
-        // still Running with no live node — e.g. before its Halt event lands, or
-        // a region awaiting a route with no failed node — it must NOT be
-        // auto-failed: that would steal the manager's recovery path. A run with
-        // an open (not-done) loop region and no terminal-failed node is not a
-        // fail-fast stall.
-        // `a -> b` where the edge is CONDITIONAL, so `b` is never an entry/ready
-        // node (it only spawns on the producer's edge evaluation). With `a`
-        // Completed and `b` not started, NOTHING is schedulable and NOT all
-        // nodes are completed — neither the `ready` nor the `all_completed` guard
-        // can mask the loop-awareness gap this test pins.
+        // A run observed still Running with an open loop region and no live node —
+        // before its Halt lands, or awaiting a route with no failed node — must NOT
+        // be auto-failed: that steals the Pipeline Manager's recovery path.
+        //
+        // The edge `a -> b` is CONDITIONAL, so `b` is never an entry/ready node. With
+        // `a` Completed and `b` not started, NOTHING is schedulable and NOT all nodes
+        // are completed, so neither the `ready` nor the `all_completed` guard can mask
+        // the loop-awareness gap this test pins.
         let mut conditional_edge = edge("a", "b");
         conditional_edge.when = Some(serde_yaml::from_str("iter: { gte: 99 }").unwrap());
         let pipeline = pipeline::PipelineDef {
@@ -23757,16 +22380,13 @@ mod tests {
 
     #[test]
     fn run_stall_reason_never_flags_a_run_with_a_waiting_node_behind_a_blocker() {
-        // #237 regression lock. A run with a throttled `Waiting` node (no
-        // session yet — held back by the admission cap) sitting behind a
-        // `Stale`/`Failed` blocker is NOT stalled: the `Waiting` node will spawn
-        // and drive the run forward the instant a slot frees. `can_progress()`
-        // INCLUDES `Waiting` precisely so this run is left alone.
+        // A run with a throttled `Waiting` node behind a `Stale`/`Failed` blocker is
+        // NOT stalled: the `Waiting` node spawns the instant a slot frees, and
+        // `can_progress()` INCLUDES `Waiting` precisely so this run is left alone.
         //
-        // This is the exact behaviour a naive `live_node_count()` collapse onto
-        // the admission `holds_session()` set (which EXCLUDES `Waiting`) would
-        // break: it would see "no live node", find the `Stale` blocker, and
-        // reconcile a healthy throttled run to Failed.
+        // Collapsing onto the admission `holds_session()` set, which EXCLUDES
+        // `Waiting`, would see "no live node", find the `Stale` blocker, and reconcile
+        // a healthy throttled run to Failed.
         let pipeline = linear_two_node_pipeline();
         let mut run_state =
             event_log::RunState::new("20260629-waiting-blocker".into(), "linear".into());
@@ -23893,7 +22513,7 @@ mod tests {
     }
 
     /// A sandboxed Run mid-prep with a `full` staging profile — the projection the
-    /// reconciler sees while the spawn is legitimately deferred (#445).
+    /// reconciler sees while the spawn is legitimately deferred.
     fn run_state_sandbox_mid_prep(run_id: &str) -> event_log::RunState {
         let mut rs = event_log::RunState::new(run_id.into(), "linear".into());
         rs.sandbox = event_log::SandboxMode::Profile("full".into());
@@ -24390,7 +23010,7 @@ mod tests {
 
     #[test]
     fn parse_numstat_sums_text_and_counts_binary_without_lines() {
-        // #100: text rows sum +/- ; binary rows show `-` so contribute 0 lines
+        // Text rows sum +/- ; binary rows show `-` so contribute 0 lines
         // but still count as a changed file. A trailing blank line is ignored.
         let out = "3\t1\tsrc/a.rs\n2\t1\tsrc/b.rs\n-\t-\tassets/logo.png\n\n";
         let loc = parse_numstat(out);
@@ -24458,7 +23078,7 @@ mod tests {
         git(&["checkout", &default_branch]);
 
         // Tier-3 legacy path: no fork_sha/source_branch recorded, so the base is "HEAD".
-        // This test never parks HEAD off the fork line, so the behaviour is unchanged (#417).
+        // This test never parks HEAD off the fork line, so the behaviour is unchanged.
         let loc = compute_run_loc(repo, run_id, "HEAD").expect("branch present -> Some");
         assert_eq!(
             loc,
@@ -24674,7 +23294,7 @@ mod tests {
             run_watcher: Arc::new(Mutex::new(None)),
             // Self-destructing no-op: should any test POST /runs and reach the
             // spawn path, the node session runs `true` and exits immediately —
-            // never real claude, never a lingering session (#181).
+            // never real claude, never a lingering session.
             tmux_cmd_override: Some("exec true".to_string()),
             docker_cmd_override,
             sandbox_home_override: None,
@@ -24689,7 +23309,7 @@ mod tests {
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
             node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            // Neutral default (#156): tests that assert the `/sessions` service
+            // Neutral default: tests that assert the `/sessions` service
             // field build their own state via `test_state_with_service_health`.
             service_health: Arc::new(ServiceHealth {
                 supervisor: "none".to_string(),
@@ -24729,7 +23349,7 @@ mod tests {
 
     #[tokio::test]
     async fn sync_run_pipeline_writes_canonical_prompt_path() {
-        // #231: run-scoped sync must write each prompt to the canonical
+        // Run-scoped sync must write each prompt to the canonical
         // `<stem>.prompts/<id>.md` (where every reader looks) — never the flat
         // `prompts/<id>.md` dir that no reader consults.
         let tmp = tempfile::tempdir().unwrap();
@@ -24874,7 +23494,7 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn patch_trigger_repoints_to_another_pipeline() {
-        // #230: PATCH /triggers/{id} {pipeline_id} must move the trigger to the
+        // PATCH /triggers/{id} {pipeline_id} must move the trigger to the
         // new pipeline — id *and* denormalised name — and persist it, instead of
         // serde silently dropping an unknown field. Driven end-to-end through the
         // router so the deserialization path itself is under test.
@@ -24882,7 +23502,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         write_optional_pipeline(tmp.path(), "watch-pipe");
         write_optional_pipeline(tmp.path(), "weekly-pipe");
-        // #470: a Trigger cannot be created without a target repo any more.
+        // A Trigger cannot be created without a target repo any more.
         init_test_repo(tmp.path());
         let state = test_state_with_dir(tmp.path()).await;
         let app = build_router(state.clone());
@@ -24952,12 +23572,12 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn patch_trigger_rejects_repoint_to_unknown_pipeline() {
-        // #230: a repoint to a non-existent pipeline is a loud 400, never a
+        // A repoint to a non-existent pipeline is a loud 400, never a
         // silent success that leaves the trigger dangling.
         let _home = FakeHome::new();
         let tmp = tempfile::tempdir().unwrap();
         write_optional_pipeline(tmp.path(), "watch-pipe");
-        // #470: a Trigger cannot be created without a target repo any more.
+        // A Trigger cannot be created without a target repo any more.
         init_test_repo(tmp.path());
         let state = test_state_with_dir(tmp.path()).await;
         let app = build_router(state.clone());
@@ -25012,8 +23632,6 @@ mod tests {
         let after = trigger_store::get(&state.db, &id).await.unwrap().unwrap();
         assert_eq!(after.pipeline_id, "watch-pipe");
     }
-
-    // --- #507: out-of-Run audit seams (create / patch / delete / pause) ---
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
@@ -25179,8 +23797,6 @@ mod tests {
         );
         assert_eq!(p.after.as_ref().unwrap()["paused"], serde_json::json!(true));
     }
-
-    // --- A Trigger is a Run template: no target repo, no Trigger (#470) ---
 
     /// Create a Trigger through the router, returning its id. `extra` is merged
     /// into the body so callers can vary one axis at a time.
@@ -25473,7 +24089,7 @@ mod tests {
 
         // No region is invented over the legacy loop node (it governs its own
         // laps), and the response says so out loud instead of leaving the canvas
-        // silently region-less (#396).
+        // silently region-less.
         assert!(
             detail["pipeline"]["loops"]
                 .as_array()
@@ -25492,7 +24108,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_pipeline_materializes_the_region_of_an_undeclared_cycle() {
-        // #396: a pipeline whose graph closes a cycle but whose file carries no
+        // A pipeline whose graph closes a cycle but whose file carries no
         // `loops:` block was served region-less, so the canvas drew no bounded
         // region and `max_iter` — editable ONLY in the region inspector — was
         // unreachable until the user redrew an edge. The invariant now lives at the
@@ -26544,14 +25160,14 @@ edges:
 
     #[test]
     fn cli_parses_complete_subcommand() {
-        // #433: bare `complete` ⇒ `auto = false` (the agent-typed path, unchanged).
+        // Bare `complete` ⇒ `auto = false` (the agent-typed path, unchanged).
         let cli = Cli::try_parse_from(["pdo", "complete"]).unwrap();
         assert!(matches!(cli.command, Commands::Complete { auto: false }));
     }
 
     #[test]
     fn cli_parses_complete_auto_flag() {
-        // #433: `--auto` is the runtime-initiated (`Stop` hook) path.
+        // `--auto` is the runtime-initiated (`Stop` hook) path.
         let cli = Cli::try_parse_from(["pdo", "complete", "--auto"]).unwrap();
         assert!(matches!(cli.command, Commands::Complete { auto: true }));
     }
@@ -26600,8 +25216,6 @@ edges:
     fn cli_fail_requires_reason() {
         assert!(Cli::try_parse_from(["pdo", "fail"]).is_err());
     }
-
-    // --- Layer 1: `pdo reap` CLI parsing (#480) ---
 
     #[test]
     fn cli_parses_reap_with_defaults() {
@@ -26656,8 +25270,6 @@ edges:
             _ => panic!("expected Reap subcommand"),
         }
     }
-
-    // --- Layer 1: `pdo service` CLI parsing (#156) ---
 
     #[test]
     fn cli_parses_service_install() {
@@ -26985,8 +25597,6 @@ edges:
         let err = result.unwrap_err();
         assert_eq!(err.kind(), clap::error::ErrorKind::DisplayVersion);
     }
-
-    // --- Layer 2: pane endpoint contract tests ---
 
     async fn seed_running_run(state: &Arc<AppState>, run_id: &str, node_id: &str) {
         let events = vec![
@@ -27420,8 +26030,6 @@ edges:
         assert!(text.contains("## Inputs"));
     }
 
-    // ---- Layer 2 contract tests: /io endpoint ----
-
     fn seed_io_test(dir: &std::path::Path, run_id: &str) {
         let run_dir = dir.join(".pdo/runs").join(run_id);
         let pipeline_path = run_dir.join("pipeline.yaml");
@@ -27564,7 +26172,7 @@ edges:
             .unwrap();
         let io: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-        // inputs array
+        // Inputs array
         let inputs = io["inputs"].as_array().unwrap();
         assert_eq!(inputs.len(), 1);
         assert_eq!(inputs[0]["port"], "plan");
@@ -27572,12 +26180,12 @@ edges:
         assert!(!inputs[0]["files"].as_array().unwrap().is_empty());
         assert_eq!(inputs[0]["files"][0]["exists"], true);
 
-        // outputs array
+        // Outputs array
         let outputs = io["outputs"].as_array().unwrap();
         assert_eq!(outputs.len(), 1);
         assert_eq!(outputs[0]["port"], "summary");
         assert_eq!(outputs[0]["files"][0]["exists"], true);
-        // frontmatter parsed
+        // Frontmatter parsed
         let fm = &outputs[0]["files"][0]["frontmatter"];
         assert_eq!(fm["verdict"], "PASS");
         assert_eq!(fm["score"], 9);
@@ -27603,8 +26211,6 @@ edges:
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }
-
-    // ---- Layer 2 contract tests: /artifact endpoint ----
 
     #[tokio::test]
     async fn artifact_returns_404_for_missing_run() {
@@ -27752,8 +26358,6 @@ edges:
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
-
-    // --- Layer-2: output validation via mark_node_done (refs #36) ---
 
     fn write_pipeline_with_outputs(dir: &std::path::Path, name: &str) {
         let pipelines_dir = dir.join(".pdo").join("pipelines");
@@ -28055,7 +26659,7 @@ edges:
             .count()
     }
 
-    /// #215: a terminal run (here `Failed` via fail-fast) that still projects a
+    /// A terminal run (here `Failed` via fail-fast) that still projects a
     /// session-holding node must be reconciled at boot — the dangling node is
     /// marked `Failed`, the projection becomes consistent, and the pass is
     /// idempotent across restarts.
@@ -28167,7 +26771,7 @@ edges:
 
     #[tokio::test]
     async fn mark_node_done_on_completed_iter_is_noop_without_downstream_spawn() {
-        // #198: the duplicate completion must neither re-emit node_completed
+        // The duplicate completion must neither re-emit node_completed
         // nor re-trigger downstream spawns.
         let tmp = tempfile::tempdir().unwrap();
         let pipe_name = "guard-dup-mark";
@@ -28175,7 +26779,7 @@ edges:
 
         let state = test_state_with_dir(tmp.path()).await;
         let run_id = "guard-dup-mark-1";
-        // worker completed organically; consumer already running iter 1.
+        // Worker completed organically; consumer already running iter 1.
         for event in [
             event_log::Event {
                 id: None,
@@ -28359,7 +26963,7 @@ edges:
 
     #[tokio::test]
     async fn stale_detector_terminal_events_on_terminal_node_are_dropped() {
-        // #212: the liveness sweep probes a snapshot; if the node completed
+        // The liveness sweep probes a snapshot; if the node completed
         // organically in between, its late `NodeFailed` must be dropped by the
         // guard at append time (re-checked against the freshly projected state).
         //
@@ -28431,7 +27035,7 @@ edges:
 
     #[tokio::test]
     async fn a_historical_node_stale_run_still_projects_and_displays() {
-        // AC3 (#469). `NodeStale` keeps its `EventKind` variant and its projection
+        // AC3. `NodeStale` keeps its `EventKind` variant and its projection
         // arm on purpose: the log is APPEND-ONLY, so removing the variant would
         // fail deserialisation for every historical Run that carries one,
         // `project()` would return None, and those Runs would VANISH from the UI.
@@ -28581,7 +27185,7 @@ edges:
 
     #[tokio::test]
     async fn restart_node_rejected_while_newer_iteration_is_live() {
-        // #196: restart_node on a stale iter must not race the scheduler's
+        // restart_node on a stale iter must not race the scheduler's
         // newer live iteration — reject with a readable cause, spawn nothing.
         let tmp = tempfile::tempdir().unwrap();
         let pipe_name = "guard-restart-race";
@@ -28642,16 +27246,10 @@ edges:
                 .unwrap(),
         )
         .unwrap();
-        // #489 / ADR-0037: the SLUG, not a substring of the prose. This assertion
-        // used to be `body["error"].contains("live")`, which only ever held because
-        // `error` carried the guard's whole sentence — the exact shape #490 removed
-        // from the completion path. `restart_refused` does NOT contain "live", so
-        // the old form had to go red here; the prose moved to `message`.
-        //
-        // Note the trap this closes: had #489 shipped a discriminating slug
-        // (`newer_iteration_live`, as the pre-grilling plan proposed), the substring
-        // assertion would have kept passing BY COINCIDENCE while silently ceasing to
-        // guard anything.
+        // Assert the SLUG, never a substring of the prose (ADR-0037). The prose lives
+        // in `message` now, and a substring assertion on `error` would have kept
+        // passing BY COINCIDENCE — on a discriminating slug — while silently ceasing
+        // to guard anything.
         assert_eq!(body["error"], "restart_refused", "got {body}");
         assert_eq!(body["recoverable"], true, "got {body}");
         // Nothing was touched: the guard is the FIRST probe, above the kill.
@@ -28669,7 +27267,7 @@ edges:
                 .any(|e| e.kind == event_log::EventKind::CommandIssued),
             "a pre-kill refusal must append nothing: {events:?}"
         );
-        // iter 2 stays the only live iteration; iter 1 was not re-spawned.
+        // Iter 2 stays the only live iteration; iter 1 was not re-spawned.
         assert_eq!(
             count_events(&events, event_log::EventKind::NodeStarted, "worker"),
             2,
@@ -28685,7 +27283,7 @@ edges:
 
     #[tokio::test]
     async fn resume_run_schedules_only_missing_work() {
-        // #195: chain a -> b -> c with a, b completed and c never started.
+        // Chain a -> b -> c with a, b completed and c never started.
         // resume_run schedules c only; a and b are not re-iterated.
         let tmp = tempfile::tempdir().unwrap();
         let pipe_name = "guard-resume-missing";
@@ -28753,7 +27351,7 @@ edges:
         assert_eq!(resp.status(), StatusCode::OK);
 
         let events = load_events(&state.db, run_id).await.unwrap();
-        // c is scheduled (waiting, because the cap is saturated)...
+        // C is scheduled (waiting, because the cap is saturated)...
         assert_eq!(
             count_events(&events, event_log::EventKind::NodeWaiting, "c")
                 + count_events(&events, event_log::EventKind::NodeStarted, "c"),
@@ -28777,7 +27375,7 @@ edges:
 
     #[tokio::test]
     async fn resume_run_refuses_concurrent_iteration_and_is_idempotent() {
-        // #201: a -> b with a back-edge b -> a (emergent cycle). a completed
+        // A -> b with a back-edge b -> a (emergent cycle). a completed
         // iter 1, b still running iter 1: resume_run must NOT spawn b iter 2,
         // and a second resume_run must be a no-op too.
         let tmp = tempfile::tempdir().unwrap();
@@ -28860,7 +27458,7 @@ edges:
 
     #[tokio::test]
     async fn failed_run_accepts_no_completion_and_schedules_nothing() {
-        // #197: once the run is failed, node_done is rejected and the
+        // Once the run is failed, node_done is rejected and the
         // scheduler does not advance until resume_run.
         let tmp = tempfile::tempdir().unwrap();
         let pipe_name = "guard-failed-sched";
@@ -28922,7 +27520,7 @@ edges:
 
     #[tokio::test]
     async fn double_node_done_is_noop_without_downstream_respawn() {
-        // #198: replaying node_done for an already-completed (node, iter) must
+        // Replaying node_done for an already-completed (node, iter) must
         // not bump the consumer to a fresh iteration.
         let tmp = tempfile::tempdir().unwrap();
         let pipe_name = "guard-dup-done";
@@ -29055,8 +27653,6 @@ edges:
         assert!(missing.iter().any(|v| v == "report"));
     }
 
-    // ---- Layer 2 contract tests: command endpoints (issue #10) ----
-
     #[tokio::test]
     async fn extend_cycle_requires_node_id() {
         let state = test_state().await;
@@ -29128,7 +27724,7 @@ edges:
     #[tokio::test]
     async fn end_region_emits_command_issued_with_region_id() {
         // Ending a region by id appends a `command_issued` control-flow event
-        // carrying the region id, so the projection can fold it (#152).
+        // carrying the region id, so the projection can fold it.
         let state = test_state().await;
 
         let run_event = event_log::Event {
@@ -29239,7 +27835,7 @@ edges:
 
     #[tokio::test]
     async fn end_region_resumes_an_exhausted_unrouted_halt() {
-        // The acceptance behavior (#152): a run blocked "exhausted — unrouted"
+        // The acceptance behavior: a run blocked "exhausted — unrouted"
         // (a RunHalted) is continued by routing the region from the manager —
         // `resume_run` lifts the halt so the run is Running again, without a
         // daemon restart.
@@ -29525,7 +28121,7 @@ edges:
         assert_eq!(run_state.status, event_log::RunStatus::Running);
     }
 
-    // --- #236: characterization net for POST /runs/{id}/commands ---
+    // Characterization net for POST /runs/{id}/commands
     //
     // Written BEFORE the dispatcher refactor and green on the unmodified tree.
     // These do not describe a contract anyone designed — they RECORD what HEAD
@@ -29571,27 +28167,24 @@ edges:
     }
 
     const JSON_CT: &str = "application/json";
-    // #491/#601: every `/commands` error body is JSON now — no text/plain constant
+    // Every `/commands` error body is JSON now — no text/plain constant
     // remains, which is itself the invariant (a text body would need re-introducing
     // the constant, a visible diff).
 
     #[tokio::test]
     async fn every_kind_status_and_content_type_on_an_unstarted_run() {
-        // THE test of the net. Against a run with an empty event log, this
-        // surface answers in two shapes, and nothing pinned it:
-        //   * four kinds answer 200 and APPEND — they are designed to work
-        //     before the run exists (`inject_artifact` writes the file the run
-        //     has not yet produced; `rename_run` appends blind);
-        //   * the rest answer 404 — and since #491/#601 they ALL answer JSON
-        //     `{"error":"run not found"}` (previously eight were text/plain and
-        //     only `start_node` was JSON; the front's `resp.json().catch()` swallowed
-        //     the text ones — that split is closed, every `/commands` error is JSON).
-        // Hoisting the `load_events -> project` preamble to the top of the
-        // handler — the single most tempting move in this refactor — flips the
-        // first group to 404. That would be silent: no other test in the repo looks.
+        // Against a run with an empty event log this surface answers in two shapes:
+        //   * four kinds answer 200 and APPEND — they are designed to work before the
+        //     run exists (`inject_artifact` writes the file the run has not yet
+        //     produced; `rename_run` appends blind);
+        //   * the rest answer 404, all in JSON `{"error":"run not found"}`.
         //
-        // One run_id per row: the 200 rows APPEND, so a shared id would let row
-        // N poison row N+1's projection.
+        // Hoisting the `load_events -> project` preamble to the top of the handler —
+        // the single most tempting refactor here — flips the first group to 404, and
+        // no other test in the repo would notice.
+        //
+        // One run_id per row: the 200 rows APPEND, so a shared id would let row N
+        // poison row N+1's projection.
         let tmp = tempfile::tempdir().unwrap();
         let state = test_state_with_dir(tmp.path()).await;
 
@@ -29755,7 +28348,7 @@ edges:
             r#"{"kind":"kill_node"}"#,
             // Unknown kind — likewise.
             r#"{"kind":"bogus_command"}"#,
-            // #489: the tombstone must outrank every NEW projection this arm
+            // The tombstone must outrank every NEW projection this arm
             // gained too — the `409`s, the `400 node_not_found` and the `500`.
             r#"{"kind":"restart_node","node_id":"n1","iter":1}"#,
         ] {
@@ -29777,7 +28370,7 @@ edges:
 
     #[tokio::test]
     async fn cleanup_run_error_bodies_are_json() {
-        // #491/#601: `cleanup_run`'s error bodies are JSON like every sibling on
+        // `cleanup_run`'s error bodies are JSON like every sibling on
         // this surface — the front's `resp.json().catch()` reads them instead of
         // swallowing text/plain. The 200/409/404 status split is unchanged (it is
         // an operator contract the disk-janitor recipe reads as "reclaimed /
@@ -29817,9 +28410,9 @@ edges:
 
     #[tokio::test]
     async fn restart_node_happy_path_emits_command_issued_and_restarts() {
-        // The only arm with no happy-path coverage anywhere in the repo — and
-        // the one the refactor touches most (two projections, a transition
-        // guard probe, a tmux kill and a re-spawn). Pin its event trace.
+        // The only arm with no happy-path coverage anywhere in the repo, and the one
+        // carrying the most machinery: two projections, a transition-guard probe, a
+        // tmux kill and a re-spawn. Pin its event trace.
         //
         // #489: the body is no longer a blind `{"ok":true}`. It reports the real
         // effect — `spawned:[{node_id,iter}]` plus what happened to the
@@ -30093,7 +28686,7 @@ edges:
 
     #[tokio::test]
     async fn kill_node_without_a_session_creates_no_directory() {
-        // #488: the reap writes only when the capture succeeded — `create_dir_all`
+        // The reap writes only when the capture succeeded — `create_dir_all`
         // is INSIDE the `if let Some(content)`. A kill on a node with no session
         // must leave nothing on disk, only in the event log.
         //
@@ -30233,19 +28826,14 @@ edges:
         assert_eq!(payload, serde_json::json!({ "name": "" }));
     }
 
-    // --- #236 / ADR-0025: the truthful-response matrix, without a daemon ---
+    // The truthful-response matrix (ADR-0025), without a daemon: 400 unknown target,
+    // 409 wrong mechanism, 200 noop, 200 spawned — all reachable from the in-crate
+    // router. Case D does attempt a real `tmux` call, but its failure is swallowed, so
+    // the verdict does not depend on tmux SUCCEEDING.
     //
-    // Four verdicts a command can reach: 400 unknown target, 409 wrong
-    // mechanism, 200 noop, 200 spawned. All four are reachable from the
-    // in-crate router — no HTTP listener, no git, no worktree. Case D does
-    // attempt a real `tmux` call, but its failure is swallowed
-    // (`node_spawn.rs`), so the verdict does not depend on tmux SUCCEEDING —
-    // which is the honest way to state it, "without tmux" would not be.
-    //
-    // The pipeline is written RUN-SCOPED (`.pdo/runs/<id>/pipeline.yaml`) on
-    // purpose: `resolve_run_pipeline_path` prefers it, so these tests can never
-    // silently pick up a real pipeline out of the developer's
-    // `$HOME/.pdo/pipelines` (the user-scoped fallback has no daemon override).
+    // The pipeline is written RUN-SCOPED on purpose: `resolve_run_pipeline_path`
+    // prefers it, so these tests can never silently pick up a real pipeline out of the
+    // developer's `$HOME/.pdo/pipelines`, which has no daemon override.
 
     const ADR25_LOOP_YAML: &str = r#"name: adr25-loop
 version: "1.0"
@@ -30559,8 +29147,6 @@ edges:
         );
     }
 
-    // --- Merge resolver tests (issue #8) ---
-
     #[test]
     fn builtin_merge_resolver_prompt_loads_from_file() {
         let prompt = load_merge_resolver_prompt(std::path::Path::new("."));
@@ -30582,8 +29168,6 @@ edges:
     fn merge_resolver_node_id_is_dunder() {
         assert_eq!(MERGE_RESOLVER_NODE_ID, "__merge_resolver__");
     }
-
-    // --- Library HTTP integration tests ---
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
@@ -30650,7 +29234,7 @@ edges: []
             run_watcher: Arc::new(Mutex::new(None)),
             // Self-destructing no-op: should any test POST /runs and reach the
             // spawn path, the node session runs `true` and exits immediately —
-            // never real claude, never a lingering session (#181).
+            // never real claude, never a lingering session.
             tmux_cmd_override: Some("exec true".to_string()),
             docker_cmd_override: None,
             sandbox_home_override: None,
@@ -30665,7 +29249,7 @@ edges: []
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
             node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            // Neutral default (#156): tests that assert the `/sessions` service
+            // Neutral default: tests that assert the `/sessions` service
             // field build their own state via `test_state_with_service_health`.
             service_health: Arc::new(ServiceHealth {
                 supervisor: "none".to_string(),
@@ -30849,7 +29433,7 @@ edges: []
             run_watcher: Arc::new(Mutex::new(None)),
             // Self-destructing no-op: should any test POST /runs and reach the
             // spawn path, the node session runs `true` and exits immediately —
-            // never real claude, never a lingering session (#181).
+            // never real claude, never a lingering session.
             tmux_cmd_override: Some("exec true".to_string()),
             docker_cmd_override: None,
             sandbox_home_override: None,
@@ -30864,7 +29448,7 @@ edges: []
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
             node_done_tail_gate_armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            // Neutral default (#156): tests that assert the `/sessions` service
+            // Neutral default: tests that assert the `/sessions` service
             // field build their own state via `test_state_with_service_health`.
             service_health: Arc::new(ServiceHealth {
                 supervisor: "none".to_string(),
@@ -31044,8 +29628,6 @@ edges: []
         let result = validate_target_repo(tmp.path().to_str().unwrap());
         assert!(result.is_ok());
     }
-
-    // --- The required-at-the-write-boundary predicate (#470, ADR-0033) ---
 
     #[test]
     fn required_target_repo_rejects_absent() {
@@ -31298,8 +29880,6 @@ edges: []
         assert!(state.source_branch.is_none());
     }
 
-    // --- Diff endpoint tests (refs #116) ---
-
     #[tokio::test]
     async fn run_diff_returns_404_for_nonexistent_run() {
         let state = test_state().await;
@@ -31429,7 +30009,7 @@ edges: []
 
     #[tokio::test]
     async fn run_diff_excludes_main_advance_after_fork() {
-        // #376: three-dot range → commits landed on main AFTER the fork must not
+        // Three-dot range → commits landed on main AFTER the fork must not
         // appear as phantom deletions. RED under two-dot `git diff HEAD pdo/run-<id>`.
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path();
@@ -31612,7 +30192,7 @@ edges: []
 
     #[tokio::test]
     async fn run_diff_excludes_pdo_artifacts() {
-        // #376: `:(exclude).pdo/` keeps the blackboard out of the diff. RED under
+        // `:(exclude).pdo/` keeps the blackboard out of the diff. RED under
         // the current no-pathspec two-dot call.
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path();
@@ -31637,7 +30217,7 @@ edges: []
         std::fs::create_dir_all(wt_dir.join(".pdo")).unwrap();
         std::fs::write(wt_dir.join(".pdo/artifact.txt"), "internal-artifact\n").unwrap();
         git(&["add", "code.rs"]);
-        // force so it's genuinely committed → test is not vacuous
+        // Force so it's genuinely committed → test is not vacuous
         git(&["add", "-f", ".pdo/artifact.txt"]);
         git(&["commit", "-m", "code + pdo artifact"]);
 
@@ -31931,8 +30511,6 @@ edges: []
         );
     }
 
-    // --- Pause/Resume/Retry-all tests ---
-
     #[tokio::test]
     async fn pause_run_sets_paused_status() {
         let state = test_state().await;
@@ -32144,7 +30722,7 @@ edges: []
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn retry_all_of_a_legacy_null_target_run_lands_on_the_resolved_repo() {
-        // #470: `retry_all` archives the original BEFORE creating the replacement.
+        // `retry_all` archives the original BEFORE creating the replacement.
         // A run recorded before the create boundary was hardened carries
         // `target_repo: null`; forwarding that raw would 400 at the now-mandatory
         // chokepoint — after the archive — i.e. archived with no replacement, work
@@ -32252,8 +30830,6 @@ edges: []
             .unwrap();
         assert_eq!(resp.status(), StatusCode::CONFLICT);
     }
-
-    // --- Per-node control tests ---
 
     async fn seed_run_for_node_control(state: &Arc<AppState>, run_id: &str, pipeline_name: &str) {
         let ev = event_log::Event {
@@ -32463,8 +31039,6 @@ edges: []
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
-    // --- Force-spawn via the `start_node` manager command (#204) ---
-
     /// Append a run-level terminal event directly (not lifecycle-guarded), so a
     /// test can drive a seeded run to a terminal status without spawning nodes.
     async fn seed_run_terminal(state: &Arc<AppState>, run_id: &str, kind: event_log::EventKind) {
@@ -32618,9 +31192,9 @@ edges: []
 
     #[tokio::test]
     async fn force_spawn_at_session_cap_is_rejected() {
-        // D5 (#204): force-spawn must fail fast with 409 when the global session
+        // D5: force-spawn must fail fast with 409 when the global session
         // cap is already reached, rather than push past it toward tmux-server
-        // collapse (#77/#78). Seed `DEFAULT_SESSION_CAP` live sessions in a
+        // collapse. Seed `DEFAULT_SESSION_CAP` live sessions in a
         // filler run so the assertion holds for any configured cap ≤ default
         // (race-free vs the env-var cap test — no global state touched).
         let tmp = tempfile::tempdir().unwrap();
@@ -32669,7 +31243,7 @@ edges: []
         );
     }
 
-    // --- #356: spawn_node driven directly through the injectable SpawnDeps ---
+    // spawn_node driven directly through the injectable SpawnDeps
     //
     // Before the carve, `spawn_node` could only be exercised end-to-end through a
     // live daemon (POST /runs, real tmux). With `SpawnDeps::from_state`, its
@@ -32719,7 +31293,7 @@ edges: []
         (pipeline, node, pipeline_path)
     }
 
-    /// INV-3 (#213): at the daemon-wide session cap, `spawn_node` throttles the
+    /// INV-3: at the daemon-wide session cap, `spawn_node` throttles the
     /// node into `waiting` (appending `NodeWaiting`) instead of starting it — no
     /// NodeStarted, no session. Pure in-memory (no git, no tmux).
     #[tokio::test]
@@ -32772,7 +31346,7 @@ edges: []
         );
     }
 
-    /// INV-4/5/6 (#279): when the spawn window panics *after* the sub-worktree is
+    /// INV-4/5/6: when the spawn window panics *after* the sub-worktree is
     /// created but *before* NodeStarted, `spawn_node` reaps the orphan
     /// (dir + branch) and fails the run LOUD as `RunFailed` — never `NodeFailed`
     /// (which the guard would no-op for a never-started node, wedging the run).
@@ -33181,7 +31755,7 @@ edges: []
         );
     }
 
-    /// INV-1 (#212): the transition guard refuses an illegal NodeStarted BEFORE
+    /// INV-1: the transition guard refuses an illegal NodeStarted BEFORE
     /// any side effect. Spawning iter-2 of a node whose iter-1 is still live is
     /// rejected — `Refused`, and no NodeStarted for iter-2 is appended.
     #[tokio::test]
@@ -33234,18 +31808,15 @@ edges: []
         );
     }
 
-    // --- #445: the sandbox spawn precondition (block + replay) ------------------
+    // The sandbox spawn precondition (block + replay).
     //
-    // The defect: a sandboxed Run's node session runs `docker exec … pdo-sbx-<run>`,
-    // and `create_run`'s detached prep task was the ONLY thing that waited for the
-    // container. The pipeline watcher (woken by the first *read* of the fresh run
-    // dir's `pipeline.yaml`) called the same advance path with no such wait, so the
-    // exec hit a container that did not exist → exit 1 in ~30 ms → the tmux window's
-    // command ended → `session_died` ~25 s later. The precondition now lives in
-    // `spawn_node`, which is why these tests drive the spawn and the advance rather
-    // than the watcher's mpsc plumbing: `handle_run_pipeline_modifications` calls
-    // `spawn_ready_after_event` == `advance_run`, the exact entry point exercised in
-    // `sandbox_pending_run_is_not_schedulable_until_prep_ready`.
+    // A sandboxed Run's node session runs `docker exec … pdo-sbx-<run>`, and
+    // `create_run`'s detached prep task used to be the ONLY thing that waited for the
+    // container: the pipeline watcher called the same advance path with no such wait,
+    // so the exec hit a container that did not exist and the session died ~25 s later.
+    // The precondition lives in `spawn_node`, which is why these tests drive the spawn
+    // and the advance rather than the watcher's mpsc plumbing — the watcher calls
+    // `spawn_ready_after_event` == `advance_run`, the entry point exercised here.
 
     /// Seed a sandboxed Run whose prep has STARTED but not finished — the projection
     /// the watcher used to spawn into (`sandbox_prep = pending`).
@@ -33500,13 +32071,11 @@ edges: []
     /// Both ACs on the real advance path, in order — this is the regression test for
     /// the reported failure and for the deadlock a naive fix would introduce.
     ///
-    /// 1. **Blocage**: `advance_run` (what the pipeline watcher calls, via
-    ///    `spawn_ready_after_event`) starts nothing while the prep is pending.
+    /// 1. **Blocage**: `advance_run` starts nothing while the prep is pending.
     /// 2. **Rejeu**: `mark_sandbox_prep_ready` + the following `advance_run` — the
-    ///    exact pair the create-time prep task runs — starts the node that was
-    ///    deferred. Without this half, a Run whose only trigger was the watcher would
-    ///    stay `Running` with nothing live for ever, which is strictly worse than the
-    ///    bug being fixed.
+    ///    exact pair the create-time prep task runs — starts the deferred node.
+    ///    Without this half a Run whose only trigger was the watcher stays `Running`
+    ///    with nothing live for ever, strictly worse than the bug being fixed.
     #[tokio::test]
     async fn sandbox_pending_run_is_not_schedulable_until_prep_ready() {
         let tmp = tempfile::tempdir().unwrap();
@@ -33861,7 +32430,7 @@ edges:
         std::fs::create_dir_all(worktree_dir.join(".pdo").join("artifacts")).unwrap();
 
         seed_run_for_node_control(&state, run_id, "test-pipe").await;
-        // worker has never started — it's implicitly pending (not in run state)
+        // Worker has never started — it's implicitly pending (not in run state)
 
         let app = build_router(state.clone());
         let resp = app
@@ -33995,7 +32564,7 @@ edges:
 
     #[tokio::test]
     async fn node_retry_on_live_run_with_failed_node_spawns_truthfully() {
-        // Non-regression (#487): retry of a `failed` node on a still-live Run is
+        // Non-regression: retry of a `failed` node on a still-live Run is
         // unchanged in spirit — it re-spawns at iter+1 — and now reports a TRUTHFUL
         // Spawned verdict (the historical `{iter, invalidated}` root plus `spawned`).
         let tmp = tempfile::tempdir().unwrap();
@@ -34072,7 +32641,7 @@ edges:
     #[tokio::test]
     async fn pane_resurrection_refused_at_session_cap() {
         // #487 §3 — a click on a dead pane must not bypass the session cap
-        // (#77/#78). At the cap the resurrection is declined and reserves NOTHING:
+        //. At the cap the resurrection is declined and reserves NOTHING:
         // no NodeStarted, so it never overshoots the bound a spawn would respect.
         let tmp = tempfile::tempdir().unwrap();
         let repo_root = tmp.path();
@@ -34312,8 +32881,6 @@ edges:
         assert_eq!(json["affected_count"], 0);
     }
 
-    // --- GET /repos/recent (issue #132) ---
-
     static SEED_TS_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
     async fn seed_run_started(state: &Arc<AppState>, run_id: &str, target_repo: Option<&str>) {
@@ -34463,7 +33030,7 @@ edges:
         assert_eq!(repos, vec!["/repo/real"]);
     }
 
-    // --- GET /fs/browse default-root resolution (issue #131) ---
+    // GET /fs/browse default-root resolution (issue #131)
     //
     // `resolve_browse_root` is pure w.r.t. the environment (home/repo_root injected),
     // so these never touch the real `$HOME` and are safe under cargo's parallel test
@@ -34537,8 +33104,6 @@ edges:
             .unwrap();
         assert_eq!(got, Path::new("/"));
     }
-
-    // --- GET /fs/browse query vocabulary + entry classification (#431) ---
 
     /// Deserialise a query string through the PRODUCTION extractor (`Query`'s own
     /// `try_from_uri`, public in axum 0.8) — no HTTP, no router, but the exact
@@ -34739,8 +33304,6 @@ edges:
         assert!(!truncated, "exactly `cap` entries is not a truncation");
     }
 
-    // --- prompt-optional run creation (#158) ---
-
     #[test]
     fn prompt_required_pipeline_rejects_empty_input() {
         assert!(validate_run_input(true, "").is_err());
@@ -34763,8 +33326,6 @@ edges:
         assert!(validate_run_input(false, "extra context").is_ok());
     }
 
-    // --- placeholder display name for prompt-less runs (#184) ---
-
     #[test]
     fn placeholder_name_is_deterministic_from_run_id_timestamp() {
         assert_eq!(
@@ -34776,7 +33337,7 @@ edges:
     #[test]
     fn run_name_hint_matrix() {
         use prompt_augmenter::RunNameHint;
-        // #338: the hint is now gated on the RESOLVED `auto_name`, not on the name.
+        // The hint is now gated on the RESOLVED `auto_name`, not on the name.
         // With auto-naming OFF the manager is never told to rename — `UserProvided`
         // regardless of name or input (the display name is chosen by the caller).
         assert_eq!(
@@ -34812,8 +33373,6 @@ edges:
         );
     }
 
-    // --- launch validation: dangling port references (#211 / #206) ---
-
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn create_run_refuses_pipeline_with_dangling_port() {
@@ -34828,7 +33387,7 @@ edges:
             "name: dangling-pipe\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: agent\n    isolated_worktree: false\n    outputs:\n      - name: result\nedges:\n  - source: {{ node: worker, port: resullt }}\n    target: {{ node: end, port: result }}\n"
         );
         std::fs::write(pipelines_dir.join("dangling-pipe.yaml"), yaml).unwrap();
-        // #470: the target repo is now checked FIRST in `create_run_inner`, so this
+        // The target repo is now checked FIRST in `create_run_inner`, so this
         // test must name a valid one — otherwise it would 400 for the wrong reason
         // and silently stop testing #211.
         init_test_repo(tmp.path());
@@ -34885,8 +33444,6 @@ edges:
         .unwrap();
         assert!(runs.is_empty(), "no run must be created on refusal");
     }
-
-    // --- The daemon cwd is never an implicit Run target (#470, ADR-0033) ---
 
     /// Assert that a `POST /runs` body was refused *for the target-repo reason*, and
     /// that the refusal happened before ANY effect: no Run, and — the point of the
@@ -34975,7 +33532,7 @@ edges:
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn create_run_with_unknown_field_is_400_naming_it() {
-        // #601: an unknown top-level field is a named `400`, never silently dropped
+        // An unknown top-level field is a named `400`, never silently dropped
         // (the symptom the issue cites is a `target_repos` typo thrown away, launching
         // the run mono-repo). The check runs before any effect: no Run is created.
         let _home = FakeHome::new();
@@ -35231,8 +33788,6 @@ edges:
         assert_no_run_and_no_worktree(&state).await;
     }
 
-    // --- Instance-wide settings routes (#129, ADR-0015) ---
-
     async fn get_settings_json(state: &Arc<AppState>) -> serde_json::Value {
         let app = build_router(state.clone());
         let resp = app
@@ -35305,7 +33860,7 @@ edges:
             "updated_at must be surfaced"
         );
 
-        // default_model (#347): string knob with no baked-in default. On a fresh
+        // default_model: string knob with no baked-in default. On a fresh
         // row (and no PDO_DEFAULT_MODEL) stored/effective/default are all null and
         // the source is "default" (= the account default, no --model).
         let dm = &view["default_model"];
@@ -35384,7 +33939,7 @@ edges:
         }
 
         // The embedded floor always resolves, always as `builtin` — copilot is the
-        // third arm (#614), listed under "Built-in" like the other two.
+        // third arm, listed under "Built-in" like the other two.
         for floor in ["claude", "opencode", "copilot"] {
             let entry = harnesses
                 .iter()
@@ -35437,7 +33992,7 @@ edges:
 
     #[tokio::test]
     async fn put_settings_round_trips_the_default_auto_name_flag_both_ways() {
-        // #338: the checkbox is authoritative in BOTH directions. Unticking must persist a
+        // The checkbox is authoritative in BOTH directions. Unticking must persist a
         // stored `0` (source still "stored"), not clear back to unset — otherwise it could
         // not override `PDO_DEFAULT_AUTO_NAME=1`.
         let state = test_state().await;
@@ -35576,8 +34131,6 @@ edges:
         assert_eq!(view["session_cap"]["stored"], 7);
         assert_eq!(view["reaper_ttl_secs"]["stored"], 200);
     }
-
-    // --- #471: the two retired sandbox-image knobs ---
 
     /// AC2: a `PUT` carrying a retired field is a **400 naming the field**, not a 200 that
     /// silently ignores it. Both fields, and the store is untouched either way.
@@ -35720,8 +34273,6 @@ edges:
         warn_about_retired_sandbox_settings(&state.db).await;
     }
 
-    // --- #410: default_sandbox settings knob + sandbox_docker probe ---
-
     #[tokio::test]
     async fn put_settings_persists_default_sandbox() {
         // Stored always wins over env/default, so the effective/source assertions are
@@ -35744,7 +34295,7 @@ edges:
     #[tokio::test]
     async fn put_settings_clears_default_sandbox_on_empty_string() {
         // "" is the clear sentinel: accepted (not 400), resets the stored tier to null
-        // so the resolver falls back to the built-in default `off` (#410).
+        // so the resolver falls back to the built-in default `off`.
         let state = test_state().await;
         put_settings_resp(&state, r#"{"default_sandbox": "minimal"}"#).await;
         let (status, view) = put_settings_resp(&state, r#"{"default_sandbox": ""}"#).await;
@@ -35764,7 +34315,7 @@ edges:
 
     #[tokio::test]
     async fn put_settings_rejects_invalid_default_sandbox() {
-        // A non-variant token is rejected 400 before anything is persisted (#410).
+        // A non-variant token is rejected 400 before anything is persisted.
         let state = test_state().await;
         let (status, body) = put_settings_resp(&state, r#"{"default_sandbox": "vm"}"#).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -35775,7 +34326,7 @@ edges:
 
     #[tokio::test]
     async fn get_settings_surfaces_sandbox_docker_probe() {
-        // The advisory probe is folded into GET /settings (#410). `test_state` has no
+        // The advisory probe is folded into GET /settings. `test_state` has no
         // docker_cmd_override, so the real `docker` (absent in CI) → available:false
         // with a reason. The shape must always be present regardless of the verdict.
         let state = test_state().await;
@@ -35793,17 +34344,12 @@ edges:
         );
     }
 
-    // ======================================================================
-    // #490 / ADR-0035 — a completion refusal is never a 2xx
-    //
-    // The structural invariant lives in `completion_refusal.rs` (the type owns no
-    // status, so a 2xx refusal is unrepresentable). What follows pins the WIRE, on
-    // BOTH surfaces, because the seam is shared and the test has to prove it: the
-    // pre-#490 bug survived precisely because `POST …/done` and
-    // `POST /runs/:id/commands` were only ever tested one at a time.
-    // ======================================================================
+    // ADR-0035 — a completion refusal is never a 2xx. The structural invariant
+    // lives in `completion_refusal.rs`; what follows pins the WIRE on BOTH
+    // surfaces, because the original bug survived precisely because `POST …/done`
+    // and `POST /runs/:id/commands` were only ever tested one at a time.
 
-    /// `command_triplet`'s sibling for `POST …/nodes/:id/done` (#490). Status **and**
+    /// `command_triplet`'s sibling for `POST …/nodes/:id/done`. Status **and**
     /// content-type, so the two surfaces are pinned by the same shape of assertion
     /// (net of #236).
     async fn done_triplet(
@@ -36300,7 +34846,7 @@ edges:
         for node in ["impl_a", "impl_b"] {
             let sub_dir = sub_worktree_path(repo, run_id, node, 1);
             let sub_branch = sub_worktree_branch(run_id, node, 1);
-            // #503: both siblings were cut from the same tip. impl_a's merge moves
+            // Both siblings were cut from the same tip. impl_a's merge moves
             // it, so impl_b's base goes stale — which is what makes its conflict a
             // *genuine* one the resolution must not swallow (AC2).
             spawn_bases.insert(
@@ -36538,7 +35084,7 @@ edges:
                 kind: event_log::EventKind::NodeStarted,
                 node_id: Some("ship".into()),
                 iter: Some(1),
-                // What a real spawn records (#503): the commit the sub-worktree was
+                // What a real spawn records: the commit the sub-worktree was
                 // cut from. It is the *only* thing that authorises the resolution.
                 payload: Some(serde_json::json!({ "base_sha": spawn_base })),
             },

@@ -107,7 +107,7 @@ fn warn_missing_staging_floor_once(run_id: &str, harness: &str) {
     static SAID: Mutex<Option<HashSet<(String, String)>>> = Mutex::new(None);
 
     let Some(note) = crate::harness_probes::staging_floor_absence_note(harness) else {
-        return; // the harness has a staging floor (claude) — nothing to say
+        return;
     };
     let mut guard = SAID.lock().unwrap_or_else(|e| e.into_inner());
     let said = guard.get_or_insert_with(HashSet::new);
@@ -130,7 +130,7 @@ fn warn_turn_end_unsupported_once(run_id: &str, harness: &str) {
     static SAID: Mutex<Option<HashSet<(String, String)>>> = Mutex::new(None);
 
     let Some(note) = crate::harness_probes::turn_end_absence_note(harness) else {
-        return; // the harness has a turn-end substrate (claude) — nothing to say
+        return;
     };
     let mut guard = SAID.lock().unwrap_or_else(|e| e.into_inner());
     let said = guard.get_or_insert_with(HashSet::new);
@@ -458,12 +458,9 @@ pub(crate) async fn spawn_node(
                     None
                 }
             };
-        // #563: the Instance tier's `AgentChoice`, from a fresh read alongside the
-        // legacy `default_harness`/`default_models` tiers (`stored_default_*` above
-        // already call `instance_config::get` internally; this is a second fresh
-        // read rather than plumbing the whole config through those two helpers — a
-        // DB error degrades the tier to transparent, same posture as every other
-        // tier here).
+        // #563: a second fresh `instance_config::get` rather than plumbing the whole
+        // config through `stored_default_*`. A DB error degrades the tier to
+        // transparent, same posture as every other tier here.
         let instance_choice = crate::instance_config::get(deps.db)
             .await
             .ok()
@@ -517,7 +514,6 @@ pub(crate) async fn spawn_node(
                     Some(d)
                 }
                 None => {
-                    // Unknown harness — a spawn that cannot happen. Fail fast, naming it.
                     return SpawnOutcome::Failed {
                         reason: format!("node {}: unknown harness '{}'", node.id, r.harness),
                     };
@@ -558,7 +554,6 @@ pub(crate) async fn spawn_node(
     // `NodeStarted`. It is the sole basis on which a later merge-back conflict may
     // be resolved in the node's favour — no base recorded, no resolution.
     let mut spawn_base_sha: Option<String> = None;
-    // #489: what the wire has to be able to say about the sub-worktree.
     let mut reused_sub_worktree = false;
     // #516: every interrupted git op left in a reused sub-worktree, in scan order.
     // Routed to both the re-spawned node's preamble and the wire response.
@@ -1092,7 +1087,6 @@ async fn interrupt_spawn_after_start(
 ) {
     error!("Run {run_id}: node {node_id} spawn failed after NodeStarted — {reason}");
 
-    // 1) Node interrupted (legal: the iteration is `Running` after `NodeStarted`).
     let interrupted = event_log::Event {
         id: None,
         run_id: run_id.to_string(),
@@ -1111,8 +1105,8 @@ async fn interrupt_spawn_after_start(
         error!("Run {run_id}: failed to append NodeInterrupted after spawn failure: {e}");
     }
 
-    // 2) Reap ONLY what this spawn created (gated; ADR-0037 §6 — a reuse loses
-    //    nothing). The run parks `AwaitingUser` via projection; no run event.
+    // Reap ONLY what this spawn created (gated; ADR-0037 §6 — a reuse loses
+    // nothing).
     if let Some((sub_worktree_dir, sub_branch)) = orphan {
         reap_orphan_sub_worktree(repo_root, sub_worktree_dir, sub_branch);
     }

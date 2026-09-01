@@ -9,16 +9,6 @@
 //! belongs to **at most one** Projet; a second attach is a **refusal that names
 //! the owning Projet**, rendered before any write.
 //!
-//! Idiom of `trigger_store` / `instance_config`: SQLite, nullable columns for
-//! what the Projet carries (its optional `harness`). Two tables:
-//!
-//! - `projects` — identity (`id`, `name`) plus the optional `harness` it carries
-//!   (the first per-Projet setting, ADR-0046).
-//! - `project_members` — `path` → `project_id`, with `path` as the PRIMARY KEY so
-//!   "at most one Projet per path" is a **schema invariant**, not merely a code
-//!   check. The named refusal is still computed in code (a bare PK conflict could
-//!   not name the owner).
-//!
 //! The Projet of a Run is the one that owns its **primary** repo path; a
 //! secondary repo (ADR-0042) is never consulted here, so adding or removing one
 //! can change neither the Projet nor the resolved harness. That property lives at
@@ -28,31 +18,22 @@
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
 
-/// A persisted Projet: a named group of member paths and the optional harness it
-/// carries. `harness` is `None` when the Projet names no harness (the tier is
-/// then transparent to resolution). `members` is the verbatim member-path list,
-/// ordered by attach time.
+/// A persisted Projet: a named group of member paths and the optional settings it
+/// carries. Each optional setting is `None` when the Projet states none — the
+/// tier is then transparent to resolution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Project {
     pub id: String,
     pub name: String,
-    /// The harness this Projet carries (ADR-0046), or `None`. Stored nullable;
-    /// there is no env/default tier for a per-Projet harness, so this is the
-    /// degenerate `stored → None`. An empty string is treated as "unset" by the
-    /// resolver seam (the `Some("")` trap of #347).
+    /// The harness this Projet carries (ADR-0046). An empty string is treated as
+    /// "unset" by the resolver seam (the `Some("")` trap of #347).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness: Option<String>,
-    /// The `auto_fail` preference this Projet carries (ADR-0049), or `None` when
-    /// it states none — the **project** tier of
-    /// [`crate::auto_fail::resolve_auto_fail`]. `Some(true)`/`Some(false)` is a
-    /// stored decision; `None` makes the tier transparent (fall through to the
-    /// instance default). No env/default tier of its own.
+    /// The **project** tier of [`crate::auto_fail::resolve_auto_fail`] (ADR-0049).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_fail: Option<bool>,
-    /// The Projet tier of the agentic-profile union (#563, ADR-0057), or `None`
-    /// when this Projet states none — the tier is then transparent and
-    /// [`Self::harness`] (the legacy signal) still applies. `Some(Profile |
-    /// Custom)` wins outright at this tier over `harness` (never merges).
+    /// The Projet tier of the agentic-profile union (#563, ADR-0057). When set it
+    /// wins outright at this tier over [`Self::harness`] (never merges).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_choice: Option<crate::agent_choice::AgentChoice>,
     /// Member repository paths, compared **verbatim** (ADR-0033). Ordered by
@@ -65,24 +46,17 @@ pub(crate) struct Project {
 /// path" invariant expressed as data so the API can render the named refusal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum AddMember {
-    /// The path was newly attached to the Projet.
     Added,
-    /// The path was already a member of **this** Projet — an idempotent no-op.
+    /// Already a member of **this** Projet — an idempotent no-op.
     AlreadyMember,
-    /// The path is already a member of **another** Projet. No write happened; the
-    /// owning Projet is named so the caller can say which one (AC: "refus nommant
-    /// le Projet propriétaire, avant tout effet").
+    /// Already a member of **another** Projet. No write happened; the owning
+    /// Projet is named so the caller can say which one.
     Refused {
         owner_id: String,
         owner_name: String,
     },
 }
 
-/// Create the `projects` and `project_members` tables if they do not exist.
-///
-/// Both are brand-new tables (like `sandbox_profiles` / `audit_log`), so a plain
-/// `CREATE TABLE IF NOT EXISTS` is the whole migration — natively idempotent,
-/// needing no PRAGMA-guarded `ALTER` (there is no earlier shape to migrate from).
 pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS projects (
@@ -97,10 +71,8 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(db)
     .await?;
 
-    // Additive migration for pre-résilience databases: the `auto_fail` column is
-    // absent on `projects` tables created before ADR-0049 (#552 shipped without
-    // it). Guarded `ADD COLUMN` — NULLABLE so an existing Projet states no
-    // preference and the tier stays transparent.
+    // Pre-ADR-0049 databases have no `auto_fail` column. Guarded `ADD COLUMN`,
+    // NULLABLE so an existing Projet states no preference.
     let has_auto_fail =
         sqlx::query("SELECT 1 FROM pragma_table_info('projects') WHERE name = 'auto_fail'")
             .fetch_optional(db)
@@ -112,10 +84,8 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
-    // Additive migration for pre-#563 databases: the `agent_choice` column is
-    // absent on `projects` tables created before the agentic-profile union.
-    // Guarded `ADD COLUMN` — NULLABLE so an existing Projet falls back to its
-    // legacy `harness` column unchanged.
+    // Pre-#563 databases have no `agent_choice` column. Guarded `ADD COLUMN`,
+    // NULLABLE so an existing Projet falls back to its legacy `harness` column.
     let has_agent_choice =
         sqlx::query("SELECT 1 FROM pragma_table_info('projects') WHERE name = 'agent_choice'")
             .fetch_optional(db)
@@ -150,7 +120,6 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
-/// Generate a Projet id (`prj-<ts>-<short uuid>`), mirroring `trigger_store`.
 pub(crate) fn generate_project_id() -> String {
     let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S");
     let short = &uuid::Uuid::new_v4().to_string()[..7];
@@ -165,7 +134,8 @@ fn row_to_project(row: &sqlx::sqlite::SqliteRow, members: Vec<String>) -> Projec
             .get::<Option<String>, _>("harness")
             .filter(|s| !s.is_empty()),
         auto_fail: row.get::<Option<i64>, _>("auto_fail").map(|v| v != 0),
-        // #563: NULL / unparseable ⇒ `None` — the tier is simply transparent.
+        // An unparseable stored choice degrades to `None` (transparent tier)
+        // rather than failing the whole read.
         agent_choice: row
             .get::<Option<String>, _>("agent_choice")
             .and_then(|s| serde_json::from_str(&s).ok()),
@@ -173,7 +143,6 @@ fn row_to_project(row: &sqlx::sqlite::SqliteRow, members: Vec<String>) -> Projec
     }
 }
 
-/// Load the member paths of one Projet, ordered by attach time.
 async fn members_of(db: &SqlitePool, project_id: &str) -> Result<Vec<String>, sqlx::Error> {
     let rows =
         sqlx::query("SELECT path FROM project_members WHERE project_id = ? ORDER BY rowid ASC")
@@ -183,9 +152,8 @@ async fn members_of(db: &SqlitePool, project_id: &str) -> Result<Vec<String>, sq
     Ok(rows.iter().map(|r| r.get::<String, _>("path")).collect())
 }
 
-/// Insert a new (empty, harness-less) Projet with the given name, returning the
-/// stored row. Materialisation on naming (ADR-0046): this is the only path that
-/// creates a `projects` row from a bare name.
+/// Materialisation on naming (ADR-0046): the only path that creates a `projects`
+/// row from a bare name.
 pub(crate) async fn create(db: &SqlitePool, name: &str) -> Result<Project, sqlx::Error> {
     let id = generate_project_id();
     let now = crate::event_log::now_iso();
@@ -205,7 +173,6 @@ pub(crate) async fn create(db: &SqlitePool, name: &str) -> Result<Project, sqlx:
     })
 }
 
-/// All Projets with their member lists, newest first.
 pub(crate) async fn list(db: &SqlitePool) -> Result<Vec<Project>, sqlx::Error> {
     let rows = sqlx::query("SELECT * FROM projects ORDER BY created_at DESC")
         .fetch_all(db)
@@ -219,7 +186,6 @@ pub(crate) async fn list(db: &SqlitePool) -> Result<Vec<Project>, sqlx::Error> {
     Ok(projects)
 }
 
-/// One Projet by id, with its members. `None` ⇒ no such Projet.
 pub(crate) async fn get(db: &SqlitePool, id: &str) -> Result<Option<Project>, sqlx::Error> {
     let row = sqlx::query("SELECT * FROM projects WHERE id = ?")
         .bind(id)
@@ -234,7 +200,6 @@ pub(crate) async fn get(db: &SqlitePool, id: &str) -> Result<Option<Project>, sq
     }
 }
 
-/// Rename a Projet. Returns `true` iff a row was updated.
 pub(crate) async fn rename(db: &SqlitePool, id: &str, name: &str) -> Result<bool, sqlx::Error> {
     let res = sqlx::query("UPDATE projects SET name = ? WHERE id = ?")
         .bind(name)
@@ -244,9 +209,8 @@ pub(crate) async fn rename(db: &SqlitePool, id: &str, name: &str) -> Result<bool
     Ok(res.rows_affected() > 0)
 }
 
-/// Set (or clear, with `None`) the harness a Projet carries. Returns `true` iff a
-/// row was updated. An empty string is stored as `NULL` — a blank never carries a
-/// harness (the `Some("")` trap of #347), matching the resolver's floor-through.
+/// An empty string is stored as `NULL` — a blank never carries a harness (the
+/// `Some("")` trap of #347), matching the resolver's floor-through.
 pub(crate) async fn set_harness(
     db: &SqlitePool,
     id: &str,
@@ -261,10 +225,8 @@ pub(crate) async fn set_harness(
     Ok(res.rows_affected() > 0)
 }
 
-/// Set (or clear, with `None`) the `auto_fail` preference a Projet carries
-/// (ADR-0049). `Some(true)` stores `1`, `Some(false)` stores `0`, `None` clears
-/// it back to "states no preference" (SQL `NULL`). Returns `true` iff a row was
-/// updated.
+/// `None` clears the preference back to "states none" (SQL `NULL`), which is
+/// distinct from a stored `false`.
 pub(crate) async fn set_auto_fail(
     db: &SqlitePool,
     id: &str,
@@ -279,10 +241,8 @@ pub(crate) async fn set_auto_fail(
     Ok(res.rows_affected() > 0)
 }
 
-/// Resolve the `auto_fail` preference a `path` inherits from its Projet, for the
-/// `project` tier of [`crate::auto_fail::resolve_auto_fail`]. `None` ⇒ the path
-/// is in no Projet, or its Projet states no preference — the tier is transparent
-/// either way.
+/// The `project` tier of [`crate::auto_fail::resolve_auto_fail`]. `None` ⇒ no
+/// Projet owns the path, or it states no preference — transparent either way.
 pub(crate) async fn auto_fail_for_path(
     db: &SqlitePool,
     path: &str,
@@ -290,10 +250,8 @@ pub(crate) async fn auto_fail_for_path(
     Ok(owner_of(db, path).await?.and_then(|p| p.auto_fail))
 }
 
-/// Set (or clear, with `None`) the `AgentChoice` a Projet carries (#563,
-/// ADR-0057). `None` clears it back to "states none" (SQL `NULL`) — the tier
-/// is then transparent and the legacy [`Project::harness`] still applies.
-/// Returns `true` iff a row was updated.
+/// `None` clears the choice (SQL `NULL`) — the tier goes transparent and the
+/// legacy [`Project::harness`] applies again.
 pub(crate) async fn set_agent_choice(
     db: &SqlitePool,
     id: &str,
@@ -308,10 +266,8 @@ pub(crate) async fn set_agent_choice(
     Ok(res.rows_affected() > 0)
 }
 
-/// Resolve the `AgentChoice` a `path` inherits from its Projet, for the
-/// Projet tier of [`crate::agent_choice::resolve`]. `None` ⇒ the path is in no
-/// Projet, or its Projet states none — the tier is transparent either way (the
-/// legacy `harness` signal, read via [`harness_for_path`], still applies).
+/// The Projet tier of [`crate::agent_choice::resolve`]. `None` ⇒ transparent —
+/// the legacy `harness` signal ([`harness_for_path`]) then applies.
 pub(crate) async fn agent_choice_for_path(
     db: &SqlitePool,
     path: &str,
@@ -319,8 +275,7 @@ pub(crate) async fn agent_choice_for_path(
     Ok(owner_of(db, path).await?.and_then(|p| p.agent_choice))
 }
 
-/// The Projet that currently owns `path`, if any. Read-then-decide basis for the
-/// named refusal, and re-usable as a plain lookup. Compared **verbatim**.
+/// The Projet that owns `path`, compared **verbatim** (ADR-0033).
 pub(crate) async fn owner_of(db: &SqlitePool, path: &str) -> Result<Option<Project>, sqlx::Error> {
     let row = sqlx::query("SELECT project_id FROM project_members WHERE path = ?")
         .bind(path)
@@ -332,9 +287,8 @@ pub(crate) async fn owner_of(db: &SqlitePool, path: &str) -> Result<Option<Proje
     }
 }
 
-/// Attach a member path to a Projet, enforcing at-most-one membership **before
-/// any write**. A path already owned by a *different* Projet is refused, naming
-/// the owner; a re-attach to the same Projet is an idempotent no-op.
+/// Enforces at-most-one membership **before any write**: a path owned by another
+/// Projet is refused (naming the owner) with no partial effect.
 pub(crate) async fn add_member(
     db: &SqlitePool,
     project_id: &str,
@@ -359,8 +313,8 @@ pub(crate) async fn add_member(
     Ok(AddMember::Added)
 }
 
-/// Detach a member path from **any** Projet (the path is globally unique). Returns
-/// `true` iff a membership row was removed.
+/// Detaches from **any** Projet — no `project_id` needed, the path is globally
+/// unique.
 pub(crate) async fn remove_member(db: &SqlitePool, path: &str) -> Result<bool, sqlx::Error> {
     let res = sqlx::query("DELETE FROM project_members WHERE path = ?")
         .bind(path)
@@ -369,8 +323,7 @@ pub(crate) async fn remove_member(db: &SqlitePool, path: &str) -> Result<bool, s
     Ok(res.rows_affected() > 0)
 }
 
-/// Delete a Projet and all its memberships. Returns `true` iff a Projet row was
-/// removed. Used when a group is un-named back to its derived label.
+/// Deletes the Projet and all its memberships, freeing those paths.
 pub(crate) async fn delete(db: &SqlitePool, id: &str) -> Result<bool, sqlx::Error> {
     sqlx::query("DELETE FROM project_members WHERE project_id = ?")
         .bind(id)
@@ -383,10 +336,8 @@ pub(crate) async fn delete(db: &SqlitePool, id: &str) -> Result<bool, sqlx::Erro
     Ok(res.rows_affected() > 0)
 }
 
-/// Resolve the harness a `path` inherits from its Projet, for the `project` tier
-/// of [`crate::harness_resolver`]. `None` ⇒ the path is in no Projet, or its
-/// Projet carries no harness — the tier is transparent either way. An empty
-/// stored harness is already normalised to `None` by [`owner_of`] → [`get`].
+/// The `project` tier of [`crate::harness_resolver`]. An empty stored harness is
+/// already normalised to `None` by [`owner_of`] → [`get`].
 pub(crate) async fn harness_for_path(
     db: &SqlitePool,
     path: &str,
@@ -406,12 +357,10 @@ mod tests {
 
     #[tokio::test]
     async fn init_is_idempotent() {
-        // The "migration de table idempotente" AC: running init twice on the same
-        // pool is a no-op, never an error (mirror of trigger_store's guarantee).
         let db = SqlitePool::connect("sqlite::memory:").await.unwrap();
         init(&db).await.unwrap();
         init(&db).await.unwrap();
-        // And a project created before the second init survives it.
+        // A project created before a later init survives it.
         let p = create(&db, "P").await.unwrap();
         init(&db).await.unwrap();
         assert!(get(&db, &p.id).await.unwrap().is_some());
@@ -419,8 +368,6 @@ mod tests {
 
     #[tokio::test]
     async fn no_row_exists_before_naming() {
-        // AC: aucune ligne de Projet tant qu'un humain n'a pas nommé un groupe.
-        // A fresh store has zero rows and no path is owned.
         let db = mem_db().await;
         assert!(list(&db).await.unwrap().is_empty());
         assert!(owner_of(&db, "/repos/front").await.unwrap().is_none());
@@ -432,8 +379,6 @@ mod tests {
 
     #[tokio::test]
     async fn a_path_cannot_belong_to_two_projects_refusal_names_the_owner() {
-        // AC: un chemin déjà membre ne peut pas être ajouté à un second — refus
-        // nommant le propriétaire, avant tout effet.
         let db = mem_db().await;
         let a = create(&db, "Alpha").await.unwrap();
         let b = create(&db, "Bravo").await.unwrap();
@@ -442,7 +387,6 @@ mod tests {
             add_member(&db, &a.id, "/repos/front").await.unwrap(),
             AddMember::Added
         );
-        // Second attach to a DIFFERENT project: refused, naming Alpha.
         match add_member(&db, &b.id, "/repos/front").await.unwrap() {
             AddMember::Refused {
                 owner_id,
@@ -455,7 +399,6 @@ mod tests {
         }
         // …and BEFORE any effect: Bravo gained no member.
         assert!(get(&db, &b.id).await.unwrap().unwrap().members.is_empty());
-        // The path still belongs to Alpha only.
         assert_eq!(
             owner_of(&db, "/repos/front").await.unwrap().unwrap().id,
             a.id
@@ -483,7 +426,7 @@ mod tests {
     #[tokio::test]
     async fn membership_comparison_is_verbatim() {
         // ADR-0033: two spellings of the same path are two paths — nothing
-        // reconciles them. A trailing slash makes a distinct, unowned key.
+        // reconciles them.
         let db = mem_db().await;
         let a = create(&db, "Alpha").await.unwrap();
         add_member(&db, &a.id, "/repos/front").await.unwrap();
@@ -494,8 +437,6 @@ mod tests {
 
     #[tokio::test]
     async fn harness_for_path_reads_the_owning_projects_harness() {
-        // The `project` tier the spawn seam reads: a member path inherits its
-        // Projet's harness; a blank harness collapses to None (#347).
         let db = mem_db().await;
         let a = create(&db, "Alpha").await.unwrap();
         add_member(&db, &a.id, "/repos/front").await.unwrap();
@@ -513,7 +454,6 @@ mod tests {
                 .as_deref(),
             Some("opencode")
         );
-        // Both members inherit it — a Projet setting is posed once for its repos.
         assert_eq!(
             harness_for_path(&db, "/repos/back")
                 .await
@@ -521,12 +461,11 @@ mod tests {
                 .as_deref(),
             Some("opencode")
         );
-        // A non-member path inherits nothing.
         assert!(harness_for_path(&db, "/repos/other")
             .await
             .unwrap()
             .is_none());
-        // Clearing the harness (empty string → NULL) makes the tier transparent.
+        // An empty string clears the harness (#347), it does not store a blank.
         assert!(set_harness(&db, &a.id, Some("")).await.unwrap());
         assert!(harness_for_path(&db, "/repos/front")
             .await
@@ -534,10 +473,6 @@ mod tests {
             .is_none());
     }
 
-    /// #563/ADR-0057: the Projet tier of `AgentChoice` — a fresh Projet carries
-    /// none, `set_agent_choice` sets it, both member paths inherit it (mirrors
-    /// `harness_for_path` above), and clearing it back to `None` makes the tier
-    /// transparent again (falls back to the legacy `harness` column).
     #[tokio::test]
     async fn agent_choice_for_path_reads_the_owning_projects_choice() {
         let db = mem_db().await;
@@ -560,18 +495,15 @@ mod tests {
             agent_choice_for_path(&db, "/repos/front").await.unwrap(),
             Some(choice.clone())
         );
-        // Both members inherit it, like the legacy harness tier.
         assert_eq!(
             agent_choice_for_path(&db, "/repos/back").await.unwrap(),
             Some(choice)
         );
-        // A non-member path inherits nothing.
         assert!(agent_choice_for_path(&db, "/repos/other")
             .await
             .unwrap()
             .is_none());
 
-        // Clearing it (`None`) makes the tier transparent again.
         assert!(set_agent_choice(&db, &a.id, None).await.unwrap());
         assert!(agent_choice_for_path(&db, "/repos/front")
             .await
@@ -579,9 +511,8 @@ mod tests {
             .is_none());
     }
 
-    /// #563: the legacy `harness` column and the new `agent_choice` column
-    /// coexist independently on the same Projet row — setting one never
-    /// disturbs the other (resolution order is `agent_choice.rs`'s concern).
+    /// Setting one never disturbs the other; resolution order between them is
+    /// `agent_choice.rs`'s concern, not this store's.
     #[tokio::test]
     async fn agent_choice_and_legacy_harness_coexist_on_the_same_project() {
         let db = mem_db().await;
@@ -605,10 +536,6 @@ mod tests {
 
     #[tokio::test]
     async fn init_migrates_pre_agent_choice_schema() {
-        // #563: a `projects` table created before the `agent_choice` column
-        // gains it on init, idempotently, without clobbering existing rows —
-        // same guarded `ADD COLUMN` idiom the pre-résilience `auto_fail`
-        // migration already established on this table.
         let db = SqlitePool::connect("sqlite::memory:").await.unwrap();
         sqlx::query(
             "CREATE TABLE projects (
@@ -661,7 +588,6 @@ mod tests {
         assert!(rename(&db, &a.id, "Renamed").await.unwrap());
         assert_eq!(get(&db, &a.id).await.unwrap().unwrap().name, "Renamed");
 
-        // Deleting a Projet frees its member paths for another Projet.
         assert!(delete(&db, &a.id).await.unwrap());
         assert!(get(&db, &a.id).await.unwrap().is_none());
         assert!(owner_of(&db, "/repos/front").await.unwrap().is_none());

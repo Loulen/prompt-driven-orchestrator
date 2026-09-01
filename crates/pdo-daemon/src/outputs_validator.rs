@@ -100,11 +100,8 @@ pub(crate) fn validate(
                     }
                 }
             }
-            // #333: an html port validates on the existence of its `output.html`
-            // only — an exact mirror of the non-`repeated` markdown arm. No
-            // frontmatter parsing (html carries none) and no emptiness check
-            // (markdown doesn't test non-empty either; a broken/empty page is
-            // caught by the human reviewer, which is the whole point).
+            // Existence of `output.html` only: html carries no frontmatter, and
+            // an empty/broken page is the human reviewer's call, not ours.
             PortType::Html => {
                 let path =
                     crate::blackboard::artifact_path_html(artifacts_dir, node_id, iter, &port.name);
@@ -373,8 +370,6 @@ mod tests {
         std::fs::write(d.join("output.md"), content).unwrap();
     }
 
-    // --- existence checks (unchanged behavior) ---
-
     #[test]
     fn all_outputs_present() {
         let tmp = TempDir::new().unwrap();
@@ -454,8 +449,6 @@ mod tests {
         assert!(validate(&pipeline, "ghost", 1, tmp.path()).is_ok());
     }
 
-    // --- frontmatter schema validation: enum ---
-
     #[test]
     fn enum_valid_value_passes() {
         let tmp = TempDir::new().unwrap();
@@ -502,8 +495,6 @@ mod tests {
         }
     }
 
-    // --- frontmatter schema validation: int ---
-
     #[test]
     fn int_valid_value_passes() {
         let tmp = TempDir::new().unwrap();
@@ -530,8 +521,6 @@ mod tests {
             other => panic!("expected FrontmatterMismatch, got {other:?}"),
         }
     }
-
-    // --- frontmatter schema validation: string ---
 
     #[test]
     fn string_valid_value_passes() {
@@ -565,8 +554,6 @@ mod tests {
             other => panic!("expected FrontmatterMismatch, got {other:?}"),
         }
     }
-
-    // --- frontmatter schema validation: bool ---
 
     #[test]
     fn bool_valid_value_passes() {
@@ -607,8 +594,6 @@ mod tests {
         }
     }
 
-    // --- frontmatter schema validation: list ---
-
     #[test]
     fn list_valid_value_passes() {
         let tmp = TempDir::new().unwrap();
@@ -642,8 +627,6 @@ mod tests {
         }
     }
 
-    // --- missing required field ---
-
     #[test]
     fn missing_required_field_fails() {
         let tmp = TempDir::new().unwrap();
@@ -664,8 +647,6 @@ mod tests {
         }
     }
 
-    // --- no schema = no validation ---
-
     #[test]
     fn port_without_schema_skips_content_validation() {
         let tmp = TempDir::new().unwrap();
@@ -674,8 +655,6 @@ mod tests {
         let pipeline = make_pipeline(vec![make_node("node", vec![port("out")])]);
         assert!(validate(&pipeline, "node", 1, artifacts).is_ok());
     }
-
-    // --- corrective message ---
 
     #[test]
     fn corrective_message_lists_all_violations() {
@@ -696,8 +675,6 @@ mod tests {
         assert!(msg.contains("score"));
         assert!(msg.contains("pdo complete"));
     }
-
-    // --- image port helpers ---
 
     fn image_port(name: &str) -> Port {
         Port {
@@ -735,8 +712,6 @@ mod tests {
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(d.join(filename), b"fake image data").unwrap();
     }
-
-    // --- image port: exactly one image required ---
 
     #[test]
     fn image_port_with_one_image_passes() {
@@ -801,8 +776,6 @@ mod tests {
         }
     }
 
-    // --- image_list port: at least one image ---
-
     #[test]
     fn image_list_port_with_one_image_passes() {
         let tmp = TempDir::new().unwrap();
@@ -831,8 +804,6 @@ mod tests {
         let result = validate(&pipeline, "node", 1, artifacts);
         assert!(matches!(result, Err(ValidationError::MissingOutputs(ref m)) if m == &["gallery"]));
     }
-
-    // --- html port: existence of output.html only (#333) ---
 
     fn html_port(name: &str) -> Port {
         Port {

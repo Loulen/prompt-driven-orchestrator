@@ -39,8 +39,8 @@ pub(crate) struct AuditEntry {
 }
 
 /// Une écriture d'audit en attente, remise à [`record`] / [`record_best_effort`].
-/// Deux colonnes explicites `before`/`after` (pas un `detail` fourre-tout) : AC2
-/// demande *avant → après*.
+/// Deux colonnes explicites `before`/`after` (pas un `detail` fourre-tout) : le
+/// feed doit rendre le *avant → après*.
 #[derive(Debug, Clone)]
 pub(crate) struct NewAuditEntry {
     pub actor_hint: String,
@@ -74,9 +74,8 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
-/// Écrit une entrée. Renvoie l'erreur au caller (les tests s'en servent) ;
-/// `before`/`after` sont sérialisés en TEXT JSON (SQLite n'a pas de type JSON
-/// réel — comme `Event.payload`).
+/// Écrit une entrée. `before`/`after` sont sérialisés en TEXT JSON (SQLite n'a
+/// pas de type JSON réel — comme `Event.payload`).
 pub(crate) async fn record(db: &SqlitePool, e: NewAuditEntry) -> Result<(), sqlx::Error> {
     let before = e.before.as_ref().map(|v| v.to_string());
     let after = e.after.as_ref().map(|v| v.to_string());
@@ -108,9 +107,9 @@ pub(crate) async fn record_best_effort(db: &SqlitePool, e: NewAuditEntry) {
 
 /// Lecture filtrée, newest-first. `id DESC` seul suffit (`INTEGER PRIMARY KEY
 /// AUTOINCREMENT` est déjà un ordre total — pas de tiebreak sur `ts`). Les
-/// quatre filtres sont optionnels : un feed global décroissant par défaut, la
-/// posture #505 (on découvre *quelle* cible dans le flux). `[from, to)` :
-/// borne basse incluse, borne haute exclue.
+/// quatre filtres sont optionnels : par défaut un feed global décroissant, où
+/// l'on découvre *quelle* cible dans le flux. `[from, to)` : borne basse
+/// incluse, borne haute exclue.
 pub(crate) async fn list(
     db: &SqlitePool,
     from: Option<&str>,
@@ -139,10 +138,8 @@ pub(crate) async fn list(
     rows.iter().map(row_to_entry).collect()
 }
 
-/// `row.get` pour les colonnes NOT NULL, `try_get` pour les nullables. Les blobs
-/// `before`/`after` sont du TEXT JSON qu'on reparse en `Value` ; un TEXT
-/// malformé (jamais écrit par [`record`], mais on ne panique pas dessus)
-/// dégrade en `None`.
+/// Un TEXT `before`/`after` malformé (jamais écrit par [`record`], mais on ne
+/// panique pas dessus) dégrade en `None`.
 fn row_to_entry(row: &sqlx::sqlite::SqliteRow) -> Result<AuditEntry, sqlx::Error> {
     let before: Option<String> = row.try_get("before")?;
     let after: Option<String> = row.try_get("after")?;
@@ -403,11 +400,10 @@ mod tests {
 
     #[tokio::test]
     async fn record_best_effort_swallows_a_write_error() {
-        // §2·B: a failed audit write must NEVER propagate. Close the pool, then a
-        // best-effort record must log-and-return, not panic or block.
+        // A failed audit write must NEVER propagate: on a closed pool the
+        // best-effort record logs and returns, never panics or blocks.
         let db = test_db().await;
         db.close().await;
-        // Would-be error is swallowed; the mutation (imagined upstream) stands.
         record_best_effort(&db, trigger_entry("trigger.updated", "t-1")).await;
     }
 

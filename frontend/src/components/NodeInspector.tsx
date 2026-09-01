@@ -20,6 +20,8 @@ import type { LibraryEntry } from "../api";
 import { saveToLibrary, deleteFromLibrary, instantiateFromLibrary, libraryPortToPortDef } from "../api";
 import { useLibraryState } from "../hooks/useLibrary";
 import type { LibrarySyncState } from "../hooks/useLibrary";
+import ProvisioningRulesEditor from "./ProvisioningRulesEditor";
+import { EMPTY_PROVISIONING_RULES } from "../lib/provisioning";
 
 const TYPE_TOOLTIPS: Record<string, string> = {
   "code-mutating": "Receives a forked sub-worktree. Can edit, commit, and merge code.",
@@ -30,6 +32,10 @@ export default function NodeInspector({
   libraryEntries,
   onLibraryChanged,
   readOnly,
+  provisioningRepository = "",
+  provisioningFrozenAt,
+  inheritedProvisioning,
+  provisioningGitRef = "HEAD",
 }: {
   libraryEntries: LibraryEntry[];
   onLibraryChanged: () => void;
@@ -37,6 +43,10 @@ export default function NodeInspector({
    * (mirrors the canvas readOnly, #315/ADR-0020). Scoped to the × alone;
    * the rest of the inspector's archived story is the #315 gap. */
   readOnly?: boolean;
+  provisioningRepository?: string;
+  provisioningFrozenAt?: string;
+  inheritedProvisioning?: import("../types").ScopedProvisioningRules[];
+  provisioningGitRef?: string;
 }) {
   const openTabs = useEditStore((s) => s.openTabs);
   const activeTabId = useEditStore((s) => s.activeTabId);
@@ -49,6 +59,7 @@ export default function NodeInspector({
 
   const asideRef = useRef<HTMLElement>(null);
   const [highlightedPort, setHighlightedPort] = useState<string | null>(null);
+  const [provisioningPreviewRepository, setProvisioningPreviewRepository] = useState("");
   // Pending destroy-loop confirmation (#339, mirrors EditCanvas #150): set when
   // deleting an input source would remove a bounded region's last cycle.
   const [pendingDestroy, setPendingDestroy] = useState<{
@@ -263,6 +274,33 @@ export default function NodeInspector({
                 disabled={!(harnessOption?.hasEffort ?? true)}
               />
             </div>
+          </>
+        )}
+
+        {(node.type === "code-mutating" || node.type === "merge") && (
+          <>
+            <SectionHead title="Isolated worktree provisioning" />
+            {!provisioningRepository && (
+              <label className="block text-fg-3" style={{ fontSize: 10 }}>
+                Resolve against
+                <input
+                  value={provisioningPreviewRepository}
+                  onChange={(event) => setProvisioningPreviewRepository(event.target.value)}
+                  placeholder="/absolute/path/to/repository"
+                  className="mt-1 w-full rounded border border-line-strong bg-bg-3 px-2 py-1 font-mono text-fg outline-none focus:border-acc"
+                />
+              </label>
+            )}
+            <ProvisioningRulesEditor
+              level="isolated_node"
+              repository={provisioningRepository || provisioningPreviewRepository}
+              rules={node.provisioning ?? EMPTY_PROVISIONING_RULES}
+              onChange={(rules) => handleField("provisioning", rules)}
+              readOnly={readOnly || !!provisioningFrozenAt}
+              frozenAt={provisioningFrozenAt}
+              inherited={inheritedProvisioning}
+              gitRef={provisioningGitRef}
+            />
           </>
         )}
 

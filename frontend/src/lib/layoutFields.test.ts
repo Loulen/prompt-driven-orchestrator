@@ -74,6 +74,7 @@ const NODE: Complete<NodeDef> = {
   pin_harness: "claude",
   harnesses: { claude: { model: "opus", effort: "low" } },
   agent_choice: { mode: "profile", profile_id: "deep-work" },
+  provisioning: { copy: [".env"], hardlink: [], symlink: [] },
 };
 const EDGE: Complete<EdgeDef> = {
   source: { node: "n1", port: "out" },

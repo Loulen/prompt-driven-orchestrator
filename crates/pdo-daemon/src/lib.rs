@@ -52,6 +52,7 @@ mod portable_pipeline;
 mod price_table;
 mod project_store;
 mod prompt_augmenter;
+mod provisioning;
 mod pty_bridge;
 mod reap_policy;
 pub(crate) mod recovery;
@@ -503,6 +504,9 @@ struct CreateRunRequest {
     /// `RunStarted` at the create chokepoint.
     #[serde(default)]
     auto_fail: Option<bool>,
+    /// Run-level provisioning rules, composed and frozen with Instance + Project.
+    #[serde(default)]
+    provisioning: provisioning::ProvisioningRules,
 }
 
 /// The top-level keys `POST /runs` accepts, kept in lock-step with
@@ -530,6 +534,7 @@ const CREATE_RUN_FIELDS: &[&str] = &[
     "agent_choice",
     "auto_name",
     "auto_fail",
+    "provisioning",
 ];
 
 /// Reject a `POST /runs` body carrying an unknown top-level key. A non-object
@@ -3982,6 +3987,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/repos/branches", get(repos_branches))
         .route("/repos/validate", get(repos_validate))
         .route("/repos/recent", get(repos_recent))
+        .route("/repos/provisioning/preview", post(preview_provisioning))
         // Filesystem explorer — not repo-specific (it also serves the settings
         // Dockerfile picker), hence `/fs` rather than `/repos/browse`.
         .route("/fs/browse", get(fs_browse))
@@ -3998,6 +4004,10 @@ fn build_router(state: Arc<AppState>) -> Router {
         // {effective, source, stored, env, default} view; `PUT` writes the stored
         // tier, with fail-fast validation.
         .route("/settings", get(get_settings).put(put_settings))
+        .route(
+            "/settings/provisioning",
+            get(get_instance_provisioning).put(put_instance_provisioning),
+        )
         // Staging profiles (ADR-0031 §2-§7) sit UNDER `/settings` as a routing
         // decision only. It is NOT a claim about the schema: profiles are ROWS, not
         // an {effective, source, stored, env, default} knob, and they must NOT be
@@ -4053,6 +4063,10 @@ fn build_router(state: Arc<AppState>) -> Router {
             post(add_project_member).delete(remove_project_member),
         )
         .route(
+            "/projects/{project_id}/provisioning",
+            get(get_project_provisioning).put(put_project_provisioning),
+        )
+        .route(
             "/triggers/{trigger_id}",
             get(get_trigger).patch(patch_trigger).delete(delete_trigger),
         )
@@ -4061,6 +4075,200 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/triggers/{trigger_id}/fire", post(fire_trigger_now))
         .fallback(static_handler)
         .with_state(state)
+}
+
+#[derive(Deserialize)]
+struct ProvisioningPreviewRequest {
+    repository: String,
+    #[serde(default = "default_provisioning_git_ref")]
+    git_ref: String,
+    scope: provisioning::ProvisioningScope,
+    #[serde(default)]
+    rules: provisioning::ProvisioningRules,
+    #[serde(default)]
+    inherited: Option<Vec<provisioning::ScopedRules>>,
+}
+
+fn default_provisioning_git_ref() -> String {
+    "HEAD".to_string()
+}
+
+async fn scoped_provisioning_rules(
+    db: &sqlx::SqlitePool,
+    repository: &str,
+    run: provisioning::ProvisioningRules,
+    node: provisioning::ProvisioningRules,
+) -> Result<Vec<provisioning::ScopedRules>, sqlx::Error> {
+    let mut rules = vec![provisioning::ScopedRules {
+        scope: provisioning::ProvisioningScope::Instance,
+        rules: provisioning::load(db, provisioning::ProvisioningScope::Instance, "instance")
+            .await?,
+    }];
+    if let Some(project) = project_store::owner_of(db, repository).await? {
+        rules.push(provisioning::ScopedRules {
+            scope: provisioning::ProvisioningScope::Project,
+            rules: provisioning::load(db, provisioning::ProvisioningScope::Project, &project.id)
+                .await?,
+        });
+    }
+    rules.push(provisioning::ScopedRules {
+        scope: provisioning::ProvisioningScope::Run,
+        rules: run,
+    });
+    if !node.is_empty() {
+        rules.push(provisioning::ScopedRules {
+            scope: provisioning::ProvisioningScope::IsolatedNode,
+            rules: node,
+        });
+    }
+    Ok(rules)
+}
+
+async fn preview_provisioning(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ProvisioningPreviewRequest>,
+) -> Response {
+    let repository = PathBuf::from(req.repository.trim());
+    if !repository.is_absolute() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "repository must be an absolute path" })),
+        )
+            .into_response();
+    }
+    let mut scoped = match req.inherited {
+        Some(rules) => rules,
+        None => match scoped_provisioning_rules(
+            &state.db,
+            req.repository.trim(),
+            provisioning::ProvisioningRules::default(),
+            provisioning::ProvisioningRules::default(),
+        )
+        .await
+        {
+            Ok(rules) => rules,
+            Err(e) => {
+                error!("failed to load provisioning rules: {e}");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": "provisioning store unavailable" })),
+                )
+                    .into_response();
+            }
+        },
+    };
+    if let Some(current) = scoped.iter_mut().find(|rules| rules.scope == req.scope) {
+        current.rules = req.rules;
+    } else {
+        scoped.push(provisioning::ScopedRules {
+            scope: req.scope,
+            rules: req.rules,
+        });
+        scoped.sort_by_key(|rules| rules.scope);
+    }
+    match provisioning::resolve_at_git_ref(&repository, &scoped, &req.git_ref) {
+        Ok(plan) => (StatusCode::OK, Json(plan)).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": format!("{e:#}") })),
+        )
+            .into_response(),
+    }
+}
+
+async fn get_instance_provisioning(State(state): State<Arc<AppState>>) -> Response {
+    provisioning_response(
+        provisioning::load(
+            &state.db,
+            provisioning::ProvisioningScope::Instance,
+            "instance",
+        )
+        .await,
+    )
+}
+
+async fn put_instance_provisioning(
+    State(state): State<Arc<AppState>>,
+    Json(rules): Json<provisioning::ProvisioningRules>,
+) -> Response {
+    match provisioning::save(
+        &state.db,
+        provisioning::ProvisioningScope::Instance,
+        "instance",
+        &rules,
+    )
+    .await
+    {
+        Ok(()) => (StatusCode::OK, Json(rules)).into_response(),
+        Err(e) => {
+            error!("failed to save instance provisioning rules: {e}");
+            provisioning_store_error()
+        }
+    }
+}
+
+async fn get_project_provisioning(
+    State(state): State<Arc<AppState>>,
+    AxumPath(project_id): AxumPath<String>,
+) -> Response {
+    provisioning_response(
+        provisioning::load(
+            &state.db,
+            provisioning::ProvisioningScope::Project,
+            &project_id,
+        )
+        .await,
+    )
+}
+
+async fn put_project_provisioning(
+    State(state): State<Arc<AppState>>,
+    AxumPath(project_id): AxumPath<String>,
+    Json(rules): Json<provisioning::ProvisioningRules>,
+) -> Response {
+    match project_store::get(&state.db, &project_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "project not found" })),
+            )
+                .into_response()
+        }
+        Err(_) => return provisioning_store_error(),
+    }
+    match provisioning::save(
+        &state.db,
+        provisioning::ProvisioningScope::Project,
+        &project_id,
+        &rules,
+    )
+    .await
+    {
+        Ok(()) => (StatusCode::OK, Json(rules)).into_response(),
+        Err(e) => {
+            error!("failed to save project provisioning rules: {e}");
+            provisioning_store_error()
+        }
+    }
+}
+
+fn provisioning_response(result: Result<provisioning::ProvisioningRules, sqlx::Error>) -> Response {
+    match result {
+        Ok(rules) => (StatusCode::OK, Json(rules)).into_response(),
+        Err(e) => {
+            error!("failed to load provisioning rules: {e}");
+            provisioning_store_error()
+        }
+    }
+}
+
+fn provisioning_store_error() -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({ "error": "provisioning store unavailable" })),
+    )
+        .into_response()
 }
 
 // A Projet is the middle tier of the harness axis and a named grouping of member
@@ -4373,6 +4581,10 @@ async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
     project_store::init(db)
         .await
         .context("failed to create project tables")?;
+
+    provisioning::init(db)
+        .await
+        .context("failed to create provisioning rules table")?;
 
     // Unlike `project_store`, this table IS seeded: the reserved `Default` profile
     // must exist on every instance, immediately.
@@ -5096,6 +5308,7 @@ async fn fire_one_trigger(
                 // No Trigger tier for `auto_fail` (ADR-0049): a fire states no
                 // run-level preference, so `pdo fail` resolves through project/instance.
                 auto_fail: None,
+                provisioning: provisioning::ProvisioningRules::default(),
             };
             let record = match create_run_inner(state, req, Vec::new()).await {
                 Ok(run_id) => trigger_store::FireRecord {
@@ -6929,6 +7142,7 @@ async fn parse_multipart_create_run(
     let mut agent_choice: Option<crate::agent_choice::AgentChoice> = None;
     let mut auto_name: Option<bool> = None;
     let mut auto_fail: Option<bool> = None;
+    let mut provisioning = provisioning::ProvisioningRules::default();
     let mut images = Vec::new();
 
     while let Ok(Some(field)) = multipart.next_field().await {
@@ -7062,6 +7276,14 @@ async fn parse_multipart_create_run(
                     auto_fail = stale_detector::parse_bool_setting(&v);
                 }
             }
+            "provisioning" => {
+                let v = field
+                    .text()
+                    .await
+                    .map_err(|e| format!("bad field provisioning: {e}"))?;
+                provisioning =
+                    serde_json::from_str(&v).map_err(|e| format!("bad field provisioning: {e}"))?;
+            }
             "images" => {
                 let raw_filename = field.file_name().unwrap_or("image.png").to_string();
                 let data = field
@@ -7105,6 +7327,7 @@ async fn parse_multipart_create_run(
         agent_choice,
         auto_name,
         auto_fail,
+        provisioning,
     };
     Ok((req, images))
 }
@@ -7388,6 +7611,46 @@ async fn create_run_inner(
         return Err((StatusCode::BAD_REQUEST, serde_json::json!({ "error": msg })));
     }
 
+    let frozen_provisioning = match scoped_provisioning_rules(
+        &state.db,
+        &run_repo_root.to_string_lossy(),
+        req.provisioning.clone(),
+        provisioning::ProvisioningRules::default(),
+    )
+    .await
+    {
+        Ok(rules) => rules,
+        Err(e) => {
+            error!("failed to load provisioning recipe: {e}");
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                serde_json::json!({ "error": "provisioning store unavailable" }),
+            ));
+        }
+    };
+    let provisioning_plan =
+        match provisioning::resolve_at_git_ref(&run_repo_root, &frozen_provisioning, source_ref) {
+            Ok(plan) if plan.conflicts.is_empty() => plan,
+            Ok(plan) => {
+                let conflict = &plan.conflicts[0];
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    serde_json::json!({
+                        "error": format!(
+                            "mode conflict in {:?}: `{}` is declared in multiple modes",
+                            conflict.scope, conflict.relative_path
+                        )
+                    }),
+                ));
+            }
+            Err(e) => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    serde_json::json!({ "error": format!("invalid provisioning recipe: {e:#}") }),
+                ))
+            }
+        };
+
     let run_id = event_log::generate_run_id();
 
     // Freeze the fork point NOW, from the same local `source_ref` `create_worktree`
@@ -7643,6 +7906,12 @@ async fn create_run_inner(
         let image_names: Vec<&str> = images.iter().map(|i| i.filename.as_str()).collect();
         run_payload["image_filenames"] = serde_json::json!(image_names);
     }
+    if frozen_provisioning
+        .iter()
+        .any(|scoped| !scoped.rules.is_empty())
+    {
+        run_payload["provisioning_rules"] = serde_json::json!(frozen_provisioning);
+    }
 
     let run_started = event_log::Event {
         id: None,
@@ -7653,14 +7922,6 @@ async fn create_run_inner(
         iter: None,
         payload: Some(run_payload),
     };
-
-    if let Err(e) = append_event(state, &run_started).await {
-        error!("failed to append run_started: {e}");
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            serde_json::json!({ "error": "event log error" }),
-        ));
-    }
 
     // Artifacts live under <target_repo>/.pdo/runs/<run-id>/.
     let worktree_dir = worktree_dir_for_run(&run_repo_root, &run_id);
@@ -7674,15 +7935,38 @@ async fn create_run_inner(
         ));
     }
 
+    if let Err(e) =
+        provisioning::provision_missing(&run_repo_root, &worktree_dir, &provisioning_plan)
+    {
+        crate::worktree_ops::reap_orphan_sub_worktree(&run_repo_root, &worktree_dir, &branch_name);
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            serde_json::json!({
+                "error": format!(
+                    "Run not created. Provisioning failed: {e:#}. No node was spawned."
+                )
+            }),
+        ));
+    }
+
     // Materialise each secondary as a detached, pinned snapshot beside
     // `worktree/`/`nodes/`. At Run start, NOT per-node spawn, so the reap surface
     // stays minimal; under `run_repo_root`, so the sandbox sees them at an identical
-    // path with no new mount. A failure fails the Run loud: the pin is already in
-    // `RunStarted`, and a missing snapshot would silently starve every node reading it.
+    // path with no new mount. A failure fails the Run loud before `RunStarted`;
+    // otherwise a missing snapshot would silently starve every node reading it.
+    let mut created_secondary_snapshots: Vec<(String, PathBuf)> = Vec::new();
     for pin in &secondary_pins {
         let dest = secondary_snapshot_path(&run_repo_root, &run_id, &pin.alias);
         if let Err(e) = create_secondary_snapshot(Path::new(&pin.repo), &dest, &pin.sha) {
             error!("failed to create secondary snapshot for {}: {e}", pin.repo);
+            for (repo, snapshot) in &created_secondary_snapshots {
+                remove_secondary_snapshot(Path::new(repo), snapshot);
+            }
+            crate::worktree_ops::reap_orphan_sub_worktree(
+                &run_repo_root,
+                &worktree_dir,
+                &branch_name,
+            );
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 serde_json::json!({
@@ -7690,6 +7974,19 @@ async fn create_run_inner(
                 }),
             ));
         }
+        created_secondary_snapshots.push((pin.repo.clone(), dest));
+    }
+
+    if let Err(e) = append_event(state, &run_started).await {
+        error!("failed to append run_started: {e}");
+        for (repo, snapshot) in &created_secondary_snapshots {
+            remove_secondary_snapshot(Path::new(repo), snapshot);
+        }
+        crate::worktree_ops::reap_orphan_sub_worktree(&run_repo_root, &worktree_dir, &branch_name);
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            serde_json::json!({ "error": "event log error" }),
+        ));
     }
 
     if let Err(e) = copy_pipeline_to_run(&run_repo_root, &pipeline_path, &run_id) {
@@ -33138,6 +33435,7 @@ edges:
             "agent_choice": null,
             "auto_name": null,
             "auto_fail": null,
+            "provisioning": {},
         });
         // The payload's keys are exactly the allow-list (pins the lock-step).
         let keys: std::collections::BTreeSet<String> =

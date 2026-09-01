@@ -391,6 +391,16 @@ export default function App() {
           libraryEntries={libraryEntries}
           onLibraryChanged={refreshLibrary}
           readOnly={isActiveRunArchived}
+          provisioningRepository={isEditingRun ? selectedRun?.target_repo ?? "" : ""}
+          provisioningFrozenAt={
+            isEditingRun && selection.id
+              ? selectedRun?.nodes[selection.id]?.started_at ?? undefined
+              : undefined
+          }
+          inheritedProvisioning={isEditingRun ? selectedRun?.provisioning_rules : undefined}
+          provisioningGitRef={
+            isEditingRun && selectedRun ? `pdo/run-${selectedRun.run_id}` : "HEAD"
+          }
         />
       );
     }
@@ -703,6 +713,16 @@ export default function App() {
                     libraryEntries={libraryEntries}
                     onLibraryChanged={refreshLibrary}
                     readOnly={isActiveRunArchived}
+                    provisioningRepository={isEditingRun ? selectedRun?.target_repo ?? "" : ""}
+                    provisioningFrozenAt={
+                      isEditingRun && selection.id
+                        ? selectedRun?.nodes[selection.id]?.started_at ?? undefined
+                        : undefined
+                    }
+                    inheritedProvisioning={isEditingRun ? selectedRun?.provisioning_rules : undefined}
+                    provisioningGitRef={
+                      isEditingRun && selectedRun ? `pdo/run-${selectedRun.run_id}` : "HEAD"
+                    }
                   />
                 ) : selection.kind === "edge" ? (
                   <EdgeDetailPanel trigger={edgeTrigger} />

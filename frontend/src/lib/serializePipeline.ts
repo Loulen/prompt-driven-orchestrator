@@ -105,6 +105,14 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
     }
     const harnesses = foldNodeIntoHarnesses(n);
     if (harnesses) node.harnesses = harnesses;
+    if (
+      n.provisioning &&
+      (n.provisioning.copy.length > 0 ||
+        n.provisioning.hardlink.length > 0 ||
+        n.provisioning.symlink.length > 0)
+    ) {
+      node.provisioning = n.provisioning;
+    }
     // Legacy `type: loop` nodes (pre-region model, ADR-0011) carry a node-level
     // `max_iter` that the daemon still requires and validates
     // (`pipeline.rs` `NodeType::Loop`). The current model emits `max_iter` on the
@@ -289,6 +297,14 @@ export function exportNodeAsYaml(node: NodeDef, prompt: string): string {
   }
   const harnesses = foldNodeIntoHarnesses(node);
   if (harnesses) obj.harnesses = harnesses;
+  if (
+    node.provisioning &&
+    (node.provisioning.copy.length > 0 ||
+      node.provisioning.hardlink.length > 0 ||
+      node.provisioning.symlink.length > 0)
+  ) {
+    obj.provisioning = node.provisioning;
+  }
   // Legacy bounded-loop nodes carry a node-level `max_iter` the daemon still
   // requires; regular nodes never set it, so its presence is the signal.
   if (node.max_iter !== undefined && node.max_iter !== null) obj.max_iter = node.max_iter;

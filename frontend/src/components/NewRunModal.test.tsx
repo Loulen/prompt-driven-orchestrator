@@ -60,6 +60,11 @@ vi.mock("../api", () => ({
     error: null,
   }),
   createRun: vi.fn().mockResolvedValue({ run_id: "test-run" }),
+  previewProvisioning: vi.fn().mockResolvedValue({
+    entries: [],
+    rules: [],
+    conflicts: [],
+  }),
   createTrigger: vi.fn().mockResolvedValue({ id: "trg-test" }),
   updateTrigger: vi.fn().mockResolvedValue({ id: "trg-test" }),
   validateRepo: vi.fn().mockResolvedValue({ valid: true }),

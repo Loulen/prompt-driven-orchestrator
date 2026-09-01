@@ -11,6 +11,7 @@ import { useHarnessCatalog } from "../hooks/useHarnessCatalog";
 import { useAgentProfiles } from "../hooks/useAgentProfiles";
 import AgentControl from "./AgentControl";
 import HarnessSelect from "./HarnessSelect";
+import PersistedProvisioningEditor from "./PersistedProvisioningEditor";
 
 /**
  * The group-header pencil (#552, ADR-0046): name a Projet (or rename an existing
@@ -58,6 +59,7 @@ export default function ProjectEditModal({
   );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [provisioningOpen, setProvisioningOpen] = useState(false);
   // #586: the harness options, dynamic from `/settings` (floor ∪ descriptors,
   // each installed/not). The modal holds no settings of its own, so it fetches.
   const harnessCatalog = useHarnessCatalog();
@@ -200,6 +202,26 @@ export default function ProjectEditModal({
             data-testid="project-harness-select"
           />
         </div>
+
+        {initialProject && (
+          <div className="mb-3">
+            {provisioningOpen ? (
+              <PersistedProvisioningEditor
+                scope="project"
+                projectId={initialProject.id}
+                initialRepository={initialProject.members[0] ?? ""}
+              />
+            ) : (
+              <button
+                type="button"
+                onClick={() => setProvisioningOpen(true)}
+                className="rounded border border-line-strong bg-bg-3 px-2.5 py-1.5 text-fg-2 hover:border-acc"
+              >
+                Configure worktree provisioning…
+              </button>
+            )}
+          </div>
+        )}
         </div>
 
         <label className="mb-1 block text-fg-3" style={{ fontSize: "11px" }}>

@@ -1,4 +1,4 @@
-import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, StatsPerformance, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, Project, BranchRef, AgentChoice, AgentProfile, AgentProfileReferents } from "./types";
+import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, StatsPerformance, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, Project, BranchRef, AgentChoice, AgentProfile, AgentProfileReferents, ProvisioningPlan, ProvisioningRules } from "./types";
 import { foldHarnessOntoNode } from "./lib/harness";
 
 const BASE = "";
@@ -678,6 +678,7 @@ export interface CreateRunRequest {
    *  the server resolves back-compat by the presence of `name`, then the instance default. */
   auto_name?: boolean;
   images?: File[];
+  provisioning?: ProvisioningRules;
 }
 
 export interface CreateRunResponse {
@@ -705,15 +706,53 @@ export function createRun(req: CreateRunRequest): Promise<CreateRunResponse> {
     if (req.harness) form.append("harness", req.harness);
     if (req.agent_choice) form.append("agent_choice", JSON.stringify(req.agent_choice));
     if (req.auto_name !== undefined) form.append("auto_name", String(req.auto_name));
+    if (req.provisioning) form.append("provisioning", JSON.stringify(req.provisioning));
     for (const file of req.images!) {
       form.append("images", file, file.name);
     }
+
     // FormData → no manual Content-Type, so the browser sets the boundary.
     return request<CreateRunResponse>("POST", "/runs", { body: form, label: "POST /runs" });
   }
+
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { images: _omitted, ...jsonBody } = req;
   return request<CreateRunResponse>("POST", "/runs", { body: jsonBody, label: "POST /runs" });
+}
+
+export function previewProvisioning(
+  repository: string,
+  scope: import("./types").ProvisioningScope,
+  rules: ProvisioningRules,
+  inherited?: import("./types").ScopedProvisioningRules[],
+  gitRef = "HEAD",
+): Promise<ProvisioningPlan> {
+  return request("POST", "/repos/provisioning/preview", {
+    body: { repository, git_ref: gitRef, scope, rules, inherited },
+  });
+}
+
+export function fetchInstanceProvisioning(): Promise<ProvisioningRules> {
+  return request("GET", "/settings/provisioning");
+}
+
+export function saveInstanceProvisioning(
+  rules: ProvisioningRules,
+): Promise<ProvisioningRules> {
+  return request("PUT", "/settings/provisioning", { body: rules });
+}
+
+export function fetchProjectProvisioning(projectId: string): Promise<ProvisioningRules> {
+  return request("GET", `/projects/${encodeURIComponent(projectId)}/provisioning`);
+}
+
+export function saveProjectProvisioning(
+  projectId: string,
+  rules: ProvisioningRules,
+): Promise<ProvisioningRules> {
+  return request("PUT", `/projects/${encodeURIComponent(projectId)}/provisioning`, {
+    body: rules,
+  });
 }
 
 /** The body of a mid-run repo-list edit (#465 slice 2). `add` entries mirror the

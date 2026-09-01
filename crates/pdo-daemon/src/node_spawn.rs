@@ -577,6 +577,53 @@ pub(crate) async fn spawn_node(
                 spawn_base_sha = ensured.base_sha;
                 reused_sub_worktree = !ensured.created;
                 interrupted_git_ops = ensured.entry_state.interrupted_git_ops().to_vec();
+                if ensured.created {
+                    let provisioned = crate::provisioning::node_rules_from_pipeline(
+                        spawn_ctx.pipeline_path,
+                        &node.id,
+                    )
+                    .and_then(|node_provisioning| {
+                        let mut scoped = projected
+                            .map(|state| state.provisioning_rules.clone())
+                            .unwrap_or_default();
+                        if !node_provisioning.is_empty() {
+                            scoped.push(crate::provisioning::ScopedRules {
+                                scope: crate::provisioning::ProvisioningScope::IsolatedNode,
+                                rules: node_provisioning,
+                            });
+                        }
+                        crate::provisioning::resolve_at_git_ref(
+                            spawn_ctx.repo_root,
+                            &scoped,
+                            &pipeline_branch,
+                        )
+                    })
+                    .and_then(|plan| {
+                        crate::provisioning::provision_missing(
+                            spawn_ctx.repo_root,
+                            &sub_wt_dir,
+                            &plan,
+                        )
+                    });
+                    if let Err(e) = provisioned {
+                        let reason = format!(
+                            "provisioning failed for {} in copy/link phase: {e:#}; no node was spawned",
+                            node.id
+                        );
+                        let orphan = (sub_wt_dir.clone(), sub_branch.clone());
+                        interrupt_spawn_before_start(
+                            deps,
+                            spawn_ctx.repo_root,
+                            run_id,
+                            &node.id,
+                            iter,
+                            Some(&orphan),
+                            &reason,
+                        )
+                        .await;
+                        return SpawnOutcome::Failed { reason };
+                    }
+                }
                 // #489-B: `Some(...)` ONLY when this spawn created the worktree.
                 // On a reuse, any later abort in the panic-isolated span would send
                 // `interrupt_spawn_before_start` into `reap_orphan_sub_worktree`, and

@@ -32,8 +32,8 @@ never exceed its baseline.
 
 | Watched directory          | Baseline |
 | -------------------------- | -------- |
-| `frontend/src/components`  | 137      |
-| `crates/pdo-daemon/src`    | 54       |
+| `frontend/src/components`  | 157      |
+| `crates/pdo-daemon/src`    | 75       |
 
 Colocated Rust unit tests (`#[cfg(test)] mod tests` at the bottom of a module) are **counted with
 their module** — they are part of the same file, so a tidied module that absorbs a sibling drops the

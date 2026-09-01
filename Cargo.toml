@@ -43,6 +43,7 @@ pretty_assertions = "1"
 insta = { version = "1", features = ["yaml"] }
 tempfile = "3"
 sha2 = "0.10"
+ignore = "0.4"
 
 # --- Release packaging (dist / ex-cargo-dist) -------------------------------
 # `dist` génère .github/workflows/release.yml à partir de cette config (voir

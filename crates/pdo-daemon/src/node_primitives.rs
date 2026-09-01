@@ -227,7 +227,48 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
             &pipeline_branch,
             None,
         ) {
-            Ok(ensured) => spawn_base_sha = ensured.base_sha,
+            Ok(ensured) => {
+                spawn_base_sha = ensured.base_sha;
+                if ensured.created {
+                    if let Err(e) = crate::provisioning::node_rules_from_pipeline(
+                        params.pipeline_path,
+                        &node.id,
+                    )
+                    .and_then(|node_provisioning| {
+                        let mut scoped = params.run_state.provisioning_rules.clone();
+                        if !node_provisioning.is_empty() {
+                            scoped.push(crate::provisioning::ScopedRules {
+                                scope: crate::provisioning::ProvisioningScope::IsolatedNode,
+                                rules: node_provisioning,
+                            });
+                        }
+                        crate::provisioning::resolve_at_git_ref(
+                            params.repo_root,
+                            &scoped,
+                            &pipeline_branch,
+                        )
+                    })
+                    .and_then(|plan| {
+                        crate::provisioning::provision_missing(params.repo_root, &sub_wt_dir, &plan)
+                    }) {
+                        crate::worktree_ops::reap_orphan_sub_worktree(
+                            params.repo_root,
+                            &sub_wt_dir,
+                            &sub_branch,
+                        );
+                        return StartNodeResult {
+                            outcome: PrimitiveOutcome::Rejected {
+                                reason: format!(
+                                    "provisioning failed for {}: {e:#}; no node was spawned",
+                                    node.id
+                                ),
+                            },
+                            events: vec![],
+                            spawn: None,
+                        };
+                    }
+                }
+            }
             Err(e) => {
                 return StartNodeResult {
                     outcome: PrimitiveOutcome::Rejected {

@@ -1,0 +1,42 @@
+- generic [ref=f6e3]:
+  - banner [ref=f6e4]:
+    - generic [ref=f6e5]: PDO
+    - generic [ref=f6e10]:
+      - button "Open stats" [ref=f6e11]
+      - button "Settings" [ref=f6e14]
+  - main [ref=f6e18]:
+    - generic [ref=f6e19]:
+      - complementary [ref=f6e22]:
+        - tablist [ref=f6e23]:
+          - tab "Runs" [selected] [ref=f6e24] [cursor=pointer]
+          - tab "Triggers" [ref=f6e25] [cursor=pointer]
+          - tab "Pipelines" [ref=f6e26] [cursor=pointer]
+        - tabpanel [ref=f6e27]:
+          - generic [ref=f6e28]:
+            - text: Runs
+            - button "Configure project" [ref=f6e29] [cursor=pointer]: Project
+            - button "New Run" [ref=f6e30] [cursor=pointer]
+          - generic [ref=f6e32]:
+            - button "Project" [ref=f6e33] [cursor=pointer]
+            - button "Pipeline" [ref=f6e37] [cursor=pointer]
+            - button "Trigger" [ref=f6e41] [cursor=pointer]
+          - generic [ref=f6e46]:
+            - generic "/tmp/pdo-fp-b4kko9SV/demo-repo" [ref=f6e47]:
+              - checkbox "Select all in demo-repo" [ref=f6e48] [cursor=pointer]
+              - generic [ref=f6e50]: demo-repo
+            - button "Select 20260902-070251-474f109 20260902-070251-474f fp-prov" [ref=f6e51] [cursor=pointer]:
+              - checkbox "Select 20260902-070251-474f109" [ref=f6e52]
+              - generic [ref=f6e54]:
+                - generic [ref=f6e55]: 20260902-070251-474f
+                - generic [ref=f6e56]: fp-prov
+            - button "Select 20260902-065745-8fd26f8 20260902-065745-8fd2 fp-prov" [ref=f6e58] [cursor=pointer]:
+              - checkbox "Select 20260902-065745-8fd26f8" [ref=f6e59]
+              - generic [ref=f6e61]:
+                - generic [ref=f6e62]: 20260902-065745-8fd2
+                - generic [ref=f6e63]: fp-prov
+      - separator [ref=f6e65]
+      - generic [ref=f6e66]: Select a run or open a pipeline to get started
+      - separator [ref=f6e69]
+  - contentinfo [ref=f6e72]:
+    - generic [ref=f6e73]: "Daemon: connected"
+    - generic "Live NodeRun sessions (manager sessions excluded)" [ref=f6e75]: 0 / 0 sessions

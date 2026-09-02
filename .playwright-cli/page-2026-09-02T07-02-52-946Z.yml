@@ -1,0 +1,184 @@
+- generic [ref=f4e3]:
+  - banner [ref=f4e4]:
+    - generic [ref=f4e5]: PDO
+    - generic [ref=f4e10]:
+      - button "Open stats" [ref=f4e11]
+      - button "Settings" [ref=f4e14]
+  - main [ref=f4e18]:
+    - generic [ref=f4e19]:
+      - complementary [ref=f4e22]:
+        - tablist [ref=f4e23]:
+          - tab "Runs" [selected] [ref=f4e24] [cursor=pointer]
+          - tab "Triggers" [ref=f4e25] [cursor=pointer]
+          - tab "Pipelines" [ref=f4e26] [cursor=pointer]
+        - tabpanel [ref=f4e27]:
+          - generic [ref=f4e28]:
+            - text: Runs
+            - button "Configure project" [ref=f4e29] [cursor=pointer]: Project
+            - button "New Run" [ref=f4e30] [cursor=pointer]
+          - generic [ref=f4e45]:
+            - button "Project" [ref=f4e46] [cursor=pointer]
+            - button "Pipeline" [ref=f4e50] [cursor=pointer]
+            - button "Trigger" [ref=f4e54] [cursor=pointer]
+          - generic [ref=f4e58]:
+            - generic "/tmp/pdo-fp-b4kko9SV/demo-repo" [ref=f4e59]:
+              - checkbox "Select all in demo-repo" [ref=f4e60] [cursor=pointer]
+              - generic [ref=f4e62]: demo-repo
+            - button "Select 20260902-070251-474f109 20260902-070251-474f fp-prov" [ref=f4e225] [cursor=pointer]:
+              - checkbox "Select 20260902-070251-474f109" [ref=f4e226]
+              - generic [ref=f4e228]:
+                - generic [ref=f4e229]: 20260902-070251-474f
+                - generic [ref=f4e230]: fp-prov
+            - button "Select 20260902-065745-8fd26f8 20260902-065745-8fd2 fp-prov" [ref=f4e63] [cursor=pointer]:
+              - checkbox "Select 20260902-065745-8fd26f8" [ref=f4e64]
+              - generic [ref=f4e66]:
+                - generic [ref=f4e67]: 20260902-065745-8fd2
+                - generic [ref=f4e68]: fp-prov
+      - separator [ref=f4e34]
+      - generic [ref=f4e37]:
+        - generic [ref=f4e232]:
+          - button "__run__20260902-070251-474f109.yaml" [ref=f4e234] [cursor=pointer]
+          - button "Save" [disabled] [ref=f4e237] [cursor=pointer]
+        - generic [ref=f4e242]:
+          - generic [ref=f4e243]:
+            - button "Add" [ref=f4e244] [cursor=pointer]
+            - button "Library · L" [ref=f4e248]
+            - button "Merge node" [ref=f4e251] [cursor=pointer]
+            - button "Script node (deterministic bash)" [ref=f4e256] [cursor=pointer]
+            - button "Undo · Ctrl+Z" [disabled] [ref=f4e261]
+            - button "Redo · Ctrl+Y" [disabled] [ref=f4e265]
+            - button "Run repositories" [ref=f4e270] [cursor=pointer]
+            - button "Pipeline info" [ref=f4e276] [cursor=pointer]
+          - application [ref=f4e279]:
+            - generic [ref=f4e281]:
+              - generic:
+                - generic:
+                  - img:
+                    - group "Edge from start to iso" [ref=f4e282] [cursor=pointer]
+                  - img:
+                    - group "Edge from iso to end" [ref=f4e286] [cursor=pointer]
+                - generic:
+                  - group [ref=f4e290]:
+                    - generic [ref=f4e291]: Start
+                  - group [ref=f4e298]:
+                    - generic [ref=f4e300]:
+                      - generic [ref=f4e305]: iso
+                      - generic "Isolated worktree — this Node forks a sub-worktree of its own" [ref=f4e306]
+                  - group [ref=f4e312]:
+                    - generic [ref=f4e313]: End
+      - separator [ref=f4e38]
+      - generic [ref=f4e320]:
+        - generic [ref=f4e321]:
+          - button "Run" [ref=f4e322] [cursor=pointer]
+          - button "Edit" [ref=f4e323] [cursor=pointer]
+        - complementary [ref=f4e326]:
+          - generic [ref=f4e327]:
+            - generic [ref=f4e328]:
+              - generic [ref=f4e329]: iso
+              - generic [ref=f4e330]: Running
+            - generic [ref=f4e331]: iso
+            - generic [ref=f4e332]:
+              - generic [ref=f4e333]: iter 1
+              - generic [ref=f4e334]: · started 09:02:52 AM
+          - generic [ref=f4e336]:
+            - generic [ref=f4e337]:
+              - generic [ref=f4e338]: Provisioning
+              - generic [ref=f4e339]: 🔒 frozen at 09:02:52 AM · reused on restart
+            - generic [ref=f4e340]:
+              - generic [ref=f4e341]: Instance · 2
+              - generic [ref=f4e342]: Project · 3
+              - generic [ref=f4e343]: Run · 0
+              - generic [ref=f4e344]: Node · 1
+            - generic [ref=f4e345]:
+              - generic [ref=f4e346]:
+                - generic [ref=f4e347]: copy
+                - generic [ref=f4e349]:
+                  - generic [ref=f4e350]:
+                    - generic [ref=f4e351]: .env
+                    - generic [ref=f4e352]: Instance · 1
+                  - generic [ref=f4e353]:
+                    - generic [ref=f4e354]: node_modules
+                    - generic [ref=f4e355]: Instance · 1
+                  - generic [ref=f4e356]:
+                    - generic [ref=f4e357]: config/secrets.yaml
+                    - generic [ref=f4e358]: Project · 1
+                  - generic [ref=f4e359]:
+                    - generic [ref=f4e360]: "!.env"
+                    - generic [ref=f4e361]: Project · 1
+                - generic [ref=f4e362]:
+                  - textbox "Copy patterns" [ref=f4e363]:
+                    - /placeholder: "one pattern per line\n!path excludes"
+                    - text: .venv/marker
+                  - generic: "1"
+              - generic [ref=f4e364]:
+                - generic [ref=f4e365]: hardlink
+                - generic [ref=f4e368]:
+                  - generic [ref=f4e369]: models/*.gguf
+                  - generic [ref=f4e370]: Project · 0
+                - textbox "Hardlink patterns" [ref=f4e372]:
+                  - /placeholder: "one pattern per line\n!path excludes"
+              - generic [ref=f4e373]:
+                - generic [ref=f4e374]: symlink
+                - generic [ref=f4e376]: No inherited rules
+                - textbox "Symlink patterns" [ref=f4e379]:
+                  - /placeholder: "one pattern per line\n!path excludes"
+            - generic [ref=f4e380]:
+              - generic [ref=f4e381]: Resolved plan · live
+              - generic [ref=f4e382]: "No match: models/*.gguf · normal, the Run still starts"
+              - group [ref=f4e383]:
+                - generic ".env · Instance · copy · 1" [ref=f4e384] [cursor=pointer]
+              - group [ref=f4e385]:
+                - generic "node_modules · Instance · copy · 1" [ref=f4e386] [cursor=pointer]
+              - group [ref=f4e387]:
+                - generic "config/secrets.yaml · Project · copy · 1" [ref=f4e388] [cursor=pointer]
+              - group [ref=f4e389]:
+                - generic "!.env · Project · copy · 1" [ref=f4e390] [cursor=pointer]
+              - group [ref=f4e391]:
+                - generic "models/*.gguf · Project · hardlink · 0" [ref=f4e392] [cursor=pointer]
+              - group [ref=f4e393]:
+                - generic ".venv/marker · Node · copy · 1" [ref=f4e394] [cursor=pointer]
+              - generic [ref=f4e395]: 3 paths added · 0 Git paths skipped
+          - generic [ref=f4e396]:
+            - button "Stop" [ref=f4e397] [cursor=pointer]
+            - button "Restart" [ref=f4e400] [cursor=pointer]
+            - button "Retry" [ref=f4e404] [cursor=pointer]
+          - generic [ref=f4e408]:
+            - generic [ref=f4e412]:
+              - generic [ref=f4e413]:
+                - generic [ref=f4e415]: pdo-20260902-070251-474f109-iso-iter-1
+                - generic [ref=f4e416]: attached · live
+                - button "Expand terminal" [ref=f4e417] [cursor=pointer]
+                - button "Detach to OS terminal" [ref=f4e423] [cursor=pointer]
+              - generic [ref=f4e430]:
+                - generic:
+                  - textbox "Terminal input"
+            - separator [ref=f4e431]
+            - generic [ref=f4e434]:
+              - button "Mark complete" [ref=f4e436] [cursor=pointer]
+              - generic [ref=f4e440]:
+                - generic [ref=f4e441]:
+                  - text: Inputs
+                  - generic [ref=f4e442]: "1"
+                - button "in _input/output.md 26 B" [ref=f4e444] [cursor=pointer]:
+                  - generic [ref=f4e446]:
+                    - generic [ref=f4e447]: in
+                    - generic [ref=f4e449]: _input/output.md
+                  - generic [ref=f4e450]:
+                    - generic [ref=f4e451]: 26 B
+                    - generic [ref=f4e452]: ↗
+              - generic [ref=f4e453]:
+                - generic [ref=f4e454]:
+                  - text: Outputs
+                  - generic [ref=f4e455]: "1"
+                - button "out iso/iter-1/out/output.md 97 B" [ref=f4e457] [cursor=pointer]:
+                  - generic [ref=f4e459]:
+                    - generic [ref=f4e460]: out
+                    - generic [ref=f4e462]: iso/iter-1/out/output.md
+                  - generic [ref=f4e463]:
+                    - generic [ref=f4e464]: 97 B
+                    - generic [ref=f4e465]: ↗
+              - button "Initial Prompt" [ref=f4e467] [cursor=pointer]
+  - contentinfo [ref=f4e41]:
+    - generic [ref=f4e42]: "Daemon: connected"
+    - generic "Live NodeRun sessions (manager sessions excluded)" [ref=f4e44]: 1 / 20 sessions
+    - generic [ref=f4e70]: v1.49.0

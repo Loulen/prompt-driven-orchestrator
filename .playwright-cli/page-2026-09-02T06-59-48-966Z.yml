@@ -1,0 +1,184 @@
+- generic [ref=f2e3]:
+  - banner [ref=f2e4]:
+    - generic [ref=f2e5]: PDO
+    - generic [ref=f2e10]:
+      - button "Open stats" [ref=f2e11]
+      - button "Settings" [ref=f2e14]
+  - main [ref=f2e18]:
+    - generic [ref=f2e19]:
+      - complementary [ref=f2e22]:
+        - tablist [ref=f2e23]:
+          - tab "Runs" [selected] [ref=f2e24] [cursor=pointer]
+          - tab "Triggers" [ref=f2e25] [cursor=pointer]
+          - tab "Pipelines" [ref=f2e26] [cursor=pointer]
+        - tabpanel [ref=f2e27]:
+          - generic [ref=f2e28]:
+            - text: Runs
+            - button "Configure project" [ref=f2e44] [cursor=pointer]: Project
+            - button "New Run" [ref=f2e29] [cursor=pointer]
+          - generic [ref=f2e45]:
+            - button "Project" [ref=f2e46] [cursor=pointer]
+            - button "Pipeline" [ref=f2e50] [cursor=pointer]
+            - button "Trigger" [ref=f2e54] [cursor=pointer]
+          - button "Select 20260902-065745-8fd26f8 20260902-065745-8fd2 fp-prov" [ref=f2e58] [cursor=pointer]:
+            - checkbox "Select 20260902-065745-8fd26f8" [ref=f2e59]
+            - generic [ref=f2e61]:
+              - generic [ref=f2e62]: 20260902-065745-8fd2
+              - generic [ref=f2e63]: fp-prov
+      - separator [ref=f2e33]
+      - generic [ref=f2e36]:
+        - generic [ref=f2e79]:
+          - button "__run__20260902-065745-8fd26f8.yaml" [ref=f2e81] [cursor=pointer]
+          - button "Save" [disabled] [ref=f2e84] [cursor=pointer]
+        - generic [ref=f2e89]:
+          - generic [ref=f2e90]:
+            - button "Add" [ref=f2e91] [cursor=pointer]
+            - button "Library · L" [ref=f2e95]
+            - button "Merge node" [ref=f2e98] [cursor=pointer]
+            - button "Script node (deterministic bash)" [ref=f2e103] [cursor=pointer]
+            - button "Undo · Ctrl+Z" [disabled] [ref=f2e108]
+            - button "Redo · Ctrl+Y" [disabled] [ref=f2e112]
+            - button "Run repositories" [ref=f2e117] [cursor=pointer]
+            - button "Pipeline info" [ref=f2e123] [cursor=pointer]
+          - application [ref=f2e126]:
+            - generic [ref=f2e128]:
+              - generic:
+                - generic:
+                  - img:
+                    - group "Edge from start to iso" [ref=f2e129] [cursor=pointer]
+                  - img:
+                    - group "Edge from iso to end" [ref=f2e133] [cursor=pointer]
+                - generic:
+                  - group [ref=f2e137]:
+                    - generic [ref=f2e138]: Start
+                  - group [active] [ref=f2e145]:
+                    - generic [ref=f2e147]:
+                      - generic [ref=f2e152]: iso
+                      - generic "Isolated worktree — this Node forks a sub-worktree of its own" [ref=f2e153]
+                  - group [ref=f2e160]:
+                    - generic [ref=f2e161]: End
+      - separator [ref=f2e37]
+      - generic [ref=f2e189]:
+        - generic [ref=f2e190]:
+          - button "Run" [ref=f2e191] [cursor=pointer]
+          - button "Edit" [ref=f2e192] [cursor=pointer]
+        - complementary [ref=f2e195]:
+          - generic [ref=f2e196]:
+            - generic [ref=f2e197]:
+              - generic [ref=f2e198]: iso
+              - generic [ref=f2e199]: Failed
+            - generic [ref=f2e200]: iso
+            - generic [ref=f2e201]:
+              - generic [ref=f2e202]: iter 1
+              - generic [ref=f2e203]: · started 08:57:45 AM
+              - generic [ref=f2e204]: · ended 08:58:45 AM
+          - generic [ref=f2e206]:
+            - generic [ref=f2e207]:
+              - generic [ref=f2e208]: Provisioning
+              - generic [ref=f2e209]: 🔒 frozen at 08:57:45 AM · reused on restart
+            - generic [ref=f2e210]:
+              - generic [ref=f2e211]: Instance · 2
+              - generic [ref=f2e212]: Project · 0
+              - generic [ref=f2e213]: Run · 6
+              - generic [ref=f2e214]: Node · 1
+            - generic [ref=f2e215]:
+              - generic [ref=f2e216]:
+                - generic [ref=f2e217]: copy
+                - generic [ref=f2e219]:
+                  - generic [ref=f2e220]:
+                    - generic [ref=f2e221]: .env
+                    - generic [ref=f2e222]: Instance · 1
+                  - generic [ref=f2e223]:
+                    - generic [ref=f2e224]: node_modules
+                    - generic [ref=f2e225]: Instance · 1
+                  - generic [ref=f2e226]:
+                    - generic [ref=f2e227]: models/*.gguf
+                    - generic [ref=f2e228]: Run · 0
+                  - generic [ref=f2e229]:
+                    - generic [ref=f2e230]: config/secrets.yaml
+                    - generic [ref=f2e231]: Run · 1
+                - generic [ref=f2e232]:
+                  - textbox "Copy patterns" [ref=f2e233]:
+                    - /placeholder: "one pattern per line\n!path excludes"
+                    - text: .venv/marker
+                  - generic: "1"
+              - generic [ref=f2e234]:
+                - generic [ref=f2e235]: hardlink
+                - generic [ref=f2e237]:
+                  - generic [ref=f2e238]:
+                    - generic [ref=f2e239]: fixtures/**/*.parquet
+                    - generic [ref=f2e240]: Run · 2
+                  - generic [ref=f2e241]:
+                    - generic [ref=f2e242]: "!fixtures/**/huge.bin"
+                    - generic [ref=f2e243]: Run · 1
+                - textbox "Hardlink patterns" [ref=f2e245]:
+                  - /placeholder: "one pattern per line\n!path excludes"
+              - generic [ref=f2e246]:
+                - generic [ref=f2e247]: symlink
+                - generic [ref=f2e249]:
+                  - generic [ref=f2e250]:
+                    - generic [ref=f2e251]: node_modules
+                    - generic [ref=f2e252]: Run · 1
+                  - generic [ref=f2e253]:
+                    - generic [ref=f2e254]: .env.local
+                    - generic [ref=f2e255]: Run · 1
+                - textbox "Symlink patterns" [ref=f2e257]:
+                  - /placeholder: "one pattern per line\n!path excludes"
+            - generic [ref=f2e258]:
+              - generic [ref=f2e259]: Resolved plan · live
+              - generic [ref=f2e260]: "No match: models/*.gguf · normal, the Run still starts"
+              - group [ref=f2e261]:
+                - generic ".env · Instance · copy · 1" [ref=f2e262] [cursor=pointer]
+              - group [ref=f2e263]:
+                - generic "node_modules · Instance · copy · 1" [ref=f2e264] [cursor=pointer]
+              - group [ref=f2e265]:
+                - generic "models/*.gguf · Run · copy · 0" [ref=f2e266] [cursor=pointer]
+              - group [ref=f2e267]:
+                - generic "config/secrets.yaml · Run · copy · 1" [ref=f2e268] [cursor=pointer]
+              - group [ref=f2e269]:
+                - generic "fixtures/**/*.parquet · Run · hardlink · 2" [ref=f2e270] [cursor=pointer]
+              - group [ref=f2e271]:
+                - generic "!fixtures/**/huge.bin · Run · hardlink · 1" [ref=f2e272] [cursor=pointer]
+              - group [ref=f2e273]:
+                - generic "node_modules · Run · symlink · 1" [ref=f2e274] [cursor=pointer]
+              - group [ref=f2e275]:
+                - generic ".env.local · Run · symlink · 1" [ref=f2e276] [cursor=pointer]
+              - group [ref=f2e277]:
+                - generic ".venv/marker · Node · copy · 1" [ref=f2e278] [cursor=pointer]
+              - generic [ref=f2e279]: 7 paths added · 0 Git paths skipped
+          - generic [ref=f2e280]:
+            - button "Stop" [disabled] [ref=f2e281]
+            - button "Play" [ref=f2e284] [cursor=pointer]
+          - generic [ref=f2e287]: Failed — script timed out after 60s
+          - generic:
+            - button "Terminal" [ref=f2e291]
+            - generic:
+              - generic:
+                - button "Mark complete" [ref=f2e299] [cursor=pointer]
+                - generic [ref=f2e303]:
+                  - generic [ref=f2e304]:
+                    - text: Inputs
+                    - generic [ref=f2e305]: "1"
+                  - button "in _input/output.md 21 B" [ref=f2e307] [cursor=pointer]:
+                    - generic [ref=f2e309]:
+                      - generic [ref=f2e310]: in
+                      - generic [ref=f2e312]: _input/output.md
+                    - generic [ref=f2e313]:
+                      - generic [ref=f2e314]: 21 B
+                      - generic [ref=f2e315]: ↗
+                - generic [ref=f2e316]:
+                  - generic [ref=f2e317]:
+                    - text: Outputs
+                    - generic [ref=f2e318]: "1"
+                  - button "out iso/iter-1/out/output.md 97 B" [ref=f2e320] [cursor=pointer]:
+                    - generic [ref=f2e322]:
+                      - generic [ref=f2e323]: out
+                      - generic [ref=f2e325]: iso/iter-1/out/output.md
+                    - generic [ref=f2e326]:
+                      - generic [ref=f2e327]: 97 B
+                      - generic [ref=f2e328]: ↗
+                - button "Initial Prompt" [ref=f2e330] [cursor=pointer]
+  - contentinfo [ref=f2e40]:
+    - generic [ref=f2e41]: "Daemon: connected"
+    - generic "Live NodeRun sessions (manager sessions excluded)" [ref=f2e43]: 0 / 20 sessions
+    - generic [ref=f2e65]: v1.49.0

@@ -4094,6 +4094,14 @@ fn default_provisioning_git_ref() -> String {
     "HEAD".to_string()
 }
 
+fn provisioning_rules_through_scope(
+    mut rules: Vec<provisioning::ScopedRules>,
+    scope: provisioning::ProvisioningScope,
+) -> Vec<provisioning::ScopedRules> {
+    rules.retain(|candidate| candidate.scope <= scope);
+    rules
+}
+
 async fn scoped_provisioning_rules(
     db: &sqlx::SqlitePool,
     repository: &str,
@@ -4137,7 +4145,7 @@ async fn preview_provisioning(
         )
             .into_response();
     }
-    let mut scoped = match req.inherited {
+    let scoped = match req.inherited {
         Some(rules) => rules,
         None => match scoped_provisioning_rules(
             &state.db,
@@ -4158,6 +4166,7 @@ async fn preview_provisioning(
             }
         },
     };
+    let mut scoped = provisioning_rules_through_scope(scoped, req.scope);
     if let Some(current) = scoped.iter_mut().find(|rules| rules.scope == req.scope) {
         current.rules = req.rules;
     } else {
@@ -10453,6 +10462,13 @@ fn inject_frozen_node_provisioning(response: &mut serde_json::Value, events: &[e
         };
         if node.get("iter").and_then(serde_json::Value::as_i64) == Some(iter) {
             node["provisioning"] = rules.clone();
+            if let Some(plan) = event
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.get("provisioning_plan"))
+            {
+                node["provisioning_plan"] = plan.clone();
+            }
             if node.get("provisioning_frozen_at").is_none() {
                 node["provisioning_frozen_at"] = serde_json::Value::String(event.ts.clone());
             }
@@ -25304,7 +25320,18 @@ edges:
                 node_id: Some("worker".into()),
                 iter: Some(2),
                 payload: Some(serde_json::json!({
-                    "provisioning": { "copy": ["frozen"], "hardlink": [], "symlink": [] }
+                    "provisioning": { "copy": ["frozen"], "hardlink": [], "symlink": [] },
+                    "provisioning_plan": {
+                        "entries": [{
+                            "relative_path": "frozen",
+                            "mode": "copy",
+                            "origin_scope": "isolated_node",
+                            "pattern": "frozen",
+                            "provided_by_git": false
+                        }],
+                        "rules": [],
+                        "conflicts": []
+                    }
                 })),
             },
             event_log::Event {
@@ -25330,6 +25357,33 @@ edges:
             response["nodes"]["worker"]["provisioning_frozen_at"],
             serde_json::json!("2026-09-01T12:01:00Z")
         );
+        assert_eq!(
+            response["nodes"]["worker"]["provisioning_plan"]["entries"][0]["relative_path"],
+            serde_json::json!("frozen")
+        );
+    }
+
+    #[test]
+    fn provisioning_preview_drops_rules_narrower_than_the_requested_scope() {
+        let scoped = vec![
+            provisioning::ScopedRules {
+                scope: provisioning::ProvisioningScope::Instance,
+                rules: provisioning::ProvisioningRules::default(),
+            },
+            provisioning::ScopedRules {
+                scope: provisioning::ProvisioningScope::Project,
+                rules: provisioning::ProvisioningRules {
+                    copy: vec!["project.env".into()],
+                    ..Default::default()
+                },
+            },
+        ];
+
+        let visible =
+            provisioning_rules_through_scope(scoped, provisioning::ProvisioningScope::Instance);
+
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].scope, provisioning::ProvisioningScope::Instance);
     }
 
     #[tokio::test]

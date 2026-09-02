@@ -28,6 +28,10 @@ const SCOPES: ProvisioningScope[] = [
   "isolated_node",
 ];
 
+function scopePrecedes(left: ProvisioningScope, right: ProvisioningScope): boolean {
+  return SCOPES.indexOf(left) < SCOPES.indexOf(right);
+}
+
 function lines(value: string): string[] {
   return value
     .split("\n")
@@ -43,6 +47,7 @@ export default function ProvisioningRulesEditor({
   onValidityChange,
   readOnly = false,
   frozenAt,
+  frozenPlan,
   inherited,
   gitRef = "HEAD",
 }: {
@@ -53,6 +58,7 @@ export default function ProvisioningRulesEditor({
   onValidityChange?: (valid: boolean) => void;
   readOnly?: boolean;
   frozenAt?: string;
+  frozenPlan?: ProvisioningPlan;
   inherited?: ScopedProvisioningRules[];
   gitRef?: string;
 }) {
@@ -60,17 +66,25 @@ export default function ProvisioningRulesEditor({
   const [error, setError] = useState<string | null>(null);
   const textareas = useRef<Partial<Record<ProvisioningMode, HTMLTextAreaElement>>>({});
   const serialized = useMemo(() => JSON.stringify(rules), [rules]);
-  const visiblePlan = repository.trim() ? plan : null;
-  const visibleError = repository.trim() ? error : null;
+  const visiblePlan = frozenPlan ?? (repository.trim() ? plan : null);
+  const visibleError = frozenPlan ? null : repository.trim() ? error : null;
+  const previewInherited = useMemo(
+    () => (level === "instance" ? [] : inherited),
+    [level, inherited],
+  );
 
   useEffect(() => {
+    if (frozenPlan) {
+      onValidityChange?.(frozenPlan.conflicts.length === 0);
+      return;
+    }
     if (!repository.trim()) {
       onValidityChange?.(true);
       return;
     }
     let cancelled = false;
     const timer = window.setTimeout(() => {
-      previewProvisioning(repository, level, rules, inherited, gitRef)
+      previewProvisioning(repository, level, rules, previewInherited, gitRef)
         .then((next) => {
           if (cancelled) return;
           setPlan(next);
@@ -88,7 +102,16 @@ export default function ProvisioningRulesEditor({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [repository, serialized, level, onValidityChange, rules, inherited, gitRef]);
+  }, [
+    repository,
+    serialized,
+    level,
+    onValidityChange,
+    rules,
+    previewInherited,
+    gitRef,
+    frozenPlan,
+  ]);
 
   const counts = useMemo(() => {
     const result: Record<ProvisioningMode, Map<string, number>> = {
@@ -154,6 +177,46 @@ export default function ProvisioningRulesEditor({
     onChange({ ...rules, [mode]: lines(text) });
   }
 
+  function jumpToConflict(mode: ProvisioningMode, relativePath: string) {
+    const textarea = textareas.current[mode];
+    const rule = visiblePlan?.rules.find(
+      (candidate) =>
+        candidate.scope === level &&
+        candidate.mode === mode &&
+        candidate.paths.includes(relativePath),
+    );
+    if (!textarea || !rule) return;
+    const lineIndex = rules[mode].indexOf(rule.pattern);
+    if (lineIndex < 0) return;
+    const start = rules[mode]
+      .slice(0, lineIndex)
+      .reduce((length, line) => length + line.length + 1, 0);
+    textarea.focus();
+    const end = start + rule.pattern.length + (lineIndex < rules[mode].length - 1 ? 1 : 0);
+    textarea.setSelectionRange(start, end);
+  }
+
+  function overriddenOrigins(
+    rule: NonNullable<ProvisioningPlan["rules"]>[number],
+  ): string[] {
+    return (visiblePlan?.rules ?? [])
+      .filter(
+        (candidate) =>
+          scopePrecedes(candidate.scope, rule.scope) &&
+          candidate.mode !== rule.mode &&
+          candidate.paths.some((candidatePath) =>
+            rule.paths.some(
+              (path) =>
+                path === candidatePath ||
+                path.startsWith(`${candidatePath}/`) ||
+                candidatePath.startsWith(`${path}/`),
+            ),
+          ),
+      )
+      .map((candidate) => `${LEVEL_LABELS[candidate.scope]} ${candidate.mode}`)
+      .filter((value, index, all) => all.indexOf(value) === index);
+  }
+
   return (
     <section
       className="@container rounded-md border border-line bg-bg-3"
@@ -186,16 +249,18 @@ export default function ProvisioningRulesEditor({
         >
           Mode conflict in {LEVEL_LABELS[conflict.scope]} — {conflict.relative_path} is
           declared as {conflict.modes.join(" and ")}. Keep one.{" "}
-          {conflict.scope === level && (
-            <button
-              type="button"
-              aria-label={`Jump to ${conflict.relative_path} conflict`}
-              onClick={() => textareas.current[conflict.modes[0]]?.focus()}
-              className="underline underline-offset-2"
-            >
-              Jump to line
-            </button>
-          )}
+          {conflict.scope === level &&
+            conflict.modes.map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                aria-label={`Jump to ${mode} rule for ${conflict.relative_path}`}
+                onClick={() => jumpToConflict(mode, conflict.relative_path)}
+                className="ml-1 underline underline-offset-2"
+              >
+                Jump to {mode}
+              </button>
+            ))}
         </div>
       ))}
       {visibleError && <div role="alert" className="m-2 text-st-failed">{visibleError}</div>}
@@ -215,7 +280,7 @@ export default function ProvisioningRulesEditor({
                 .filter(
                   (rule) =>
                     rule.mode === key &&
-                    SCOPES.indexOf(rule.scope) < SCOPES.indexOf(level),
+                    scopePrecedes(rule.scope, level),
                 )
                 .map((rule) => {
                   const redeclared = MODES.some(({ key: mode }) =>
@@ -240,7 +305,7 @@ export default function ProvisioningRulesEditor({
               {!visiblePlan?.rules.some(
                 (rule) =>
                   rule.mode === key &&
-                  SCOPES.indexOf(rule.scope) < SCOPES.indexOf(level),
+                  scopePrecedes(rule.scope, level),
               ) && (
                 <div className="text-fg-4" style={{ fontSize: 9 }}>No inherited rules</div>
               )}
@@ -278,38 +343,42 @@ export default function ProvisioningRulesEditor({
 
       <div className="border-t border-line px-3 py-2">
         <div className="mb-1 font-medium uppercase tracking-wide text-fg-4" style={{ fontSize: 9 }}>
-          Resolved plan · live
+          Resolved plan · {frozenAt ? "frozen" : "live"}
         </div>
         {(visiblePlan?.rules ?? []).filter((rule) => rule.unmatched).map((rule) => (
           <div key={`${rule.scope}-${rule.mode}-${rule.pattern}`} className="mb-1 rounded bg-amber-950/30 px-2 py-1 text-amber-400">
             No match: {rule.pattern} · normal, the Run still starts
           </div>
         ))}
-        {(visiblePlan?.rules ?? []).map((rule) => (
-          <details
-            key={`${rule.scope}-${rule.mode}-${rule.pattern}`}
-            className="border-t border-line-soft py-1 font-mono"
-          >
-            <summary className="cursor-pointer">
-              {rule.pattern} · {LEVEL_LABELS[rule.scope]} · {rule.mode} ·{" "}
-              {rule.paths.length + rule.excluded_paths.length}
-            </summary>
-            <div className="pl-4 text-fg-4">
-              {rule.paths.map((path) => (
-                <div key={path}>
-                  {path}
-                  {gitProvidedPaths.has(path) ? " · provided by Git · skipped" : ""}
-                </div>
-              ))}
-              {rule.excluded_paths.map((excluded) => (
-                <div key={`excluded-${excluded.relative_path}`} className="line-through">
-                  {excluded.relative_path} · excluded by{" "}
-                  {LEVEL_LABELS[excluded.excluded_by_scope]}
-                </div>
-              ))}
-            </div>
-          </details>
-        ))}
+        {(visiblePlan?.rules ?? []).map((rule) => {
+          const overrides = overriddenOrigins(rule);
+          return (
+            <details
+              key={`${rule.scope}-${rule.mode}-${rule.pattern}`}
+              className="border-t border-line-soft py-1 font-mono"
+            >
+              <summary className="cursor-pointer">
+                {rule.pattern} · {LEVEL_LABELS[rule.scope]} · {rule.mode} ·{" "}
+                {rule.paths.length + rule.excluded_paths.length}
+                {overrides.length > 0 ? ` · overrides ${overrides.join(", ")}` : ""}
+              </summary>
+              <div className="pl-4 text-fg-4">
+                {rule.paths.map((path) => (
+                  <div key={path}>
+                    {path}
+                    {gitProvidedPaths.has(path) ? " · provided by Git · skipped" : ""}
+                  </div>
+                ))}
+                {rule.excluded_paths.map((excluded) => (
+                  <div key={`excluded-${excluded.relative_path}`} className="line-through">
+                    {excluded.relative_path} · excluded by{" "}
+                    {LEVEL_LABELS[excluded.excluded_by_scope]}
+                  </div>
+                ))}
+              </div>
+            </details>
+          );
+        })}
         <div className="mt-1 text-fg-4">
           {visiblePlan?.entries.filter((entry) => !entry.provided_by_git).length ?? 0} paths added ·{" "}
           {visiblePlan?.entries.filter((entry) => entry.provided_by_git).length ?? 0} Git paths skipped

@@ -582,6 +582,9 @@ pub(crate) async fn spawn_node(
     } else {
         crate::provisioning::ProvisioningRules::default()
     };
+    let mut node_provisioning_plan = loaded
+        .as_ref()
+        .and_then(|(events, _)| crate::provisioning::frozen_node_plan(events, &node.id, iter));
     let working_dir = if has_sub_worktree {
         let sub_wt_dir = sub_worktree_path(spawn_ctx.repo_root, run_id, &node.id, iter);
         let sub_branch = sub_worktree_branch(run_id, &node.id, iter);
@@ -619,23 +622,26 @@ pub(crate) async fn spawn_node(
                         &node_provisioning,
                         &pipeline_branch,
                     );
-                    if let Err(e) = provisioned {
-                        let reason = format!(
-                            "provisioning failed for {} in copy/link phase: {e:#}; no node was spawned",
-                            node.id
-                        );
-                        let orphan = (sub_wt_dir.clone(), sub_branch.clone());
-                        interrupt_spawn_before_start(
-                            deps,
-                            spawn_ctx.repo_root,
-                            run_id,
-                            &node.id,
-                            iter,
-                            Some(&orphan),
-                            &reason,
-                        )
-                        .await;
-                        return SpawnOutcome::Failed { reason };
+                    match provisioned {
+                        Ok(plan) => node_provisioning_plan = Some(plan),
+                        Err(e) => {
+                            let reason = format!(
+                                "provisioning failed for {} in copy/link phase: {e:#}; no node was spawned",
+                                node.id
+                            );
+                            let orphan = (sub_wt_dir.clone(), sub_branch.clone());
+                            interrupt_spawn_before_start(
+                                deps,
+                                spawn_ctx.repo_root,
+                                run_id,
+                                &node.id,
+                                iter,
+                                Some(&orphan),
+                                &reason,
+                            )
+                            .await;
+                            return SpawnOutcome::Failed { reason };
+                        }
                     }
                 }
                 // #489-B: `Some(...)` ONLY when this spawn created the worktree.
@@ -868,6 +874,7 @@ pub(crate) async fn spawn_node(
                 // never under a live node's feet.
                 "isolated_worktree": has_sub_worktree,
                 "provisioning": node_provisioning,
+                "provisioning_plan": node_provisioning_plan,
                 // #424: the launch-time model and effort, **resolved** (post
                 // node → instance precedence, post empty-string collapse) — not
                 // the raw `NodeDef` values. This is what the resume path reads

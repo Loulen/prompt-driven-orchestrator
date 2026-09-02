@@ -2,7 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useState } from "react";
-import type { ProvisioningRules } from "../types";
+import type { ProvisioningPlan, ProvisioningRules } from "../types";
 import { previewProvisioning } from "../api";
 import ProvisioningRulesEditor from "./ProvisioningRulesEditor";
 
@@ -64,7 +64,7 @@ describe("ProvisioningRulesEditor", () => {
   });
 
   it("shows inherited rules, grouped exclusions, and the frozen state", async () => {
-    vi.mocked(previewProvisioning).mockResolvedValue({
+    const frozenPlan: ProvisioningPlan = {
       entries: [
         {
           relative_path: "fixtures/a.bin",
@@ -90,7 +90,8 @@ describe("ProvisioningRulesEditor", () => {
         },
       ],
       conflicts: [],
-    });
+    };
+    vi.mocked(previewProvisioning).mockClear();
 
     render(
       <ProvisioningRulesEditor
@@ -100,12 +101,16 @@ describe("ProvisioningRulesEditor", () => {
         onChange={() => {}}
         readOnly
         frozenAt="09:12"
+        frozenPlan={frozenPlan}
       />,
     );
 
     await waitFor(() => expect(screen.getByText("fixtures/")).toBeInTheDocument());
     expect(screen.getByText("Instance · 2")).toBeInTheDocument();
     expect(screen.getByText(/frozen at 09:12 · reused on restart/)).toBeInTheDocument();
+    expect(screen.getByText("Resolved plan · frozen")).toBeInTheDocument();
+    expect(screen.queryByText("Resolved plan · live")).not.toBeInTheDocument();
+    expect(previewProvisioning).not.toHaveBeenCalled();
     expect(screen.getByLabelText("Copy patterns")).toHaveAttribute("readonly");
     await userEvent.click(screen.getByText(/fixtures\/ · Instance · copy · 2/));
     expect(screen.getByText(/fixtures\/private.bin · excluded by Node/)).toHaveClass(
@@ -113,7 +118,7 @@ describe("ProvisioningRulesEditor", () => {
     );
   });
 
-  it("makes overrides visible and lets a conflict jump to its first rule", async () => {
+  it("makes overrides visible and lets a conflict jump to either rule", async () => {
     vi.mocked(previewProvisioning).mockResolvedValue({
       entries: [],
       rules: [
@@ -126,8 +131,8 @@ describe("ProvisioningRulesEditor", () => {
           unmatched: false,
         },
         {
-          scope: "isolated_node",
-          mode: "copy",
+          scope: "run",
+          mode: "symlink",
           pattern: ".env",
           paths: [".env"],
           excluded_paths: [],
@@ -136,8 +141,16 @@ describe("ProvisioningRulesEditor", () => {
         {
           scope: "isolated_node",
           mode: "symlink",
-          pattern: ".env",
-          paths: [".env"],
+          pattern: "secrets/*",
+          paths: ["secrets/token"],
+          excluded_paths: [],
+          unmatched: false,
+        },
+        {
+          scope: "isolated_node",
+          mode: "copy",
+          pattern: "secrets/*",
+          paths: ["secrets/token"],
           excluded_paths: [],
           unmatched: false,
         },
@@ -145,7 +158,7 @@ describe("ProvisioningRulesEditor", () => {
       conflicts: [
         {
           scope: "isolated_node",
-          relative_path: ".env",
+          relative_path: "secrets/token",
           modes: ["copy", "symlink"],
         },
       ],
@@ -155,18 +168,82 @@ describe("ProvisioningRulesEditor", () => {
       <ProvisioningRulesEditor
         level="isolated_node"
         repository="/repo"
-        rules={{ copy: [".env"], hardlink: [], symlink: [".env"] }}
+        rules={{
+          copy: ["ordinary", "secrets/*"],
+          hardlink: [],
+          symlink: ["other", "secrets/*"],
+        }}
         onChange={() => {}}
       />,
     );
 
-    const inherited = (await screen.findAllByText("Instance · 1")).find((element) =>
-      element.classList.contains("bg-bg-4"),
+    expect(await screen.findByText(/overrides Instance copy/)).toBeInTheDocument();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Jump to copy rule for secrets/token" }),
     );
-    expect(inherited).toBeDefined();
-    expect(inherited!.parentElement).toHaveStyle({ textDecorationLine: "line-through" });
-    await userEvent.click(screen.getByRole("button", { name: "Jump to .env conflict" }));
     expect(screen.getByLabelText("Copy patterns")).toHaveFocus();
+    expect(screen.getByLabelText("Copy patterns")).toHaveProperty(
+      "selectionStart",
+      "ordinary\n".length,
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Jump to symlink rule for secrets/token" }),
+    );
+    expect(screen.getByLabelText("Symlink patterns")).toHaveFocus();
+    expect(screen.getByLabelText("Symlink patterns")).toHaveProperty(
+      "selectionStart",
+      "other\n".length,
+    );
+  });
+
+  it("previews Instance rules without folding in a Project owner", async () => {
+    render(
+      <ProvisioningRulesEditor
+        level="instance"
+        repository="/repo"
+        rules={{ copy: [".env"], hardlink: [], symlink: [] }}
+        onChange={() => {}}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(previewProvisioning).toHaveBeenCalledWith(
+        "/repo",
+        "instance",
+        { copy: [".env"], hardlink: [], symlink: [] },
+        [],
+        "HEAD",
+      ),
+    );
+  });
+
+  it("always isolates an Instance preview from supplied narrower scopes", async () => {
+    render(
+      <ProvisioningRulesEditor
+        level="instance"
+        repository="/repo"
+        rules={{ copy: [".env"], hardlink: [], symlink: [] }}
+        inherited={[
+          {
+            scope: "project",
+            rules: { copy: ["project.env"], hardlink: [], symlink: [] },
+          },
+        ]}
+        onChange={() => {}}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(previewProvisioning).toHaveBeenCalledWith(
+        "/repo",
+        "instance",
+        { copy: [".env"], hardlink: [], symlink: [] },
+        [],
+        "HEAD",
+      ),
+    );
   });
 
   it("stacks mode lists until its own container is wide enough for three columns", () => {

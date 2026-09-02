@@ -359,7 +359,7 @@ export default function App() {
     provisioningRepository: isEditingRun ? selectedRun?.target_repo ?? "" : "",
     provisioningFrozenAt:
       isEditingRun && selection.id
-        ? selectedRun?.nodes[selection.id]?.started_at ?? undefined
+        ? selectedRun?.nodes[selection.id]?.provisioning_frozen_at ?? undefined
         : undefined,
     inheritedProvisioning: isEditingRun
       ? selectedRun?.provisioning_rules

@@ -409,6 +409,7 @@ export default function NodeDetailPanel({
                   ? formatTime(node.provisioning_frozen_at)
                   : undefined
               }
+              frozenPlan={node.provisioning_plan}
               inherited={inheritedProvisioning}
               gitRef={provisioningGitRef}
             />

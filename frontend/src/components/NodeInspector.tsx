@@ -303,6 +303,7 @@ export default function NodeInspector({
                       onChange={(rules) => handleField("provisioning", rules)}
                       readOnly={readOnly || !!provisioningFrozenAt}
                       frozenAt={provisioningFrozenAt}
+                      frozenPlan={runNode?.provisioning_plan}
                       inherited={inheritedProvisioning}
                       gitRef={provisioningGitRef}
                     />

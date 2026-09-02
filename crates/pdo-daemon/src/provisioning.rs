@@ -512,7 +512,7 @@ pub(crate) fn provision_node_worktree(
     inherited: &[ScopedRules],
     node_rules: &ProvisioningRules,
     git_ref: &str,
-) -> Result<()> {
+) -> Result<ProvisioningPlan> {
     let mut scoped = inherited.to_vec();
     if !node_rules.is_empty() {
         scoped.push(ScopedRules {
@@ -521,7 +521,8 @@ pub(crate) fn provision_node_worktree(
         });
     }
     let plan = resolve_at_git_ref(repository, &scoped, git_ref)?;
-    provision_missing(repository, worktree, &plan)
+    provision_missing(repository, worktree, &plan)?;
+    Ok(plan)
 }
 
 pub(crate) fn frozen_node_rules(
@@ -542,6 +543,26 @@ pub(crate) fn frozen_node_rules(
             .and_then(|payload| payload.get("provisioning"))
             .cloned()
             .and_then(|rules| serde_json::from_value(rules).ok())
+    })
+}
+
+pub(crate) fn frozen_node_plan(
+    events: &[crate::event_log::Event],
+    node_id: &str,
+    iter: i64,
+) -> Option<ProvisioningPlan> {
+    events.iter().rev().find_map(|event| {
+        if event.kind != crate::event_log::EventKind::NodeStarted
+            || event.node_id.as_deref() != Some(node_id)
+            || event.iter != Some(iter)
+        {
+            return None;
+        }
+        event
+            .payload
+            .as_ref()
+            .and_then(|payload| payload.get("provisioning_plan"))
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
     })
 }
 
@@ -854,7 +875,7 @@ mod tests {
     }
 
     #[test]
-    fn frozen_node_rules_uses_the_started_iteration_recipe() {
+    fn frozen_node_provisioning_uses_the_started_iteration_recipe_and_plan() {
         let event = crate::event_log::Event {
             id: None,
             run_id: "run".into(),
@@ -867,14 +888,32 @@ mod tests {
                     "copy": [".env"],
                     "hardlink": [],
                     "symlink": []
+                },
+                "provisioning_plan": {
+                    "entries": [{
+                        "relative_path": ".env",
+                        "mode": "copy",
+                        "origin_scope": "isolated_node",
+                        "pattern": ".env",
+                        "provided_by_git": false
+                    }],
+                    "rules": [],
+                    "conflicts": []
                 }
             })),
         };
 
         assert_eq!(
-            frozen_node_rules(&[event], "worker", 2).unwrap().copy,
+            frozen_node_rules(std::slice::from_ref(&event), "worker", 2)
+                .unwrap()
+                .copy,
             vec![".env"]
         );
+        assert_eq!(
+            frozen_node_plan(&[event], "worker", 2).unwrap().entries[0].relative_path,
+            ".env"
+        );
         assert!(frozen_node_rules(&[], "worker", 2).is_none());
+        assert!(frozen_node_plan(&[], "worker", 2).is_none());
     }
 }

@@ -102,7 +102,7 @@ export default function SettingsModal({ open, onClose, liveSessions = 0, onSaved
       onClick={handleClose}
     >
       <div
-        className="w-[460px] max-h-[85vh] flex flex-col rounded-lg border border-line bg-bg-4 shadow-xl"
+        className="w-[460px] max-h-[85vh] flex flex-col overflow-y-auto rounded-lg border border-line bg-bg-4 shadow-xl"
         onClick={(e) => e.stopPropagation()}
         data-testid="settings-modal"
       >

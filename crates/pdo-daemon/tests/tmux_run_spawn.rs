@@ -93,6 +93,9 @@ fn build_tmux_script_uses_exec_bash_and_invokes_claude() {
         "solo",
         1,
         5172,
+        // #661/ADR-0055: the session PATH the live spawn threads from
+        // `harness_probe_path`; a fixed value here keeps the assertion hermetic.
+        "/home/u/.local/bin:/usr/bin:/bin",
         prompt_path,
         None,
         SessionTail::Agent {

@@ -2104,6 +2104,14 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 // Reproduce the original Run's `auto_fail`, like `harness`: `None`
                 // forwards as `None` and re-resolves through project / instance.
                 auto_fail: run_state.auto_fail,
+                // Preserve the explicit Run tier. Instance and Project are resolved
+                // afresh for this new Run, while its per-Run override remains stable.
+                provisioning: run_state
+                    .provisioning_rules
+                    .iter()
+                    .find(|scoped| scoped.scope == crate::provisioning::ProvisioningScope::Run)
+                    .map(|scoped| scoped.rules.clone())
+                    .unwrap_or_default(),
             };
             let new_run_resp = create_run_core(&state, new_run_req, Vec::new()).await;
 

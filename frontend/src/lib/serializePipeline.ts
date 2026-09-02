@@ -32,6 +32,7 @@ import type {
 // #550: the per-harness fold (pure, `../types`-only) — keeps this module pure.
 import { foldNodeIntoHarnesses } from "./harness";
 import { nodeIsolation } from "./nodeIsolation";
+import { hasProvisioningRules } from "./provisioning";
 
 /**
  * Drops the null-valued keys of every frontmatter declaration (#457).
@@ -112,6 +113,9 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
     }
     const harnesses = foldNodeIntoHarnesses(n);
     if (harnesses) node.harnesses = harnesses;
+    if (n.provisioning && hasProvisioningRules(n.provisioning)) {
+      node.provisioning = n.provisioning;
+    }
     // Legacy `type: loop` nodes (pre-region model, ADR-0011) carry a node-level
     // `max_iter` that the daemon still requires and validates
     // (`pipeline.rs` `NodeType::Loop`). The current model emits `max_iter` on the
@@ -300,6 +304,9 @@ export function exportNodeAsYaml(node: NodeDef, prompt: string): string {
   }
   const harnesses = foldNodeIntoHarnesses(node);
   if (harnesses) obj.harnesses = harnesses;
+  if (node.provisioning && hasProvisioningRules(node.provisioning)) {
+    obj.provisioning = node.provisioning;
+  }
   // Legacy bounded-loop nodes carry a node-level `max_iter` the daemon still
   // requires; regular nodes never set it, so its presence is the signal.
   if (node.max_iter !== undefined && node.max_iter !== null) obj.max_iter = node.max_iter;
@@ -322,7 +329,15 @@ function dumpYaml(val: unknown, indent: number): string {
   if (typeof val === "boolean") return val ? "true" : "false";
   if (typeof val === "number") return String(val);
   if (typeof val === "string") {
-    if (val.includes("\n") || val.includes(":") || val.includes("#") || val.includes('"') || val === "") {
+    if (
+      val.includes("\n") ||
+      val.includes(":") ||
+      val.includes("#") ||
+      val.includes('"') ||
+      val === "" ||
+      /^[!&*[\]{},|>@`%]/.test(val) ||
+      /[[\]{},]/.test(val)
+    ) {
       return JSON.stringify(val);
     }
     if (/^\d/.test(val) || val === "true" || val === "false" || val === "null") {

@@ -7,6 +7,7 @@ import type { PipelineListEntry, RunListEntry, Trigger } from "../types";
 import type { LibraryPipelineEntry } from "../api";
 import { cleanupRun, deleteLibraryPipeline, deletePipeline, duplicateLibraryPipeline, fetchPipelines, importPipelineDocument, importWorkflow, openRunShell, pauseRun, renameRun, resumeRun, retryAll } from "../api";
 import { useEditStore } from "../stores/editStore";
+import { useRecentReposStore } from "../stores/recentReposStore";
 
 const mockRenameRun = vi.mocked(renameRun);
 const mockDeletePipeline = vi.mocked(deletePipeline);
@@ -51,6 +52,8 @@ vi.mock("../api", () => ({
     prompts: {},
     diagnostics: [],
   }),
+  fetchSettings: vi.fn().mockResolvedValue({}),
+  fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
 }));
 
 describe("portable pipeline import", () => {
@@ -468,6 +471,27 @@ describe("UnifiedLeftPanel runs grouped by repo (#258)", () => {
     renderPanel({ runs });
     expect(screen.queryByTestId("run-repo-group")).not.toBeInTheDocument();
     expect(screen.getAllByTestId("run-display-label")).toHaveLength(2);
+  });
+
+  it("opens project onboarding from a flat single-repository list", () => {
+    const runs: RunListEntry[] = [
+      { run_id: "r1", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/foo" },
+    ];
+    renderPanel({ runs });
+
+    fireEvent.click(screen.getByRole("button", { name: "Configure project" }));
+    expect(screen.getByTestId("project-edit-modal")).toBeInTheDocument();
+    expect(screen.getByTestId("project-members-list")).toHaveTextContent("/repos/foo");
+  });
+
+  it("opens project onboarding from a recent repository before the first Run", () => {
+    useRecentReposStore.setState({ recentRepos: ["/repos/fresh"] });
+    renderPanel({ runs: [] });
+
+    fireEvent.click(screen.getByRole("button", { name: "Configure project" }));
+
+    expect(screen.getByTestId("project-edit-modal")).toBeInTheDocument();
+    expect(screen.getByTestId("project-members-list")).toHaveTextContent("/repos/fresh");
   });
 
   it("renders one repo-group header per distinct repo, alphabetical, when ≥ 2 repos", () => {

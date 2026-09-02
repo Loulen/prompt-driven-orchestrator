@@ -884,6 +884,10 @@ pub struct RunState {
     pub edges: Vec<EdgeInfo>,
     #[serde(default)]
     pub node_defs: Vec<NodeDefInfo>,
+    /// Instance + Project + Run provisioning recipe frozen at Run creation
+    /// (ADR-0061). Node rules are appended only when its isolated worktree is cut.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) provisioning_rules: Vec<crate::provisioning::ScopedRules>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start_node: Option<StartNodeInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1099,6 +1103,7 @@ impl RunState {
             nodes: HashMap::new(),
             edges: Vec::new(),
             node_defs: Vec::new(),
+            provisioning_rules: Vec::new(),
             start_node: None,
             end_node: None,
             merge_resolver: None,
@@ -1552,6 +1557,16 @@ fn apply_run_event(state: &mut RunState, event: &Event) {
                         serde_json::from_value::<Vec<NodeDefInfo>>(node_defs.clone())
                     {
                         state.node_defs = parsed;
+                    }
+                    if let Some(raw) = payload.get("provisioning_rules") {
+                        match serde_json::from_value::<Vec<crate::provisioning::ScopedRules>>(
+                            raw.clone(),
+                        ) {
+                            Ok(rules) => state.provisioning_rules = rules,
+                            Err(e) => warn!(
+                                "run_started carries unreadable provisioning_rules ({raw}): {e}"
+                            ),
+                        }
                     }
                 }
                 if let Some(tr) = payload.get("target_repo").and_then(|v| v.as_str()) {

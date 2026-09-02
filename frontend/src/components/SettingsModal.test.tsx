@@ -11,6 +11,7 @@ const fetchSandboxProfilesMock = vi.fn();
 const saveSandboxProfileMock = vi.fn();
 const deleteSandboxProfileMock = vi.fn();
 const fetchSandboxProfileReferentsMock = vi.fn();
+const fetchInstanceProvisioningMock = vi.fn();
 
 // #431: `browseFs` MUST be in this factory now that the Dockerfile picker renders
 // `FsExplorerModal`. Vitest 4 wraps the factory's return in a Proxy whose `get` trap
@@ -33,6 +34,7 @@ vi.mock("../api", () => ({
   deleteSandboxProfile: (...args: unknown[]) => deleteSandboxProfileMock(...args),
   fetchSandboxProfileReferents: (...args: unknown[]) =>
     fetchSandboxProfileReferentsMock(...args),
+  fetchInstanceProvisioning: (...args: unknown[]) => fetchInstanceProvisioningMock(...args),
 }));
 
 import SettingsModal, { relativiseToHome } from "./SettingsModal";
@@ -260,12 +262,28 @@ describe("SettingsModal", () => {
       profiles: [profileFixture("full"), profileFixture("minimal", { virtual: true })],
       home: "/home/user",
     });
+    fetchInstanceProvisioningMock.mockReset();
+    fetchInstanceProvisioningMock.mockResolvedValue({
+      copy: [],
+      hardlink: [],
+      symlink: [],
+    });
   });
 
   it("renders nothing when closed", () => {
     fetchSettingsMock.mockResolvedValue(sample());
     render(<SettingsModal open={false} onClose={() => {}} />);
     expect(screen.queryByTestId("settings-modal")).not.toBeInTheDocument();
+  });
+
+  it("keeps expanded settings reachable within the viewport", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    render(<SettingsModal open onClose={() => {}} />);
+
+    expect(await screen.findByTestId("setting-default-sandbox")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Configure worktree provisioning…" }));
+    expect(await screen.findByRole("button", { name: "Save provisioning" })).toBeInTheDocument();
+    expect(screen.getByTestId("settings-modal")).toHaveClass("overflow-y-auto");
   });
 
   it("loads and seeds the effective values", async () => {

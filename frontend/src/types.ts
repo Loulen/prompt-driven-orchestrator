@@ -521,6 +521,50 @@ export interface Project {
   members: string[];
 }
 
+export type ProvisioningMode = "copy" | "hardlink" | "symlink";
+export type ProvisioningScope = "instance" | "project" | "run" | "isolated_node";
+
+export interface ProvisioningRules {
+  copy: string[];
+  hardlink: string[];
+  symlink: string[];
+}
+
+export interface ScopedProvisioningRules {
+  scope: ProvisioningScope;
+  rules: ProvisioningRules;
+}
+
+export interface ProvisioningEntry {
+  relative_path: string;
+  mode: ProvisioningMode;
+  origin_scope: ProvisioningScope;
+  pattern: string;
+  provided_by_git: boolean;
+}
+
+export interface ProvisioningRulePreview {
+  scope: ProvisioningScope;
+  mode: ProvisioningMode;
+  pattern: string;
+  paths: string[];
+  excluded_paths: Array<{
+    relative_path: string;
+    excluded_by_scope: ProvisioningScope;
+  }>;
+  unmatched: boolean;
+}
+
+export interface ProvisioningPlan {
+  entries: ProvisioningEntry[];
+  rules: ProvisioningRulePreview[];
+  conflicts: Array<{
+    scope: ProvisioningScope;
+    relative_path: string;
+    modes: ProvisioningMode[];
+  }>;
+}
+
 /**
  * A persisted Trigger (#160 / ADR-0012): a cron schedule bound to a run
  * template. Cron-only in this slice — `guard_command` is reserved for #161.
@@ -658,6 +702,12 @@ export interface NodeState {
    * node that never started, a structural node, or a pre-#653 daemon.
    */
   isolated_worktree?: boolean;
+  /** Node provisioning recipe frozen into this iteration's NodeStarted event. */
+  provisioning?: ProvisioningRules;
+  /** Time this iteration's isolated worktree recipe was first materialized. */
+  provisioning_frozen_at?: string;
+  /** Exact resolved plan applied when the isolated worktree was first materialized. */
+  provisioning_plan?: ProvisioningPlan;
   /**
    * #654/ADR-0060: what this NodeRun DELIVERED onto the run's branch — the two
    * tips its delivery moved the branch between. Present for any NodeRun that
@@ -828,6 +878,8 @@ export interface RunState {
   nodes: Record<string, NodeState>;
   edges: EdgeInfo[];
   node_defs: NodeDefInfo[];
+  /** Instance + Project + Run provisioning rules frozen at Run creation. */
+  provisioning_rules?: ScopedProvisioningRules[];
   start_node: StartNodeInfo | null;
   end_node: EndNodeInfo | null;
   merge_resolver: MergeResolverInfo | null;
@@ -1056,6 +1108,8 @@ export interface NodeDef {
   harnesses?: Record<string, HarnessSettings>;
   /** Atomic agent selection for this node. Missing/`inherit` continues precedence. */
   agent_choice?: AgentChoice | null;
+  /** Resources added only when this isolated node worktree is first created. */
+  provisioning?: ProvisioningRules;
   /** #653/ADR-0060: where this node's NodeRun works — `true` a sub-worktree of
    *  its own, `false` the Run's shared worktree. Carried by `agent` and `script`
    *  only, and ALWAYS serialized for them (including at the default), so a

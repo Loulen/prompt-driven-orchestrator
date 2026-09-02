@@ -19,6 +19,9 @@ import { CRON_PRESETS, cronToPreset, parseDailyTime, type CronPresetId } from ".
 import { useLaunchTargets } from "../hooks/useLaunchTargets";
 import { useRepoValidation } from "../hooks/useRepoValidation";
 import * as newRunForm from "../lib/newRunForm";
+import ProvisioningRulesEditor from "./ProvisioningRulesEditor";
+import { EMPTY_PROVISIONING_RULES, hasProvisioningRules } from "../lib/provisioning";
+import type { ProvisioningRules } from "../types";
 
 const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml", "image/bmp"];
 
@@ -115,6 +118,10 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
   const [varsOpen, setVarsOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [provisioning, setProvisioning] = useState<ProvisioningRules>(
+    EMPTY_PROVISIONING_RULES,
+  );
+  const [provisioningValid, setProvisioningValid] = useState(true);
 
   // #465 (ADR-0042): read-only secondary repos. The primary stays `targetRepo` /
   // `sourceBranch` (from the hooks above, row 0), untouched — these are the extra
@@ -205,6 +212,8 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     setGuardTest(null);
     setGuardTestError(null);
     setError(null);
+    setProvisioning(EMPTY_PROVISIONING_RULES);
+    setProvisioningValid(true);
 
     // One-shot reset: the `openPrefillDone` ref gates this to a single run per
     // open, so the setState cascade is bounded and does not re-fire. The
@@ -580,6 +589,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
           targetRepos: buildTargetRepos(),
         }),
         ...(agentChoice.mode === "inherit" ? {} : { agent_choice: agentChoice }),
+        ...(hasProvisioningRules(provisioning) ? { provisioning } : {}),
       });
       onCreated(resp.run_id);
       refreshRecentRepos();
@@ -590,15 +600,16 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
       setInput("");
       setOverrides({});
       setImages([]);
+      setProvisioning(EMPTY_PROVISIONING_RULES);
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to launch run");
     } finally {
       setSubmitting(false);
     }
-  }, [selectedPipeline, input, hasRequiredPrompt, overrides, onCreated, onClose, flushPendingSaves, repoValid, targetRepo, sourceBranch, buildTargetRepos, autoName, runName, images, sandbox, harness, agentChoice, settings, refreshRecentRepos]);
+  }, [selectedPipeline, input, hasRequiredPrompt, overrides, onCreated, onClose, flushPendingSaves, repoValid, targetRepo, sourceBranch, buildTargetRepos, autoName, runName, images, sandbox, harness, agentChoice, settings, refreshRecentRepos, provisioning]);
 
-  const canLaunch = newRunForm.canLaunch({
+  const canLaunch = provisioningValid && newRunForm.canLaunch({
     repoValid,
     selectedPipeline,
     hasRequiredPrompt,
@@ -1566,6 +1577,19 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
               data-testid="trigger-reject-reason"
             >
               {triggerInputRejectReason}
+            </div>
+          )}
+
+          {mode === "run" && (
+            <div className="mt-3">
+              <ProvisioningRulesEditor
+                level="run"
+                repository={targetRepo}
+                rules={provisioning}
+                onChange={setProvisioning}
+                onValidityChange={setProvisioningValid}
+                gitRef={sourceBranch || "HEAD"}
+              />
             </div>
           )}
 

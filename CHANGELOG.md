@@ -10,6 +10,17 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.50.0
+
+**Provisionnement déclaratif des worktrees** (#630 ; ADR-0061). Un worktree de Run ou de Node
+isolé reçoit les ressources du dépôt primaire qu'un checkout Git neuf ne contient pas
+(`.env`, `node_modules`, modèles, fixtures…), déclarées en patrons `.gitignore` sur trois listes —
+copie, lien physique, lien symbolique — aux niveaux Instance, Projet, Run et Node isolé. Les
+règles se composent de manière additive ; le mode le plus spécifique l'emporte ; un conflit de
+mode au même niveau est refusé avant le lancement. La recette est **gelée par Run** : un Node
+redémarré sur la même itération garde son sous-worktree et ses éditions. Une erreur de
+provisionnement interrompt le Run avant tout spawn et nomme le chemin, le mode et la cause.
+
 ## 1.49.0
 
 **Un seul contrat de livraison pour les Agents et les Scripts** (#654 ; ADR-0060). *Cassant.*

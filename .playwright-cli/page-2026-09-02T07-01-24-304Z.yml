@@ -1,0 +1,54 @@
+- generic [ref=f3e3]:
+  - banner [ref=f3e4]:
+    - generic [ref=f3e5]: PDO
+    - generic [ref=f3e10]:
+      - button "Open stats" [ref=f3e11]
+      - button "Settings" [ref=f3e14]
+  - main [ref=f3e18]:
+    - generic [ref=f3e19]:
+      - complementary [ref=f3e22]:
+        - tablist [ref=f3e23]:
+          - tab "Runs" [selected] [ref=f3e24] [cursor=pointer]
+          - tab "Triggers" [ref=f3e25] [cursor=pointer]
+          - tab "Pipelines" [ref=f3e26] [cursor=pointer]
+        - tabpanel [ref=f3e27]:
+          - generic [ref=f3e28]:
+            - text: Runs
+            - button "Configure project" [active] [ref=f3e29] [cursor=pointer]: Project
+            - button "New Run" [ref=f3e30] [cursor=pointer]
+          - generic [ref=f3e32]:
+            - button "Project" [ref=f3e33] [cursor=pointer]
+            - button "Pipeline" [ref=f3e37] [cursor=pointer]
+            - button "Trigger" [ref=f3e41] [cursor=pointer]
+          - button "Select 20260902-065745-8fd26f8 20260902-065745-8fd2 fp-prov" [ref=f3e46] [cursor=pointer]:
+            - checkbox "Select 20260902-065745-8fd26f8" [ref=f3e47]
+            - generic [ref=f3e49]:
+              - generic [ref=f3e50]: 20260902-065745-8fd2
+              - generic [ref=f3e51]: fp-prov
+        - dialog "Edit project" [ref=f3e66]:
+          - generic [ref=f3e67]: Name project
+          - paragraph [ref=f3e68]: Group repositories that work together under one name. A repo belongs to at most one project; the harness set here applies to every Run whose primary repo is a member.
+          - generic [ref=f3e69]: Name
+          - textbox [ref=f3e70]: demo-repo
+          - generic [ref=f3e71]:
+            - generic [ref=f3e72]:
+              - generic [ref=f3e73]: Agent — Project
+              - button "Inherit claude · — · —" [ref=f3e74]:
+                - generic [ref=f3e80]:
+                  - generic [ref=f3e81]: Inherit
+                  - generic [ref=f3e82]: claude · — · —
+            - button [ref=f3e86] [cursor=pointer]:
+              - generic [ref=f3e87]: No harness (inherit)
+          - generic [ref=f3e90]: Member repositories
+          - generic "/tmp/pdo-fp-b4kko9SV/demo-repo" [ref=f3e92] [cursor=pointer]:
+            - checkbox "/tmp/pdo-fp-b4kko9SV/demo-repo" [checked] [ref=f3e93]
+          - generic [ref=f3e95]:
+            - button "Cancel" [ref=f3e96] [cursor=pointer]
+            - button "Save" [ref=f3e97] [cursor=pointer]
+      - separator [ref=f3e53]
+      - generic [ref=f3e54]: Select a run or open a pipeline to get started
+      - separator [ref=f3e57]
+  - contentinfo [ref=f3e60]:
+    - generic [ref=f3e61]: "Daemon: connected"
+    - generic "Live NodeRun sessions (manager sessions excluded)" [ref=f3e63]: 1 / 20 sessions
+    - generic [ref=f3e64]: v1.49.0

@@ -27,6 +27,8 @@ import type { LibraryEntry } from "../api";
 import { saveToLibrary, deleteFromLibrary, instantiateFromLibrary, libraryPortToPortDef } from "../api";
 import { useLibraryState } from "../hooks/useLibrary";
 import type { LibrarySyncState } from "../hooks/useLibrary";
+import ProvisioningRulesEditor from "./ProvisioningRulesEditor";
+import { EMPTY_PROVISIONING_RULES } from "../lib/provisioning";
 
 
 /**
@@ -37,6 +39,10 @@ export default function NodeInspector({
   libraryEntries,
   onLibraryChanged,
   readOnly,
+  provisioningRepository = "",
+  provisioningFrozenAt,
+  inheritedProvisioning,
+  provisioningGitRef = "HEAD",
   runNode,
 }: {
   libraryEntries: LibraryEntry[];
@@ -49,6 +55,10 @@ export default function NodeInspector({
    * (mirrors the canvas readOnly, #315/ADR-0020). Scoped to the × alone;
    * the rest of the inspector's archived story is the #315 gap. */
   readOnly?: boolean;
+  provisioningRepository?: string;
+  provisioningFrozenAt?: string;
+  inheritedProvisioning?: import("../types").ScopedProvisioningRules[];
+  provisioningGitRef?: string;
 }) {
   const openTabs = useEditStore((s) => s.openTabs);
   const activeTabId = useEditStore((s) => s.activeTabId);
@@ -61,6 +71,8 @@ export default function NodeInspector({
 
   const asideRef = useRef<HTMLElement>(null);
   const [highlightedPort, setHighlightedPort] = useState<string | null>(null);
+  const [provisioningPreviewRepository, setProvisioningPreviewRepository] = useState("");
+  const [provisioningOpenFor, setProvisioningOpenFor] = useState<string | null>(null);
   // Pending destroy-loop confirmation (#339, mirrors EditCanvas #150): set when
   // deleting an input source would remove a bounded region's last cycle.
   const [pendingDestroy, setPendingDestroy] = useState<{
@@ -94,6 +106,7 @@ export default function NodeInspector({
   const { profiles: agentProfiles } = useAgentProfiles();
 
   if (!tab || !node) return null;
+  const provisioningOpen = provisioningOpenFor === node.id;
   const resolvedHarness = resolveEditorHarness(node);
   const harnessOption = findHarnessOption(harnessCatalog, resolvedHarness);
 
@@ -259,6 +272,48 @@ export default function NodeInspector({
               <span data-testid="workspace-frozen" className="text-fg-4" style={{ fontSize: "9.5px" }}>
                 Frozen at spawn — an edit applies to the next NodeRun.
               </span>
+            )}
+            {isolation && (
+              <>
+                <button
+                  type="button"
+                  aria-expanded={provisioningOpen}
+                  onClick={() => setProvisioningOpenFor(provisioningOpen ? null : node.id)}
+                  className="cursor-pointer rounded border border-line-strong bg-bg-3 px-2 py-1.5 text-left font-medium text-fg-2 hover:border-fg-4"
+                >
+                  {provisioningOpen ? "Hide provisioning" : "Configure provisioning"}
+                </button>
+                {provisioningOpen && (
+                  <>
+                    {!provisioningRepository && (
+                      <label className="block text-fg-3" style={{ fontSize: 10 }}>
+                        Resolve against
+                        <input
+                          value={provisioningPreviewRepository}
+                          onChange={(event) => setProvisioningPreviewRepository(event.target.value)}
+                          placeholder="/absolute/path/to/repository"
+                          className="mt-1 w-full rounded border border-line-strong bg-bg-3 px-2 py-1 font-mono text-fg outline-none focus:border-acc"
+                        />
+                      </label>
+                    )}
+                    <ProvisioningRulesEditor
+                      level="isolated_node"
+                      repository={provisioningRepository || provisioningPreviewRepository}
+                      rules={
+                        (provisioningFrozenAt ? runNode?.provisioning : undefined) ??
+                        node.provisioning ??
+                        EMPTY_PROVISIONING_RULES
+                      }
+                      onChange={(rules) => handleField("provisioning", rules)}
+                      readOnly={readOnly || !!provisioningFrozenAt}
+                      frozenAt={provisioningFrozenAt}
+                      frozenPlan={provisioningFrozenAt ? runNode?.provisioning_plan : undefined}
+                      inherited={inheritedProvisioning}
+                      gitRef={provisioningGitRef}
+                    />
+                  </>
+                )}
+              </>
             )}
           </>
         )}

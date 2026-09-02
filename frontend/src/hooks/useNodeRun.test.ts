@@ -307,7 +307,7 @@ describe("useNodeRun — commands", () => {
 
     await act(async () => {
       await result.current.killStale();
-      await result.current.restartStale();
+      await result.current.restartIteration();
     });
     expect(api.killNode).toHaveBeenCalledWith("run-1", "n1", 2);
     expect(api.restartNode).toHaveBeenCalledWith("run-1", "n1", 2);

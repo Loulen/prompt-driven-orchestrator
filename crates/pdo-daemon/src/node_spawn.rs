@@ -558,6 +558,33 @@ pub(crate) async fn spawn_node(
     // #516: every interrupted git op left in a reused sub-worktree, in scan order.
     // Routed to both the re-spawned node's preamble and the wire response.
     let mut interrupted_git_ops: Vec<String> = Vec::new();
+    let node_provisioning = if has_sub_worktree {
+        let frozen = loaded
+            .as_ref()
+            .and_then(|(events, _)| crate::provisioning::frozen_node_rules(events, &node.id, iter));
+        match frozen {
+            Some(rules) => rules,
+            None => match crate::provisioning::node_rules_from_pipeline(
+                spawn_ctx.pipeline_path,
+                &node.id,
+            ) {
+                Ok(rules) => rules,
+                Err(e) => {
+                    return SpawnOutcome::Failed {
+                        reason: format!(
+                            "provisioning failed for {}: {e:#}; no node was spawned",
+                            node.id
+                        ),
+                    };
+                }
+            },
+        }
+    } else {
+        crate::provisioning::ProvisioningRules::default()
+    };
+    let mut node_provisioning_plan = loaded
+        .as_ref()
+        .and_then(|(events, _)| crate::provisioning::frozen_node_plan(events, &node.id, iter));
     let working_dir = if has_sub_worktree {
         let sub_wt_dir = sub_worktree_path(spawn_ctx.repo_root, run_id, &node.id, iter);
         let sub_branch = sub_worktree_branch(run_id, &node.id, iter);
@@ -584,6 +611,39 @@ pub(crate) async fn spawn_node(
                 spawn_base_sha = ensured.base_sha;
                 reused_sub_worktree = !ensured.created;
                 interrupted_git_ops = ensured.entry_state.interrupted_git_ops().to_vec();
+                if ensured.created {
+                    let inherited = projected
+                        .map(|state| state.provisioning_rules.as_slice())
+                        .unwrap_or_default();
+                    let provisioned = crate::provisioning::provision_node_worktree(
+                        spawn_ctx.repo_root,
+                        &sub_wt_dir,
+                        inherited,
+                        &node_provisioning,
+                        &pipeline_branch,
+                    );
+                    match provisioned {
+                        Ok(plan) => node_provisioning_plan = Some(plan),
+                        Err(e) => {
+                            let reason = format!(
+                                "provisioning failed for {} in copy/link phase: {e:#}; no node was spawned",
+                                node.id
+                            );
+                            let orphan = (sub_wt_dir.clone(), sub_branch.clone());
+                            interrupt_spawn_before_start(
+                                deps,
+                                spawn_ctx.repo_root,
+                                run_id,
+                                &node.id,
+                                iter,
+                                Some(&orphan),
+                                &reason,
+                            )
+                            .await;
+                            return SpawnOutcome::Failed { reason };
+                        }
+                    }
+                }
                 // #489-B: `Some(...)` ONLY when this spawn created the worktree.
                 // On a reuse, any later abort in the panic-isolated span would send
                 // `interrupt_spawn_before_start` into `reap_orphan_sub_worktree`, and
@@ -813,6 +873,8 @@ pub(crate) async fn spawn_node(
                 // document, so an isolation edit lands on the next launch and
                 // never under a live node's feet.
                 "isolated_worktree": has_sub_worktree,
+                "provisioning": node_provisioning,
+                "provisioning_plan": node_provisioning_plan,
                 // #424: the launch-time model and effort, **resolved** (post
                 // node → instance precedence, post empty-string collapse) — not
                 // the raw `NodeDef` values. This is what the resume path reads

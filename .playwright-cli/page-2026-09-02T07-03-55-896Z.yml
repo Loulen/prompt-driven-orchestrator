@@ -1,0 +1,152 @@
+- generic [ref=f5e3]:
+  - banner [ref=f5e4]:
+    - generic [ref=f5e5]: PDO
+    - generic [ref=f5e10]:
+      - button "Open stats" [ref=f5e11]
+      - button "Settings" [active] [ref=f5e14]
+  - main [ref=f5e18]:
+    - generic [ref=f5e19]:
+      - complementary [ref=f5e22]:
+        - tablist [ref=f5e23]:
+          - tab "Runs" [selected] [ref=f5e24] [cursor=pointer]
+          - tab "Triggers" [ref=f5e25] [cursor=pointer]
+          - tab "Pipelines" [ref=f5e26] [cursor=pointer]
+        - tabpanel [ref=f5e27]:
+          - generic [ref=f5e28]:
+            - text: Runs
+            - button "Configure project" [ref=f5e29] [cursor=pointer]: Project
+            - button "New Run" [ref=f5e30] [cursor=pointer]
+          - generic [ref=f5e32]:
+            - button "Project" [ref=f5e33] [cursor=pointer]
+            - button "Pipeline" [ref=f5e37] [cursor=pointer]
+            - button "Trigger" [ref=f5e41] [cursor=pointer]
+          - generic [ref=f5e46]:
+            - generic "/tmp/pdo-fp-b4kko9SV/demo-repo" [ref=f5e47]:
+              - checkbox "Select all in demo-repo" [ref=f5e48] [cursor=pointer]
+              - generic [ref=f5e50]: demo-repo
+            - button "Select 20260902-070251-474f109 20260902-070251-474f fp-prov" [ref=f5e51] [cursor=pointer]:
+              - checkbox "Select 20260902-070251-474f109" [ref=f5e52]
+              - generic [ref=f5e54]:
+                - generic [ref=f5e55]: 20260902-070251-474f
+                - generic [ref=f5e56]: fp-prov
+            - button "Select 20260902-065745-8fd26f8 20260902-065745-8fd2 fp-prov" [ref=f5e58] [cursor=pointer]:
+              - checkbox "Select 20260902-065745-8fd26f8" [ref=f5e59]
+              - generic [ref=f5e61]:
+                - generic [ref=f5e62]: 20260902-065745-8fd2
+                - generic [ref=f5e63]: fp-prov
+      - separator [ref=f5e65]
+      - generic [ref=f5e66]: Select a run or open a pipeline to get started
+      - separator [ref=f5e69]
+  - contentinfo [ref=f5e72]:
+    - generic [ref=f5e73]: "Daemon: connected"
+    - generic "Live NodeRun sessions (manager sessions excluded)" [ref=f5e75]: 0 / 20 sessions
+    - generic [ref=f5e76]: v1.49.0
+  - generic [ref=f5e78]:
+    - generic [ref=f5e79]:
+      - heading "Instance settings" [level=2] [ref=f5e81]
+      - button "Close settings" [ref=f5e82]
+    - generic [ref=f5e86]:
+      - generic [ref=f5e87]:
+        - heading "Interface" [level=3] [ref=f5e88]
+        - switch "Single-tab mode Opening a pipeline or run replaces the current tab instead of stacking a new one. Enabling it closes the other open tabs." [ref=f5e89]:
+          - generic [ref=f5e90]:
+            - generic [ref=f5e91]: Single-tab mode
+            - generic [ref=f5e92]: Opening a pipeline or run replaces the current tab instead of stacking a new one. Enabling it closes the other open tabs.
+      - button "Configure worktree provisioning…" [ref=f5e96]
+      - button "Manage agent profiles…" [ref=f5e98]
+    - generic [ref=f5e99]:
+      - generic [ref=f5e100]:
+        - generic [ref=f5e101]:
+          - generic [ref=f5e102]: Agent — Instance settings
+          - button "Inherit claude · — · —" [ref=f5e103]:
+            - generic [ref=f5e109]:
+              - generic [ref=f5e110]: Inherit
+              - generic [ref=f5e111]: claude · — · —
+        - generic [ref=f5e114]:
+          - generic [ref=f5e115]: Concurrent session cap
+          - spinbutton "Concurrent session cap" [ref=f5e116]: "20"
+          - generic [ref=f5e117]: Max live NodeRun sessions daemon-wide. Kept below the tmux-collapse zone (#77/#78).
+          - generic [ref=f5e118]: "Source: built-in default (20)."
+          - generic [ref=f5e119]:
+            - generic [ref=f5e120]: "Preview:"
+            - generic "Live NodeRun sessions (manager sessions excluded)" [ref=f5e121]: 0 / 20 sessions
+        - generic [ref=f5e122]:
+          - generic [ref=f5e123]: Reaper TTL (seconds)
+          - spinbutton "Reaper TTL (seconds)" [ref=f5e124]: "3600"
+          - generic [ref=f5e125]: Seconds after a node completes before its idle tmux session is reaped. Sweep runs every 60 s, so values below ~60 s add little.
+          - generic [ref=f5e126]: "Source: built-in default (3600 s)."
+        - generic [ref=f5e127]:
+          - generic [ref=f5e128]: Trigger guard timeout (seconds)
+          - spinbutton "Trigger guard timeout (seconds)" [ref=f5e129]: "60"
+          - generic [ref=f5e130]: Hard timeout for a Trigger guard command. 1–600 s.
+          - generic [ref=f5e131]: "Source: built-in default (60 s)."
+        - generic [ref=f5e132]:
+          - generic [ref=f5e133] [cursor=pointer]:
+            - checkbox "Try to auto-complete a node when its agent has clearly finished its turn" [ref=f5e134]
+            - generic [ref=f5e135]: Try to auto-complete a node when its agent has clearly finished its turn
+          - generic [ref=f5e136]:
+            - text: When an agent stops without running pdo complete, PDO can finish the node for it — but only when its transcript shows the turn actually ended (no tool call in flight)
+            - strong [ref=f5e137]: and
+            - text: its declared outputs validate. An agent still inside a long tool call, waiting on a reply, or stopped to ask a question is never touched. Leave this off and such a node waits for you.
+          - generic [ref=f5e138]: "Source: built-in default (off)."
+        - generic [ref=f5e139]:
+          - generic [ref=f5e140] [cursor=pointer]:
+            - checkbox "Let the manager auto-name a Run created without a name" [checked] [ref=f5e141]
+            - generic [ref=f5e142]: Let the manager auto-name a Run created without a name
+          - generic [ref=f5e143]:
+            - text: When a Run starts with no name — from the New Run dialog with "Auto-generated" left on, or from a Trigger — the Pipeline Manager gives it a short descriptive name (from the input, or a placeholder it renames once the run's purpose is clear). Turn this off and such a Run keeps a stable Untitled run … placeholder instead. This is only the
+            - strong [ref=f5e144]: default
+            - text: ": the New Run box and each Trigger can override it."
+          - generic [ref=f5e145]: "Source: built-in default (on)."
+        - generic [ref=f5e146]:
+          - generic [ref=f5e147]: Default model
+          - button "default model" [ref=f5e148] [cursor=pointer]
+          - generic [ref=f5e152]: The model every work node launches with unless it sets its own. "Default" leaves it to your Claude account (no --model).
+          - generic [ref=f5e153]: "Source: your Claude account default (no --model)."
+        - generic [ref=f5e154]:
+          - generic [ref=f5e155]: Default harness
+          - button "Default (claude floor)" [ref=f5e156] [cursor=pointer]
+          - generic [ref=f5e160]: Every new node runs on this harness unless it pins its own. "Default" leaves it to the claude floor.
+          - generic [ref=f5e161]: "Source: your Claude account default (no --model)."
+        - generic [ref=f5e162]:
+          - generic [ref=f5e163]: Default model per harness
+          - generic [ref=f5e164]:
+            - generic [ref=f5e165]: claude
+            - textbox "claude" [ref=f5e166]:
+              - /placeholder: account default
+          - generic [ref=f5e167]:
+            - generic [ref=f5e168]: opencode
+            - textbox "opencode" [ref=f5e169]:
+              - /placeholder: account default
+          - generic [ref=f5e170]:
+            - generic [ref=f5e171]: copilot
+            - textbox "copilot" [ref=f5e172]:
+              - /placeholder: account default
+          - generic [ref=f5e173]:
+            - generic [ref=f5e174]: pi
+            - textbox "pi" [ref=f5e175]:
+              - /placeholder: account default
+          - generic [ref=f5e176]: The model a node runs with on that harness when it sets none. Empty = the harness account default.
+        - generic [ref=f5e177]:
+          - generic [ref=f5e178]: Default sandbox
+          - combobox "Default sandbox" [ref=f5e179]:
+            - option "off (run on the host)" [selected]
+            - option "full (built-in)"
+            - option "minimal (built-in)"
+          - generic [ref=f5e180]: What a Run uses when neither the launch dialog nor a firing Trigger picks one. off runs on the host; a staging profile runs it inside a Docker sandbox with that profile's home content (requires Docker).
+          - button "Manage staging profiles…" [ref=f5e181]
+          - generic [ref=f5e182]: "Source: built-in default (off)."
+        - generic [ref=f5e183]:
+          - generic [ref=f5e184]: Cost price table
+          - generic [ref=f5e185]: Costs resolve manual → fetched → built-in, per model family. Neither file exists until you create one (or press “Sync costs” in Stats); the built-in table is the floor.
+          - generic [ref=f5e186]: "Yours (wins): /tmp/pdo-fp-b4kko9SV/home/.pdo/prices/models.yaml"
+          - generic [ref=f5e187]: "Synced (PDO writes this): /tmp/pdo-fp-b4kko9SV/home/.pdo/prices/fetched.json — 0 model(s)"
+          - generic [ref=f5e188]: Never synced — only the built-in prices apply.
+        - generic [ref=f5e189]:
+          - generic [ref=f5e190]: Harness descriptors
+          - generic [ref=f5e191]: Declare a harness PDO does not ship by writing this file; it merges over the built-in claude / opencode by name. Nothing is ever seeded — the built-in harnesses are the floor.
+          - generic [ref=f5e192]: "File: /tmp/pdo-fp-b4kko9SV/home/.pdo/harnesses/descriptors.yaml"
+          - generic [ref=f5e193]: "Harnesses: claude, opencode, copilot, pi"
+      - generic [ref=f5e194]:
+        - button "Cancel" [ref=f5e195]
+        - button "Save" [ref=f5e196]

@@ -36,6 +36,7 @@ import { harnessCatalog, findHarnessOption } from "../lib/harness";
 import AgentControl from "./AgentControl";
 import { announceAgentProfilesChanged, useAgentProfiles } from "../hooks/useAgentProfiles";
 import { useHarnessCatalog } from "../hooks/useHarnessCatalog";
+import PersistedProvisioningEditor from "./PersistedProvisioningEditor";
 
 interface Props {
   open: boolean;
@@ -79,6 +80,7 @@ export default function SettingsModal({ open, onClose, liveSessions = 0, onSaved
    */
   const [profilesOpen, setProfilesOpen] = useState(false);
   const [agentProfilesOpen, setAgentProfilesOpen] = useState(false);
+  const [provisioningOpen, setProvisioningOpen] = useState(false);
   const { profiles: agentProfiles, refresh: refreshAgentProfiles } = useAgentProfiles(open);
 
   // The modal is unmounted-by-render (`if (!open) return null`), so its state SURVIVES a
@@ -88,6 +90,7 @@ export default function SettingsModal({ open, onClose, liveSessions = 0, onSaved
   const handleClose = () => {
     setProfilesOpen(false);
     setAgentProfilesOpen(false);
+    setProvisioningOpen(false);
     onClose();
   };
 
@@ -99,7 +102,7 @@ export default function SettingsModal({ open, onClose, liveSessions = 0, onSaved
       onClick={handleClose}
     >
       <div
-        className="w-[460px] max-h-[85vh] flex flex-col rounded-lg border border-line bg-bg-4 shadow-xl"
+        className="w-[460px] max-h-[85vh] flex flex-col overflow-y-auto rounded-lg border border-line bg-bg-4 shadow-xl"
         onClick={(e) => e.stopPropagation()}
         data-testid="settings-modal"
       >
@@ -138,6 +141,19 @@ export default function SettingsModal({ open, onClose, liveSessions = 0, onSaved
             as `SettingsForm` below. */}
         <div className={profilesOpen || agentProfilesOpen ? "hidden" : undefined}>
           <InterfaceSection />
+          <div className="border-b border-line px-4 py-3">
+            {provisioningOpen ? (
+              <PersistedProvisioningEditor scope="instance" />
+            ) : (
+              <button
+                type="button"
+                onClick={() => setProvisioningOpen(true)}
+                className="rounded border border-line-strong bg-bg-3 px-2.5 py-1.5 text-fg-2 hover:border-acc"
+              >
+                Configure worktree provisioning…
+              </button>
+            )}
+          </div>
           <div className="border-b border-line px-4 py-3">
             <button
               type="button"

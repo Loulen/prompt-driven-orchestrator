@@ -790,6 +790,88 @@ describe("NodeInspector — the model field does not follow the selection (#617)
  * underneath, and nothing at all on the types that carry no isolation.
  */
 describe("NodeInspector — Workspace (#653)", () => {
+  it("keeps provisioning collapsed under isolated Workspace and hides it for shared Workspace", async () => {
+    seedTabWithReviewer(false);
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    expect(screen.getByRole("button", { name: "Configure provisioning" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    expect(screen.queryByTestId("provisioning-isolated_node")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Configure provisioning" }));
+    expect(screen.getByTestId("provisioning-isolated_node")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId("workspace-shared"));
+    expect(screen.queryByRole("button", { name: /provisioning/i })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("provisioning-isolated_node")).not.toBeInTheDocument();
+  });
+
+  it("shows the frozen NodeRun recipe instead of the mutable pipeline recipe", async () => {
+    seedTabWithReviewer(false);
+    useEditStore.getState().openTabs[0].pipeline.nodes[0].provisioning = {
+      copy: ["current"],
+      hardlink: [],
+      symlink: [],
+    };
+    renderInspector({
+      libraryEntries: [],
+      onLibraryChanged: () => {},
+      runNode: {
+        node_id: "rv1",
+        status: "running",
+        iter: 1,
+        started_at: "2026-09-01T12:00:00Z",
+        completed_at: null,
+        failure_reason: null,
+        iterations: [],
+        isolated_worktree: true,
+        provisioning: { copy: ["frozen"], hardlink: [], symlink: [] },
+      },
+      provisioningFrozenAt: "12:00",
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "Configure provisioning" }));
+
+    expect(screen.getByLabelText("Copy patterns")).toHaveValue("frozen");
+  });
+
+  it("keeps pipeline provisioning editable when a stale run projection is present", async () => {
+    seedTabWithReviewer(false);
+    useEditStore.getState().openTabs[0].pipeline.nodes[0].provisioning = {
+      copy: ["pipeline-rule"],
+      hardlink: [],
+      symlink: [],
+    };
+    renderInspector({
+      libraryEntries: [],
+      onLibraryChanged: () => {},
+      runNode: {
+        node_id: "rv1",
+        status: "running",
+        iter: 1,
+        started_at: "2026-09-01T12:00:00Z",
+        completed_at: null,
+        failure_reason: null,
+        iterations: [],
+        isolated_worktree: true,
+        provisioning: { copy: ["stale-run-rule"], hardlink: [], symlink: [] },
+      },
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "Configure provisioning" }));
+    const copyPatterns = screen.getByLabelText("Copy patterns");
+    expect(copyPatterns).toHaveValue("pipeline-rule");
+
+    await userEvent.clear(copyPatterns);
+    await userEvent.type(copyPatterns, "updated-pipeline-rule");
+
+    expect(useEditStore.getState().openTabs[0].pipeline.nodes[0].provisioning?.copy).toEqual([
+      "updated-pipeline-rule",
+    ]);
+  });
+
   it("shows a static agent type label instead of a type toggle", () => {
     seedTabWithReviewer(false);
     renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });

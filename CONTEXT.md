@@ -618,6 +618,18 @@ Réglages **daemon-wide** (ADR-0015), à distinguer d'une variable *pipeline* ou
 - **Prise d'effet sans redémarrage** : tous les réglages sont lus frais — aucun `PUT` n'est no-op jusqu'au redémarrage.
 - **Frontière** : « le manager vérifie périodiquement le pipeline » reste exclu — réveiller le manager depuis le runtime renverse *Pas de polling actif* et l'origine-de-l'autonomie d'ADR-0012.
 
+### Règles de provisionnement
+
+Les **règles de provisionnement** sélectionnent, avec la syntaxe de patrons de `.gitignore`, les chemins du dépôt primaire à rendre présents lorsqu'ils manquent dans les worktrees d'un Run. Elles sont facultatives et additives selon la chaîne Configuration d'instance → Projet → Run → Node ; une règle plus précise remplace le mode hérité, et `!` exclut entièrement un patron hérité. Deux modes visant le même chemin au même niveau sont un conflit nommé, jamais une précédence implicite. Contrat → ADR-0061.
+
+Trois listes distinctes rendent le mode explicite : **copie** indépendante, **lien physique** aux inodes de la source, ou **lien symbolique** vers la source. Un patron commençant par `/` est ancré à la racine du dépôt ; aucun chemin ne peut sortir du dépôt. Le worktree du Run reçoit les trois premiers niveaux et le sous-worktree d'un Node reçoit aussi le sien. Un patron sans correspondance est un résultat vide normal.
+
+La recette Instance + Projet + Run est résolue et gelée à la création du Run ; celle du Node l'est pour son itération. Le niveau Node ne s'applique qu'à un Node isolé, qui possède son sous-worktree. Le provisionnement n'a lieu qu'à la création physique d'un worktree : une réutilisation préserve strictement son contenu. Il fusionne récursivement les dossiers mais n'écrase rien : seuls les chemins absents sont ajoutés, un chemin déjà matérialisé par Git ou par une règle précédente reste intact, et une exclusion n'enlève jamais un chemin versionné. PDO ne déduit aucune invalidation d'un changement du dépôt ; une erreur de copie ou de lien refuse le spawn avant toute session plutôt que de livrer un environnement partiel.
+
+La recette est gelée, pas les octets : chaque worktree lit la source courante au moment de sa création. Les liens symboliques déjà présents dans la source sont reproduits sans jamais être déréférencés. Une prévisualisation sans effet résout les règles contre un dépôt explicitement choisi, montre leur niveau, leur mode et le nombre d'entrées, et signale exclusions, conflits et patrons sans correspondance ; elle ne se rabat jamais sur le cwd du daemon.
+
+_Éviter_ : « fichiers obligatoires » ; « `.gitkeep` » (ce fichier conventionnel n'a aucune sémantique Git) ; « chemin absolu » pour un patron ancré au dépôt.
+
 ---
 
 ## Sessions tmux

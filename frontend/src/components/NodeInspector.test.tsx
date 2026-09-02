@@ -837,6 +837,41 @@ describe("NodeInspector — Workspace (#653)", () => {
     expect(screen.getByLabelText("Copy patterns")).toHaveValue("frozen");
   });
 
+  it("keeps pipeline provisioning editable when a stale run projection is present", async () => {
+    seedTabWithReviewer(false);
+    useEditStore.getState().openTabs[0].pipeline.nodes[0].provisioning = {
+      copy: ["pipeline-rule"],
+      hardlink: [],
+      symlink: [],
+    };
+    renderInspector({
+      libraryEntries: [],
+      onLibraryChanged: () => {},
+      runNode: {
+        node_id: "rv1",
+        status: "running",
+        iter: 1,
+        started_at: "2026-09-01T12:00:00Z",
+        completed_at: null,
+        failure_reason: null,
+        iterations: [],
+        isolated_worktree: true,
+        provisioning: { copy: ["stale-run-rule"], hardlink: [], symlink: [] },
+      },
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "Configure provisioning" }));
+    const copyPatterns = screen.getByLabelText("Copy patterns");
+    expect(copyPatterns).toHaveValue("pipeline-rule");
+
+    await userEvent.clear(copyPatterns);
+    await userEvent.type(copyPatterns, "updated-pipeline-rule");
+
+    expect(useEditStore.getState().openTabs[0].pipeline.nodes[0].provisioning?.copy).toEqual([
+      "updated-pipeline-rule",
+    ]);
+  });
+
   it("shows a static agent type label instead of a type toggle", () => {
     seedTabWithReviewer(false);
     renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });

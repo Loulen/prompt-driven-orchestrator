@@ -299,11 +299,15 @@ export default function NodeInspector({
                     <ProvisioningRulesEditor
                       level="isolated_node"
                       repository={provisioningRepository || provisioningPreviewRepository}
-                      rules={runNode?.provisioning ?? node.provisioning ?? EMPTY_PROVISIONING_RULES}
+                      rules={
+                        (provisioningFrozenAt ? runNode?.provisioning : undefined) ??
+                        node.provisioning ??
+                        EMPTY_PROVISIONING_RULES
+                      }
                       onChange={(rules) => handleField("provisioning", rules)}
                       readOnly={readOnly || !!provisioningFrozenAt}
                       frozenAt={provisioningFrozenAt}
-                      frozenPlan={runNode?.provisioning_plan}
+                      frozenPlan={provisioningFrozenAt ? runNode?.provisioning_plan : undefined}
                       inherited={inheritedProvisioning}
                       gitRef={provisioningGitRef}
                     />

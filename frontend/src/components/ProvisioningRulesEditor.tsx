@@ -32,6 +32,17 @@ function scopePrecedes(left: ProvisioningScope, right: ProvisioningScope): boole
   return SCOPES.indexOf(left) < SCOPES.indexOf(right);
 }
 
+function pathsOverlap(left: string[], right: string[]): boolean {
+  return left.some((leftPath) =>
+    right.some(
+      (rightPath) =>
+        leftPath === rightPath ||
+        leftPath.startsWith(`${rightPath}/`) ||
+        rightPath.startsWith(`${leftPath}/`),
+    ),
+  );
+}
+
 function lines(value: string): string[] {
   return value
     .split("\n")
@@ -192,8 +203,7 @@ export default function ProvisioningRulesEditor({
       .slice(0, lineIndex)
       .reduce((length, line) => length + line.length + 1, 0);
     textarea.focus();
-    const end = start + rule.pattern.length + (lineIndex < rules[mode].length - 1 ? 1 : 0);
-    textarea.setSelectionRange(start, end);
+    textarea.setSelectionRange(start, start + rule.pattern.length);
   }
 
   function overriddenOrigins(
@@ -204,14 +214,21 @@ export default function ProvisioningRulesEditor({
         (candidate) =>
           scopePrecedes(candidate.scope, rule.scope) &&
           candidate.mode !== rule.mode &&
-          candidate.paths.some((candidatePath) =>
-            rule.paths.some(
-              (path) =>
-                path === candidatePath ||
-                path.startsWith(`${candidatePath}/`) ||
-                candidatePath.startsWith(`${path}/`),
-            ),
-          ),
+          pathsOverlap(candidate.paths, rule.paths),
+      )
+      .map((candidate) => `${LEVEL_LABELS[candidate.scope]} ${candidate.mode}`)
+      .filter((value, index, all) => all.indexOf(value) === index);
+  }
+
+  function overridingOrigins(
+    rule: NonNullable<ProvisioningPlan["rules"]>[number],
+  ): string[] {
+    return (visiblePlan?.rules ?? [])
+      .filter(
+        (candidate) =>
+          scopePrecedes(rule.scope, candidate.scope) &&
+          candidate.mode !== rule.mode &&
+          pathsOverlap(candidate.paths, rule.paths),
       )
       .map((candidate) => `${LEVEL_LABELS[candidate.scope]} ${candidate.mode}`)
       .filter((value, index, all) => all.indexOf(value) === index);
@@ -352,6 +369,7 @@ export default function ProvisioningRulesEditor({
         ))}
         {(visiblePlan?.rules ?? []).map((rule) => {
           const overrides = overriddenOrigins(rule);
+          const overriddenBy = overridingOrigins(rule);
           return (
             <details
               key={`${rule.scope}-${rule.mode}-${rule.pattern}`}
@@ -361,6 +379,9 @@ export default function ProvisioningRulesEditor({
                 {rule.pattern} · {LEVEL_LABELS[rule.scope]} · {rule.mode} ·{" "}
                 {rule.paths.length + rule.excluded_paths.length}
                 {overrides.length > 0 ? ` · overrides ${overrides.join(", ")}` : ""}
+                {overriddenBy.length > 0
+                  ? ` · overridden by ${overriddenBy.join(", ")}`
+                  : ""}
               </summary>
               <div className="pl-4 text-fg-4">
                 {rule.paths.map((path) => (

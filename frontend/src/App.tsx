@@ -366,7 +366,8 @@ export default function App() {
       : undefined,
     provisioningGitRef:
       isEditingRun && selectedRun ? `pdo/run-${selectedRun.run_id}` : "HEAD",
-    runNode: selection.id ? selectedRun?.nodes?.[selection.id] : null,
+    runNode:
+      isEditingRun && selection.id ? selectedRun?.nodes?.[selection.id] : null,
   };
 
   // Both inspector panes are always rendered (with the inactive one hidden

@@ -700,6 +700,20 @@ describe("NewRunModal — image upload", () => {
 });
 
 describe("NewRunModal — form persistence across close/reopen", () => {
+  it("clears run provisioning across close/reopen", async () => {
+    const { rerender } = render(
+      <NewRunModal open={true} onClose={noop} onCreated={noop} />,
+    );
+
+    await userEvent.type(screen.getByLabelText("Symlink patterns"), "conflicting-draft");
+    expect(screen.getByLabelText("Symlink patterns")).toHaveValue("conflicting-draft");
+
+    rerender(<NewRunModal open={false} onClose={noop} onCreated={noop} />);
+    rerender(<NewRunModal open={true} onClose={noop} onCreated={noop} />);
+
+    expect(screen.getByLabelText("Symlink patterns")).toHaveValue("");
+  });
+
   it("preserves prompt text across close/reopen", async () => {
     const { rerender } = render(
       <NewRunModal open={true} onClose={noop} onCreated={noop} />,

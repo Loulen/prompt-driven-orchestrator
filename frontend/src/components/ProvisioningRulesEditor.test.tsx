@@ -187,6 +187,10 @@ describe("ProvisioningRulesEditor", () => {
       "selectionStart",
       "ordinary\n".length,
     );
+    expect(screen.getByLabelText("Copy patterns")).toHaveProperty(
+      "selectionEnd",
+      "ordinary\nsecrets/*".length,
+    );
 
     await userEvent.click(
       screen.getByRole("button", { name: "Jump to symlink rule for secrets/token" }),
@@ -196,6 +200,12 @@ describe("ProvisioningRulesEditor", () => {
       "selectionStart",
       "other\n".length,
     );
+    expect(screen.getByLabelText("Symlink patterns")).toHaveProperty(
+      "selectionEnd",
+      "other\nsecrets/*".length,
+    );
+    expect(screen.getByText(/\.env · Instance · copy · 1 · overridden by Run symlink/))
+      .toBeInTheDocument();
   });
 
   it("previews Instance rules without folding in a Project owner", async () => {

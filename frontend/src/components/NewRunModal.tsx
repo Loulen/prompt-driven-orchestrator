@@ -212,6 +212,8 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     setGuardTest(null);
     setGuardTestError(null);
     setError(null);
+    setProvisioning(EMPTY_PROVISIONING_RULES);
+    setProvisioningValid(true);
 
     // One-shot reset: the `openPrefillDone` ref gates this to a single run per
     // open, so the setState cascade is bounded and does not re-fire. The

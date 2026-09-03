@@ -76,6 +76,7 @@ mod skill_bank;
 mod skill_delivery;
 mod skill_import;
 mod skill_selection;
+mod skill_sidecar;
 pub mod stale_detector;
 mod stats;
 mod stats_performance;
@@ -3927,7 +3928,20 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/pipelines/{pipeline_id}/document",
             get(get_pipeline_document),
         )
-        .route("/pipelines/import", post(import_pipeline_document))
+        // #673 / ADR-0062: the skills sidecar of the portable document — a zip of
+        // `<pipeline>.skills/<id>/…` to unpack beside the YAML. The import takes it
+        // back as a base64 field of the same request; own body limit so a sidecar
+        // carrying a few reference files is not refused by the 2 MB default.
+        .route(
+            "/pipelines/{pipeline_id}/document/skills",
+            get(get_pipeline_document_skills),
+        )
+        .route(
+            "/pipelines/import",
+            post(import_pipeline_document).route_layer(axum::extract::DefaultBodyLimit::max(
+                SKILL_UPLOAD_BODY_LIMIT,
+            )),
+        )
         .route(
             "/pipelines/{pipeline_id}",
             axum::routing::put(save_pipeline).delete(delete_pipeline),
@@ -3953,6 +3967,10 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route(
             "/runs/{run_id}/pipeline/document",
             get(get_run_pipeline_document),
+        )
+        .route(
+            "/runs/{run_id}/pipeline/document/skills",
+            get(get_run_pipeline_document_skills),
         )
         .route(
             "/runs/{run_id}/repos",
@@ -6121,9 +6139,81 @@ async fn get_pipeline_document(
     pipeline_document_response(&resolve_pipeline_path(&state.repo_root, &id))
 }
 
+/// The skills sidecar of a parsed pipeline (#673): a zip of
+/// `<pipeline>.skills/<id>/…` read from the bank's disk root, or **204** when the
+/// pipeline references no skill (nothing to ship — the YAML alone is the
+/// document). A referenced id with no folder in the bank is left out: the
+/// exporting instance already shows the warning, and the importing one will.
+fn skills_sidecar_response(repo_root: &Path, pipeline: &pipeline::PipelineDef) -> Response {
+    if skill_sidecar::referenced_skills(pipeline).is_empty() {
+        return StatusCode::NO_CONTENT.into_response();
+    }
+    let (skills, absent) = skill_sidecar::collect(repo_root, pipeline);
+    if !absent.is_empty() {
+        info!(
+            "skills sidecar of '{}': {} referenced skill(s) not in the bank: {}",
+            pipeline.name,
+            absent.len(),
+            absent.join(", ")
+        );
+    }
+    match skill_sidecar::write_zip(&pipeline.name, &skills) {
+        Ok(bytes) => (
+            [
+                (header::CONTENT_TYPE, "application/zip".to_string()),
+                (
+                    header::CONTENT_DISPOSITION,
+                    format!(
+                        "attachment; filename=\"{}.zip\"",
+                        skill_sidecar::sidecar_dir_name(&pipeline.name).replace('"', "")
+                    ),
+                ),
+                (
+                    header::HeaderName::from_static("x-pdo-skills"),
+                    skills.len().to_string(),
+                ),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": error })),
+        )
+            .into_response(),
+    }
+}
+
+async fn get_pipeline_document_skills(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    let path = resolve_pipeline_path(&state.repo_root, &id);
+    let yaml = match std::fs::read_to_string(&path) {
+        Ok(yaml) => yaml,
+        Err(_) => return (StatusCode::NOT_FOUND, "pipeline not found").into_response(),
+    };
+    let parsed = match pipeline::parse_pipeline(&yaml) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("invalid pipeline: {error}") })),
+            )
+                .into_response()
+        }
+    };
+    skills_sidecar_response(&state.repo_root, &parsed.pipeline)
+}
+
 #[derive(Deserialize)]
 struct ImportPipelineDocumentRequest {
     document: String,
+    /// #673: the skills sidecar as PDO exported it (or as the user re-zipped the
+    /// `<pipeline>.skills/` folder), base64. Absent ⇒ unknown ids import with the
+    /// "skill absent" warning, never a failure.
+    #[serde(default)]
+    skills_sidecar: Option<String>,
 }
 
 async fn import_pipeline_document(
@@ -6140,6 +6230,34 @@ async fn import_pipeline_document(
                 .into_response()
         }
     };
+    let sidecar = match req.skills_sidecar.as_deref().map(str::trim) {
+        Some(encoded) if !encoded.is_empty() => {
+            use base64::Engine as _;
+            let bytes = match base64::engine::general_purpose::STANDARD.decode(encoded) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({
+                            "error": format!("skills_sidecar: not valid base64: {error}")
+                        })),
+                    )
+                        .into_response()
+                }
+            };
+            match skill_sidecar::read_zip(&bytes) {
+                Ok(skills) => skills,
+                Err(error) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({ "error": format!("skills_sidecar: {error}") })),
+                    )
+                        .into_response()
+                }
+            }
+        }
+        _ => Vec::new(),
+    };
     let Some(dir) = instance_pipeline_dir(&state.repo_root) else {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -6149,6 +6267,20 @@ async fn import_pipeline_document(
     };
     let (id, name) = available_pipeline_identity(&dir, &interpreted.pipeline.name);
     let mut imported = interpreted.pipeline;
+    // #673: the bank first, the YAML second — a created skill is referenced by
+    // the id the document carries, so the pipeline is launchable as soon as it
+    // is written, and its node references are relabelled with the bank's names.
+    // The import folder is named after the document's own name (its provenance),
+    // before the "(2)" a same-named pipeline on this instance may add.
+    let mut warnings = interpreted.warnings;
+    let skills =
+        match skill_sidecar::import_into_bank(&state.db, &state.repo_root, &mut imported, &sidecar)
+            .await
+        {
+            Ok(report) => report,
+            Err(error) => return skill_error_response(error),
+        };
+    warnings.extend(skills.warnings.iter().cloned());
     imported.name = name;
     match write_pipeline_atomically(&dir, &id, &imported, &interpreted.prompts) {
         Ok(path) => (
@@ -6157,7 +6289,8 @@ async fn import_pipeline_document(
                 "id": id,
                 "scope": "instance",
                 "path": path.to_string_lossy(),
-                "warnings": interpreted.warnings,
+                "warnings": warnings,
+                "skills": skills,
             })),
         )
             .into_response(),
@@ -11763,38 +11896,57 @@ async fn get_run_pipeline(
     .into_response()
 }
 
-async fn get_run_pipeline_document(
-    State(state): State<Arc<AppState>>,
-    AxumPath(run_id): AxumPath<String>,
-) -> Response {
-    let run_state = load_events(&state.db, &run_id)
+/// The pipeline a Run ran (archived or live) with its prompts — what the Run's
+/// portable document and its skills sidecar are both built from.
+async fn run_pipeline_for_export(
+    state: &AppState,
+    run_id: &str,
+) -> Result<(pipeline::PipelineDef, HashMap<String, String>), Box<Response>> {
+    let run_state = load_events(&state.db, run_id)
         .await
         .ok()
         .and_then(|events| event_log::project(&events));
     let yaml_path = match &run_state {
-        Some(run) => archived_or_live_pipeline_yaml(&state, run, &run_id),
-        None => run_scoped_pipeline_path(&state.repo_root, &run_id),
+        Some(run) => archived_or_live_pipeline_yaml(state, run, run_id),
+        None => run_scoped_pipeline_path(&state.repo_root, run_id),
     };
-    let yaml = match std::fs::read_to_string(&yaml_path) {
-        Ok(yaml) => yaml,
-        Err(_) => return (StatusCode::NOT_FOUND, "run pipeline not found").into_response(),
-    };
-    let parsed = match pipeline::parse_pipeline(&yaml) {
-        Ok(parsed) => parsed,
-        Err(error) => {
-            return (
+    let yaml = std::fs::read_to_string(&yaml_path)
+        .map_err(|_| Box::new((StatusCode::NOT_FOUND, "run pipeline not found").into_response()))?;
+    let parsed = pipeline::parse_pipeline(&yaml).map_err(|error| {
+        Box::new(
+            (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": format!("invalid run pipeline: {error}") })),
             )
-                .into_response()
-        }
-    };
+                .into_response(),
+        )
+    })?;
     let prompts_dir = match &run_state {
-        Some(run) => archived_or_live_prompts_dir(&state, run, &run_id),
-        None => run_scoped_prompts_dir(&state.repo_root, &run_id),
+        Some(run) => archived_or_live_prompts_dir(state, run, run_id),
+        None => run_scoped_prompts_dir(&state.repo_root, run_id),
     };
-    let prompts = read_prompts_from_dir(&prompts_dir);
-    match portable_pipeline::export(&parsed.pipeline, &prompts) {
+    Ok((parsed.pipeline, read_prompts_from_dir(&prompts_dir)))
+}
+
+async fn get_run_pipeline_document_skills(
+    State(state): State<Arc<AppState>>,
+    AxumPath(run_id): AxumPath<String>,
+) -> Response {
+    match run_pipeline_for_export(&state, &run_id).await {
+        Ok((pipeline, _)) => skills_sidecar_response(&state.repo_root, &pipeline),
+        Err(response) => *response,
+    }
+}
+
+async fn get_run_pipeline_document(
+    State(state): State<Arc<AppState>>,
+    AxumPath(run_id): AxumPath<String>,
+) -> Response {
+    let (pipeline, prompts) = match run_pipeline_for_export(&state, &run_id).await {
+        Ok(found) => found,
+        Err(response) => return *response,
+    };
+    match portable_pipeline::export(&pipeline, &prompts) {
         Ok(document) => (
             [(header::CONTENT_TYPE, "application/yaml; charset=utf-8")],
             document,

@@ -10,6 +10,18 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.56.0
+
+**Voyage des skills par document** (#673 ; story #666, spec #667, ADR-0062). Exporter un pipeline dont
+des nœuds sélectionnent des skills produit, à côté du YAML, un **sidecar** `<pipeline>.skills.zip`
+(entrées `<pipeline>.skills/<id>/SKILL.md` + fichiers de référence) : bouton *Skills (N)* dans la barre
+du document portable, endpoints `GET /pipelines/{id}/document/skills` et
+`GET /runs/{run_id}/pipeline/document/skills` (204 sans skill). L'import (*load files…* accepte YAML +
+zip ; `POST /pipelines/import` prend un `skills_sidecar` base64) recrée dans la banque les skills dont
+l'id est inconnu, **avec le même id**, dans un dossier racine *importés avec <pipeline>* ; un id connu
+reste intact ; un nom déjà pris est suffixé `-2`, `-3`… avec avertissement ; un id absent de la banque
+et du sidecar produit un avertissement, jamais un échec. La réponse porte un rapport `skills`
+(`created`, `kept`, `renamed`, `missing`, `folder`). Le YAML du document ne change pas.
 ## 1.55.0
 
 **Livraison des skills effectifs dans le worktree** (#672 ; story #666, spec #667 ; ADR-0062). Quand

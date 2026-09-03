@@ -796,6 +796,47 @@ pub(crate) async fn create(
     label: Option<&str>,
     folder_id: Option<&str>,
 ) -> Result<Skill, SkillError> {
+    create_with_id(db, repo_root, None, content, label, folder_id).await
+}
+
+/// A skill id that can name a folder on disk: plain characters only, no path
+/// separators, no `.`/`..`. The bank's own ids are UUIDs; an imported document
+/// (#673) supplies its own, and this is the one gate before it reaches
+/// [`skill_dir`].
+pub(crate) fn is_safe_skill_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id != "."
+        && id != ".."
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
+/// [`create`] with the id chosen by the caller — the seam the document import
+/// uses (#673, ADR-0062 "identité par id"): a skill recreated from a sidecar
+/// keeps the id the pipeline references, so the round-trip export → delete →
+/// import leaves the pipeline without a warning. `None` generates a fresh one.
+/// An id already indexed is a [`SkillError::Storage`] (the importer checks
+/// first and never overwrites); an unsafe id is an [`SkillError::InvalidPath`].
+pub(crate) async fn create_with_id(
+    db: &SqlitePool,
+    repo_root: &Path,
+    id: Option<&str>,
+    content: &str,
+    label: Option<&str>,
+    folder_id: Option<&str>,
+) -> Result<Skill, SkillError> {
+    if let Some(id) = id {
+        if !is_safe_skill_id(id) {
+            return Err(SkillError::InvalidPath(id.to_string()));
+        }
+        if get(db, id).await?.is_some() {
+            return Err(SkillError::Storage(format!(
+                "a skill with id `{id}` already exists"
+            )));
+        }
+    }
     let parsed = validate_skill_md(content)?;
     let name = check_label_unique(db, label.unwrap_or(&parsed.name), None).await?;
     let folder_id = match folder_id.map(str::trim).filter(|s| !s.is_empty()) {
@@ -807,7 +848,7 @@ pub(crate) async fn create(
         }
         None => None,
     };
-    let id = generate_skill_id();
+    let id = id.map(str::to_string).unwrap_or_else(generate_skill_id);
     let now = crate::event_log::now_iso();
     sqlx::query(
         "INSERT INTO skills (id, name, description, folder_id, source, source_commit, created_at, updated_at) \

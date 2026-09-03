@@ -186,7 +186,7 @@ export default function PasteSkillModal({
               className="rounded-md border border-dashed border-line px-3 py-2 text-fg-4"
               style={{ fontSize: "10.5px" }}
             >
-              Reference files (drag files here) arrive in a later ticket · SKILL.md only for now
+              SKILL.md only here · to bring reference files along, import the skill's folder from a source
             </div>
           </div>
 

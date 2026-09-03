@@ -1448,6 +1448,27 @@ export interface StatsPerformance {
 // Banque de skills (#668, ADR-0062)
 // ---------------------------------------------------------------------------
 
+/**
+ * Where an imported skill comes from (#670): repository URL or local folder,
+ * the ref asked for, the commit read, and the skill's folder path inside the
+ * source. A skill keeps it even when moved out of its Source folder.
+ */
+export interface SkillProvenance {
+  url: string;
+  ref: string | null;
+  commit: string | null;
+  /** `/`-separated path inside the source; `""` at its root. */
+  path: string;
+}
+
+/** A Source folder's provenance: the scan root plus what the last import saw. */
+export interface FolderProvenance extends SkillProvenance {
+  imported_at: string;
+  /** Skills found at the source at that time, valid or not. */
+  found: number;
+  invalid: number;
+}
+
 /** One row of the bank's index. Identity is `id`; `name` is a unique label. */
 export interface Skill {
   id: string;
@@ -1456,8 +1477,7 @@ export interface Skill {
   /** `null` at the root of the bank. */
   folder_id: string | null;
   /** Provenance of an import; absent for a pasted skill. */
-  source?: string | null;
-  source_commit?: string | null;
+  source?: SkillProvenance | null;
   created_at: string;
   updated_at: string;
 }
@@ -1467,8 +1487,93 @@ export interface SkillFolder {
   id: string;
   name: string;
   parent_id: string | null;
+  /** Present on a folder created by an import (a Source folder). */
+  source?: FolderProvenance | null;
   created_at: string;
   updated_at: string;
+}
+
+/** The daemon's reading of a typed source (`POST /settings/skills/scan`). */
+export interface ParsedSkillSource {
+  kind: "git" | "local";
+  url: string;
+  ref: string | null;
+  path: string;
+  repo: string;
+  suggested_folder: string;
+}
+
+export type SkillCandidateStatus = "new" | "name_taken" | "same_commit" | "invalid";
+
+/** One folder holding a `SKILL.md` at the source, with its collision status. */
+export interface SkillCandidate {
+  path: string;
+  name: string;
+  description: string;
+  valid: boolean;
+  reason?: string;
+  code?: string;
+  file_count: number;
+  status: SkillCandidateStatus;
+  existing?: { id: string; name: string; folder_id: string | null; folder_name: string | null };
+}
+
+export interface SkillScanResult {
+  scan_id: string;
+  source: ParsedSkillSource;
+  commit: string | null;
+  candidates: SkillCandidate[];
+  /** When the sub-path held nothing: folders elsewhere in the repo that do. */
+  elsewhere: string[];
+  elsewhere_count: number;
+}
+
+export type SkillImportAction = "import" | "replace" | "rename" | "skip";
+
+export interface SkillImportItem {
+  path: string;
+  action: SkillImportAction;
+  name?: string;
+}
+
+export interface SkillImportReport {
+  folder: SkillFolder;
+  imported: { path: string; skill: Skill; action: string }[];
+  failed: { path: string; error: string; code: string }[];
+  commit: string | null;
+}
+
+export type SkillUpdateStatus = "updated" | "unchanged" | "new" | "skipped" | "gone" | "invalid";
+
+export interface SkillUpdateEntry {
+  path: string;
+  name: string;
+  description: string;
+  status: SkillUpdateStatus;
+  skill_id?: string;
+  reason?: string;
+  skill_md_changed: boolean;
+  files_added: number;
+  files_removed: number;
+  files_changed: number;
+  name_taken_by?: string;
+}
+
+export interface SkillRescanReport {
+  scan_id: string;
+  source: ParsedSkillSource;
+  previous_commit: string | null;
+  commit: string | null;
+  entries: SkillUpdateEntry[];
+}
+
+export interface RecentSkillSource {
+  url: string;
+  ref: string | null;
+  path: string;
+  last_used_at: string;
+  folder_id?: string;
+  folder_name?: string;
 }
 
 /** `GET /settings/skills`: the whole bank in one read. */

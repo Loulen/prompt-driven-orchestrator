@@ -40,6 +40,42 @@ pub(crate) fn skill_dir(repo_root: &Path, id: &str) -> PathBuf {
 
 pub(crate) const SKILL_MD: &str = "SKILL.md";
 
+/// Where an imported skill comes from (#670, CONTEXT.md §*Source*): the
+/// repository URL (or local folder), the ref that was asked for, the commit the
+/// content was read at, and the skill's folder path inside the source. Carried
+/// by the skill itself — a skill moved out of its Source folder keeps it — and,
+/// with a few counters, by the folder the import created.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct Provenance {
+    pub url: String,
+    #[serde(default, rename = "ref")]
+    pub git_ref: Option<String>,
+    #[serde(default)]
+    pub commit: Option<String>,
+    /// `/`-separated path of the skill's folder inside the source (`""` = root).
+    #[serde(default)]
+    pub path: String,
+}
+
+/// A Source folder's provenance: the scan root (`path` is the sub-folder the
+/// scan was pointed at), plus what the last import / update saw there.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct FolderProvenance {
+    pub url: String,
+    #[serde(default, rename = "ref")]
+    pub git_ref: Option<String>,
+    #[serde(default)]
+    pub commit: Option<String>,
+    #[serde(default)]
+    pub path: String,
+    /// When the folder was last imported or updated from the source.
+    pub imported_at: String,
+    /// Skills found at the source at that time (valid or not).
+    pub found: i64,
+    /// Of which not importable (invalid frontmatter).
+    pub invalid: i64,
+}
+
 /// One row of the bank's index. `folder_id` is `None` at the root.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Skill {
@@ -48,11 +84,9 @@ pub(crate) struct Skill {
     pub description: String,
     #[serde(default)]
     pub folder_id: Option<String>,
-    /// Provenance of an import (URL / local path). `None` for a pasted skill.
+    /// Provenance of an import. `None` for a pasted skill.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_commit: Option<String>,
+    pub source: Option<Provenance>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -64,6 +98,9 @@ pub(crate) struct SkillFolder {
     pub name: String,
     #[serde(default)]
     pub parent_id: Option<String>,
+    /// Set on a folder created by an import (a **Source folder**).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<FolderProvenance>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -201,27 +238,96 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
     )
     .execute(db)
     .await?;
+    // #670: provenance grows from `(source, source_commit)` to a full object on
+    // the skill, and lands on the folder too. Additive columns, guarded so a
+    // 1.51 database opens unchanged.
+    for (table, column, ty) in [
+        ("skills", "source_ref", "TEXT"),
+        ("skills", "source_path", "TEXT"),
+        ("skill_folders", "source", "TEXT"),
+        ("skill_folders", "source_ref", "TEXT"),
+        ("skill_folders", "source_commit", "TEXT"),
+        ("skill_folders", "source_path", "TEXT"),
+        ("skill_folders", "source_imported_at", "TEXT"),
+        ("skill_folders", "source_found", "INTEGER"),
+        ("skill_folders", "source_invalid", "INTEGER"),
+    ] {
+        add_column_if_missing(db, table, column, ty).await?;
+    }
+    // Sources the operator has scanned, for the import popup's "Recent sources".
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS skill_sources (
+            url          TEXT NOT NULL,
+            git_ref      TEXT NOT NULL DEFAULT '',
+            path         TEXT NOT NULL DEFAULT '',
+            last_used_at TEXT NOT NULL,
+            PRIMARY KEY (url, git_ref, path)
+        )",
+    )
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+async fn add_column_if_missing(
+    db: &SqlitePool,
+    table: &str,
+    column: &str,
+    ty: &str,
+) -> Result<(), sqlx::Error> {
+    let rows = sqlx::query(&format!("PRAGMA table_info({table})"))
+        .fetch_all(db)
+        .await?;
+    let present = rows
+        .iter()
+        .any(|row| row.get::<String, _>("name") == column);
+    if !present {
+        sqlx::query(&format!("ALTER TABLE {table} ADD COLUMN {column} {ty}"))
+            .execute(db)
+            .await?;
+    }
     Ok(())
 }
 
 fn row_to_skill(row: &sqlx::sqlite::SqliteRow) -> Skill {
+    let url: Option<String> = row.get("source");
     Skill {
         id: row.get("id"),
         name: row.get("name"),
         description: row.get("description"),
         folder_id: row.get("folder_id"),
-        source: row.get("source"),
-        source_commit: row.get("source_commit"),
+        source: url.map(|url| Provenance {
+            url,
+            git_ref: row.get("source_ref"),
+            commit: row.get("source_commit"),
+            path: row
+                .get::<Option<String>, _>("source_path")
+                .unwrap_or_default(),
+        }),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
     }
 }
 
 fn row_to_folder(row: &sqlx::sqlite::SqliteRow) -> SkillFolder {
+    let url: Option<String> = row.get("source");
     SkillFolder {
         id: row.get("id"),
         name: row.get("name"),
         parent_id: row.get("parent_id"),
+        source: url.map(|url| FolderProvenance {
+            url,
+            git_ref: row.get("source_ref"),
+            commit: row.get("source_commit"),
+            path: row
+                .get::<Option<String>, _>("source_path")
+                .unwrap_or_default(),
+            imported_at: row
+                .get::<Option<String>, _>("source_imported_at")
+                .unwrap_or_default(),
+            found: row.get::<Option<i64>, _>("source_found").unwrap_or(0),
+            invalid: row.get::<Option<i64>, _>("source_invalid").unwrap_or(0),
+        }),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
     }
@@ -488,10 +594,167 @@ pub(crate) async fn create(
         description: parsed.description,
         folder_id,
         source: None,
-        source_commit: None,
         created_at: now.clone(),
         updated_at: now,
     })
+}
+
+/// Copy a directory tree (files and sub-directories; symlinks are followed as
+/// files, `.git` folders skipped). Used to bring a skill's folder — `SKILL.md`
+/// and its reference files, verbatim — from a scanned source into the bank.
+pub(crate) fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if name == ".git" {
+            continue;
+        }
+        let from = entry.path();
+        let to = dst.join(&name);
+        if from.is_dir() {
+            copy_dir_all(&from, &to)?;
+        } else {
+            std::fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
+}
+
+/// Create a skill from a **folder** (the import path, #670): same gate and same
+/// order as [`create`] — validate the `SKILL.md`, check the label, insert the
+/// row with its provenance, then copy the whole folder. A refusal leaves no byte
+/// on disk; a copy failure rolls the row back.
+pub(crate) async fn create_from_dir(
+    db: &SqlitePool,
+    repo_root: &Path,
+    src_dir: &Path,
+    label: Option<&str>,
+    folder_id: Option<&str>,
+    provenance: &Provenance,
+) -> Result<Skill, SkillError> {
+    let content = std::fs::read_to_string(src_dir.join(SKILL_MD))?;
+    let parsed = validate_skill_md(&content)?;
+    let name = check_label_unique(db, label.unwrap_or(&parsed.name), None).await?;
+    let folder_id = match folder_id.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(folder) => {
+            if !folder_exists(db, folder).await? {
+                return Err(SkillError::FolderNotFound);
+            }
+            Some(folder.to_string())
+        }
+        None => None,
+    };
+    let id = generate_skill_id();
+    let now = crate::event_log::now_iso();
+    sqlx::query(
+        "INSERT INTO skills (id, name, description, folder_id, source, source_ref, source_commit, source_path, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(&name)
+    .bind(&parsed.description)
+    .bind(&folder_id)
+    .bind(&provenance.url)
+    .bind(&provenance.git_ref)
+    .bind(&provenance.commit)
+    .bind(&provenance.path)
+    .bind(&now)
+    .bind(&now)
+    .execute(db)
+    .await?;
+
+    let dir = skill_dir(repo_root, &id);
+    if let Err(error) = copy_dir_all(src_dir, &dir) {
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = sqlx::query("DELETE FROM skills WHERE id = ?")
+            .bind(&id)
+            .execute(db)
+            .await;
+        return Err(SkillError::Storage(format!(
+            "failed to copy {} into {}: {error}",
+            src_dir.display(),
+            dir.display()
+        )));
+    }
+
+    Ok(Skill {
+        id,
+        name,
+        description: parsed.description,
+        folder_id,
+        source: Some(provenance.clone()),
+        created_at: now.clone(),
+        updated_at: now,
+    })
+}
+
+/// Replace a skill's **content** with a folder from a source, keeping its id,
+/// label, folder and referents (the *Replace* choice of a collision, and the
+/// *updated* rows of an Update from source). The old folder is swapped out only
+/// after the new content validated; a failed copy restores it.
+pub(crate) async fn replace_content_from_dir(
+    db: &SqlitePool,
+    repo_root: &Path,
+    id: &str,
+    src_dir: &Path,
+    provenance: &Provenance,
+) -> Result<Skill, SkillError> {
+    get(db, id).await?.ok_or(SkillError::NotFound)?;
+    let content = std::fs::read_to_string(src_dir.join(SKILL_MD))?;
+    let parsed = validate_skill_md(&content)?;
+    let dir = skill_dir(repo_root, id);
+    let backup = skills_root(repo_root).join(format!(".{id}.replacing"));
+    let _ = std::fs::remove_dir_all(&backup);
+    if dir.exists() {
+        std::fs::rename(&dir, &backup)?;
+    }
+    if let Err(error) = copy_dir_all(src_dir, &dir) {
+        let _ = std::fs::remove_dir_all(&dir);
+        if backup.exists() {
+            let _ = std::fs::rename(&backup, &dir);
+        }
+        return Err(SkillError::Storage(format!(
+            "failed to copy {} into {}: {error}",
+            src_dir.display(),
+            dir.display()
+        )));
+    }
+    let _ = std::fs::remove_dir_all(&backup);
+    let now = crate::event_log::now_iso();
+    sqlx::query(
+        "UPDATE skills SET description = ?, source = ?, source_ref = ?, source_commit = ?, source_path = ?, updated_at = ? WHERE id = ?",
+    )
+    .bind(&parsed.description)
+    .bind(&provenance.url)
+    .bind(&provenance.git_ref)
+    .bind(&provenance.commit)
+    .bind(&provenance.path)
+    .bind(&now)
+    .bind(id)
+    .execute(db)
+    .await?;
+    get(db, id).await?.ok_or(SkillError::NotFound)
+}
+
+/// Refresh the provenance commit of a skill whose content is identical at a
+/// newer commit of its source (an Update from source that found it *unchanged*).
+pub(crate) async fn touch_provenance(
+    db: &SqlitePool,
+    id: &str,
+    provenance: &Provenance,
+) -> Result<(), SkillError> {
+    sqlx::query(
+        "UPDATE skills SET source = ?, source_ref = ?, source_commit = ?, source_path = ? WHERE id = ?",
+    )
+    .bind(&provenance.url)
+    .bind(&provenance.git_ref)
+    .bind(&provenance.commit)
+    .bind(&provenance.path)
+    .bind(id)
+    .execute(db)
+    .await?;
+    Ok(())
 }
 
 /// A sparse edit of the index row: rename (label only — the frontmatter `name`
@@ -623,9 +886,109 @@ pub(crate) async fn create_folder(
         id,
         name: name.to_string(),
         parent_id,
+        source: None,
         created_at: now.clone(),
         updated_at: now,
     })
+}
+
+/// Stamp (or refresh) a folder's Source provenance. Called by the import when it
+/// creates the folder, and by every Update from source afterwards.
+pub(crate) async fn set_folder_provenance(
+    db: &SqlitePool,
+    id: &str,
+    provenance: &FolderProvenance,
+) -> Result<SkillFolder, SkillError> {
+    get_folder(db, id)
+        .await?
+        .ok_or(SkillError::FolderNotFound)?;
+    let now = crate::event_log::now_iso();
+    sqlx::query(
+        "UPDATE skill_folders SET source = ?, source_ref = ?, source_commit = ?, source_path = ?, \
+         source_imported_at = ?, source_found = ?, source_invalid = ?, updated_at = ? WHERE id = ?",
+    )
+    .bind(&provenance.url)
+    .bind(&provenance.git_ref)
+    .bind(&provenance.commit)
+    .bind(&provenance.path)
+    .bind(&provenance.imported_at)
+    .bind(provenance.found)
+    .bind(provenance.invalid)
+    .bind(&now)
+    .bind(id)
+    .execute(db)
+    .await?;
+    get_folder(db, id).await?.ok_or(SkillError::FolderNotFound)
+}
+
+/// Remember a scanned source for the popup's "Recent sources" list.
+pub(crate) async fn remember_source(
+    db: &SqlitePool,
+    url: &str,
+    git_ref: Option<&str>,
+    path: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO skill_sources (url, git_ref, path, last_used_at) VALUES (?, ?, ?, ?) \
+         ON CONFLICT(url, git_ref, path) DO UPDATE SET last_used_at = excluded.last_used_at",
+    )
+    .bind(url)
+    .bind(git_ref.unwrap_or(""))
+    .bind(path)
+    .bind(crate::event_log::now_iso())
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// A remembered source, most recent first, with the Source folder that holds
+/// it in the bank (if any).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct RecentSource {
+    pub url: String,
+    #[serde(rename = "ref")]
+    pub git_ref: Option<String>,
+    pub path: String,
+    pub last_used_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub folder_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub folder_name: Option<String>,
+}
+
+pub(crate) async fn recent_sources(db: &SqlitePool) -> Result<Vec<RecentSource>, sqlx::Error> {
+    let rows = sqlx::query(
+        "SELECT url, git_ref, path, last_used_at FROM skill_sources ORDER BY last_used_at DESC LIMIT 12",
+    )
+    .fetch_all(db)
+    .await?;
+    let folders = list_folders(db).await?;
+    Ok(rows
+        .iter()
+        .map(|row| {
+            let url: String = row.get("url");
+            let git_ref: String = row.get("git_ref");
+            let path: String = row.get("path");
+            let holder = folders.iter().find(|folder| {
+                folder
+                    .source
+                    .as_ref()
+                    .is_some_and(|s| s.url == url && s.path == path)
+            });
+            RecentSource {
+                url,
+                git_ref: if git_ref.is_empty() {
+                    None
+                } else {
+                    Some(git_ref)
+                },
+                path,
+                last_used_at: row.get("last_used_at"),
+                folder_id: holder.map(|f| f.id.clone()),
+                folder_name: holder.map(|f| f.name.clone()),
+            }
+        })
+        .collect())
 }
 
 /// Is `candidate` equal to `folder` or one of its descendants? Guards a move

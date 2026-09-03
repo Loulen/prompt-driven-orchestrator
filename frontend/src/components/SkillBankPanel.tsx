@@ -1,13 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ChevronDown,
   ClipboardPaste,
   Copy,
+  Download,
   FileText,
   Folder,
   FolderInput,
   FolderPlus,
   MoreVertical,
   Pencil,
+  Plus,
+  RefreshCw,
   Search,
   Trash2,
 } from "lucide-react";
@@ -20,11 +24,22 @@ import {
   deleteSkillFolder,
   fetchSkill,
   fetchSkillReferents,
+  rescanSkillFolder,
   updateSkill,
   updateSkillFolder,
+  updateSkillFolderFromSource,
 } from "../api";
-import type { Skill, SkillBank, SkillDetail, SkillFolder, SkillReferents } from "../types";
+import type {
+  Skill,
+  SkillBank,
+  SkillDetail,
+  SkillFolder,
+  SkillReferents,
+  SkillRescanReport,
+  SkillUpdateEntry,
+} from "../types";
 import { formatSize, timeAgo } from "../lib/skillMd";
+import { displaySourceUrl, shortCommit } from "../lib/skillSource";
 import {
   descendantFolderIds,
   folderCounts,
@@ -36,6 +51,7 @@ import {
 } from "../lib/skillTree";
 import SkillTree from "./SkillTree";
 import PasteSkillModal from "./PasteSkillModal";
+import ImportSkillsModal from "./ImportSkillsModal";
 
 const REMARK_PLUGINS = [remarkGfm];
 const UNDO_MS = 6000;
@@ -51,7 +67,10 @@ interface Props {
 
 type Pending =
   | { kind: "delete-skill"; skill: Skill; referents: SkillReferents }
-  | { kind: "delete-folder"; folder: SkillFolder };
+  | { kind: "delete-folder"; folder: SkillFolder }
+  /** Update from source (#670): the re-scan is running, then its diff awaits confirmation. */
+  | { kind: "rescan-folder"; folder: SkillFolder }
+  | { kind: "update-folder"; folder: SkillFolder; report: SkillRescanReport };
 
 interface Toast {
   message: string;
@@ -80,6 +99,8 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [filter, setFilter] = useState("");
   const [pasteOpen, setPasteOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
   const [detail, setDetail] = useState<SkillDetail | null>(null);
   const [detailTab, setDetailTab] = useState<"skill" | "files">("skill");
   const [renaming, setRenaming] = useState<TreeNodeRef | null>(null);
@@ -125,10 +146,11 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
 
   // Close a kebab on outside click / Escape.
   useEffect(() => {
-    if (!menuFor && !movePickerFor) return;
+    if (!menuFor && !movePickerFor && !addMenuOpen) return;
     const close = () => {
       setMenuFor(null);
       setMovePickerFor(null);
+      setAddMenuOpen(false);
     };
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") close();
@@ -139,7 +161,7 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
       window.removeEventListener("click", close);
       window.removeEventListener("keydown", onKey);
     };
-  }, [menuFor, movePickerFor]);
+  }, [menuFor, movePickerFor, addMenuOpen]);
 
   const showToast = useCallback((next: Toast) => {
     if (toastTimer.current) window.clearTimeout(toastTimer.current);
@@ -325,6 +347,52 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
     }
   };
 
+  const startUpdateFromSource = async (folder: SkillFolder) => {
+    setError(null);
+    setSelected({ kind: "folder", id: folder.id });
+    setPending({ kind: "rescan-folder", folder });
+    const scanId = newScanId();
+    try {
+      const report = await rescanSkillFolder(folder.id, scanId);
+      setPending((current) =>
+        current?.kind === "rescan-folder" && current.folder.id === folder.id
+          ? { kind: "update-folder", folder, report }
+          : current,
+      );
+    } catch (cause) {
+      setPending((current) => (current?.kind === "rescan-folder" ? null : current));
+      failWith(cause, "Failed to re-scan the source");
+    }
+  };
+
+  const confirmUpdateFromSource = async (items: { path: string; action: "update" | "import" }[]) => {
+    if (pending?.kind !== "update-folder") return;
+    const folder = pending.folder;
+    setError(null);
+    try {
+      const report = await updateSkillFolderFromSource(folder.id, { scan_id: pending.report.scan_id, items });
+      setPending(null);
+      await onChanged();
+      expandTo(folder.id);
+      setSelected({ kind: "folder", id: folder.id });
+      const n = report.imported.length;
+      showToast({
+        message:
+          report.failed.length > 0
+            ? `Updated ${n} skill${n === 1 ? "" : "s"} · ${report.failed.length} failed: ${report.failed[0].error}`
+            : `Updated ${n} skill${n === 1 ? "" : "s"} from ${displaySourceUrl(folder.source?.url ?? "the source")}`,
+      });
+    } catch (cause) {
+      failWith(cause, "Update from source failed");
+    }
+  };
+
+  const openSourceFolder = (folderId: string) => {
+    expandTo(folderId);
+    setSelected({ kind: "folder", id: folderId });
+    setPending(null);
+  };
+
   // ---- rendering ----------------------------------------------------------
 
   const rootLabel = bank.root_path ? `${relativise(bank.root_path, home)}/<id>/` : "";
@@ -425,16 +493,53 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
             <Folder size={12} />
             <span style={{ fontSize: "12px", lineHeight: 1 }}>+</span>
           </button>
-          <button
-            type="button"
-            onClick={() => setPasteOpen(true)}
-            data-testid="skill-paste"
-            className="flex shrink-0 items-center gap-1.5 rounded-md bg-acc px-2.5 py-1.5 font-medium text-bg-1 hover:opacity-90"
-            style={{ fontSize: "11.5px" }}
-          >
-            <ClipboardPaste size={12} />
-            Paste skill
-          </button>
+          <span className="relative">
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                setMenuFor(null);
+                setAddMenuOpen((open) => !open);
+              }}
+              aria-haspopup="menu"
+              aria-expanded={addMenuOpen}
+              data-testid="skill-add"
+              className="flex shrink-0 items-center gap-1 rounded-md bg-acc px-2.5 py-1.5 font-medium text-bg-1 hover:opacity-90"
+              style={{ fontSize: "11.5px" }}
+            >
+              <Plus size={12} />
+              Add
+              <ChevronDown size={11} />
+            </button>
+            {addMenuOpen && (
+              <div
+                role="menu"
+                data-testid="skill-add-menu"
+                className="absolute right-0 top-8 z-10 w-64 rounded-md border border-line bg-bg-4 p-1 shadow-xl"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <MenuItem
+                  icon={<ClipboardPaste size={12} />}
+                  label="Paste SKILL.md…"
+                  testid="skill-paste"
+                  onClick={() => {
+                    setAddMenuOpen(false);
+                    setPasteOpen(true);
+                  }}
+                />
+                <MenuItem
+                  icon={<Download size={12} />}
+                  label="Import from a source…"
+                  hint="repo · folder"
+                  testid="skill-import"
+                  onClick={() => {
+                    setAddMenuOpen(false);
+                    setImportOpen(true);
+                  }}
+                />
+              </div>
+            )}
+          </span>
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
@@ -528,6 +633,15 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
             onCancel={() => setPending(null)}
             onConfirm={() => void confirmDelete()}
           />
+        ) : pending?.kind === "rescan-folder" ? (
+          <RescanInProgress folder={pending.folder} onCancel={() => setPending(null)} />
+        ) : pending?.kind === "update-folder" ? (
+          <UpdateFromSourceConfirm
+            folder={pending.folder}
+            report={pending.report}
+            onCancel={() => setPending(null)}
+            onConfirm={(items) => void confirmUpdateFromSource(items)}
+          />
         ) : selectedSkill ? (
           <SkillDetailView
             skill={selectedSkill}
@@ -545,19 +659,29 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
               setMovePickerFor(null);
               void moveSkill(selectedSkill.id, folderId);
             }}
+            sourceFolder={folders.find(
+              (folder) =>
+                folder.source &&
+                selectedSkill.source &&
+                folder.source.url === selectedSkill.source.url &&
+                selectedSkill.source.path.startsWith(folder.source.path),
+            ) ?? null}
+            onOpenSourceFolder={openSourceFolder}
           />
         ) : selectedFolder ? (
           <FolderDetailView
             folder={selectedFolder}
             folders={folders}
+            skills={skills}
             count={counts.get(selectedFolder.id) ?? 0}
             onNewSubfolder={() => void newFolder(selectedFolder.id)}
             onRename={() => startRename({ kind: "folder", id: selectedFolder.id })}
             onDelete={() => void askDelete({ kind: "folder", id: selectedFolder.id })}
             onMoveTo={(parentId) => void moveFolder(selectedFolder.id, parentId)}
+            onUpdateFromSource={() => void startUpdateFromSource(selectedFolder)}
           />
         ) : emptyBank ? (
-          <EmptyBank onPaste={() => setPasteOpen(true)} />
+          <EmptyBank onPaste={() => setPasteOpen(true)} onImport={() => setImportOpen(true)} />
         ) : (
           <div className="flex flex-1 items-center justify-center p-8 text-center text-fg-4" style={{ fontSize: "11.5px" }}>
             Select a skill to read it, or a folder to manage it.
@@ -591,6 +715,26 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
         )}
       </div>
 
+      {importOpen && (
+        <ImportSkillsModal
+          folders={folders}
+          existingNames={existingNames}
+          initialFolderId={selectedFolder?.id ?? selectedSkill?.folder_id ?? null}
+          home={home}
+          onClose={() => setImportOpen(false)}
+          onImported={async (report, complete) => {
+            await onChanged();
+            expandTo(report.folder.id);
+            setSelected({ kind: "folder", id: report.folder.id });
+            setPending(null);
+            if (complete) {
+              const n = report.imported.length;
+              showToast({ message: `Imported ${n} skill${n === 1 ? "" : "s"} into ${report.folder.name}` });
+            }
+          }}
+        />
+      )}
+
       {pasteOpen && (
         <PasteSkillModal
           folders={folders}
@@ -611,23 +755,32 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
 
 // ---------------------------------------------------------------------------
 
+function newScanId(): string {
+  const c = globalThis.crypto as Crypto | undefined;
+  if (c && typeof c.randomUUID === "function") return c.randomUUID();
+  return `scan-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 function MenuItem({
   icon,
   label,
   hint,
   danger,
+  testid,
   onClick,
 }: {
   icon: React.ReactNode;
   label: string;
   hint?: string;
   danger?: boolean;
+  testid?: string;
   onClick: () => void;
 }) {
   return (
     <button
       type="button"
       role="menuitem"
+      data-testid={testid}
       onClick={onClick}
       className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-bg-5 ${
         danger ? "text-st-failed" : "text-fg-2"
@@ -635,7 +788,7 @@ function MenuItem({
       style={{ fontSize: "11.5px" }}
     >
       <span className="shrink-0">{icon}</span>
-      <span className="flex-1">{label}</span>
+      <span className="flex-1 whitespace-nowrap">{label}</span>
       {hint && (
         <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
           {hint}
@@ -649,7 +802,7 @@ function MenuSeparator() {
   return <div className="my-1 border-t border-line" />;
 }
 
-function EmptyBank({ onPaste }: { onPaste: () => void }) {
+function EmptyBank({ onPaste, onImport }: { onPaste: () => void; onImport: () => void }) {
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center" data-testid="skill-bank-empty">
       <div className="grid h-14 w-14 place-items-center rounded-xl border border-dashed border-line-strong text-fg-4">
@@ -658,23 +811,32 @@ function EmptyBank({ onPaste }: { onPaste: () => void }) {
       <h3 className="font-semibold text-fg" style={{ fontSize: "14px" }}>
         No skills yet
       </h3>
-      <p className="max-w-[380px] text-fg-3" style={{ fontSize: "12px" }}>
-        Paste the text of a <span className="font-mono">SKILL.md</span> to add one. Skills are
+      <p className="max-w-[420px] text-fg-3" style={{ fontSize: "12px" }}>
+        Import a repo of skills, or paste the text of a <span className="font-mono">SKILL.md</span>. Skills are
         delivered to every worktree PDO creates, never committed.
       </p>
-      <button
-        type="button"
-        onClick={onPaste}
-        data-testid="skill-paste-empty"
-        className="mt-1 flex items-center gap-1.5 rounded-md bg-acc px-3 py-2 font-medium text-bg-1 hover:opacity-90"
-        style={{ fontSize: "12px" }}
-      >
-        <ClipboardPaste size={13} />
-        Paste skill
-      </button>
-      <p className="text-fg-4" style={{ fontSize: "11px" }}>
-        Import from a repo or a local folder arrives in a later ticket.
-      </p>
+      <div className="mt-1 flex items-center gap-2">
+        <button
+          type="button"
+          onClick={onImport}
+          data-testid="skill-import-empty"
+          className="flex items-center gap-1.5 rounded-md bg-acc px-3 py-2 font-medium text-bg-1 hover:opacity-90"
+          style={{ fontSize: "12px" }}
+        >
+          <Download size={13} />
+          Import from a source
+        </button>
+        <button
+          type="button"
+          onClick={onPaste}
+          data-testid="skill-paste-empty"
+          className="flex items-center gap-1.5 rounded-md border border-line-strong bg-bg-3 px-3 py-2 font-medium text-fg-2 hover:border-acc"
+          style={{ fontSize: "12px" }}
+        >
+          <ClipboardPaste size={13} />
+          Paste SKILL.md
+        </button>
+      </div>
     </div>
   );
 }
@@ -697,7 +859,7 @@ function ActionButton({
       type="button"
       onClick={onClick}
       data-testid={testid}
-      className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 transition-colors ${
+      className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 py-1.5 transition-colors ${
         danger
           ? "border-st-failed/40 text-st-failed hover:bg-st-failed-bg"
           : "border-line-strong bg-bg-3 text-fg-2 hover:border-acc"
@@ -785,6 +947,8 @@ function SkillDetailView({
   onDelete,
   movePickerOpen,
   onMoveTo,
+  sourceFolder,
+  onOpenSourceFolder,
 }: {
   skill: Skill;
   detail: SkillDetail | null;
@@ -798,6 +962,9 @@ function SkillDetailView({
   onDelete: () => void;
   movePickerOpen: boolean;
   onMoveTo: (folderId: string | null) => void;
+  /** The Source folder this skill was imported into, if it still exists. */
+  sourceFolder: SkillFolder | null;
+  onOpenSourceFolder: (folderId: string) => void;
 }) {
   const current = detail && detail.id === skill.id ? detail : null;
   const fileCount = current?.files.length ?? 0;
@@ -836,7 +1003,29 @@ function SkillDetailView({
           {fileCount} file{fileCount === 1 ? "" : "s"}
         </span>
         <span>updated {timeAgo(skill.updated_at)}</span>
-        <span>created by {skill.source ? "import" : "paste"}</span>
+        {skill.source ? (
+          <span className="flex items-center gap-1" data-testid="skill-detail-provenance">
+            imported from{" "}
+            {sourceFolder ? (
+              <button
+                type="button"
+                onClick={() => onOpenSourceFolder(sourceFolder.id)}
+                className="font-mono text-fg-3 hover:text-acc hover:underline"
+                title={`Open the Source folder “${sourceFolder.name}”`}
+              >
+                {displaySourceUrl(skill.source.url)}
+                {skill.source.commit ? `@${shortCommit(skill.source.commit)}` : ""} · {skill.source.path || "."}
+              </button>
+            ) : (
+              <span className="font-mono text-fg-3" title={skill.source.url}>
+                {displaySourceUrl(skill.source.url)}
+                {skill.source.commit ? `@${shortCommit(skill.source.commit)}` : ""} · {skill.source.path || "."}
+              </span>
+            )}
+          </span>
+        ) : (
+          <span>created by paste</span>
+        )}
         <span>referenced by 0 tiers</span>
       </div>
 
@@ -961,22 +1150,30 @@ function TabButton({ active, onClick, label }: { active: boolean; onClick: () =>
 function FolderDetailView({
   folder,
   folders,
+  skills,
   count,
   onNewSubfolder,
   onRename,
   onDelete,
   onMoveTo,
+  onUpdateFromSource,
 }: {
   folder: SkillFolder;
   folders: SkillFolder[];
+  skills: Skill[];
   count: number;
   onNewSubfolder: () => void;
   onRename: () => void;
   onDelete: () => void;
   onMoveTo: (parentId: string | null) => void;
+  onUpdateFromSource: () => void;
 }) {
   const [picker, setPicker] = useState(false);
   const exclude = useMemo(() => descendantFolderIds(folder.id, folders), [folder.id, folders]);
+  const source = folder.source ?? null;
+  const importedHere = source
+    ? skills.filter((skill) => skill.folder_id === folder.id && skill.source?.url === source.url).length
+    : 0;
   return (
     <div className="flex min-h-0 flex-1 flex-col p-5" data-testid="folder-detail">
       <div className="flex items-center gap-2">
@@ -984,6 +1181,15 @@ function FolderDetailView({
         <h3 className="truncate font-semibold text-fg" style={{ fontSize: "17px" }}>
           {folderPathLabel(folder.id, folders)}
         </h3>
+        {source && (
+          <span
+            className="rounded border border-acc/40 bg-acc/10 px-1.5 py-0.5 text-acc"
+            style={{ fontSize: "9.5px" }}
+            data-testid="folder-source-badge"
+          >
+            Source
+          </span>
+        )}
       </div>
       <p className="mt-1.5 text-fg-3" style={{ fontSize: "12px" }}>
         {count} skill{count === 1 ? "" : "s"} in this folder and below. Checking a folder in a
@@ -1009,6 +1215,266 @@ function FolderDetailView({
         </span>
         <span className="flex-1" />
         <ActionButton icon={<Trash2 size={11} />} label="Delete folder" onClick={onDelete} danger testid="folder-detail-delete" />
+      </div>
+
+      {source && (
+        <>
+          <div className="mt-4 overflow-hidden rounded-md border border-line" data-testid="folder-provenance">
+            <div className="flex items-center justify-between bg-bg-3 px-3 py-1.5">
+              <span className="text-fg-4 uppercase tracking-wide" style={{ fontSize: "9.5px" }}>
+                Provenance
+              </span>
+              <button
+                type="button"
+                onClick={onUpdateFromSource}
+                data-testid="folder-update-from-source"
+                className="flex items-center gap-1 text-acc hover:underline"
+                style={{ fontSize: "11px" }}
+              >
+                <RefreshCw size={10} />
+                Update from source…
+              </button>
+            </div>
+            <table className="w-full" style={{ fontSize: "11.5px" }}>
+              <tbody>
+                <ProvenanceRow label="source">
+                  <span className="font-mono text-fg">{source.url}</span>
+                </ProvenanceRow>
+                <ProvenanceRow label="ref">
+                  <span className="font-mono text-fg">{source.ref ?? "default branch"}</span>
+                </ProvenanceRow>
+                <ProvenanceRow label="commit">
+                  <span className="font-mono text-fg">{source.commit ? shortCommit(source.commit) : "—"}</span>
+                  {source.imported_at && (
+                    <span className="ml-2 font-mono text-fg-4" style={{ fontSize: "10.5px" }}>
+                      · imported {timeAgo(source.imported_at)}
+                    </span>
+                  )}
+                </ProvenanceRow>
+                <ProvenanceRow label="path">
+                  <span className="font-mono text-fg">{source.path ? `${source.path}/` : "."}</span>
+                </ProvenanceRow>
+                <ProvenanceRow label="imported">
+                  <span className="text-fg">
+                    {importedHere} of {source.found} skill{source.found === 1 ? "" : "s"} found at the source
+                  </span>
+                  {source.invalid > 0 && (
+                    <span className="ml-2 text-fg-4" style={{ fontSize: "10.5px" }}>
+                      · {source.invalid} invalid
+                    </span>
+                  )}
+                </ProvenanceRow>
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-3 rounded-md border border-dashed border-line px-3 py-2 text-fg-4" style={{ fontSize: "10.5px" }}>
+            Renaming or moving this folder keeps its provenance. Deleting it moves its skills to the parent and drops the
+            link to the source; the skills keep their own provenance.
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
+function ProvenanceRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <tr className="border-t border-line">
+      <td className="w-[110px] px-3 py-1.5 align-top text-fg-4">{label}</td>
+      <td className="px-3 py-1.5">{children}</td>
+    </tr>
+  );
+}
+
+function RescanInProgress({ folder, onCancel }: { folder: SkillFolder; onCancel: () => void }) {
+  const source = folder.source;
+  return (
+    <div className="flex min-h-0 flex-1 flex-col p-5" data-testid="folder-rescan">
+      <h3 className="font-semibold text-fg" style={{ fontSize: "17px" }}>
+        Update {folder.name} from its source?
+      </h3>
+      <p className="mt-2 text-fg-3" style={{ fontSize: "12px" }}>
+        Re-scanning <span className="font-mono">{source ? displaySourceUrl(source.url) : ""}</span>
+        {source?.ref ? <span className="font-mono">@{source.ref}</span> : null}… nothing is written before you confirm.
+      </p>
+      <div className="mt-6 flex flex-col items-center gap-3">
+        <div className="h-1 w-[280px] overflow-hidden rounded-full bg-bg-5">
+          <div className="h-full w-1/3 animate-pulse rounded-full bg-st-running" />
+        </div>
+        <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
+          Shallow clone with your git credentials
+        </span>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 hover:bg-bg-4"
+          style={{ fontSize: "11.5px" }}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+const UPDATE_BADGE: Record<SkillUpdateEntry["status"], { label: string; className: string }> = {
+  updated: { label: "updated", className: "border-st-blocked/50 bg-st-blocked-bg text-st-blocked" },
+  unchanged: { label: "unchanged", className: "border-line bg-bg-3 text-fg-4" },
+  new: { label: "new at source · not imported", className: "border-acc/40 bg-acc/10 text-acc" },
+  skipped: { label: "skipped", className: "border-line bg-bg-3 text-fg-4" },
+  gone: { label: "gone from source", className: "border-st-failed/40 bg-st-failed-bg text-st-failed" },
+  invalid: { label: "not importable", className: "border-st-failed/40 bg-st-failed-bg text-st-failed" },
+};
+
+/**
+ * The diff of an Update from source (#670), confirmed in the right panel like
+ * the delete confirmations: updated rows checked, unchanged greyed, new at the
+ * source unchecked by default (an update does not widen silently), skipped for
+ * a skill the user moved out, gone kept and flagged.
+ */
+function UpdateFromSourceConfirm({
+  folder,
+  report,
+  onCancel,
+  onConfirm,
+}: {
+  folder: SkillFolder;
+  report: SkillRescanReport;
+  onCancel: () => void;
+  onConfirm: (items: { path: string; action: "update" | "import" }[]) => void;
+}) {
+  const [checked, setChecked] = useState<Set<string>>(
+    () => new Set(report.entries.filter((entry) => entry.status === "updated").map((entry) => entry.path)),
+  );
+  const [submitting, setSubmitting] = useState(false);
+  const items = report.entries
+    .filter((entry) => checked.has(entry.path))
+    .map((entry) => ({ path: entry.path, action: entry.status === "new" ? ("import" as const) : ("update" as const) }));
+  const changed = report.entries.filter((e) => e.status === "updated").length;
+  const sameCommit = report.previous_commit && report.commit && report.previous_commit === report.commit;
+  const updatedNames = report.entries.filter((e) => checked.has(e.path) && e.status === "updated").map((e) => e.name);
+  return (
+    <div className="flex min-h-0 flex-1 flex-col p-5" data-testid="folder-update">
+      <h3 className="font-semibold text-fg" style={{ fontSize: "17px" }}>
+        Update {folder.name} from its source?
+      </h3>
+      <p className="mt-1.5 text-fg-3" style={{ fontSize: "12px" }} data-testid="folder-update-summary">
+        Re-scanned <span className="font-mono">{displaySourceUrl(report.source.url)}</span>
+        {report.source.ref ? <span className="font-mono">@{report.source.ref}</span> : null} ·{" "}
+        {sameCommit ? (
+          <>
+            still at <span className="font-mono">{shortCommit(report.commit)}</span>
+          </>
+        ) : (
+          <>
+            <span className="font-mono">{shortCommit(report.previous_commit) || "?"}</span> →{" "}
+            <span className="font-mono">{shortCommit(report.commit) || "?"}</span>
+          </>
+        )}{" "}
+        · {changed} skill{changed === 1 ? "" : "s"} changed.
+      </p>
+      <ul className="mt-3 flex flex-col overflow-hidden rounded-md border border-line bg-bg-1" data-testid="folder-update-entries">
+        {report.entries.map((entry) => {
+          const selectable = entry.status === "updated" || (entry.status === "new" && !entry.name_taken_by);
+          const badge = UPDATE_BADGE[entry.status];
+          const dim = !selectable;
+          return (
+            <li
+              key={entry.path}
+              className="flex items-start gap-2.5 border-b border-line px-3 py-2 last:border-b-0"
+              data-testid={`update-entry-${entry.name}`}
+              data-status={entry.status}
+            >
+              <input
+                type="checkbox"
+                checked={entry.status === "unchanged" || checked.has(entry.path)}
+                disabled={!selectable}
+                aria-label={`${entry.status === "new" ? "Import" : "Update"} ${entry.name}`}
+                onChange={(event) =>
+                  setChecked((prev) => {
+                    const next = new Set(prev);
+                    if (event.target.checked) next.add(entry.path);
+                    else next.delete(entry.path);
+                    return next;
+                  })
+                }
+                className={`mt-0.5 h-3.5 w-3.5 shrink-0 accent-[var(--color-acc)] ${dim ? "opacity-40" : ""}`}
+              />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className={`font-semibold ${dim ? "text-fg-3" : "text-fg"}`} style={{ fontSize: "12.5px" }}>
+                    {entry.name}
+                  </span>
+                  <span className="flex-1" />
+                  <span className={`rounded border px-1.5 py-0.5 whitespace-nowrap ${badge.className}`} style={{ fontSize: "9.5px" }}>
+                    {badge.label}
+                  </span>
+                </div>
+                <div className="mt-0.5 font-mono text-fg-4" style={{ fontSize: "10px" }}>
+                  {entry.status === "updated"
+                    ? [
+                        entry.skill_md_changed ? "SKILL.md changed" : null,
+                        entry.files_added ? `+${entry.files_added} reference file${entry.files_added === 1 ? "" : "s"}` : null,
+                        entry.files_changed ? `${entry.files_changed} changed` : null,
+                        entry.files_removed ? `−${entry.files_removed} removed` : null,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")
+                    : entry.status === "unchanged"
+                      ? "identical"
+                      : entry.status === "new"
+                        ? entry.name_taken_by
+                          ? `${entry.path}/SKILL.md · name taken by “${entry.name_taken_by}”`
+                          : `${entry.path}/SKILL.md`
+                        : entry.status === "skipped"
+                          ? `${entry.reason ?? "moved out of this folder"} · left alone`
+                          : entry.status === "gone"
+                            ? entry.reason ?? "no longer at the source · kept in the bank"
+                            : entry.reason ?? "invalid frontmatter"}
+                </div>
+              </div>
+            </li>
+          );
+        })}
+        {report.entries.length === 0 && (
+          <li className="px-3 py-4 text-center text-fg-4" style={{ fontSize: "11px" }}>
+            Nothing at the source.
+          </li>
+        )}
+      </ul>
+      <p className="mt-3 rounded-md border border-st-blocked/40 bg-st-blocked-bg px-3 py-2 text-fg-2" style={{ fontSize: "11px" }}>
+        Runs already started keep their frozen copy.
+        {updatedNames.length > 0 && (
+          <>
+            {" "}
+            Nodes that select <strong className="text-fg">{updatedNames.join(", ")}</strong> will pick up the new content at
+            their next spawn.
+          </>
+        )}{" "}
+        Skills that vanished from the source are kept in the bank and flagged.
+      </p>
+      <div className="mt-4 flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 hover:bg-bg-4"
+          style={{ fontSize: "11.5px" }}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          disabled={items.length === 0 || submitting}
+          onClick={() => {
+            setSubmitting(true);
+            onConfirm(items);
+          }}
+          data-testid="folder-update-confirm"
+          className="rounded-md bg-acc px-3 py-1.5 font-medium text-bg-1 hover:opacity-90 disabled:opacity-40"
+          style={{ fontSize: "11.5px" }}
+        >
+          {submitting ? "Updating…" : `Update ${items.length} skill${items.length === 1 ? "" : "s"}`}
+        </button>
       </div>
     </div>
   );
@@ -1117,6 +1583,13 @@ function DeleteFolderConfirm({
         {count === 0
           ? "The folder is empty."
           : `Its ${count} skill${count === 1 ? "" : "s"} and sub-folders move to ${parentName ? `“${parentName}”` : "the root of the bank"}. No skill is deleted.`}
+        {folder.source && (
+          <>
+            {" "}
+            The link to <span className="font-mono">{displaySourceUrl(folder.source.url)}</span> is lost with the folder; the
+            skills keep their own provenance.
+          </>
+        )}
       </p>
       <div className="mt-4 flex justify-end gap-2">
         <button

@@ -9,8 +9,18 @@ const createSkillFolderMock = vi.fn();
 const updateSkillFolderMock = vi.fn();
 const deleteSkillFolderMock = vi.fn();
 const createSkillMock = vi.fn();
+const rescanSkillFolderMock = vi.fn();
+const updateSkillFolderFromSourceMock = vi.fn();
+const fetchRecentSkillSourcesMock = vi.fn();
 
 vi.mock("../api", () => ({
+  rescanSkillFolder: (...args: unknown[]) => rescanSkillFolderMock(...args),
+  updateSkillFolderFromSource: (...args: unknown[]) => updateSkillFolderFromSourceMock(...args),
+  fetchRecentSkillSources: (...args: unknown[]) => fetchRecentSkillSourcesMock(...args),
+  scanSkillSource: vi.fn(),
+  cancelSkillScan: vi.fn(),
+  importSkills: vi.fn(),
+  browseFs: vi.fn(),
   fetchSkill: (...args: unknown[]) => fetchSkillMock(...args),
   updateSkill: (...args: unknown[]) => updateSkillMock(...args),
   deleteSkill: (...args: unknown[]) => deleteSkillMock(...args),
@@ -68,6 +78,24 @@ function detailOf(s: Skill): SkillDetail {
 }
 
 const EMPTY: SkillBank = { skills: [], folders: [], root_path: "/home/user/.pdo/skills" };
+const SOURCE_URL = "https://github.com/anthropics/skills";
+const sourceFolder: SkillFolder = {
+  ...folder("f-src", "anthropics/skills"),
+  source: { url: SOURCE_URL, ref: "main", commit: "3f9c2e1deadbeef", path: "skills", imported_at: t, found: 14, invalid: 1 },
+};
+const importedSkill = (id: string, name: string, path: string): Skill => ({
+  ...skill(id, name, "f-src", `${name} desc`),
+  source: { url: SOURCE_URL, ref: "main", commit: "3f9c2e1deadbeef", path },
+});
+const WITH_SOURCE: SkillBank = {
+  root_path: "/home/user/.pdo/skills",
+  folders: [folder("f-m", "craft"), sourceFolder],
+  skills: [
+    skill("s-tdd", "tdd", "f-m", "Test-driven development."),
+    importedSkill("s-pdf", "pdf", "skills/pdf"),
+    importedSkill("s-fd", "frontend-design", "skills/frontend-design"),
+  ],
+};
 const POPULATED: SkillBank = {
   root_path: "/home/user/.pdo/skills",
   folders: [folder("f-m", "méthode"), folder("f-i", "ippon"), folder("f-j", "java", "f-i")],
@@ -95,19 +123,25 @@ describe("SkillBankPanel (#668)", () => {
       updateSkillFolderMock,
       deleteSkillFolderMock,
       createSkillMock,
+      rescanSkillFolderMock,
+      updateSkillFolderFromSourceMock,
+      fetchRecentSkillSourcesMock,
     ]) {
       mock.mockReset();
     }
+    fetchRecentSkillSourcesMock.mockResolvedValue({ sources: [] });
     fetchSkillMock.mockImplementation(async (id: string) => {
       const found = POPULATED.skills.find((s) => s.id === id) ?? skill(id, id, null);
       return detailOf(found);
     });
   });
 
-  it("FP step 1: an empty bank shows the empty state with one primary action and the disk path", () => {
+  it("FP step 1: an empty bank shows the empty state with import primary, paste secondary, and the disk path", () => {
     setup(EMPTY);
     expect(screen.getByTestId("skill-bank-empty")).toHaveTextContent("No skills yet");
+    expect(screen.getByTestId("skill-import-empty")).toBeInTheDocument();
     expect(screen.getByTestId("skill-paste-empty")).toBeInTheDocument();
+    expect(screen.getByTestId("skill-bank-empty")).not.toHaveTextContent("later ticket");
     expect(screen.getByTestId("skill-bank-footer")).toHaveTextContent("0 skills · 0 folders");
     expect(screen.getByTestId("skill-bank-footer")).toHaveTextContent("~/.pdo/skills/<id>/");
     // Vocabulary visible but muted: filter + folder button are there.
@@ -115,14 +149,142 @@ describe("SkillBankPanel (#668)", () => {
     expect(screen.getByTestId("skill-new-folder")).toBeInTheDocument();
   });
 
-  it("opens the paste popup from the empty state and from the toolbar", () => {
+  it("opens the paste popup from the empty state and from the + Add menu", () => {
     setup(EMPTY);
     fireEvent.click(screen.getByTestId("skill-paste-empty"));
     expect(screen.getByTestId("paste-skill-modal")).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText("Close paste popup"));
     expect(screen.queryByTestId("paste-skill-modal")).toBeNull();
+    // The toolbar's primary is "+ Add ▾" (#670): two entries.
+    fireEvent.click(screen.getByTestId("skill-add"));
+    const menu = screen.getByTestId("skill-add-menu");
+    expect(within(menu).getAllByRole("menuitem").map((m) => m.textContent)).toEqual([
+      expect.stringContaining("Paste SKILL.md…"),
+      expect.stringContaining("Import from a source…"),
+    ]);
     fireEvent.click(screen.getByTestId("skill-paste"));
     expect(screen.getByTestId("paste-skill-modal")).toBeInTheDocument();
+    expect(screen.queryByTestId("skill-add-menu")).toBeNull();
+  });
+
+  it("opens the import popup from the empty state and from the + Add menu, pre-filled with the selected folder", () => {
+    setup(EMPTY);
+    fireEvent.click(screen.getByTestId("skill-import-empty"));
+    expect(screen.getByTestId("import-skills-modal")).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Close import popup"));
+    expect(screen.queryByTestId("import-skills-modal")).toBeNull();
+    fireEvent.click(screen.getByTestId("skill-add"));
+    fireEvent.click(screen.getByTestId("skill-import"));
+    expect(screen.getByTestId("import-skills-modal")).toBeInTheDocument();
+  });
+
+  it("a Source folder shows a glyph in the tree, a badge and its provenance in the detail", () => {
+    setup(WITH_SOURCE);
+    expect(screen.getByTestId("tree-source-f-src")).toBeInTheDocument();
+    expect(screen.queryByTestId("tree-source-f-m")).toBeNull();
+    fireEvent.click(screen.getByTestId("tree-folder-f-src"));
+    expect(screen.getByTestId("folder-source-badge")).toHaveTextContent("Source");
+    const provenance = screen.getByTestId("folder-provenance");
+    expect(provenance).toHaveTextContent(SOURCE_URL);
+    expect(provenance).toHaveTextContent("main");
+    expect(provenance).toHaveTextContent("3f9c2e1");
+    expect(provenance).toHaveTextContent("skills/");
+    expect(provenance).toHaveTextContent("2 of 14 skills found at the source");
+    expect(provenance).toHaveTextContent("1 invalid");
+    expect(screen.getByTestId("folder-update-from-source")).toBeInTheDocument();
+    // A plain folder has none of it.
+    fireEvent.click(screen.getByTestId("tree-folder-f-m"));
+    expect(screen.queryByTestId("folder-provenance")).toBeNull();
+    // Deleting a Source folder says the link is lost, the skills keep theirs.
+    fireEvent.click(screen.getByTestId("tree-folder-f-src"));
+    fireEvent.click(screen.getByTestId("folder-detail-delete"));
+    expect(screen.getByTestId("folder-delete")).toHaveTextContent("The link to github.com/anthropics/skills is lost");
+    expect(screen.getByTestId("folder-delete")).toHaveTextContent("the skills keep their own provenance");
+  });
+
+  it("an imported skill links its provenance to the Source folder", async () => {
+    setup(WITH_SOURCE);
+    fireEvent.click(screen.getByLabelText("Expand anthropics/skills"));
+    fireEvent.click(screen.getByTestId("tree-skill-s-pdf"));
+    const provenance = screen.getByTestId("skill-detail-provenance");
+    expect(provenance).toHaveTextContent("github.com/anthropics/skills@3f9c2e1 · skills/pdf");
+    fireEvent.click(within(provenance).getByRole("button"));
+    await waitFor(() => expect(screen.getByTestId("folder-detail")).toBeInTheDocument());
+    expect(screen.getByTestId("folder-source-badge")).toBeInTheDocument();
+  });
+
+  it("FP step 4: Update from source re-scans, shows the diff in the right panel, then updates", async () => {
+    const { onChanged } = setup(WITH_SOURCE);
+    let resolveRescan: (v: unknown) => void = () => undefined;
+    rescanSkillFolderMock.mockImplementation(() => new Promise((r) => (resolveRescan = r)));
+    fireEvent.click(screen.getByTestId("tree-folder-f-src"));
+    fireEvent.click(screen.getByTestId("folder-update-from-source"));
+    expect(screen.getByTestId("folder-rescan")).toHaveTextContent("Re-scanning github.com/anthropics/skills@main");
+    expect(rescanSkillFolderMock).toHaveBeenCalledWith("f-src", expect.any(String));
+    resolveRescan({
+      scan_id: "scan-u",
+      source: { kind: "git", url: SOURCE_URL, ref: "main", path: "skills", repo: "anthropics/skills", suggested_folder: "anthropics/skills · skills" },
+      previous_commit: "3f9c2e1deadbeef",
+      commit: "8a1d07bfeedface",
+      entries: [
+        { path: "skills/pdf", name: "pdf", description: "d", status: "updated", skill_id: "s-pdf", skill_md_changed: true, files_added: 1, files_removed: 0, files_changed: 0 },
+        { path: "skills/frontend-design", name: "frontend-design", description: "d", status: "unchanged", skill_id: "s-fd", skill_md_changed: false, files_added: 0, files_removed: 0, files_changed: 0 },
+        { path: "skills/webapp-testing", name: "webapp-testing", description: "d", status: "new", skill_md_changed: false, files_added: 0, files_removed: 0, files_changed: 0 },
+        { path: "skills/code-review", name: "code-review-anthropic", description: "d", status: "skipped", skill_id: "s-x", reason: "moved out of this folder by you", skill_md_changed: false, files_added: 0, files_removed: 0, files_changed: 0 },
+        { path: "skills/old", name: "old", description: "d", status: "gone", skill_id: "s-old", skill_md_changed: false, files_added: 0, files_removed: 0, files_changed: 0 },
+      ],
+    });
+    await waitFor(() => expect(screen.getByTestId("folder-update")).toBeInTheDocument());
+    expect(screen.getByTestId("folder-update")).toHaveTextContent("Update anthropics/skills from its source?");
+    expect(screen.getByTestId("folder-update-summary")).toHaveTextContent("3f9c2e1 → 8a1d07b");
+    expect(screen.getByTestId("folder-update-summary")).toHaveTextContent("1 skill changed");
+    const updated = screen.getByTestId("update-entry-pdf");
+    expect(updated).toHaveTextContent("updated");
+    expect(updated).toHaveTextContent("SKILL.md changed · +1 reference file");
+    expect(within(updated).getByRole("checkbox")).toBeChecked();
+    expect(within(screen.getByTestId("update-entry-frontend-design")).getByRole("checkbox")).toBeDisabled();
+    const fresh = screen.getByTestId("update-entry-webapp-testing");
+    expect(fresh).toHaveTextContent("new at source · not imported");
+    expect(within(fresh).getByRole("checkbox")).not.toBeChecked();
+    expect(screen.getByTestId("update-entry-code-review-anthropic")).toHaveTextContent("skipped");
+    expect(screen.getByTestId("update-entry-old")).toHaveTextContent("gone from source");
+    expect(screen.getByTestId("folder-update")).toHaveTextContent("Runs already started keep their frozen copy.");
+    expect(screen.getByTestId("folder-update-confirm")).toHaveTextContent("Update 1 skill");
+    // Nothing was written yet.
+    expect(updateSkillFolderFromSourceMock).not.toHaveBeenCalled();
+
+    // Opt the new one in, confirm.
+    fireEvent.click(within(fresh).getByRole("checkbox"));
+    expect(screen.getByTestId("folder-update-confirm")).toHaveTextContent("Update 2 skills");
+    updateSkillFolderFromSourceMock.mockResolvedValue({
+      folder: { ...sourceFolder, source: { ...sourceFolder.source!, commit: "8a1d07bfeedface" } },
+      imported: [{ path: "skills/pdf", action: "updated", skill: WITH_SOURCE.skills[1] }, { path: "skills/webapp-testing", action: "imported", skill: skill("s-wt", "webapp-testing", "f-src") }],
+      failed: [],
+      commit: "8a1d07bfeedface",
+    });
+    fireEvent.click(screen.getByTestId("folder-update-confirm"));
+    await waitFor(() =>
+      expect(updateSkillFolderFromSourceMock).toHaveBeenCalledWith("f-src", {
+        scan_id: "scan-u",
+        items: [
+          { path: "skills/pdf", action: "update" },
+          { path: "skills/webapp-testing", action: "import" },
+        ],
+      }),
+    );
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+    expect(screen.queryByTestId("folder-update")).toBeNull();
+    expect(screen.getByTestId("skill-toast")).toHaveTextContent("Updated 2 skills from github.com/anthropics/skills");
+    expect(screen.queryByTestId("skill-toast-undo")).toBeNull();
+  });
+
+  it("a failed re-scan reads in place and drops back to the folder detail", async () => {
+    setup(WITH_SOURCE);
+    rescanSkillFolderMock.mockRejectedValue(new ApiError("fatal: could not read Username", { status: 502, body: { code: "clone_failed" } }));
+    fireEvent.click(screen.getByTestId("tree-folder-f-src"));
+    fireEvent.click(screen.getByTestId("folder-update-from-source"));
+    await waitFor(() => expect(screen.getByTestId("skill-bank-error")).toHaveTextContent("could not read Username"));
+    expect(screen.getByTestId("folder-detail")).toBeInTheDocument();
   });
 
   it("renders folders first with counts, root skills after, and the footer totals", () => {

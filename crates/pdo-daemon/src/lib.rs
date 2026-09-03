@@ -4041,6 +4041,27 @@ fn build_router(state: Arc<AppState>) -> Router {
             get(get_skill).put(update_skill).delete(delete_skill),
         )
         .route("/settings/skills/{id}/referents", get(get_skill_referents))
+        // Reference files (#671): upload (multipart from the browser, or
+        // `{ "from_path" }` from the explorer), read / overwrite as plain text,
+        // delete. `{*path}` keeps sub-folders (`examples/login.spec.ts`); the
+        // module refuses anything that would leave the skill's folder (400).
+        // Own body limit: the default 2 MB would refuse a 4 MB fixture before the
+        // per-file 10 MB rule gets to name it.
+        .route(
+            "/settings/skills/{id}/files",
+            post(upload_skill_files).route_layer(axum::extract::DefaultBodyLimit::max(
+                SKILL_UPLOAD_BODY_LIMIT,
+            )),
+        )
+        .route(
+            "/settings/skills/{id}/files/{*path}",
+            get(read_skill_file)
+                .put(write_skill_file)
+                .delete(delete_skill_file)
+                .route_layer(axum::extract::DefaultBodyLimit::max(
+                    SKILL_UPLOAD_BODY_LIMIT,
+                )),
+        )
         .route(
             "/settings/skill-folders",
             get(list_skill_folders).post(create_skill_folder),
@@ -9715,6 +9736,11 @@ fn skill_error_code(error: &skill_bank::SkillError) -> &'static str {
         E::FolderNotFound => "folder_not_found",
         E::EmptyFolderName => "empty_folder_name",
         E::FolderCycle => "folder_cycle",
+        E::InvalidPath(_) => "invalid_path",
+        E::SkillMdReserved => "skill_md_reserved",
+        E::FileNotFound(_) => "file_not_found",
+        E::FileTooLarge { .. } => "file_too_large",
+        E::SourceNotAFile(_) => "source_not_a_file",
         E::Storage(_) => "storage",
     }
 }
@@ -9722,10 +9748,14 @@ fn skill_error_code(error: &skill_bank::SkillError) -> &'static str {
 fn skill_error_response(error: skill_bank::SkillError) -> Response {
     use skill_bank::SkillError as E;
     let status = match &error {
-        E::NotFound => StatusCode::NOT_FOUND,
+        E::NotFound | E::FileNotFound(_) => StatusCode::NOT_FOUND,
         E::DuplicateName { .. } => StatusCode::CONFLICT,
+        E::FileTooLarge { .. } => StatusCode::PAYLOAD_TOO_LARGE,
         E::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
-        E::NoFrontmatter
+        E::InvalidPath(_)
+        | E::SkillMdReserved
+        | E::SourceNotAFile(_)
+        | E::NoFrontmatter
         | E::MalformedFrontmatter(_)
         | E::MissingName
         | E::NameNotKebabCase(_)
@@ -9892,6 +9922,244 @@ async fn get_skill_referents(
         "runs": []
     }))
     .into_response()
+}
+
+/// Body ceiling of the files routes: a handful of 10 MB files per multipart
+/// request. The per-file rule (`skill_bank::MAX_FILE_BYTES`) does the naming.
+const SKILL_UPLOAD_BODY_LIMIT: usize = 64 * 1024 * 1024;
+
+#[derive(Deserialize)]
+struct UploadFromPathRequest {
+    /// Absolute path on the daemon's host, picked in the explorer.
+    from_path: String,
+    /// Destination relative to the skill folder; defaults to the file name.
+    #[serde(default)]
+    path: Option<String>,
+}
+
+/// `POST /settings/skills/{id}/files` — add reference files. Two bodies, one
+/// list (#671 design "deux chemins d'upload"):
+///
+/// - `multipart/form-data`: each `file` part is written under its `filename`
+///   (a relative path, sub-folders kept); a `path` text part right before a
+///   `file` part overrides that name (browsers flatten `webkitRelativePath`).
+/// - JSON `{ "from_path": "/abs/on/host", "path"?: "rel" }`: the daemon copies
+///   the file the explorer picked.
+///
+/// Files are written one by one, in order; the first refusal stops the batch
+/// and is returned with the files already written (`uploaded`), so the popup
+/// can mark them and retry the rest. A `SKILL.md` is refused here (400
+/// `skill_md_reserved`): the UI routes a dropped one to `PUT …/files/SKILL.md`.
+async fn upload_skill_files(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+    req: axum::extract::Request,
+) -> Response {
+    match skill_bank::get(&state.db, &id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return skill_error_response(skill_bank::SkillError::NotFound),
+        Err(error) => return storage_error_response(error),
+    }
+    let content_type = req
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    let mut uploaded: Vec<skill_bank::SkillFile> = Vec::new();
+    let mut failure: Option<skill_bank::SkillError> = None;
+
+    if content_type.starts_with("multipart/form-data") {
+        let mut multipart = match Multipart::from_request(req, &()).await {
+            Ok(m) => m,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": format!("multipart parse error: {e}"),
+                        "code": "bad_multipart"
+                    })),
+                )
+                    .into_response();
+            }
+        };
+        let mut pending_path: Option<String> = None;
+        loop {
+            let field = match multipart.next_field().await {
+                Ok(Some(field)) => field,
+                Ok(None) => break,
+                Err(e) => {
+                    // A body over the route limit surfaces here, mid-stream.
+                    failure = Some(skill_bank::SkillError::Storage(format!(
+                        "upload interrupted: {e}"
+                    )));
+                    break;
+                }
+            };
+            let field_name = field.name().unwrap_or("").to_string();
+            match field_name.as_str() {
+                "path" => {
+                    pending_path = field.text().await.ok().filter(|s| !s.trim().is_empty());
+                }
+                "file" => {
+                    let filename = field.file_name().unwrap_or("").to_string();
+                    let rel = pending_path.take().unwrap_or(filename);
+                    let data = match field.bytes().await {
+                        Ok(data) => data,
+                        Err(e) => {
+                            failure = Some(skill_bank::SkillError::Storage(format!(
+                                "failed to read `{rel}`: {e}"
+                            )));
+                            break;
+                        }
+                    };
+                    match skill_bank::write_file(&state.repo_root, &id, &rel, &data) {
+                        Ok(file) => uploaded.push(file),
+                        Err(error) => {
+                            failure = Some(error);
+                            break;
+                        }
+                    }
+                }
+                other => {
+                    failure = Some(skill_bank::SkillError::InvalidPath(format!(
+                        "unknown multipart field `{other}` (accepted: path, file)"
+                    )));
+                    break;
+                }
+            }
+        }
+    } else {
+        let body = match Json::<UploadFromPathRequest>::from_request(req, &()).await {
+            Ok(Json(body)) => body,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": format!("expected multipart/form-data or {{ \"from_path\" }}: {e}"),
+                        "code": "bad_request"
+                    })),
+                )
+                    .into_response();
+            }
+        };
+        let from = std::path::Path::new(&body.from_path);
+        if !from.is_absolute() {
+            failure = Some(skill_bank::SkillError::SourceNotAFile(
+                body.from_path.clone(),
+            ));
+        } else {
+            match skill_bank::copy_file_from(&state.repo_root, &id, from, body.path.as_deref()) {
+                Ok(file) => uploaded.push(file),
+                Err(error) => failure = Some(error),
+            }
+        }
+    }
+
+    let files = skill_bank::list_files(&state.repo_root, &id).unwrap_or_default();
+    match failure {
+        None => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({ "uploaded": uploaded, "files": files })),
+        )
+            .into_response(),
+        Some(error) => {
+            let mut response = skill_error_response(error);
+            // Keep the status and reason; add what did land, so the client
+            // never re-uploads a file that is already there.
+            let (parts, body) = response.into_parts();
+            let bytes = axum::body::to_bytes(body, usize::MAX)
+                .await
+                .unwrap_or_default();
+            let mut json: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
+            json["uploaded"] = serde_json::to_value(&uploaded).unwrap_or_default();
+            json["files"] = serde_json::to_value(&files).unwrap_or_default();
+            response = Response::from_parts(parts, axum::body::Body::from(json.to_string()));
+            response
+        }
+    }
+}
+
+/// `GET /settings/skills/{id}/files/{*path}` — one file for the plain-text
+/// editor: `text` when it decodes as UTF-8, else `text: null, binary: true`
+/// (the editor shows "binary file · N KB" instead of the text).
+async fn read_skill_file(
+    State(state): State<Arc<AppState>>,
+    AxumPath((id, path)): AxumPath<(String, String)>,
+) -> Response {
+    match skill_bank::get(&state.db, &id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return skill_error_response(skill_bank::SkillError::NotFound),
+        Err(error) => return storage_error_response(error),
+    }
+    match skill_bank::read_file(&state.repo_root, &id, &path) {
+        Ok((file, bytes)) => {
+            let text = String::from_utf8(bytes).ok();
+            Json(serde_json::json!({
+                "path": file.path,
+                "size": file.size,
+                "binary": text.is_none(),
+                "text": text,
+            }))
+            .into_response()
+        }
+        Err(error) => skill_error_response(error),
+    }
+}
+
+/// `PUT /settings/skills/{id}/files/{*path}` — save the editor's text. Any
+/// `Content-Type`; the body is the file. `SKILL.md` goes through the five
+/// checks again (`skill_bank::update_skill_md`): a refusal is the same named
+/// 400 the paste popup gets, and the file on disk is untouched.
+async fn write_skill_file(
+    State(state): State<Arc<AppState>>,
+    AxumPath((id, path)): AxumPath<(String, String)>,
+    body: String,
+) -> Response {
+    let rel = match skill_bank::normalise_file_path(&path) {
+        Ok(rel) => rel,
+        Err(error) => return skill_error_response(error),
+    };
+    if rel == skill_bank::SKILL_MD {
+        return match skill_bank::update_skill_md(&state.db, &state.repo_root, &id, &body).await {
+            Ok(skill) => Json(serde_json::json!({
+                "path": skill_bank::SKILL_MD,
+                "size": body.len(),
+                "skill": skill,
+            }))
+            .into_response(),
+            Err(error) => skill_error_response(error),
+        };
+    }
+    match skill_bank::get(&state.db, &id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return skill_error_response(skill_bank::SkillError::NotFound),
+        Err(error) => return storage_error_response(error),
+    }
+    match skill_bank::overwrite_file(&state.repo_root, &id, &rel, &body) {
+        Ok(file) => {
+            Json(serde_json::json!({ "path": file.path, "size": file.size })).into_response()
+        }
+        Err(error) => skill_error_response(error),
+    }
+}
+
+/// `DELETE /settings/skills/{id}/files/{*path}` — remove one reference file
+/// (never `SKILL.md`: 400 `skill_md_reserved`).
+async fn delete_skill_file(
+    State(state): State<Arc<AppState>>,
+    AxumPath((id, path)): AxumPath<(String, String)>,
+) -> Response {
+    match skill_bank::get(&state.db, &id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return skill_error_response(skill_bank::SkillError::NotFound),
+        Err(error) => return storage_error_response(error),
+    }
+    match skill_bank::delete_file(&state.repo_root, &id, &path) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => skill_error_response(error),
+    }
 }
 
 async fn list_skill_folders(State(state): State<Arc<AppState>>) -> Response {

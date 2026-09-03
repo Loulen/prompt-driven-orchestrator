@@ -5,7 +5,8 @@
 //! Two halves, one seam:
 //!
 //! - **Content on disk**, one folder per skill under `<repo_root>/.pdo/skills/<id>/`
-//!   holding the `SKILL.md` and its read-only reference files. The folder is keyed
+//!   holding the `SKILL.md` and its reference files (#671: uploaded, edited as
+//!   plain text, deleted — always inside the skill's folder, never outside it). The folder is keyed
 //!   by the **stable id**, never by the name — renaming a skill touches a row, not a
 //!   path (#668 AC "renommer ne déplace rien").
 //! - **Index in SQLite**: `skills` (id, name unique case-insensitively, description,
@@ -68,8 +69,7 @@ pub(crate) struct SkillFolder {
     pub updated_at: String,
 }
 
-/// A reference file of a skill (anything under its folder except `SKILL.md`),
-/// listed read-only.
+/// A reference file of a skill (anything under its folder except `SKILL.md`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct SkillFile {
     /// Path relative to the skill's folder, `/`-separated.
@@ -113,6 +113,20 @@ pub(crate) enum SkillError {
     EmptyFolderName,
     /// Moving a folder under itself or one of its descendants.
     FolderCycle,
+    /// A reference-file path that would leave the skill's folder, is absolute,
+    /// empty, or otherwise not a plain relative `a/b/c.ext` (#671 AC: 400).
+    InvalidPath(String),
+    /// `SKILL.md` is the skill's text, not a reference file: it is neither
+    /// uploaded nor deleted through the files endpoints (`PUT` it instead).
+    SkillMdReserved,
+    FileNotFound(String),
+    /// One file above [`MAX_FILE_BYTES`].
+    FileTooLarge {
+        path: String,
+        size: u64,
+    },
+    /// `from_path` (the explorer pick) is not a readable regular file.
+    SourceNotAFile(String),
     Storage(String),
 }
 
@@ -147,6 +161,29 @@ impl fmt::Display for SkillError {
             Self::FolderNotFound => write!(f, "no such skill folder"),
             Self::EmptyFolderName => write!(f, "a folder name cannot be blank"),
             Self::FolderCycle => write!(f, "a folder cannot be moved under itself"),
+            Self::InvalidPath(path) => write!(
+                f,
+                "`{path}` is not a valid file path inside the skill folder (relative, no `..`, \
+                 no leading `/`)"
+            ),
+            Self::SkillMdReserved => write!(
+                f,
+                "SKILL.md is the skill's text, not a reference file: edit it, do not upload or \
+                 delete it"
+            ),
+            Self::FileNotFound(path) => write!(f, "no file `{path}` in this skill"),
+            Self::FileTooLarge { path, size } => write!(
+                f,
+                "`{path}` is {} — larger than the {} MB limit",
+                human_size(*size),
+                MAX_FILE_BYTES / (1024 * 1024)
+            ),
+            Self::SourceNotAFile(path) => {
+                write!(
+                    f,
+                    "`{path}` is not a readable file (drop files, not folders)"
+                )
+            }
             Self::Storage(message) => write!(f, "{message}"),
         }
     }
@@ -414,6 +451,202 @@ pub(crate) fn list_files(repo_root: &Path, id: &str) -> Result<Vec<SkillFile>, S
     }
     out.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(out)
+}
+
+/// The per-file ceiling of an upload (#671 design: 10 MB). A reference file is
+/// a cheatsheet or a fixture the agent reads, not a dataset.
+pub(crate) const MAX_FILE_BYTES: u64 = 10 * 1024 * 1024;
+
+fn human_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
+/// Normalise a reference-file path the client sent: `/`-separated, relative,
+/// made only of plain components (no `.`, no `..`, no empty segment, no
+/// backslash, no NUL). This is the **one** gate keeping a write inside the
+/// skill's folder (#671 AC "les chemins sortant du dossier du skill sont
+/// refusés (400)"); every file endpoint goes through it.
+pub(crate) fn normalise_file_path(raw: &str) -> Result<String, SkillError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty()
+        || trimmed.starts_with('/')
+        || trimmed.contains('\\')
+        || trimmed.contains('\0')
+    {
+        return Err(SkillError::InvalidPath(raw.to_string()));
+    }
+    let mut parts = Vec::new();
+    for segment in trimmed.split('/') {
+        if segment.is_empty() || segment == "." || segment == ".." {
+            return Err(SkillError::InvalidPath(raw.to_string()));
+        }
+        parts.push(segment);
+    }
+    Ok(parts.join("/"))
+}
+
+/// Resolve a normalised relative path under the skill's folder. Refuses
+/// `SKILL.md` itself unless `allow_skill_md` (only the text editor writes it).
+fn file_path(
+    repo_root: &Path,
+    id: &str,
+    rel: &str,
+    allow_skill_md: bool,
+) -> Result<(String, PathBuf), SkillError> {
+    let rel = normalise_file_path(rel)?;
+    if rel == SKILL_MD && !allow_skill_md {
+        return Err(SkillError::SkillMdReserved);
+    }
+    let mut path = skill_dir(repo_root, id);
+    for segment in rel.split('/') {
+        path.push(segment);
+    }
+    Ok((rel, path))
+}
+
+/// Write (create or replace) a reference file from bytes. The skill folder must
+/// exist (the row was indexed by `create`); intermediate sub-folders are made.
+pub(crate) fn write_file(
+    repo_root: &Path,
+    id: &str,
+    rel: &str,
+    data: &[u8],
+) -> Result<SkillFile, SkillError> {
+    let (rel, path) = file_path(repo_root, id, rel, false)?;
+    if data.len() as u64 > MAX_FILE_BYTES {
+        return Err(SkillError::FileTooLarge {
+            path: rel,
+            size: data.len() as u64,
+        });
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, data)?;
+    Ok(SkillFile {
+        path: rel,
+        size: data.len() as u64,
+    })
+}
+
+/// Copy a file the explorer picked (an absolute path on the daemon's host) into
+/// the skill folder, under `rel` (defaults to the source file name).
+pub(crate) fn copy_file_from(
+    repo_root: &Path,
+    id: &str,
+    from: &Path,
+    rel: Option<&str>,
+) -> Result<SkillFile, SkillError> {
+    let meta = std::fs::metadata(from)
+        .map_err(|_| SkillError::SourceNotAFile(from.display().to_string()))?;
+    if !meta.is_file() {
+        return Err(SkillError::SourceNotAFile(from.display().to_string()));
+    }
+    let rel = match rel {
+        Some(rel) => rel.to_string(),
+        None => from
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .ok_or_else(|| SkillError::SourceNotAFile(from.display().to_string()))?,
+    };
+    if meta.len() > MAX_FILE_BYTES {
+        return Err(SkillError::FileTooLarge {
+            path: normalise_file_path(&rel)?,
+            size: meta.len(),
+        });
+    }
+    let data = std::fs::read(from)?;
+    write_file(repo_root, id, &rel, &data)
+}
+
+/// The bytes of one file of the skill (`SKILL.md` included: the editor reads
+/// it through the same seam).
+pub(crate) fn read_file(
+    repo_root: &Path,
+    id: &str,
+    rel: &str,
+) -> Result<(SkillFile, Vec<u8>), SkillError> {
+    let (rel, path) = file_path(repo_root, id, rel, true)?;
+    if !path.is_file() {
+        return Err(SkillError::FileNotFound(rel));
+    }
+    let data = std::fs::read(&path)?;
+    Ok((
+        SkillFile {
+            path: rel,
+            size: data.len() as u64,
+        },
+        data,
+    ))
+}
+
+/// Overwrite the text of a reference file (plain-text editor, #671). Not for
+/// `SKILL.md`: that one goes through [`update_skill_md`], which re-validates.
+pub(crate) fn overwrite_file(
+    repo_root: &Path,
+    id: &str,
+    rel: &str,
+    text: &str,
+) -> Result<SkillFile, SkillError> {
+    let (rel, path) = file_path(repo_root, id, rel, false)?;
+    if !path.is_file() {
+        return Err(SkillError::FileNotFound(rel));
+    }
+    write_file(repo_root, id, &rel, text.as_bytes())
+}
+
+/// Delete a reference file, then prune the sub-folders it leaves empty (a
+/// `examples/` that held one spec disappears with it; the skill folder stays).
+pub(crate) fn delete_file(repo_root: &Path, id: &str, rel: &str) -> Result<(), SkillError> {
+    let (rel, path) = file_path(repo_root, id, rel, false)?;
+    if !path.is_file() {
+        return Err(SkillError::FileNotFound(rel));
+    }
+    std::fs::remove_file(&path)?;
+    let root = skill_dir(repo_root, id);
+    let mut cursor = path.parent().map(Path::to_path_buf);
+    while let Some(dir) = cursor {
+        if dir == root || !dir.starts_with(&root) {
+            break;
+        }
+        if std::fs::remove_dir(&dir).is_err() {
+            break;
+        }
+        cursor = dir.parent().map(Path::to_path_buf);
+    }
+    Ok(())
+}
+
+/// Replace the `SKILL.md` of an existing skill (editor save, or a dropped
+/// `SKILL.md` — #671 design: "replaces the text, no confirmation, the five
+/// checks re-run"). The same gate as `create`: an invalid text is refused with
+/// its named reason and **nothing is written**. The row's `description` follows
+/// the new frontmatter; the label (`name`) does not — renaming is its own verb.
+pub(crate) async fn update_skill_md(
+    db: &SqlitePool,
+    repo_root: &Path,
+    id: &str,
+    content: &str,
+) -> Result<Skill, SkillError> {
+    get(db, id).await?.ok_or(SkillError::NotFound)?;
+    let parsed = validate_skill_md(content)?;
+    let dir = skill_dir(repo_root, id);
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(dir.join(SKILL_MD), content)?;
+    let now = crate::event_log::now_iso();
+    sqlx::query("UPDATE skills SET description = ?, updated_at = ? WHERE id = ?")
+        .bind(&parsed.description)
+        .bind(&now)
+        .bind(id)
+        .execute(db)
+        .await?;
+    get(db, id).await?.ok_or(SkillError::NotFound)
 }
 
 // ---------------------------------------------------------------------------
@@ -921,6 +1154,143 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn file_paths_leaving_the_skill_folder_are_refused() {
+        for bad in [
+            "",
+            "/etc/passwd",
+            "../x",
+            "a/../b",
+            "a//b",
+            "./a",
+            "a\\b",
+            "a/./b",
+        ] {
+            assert!(
+                matches!(normalise_file_path(bad), Err(SkillError::InvalidPath(_))),
+                "{bad:?} should be refused"
+            );
+        }
+        assert_eq!(
+            normalise_file_path(" examples/login.spec.ts ").unwrap(),
+            "examples/login.spec.ts"
+        );
+        assert_eq!(normalise_file_path("notes.md").unwrap(), "notes.md");
+    }
+
+    #[tokio::test]
+    async fn write_read_delete_a_reference_file_and_prune_empty_subfolders() {
+        let db = mem_db().await;
+        let root = tempfile::tempdir().unwrap();
+        let skill = create(&db, root.path(), VALID, None, None).await.unwrap();
+        let dir = skill_dir(root.path(), &skill.id);
+
+        let file = write_file(root.path(), &skill.id, "examples/login.spec.ts", b"test()").unwrap();
+        assert_eq!(file.path, "examples/login.spec.ts");
+        assert_eq!(file.size, 6);
+        assert!(dir.join("examples").join("login.spec.ts").is_file());
+
+        let (meta, bytes) = read_file(root.path(), &skill.id, "examples/login.spec.ts").unwrap();
+        assert_eq!(meta.size, 6);
+        assert_eq!(bytes, b"test()");
+
+        overwrite_file(root.path(), &skill.id, "examples/login.spec.ts", "edited").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join("examples/login.spec.ts")).unwrap(),
+            "edited"
+        );
+        assert!(matches!(
+            overwrite_file(root.path(), &skill.id, "missing.md", "x"),
+            Err(SkillError::FileNotFound(_))
+        ));
+
+        delete_file(root.path(), &skill.id, "examples/login.spec.ts").unwrap();
+        assert!(
+            !dir.join("examples").exists(),
+            "the emptied sub-folder is pruned"
+        );
+        assert!(
+            dir.join(SKILL_MD).is_file(),
+            "the skill folder itself stays"
+        );
+        assert!(matches!(
+            delete_file(root.path(), &skill.id, "examples/login.spec.ts"),
+            Err(SkillError::FileNotFound(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn skill_md_is_reserved_for_the_files_endpoints_but_readable() {
+        let db = mem_db().await;
+        let root = tempfile::tempdir().unwrap();
+        let skill = create(&db, root.path(), VALID, None, None).await.unwrap();
+        assert!(matches!(
+            write_file(root.path(), &skill.id, "SKILL.md", b"x"),
+            Err(SkillError::SkillMdReserved)
+        ));
+        assert!(matches!(
+            delete_file(root.path(), &skill.id, "SKILL.md"),
+            Err(SkillError::SkillMdReserved)
+        ));
+        let (_, bytes) = read_file(root.path(), &skill.id, "SKILL.md").unwrap();
+        assert_eq!(bytes, VALID.as_bytes());
+    }
+
+    #[tokio::test]
+    async fn update_skill_md_revalidates_and_writes_nothing_on_refusal() {
+        let db = mem_db().await;
+        let root = tempfile::tempdir().unwrap();
+        let skill = create(&db, root.path(), VALID, None, None).await.unwrap();
+        let err = update_skill_md(&db, root.path(), &skill.id, "no frontmatter")
+            .await
+            .unwrap_err();
+        assert_eq!(err, SkillError::NoFrontmatter);
+        assert_eq!(read_skill_md(root.path(), &skill.id).unwrap(), VALID);
+
+        let edited = VALID.replace(
+            "description: Test-driven development.",
+            "description: Edited.",
+        );
+        assert_ne!(edited, VALID);
+        let updated = update_skill_md(&db, root.path(), &skill.id, &edited)
+            .await
+            .unwrap();
+        assert_eq!(updated.description, "Edited.");
+        assert_eq!(updated.name, "tdd", "the label is not renamed by an edit");
+        assert_eq!(read_skill_md(root.path(), &skill.id).unwrap(), edited);
+    }
+
+    #[tokio::test]
+    async fn copy_file_from_the_host_refuses_folders_and_oversize() {
+        let db = mem_db().await;
+        let root = tempfile::tempdir().unwrap();
+        let skill = create(&db, root.path(), VALID, None, None).await.unwrap();
+        let src = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("cheatsheet.md"), "# sheet").unwrap();
+        let file = copy_file_from(
+            root.path(),
+            &skill.id,
+            &src.path().join("cheatsheet.md"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(file.path, "cheatsheet.md");
+        assert_eq!(file.size, 7);
+        assert!(matches!(
+            copy_file_from(root.path(), &skill.id, src.path(), None),
+            Err(SkillError::SourceNotAFile(_))
+        ));
+        assert!(matches!(
+            write_file(
+                root.path(),
+                &skill.id,
+                "big.bin",
+                &vec![0u8; MAX_FILE_BYTES as usize + 1]
+            ),
+            Err(SkillError::FileTooLarge { .. })
+        ));
     }
 
     #[tokio::test]

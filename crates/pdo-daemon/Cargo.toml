@@ -65,6 +65,11 @@ ignore.workspace = true
 # openssl-sys can't cross-compile to aarch64-unknown-linux-gnu in the release
 # build (no target OpenSSL). rustls removes the C dependency entirely.
 reqwest = { version = "0.12", default-features = false, features = ["charset", "http2", "system-proxy", "rustls-tls", "json", "blocking"] }
+# Skills sidecar of the portable pipeline document (#673 / ADR-0062): a zip of
+# `<pipeline>.skills/<id>/…` the browser can download and hand back, base64 in
+# the import request. Deflate only — no bzip2/zstd/lzma, nothing to read there.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+base64 = "0.22"
 
 [dev-dependencies]
 tokio-tungstenite = "0.26"

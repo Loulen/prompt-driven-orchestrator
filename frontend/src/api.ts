@@ -1419,13 +1419,72 @@ export function fetchRunPipelineDocument(runId: string): Promise<string> {
   });
 }
 
-/// `warnings` carries the non-fatal diagnostics of the import — today, prompts
-/// dropped because they name a node the document does not define.
+/// The skills sidecar of a pipeline's portable document (#673 / ADR-0062): a zip
+/// of `<pipeline>.skills/<id>/…` to unpack next to the YAML. `null` when the
+/// pipeline references no skill (the daemon answers 204: the YAML is the whole
+/// document).
+export async function fetchPipelineSkillsSidecar(id: string): Promise<Blob | null> {
+  const resp = await request<Response>(
+    "GET",
+    `/pipelines/${encodeURIComponent(id)}/document/skills`,
+    { responseMode: "raw", label: `GET /pipelines/${id}/document/skills` },
+  );
+  return sidecarBlob(resp, `GET /pipelines/${id}/document/skills`);
+}
+
+export async function fetchRunPipelineSkillsSidecar(runId: string): Promise<Blob | null> {
+  const resp = await request<Response>(
+    "GET",
+    `/runs/${encodeURIComponent(runId)}/pipeline/document/skills`,
+    { responseMode: "raw", label: `GET /runs/${runId}/pipeline/document/skills` },
+  );
+  return sidecarBlob(resp, `GET /runs/${runId}/pipeline/document/skills`);
+}
+
+async function sidecarBlob(resp: Response, label: string): Promise<Blob | null> {
+  if (resp.status === 204) return null;
+  if (!resp.ok) {
+    const errBody = await resp.json().catch(() => null);
+    throw new ApiError(apiErrorMessage(errBody, `${label} failed: ${resp.status}`), {
+      status: resp.status,
+      body: errBody,
+    });
+  }
+  return resp.blob();
+}
+
+/// What the import did to the Banque de skills (#673): created ids (same ids as
+/// the document), ids the bank already knew (untouched), labels that had to be
+/// suffixed, and ids found neither in the bank nor in the sidecar.
+export interface SkillImportReport {
+  created: SkillRef[];
+  kept: SkillRef[];
+  renamed: { id: string; from: string; to: string }[];
+  missing: SkillRef[];
+  folder?: { id: string; name: string };
+  warnings: string[];
+}
+
+export interface ImportPipelineDocumentResult {
+  id: string;
+  scope: string;
+  path: string;
+  /// Non-fatal diagnostics: prompts dropped because they name a node the
+  /// document does not define, and the skills the import renamed or could not
+  /// find (#673).
+  warnings: string[];
+  skills?: SkillImportReport;
+}
+
+/// `skillsSidecar` is the base64 of the sidecar zip PDO exported (or of the
+/// `<pipeline>.skills/` folder re-zipped). Without it, unknown skill ids import
+/// with a "skill absent" warning — never a failure.
 export function importPipelineDocument(
   document: string,
-): Promise<{ id: string; scope: string; path: string; warnings: string[] }> {
+  skillsSidecar?: string,
+): Promise<ImportPipelineDocumentResult> {
   return request("POST", "/pipelines/import", {
-    body: { document },
+    body: skillsSidecar ? { document, skills_sidecar: skillsSidecar } : { document },
     label: "POST /pipelines/import",
   });
 }

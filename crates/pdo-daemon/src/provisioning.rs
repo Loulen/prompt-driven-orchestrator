@@ -465,7 +465,7 @@ fn provisioning_manifest_path(worktree: &Path) -> Result<Option<std::path::PathB
     }))
 }
 
-fn record_materialized_paths(worktree: &Path, paths: &[String]) -> Result<()> {
+pub(crate) fn record_materialized_paths(worktree: &Path, paths: &[String]) -> Result<()> {
     let Some(manifest) = provisioning_manifest_path(worktree)? else {
         return Ok(());
     };

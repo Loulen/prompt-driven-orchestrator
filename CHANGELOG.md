@@ -10,7 +10,7 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## 1.55.0
+## 1.56.0
 
 **Voyage des skills par document** (#673 ; story #666, spec #667, ADR-0062). Exporter un pipeline dont
 des nœuds sélectionnent des skills produit, à côté du YAML, un **sidecar** `<pipeline>.skills.zip`
@@ -22,6 +22,17 @@ l'id est inconnu, **avec le même id**, dans un dossier racine *importés avec <
 reste intact ; un nom déjà pris est suffixé `-2`, `-3`… avec avertissement ; un id absent de la banque
 et du sidecar produit un avertissement, jamais un échec. La réponse porte un rapport `skills`
 (`created`, `kept`, `renamed`, `missing`, `folder`). Le YAML du document ne change pas.
+## 1.55.0
+
+**Livraison des skills effectifs dans le worktree** (#672 ; story #666, spec #667 ; ADR-0062). Quand
+PDO crée un worktree (celui du Run ou le sous-worktree d'un nœud isolé), il y copie les skills
+effectifs du nœud dans `.agents/skills/<name>/` et pose un lien relatif `.claude/skills/<name>` par
+skill. Le contenu est **gelé au Run** : instantané additif sous `.pdo/runs/<run>/skills/`, hors
+worktree ; éditer la banque après le lancement ne change rien aux nœuds suivants. Les chemins livrés
+sont exclus du versionnage au grain du skill (lignes `# pdo <run>` dans `info/exclude` du dépôt
+cible, retirées au nettoyage du Run) et filtrés du commit de complétion même après `git add -A`.
+Un `.agents/skills/<name>` versionné reste intact et suivi ; le skill PDO homonyme est ignoré et
+signalé (`skipped_skills` sur `RunStarted` / `NodeStarted`, visible dans l'inspecteur du nœud).
 
 ## 1.54.0
 

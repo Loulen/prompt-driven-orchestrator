@@ -149,6 +149,9 @@ mod skill_bank;
 #[path = "skill_document.rs"]
 mod skill_document;
 
+#[path = "skill_delivery.rs"]
+mod skill_delivery;
+
 #[path = "sandbox_tracer.rs"]
 mod sandbox_tracer;
 

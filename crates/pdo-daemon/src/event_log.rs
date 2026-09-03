@@ -545,6 +545,11 @@ pub struct NodeState {
     /// without them (a warning, never a failure). Absent when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) missing_skills: Vec<crate::skill_selection::MissingSkill>,
+    /// #672: skills promised to this NodeRun that could not be written into its
+    /// worktree (versioned homonym, occupied path, content gone) — the node ran
+    /// without them. Absent when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) skipped_skills: Vec<crate::skill_delivery::SkippedSkill>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost: Option<NodeCost>,
     pub status: NodeStatus,
@@ -1969,6 +1974,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                         isolated_worktree: None,
                         skills: None,
                         missing_skills: Vec::new(),
+                        skipped_skills: Vec::new(),
                         cost: None,
                         node_id: node_id.clone(),
                         status: NodeStatus::Waiting,
@@ -2009,6 +2015,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                         isolated_worktree: None,
                         skills: None,
                         missing_skills: Vec::new(),
+                        skipped_skills: Vec::new(),
                         cost: None,
                         node_id: node_id.clone(),
                         status: NodeStatus::Running,
@@ -2076,6 +2083,13 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                     .and_then(|p| p.get("missing_skills"))
                     .and_then(|v| serde_json::from_value(v.clone()).ok())
                     .unwrap_or_default();
+                // #672: what the delivery could not write into the worktree.
+                node.skipped_skills = event
+                    .payload
+                    .as_ref()
+                    .and_then(|p| p.get("skipped_skills"))
+                    .and_then(|v| serde_json::from_value(v.clone()).ok())
+                    .unwrap_or_default();
                 upsert_iteration(&mut node.iterations, iteration);
             }
         }
@@ -2123,6 +2137,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                             isolated_worktree: None,
                             skills: None,
                             missing_skills: Vec::new(),
+                            skipped_skills: Vec::new(),
                             cost: None,
                             node_id: node_id.clone(),
                             status: done_status.clone(),
@@ -2244,6 +2259,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                         isolated_worktree: None,
                         skills: None,
                         missing_skills: Vec::new(),
+                        skipped_skills: Vec::new(),
                         cost: None,
                         node_id: node_id.clone(),
                         status: NodeStatus::Interrupted,
@@ -2393,6 +2409,7 @@ fn apply_switch_event(state: &mut RunState, event: &Event) {
                     isolated_worktree: None,
                     skills: None,
                     missing_skills: Vec::new(),
+                    skipped_skills: Vec::new(),
                     cost: None,
                     node_id: node_id.to_string(),
                     status: NodeStatus::Completed,
@@ -3546,6 +3563,7 @@ mod tests {
         assert_eq!(value["harness"], "copilot");
         let bare = super::NodeState {
             missing_skills: Vec::new(),
+            skipped_skills: Vec::new(),
             skills: None,
             harness: None,
             isolated_worktree: None,
@@ -6470,6 +6488,7 @@ mod tests {
     ) -> NodeState {
         NodeState {
             missing_skills: Vec::new(),
+            skipped_skills: Vec::new(),
             skills: None,
             harness: None,
             isolated_worktree: None,

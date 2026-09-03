@@ -393,6 +393,15 @@ export default function NodeInspector({
                     {" "}· missing: {runNode.missing_skills.map((skill) => skill.name || skill.id).join(", ")}
                   </span>
                 )}
+                {runNode.skipped_skills && runNode.skipped_skills.length > 0 && (
+                  <span
+                    className="text-st-blocked"
+                    data-testid="node-skills-skipped"
+                    title={runNode.skipped_skills.map((skill) => `${skill.name}: ${skill.reason}`).join("\n")}
+                  >
+                    {" "}· not delivered: {runNode.skipped_skills.map((skill) => skill.name || skill.id).join(", ")}
+                  </span>
+                )}
               </p>
             )}
             <div className="sr-only">

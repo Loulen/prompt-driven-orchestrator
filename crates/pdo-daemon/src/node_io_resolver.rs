@@ -295,6 +295,7 @@ mod tests {
         let (head_iter, head_status) = iters.last().cloned().unwrap_or((1, NodeStatus::Pending));
         let node = NodeState {
             missing_skills: Vec::new(),
+            skipped_skills: Vec::new(),
             skills: None,
             isolated_worktree: None,
             harness: None,

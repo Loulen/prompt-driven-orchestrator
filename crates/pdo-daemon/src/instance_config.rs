@@ -120,6 +120,12 @@ pub(crate) struct InstanceConfig {
     /// [`Self::default_harness_model`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_choice: Option<crate::agent_choice::AgentChoice>,
+    /// The Instance tier of the **skills** selection (#669, ADR-0062): the
+    /// baseline every node of every Run receives, unioned with the Projet, Run
+    /// and Node tiers by `skill_selection::resolve`. Stored as a JSON list in a
+    /// nullable TEXT column; `NULL` ⇒ empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<crate::skill_selection::SkillRef>,
     /// RFC3339-millis UTC timestamp of the last write (or the seed).
     pub updated_at: String,
 }
@@ -180,6 +186,11 @@ pub(crate) struct UpdateInstanceConfig {
     /// — this column, unlike the set-only numeric knobs, needs a genuine "clear"
     /// path back to legacy precedence.
     pub agent_choice: Option<Option<crate::agent_choice::AgentChoice>>,
+    /// Replace the Instance tier's skills selection wholesale (#669): `Some(list)`
+    /// stores it (an empty list clears to `NULL`); `None` leaves it untouched.
+    /// A flat `Option<Vec>` rather than a double-`Option`: an empty selection IS
+    /// the clear, there is no third state.
+    pub skills: Option<Vec<crate::skill_selection::SkillRef>>,
 }
 
 impl UpdateInstanceConfig {
@@ -196,6 +207,7 @@ impl UpdateInstanceConfig {
             && self.default_harness_model.is_none()
             && self.auto_fail.is_none()
             && self.agent_choice.is_none()
+            && self.skills.is_none()
     }
 }
 
@@ -372,6 +384,19 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
+    // Additive migration, pre-#669: the Instance tier's skills selection. NULLABLE
+    // so an existing install selects nothing.
+    let has_skills =
+        sqlx::query("SELECT 1 FROM pragma_table_info('instance_config') WHERE name = 'skills'")
+            .fetch_optional(db)
+            .await?
+            .is_some();
+    if !has_skills {
+        sqlx::query("ALTER TABLE instance_config ADD COLUMN skills TEXT")
+            .execute(db)
+            .await?;
+    }
+
     Ok(())
 }
 
@@ -399,6 +424,10 @@ fn row_to_config(row: &sqlx::sqlite::SqliteRow) -> InstanceConfig {
         agent_choice: row
             .get::<Option<String>, _>("agent_choice")
             .and_then(|s| serde_json::from_str(&s).ok()),
+        // #669: NULL / unparseable ⇒ empty selection, never an error.
+        skills: crate::skill_selection::from_stored_json(
+            row.try_get::<Option<String>, _>("skills").unwrap_or(None),
+        ),
         updated_at: row.get("updated_at"),
     }
 }
@@ -462,6 +491,9 @@ pub(crate) async fn update(
     if edit.agent_choice.is_some() {
         sets.push("agent_choice = ?");
     }
+    if edit.skills.is_some() {
+        sets.push("skills = ?");
+    }
     // Always bump the write timestamp on a real edit.
     sets.push("updated_at = ?");
 
@@ -523,6 +555,13 @@ pub(crate) async fn update(
         // #563: `Some(None)` → SQL NULL (fall back to legacy `default_harness`/
         // `default_harness_model`); `Some(Some(choice))` → the serialized JSON.
         query = query.bind(v.map(|c| serde_json::to_string(&c).unwrap_or_default()));
+    }
+    if let Some(v) = edit.skills {
+        // #669: an empty selection stores NULL — "nothing selected" and "never
+        // set" read the same, and the tier stays transparent.
+        query = query.bind(crate::skill_selection::to_stored_json(
+            &crate::skill_selection::normalise(v),
+        ));
     }
     query = query.bind(crate::event_log::now_iso());
     query.execute(db).await?;

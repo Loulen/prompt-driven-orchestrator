@@ -203,6 +203,8 @@ mod tests {
     fn node_with_iterations(id: &str, iters: &[(i64, NodeStatus)]) -> NodeState {
         let (head_iter, head_status) = iters.last().cloned().unwrap_or((1, NodeStatus::Pending));
         NodeState {
+            missing_skills: Vec::new(),
+            skills: None,
             isolated_worktree: None,
             harness: None,
             cost: None,
@@ -438,6 +440,7 @@ mod tests {
 
     fn node_def(id: &str, node_type: crate::pipeline::NodeType) -> crate::pipeline::NodeDef {
         crate::pipeline::NodeDef {
+            skills: Vec::new(),
             isolated_worktree: None,
             id: id.into(),
             name: id.into(),

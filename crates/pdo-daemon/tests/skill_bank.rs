@@ -867,3 +867,507 @@ async fn file_endpoints_on_an_unknown_skill_are_404() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
+
+
+// ---------------------------------------------------------------------------
+// #669 — selection by tier, skills effectifs with origin, referents populated.
+// A real daemon, a seeded pipeline, nodes spawned through the tmux command seam
+// (a harmless `sleep`). Every assertion is an HTTP response or an event payload.
+// ---------------------------------------------------------------------------
+
+const TIER_PIPELINE: &str = "skills-tiers";
+
+fn tier_pipeline_yaml(node_skills: &str) -> String {
+    format!(
+        r#"name: skills-tiers
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: aaaaaaaa
+    name: worker
+    type: agent
+    isolated_worktree: false
+{node_skills}    outputs:
+      - name: out
+    view: {{ x: 200, y: 60 }}
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: {{ node: start, port: user_prompt }}
+    target: {{ node: aaaaaaaa, port: task }}
+  - source: {{ node: aaaaaaaa, port: out }}
+    target: {{ node: end, port: result }}
+"#
+    )
+}
+
+fn seed_tier_pipeline(repo: &Path) -> anyhow::Result<()> {
+    let pipelines_dir = repo.join(".pdo").join("pipelines");
+    std::fs::create_dir_all(&pipelines_dir)?;
+    std::fs::write(
+        pipelines_dir.join(format!("{TIER_PIPELINE}.yaml")),
+        tier_pipeline_yaml(""),
+    )?;
+    let prompts_dir = pipelines_dir.join(format!("{TIER_PIPELINE}.prompts"));
+    std::fs::create_dir_all(&prompts_dir)?;
+    std::fs::write(prompts_dir.join("aaaaaaaa.md"), "You are the worker.\n")?;
+    let run = |args: &[&str]| -> anyhow::Result<()> {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .output()?;
+        anyhow::ensure!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        Ok(())
+    };
+    run(&["init", "-q", "-b", "main"])?;
+    run(&["config", "user.email", "test@example.com"])?;
+    run(&["config", "user.name", "Test"])?;
+    run(&["config", "commit.gpgsign", "false"])?;
+    std::fs::write(repo.join(".gitignore"), ".pdo/runs/\n")?;
+    run(&["add", "."])?;
+    run(&["commit", "-q", "-m", "init"])?;
+    Ok(())
+}
+
+/// A valid skill named `name`, created through the API; returns its `{id, name}`
+/// reference as the tiers store it.
+async fn create_named_skill(daemon: &TestDaemon, name: &str) -> serde_json::Value {
+    let content =
+        format!("---\nname: {name}\ndescription: The {name} method.\n---\n\n# {name}\n\nBody.\n");
+    let resp = post_skill(daemon, serde_json::json!({ "content": content })).await;
+    assert_eq!(resp.status(), StatusCode::CREATED, "skill `{name}`");
+    let skill: serde_json::Value = resp.json().await.unwrap();
+    serde_json::json!({ "id": skill["id"], "name": skill["name"] })
+}
+
+async fn post_json(daemon: &TestDaemon, path: &str, body: serde_json::Value) -> reqwest::Response {
+    reqwest::Client::new()
+        .post(format!("{}{path}", daemon.url()))
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+}
+
+async fn patch_json(daemon: &TestDaemon, path: &str, body: serde_json::Value) -> reqwest::Response {
+    reqwest::Client::new()
+        .patch(format!("{}{path}", daemon.url()))
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+}
+
+async fn events_of(daemon: &TestDaemon, run_id: &str) -> Vec<serde_json::Value> {
+    let v: serde_json::Value = get_json(daemon, &format!("/runs/{run_id}/events")).await;
+    v.as_array().cloned().unwrap_or_default()
+}
+
+/// The worker node's `NodeStarted` payload, once it exists.
+async fn wait_for_node_started(daemon: &TestDaemon, run_id: &str) -> serde_json::Value {
+    for _ in 0..80 {
+        let evs = events_of(daemon, run_id).await;
+        if let Some(e) = evs
+            .iter()
+            .rev()
+            .find(|e| e["kind"] == "node_started" && e["node_id"] == "aaaaaaaa")
+        {
+            return e["payload"].clone();
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    panic!("worker node should have started within the timeout");
+}
+
+fn skill_ids(list: &serde_json::Value) -> Vec<String> {
+    list.as_array()
+        .map(|a| {
+            a.iter()
+                .map(|s| s["id"].as_str().unwrap().to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn tiers_of(list: &serde_json::Value, id: &serde_json::Value) -> serde_json::Value {
+    list.as_array()
+        .and_then(|a| a.iter().find(|s| s["id"] == *id))
+        .map(|s| s["tiers"].clone())
+        .unwrap_or(serde_json::Value::Null)
+}
+
+/// FP steps 1–2 (#669): A at the instance tier, B on the Projet owning the repo,
+/// C on the node; the node's `NodeStarted` freezes the union with each origin,
+/// and the Run projection exposes it on the node.
+#[tokio::test]
+async fn skills_of_the_four_tiers_are_unioned_at_spawn_with_their_origin() {
+    let daemon = TestDaemon::spawn(seed_tier_pipeline).await.unwrap();
+    let primary = daemon.target_repo();
+    let a = create_named_skill(&daemon, "tdd").await;
+    let b = create_named_skill(&daemon, "grilling").await;
+    let c = create_named_skill(&daemon, "code-review").await;
+    let d = create_named_skill(&daemon, "docs").await;
+
+    // Instance tier — a settings knob, read back on GET.
+    let resp = put_json(&daemon, "/settings", serde_json::json!({ "skills": [a] })).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let settings = get_json(&daemon, "/settings").await;
+    assert_eq!(
+        skill_ids(&settings["skills"]),
+        vec![a["id"].as_str().unwrap()]
+    );
+
+    // Projet tier — the Projet owning the Run's primary repo.
+    let project: serde_json::Value = post_json(
+        &daemon,
+        "/projects",
+        serde_json::json!({ "name": "Product" }),
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+    let project_id = project["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        post_json(
+            &daemon,
+            &format!("/projects/{project_id}/members"),
+            serde_json::json!({ "path": primary })
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    let resp = patch_json(
+        &daemon,
+        &format!("/projects/{project_id}"),
+        serde_json::json!({ "skills": [b, a] }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let project: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(skill_ids(&project["skills"]).len(), 2, "{project}");
+
+    // Node tier — the document references skills by id, name beside it.
+    let node_skills = format!(
+        "    skills:\n      - id: {}\n        name: {}\n",
+        c["id"].as_str().unwrap(),
+        c["name"].as_str().unwrap()
+    );
+    let resp = put_json(
+        &daemon,
+        &format!("/pipelines/{TIER_PIPELINE}"),
+        serde_json::json!({ "yaml": tier_pipeline_yaml(&node_skills), "prompts": {} }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Run tier — frozen on `RunStarted` when non-empty.
+    let resp = post_json(
+        &daemon,
+        "/runs",
+        serde_json::json!({
+            "pipeline": TIER_PIPELINE,
+            "input": "go",
+            "target_repo": primary,
+            "skills": [d],
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let run: serde_json::Value = resp.json().await.unwrap();
+    let run_id = run["run_id"].as_str().unwrap().to_string();
+
+    let payload = wait_for_node_started(&daemon, &run_id).await;
+    let effective = &payload["skills"];
+    assert_eq!(
+        skill_ids(effective),
+        vec![
+            a["id"].as_str().unwrap(),
+            b["id"].as_str().unwrap(),
+            d["id"].as_str().unwrap(),
+            c["id"].as_str().unwrap()
+        ],
+        "union, coarsest tier first, de-duplicated: {payload}"
+    );
+    assert_eq!(
+        tiers_of(effective, &a["id"]),
+        serde_json::json!(["instance", "project"])
+    );
+    assert_eq!(
+        tiers_of(effective, &b["id"]),
+        serde_json::json!(["project"])
+    );
+    assert_eq!(tiers_of(effective, &d["id"]), serde_json::json!(["run"]));
+    assert_eq!(tiers_of(effective, &c["id"]), serde_json::json!(["node"]));
+    assert_eq!(payload["missing_skills"], serde_json::json!([]));
+
+    // The Run tier was frozen on `RunStarted`; the projection exposes both.
+    let evs = events_of(&daemon, &run_id).await;
+    let started = evs.iter().find(|e| e["kind"] == "run_started").unwrap();
+    assert_eq!(
+        skill_ids(&started["payload"]["skills"]),
+        vec![d["id"].as_str().unwrap()]
+    );
+    let state = get_json(&daemon, &format!("/runs/{run_id}")).await;
+    assert_eq!(skill_ids(&state["skills"]), vec![d["id"].as_str().unwrap()]);
+    assert_eq!(
+        skill_ids(&state["nodes"]["aaaaaaaa"]["skills"]).len(),
+        4,
+        "{state}"
+    );
+}
+
+/// FP step 4 (#669): a skill deleted from the bank but still selected produces a
+/// warning on the node (`missing_skills`) and the Run launches anyway.
+#[tokio::test]
+async fn a_deleted_skill_is_a_warning_on_the_node_never_a_refusal_to_launch() {
+    let daemon = TestDaemon::spawn(seed_tier_pipeline).await.unwrap();
+    let gone = create_named_skill(&daemon, "ephemeral").await;
+    let kept = create_named_skill(&daemon, "kept").await;
+    let gone_id = gone["id"].as_str().unwrap().to_string();
+
+    // Selected at the instance tier, then deleted from the bank.
+    assert_eq!(
+        put_json(
+            &daemon,
+            "/settings",
+            serde_json::json!({ "skills": [gone, kept] })
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    let resp = reqwest::Client::new()
+        .delete(format!("{}/settings/skills/{gone_id}", daemon.url()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    let resp = post_json(
+        &daemon,
+        "/runs",
+        serde_json::json!({ "pipeline": TIER_PIPELINE, "input": "go", "target_repo": daemon.target_repo() }),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::CREATED,
+        "the Run launches anyway"
+    );
+    let run: serde_json::Value = resp.json().await.unwrap();
+    let run_id = run["run_id"].as_str().unwrap().to_string();
+
+    let payload = wait_for_node_started(&daemon, &run_id).await;
+    assert_eq!(
+        skill_ids(&payload["skills"]),
+        vec![kept["id"].as_str().unwrap()]
+    );
+    assert_eq!(payload["missing_skills"][0]["id"], gone_id);
+    assert_eq!(
+        payload["missing_skills"][0]["name"], "ephemeral",
+        "the stored label survives"
+    );
+    assert_eq!(
+        payload["missing_skills"][0]["tiers"],
+        serde_json::json!(["instance"])
+    );
+    let state = get_json(&daemon, &format!("/runs/{run_id}")).await;
+    assert_eq!(state["status"], "running", "{state}");
+    assert_eq!(
+        state["nodes"]["aaaaaaaa"]["missing_skills"][0]["id"],
+        gone_id
+    );
+}
+
+/// AC (#669): a `script` node carrying `skills` is refused at parse with a clear
+/// message — on the single-node parse endpoint and on a pipeline write alike.
+#[tokio::test]
+async fn a_script_node_with_skills_is_refused_at_parse_over_http() {
+    let daemon = TestDaemon::spawn(seed_tier_pipeline).await.unwrap();
+    let resp = post_json(
+        &daemon,
+        "/nodes/parse",
+        serde_json::json!({
+            "yaml": "name: sh\ntype: script\nskills:\n  - id: 11111111-1111-1111-1111-111111111111\n    name: tdd\nprompt: |\n  echo hi\n"
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let message = body.to_string();
+    assert!(message.contains("script"), "{message}");
+    assert!(message.contains("skills"), "{message}");
+
+    let yaml = tier_pipeline_yaml(
+        "    skills:\n      - id: 11111111-1111-1111-1111-111111111111\n        name: tdd\n",
+    )
+    .replace(
+        "    type: agent\n    isolated_worktree: false",
+        "    type: script\n    isolated_worktree: false",
+    );
+    let resp = put_json(
+        &daemon,
+        &format!("/pipelines/{TIER_PIPELINE}"),
+        serde_json::json!({ "yaml": yaml, "prompts": {} }),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::BAD_REQUEST,
+        "a pipeline write is refused too"
+    );
+}
+
+/// AC (#669): `GET /settings/skills/{id}/referents` lists the instance, the
+/// Projets, the Triggers and the pipelines' nodes that select the skill — and a
+/// rename never breaks any of them (identity is the id).
+#[tokio::test]
+async fn referents_list_every_tier_that_selects_the_skill() {
+    let daemon = TestDaemon::spawn(seed_tier_pipeline).await.unwrap();
+    let primary = daemon.target_repo();
+    let s = create_named_skill(&daemon, "shared").await;
+    let other = create_named_skill(&daemon, "other").await;
+    let id = s["id"].as_str().unwrap().to_string();
+
+    // Nothing selects it yet.
+    let referents = get_json(&daemon, &format!("/settings/skills/{id}/referents")).await;
+    assert_eq!(referents["instance"], false);
+    assert_eq!(referents["projects"], serde_json::json!([]));
+    assert_eq!(referents["triggers"], serde_json::json!([]));
+    assert_eq!(referents["pipelines"], serde_json::json!([]));
+    assert!(referents["runs"].is_array());
+
+    assert_eq!(
+        put_json(
+            &daemon,
+            "/settings",
+            serde_json::json!({ "skills": [s.clone()] })
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    let project: serde_json::Value = post_json(
+        &daemon,
+        "/projects",
+        serde_json::json!({ "name": "Product" }),
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+    let project_id = project["id"].as_str().unwrap().to_string();
+    post_json(
+        &daemon,
+        &format!("/projects/{project_id}/members"),
+        serde_json::json!({ "path": primary }),
+    )
+    .await;
+    assert_eq!(
+        patch_json(
+            &daemon,
+            &format!("/projects/{project_id}"),
+            serde_json::json!({ "skills": [s.clone()] })
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    let trigger: serde_json::Value = post_json(
+        &daemon,
+        "/triggers",
+        serde_json::json!({
+            "name": "nightly",
+            "pipeline_id": TIER_PIPELINE,
+            "cron": "0 3 * * *",
+            "input_template": "audit",
+            "target_repo": primary,
+            "skills": [s.clone(), other.clone()],
+        }),
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+    assert_eq!(skill_ids(&trigger["skills"]).len(), 2, "{trigger}");
+    let node_skills = format!("    skills:\n      - id: {id}\n        name: shared\n");
+    assert_eq!(
+        put_json(
+            &daemon,
+            &format!("/pipelines/{TIER_PIPELINE}"),
+            serde_json::json!({ "yaml": tier_pipeline_yaml(&node_skills), "prompts": {} }),
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+
+    // A rename touches the label only: every referent still resolves.
+    assert_eq!(
+        put_json(
+            &daemon,
+            &format!("/settings/skills/{id}"),
+            serde_json::json!({ "name": "shared-renamed" })
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+
+    let referents = get_json(&daemon, &format!("/settings/skills/{id}/referents")).await;
+    assert_eq!(referents["skill_id"], id);
+    assert_eq!(referents["instance"], true);
+    assert_eq!(referents["projects"][0]["id"], project_id);
+    assert_eq!(referents["projects"][0]["name"], "Product");
+    assert_eq!(referents["triggers"][0]["id"], trigger_id);
+    assert_eq!(referents["pipelines"][0]["name"], TIER_PIPELINE);
+    assert_eq!(referents["pipelines"][0]["node_id"], "aaaaaaaa");
+    assert!(referents["runs"].is_array());
+
+    // `other` is referenced by the trigger only.
+    let other_id = other["id"].as_str().unwrap();
+    let referents = get_json(&daemon, &format!("/settings/skills/{other_id}/referents")).await;
+    assert_eq!(referents["instance"], false);
+    assert_eq!(referents["projects"], serde_json::json!([]));
+    assert_eq!(referents["triggers"].as_array().unwrap().len(), 1);
+    assert_eq!(referents["pipelines"], serde_json::json!([]));
+
+    // Clearing a tier: an empty list clears (flat, no double-Option).
+    assert_eq!(
+        patch_json(
+            &daemon,
+            &format!("/triggers/{trigger_id}"),
+            serde_json::json!({ "skills": [] })
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    let trigger = get_json(&daemon, &format!("/triggers/{trigger_id}")).await;
+    assert!(skill_ids(&trigger["skills"]).is_empty(), "{trigger}");
+    assert_eq!(
+        put_json(&daemon, "/settings", serde_json::json!({ "skills": [] }))
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    let settings = get_json(&daemon, "/settings").await;
+    assert!(skill_ids(&settings["skills"]).is_empty(), "{settings}");
+    let referents = get_json(&daemon, &format!("/settings/skills/{id}/referents")).await;
+    assert_eq!(referents["instance"], false);
+    assert_eq!(referents["triggers"], serde_json::json!([]));
+}

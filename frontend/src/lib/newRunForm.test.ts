@@ -659,6 +659,8 @@ describe("buildTriggerCreatePayload / buildTriggerUpdatePayload", () => {
       max_concurrent: 2,
       sandbox: "minimal",
       harness: null,
+      // #669: replaced wholesale on edit; no selection clears.
+      skills: [],
       auto_name: true,
       variables: { max_iter: 5 },
     });

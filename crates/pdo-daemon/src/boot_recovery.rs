@@ -337,6 +337,8 @@ mod tests {
         rs.nodes.insert(
             node_id.into(),
             event_log::NodeState {
+                missing_skills: Vec::new(),
+                skills: None,
                 isolated_worktree: None,
                 harness: None,
                 cost: None,

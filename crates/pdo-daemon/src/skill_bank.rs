@@ -368,6 +368,22 @@ pub(crate) async fn list(db: &SqlitePool) -> Result<Vec<Skill>, sqlx::Error> {
     Ok(rows.iter().map(row_to_skill).collect())
 }
 
+/// The `id → name` map of the whole bank, read ONCE per resolution — the
+/// snapshot `skill_selection::resolve` names skills from (identity is the id;
+/// the stored label is only a fallback for a deleted one). Same posture as
+/// `agent_profile::snapshot` (ADR-0057 ¶4).
+pub(crate) async fn snapshot_names(
+    db: &SqlitePool,
+) -> Result<std::collections::BTreeMap<String, String>, sqlx::Error> {
+    let rows = sqlx::query("SELECT id, name FROM skills")
+        .fetch_all(db)
+        .await?;
+    Ok(rows
+        .iter()
+        .map(|row| (row.get::<String, _>("id"), row.get::<String, _>("name")))
+        .collect())
+}
+
 pub(crate) async fn get(db: &SqlitePool, id: &str) -> Result<Option<Skill>, sqlx::Error> {
     let row = sqlx::query("SELECT * FROM skills WHERE id = ?")
         .bind(id)

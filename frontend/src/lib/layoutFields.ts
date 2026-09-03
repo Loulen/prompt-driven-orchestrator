@@ -52,7 +52,9 @@ export const SEMANTIC_FIELDS: Record<SerializerScope, readonly string[]> = {
   // #653/ADR-0060: `isolated_worktree` is SEMANTIC — moving a node between the
   // Run worktree and one of its own changes what the pipeline does, so the
   // library star and the pipeline diff must both see it.
-  node: ["id", "name", "type", "interactive", "agent_choice", "pin_harness", "harnesses", "provisioning", "max_iter", "isolated_worktree", "inputs", "outputs"] satisfies (keyof NodeDef)[],
+  // #669/ADR-0062: `skills` is SEMANTIC — the skills a node carries change what
+  // its NodeRun works with, so a selection edit versions the pipeline.
+  node: ["id", "name", "type", "interactive", "agent_choice", "skills", "pin_harness", "harnesses", "provisioning", "max_iter", "isolated_worktree", "inputs", "outputs"] satisfies (keyof NodeDef)[],
   // `side` is SEMANTIC today (emitted, not stripped) — deliberate, see #355 D5:
   // the node-library star already treats port side as identity, so the pipeline
   // diff must agree or the two stars contradict each other on the same edit.

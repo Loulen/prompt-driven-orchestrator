@@ -25,6 +25,9 @@ vi.mock("@xyflow/react", async (importOriginal) => {
 
 vi.mock("../api", () => ({
   fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
+  // #669: the skills selector's reads (bank + inherited tiers), empty by default.
+  fetchSkillBank: vi.fn().mockResolvedValue({ skills: [], folders: [], root_path: "" }),
+  fetchProjects: vi.fn().mockResolvedValue([]),
   fetchLibrary: vi.fn().mockResolvedValue([]),
   fetchLibraryPipelines: vi.fn().mockResolvedValue([]),
   saveLibraryPipeline: vi.fn().mockResolvedValue({ id: "p", scope: "repo" }),

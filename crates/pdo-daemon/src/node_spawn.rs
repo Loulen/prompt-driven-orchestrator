@@ -168,6 +168,26 @@ fn warn_missing_agent_profile_once(
     }
 }
 
+/// #669 (ADR-0062): say ONCE per `(run, skill id)` that a tier selected a skill
+/// the bank no longer has — the node runs without it, the inspector and the
+/// pipeline banner carry the warning, and the Run is never refused. Same dedupe
+/// as [`warn_missing_agent_profile_once`].
+fn warn_missing_skill_once(run_id: &str, missing: &crate::skill_selection::MissingSkill) {
+    use std::collections::HashSet;
+    use std::sync::Mutex;
+    static SAID: Mutex<Option<HashSet<(String, String)>>> = Mutex::new(None);
+
+    let mut guard = SAID.lock().unwrap_or_else(|e| e.into_inner());
+    let said = guard.get_or_insert_with(HashSet::new);
+    if said.insert((run_id.to_string(), missing.id.clone())) {
+        warn!(
+            "run {run_id}: skill '{}' ({}) selected at {:?} no longer exists in the bank — \
+             the node runs without it",
+            missing.name, missing.id, missing.tiers
+        );
+    }
+}
+
 /// A collection-region member (ADR-0011 / #269) reads its OWN deposited item:
 /// the fan-out deposits `_item.md` under the entry's artifact dir, one per
 /// lap — there is no separate driver node like the retired ForEach.
@@ -493,6 +513,48 @@ pub(crate) async fn spawn_node(
             warn_missing_agent_profile_once(run_id, warning);
         }
         Some(resolved.combo)
+    };
+    // #669 / ADR-0062: the **skills effectifs** of this NodeRun — the strict
+    // additive union of the four tiers, resolved HERE at spawn like the harness
+    // (ADR-0046 sharing: editing a tier reaches a node not yet launched, never a
+    // live one). The Run tier is the list FROZEN on `RunStarted`; the Projet and
+    // instance tiers are read fresh, keyed by the same primary repo as the harness
+    // above; the Node tier is the document's `skills`. The bank snapshot is taken
+    // ONCE so every id resolves against the same point in time. A DB error
+    // degrades a tier to empty — a skill lookup never fails a spawn. A `script`
+    // node carries none (refused at parse) and launches no agent: `None`.
+    let resolved_skills = if node.node_type == pipeline::NodeType::Script {
+        None
+    } else {
+        let primary_repo = projected
+            .and_then(|s| s.target_repo.clone())
+            .unwrap_or_else(|| spawn_ctx.repo_root.to_string_lossy().into_owned());
+        let project_skills =
+            match crate::project_store::skills_for_path(deps.db, &primary_repo).await {
+                Ok(skills) => skills,
+                Err(e) => {
+                    warn!("project skills lookup failed for {primary_repo}: {e}");
+                    Vec::new()
+                }
+            };
+        let instance_skills = crate::instance_config::get(deps.db)
+            .await
+            .map(|c| c.skills)
+            .unwrap_or_default();
+        let bank = crate::skill_bank::snapshot_names(deps.db)
+            .await
+            .unwrap_or_default();
+        let tiers = crate::skill_selection::SkillTiers {
+            instance: Some(&instance_skills),
+            project: Some(&project_skills),
+            run: projected.map(|s| s.skills.as_slice()),
+            node: Some(&node.skills),
+        };
+        let resolved = crate::skill_selection::resolve(&tiers, &bank);
+        for missing in &resolved.missing {
+            warn_missing_skill_once(run_id, missing);
+        }
+        Some(resolved)
     };
     let harness_descriptor = match &resolved_harness {
         None => None,
@@ -891,6 +953,15 @@ pub(crate) async fn spawn_node(
                 // resume path re-poses what was launched, never what the YAML or a
                 // tier says now (ADR-0007). `null` for a `script` node (no agent).
                 "harness": resolved_harness.as_ref().map(|r| r.harness.as_str()),
+                // #669/ADR-0062: the skills effectifs this session receives, FROZEN
+                // with their origin tier (ids + current bank names), and the ids the
+                // bank no longer had — the node runs without those, and the Run view
+                // says so. `null` / empty for a `script` node (no agent).
+                "skills": resolved_skills.as_ref().map(|r| &r.skills),
+                "missing_skills": resolved_skills
+                    .as_ref()
+                    .map(|r| r.missing.clone())
+                    .unwrap_or_default(),
                 // #473: the pinned Claude Code session id the agent launches with
                 // (`claude --session-id <uuid>`). The sweep resolves this node's
                 // transcript by it (`<uuid>.jsonl`), and the resume path re-enters

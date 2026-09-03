@@ -1,4 +1,4 @@
-import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, StatsPerformance, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, Project, BranchRef, AgentChoice, AgentProfile, AgentProfileReferents, ProvisioningPlan, ProvisioningRules, Skill, SkillBank, SkillDetail, SkillFile, SkillFileContent, SkillFilesUpload, SkillFolder, SkillReferents } from "./types";
+import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, StatsPerformance, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, Project, BranchRef, AgentChoice, AgentProfile, AgentProfileReferents, ProvisioningPlan, ProvisioningRules, Skill, SkillBank, SkillDetail, SkillFile, SkillFileContent, SkillFilesUpload, SkillFolder, SkillReferents, SkillRef } from "./types";
 import { foldHarnessOntoNode } from "./lib/harness";
 
 const BASE = "";
@@ -679,6 +679,9 @@ export interface CreateRunRequest {
    *  default and the `claude` floor. Frozen into `RunStarted` at the create chokepoint. */
   harness?: string;
   agent_choice?: AgentChoice;
+  /** #669/ADR-0062: the Run tier of the skills selection, frozen into `RunStarted`
+   *  when non-empty. Omit for none. */
+  skills?: SkillRef[];
   /** Whether the manager auto-names this Run (#338). The modal always sends it; omit and
    *  the server resolves back-compat by the presence of `name`, then the instance default. */
   auto_name?: boolean;
@@ -710,6 +713,7 @@ export function createRun(req: CreateRunRequest): Promise<CreateRunResponse> {
     if (req.sandbox) form.append("sandbox", req.sandbox);
     if (req.harness) form.append("harness", req.harness);
     if (req.agent_choice) form.append("agent_choice", JSON.stringify(req.agent_choice));
+    if (req.skills && req.skills.length > 0) form.append("skills", JSON.stringify(req.skills));
     if (req.auto_name !== undefined) form.append("auto_name", String(req.auto_name));
     if (req.provisioning) form.append("provisioning", JSON.stringify(req.provisioning));
     for (const file of req.images!) {
@@ -834,6 +838,8 @@ export interface CreateTriggerRequest {
    *  default. Folded into the fired Run's harness (no separate Trigger tier). */
   harness?: string | null;
   agent_choice?: AgentChoice | null;
+  /** #669: the Run-tier skills every fired Run carries. Omit for none. */
+  skills?: SkillRef[];
   /** Whether Runs this Trigger fires are auto-named (#338). Seeded from the instance
    *  default in the modal; omit → the server defaults to `true` (pre-#338 behaviour). */
   auto_name?: boolean;
@@ -880,6 +886,8 @@ export interface UpdateTriggerRequest {
    *  instance default, `undefined` leaves it unchanged. */
   harness?: string | null;
   agent_choice?: AgentChoice | null;
+  /** #669: replace the Run-tier skills wholesale; `[]` clears. */
+  skills?: SkillRef[];
   /** Auto-naming toggle (#338): a bool sets it, `undefined` leaves it unchanged. A flat
    *  bool (no clear state) — mirror of `enabled`. */
   auto_name?: boolean;
@@ -916,6 +924,8 @@ export interface UpdateProjectRequest {
   name?: string;
   harness?: string | null;
   agent_choice?: AgentChoice | null;
+  /** #669: replace the Projet's skills wholesale; `[]` clears. */
+  skills?: SkillRef[];
 }
 
 export function updateProject(

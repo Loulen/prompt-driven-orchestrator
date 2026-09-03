@@ -2093,6 +2093,9 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 // harness) forwards as `None`. Unlike `sandbox` this needs no
                 // `Some`-wrapping: the create chokepoint freezes `req.harness` verbatim.
                 harness: run_state.harness.clone(),
+                // #669: a retry reproduces the original Run tier's skills, same
+                // reason as `harness` — the union must not silently shrink.
+                skills: run_state.skills.clone(),
                 // Reproduce the original Run's `AgentChoice`, like `harness`: `None`
                 // forwards as `None`, so the retry re-resolves through the legacy
                 // `harness` tier exactly as the original did.
@@ -3096,6 +3099,7 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![NodeDef {
+                skills: Vec::new(),
                 isolated_worktree: None,
                 id: "sw1".into(),
                 name: "switch".into(),
@@ -3164,6 +3168,7 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![NodeDef {
+                skills: Vec::new(),
                 isolated_worktree: None,
                 id: "b".into(),
                 name: "b".into(),

@@ -73,6 +73,7 @@ mod scheduler_dispatcher;
 mod scheduler_interpreter;
 mod service_unit;
 mod skill_bank;
+mod skill_selection;
 pub mod stale_detector;
 mod stats;
 mod stats_performance;
@@ -491,6 +492,12 @@ struct CreateRunRequest {
     /// Custom)` wins outright at this tier and never merges with `harness`.
     #[serde(default)]
     agent_choice: Option<crate::agent_choice::AgentChoice>,
+    /// The Run tier of the **skills** selection (#669, ADR-0062): ids (+ label)
+    /// added to every node of this Run, on top of the instance and Projet tiers.
+    /// Frozen into `RunStarted` at the create chokepoint (only when non-empty). A
+    /// Trigger fire folds its stored list in here, like `harness`.
+    #[serde(default)]
+    skills: Vec<crate::skill_selection::SkillRef>,
     /// Whether the manager auto-names this Run. Don't collapse to `bool`: `None`
     /// (omitted) must resolve by the presence of `name`, so a supplied `name` with
     /// no flag keeps the name; `Some(b)` is an explicit choice that wins.
@@ -532,6 +539,7 @@ const CREATE_RUN_FIELDS: &[&str] = &[
     "sandbox",
     "harness",
     "agent_choice",
+    "skills",
     "auto_name",
     "auto_fail",
     "provisioning",
@@ -669,6 +677,10 @@ struct PatchProjectRequest {
     /// and then to the instance tier.
     #[serde(default, deserialize_with = "deserialize_double_option")]
     agent_choice: Option<Option<crate::agent_choice::AgentChoice>>,
+    /// The Projet's skills selection (#669), replaced wholesale: absent leaves it,
+    /// a list sets it, an empty list clears it (flat — the empty list IS the clear).
+    #[serde(default)]
+    skills: Option<Vec<crate::skill_selection::SkillRef>>,
     /// The Projet's `auto_fail` (ADR-0049), same double-`Option` shape as
     /// `harness`; `null` states no preference.
     #[serde(default, deserialize_with = "deserialize_double_option")]
@@ -1983,6 +1995,7 @@ impl DaemonHandle {
                 sandbox: None,
                 harness: None,
                 agent_choice: None,
+                skills: Vec::new(),
                 auto_name: true,
                 next_fire_at: Some("2030-01-01T00:00:00.000Z".to_string()),
             },
@@ -2962,6 +2975,10 @@ struct CreateTriggerRequest {
     /// explicit tier at fire time.
     #[serde(default)]
     agent_choice: Option<crate::agent_choice::AgentChoice>,
+    /// The Run-tier skills every fired Run carries (#669, ADR-0062). Folded into
+    /// the fired Run's `skills` at fire time, like `harness`.
+    #[serde(default)]
+    skills: Vec<crate::skill_selection::SkillRef>,
     /// Whether Runs this Trigger fires are auto-named. Seeded from the instance
     /// default in the create modal and frozen on the row; defaults to `true` so an
     /// older client that omits the field keeps auto-naming.
@@ -3267,6 +3284,8 @@ async fn create_trigger(
         // No normalisation needed: `None`/`Inherit`/blank payloads are already
         // transparent inside `agent_choice::resolve`.
         agent_choice: req.agent_choice,
+        // #669: the store normalises (trim, dedupe) and stores NULL for empty.
+        skills: req.skills,
         // Frozen on the row, never re-resolved at fire time — the runtime never
         // decides autonomy (ADR-0012 frontier).
         auto_name: req.auto_name,
@@ -3461,6 +3480,10 @@ struct PatchTriggerRequest {
     /// back to inheriting the legacy `harness` field.
     #[serde(default, deserialize_with = "deserialize_double_option")]
     agent_choice: Option<Option<crate::agent_choice::AgentChoice>>,
+    /// The Run-tier skills (#669), replaced wholesale: absent leaves them, a list
+    /// sets them, an empty list clears them. Flat: the empty list IS the clear.
+    #[serde(default)]
+    skills: Option<Vec<crate::skill_selection::SkillRef>>,
     /// Auto-naming toggle — a FLAT `Option<bool>`, deliberately not double-wrapped:
     /// there is no "inherit" state to clear back to, a Trigger's autonomy is a plain
     /// on/off.
@@ -3690,6 +3713,7 @@ async fn patch_trigger(
             .harness
             .map(|inner| inner.filter(|s| !s.trim().is_empty())),
         agent_choice: req.agent_choice,
+        skills: req.skills,
         auto_name: req.auto_name,
         next_fire_at,
         // The enable bit and the forward next_fire_at must land in ONE atomic UPDATE,
@@ -4427,6 +4451,13 @@ async fn patch_project(
         if let Err(e) = project_store::set_agent_choice(&state.db, &project_id, agent_choice).await
         {
             error!("failed to set agent_choice on project {project_id}: {e}");
+            return project_list_error();
+        }
+    }
+    // #669: replace the Projet's skills selection wholesale; an empty list clears.
+    if let Some(skills) = req.skills {
+        if let Err(e) = project_store::set_skills(&state.db, &project_id, skills).await {
+            error!("failed to set skills on project {project_id}: {e}");
             return project_list_error();
         }
     }
@@ -5358,6 +5389,9 @@ async fn fire_one_trigger(
                 // here, so they freeze the SAME harness.
                 harness: trigger.harness.clone(),
                 agent_choice: trigger.agent_choice.clone(),
+                // #669: the Trigger's skills ARE the fired Run's Run tier, same as
+                // `harness` — a cron tick and a "Run now" freeze the SAME list.
+                skills: trigger.skills.clone(),
                 // `Some(b)` wins the chokepoint resolution unconditionally, so a fire
                 // with `auto_name=false` keeps a stable per-id name.
                 auto_name: Some(trigger.auto_name),
@@ -5685,6 +5719,7 @@ fn parse_error_to_structured(e: &pipeline::ParseError) -> (String, Option<usize>
         pipeline::ParseError::MissingField(field) => {
             (format!("missing required field: {field}"), None)
         }
+        pipeline::ParseError::InvalidField(message) => (message.clone(), None),
         pipeline::ParseError::UndeclaredWhenField {
             node_id,
             port,
@@ -7267,6 +7302,7 @@ async fn parse_multipart_create_run(
     let mut sandbox: Option<event_log::SandboxMode> = None;
     let mut harness: Option<String> = None;
     let mut agent_choice: Option<crate::agent_choice::AgentChoice> = None;
+    let mut skills: Vec<crate::skill_selection::SkillRef> = Vec::new();
     let mut auto_name: Option<bool> = None;
     let mut auto_fail: Option<bool> = None;
     let mut provisioning = provisioning::ProvisioningRules::default();
@@ -7383,6 +7419,18 @@ async fn parse_multipart_create_run(
                     );
                 }
             }
+            "skills" => {
+                // #669: a JSON list of `{id, name}`, mirrored from the JSON path so a
+                // Run created WITH images keeps its skills.
+                let value = field
+                    .text()
+                    .await
+                    .map_err(|e| format!("bad field skills: {e}"))?;
+                if !value.trim().is_empty() {
+                    skills = serde_json::from_str(&value)
+                        .map_err(|e| format!("invalid skills JSON: {e}"))?;
+                }
+            }
             "auto_name" => {
                 // An unrecognised token leaves `None`, deferring to the chokepoint's
                 // name-presence resolution.
@@ -7452,6 +7500,7 @@ async fn parse_multipart_create_run(
         sandbox,
         harness,
         agent_choice,
+        skills,
         auto_name,
         auto_fail,
         provisioning,
@@ -7972,6 +8021,15 @@ async fn create_run_inner(
     };
     if let Some(choice) = explicit_agent_choice {
         run_payload["agent_choice"] = serde_json::to_value(choice).unwrap_or_default();
+    }
+    // FREEZE the Run tier of the skills selection (#669, ADR-0062) — same posture as
+    // `harness`/`agent_choice`: set once here, never re-decided by a later edit of
+    // the bank or the Trigger. Written ONLY when non-empty, so a Run that selects
+    // none keeps the historical payload shape. Not validated against the bank: an
+    // unknown id is a spawn-time WARNING, never a refusal to launch (#669 AC).
+    let run_skills = crate::skill_selection::normalise(req.skills.clone());
+    if !run_skills.is_empty() {
+        run_payload["skills"] = serde_json::to_value(&run_skills).unwrap_or_default();
     }
     // FREEZE the Run's `auto_fail` choice (ADR-0049), same immutability posture as
     // `harness`. Absent ⇒ resolve through the project / instance tiers.
@@ -8994,6 +9052,8 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
             "stored": dhm_stored,
         },
         "agent_choice": cfg.agent_choice,
+        // #669: the Instance tier of the skills selection, as stored (ids + labels).
+        "skills": cfg.skills,
         // The settings surface is where a broken descriptor is ALWAYS said.
         "harness_descriptors": harness_descriptors_view,
         "default_sandbox": {
@@ -9900,11 +9960,15 @@ async fn delete_skill(
     }
 }
 
-/// `GET /settings/skills/{id}/referents` — who selects this skill, by tier:
-/// instance, projects, pipelines (node), not-yet-started runs. **Empty in #668**
-/// (no tier selects skills yet), but the shape is the one the delete dialog
-/// renders and the one the selector tickets will fill — same pattern as
-/// `get_agent_profile_referents`.
+/// `GET /settings/skills/{id}/referents` — who selects this skill, by tier
+/// (#669, same pattern as `get_agent_profile_referents`, ADR-0057): the
+/// instance, the Projets, the Triggers, the pipelines' nodes, and the **not yet
+/// started** Runs (a `run_started` whose payload selects the id, non-terminal,
+/// with no `node_started` yet — the only Runs whose resolution still lies
+/// ahead; a Run with a spawned node already froze its content at the Run).
+///
+/// Informative, never blocking: the delete is unconditional (`skill_bank::delete`),
+/// and every referent keeps the id and shows a warning afterwards.
 async fn get_skill_referents(
     State(state): State<Arc<AppState>>,
     AxumPath(id): AxumPath<String>,
@@ -9914,12 +9978,108 @@ async fn get_skill_referents(
         Ok(None) => return skill_error_response(skill_bank::SkillError::NotFound),
         Err(error) => return storage_error_response(error),
     }
+
+    let instance = instance_config::get(&state.db)
+        .await
+        .map(|config| skill_selection::selects(&config.skills, &id))
+        .unwrap_or(false);
+
+    let projects = project_store::list(&state.db)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|project| skill_selection::selects(&project.skills, &id))
+        .map(|project| serde_json::json!({ "id": project.id, "name": project.name }))
+        .collect::<Vec<_>>();
+
+    let triggers = trigger_store::list(&state.db)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|trigger| skill_selection::selects(&trigger.skills, &id))
+        .map(|trigger| {
+            serde_json::json!({
+                "id": trigger.id,
+                "name": trigger.name,
+                "pipeline_id": trigger.pipeline_id
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let pipeline_entries = instance_pipeline_dir(&state.repo_root)
+        .map(|directory| scan_pipeline_dir(&directory, "instance"))
+        .unwrap_or_default();
+    let pipelines = pipeline_entries
+        .into_iter()
+        .flat_map(|entry| {
+            let Ok(yaml) = std::fs::read_to_string(&entry.path) else {
+                return Vec::new();
+            };
+            let Ok(parsed) = pipeline::parse_pipeline(&yaml) else {
+                return Vec::new();
+            };
+            parsed
+                .pipeline
+                .nodes
+                .into_iter()
+                .filter(|node| skill_selection::selects(&node.skills, &id))
+                .map(|node| {
+                    serde_json::json!({
+                        "id": entry.id,
+                        "name": entry.name,
+                        "node_id": node.id,
+                        "scope": entry.scope
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    // One indexed pass over `run_started` payloads: non-terminal Runs that have not
+    // spawned a single node yet (same terminality test as the sandbox-profile
+    // referents, plus the "no node_started" clause that makes them *not started*).
+    let rows: Result<Vec<(String, String)>, _> = sqlx::query_as(
+        "SELECT e.run_id, e.payload FROM events e \
+         WHERE e.kind = 'run_started' AND e.payload IS NOT NULL \
+           AND NOT EXISTS ( \
+             SELECT 1 FROM events t WHERE t.run_id = e.run_id AND t.kind IN \
+               ('run_completed', 'run_failed', 'run_skipped', 'run_halted', 'run_archived', \
+                'node_started') \
+           ) \
+         ORDER BY e.ts DESC",
+    )
+    .fetch_all(&state.db)
+    .await;
+    let runs: Vec<serde_json::Value> = match rows {
+        Ok(rows) => rows
+            .iter()
+            .filter_map(|(run_id, payload)| {
+                let val = serde_json::from_str::<serde_json::Value>(payload).ok()?;
+                let skills: Vec<skill_selection::SkillRef> =
+                    serde_json::from_value(val.get("skills")?.clone()).ok()?;
+                if !skill_selection::selects(&skills, &id) {
+                    return None;
+                }
+                Some(serde_json::json!({
+                    "run_id": run_id,
+                    "pipeline_name": val.get("pipeline_name").and_then(|v| v.as_str()),
+                    "name": val.get("name").and_then(|v| v.as_str()),
+                }))
+            })
+            .collect(),
+        Err(e) => {
+            error!("failed to query runs for skill referents: {e}");
+            Vec::new()
+        }
+    };
+
     Json(serde_json::json!({
         "skill_id": id,
-        "instance": false,
-        "projects": [],
-        "pipelines": [],
-        "runs": []
+        "instance": instance,
+        "projects": projects,
+        "triggers": triggers,
+        "pipelines": pipelines,
+        "runs": runs
     }))
     .into_response()
 }
@@ -23114,6 +23274,8 @@ mod tests {
         rs.nodes.insert(
             node_id.into(),
             event_log::NodeState {
+                missing_skills: Vec::new(),
+                skills: None,
                 isolated_worktree: None,
                 harness: None,
                 cost: None,
@@ -23153,6 +23315,7 @@ mod tests {
 
     fn doc_node_def(id: &str) -> pipeline::NodeDef {
         pipeline::NodeDef {
+            skills: Vec::new(),
             isolated_worktree: None,
             id: id.into(),
             name: id.into(),
@@ -23327,6 +23490,8 @@ mod tests {
         run_state.nodes.insert(
             "a".into(),
             event_log::NodeState {
+                missing_skills: Vec::new(),
+                skills: None,
                 isolated_worktree: None,
                 harness: None,
                 cost: None,
@@ -23382,6 +23547,8 @@ mod tests {
         run_state.nodes.insert(
             "a".into(),
             event_log::NodeState {
+                missing_skills: Vec::new(),
+                skills: None,
                 isolated_worktree: None,
                 harness: None,
                 cost: None,
@@ -23405,6 +23572,8 @@ mod tests {
         run_state.nodes.insert(
             "b".into(),
             event_log::NodeState {
+                missing_skills: Vec::new(),
+                skills: None,
                 isolated_worktree: None,
                 harness: None,
                 cost: None,
@@ -23635,6 +23804,8 @@ mod tests {
             rs.nodes.insert(
                 node_id.into(),
                 event_log::NodeState {
+                    missing_skills: Vec::new(),
+                    skills: None,
                     isolated_worktree: None,
                     harness: None,
                     cost: None,
@@ -32384,6 +32555,7 @@ edges: []
         isolated: bool,
     ) -> (pipeline::PipelineDef, pipeline::NodeDef, std::path::PathBuf) {
         let node = pipeline::NodeDef {
+            skills: Vec::new(),
             isolated_worktree: Some(isolated),
             id: node_id.into(),
             name: node_id.into(),
@@ -34764,6 +34936,7 @@ edges:
             "sandbox": null,
             "harness": null,
             "agent_choice": null,
+            "skills": [],
             "auto_name": null,
             "auto_fail": null,
             "provisioning": {},

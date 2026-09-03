@@ -1081,8 +1081,13 @@ function DeleteSkillConfirm({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  const triggers = referents.triggers ?? [];
   const count =
-    Number(referents.instance) + referents.projects.length + referents.pipelines.length + referents.runs.length;
+    Number(referents.instance) +
+    referents.projects.length +
+    triggers.length +
+    referents.pipelines.length +
+    referents.runs.length;
   return (
     <div className="flex min-h-0 flex-1 flex-col p-5" data-testid="skill-delete">
       <h3 className="font-semibold text-fg" style={{ fontSize: "17px" }}>
@@ -1106,6 +1111,7 @@ function DeleteSkillConfirm({
         {count === 0 && <div>No live references.</div>}
         {referents.instance && <ReferentLine tier="INSTANCE" label="settings" />}
         {referents.projects.map((item) => <ReferentLine key={`p-${item.id}`} tier="PROJECT" label={item.name} />)}
+        {triggers.map((item) => <ReferentLine key={`t-${item.id}`} tier="TRIGGER" label={item.name} />)}
         {referents.pipelines.map((item, i) => (
           <ReferentLine key={`l-${item.id}-${item.node_id ?? i}`} tier="PIPELINE" label={`${item.name}${item.node_id ? ` · node ${item.node_id}` : ""}`} />
         ))}

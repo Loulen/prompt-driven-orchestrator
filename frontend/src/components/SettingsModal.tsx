@@ -39,6 +39,9 @@ import { useHarnessCatalog } from "../hooks/useHarnessCatalog";
 import PersistedProvisioningEditor from "./PersistedProvisioningEditor";
 import SkillBankPanel from "./SkillBankPanel";
 import { announceSkillsChanged, useSkillBank } from "../hooks/useSkillBank";
+import SkillSelector from "./SkillSelector";
+import { announceSkillTiersChanged } from "../hooks/useSkillTiers";
+import type { SkillRef } from "../types";
 
 interface Props {
   open: boolean;
@@ -378,6 +381,12 @@ function SettingsForm({
   const [agentChoice, setAgentChoice] = useState<AgentChoice | null>(
     () => settings.agent_choice ?? null,
   );
+  // #669/ADR-0062: the Instance tier of the skills selection — the baseline every
+  // node of every Run receives. No inherited tier above it.
+  const [instanceSkills, setInstanceSkills] = useState<SkillRef[]>(
+    () => settings.skills ?? [],
+  );
+  const { bank: skillBank } = useSkillBank();
   // #616 (correctif 1): the per-harness default model is a MAP keyed by harness
   // name, derived from the SERVED harness list — not two hard-coded `claude` /
   // `opencode` fields. Seeded from the stored map so every harness that already
@@ -471,6 +480,11 @@ function SettingsForm({
     if (JSON.stringify(agentChoice) !== JSON.stringify(settings.agent_choice ?? null)) {
       patch.agent_choice = agentChoice;
     }
+    // #669: sent whole when the id list changed (an empty list clears the tier).
+    const storedSkillIds = (settings.skills ?? []).map((skill) => skill.id).join("\u0000");
+    if (instanceSkills.map((skill) => skill.id).join("\u0000") !== storedSkillIds) {
+      patch.skills = instanceSkills;
+    }
     // #616 (correctif 1): build the per-harness model map from the FULL edited map,
     // dropping only trimmed-empty entries — never a two-field block. The daemon
     // replaces the stored map wholesale, so sending the whole thing is what
@@ -519,6 +533,7 @@ function SettingsForm({
     setSubmitting(true);
     try {
       await save(patch);
+      if (patch.skills) announceSkillTiersChanged();
       onSaved?.();
       onClose();
     } catch (e) {
@@ -544,6 +559,15 @@ function SettingsForm({
           allowInherit={false}
           label="Agent — Instance settings"
           testId="instance-agent-control"
+        />
+        {/* #669/ADR-0062: the instance tier of the skills selection. */}
+        <SkillSelector
+          tier="instance"
+          own={instanceSkills}
+          onChange={setInstanceSkills}
+          bank={skillBank}
+          label="Skills — Instance settings"
+          testId="instance-skill-selector"
         />
         {/* Session cap */}
         <SettingRow

@@ -54,6 +54,9 @@ vi.mock("../api", () => ({
   }),
   fetchSettings: vi.fn().mockResolvedValue({}),
   fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
+  // #669: the skills selector's reads (bank + inherited tiers), empty by default.
+  fetchSkillBank: vi.fn().mockResolvedValue({ skills: [], folders: [], root_path: "" }),
+  fetchProjects: vi.fn().mockResolvedValue([]),
 }));
 
 describe("portable pipeline import", () => {

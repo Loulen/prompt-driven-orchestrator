@@ -42,6 +42,7 @@ import { DragHighlightProvider, useIsDropTarget } from "./DragHighlightContext";
 import { useDismissedNudges } from "../hooks/useDismissedNudges";
 import { anchorHandleId, anchorsByDropOnBody, chooseAnchorSide, isEmergentInputNode } from "../lib/anchorSide";
 import { useAgentProfiles } from "../hooks/useAgentProfiles";
+import { useSkillBank } from "../hooks/useSkillBank";
 import { Bookmark, SlidersHorizontal, TriangleAlert } from "lucide-react";
 
 // The four emergent body anchor handles (#168), each pinned to its side-centre
@@ -409,6 +410,9 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
     () => new Set(agentProfiles.map((profile) => profile.id)),
     [agentProfiles],
   );
+  // #669: the bank's ids, for the missing-skill lint above the canvas.
+  const { bank: skillBank, loaded: skillBankLoaded } = useSkillBank();
+  const skillIds = useMemo(() => new Set(skillBank.skills.map((skill) => skill.id)), [skillBank]);
   const derivedNodes = useMemo(() => {
     if (!pipeline) return [];
     const cards = deriveEditNodes(pipeline, activeRunState, agentProfileIds);
@@ -641,8 +645,22 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
         message: `Agent profile ${choice.profile_id} no longer exists. Node ${node.name ?? node.id} falls back to the next tier. Pick a profile or set Custom.`,
       }];
     });
-    return [...lint, ...missingProfiles, ...nudges];
-  }, [tab, agentProfileIds]);
+    // #669/ADR-0062: a node selecting a skill the bank no longer has. A warning,
+    // never a refusal — the node runs without it. Only once the bank has loaded,
+    // or every skill would flash as missing on the first render.
+    const missingSkills = !skillBankLoaded
+      ? []
+      : tab.pipeline.nodes.flatMap((node) =>
+          (node.skills ?? [])
+            .filter((skill) => !skillIds.has(skill.id))
+            .map((skill) => ({
+              id: `skill:${node.id}:${skill.id}`,
+              kind: "lint" as const,
+              message: `Skill ${skill.name || skill.id} no longer exists in the bank. Node ${node.name ?? node.id} runs without it; the pipeline still launches.`,
+            })),
+        );
+    return [...lint, ...missingProfiles, ...missingSkills, ...nudges];
+  }, [tab, agentProfileIds, skillIds, skillBankLoaded]);
   // Filter BEFORE the render gate so dismissing the last nudge (with no lint)
   // collapses the whole overlay. MUST depend on `dismissed` or it won't update.
   const visibleItems = useMemo(

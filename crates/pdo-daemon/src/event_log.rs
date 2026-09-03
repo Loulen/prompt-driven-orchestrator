@@ -535,6 +535,16 @@ pub struct NodeState {
     /// snapshot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isolated_worktree: Option<bool>,
+    /// #669/ADR-0062: the **skills effectifs** this NodeRun was frozen with at
+    /// spawn (union of the four tiers, each with its origin), read from the
+    /// `NodeStarted` payload. `None` for a node that never started, a `script`
+    /// node (no agent) or a pre-#669 event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) skills: Option<Vec<crate::skill_selection::EffectiveSkill>>,
+    /// #669: selected ids the bank no longer knew at spawn — the node ran
+    /// without them (a warning, never a failure). Absent when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) missing_skills: Vec<crate::skill_selection::MissingSkill>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost: Option<NodeCost>,
     pub status: NodeStatus,
@@ -1047,6 +1057,13 @@ pub struct RunState {
     /// Run-only-harness rule for infra).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) agent_choice: Option<crate::agent_choice::AgentChoice>,
+    /// The Run tier of the **skills** selection (#669, ADR-0062), **frozen** here
+    /// from the `RunStarted` payload — set once at create (a fired Run copies its
+    /// Trigger's list), never mutated. Read at every node spawn as the `run` slot
+    /// of `skill_selection::resolve`. Empty ⇒ the Run adds none (every
+    /// historical Run: the payload omits the key).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) skills: Vec<crate::skill_selection::SkillRef>,
     /// The Run's `auto_fail` preference (ADR-0049), **frozen** here from the
     /// `RunStarted` payload — the **run** tier of
     /// [`crate::auto_fail::resolve_auto_fail`] (`node → Run → Projet →
@@ -1127,6 +1144,7 @@ impl RunState {
             fork_sha: None,
             harness: None,
             agent_choice: None,
+            skills: Vec::new(),
             auto_fail: None,
             triggered_by: None,
             pipeline_id: None,
@@ -1734,6 +1752,15 @@ fn apply_run_event(state: &mut RunState, event: &Event) {
                         state.agent_choice = Some(choice);
                     }
                 }
+                // #669 (ADR-0062): the FROZEN Run-tier skills, written by the create
+                // chokepoint only when non-empty; absent ⇒ none (historical Runs).
+                if let Some(v) = payload.get("skills") {
+                    if let Ok(skills) =
+                        serde_json::from_value::<Vec<crate::skill_selection::SkillRef>>(v.clone())
+                    {
+                        state.skills = skills;
+                    }
+                }
                 // ADR-0049: the Run's frozen `auto_fail` tier. Absent key ⇒ `None`
                 // (the Run stated no preference — every historical Run).
                 if let Some(af) = payload.get("auto_fail").and_then(|v| v.as_bool()) {
@@ -1940,6 +1967,8 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                     .or_insert_with(|| NodeState {
                         harness: None,
                         isolated_worktree: None,
+                        skills: None,
+                        missing_skills: Vec::new(),
                         cost: None,
                         node_id: node_id.clone(),
                         status: NodeStatus::Waiting,
@@ -1978,6 +2007,8 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                     .or_insert_with(|| NodeState {
                         harness: None,
                         isolated_worktree: None,
+                        skills: None,
+                        missing_skills: Vec::new(),
                         cost: None,
                         node_id: node_id.clone(),
                         status: NodeStatus::Running,
@@ -2027,6 +2058,24 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                 {
                     node.isolated_worktree = Some(isolated);
                 }
+                // #669/ADR-0062: freeze the skills effectifs this session received,
+                // and the ids it was promised but the bank no longer had. A re-spawn
+                // re-freezes; a `script` node / pre-#669 event leaves `None`.
+                if let Some(skills) = event
+                    .payload
+                    .as_ref()
+                    .and_then(|p| p.get("skills"))
+                    .filter(|v| !v.is_null())
+                    .and_then(|v| serde_json::from_value(v.clone()).ok())
+                {
+                    node.skills = Some(skills);
+                }
+                node.missing_skills = event
+                    .payload
+                    .as_ref()
+                    .and_then(|p| p.get("missing_skills"))
+                    .and_then(|v| serde_json::from_value(v.clone()).ok())
+                    .unwrap_or_default();
                 upsert_iteration(&mut node.iterations, iteration);
             }
         }
@@ -2072,6 +2121,8 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                         NodeState {
                             harness: None,
                             isolated_worktree: None,
+                            skills: None,
+                            missing_skills: Vec::new(),
                             cost: None,
                             node_id: node_id.clone(),
                             status: done_status.clone(),
@@ -2191,6 +2242,8 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                     .or_insert_with(|| NodeState {
                         harness: None,
                         isolated_worktree: None,
+                        skills: None,
+                        missing_skills: Vec::new(),
                         cost: None,
                         node_id: node_id.clone(),
                         status: NodeStatus::Interrupted,
@@ -2338,6 +2391,8 @@ fn apply_switch_event(state: &mut RunState, event: &Event) {
                 .or_insert_with(|| NodeState {
                     harness: None,
                     isolated_worktree: None,
+                    skills: None,
+                    missing_skills: Vec::new(),
                     cost: None,
                     node_id: node_id.to_string(),
                     status: NodeStatus::Completed,
@@ -3490,6 +3545,8 @@ mod tests {
         let value = serde_json::to_value(&state.nodes["impl"]).unwrap();
         assert_eq!(value["harness"], "copilot");
         let bare = super::NodeState {
+            missing_skills: Vec::new(),
+            skills: None,
             harness: None,
             isolated_worktree: None,
             cost: None,
@@ -6412,6 +6469,8 @@ mod tests {
         iters: &[(i64, NodeStatus)],
     ) -> NodeState {
         NodeState {
+            missing_skills: Vec::new(),
+            skills: None,
             harness: None,
             isolated_worktree: None,
             cost: None,

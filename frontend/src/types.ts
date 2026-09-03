@@ -259,6 +259,8 @@ export interface InstanceSettings {
     stored: Record<string, string>;
   };
   agent_choice?: AgentChoice | null;
+  /** #669/ADR-0062: the Instance tier of the skills selection (ids + labels). */
+  skills?: SkillRef[];
   /**
    * Instance-wide default sandbox (#410/#432): `"off"` (host, default) or the name of a
    * **staging profile**. No longer a closed enum — its value space is the user's profile
@@ -443,6 +445,8 @@ export interface UpdateSettingsRequest {
   default_harness_model?: Record<string, string>;
   /** Atomic instance agent selection. `null` clears to the Default floor. */
   agent_choice?: AgentChoice | null;
+  /** #669: replace the Instance tier's skills wholesale; `[]` clears. */
+  skills?: SkillRef[];
   /** Default sandbox (#410/#432): `"off"` or a staging-profile name, or `""` to clear
    *  back to the built-in default (`off`). Same `""`-sentinel discipline as
    *  `default_model`. The daemon 400s a name that does not resolve.
@@ -517,6 +521,8 @@ export interface Project {
   /** The harness this Projet carries, or absent/null when it carries none. */
   harness?: string | null;
   agent_choice?: AgentChoice | null;
+  /** #669/ADR-0062: the Projet tier of the skills selection. Absent ⇒ none. */
+  skills?: SkillRef[];
   /** Member repository paths (the effective-repo keys the lists group by). */
   members: string[];
 }
@@ -603,6 +609,8 @@ export interface Trigger {
    *  separate Trigger tier — a cron tick and a "Run now" produce the same one). */
   harness?: string | null;
   agent_choice?: AgentChoice | null;
+  /** #669: the Run-tier skills every fired Run carries. Absent ⇒ none. */
+  skills?: SkillRef[];
   /** Whether Runs this Trigger fires are auto-named (#338). Frozen at creation from the
    *  instance default; `true` is the pre-#338 behaviour. A flat bool (no inherit state). */
   auto_name: boolean;
@@ -702,6 +710,14 @@ export interface NodeState {
    * node that never started, a structural node, or a pre-#653 daemon.
    */
   isolated_worktree?: boolean;
+  /**
+   * #669/ADR-0062: the skills effectifs this NodeRun was FROZEN with at spawn
+   * (union of the four tiers, each with its origin). Absent for a node that never
+   * started, a `script` node, or a pre-#669 daemon.
+   */
+  skills?: EffectiveSkill[];
+  /** #669: selected ids the bank no longer knew at spawn — the node ran without them. */
+  missing_skills?: MissingSkill[];
   /** Node provisioning recipe frozen into this iteration's NodeStarted event. */
   provisioning?: ProvisioningRules;
   /** Time this iteration's isolated worktree recipe was first materialized. */
@@ -848,6 +864,8 @@ export interface RunState {
   pipeline_name: string;
   name?: string | null;
   input: string | null;
+  /** #669: the Run tier of the skills selection, frozen on `RunStarted`. Absent ⇒ none. */
+  skills?: SkillRef[];
   started_at: string | null;
   completed_at: string | null;
   /**
@@ -1108,6 +1126,10 @@ export interface NodeDef {
   harnesses?: Record<string, HarnessSettings>;
   /** Atomic agent selection for this node. Missing/`inherit` continues precedence. */
   agent_choice?: AgentChoice | null;
+  /** #669/ADR-0062: the Node tier of the skills selection — ids with their label,
+   *  unioned with the instance, Projet and Run tiers at spawn. Semantic. Never
+   *  carried by a `script` node (refused at parse). */
+  skills?: SkillRef[];
   /** Resources added only when this isolated node worktree is first created. */
   provisioning?: ProvisioningRules;
   /** #653/ADR-0060: where this node's NodeRun works — `true` a sub-worktree of
@@ -1513,11 +1535,35 @@ export interface SkillDetail extends Skill {
   path: string;
 }
 
-/** Who selects a skill, by tier. Empty in #668 (no tier selects yet). */
+/** Who selects a skill, by tier (#669). */
 export interface SkillReferents {
   skill_id: string;
   instance: boolean;
   projects: { id: string; name: string }[];
+  triggers?: { id: string; name: string; pipeline_id: string }[];
   pipelines: { id: string; name: string; node_id?: string; scope?: string }[];
-  runs: { run_id: string; name?: string | null }[];
+  runs: { run_id: string; name?: string | null; pipeline_name?: string | null }[];
+}
+
+/**
+ * One selected skill as a tier stores it (#669, ADR-0062): the stable id and the
+ * label shown when it was picked. Identity is the id; the bank's current name
+ * wins at display and at spawn.
+ */
+export interface SkillRef {
+  id: string;
+  name: string;
+}
+
+/** The four additive tiers, coarsest first. */
+export type SkillTier = "instance" | "project" | "run" | "node";
+
+/** An effective skill frozen on a NodeRun, with every tier that selected it. */
+export interface EffectiveSkill extends SkillRef {
+  tiers: SkillTier[];
+}
+
+/** A selected id the bank no longer knew at spawn. */
+export interface MissingSkill extends SkillRef {
+  tiers: SkillTier[];
 }

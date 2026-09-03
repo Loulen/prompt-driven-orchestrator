@@ -16,6 +16,9 @@ vi.mock("../api", () => {
   class ApiError extends Error {}
   return {
     fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
+    // #669: the skills selector's reads (bank + inherited tiers), empty by default.
+    fetchSkillBank: vi.fn().mockResolvedValue({ skills: [], folders: [], root_path: "" }),
+    fetchProjects: vi.fn().mockResolvedValue([]),
     ApiError,
     createProject: (name: string) => createProject(name),
     updateProject: (id: string, req: unknown) => updateProject(id, req),

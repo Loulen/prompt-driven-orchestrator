@@ -10,6 +10,18 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.53.0
+
+**Skills : sélection par tier et skills effectifs avec origine** (#669 ; story #666, spec #667 ;
+ADR-0062). Un skill se coche à trois niveaux — Instance (réglages), Projet (fiche projet) et Nœud
+(inspecteur du pipeline) — et un lancement de Run hérite des deux premiers, avec des skills RUN
+ajoutés à la volée (cocher un dossier coche ses skills). L'inspecteur d'un nœud affiche la liste des
+*skills effectifs* avec l'origine de chacun (INSTANCE / PROJECT / NODE / RUN) et la liste figée au
+spawn (`NodeStarted.skills`). Supprimer un skill de la banque liste ses référents (projets, nœuds) ;
+les références orphelines gardent l'id, s'affichent barrées avec un avertissement (inspecteur, bandeau
+de lint du pipeline, modale New Run) et le Run se lance quand même, le skill étant ignoré
+(`missing_skills`). API : `GET /settings/skills/{id}/referents`.
+
 ## 1.52.0
 
 **Fichiers de référence d'un skill** (#671 ; story #666, spec #667 ; ADR-0062). Un skill peut

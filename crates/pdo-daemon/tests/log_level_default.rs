@@ -55,8 +55,21 @@ fn info_logs_emitted_when_rust_log_is_unset() {
         }
     });
 
-    // 2s gives the runtime time to bind, log, and flush even on slow CI.
-    std::thread::sleep(Duration::from_secs(2));
+    // Poll for the line rather than sleeping a fixed 2 s: under the full suite
+    // (thousands of tests in parallel) a cold daemon can take longer than that to
+    // bind and flush, and the fixed window made this test flake on load alone.
+    // Return as soon as the line shows up; give up after a generous deadline.
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let seen = buf
+            .lock()
+            .map(|g| g.contains("INFO") || g.contains("listening"))
+            .unwrap_or(false);
+        if seen || std::time::Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 
     let _ = child.kill();
     let _ = child.wait();

@@ -10,6 +10,16 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.51.0
+
+**Banque de skills** (#668 ; story #666, spec #667 ; ADR-0062). L'instance gère une banque de
+skills depuis *Instance settings › Manage skills…* : création par collage d'un `SKILL.md`
+(frontmatter validé en direct — nom kebab-case, description obligatoire —, refus sans écriture
+disque), rangement en dossiers par glisser-déposer, renommage inline (unicité insensible à la
+casse) et suppression précédée d'un inventaire des référents (instance, projets, pipelines, runs).
+Chaque skill vit sous `<repo>/.pdo/skills/<id>/SKILL.md`, à côté de `pdo.db`. API REST sous
+`/settings/skills`.
+
 ## 1.50.0
 
 **Provisionnement déclaratif des worktrees** (#630 ; ADR-0061). Un worktree de Run ou de Node

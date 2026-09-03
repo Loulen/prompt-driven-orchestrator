@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ChevronLeft, Lock, Pencil, Plus, Search, Trash2, X } from "lucide-react";
+import { ChevronLeft, FileText, Lock, Pencil, Plus, Search, Trash2, X } from "lucide-react";
 import FsExplorerModal from "./FsExplorerModal";
 import { useSettings } from "../hooks/useSettings";
 import { useEditStore } from "../stores/editStore";
@@ -37,6 +37,8 @@ import AgentControl from "./AgentControl";
 import { announceAgentProfilesChanged, useAgentProfiles } from "../hooks/useAgentProfiles";
 import { useHarnessCatalog } from "../hooks/useHarnessCatalog";
 import PersistedProvisioningEditor from "./PersistedProvisioningEditor";
+import SkillBankPanel from "./SkillBankPanel";
+import { announceSkillsChanged, useSkillBank } from "../hooks/useSkillBank";
 
 interface Props {
   open: boolean;
@@ -81,7 +83,16 @@ export default function SettingsModal({ open, onClose, liveSessions = 0, onSaved
   const [profilesOpen, setProfilesOpen] = useState(false);
   const [agentProfilesOpen, setAgentProfilesOpen] = useState(false);
   const [provisioningOpen, setProvisioningOpen] = useState(false);
+  /**
+   * Banque de skills drill-down (#668). Same shell, but it WIDENS the modal to
+   * 760 px for the visit (a folder tree plus a readable detail do not fit in
+   * 460) and comes back to 460 on Back. Two panes: tree left, read-only detail
+   * right.
+   */
+  const [skillsOpen, setSkillsOpen] = useState(false);
   const { profiles: agentProfiles, refresh: refreshAgentProfiles } = useAgentProfiles(open);
+  const { bank: skillBank, loaded: skillsLoaded, refresh: refreshSkills } = useSkillBank(open);
+  const drillDown = profilesOpen || agentProfilesOpen || skillsOpen;
 
   // The modal is unmounted-by-render (`if (!open) return null`), so its state SURVIVES a
   // close. Reset the drill-down here rather than in an effect on `open`: both the backdrop
@@ -90,6 +101,7 @@ export default function SettingsModal({ open, onClose, liveSessions = 0, onSaved
   const handleClose = () => {
     setProfilesOpen(false);
     setAgentProfilesOpen(false);
+    setSkillsOpen(false);
     setProvisioningOpen(false);
     onClose();
   };
@@ -102,17 +114,21 @@ export default function SettingsModal({ open, onClose, liveSessions = 0, onSaved
       onClick={handleClose}
     >
       <div
-        className="w-[460px] max-h-[85vh] flex flex-col overflow-y-auto rounded-lg border border-line bg-bg-4 shadow-xl"
+        className={`${
+          skillsOpen ? "w-[760px] h-[85vh]" : "w-[460px]"
+        } max-h-[85vh] flex flex-col overflow-y-auto rounded-lg border border-line bg-bg-4 shadow-xl transition-[width] duration-200`}
         onClick={(e) => e.stopPropagation()}
         data-testid="settings-modal"
+        data-drilldown={skillsOpen ? "skills" : agentProfilesOpen ? "agent-profiles" : profilesOpen ? "staging-profiles" : undefined}
       >
         <div className="flex items-center justify-between border-b border-line px-4 py-3">
           <div className="flex min-w-0 items-center gap-2">
-            {(profilesOpen || agentProfilesOpen) && (
+            {drillDown && (
               <button
                 onClick={() => {
                   setProfilesOpen(false);
                   setAgentProfilesOpen(false);
+                  setSkillsOpen(false);
                 }}
                 aria-label="Back to settings"
                 data-testid="staging-profiles-back"
@@ -122,7 +138,17 @@ export default function SettingsModal({ open, onClose, liveSessions = 0, onSaved
               </button>
             )}
             <h2 className="truncate font-semibold text-fg" style={{ fontSize: "13.5px" }}>
-              {profilesOpen ? "Staging profiles" : agentProfilesOpen ? "Agent profiles" : "Instance settings"}
+              {skillsOpen ? (
+                <>
+                  <span className="font-normal text-fg-3">Instance settings / </span>Skills
+                </>
+              ) : profilesOpen ? (
+                "Staging profiles"
+              ) : agentProfilesOpen ? (
+                "Agent profiles"
+              ) : (
+                "Instance settings"
+              )}
             </h2>
           </div>
           <button
@@ -139,7 +165,7 @@ export default function SettingsModal({ open, onClose, liveSessions = 0, onSaved
             even if `GET /settings` fails and the numeric form never mounts
             (Trap A). Hidden — not unmounted — behind the drill-down, same reason
             as `SettingsForm` below. */}
-        <div className={profilesOpen || agentProfilesOpen ? "hidden" : undefined}>
+        <div className={drillDown ? "hidden" : undefined}>
           <InterfaceSection />
           <div className="border-b border-line px-4 py-3">
             {provisioningOpen ? (
@@ -165,6 +191,32 @@ export default function SettingsModal({ open, onClose, liveSessions = 0, onSaved
               Manage agent profiles…
             </button>
           </div>
+          {/* Banque de skills (#668): entry point of the drill-down, with the bank's
+              size as a hint and the instance-tier reminder (selection lands in a
+              later ticket). */}
+          <div className="border-b border-line px-4 py-3">
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                data-testid="setting-manage-skills"
+                onClick={() => setSkillsOpen(true)}
+                className="flex items-center gap-1.5 rounded border border-line-strong bg-bg-3 px-2.5 py-1.5 text-fg-2 hover:border-acc"
+                style={{ fontSize: 11 }}
+              >
+                <FileText size={11} />
+                Manage skills…
+              </button>
+              <span className="text-fg-4" style={{ fontSize: "10.5px" }} data-testid="setting-skills-count">
+                {skillsLoaded
+                  ? `${skillBank.skills.length} skill${skillBank.skills.length === 1 ? "" : "s"} · ${skillBank.folders.length} folder${skillBank.folders.length === 1 ? "" : "s"}`
+                  : ""}
+              </span>
+            </div>
+            <p className="mt-2 text-fg-4" style={{ fontSize: "10.5px" }}>
+              Skills selected here apply to every node of every run (instance tier).{" "}
+              <span className="text-fg-5">Selection arrives in a later ticket.</span>
+            </p>
+          </div>
         </div>
 
         {settings ? (
@@ -172,9 +224,7 @@ export default function SettingsModal({ open, onClose, liveSessions = 0, onSaved
           // UNSAVED edits (`capStr`, `model`, …) seeded on mount, and a conditional render
           // would throw them away in silence.
           <div
-            className={
-              profilesOpen || agentProfilesOpen ? "hidden" : "flex min-h-0 flex-1 flex-col"
-            }
+            className={drillDown ? "hidden" : "flex min-h-0 flex-1 flex-col"}
           >
             <SettingsForm
               // Re-seed if the loaded config changes (refetch / restart, or a profile write
@@ -211,6 +261,17 @@ export default function SettingsModal({ open, onClose, liveSessions = 0, onSaved
             onChanged={() => {
               void refresh();
               onSaved?.();
+            }}
+          />
+        )}
+        {skillsOpen && (
+          <SkillBankPanel
+            bank={skillBank}
+            loaded={skillsLoaded}
+            home={settings?.home ?? null}
+            onChanged={async () => {
+              await refreshSkills();
+              announceSkillsChanged();
             }}
           />
         )}

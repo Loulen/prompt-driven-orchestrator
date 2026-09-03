@@ -1443,3 +1443,65 @@ export interface StatsPerformance {
   by_pipeline: StatsPerformanceEntity[];
   infrastructure: StatsPerformanceEntity[];
 }
+
+// ---------------------------------------------------------------------------
+// Banque de skills (#668, ADR-0062)
+// ---------------------------------------------------------------------------
+
+/** One row of the bank's index. Identity is `id`; `name` is a unique label. */
+export interface Skill {
+  id: string;
+  name: string;
+  description: string;
+  /** `null` at the root of the bank. */
+  folder_id: string | null;
+  /** Provenance of an import; absent for a pasted skill. */
+  source?: string | null;
+  source_commit?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** A folder of the bank's free hierarchy. A UI gesture, never a reference. */
+export interface SkillFolder {
+  id: string;
+  name: string;
+  parent_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** `GET /settings/skills`: the whole bank in one read. */
+export interface SkillBank {
+  skills: Skill[];
+  folders: SkillFolder[];
+  /** Where the skill folders live on disk (`<root>/<id>/SKILL.md`). */
+  root_path: string;
+}
+
+/** A reference file of a skill, listed read-only. */
+export interface SkillFile {
+  path: string;
+  size: number;
+}
+
+/** `GET /settings/skills/{id}`: the row plus its content. */
+export interface SkillDetail extends Skill {
+  /** Raw `SKILL.md`; `null` if the folder vanished from disk. */
+  content: string | null;
+  frontmatter: Record<string, unknown> | null;
+  /** Keys of `frontmatter` in the author's order (JSON objects do not keep it). */
+  frontmatter_keys?: string[] | null;
+  body: string | null;
+  files: SkillFile[];
+  path: string;
+}
+
+/** Who selects a skill, by tier. Empty in #668 (no tier selects yet). */
+export interface SkillReferents {
+  skill_id: string;
+  instance: boolean;
+  projects: { id: string; name: string }[];
+  pipelines: { id: string; name: string; node_id?: string; scope?: string }[];
+  runs: { run_id: string; name?: string | null }[];
+}

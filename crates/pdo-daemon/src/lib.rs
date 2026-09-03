@@ -72,6 +72,7 @@ mod scheduler;
 mod scheduler_dispatcher;
 mod scheduler_interpreter;
 mod service_unit;
+mod skill_bank;
 pub mod stale_detector;
 mod stats;
 mod stats_performance;
@@ -100,7 +101,7 @@ use axum::extract::{
 };
 use axum::http::{header, HeaderMap, Method, StatusCode, Uri};
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::Router;
 use clap::{Parser, Subcommand};
 use rust_embed::Embed;
@@ -4030,6 +4031,24 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/settings/agent-profiles/{id}/referents",
             get(get_agent_profile_referents),
         )
+        // Banque de skills (#668, ADR-0062): the bank's index + content CRUD, the
+        // folder hierarchy, and the referents endpoint the delete dialog reads.
+        // Folders sit under their own prefix (`/settings/skill-folders`) rather than
+        // `/settings/skills/folders`, so they can never shadow a skill id.
+        .route("/settings/skills", get(list_skills).post(create_skill))
+        .route(
+            "/settings/skills/{id}",
+            get(get_skill).put(update_skill).delete(delete_skill),
+        )
+        .route("/settings/skills/{id}/referents", get(get_skill_referents))
+        .route(
+            "/settings/skill-folders",
+            get(list_skill_folders).post(create_skill_folder),
+        )
+        .route(
+            "/settings/skill-folders/{id}",
+            put(update_skill_folder).delete(delete_skill_folder),
+        )
         .route("/settings/sandbox-profiles", get(list_sandbox_profiles))
         .route(
             "/settings/sandbox-profiles/{name}",
@@ -4601,6 +4620,12 @@ async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
     agent_profile::init(db)
         .await
         .context("failed to create agent_profiles table")?;
+
+    // The Banque de skills index (#668, ADR-0062). Content lives on disk under
+    // `<repo_root>/.pdo/skills/<id>/`; nothing is seeded.
+    skill_bank::init(db)
+        .await
+        .context("failed to create skill bank tables")?;
 
     Ok(())
 }
@@ -9633,6 +9658,307 @@ async fn get_agent_profile_referents(
         "runs": []
     }))
     .into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Banque de skills (#668, ADR-0062)
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct CreateSkillRequest {
+    /// The pasted `SKILL.md` text, frontmatter included.
+    content: String,
+    /// The bank label; defaults to the frontmatter `name`.
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    folder_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct UpdateSkillRequest {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    folder_id: Option<Option<String>>,
+}
+
+#[derive(Deserialize)]
+struct CreateSkillFolderRequest {
+    name: String,
+    #[serde(default)]
+    parent_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct UpdateSkillFolderRequest {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    parent_id: Option<Option<String>>,
+}
+
+/// A stable machine-readable code next to the human message, so the popup can
+/// light the right check without parsing English.
+fn skill_error_code(error: &skill_bank::SkillError) -> &'static str {
+    use skill_bank::SkillError as E;
+    match error {
+        E::NoFrontmatter => "no_frontmatter",
+        E::MalformedFrontmatter(_) => "malformed_frontmatter",
+        E::MissingName => "missing_name",
+        E::NameNotKebabCase(_) => "name_not_kebab_case",
+        E::MissingDescription => "missing_description",
+        E::EmptyBody => "empty_body",
+        E::DuplicateName { .. } => "duplicate_name",
+        E::EmptyLabel => "empty_label",
+        E::NotFound => "not_found",
+        E::FolderNotFound => "folder_not_found",
+        E::EmptyFolderName => "empty_folder_name",
+        E::FolderCycle => "folder_cycle",
+        E::Storage(_) => "storage",
+    }
+}
+
+fn skill_error_response(error: skill_bank::SkillError) -> Response {
+    use skill_bank::SkillError as E;
+    let status = match &error {
+        E::NotFound => StatusCode::NOT_FOUND,
+        E::DuplicateName { .. } => StatusCode::CONFLICT,
+        E::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        E::NoFrontmatter
+        | E::MalformedFrontmatter(_)
+        | E::MissingName
+        | E::NameNotKebabCase(_)
+        | E::MissingDescription
+        | E::EmptyBody
+        | E::EmptyLabel
+        | E::FolderNotFound
+        | E::EmptyFolderName
+        | E::FolderCycle => StatusCode::BAD_REQUEST,
+    };
+    let mut body = serde_json::json!({
+        "error": error.to_string(),
+        "code": skill_error_code(&error),
+    });
+    if let E::DuplicateName { existing_id, name } = &error {
+        body["existing_id"] = serde_json::Value::String(existing_id.clone());
+        body["existing_name"] = serde_json::Value::String(name.clone());
+    }
+    (status, Json(body)).into_response()
+}
+
+fn storage_error_response(error: impl std::fmt::Display) -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({ "error": error.to_string(), "code": "storage" })),
+    )
+        .into_response()
+}
+
+/// `GET /settings/skills` — the whole bank in one read: skills, folders, and the
+/// disk root the panel's footer names.
+async fn list_skills(State(state): State<Arc<AppState>>) -> Response {
+    let skills = match skill_bank::list(&state.db).await {
+        Ok(skills) => skills,
+        Err(error) => return storage_error_response(error),
+    };
+    let folders = match skill_bank::list_folders(&state.db).await {
+        Ok(folders) => folders,
+        Err(error) => return storage_error_response(error),
+    };
+    Json(serde_json::json!({
+        "skills": skills,
+        "folders": folders,
+        "root_path": skill_bank::skills_root(&state.repo_root).display().to_string(),
+    }))
+    .into_response()
+}
+
+async fn create_skill(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateSkillRequest>,
+) -> Response {
+    match skill_bank::create(
+        &state.db,
+        &state.repo_root,
+        &req.content,
+        req.name.as_deref(),
+        req.folder_id.as_deref(),
+    )
+    .await
+    {
+        Ok(skill) => (StatusCode::CREATED, Json(skill)).into_response(),
+        Err(error) => skill_error_response(error),
+    }
+}
+
+/// `GET /settings/skills/{id}` — the row plus its content: the raw `SKILL.md`,
+/// the parsed frontmatter (for the read-only table), the body, and the reference
+/// files. A skill whose folder vanished from disk still answers with its row
+/// and `content: null`, never a 500: the row is the truth of the index.
+async fn get_skill(State(state): State<Arc<AppState>>, AxumPath(id): AxumPath<String>) -> Response {
+    let skill = match skill_bank::get(&state.db, &id).await {
+        Ok(Some(skill)) => skill,
+        Ok(None) => return skill_error_response(skill_bank::SkillError::NotFound),
+        Err(error) => return storage_error_response(error),
+    };
+    let content = skill_bank::read_skill_md(&state.repo_root, &id).ok();
+    let parsed = content
+        .as_deref()
+        .and_then(|text| skill_bank::validate_skill_md(text).ok());
+    let files = skill_bank::list_files(&state.repo_root, &id).unwrap_or_default();
+    let mut body = serde_json::to_value(&skill).unwrap_or_default();
+    body["content"] = serde_json::to_value(&content).unwrap_or_default();
+    // The table is rendered in the author's order: `serde_json` objects do not
+    // keep insertion order, so the keys travel separately.
+    body["frontmatter"] = parsed
+        .as_ref()
+        .map(|p| serde_json::to_value(&p.frontmatter).unwrap_or_default())
+        .unwrap_or(serde_json::Value::Null);
+    body["frontmatter_keys"] = parsed
+        .as_ref()
+        .map(|p| {
+            serde_json::Value::Array(
+                p.frontmatter
+                    .keys()
+                    .filter_map(|k| k.as_str().map(|s| serde_json::Value::String(s.to_string())))
+                    .collect(),
+            )
+        })
+        .unwrap_or(serde_json::Value::Null);
+    body["body"] = parsed
+        .as_ref()
+        .map(|p| serde_json::Value::String(p.body.clone()))
+        .unwrap_or(serde_json::Value::Null);
+    body["files"] = serde_json::to_value(&files).unwrap_or_default();
+    body["path"] = serde_json::Value::String(
+        skill_bank::skill_dir(&state.repo_root, &id)
+            .display()
+            .to_string(),
+    );
+    Json(body).into_response()
+}
+
+/// `PUT /settings/skills/{id}` — rename (label only) and/or move. Renaming never
+/// touches the disk: the folder carries the id (#668 AC).
+async fn update_skill(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<UpdateSkillRequest>,
+) -> Response {
+    match skill_bank::update(
+        &state.db,
+        &id,
+        req.name.as_deref(),
+        req.folder_id.as_ref().map(|f| f.as_deref()),
+    )
+    .await
+    {
+        Ok(skill) => Json(skill).into_response(),
+        Err(error) => skill_error_response(error),
+    }
+}
+
+async fn delete_skill(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    match skill_bank::delete(&state.db, &state.repo_root, &id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => skill_error_response(skill_bank::SkillError::NotFound),
+        Err(error) => skill_error_response(error),
+    }
+}
+
+/// `GET /settings/skills/{id}/referents` — who selects this skill, by tier:
+/// instance, projects, pipelines (node), not-yet-started runs. **Empty in #668**
+/// (no tier selects skills yet), but the shape is the one the delete dialog
+/// renders and the one the selector tickets will fill — same pattern as
+/// `get_agent_profile_referents`.
+async fn get_skill_referents(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    match skill_bank::get(&state.db, &id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return skill_error_response(skill_bank::SkillError::NotFound),
+        Err(error) => return storage_error_response(error),
+    }
+    Json(serde_json::json!({
+        "skill_id": id,
+        "instance": false,
+        "projects": [],
+        "pipelines": [],
+        "runs": []
+    }))
+    .into_response()
+}
+
+async fn list_skill_folders(State(state): State<Arc<AppState>>) -> Response {
+    match skill_bank::list_folders(&state.db).await {
+        Ok(folders) => Json(serde_json::json!({ "folders": folders })).into_response(),
+        Err(error) => storage_error_response(error),
+    }
+}
+
+async fn create_skill_folder(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateSkillFolderRequest>,
+) -> Response {
+    match skill_bank::create_folder(&state.db, &req.name, req.parent_id.as_deref()).await {
+        Ok(folder) => (StatusCode::CREATED, Json(folder)).into_response(),
+        Err(error) => skill_error_response(error),
+    }
+}
+
+/// A folder addressed by its own route that does not exist is a 404, while an
+/// unknown folder *named in a body* (a move target, a parent) stays a 400: the
+/// first is "no such resource", the second "your request is wrong".
+fn skill_folder_not_found_response() -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({
+            "error": skill_bank::SkillError::FolderNotFound.to_string(),
+            "code": "not_found",
+        })),
+    )
+        .into_response()
+}
+
+async fn update_skill_folder(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<UpdateSkillFolderRequest>,
+) -> Response {
+    match skill_bank::get_folder(&state.db, &id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return skill_folder_not_found_response(),
+        Err(error) => return storage_error_response(error),
+    }
+    match skill_bank::update_folder(
+        &state.db,
+        &id,
+        req.name.as_deref(),
+        req.parent_id.as_ref().map(|p| p.as_deref()),
+    )
+    .await
+    {
+        Ok(folder) => Json(folder).into_response(),
+        Err(error) => skill_error_response(error),
+    }
+}
+
+/// `DELETE /settings/skill-folders/{id}` — the folder's skills and sub-folders
+/// move to its parent. Never deletes a skill.
+async fn delete_skill_folder(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    match skill_bank::delete_folder(&state.db, &id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => skill_folder_not_found_response(),
+        Err(error) => skill_error_response(error),
+    }
 }
 
 /// Serialise one resolved entry for the editor.

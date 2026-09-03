@@ -1133,6 +1133,165 @@ async fn fp670_step_4_update_from_source_rescans_diffs_then_updates_content_and_
 }
 
 #[tokio::test]
+async fn updating_a_source_folder_never_writes_to_a_sibling_folder_from_the_same_source() {
+    // Regression (FP #670 step 4): folder A imported at v1, folder B re-imported
+    // from the same repo at v2 with `code-review` renamed. Updating A to v3
+    // must rewrite A's own `code-review`, never B's copy.
+    let daemon = TestDaemon::spawn(|_| Ok(())).await.unwrap();
+    let repo = fixture_repo();
+    let url = file_url(repo.path());
+    let v1 = head_of(repo.path());
+    post_json(
+        &daemon,
+        "/settings/skills/scan",
+        serde_json::json!({ "scan_id": "s1", "source": url }),
+    )
+    .await;
+    let report_a: serde_json::Value = post_json(
+        &daemon,
+        "/settings/skills/import",
+        serde_json::json!({
+            "scan_id": "s1", "source": url, "folder": { "name": "A" },
+            "items": [
+                { "path": "skills/engineering/pdf", "action": "import" },
+                { "path": "skills/engineering/code-review", "action": "import" },
+            ]
+        }),
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+    let folder_a = report_a["folder"]["id"].as_str().unwrap().to_string();
+    let cr_a = report_a["imported"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["skill"]["name"] == "code-review")
+        .unwrap()["skill"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // v2: code-review changes; re-import it into a second folder under another name.
+    std::fs::write(
+        repo.path().join("skills/engineering/code-review/SKILL.md"),
+        "---\nname: code-review\ndescription: Review, v2.\n---\n\n# v2\n",
+    )
+    .unwrap();
+    git(repo.path(), &["add", "-A"]);
+    git(repo.path(), &["commit", "-q", "-m", "v2"]);
+    let v2 = head_of(repo.path());
+    post_json(
+        &daemon,
+        "/settings/skills/scan",
+        serde_json::json!({ "scan_id": "s2", "source": url }),
+    )
+    .await;
+    let report_b: serde_json::Value = post_json(
+        &daemon,
+        "/settings/skills/import",
+        serde_json::json!({
+            "scan_id": "s2", "source": url, "folder": { "name": "B" },
+            "items": [
+                { "path": "skills/engineering/code-review", "action": "rename", "name": "code-review-v2" },
+            ]
+        }),
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+    let folder_b = report_b["folder"]["id"].as_str().unwrap().to_string();
+    let cr_b = report_b["imported"][0]["skill"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // v3: code-review changes again. Rescan A: its own copy is the one diffed.
+    std::fs::write(
+        repo.path().join("skills/engineering/code-review/SKILL.md"),
+        "---\nname: code-review\ndescription: Review, v3.\n---\n\n# v3\n",
+    )
+    .unwrap();
+    git(repo.path(), &["add", "-A"]);
+    git(repo.path(), &["commit", "-q", "-m", "v3"]);
+    let v3 = head_of(repo.path());
+    let rescan: serde_json::Value = post_json(
+        &daemon,
+        &format!("/settings/skill-folders/{folder_a}/rescan"),
+        serde_json::json!({ "scan_id": "s3" }),
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+    let entry = rescan["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["path"] == "skills/engineering/code-review")
+        .unwrap();
+    assert_eq!(entry["status"], "updated");
+    assert_eq!(entry["skill_id"], cr_a);
+    assert_eq!(entry["name"], "code-review");
+
+    // Rescan B: A's copy is reported as living elsewhere, by folder name.
+    let rescan_b: serde_json::Value = post_json(
+        &daemon,
+        &format!("/settings/skill-folders/{folder_b}/rescan"),
+        serde_json::json!({ "scan_id": "s4" }),
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+    let pdf_b = rescan_b["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["path"] == "skills/engineering/pdf")
+        .unwrap();
+    assert_eq!(pdf_b["status"], "skipped");
+    assert_eq!(pdf_b["reason"], "already in \u{201c}A\u{201d}");
+    let cr_in_b = rescan_b["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["path"] == "skills/engineering/code-review")
+        .unwrap();
+    assert_eq!(cr_in_b["skill_id"], cr_b);
+
+    // Update A: only A's copy moves to v3, B's stays at v2 untouched.
+    let report: serde_json::Value = post_json(
+        &daemon,
+        &format!("/settings/skill-folders/{folder_a}/update"),
+        serde_json::json!({
+            "scan_id": "s3",
+            "items": [{ "path": "skills/engineering/code-review", "action": "update" }]
+        }),
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(report["failed"], serde_json::json!([]));
+    assert_eq!(report["imported"].as_array().unwrap().len(), 1);
+    assert_eq!(report["imported"][0]["skill"]["id"], cr_a);
+    let a = get_json(&daemon, &format!("/settings/skills/{cr_a}")).await;
+    assert!(a["content"].as_str().unwrap().contains("v3"));
+    assert_eq!(a["source"]["commit"], v3);
+    let b = get_json(&daemon, &format!("/settings/skills/{cr_b}")).await;
+    assert!(
+        b["content"].as_str().unwrap().contains("v2"),
+        "B was overwritten"
+    );
+    assert_eq!(b["source"]["commit"], v2);
+    assert_eq!(b["folder_id"], folder_b);
+    let _ = v1;
+}
+
+#[tokio::test]
 async fn scanning_a_sub_path_without_skills_points_at_where_they_are() {
     let daemon = TestDaemon::spawn(|_| Ok(())).await.unwrap();
     let repo = fixture_repo();

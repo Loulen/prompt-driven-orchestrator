@@ -322,6 +322,59 @@ describe("ImportSkillsModal (#670)", () => {
     expect(within(screen.getByTestId("import-candidate-pdf")).getByRole("checkbox")).not.toBeChecked();
     expect(within(screen.getByTestId("import-candidate-pdf")).getByRole("checkbox")).toBeDisabled();
     expect(screen.getByTestId("import-submit")).toHaveTextContent("Import 1 skill");
+    // The import already wrote: Esc closes without a discard prompt.
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByTestId("import-discard-prompt")).toBeNull();
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("a same-commit duplicate, once checked, needs replace / rename / skip like a taken name", async () => {
+    setup(["code-review", "tdd", "frontend-design"]);
+    await scanned();
+    const same = screen.getByTestId("import-candidate-frontend-design");
+    expect(screen.queryByTestId("import-resolution-frontend-design")).toBeNull();
+    fireEvent.click(within(same).getByRole("checkbox"));
+    expect(screen.getByTestId("import-resolution-frontend-design")).toBeInTheDocument();
+    expect(screen.getByTestId("import-submit")).toBeDisabled();
+    fireEvent.click(within(same).getByRole("radio", { name: "rename" }));
+    expect((screen.getByTestId("import-rename-frontend-design") as HTMLInputElement).value).toBe("frontend-design-anthropics");
+    expect(same).toHaveTextContent("free");
+    // Resolve the other collision too: Import enables with both renames.
+    fireEvent.click(within(screen.getByTestId("import-candidate-code-review")).getByRole("radio", { name: "skip" }));
+    expect(screen.getByTestId("import-submit")).toHaveTextContent("Import 4 skills");
+    expect(screen.getByTestId("import-summary")).toHaveTextContent("frontend-design → frontend-design-anthropics");
+  });
+
+  it("warns when a folder of the destination name already exists here and can import into it", async () => {
+    const onClose = vi.fn();
+    const onImported = vi.fn().mockResolvedValue(undefined);
+    const withSource: SkillFolder[] = [
+      ...folders,
+      {
+        id: "f-src",
+        name: "anthropics/skills · engineering",
+        parent_id: null,
+        source: { url: "https://github.com/anthropics/skills", ref: "main", commit: "0000000", path: "skills/engineering", imported_at: t, found: 3, invalid: 0 },
+        created_at: t,
+        updated_at: t,
+      },
+    ];
+    render(
+      <ImportSkillsModal folders={withSource} existingNames={["tdd"]} initialFolderId={null} home="/home/user" onClose={onClose} onImported={onImported} />,
+    );
+    scanMock.mockResolvedValue({ ...SCAN, candidates: SCAN.candidates.filter((c) => c.status === "new") });
+    fireEvent.change(screen.getByTestId("import-source-input"), { target: { value: URL } });
+    fireEvent.keyDown(screen.getByTestId("import-source-input"), { key: "Enter" });
+    await waitFor(() => expect(screen.getByTestId("import-skills-modal")).toHaveAttribute("data-step", "results"));
+    expect(screen.getByTestId("import-folder-homonym")).toHaveTextContent("A folder named “anthropics/skills · engineering” already exists here");
+    fireEvent.click(screen.getByTestId("import-use-existing"));
+    expect(screen.queryByTestId("import-folder-homonym")).toBeNull();
+    expect(screen.getByTestId("import-into-existing")).toHaveTextContent("existing");
+    importMock.mockResolvedValue({ folder: withSource[1], imported: [], failed: [], commit: "3f9c2e1deadbeef" });
+    fireEvent.click(screen.getByTestId("import-submit"));
+    await waitFor(() => expect(importMock).toHaveBeenCalledTimes(1));
+    expect(importMock.mock.calls[0][0].folder).toEqual({ id: "f-src" });
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 
   it("Browse local… opens the folder explorer and fills the field with the pick", async () => {

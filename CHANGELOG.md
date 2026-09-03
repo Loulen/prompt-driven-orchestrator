@@ -26,6 +26,14 @@ fichiers de référence sont copiés intégralement. Endpoints : `POST /settings
 de `(source, source_commit)` à un objet `{url, ref, commit, path}` (colonnes additives, base 1.51
 lisible telle quelle).
 
+Retouches après le Feature Path #670 : *Update from source* ne touche que les skills du dossier
+ciblé (deux dossiers importés du même dépôt ne s'écrasent plus l'un l'autre ; un skill de la même
+source rangé ailleurs est signalé « already in “<dossier>” ») ; le clone d'un scan est isolé par
+processus daemon ; un skill « same commit » coché propose remplacer / renommer / ignorer au lieu
+d'échouer à l'import ; la modale avertit quand un dossier homonyme existe déjà à la destination et
+propose d'importer dedans ; `Esc` ferme la modale après un import partiel ; le diff d'update libelle
+« N reference files changed ».
+
 ## 1.51.0
 
 **Banque de skills** (#668 ; story #666, spec #667 ; ADR-0062). L'instance gère une banque de

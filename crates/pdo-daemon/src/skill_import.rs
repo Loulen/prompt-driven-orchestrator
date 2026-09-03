@@ -490,8 +490,10 @@ pub(crate) fn cancel_scan(scan_id: &str) -> bool {
     }
 }
 
+/// Scoped by process: the scan id is chosen by the client, and two daemons on
+/// one machine (or two test daemons) must never share a clone.
 fn scan_temp_dir(scan_id: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("pdo-skill-scan-{scan_id}"))
+    std::env::temp_dir().join(format!("pdo-skill-scan-{}-{scan_id}", std::process::id()))
 }
 
 async fn git_head(dir: &Path) -> Option<String> {
@@ -1016,7 +1018,8 @@ pub(crate) enum UpdateStatus {
     Unchanged,
     /// At the source, not in the bank; unchecked by default.
     New,
-    /// Imported from this source but moved out of this folder by the user.
+    /// Imported from this source but living in another folder (moved out, or
+    /// imported again elsewhere): never written to from here.
     Skipped,
     /// In this folder, no longer at the source; kept and flagged.
     Gone,
@@ -1107,25 +1110,34 @@ pub(crate) async fn rescan(
     let outcome = scan(scan_id, source.clone()).await?;
     let (root, _, _) = scan_root(scan_id).ok_or(ImportError::ScanExpired)?;
     let skills = skill_bank::list(db).await?;
+    let folders = skill_bank::list_folders(db).await?;
     let from_source: Vec<&Skill> = skills
         .iter()
         .filter(|s| s.source.as_ref().is_some_and(|p| p.url == source.url))
         .collect();
+    let in_folder = |s: &&&Skill| s.folder_id.as_deref() == Some(folder_id);
     let mut entries = Vec::new();
     let mut seen_paths = std::collections::HashSet::new();
     for candidate in &outcome.candidates {
         seen_paths.insert(candidate.path.clone());
+        let at_path = |s: &&&Skill| s.source.as_ref().is_some_and(|p| p.path == candidate.path);
+        // Two folders may come from the same source (a re-import): the skill
+        // of *this* folder wins; another folder's skill only yields `skipped`.
         let matched = from_source
             .iter()
-            .find(|s| s.source.as_ref().is_some_and(|p| p.path == candidate.path));
+            .find(|s| in_folder(s) && at_path(s))
+            .or_else(|| from_source.iter().find(at_path));
         let entry = match matched {
-            Some(skill) if skill.folder_id.as_deref() != Some(folder_id) => UpdateEntry {
+            Some(skill) if !in_folder(&skill) => UpdateEntry {
                 path: candidate.path.clone(),
                 name: skill.name.clone(),
                 description: candidate.description.clone(),
                 status: UpdateStatus::Skipped,
                 skill_id: Some(skill.id.clone()),
-                reason: Some("moved out of this folder by you".to_string()),
+                reason: Some(match folder_name_of(&folders, skill.folder_id.as_deref()) {
+                    Some(name) => format!("already in \u{201c}{name}\u{201d}"),
+                    None => "already in the bank, outside any folder".to_string(),
+                }),
                 skill_md_changed: false,
                 files_added: 0,
                 files_removed: 0,
@@ -1289,8 +1301,11 @@ pub(crate) async fn update(
     let (root, commit) = resolve_scan(scan_id, &source).await?;
     let candidates = scan_dir(&root, &source.path);
     let skills = skill_bank::list(db).await?;
+    // Only this folder's skills are ever written to: a sibling folder imported
+    // from the same source keeps its own copies untouched.
     let by_path: HashMap<String, &Skill> = skills
         .iter()
+        .filter(|s| s.folder_id.as_deref() == Some(folder_id))
         .filter_map(|s| {
             s.source
                 .as_ref()

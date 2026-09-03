@@ -1330,7 +1330,7 @@ const UPDATE_BADGE: Record<SkillUpdateEntry["status"], { label: string; classNam
  * The diff of an Update from source (#670), confirmed in the right panel like
  * the delete confirmations: updated rows checked, unchanged greyed, new at the
  * source unchecked by default (an update does not widen silently), skipped for
- * a skill the user moved out, gone kept and flagged.
+ * a skill living in another folder, gone kept and flagged.
  */
 function UpdateFromSourceConfirm({
   folder,
@@ -1415,7 +1415,7 @@ function UpdateFromSourceConfirm({
                     ? [
                         entry.skill_md_changed ? "SKILL.md changed" : null,
                         entry.files_added ? `+${entry.files_added} reference file${entry.files_added === 1 ? "" : "s"}` : null,
-                        entry.files_changed ? `${entry.files_changed} changed` : null,
+                        entry.files_changed ? `${entry.files_changed} reference file${entry.files_changed === 1 ? "" : "s"} changed` : null,
                         entry.files_removed ? `−${entry.files_removed} removed` : null,
                       ]
                         .filter(Boolean)
@@ -1427,7 +1427,7 @@ function UpdateFromSourceConfirm({
                           ? `${entry.path}/SKILL.md · name taken by “${entry.name_taken_by}”`
                           : `${entry.path}/SKILL.md`
                         : entry.status === "skipped"
-                          ? `${entry.reason ?? "moved out of this folder"} · left alone`
+                          ? `${entry.reason ?? "already in another folder"} · left alone`
                           : entry.status === "gone"
                             ? entry.reason ?? "no longer at the source · kept in the bank"
                             : entry.reason ?? "invalid frontmatter"}

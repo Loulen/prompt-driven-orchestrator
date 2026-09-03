@@ -227,10 +227,10 @@ describe("SkillBankPanel (#668)", () => {
       previous_commit: "3f9c2e1deadbeef",
       commit: "8a1d07bfeedface",
       entries: [
-        { path: "skills/pdf", name: "pdf", description: "d", status: "updated", skill_id: "s-pdf", skill_md_changed: true, files_added: 1, files_removed: 0, files_changed: 0 },
+        { path: "skills/pdf", name: "pdf", description: "d", status: "updated", skill_id: "s-pdf", skill_md_changed: true, files_added: 1, files_removed: 0, files_changed: 1 },
         { path: "skills/frontend-design", name: "frontend-design", description: "d", status: "unchanged", skill_id: "s-fd", skill_md_changed: false, files_added: 0, files_removed: 0, files_changed: 0 },
         { path: "skills/webapp-testing", name: "webapp-testing", description: "d", status: "new", skill_md_changed: false, files_added: 0, files_removed: 0, files_changed: 0 },
-        { path: "skills/code-review", name: "code-review-anthropic", description: "d", status: "skipped", skill_id: "s-x", reason: "moved out of this folder by you", skill_md_changed: false, files_added: 0, files_removed: 0, files_changed: 0 },
+        { path: "skills/code-review", name: "code-review-anthropic", description: "d", status: "skipped", skill_id: "s-x", reason: "already in “craft”", skill_md_changed: false, files_added: 0, files_removed: 0, files_changed: 0 },
         { path: "skills/old", name: "old", description: "d", status: "gone", skill_id: "s-old", skill_md_changed: false, files_added: 0, files_removed: 0, files_changed: 0 },
       ],
     });
@@ -240,7 +240,7 @@ describe("SkillBankPanel (#668)", () => {
     expect(screen.getByTestId("folder-update-summary")).toHaveTextContent("1 skill changed");
     const updated = screen.getByTestId("update-entry-pdf");
     expect(updated).toHaveTextContent("updated");
-    expect(updated).toHaveTextContent("SKILL.md changed · +1 reference file");
+    expect(updated).toHaveTextContent("SKILL.md changed · +1 reference file · 1 reference file changed");
     expect(within(updated).getByRole("checkbox")).toBeChecked();
     expect(within(screen.getByTestId("update-entry-frontend-design")).getByRole("checkbox")).toBeDisabled();
     const fresh = screen.getByTestId("update-entry-webapp-testing");

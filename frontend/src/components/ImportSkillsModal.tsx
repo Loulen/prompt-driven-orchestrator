@@ -83,6 +83,11 @@ function sshHint(url: string): string | null {
   return match ? `git@${match[1]}:${match[2]}/${match[3]}.git` : null;
 }
 
+/** A checked row whose name is already in the bank must say replace / rename / skip. */
+function needsResolution(candidate: SkillCandidate): boolean {
+  return candidate.status === "name_taken" || candidate.status === "same_commit";
+}
+
 function defaultRow(candidate: SkillCandidate): RowState {
   return {
     checked: candidate.status === "new" || candidate.status === "name_taken",
@@ -111,6 +116,8 @@ export default function ImportSkillsModal({
   const [text, setText] = useState("");
   const [parentId, setParentId] = useState<string | null>(initialFolderId);
   const [folderName, setFolderName] = useState("");
+  /** Set when the user chose to import into an existing folder of that name. */
+  const [intoFolderId, setIntoFolderId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState(false);
   const [recent, setRecent] = useState<RecentSkillSource[]>([]);
   const [browsing, setBrowsing] = useState(false);
@@ -153,6 +160,7 @@ export default function ImportSkillsModal({
         setScan(result);
         setRows(new Map(result.candidates.map((c) => [c.path, defaultRow(c)])));
         setFolderName(result.source.suggested_folder);
+        setIntoFolderId(null);
         setStep("results");
       } catch (cause) {
         if (scanIdRef.current !== id) return;
@@ -254,7 +262,7 @@ export default function ImportSkillsModal({
         if (candidate.status !== "same_commit") unchecked += 1;
         continue;
       }
-      if (candidate.status === "name_taken") {
+      if (needsResolution(candidate)) {
         if (!row.resolution) {
           unresolved += 1;
           continue;
@@ -280,8 +288,19 @@ export default function ImportSkillsModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [candidates, rows, doneRows, existingNames, renameTargets]);
 
+  const intoFolder = intoFolderId ? folders.find((f) => f.id === intoFolderId) ?? null : null;
+  /** A sibling folder already carrying the destination name: warn, offer to reuse it. */
+  const homonym = useMemo(() => {
+    const needle = folderName.trim().toLowerCase();
+    if (!needle || intoFolderId) return null;
+    return folders.find((f) => f.name.toLowerCase() === needle && (f.parent_id ?? null) === parentId) ?? null;
+  }, [folders, folderName, parentId, intoFolderId]);
+
   const canImport =
-    step === "results" && summary.willImport.length > 0 && summary.unresolved === 0 && folderName.trim() !== "";
+    step === "results" &&
+    summary.willImport.length > 0 &&
+    summary.unresolved === 0 &&
+    (intoFolder !== null || folderName.trim() !== "");
 
   // ---- import -------------------------------------------------------------
 
@@ -298,7 +317,7 @@ export default function ImportSkillsModal({
       const report = await importSkills({
         scan_id: scan.scan_id,
         source: text,
-        folder: { name: folderName.trim(), parent_id: parentId },
+        folder: intoFolder ? { id: intoFolder.id } : { name: folderName.trim(), parent_id: parentId },
         items,
       });
       const complete = report.failed.length === 0;
@@ -334,12 +353,13 @@ export default function ImportSkillsModal({
       cancelScan();
       return;
     }
-    if (step === "results" && touched && !confirmDiscard) {
+    const wrote = doneRows.size > 0 || failedRows.size > 0;
+    if (step === "results" && touched && !confirmDiscard && !wrote) {
       setConfirmDiscard(true);
       return;
     }
     onClose();
-  }, [step, touched, confirmDiscard, cancelScan, onClose]);
+  }, [step, touched, confirmDiscard, doneRows, failedRows, cancelScan, onClose]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -775,7 +795,7 @@ export default function ImportSkillsModal({
                                 {failure}
                               </div>
                             )}
-                            {candidate.valid && candidate.status === "name_taken" && row.checked && !done && (
+                            {candidate.valid && needsResolution(candidate) && row.checked && !done && (
                               <div className="mt-1.5 flex flex-wrap items-center gap-2" data-testid={`import-resolution-${candidate.name}`}>
                                 <div className="flex overflow-hidden rounded-md border border-line-strong" role="radiogroup" aria-label={`Resolve ${candidate.name}`}>
                                   {(["replace", "rename", "skip"] as Resolution[]).map((option) => (
@@ -902,6 +922,26 @@ export default function ImportSkillsModal({
                   <h4 className="mb-2 text-fg-4 uppercase tracking-wide" style={{ fontSize: "10px" }}>
                     Destination
                   </h4>
+                  {intoFolder ? (
+                    <div className="flex items-center gap-2 rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5" data-testid="import-into-existing">
+                      <FolderOpen size={12} className="shrink-0 text-st-await" />
+                      <span className="min-w-0 flex-1 truncate font-mono text-fg" style={{ fontSize: "11.5px" }} data-testid="import-folder-name">
+                        {folderPathLabel(intoFolder.id, folders)}
+                      </span>
+                      <span className="rounded border border-line bg-bg-1 px-1.5 py-0.5 text-fg-4" style={{ fontSize: "9.5px" }}>
+                        existing
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setIntoFolderId(null)}
+                        data-testid="import-into-new"
+                        className="text-acc hover:underline"
+                        style={{ fontSize: "10.5px" }}
+                      >
+                        New folder instead
+                      </button>
+                    </div>
+                  ) : (
                   <div className="flex items-center gap-2 rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5">
                     <FolderOpen size={12} className="shrink-0 text-st-await" />
                     {editingName ? (
@@ -936,12 +976,38 @@ export default function ImportSkillsModal({
                       <Pencil size={11} />
                     </button>
                   </div>
-                  <div className="mt-1.5">
-                    <ParentSelect folders={folders} value={parentId} onChange={setParentId} disabled={step === "importing"} prefix="in" />
-                  </div>
-                  <p className="mt-1.5 text-fg-4" style={{ fontSize: "10.5px" }}>
-                    New folder, tagged with this source and commit. Sub-paths are flattened: one skill = one row.
-                  </p>
+                  )}
+                  {!intoFolder && (
+                    <div className="mt-1.5">
+                      <ParentSelect folders={folders} value={parentId} onChange={setParentId} disabled={step === "importing"} prefix="in" />
+                    </div>
+                  )}
+                  {homonym ? (
+                    <div
+                      role="alert"
+                      className="mt-1.5 rounded-md border border-st-blocked/50 bg-st-blocked-bg px-2.5 py-1.5 text-fg-2"
+                      style={{ fontSize: "10.5px" }}
+                      data-testid="import-folder-homonym"
+                    >
+                      A folder named “{homonym.name}” already exists here
+                      {homonym.source ? " (imported from a source)" : ""}. Importing would create a second one next to it.{" "}
+                      <button
+                        type="button"
+                        onClick={() => setIntoFolderId(homonym.id)}
+                        data-testid="import-use-existing"
+                        className="text-acc hover:underline"
+                      >
+                        Import into the existing folder
+                      </button>{" "}
+                      or rename the destination.
+                    </div>
+                  ) : (
+                    <p className="mt-1.5 text-fg-4" style={{ fontSize: "10.5px" }}>
+                      {intoFolder
+                        ? "Existing folder: it takes this source and commit as provenance. Sub-paths are flattened: one skill = one row."
+                        : "New folder, tagged with this source and commit. Sub-paths are flattened: one skill = one row."}
+                    </p>
+                  )}
                 </section>
 
                 <section>
@@ -987,7 +1053,7 @@ export default function ImportSkillsModal({
                     {summary.unchecked} unchecked · {summary.invalid} invalid · {summary.sameCommit} already present at the
                     same commit.
                     {candidates
-                      .filter((c) => c.status === "name_taken" && rows.get(c.path)?.resolution === "skip" && rows.get(c.path)?.checked)
+                      .filter((c) => needsResolution(c) && rows.get(c.path)?.resolution === "skip" && rows.get(c.path)?.checked)
                       .map((c) => (
                         <span key={c.path}>
                           {" "}
@@ -1004,7 +1070,7 @@ export default function ImportSkillsModal({
                     style={{ fontSize: "11px" }}
                     data-testid="import-unresolved"
                   >
-                    Resolve the name taken before importing: <strong className="text-fg">replace</strong> overwrites the content
+                    Resolve the name already in the bank before importing: <strong className="text-fg">replace</strong> overwrites the content
                     of the bank's skill (its id and referents stay), <strong className="text-fg">rename</strong> keeps both,{" "}
                     <strong className="text-fg">skip</strong> leaves it out.
                   </div>
@@ -1018,7 +1084,7 @@ export default function ImportSkillsModal({
                 {failedRows.size > 0 && !importError && (
                   <div role="alert" className="rounded-md border border-st-failed/50 bg-st-failed-bg px-3 py-2 text-fg-2" style={{ fontSize: "11px" }} data-testid="import-partial">
                     {failedRows.size} skill{failedRows.size === 1 ? "" : "s"} could not be imported; the reasons are on the rows. The
-                    others landed in “{folderName}”.
+                    others landed in “{intoFolder?.name ?? folderName}”.
                   </div>
                 )}
               </>

@@ -10,7 +10,7 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## 1.52.0
+## 1.54.0
 
 **Import de skills depuis une Source** (#670 ; story #666, spec #667). Depuis la banque, *+ Add ▾ ›
 Import from a source…* accepte une URL de dépôt GitHub (racine, branche, `/tree/<branche>/<chemin>`),
@@ -33,6 +33,28 @@ processus daemon ; un skill « same commit » coché propose remplacer / renomme
 d'échouer à l'import ; la modale avertit quand un dossier homonyme existe déjà à la destination et
 propose d'importer dedans ; `Esc` ferme la modale après un import partiel ; le diff d'update libelle
 « N reference files changed ».
+
+## 1.53.0
+
+**Skills : sélection par tier et skills effectifs avec origine** (#669 ; story #666, spec #667 ;
+ADR-0062). Un skill se coche à trois niveaux — Instance (réglages), Projet (fiche projet) et Nœud
+(inspecteur du pipeline) — et un lancement de Run hérite des deux premiers, avec des skills RUN
+ajoutés à la volée (cocher un dossier coche ses skills). L'inspecteur d'un nœud affiche la liste des
+*skills effectifs* avec l'origine de chacun (INSTANCE / PROJECT / NODE / RUN) et la liste figée au
+spawn (`NodeStarted.skills`). Supprimer un skill de la banque liste ses référents (projets, nœuds) ;
+les références orphelines gardent l'id, s'affichent barrées avec un avertissement (inspecteur, bandeau
+de lint du pipeline, modale New Run) et le Run se lance quand même, le skill étant ignoré
+(`missing_skills`). API : `GET /settings/skills/{id}/referents`.
+
+## 1.52.0
+
+**Fichiers de référence d'un skill** (#671 ; story #666, spec #667 ; ADR-0062). Un skill peut
+embarquer des fichiers à côté de son `SKILL.md` : glisser-déposer dans la modale de collage
+(fichiers stagés avant la création, « Create skill + N files ») ou dans l'onglet *Files* du détail,
+explorateur multi-sélection (chemin hôte), suppression avec confirmation inline, édition texte brut
+avec sauvegarde explicite (`⌘S`). Un `SKILL.md` déposé remplace le texte courant (annulable). Limite
+10 MB par fichier, sous-dossiers conservés, chemins traversants refusés. API REST sous
+`/settings/skills/{id}/files`.
 
 ## 1.51.0
 

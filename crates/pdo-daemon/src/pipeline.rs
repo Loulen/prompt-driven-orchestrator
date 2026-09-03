@@ -210,6 +210,15 @@ pub(crate) struct NodeDef {
     /// the legacy behaviour exactly. Semantic, not layout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_choice: Option<crate::agent_choice::AgentChoice>,
+    /// The Node tier of the **skills** selection (#669, ADR-0062): the skills this
+    /// node's NodeRun receives on top of the instance, Projet and Run tiers
+    /// (strict additive union, `skill_selection::resolve`). Referenced by **id**;
+    /// the `name` beside it is a readable label the bank re-reads at spawn.
+    /// Semantic, not layout — in the diff and the library content hash. Refused
+    /// on a `script` node at parse ([`normalize_node_value`]): a script launches
+    /// no agent, so a skill there would be a setting that silently does nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<crate::skill_selection::SkillRef>,
     /// The **finest** tier of [`crate::auto_fail::resolve_auto_fail`] (`node → Run
     /// → Projet → instance`): `Some(_)` overrides every coarser tier for this
     /// node's `pdo fail`. Semantic, not layout.
@@ -481,6 +490,10 @@ pub(crate) enum ParseError {
     InvalidYaml(#[from] serde_yaml::Error),
     #[error("missing required field: {0}")]
     MissingField(String),
+    /// A field that is present but meaningless where it sits (#669: `skills` on
+    /// a `script` node). Refused at parse, naming the node and the fix.
+    #[error("{0}")]
+    InvalidField(String),
     #[error("switch node '{node_id}' output '{port}': when-clause field '{field}' not found in upstream schema")]
     UndeclaredWhenField {
         node_id: String,
@@ -580,6 +593,27 @@ pub(crate) fn normalize_node_value(
 
     stamp_isolation_default(node_map);
 
+    // #669 / ADR-0062: a `script` node runs deterministic bash and launches no
+    // agent, so a `skills` selection on it can never take effect. Refused rather
+    // than dropped: a setting that silently does nothing is the failure mode the
+    // spec names (« un réglage sans signification ne peut exister en silence »).
+    if node_map
+        .get(serde_yaml::Value::String("type".into()))
+        .and_then(|v| v.as_str())
+        .is_some_and(|t| t == "script")
+    {
+        if let Some(skills) = node_map.get(serde_yaml::Value::String(SKILLS_KEY.into())) {
+            let is_empty_list = skills.as_sequence().is_some_and(|s| s.is_empty());
+            if !skills.is_null() && !is_empty_list {
+                return Err(ParseError::InvalidField(format!(
+                    "node '{node_id}': a `script` node cannot carry `skills` — a script \
+                     launches no agent, so no skill would ever be read. Remove the \
+                     `skills` key, or make the node an `agent`"
+                )));
+            }
+        }
+    }
+
     // #550: fold a legacy flat `model:` / `effort:` into `harnesses.claude.*` so
     // that a parse is lossless even before the on-disk migrator has rewritten the
     // file. The migrator persists the same fold; this is the in-memory safety net
@@ -591,6 +625,9 @@ pub(crate) fn normalize_node_value(
 
 /// The node key that says where a NodeRun works (#653, ADR-0060).
 pub(crate) const ISOLATED_WORKTREE_KEY: &str = "isolated_worktree";
+
+/// The node key carrying its skills selection (#669, ADR-0062).
+pub(crate) const SKILLS_KEY: &str = "skills";
 
 /// Write a node's isolation default into the raw YAML when the document is
 /// silent (#653, ADR-0060).
@@ -2694,6 +2731,82 @@ nodes:
         assert!(NodeType::Script.has_emergent_inputs());
     }
 
+    /// #669 / ADR-0062: a `script` node carrying `skills` is refused at parse with
+    /// a message naming the node and the fix — a skill on a node that launches no
+    /// agent would be a setting that silently does nothing.
+    #[test]
+    fn script_node_with_skills_is_refused_at_parse() {
+        let yaml = r#"
+name: script-skills
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: sh
+    name: Shell
+    type: script
+    skills:
+      - id: 11111111-1111-1111-1111-111111111111
+        name: tdd
+    outputs:
+      - name: out
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: sh, port: in }
+  - source: { node: sh, port: out }
+    target: { node: end, port: result }
+"#;
+        let err = parse_pipeline(yaml).unwrap_err();
+        let message = err.to_string();
+        assert!(matches!(err, ParseError::InvalidField(_)), "{message}");
+        assert!(message.contains("node 'sh'"), "{message}");
+        assert!(message.contains("`script`"), "{message}");
+        assert!(message.contains("`skills`"), "{message}");
+        // An empty list or a null is not a selection: tolerated, not refused.
+        let tolerated = yaml.replace(
+            "    skills:\n      - id: 11111111-1111-1111-1111-111111111111\n        name: tdd\n",
+            "    skills: []\n",
+        );
+        assert!(parse_pipeline(&tolerated).is_ok());
+    }
+
+    /// #669: an `agent` node's `skills` (ids + labels) round-trip through parse
+    /// and re-serialization; an absent key parses to an empty list and is omitted
+    /// on the way back out.
+    #[test]
+    fn agent_node_skills_round_trip_and_absent_is_omitted() {
+        let yaml = r#"
+id: a1
+name: Worker
+type: agent
+skills:
+  - id: 11111111-1111-1111-1111-111111111111
+    name: tdd
+  - id: 22222222-2222-2222-2222-222222222222
+    name: grilling
+"#;
+        let node: NodeDef = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(node.skills.len(), 2);
+        assert_eq!(node.skills[0].name, "tdd");
+        let round = serde_yaml::to_string(&node).unwrap();
+        assert!(round.contains("skills:"), "{round}");
+        let back: NodeDef = serde_yaml::from_str(&round).unwrap();
+        assert_eq!(back.skills, node.skills);
+
+        let bare: NodeDef = serde_yaml::from_str("id: a2\nname: X\ntype: agent\n").unwrap();
+        assert!(bare.skills.is_empty());
+        let round = serde_yaml::to_string(&bare).unwrap();
+        assert!(!round.contains("skills"), "{round}");
+    }
+
     #[test]
     fn script_node_roundtrips_via_serde() {
         let node = NodeDef {
@@ -2720,6 +2833,7 @@ nodes:
             pin_harness: None,
             harnesses: Default::default(),
             agent_choice: None,
+            skills: Vec::new(),
             auto_fail: None,
         };
         let yaml = serde_yaml::to_string(&node).unwrap();

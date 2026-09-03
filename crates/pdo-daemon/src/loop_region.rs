@@ -507,6 +507,7 @@ mod tests {
 
     fn node(id: &str, inputs: &[&str], outputs: &[&str]) -> NodeDef {
         NodeDef {
+            skills: Vec::new(),
             isolated_worktree: None,
             id: id.into(),
             name: id.into(),

@@ -1,4 +1,4 @@
-import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, StatsPerformance, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, Project, BranchRef, AgentChoice, AgentProfile, AgentProfileReferents, ProvisioningPlan, ProvisioningRules, Skill, SkillBank, SkillDetail, SkillFolder, SkillReferents, SkillScanResult, SkillImportItem, SkillImportReport, SkillRescanReport, RecentSkillSource } from "./types";
+import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, StatsPerformance, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, Project, BranchRef, AgentChoice, AgentProfile, AgentProfileReferents, ProvisioningPlan, ProvisioningRules, Skill, SkillBank, SkillDetail, SkillFile, SkillFileContent, SkillFilesUpload, SkillFolder, SkillReferents, SkillRef, SkillScanResult, SkillImportItem, SkillImportReport, SkillRescanReport, RecentSkillSource } from "./types";
 import { foldHarnessOntoNode } from "./lib/harness";
 
 const BASE = "";
@@ -67,7 +67,8 @@ export type ResponseMode = "json" | "text" | "void" | "raw";
 
 export interface RequestOpts {
   /** `object` → JSON body + `Content-Type: application/json`; `FormData` → sent
-   *  as-is so the browser sets the multipart boundary; `undefined` → no body. */
+   *  as-is so the browser sets the multipart boundary; `Blob` → sent as-is with
+   *  its own type (a raw text save); `undefined` → no body. */
   body?: unknown;
   /** Query params appended to `path`; `undefined` values are dropped, keys and
    *  values are `encodeURIComponent`-encoded. */
@@ -116,6 +117,10 @@ export async function request<T = unknown>(
   const headers: Record<string, string> = { "X-PDO-Actor": "ui" };
   if (body instanceof FormData) {
     init.body = body; // browser sets the multipart boundary — no Content-Type
+  } else if (body instanceof Blob) {
+    // A raw body (a plain-text file save, #671): sent as-is, the Blob's own type.
+    init.body = body;
+    if (body.type) headers["Content-Type"] = body.type;
   } else if (body !== undefined) {
     headers["Content-Type"] = "application/json";
     init.body = JSON.stringify(body);
@@ -674,6 +679,9 @@ export interface CreateRunRequest {
    *  default and the `claude` floor. Frozen into `RunStarted` at the create chokepoint. */
   harness?: string;
   agent_choice?: AgentChoice;
+  /** #669/ADR-0062: the Run tier of the skills selection, frozen into `RunStarted`
+   *  when non-empty. Omit for none. */
+  skills?: SkillRef[];
   /** Whether the manager auto-names this Run (#338). The modal always sends it; omit and
    *  the server resolves back-compat by the presence of `name`, then the instance default. */
   auto_name?: boolean;
@@ -705,6 +713,7 @@ export function createRun(req: CreateRunRequest): Promise<CreateRunResponse> {
     if (req.sandbox) form.append("sandbox", req.sandbox);
     if (req.harness) form.append("harness", req.harness);
     if (req.agent_choice) form.append("agent_choice", JSON.stringify(req.agent_choice));
+    if (req.skills && req.skills.length > 0) form.append("skills", JSON.stringify(req.skills));
     if (req.auto_name !== undefined) form.append("auto_name", String(req.auto_name));
     if (req.provisioning) form.append("provisioning", JSON.stringify(req.provisioning));
     for (const file of req.images!) {
@@ -829,6 +838,8 @@ export interface CreateTriggerRequest {
    *  default. Folded into the fired Run's harness (no separate Trigger tier). */
   harness?: string | null;
   agent_choice?: AgentChoice | null;
+  /** #669: the Run-tier skills every fired Run carries. Omit for none. */
+  skills?: SkillRef[];
   /** Whether Runs this Trigger fires are auto-named (#338). Seeded from the instance
    *  default in the modal; omit → the server defaults to `true` (pre-#338 behaviour). */
   auto_name?: boolean;
@@ -875,6 +886,8 @@ export interface UpdateTriggerRequest {
    *  instance default, `undefined` leaves it unchanged. */
   harness?: string | null;
   agent_choice?: AgentChoice | null;
+  /** #669: replace the Run-tier skills wholesale; `[]` clears. */
+  skills?: SkillRef[];
   /** Auto-naming toggle (#338): a bool sets it, `undefined` leaves it unchanged. A flat
    *  bool (no clear state) — mirror of `enabled`. */
   auto_name?: boolean;
@@ -911,6 +924,8 @@ export interface UpdateProjectRequest {
   name?: string;
   harness?: string | null;
   agent_choice?: AgentChoice | null;
+  /** #669: replace the Projet's skills wholesale; `[]` clears. */
+  skills?: SkillRef[];
 }
 
 export function updateProject(
@@ -1730,6 +1745,63 @@ export function deleteSkill(id: string): Promise<void> {
 
 export function fetchSkillReferents(id: string): Promise<SkillReferents> {
   return request("GET", `/settings/skills/${encodeURIComponent(id)}/referents`);
+}
+
+// Reference files (#671). `path` may hold sub-folders (`examples/login.spec.ts`);
+// each segment is encoded, the `/` is kept for the daemon's `{*path}` wildcard.
+function skillFilePath(id: string, path: string): string {
+  const rel = path.split("/").map(encodeURIComponent).join("/");
+  return `/settings/skills/${encodeURIComponent(id)}/files/${rel}`;
+}
+
+/**
+ * Upload browser files (a drop or the file picker) as multipart. Each file
+ * travels as a `path` text part (its destination, sub-folders kept) followed by
+ * the `file` part. The daemon writes them in order and stops at the first
+ * refusal, reporting what landed.
+ */
+export function uploadSkillFiles(
+  id: string,
+  files: { path: string; file: Blob }[],
+): Promise<SkillFilesUpload> {
+  const form = new FormData();
+  for (const { path, file } of files) {
+    form.append("path", path);
+    form.append("file", file, path.split("/").pop() ?? path);
+  }
+  return request("POST", `/settings/skills/${encodeURIComponent(id)}/files`, { body: form });
+}
+
+/** The explorer path: the daemon copies `from_path` (absolute, on its host). */
+export function uploadSkillFileFromPath(
+  id: string,
+  fromPath: string,
+  path?: string,
+): Promise<SkillFilesUpload> {
+  return request("POST", `/settings/skills/${encodeURIComponent(id)}/files`, {
+    body: { from_path: fromPath, path },
+  });
+}
+
+export function fetchSkillFile(id: string, path: string): Promise<SkillFileContent> {
+  return request("GET", skillFilePath(id, path));
+}
+
+/**
+ * Save the editor's text. For `SKILL.md` the daemon re-runs the five checks and
+ * answers the same named 400 as the paste popup; the response then carries the
+ * refreshed `skill` row.
+ */
+export function writeSkillFile(
+  id: string,
+  path: string,
+  text: string,
+): Promise<SkillFile & { skill?: Skill }> {
+  return request("PUT", skillFilePath(id, path), { body: new Blob([text], { type: "text/plain" }) });
+}
+
+export function deleteSkillFile(id: string, path: string): Promise<void> {
+  return request("DELETE", skillFilePath(id, path), { responseMode: "void" });
 }
 
 export function createSkillFolder(body: {

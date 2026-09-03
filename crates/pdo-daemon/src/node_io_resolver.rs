@@ -294,6 +294,8 @@ mod tests {
     fn run_state_with(node_id: &str, iters: &[(i64, NodeStatus)]) -> RunState {
         let (head_iter, head_status) = iters.last().cloned().unwrap_or((1, NodeStatus::Pending));
         let node = NodeState {
+            missing_skills: Vec::new(),
+            skills: None,
             isolated_worktree: None,
             harness: None,
             cost: None,
@@ -330,6 +332,7 @@ mod tests {
             variables: HashMap::new(),
             nodes: vec![
                 NodeDef {
+                    skills: Vec::new(),
                     isolated_worktree: None,
                     id: "planner".into(),
                     name: "planner".into(),
@@ -366,6 +369,7 @@ mod tests {
                     auto_fail: None,
                 },
                 NodeDef {
+                    skills: Vec::new(),
                     isolated_worktree: None,
                     id: "implementer".into(),
                     name: "implementer".into(),
@@ -532,6 +536,7 @@ mod tests {
             variables: HashMap::new(),
             nodes: vec![
                 NodeDef {
+                    skills: Vec::new(),
                     isolated_worktree: None,
                     id: "reviewer".into(),
                     name: "reviewer".into(),
@@ -558,6 +563,7 @@ mod tests {
                     auto_fail: None,
                 },
                 NodeDef {
+                    skills: Vec::new(),
                     isolated_worktree: None,
                     id: "implementer".into(),
                     name: "implementer".into(),
@@ -731,6 +737,7 @@ mod tests {
             variables: HashMap::new(),
             nodes: vec![
                 NodeDef {
+                    skills: Vec::new(),
                     isolated_worktree: None,
                     id: "a".into(),
                     name: "a".into(),
@@ -757,6 +764,7 @@ mod tests {
                     auto_fail: None,
                 },
                 NodeDef {
+                    skills: Vec::new(),
                     isolated_worktree: None,
                     id: "b".into(),
                     name: "b".into(),
@@ -783,6 +791,7 @@ mod tests {
                     auto_fail: None,
                 },
                 NodeDef {
+                    skills: Vec::new(),
                     isolated_worktree: None,
                     id: "merger".into(),
                     name: "merger".into(),
@@ -877,6 +886,7 @@ mod tests {
             variables: HashMap::new(),
             nodes: vec![
                 NodeDef {
+                    skills: Vec::new(),
                     isolated_worktree: None,
                     id: "planner".into(),
                     name: "planner".into(),
@@ -903,6 +913,7 @@ mod tests {
                     auto_fail: None,
                 },
                 NodeDef {
+                    skills: Vec::new(),
                     isolated_worktree: None,
                     id: "implementer".into(),
                     name: "implementer".into(),
@@ -963,6 +974,7 @@ mod tests {
         }
 
         let mk_node = |id: &str, has_out: bool| NodeDef {
+            skills: Vec::new(),
             isolated_worktree: None,
             id: id.into(),
             name: id.into(),
@@ -1048,6 +1060,7 @@ mod tests {
         }
 
         let mk_node = |id: &str, out: Option<&str>| NodeDef {
+            skills: Vec::new(),
             isolated_worktree: None,
             id: id.into(),
             name: id.into(),
@@ -1138,6 +1151,7 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![NodeDef {
+                skills: Vec::new(),
                 isolated_worktree: None,
                 id: "designer".into(),
                 name: "designer".into(),

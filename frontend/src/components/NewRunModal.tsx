@@ -13,8 +13,11 @@ import SecondaryRepoRow, {
 import GuardTestResult from "./GuardTestResult";
 import AgentControl from "./AgentControl";
 import HarnessSelect from "./HarnessSelect";
+import SkillSelector from "./SkillSelector";
 import { useAgentProfiles } from "../hooks/useAgentProfiles";
-import type { AgentChoice } from "../types";
+import { useSkillBank } from "../hooks/useSkillBank";
+import { useSkillTiers } from "../hooks/useSkillTiers";
+import type { AgentChoice, SkillRef } from "../types";
 import { CRON_PRESETS, cronToPreset, parseDailyTime, type CronPresetId } from "../cronPresets";
 import { useLaunchTargets } from "../hooks/useLaunchTargets";
 import { useRepoValidation } from "../hooks/useRepoValidation";
@@ -155,8 +158,16 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
   // the request, the only value that lets the daemon resolve its own default.
   const [harness, setHarness] = useState<string>("");
   const [agentChoice, setAgentChoice] = useState<AgentChoice>({ mode: "inherit" });
+  // #669/ADR-0062: the Run tier of the skills selection (a Trigger stores the same
+  // list for its fired Runs). Inherits the instance and the Projet of the repo.
+  const [skills, setSkills] = useState<SkillRef[]>([]);
   const harnessSeeded = useRef(false);
   const { profiles: agentProfiles } = useAgentProfiles(open);
+  const { bank: skillBank } = useSkillBank(open);
+  // The instance tier comes from the modal's own `settings` read (#452: one
+  // `GET /settings` per open); only the Projets are read here.
+  const instanceSkills = useMemo(() => settings?.skills ?? [], [settings]);
+  const { inherited: inheritedSkillTiers } = useSkillTiers(targetRepo, open, instanceSkills);
   const autoNameSeeded = useRef(false);
 
   const recentRepos = useRecentReposStore((s) => s.recentRepos);
@@ -407,6 +418,9 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
         ? openIntent.trigger.agent_choice ?? { mode: "inherit" }
         : { mode: "inherit" },
     );
+    // #669: an `edit-trigger` round-trips the Trigger's own list; a run / new
+    // trigger seeds empty (the inherited tiers stay labels, never copied).
+    setSkills(openIntent.kind === "edit-trigger" ? openIntent.trigger.skills ?? [] : []);
   }, [open, openIntent]);
 
   // #338: seed the "Auto-generated" box once per open, ref-gated (same anti-reseed guard as
@@ -583,6 +597,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
           runName,
           sandbox,
           harness,
+          skills,
           images,
           // #465: full list ([0] = primary, [1..] = secondaries), or undefined
           // for a mono-repo Run (keeps the request byte-identical).
@@ -600,6 +615,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
       setInput("");
       setOverrides({});
       setImages([]);
+      setSkills([]);
       setProvisioning(EMPTY_PROVISIONING_RULES);
       onClose();
     } catch (e) {
@@ -607,7 +623,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     } finally {
       setSubmitting(false);
     }
-  }, [selectedPipeline, input, hasRequiredPrompt, overrides, onCreated, onClose, flushPendingSaves, repoValid, targetRepo, sourceBranch, buildTargetRepos, autoName, runName, images, sandbox, harness, agentChoice, settings, refreshRecentRepos, provisioning]);
+  }, [selectedPipeline, input, hasRequiredPrompt, overrides, onCreated, onClose, flushPendingSaves, repoValid, targetRepo, sourceBranch, buildTargetRepos, autoName, runName, images, sandbox, harness, skills, agentChoice, settings, refreshRecentRepos, provisioning]);
 
   const canLaunch = provisioningValid && newRunForm.canLaunch({
     repoValid,
@@ -682,6 +698,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
       maxConcurrent,
       sandbox,
       harness,
+      skills,
       autoName,
       variables,
       // #465: full list ([0] = primary, [1..] = secondaries), or undefined for
@@ -734,6 +751,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     buildTargetRepos,
     sandbox,
     harness,
+    skills,
     autoName,
     flushPendingSaves,
     onTriggerSaved,
@@ -1175,6 +1193,26 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
                 {mode === "trigger"
                   ? "Every fired Run launches on this harness. Nodes that pin their own harness ignore it."
                   : "The harness every free node runs on for this Run. Nodes that pin their own harness ignore it."}
+              </span>
+            </div>
+
+            {/* #669/ADR-0062: the Run tier of the skills selection. Inherited from
+                the instance and the Projet owning the target repo; a Trigger stores
+                the same list for every Run it fires. */}
+            <div className="flex flex-col gap-1.5">
+              <SkillSelector
+                tier="run"
+                own={skills}
+                onChange={setSkills}
+                inherited={inheritedSkillTiers}
+                bank={skillBank}
+                label={mode === "trigger" ? "Skills — Trigger" : "Skills — New Run"}
+                testId="run-skill-selector"
+              />
+              <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
+                {mode === "trigger"
+                  ? "Every fired Run adds these skills to every node, on top of the instance and project tiers."
+                  : "Added to every node of this Run, on top of the instance and project tiers. Nodes add their own."}
               </span>
             </div>
           </div>

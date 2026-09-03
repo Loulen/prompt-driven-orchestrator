@@ -143,6 +143,11 @@ struct NodeProjection<'a> {
     /// content hash — the same discipline `auto_fail` below uses.
     #[serde(skip_serializing_if = "Option::is_none")]
     agent_choice: Option<&'a crate::agent_choice::AgentChoice>,
+    /// Semantic (#669, ADR-0062): the skills a node carries change what its
+    /// NodeRun works with. `skip_serializing_if` keeps a node that selects none
+    /// byte-identical to its pre-#669 content hash.
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    skills: &'a [crate::skill_selection::SkillRef],
     max_iter: Option<serde_json::Value>,
     /// Legacy per-node collection driver. The frontend serializer no longer emits
     /// it, so it is absent from `SEMANTIC_FIELDS.node`; it is still a behavioural
@@ -179,6 +184,7 @@ impl<'a> NodeProjection<'a> {
             pin_harness,
             harnesses,
             agent_choice,
+            skills,
             auto_fail,
             isolated_worktree,
         } = node;
@@ -191,6 +197,7 @@ impl<'a> NodeProjection<'a> {
             pin_harness: pin_harness.as_deref(),
             harnesses,
             agent_choice: agent_choice.as_ref(),
+            skills,
             max_iter: max_iter.as_ref().map(canon_yaml),
             over: over.as_deref(),
             auto_fail: *auto_fail,
@@ -507,6 +514,15 @@ mod tests {
                 base.replace(
                     "  type: agent",
                     "  type: agent\n  harnesses:\n    claude:\n      model: opus",
+                ),
+            ),
+            (
+                // #669/ADR-0062: the skills a node carries change what its NodeRun
+                // works with — a selection edit versions the pipeline.
+                "skills",
+                base.replace(
+                    "  type: agent",
+                    "  type: agent\n  skills:\n    - id: 11111111-1111-1111-1111-111111111111\n      name: tdd",
                 ),
             ),
             (

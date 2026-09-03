@@ -73,6 +73,11 @@ pub(crate) struct Trigger {
     /// [`Self::harness`]. `None` ⇒ `harness` (and the tiers below it) decide.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_choice: Option<crate::agent_choice::AgentChoice>,
+    /// The skills a fired Run carries at its **Run** tier (#669, ADR-0062). Read
+    /// at fire time and folded into the create request's `skills`, exactly like
+    /// [`Self::harness`] — no separate Trigger tier. Empty ⇒ nothing added.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<crate::skill_selection::SkillRef>,
     /// Whether Runs fired from this Trigger are auto-named by the manager. A flat
     /// bool (mirror of [`Self::enabled`]), NOT a nullable inherit: the choice is
     /// frozen at creation from the instance default and read at fire time.
@@ -115,6 +120,8 @@ pub(crate) struct NewTrigger {
     pub harness: Option<String>,
     /// `None` inherits the legacy `harness` tier (and below) at fire time.
     pub agent_choice: Option<crate::agent_choice::AgentChoice>,
+    /// The Run-tier skills every fired Run carries (#669). Empty ⇒ none.
+    pub skills: Vec<crate::skill_selection::SkillRef>,
     /// Seeded from the instance default in the create modal and frozen here.
     pub auto_name: bool,
     /// First scheduled fire, computed by the caller from the cron expression.
@@ -262,6 +269,18 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
+    // `skills` — NULLABLE (#669): a NULL row adds no skill at the Run tier.
+    let has_skills =
+        sqlx::query("SELECT 1 FROM pragma_table_info('triggers') WHERE name = 'skills'")
+            .fetch_optional(db)
+            .await?
+            .is_some();
+    if !has_skills {
+        sqlx::query("ALTER TABLE triggers ADD COLUMN skills TEXT")
+            .execute(db)
+            .await?;
+    }
+
     // `target_repos` — NULLABLE: a NULL row fires mono-repo.
     let has_target_repos =
         sqlx::query("SELECT 1 FROM pragma_table_info('triggers') WHERE name = 'target_repos'")
@@ -347,8 +366,8 @@ pub(crate) async fn create(db: &SqlitePool, new: NewTrigger) -> Result<Trigger, 
         "INSERT INTO triggers
             (id, name, pipeline_id, pipeline_name, target_repo, target_repos, source_branch,
              input_template, variables, cron, guard_command, overlap_policy,
-             max_concurrent, sandbox, harness, agent_choice, auto_name, enabled, next_fire_at, last_fired_at, last_outcome, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL, ?)",
+             max_concurrent, sandbox, harness, agent_choice, skills, auto_name, enabled, next_fire_at, last_fired_at, last_outcome, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL, ?)",
     )
     .bind(&id)
     .bind(&new.name)
@@ -370,6 +389,9 @@ pub(crate) async fn create(db: &SqlitePool, new: NewTrigger) -> Result<Trigger, 
             .as_ref()
             .map(|c| serde_json::to_string(c).unwrap_or_default()),
     )
+    .bind(crate::skill_selection::to_stored_json(
+        &crate::skill_selection::normalise(new.skills.clone()),
+    ))
     .bind(if new.auto_name { 1_i64 } else { 0_i64 })
     .bind(&new.next_fire_at)
     .bind(&now)
@@ -406,6 +428,10 @@ fn row_to_trigger(row: &sqlx::sqlite::SqliteRow) -> Trigger {
             .ok()
             .flatten()
             .and_then(|s| serde_json::from_str(&s).ok()),
+        // #669: absence (legacy NULL) or an unparseable value adds no skill.
+        skills: crate::skill_selection::from_stored_json(
+            row.try_get::<Option<String>, _>("skills").unwrap_or(None),
+        ),
         // A legacy NULL reads as auto-name ON.
         auto_name: row.try_get::<i64, _>("auto_name").unwrap_or(1) != 0,
         enabled: row.get::<i64, _>("enabled") != 0,
@@ -580,6 +606,9 @@ pub(crate) struct UpdateTrigger {
     pub harness: Option<Option<String>>,
     /// `Some(None)` clears to NULL = the legacy `harness` tier decides again.
     pub agent_choice: Option<Option<crate::agent_choice::AgentChoice>>,
+    /// Replace the Run-tier skills wholesale (#669). A flat `Option<Vec>`: an
+    /// empty list IS the clear (stored as NULL), there is no third state.
+    pub skills: Option<Vec<crate::skill_selection::SkillRef>>,
     /// A FLAT `Option<bool>`, NOT double-wrapped: there is no "inherit" state to
     /// clear back to; the choice is a plain on/off.
     pub auto_name: Option<bool>,
@@ -606,6 +635,7 @@ impl UpdateTrigger {
             && self.sandbox.is_none()
             && self.harness.is_none()
             && self.agent_choice.is_none()
+            && self.skills.is_none()
             && self.auto_name.is_none()
             && self.next_fire_at.is_none()
             && self.enabled.is_none()
@@ -670,6 +700,9 @@ pub(crate) async fn update(
     if edit.agent_choice.is_some() {
         sets.push("agent_choice = ?");
     }
+    if edit.skills.is_some() {
+        sets.push("skills = ?");
+    }
     if edit.auto_name.is_some() {
         sets.push("auto_name = ?");
     }
@@ -730,6 +763,11 @@ pub(crate) async fn update(
                 .map(|c| serde_json::to_string(c).unwrap_or_default()),
         );
     }
+    if let Some(v) = &edit.skills {
+        query = query.bind(crate::skill_selection::to_stored_json(
+            &crate::skill_selection::normalise(v.clone()),
+        ));
+    }
     if let Some(v) = &edit.auto_name {
         // Never NULL: the column is `NOT NULL DEFAULT 1`.
         query = query.bind(if *v { 1_i64 } else { 0_i64 });
@@ -776,6 +814,7 @@ mod tests {
             sandbox: None,
             harness: None,
             agent_choice: None,
+            skills: Vec::new(),
             auto_name: true,
             next_fire_at: Some("2026-06-06T10:00:00.000Z".to_string()),
         }

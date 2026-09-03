@@ -273,6 +273,7 @@ mod tests {
 
     fn trigger(cron: &str, next_fire_at: Option<&str>) -> Trigger {
         Trigger {
+            skills: Vec::new(),
             id: "trg-1".to_string(),
             name: "t".to_string(),
             pipeline_id: "p".to_string(),

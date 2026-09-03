@@ -872,6 +872,7 @@ mod tests {
 
     fn make_node(id: &str, node_type: NodeType, inputs: &[&str], outputs: &[&str]) -> NodeDef {
         NodeDef {
+            skills: Vec::new(),
             // #653: these fixtures exercise graph wiring, not worktrees — a
             // shared-worktree node keeps them out of `git worktree add` on a
             // scratch dir. Isolation-sensitive tests state `Some(true)`.
@@ -920,6 +921,7 @@ mod tests {
 
     fn make_node_with_repeated_input(id: &str, port_name: &str) -> NodeDef {
         NodeDef {
+            skills: Vec::new(),
             isolated_worktree: None,
             id: id.into(),
             name: id.into(),
@@ -981,6 +983,8 @@ mod tests {
 
     fn running_node(id: &str, iter: i64) -> NodeState {
         NodeState {
+            missing_skills: Vec::new(),
+            skills: None,
             isolated_worktree: None,
             harness: None,
             cost: None,
@@ -1006,6 +1010,8 @@ mod tests {
 
     fn completed_node(id: &str, iter: i64) -> NodeState {
         NodeState {
+            missing_skills: Vec::new(),
+            skills: None,
             isolated_worktree: None,
             harness: None,
             cost: None,
@@ -1031,6 +1037,8 @@ mod tests {
 
     fn pending_node(id: &str) -> NodeState {
         NodeState {
+            missing_skills: Vec::new(),
+            skills: None,
             isolated_worktree: None,
             harness: None,
             cost: None,
@@ -1605,6 +1613,8 @@ mod tests {
     fn completed_node_iters(id: &str, iters: &[(i64, NodeStatus)]) -> NodeState {
         let (head_iter, head_status) = iters.last().cloned().unwrap_or((1, NodeStatus::Pending));
         NodeState {
+            missing_skills: Vec::new(),
+            skills: None,
             isolated_worktree: None,
             harness: None,
             cost: None,

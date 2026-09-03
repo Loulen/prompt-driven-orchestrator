@@ -368,6 +368,8 @@ export default function App() {
       isEditingRun && selectedRun ? `pdo/run-${selectedRun.run_id}` : "HEAD",
     runNode:
       isEditingRun && selection.id ? selectedRun?.nodes?.[selection.id] : null,
+    // #669: the Run tier's frozen skills, shown as inherited in the inspector.
+    runSkills: isEditingRun ? selectedRun?.skills ?? undefined : undefined,
   };
 
   // Both inspector panes are always rendered (with the inactive one hidden

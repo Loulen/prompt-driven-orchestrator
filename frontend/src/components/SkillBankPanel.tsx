@@ -38,7 +38,7 @@ import type {
   SkillRescanReport,
   SkillUpdateEntry,
 } from "../types";
-import { formatSize, timeAgo } from "../lib/skillMd";
+import { timeAgo } from "../lib/skillMd";
 import { displaySourceUrl, shortCommit } from "../lib/skillSource";
 import {
   descendantFolderIds,
@@ -52,6 +52,10 @@ import {
 import SkillTree from "./SkillTree";
 import PasteSkillModal from "./PasteSkillModal";
 import ImportSkillsModal from "./ImportSkillsModal";
+import SkillFilesTab from "./SkillFilesTab";
+import { useSkillFiles } from "../hooks/useSkillFiles";
+import { useFileDropTarget } from "../hooks/useFileDropTarget";
+import { DropOverlay } from "./SkillFileDropZone";
 
 const REMARK_PLUGINS = [remarkGfm];
 const UNDO_MS = 6000;
@@ -112,6 +116,11 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const toastTimer = useRef<number | null>(null);
+  /** Bumped after every file write so the detail (its `files`) is re-read (#671). */
+  const [detailVersion, setDetailVersion] = useState(0);
+  /** The editor holds an unsaved draft: leaving the skill or the tab asks first. */
+  const [filesDirty, setFilesDirty] = useState(false);
+  const [leaveRequest, setLeaveRequest] = useState<(() => void) | null>(null);
 
   const skillById = useMemo(() => new Map(skills.map((skill) => [skill.id, skill])), [skills]);
   const folderById = useMemo(() => new Map(folders.map((folder) => [folder.id, folder])), [folders]);
@@ -142,7 +151,22 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
     return () => {
       cancelled = true;
     };
-  }, [selectedSkillId, selectedSkillVersion]);
+  }, [selectedSkillId, selectedSkillVersion, detailVersion]);
+
+  const refreshDetail = useCallback(() => setDetailVersion((v) => v + 1), []);
+
+  /**
+   * Run `action` now, or — when the file editor is dirty — hand it to the
+   * editor header, which asks Save / Discard / Stay and runs it on the first two
+   * (#671 design 07: "changer de fichier ou de skill … demande d'abord").
+   */
+  const guarded = (action: () => void) => {
+    if (filesDirty) {
+      setLeaveRequest(() => action);
+      return;
+    }
+    action();
+  };
 
   // Close a kebab on outside click / Escape.
   useEffect(() => {
@@ -547,11 +571,13 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
             folders={folders}
             skills={skills}
             selected={selectedRef}
-            onSelect={(ref) => {
-              setSelected(ref);
-              setPending(null);
-              setMenuFor(null);
-            }}
+            onSelect={(ref) =>
+              guarded(() => {
+                setSelected(ref);
+                setPending(null);
+                setMenuFor(null);
+              })
+            }
             expanded={expanded}
             onToggle={(id) =>
               setExpanded((prev) => {
@@ -648,7 +674,16 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
             detail={detail}
             folders={folders}
             tab={detailTab}
-            onTab={setDetailTab}
+            onTab={(tab) => guarded(() => setDetailTab(tab))}
+            existingNames={existingNames}
+            refreshDetail={refreshDetail}
+            onSkillChanged={onChanged}
+            showToast={(message) => showToast({ message })}
+            onError={setError}
+            pathLabel={bank.root_path ? `${relativise(bank.root_path, home)}/${shortId(selectedSkill.id)}/` : null}
+            leaveRequest={leaveRequest}
+            onLeaveSettled={() => setLeaveRequest(null)}
+            onDirtyChange={setFilesDirty}
             copied={copied}
             onCopyId={() => void copyId(selectedSkill.id)}
             onRename={() => startRename({ kind: "skill", id: selectedSkill.id })}
@@ -741,11 +776,13 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
           existingNames={existingNames}
           initialFolderId={selectedFolder?.id ?? selectedSkill?.folder_id ?? null}
           onClose={() => setPasteOpen(false)}
-          onCreated={async (skill) => {
+          onCreated={async (skill, fileCount) => {
             await onChanged();
             expandTo(skill.folder_id ?? null);
             setSelected({ kind: "skill", id: skill.id });
-            setDetailTab("skill");
+            // Files attached: land on the Files tab, so FP #671 step 2 reads
+            // without a click.
+            setDetailTab(fileCount > 0 ? "files" : "skill");
           }}
         />
       )}
@@ -940,6 +977,15 @@ function SkillDetailView({
   folders,
   tab,
   onTab,
+  existingNames,
+  refreshDetail,
+  onSkillChanged,
+  showToast,
+  onError,
+  pathLabel,
+  leaveRequest,
+  onLeaveSettled,
+  onDirtyChange,
   copied,
   onCopyId,
   onRename,
@@ -955,6 +1001,15 @@ function SkillDetailView({
   folders: SkillFolder[];
   tab: "skill" | "files";
   onTab: (tab: "skill" | "files") => void;
+  existingNames: string[];
+  refreshDetail: () => void;
+  onSkillChanged: () => Promise<void>;
+  showToast: (message: string) => void;
+  onError: (message: string) => void;
+  pathLabel: string | null;
+  leaveRequest: (() => void) | null;
+  onLeaveSettled: () => void;
+  onDirtyChange: (dirty: boolean) => void;
   copied: boolean;
   onCopyId: () => void;
   onRename: () => void;
@@ -968,6 +1023,28 @@ function SkillDetailView({
 }) {
   const current = detail && detail.id === skill.id ? detail : null;
   const fileCount = current?.files.length ?? 0;
+  const files = useSkillFiles({
+    skillId: skill.id,
+    skillName: skill.name,
+    detail: current,
+    existingNames,
+    refreshDetail,
+    onSkillChanged,
+    showToast,
+    onError,
+  });
+  useEffect(() => {
+    onDirtyChange(files.dirty);
+  }, [files.dirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
+  // A file drag anywhere over the detail switches to the Files tab and covers
+  // the pane with the drop overlay (#671 design 02/05).
+  const { dragging, handlers: dropHandlers } = useFileDropTarget(
+    (dataTransfer) => void files.acceptDrop(dataTransfer),
+    () => {
+      if (tab !== "files") onTab("files");
+    },
+  );
   const frontmatter = current?.frontmatter ?? null;
   const frontmatterKeys = frontmatter
     ? [
@@ -976,7 +1053,10 @@ function SkillDetailView({
       ]
     : [];
   return (
-    <div className="flex min-h-0 flex-1 flex-col p-5" data-testid="skill-detail">
+    <div className="relative flex min-h-0 flex-1 flex-col p-5" data-testid="skill-detail" {...dropHandlers}>
+      {dragging !== null && (
+        <DropOverlay count={dragging} hint="A SKILL.md replaces the skill text · folders are refused" />
+      )}
       <div className="flex items-baseline gap-2">
         <h3 className="truncate font-semibold text-fg" style={{ fontSize: "17px" }} data-testid="skill-detail-name">
           {skill.name}
@@ -1100,33 +1180,7 @@ function SkillDetailView({
           )}
         </div>
       ) : (
-        <div className="mt-3 flex flex-col gap-1" data-testid="skill-files">
-          <FileRow name="SKILL.md" size={current?.content ? new TextEncoder().encode(current.content).length : null} />
-          {current?.files.map((file) => <FileRow key={file.path} name={file.path} size={file.size} />)}
-          {current && current.files.length === 0 && (
-            <p className="mt-2 text-fg-4" style={{ fontSize: "11px" }}>
-              No reference files. Attaching files arrives in a later ticket.
-            </p>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function FileRow({ name, size }: { name: string; size: number | null }) {
-  return (
-    <div className="flex items-center gap-2 rounded-md border border-line bg-bg-3 px-3 py-2" style={{ fontSize: "11.5px" }}>
-      <FileText size={12} className="shrink-0 text-fg-3" />
-      <span className="font-mono text-fg">{name}</span>
-      <span className="rounded border border-line px-1.5 text-fg-4" style={{ fontSize: "9.5px" }}>
-        read-only
-      </span>
-      <span className="flex-1" />
-      {size !== null && (
-        <span className="font-mono text-fg-4" style={{ fontSize: "10.5px" }}>
-          {formatSize(size)}
-        </span>
+        <SkillFilesTab files={files} pathLabel={pathLabel} leaveRequest={leaveRequest} onLeaveSettled={onLeaveSettled} />
       )}
     </div>
   );
@@ -1493,8 +1547,13 @@ function DeleteSkillConfirm({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  const triggers = referents.triggers ?? [];
   const count =
-    Number(referents.instance) + referents.projects.length + referents.pipelines.length + referents.runs.length;
+    Number(referents.instance) +
+    referents.projects.length +
+    triggers.length +
+    referents.pipelines.length +
+    referents.runs.length;
   return (
     <div className="flex min-h-0 flex-1 flex-col p-5" data-testid="skill-delete">
       <h3 className="font-semibold text-fg" style={{ fontSize: "17px" }}>
@@ -1518,6 +1577,7 @@ function DeleteSkillConfirm({
         {count === 0 && <div>No live references.</div>}
         {referents.instance && <ReferentLine tier="INSTANCE" label="settings" />}
         {referents.projects.map((item) => <ReferentLine key={`p-${item.id}`} tier="PROJECT" label={item.name} />)}
+        {triggers.map((item) => <ReferentLine key={`t-${item.id}`} tier="TRIGGER" label={item.name} />)}
         {referents.pipelines.map((item, i) => (
           <ReferentLine key={`l-${item.id}-${item.node_id ?? i}`} tier="PIPELINE" label={`${item.name}${item.node_id ? ` · node ${item.node_id}` : ""}`} />
         ))}

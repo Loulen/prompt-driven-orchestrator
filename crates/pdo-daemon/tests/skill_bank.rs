@@ -1,0 +1,510 @@
+//! Layer 3a — the Banque de skills over HTTP (#668, ADR-0062).
+//!
+//! A **real daemon** over a tempdir: every assertion is an HTTP response or a
+//! file under `<repo_root>/.pdo/skills/<id>/`, never the shape of a table. Prior
+//! art: the agent-profile and staging-profile suites.
+
+use std::path::Path;
+
+use crate::common::TestDaemon;
+use reqwest::StatusCode;
+
+const VALID: &str = "---\nname: tdd\ndescription: Test-driven development. Red-green-refactor at pre-agreed seams.\nallowed-tools: Bash(npm:*) Bash(cargo:*)\n---\n\n# Test-driven development\n\nRed, green, refactor.\n";
+const NO_DESCRIPTION: &str = "---\nname: tdd\nallowed-tools: Bash(npm:*)\n---\n\n# Test-driven development\n\nRed, green, refactor.\n";
+
+fn skills_root(daemon: &TestDaemon) -> std::path::PathBuf {
+    daemon.repo_root().join(".pdo").join("skills")
+}
+
+async fn post_skill(daemon: &TestDaemon, body: serde_json::Value) -> reqwest::Response {
+    reqwest::Client::new()
+        .post(format!("{}/settings/skills", daemon.url()))
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+}
+
+async fn put_json(daemon: &TestDaemon, path: &str, body: serde_json::Value) -> reqwest::Response {
+    reqwest::Client::new()
+        .put(format!("{}{path}", daemon.url()))
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+}
+
+async fn get_json(daemon: &TestDaemon, path: &str) -> serde_json::Value {
+    reqwest::get(format!("{}{path}", daemon.url()))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
+}
+
+async fn create_valid(daemon: &TestDaemon) -> serde_json::Value {
+    let resp = post_skill(daemon, serde_json::json!({ "content": VALID })).await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    resp.json().await.unwrap()
+}
+
+fn skill_dir_count(root: &Path) -> usize {
+    std::fs::read_dir(root).map(|d| d.count()).unwrap_or(0)
+}
+
+#[tokio::test]
+async fn fp_step_1_a_fresh_instance_has_an_empty_bank() {
+    let daemon = TestDaemon::spawn(|_| Ok(())).await.unwrap();
+    let bank = get_json(&daemon, "/settings/skills").await;
+    assert_eq!(bank["skills"], serde_json::json!([]));
+    assert_eq!(bank["folders"], serde_json::json!([]));
+    // The footer names the disk location: one folder per id under `.pdo/skills`.
+    assert_eq!(
+        bank["root_path"].as_str().unwrap(),
+        skills_root(&daemon).display().to_string()
+    );
+}
+
+#[tokio::test]
+async fn fp_step_2_pasting_a_valid_skill_md_indexes_it_and_writes_its_folder_by_id() {
+    let daemon = TestDaemon::spawn(|_| Ok(())).await.unwrap();
+    let skill = create_valid(&daemon).await;
+    let id = skill["id"].as_str().unwrap();
+    assert_eq!(skill["name"], "tdd");
+    assert_eq!(
+        skill["description"],
+        "Test-driven development. Red-green-refactor at pre-agreed seams."
+    );
+    assert!(skill["folder_id"].is_null());
+
+    // On disk: `<root>/<id>/SKILL.md`, byte-identical to the paste.
+    let on_disk = skills_root(&daemon).join(id).join("SKILL.md");
+    assert_eq!(std::fs::read_to_string(&on_disk).unwrap(), VALID);
+
+    // Listed with its name and description.
+    let bank = get_json(&daemon, "/settings/skills").await;
+    assert_eq!(bank["skills"].as_array().unwrap().len(), 1);
+    assert_eq!(bank["skills"][0]["name"], "tdd");
+
+    // Detail: raw content, parsed frontmatter for the table, body, files (none).
+    let detail = get_json(&daemon, &format!("/settings/skills/{id}")).await;
+    assert_eq!(detail["content"], VALID);
+    assert_eq!(detail["frontmatter"]["name"], "tdd");
+    assert_eq!(
+        detail["frontmatter"]["allowed-tools"],
+        "Bash(npm:*) Bash(cargo:*)"
+    );
+    assert!(detail["body"]
+        .as_str()
+        .unwrap()
+        .starts_with("# Test-driven development"));
+    assert_eq!(detail["files"], serde_json::json!([]));
+    assert_eq!(
+        detail["path"].as_str().unwrap(),
+        skills_root(&daemon).join(id).display().to_string()
+    );
+}
+
+#[tokio::test]
+async fn fp_step_3_missing_description_is_a_400_with_the_reason_and_nothing_on_disk() {
+    let daemon = TestDaemon::spawn(|_| Ok(())).await.unwrap();
+    let resp = post_skill(&daemon, serde_json::json!({ "content": NO_DESCRIPTION })).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["code"], "missing_description");
+    assert!(body["error"].as_str().unwrap().contains("description"));
+
+    // Nothing appears, nothing is written.
+    let bank = get_json(&daemon, "/settings/skills").await;
+    assert_eq!(bank["skills"], serde_json::json!([]));
+    assert_eq!(skill_dir_count(&skills_root(&daemon)), 0);
+}
+
+#[tokio::test]
+async fn every_frontmatter_refusal_is_a_named_400() {
+    let daemon = TestDaemon::spawn(|_| Ok(())).await.unwrap();
+    let cases = [
+        ("# no frontmatter\n\nbody", "no_frontmatter"),
+        ("---\ndescription: x\n---\nbody", "missing_name"),
+        (
+            "---\nname: TDD\ndescription: x\n---\nbody",
+            "name_not_kebab_case",
+        ),
+        ("---\nname: tdd\ndescription: x\n---\n\n", "empty_body"),
+        ("---\nname: [\n---\nbody", "malformed_frontmatter"),
+    ];
+    for (content, code) in cases {
+        let resp = post_skill(&daemon, serde_json::json!({ "content": content })).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{code}");
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["code"], code);
+    }
+    assert_eq!(skill_dir_count(&skills_root(&daemon)), 0);
+}
+
+#[tokio::test]
+async fn a_case_insensitive_name_collision_is_an_explicit_409() {
+    let daemon = TestDaemon::spawn(|_| Ok(())).await.unwrap();
+    let first = create_valid(&daemon).await;
+    // Same frontmatter, a label that differs only by case (the `name` field
+    // overrides the bank label; the frontmatter `name` itself must stay kebab-case).
+    let resp = post_skill(
+        &daemon,
+        serde_json::json!({ "content": VALID, "name": "TDD" }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["code"], "duplicate_name");
+    assert_eq!(body["existing_id"], first["id"]);
+    assert_eq!(body["existing_name"], "tdd");
+    assert!(body["error"].as_str().unwrap().contains("`tdd`"));
+    // The refused paste wrote nothing: one folder only.
+    assert_eq!(skill_dir_count(&skills_root(&daemon)), 1);
+}
+
+#[tokio::test]
+async fn fp_step_4_create_a_folder_and_move_the_skill_into_it() {
+    let daemon = TestDaemon::spawn(|_| Ok(())).await.unwrap();
+    let skill = create_valid(&daemon).await;
+    let id = skill["id"].as_str().unwrap();
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/settings/skill-folders", daemon.url()))
+        .json(&serde_json::json!({ "name": "méthode" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let folder: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(folder["name"], "méthode");
+    assert!(folder["parent_id"].is_null());
+    let folder_id = folder["id"].as_str().unwrap();
+
+    let resp = put_json(
+        &daemon,
+        &format!("/settings/skills/{id}"),
+        serde_json::json!({ "folder_id": folder_id }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let moved: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(moved["folder_id"], folder_id);
+
+    // The tree shows it under the folder; the disk did not move.
+    let bank = get_json(&daemon, "/settings/skills").await;
+    assert_eq!(bank["skills"][0]["folder_id"], folder_id);
+    assert_eq!(bank["folders"][0]["id"], folder_id);
+    assert!(skills_root(&daemon).join(id).join("SKILL.md").exists());
+
+    // Back to the root with an explicit null.
+    let resp = put_json(
+        &daemon,
+        &format!("/settings/skills/{id}"),
+        serde_json::json!({ "folder_id": null }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let back: serde_json::Value = resp.json().await.unwrap();
+    assert!(back["folder_id"].is_null());
+
+    // An unknown folder is refused.
+    let resp = put_json(
+        &daemon,
+        &format!("/settings/skills/{id}"),
+        serde_json::json!({ "folder_id": "skf-nope" }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn fp_step_5_renaming_changes_the_label_only_and_moves_nothing() {
+    let daemon = TestDaemon::spawn(|_| Ok(())).await.unwrap();
+    let skill = create_valid(&daemon).await;
+    let id = skill["id"].as_str().unwrap();
+    let dir = skills_root(&daemon).join(id);
+    let before = std::fs::read_to_string(dir.join("SKILL.md")).unwrap();
+
+    let resp = put_json(
+        &daemon,
+        &format!("/settings/skills/{id}"),
+        serde_json::json!({ "name": "tdd-strict" }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let renamed: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(renamed["id"], id, "the id is the identity");
+    assert_eq!(renamed["name"], "tdd-strict");
+
+    // Same folder, same bytes, frontmatter `name` untouched: the detail is unchanged.
+    assert!(dir.exists());
+    assert_eq!(
+        std::fs::read_to_string(dir.join("SKILL.md")).unwrap(),
+        before
+    );
+    assert_eq!(skill_dir_count(&skills_root(&daemon)), 1);
+    let detail = get_json(&daemon, &format!("/settings/skills/{id}")).await;
+    assert_eq!(detail["name"], "tdd-strict");
+    assert_eq!(detail["frontmatter"]["name"], "tdd");
+
+    // A rename onto another skill's name (any case) is a 409; onto its own is fine.
+    let other = post_skill(
+        &daemon,
+        serde_json::json!({ "content": VALID.replace("name: tdd", "name: grilling") }),
+    )
+    .await;
+    assert_eq!(other.status(), StatusCode::CREATED);
+    let resp = put_json(
+        &daemon,
+        &format!("/settings/skills/{id}"),
+        serde_json::json!({ "name": "Grilling" }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let resp = put_json(
+        &daemon,
+        &format!("/settings/skills/{id}"),
+        serde_json::json!({ "name": "TDD-Strict" }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn fp_step_6_referents_are_empty_and_delete_removes_row_and_folder() {
+    let daemon = TestDaemon::spawn(|_| Ok(())).await.unwrap();
+    let skill = create_valid(&daemon).await;
+    let id = skill["id"].as_str().unwrap();
+    let dir = skills_root(&daemon).join(id);
+
+    // The dialog reads the referents first: the endpoint exists, shaped by tier, empty.
+    let referents = get_json(&daemon, &format!("/settings/skills/{id}/referents")).await;
+    assert_eq!(referents["skill_id"], id);
+    assert_eq!(referents["instance"], false);
+    assert_eq!(referents["projects"], serde_json::json!([]));
+    assert_eq!(referents["pipelines"], serde_json::json!([]));
+    assert_eq!(referents["runs"], serde_json::json!([]));
+
+    let resp = reqwest::Client::new()
+        .delete(format!("{}/settings/skills/{id}", daemon.url()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    assert!(!dir.exists(), "the folder on disk is removed");
+    let bank = get_json(&daemon, "/settings/skills").await;
+    assert_eq!(bank["skills"], serde_json::json!([]));
+
+    // Gone means gone: 404 on every route for that id.
+    let resp = reqwest::get(format!("{}/settings/skills/{id}", daemon.url()))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let resp = reqwest::get(format!("{}/settings/skills/{id}/referents", daemon.url()))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let resp = reqwest::Client::new()
+        .delete(format!("{}/settings/skills/{id}", daemon.url()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn folder_crud_nests_renames_and_deleting_moves_content_to_the_parent() {
+    let daemon = TestDaemon::spawn(|_| Ok(())).await.unwrap();
+    let client = reqwest::Client::new();
+    let mk = |name: &str, parent: Option<&str>| {
+        let client = client.clone();
+        let url = format!("{}/settings/skill-folders", daemon.url());
+        let body = serde_json::json!({ "name": name, "parent_id": parent });
+        async move {
+            let resp = client.post(url).json(&body).send().await.unwrap();
+            assert_eq!(resp.status(), StatusCode::CREATED);
+            resp.json::<serde_json::Value>().await.unwrap()
+        }
+    };
+    let ippon = mk("ippon", None).await;
+    let ippon_id = ippon["id"].as_str().unwrap();
+    let java = mk("java", Some(ippon_id)).await;
+    let java_id = java["id"].as_str().unwrap();
+    assert_eq!(java["parent_id"], ippon_id);
+
+    // A skill inside `java`.
+    let resp = post_skill(
+        &daemon,
+        serde_json::json!({ "content": VALID, "folder_id": java_id }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let skill: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(skill["folder_id"], java_id);
+
+    // Rename the folder.
+    let resp = put_json(
+        &daemon,
+        &format!("/settings/skill-folders/{java_id}"),
+        serde_json::json!({ "name": "java-spring" }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let renamed: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(renamed["name"], "java-spring");
+
+    // A cycle is refused; a blank name too; an unknown parent too.
+    let resp = put_json(
+        &daemon,
+        &format!("/settings/skill-folders/{ippon_id}"),
+        serde_json::json!({ "parent_id": java_id }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let resp = client
+        .post(format!("{}/settings/skill-folders", daemon.url()))
+        .json(&serde_json::json!({ "name": "  " }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let resp = client
+        .post(format!("{}/settings/skill-folders", daemon.url()))
+        .json(&serde_json::json!({ "name": "x", "parent_id": "skf-nope" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // Listed.
+    let listed = get_json(&daemon, "/settings/skill-folders").await;
+    assert_eq!(listed["folders"].as_array().unwrap().len(), 2);
+
+    // Delete `java`: its skill moves up to `ippon`; the skill itself survives.
+    let resp = client
+        .delete(format!("{}/settings/skill-folders/{java_id}", daemon.url()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    let bank = get_json(&daemon, "/settings/skills").await;
+    assert_eq!(bank["folders"].as_array().unwrap().len(), 1);
+    assert_eq!(bank["skills"][0]["folder_id"], ippon_id);
+    assert!(skills_root(&daemon)
+        .join(skill["id"].as_str().unwrap())
+        .join("SKILL.md")
+        .exists());
+
+    // Deleting `ippon` sends the skill to the root.
+    let resp = client
+        .delete(format!(
+            "{}/settings/skill-folders/{ippon_id}",
+            daemon.url()
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    let bank = get_json(&daemon, "/settings/skills").await;
+    assert!(bank["skills"][0]["folder_id"].is_null());
+    let resp = client
+        .delete(format!(
+            "{}/settings/skill-folders/{ippon_id}",
+            daemon.url()
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn reference_files_on_disk_are_listed_read_only_in_the_detail() {
+    let daemon = TestDaemon::spawn(|_| Ok(())).await.unwrap();
+    let skill = create_valid(&daemon).await;
+    let id = skill["id"].as_str().unwrap();
+    let dir = skills_root(&daemon).join(id);
+    std::fs::write(dir.join("checklist.md"), "- [ ] one\n").unwrap();
+    std::fs::create_dir_all(dir.join("ref")).unwrap();
+    std::fs::write(dir.join("ref").join("a.txt"), "12345").unwrap();
+
+    let detail = get_json(&daemon, &format!("/settings/skills/{id}")).await;
+    assert_eq!(
+        detail["files"],
+        serde_json::json!([
+            { "path": "checklist.md", "size": 10 },
+            { "path": "ref/a.txt", "size": 5 },
+        ])
+    );
+}
+
+#[tokio::test]
+async fn the_bank_survives_a_daemon_restart() {
+    // The index is in `pdo.db`, the content on disk: both are under the repo root,
+    // so a fresh daemon over the same directory sees the same bank. Two daemons
+    // are booted in turn over ONE tempdir with `serve_with_config` directly (the
+    // `TestDaemon` constructors each own a fresh tempdir).
+    use pdo_daemon::{serve_with_config, DaemonConfig};
+    use std::net::SocketAddr;
+
+    let tempdir = tempfile::tempdir().unwrap();
+    let config = || DaemonConfig {
+        tmux_cmd_override: Some("exec sleep 600".to_string()),
+        panic_on_trigger_name: None,
+        panic_on_stale_sweep: false,
+        panic_on_spawn: false,
+        service_health_override: None,
+        docker_cmd_override: None,
+        sandbox_home_override: None,
+        price_source_url: None,
+        price_refresh_at_boot: false,
+        allowed_ws_origins: Vec::new(),
+        run_trigger_scheduler_loop: false,
+        nested_daemon: true,
+    };
+
+    let first = serve_with_config(
+        SocketAddr::from(([127, 0, 0, 1], 0)),
+        tempdir.path().to_path_buf(),
+        config(),
+    )
+    .await
+    .unwrap();
+    let url = format!("http://{}", first.addr);
+    let resp = reqwest::Client::new()
+        .post(format!("{url}/settings/skills"))
+        .json(&serde_json::json!({ "content": VALID }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let skill: serde_json::Value = resp.json().await.unwrap();
+    let id = skill["id"].as_str().unwrap().to_string();
+    first.task.abort();
+
+    let second = serve_with_config(
+        SocketAddr::from(([127, 0, 0, 1], 0)),
+        tempdir.path().to_path_buf(),
+        config(),
+    )
+    .await
+    .unwrap();
+    let url = format!("http://{}", second.addr);
+    let bank: serde_json::Value = reqwest::get(format!("{url}/settings/skills"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(bank["skills"][0]["id"], id);
+    let detail: serde_json::Value = reqwest::get(format!("{url}/settings/skills/{id}"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(detail["content"], VALID);
+    second.task.abort();
+}

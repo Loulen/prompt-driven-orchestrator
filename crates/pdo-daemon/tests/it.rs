@@ -143,6 +143,9 @@ mod sandbox_observability;
 #[path = "sandbox_profiles.rs"]
 mod sandbox_profiles;
 
+#[path = "skill_bank.rs"]
+mod skill_bank;
+
 #[path = "sandbox_tracer.rs"]
 mod sandbox_tracer;
 

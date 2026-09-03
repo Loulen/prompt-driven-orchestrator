@@ -508,3 +508,362 @@ async fn the_bank_survives_a_daemon_restart() {
     assert_eq!(detail["content"], VALID);
     second.task.abort();
 }
+
+// ---------------------------------------------------------------------------
+// Reference files (#671): upload, read, edit, delete — always inside the folder.
+// ---------------------------------------------------------------------------
+
+/// A hand-rolled multipart body: `reqwest` is built without its `multipart`
+/// feature here, and the wire format is short enough to spell out.
+fn multipart_body(parts: &[(&str, Option<&str>, &[u8])]) -> (String, Vec<u8>) {
+    let boundary = "----pdo-test-boundary-671";
+    let mut body = Vec::new();
+    for (name, filename, data) in parts {
+        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        match filename {
+            Some(filename) => body.extend_from_slice(
+                format!(
+                    "Content-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\n\
+                     Content-Type: application/octet-stream\r\n\r\n"
+                )
+                .as_bytes(),
+            ),
+            None => body.extend_from_slice(
+                format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes(),
+            ),
+        }
+        body.extend_from_slice(data);
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    (format!("multipart/form-data; boundary={boundary}"), body)
+}
+
+async fn upload(
+    daemon: &TestDaemon,
+    id: &str,
+    parts: &[(&str, Option<&str>, &[u8])],
+) -> reqwest::Response {
+    let (content_type, body) = multipart_body(parts);
+    reqwest::Client::new()
+        .post(format!("{}/settings/skills/{id}/files", daemon.url()))
+        .header("content-type", content_type)
+        .body(body)
+        .send()
+        .await
+        .unwrap()
+}
+
+async fn put_text(daemon: &TestDaemon, path: &str, text: &str) -> reqwest::Response {
+    reqwest::Client::new()
+        .put(format!("{}{path}", daemon.url()))
+        .header("content-type", "text/plain; charset=utf-8")
+        .body(text.to_string())
+        .send()
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn fp_671_step_1_2_multipart_upload_writes_the_files_and_the_detail_lists_them() {
+    let daemon = TestDaemon::spawn(|_| Ok(())).await.unwrap();
+    let skill = create_valid(&daemon).await;
+    let id = skill["id"].as_str().unwrap();
+
+    let resp = upload(
+        &daemon,
+        id,
+        &[
+            ("file", Some("selectors-cheatsheet.md"), b"# Selectors\n"),
+            // A `path` part right before a `file` part overrides the filename:
+            // this is how a browser keeps `examples/login.spec.ts` (webkitRelativePath).
+            ("path", None, b"examples/login.spec.ts"),
+            ("file", Some("login.spec.ts"), b"test('login', () => {});\n"),
+        ],
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["uploaded"],
+        serde_json::json!([
+            { "path": "selectors-cheatsheet.md", "size": 12 },
+            { "path": "examples/login.spec.ts", "size": 25 },
+        ])
+    );
+    assert_eq!(body["files"].as_array().unwrap().len(), 2);
+
+    // Verify (FP): the disk confirms the tree of the skill.
+    let dir = skills_root(&daemon).join(id);
+    assert_eq!(
+        std::fs::read_to_string(dir.join("selectors-cheatsheet.md")).unwrap(),
+        "# Selectors\n"
+    );
+    assert!(dir.join("examples").join("login.spec.ts").is_file());
+
+    let detail = get_json(&daemon, &format!("/settings/skills/{id}")).await;
+    assert_eq!(
+        detail["files"],
+        serde_json::json!([
+            { "path": "examples/login.spec.ts", "size": 25 },
+            { "path": "selectors-cheatsheet.md", "size": 12 },
+        ])
+    );
+}
+
+#[tokio::test]
+async fn fp_671_step_3_from_path_copies_the_explorer_pick_and_delete_removes_one_file() {
+    let daemon = TestDaemon::spawn(|_| Ok(())).await.unwrap();
+    let skill = create_valid(&daemon).await;
+    let id = skill["id"].as_str().unwrap();
+    upload(&daemon, id, &[("file", Some("first.md"), b"1")]).await;
+
+    // The explorer path: the daemon copies from the host.
+    let src = tempfile::tempdir().unwrap();
+    std::fs::write(src.path().join("notes.md"), "some notes").unwrap();
+    let resp = reqwest::Client::new()
+        .post(format!("{}/settings/skills/{id}/files", daemon.url()))
+        .json(&serde_json::json!({ "from_path": src.path().join("notes.md") }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["uploaded"],
+        serde_json::json!([{ "path": "notes.md", "size": 10 }])
+    );
+
+    // A folder is refused in place, nothing written.
+    let resp = reqwest::Client::new()
+        .post(format!("{}/settings/skills/{id}/files", daemon.url()))
+        .json(&serde_json::json!({ "from_path": src.path() }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["code"], "source_not_a_file");
+
+    // Delete the first one.
+    let resp = reqwest::Client::new()
+        .delete(format!(
+            "{}/settings/skills/{id}/files/first.md",
+            daemon.url()
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    assert!(!skills_root(&daemon).join(id).join("first.md").exists());
+    let detail = get_json(&daemon, &format!("/settings/skills/{id}")).await;
+    assert_eq!(
+        detail["files"],
+        serde_json::json!([{ "path": "notes.md", "size": 10 }])
+    );
+
+    // Deleting it again is a 404, not a 500.
+    let resp = reqwest::Client::new()
+        .delete(format!(
+            "{}/settings/skills/{id}/files/first.md",
+            daemon.url()
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn paths_leaving_the_skill_folder_are_a_400_and_skill_md_is_reserved() {
+    let daemon = TestDaemon::spawn(|_| Ok(())).await.unwrap();
+    let skill = create_valid(&daemon).await;
+    let id = skill["id"].as_str().unwrap();
+    let root = skills_root(&daemon);
+
+    for bad in ["../escape.md", "a/../../escape.md", "/etc/escape.md"] {
+        let resp = upload(
+            &daemon,
+            id,
+            &[
+                ("path", None, bad.as_bytes()),
+                ("file", Some("x"), b"pwned"),
+            ],
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{bad}");
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["code"], "invalid_path", "{bad}");
+    }
+    assert!(!root.join("escape.md").exists());
+    assert!(!daemon.repo_root().join(".pdo").join("escape.md").exists());
+
+    // The wildcard route cannot express `..` after normalisation, but a DELETE on
+    // an encoded traversal must still be refused, not resolved.
+    let resp = reqwest::Client::new()
+        .delete(format!(
+            "{}/settings/skills/{id}/files/..%2Fother",
+            daemon.url()
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        resp.status() == StatusCode::BAD_REQUEST || resp.status() == StatusCode::NOT_FOUND,
+        "got {}",
+        resp.status()
+    );
+
+    // SKILL.md is not a reference file: upload and delete are refused, the text
+    // on disk is untouched.
+    let resp = upload(&daemon, id, &[("file", Some("SKILL.md"), b"replaced")]).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["code"], "skill_md_reserved");
+    assert_eq!(
+        std::fs::read_to_string(root.join(id).join("SKILL.md")).unwrap(),
+        VALID
+    );
+    let resp = reqwest::Client::new()
+        .delete(format!(
+            "{}/settings/skills/{id}/files/SKILL.md",
+            daemon.url()
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert!(root.join(id).join("SKILL.md").is_file());
+}
+
+#[tokio::test]
+async fn a_file_over_10_mb_is_a_413_and_the_files_before_it_stay() {
+    let daemon = TestDaemon::spawn(|_| Ok(())).await.unwrap();
+    let skill = create_valid(&daemon).await;
+    let id = skill["id"].as_str().unwrap();
+    let big = vec![b'x'; 10 * 1024 * 1024 + 1];
+    let resp = upload(
+        &daemon,
+        id,
+        &[
+            ("file", Some("small.md"), b"ok"),
+            ("file", Some("big.bin"), &big),
+        ],
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["code"], "file_too_large");
+    assert!(body["error"].as_str().unwrap().contains("10 MB limit"));
+    // The batch stops at the refusal; what landed is reported.
+    assert_eq!(
+        body["uploaded"],
+        serde_json::json!([{ "path": "small.md", "size": 2 }])
+    );
+    assert!(!skills_root(&daemon).join(id).join("big.bin").exists());
+}
+
+#[tokio::test]
+async fn a_file_is_read_and_edited_as_plain_text_and_binaries_are_flagged() {
+    let daemon = TestDaemon::spawn(|_| Ok(())).await.unwrap();
+    let skill = create_valid(&daemon).await;
+    let id = skill["id"].as_str().unwrap();
+    upload(
+        &daemon,
+        id,
+        &[
+            ("file", Some("notes.md"), b"# Notes\n"),
+            (
+                "file",
+                Some("logo.png"),
+                &[0x89, b'P', b'N', b'G', 0xff, 0xfe],
+            ),
+        ],
+    )
+    .await;
+
+    let file = get_json(&daemon, &format!("/settings/skills/{id}/files/notes.md")).await;
+    assert_eq!(file["text"], "# Notes\n");
+    assert_eq!(file["binary"], false);
+    assert_eq!(file["size"], 8);
+
+    let png = get_json(&daemon, &format!("/settings/skills/{id}/files/logo.png")).await;
+    assert_eq!(png["binary"], true);
+    assert!(png["text"].is_null());
+
+    // SKILL.md is readable through the same seam (the editor opens it too).
+    let md = get_json(&daemon, &format!("/settings/skills/{id}/files/SKILL.md")).await;
+    assert_eq!(md["text"], VALID);
+
+    // Save the editor's text.
+    let resp = put_text(
+        &daemon,
+        &format!("/settings/skills/{id}/files/notes.md"),
+        "# Notes\n\nEdited.\n",
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        std::fs::read_to_string(skills_root(&daemon).join(id).join("notes.md")).unwrap(),
+        "# Notes\n\nEdited.\n"
+    );
+    // Saving a file that does not exist is a 404 (the editor never creates).
+    let resp = put_text(
+        &daemon,
+        &format!("/settings/skills/{id}/files/ghost.md"),
+        "x",
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    // A 404 skill.
+    let resp = put_text(&daemon, "/settings/skills/nope/files/notes.md", "x").await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn saving_skill_md_reruns_the_five_checks_and_refuses_without_writing() {
+    let daemon = TestDaemon::spawn(|_| Ok(())).await.unwrap();
+    let skill = create_valid(&daemon).await;
+    let id = skill["id"].as_str().unwrap();
+    let path = format!("/settings/skills/{id}/files/SKILL.md");
+
+    let resp = put_text(&daemon, &path, NO_DESCRIPTION).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["code"], "missing_description");
+    assert_eq!(
+        std::fs::read_to_string(skills_root(&daemon).join(id).join("SKILL.md")).unwrap(),
+        VALID
+    );
+
+    let edited = VALID.replace("Red-green-refactor at pre-agreed seams.", "Edited by drop.");
+    let resp = put_text(&daemon, &path, &edited).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["skill"]["description"],
+        "Test-driven development. Edited by drop."
+    );
+    assert_eq!(body["skill"]["name"], "tdd");
+    assert_eq!(
+        std::fs::read_to_string(skills_root(&daemon).join(id).join("SKILL.md")).unwrap(),
+        edited
+    );
+    let detail = get_json(&daemon, &format!("/settings/skills/{id}")).await;
+    assert_eq!(
+        detail["description"],
+        "Test-driven development. Edited by drop."
+    );
+    assert_eq!(detail["content"], edited);
+}
+
+#[tokio::test]
+async fn file_endpoints_on_an_unknown_skill_are_404() {
+    let daemon = TestDaemon::spawn(|_| Ok(())).await.unwrap();
+    let resp = upload(&daemon, "nope", &[("file", Some("a.md"), b"a")]).await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let resp = reqwest::get(format!("{}/settings/skills/nope/files/a.md", daemon.url()))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}

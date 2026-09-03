@@ -1479,10 +1479,26 @@ export interface SkillBank {
   root_path: string;
 }
 
-/** A reference file of a skill, listed read-only. */
+/** A reference file of a skill (anything in its folder but `SKILL.md`). */
 export interface SkillFile {
+  /** Relative to the skill folder, `/`-separated; sub-folders are kept. */
   path: string;
   size: number;
+}
+
+/** `GET /settings/skills/{id}/files/{path}`: one file for the plain-text editor (#671). */
+export interface SkillFileContent {
+  path: string;
+  size: number;
+  /** `true` when the bytes are not UTF-8: `text` is `null` and the editor says so. */
+  binary: boolean;
+  text: string | null;
+}
+
+/** `POST /settings/skills/{id}/files`: what landed, and the whole list after. */
+export interface SkillFilesUpload {
+  uploaded: SkillFile[];
+  files: SkillFile[];
 }
 
 /** `GET /settings/skills/{id}`: the row plus its content. */

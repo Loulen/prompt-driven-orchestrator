@@ -10,6 +10,16 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.52.0
+
+**Fichiers de référence d'un skill** (#671 ; story #666, spec #667 ; ADR-0062). Un skill peut
+embarquer des fichiers à côté de son `SKILL.md` : glisser-déposer dans la modale de collage
+(fichiers stagés avant la création, « Create skill + N files ») ou dans l'onglet *Files* du détail,
+explorateur multi-sélection (chemin hôte), suppression avec confirmation inline, édition texte brut
+avec sauvegarde explicite (`⌘S`). Un `SKILL.md` déposé remplace le texte courant (annulable). Limite
+10 MB par fichier, sous-dossiers conservés, chemins traversants refusés. API REST sous
+`/settings/skills/{id}/files`.
+
 ## 1.51.0
 
 **Banque de skills** (#668 ; story #666, spec #667 ; ADR-0062). L'instance gère une banque de

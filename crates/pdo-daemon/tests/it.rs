@@ -146,6 +146,9 @@ mod sandbox_profiles;
 #[path = "skill_bank.rs"]
 mod skill_bank;
 
+#[path = "skill_delivery.rs"]
+mod skill_delivery;
+
 #[path = "sandbox_tracer.rs"]
 mod sandbox_tracer;
 

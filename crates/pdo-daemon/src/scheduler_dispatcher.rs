@@ -122,6 +122,7 @@ mod tests {
     fn running_node(id: &str) -> NodeState {
         NodeState {
             missing_skills: Vec::new(),
+            skipped_skills: Vec::new(),
             skills: None,
             isolated_worktree: None,
             harness: None,
@@ -144,6 +145,7 @@ mod tests {
     fn waiting_node(id: &str, iter: i64) -> NodeState {
         NodeState {
             missing_skills: Vec::new(),
+            skipped_skills: Vec::new(),
             skills: None,
             isolated_worktree: None,
             harness: None,
@@ -191,6 +193,7 @@ mod tests {
     fn completed_node(id: &str) -> NodeState {
         NodeState {
             missing_skills: Vec::new(),
+            skipped_skills: Vec::new(),
             skills: None,
             isolated_worktree: None,
             harness: None,

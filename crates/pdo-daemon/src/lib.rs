@@ -73,6 +73,7 @@ mod scheduler_dispatcher;
 mod scheduler_interpreter;
 mod service_unit;
 mod skill_bank;
+mod skill_import;
 mod skill_selection;
 pub mod stale_detector;
 mod stats;
@@ -4065,6 +4066,24 @@ fn build_router(state: Arc<AppState>) -> Router {
             get(get_skill).put(update_skill).delete(delete_skill),
         )
         .route("/settings/skills/{id}/referents", get(get_skill_referents))
+        // Import from a Source (#670): scan (clone + walk + collisions), import,
+        // and the per-folder rescan / update. Fixed segments sit under
+        // `/settings/skills/` but never collide with a skill id (UUIDs).
+        .route("/settings/skills/scan", post(scan_skill_source))
+        .route(
+            "/settings/skills/scan/{scan_id}/cancel",
+            post(cancel_skill_scan),
+        )
+        .route("/settings/skills/import", post(import_skills))
+        .route("/settings/skills/sources/recent", get(recent_skill_sources))
+        .route(
+            "/settings/skill-folders/{id}/rescan",
+            post(rescan_skill_folder),
+        )
+        .route(
+            "/settings/skill-folders/{id}/update",
+            post(update_skill_folder_from_source),
+        )
         // Reference files (#671): upload (multipart from the browser, or
         // `{ "from_path" }` from the explorer), read / overwrite as plain text,
         // delete. `{*path}` keeps sub-folders (`examples/login.spec.ts`); the
@@ -10386,6 +10405,189 @@ async fn delete_skill_folder(
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => skill_folder_not_found_response(),
         Err(error) => skill_error_response(error),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Import from a Source (#670)
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct ScanSkillSourceRequest {
+    /// Client-chosen id; the clone is kept under it for the import that follows
+    /// and `POST …/scan/{id}/cancel` kills it.
+    scan_id: String,
+    source: String,
+}
+
+#[derive(Deserialize)]
+struct ImportSkillsRequest {
+    scan_id: String,
+    source: String,
+    #[serde(default)]
+    folder: Option<skill_import::ImportFolder>,
+    items: Vec<skill_import::ImportItem>,
+}
+
+#[derive(Deserialize)]
+struct RescanSkillFolderRequest {
+    scan_id: String,
+}
+
+#[derive(Deserialize)]
+struct UpdateSkillFolderFromSourceRequest {
+    scan_id: String,
+    items: Vec<skill_import::UpdateItem>,
+}
+
+fn import_error_response(error: skill_import::ImportError) -> Response {
+    use skill_import::ImportError as E;
+    if let E::Skill(inner) = error {
+        return skill_error_response(inner);
+    }
+    let status = match &error {
+        E::CloneFailed(_) | E::CloneTimeout => StatusCode::BAD_GATEWAY,
+        E::Cancelled => StatusCode::from_u16(499).unwrap_or(StatusCode::BAD_REQUEST),
+        E::ScanExpired => StatusCode::GONE,
+        E::NotASourceFolder | E::UnknownCandidate(_) | E::UnresolvedCollision(_) => {
+            StatusCode::CONFLICT
+        }
+        E::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        E::EmptySource | E::InvalidSource(_) | E::LocalNotFound(_) => StatusCode::BAD_REQUEST,
+        E::Skill(_) => unreachable!("handled above"),
+    };
+    (
+        status,
+        Json(serde_json::json!({
+            "error": error.to_string(),
+            "code": skill_import::error_code(&error),
+        })),
+    )
+        .into_response()
+}
+
+fn daemon_home() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(PathBuf::from)
+}
+
+/// `POST /settings/skills/scan` — clone shallow (or open a local folder), walk
+/// it for `SKILL.md`s, validate each, and report collisions with the bank.
+/// Nothing is written to the bank.
+async fn scan_skill_source(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ScanSkillSourceRequest>,
+) -> Response {
+    let source = match skill_import::parse_source(&req.source, daemon_home().as_deref()) {
+        Ok(source) => source,
+        Err(error) => return import_error_response(error),
+    };
+    let outcome = match skill_import::scan(&req.scan_id, source).await {
+        Ok(outcome) => outcome,
+        Err(error) => return import_error_response(error),
+    };
+    let candidates = match skill_import::with_collisions(
+        &state.db,
+        &outcome.source,
+        outcome.commit.as_deref(),
+        outcome.candidates,
+    )
+    .await
+    {
+        Ok(candidates) => candidates,
+        Err(error) => return import_error_response(error),
+    };
+    let _ = skill_bank::remember_source(
+        &state.db,
+        &outcome.source.url,
+        outcome.source.git_ref.as_deref(),
+        &outcome.source.path,
+    )
+    .await;
+    Json(serde_json::json!({
+        "scan_id": req.scan_id,
+        "source": outcome.source,
+        "commit": outcome.commit,
+        "candidates": candidates,
+        "elsewhere": outcome.elsewhere,
+        "elsewhere_count": outcome.elsewhere_count,
+    }))
+    .into_response()
+}
+
+async fn cancel_skill_scan(AxumPath(scan_id): AxumPath<String>) -> Response {
+    let cancelled = skill_import::cancel_scan(&scan_id);
+    Json(serde_json::json!({ "cancelled": cancelled })).into_response()
+}
+
+/// `POST /settings/skills/import` — write the checked candidates into a Source
+/// folder (new or given), with the explicit per-collision choice.
+async fn import_skills(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ImportSkillsRequest>,
+) -> Response {
+    let source = match skill_import::parse_source(&req.source, daemon_home().as_deref()) {
+        Ok(source) => source,
+        Err(error) => return import_error_response(error),
+    };
+    let folder = req.folder.unwrap_or(skill_import::ImportFolder {
+        id: None,
+        name: None,
+        parent_id: None,
+    });
+    match skill_import::import(
+        &state.db,
+        &state.repo_root,
+        &req.scan_id,
+        source,
+        folder,
+        req.items,
+    )
+    .await
+    {
+        Ok(report) => Json(report).into_response(),
+        Err(error) => import_error_response(error),
+    }
+}
+
+async fn recent_skill_sources(State(state): State<Arc<AppState>>) -> Response {
+    match skill_bank::recent_sources(&state.db).await {
+        Ok(sources) => Json(serde_json::json!({ "sources": sources })).into_response(),
+        Err(error) => storage_error_response(error),
+    }
+}
+
+/// `POST /settings/skill-folders/{id}/rescan` — re-clone the folder's source
+/// and diff it against the folder's skills. Read-only on the bank.
+async fn rescan_skill_folder(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<RescanSkillFolderRequest>,
+) -> Response {
+    match skill_bank::get_folder(&state.db, &id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return skill_folder_not_found_response(),
+        Err(error) => return storage_error_response(error),
+    }
+    match skill_import::rescan(&state.db, &state.repo_root, &id, &req.scan_id).await {
+        Ok(report) => Json(report).into_response(),
+        Err(error) => import_error_response(error),
+    }
+}
+
+/// `POST /settings/skill-folders/{id}/update` — apply the confirmed diff.
+async fn update_skill_folder_from_source(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<UpdateSkillFolderFromSourceRequest>,
+) -> Response {
+    match skill_bank::get_folder(&state.db, &id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return skill_folder_not_found_response(),
+        Err(error) => return storage_error_response(error),
+    }
+    match skill_import::update(&state.db, &state.repo_root, &id, &req.scan_id, req.items).await {
+        Ok(report) => Json(report).into_response(),
+        Err(error) => import_error_response(error),
     }
 }
 

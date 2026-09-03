@@ -10,6 +10,30 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.54.0
+
+**Import de skills depuis une Source** (#670 ; story #666, spec #667). Depuis la banque, *+ Add ▾ ›
+Import from a source…* accepte une URL de dépôt GitHub (racine, branche, `/tree/<branche>/<chemin>`),
+une URL SSH ou un dossier local : PDO clone en shallow avec les credentials git de l'utilisateur du
+daemon, scanne récursivement les `SKILL.md`, valide chaque frontmatter et présente une liste cochable
+(invalides grisés avec la raison, collisions de nom à résoudre explicitement : remplacer / renommer /
+ignorer — rien n'est écrit tant qu'un choix manque). Les skills cochés atterrissent dans un **dossier
+Source** nommé d'après la Source, qui porte sa provenance (URL, ref, commit, chemin) ; chaque skill
+importé garde la sienne, même déplacé. *Update from source…* re-scanne, montre le diff (mis à jour,
+inchangé, nouveau à la source, sorti du dossier, disparu) et met à jour après confirmation. Les
+fichiers de référence sont copiés intégralement. Endpoints : `POST /settings/skills/scan`,
+`/import`, `/settings/skill-folders/{id}/rescan`, `/update`. Schéma : la provenance des skills passe
+de `(source, source_commit)` à un objet `{url, ref, commit, path}` (colonnes additives, base 1.51
+lisible telle quelle).
+
+Retouches après le Feature Path #670 : *Update from source* ne touche que les skills du dossier
+ciblé (deux dossiers importés du même dépôt ne s'écrasent plus l'un l'autre ; un skill de la même
+source rangé ailleurs est signalé « already in “<dossier>” ») ; le clone d'un scan est isolé par
+processus daemon ; un skill « same commit » coché propose remplacer / renommer / ignorer au lieu
+d'échouer à l'import ; la modale avertit quand un dossier homonyme existe déjà à la destination et
+propose d'importer dedans ; `Esc` ferme la modale après un import partiel ; le diff d'update libelle
+« N reference files changed ».
+
 ## 1.53.0
 
 **Skills : sélection par tier et skills effectifs avec origine** (#669 ; story #666, spec #667 ;

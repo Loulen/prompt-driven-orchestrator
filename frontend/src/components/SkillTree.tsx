@@ -325,8 +325,18 @@ function TreeRowView({
           </span>
         )}
         {isFolder && !renaming && (
-          <span className="shrink-0 font-mono text-fg-4 group-hover:hidden" style={{ fontSize: "10px" }}>
-            {row.count}
+          <span className="flex shrink-0 items-center gap-1.5 group-hover:hidden">
+            {row.folder?.source && (
+              <span
+                className="h-2 w-2 rounded-full border-[1.5px] border-acc"
+                title={`Imported from ${row.folder.source.url}`}
+                aria-label="Source folder"
+                data-testid={`tree-source-${row.ref.id}`}
+              />
+            )}
+            <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
+              {row.count}
+            </span>
           </span>
         )}
         {!renaming && actions && (

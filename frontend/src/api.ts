@@ -1456,7 +1456,7 @@ async function sidecarBlob(resp: Response, label: string): Promise<Blob | null> 
 /// What the import did to the Banque de skills (#673): created ids (same ids as
 /// the document), ids the bank already knew (untouched), labels that had to be
 /// suffixed, and ids found neither in the bank nor in the sidecar.
-export interface SkillImportReport {
+export interface SkillSidecarImportReport {
   created: SkillRef[];
   kept: SkillRef[];
   renamed: { id: string; from: string; to: string }[];
@@ -1473,7 +1473,7 @@ export interface ImportPipelineDocumentResult {
   /// document does not define, and the skills the import renamed or could not
   /// find (#673).
   warnings: string[];
-  skills?: SkillImportReport;
+  skills?: SkillSidecarImportReport;
 }
 
 /// `skillsSidecar` is the base64 of the sidecar zip PDO exported (or of the

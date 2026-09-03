@@ -73,6 +73,7 @@ mod scheduler_dispatcher;
 mod scheduler_interpreter;
 mod service_unit;
 mod skill_bank;
+mod skill_delivery;
 mod skill_import;
 mod skill_selection;
 pub mod stale_detector;
@@ -8050,6 +8051,48 @@ async fn create_run_inner(
     if !run_skills.is_empty() {
         run_payload["skills"] = serde_json::to_value(&run_skills).unwrap_or_default();
     }
+    // #672 / ADR-0062: FREEZE the resolved instance + Projet + Run selection (ids,
+    // bank names, origin tiers) — the base every node spawn of this Run adds its own
+    // tier to. The bank's names are read once here; a later rename or edit of the
+    // bank never reaches this Run (its content is snapshotted below). Written only
+    // when non-empty so a Run selecting nothing keeps the historical payload shape.
+    // An id the bank does not know is a warning on the Run, never a refusal.
+    let frozen_skills = {
+        let instance_skills = instance_config::get(&state.db)
+            .await
+            .map(|c| c.skills)
+            .unwrap_or_default();
+        let project_skills =
+            crate::project_store::skills_for_path(&state.db, &run_repo_root.to_string_lossy())
+                .await
+                .unwrap_or_default();
+        let bank = crate::skill_bank::snapshot_names(&state.db)
+            .await
+            .unwrap_or_default();
+        let tiers = crate::skill_selection::SkillTiers {
+            instance: Some(&instance_skills),
+            project: Some(&project_skills),
+            run: Some(&run_skills),
+            node: None,
+        };
+        let resolved = crate::skill_selection::resolve(&tiers, &bank);
+        for missing in &resolved.missing {
+            warn!(
+                "run {run_id}: skill '{}' ({}) selected at {:?} is no longer in the bank; \
+                 the Run proceeds without it",
+                missing.name, missing.id, missing.tiers
+            );
+        }
+        if !resolved.missing.is_empty() {
+            run_payload["missing_skills"] =
+                serde_json::to_value(&resolved.missing).unwrap_or_default();
+        }
+        if !resolved.skills.is_empty() {
+            run_payload[crate::skill_delivery::RUN_STARTED_FROZEN_KEY] =
+                serde_json::to_value(&resolved.skills).unwrap_or_default();
+        }
+        resolved.skills
+    };
     // FREEZE the Run's `auto_fail` choice (ADR-0049), same immutability posture as
     // `harness`. Absent ⇒ resolve through the project / instance tiers.
     if let Some(af) = req.auto_fail {
@@ -8117,7 +8160,9 @@ async fn create_run_inner(
         run_payload["provisioning_rules"] = serde_json::json!(frozen_provisioning);
     }
 
-    let run_started = event_log::Event {
+    // `mut`: the skill delivery below (#672) appends `skipped_skills` once the
+    // worktree exists, before the event is appended.
+    let mut run_started = event_log::Event {
         id: None,
         run_id: run_id.clone(),
         ts: event_log::now_iso(),
@@ -8151,6 +8196,63 @@ async fn create_run_inner(
                 )
             }),
         ));
+    }
+
+    // #672 / ADR-0062: snapshot the frozen selection's content under the Run dir
+    // (outside the worktree), then deliver it into the Run worktree — the tree the
+    // non-isolated nodes, the Pipeline Manager and the run shell work in. Paths are
+    // excluded per skill in the target repo's `info/exclude` and recorded in the
+    // worktree's provisioning manifest, so no skill ever reaches the Run branch. A
+    // versioned homonym is skipped and reported on the Run; an I/O failure refuses
+    // the Run like a provisioning failure (never a partial environment).
+    let skill_delivery = crate::skill_delivery::snapshot_skills(
+        &state.repo_root,
+        &run_repo_root,
+        &run_id,
+        &frozen_skills,
+    )
+    .and_then(|mut skipped| {
+        let mut report = crate::skill_delivery::deliver(
+            &worktree_dir,
+            &crate::skill_delivery::snapshot_root(&run_repo_root, &run_id),
+            &run_id,
+            &frozen_skills,
+        )?;
+        skipped.append(&mut report.skipped);
+        report.skipped = skipped;
+        Ok(report)
+    });
+    match skill_delivery {
+        Ok(report) => {
+            for skipped in &report.skipped {
+                warn!(
+                    "run {run_id}: skill '{}' not delivered: {}",
+                    skipped.name, skipped.reason
+                );
+            }
+            if !report.skipped.is_empty() {
+                if let Some(payload) = run_started.payload.as_mut() {
+                    payload["skipped_skills"] =
+                        serde_json::to_value(&report.skipped).unwrap_or_default();
+                }
+            }
+        }
+        Err(e) => {
+            let _ = crate::skill_delivery::remove_exclusions(&run_repo_root, &run_id);
+            crate::worktree_ops::reap_orphan_run_worktree(
+                &run_repo_root,
+                &worktree_dir,
+                &branch_name,
+            );
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                serde_json::json!({
+                    "error": format!(
+                        "Run not created. Skill delivery failed: {e:#}. No node was spawned."
+                    )
+                }),
+            ));
+        }
     }
 
     // Materialise each secondary as a detached, pinned snapshot beside
@@ -15906,6 +16008,13 @@ async fn cleanup_run(state: &AppState, run_id: &str) -> Response {
         }
     }
 
+    // #672 / ADR-0062: take back the per-skill exclusions this Run wrote in the target
+    // repo's `info/exclude` (its `# pdo <run-id>` marked lines only — every other
+    // line, PDO's for another Run or the user's, stays intact).
+    if let Err(e) = crate::skill_delivery::remove_exclusions(&repo_root, run_id) {
+        warn!("cleanup_run: cannot remove skill exclusions for run {run_id}: {e:#}");
+    }
+
     for pattern in [format!("pdo/run-{run_id}"), format!("pdo/sub-{run_id}*")] {
         let branch_output = std::process::Command::new("git")
             .args(["branch", "--list", &pattern])
@@ -23477,6 +23586,7 @@ mod tests {
             node_id.into(),
             event_log::NodeState {
                 missing_skills: Vec::new(),
+                skipped_skills: Vec::new(),
                 skills: None,
                 isolated_worktree: None,
                 harness: None,
@@ -23693,6 +23803,7 @@ mod tests {
             "a".into(),
             event_log::NodeState {
                 missing_skills: Vec::new(),
+                skipped_skills: Vec::new(),
                 skills: None,
                 isolated_worktree: None,
                 harness: None,
@@ -23750,6 +23861,7 @@ mod tests {
             "a".into(),
             event_log::NodeState {
                 missing_skills: Vec::new(),
+                skipped_skills: Vec::new(),
                 skills: None,
                 isolated_worktree: None,
                 harness: None,
@@ -23775,6 +23887,7 @@ mod tests {
             "b".into(),
             event_log::NodeState {
                 missing_skills: Vec::new(),
+                skipped_skills: Vec::new(),
                 skills: None,
                 isolated_worktree: None,
                 harness: None,
@@ -24007,6 +24120,7 @@ mod tests {
                 node_id.into(),
                 event_log::NodeState {
                     missing_skills: Vec::new(),
+                    skipped_skills: Vec::new(),
                     skills: None,
                     isolated_worktree: None,
                     harness: None,

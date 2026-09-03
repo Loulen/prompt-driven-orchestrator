@@ -66,6 +66,12 @@ pub(crate) fn reap_orphan_sub_worktree(
 
 pub(crate) fn reap_orphan_run_worktree(repo_root: &Path, worktree_dir: &Path, branch: &str) {
     reap_orphan_sub_worktree(repo_root, worktree_dir, branch);
+    // #672: a Run aborted at create may already have snapshotted skills beside the
+    // worktree and excluded their paths in the repo's `info/exclude`; take both back.
+    if let Some(run_id) = branch.strip_prefix("pdo/run-") {
+        let _ = crate::skill_delivery::remove_exclusions(repo_root, run_id);
+        let _ = std::fs::remove_dir_all(crate::skill_delivery::snapshot_root(repo_root, run_id));
+    }
     if let Some(run_dir) = worktree_dir.parent() {
         let _ = std::fs::remove_dir(run_dir);
     }

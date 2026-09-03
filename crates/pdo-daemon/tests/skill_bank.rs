@@ -868,7 +868,6 @@ async fn file_endpoints_on_an_unknown_skill_are_404() {
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
-
 // ---------------------------------------------------------------------------
 // #669 — selection by tier, skills effectifs with origin, referents populated.
 // A real daemon, a seeded pipeline, nodes spawned through the tmux command seam

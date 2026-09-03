@@ -4,8 +4,10 @@
 //!
 //! Four additive tiers carry the same key `skills`, a list of [`SkillRef`]
 //! (`id` + `name`): the Configuration d'instance, the Projet owning the Run's
-//! primary repo, the Run (frozen into `RunStarted` at create, seeded from the
-//! Trigger for a fired Run) and the Node of the pipeline document. Unlike the
+//! primary repo, the Run (seeded from the Trigger for a fired Run) and the Node of
+//! the pipeline document. Since #672 the first three are resolved ONCE at create
+//! and frozen on `RunStarted` (`frozen_skills`, see `skill_delivery`); a node spawn
+//! adds only its own tier to that base. Unlike the
 //! agentic profile (`agent_choice`, ADR-0057) where the finest explicit tier
 //! *wins*, skills are a **strict additive union**: no tier removes a skill an
 //! outer tier selected (CONTEXT.md: « aucun tier ne retire un skill hérité »).

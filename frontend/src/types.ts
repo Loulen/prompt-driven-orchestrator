@@ -718,6 +718,12 @@ export interface NodeState {
   skills?: EffectiveSkill[];
   /** #669: selected ids the bank no longer knew at spawn — the node ran without them. */
   missing_skills?: MissingSkill[];
+  /**
+   * #672: skills promised to this NodeRun that the delivery could not write into
+   * its worktree (a versioned homonym in the target repo, an occupied path, content
+   * gone from the bank) — the node ran without them.
+   */
+  skipped_skills?: SkippedSkill[];
   /** Node provisioning recipe frozen into this iteration's NodeStarted event. */
   provisioning?: ProvisioningRules;
   /** Time this iteration's isolated worktree recipe was first materialized. */
@@ -1671,4 +1677,11 @@ export interface EffectiveSkill extends SkillRef {
 /** A selected id the bank no longer knew at spawn. */
 export interface MissingSkill extends SkillRef {
   tiers: SkillTier[];
+}
+
+/** #672: a skill not delivered into a worktree, with the reason it was skipped. */
+export interface SkippedSkill {
+  id: string;
+  name: string;
+  reason: string;
 }

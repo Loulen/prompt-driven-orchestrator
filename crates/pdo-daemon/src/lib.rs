@@ -52,6 +52,7 @@ mod portable_pipeline;
 mod price_table;
 mod project_store;
 mod prompt_augmenter;
+mod provisioning;
 mod pty_bridge;
 mod reap_policy;
 pub(crate) mod recovery;
@@ -71,6 +72,11 @@ mod scheduler;
 mod scheduler_dispatcher;
 mod scheduler_interpreter;
 mod service_unit;
+mod skill_bank;
+mod skill_delivery;
+mod skill_import;
+mod skill_selection;
+mod skill_sidecar;
 pub mod stale_detector;
 mod stats;
 mod stats_performance;
@@ -99,7 +105,7 @@ use axum::extract::{
 };
 use axum::http::{header, HeaderMap, Method, StatusCode, Uri};
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::Router;
 use clap::{Parser, Subcommand};
 use rust_embed::Embed;
@@ -489,6 +495,12 @@ struct CreateRunRequest {
     /// Custom)` wins outright at this tier and never merges with `harness`.
     #[serde(default)]
     agent_choice: Option<crate::agent_choice::AgentChoice>,
+    /// The Run tier of the **skills** selection (#669, ADR-0062): ids (+ label)
+    /// added to every node of this Run, on top of the instance and Projet tiers.
+    /// Frozen into `RunStarted` at the create chokepoint (only when non-empty). A
+    /// Trigger fire folds its stored list in here, like `harness`.
+    #[serde(default)]
+    skills: Vec<crate::skill_selection::SkillRef>,
     /// Whether the manager auto-names this Run. Don't collapse to `bool`: `None`
     /// (omitted) must resolve by the presence of `name`, so a supplied `name` with
     /// no flag keeps the name; `Some(b)` is an explicit choice that wins.
@@ -502,6 +514,9 @@ struct CreateRunRequest {
     /// `RunStarted` at the create chokepoint.
     #[serde(default)]
     auto_fail: Option<bool>,
+    /// Run-level provisioning rules, composed and frozen with Instance + Project.
+    #[serde(default)]
+    provisioning: provisioning::ProvisioningRules,
 }
 
 /// The top-level keys `POST /runs` accepts, kept in lock-step with
@@ -527,8 +542,10 @@ const CREATE_RUN_FIELDS: &[&str] = &[
     "sandbox",
     "harness",
     "agent_choice",
+    "skills",
     "auto_name",
     "auto_fail",
+    "provisioning",
 ];
 
 /// Reject a `POST /runs` body carrying an unknown top-level key. A non-object
@@ -663,6 +680,10 @@ struct PatchProjectRequest {
     /// and then to the instance tier.
     #[serde(default, deserialize_with = "deserialize_double_option")]
     agent_choice: Option<Option<crate::agent_choice::AgentChoice>>,
+    /// The Projet's skills selection (#669), replaced wholesale: absent leaves it,
+    /// a list sets it, an empty list clears it (flat — the empty list IS the clear).
+    #[serde(default)]
+    skills: Option<Vec<crate::skill_selection::SkillRef>>,
     /// The Projet's `auto_fail` (ADR-0049), same double-`Option` shape as
     /// `harness`; `null` states no preference.
     #[serde(default, deserialize_with = "deserialize_double_option")]
@@ -1977,6 +1998,7 @@ impl DaemonHandle {
                 sandbox: None,
                 harness: None,
                 agent_choice: None,
+                skills: Vec::new(),
                 auto_name: true,
                 next_fire_at: Some("2030-01-01T00:00:00.000Z".to_string()),
             },
@@ -2956,6 +2978,10 @@ struct CreateTriggerRequest {
     /// explicit tier at fire time.
     #[serde(default)]
     agent_choice: Option<crate::agent_choice::AgentChoice>,
+    /// The Run-tier skills every fired Run carries (#669, ADR-0062). Folded into
+    /// the fired Run's `skills` at fire time, like `harness`.
+    #[serde(default)]
+    skills: Vec<crate::skill_selection::SkillRef>,
     /// Whether Runs this Trigger fires are auto-named. Seeded from the instance
     /// default in the create modal and frozen on the row; defaults to `true` so an
     /// older client that omits the field keeps auto-naming.
@@ -3261,6 +3287,8 @@ async fn create_trigger(
         // No normalisation needed: `None`/`Inherit`/blank payloads are already
         // transparent inside `agent_choice::resolve`.
         agent_choice: req.agent_choice,
+        // #669: the store normalises (trim, dedupe) and stores NULL for empty.
+        skills: req.skills,
         // Frozen on the row, never re-resolved at fire time — the runtime never
         // decides autonomy (ADR-0012 frontier).
         auto_name: req.auto_name,
@@ -3455,6 +3483,10 @@ struct PatchTriggerRequest {
     /// back to inheriting the legacy `harness` field.
     #[serde(default, deserialize_with = "deserialize_double_option")]
     agent_choice: Option<Option<crate::agent_choice::AgentChoice>>,
+    /// The Run-tier skills (#669), replaced wholesale: absent leaves them, a list
+    /// sets them, an empty list clears them. Flat: the empty list IS the clear.
+    #[serde(default)]
+    skills: Option<Vec<crate::skill_selection::SkillRef>>,
     /// Auto-naming toggle — a FLAT `Option<bool>`, deliberately not double-wrapped:
     /// there is no "inherit" state to clear back to, a Trigger's autonomy is a plain
     /// on/off.
@@ -3684,6 +3716,7 @@ async fn patch_trigger(
             .harness
             .map(|inner| inner.filter(|s| !s.trim().is_empty())),
         agent_choice: req.agent_choice,
+        skills: req.skills,
         auto_name: req.auto_name,
         next_fire_at,
         // The enable bit and the forward next_fire_at must land in ONE atomic UPDATE,
@@ -3895,7 +3928,20 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/pipelines/{pipeline_id}/document",
             get(get_pipeline_document),
         )
-        .route("/pipelines/import", post(import_pipeline_document))
+        // #673 / ADR-0062: the skills sidecar of the portable document — a zip of
+        // `<pipeline>.skills/<id>/…` to unpack beside the YAML. The import takes it
+        // back as a base64 field of the same request; own body limit so a sidecar
+        // carrying a few reference files is not refused by the 2 MB default.
+        .route(
+            "/pipelines/{pipeline_id}/document/skills",
+            get(get_pipeline_document_skills),
+        )
+        .route(
+            "/pipelines/import",
+            post(import_pipeline_document).route_layer(axum::extract::DefaultBodyLimit::max(
+                SKILL_UPLOAD_BODY_LIMIT,
+            )),
+        )
         .route(
             "/pipelines/{pipeline_id}",
             axum::routing::put(save_pipeline).delete(delete_pipeline),
@@ -3921,6 +3967,10 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route(
             "/runs/{run_id}/pipeline/document",
             get(get_run_pipeline_document),
+        )
+        .route(
+            "/runs/{run_id}/pipeline/document/skills",
+            get(get_run_pipeline_document_skills),
         )
         .route(
             "/runs/{run_id}/repos",
@@ -3983,6 +4033,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/repos/branches", get(repos_branches))
         .route("/repos/validate", get(repos_validate))
         .route("/repos/recent", get(repos_recent))
+        .route("/repos/provisioning/preview", post(preview_provisioning))
         // Filesystem explorer — not repo-specific (it also serves the settings
         // Dockerfile picker), hence `/fs` rather than `/repos/browse`.
         .route("/fs/browse", get(fs_browse))
@@ -3999,6 +4050,10 @@ fn build_router(state: Arc<AppState>) -> Router {
         // {effective, source, stored, env, default} view; `PUT` writes the stored
         // tier, with fail-fast validation.
         .route("/settings", get(get_settings).put(put_settings))
+        .route(
+            "/settings/provisioning",
+            get(get_instance_provisioning).put(put_instance_provisioning),
+        )
         // Staging profiles (ADR-0031 §2-§7) sit UNDER `/settings` as a routing
         // decision only. It is NOT a claim about the schema: profiles are ROWS, not
         // an {effective, source, stored, env, default} knob, and they must NOT be
@@ -4019,6 +4074,63 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route(
             "/settings/agent-profiles/{id}/referents",
             get(get_agent_profile_referents),
+        )
+        // Banque de skills (#668, ADR-0062): the bank's index + content CRUD, the
+        // folder hierarchy, and the referents endpoint the delete dialog reads.
+        // Folders sit under their own prefix (`/settings/skill-folders`) rather than
+        // `/settings/skills/folders`, so they can never shadow a skill id.
+        .route("/settings/skills", get(list_skills).post(create_skill))
+        .route(
+            "/settings/skills/{id}",
+            get(get_skill).put(update_skill).delete(delete_skill),
+        )
+        .route("/settings/skills/{id}/referents", get(get_skill_referents))
+        // Import from a Source (#670): scan (clone + walk + collisions), import,
+        // and the per-folder rescan / update. Fixed segments sit under
+        // `/settings/skills/` but never collide with a skill id (UUIDs).
+        .route("/settings/skills/scan", post(scan_skill_source))
+        .route(
+            "/settings/skills/scan/{scan_id}/cancel",
+            post(cancel_skill_scan),
+        )
+        .route("/settings/skills/import", post(import_skills))
+        .route("/settings/skills/sources/recent", get(recent_skill_sources))
+        .route(
+            "/settings/skill-folders/{id}/rescan",
+            post(rescan_skill_folder),
+        )
+        .route(
+            "/settings/skill-folders/{id}/update",
+            post(update_skill_folder_from_source),
+        )
+        // Reference files (#671): upload (multipart from the browser, or
+        // `{ "from_path" }` from the explorer), read / overwrite as plain text,
+        // delete. `{*path}` keeps sub-folders (`examples/login.spec.ts`); the
+        // module refuses anything that would leave the skill's folder (400).
+        // Own body limit: the default 2 MB would refuse a 4 MB fixture before the
+        // per-file 10 MB rule gets to name it.
+        .route(
+            "/settings/skills/{id}/files",
+            post(upload_skill_files).route_layer(axum::extract::DefaultBodyLimit::max(
+                SKILL_UPLOAD_BODY_LIMIT,
+            )),
+        )
+        .route(
+            "/settings/skills/{id}/files/{*path}",
+            get(read_skill_file)
+                .put(write_skill_file)
+                .delete(delete_skill_file)
+                .route_layer(axum::extract::DefaultBodyLimit::max(
+                    SKILL_UPLOAD_BODY_LIMIT,
+                )),
+        )
+        .route(
+            "/settings/skill-folders",
+            get(list_skill_folders).post(create_skill_folder),
+        )
+        .route(
+            "/settings/skill-folders/{id}",
+            put(update_skill_folder).delete(delete_skill_folder),
         )
         .route("/settings/sandbox-profiles", get(list_sandbox_profiles))
         .route(
@@ -4054,6 +4166,10 @@ fn build_router(state: Arc<AppState>) -> Router {
             post(add_project_member).delete(remove_project_member),
         )
         .route(
+            "/projects/{project_id}/provisioning",
+            get(get_project_provisioning).put(put_project_provisioning),
+        )
+        .route(
             "/triggers/{trigger_id}",
             get(get_trigger).patch(patch_trigger).delete(delete_trigger),
         )
@@ -4062,6 +4178,209 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/triggers/{trigger_id}/fire", post(fire_trigger_now))
         .fallback(static_handler)
         .with_state(state)
+}
+
+#[derive(Deserialize)]
+struct ProvisioningPreviewRequest {
+    repository: String,
+    #[serde(default = "default_provisioning_git_ref")]
+    git_ref: String,
+    scope: provisioning::ProvisioningScope,
+    #[serde(default)]
+    rules: provisioning::ProvisioningRules,
+    #[serde(default)]
+    inherited: Option<Vec<provisioning::ScopedRules>>,
+}
+
+fn default_provisioning_git_ref() -> String {
+    "HEAD".to_string()
+}
+
+fn provisioning_rules_through_scope(
+    mut rules: Vec<provisioning::ScopedRules>,
+    scope: provisioning::ProvisioningScope,
+) -> Vec<provisioning::ScopedRules> {
+    rules.retain(|candidate| candidate.scope <= scope);
+    rules
+}
+
+async fn scoped_provisioning_rules(
+    db: &sqlx::SqlitePool,
+    repository: &str,
+    run: provisioning::ProvisioningRules,
+    node: provisioning::ProvisioningRules,
+) -> Result<Vec<provisioning::ScopedRules>, sqlx::Error> {
+    let mut rules = vec![provisioning::ScopedRules {
+        scope: provisioning::ProvisioningScope::Instance,
+        rules: provisioning::load(db, provisioning::ProvisioningScope::Instance, "instance")
+            .await?,
+    }];
+    if let Some(project) = project_store::owner_of(db, repository).await? {
+        rules.push(provisioning::ScopedRules {
+            scope: provisioning::ProvisioningScope::Project,
+            rules: provisioning::load(db, provisioning::ProvisioningScope::Project, &project.id)
+                .await?,
+        });
+    }
+    rules.push(provisioning::ScopedRules {
+        scope: provisioning::ProvisioningScope::Run,
+        rules: run,
+    });
+    if !node.is_empty() {
+        rules.push(provisioning::ScopedRules {
+            scope: provisioning::ProvisioningScope::IsolatedNode,
+            rules: node,
+        });
+    }
+    Ok(rules)
+}
+
+async fn preview_provisioning(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ProvisioningPreviewRequest>,
+) -> Response {
+    let repository = PathBuf::from(req.repository.trim());
+    if !repository.is_absolute() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "repository must be an absolute path" })),
+        )
+            .into_response();
+    }
+    let scoped = match req.inherited {
+        Some(rules) => rules,
+        None => match scoped_provisioning_rules(
+            &state.db,
+            req.repository.trim(),
+            provisioning::ProvisioningRules::default(),
+            provisioning::ProvisioningRules::default(),
+        )
+        .await
+        {
+            Ok(rules) => rules,
+            Err(e) => {
+                error!("failed to load provisioning rules: {e}");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": "provisioning store unavailable" })),
+                )
+                    .into_response();
+            }
+        },
+    };
+    let mut scoped = provisioning_rules_through_scope(scoped, req.scope);
+    if let Some(current) = scoped.iter_mut().find(|rules| rules.scope == req.scope) {
+        current.rules = req.rules;
+    } else {
+        scoped.push(provisioning::ScopedRules {
+            scope: req.scope,
+            rules: req.rules,
+        });
+        scoped.sort_by_key(|rules| rules.scope);
+    }
+    match provisioning::resolve_at_git_ref(&repository, &scoped, &req.git_ref) {
+        Ok(plan) => (StatusCode::OK, Json(plan)).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": format!("{e:#}") })),
+        )
+            .into_response(),
+    }
+}
+
+async fn get_instance_provisioning(State(state): State<Arc<AppState>>) -> Response {
+    provisioning_response(
+        provisioning::load(
+            &state.db,
+            provisioning::ProvisioningScope::Instance,
+            "instance",
+        )
+        .await,
+    )
+}
+
+async fn put_instance_provisioning(
+    State(state): State<Arc<AppState>>,
+    Json(rules): Json<provisioning::ProvisioningRules>,
+) -> Response {
+    match provisioning::save(
+        &state.db,
+        provisioning::ProvisioningScope::Instance,
+        "instance",
+        &rules,
+    )
+    .await
+    {
+        Ok(()) => (StatusCode::OK, Json(rules)).into_response(),
+        Err(e) => {
+            error!("failed to save instance provisioning rules: {e}");
+            provisioning_store_error()
+        }
+    }
+}
+
+async fn get_project_provisioning(
+    State(state): State<Arc<AppState>>,
+    AxumPath(project_id): AxumPath<String>,
+) -> Response {
+    provisioning_response(
+        provisioning::load(
+            &state.db,
+            provisioning::ProvisioningScope::Project,
+            &project_id,
+        )
+        .await,
+    )
+}
+
+async fn put_project_provisioning(
+    State(state): State<Arc<AppState>>,
+    AxumPath(project_id): AxumPath<String>,
+    Json(rules): Json<provisioning::ProvisioningRules>,
+) -> Response {
+    match project_store::get(&state.db, &project_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "project not found" })),
+            )
+                .into_response()
+        }
+        Err(_) => return provisioning_store_error(),
+    }
+    match provisioning::save(
+        &state.db,
+        provisioning::ProvisioningScope::Project,
+        &project_id,
+        &rules,
+    )
+    .await
+    {
+        Ok(()) => (StatusCode::OK, Json(rules)).into_response(),
+        Err(e) => {
+            error!("failed to save project provisioning rules: {e}");
+            provisioning_store_error()
+        }
+    }
+}
+
+fn provisioning_response(result: Result<provisioning::ProvisioningRules, sqlx::Error>) -> Response {
+    match result {
+        Ok(rules) => (StatusCode::OK, Json(rules)).into_response(),
+        Err(e) => {
+            error!("failed to load provisioning rules: {e}");
+            provisioning_store_error()
+        }
+    }
+}
+
+fn provisioning_store_error() -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({ "error": "provisioning store unavailable" })),
+    )
+        .into_response()
 }
 
 // A Projet is the middle tier of the harness axis and a named grouping of member
@@ -4170,6 +4489,13 @@ async fn patch_project(
         if let Err(e) = project_store::set_agent_choice(&state.db, &project_id, agent_choice).await
         {
             error!("failed to set agent_choice on project {project_id}: {e}");
+            return project_list_error();
+        }
+    }
+    // #669: replace the Projet's skills selection wholesale; an empty list clears.
+    if let Some(skills) = req.skills {
+        if let Err(e) = project_store::set_skills(&state.db, &project_id, skills).await {
+            error!("failed to set skills on project {project_id}: {e}");
             return project_list_error();
         }
     }
@@ -4375,11 +4701,21 @@ async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
         .await
         .context("failed to create project tables")?;
 
+    provisioning::init(db)
+        .await
+        .context("failed to create provisioning rules table")?;
+
     // Unlike `project_store`, this table IS seeded: the reserved `Default` profile
     // must exist on every instance, immediately.
     agent_profile::init(db)
         .await
         .context("failed to create agent_profiles table")?;
+
+    // The Banque de skills index (#668, ADR-0062). Content lives on disk under
+    // `<repo_root>/.pdo/skills/<id>/`; nothing is seeded.
+    skill_bank::init(db)
+        .await
+        .context("failed to create skill bank tables")?;
 
     Ok(())
 }
@@ -5091,12 +5427,16 @@ async fn fire_one_trigger(
                 // here, so they freeze the SAME harness.
                 harness: trigger.harness.clone(),
                 agent_choice: trigger.agent_choice.clone(),
+                // #669: the Trigger's skills ARE the fired Run's Run tier, same as
+                // `harness` — a cron tick and a "Run now" freeze the SAME list.
+                skills: trigger.skills.clone(),
                 // `Some(b)` wins the chokepoint resolution unconditionally, so a fire
                 // with `auto_name=false` keeps a stable per-id name.
                 auto_name: Some(trigger.auto_name),
                 // No Trigger tier for `auto_fail` (ADR-0049): a fire states no
                 // run-level preference, so `pdo fail` resolves through project/instance.
                 auto_fail: None,
+                provisioning: provisioning::ProvisioningRules::default(),
             };
             let record = match create_run_inner(state, req, Vec::new()).await {
                 Ok(run_id) => trigger_store::FireRecord {
@@ -5350,16 +5690,61 @@ async fn get_pipeline(
         .map(|d| d.message.clone())
         .collect();
 
+    let pipeline = match pipeline_json_with_node_provisioning(&parse_result.pipeline, &yaml) {
+        Ok(pipeline) => pipeline,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("parse node provisioning: {e}") })),
+            )
+                .into_response();
+        }
+    };
+
     Json(serde_json::json!({
         "id": pipeline_id,
         "scope": pipeline_scope_for_response(&state.repo_root, &path),
         "path": path.to_string_lossy(),
         "yaml": yaml,
-        "pipeline": parse_result.pipeline,
+        "pipeline": pipeline,
         "prompts": prompts,
         "diagnostics": diagnostics,
     }))
     .into_response()
+}
+
+fn pipeline_json_with_node_provisioning(
+    pipeline: &pipeline::PipelineDef,
+    yaml: &str,
+) -> anyhow::Result<serde_json::Value> {
+    let mut json = serde_json::to_value(pipeline)?;
+    let source: serde_yaml::Value = serde_yaml::from_str(yaml)?;
+    let Some(source_nodes) = source.get("nodes").and_then(serde_yaml::Value::as_sequence) else {
+        return Ok(json);
+    };
+    let Some(response_nodes) = json
+        .get_mut("nodes")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return Ok(json);
+    };
+
+    for source_node in source_nodes {
+        let Some(node_id) = source_node.get("id").and_then(serde_yaml::Value::as_str) else {
+            continue;
+        };
+        let Some(raw_rules) = source_node.get("provisioning") else {
+            continue;
+        };
+        let rules: provisioning::ProvisioningRules = serde_yaml::from_value(raw_rules.clone())?;
+        if let Some(response_node) = response_nodes
+            .iter_mut()
+            .find(|node| node.get("id").and_then(serde_json::Value::as_str) == Some(node_id))
+        {
+            response_node["provisioning"] = serde_json::to_value(rules)?;
+        }
+    }
+    Ok(json)
 }
 
 fn parse_error_to_structured(e: &pipeline::ParseError) -> (String, Option<usize>) {
@@ -5372,6 +5757,7 @@ fn parse_error_to_structured(e: &pipeline::ParseError) -> (String, Option<usize>
         pipeline::ParseError::MissingField(field) => {
             (format!("missing required field: {field}"), None)
         }
+        pipeline::ParseError::InvalidField(message) => (message.clone(), None),
         pipeline::ParseError::UndeclaredWhenField {
             node_id,
             port,
@@ -5753,9 +6139,81 @@ async fn get_pipeline_document(
     pipeline_document_response(&resolve_pipeline_path(&state.repo_root, &id))
 }
 
+/// The skills sidecar of a parsed pipeline (#673): a zip of
+/// `<pipeline>.skills/<id>/…` read from the bank's disk root, or **204** when the
+/// pipeline references no skill (nothing to ship — the YAML alone is the
+/// document). A referenced id with no folder in the bank is left out: the
+/// exporting instance already shows the warning, and the importing one will.
+fn skills_sidecar_response(repo_root: &Path, pipeline: &pipeline::PipelineDef) -> Response {
+    if skill_sidecar::referenced_skills(pipeline).is_empty() {
+        return StatusCode::NO_CONTENT.into_response();
+    }
+    let (skills, absent) = skill_sidecar::collect(repo_root, pipeline);
+    if !absent.is_empty() {
+        info!(
+            "skills sidecar of '{}': {} referenced skill(s) not in the bank: {}",
+            pipeline.name,
+            absent.len(),
+            absent.join(", ")
+        );
+    }
+    match skill_sidecar::write_zip(&pipeline.name, &skills) {
+        Ok(bytes) => (
+            [
+                (header::CONTENT_TYPE, "application/zip".to_string()),
+                (
+                    header::CONTENT_DISPOSITION,
+                    format!(
+                        "attachment; filename=\"{}.zip\"",
+                        skill_sidecar::sidecar_dir_name(&pipeline.name).replace('"', "")
+                    ),
+                ),
+                (
+                    header::HeaderName::from_static("x-pdo-skills"),
+                    skills.len().to_string(),
+                ),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": error })),
+        )
+            .into_response(),
+    }
+}
+
+async fn get_pipeline_document_skills(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    let path = resolve_pipeline_path(&state.repo_root, &id);
+    let yaml = match std::fs::read_to_string(&path) {
+        Ok(yaml) => yaml,
+        Err(_) => return (StatusCode::NOT_FOUND, "pipeline not found").into_response(),
+    };
+    let parsed = match pipeline::parse_pipeline(&yaml) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("invalid pipeline: {error}") })),
+            )
+                .into_response()
+        }
+    };
+    skills_sidecar_response(&state.repo_root, &parsed.pipeline)
+}
+
 #[derive(Deserialize)]
 struct ImportPipelineDocumentRequest {
     document: String,
+    /// #673: the skills sidecar as PDO exported it (or as the user re-zipped the
+    /// `<pipeline>.skills/` folder), base64. Absent ⇒ unknown ids import with the
+    /// "skill absent" warning, never a failure.
+    #[serde(default)]
+    skills_sidecar: Option<String>,
 }
 
 async fn import_pipeline_document(
@@ -5772,6 +6230,34 @@ async fn import_pipeline_document(
                 .into_response()
         }
     };
+    let sidecar = match req.skills_sidecar.as_deref().map(str::trim) {
+        Some(encoded) if !encoded.is_empty() => {
+            use base64::Engine as _;
+            let bytes = match base64::engine::general_purpose::STANDARD.decode(encoded) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({
+                            "error": format!("skills_sidecar: not valid base64: {error}")
+                        })),
+                    )
+                        .into_response()
+                }
+            };
+            match skill_sidecar::read_zip(&bytes) {
+                Ok(skills) => skills,
+                Err(error) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({ "error": format!("skills_sidecar: {error}") })),
+                    )
+                        .into_response()
+                }
+            }
+        }
+        _ => Vec::new(),
+    };
     let Some(dir) = instance_pipeline_dir(&state.repo_root) else {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -5781,6 +6267,20 @@ async fn import_pipeline_document(
     };
     let (id, name) = available_pipeline_identity(&dir, &interpreted.pipeline.name);
     let mut imported = interpreted.pipeline;
+    // #673: the bank first, the YAML second — a created skill is referenced by
+    // the id the document carries, so the pipeline is launchable as soon as it
+    // is written, and its node references are relabelled with the bank's names.
+    // The import folder is named after the document's own name (its provenance),
+    // before the "(2)" a same-named pipeline on this instance may add.
+    let mut warnings = interpreted.warnings;
+    let skills =
+        match skill_sidecar::import_into_bank(&state.db, &state.repo_root, &mut imported, &sidecar)
+            .await
+        {
+            Ok(report) => report,
+            Err(error) => return skill_error_response(error),
+        };
+    warnings.extend(skills.warnings.iter().cloned());
     imported.name = name;
     match write_pipeline_atomically(&dir, &id, &imported, &interpreted.prompts) {
         Ok(path) => (
@@ -5789,7 +6289,8 @@ async fn import_pipeline_document(
                 "id": id,
                 "scope": "instance",
                 "path": path.to_string_lossy(),
-                "warnings": interpreted.warnings,
+                "warnings": warnings,
+                "skills": skills,
             })),
         )
             .into_response(),
@@ -6954,8 +7455,10 @@ async fn parse_multipart_create_run(
     let mut sandbox: Option<event_log::SandboxMode> = None;
     let mut harness: Option<String> = None;
     let mut agent_choice: Option<crate::agent_choice::AgentChoice> = None;
+    let mut skills: Vec<crate::skill_selection::SkillRef> = Vec::new();
     let mut auto_name: Option<bool> = None;
     let mut auto_fail: Option<bool> = None;
+    let mut provisioning = provisioning::ProvisioningRules::default();
     let mut images = Vec::new();
 
     while let Ok(Some(field)) = multipart.next_field().await {
@@ -7069,6 +7572,18 @@ async fn parse_multipart_create_run(
                     );
                 }
             }
+            "skills" => {
+                // #669: a JSON list of `{id, name}`, mirrored from the JSON path so a
+                // Run created WITH images keeps its skills.
+                let value = field
+                    .text()
+                    .await
+                    .map_err(|e| format!("bad field skills: {e}"))?;
+                if !value.trim().is_empty() {
+                    skills = serde_json::from_str(&value)
+                        .map_err(|e| format!("invalid skills JSON: {e}"))?;
+                }
+            }
             "auto_name" => {
                 // An unrecognised token leaves `None`, deferring to the chokepoint's
                 // name-presence resolution.
@@ -7088,6 +7603,14 @@ async fn parse_multipart_create_run(
                 if !v.is_empty() {
                     auto_fail = stale_detector::parse_bool_setting(&v);
                 }
+            }
+            "provisioning" => {
+                let v = field
+                    .text()
+                    .await
+                    .map_err(|e| format!("bad field provisioning: {e}"))?;
+                provisioning =
+                    serde_json::from_str(&v).map_err(|e| format!("bad field provisioning: {e}"))?;
             }
             "images" => {
                 let raw_filename = field.file_name().unwrap_or("image.png").to_string();
@@ -7130,8 +7653,10 @@ async fn parse_multipart_create_run(
         sandbox,
         harness,
         agent_choice,
+        skills,
         auto_name,
         auto_fail,
+        provisioning,
     };
     Ok((req, images))
 }
@@ -7415,6 +7940,46 @@ async fn create_run_inner(
         return Err((StatusCode::BAD_REQUEST, serde_json::json!({ "error": msg })));
     }
 
+    let frozen_provisioning = match scoped_provisioning_rules(
+        &state.db,
+        &run_repo_root.to_string_lossy(),
+        req.provisioning.clone(),
+        provisioning::ProvisioningRules::default(),
+    )
+    .await
+    {
+        Ok(rules) => rules,
+        Err(e) => {
+            error!("failed to load provisioning recipe: {e}");
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                serde_json::json!({ "error": "provisioning store unavailable" }),
+            ));
+        }
+    };
+    let provisioning_plan =
+        match provisioning::resolve_at_git_ref(&run_repo_root, &frozen_provisioning, source_ref) {
+            Ok(plan) if plan.conflicts.is_empty() => plan,
+            Ok(plan) => {
+                let conflict = &plan.conflicts[0];
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    serde_json::json!({
+                        "error": format!(
+                            "mode conflict in {:?}: `{}` is declared in multiple modes",
+                            conflict.scope, conflict.relative_path
+                        )
+                    }),
+                ));
+            }
+            Err(e) => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    serde_json::json!({ "error": format!("invalid provisioning recipe: {e:#}") }),
+                ))
+            }
+        };
+
     let run_id = event_log::generate_run_id();
 
     // Freeze the fork point NOW, from the same local `source_ref` `create_worktree`
@@ -7610,6 +8175,57 @@ async fn create_run_inner(
     if let Some(choice) = explicit_agent_choice {
         run_payload["agent_choice"] = serde_json::to_value(choice).unwrap_or_default();
     }
+    // FREEZE the Run tier of the skills selection (#669, ADR-0062) — same posture as
+    // `harness`/`agent_choice`: set once here, never re-decided by a later edit of
+    // the bank or the Trigger. Written ONLY when non-empty, so a Run that selects
+    // none keeps the historical payload shape. Not validated against the bank: an
+    // unknown id is a spawn-time WARNING, never a refusal to launch (#669 AC).
+    let run_skills = crate::skill_selection::normalise(req.skills.clone());
+    if !run_skills.is_empty() {
+        run_payload["skills"] = serde_json::to_value(&run_skills).unwrap_or_default();
+    }
+    // #672 / ADR-0062: FREEZE the resolved instance + Projet + Run selection (ids,
+    // bank names, origin tiers) — the base every node spawn of this Run adds its own
+    // tier to. The bank's names are read once here; a later rename or edit of the
+    // bank never reaches this Run (its content is snapshotted below). Written only
+    // when non-empty so a Run selecting nothing keeps the historical payload shape.
+    // An id the bank does not know is a warning on the Run, never a refusal.
+    let frozen_skills = {
+        let instance_skills = instance_config::get(&state.db)
+            .await
+            .map(|c| c.skills)
+            .unwrap_or_default();
+        let project_skills =
+            crate::project_store::skills_for_path(&state.db, &run_repo_root.to_string_lossy())
+                .await
+                .unwrap_or_default();
+        let bank = crate::skill_bank::snapshot_names(&state.db)
+            .await
+            .unwrap_or_default();
+        let tiers = crate::skill_selection::SkillTiers {
+            instance: Some(&instance_skills),
+            project: Some(&project_skills),
+            run: Some(&run_skills),
+            node: None,
+        };
+        let resolved = crate::skill_selection::resolve(&tiers, &bank);
+        for missing in &resolved.missing {
+            warn!(
+                "run {run_id}: skill '{}' ({}) selected at {:?} is no longer in the bank; \
+                 the Run proceeds without it",
+                missing.name, missing.id, missing.tiers
+            );
+        }
+        if !resolved.missing.is_empty() {
+            run_payload["missing_skills"] =
+                serde_json::to_value(&resolved.missing).unwrap_or_default();
+        }
+        if !resolved.skills.is_empty() {
+            run_payload[crate::skill_delivery::RUN_STARTED_FROZEN_KEY] =
+                serde_json::to_value(&resolved.skills).unwrap_or_default();
+        }
+        resolved.skills
+    };
     // FREEZE the Run's `auto_fail` choice (ADR-0049), same immutability posture as
     // `harness`. Absent ⇒ resolve through the project / instance tiers.
     if let Some(af) = req.auto_fail {
@@ -7670,8 +8286,16 @@ async fn create_run_inner(
         let image_names: Vec<&str> = images.iter().map(|i| i.filename.as_str()).collect();
         run_payload["image_filenames"] = serde_json::json!(image_names);
     }
+    if frozen_provisioning
+        .iter()
+        .any(|scoped| !scoped.rules.is_empty())
+    {
+        run_payload["provisioning_rules"] = serde_json::json!(frozen_provisioning);
+    }
 
-    let run_started = event_log::Event {
+    // `mut`: the skill delivery below (#672) appends `skipped_skills` once the
+    // worktree exists, before the event is appended.
+    let mut run_started = event_log::Event {
         id: None,
         run_id: run_id.clone(),
         ts: event_log::now_iso(),
@@ -7680,14 +8304,6 @@ async fn create_run_inner(
         iter: None,
         payload: Some(run_payload),
     };
-
-    if let Err(e) = append_event(state, &run_started).await {
-        error!("failed to append run_started: {e}");
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            serde_json::json!({ "error": "event log error" }),
-        ));
-    }
 
     // Artifacts live under <target_repo>/.pdo/runs/<run-id>/.
     let worktree_dir = worktree_dir_for_run(&run_repo_root, &run_id);
@@ -7701,15 +8317,95 @@ async fn create_run_inner(
         ));
     }
 
+    if let Err(e) =
+        provisioning::provision_missing(&run_repo_root, &worktree_dir, &provisioning_plan)
+    {
+        crate::worktree_ops::reap_orphan_run_worktree(&run_repo_root, &worktree_dir, &branch_name);
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            serde_json::json!({
+                "error": format!(
+                    "Run not created. Provisioning failed: {e:#}. No node was spawned."
+                )
+            }),
+        ));
+    }
+
+    // #672 / ADR-0062: snapshot the frozen selection's content under the Run dir
+    // (outside the worktree), then deliver it into the Run worktree — the tree the
+    // non-isolated nodes, the Pipeline Manager and the run shell work in. Paths are
+    // excluded per skill in the target repo's `info/exclude` and recorded in the
+    // worktree's provisioning manifest, so no skill ever reaches the Run branch. A
+    // versioned homonym is skipped and reported on the Run; an I/O failure refuses
+    // the Run like a provisioning failure (never a partial environment).
+    let skill_delivery = crate::skill_delivery::snapshot_skills(
+        &state.repo_root,
+        &run_repo_root,
+        &run_id,
+        &frozen_skills,
+    )
+    .and_then(|mut skipped| {
+        let mut report = crate::skill_delivery::deliver(
+            &worktree_dir,
+            &crate::skill_delivery::snapshot_root(&run_repo_root, &run_id),
+            &run_id,
+            &frozen_skills,
+        )?;
+        skipped.append(&mut report.skipped);
+        report.skipped = skipped;
+        Ok(report)
+    });
+    match skill_delivery {
+        Ok(report) => {
+            for skipped in &report.skipped {
+                warn!(
+                    "run {run_id}: skill '{}' not delivered: {}",
+                    skipped.name, skipped.reason
+                );
+            }
+            if !report.skipped.is_empty() {
+                if let Some(payload) = run_started.payload.as_mut() {
+                    payload["skipped_skills"] =
+                        serde_json::to_value(&report.skipped).unwrap_or_default();
+                }
+            }
+        }
+        Err(e) => {
+            let _ = crate::skill_delivery::remove_exclusions(&run_repo_root, &run_id);
+            crate::worktree_ops::reap_orphan_run_worktree(
+                &run_repo_root,
+                &worktree_dir,
+                &branch_name,
+            );
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                serde_json::json!({
+                    "error": format!(
+                        "Run not created. Skill delivery failed: {e:#}. No node was spawned."
+                    )
+                }),
+            ));
+        }
+    }
+
     // Materialise each secondary as a detached, pinned snapshot beside
     // `worktree/`/`nodes/`. At Run start, NOT per-node spawn, so the reap surface
     // stays minimal; under `run_repo_root`, so the sandbox sees them at an identical
-    // path with no new mount. A failure fails the Run loud: the pin is already in
-    // `RunStarted`, and a missing snapshot would silently starve every node reading it.
+    // path with no new mount. A failure fails the Run loud before `RunStarted`;
+    // otherwise a missing snapshot would silently starve every node reading it.
+    let mut created_secondary_snapshots: Vec<(String, PathBuf)> = Vec::new();
     for pin in &secondary_pins {
         let dest = secondary_snapshot_path(&run_repo_root, &run_id, &pin.alias);
         if let Err(e) = create_secondary_snapshot(Path::new(&pin.repo), &dest, &pin.sha) {
             error!("failed to create secondary snapshot for {}: {e}", pin.repo);
+            for (repo, snapshot) in &created_secondary_snapshots {
+                remove_secondary_snapshot(Path::new(repo), snapshot);
+            }
+            crate::worktree_ops::reap_orphan_run_worktree(
+                &run_repo_root,
+                &worktree_dir,
+                &branch_name,
+            );
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 serde_json::json!({
@@ -7717,6 +8413,19 @@ async fn create_run_inner(
                 }),
             ));
         }
+        created_secondary_snapshots.push((pin.repo.clone(), dest));
+    }
+
+    if let Err(e) = append_event(state, &run_started).await {
+        error!("failed to append run_started: {e}");
+        for (repo, snapshot) in &created_secondary_snapshots {
+            remove_secondary_snapshot(Path::new(repo), snapshot);
+        }
+        crate::worktree_ops::reap_orphan_run_worktree(&run_repo_root, &worktree_dir, &branch_name);
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            serde_json::json!({ "error": "event log error" }),
+        ));
     }
 
     if let Err(e) = copy_pipeline_to_run(&run_repo_root, &pipeline_path, &run_id) {
@@ -8597,6 +9306,8 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
             "stored": dhm_stored,
         },
         "agent_choice": cfg.agent_choice,
+        // #669: the Instance tier of the skills selection, as stored (ids + labels).
+        "skills": cfg.skills,
         // The settings surface is where a broken descriptor is ALWAYS said.
         "harness_descriptors": harness_descriptors_view,
         "default_sandbox": {
@@ -9282,6 +9993,837 @@ async fn get_agent_profile_referents(
         "runs": []
     }))
     .into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Banque de skills (#668, ADR-0062)
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct CreateSkillRequest {
+    /// The pasted `SKILL.md` text, frontmatter included.
+    content: String,
+    /// The bank label; defaults to the frontmatter `name`.
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    folder_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct UpdateSkillRequest {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    folder_id: Option<Option<String>>,
+}
+
+#[derive(Deserialize)]
+struct CreateSkillFolderRequest {
+    name: String,
+    #[serde(default)]
+    parent_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct UpdateSkillFolderRequest {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    parent_id: Option<Option<String>>,
+}
+
+/// A stable machine-readable code next to the human message, so the popup can
+/// light the right check without parsing English.
+fn skill_error_code(error: &skill_bank::SkillError) -> &'static str {
+    use skill_bank::SkillError as E;
+    match error {
+        E::NoFrontmatter => "no_frontmatter",
+        E::MalformedFrontmatter(_) => "malformed_frontmatter",
+        E::MissingName => "missing_name",
+        E::NameNotKebabCase(_) => "name_not_kebab_case",
+        E::MissingDescription => "missing_description",
+        E::EmptyBody => "empty_body",
+        E::DuplicateName { .. } => "duplicate_name",
+        E::EmptyLabel => "empty_label",
+        E::NotFound => "not_found",
+        E::FolderNotFound => "folder_not_found",
+        E::EmptyFolderName => "empty_folder_name",
+        E::FolderCycle => "folder_cycle",
+        E::InvalidPath(_) => "invalid_path",
+        E::SkillMdReserved => "skill_md_reserved",
+        E::FileNotFound(_) => "file_not_found",
+        E::FileTooLarge { .. } => "file_too_large",
+        E::SourceNotAFile(_) => "source_not_a_file",
+        E::Storage(_) => "storage",
+    }
+}
+
+fn skill_error_response(error: skill_bank::SkillError) -> Response {
+    use skill_bank::SkillError as E;
+    let status = match &error {
+        E::NotFound | E::FileNotFound(_) => StatusCode::NOT_FOUND,
+        E::DuplicateName { .. } => StatusCode::CONFLICT,
+        E::FileTooLarge { .. } => StatusCode::PAYLOAD_TOO_LARGE,
+        E::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        E::InvalidPath(_)
+        | E::SkillMdReserved
+        | E::SourceNotAFile(_)
+        | E::NoFrontmatter
+        | E::MalformedFrontmatter(_)
+        | E::MissingName
+        | E::NameNotKebabCase(_)
+        | E::MissingDescription
+        | E::EmptyBody
+        | E::EmptyLabel
+        | E::FolderNotFound
+        | E::EmptyFolderName
+        | E::FolderCycle => StatusCode::BAD_REQUEST,
+    };
+    let mut body = serde_json::json!({
+        "error": error.to_string(),
+        "code": skill_error_code(&error),
+    });
+    if let E::DuplicateName { existing_id, name } = &error {
+        body["existing_id"] = serde_json::Value::String(existing_id.clone());
+        body["existing_name"] = serde_json::Value::String(name.clone());
+    }
+    (status, Json(body)).into_response()
+}
+
+fn storage_error_response(error: impl std::fmt::Display) -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({ "error": error.to_string(), "code": "storage" })),
+    )
+        .into_response()
+}
+
+/// `GET /settings/skills` — the whole bank in one read: skills, folders, and the
+/// disk root the panel's footer names.
+async fn list_skills(State(state): State<Arc<AppState>>) -> Response {
+    let skills = match skill_bank::list(&state.db).await {
+        Ok(skills) => skills,
+        Err(error) => return storage_error_response(error),
+    };
+    let folders = match skill_bank::list_folders(&state.db).await {
+        Ok(folders) => folders,
+        Err(error) => return storage_error_response(error),
+    };
+    Json(serde_json::json!({
+        "skills": skills,
+        "folders": folders,
+        "root_path": skill_bank::skills_root(&state.repo_root).display().to_string(),
+    }))
+    .into_response()
+}
+
+async fn create_skill(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateSkillRequest>,
+) -> Response {
+    match skill_bank::create(
+        &state.db,
+        &state.repo_root,
+        &req.content,
+        req.name.as_deref(),
+        req.folder_id.as_deref(),
+    )
+    .await
+    {
+        Ok(skill) => (StatusCode::CREATED, Json(skill)).into_response(),
+        Err(error) => skill_error_response(error),
+    }
+}
+
+/// `GET /settings/skills/{id}` — the row plus its content: the raw `SKILL.md`,
+/// the parsed frontmatter (for the read-only table), the body, and the reference
+/// files. A skill whose folder vanished from disk still answers with its row
+/// and `content: null`, never a 500: the row is the truth of the index.
+async fn get_skill(State(state): State<Arc<AppState>>, AxumPath(id): AxumPath<String>) -> Response {
+    let skill = match skill_bank::get(&state.db, &id).await {
+        Ok(Some(skill)) => skill,
+        Ok(None) => return skill_error_response(skill_bank::SkillError::NotFound),
+        Err(error) => return storage_error_response(error),
+    };
+    let content = skill_bank::read_skill_md(&state.repo_root, &id).ok();
+    let parsed = content
+        .as_deref()
+        .and_then(|text| skill_bank::validate_skill_md(text).ok());
+    let files = skill_bank::list_files(&state.repo_root, &id).unwrap_or_default();
+    let mut body = serde_json::to_value(&skill).unwrap_or_default();
+    body["content"] = serde_json::to_value(&content).unwrap_or_default();
+    // The table is rendered in the author's order: `serde_json` objects do not
+    // keep insertion order, so the keys travel separately.
+    body["frontmatter"] = parsed
+        .as_ref()
+        .map(|p| serde_json::to_value(&p.frontmatter).unwrap_or_default())
+        .unwrap_or(serde_json::Value::Null);
+    body["frontmatter_keys"] = parsed
+        .as_ref()
+        .map(|p| {
+            serde_json::Value::Array(
+                p.frontmatter
+                    .keys()
+                    .filter_map(|k| k.as_str().map(|s| serde_json::Value::String(s.to_string())))
+                    .collect(),
+            )
+        })
+        .unwrap_or(serde_json::Value::Null);
+    body["body"] = parsed
+        .as_ref()
+        .map(|p| serde_json::Value::String(p.body.clone()))
+        .unwrap_or(serde_json::Value::Null);
+    body["files"] = serde_json::to_value(&files).unwrap_or_default();
+    body["path"] = serde_json::Value::String(
+        skill_bank::skill_dir(&state.repo_root, &id)
+            .display()
+            .to_string(),
+    );
+    Json(body).into_response()
+}
+
+/// `PUT /settings/skills/{id}` — rename (label only) and/or move. Renaming never
+/// touches the disk: the folder carries the id (#668 AC).
+async fn update_skill(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<UpdateSkillRequest>,
+) -> Response {
+    match skill_bank::update(
+        &state.db,
+        &id,
+        req.name.as_deref(),
+        req.folder_id.as_ref().map(|f| f.as_deref()),
+    )
+    .await
+    {
+        Ok(skill) => Json(skill).into_response(),
+        Err(error) => skill_error_response(error),
+    }
+}
+
+async fn delete_skill(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    match skill_bank::delete(&state.db, &state.repo_root, &id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => skill_error_response(skill_bank::SkillError::NotFound),
+        Err(error) => skill_error_response(error),
+    }
+}
+
+/// `GET /settings/skills/{id}/referents` — who selects this skill, by tier
+/// (#669, same pattern as `get_agent_profile_referents`, ADR-0057): the
+/// instance, the Projets, the Triggers, the pipelines' nodes, and the **not yet
+/// started** Runs (a `run_started` whose payload selects the id, non-terminal,
+/// with no `node_started` yet — the only Runs whose resolution still lies
+/// ahead; a Run with a spawned node already froze its content at the Run).
+///
+/// Informative, never blocking: the delete is unconditional (`skill_bank::delete`),
+/// and every referent keeps the id and shows a warning afterwards.
+async fn get_skill_referents(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    match skill_bank::get(&state.db, &id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return skill_error_response(skill_bank::SkillError::NotFound),
+        Err(error) => return storage_error_response(error),
+    }
+
+    let instance = instance_config::get(&state.db)
+        .await
+        .map(|config| skill_selection::selects(&config.skills, &id))
+        .unwrap_or(false);
+
+    let projects = project_store::list(&state.db)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|project| skill_selection::selects(&project.skills, &id))
+        .map(|project| serde_json::json!({ "id": project.id, "name": project.name }))
+        .collect::<Vec<_>>();
+
+    let triggers = trigger_store::list(&state.db)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|trigger| skill_selection::selects(&trigger.skills, &id))
+        .map(|trigger| {
+            serde_json::json!({
+                "id": trigger.id,
+                "name": trigger.name,
+                "pipeline_id": trigger.pipeline_id
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let pipeline_entries = instance_pipeline_dir(&state.repo_root)
+        .map(|directory| scan_pipeline_dir(&directory, "instance"))
+        .unwrap_or_default();
+    let pipelines = pipeline_entries
+        .into_iter()
+        .flat_map(|entry| {
+            let Ok(yaml) = std::fs::read_to_string(&entry.path) else {
+                return Vec::new();
+            };
+            let Ok(parsed) = pipeline::parse_pipeline(&yaml) else {
+                return Vec::new();
+            };
+            parsed
+                .pipeline
+                .nodes
+                .into_iter()
+                .filter(|node| skill_selection::selects(&node.skills, &id))
+                .map(|node| {
+                    serde_json::json!({
+                        "id": entry.id,
+                        "name": entry.name,
+                        "node_id": node.id,
+                        "scope": entry.scope
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    // One indexed pass over `run_started` payloads: non-terminal Runs that have not
+    // spawned a single node yet (same terminality test as the sandbox-profile
+    // referents, plus the "no node_started" clause that makes them *not started*).
+    let rows: Result<Vec<(String, String)>, _> = sqlx::query_as(
+        "SELECT e.run_id, e.payload FROM events e \
+         WHERE e.kind = 'run_started' AND e.payload IS NOT NULL \
+           AND NOT EXISTS ( \
+             SELECT 1 FROM events t WHERE t.run_id = e.run_id AND t.kind IN \
+               ('run_completed', 'run_failed', 'run_skipped', 'run_halted', 'run_archived', \
+                'node_started') \
+           ) \
+         ORDER BY e.ts DESC",
+    )
+    .fetch_all(&state.db)
+    .await;
+    let runs: Vec<serde_json::Value> = match rows {
+        Ok(rows) => rows
+            .iter()
+            .filter_map(|(run_id, payload)| {
+                let val = serde_json::from_str::<serde_json::Value>(payload).ok()?;
+                let skills: Vec<skill_selection::SkillRef> =
+                    serde_json::from_value(val.get("skills")?.clone()).ok()?;
+                if !skill_selection::selects(&skills, &id) {
+                    return None;
+                }
+                Some(serde_json::json!({
+                    "run_id": run_id,
+                    "pipeline_name": val.get("pipeline_name").and_then(|v| v.as_str()),
+                    "name": val.get("name").and_then(|v| v.as_str()),
+                }))
+            })
+            .collect(),
+        Err(e) => {
+            error!("failed to query runs for skill referents: {e}");
+            Vec::new()
+        }
+    };
+
+    Json(serde_json::json!({
+        "skill_id": id,
+        "instance": instance,
+        "projects": projects,
+        "triggers": triggers,
+        "pipelines": pipelines,
+        "runs": runs
+    }))
+    .into_response()
+}
+
+/// Body ceiling of the files routes: a handful of 10 MB files per multipart
+/// request. The per-file rule (`skill_bank::MAX_FILE_BYTES`) does the naming.
+const SKILL_UPLOAD_BODY_LIMIT: usize = 64 * 1024 * 1024;
+
+#[derive(Deserialize)]
+struct UploadFromPathRequest {
+    /// Absolute path on the daemon's host, picked in the explorer.
+    from_path: String,
+    /// Destination relative to the skill folder; defaults to the file name.
+    #[serde(default)]
+    path: Option<String>,
+}
+
+/// `POST /settings/skills/{id}/files` — add reference files. Two bodies, one
+/// list (#671 design "deux chemins d'upload"):
+///
+/// - `multipart/form-data`: each `file` part is written under its `filename`
+///   (a relative path, sub-folders kept); a `path` text part right before a
+///   `file` part overrides that name (browsers flatten `webkitRelativePath`).
+/// - JSON `{ "from_path": "/abs/on/host", "path"?: "rel" }`: the daemon copies
+///   the file the explorer picked.
+///
+/// Files are written one by one, in order; the first refusal stops the batch
+/// and is returned with the files already written (`uploaded`), so the popup
+/// can mark them and retry the rest. A `SKILL.md` is refused here (400
+/// `skill_md_reserved`): the UI routes a dropped one to `PUT …/files/SKILL.md`.
+async fn upload_skill_files(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+    req: axum::extract::Request,
+) -> Response {
+    match skill_bank::get(&state.db, &id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return skill_error_response(skill_bank::SkillError::NotFound),
+        Err(error) => return storage_error_response(error),
+    }
+    let content_type = req
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    let mut uploaded: Vec<skill_bank::SkillFile> = Vec::new();
+    let mut failure: Option<skill_bank::SkillError> = None;
+
+    if content_type.starts_with("multipart/form-data") {
+        let mut multipart = match Multipart::from_request(req, &()).await {
+            Ok(m) => m,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": format!("multipart parse error: {e}"),
+                        "code": "bad_multipart"
+                    })),
+                )
+                    .into_response();
+            }
+        };
+        let mut pending_path: Option<String> = None;
+        loop {
+            let field = match multipart.next_field().await {
+                Ok(Some(field)) => field,
+                Ok(None) => break,
+                Err(e) => {
+                    // A body over the route limit surfaces here, mid-stream.
+                    failure = Some(skill_bank::SkillError::Storage(format!(
+                        "upload interrupted: {e}"
+                    )));
+                    break;
+                }
+            };
+            let field_name = field.name().unwrap_or("").to_string();
+            match field_name.as_str() {
+                "path" => {
+                    pending_path = field.text().await.ok().filter(|s| !s.trim().is_empty());
+                }
+                "file" => {
+                    let filename = field.file_name().unwrap_or("").to_string();
+                    let rel = pending_path.take().unwrap_or(filename);
+                    let data = match field.bytes().await {
+                        Ok(data) => data,
+                        Err(e) => {
+                            failure = Some(skill_bank::SkillError::Storage(format!(
+                                "failed to read `{rel}`: {e}"
+                            )));
+                            break;
+                        }
+                    };
+                    match skill_bank::write_file(&state.repo_root, &id, &rel, &data) {
+                        Ok(file) => uploaded.push(file),
+                        Err(error) => {
+                            failure = Some(error);
+                            break;
+                        }
+                    }
+                }
+                other => {
+                    failure = Some(skill_bank::SkillError::InvalidPath(format!(
+                        "unknown multipart field `{other}` (accepted: path, file)"
+                    )));
+                    break;
+                }
+            }
+        }
+    } else {
+        let body = match Json::<UploadFromPathRequest>::from_request(req, &()).await {
+            Ok(Json(body)) => body,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": format!("expected multipart/form-data or {{ \"from_path\" }}: {e}"),
+                        "code": "bad_request"
+                    })),
+                )
+                    .into_response();
+            }
+        };
+        let from = std::path::Path::new(&body.from_path);
+        if !from.is_absolute() {
+            failure = Some(skill_bank::SkillError::SourceNotAFile(
+                body.from_path.clone(),
+            ));
+        } else {
+            match skill_bank::copy_file_from(&state.repo_root, &id, from, body.path.as_deref()) {
+                Ok(file) => uploaded.push(file),
+                Err(error) => failure = Some(error),
+            }
+        }
+    }
+
+    let files = skill_bank::list_files(&state.repo_root, &id).unwrap_or_default();
+    match failure {
+        None => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({ "uploaded": uploaded, "files": files })),
+        )
+            .into_response(),
+        Some(error) => {
+            let mut response = skill_error_response(error);
+            // Keep the status and reason; add what did land, so the client
+            // never re-uploads a file that is already there.
+            let (parts, body) = response.into_parts();
+            let bytes = axum::body::to_bytes(body, usize::MAX)
+                .await
+                .unwrap_or_default();
+            let mut json: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
+            json["uploaded"] = serde_json::to_value(&uploaded).unwrap_or_default();
+            json["files"] = serde_json::to_value(&files).unwrap_or_default();
+            response = Response::from_parts(parts, axum::body::Body::from(json.to_string()));
+            response
+        }
+    }
+}
+
+/// `GET /settings/skills/{id}/files/{*path}` — one file for the plain-text
+/// editor: `text` when it decodes as UTF-8, else `text: null, binary: true`
+/// (the editor shows "binary file · N KB" instead of the text).
+async fn read_skill_file(
+    State(state): State<Arc<AppState>>,
+    AxumPath((id, path)): AxumPath<(String, String)>,
+) -> Response {
+    match skill_bank::get(&state.db, &id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return skill_error_response(skill_bank::SkillError::NotFound),
+        Err(error) => return storage_error_response(error),
+    }
+    match skill_bank::read_file(&state.repo_root, &id, &path) {
+        Ok((file, bytes)) => {
+            let text = String::from_utf8(bytes).ok();
+            Json(serde_json::json!({
+                "path": file.path,
+                "size": file.size,
+                "binary": text.is_none(),
+                "text": text,
+            }))
+            .into_response()
+        }
+        Err(error) => skill_error_response(error),
+    }
+}
+
+/// `PUT /settings/skills/{id}/files/{*path}` — save the editor's text. Any
+/// `Content-Type`; the body is the file. `SKILL.md` goes through the five
+/// checks again (`skill_bank::update_skill_md`): a refusal is the same named
+/// 400 the paste popup gets, and the file on disk is untouched.
+async fn write_skill_file(
+    State(state): State<Arc<AppState>>,
+    AxumPath((id, path)): AxumPath<(String, String)>,
+    body: String,
+) -> Response {
+    let rel = match skill_bank::normalise_file_path(&path) {
+        Ok(rel) => rel,
+        Err(error) => return skill_error_response(error),
+    };
+    if rel == skill_bank::SKILL_MD {
+        return match skill_bank::update_skill_md(&state.db, &state.repo_root, &id, &body).await {
+            Ok(skill) => Json(serde_json::json!({
+                "path": skill_bank::SKILL_MD,
+                "size": body.len(),
+                "skill": skill,
+            }))
+            .into_response(),
+            Err(error) => skill_error_response(error),
+        };
+    }
+    match skill_bank::get(&state.db, &id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return skill_error_response(skill_bank::SkillError::NotFound),
+        Err(error) => return storage_error_response(error),
+    }
+    match skill_bank::overwrite_file(&state.repo_root, &id, &rel, &body) {
+        Ok(file) => {
+            Json(serde_json::json!({ "path": file.path, "size": file.size })).into_response()
+        }
+        Err(error) => skill_error_response(error),
+    }
+}
+
+/// `DELETE /settings/skills/{id}/files/{*path}` — remove one reference file
+/// (never `SKILL.md`: 400 `skill_md_reserved`).
+async fn delete_skill_file(
+    State(state): State<Arc<AppState>>,
+    AxumPath((id, path)): AxumPath<(String, String)>,
+) -> Response {
+    match skill_bank::get(&state.db, &id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return skill_error_response(skill_bank::SkillError::NotFound),
+        Err(error) => return storage_error_response(error),
+    }
+    match skill_bank::delete_file(&state.repo_root, &id, &path) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => skill_error_response(error),
+    }
+}
+
+async fn list_skill_folders(State(state): State<Arc<AppState>>) -> Response {
+    match skill_bank::list_folders(&state.db).await {
+        Ok(folders) => Json(serde_json::json!({ "folders": folders })).into_response(),
+        Err(error) => storage_error_response(error),
+    }
+}
+
+async fn create_skill_folder(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateSkillFolderRequest>,
+) -> Response {
+    match skill_bank::create_folder(&state.db, &req.name, req.parent_id.as_deref()).await {
+        Ok(folder) => (StatusCode::CREATED, Json(folder)).into_response(),
+        Err(error) => skill_error_response(error),
+    }
+}
+
+/// A folder addressed by its own route that does not exist is a 404, while an
+/// unknown folder *named in a body* (a move target, a parent) stays a 400: the
+/// first is "no such resource", the second "your request is wrong".
+fn skill_folder_not_found_response() -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({
+            "error": skill_bank::SkillError::FolderNotFound.to_string(),
+            "code": "not_found",
+        })),
+    )
+        .into_response()
+}
+
+async fn update_skill_folder(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<UpdateSkillFolderRequest>,
+) -> Response {
+    match skill_bank::get_folder(&state.db, &id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return skill_folder_not_found_response(),
+        Err(error) => return storage_error_response(error),
+    }
+    match skill_bank::update_folder(
+        &state.db,
+        &id,
+        req.name.as_deref(),
+        req.parent_id.as_ref().map(|p| p.as_deref()),
+    )
+    .await
+    {
+        Ok(folder) => Json(folder).into_response(),
+        Err(error) => skill_error_response(error),
+    }
+}
+
+/// `DELETE /settings/skill-folders/{id}` — the folder's skills and sub-folders
+/// move to its parent. Never deletes a skill.
+async fn delete_skill_folder(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    match skill_bank::delete_folder(&state.db, &id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => skill_folder_not_found_response(),
+        Err(error) => skill_error_response(error),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Import from a Source (#670)
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct ScanSkillSourceRequest {
+    /// Client-chosen id; the clone is kept under it for the import that follows
+    /// and `POST …/scan/{id}/cancel` kills it.
+    scan_id: String,
+    source: String,
+}
+
+#[derive(Deserialize)]
+struct ImportSkillsRequest {
+    scan_id: String,
+    source: String,
+    #[serde(default)]
+    folder: Option<skill_import::ImportFolder>,
+    items: Vec<skill_import::ImportItem>,
+}
+
+#[derive(Deserialize)]
+struct RescanSkillFolderRequest {
+    scan_id: String,
+}
+
+#[derive(Deserialize)]
+struct UpdateSkillFolderFromSourceRequest {
+    scan_id: String,
+    items: Vec<skill_import::UpdateItem>,
+}
+
+fn import_error_response(error: skill_import::ImportError) -> Response {
+    use skill_import::ImportError as E;
+    if let E::Skill(inner) = error {
+        return skill_error_response(inner);
+    }
+    let status = match &error {
+        E::CloneFailed(_) | E::CloneTimeout => StatusCode::BAD_GATEWAY,
+        E::Cancelled => StatusCode::from_u16(499).unwrap_or(StatusCode::BAD_REQUEST),
+        E::ScanExpired => StatusCode::GONE,
+        E::NotASourceFolder | E::UnknownCandidate(_) | E::UnresolvedCollision(_) => {
+            StatusCode::CONFLICT
+        }
+        E::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        E::EmptySource | E::InvalidSource(_) | E::LocalNotFound(_) => StatusCode::BAD_REQUEST,
+        E::Skill(_) => unreachable!("handled above"),
+    };
+    (
+        status,
+        Json(serde_json::json!({
+            "error": error.to_string(),
+            "code": skill_import::error_code(&error),
+        })),
+    )
+        .into_response()
+}
+
+fn daemon_home() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(PathBuf::from)
+}
+
+/// `POST /settings/skills/scan` — clone shallow (or open a local folder), walk
+/// it for `SKILL.md`s, validate each, and report collisions with the bank.
+/// Nothing is written to the bank.
+async fn scan_skill_source(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ScanSkillSourceRequest>,
+) -> Response {
+    let source = match skill_import::parse_source(&req.source, daemon_home().as_deref()) {
+        Ok(source) => source,
+        Err(error) => return import_error_response(error),
+    };
+    let outcome = match skill_import::scan(&req.scan_id, source).await {
+        Ok(outcome) => outcome,
+        Err(error) => return import_error_response(error),
+    };
+    let candidates = match skill_import::with_collisions(
+        &state.db,
+        &outcome.source,
+        outcome.commit.as_deref(),
+        outcome.candidates,
+    )
+    .await
+    {
+        Ok(candidates) => candidates,
+        Err(error) => return import_error_response(error),
+    };
+    let _ = skill_bank::remember_source(
+        &state.db,
+        &outcome.source.url,
+        outcome.source.git_ref.as_deref(),
+        &outcome.source.path,
+    )
+    .await;
+    Json(serde_json::json!({
+        "scan_id": req.scan_id,
+        "source": outcome.source,
+        "commit": outcome.commit,
+        "candidates": candidates,
+        "elsewhere": outcome.elsewhere,
+        "elsewhere_count": outcome.elsewhere_count,
+    }))
+    .into_response()
+}
+
+async fn cancel_skill_scan(AxumPath(scan_id): AxumPath<String>) -> Response {
+    let cancelled = skill_import::cancel_scan(&scan_id);
+    Json(serde_json::json!({ "cancelled": cancelled })).into_response()
+}
+
+/// `POST /settings/skills/import` — write the checked candidates into a Source
+/// folder (new or given), with the explicit per-collision choice.
+async fn import_skills(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ImportSkillsRequest>,
+) -> Response {
+    let source = match skill_import::parse_source(&req.source, daemon_home().as_deref()) {
+        Ok(source) => source,
+        Err(error) => return import_error_response(error),
+    };
+    let folder = req.folder.unwrap_or(skill_import::ImportFolder {
+        id: None,
+        name: None,
+        parent_id: None,
+    });
+    match skill_import::import(
+        &state.db,
+        &state.repo_root,
+        &req.scan_id,
+        source,
+        folder,
+        req.items,
+    )
+    .await
+    {
+        Ok(report) => Json(report).into_response(),
+        Err(error) => import_error_response(error),
+    }
+}
+
+async fn recent_skill_sources(State(state): State<Arc<AppState>>) -> Response {
+    match skill_bank::recent_sources(&state.db).await {
+        Ok(sources) => Json(serde_json::json!({ "sources": sources })).into_response(),
+        Err(error) => storage_error_response(error),
+    }
+}
+
+/// `POST /settings/skill-folders/{id}/rescan` — re-clone the folder's source
+/// and diff it against the folder's skills. Read-only on the bank.
+async fn rescan_skill_folder(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<RescanSkillFolderRequest>,
+) -> Response {
+    match skill_bank::get_folder(&state.db, &id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return skill_folder_not_found_response(),
+        Err(error) => return storage_error_response(error),
+    }
+    match skill_import::rescan(&state.db, &state.repo_root, &id, &req.scan_id).await {
+        Ok(report) => Json(report).into_response(),
+        Err(error) => import_error_response(error),
+    }
+}
+
+/// `POST /settings/skill-folders/{id}/update` — apply the confirmed diff.
+async fn update_skill_folder_from_source(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<UpdateSkillFolderFromSourceRequest>,
+) -> Response {
+    match skill_bank::get_folder(&state.db, &id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return skill_folder_not_found_response(),
+        Err(error) => return storage_error_response(error),
+    }
+    match skill_import::update(&state.db, &state.repo_root, &id, &req.scan_id, req.items).await {
+        Ok(report) => Json(report).into_response(),
+        Err(error) => import_error_response(error),
+    }
 }
 
 /// Serialise one resolved entry for the editor.
@@ -10076,9 +11618,52 @@ async fn get_run(
                 &repo_root,
                 &prices,
             );
-            Json(run_state).into_response()
+            let mut response = serde_json::to_value(run_state).expect("RunState serializes");
+            inject_frozen_node_provisioning(&mut response, &events);
+            Json(response).into_response()
         }
+
         None => (StatusCode::NOT_FOUND, "run not found").into_response(),
+    }
+}
+
+fn inject_frozen_node_provisioning(response: &mut serde_json::Value, events: &[event_log::Event]) {
+    let Some(nodes) = response
+        .get_mut("nodes")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return;
+    };
+    for event in events {
+        if event.kind != event_log::EventKind::NodeStarted {
+            continue;
+        }
+        let (Some(node_id), Some(iter), Some(rules)) = (
+            event.node_id.as_deref(),
+            event.iter,
+            event
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.get("provisioning")),
+        ) else {
+            continue;
+        };
+        let Some(node) = nodes.get_mut(node_id) else {
+            continue;
+        };
+        if node.get("iter").and_then(serde_json::Value::as_i64) == Some(iter) {
+            node["provisioning"] = rules.clone();
+            if let Some(plan) = event
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.get("provisioning_plan"))
+            {
+                node["provisioning_plan"] = plan.clone();
+            }
+            if node.get("provisioning_frozen_at").is_none() {
+                node["provisioning_frozen_at"] = serde_json::Value::String(event.ts.clone());
+            }
+        }
     }
 }
 
@@ -10311,38 +11896,57 @@ async fn get_run_pipeline(
     .into_response()
 }
 
-async fn get_run_pipeline_document(
-    State(state): State<Arc<AppState>>,
-    AxumPath(run_id): AxumPath<String>,
-) -> Response {
-    let run_state = load_events(&state.db, &run_id)
+/// The pipeline a Run ran (archived or live) with its prompts — what the Run's
+/// portable document and its skills sidecar are both built from.
+async fn run_pipeline_for_export(
+    state: &AppState,
+    run_id: &str,
+) -> Result<(pipeline::PipelineDef, HashMap<String, String>), Box<Response>> {
+    let run_state = load_events(&state.db, run_id)
         .await
         .ok()
         .and_then(|events| event_log::project(&events));
     let yaml_path = match &run_state {
-        Some(run) => archived_or_live_pipeline_yaml(&state, run, &run_id),
-        None => run_scoped_pipeline_path(&state.repo_root, &run_id),
+        Some(run) => archived_or_live_pipeline_yaml(state, run, run_id),
+        None => run_scoped_pipeline_path(&state.repo_root, run_id),
     };
-    let yaml = match std::fs::read_to_string(&yaml_path) {
-        Ok(yaml) => yaml,
-        Err(_) => return (StatusCode::NOT_FOUND, "run pipeline not found").into_response(),
-    };
-    let parsed = match pipeline::parse_pipeline(&yaml) {
-        Ok(parsed) => parsed,
-        Err(error) => {
-            return (
+    let yaml = std::fs::read_to_string(&yaml_path)
+        .map_err(|_| Box::new((StatusCode::NOT_FOUND, "run pipeline not found").into_response()))?;
+    let parsed = pipeline::parse_pipeline(&yaml).map_err(|error| {
+        Box::new(
+            (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": format!("invalid run pipeline: {error}") })),
             )
-                .into_response()
-        }
-    };
+                .into_response(),
+        )
+    })?;
     let prompts_dir = match &run_state {
-        Some(run) => archived_or_live_prompts_dir(&state, run, &run_id),
-        None => run_scoped_prompts_dir(&state.repo_root, &run_id),
+        Some(run) => archived_or_live_prompts_dir(state, run, run_id),
+        None => run_scoped_prompts_dir(&state.repo_root, run_id),
     };
-    let prompts = read_prompts_from_dir(&prompts_dir);
-    match portable_pipeline::export(&parsed.pipeline, &prompts) {
+    Ok((parsed.pipeline, read_prompts_from_dir(&prompts_dir)))
+}
+
+async fn get_run_pipeline_document_skills(
+    State(state): State<Arc<AppState>>,
+    AxumPath(run_id): AxumPath<String>,
+) -> Response {
+    match run_pipeline_for_export(&state, &run_id).await {
+        Ok((pipeline, _)) => skills_sidecar_response(&state.repo_root, &pipeline),
+        Err(response) => *response,
+    }
+}
+
+async fn get_run_pipeline_document(
+    State(state): State<Arc<AppState>>,
+    AxumPath(run_id): AxumPath<String>,
+) -> Response {
+    let (pipeline, prompts) = match run_pipeline_for_export(&state, &run_id).await {
+        Ok(found) => found,
+        Err(response) => return *response,
+    };
+    match portable_pipeline::export(&pipeline, &prompts) {
         Ok(document) => (
             [(header::CONTENT_TYPE, "application/yaml; charset=utf-8")],
             document,
@@ -14554,6 +16158,13 @@ async fn cleanup_run(state: &AppState, run_id: &str) -> Response {
                 );
             }
         }
+    }
+
+    // #672 / ADR-0062: take back the per-skill exclusions this Run wrote in the target
+    // repo's `info/exclude` (its `# pdo <run-id>` marked lines only — every other
+    // line, PDO's for another Run or the user's, stays intact).
+    if let Err(e) = crate::skill_delivery::remove_exclusions(&repo_root, run_id) {
+        warn!("cleanup_run: cannot remove skill exclusions for run {run_id}: {e:#}");
     }
 
     for pattern in [format!("pdo/run-{run_id}"), format!("pdo/sub-{run_id}*")] {
@@ -22126,6 +23737,9 @@ mod tests {
         rs.nodes.insert(
             node_id.into(),
             event_log::NodeState {
+                missing_skills: Vec::new(),
+                skipped_skills: Vec::new(),
+                skills: None,
                 isolated_worktree: None,
                 harness: None,
                 cost: None,
@@ -22165,6 +23779,7 @@ mod tests {
 
     fn doc_node_def(id: &str) -> pipeline::NodeDef {
         pipeline::NodeDef {
+            skills: Vec::new(),
             isolated_worktree: None,
             id: id.into(),
             name: id.into(),
@@ -22339,6 +23954,9 @@ mod tests {
         run_state.nodes.insert(
             "a".into(),
             event_log::NodeState {
+                missing_skills: Vec::new(),
+                skipped_skills: Vec::new(),
+                skills: None,
                 isolated_worktree: None,
                 harness: None,
                 cost: None,
@@ -22394,6 +24012,9 @@ mod tests {
         run_state.nodes.insert(
             "a".into(),
             event_log::NodeState {
+                missing_skills: Vec::new(),
+                skipped_skills: Vec::new(),
+                skills: None,
                 isolated_worktree: None,
                 harness: None,
                 cost: None,
@@ -22417,6 +24038,9 @@ mod tests {
         run_state.nodes.insert(
             "b".into(),
             event_log::NodeState {
+                missing_skills: Vec::new(),
+                skipped_skills: Vec::new(),
+                skills: None,
                 isolated_worktree: None,
                 harness: None,
                 cost: None,
@@ -22647,6 +24271,9 @@ mod tests {
             rs.nodes.insert(
                 node_id.into(),
                 event_log::NodeState {
+                    missing_skills: Vec::new(),
+                    skipped_skills: Vec::new(),
+                    skills: None,
                     isolated_worktree: None,
                     harness: None,
                     cost: None,
@@ -24858,6 +26485,138 @@ edges:
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn get_pipeline_returns_node_provisioning_rules() {
+        let fake_home = FakeHome::new();
+        let pipelines = fake_home.path().join(".pdo/pipelines");
+        std::fs::create_dir_all(&pipelines).unwrap();
+        std::fs::write(
+            pipelines.join("provisioned.yaml"),
+            format!(
+                "name: provisioned\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: worker\n    name: Worker\n    type: agent\n    isolated_worktree: true\n    provisioning:\n      copy: [\".env\"]\n      hardlink: [\"datasets/**\", \"!datasets/huge.bin\"]\n      symlink: []\n    outputs:\n      - name: result\n"
+            ),
+        )
+        .unwrap();
+
+        let state = test_state_with_dir(fake_home.path()).await;
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/pipelines/provisioned")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            json["pipeline"]["nodes"][2]["provisioning"],
+            serde_json::json!({
+                "copy": [".env"],
+                "hardlink": ["datasets/**", "!datasets/huge.bin"],
+                "symlink": []
+            })
+        );
+    }
+
+    #[test]
+    fn run_response_uses_the_current_iterations_frozen_node_provisioning() {
+        let mut response = serde_json::json!({
+            "nodes": {
+                "worker": { "iter": 2 }
+            }
+        });
+        let events = vec![
+            event_log::Event {
+                id: None,
+                run_id: "run".into(),
+                ts: "2026-09-01T12:00:00Z".into(),
+                kind: event_log::EventKind::NodeStarted,
+                node_id: Some("worker".into()),
+                iter: Some(1),
+                payload: Some(serde_json::json!({
+                    "provisioning": { "copy": ["old"], "hardlink": [], "symlink": [] }
+                })),
+            },
+            event_log::Event {
+                id: None,
+                run_id: "run".into(),
+                ts: "2026-09-01T12:01:00Z".into(),
+                kind: event_log::EventKind::NodeStarted,
+                node_id: Some("worker".into()),
+                iter: Some(2),
+                payload: Some(serde_json::json!({
+                    "provisioning": { "copy": ["frozen"], "hardlink": [], "symlink": [] },
+                    "provisioning_plan": {
+                        "entries": [{
+                            "relative_path": "frozen",
+                            "mode": "copy",
+                            "origin_scope": "isolated_node",
+                            "pattern": "frozen",
+                            "provided_by_git": false
+                        }],
+                        "rules": [],
+                        "conflicts": []
+                    }
+                })),
+            },
+            event_log::Event {
+                id: None,
+                run_id: "run".into(),
+                ts: "2026-09-01T12:02:00Z".into(),
+                kind: event_log::EventKind::NodeStarted,
+                node_id: Some("worker".into()),
+                iter: Some(2),
+                payload: Some(serde_json::json!({
+                    "provisioning": { "copy": ["frozen"], "hardlink": [], "symlink": [] }
+                })),
+            },
+        ];
+
+        inject_frozen_node_provisioning(&mut response, &events);
+
+        assert_eq!(
+            response["nodes"]["worker"]["provisioning"]["copy"],
+            serde_json::json!(["frozen"])
+        );
+        assert_eq!(
+            response["nodes"]["worker"]["provisioning_frozen_at"],
+            serde_json::json!("2026-09-01T12:01:00Z")
+        );
+        assert_eq!(
+            response["nodes"]["worker"]["provisioning_plan"]["entries"][0]["relative_path"],
+            serde_json::json!("frozen")
+        );
+    }
+
+    #[test]
+    fn provisioning_preview_drops_rules_narrower_than_the_requested_scope() {
+        let scoped = vec![
+            provisioning::ScopedRules {
+                scope: provisioning::ProvisioningScope::Instance,
+                rules: provisioning::ProvisioningRules::default(),
+            },
+            provisioning::ScopedRules {
+                scope: provisioning::ProvisioningScope::Project,
+                rules: provisioning::ProvisioningRules {
+                    copy: vec!["project.env".into()],
+                    ..Default::default()
+                },
+            },
+        ];
+
+        let visible =
+            provisioning_rules_through_scope(scoped, provisioning::ProvisioningScope::Instance);
+
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].scope, provisioning::ProvisioningScope::Instance);
     }
 
     #[tokio::test]
@@ -31264,6 +33023,7 @@ edges: []
         isolated: bool,
     ) -> (pipeline::PipelineDef, pipeline::NodeDef, std::path::PathBuf) {
         let node = pipeline::NodeDef {
+            skills: Vec::new(),
             isolated_worktree: Some(isolated),
             id: node_id.into(),
             name: node_id.into(),
@@ -33644,8 +35404,10 @@ edges:
             "sandbox": null,
             "harness": null,
             "agent_choice": null,
+            "skills": [],
             "auto_name": null,
             "auto_fail": null,
+            "provisioning": {},
         });
         // The payload's keys are exactly the allow-list (pins the lock-step).
         let keys: std::collections::BTreeSet<String> =

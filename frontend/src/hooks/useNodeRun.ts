@@ -58,7 +58,10 @@ export type MarkVerdict =
  * node flips to `running` and the terminal re-shows), so `null` is the resting
  * state; only a refusal writes one.
  */
-export type ActionVerdict = { action: "retry" | "start"; message: string };
+export type ActionVerdict = {
+  action: "retry" | "start" | "restart";
+  message: string;
+};
 
 export interface UseNodeRunOptions {
   isArchived?: boolean;
@@ -279,9 +282,18 @@ export function useNodeRun(
     try { await killNode(runId, node.node_id, selectedIter); } catch { /* best-effort */ }
   }, [runId, node.node_id, selectedIter]);
 
-  const restartStale = useCallback(async () => {
-    try { await restartNode(runId, node.node_id, selectedIter); } catch { /* best-effort */ }
-  }, [runId, node.node_id, selectedIter]);
+  const restartIteration = useCallback(async () => {
+    setActionVerdict(null);
+    try {
+      await restartNode(runId, node.node_id, selectedIter);
+      onRetryStarted?.();
+    } catch (e) {
+      setActionVerdict({
+        action: "restart",
+        message: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }, [runId, node.node_id, selectedIter, onRetryStarted]);
 
   return {
     promptText,
@@ -297,6 +309,6 @@ export function useNodeRun(
     start,
     markComplete,
     killStale,
-    restartStale,
+    restartIteration,
   };
 }

@@ -7,6 +7,7 @@ import type { PipelineListEntry, RunListEntry, Trigger } from "../types";
 import type { LibraryPipelineEntry } from "../api";
 import { cleanupRun, deleteLibraryPipeline, deletePipeline, duplicateLibraryPipeline, fetchPipelines, importPipelineDocument, importWorkflow, openRunShell, pauseRun, renameRun, resumeRun, retryAll } from "../api";
 import { useEditStore } from "../stores/editStore";
+import { useRecentReposStore } from "../stores/recentReposStore";
 
 const mockRenameRun = vi.mocked(renameRun);
 const mockDeletePipeline = vi.mocked(deletePipeline);
@@ -51,6 +52,11 @@ vi.mock("../api", () => ({
     prompts: {},
     diagnostics: [],
   }),
+  fetchSettings: vi.fn().mockResolvedValue({}),
+  fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
+  // #669: the skills selector's reads (bank + inherited tiers), empty by default.
+  fetchSkillBank: vi.fn().mockResolvedValue({ skills: [], folders: [], root_path: "" }),
+  fetchProjects: vi.fn().mockResolvedValue([]),
 }));
 
 describe("portable pipeline import", () => {
@@ -163,6 +169,104 @@ describe("portable pipeline import", () => {
       "prompts.FBKE6BhH",
     );
     expect(screen.getByText(/Imported with 1 warning:/)).toBeInTheDocument();
+  });
+
+  // #673 / ADR-0062: the skills sidecar picked beside the YAML travels as base64
+  // in the same import request, and the bank is told to refresh afterwards so
+  // the missing-skill warnings disappear (FP step 3).
+  it("sends the skills sidecar with the document and refreshes the bank", async () => {
+    const openPipeline = vi.fn().mockResolvedValue(undefined);
+    useEditStore.setState({ openPipeline });
+    mockImportPipelineDocument.mockResolvedValue({
+      id: "with-skills",
+      scope: "instance",
+      path: "/tmp/with-skills.yaml",
+      warnings: [],
+    });
+    const skillsChanged = vi.fn();
+    window.addEventListener("pdo:skills-changed", skillsChanged);
+
+    render(
+      <UnifiedLeftPanel
+        runs={[]}
+        selectedRunId={null}
+        onSelectRun={() => {}}
+        onNewRun={() => {}}
+        libraryPipelines={[]}
+        onLibraryPipelinesChanged={() => {}}
+      />,
+    );
+    await userEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
+    await userEvent.click(screen.getByTestId("import-workflow-button"));
+    expect(screen.getByText("no skills sidecar")).toBeInTheDocument();
+
+    const yaml = new File(["pdo_pipeline: 1\npipeline: {}\n"], "with-skills.pdo.yaml", {
+      type: "application/yaml",
+    });
+    const zip = new File([new Uint8Array([0x50, 0x4b, 0x05, 0x06])], "with-skills.skills.zip", {
+      type: "application/zip",
+    });
+    await userEvent.upload(screen.getByTestId("pipeline-document-files"), [yaml, zip]);
+
+    expect(await screen.findByTestId("skills-sidecar-chip")).toHaveTextContent(
+      "with-skills.skills.zip",
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("pipeline-document-input")).toHaveValue(
+        "pdo_pipeline: 1\npipeline: {}\n",
+      ),
+    );
+    await userEvent.click(await screen.findByRole("button", { name: "Import" }));
+
+    await waitFor(() =>
+      expect(mockImportPipelineDocument).toHaveBeenCalledWith(
+        "pdo_pipeline: 1\npipeline: {}\n",
+        btoa(String.fromCharCode(0x50, 0x4b, 0x05, 0x06)),
+      ),
+    );
+    await waitFor(() => expect(openPipeline).toHaveBeenCalledWith("with-skills"));
+    expect(skillsChanged).toHaveBeenCalled();
+    window.removeEventListener("pdo:skills-changed", skillsChanged);
+  });
+
+  it("removes a picked sidecar and imports the document alone", async () => {
+    useEditStore.setState({ openPipeline: vi.fn().mockResolvedValue(undefined) });
+    mockImportPipelineDocument.mockResolvedValue({
+      id: "alone",
+      scope: "instance",
+      path: "/tmp/alone.yaml",
+      warnings: ["skills.1111: skill `tdd` is absent from the bank and from the sidecar"],
+    });
+    render(
+      <UnifiedLeftPanel
+        runs={[]}
+        selectedRunId={null}
+        onSelectRun={() => {}}
+        onNewRun={() => {}}
+        libraryPipelines={[]}
+        onLibraryPipelinesChanged={() => {}}
+      />,
+    );
+    await userEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
+    await userEvent.click(screen.getByTestId("import-workflow-button"));
+    const zip = new File([new Uint8Array([1, 2, 3])], "x.skills.zip", { type: "application/zip" });
+    await userEvent.upload(screen.getByTestId("pipeline-document-files"), [zip]);
+    await screen.findByTestId("skills-sidecar-chip");
+    await userEvent.click(screen.getByRole("button", { name: "Remove the skills sidecar" }));
+    expect(screen.getByText("no skills sidecar")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByTestId("pipeline-document-input"), {
+      target: { value: "pdo_pipeline: 1\npipeline: {}\n" },
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Import" }));
+
+    await waitFor(() =>
+      expect(mockImportPipelineDocument).toHaveBeenCalledWith(
+        "pdo_pipeline: 1\npipeline: {}\n",
+        undefined,
+      ),
+    );
+    expect(await screen.findByTestId("import-workflow-warnings")).toHaveTextContent("absent");
   });
 });
 
@@ -468,6 +572,27 @@ describe("UnifiedLeftPanel runs grouped by repo (#258)", () => {
     renderPanel({ runs });
     expect(screen.queryByTestId("run-repo-group")).not.toBeInTheDocument();
     expect(screen.getAllByTestId("run-display-label")).toHaveLength(2);
+  });
+
+  it("opens project onboarding from a flat single-repository list", () => {
+    const runs: RunListEntry[] = [
+      { run_id: "r1", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/foo" },
+    ];
+    renderPanel({ runs });
+
+    fireEvent.click(screen.getByRole("button", { name: "Configure project" }));
+    expect(screen.getByTestId("project-edit-modal")).toBeInTheDocument();
+    expect(screen.getByTestId("project-members-list")).toHaveTextContent("/repos/foo");
+  });
+
+  it("opens project onboarding from a recent repository before the first Run", () => {
+    useRecentReposStore.setState({ recentRepos: ["/repos/fresh"] });
+    renderPanel({ runs: [] });
+
+    fireEvent.click(screen.getByRole("button", { name: "Configure project" }));
+
+    expect(screen.getByTestId("project-edit-modal")).toBeInTheDocument();
+    expect(screen.getByTestId("project-members-list")).toHaveTextContent("/repos/fresh");
   });
 
   it("renders one repo-group header per distinct repo, alphabetical, when ≥ 2 repos", () => {

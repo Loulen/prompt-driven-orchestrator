@@ -4,7 +4,7 @@ import { SectionHead } from "./InspectorPrimitives";
 import TmuxTerminal from "./TmuxTerminal";
 import DiffSection from "./DiffSection";
 import type { LibraryPipelineEntry } from "../api";
-import { fetchPipelineDocument, fetchRunPipelineDocument, openLibraryAssistant } from "../api";
+import { fetchPipelineDocument, fetchPipelineSkillsSidecar, fetchRunPipelineDocument, fetchRunPipelineSkillsSidecar, openLibraryAssistant } from "../api";
 import type { RunState, PipelineDef } from "../types";
 import { isLiveRun } from "../types";
 import { formatDuration, useRunDuration } from "../lib/runDuration";
@@ -494,6 +494,16 @@ function YamlTab({
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
   const [showExcluded, setShowExcluded] = useState(false);
+  const [sidecarError, setSidecarError] = useState<string | null>(null);
+  // #673 / ADR-0062: the skills the nodes select travel beside the YAML, in a
+  // sidecar `<pipeline>.skills/<id>/…` — content, not instance configuration.
+  const skillCount = useMemo(() => {
+    const ids = new Set<string>();
+    for (const node of pipeline?.nodes ?? []) {
+      for (const skill of node.skills ?? []) ids.add(skill.id);
+    }
+    return ids.size;
+  }, [pipeline]);
 
   useEffect(() => {
     let cancelled = false;
@@ -542,13 +552,35 @@ function YamlTab({
 
   const pipelineName = pipeline.name || "pipeline";
 
-  function downloadDocument() {
-    const url = URL.createObjectURL(new Blob([yaml], { type: "application/yaml" }));
+  function saveBlob(blob: Blob, filename: string) {
+    const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = `${pipelineName}.pdo.yaml`;
+    anchor.download = filename;
     anchor.click();
     URL.revokeObjectURL(url);
+  }
+
+  function downloadDocument() {
+    saveBlob(new Blob([yaml], { type: "application/yaml" }), `${pipelineName}.pdo.yaml`);
+  }
+
+  async function downloadSkillsSidecar() {
+    setSidecarError(null);
+    try {
+      const blob = runId
+        ? await fetchRunPipelineSkillsSidecar(runId)
+        : pipelineId
+          ? await fetchPipelineSkillsSidecar(pipelineId)
+          : null;
+      if (!blob) {
+        setSidecarError("No skill of this pipeline is in the bank: nothing to export.");
+        return;
+      }
+      saveBlob(blob, `${pipelineName}.skills.zip`);
+    } catch (e) {
+      setSidecarError(e instanceof Error ? e.message : String(e));
+    }
   }
 
   return (
@@ -573,11 +605,33 @@ function YamlTab({
             <Download size={11} />
             Download
           </button>
+          {skillCount > 0 && (
+            <button
+              className="flex items-center gap-1 rounded px-1.5 py-1 text-fg-3 hover:bg-bg-4 hover:text-fg"
+              onClick={() => void downloadSkillsSidecar()}
+              title={`The ${skillCount} skill${skillCount === 1 ? "" : "s"} this pipeline selects, as ${pipelineName}.skills/<id>/… to unpack next to the YAML`}
+              data-testid="download-skills-sidecar"
+            >
+              <Download size={11} />
+              Skills ({skillCount})
+            </button>
+          )}
         </div>
         {copyError && (
           <div className="mt-1 text-st-failed" role="alert">
             Clipboard access was denied. Use Download instead.
           </div>
+        )}
+        {sidecarError && (
+          <div className="mt-1 text-st-failed" role="alert" data-testid="skills-sidecar-error">
+            {sidecarError}
+          </div>
+        )}
+        {skillCount > 0 && (
+          <p className="mt-1 text-fg-4" style={{ fontSize: "10px" }} data-testid="skills-sidecar-note">
+            {skillCount} skill{skillCount === 1 ? "" : "s"} referenced by id. Their content travels in
+            the sidecar <code>{pipelineName}.skills/</code>; import both so the bank recreates them.
+          </p>
         )}
         {runId && (
           <p className="mt-1 text-fg-4" style={{ fontSize: "10px" }}>
@@ -595,7 +649,8 @@ function YamlTab({
         {showExcluded && (
           <p className="mt-1 text-fg-4" style={{ fontSize: "10px" }}>
             Secrets, environment, runtime values, and instance configuration. Named agent
-            profiles become Inherit; shared nodes become ordinary nodes.
+            profiles become Inherit; shared nodes become ordinary nodes. Skills are content,
+            not configuration: they travel in the separate skills sidecar.
           </p>
         )}
       </div>

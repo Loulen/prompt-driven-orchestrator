@@ -2093,6 +2093,9 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 // harness) forwards as `None`. Unlike `sandbox` this needs no
                 // `Some`-wrapping: the create chokepoint freezes `req.harness` verbatim.
                 harness: run_state.harness.clone(),
+                // #669: a retry reproduces the original Run tier's skills, same
+                // reason as `harness` — the union must not silently shrink.
+                skills: run_state.skills.clone(),
                 // Reproduce the original Run's `AgentChoice`, like `harness`: `None`
                 // forwards as `None`, so the retry re-resolves through the legacy
                 // `harness` tier exactly as the original did.
@@ -2104,6 +2107,14 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 // Reproduce the original Run's `auto_fail`, like `harness`: `None`
                 // forwards as `None` and re-resolves through project / instance.
                 auto_fail: run_state.auto_fail,
+                // Preserve the explicit Run tier. Instance and Project are resolved
+                // afresh for this new Run, while its per-Run override remains stable.
+                provisioning: run_state
+                    .provisioning_rules
+                    .iter()
+                    .find(|scoped| scoped.scope == crate::provisioning::ProvisioningScope::Run)
+                    .map(|scoped| scoped.rules.clone())
+                    .unwrap_or_default(),
             };
             let new_run_resp = create_run_core(&state, new_run_req, Vec::new()).await;
 
@@ -3088,6 +3099,7 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![NodeDef {
+                skills: Vec::new(),
                 isolated_worktree: None,
                 id: "sw1".into(),
                 name: "switch".into(),
@@ -3156,6 +3168,7 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![NodeDef {
+                skills: Vec::new(),
                 isolated_worktree: None,
                 id: "b".into(),
                 name: "b".into(),

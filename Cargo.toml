@@ -4,7 +4,7 @@ members = ["crates/pdo-daemon"]
 
 [workspace.package]
 edition = "2021"
-version = "1.49.1"
+version = "1.56.1"
 license = "MIT"
 description = "Prompt-Driven Orchestrator — a local daemon that runs and supervises agentic coding pipelines"
 repository = "https://github.com/Loulen/prompt-driven-orchestrator"
@@ -43,6 +43,7 @@ pretty_assertions = "1"
 insta = { version = "1", features = ["yaml"] }
 tempfile = "3"
 sha2 = "0.10"
+ignore = "0.4"
 
 # --- Release packaging (dist / ex-cargo-dist) -------------------------------
 # `dist` génère .github/workflows/release.yml à partir de cette config (voir

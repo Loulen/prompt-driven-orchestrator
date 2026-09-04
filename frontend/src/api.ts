@@ -1,4 +1,4 @@
-import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, StatsPerformance, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, Project, BranchRef, AgentChoice, AgentProfile, AgentProfileReferents } from "./types";
+import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, StatsPerformance, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, Project, BranchRef, AgentChoice, AgentProfile, AgentProfileReferents, ProvisioningPlan, ProvisioningRules, Skill, SkillBank, SkillDetail, SkillFile, SkillFileContent, SkillFilesUpload, SkillFolder, SkillReferents, SkillRef, SkillScanResult, SkillImportItem, SkillImportReport, SkillRescanReport, RecentSkillSource } from "./types";
 import { foldHarnessOntoNode } from "./lib/harness";
 
 const BASE = "";
@@ -67,7 +67,8 @@ export type ResponseMode = "json" | "text" | "void" | "raw";
 
 export interface RequestOpts {
   /** `object` → JSON body + `Content-Type: application/json`; `FormData` → sent
-   *  as-is so the browser sets the multipart boundary; `undefined` → no body. */
+   *  as-is so the browser sets the multipart boundary; `Blob` → sent as-is with
+   *  its own type (a raw text save); `undefined` → no body. */
   body?: unknown;
   /** Query params appended to `path`; `undefined` values are dropped, keys and
    *  values are `encodeURIComponent`-encoded. */
@@ -116,6 +117,10 @@ export async function request<T = unknown>(
   const headers: Record<string, string> = { "X-PDO-Actor": "ui" };
   if (body instanceof FormData) {
     init.body = body; // browser sets the multipart boundary — no Content-Type
+  } else if (body instanceof Blob) {
+    // A raw body (a plain-text file save, #671): sent as-is, the Blob's own type.
+    init.body = body;
+    if (body.type) headers["Content-Type"] = body.type;
   } else if (body !== undefined) {
     headers["Content-Type"] = "application/json";
     init.body = JSON.stringify(body);
@@ -674,10 +679,14 @@ export interface CreateRunRequest {
    *  default and the `claude` floor. Frozen into `RunStarted` at the create chokepoint. */
   harness?: string;
   agent_choice?: AgentChoice;
+  /** #669/ADR-0062: the Run tier of the skills selection, frozen into `RunStarted`
+   *  when non-empty. Omit for none. */
+  skills?: SkillRef[];
   /** Whether the manager auto-names this Run (#338). The modal always sends it; omit and
    *  the server resolves back-compat by the presence of `name`, then the instance default. */
   auto_name?: boolean;
   images?: File[];
+  provisioning?: ProvisioningRules;
 }
 
 export interface CreateRunResponse {
@@ -704,16 +713,55 @@ export function createRun(req: CreateRunRequest): Promise<CreateRunResponse> {
     if (req.sandbox) form.append("sandbox", req.sandbox);
     if (req.harness) form.append("harness", req.harness);
     if (req.agent_choice) form.append("agent_choice", JSON.stringify(req.agent_choice));
+    if (req.skills && req.skills.length > 0) form.append("skills", JSON.stringify(req.skills));
     if (req.auto_name !== undefined) form.append("auto_name", String(req.auto_name));
+    if (req.provisioning) form.append("provisioning", JSON.stringify(req.provisioning));
     for (const file of req.images!) {
       form.append("images", file, file.name);
     }
+
     // FormData → no manual Content-Type, so the browser sets the boundary.
     return request<CreateRunResponse>("POST", "/runs", { body: form, label: "POST /runs" });
   }
+
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { images: _omitted, ...jsonBody } = req;
   return request<CreateRunResponse>("POST", "/runs", { body: jsonBody, label: "POST /runs" });
+}
+
+export function previewProvisioning(
+  repository: string,
+  scope: import("./types").ProvisioningScope,
+  rules: ProvisioningRules,
+  inherited?: import("./types").ScopedProvisioningRules[],
+  gitRef = "HEAD",
+): Promise<ProvisioningPlan> {
+  return request("POST", "/repos/provisioning/preview", {
+    body: { repository, git_ref: gitRef, scope, rules, inherited },
+  });
+}
+
+export function fetchInstanceProvisioning(): Promise<ProvisioningRules> {
+  return request("GET", "/settings/provisioning");
+}
+
+export function saveInstanceProvisioning(
+  rules: ProvisioningRules,
+): Promise<ProvisioningRules> {
+  return request("PUT", "/settings/provisioning", { body: rules });
+}
+
+export function fetchProjectProvisioning(projectId: string): Promise<ProvisioningRules> {
+  return request("GET", `/projects/${encodeURIComponent(projectId)}/provisioning`);
+}
+
+export function saveProjectProvisioning(
+  projectId: string,
+  rules: ProvisioningRules,
+): Promise<ProvisioningRules> {
+  return request("PUT", `/projects/${encodeURIComponent(projectId)}/provisioning`, {
+    body: rules,
+  });
 }
 
 /** The body of a mid-run repo-list edit (#465 slice 2). `add` entries mirror the
@@ -790,6 +838,8 @@ export interface CreateTriggerRequest {
    *  default. Folded into the fired Run's harness (no separate Trigger tier). */
   harness?: string | null;
   agent_choice?: AgentChoice | null;
+  /** #669: the Run-tier skills every fired Run carries. Omit for none. */
+  skills?: SkillRef[];
   /** Whether Runs this Trigger fires are auto-named (#338). Seeded from the instance
    *  default in the modal; omit → the server defaults to `true` (pre-#338 behaviour). */
   auto_name?: boolean;
@@ -836,6 +886,8 @@ export interface UpdateTriggerRequest {
    *  instance default, `undefined` leaves it unchanged. */
   harness?: string | null;
   agent_choice?: AgentChoice | null;
+  /** #669: replace the Run-tier skills wholesale; `[]` clears. */
+  skills?: SkillRef[];
   /** Auto-naming toggle (#338): a bool sets it, `undefined` leaves it unchanged. A flat
    *  bool (no clear state) — mirror of `enabled`. */
   auto_name?: boolean;
@@ -872,6 +924,8 @@ export interface UpdateProjectRequest {
   name?: string;
   harness?: string | null;
   agent_choice?: AgentChoice | null;
+  /** #669: replace the Projet's skills wholesale; `[]` clears. */
+  skills?: SkillRef[];
 }
 
 export function updateProject(
@@ -1365,13 +1419,72 @@ export function fetchRunPipelineDocument(runId: string): Promise<string> {
   });
 }
 
-/// `warnings` carries the non-fatal diagnostics of the import — today, prompts
-/// dropped because they name a node the document does not define.
+/// The skills sidecar of a pipeline's portable document (#673 / ADR-0062): a zip
+/// of `<pipeline>.skills/<id>/…` to unpack next to the YAML. `null` when the
+/// pipeline references no skill (the daemon answers 204: the YAML is the whole
+/// document).
+export async function fetchPipelineSkillsSidecar(id: string): Promise<Blob | null> {
+  const resp = await request<Response>(
+    "GET",
+    `/pipelines/${encodeURIComponent(id)}/document/skills`,
+    { responseMode: "raw", label: `GET /pipelines/${id}/document/skills` },
+  );
+  return sidecarBlob(resp, `GET /pipelines/${id}/document/skills`);
+}
+
+export async function fetchRunPipelineSkillsSidecar(runId: string): Promise<Blob | null> {
+  const resp = await request<Response>(
+    "GET",
+    `/runs/${encodeURIComponent(runId)}/pipeline/document/skills`,
+    { responseMode: "raw", label: `GET /runs/${runId}/pipeline/document/skills` },
+  );
+  return sidecarBlob(resp, `GET /runs/${runId}/pipeline/document/skills`);
+}
+
+async function sidecarBlob(resp: Response, label: string): Promise<Blob | null> {
+  if (resp.status === 204) return null;
+  if (!resp.ok) {
+    const errBody = await resp.json().catch(() => null);
+    throw new ApiError(apiErrorMessage(errBody, `${label} failed: ${resp.status}`), {
+      status: resp.status,
+      body: errBody,
+    });
+  }
+  return resp.blob();
+}
+
+/// What the import did to the Banque de skills (#673): created ids (same ids as
+/// the document), ids the bank already knew (untouched), labels that had to be
+/// suffixed, and ids found neither in the bank nor in the sidecar.
+export interface SkillSidecarImportReport {
+  created: SkillRef[];
+  kept: SkillRef[];
+  renamed: { id: string; from: string; to: string }[];
+  missing: SkillRef[];
+  folder?: { id: string; name: string };
+  warnings: string[];
+}
+
+export interface ImportPipelineDocumentResult {
+  id: string;
+  scope: string;
+  path: string;
+  /// Non-fatal diagnostics: prompts dropped because they name a node the
+  /// document does not define, and the skills the import renamed or could not
+  /// find (#673).
+  warnings: string[];
+  skills?: SkillSidecarImportReport;
+}
+
+/// `skillsSidecar` is the base64 of the sidecar zip PDO exported (or of the
+/// `<pipeline>.skills/` folder re-zipped). Without it, unknown skill ids import
+/// with a "skill absent" warning — never a failure.
 export function importPipelineDocument(
   document: string,
-): Promise<{ id: string; scope: string; path: string; warnings: string[] }> {
+  skillsSidecar?: string,
+): Promise<ImportPipelineDocumentResult> {
   return request("POST", "/pipelines/import", {
-    body: { document },
+    body: skillsSidecar ? { document, skills_sidecar: skillsSidecar } : { document },
     label: "POST /pipelines/import",
   });
 }
@@ -1651,4 +1764,166 @@ export function promotePipeline(pipelineId: string): Promise<PromoteResult> {
     `/pipelines/${encodeURIComponent(pipelineId)}/promote`,
     { label: `POST /pipelines/${pipelineId}/promote` },
   );
+}
+
+// ---------------------------------------------------------------------------
+// Banque de skills (#668, ADR-0062). Separate REST resources under `/settings`,
+// NOT part of the grouped `PUT /settings`: a skill is a ROW plus a folder on disk.
+// Every gesture commits immediately (no unsaved state in the bank).
+// ---------------------------------------------------------------------------
+
+export function fetchSkillBank(): Promise<SkillBank> {
+  return request("GET", "/settings/skills");
+}
+
+export function createSkill(body: {
+  content: string;
+  name?: string;
+  folder_id?: string | null;
+}): Promise<Skill> {
+  return request("POST", "/settings/skills", { body });
+}
+
+export function fetchSkill(id: string): Promise<SkillDetail> {
+  return request("GET", `/settings/skills/${encodeURIComponent(id)}`);
+}
+
+/** Sparse edit: `name` renames the label only; `folder_id: null` moves to the root. */
+export function updateSkill(
+  id: string,
+  patch: { name?: string; folder_id?: string | null },
+): Promise<Skill> {
+  return request("PUT", `/settings/skills/${encodeURIComponent(id)}`, { body: patch });
+}
+
+export function deleteSkill(id: string): Promise<void> {
+  return request("DELETE", `/settings/skills/${encodeURIComponent(id)}`, {
+    responseMode: "void",
+  });
+}
+
+export function fetchSkillReferents(id: string): Promise<SkillReferents> {
+  return request("GET", `/settings/skills/${encodeURIComponent(id)}/referents`);
+}
+
+// Reference files (#671). `path` may hold sub-folders (`examples/login.spec.ts`);
+// each segment is encoded, the `/` is kept for the daemon's `{*path}` wildcard.
+function skillFilePath(id: string, path: string): string {
+  const rel = path.split("/").map(encodeURIComponent).join("/");
+  return `/settings/skills/${encodeURIComponent(id)}/files/${rel}`;
+}
+
+/**
+ * Upload browser files (a drop or the file picker) as multipart. Each file
+ * travels as a `path` text part (its destination, sub-folders kept) followed by
+ * the `file` part. The daemon writes them in order and stops at the first
+ * refusal, reporting what landed.
+ */
+export function uploadSkillFiles(
+  id: string,
+  files: { path: string; file: Blob }[],
+): Promise<SkillFilesUpload> {
+  const form = new FormData();
+  for (const { path, file } of files) {
+    form.append("path", path);
+    form.append("file", file, path.split("/").pop() ?? path);
+  }
+  return request("POST", `/settings/skills/${encodeURIComponent(id)}/files`, { body: form });
+}
+
+/** The explorer path: the daemon copies `from_path` (absolute, on its host). */
+export function uploadSkillFileFromPath(
+  id: string,
+  fromPath: string,
+  path?: string,
+): Promise<SkillFilesUpload> {
+  return request("POST", `/settings/skills/${encodeURIComponent(id)}/files`, {
+    body: { from_path: fromPath, path },
+  });
+}
+
+export function fetchSkillFile(id: string, path: string): Promise<SkillFileContent> {
+  return request("GET", skillFilePath(id, path));
+}
+
+/**
+ * Save the editor's text. For `SKILL.md` the daemon re-runs the five checks and
+ * answers the same named 400 as the paste popup; the response then carries the
+ * refreshed `skill` row.
+ */
+export function writeSkillFile(
+  id: string,
+  path: string,
+  text: string,
+): Promise<SkillFile & { skill?: Skill }> {
+  return request("PUT", skillFilePath(id, path), { body: new Blob([text], { type: "text/plain" }) });
+}
+
+export function deleteSkillFile(id: string, path: string): Promise<void> {
+  return request("DELETE", skillFilePath(id, path), { responseMode: "void" });
+}
+
+export function createSkillFolder(body: {
+  name: string;
+  parent_id?: string | null;
+}): Promise<SkillFolder> {
+  return request("POST", "/settings/skill-folders", { body });
+}
+
+export function updateSkillFolder(
+  id: string,
+  patch: { name?: string; parent_id?: string | null },
+): Promise<SkillFolder> {
+  return request("PUT", `/settings/skill-folders/${encodeURIComponent(id)}`, { body: patch });
+}
+
+/** The folder's skills and sub-folders move to its parent; no skill is deleted. */
+export function deleteSkillFolder(id: string): Promise<void> {
+  return request("DELETE", `/settings/skill-folders/${encodeURIComponent(id)}`, {
+    responseMode: "void",
+  });
+}
+
+// ---- Import from a Source (#670) ------------------------------------------
+
+/**
+ * Clone shallow (or open a local folder) and list every `SKILL.md` with its
+ * validity and collisions. Writes nothing to the bank. `scanId` is chosen by the
+ * caller so the clone can be cancelled and then reused by `importSkills`.
+ */
+export function scanSkillSource(scanId: string, source: string): Promise<SkillScanResult> {
+  return request("POST", "/settings/skills/scan", { body: { scan_id: scanId, source } });
+}
+
+export function cancelSkillScan(scanId: string): Promise<{ cancelled: boolean }> {
+  return request("POST", `/settings/skills/scan/${encodeURIComponent(scanId)}/cancel`);
+}
+
+export function importSkills(body: {
+  scan_id: string;
+  source: string;
+  folder?: { id?: string | null; name?: string | null; parent_id?: string | null };
+  items: SkillImportItem[];
+}): Promise<SkillImportReport> {
+  return request("POST", "/settings/skills/import", { body });
+}
+
+export function fetchRecentSkillSources(): Promise<{ sources: RecentSkillSource[] }> {
+  return request("GET", "/settings/skills/sources/recent");
+}
+
+/** Re-clone a Source folder's source and diff it against the folder. Read-only. */
+export function rescanSkillFolder(folderId: string, scanId: string): Promise<SkillRescanReport> {
+  return request("POST", `/settings/skill-folders/${encodeURIComponent(folderId)}/rescan`, {
+    body: { scan_id: scanId },
+  });
+}
+
+export function updateSkillFolderFromSource(
+  folderId: string,
+  body: { scan_id: string; items: { path: string; action: "update" | "import" }[] },
+): Promise<SkillImportReport> {
+  return request("POST", `/settings/skill-folders/${encodeURIComponent(folderId)}/update`, {
+    body,
+  });
 }

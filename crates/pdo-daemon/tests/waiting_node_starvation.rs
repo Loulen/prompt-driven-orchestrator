@@ -153,7 +153,10 @@ async fn node_status(daemon: &TestDaemon, run_id: &str, node: &str) -> Option<St
 }
 
 async fn wait_for_node_status(daemon: &TestDaemon, run_id: &str, node: &str, want: &str) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    // A poll bound, not a latency assertion: under the full parallel suite (2 700+
+    // tests, one daemon per test) a scheduler tick can take several seconds to
+    // land, and a 5 s bound flaked once. The happy path returns in well under 3 s.
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
     while std::time::Instant::now() < deadline {
         if node_status(daemon, run_id, node).await.as_deref() == Some(want) {
             return;
@@ -234,7 +237,10 @@ async fn boot_recovery_redrives_a_waiting_node_after_freeing_a_slot() {
 }
 
 async fn wait_for_a_redriven_node(daemon: &TestDaemon, run_b: &str) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    // A poll bound, not a latency assertion: under the full parallel suite (2 700+
+    // tests, one daemon per test) a scheduler tick can take several seconds to
+    // land, and a 5 s bound flaked once. The happy path returns in well under 3 s.
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
     loop {
         let leaf1 = node_status(daemon, run_b, "leaf1").await;
         let leader = node_status(daemon, run_b, "leader").await;

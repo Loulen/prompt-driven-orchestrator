@@ -57,10 +57,24 @@ pub(crate) fn reap_orphan_sub_worktree(
     if sub_worktree_dir.exists() {
         let _ = std::fs::remove_dir_all(sub_worktree_dir);
     }
+
     info!(
         "Reaped sub-worktree {} (branch {sub_branch}) — nothing of value was there (#279/#489)",
         sub_worktree_dir.display()
     );
+}
+
+pub(crate) fn reap_orphan_run_worktree(repo_root: &Path, worktree_dir: &Path, branch: &str) {
+    reap_orphan_sub_worktree(repo_root, worktree_dir, branch);
+    // #672: a Run aborted at create may already have snapshotted skills beside the
+    // worktree and excluded their paths in the repo's `info/exclude`; take both back.
+    if let Some(run_id) = branch.strip_prefix("pdo/run-") {
+        let _ = crate::skill_delivery::remove_exclusions(repo_root, run_id);
+        let _ = std::fs::remove_dir_all(crate::skill_delivery::snapshot_root(repo_root, run_id));
+    }
+    if let Some(run_dir) = worktree_dir.parent() {
+        let _ = std::fs::remove_dir(run_dir);
+    }
 }
 
 pub(crate) fn worktree_dir_for_run(repo_root: &Path, run_id: &str) -> PathBuf {
@@ -642,15 +656,17 @@ pub(crate) fn delivery_commit_message(node_id: &str, iter: i64) -> String {
     format!("{node_id} iter-{iter}: completed")
 }
 
-/// Stage everything git does not ignore and commit it under
+/// Stage node-authored work and commit it under
 /// [`delivery_commit_message`], or answer `Ok(None)` when nothing was left to
 /// commit (#654 / ADR-0060).
 ///
-/// Staging is plain `git add -A` with **no PDO-specific exclusion**: the target
-/// repo's `.gitignore` is the single exclusion policy, runtime paths included. A
-/// node that already committed its own work reaches this with a clean index and
-/// gets `None` — its commits are kept as they are, and no empty commit is ever
-/// written.
+/// Staging starts with `git add -A`, then removes paths PDO materialized through
+/// declarative worktree provisioning (ADR-0061). This second step is required
+/// even when a Node already staged those paths itself: provisioning commonly
+/// carries credentials and host-local links that must never enter the Run branch.
+/// The target repo's `.gitignore` remains the policy for every other path. A node
+/// that already committed its own work reaches this with a clean index and gets
+/// `None` — its commits are kept as they are, and no empty commit is ever written.
 ///
 /// #489: the exit STATUS of `git add -A` is checked, not just the spawn. Discarding
 /// it loses the whole node's work in silence, and reusing a sub-worktree (#489-B)
@@ -685,6 +701,51 @@ pub(crate) fn stage_and_commit(
             worktree_dir.display(),
             git_report(&add_output)
         );
+    }
+
+    let provisioned = crate::provisioning::materialized_paths(worktree_dir)?;
+    if !provisioned.is_empty() {
+        let mut child = std::process::Command::new("git")
+            .args([
+                "reset",
+                "--quiet",
+                "--pathspec-from-file=-",
+                "--pathspec-file-nul",
+            ])
+            .current_dir(worktree_dir)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .with_context(|| {
+                format!(
+                    "git reset of provisioned paths failed to run in {}",
+                    worktree_dir.display()
+                )
+            })?;
+        {
+            use std::io::Write;
+            let stdin = child
+                .stdin
+                .as_mut()
+                .context("git reset stdin unavailable")?;
+            for path in provisioned {
+                stdin.write_all(b":(top,literal)")?;
+                stdin.write_all(&path)?;
+                stdin.write_all(&[0])?;
+            }
+        }
+        let output = child
+            .wait_with_output()
+            .context("wait for git reset of provisioned paths")?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "git reset of provisioned paths in {} failed, refusing to commit provisioned \
+                 resources: {}",
+                worktree_dir.display(),
+                git_report(&output)
+            );
+        }
     }
 
     let status_output = std::process::Command::new("git")
@@ -758,8 +819,8 @@ pub(crate) enum DeliveryOutcome {
 /// *what*: an isolated NodeRun commits in its sub-worktree and its branch is then
 /// merged into the Run's; a non-isolated one commits directly in the Run's
 /// worktree. Both keep any commit the node made itself, both refuse to write an
-/// empty commit, and both stage under the repo's own `.gitignore` with no
-/// PDO-specific exclusion.
+/// empty commit, and both stage under the repo's own `.gitignore` while excluding
+/// paths PDO materialized through declarative worktree provisioning.
 ///
 /// No serialisation is added for the shared worktree beyond what git itself needs:
 /// two non-isolated NodeRuns may run concurrently, and the first one here commits
@@ -2002,6 +2063,60 @@ mod tests {
         assert_eq!(d.after, rev_parse(repo, &pipeline_branch).unwrap());
     }
 
+    #[test]
+    fn deliver_in_place_excludes_resources_materialized_by_provisioning() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+        std::fs::write(repo.join("local-secret.txt"), "SECRET TOKEN abc123\n").unwrap();
+
+        let run_id = "test-deliver-provisioned";
+        let wt_dir = repo.join(".pdo/runs").join(run_id).join("worktree");
+        let pipeline_branch = format!("pdo/run-{run_id}");
+        create_worktree(repo, &wt_dir, &pipeline_branch, "HEAD").unwrap();
+        let plan = crate::provisioning::resolve(
+            repo,
+            &[crate::provisioning::ScopedRules {
+                scope: crate::provisioning::ProvisioningScope::Run,
+                rules: crate::provisioning::ProvisioningRules {
+                    copy: vec!["local-secret.txt".into()],
+                    ..Default::default()
+                },
+            }],
+        )
+        .unwrap();
+        crate::provisioning::provision_missing(repo, &wt_dir, &plan).unwrap();
+        std::fs::write(wt_dir.join("node-work.rs"), "pub fn node_work() {}\n").unwrap();
+        let staged = std::process::Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(&wt_dir)
+            .output()
+            .unwrap();
+        assert!(staged.status.success());
+
+        let outcome = deliver_node_work(
+            &wt_dir, &wt_dir, false, "unused", "shared-1", 1, false, None,
+        )
+        .unwrap();
+        let DeliveryOutcome::Delivered(delivered) = outcome else {
+            panic!("expected a delivery");
+        };
+        assert!(delivered.changed());
+
+        let committed = std::process::Command::new("git")
+            .args(["ls-tree", "-r", "--name-only", "HEAD"])
+            .current_dir(&wt_dir)
+            .output()
+            .unwrap();
+        assert!(committed.status.success());
+        let committed = String::from_utf8_lossy(&committed.stdout);
+        assert!(committed.lines().any(|path| path == "node-work.rs"));
+        assert!(
+            !committed.lines().any(|path| path == "local-secret.txt"),
+            "provisioned resources must not enter delivery commits: {committed}"
+        );
+    }
+
     /// The no-op reports itself as one: same tip on both sides, no commit taken.
     #[test]
     fn deliver_in_place_on_a_clean_tree_is_a_no_op() {
@@ -2057,6 +2172,64 @@ mod tests {
         assert!(d.changed());
         assert!(wt_dir.join("forked.rs").exists());
         assert_eq!(d.after, rev_parse(repo, &pipeline_branch).unwrap());
+    }
+
+    #[test]
+    fn deliver_isolated_excludes_resources_materialized_in_the_sub_worktree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+        std::fs::write(repo.join("local-secret.txt"), "SECRET TOKEN abc123\n").unwrap();
+
+        let run_id = "test-deliver-isolated-provisioned";
+        let wt_dir = repo.join(".pdo/runs").join(run_id).join("worktree");
+        let pipeline_branch = format!("pdo/run-{run_id}");
+        create_worktree(repo, &wt_dir, &pipeline_branch, "HEAD").unwrap();
+        let sub_wt = sub_worktree_path(repo, run_id, "forked-1", 1);
+        let sub_branch = sub_worktree_branch(run_id, "forked-1", 1);
+        create_sub_worktree(repo, &sub_wt, &sub_branch, &pipeline_branch).unwrap();
+        let plan = crate::provisioning::resolve(
+            repo,
+            &[crate::provisioning::ScopedRules {
+                scope: crate::provisioning::ProvisioningScope::IsolatedNode,
+                rules: crate::provisioning::ProvisioningRules {
+                    symlink: vec!["local-secret.txt".into()],
+                    ..Default::default()
+                },
+            }],
+        )
+        .unwrap();
+        crate::provisioning::provision_missing(repo, &sub_wt, &plan).unwrap();
+        std::fs::write(sub_wt.join("isolated-work.rs"), "pub fn isolated() {}\n").unwrap();
+
+        let outcome = deliver_node_work(
+            &wt_dir,
+            &sub_wt,
+            true,
+            &sub_branch,
+            "forked-1",
+            1,
+            false,
+            None,
+        )
+        .unwrap();
+        let DeliveryOutcome::Delivered(delivered) = outcome else {
+            panic!("expected a delivery");
+        };
+        assert!(delivered.changed());
+
+        let committed = std::process::Command::new("git")
+            .args(["ls-tree", "-r", "--name-only", "HEAD"])
+            .current_dir(&wt_dir)
+            .output()
+            .unwrap();
+        assert!(committed.status.success());
+        let committed = String::from_utf8_lossy(&committed.stdout);
+        assert!(committed.lines().any(|path| path == "isolated-work.rs"));
+        assert!(
+            !committed.lines().any(|path| path == "local-secret.txt"),
+            "provisioned resources must not merge into the Run branch: {committed}"
+        );
     }
 
     /// A directory git knows nothing about is not a worktree — the precondition
@@ -2319,6 +2492,21 @@ mod tests {
         assert!(
             String::from_utf8_lossy(&after.stdout).trim().is_empty(),
             "sub-branch must be deleted after reap"
+        );
+    }
+
+    #[test]
+    fn reap_orphan_run_worktree_removes_empty_run_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+
+        let worktree = worktree_dir_for_run(repo, "failed-run");
+        reap_orphan_run_worktree(repo, &worktree, "pdo/run-failed-run");
+
+        assert!(
+            !worktree.parent().unwrap().exists(),
+            "an aborted Run must not leave its empty directory behind"
         );
     }
 

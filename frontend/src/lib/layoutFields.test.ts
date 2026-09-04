@@ -73,7 +73,10 @@ const NODE: Complete<NodeDef> = {
   // naming them proves nothing about emission (the serializer tests do that).
   pin_harness: "claude",
   harnesses: { claude: { model: "opus", effort: "low" } },
+  // #669/ADR-0062: the node's skills selection (semantic; emitted when non-empty).
+  skills: [{ id: "11111111-1111-1111-1111-111111111111", name: "tdd" }],
   agent_choice: { mode: "profile", profile_id: "deep-work" },
+  provisioning: { copy: [".env"], hardlink: [], symlink: [] },
   // #653/ADR-0060: same caveat again — the emission proof is in
   // `serializePipeline.test.ts` ("an agent always writes its isolation line").
   isolated_worktree: false,

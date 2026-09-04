@@ -2421,6 +2421,7 @@ edges:
 
     fn make_isolated_node(id: &str) -> NodeDef {
         NodeDef {
+            skills: Vec::new(),
             isolated_worktree: Some(true),
             id: id.into(),
             name: id.into(),
@@ -2460,6 +2461,7 @@ edges:
 
     fn make_merge_node(id: &str) -> NodeDef {
         NodeDef {
+            skills: Vec::new(),
             isolated_worktree: None,
             id: id.into(),
             name: id.into(),
@@ -2499,6 +2501,7 @@ edges:
 
     fn make_shared_node(id: &str) -> NodeDef {
         NodeDef {
+            skills: Vec::new(),
             isolated_worktree: Some(false),
             id: id.into(),
             name: id.into(),

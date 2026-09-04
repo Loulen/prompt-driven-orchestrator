@@ -53,3 +53,4 @@ CLAUDE.local.md
 # Env files at any path
 .env
 .env.local
+.playwright-cli/

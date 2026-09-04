@@ -29,6 +29,20 @@ interface Props {
    * `onClose`.
    */
   onPick: (path: string) => void;
+  /**
+   * File mode only (#671): several files at once. Rows toggle a selection
+   * (⇧-click extends a range), the confirm button reads "Add N files" and
+   * `onPickMany` receives the absolute paths in listing order. `onPick` is
+   * then never called.
+   */
+  multiple?: boolean;
+  onPickMany?: (paths: string[]) => void;
+  /**
+   * The backdrop's stacking class. Default `z-[60]`: above the `z-50` of every
+   * parent modal. The paste popup is itself at `z-[60]` and opens this explorer
+   * on top of it (#671 Browse…), so it passes `z-[70]`.
+   */
+  zIndexClass?: string;
   onClose: () => void;
   /**
    * Testid namespace: `${testIdPrefix}-{backdrop,up,path,error,entry,git-dot,symlink,select}`.
@@ -66,6 +80,9 @@ export default function FsExplorerModal({
   title,
   confirmLabel,
   onPick,
+  multiple = false,
+  onPickMany,
+  zIndexClass = "z-[60]",
   onClose,
   testIdPrefix = "fs-browse",
   modalTestId,
@@ -78,6 +95,10 @@ export default function FsExplorerModal({
   const [truncated, setTruncated] = useState(false);
   /** File mode only: the selected file, `null` until one is clicked. */
   const [picked, setPicked] = useState<string | null>(null);
+  /** Multi-pick (#671): selected absolute paths, across directories. */
+  const [pickedMany, setPickedMany] = useState<string[]>([]);
+  /** Anchor of a ⇧-click range, an index into `entries`. */
+  const lastToggled = useRef<number | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
 
   // Navigate to `path` (omit → backend default root). Always lands on a 200 shape: an
@@ -193,22 +214,42 @@ export default function FsExplorerModal({
     return () => document.removeEventListener("keydown", handleTab);
   }, []);
 
-  const handleRow = (entry: BrowseEntry) => {
+  const handleRow = (entry: BrowseEntry, event?: React.MouseEvent) => {
     // Dir mode: the listing is directories-only by contract, so a row is ALWAYS a
     // navigation and `is_dir` is never consulted — which keeps the frozen
     // `RepoCombobox` tests independent of a field their fixtures predate.
-    if (mode === "dir" || entry.is_dir) void navigateTo(entry.path);
-    else setPicked(entry.path);
+    if (mode === "dir" || entry.is_dir) {
+      void navigateTo(entry.path);
+      return;
+    }
+    if (!multiple) {
+      setPicked(entry.path);
+      return;
+    }
+    const index = entries.findIndex((row) => row.path === entry.path);
+    const anchor = lastToggled.current;
+    if (event?.shiftKey && anchor !== null && anchor !== index) {
+      const [from, to] = anchor < index ? [anchor, index] : [index, anchor];
+      const range = entries.slice(from, to + 1).filter((row) => !row.is_dir).map((row) => row.path);
+      setPickedMany((prev) => [...prev, ...range.filter((path) => !prev.includes(path))]);
+    } else {
+      setPickedMany((prev) =>
+        prev.includes(entry.path) ? prev.filter((path) => path !== entry.path) : [...prev, entry.path],
+      );
+    }
+    lastToggled.current = index;
   };
 
   // Dir mode picks the folder you are standing in (git-dotted or not — ADR-0001: any
   // folder is pickable, the authoritative check gates it downstream). File mode is
   // select-then-confirm: one path to `onPick`, and a misclick can never silently write
   // a persisted setting and close the box.
-  const confirmTarget = mode === "file" ? picked : currentDir;
+  const multi = mode === "file" && multiple;
+  const confirmTarget = multi ? (pickedMany.length > 0 ? pickedMany[0] : null) : mode === "file" ? picked : currentDir;
   const confirm = () => {
     if (!confirmTarget) return;
-    onPick(confirmTarget);
+    if (multi) onPickMany?.(pickedMany);
+    else onPick(confirmTarget);
     onClose();
   };
 
@@ -217,7 +258,7 @@ export default function FsExplorerModal({
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50"
+      className={`fixed inset-0 ${zIndexClass} flex items-center justify-center bg-black/50`}
       data-testid={`${testIdPrefix}-backdrop`}
       onClick={(e) => {
         // Unconditional `stopPropagation`: keeps a backdrop click from bubbling up the
@@ -304,12 +345,21 @@ export default function FsExplorerModal({
               <li key={entry.path}>
                 <button
                   type="button"
-                  onClick={() => handleRow(entry)}
+                  onClick={(event) => handleRow(entry, event)}
+                  aria-pressed={multi && !entry.is_dir ? pickedMany.includes(entry.path) : undefined}
                   className={`flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-bg-5 ${
-                    picked === entry.path ? "bg-bg-5" : ""
+                    picked === entry.path || pickedMany.includes(entry.path) ? "bg-bg-5" : ""
                   }`}
                   data-testid={`${testIdPrefix}-entry`}
                 >
+                  {multi && !entry.is_dir && (
+                    <span
+                      aria-hidden
+                      className={`grid h-3 w-3 shrink-0 place-items-center rounded-sm border ${
+                        pickedMany.includes(entry.path) ? "border-acc bg-acc" : "border-line-strong"
+                      }`}
+                    />
+                  )}
                   {entry.is_git_repo ? (
                     <FolderGit2
                       size={14}
@@ -343,6 +393,11 @@ export default function FsExplorerModal({
 
         {/* Footer: cancel + confirm */}
         <div className="flex items-center justify-end gap-2 border-t border-line px-3 py-2">
+          {multi && (
+            <span className="mr-auto text-fg-4" style={{ fontSize: "10.5px" }} data-testid={`${testIdPrefix}-count`}>
+              {pickedMany.length} selected · click toggles, ⇧-click ranges
+            </span>
+          )}
           <button
             type="button"
             onClick={onClose}
@@ -359,7 +414,12 @@ export default function FsExplorerModal({
             style={{ fontSize: "11.5px" }}
             data-testid={`${testIdPrefix}-select`}
           >
-            {confirmLabel ?? (mode === "file" ? "Select this file" : "Select this folder")}
+            {confirmLabel ??
+              (multi
+                ? `Add ${pickedMany.length} file${pickedMany.length === 1 ? "" : "s"}`
+                : mode === "file"
+                  ? "Select this file"
+                  : "Select this folder")}
           </button>
         </div>
       </div>

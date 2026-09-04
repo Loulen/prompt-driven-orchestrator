@@ -17,11 +17,13 @@ const {
   closeLibraryAssistant,
   fetchPipelineDocument,
   fetchRunPipelineDocument,
+  fetchPipelineSkillsSidecar,
 } = vi.hoisted(() => ({
   openLibraryAssistant: vi.fn(),
   closeLibraryAssistant: vi.fn(),
   fetchPipelineDocument: vi.fn(),
   fetchRunPipelineDocument: vi.fn(),
+  fetchPipelineSkillsSidecar: vi.fn(),
 }));
 vi.mock("../api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api")>();
@@ -31,6 +33,7 @@ vi.mock("../api", async (importOriginal) => {
     closeLibraryAssistant,
     fetchPipelineDocument,
     fetchRunPipelineDocument,
+    fetchPipelineSkillsSidecar,
   };
 });
 
@@ -148,6 +151,7 @@ describe("PipelineInfoPanel — Assistant tab (#302)", () => {
       assistantId?: string | null;
       initialTab?: TabId;
       run?: RunState | null;
+      pipeline?: PipelineDef;
     } = {},
   ) {
     // Honour an explicit `assistantId: null` (a template without a resolvable id)
@@ -156,7 +160,7 @@ describe("PipelineInfoPanel — Assistant tab (#302)", () => {
     return render(
       <PipelineInfoPanel
         run={props.run ?? null}
-        pipeline={makePipeline()}
+        pipeline={props.pipeline ?? makePipeline()}
         libraryPipelines={[]}
         onLibraryChanged={() => {}}
         onClose={() => {}}
@@ -213,6 +217,91 @@ describe("PipelineInfoPanel — Assistant tab (#302)", () => {
 
     expect(fetchPipelineDocument).toHaveBeenCalledWith("feature-with-review");
     expect(writeText).toHaveBeenCalledWith(expect.stringContaining("pdo_pipeline: 1"));
+  });
+
+  // #673 / ADR-0062: the skills a node selects travel beside the YAML, in a
+  // sidecar zip the bar offers only when there is something to ship.
+  it("offers the skills sidecar only when a node selects skills, and downloads it", async () => {
+    fetchPipelineSkillsSidecar.mockReset();
+    fetchPipelineSkillsSidecar.mockResolvedValue(new Blob(["PK"], { type: "application/zip" }));
+    const createObjectURL = vi.fn().mockReturnValue("blob:sidecar");
+    const revokeObjectURL = vi.fn();
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectURL });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revokeObjectURL });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+
+    const { unmount } = renderTemplatePanel();
+    await userEvent.click(screen.getByTestId("info-tab-yaml"));
+    await screen.findByTestId("portable-document-bar");
+    expect(screen.queryByTestId("download-skills-sidecar")).not.toBeInTheDocument();
+    unmount();
+
+    renderTemplatePanel({
+      pipeline: makePipeline({
+        nodes: [
+          {
+            id: "worker",
+            name: "Worker",
+            type: "agent",
+            inputs: [],
+            outputs: [],
+            interactive: false,
+            skills: [
+              { id: "11111111-1111-1111-1111-111111111111", name: "tdd" },
+              { id: "22222222-2222-2222-2222-222222222222", name: "grilling" },
+            ],
+          },
+          {
+            id: "reviewer",
+            name: "Reviewer",
+            type: "agent",
+            inputs: [],
+            outputs: [],
+            interactive: false,
+            // The same id twice across nodes counts once in the sidecar.
+            skills: [{ id: "11111111-1111-1111-1111-111111111111", name: "tdd" }],
+          },
+        ] as PipelineDef["nodes"],
+      }),
+    });
+    await userEvent.click(screen.getByTestId("info-tab-yaml"));
+    const button = await screen.findByTestId("download-skills-sidecar");
+    expect(button).toHaveTextContent("Skills (2)");
+    expect(screen.getByTestId("skills-sidecar-note")).toHaveTextContent(
+      "feature-with-review.skills/",
+    );
+
+    await userEvent.click(button);
+
+    await waitFor(() => expect(fetchPipelineSkillsSidecar).toHaveBeenCalledWith("feature-with-review"));
+    await waitFor(() => expect(click).toHaveBeenCalled());
+    expect(createObjectURL).toHaveBeenCalledWith(expect.any(Blob));
+    click.mockRestore();
+  });
+
+  it("says so when the sidecar is empty (204: no referenced skill is in the bank)", async () => {
+    fetchPipelineSkillsSidecar.mockReset();
+    fetchPipelineSkillsSidecar.mockResolvedValue(null);
+    renderTemplatePanel({
+      pipeline: makePipeline({
+        nodes: [
+          {
+            id: "worker",
+            name: "Worker",
+            type: "agent",
+            inputs: [],
+            outputs: [],
+            interactive: false,
+            skills: [{ id: "11111111-1111-1111-1111-111111111111", name: "tdd" }],
+          },
+        ] as PipelineDef["nodes"],
+      }),
+    });
+    await userEvent.click(screen.getByTestId("info-tab-yaml"));
+    await userEvent.click(await screen.findByTestId("download-skills-sidecar"));
+    expect(await screen.findByTestId("skills-sidecar-error")).toHaveTextContent(
+      "nothing to export",
+    );
   });
 
   it("surfaces a rejected clipboard write", async () => {

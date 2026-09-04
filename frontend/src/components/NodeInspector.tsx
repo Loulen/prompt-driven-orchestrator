@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { Star } from "lucide-react";
 import { useEditStore } from "../stores/editStore";
 import type { NodeDef, NodeState, NodeType, PortDef } from "../types";
@@ -9,6 +9,10 @@ import PooledInputRow from "./PooledInputRow";
 import { useHarnessCatalog } from "../hooks/useHarnessCatalog";
 import { useAgentProfiles } from "../hooks/useAgentProfiles";
 import AgentControl from "./AgentControl";
+import SkillSelector from "./SkillSelector";
+import { useSkillBank } from "../hooks/useSkillBank";
+import { useSkillTiers } from "../hooks/useSkillTiers";
+import type { InheritedTier } from "../lib/skillSelection";
 import HarnessSelect from "./HarnessSelect";
 import ModelPicker from "./ModelPicker";
 import EffortPicker from "./EffortPicker";
@@ -27,6 +31,8 @@ import type { LibraryEntry } from "../api";
 import { saveToLibrary, deleteFromLibrary, instantiateFromLibrary, libraryPortToPortDef } from "../api";
 import { useLibraryState } from "../hooks/useLibrary";
 import type { LibrarySyncState } from "../hooks/useLibrary";
+import ProvisioningRulesEditor from "./ProvisioningRulesEditor";
+import { EMPTY_PROVISIONING_RULES } from "../lib/provisioning";
 
 
 /**
@@ -37,10 +43,17 @@ export default function NodeInspector({
   libraryEntries,
   onLibraryChanged,
   readOnly,
+  provisioningRepository = "",
+  provisioningFrozenAt,
+  inheritedProvisioning,
+  provisioningGitRef = "HEAD",
   runNode,
+  runSkills,
 }: {
   libraryEntries: LibraryEntry[];
   onLibraryChanged: () => void;
+  /** #669: the Run tier's frozen skills, on a run canvas — shown as inherited. */
+  runSkills?: import("../types").SkillRef[];
   /** #653: the live NodeRun's projected state, on a run canvas. Its frozen
    *  `isolated_worktree` is what the Workspace section reads in run mode —
    *  where the iteration ACTUALLY works, which an edit no longer moves. */
@@ -49,6 +62,10 @@ export default function NodeInspector({
    * (mirrors the canvas readOnly, #315/ADR-0020). Scoped to the × alone;
    * the rest of the inspector's archived story is the #315 gap. */
   readOnly?: boolean;
+  provisioningRepository?: string;
+  provisioningFrozenAt?: string;
+  inheritedProvisioning?: import("../types").ScopedProvisioningRules[];
+  provisioningGitRef?: string;
 }) {
   const openTabs = useEditStore((s) => s.openTabs);
   const activeTabId = useEditStore((s) => s.activeTabId);
@@ -61,6 +78,8 @@ export default function NodeInspector({
 
   const asideRef = useRef<HTMLElement>(null);
   const [highlightedPort, setHighlightedPort] = useState<string | null>(null);
+  const [provisioningPreviewRepository, setProvisioningPreviewRepository] = useState("");
+  const [provisioningOpenFor, setProvisioningOpenFor] = useState<string | null>(null);
   // Pending destroy-loop confirmation (#339, mirrors EditCanvas #150): set when
   // deleting an input source would remove a bounded region's last cycle.
   const [pendingDestroy, setPendingDestroy] = useState<{
@@ -92,8 +111,22 @@ export default function NodeInspector({
   // each installed/not). Called before the early return so the hook order is stable.
   const harnessCatalog = useHarnessCatalog();
   const { profiles: agentProfiles } = useAgentProfiles();
+  // #669/ADR-0062: the bank (names, folders) and the coarser tiers this node
+  // inherits — the instance selection, the Projet owning the Run's repo when one
+  // is known (run canvas), and the Run's frozen list. Called before the early
+  // return so the hook order is stable.
+  const { bank: skillBank } = useSkillBank();
+  const { inherited: inheritedTiers } = useSkillTiers(provisioningRepository || null);
+  const inheritedSkillTiers = useMemo<InheritedTier[]>(
+    () =>
+      runSkills && runSkills.length > 0
+        ? [...inheritedTiers, { tier: "run", skills: runSkills }]
+        : inheritedTiers,
+    [inheritedTiers, runSkills],
+  );
 
   if (!tab || !node) return null;
+  const provisioningOpen = provisioningOpenFor === node.id;
   const resolvedHarness = resolveEditorHarness(node);
   const harnessOption = findHarnessOption(harnessCatalog, resolvedHarness);
 
@@ -260,6 +293,48 @@ export default function NodeInspector({
                 Frozen at spawn — an edit applies to the next NodeRun.
               </span>
             )}
+            {isolation && (
+              <>
+                <button
+                  type="button"
+                  aria-expanded={provisioningOpen}
+                  onClick={() => setProvisioningOpenFor(provisioningOpen ? null : node.id)}
+                  className="cursor-pointer rounded border border-line-strong bg-bg-3 px-2 py-1.5 text-left font-medium text-fg-2 hover:border-fg-4"
+                >
+                  {provisioningOpen ? "Hide provisioning" : "Configure provisioning"}
+                </button>
+                {provisioningOpen && (
+                  <>
+                    {!provisioningRepository && (
+                      <label className="block text-fg-3" style={{ fontSize: 10 }}>
+                        Resolve against
+                        <input
+                          value={provisioningPreviewRepository}
+                          onChange={(event) => setProvisioningPreviewRepository(event.target.value)}
+                          placeholder="/absolute/path/to/repository"
+                          className="mt-1 w-full rounded border border-line-strong bg-bg-3 px-2 py-1 font-mono text-fg outline-none focus:border-acc"
+                        />
+                      </label>
+                    )}
+                    <ProvisioningRulesEditor
+                      level="isolated_node"
+                      repository={provisioningRepository || provisioningPreviewRepository}
+                      rules={
+                        (provisioningFrozenAt ? runNode?.provisioning : undefined) ??
+                        node.provisioning ??
+                        EMPTY_PROVISIONING_RULES
+                      }
+                      onChange={(rules) => handleField("provisioning", rules)}
+                      readOnly={readOnly || !!provisioningFrozenAt}
+                      frozenAt={provisioningFrozenAt}
+                      frozenPlan={provisioningFrozenAt ? runNode?.provisioning_plan : undefined}
+                      inherited={inheritedProvisioning}
+                      gitRef={provisioningGitRef}
+                    />
+                  </>
+                )}
+              </>
+            )}
           </>
         )}
 
@@ -294,6 +369,41 @@ export default function NodeInspector({
               label="Agent"
               testId="node-agent-control"
             />
+            {/* #669/ADR-0062: the Node tier of the skills selection. Own skills are
+                live; inherited ones (instance, Projet, Run) are greyed with their
+                origin; the total is the strict additive union. An id the bank lost
+                warns here and on the pipeline banner — the node still runs. */}
+            <SkillSelector
+              tier="node"
+              own={node.skills ?? []}
+              onChange={(skills) => handleField("skills", skills.length > 0 ? skills : undefined)}
+              inherited={inheritedSkillTiers}
+              bank={skillBank}
+              label="Skills"
+              testId="node-skill-selector"
+            />
+            {runNode?.skills && (
+              <p className="text-fg-4" style={{ fontSize: 9.5 }} data-testid="node-skills-frozen">
+                Frozen at spawn:{" "}
+                {runNode.skills.length === 0
+                  ? "none"
+                  : runNode.skills.map((skill) => skill.name).join(", ")}
+                {runNode.missing_skills && runNode.missing_skills.length > 0 && (
+                  <span className="text-st-blocked">
+                    {" "}· missing: {runNode.missing_skills.map((skill) => skill.name || skill.id).join(", ")}
+                  </span>
+                )}
+                {runNode.skipped_skills && runNode.skipped_skills.length > 0 && (
+                  <span
+                    className="text-st-blocked"
+                    data-testid="node-skills-skipped"
+                    title={runNode.skipped_skills.map((skill) => `${skill.name}: ${skill.reason}`).join("\n")}
+                  >
+                    {" "}· not delivered: {runNode.skipped_skills.map((skill) => skill.name || skill.id).join(", ")}
+                  </span>
+                )}
+              </p>
+            )}
             <div className="sr-only">
               <div data-testid="node-harness" data-resolved={resolvedHarness}>
                 <HarnessSelect

@@ -1047,6 +1047,7 @@ mod tests {
 
     fn make_node(name: &str) -> pipeline::NodeDef {
         pipeline::NodeDef {
+            skills: Vec::new(),
             isolated_worktree: None,
             id: "test-id".to_string(),
             name: name.to_string(),

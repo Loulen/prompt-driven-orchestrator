@@ -844,3 +844,33 @@ describe("isolated_worktree emission (#653)", () => {
     );
   });
 });
+
+describe("provisioning pattern emission", () => {
+  it("quotes YAML-significant gitignore patterns", () => {
+    const pipeline: PipelineDef = {
+      name: "provisioning",
+      version: "1.0",
+      variables: {},
+      nodes: [{
+        id: "impl",
+        name: "implementer",
+        type: "agent",
+        inputs: [],
+        outputs: [],
+        interactive: false,
+        provisioning: {
+          copy: ["!datasets/eval/huge.bin", "*", "folder/a,b", "folder/[x]"],
+          hardlink: [],
+          symlink: [],
+        },
+      }],
+      edges: [],
+    };
+
+    const yaml = serializePipeline(pipeline);
+    expect(yaml).toContain('"!datasets/eval/huge.bin"');
+    expect(yaml).toContain('"*"');
+    expect(yaml).toContain('"folder/a,b"');
+    expect(yaml).toContain('"folder/[x]"');
+  });
+});

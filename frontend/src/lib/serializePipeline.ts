@@ -32,6 +32,7 @@ import type {
 // #550: the per-harness fold (pure, `../types`-only) — keeps this module pure.
 import { foldNodeIntoHarnesses } from "./harness";
 import { nodeIsolation } from "./nodeIsolation";
+import { hasProvisioningRules } from "./provisioning";
 
 /**
  * Drops the null-valued keys of every frontmatter declaration (#457).
@@ -110,8 +111,16 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
     if (n.agent_choice && n.agent_choice.mode !== "inherit") {
       node.agent_choice = n.agent_choice;
     }
+    // #669/ADR-0062: the node's skills, by id with their label, emitted only when
+    // non-empty so an unset node stays byte-identical to its pre-#669 document.
+    if (n.skills && n.skills.length > 0) {
+      node.skills = n.skills.map((skill) => ({ id: skill.id, name: skill.name }));
+    }
     const harnesses = foldNodeIntoHarnesses(n);
     if (harnesses) node.harnesses = harnesses;
+    if (n.provisioning && hasProvisioningRules(n.provisioning)) {
+      node.provisioning = n.provisioning;
+    }
     // Legacy `type: loop` nodes (pre-region model, ADR-0011) carry a node-level
     // `max_iter` that the daemon still requires and validates
     // (`pipeline.rs` `NodeType::Loop`). The current model emits `max_iter` on the
@@ -298,8 +307,14 @@ export function exportNodeAsYaml(node: NodeDef, prompt: string): string {
   if (node.agent_choice && node.agent_choice.mode !== "inherit") {
     obj.agent_choice = node.agent_choice;
   }
+  if (node.skills && node.skills.length > 0) {
+    obj.skills = node.skills.map((skill) => ({ id: skill.id, name: skill.name }));
+  }
   const harnesses = foldNodeIntoHarnesses(node);
   if (harnesses) obj.harnesses = harnesses;
+  if (node.provisioning && hasProvisioningRules(node.provisioning)) {
+    obj.provisioning = node.provisioning;
+  }
   // Legacy bounded-loop nodes carry a node-level `max_iter` the daemon still
   // requires; regular nodes never set it, so its presence is the signal.
   if (node.max_iter !== undefined && node.max_iter !== null) obj.max_iter = node.max_iter;
@@ -322,7 +337,15 @@ function dumpYaml(val: unknown, indent: number): string {
   if (typeof val === "boolean") return val ? "true" : "false";
   if (typeof val === "number") return String(val);
   if (typeof val === "string") {
-    if (val.includes("\n") || val.includes(":") || val.includes("#") || val.includes('"') || val === "") {
+    if (
+      val.includes("\n") ||
+      val.includes(":") ||
+      val.includes("#") ||
+      val.includes('"') ||
+      val === "" ||
+      /^[!&*[\]{},|>@`%]/.test(val) ||
+      /[[\]{},]/.test(val)
+    ) {
       return JSON.stringify(val);
     }
     if (/^\d/.test(val) || val === "true" || val === "false" || val === "null") {

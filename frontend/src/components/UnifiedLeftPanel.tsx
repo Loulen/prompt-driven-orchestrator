@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Copy, FileUp, Pause, Pencil, Play, Plus, RotateCcw, SquareTerminal, Trash2, Zap } from "lucide-react";
+import { ChevronDown, ChevronRight, Copy, FileUp, Pause, Pencil, Play, Plus, RotateCcw, SquareTerminal, Trash2, X, Zap } from "lucide-react";
 import { isLiveRun, isTerminalRun, type RunListEntry, type RunStatus, type PipelineListEntry, type Trigger, type Project } from "../types";
 import type { LibraryPipelineEntry } from "../api";
 import { cleanupRun, createPipeline, duplicatePipeline, forgetRun, importPipelineDocument, importWorkflow, openRunShell, pauseRun, renameRun, resumeRun, retryAll } from "../api";
+import { announceSkillsChanged } from "../hooks/useSkillBank";
 import { useEditStore } from "../stores/editStore";
 import { useSelectionStore } from "../stores/selectionStore";
+import { useRecentReposStore } from "../stores/recentReposStore";
 import { handleSelectionKeydown } from "../lib/selectionKeys";
 import { type BulkItem, type BulkOutcome } from "../lib/bulk";
 import { groupByProject, type ProjectRef } from "../lib/groupByRepo";
@@ -110,6 +112,7 @@ export default function UnifiedLeftPanel({
   const openPipeline = useEditStore((s) => s.openPipeline);
   const removePipeline = useEditStore((s) => s.removePipeline);
   const activeTabId = useEditStore((s) => s.activeTabId);
+  const recentRepos = useRecentReposStore((s) => s.recentRepos);
 
   // #577 — multi-select. The per-tab sets live in the shared store (so a tab's
   // count survives a switch as its badge); the pending bulk action is local.
@@ -512,9 +515,13 @@ export default function UnifiedLeftPanel({
   );
   const availableRepos = useMemo(() => {
     const set = new Set<string>();
+    for (const path of recentRepos) set.add(path);
     for (const r of runs) if (r.effective_repo) set.add(r.effective_repo);
+    for (const project of projects) {
+      for (const path of project.members) set.add(path);
+    }
     return [...set];
-  }, [runs]);
+  }, [projects, recentRepos, runs]);
 
   // Group the active Runs list by Projet (#552), falling back to the #258
   // per-path grouping when nothing is named; `null` ⇒ the flat list.
@@ -647,9 +654,46 @@ export default function UnifiedLeftPanel({
             style={{ fontSize: "11.5px" }}
           >
             Runs
+            {availableRepos.length > 0 && (
+              <button
+                type="button"
+                aria-label="Configure project"
+                onClick={() => {
+                  if (availableRepos.length > 1) {
+                    setProjectEditor({
+                      project: null,
+                      name: "Project",
+                      memberPaths: [],
+                    });
+                    return;
+                  }
+                  const path = availableRepos[0];
+                  const project = projectOf(path);
+                  openProjectEditor(
+                    project
+                      ? {
+                          kind: "project",
+                          key: `project:${project.id}`,
+                          repoPath: "",
+                          label: project.name,
+                        }
+                      : {
+                          kind: "path",
+                          key: path,
+                          repoPath: path,
+                          label: path.split("/").filter(Boolean).pop() ?? path,
+                        },
+                  );
+                }}
+                className="ml-auto cursor-pointer rounded border border-line-strong bg-bg-3 px-1.5 py-0.5 text-fg-3 hover:border-acc hover:text-fg"
+                style={{ fontSize: "10.5px" }}
+              >
+                Project
+              </button>
+            )}
             <button
               onClick={onNewRun}
-              className="ml-auto flex cursor-pointer items-center gap-1 rounded bg-acc px-1.5 py-0.5 font-medium text-[#04140d] transition-colors hover:bg-acc-dim"
+              className={`${availableRepos.length > 0 ? "ml-1.5" : "ml-auto"} flex cursor-pointer items-center gap-1 rounded bg-acc px-1.5 py-0.5 font-medium text-[#04140d] transition-colors hover:bg-acc-dim`}
               style={{ fontSize: "10.5px" }}
             >
               <Plus size={10} />
@@ -1125,6 +1169,18 @@ function NewPipelineModal({ onClose }: { onClose: () => void }) {
   );
 }
 
+/// The base64 of a picked file (the skills sidecar zip, #673) — what the import
+/// request carries; the daemon decodes and unzips it.
+async function fileToBase64(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
 /// Import a Claude Code workflow `.js` as a draft library pipeline (#155). The
 /// file is read client-side and POSTed as text — the daemon parses it to an AST
 /// (never executes it) and returns a draft plus lossy-translation warnings.
@@ -1136,6 +1192,10 @@ function ImportWorkflowModal({
   const [mode, setMode] = useState<"pdo" | "claude">("pdo");
   const [file, setFile] = useState<File | null>(null);
   const [content, setContent] = useState("");
+  // #673: the skills sidecar (`<pipeline>.skills.zip`) picked beside the YAML,
+  // sent as base64. Optional: without it, unknown skill ids import with a
+  // "skill absent" warning instead of failing.
+  const [sidecar, setSidecar] = useState<{ name: string; base64: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[] | null>(null);
@@ -1160,10 +1220,15 @@ function ImportWorkflowModal({
     try {
       const result =
         mode === "pdo"
-          ? await importPipelineDocument(content)
+          ? await importPipelineDocument(content, sidecar?.base64)
           : await importWorkflow(file?.name ?? "workflow.js", content);
       await loadPipelines();
       await openPipeline(result.id);
+      if (mode === "pdo") {
+        // The import may have added skills to the bank (#673): the Skills panel,
+        // the selectors and the missing-skill warnings all re-read it.
+        announceSkillsChanged();
+      }
       const w = "warnings" in result ? result.warnings ?? [] : [];
       if (w.length > 0) {
         // Surface the diagnostics rather than silently closing: for a Claude
@@ -1185,6 +1250,21 @@ function ImportWorkflowModal({
     setContent(next ? await next.text() : "");
     setError(null);
     setWarnings(null);
+  }
+
+  /// PDO mode: the picker takes the YAML and, beside it, the skills sidecar
+  /// (`.zip`). Either may come alone; a later pick replaces its own kind only.
+  async function loadPdoFiles(files: FileList | null) {
+    setError(null);
+    setWarnings(null);
+    for (const next of Array.from(files ?? [])) {
+      if (/\.zip$/i.test(next.name)) {
+        setSidecar({ name: next.name, base64: await fileToBase64(next) });
+      } else {
+        setFile(next);
+        setContent(await next.text());
+      }
+    }
   }
 
   return (
@@ -1221,7 +1301,8 @@ function ImportWorkflowModal({
         {mode === "pdo" ? (
           <>
             <p className="mb-2 text-fg-4" style={{ fontSize: "11px" }}>
-              Paste a portable PDO pipeline document or load a YAML file.
+              Paste a portable PDO pipeline document or load a YAML file. If the pipeline
+              selects skills, add its <code>.skills.zip</code> sidecar so the bank recreates them.
             </p>
             <textarea
               value={content}
@@ -1233,15 +1314,33 @@ function ImportWorkflowModal({
               data-testid="pipeline-document-input"
               autoFocus
             />
-            <label className="mb-3 mt-1.5 inline-block cursor-pointer text-acc hover:underline">
-              load a file…
-              <input
-                type="file"
-                accept=".yaml,.yml"
-                className="hidden"
-                onChange={(event) => void loadFile(event.target.files?.[0] ?? null)}
-              />
-            </label>
+            <div className="mb-3 mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+              <label className="inline-block cursor-pointer text-acc hover:underline">
+                load files…
+                <input
+                  type="file"
+                  accept=".yaml,.yml,.zip"
+                  multiple
+                  className="hidden"
+                  data-testid="pipeline-document-files"
+                  onChange={(event) => void loadPdoFiles(event.target.files)}
+                />
+              </label>
+              {sidecar ? (
+                <span className="flex items-center gap-1 text-fg-3" data-testid="skills-sidecar-chip">
+                  skills sidecar: <code>{sidecar.name}</code>
+                  <button
+                    className="text-fg-4 hover:text-fg"
+                    onClick={() => setSidecar(null)}
+                    aria-label="Remove the skills sidecar"
+                  >
+                    <X size={10} />
+                  </button>
+                </span>
+              ) : (
+                <span className="text-fg-4">no skills sidecar</span>
+              )}
+            </div>
           </>
         ) : (
           <>

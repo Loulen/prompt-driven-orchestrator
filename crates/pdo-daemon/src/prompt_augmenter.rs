@@ -1151,6 +1151,7 @@ mod tests {
             version: Some("1.0".into()),
             variables: HashMap::new(),
             nodes: vec![NodeDef {
+                skills: Vec::new(),
                 isolated_worktree: None,
                 id: "planner".into(),
                 name: "planner".into(),
@@ -1444,6 +1445,7 @@ mod tests {
     fn script_with_repeated_laps_pipeline() -> PipelineDef {
         let mut pipeline = sample_pipeline();
         pipeline.nodes.push(NodeDef {
+            skills: Vec::new(),
             isolated_worktree: None,
             id: "collector".into(),
             name: "collector".into(),
@@ -1568,6 +1570,7 @@ mod tests {
     fn edge_based_input_resolution() {
         let mut pipeline = sample_pipeline();
         pipeline.nodes.push(NodeDef {
+            skills: Vec::new(),
             isolated_worktree: None,
             id: "implementer".into(),
             name: "implementer".into(),
@@ -1651,6 +1654,7 @@ mod tests {
             ..Default::default()
         });
         pipeline.nodes.push(NodeDef {
+            skills: Vec::new(),
             isolated_worktree: None,
             id: "implementer".into(),
             name: "implementer".into(),
@@ -1686,6 +1690,7 @@ mod tests {
         // the incoming edge. The preamble must still enumerate it.
         let mut pipeline = sample_pipeline();
         pipeline.nodes.push(NodeDef {
+            skills: Vec::new(),
             isolated_worktree: None,
             id: "implementer".into(),
             name: "implementer".into(),
@@ -1735,6 +1740,7 @@ mod tests {
         // on a declared input port. planner → implementer, port `plans`.
         let mut pipeline = sample_pipeline();
         pipeline.nodes.push(NodeDef {
+            skills: Vec::new(),
             isolated_worktree: None,
             id: "implementer".into(),
             name: "implementer".into(),
@@ -1880,6 +1886,7 @@ mod tests {
             variables: HashMap::new(),
             nodes: vec![
                 NodeDef {
+                    skills: Vec::new(),
                     isolated_worktree: None,
                     id: "planner".into(),
                     name: "planner".into(),
@@ -1906,6 +1913,7 @@ mod tests {
                     auto_fail: None,
                 },
                 NodeDef {
+                    skills: Vec::new(),
                     isolated_worktree: None,
                     id: "researcher".into(),
                     name: "researcher".into(),
@@ -1932,6 +1940,7 @@ mod tests {
                     auto_fail: None,
                 },
                 NodeDef {
+                    skills: Vec::new(),
                     isolated_worktree: None,
                     id: "implementer".into(),
                     name: "implementer".into(),
@@ -2051,6 +2060,7 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![NodeDef {
+                skills: Vec::new(),
                 isolated_worktree: None,
                 id: "reviewer".into(),
                 name: "reviewer".into(),
@@ -2400,6 +2410,7 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![NodeDef {
+                skills: Vec::new(),
                 isolated_worktree: None,
                 id: "designer".into(),
                 name: "designer".into(),
@@ -2456,6 +2467,7 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![NodeDef {
+                skills: Vec::new(),
                 isolated_worktree: None,
                 id: "gallery".into(),
                 name: "gallery".into(),
@@ -2507,6 +2519,7 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![NodeDef {
+                skills: Vec::new(),
                 isolated_worktree: None,
                 id: "node".into(),
                 name: "node".into(),

@@ -206,6 +206,7 @@ mod tests {
 
     fn simple_node(id: &str, node_type: pipeline::NodeType) -> pipeline::NodeDef {
         pipeline::NodeDef {
+            skills: Vec::new(),
             isolated_worktree: None,
             id: id.to_string(),
             name: id.to_string(),
@@ -225,6 +226,7 @@ mod tests {
 
     fn loop_node(id: &str, max_iter: i64) -> pipeline::NodeDef {
         pipeline::NodeDef {
+            skills: Vec::new(),
             isolated_worktree: None,
             id: id.to_string(),
             name: id.to_string(),
@@ -263,6 +265,9 @@ mod tests {
             state.nodes.insert(
                 id.to_string(),
                 event_log::NodeState {
+                    missing_skills: Vec::new(),
+                    skipped_skills: Vec::new(),
+                    skills: None,
                     isolated_worktree: None,
                     harness: None,
                     cost: None,

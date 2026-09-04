@@ -214,6 +214,25 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
     // never be resolved in the node's favour. Record it on this path too, not just
     // in `node_spawn`.
     let mut spawn_base_sha: Option<String> = None;
+    let node_provisioning = if has_sub_worktree {
+        match crate::provisioning::node_rules_from_pipeline(params.pipeline_path, &node.id) {
+            Ok(rules) => rules,
+            Err(e) => {
+                return StartNodeResult {
+                    outcome: PrimitiveOutcome::Rejected {
+                        reason: format!(
+                            "provisioning failed for {}: {e:#}; no node was spawned",
+                            node.id
+                        ),
+                    },
+                    events: vec![],
+                    spawn: None,
+                };
+            }
+        }
+    } else {
+        crate::provisioning::ProvisioningRules::default()
+    };
     let working_dir = if has_sub_worktree {
         let sub_wt_dir =
             sub_worktree_path(params.repo_root, params.run_id, params.node_id, params.iter);
@@ -230,7 +249,34 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
             &pipeline_branch,
             None,
         ) {
-            Ok(ensured) => spawn_base_sha = ensured.base_sha,
+            Ok(ensured) => {
+                spawn_base_sha = ensured.base_sha;
+                if ensured.created {
+                    if let Err(e) = crate::provisioning::provision_node_worktree(
+                        params.repo_root,
+                        &sub_wt_dir,
+                        &params.run_state.provisioning_rules,
+                        &node_provisioning,
+                        &pipeline_branch,
+                    ) {
+                        crate::worktree_ops::reap_orphan_sub_worktree(
+                            params.repo_root,
+                            &sub_wt_dir,
+                            &sub_branch,
+                        );
+                        return StartNodeResult {
+                            outcome: PrimitiveOutcome::Rejected {
+                                reason: format!(
+                                    "provisioning failed for {}: {e:#}; no node was spawned",
+                                    node.id
+                                ),
+                            },
+                            events: vec![],
+                            spawn: None,
+                        };
+                    }
+                }
+            }
             Err(e) => {
                 return StartNodeResult {
                     outcome: PrimitiveOutcome::Rejected {
@@ -465,6 +511,7 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
             // #653/ADR-0060: FREEZE where this NodeRun works. Mirrors the
             // `spawn_node` payload — every later reader asks this event.
             "isolated_worktree": has_sub_worktree,
+            "provisioning": node_provisioning,
             "input_paths": input_paths,
             // Launch-time model + effort, **resolved**. Mirrors the `spawn_node`
             // payload.
@@ -825,6 +872,7 @@ mod tests {
 
     fn make_node(id: &str, node_type: NodeType, inputs: &[&str], outputs: &[&str]) -> NodeDef {
         NodeDef {
+            skills: Vec::new(),
             // #653: these fixtures exercise graph wiring, not worktrees — a
             // shared-worktree node keeps them out of `git worktree add` on a
             // scratch dir. Isolation-sensitive tests state `Some(true)`.
@@ -873,6 +921,7 @@ mod tests {
 
     fn make_node_with_repeated_input(id: &str, port_name: &str) -> NodeDef {
         NodeDef {
+            skills: Vec::new(),
             isolated_worktree: None,
             id: id.into(),
             name: id.into(),
@@ -934,6 +983,9 @@ mod tests {
 
     fn running_node(id: &str, iter: i64) -> NodeState {
         NodeState {
+            missing_skills: Vec::new(),
+            skipped_skills: Vec::new(),
+            skills: None,
             isolated_worktree: None,
             harness: None,
             cost: None,
@@ -959,6 +1011,9 @@ mod tests {
 
     fn completed_node(id: &str, iter: i64) -> NodeState {
         NodeState {
+            missing_skills: Vec::new(),
+            skipped_skills: Vec::new(),
+            skills: None,
             isolated_worktree: None,
             harness: None,
             cost: None,
@@ -984,6 +1039,9 @@ mod tests {
 
     fn pending_node(id: &str) -> NodeState {
         NodeState {
+            missing_skills: Vec::new(),
+            skipped_skills: Vec::new(),
+            skills: None,
             isolated_worktree: None,
             harness: None,
             cost: None,
@@ -1558,6 +1616,9 @@ mod tests {
     fn completed_node_iters(id: &str, iters: &[(i64, NodeStatus)]) -> NodeState {
         let (head_iter, head_status) = iters.last().cloned().unwrap_or((1, NodeStatus::Pending));
         NodeState {
+            missing_skills: Vec::new(),
+            skipped_skills: Vec::new(),
+            skills: None,
             isolated_worktree: None,
             harness: None,
             cost: None,

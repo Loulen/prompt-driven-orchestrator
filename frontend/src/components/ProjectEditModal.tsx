@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { AgentChoice, Project } from "../types";
+import type { AgentChoice, Project, SkillRef } from "../types";
 import {
   addProjectMember,
   ApiError,
@@ -11,6 +11,10 @@ import { useHarnessCatalog } from "../hooks/useHarnessCatalog";
 import { useAgentProfiles } from "../hooks/useAgentProfiles";
 import AgentControl from "./AgentControl";
 import HarnessSelect from "./HarnessSelect";
+import PersistedProvisioningEditor from "./PersistedProvisioningEditor";
+import SkillSelector from "./SkillSelector";
+import { useSkillBank } from "../hooks/useSkillBank";
+import { announceSkillTiersChanged, useSkillTiers } from "../hooks/useSkillTiers";
 
 /**
  * The group-header pencil (#552, ADR-0046): name a Projet (or rename an existing
@@ -53,11 +57,19 @@ export default function ProjectEditModal({
   const [agentChoice, setAgentChoice] = useState<AgentChoice>(
     initialProject?.agent_choice ?? { mode: "inherit" },
   );
+  // #669/ADR-0062: the Projet tier of the skills selection; inherits the instance.
+  const [skills, setSkills] = useState<SkillRef[]>(initialProject?.skills ?? []);
+  const skillsChanged =
+    skills.map((skill) => skill.id).join("\u0000") !==
+    (initialProject?.skills ?? []).map((skill) => skill.id).join("\u0000");
+  const { bank: skillBank } = useSkillBank();
+  const { instance: instanceSkills } = useSkillTiers(null);
   const [checked, setChecked] = useState<Set<string>>(
     () => new Set(initialMemberPaths),
   );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [provisioningOpen, setProvisioningOpen] = useState(false);
   // #586: the harness options, dynamic from `/settings` (floor ∪ descriptors,
   // each installed/not). The modal holds no settings of its own, so it fetches.
   const harnessCatalog = useHarnessCatalog();
@@ -109,6 +121,8 @@ export default function ProjectEditModal({
           // Empty select → clear the harness (null); a value sets it.
           harness: harness ? harness : null,
           ...(agentChoice.mode === "inherit" ? {} : { agent_choice: agentChoice }),
+          // #669: replaced wholesale when it changed; an empty list clears the tier.
+          ...(skillsChanged ? { skills } : {}),
         });
       } else {
         const created = await createProject(trimmedName);
@@ -116,6 +130,7 @@ export default function ProjectEditModal({
         await updateProject(projectId, {
           ...(harness ? { harness } : {}),
           ...(agentChoice.mode === "inherit" ? {} : { agent_choice: agentChoice }),
+          ...(skills.length > 0 ? { skills } : {}),
         });
       }
 
@@ -130,6 +145,7 @@ export default function ProjectEditModal({
       for (const path of current) {
         if (!desired.has(path)) await removeProjectMember(projectId, path);
       }
+      if (skillsChanged) announceSkillTiersChanged();
       onSaved();
       onClose();
     } catch (e) {
@@ -191,6 +207,18 @@ export default function ProjectEditModal({
           label="Agent — Project"
           testId="project-agent-control"
         />
+        <div className="mt-2">
+          {/* #669/ADR-0062: the Projet tier; the instance selection is inherited. */}
+          <SkillSelector
+            tier="project"
+            own={skills}
+            onChange={setSkills}
+            inherited={[{ tier: "instance", skills: instanceSkills }]}
+            bank={skillBank}
+            label="Skills — Project"
+            testId="project-skill-selector"
+          />
+        </div>
         <div className="sr-only" aria-hidden>
           <HarnessSelect
             value={harness}
@@ -200,6 +228,26 @@ export default function ProjectEditModal({
             data-testid="project-harness-select"
           />
         </div>
+
+        {initialProject && (
+          <div className="mb-3">
+            {provisioningOpen ? (
+              <PersistedProvisioningEditor
+                scope="project"
+                projectId={initialProject.id}
+                initialRepository={initialProject.members[0] ?? ""}
+              />
+            ) : (
+              <button
+                type="button"
+                onClick={() => setProvisioningOpen(true)}
+                className="rounded border border-line-strong bg-bg-3 px-2.5 py-1.5 text-fg-2 hover:border-acc"
+              >
+                Configure worktree provisioning…
+              </button>
+            )}
+          </div>
+        )}
         </div>
 
         <label className="mb-1 block text-fg-3" style={{ fontSize: "11px" }}>

@@ -10,14 +10,19 @@ cd "$(git rev-parse --show-toplevel)"
 # frontend/src/components: 146 reconciles a preexisting drift (the tree already
 #   held 146 direct files before #598; the baseline had lagged at 144). Ratchet
 #   down when the flat list is genuinely tidied.
-# crates/pdo-daemon/src: 71 admits three pure Performance modules from #585:
+# frontend/src/components: 157 admits the declarative provisioning editor,
+#   persisted-scope host, and component test. Provisioning is a new concern shared
+#   by four existing surfaces, so one reusable sibling avoids divergent editors.
+# crates/pdo-daemon/src: 75 admits the provisioning resolver/provisioner sibling;
+#   it owns matching, persistence, preview, and filesystem effects at one seam.
+#   71 admitted three pure Performance modules from #585:
 #   context_peak.rs parses harness telemetry, distribution.rs owns R-7 summary
 #   statistics, and stats_performance.rs aggregates the HTTP response. Keeping
 #   these concerns separate follows the sibling-module rule. 68 previously
 #   admitted the three pure modules from the `copilot` spec (#612).
 BASELINES='
-frontend/src/components 152
-crates/pdo-daemon/src 71
+frontend/src/components 157
+crates/pdo-daemon/src 75
 '
 
 fail=0

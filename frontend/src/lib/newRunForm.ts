@@ -4,7 +4,7 @@ import type {
   TargetRepoInput,
   UpdateTriggerRequest,
 } from "../api";
-import type { InstanceSettings, PipelineListEntry, SandboxProfileRef } from "../types";
+import type { InstanceSettings, PipelineListEntry, SandboxProfileRef, SkillRef } from "../types";
 import { presetToCron, type CronPresetId } from "../cronPresets";
 import { HARNESS_FLOOR, harnessCatalog, type HarnessCatalog } from "./harness";
 
@@ -360,6 +360,8 @@ export interface RunPayloadInput {
   sandbox: string;
   /** #551: the harness selector value — `""` (inherit) or a concrete name. */
   harness: string;
+  /** #669: the Run tier of the skills selection. Empty ⇒ the key is omitted. */
+  skills?: SkillRef[];
   images: File[];
   /** #465: `[0]` = primary, `[1..]` = secondaries. Omit / `undefined` for a mono-repo Run. */
   targetRepos?: TargetRepoInput[];
@@ -375,6 +377,7 @@ export function buildRunPayload({
   runName,
   sandbox,
   harness,
+  skills,
   images,
   targetRepos,
 }: RunPayloadInput): CreateRunRequest {
@@ -401,6 +404,9 @@ export function buildRunPayload({
     // no harness and each free node resolves through the instance default and the floor —
     // exactly the "name the default, don't copy it" contract of the selector (#452).
     harness: harness || undefined,
+    // #669: the explicit Run-tier skills. An empty list OMITS the key, so the
+    // Run adds none and the payload stays byte-identical to the pre-#669 shape.
+    skills: skills && skills.length > 0 ? skills : undefined,
     images: images.length > 0 ? images : undefined,
   };
 }
@@ -419,6 +425,8 @@ export interface TriggerPayloadInput {
   sandbox: string;
   /** #551: the harness selector value — `""` (inherit) or a concrete name. */
   harness: string;
+  /** #669: the Run-tier skills every fired Run carries. */
+  skills?: SkillRef[];
   autoName: boolean;
   variables: Record<string, unknown>;
   /** #465: `[0]` = primary, `[1..]` = secondaries. Omit / `undefined` for a mono-repo Trigger. */
@@ -443,6 +451,7 @@ export function buildTriggerUpdatePayload({
   maxConcurrent,
   sandbox,
   harness,
+  skills,
   autoName,
   variables,
   targetRepos,
@@ -468,6 +477,8 @@ export function buildTriggerUpdatePayload({
     // #551: `""` (Use instance default) clears back to inheriting (`null`); a concrete
     // harness name sets it. Mirror of `sandbox`.
     harness: harness || null,
+    // #669: replaced wholesale on edit — an empty list clears the Trigger's skills.
+    skills: skills ?? [],
     // #338: round-trip the auto-naming choice (flat bool, mirror of `enabled`).
     auto_name: autoName,
     variables,
@@ -486,6 +497,7 @@ export function buildTriggerCreatePayload({
   maxConcurrent,
   sandbox,
   harness,
+  skills,
   autoName,
   variables,
   targetRepos,
@@ -506,6 +518,8 @@ export function buildTriggerCreatePayload({
     sandbox: sandbox || null,
     // #551: `""` (Use instance default) → `null` (inherit); a concrete harness sets it.
     harness: harness || null,
+    // #669: the Run-tier skills every fired Run carries; omitted when none.
+    ...(skills && skills.length > 0 ? { skills } : {}),
     // #338: freeze the auto-naming choice on the new Trigger (seeded from the
     // instance default when the modal opened).
     auto_name: autoName,

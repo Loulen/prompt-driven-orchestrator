@@ -14,9 +14,14 @@ import { findHarnessOption } from "../lib/harness";
 import { useHarnessCatalog } from "../hooks/useHarnessCatalog";
 
 /**
- * Agent profiles editor. Each create / update / delete is its own request — profiles are
- * their own REST resource, not part of the grouped `PUT /settings`, which is why the host
- * frames this with **Done**, never Save.
+ * Agent profiles editor, mounted inline in Settings › Agents › Agent profiles (#691). Each
+ * create / update / delete is its own request — profiles are their own REST resource, not
+ * part of the grouped `PUT /settings`, which is why the section says `saves as you go` and
+ * the form's Save never sends anything from here.
+ *
+ * List-first: the editor stays folded until a row or **New profile** opens it, so a visit
+ * to the Agents page reads as a list and never shows a second primary button next to the
+ * footer's Save.
  */
 export default function AgentProfilesPanel({
   profiles,
@@ -25,19 +30,14 @@ export default function AgentProfilesPanel({
   profiles: AgentProfile[];
   onChanged: () => Promise<void>;
 }) {
-  const [selectedId, setSelectedId] = useState<string | null>(profiles[0]?.id ?? null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
-  const [draft, setDraft] = useState(() => {
-    const profile = profiles[0];
-    return profile
-      ? {
-          name: profile.name,
-          harness: profile.harness,
-          model: profile.model ?? null,
-          effort: profile.effort ?? null,
-        }
-      : { name: "", harness: "", model: null as string | null, effort: null as string | null };
-  });
+  const [draft, setDraft] = useState(() => ({
+    name: "",
+    harness: "",
+    model: null as string | null,
+    effort: null as string | null,
+  }));
   const [referents, setReferents] = useState<AgentProfileReferents | null>(null);
   const [deleting, setDeleting] = useState<AgentProfile | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -102,7 +102,7 @@ export default function AgentProfilesPanel({
       Number(referents.instance) + referents.projects.length + referents.triggers.length +
       referents.pipelines.length + referents.runs.length;
     return (
-      <div className="flex min-h-0 flex-1 flex-col p-4" data-testid="agent-profile-delete">
+      <div className="flex flex-col p-4" data-testid="agent-profile-delete">
         <h3 className="font-semibold text-fg">Delete {deleting.name}?</h3>
         <p className="mt-2 text-fg-3" style={{ fontSize: 11 }}>
           These <strong>{count} live references</strong> will resolve at the next tier instead.
@@ -127,7 +127,7 @@ export default function AgentProfilesPanel({
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-4" data-testid="agent-profiles-panel">
+    <div className="flex flex-col p-4" data-testid="agent-profiles-panel">
       <div className="space-y-1">
         {profiles.map((profile) => (
           <div
@@ -163,6 +163,7 @@ export default function AgentProfilesPanel({
           setDraft({ name: "", harness: "", model: null, effort: null });
         }}
         className="mt-2 self-start rounded border border-line px-2 py-1 text-fg-2"
+        data-testid="agent-profile-new"
       >
         <Plus size={11} className="mr-1 inline" /> New profile
       </button>
@@ -184,6 +185,7 @@ export default function AgentProfilesPanel({
               onChange={(harness) => setDraft({ ...draft, harness, model: null, effort: null })}
               catalog={catalog}
               inheritLabel="Choose a harness…"
+              data-testid="agent-profile-harness"
               className="mt-1 w-full rounded border border-line-strong bg-bg-3 px-2 py-1.5"
             />
           </label>
@@ -213,7 +215,7 @@ export default function AgentProfilesPanel({
           )}
           {error && <p className="text-st-failed" style={{ fontSize: 10 }}>{error}</p>}
           <div className="flex justify-end gap-2">
-            <button onClick={() => setDraft({ name: "", harness: "", model: null, effort: null })} className="rounded border border-line px-2 py-1 text-fg-3">Cancel</button>
+            <button onClick={() => { setSelectedId(null); setCreating(false); setDraft({ name: "", harness: "", model: null, effort: null }); }} className="rounded border border-line px-2 py-1 text-fg-3">Cancel</button>
             <button disabled={!draft.name.trim() || !draft.harness || profiles.some((p) => p.id !== selectedId && p.name.toLowerCase() === draft.name.trim().toLowerCase())} onClick={() => void save()} className="rounded bg-acc px-2 py-1 text-bg-1 disabled:opacity-40">
               {creating ? "Create" : "Save profile"}
             </button>

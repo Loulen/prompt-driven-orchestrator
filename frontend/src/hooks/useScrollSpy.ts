@@ -10,7 +10,12 @@ import { useCallback, useEffect, useRef, useState, type RefObject } from "react"
  *   top — the classic "last section never highlights" bug.
  * - A clicked entry is **pinned** until the smooth scroll settles (`scrollend`, or 150 ms
  *   after the last `scroll` event), so the highlight never flickers through the sections
- *   the scroll passes over.
+ *   the scroll passes over — and it stays on the clicked entry once settled, even when the
+ *   page could not scroll it to the top (#691: three sections on a short page).
+ *
+ * The page grows after mount (#691: inline panels fetch their own data), which moves every
+ * heading and can flip the "scrolled to the bottom" rule: a `ResizeObserver` on the
+ * container's content re-evaluates the pick whenever its height changes.
  *
  * Environments without `IntersectionObserver` (jsdom) keep the pinned / initial value.
  */
@@ -57,10 +62,15 @@ export function useScrollSpy<Id extends string>(
       if (best) setSpied(best);
     };
 
+    // A click that settled keeps its entry: on a short page the target may sit at the very
+    // bottom, where the "last section wins" rule would otherwise override the user's own
+    // choice. The next user scroll (or content growth) hands the pick back to the spy.
     const unpin = () => {
+      const clicked = pinnedRef.current;
       pinnedRef.current = null;
       setPinned(null);
-      pick();
+      if (clicked) setSpied(clicked);
+      else pick();
     };
     const onScroll = () => {
       if (pinnedRef.current) {
@@ -93,10 +103,18 @@ export function useScrollSpy<Id extends string>(
       pick();
     }
 
+    let resize: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== "undefined") {
+      resize = new ResizeObserver(() => pick());
+      // The content wrapper grows, not the container (which is the flex-sized viewport).
+      for (const child of Array.from(container.children)) resize.observe(child);
+    }
+
     return () => {
       container.removeEventListener("scroll", onScroll);
       container.removeEventListener("scrollend", onScrollEnd);
       observer?.disconnect();
+      resize?.disconnect();
       if (settleTimer.current) clearTimeout(settleTimer.current);
     };
   }, [ids, containerRef, enabled]);

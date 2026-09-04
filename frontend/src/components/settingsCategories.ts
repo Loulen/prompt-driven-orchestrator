@@ -12,7 +12,11 @@ export type SettingsSectionId =
   | "runtime-limits"
   | "runs"
   | "harness-models"
+  | "agent-profiles"
+  | "skills"
   | "sandbox"
+  | "staging-profiles"
+  | "worktree-provisioning"
   | "price-table"
   | "harness-descriptors";
 
@@ -22,6 +26,11 @@ export interface SettingsSection {
   description: string;
   /** Diagnostics: observed state, nothing to PUT. */
   readOnly?: boolean;
+  /**
+   * Inline panel with its own REST resource (#691): every edit is written at once, the
+   * form's Save ignores it. Rendered as a `saves as you go` badge next to the title.
+   */
+  ownPersistence?: boolean;
 }
 
 export interface SettingsCategory {
@@ -62,6 +71,19 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
         description:
           "What a work node runs on when neither the node nor a coarser tier decides.",
       },
+      {
+        id: "agent-profiles",
+        label: "Agent profiles",
+        description:
+          "Named harness · model · effort presets a node, a Run or the instance can pick by name.",
+        ownPersistence: true,
+      },
+      {
+        id: "skills",
+        label: "Skills",
+        description:
+          "The skills the instance tier hands to every node (saved with the form), and the bank they come from.",
+      },
     ],
   },
   {
@@ -70,9 +92,23 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
     sections: [
       {
         id: "sandbox",
-        label: "Sandbox",
+        label: "Default sandbox",
         description:
-          "Where a Run executes when neither the launch dialog nor a Trigger picks, and what its worktrees receive.",
+          "Where a Run executes when neither the launch dialog nor a Trigger picks one.",
+      },
+      {
+        id: "staging-profiles",
+        label: "Staging profiles",
+        description:
+          "What a Docker sandbox receives from your home: the floor, the default entries, your extras.",
+        ownPersistence: true,
+      },
+      {
+        id: "worktree-provisioning",
+        label: "Worktree provisioning",
+        description:
+          "Repository paths copied, hard-linked or symlinked into a Run's worktrees when Git leaves them absent.",
+        ownPersistence: true,
       },
     ],
   },
@@ -123,7 +159,7 @@ export const FIELD_SECTION: Record<SettingsFieldId, SettingsSectionId> = {
   "autocomplete-turn-end": "runs",
   "default-auto-name": "runs",
   "agent-choice": "harness-models",
-  skills: "harness-models",
+  skills: "skills",
   "default-model": "harness-models",
   "default-harness": "harness-models",
   "harness-models": "harness-models",

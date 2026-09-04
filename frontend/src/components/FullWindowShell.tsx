@@ -22,7 +22,7 @@ interface Props {
   railAriaLabel: string;
   /** `data-testid` prefix of a rail entry: `${prefix}-${id}`. */
   railTestIdPrefix: string;
-  /** Right-side drawer (Stats' pricing details, Settings' temporary panels). */
+  /** Right-side drawer (Stats' pricing details, Settings' skill bank). */
   drawer?: ReactNode;
   /** Spans the pane, not the rail. Settings' Save footer. */
   footer?: ReactNode;

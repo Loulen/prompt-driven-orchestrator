@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Bookmark, Check, ChevronDown, ChevronLeft, GitFork, SlidersHorizontal, TriangleAlert } from "lucide-react";
 import type { AgentChoice, AgentCombination, AgentProfile } from "../types";
 import type { HarnessCatalog } from "../lib/harness";
@@ -51,13 +51,39 @@ export default function AgentControl({
     : GitFork;
   const harnessOption = findHarnessOption(catalog, custom.harness);
 
+  const rootRef = useRef<HTMLDivElement>(null);
+
   const close = () => {
     setOpen(false);
     setCustomPane(false);
   };
 
+  // Dismiss on outside click and Escape (#686). The nested Harness/Model/Effort
+  // pickers render through a portal, so a click or key inside one of them lands
+  // outside `rootRef` — those events belong to the nested menu and are ignored.
+  useEffect(() => {
+    if (!open) return;
+    const insidePortaledMenu = (target: EventTarget | null) =>
+      target instanceof Element && target.closest('[data-slot="dropdown-menu-content"]') != null;
+    const onMouseDown = (event: MouseEvent) => {
+      const target = event.target;
+      if (rootRef.current?.contains(target as Node) || insidePortaledMenu(target)) return;
+      close();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented || insidePortaledMenu(event.target)) return;
+      close();
+    };
+    document.addEventListener("mousedown", onMouseDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onMouseDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
   return (
-    <div className="relative" data-testid={`${testId}-root`}>
+    <div ref={rootRef} className="relative" data-testid={`${testId}-root`}>
       <span className="mb-1 block uppercase tracking-wider text-fg-4" style={{ fontSize: 9 }}>{label}</span>
       <button
         type="button"

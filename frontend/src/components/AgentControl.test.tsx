@@ -33,6 +33,40 @@ describe("AgentControl", () => {
     expect(onChange).toHaveBeenCalledWith({ mode: "profile", profile_id: "p1" });
   });
 
+  function renderOpen() {
+    render(
+      <AgentControl
+        choice={{ mode: "inherit" }}
+        onChange={vi.fn()}
+        profiles={profiles}
+        catalog={catalog}
+        inherited={{ harness: "claude", model: null, effort: null }}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("agent-control"));
+    expect(screen.getByTestId("agent-control-popover")).toBeInTheDocument();
+    expect(screen.getByTestId("agent-control")).toHaveAttribute("aria-expanded", "true");
+  }
+
+  it("closes on a click outside the control (#686)", () => {
+    renderOpen();
+    fireEvent.mouseDown(document.body);
+    expect(screen.queryByTestId("agent-control-popover")).not.toBeInTheDocument();
+    expect(screen.getByTestId("agent-control")).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("stays open on a click inside the popover", () => {
+    renderOpen();
+    fireEvent.mouseDown(screen.getByText("Profiles"));
+    expect(screen.getByTestId("agent-control-popover")).toBeInTheDocument();
+  });
+
+  it("closes on Escape (#686)", () => {
+    renderOpen();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByTestId("agent-control-popover")).not.toBeInTheDocument();
+  });
+
   it("marks a missing profile and falls through to the inherited combination", () => {
     const resolved = resolveAgentChoice(
       { mode: "profile", profile_id: "gone" },

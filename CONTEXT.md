@@ -625,6 +625,7 @@ Réglages **daemon-wide** (ADR-0015), à distinguer d'une variable *pipeline* ou
 - **Précédence `stored → env → default`** : la valeur **stockée (UI) gagne**, l'env est un bootstrap. _Éviter_ : « l'env gagne » (rendrait la page no-op pour ses propres opérateurs).
 - **Prise d'effet sans redémarrage** : tous les réglages sont lus frais — aucun `PUT` n'est no-op jusqu'au redémarrage.
 - **Frontière** : « le manager vérifie périodiquement le pipeline » reste exclu — réveiller le manager depuis le runtime renverse *Pas de polling actif* et l'origine-de-l'autonomie d'ADR-0012.
+- **Surface Settings** (#688) : pleine fenêtre, même coquille que Stats — un **rail** de **catégories** (General, Agents, Sandbox & worktrees, Diagnostics) et, par catégorie, une page défilante découpée en **sous-catégories** listées dans une deuxième colonne qui sert d'ancre (scroll-spy). Les anciens drill-downs (profils agentiques, banque de skills, profils de staging, provisionnement) sont des sous-catégories inline. Un seul **Save** explicite pour le formulaire d'instance, visible partout ; changer de catégorie ne perd jamais une modification. Diagnostics est en lecture seule. _Éviter_ : « onglet » (c'est le vocabulaire de Stats, dont le rail n'a pas de second niveau), « modale de settings » (ce n'est plus une boîte de dialogue), « page de sous-catégorie » (une sous-catégorie est une section, pas un écran).
 
 ### Règles de provisionnement
 

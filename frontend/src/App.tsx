@@ -16,7 +16,7 @@ import UnifiedLeftPanel from "./components/UnifiedLeftPanel";
 import NodeDetailPanel from "./components/NodeDetailPanel";
 import RunInfoSidebar from "./components/RunInfoSidebar";
 import NewRunModal, { RUN_INTENT } from "./components/NewRunModal";
-import SettingsModal from "./components/SettingsModal";
+import SettingsSurface, { type SettingsPosition, type StatsOpenIntent } from "./components/SettingsSurface";
 import StatsModal from "./components/StatsModal";
 import ConflictModal from "./components/ConflictModal";
 import SaveErrorModal from "./components/SaveErrorModal";
@@ -174,8 +174,29 @@ export default function App() {
   const { run: selectedRun, select: selectRun, refresh: refreshRun } = useSelectedRun();
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [newRunModalOpen, setNewRunModalOpen] = useState(false);
-  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
-  const [statsModalOpen, setStatsModalOpen] = useState(false);
+  // #690: Settings and Stats are full-window surfaces on one shared shell, one open at a
+  // time. `openSettings` / `openStats` are the single openers: the gear and the chart icon
+  // call them bare (the surface lands where the user last was), programmatic entries pass a
+  // position, which is applied by remounting the surface (`key`) — its state otherwise
+  // survives a close on purpose (page-session memory).
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsEntry, setSettingsEntry] = useState<{ key: number; position?: SettingsPosition }>(
+    { key: 0 },
+  );
+  const [statsOpen, setStatsOpen] = useState(false);
+  const [statsEntry, setStatsEntry] = useState<{ key: number; intent?: StatsOpenIntent }>({
+    key: 0,
+  });
+  const openSettings = useCallback((position?: SettingsPosition) => {
+    if (position) setSettingsEntry((entry) => ({ key: entry.key + 1, position }));
+    setStatsOpen(false);
+    setSettingsOpen(true);
+  }, []);
+  const openStats = useCallback((intent?: StatsOpenIntent) => {
+    if (intent) setStatsEntry((entry) => ({ key: entry.key + 1, intent }));
+    setSettingsOpen(false);
+    setStatsOpen(true);
+  }, []);
   // #386: how the always-mounted New Run modal should open. Drives a one-shot
   // reset on every reopen so a dismissed "Edit trigger" can't leak into a fresh
   // "New run" / "New trigger". Defaults to a plain run.
@@ -629,8 +650,8 @@ export default function App() {
     <TooltipProvider>
     <div className="flex h-full flex-col bg-bg-1 text-fg">
       <TopBar
-        onOpenSettings={() => setSettingsModalOpen(true)}
-        onOpenStats={() => setStatsModalOpen(true)}
+        onOpenSettings={() => openSettings()}
+        onOpenStats={() => openStats()}
       />
       <main className="min-h-0 flex-1">
         <ResizablePanelGroup
@@ -805,13 +826,22 @@ export default function App() {
         openIntent={openIntent}
         onTriggerSaved={refreshTriggers}
       />
-      <SettingsModal
-        open={settingsModalOpen}
-        onClose={() => setSettingsModalOpen(false)}
+      <SettingsSurface
+        key={settingsEntry.key}
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
         liveSessions={sessions.live}
         onSaved={refreshSessions}
+        initialPosition={settingsEntry.position}
+        onOpenStats={openStats}
       />
-      <StatsModal open={statsModalOpen} onClose={() => setStatsModalOpen(false)} />
+      <StatsModal
+        key={statsEntry.key}
+        open={statsOpen}
+        onClose={() => setStatsOpen(false)}
+        initialTab={statsEntry.intent?.tab}
+        initialPricingOpen={statsEntry.intent?.pricingOpen}
+      />
       <ConflictModal
         open={conflictTab != null}
         pipelineId={conflictTab?.id ?? ""}

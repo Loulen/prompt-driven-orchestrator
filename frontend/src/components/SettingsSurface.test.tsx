@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -52,7 +52,8 @@ vi.mock("../api", () => ({
   },
 }));
 
-import SettingsModal, { relativiseToHome } from "./SettingsModal";
+import SettingsSurface from "./SettingsSurface";
+import { relativiseToHome } from "./StagingProfilesPanel";
 import { useEditStore } from "../stores/editStore";
 import type { InstanceSettings, SandboxProfile } from "../types";
 
@@ -262,7 +263,7 @@ function resetProfileMocks() {
   });
 }
 
-describe("SettingsModal", () => {
+describe("SettingsSurface", () => {
   beforeEach(() => {
     fetchSettingsMock.mockReset();
     updateSettingsMock.mockReset();
@@ -287,23 +288,26 @@ describe("SettingsModal", () => {
 
   it("renders nothing when closed", () => {
     fetchSettingsMock.mockResolvedValue(sample());
-    render(<SettingsModal open={false} onClose={() => {}} />);
-    expect(screen.queryByTestId("settings-modal")).not.toBeInTheDocument();
+    render(<SettingsSurface open={false} onClose={() => {}} />);
+    expect(screen.queryByTestId("settings-surface")).not.toBeInTheDocument();
   });
 
   it("keeps expanded settings reachable within the viewport", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
-    render(<SettingsModal open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} />);
 
     expect(await screen.findByTestId("setting-default-sandbox")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("settings-category-sandbox"));
     fireEvent.click(screen.getByRole("button", { name: "Configure worktree provisioning…" }));
     expect(await screen.findByRole("button", { name: "Save provisioning" })).toBeInTheDocument();
-    expect(screen.getByTestId("settings-modal")).toHaveClass("overflow-y-auto");
+    // The page scrolls, not the surface: the shell is fixed, each category page owns its
+    // scroll container.
+    expect(screen.getByTestId("settings-scroll-sandbox")).toHaveClass("overflow-y-auto");
   });
 
   it("loads and seeds the effective values", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
-    render(<SettingsModal open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} />);
     const cap = (await screen.findByTestId("setting-session-cap")) as HTMLInputElement;
     expect(cap.value).toBe("9");
     expect((screen.getByTestId("setting-reaper-ttl") as HTMLInputElement).value).toBe("3600");
@@ -314,7 +318,7 @@ describe("SettingsModal", () => {
     // Nothing is ever seeded (that would freeze a snapshot, ADR-0031 §2), so naming
     // the paths IS the whole discoverability story.
     fetchSettingsMock.mockResolvedValue(sample());
-    render(<SettingsModal open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} />);
     expect(await screen.findByTestId("setting-price-table")).toBeInTheDocument();
     expect(screen.getByTestId("setting-price-table-manual-path")).toHaveTextContent(
       "/home/user/.pdo/prices/models.yaml",
@@ -347,7 +351,7 @@ describe("SettingsModal", () => {
         },
       }),
     );
-    render(<SettingsModal open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} />);
     const reason = await screen.findByTestId("setting-price-table-reason");
     expect(reason).toHaveTextContent("claude-opus-5");
     // The vintage is readable, not guessed — a third-party source is now a
@@ -363,7 +367,7 @@ describe("SettingsModal", () => {
 
   it("lists the resolved harnesses and stays silent when no descriptor is inert (#553)", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
-    render(<SettingsModal open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} />);
     const names = await screen.findByTestId("setting-harness-descriptors-names");
     // A declared harness "appears" here (floor ∪ disk); the clean fixture shows the floor.
     expect(names).toHaveTextContent("claude");
@@ -394,7 +398,7 @@ describe("SettingsModal", () => {
         },
       }),
     );
-    render(<SettingsModal open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} />);
     const reason = await screen.findByTestId("setting-harness-descriptors-reason");
     expect(reason).toHaveTextContent("claude");
     expect(reason).toHaveTextContent(/falling through/);
@@ -406,7 +410,7 @@ describe("SettingsModal", () => {
 
   it("discloses a shadowed env source for the cap", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
-    render(<SettingsModal open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} />);
     const note = await screen.findByTestId("setting-source-session-cap");
     expect(note).toHaveTextContent("PDO_SESSION_CAP=9");
     expect(note).toHaveTextContent(/env/i);
@@ -419,7 +423,7 @@ describe("SettingsModal", () => {
     );
     const onClose = vi.fn();
     const onSaved = vi.fn();
-    render(<SettingsModal open onClose={onClose} onSaved={onSaved} />);
+    render(<SettingsSurface open onClose={onClose} onSaved={onSaved} />);
 
     const cap = await screen.findByTestId("setting-session-cap");
     fireEvent.change(cap, { target: { value: "4" } });
@@ -429,13 +433,18 @@ describe("SettingsModal", () => {
     // Only the cap changed; TTL and guard were left at their effective values.
     expect(updateSettingsMock).toHaveBeenCalledWith({ session_cap: 4 });
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
-    expect(onClose).toHaveBeenCalled();
+    // #690: Save keeps the surface open — the footer confirms, the dirty dot clears.
+    expect(onClose).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(screen.getByTestId("settings-footer-status")).toHaveTextContent("Saved"),
+    );
+    expect(screen.queryByTestId("settings-category-general-dirty")).not.toBeInTheDocument();
   });
 
   it("rejects invalid input client-side without hitting the API", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
     const onClose = vi.fn();
-    render(<SettingsModal open onClose={onClose} />);
+    render(<SettingsSurface open onClose={onClose} />);
 
     const cap = await screen.findByTestId("setting-session-cap");
     fireEvent.change(cap, { target: { value: "0" } });
@@ -444,7 +453,7 @@ describe("SettingsModal", () => {
     expect(await screen.findByTestId("settings-error")).toBeInTheDocument();
     expect(updateSettingsMock).not.toHaveBeenCalled();
     // Modal stays open on rejection.
-    expect(screen.getByTestId("settings-modal")).toBeInTheDocument();
+    expect(screen.getByTestId("settings-surface")).toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
   });
 
@@ -452,7 +461,7 @@ describe("SettingsModal", () => {
     fetchSettingsMock.mockResolvedValue(sample());
     updateSettingsMock.mockRejectedValue(new Error("session_cap must be >= 1"));
     const onClose = vi.fn();
-    render(<SettingsModal open onClose={onClose} />);
+    render(<SettingsSurface open onClose={onClose} />);
 
     const cap = await screen.findByTestId("setting-session-cap");
     // A value that passes the client check but that the backend rejects.
@@ -464,21 +473,24 @@ describe("SettingsModal", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it("closes without an API call when nothing changed", async () => {
+  it("makes no API call when nothing changed, and Cancel closes without asking", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
     const onClose = vi.fn();
-    render(<SettingsModal open onClose={onClose} />);
+    render(<SettingsSurface open onClose={onClose} />);
 
     await screen.findByTestId("setting-session-cap");
     fireEvent.click(screen.getByTestId("settings-save"));
-
-    await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(updateSettingsMock).not.toHaveBeenCalled();
+    expect(screen.getByTestId("settings-footer-status")).toHaveTextContent("No unsaved changes");
+
+    fireEvent.click(screen.getByTestId("settings-cancel"));
+    expect(screen.queryByTestId("settings-confirm-close")).not.toBeInTheDocument();
+    expect(onClose).toHaveBeenCalled();
   });
 
   it("warns when the pending cap enters the tmux-collapse zone", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
-    render(<SettingsModal open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} />);
     const cap = await screen.findByTestId("setting-session-cap");
     fireEvent.change(cap, { target: { value: "40" } });
     expect(await screen.findByTestId("settings-cap-advisory")).toBeInTheDocument();
@@ -495,7 +507,7 @@ describe("SettingsModal", () => {
       }),
     );
     const onClose = vi.fn();
-    render(<SettingsModal open onClose={onClose} />);
+    render(<SettingsSurface open onClose={onClose} />);
 
     await user.click(await screen.findByTestId("default-model-trigger"));
     await user.click(await screen.findByTestId("default-model-option-opus"));
@@ -504,7 +516,10 @@ describe("SettingsModal", () => {
     await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
     // Only the model changed; the numeric knobs were left at their effective values.
     expect(updateSettingsMock).toHaveBeenCalledWith({ default_model: "opus" });
-    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(screen.getByTestId("settings-footer-status")).toHaveTextContent("Saved"),
+    );
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it("preserves a harness's stored default when saving an edit to another (#616 correctif 1)", async () => {
@@ -521,7 +536,7 @@ describe("SettingsModal", () => {
       }),
     );
     updateSettingsMock.mockResolvedValue(sample());
-    render(<SettingsModal open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} />);
 
     // Edit claude's per-harness default model, leaving copilot's untouched.
     const claudeInput = await screen.findByTestId("setting-default-model-claude");
@@ -549,7 +564,7 @@ describe("SettingsModal", () => {
       }),
     );
     updateSettingsMock.mockResolvedValue(sample());
-    render(<SettingsModal open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} />);
 
     // Trigger shows the stored model, then pick "Default" to clear it.
     const trigger = await screen.findByTestId("default-model-trigger");
@@ -571,7 +586,7 @@ describe("SettingsModal", () => {
         default_harness_model: { effective: {}, stored: {} },
       }),
     );
-    render(<SettingsModal open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} />);
     const note = await screen.findByTestId("setting-source-default-model");
     expect(note).toHaveTextContent("PDO_DEFAULT_MODEL=sonnet");
     expect(note).toHaveTextContent(/overridden/i);
@@ -594,7 +609,7 @@ describe("SettingsModal", () => {
         },
       }),
     );
-    render(<SettingsModal open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} />);
     const select = (await screen.findByTestId("setting-default-sandbox")) as HTMLSelectElement;
     expect(select.value).toBe("minimal");
   });
@@ -614,7 +629,7 @@ describe("SettingsModal", () => {
       }),
     );
     const onClose = vi.fn();
-    render(<SettingsModal open onClose={onClose} />);
+    render(<SettingsSurface open onClose={onClose} />);
 
     const select = await screen.findByTestId("setting-default-sandbox");
     fireEvent.change(select, { target: { value: "full" } });
@@ -622,17 +637,21 @@ describe("SettingsModal", () => {
 
     await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
     expect(updateSettingsMock).toHaveBeenCalledWith({ default_sandbox: "full" });
-    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(screen.getByTestId("settings-footer-status")).toHaveTextContent("Saved"),
+    );
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it("does not send default_sandbox when left unchanged (#410)", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
     const onClose = vi.fn();
-    render(<SettingsModal open onClose={onClose} />);
+    render(<SettingsSurface open onClose={onClose} />);
     await screen.findByTestId("setting-default-sandbox");
     fireEvent.click(screen.getByTestId("settings-save"));
-    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(screen.getByTestId("settings-footer-status")).toHaveTextContent("No unsaved changes");
     expect(updateSettingsMock).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   /**
@@ -643,7 +662,7 @@ describe("SettingsModal", () => {
    */
   it("keeps only Default sandbox and the profiles button on the sandbox side (#471)", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
-    render(<SettingsModal open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} />);
     expect(await screen.findByTestId("setting-default-sandbox")).toBeInTheDocument();
     expect(screen.getByTestId("setting-manage-staging-profiles")).toBeInTheDocument();
     for (const gone of [
@@ -676,14 +695,14 @@ describe("SettingsModal", () => {
         },
       }),
     );
-    render(<SettingsModal open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} />);
     const note = await screen.findByTestId("setting-source-default-sandbox");
     expect(note).toHaveTextContent("PDO_DEFAULT_SANDBOX=full");
     expect(note).toHaveTextContent(/overridden/i);
   });
 });
 
-describe("SettingsModal — turn-end auto-completion (#469)", () => {
+describe("SettingsSurface — turn-end auto-completion (#469)", () => {
   beforeEach(() => {
     fetchSettingsMock.mockReset();
     updateSettingsMock.mockReset();
@@ -694,7 +713,7 @@ describe("SettingsModal — turn-end auto-completion (#469)", () => {
 
   it("is unchecked on a fresh instance (ADR-0012: opt-in)", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
-    render(<SettingsModal open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} />);
     const box = (await screen.findByTestId(
       "setting-autocomplete-turn-end",
     )) as HTMLInputElement;
@@ -707,7 +726,7 @@ describe("SettingsModal — turn-end auto-completion (#469)", () => {
     // agent that way. A future edit that reintroduces a threshold in the copy
     // should have to delete this assertion on purpose.
     fetchSettingsMock.mockResolvedValue(sample());
-    render(<SettingsModal open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} />);
     const box = await screen.findByTestId("setting-autocomplete-turn-end");
     const row = box.closest("div") as HTMLElement;
     expect(row).toHaveTextContent(/finished its turn/i);
@@ -726,7 +745,7 @@ describe("SettingsModal — turn-end auto-completion (#469)", () => {
         },
       }),
     );
-    render(<SettingsModal open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} />);
     const box = (await screen.findByTestId(
       "setting-autocomplete-turn-end",
     )) as HTMLInputElement;
@@ -750,14 +769,17 @@ describe("SettingsModal — turn-end auto-completion (#469)", () => {
       }),
     );
     const onClose = vi.fn();
-    render(<SettingsModal open onClose={onClose} />);
+    render(<SettingsSurface open onClose={onClose} />);
 
     fireEvent.click(await screen.findByTestId("setting-autocomplete-turn-end"));
     fireEvent.click(screen.getByTestId("settings-save"));
 
     await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
     expect(updateSettingsMock).toHaveBeenCalledWith({ autocomplete_turn_end: true });
-    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(screen.getByTestId("settings-footer-status")).toHaveTextContent("Saved"),
+    );
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it("sends `false` when unticked — never a clear sentinel", async () => {
@@ -776,25 +798,29 @@ describe("SettingsModal — turn-end auto-completion (#469)", () => {
     );
     updateSettingsMock.mockResolvedValue(sample());
     const onClose = vi.fn();
-    render(<SettingsModal open onClose={onClose} />);
+    render(<SettingsSurface open onClose={onClose} />);
 
     fireEvent.click(await screen.findByTestId("setting-autocomplete-turn-end"));
     fireEvent.click(screen.getByTestId("settings-save"));
 
     await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
     expect(updateSettingsMock).toHaveBeenCalledWith({ autocomplete_turn_end: false });
-    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(screen.getByTestId("settings-footer-status")).toHaveTextContent("Saved"),
+    );
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it("does not send the flag when left unchanged", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
     const onClose = vi.fn();
-    render(<SettingsModal open onClose={onClose} />);
+    render(<SettingsSurface open onClose={onClose} />);
     await screen.findByTestId("setting-autocomplete-turn-end");
     fireEvent.click(screen.getByTestId("settings-save"));
-    // Nothing changed at all → close without a round-trip.
-    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    // Nothing changed at all → no round-trip, the footer says so.
+    expect(screen.getByTestId("settings-footer-status")).toHaveTextContent("No unsaved changes");
     expect(updateSettingsMock).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it("discloses a stored OFF distinctly from the built-in default", async () => {
@@ -811,7 +837,7 @@ describe("SettingsModal — turn-end auto-completion (#469)", () => {
         },
       }),
     );
-    render(<SettingsModal open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} />);
     const note = await screen.findByTestId("setting-source-autocomplete-turn-end");
     expect(note).toHaveTextContent(/stored value \(off\)/i);
     expect(note).toHaveTextContent("PDO_AUTOCOMPLETE_TURN_END=on");
@@ -819,7 +845,7 @@ describe("SettingsModal — turn-end auto-completion (#469)", () => {
   });
 });
 
-describe("SettingsModal — default Run auto-naming (#338)", () => {
+describe("SettingsSurface — default Run auto-naming (#338)", () => {
   beforeEach(() => {
     fetchSettingsMock.mockReset();
     updateSettingsMock.mockReset();
@@ -830,7 +856,7 @@ describe("SettingsModal — default Run auto-naming (#338)", () => {
 
   it("is checked on a fresh instance (default is ON — pre-#338 behaviour)", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
-    render(<SettingsModal open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} />);
     const box = (await screen.findByTestId("setting-default-auto-name")) as HTMLInputElement;
     expect(box.checked).toBe(true);
   });
@@ -841,7 +867,7 @@ describe("SettingsModal — default Run auto-naming (#338)", () => {
         default_auto_name: { effective: false, source: "stored", stored: false, env: null, default: true },
       }),
     );
-    render(<SettingsModal open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} />);
     const box = (await screen.findByTestId("setting-default-auto-name")) as HTMLInputElement;
     expect(box.checked).toBe(false);
     expect(screen.getByTestId("setting-source-default-auto-name")).toHaveTextContent(
@@ -857,24 +883,28 @@ describe("SettingsModal — default Run auto-naming (#338)", () => {
       }),
     );
     const onClose = vi.fn();
-    render(<SettingsModal open onClose={onClose} />);
+    render(<SettingsSurface open onClose={onClose} />);
 
     fireEvent.click(await screen.findByTestId("setting-default-auto-name"));
     fireEvent.click(screen.getByTestId("settings-save"));
 
     await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
     expect(updateSettingsMock).toHaveBeenCalledWith({ default_auto_name: false });
-    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(screen.getByTestId("settings-footer-status")).toHaveTextContent("Saved"),
+    );
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it("does not send the flag when left unchanged", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
     const onClose = vi.fn();
-    render(<SettingsModal open onClose={onClose} />);
+    render(<SettingsSurface open onClose={onClose} />);
     await screen.findByTestId("setting-default-auto-name");
     fireEvent.click(screen.getByTestId("settings-save"));
-    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(screen.getByTestId("settings-footer-status")).toHaveTextContent("No unsaved changes");
     expect(updateSettingsMock).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it("discloses a shadowed env var", async () => {
@@ -883,7 +913,7 @@ describe("SettingsModal — default Run auto-naming (#338)", () => {
         default_auto_name: { effective: false, source: "stored", stored: false, env: true, default: true },
       }),
     );
-    render(<SettingsModal open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} />);
     const note = await screen.findByTestId("setting-source-default-auto-name");
     expect(note).toHaveTextContent(/stored value \(off\)/i);
     expect(note).toHaveTextContent("PDO_DEFAULT_AUTO_NAME=on");
@@ -891,7 +921,7 @@ describe("SettingsModal — default Run auto-naming (#338)", () => {
   });
 });
 
-describe("SettingsModal — Interface / single-tab toggle (#342)", () => {
+describe("SettingsSurface — Interface / single-tab toggle (#342)", () => {
   beforeEach(() => {
     fetchSettingsMock.mockReset();
     updateSettingsMock.mockReset();
@@ -902,7 +932,7 @@ describe("SettingsModal — Interface / single-tab toggle (#342)", () => {
 
   it("persists to localStorage at the change, WITHOUT the numeric Save button", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
-    render(<SettingsModal open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} />);
 
     const toggle = await screen.findByTestId("setting-tabs-disabled");
     expect(toggle).toHaveAttribute("aria-checked", "false");
@@ -918,7 +948,7 @@ describe("SettingsModal — Interface / single-tab toggle (#342)", () => {
 
   it("toggles back off and writes false", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
-    render(<SettingsModal open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} />);
     const toggle = await screen.findByTestId("setting-tabs-disabled");
     fireEvent.click(toggle);
     fireEvent.click(toggle);
@@ -929,7 +959,7 @@ describe("SettingsModal — Interface / single-tab toggle (#342)", () => {
   it("stays reachable when GET /settings fails (Trap A — lives in the outer modal)", async () => {
     // Daemon 500: settings never load, the numeric form never mounts…
     fetchSettingsMock.mockRejectedValue(new Error("500"));
-    render(<SettingsModal open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} />);
 
     // …but the toggle is present and functional.
     const toggle = await screen.findByTestId("setting-tabs-disabled");
@@ -941,7 +971,7 @@ describe("SettingsModal — Interface / single-tab toggle (#342)", () => {
   it("seeds the toggle from the current store state", async () => {
     useEditStore.setState({ singleTabMode: true });
     fetchSettingsMock.mockResolvedValue(sample());
-    render(<SettingsModal open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} />);
     const toggle = await screen.findByTestId("setting-tabs-disabled");
     expect(toggle).toHaveAttribute("aria-checked", "true");
   });
@@ -964,7 +994,7 @@ describe("relativiseToHome (#432)", () => {
   });
 });
 
-describe("SettingsModal — default sandbox is profile-driven (#432)", () => {
+describe("SettingsSurface — default sandbox is profile-driven (#432)", () => {
   beforeEach(() => {
     fetchSettingsMock.mockReset();
     updateSettingsMock.mockReset();
@@ -983,7 +1013,7 @@ describe("SettingsModal — default sandbox is profile-driven (#432)", () => {
         ],
       }),
     );
-    render(<SettingsModal open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} />);
     const select = (await screen.findByTestId("setting-default-sandbox")) as HTMLSelectElement;
     expect(Array.from(select.options).map((o) => o.value)).toEqual([
       "off",
@@ -1012,7 +1042,7 @@ describe("SettingsModal — default sandbox is profile-driven (#432)", () => {
         },
       }),
     );
-    render(<SettingsModal open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} />);
     const select = (await screen.findByTestId("setting-default-sandbox")) as HTMLSelectElement;
     expect(select.value).toBe("gone");
     expect(screen.getByTestId("setting-default-sandbox-missing")).toBeInTheDocument();
@@ -1028,7 +1058,7 @@ describe("SettingsModal — default sandbox is profile-driven (#432)", () => {
   });
 });
 
-describe("SettingsModal — staging profiles panel (#432)", () => {
+describe("SettingsSurface — staging profiles panel (#432)", () => {
   beforeEach(() => {
     fetchSettingsMock.mockReset();
     updateSettingsMock.mockReset();
@@ -1039,30 +1069,29 @@ describe("SettingsModal — staging profiles panel (#432)", () => {
   });
 
   async function openPanel() {
-    render(<SettingsModal open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} />);
     fireEvent.click(await screen.findByTestId("setting-manage-staging-profiles"));
     return screen.findByTestId("staging-profiles-panel");
   }
 
   /**
-   * The drill-down HIDES the form, it does not unmount it. `SettingsForm` holds UNSAVED
-   * edits seeded on mount, so a conditional render would discard them in silence — the
-   * exact reason the panel is a sibling with a `hidden` class rather than an `? :`.
+   * The drawer overlays the page, it does not unmount it (#690): the draft lives in the
+   * surface, so opening and closing the panel never discards an unsaved edit.
    */
-  it("hides the settings form without discarding its unsaved edits", async () => {
+  it("keeps the form and its unsaved edits under the drawer", async () => {
     await openPanel();
     const cap = screen.getByTestId("setting-session-cap") as HTMLInputElement;
     // Still mounted (hence still holding state) while the panel is open…
     expect(cap).toBeInTheDocument();
 
-    fireEvent.click(screen.getByTestId("staging-profiles-back"));
+    fireEvent.click(screen.getByTestId("settings-drawer-close"));
     await waitFor(() =>
       expect(screen.queryByTestId("staging-profiles-panel")).not.toBeInTheDocument(),
     );
     fireEvent.change(cap, { target: { value: "7" } });
     fireEvent.click(screen.getByTestId("setting-manage-staging-profiles"));
     await screen.findByTestId("staging-profiles-panel");
-    fireEvent.click(screen.getByTestId("staging-profiles-back"));
+    fireEvent.click(screen.getByTestId("settings-drawer-close"));
     await waitFor(() =>
       expect(
         (screen.getByTestId("setting-session-cap") as HTMLInputElement).value,
@@ -1420,7 +1449,7 @@ describe("SettingsModal — staging profiles panel (#432)", () => {
    * fields are gone. A `queryBy*` because the point is that it renders nothing.
    */
   it("no longer explains an instance-wide image source, because there is none", async () => {
-    render(<SettingsModal open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} />);
     // Wait for the form, so the assertion is about the rendered screen rather than a race.
     await screen.findByTestId("setting-default-sandbox");
     expect(
@@ -1454,5 +1483,313 @@ describe("SettingsModal — staging profiles panel (#432)", () => {
     await openPanel();
     expect(await screen.findByTestId("staging-extra-sensitive-.ssh")).toBeInTheDocument();
     expect(screen.getByTestId("staging-profile-sensitive-warning")).toHaveTextContent(/.ssh/);
+  });
+});
+
+describe("SettingsSurface — full-window shell, categories, sections (#690)", () => {
+  beforeEach(() => {
+    fetchSettingsMock.mockReset();
+    updateSettingsMock.mockReset();
+    browseFsMock.mockReset();
+    browseFsMock.mockResolvedValue(BROWSE_HOME);
+    resetProfileMocks();
+    fetchSettingsMock.mockResolvedValue(sample());
+    localStorage.clear();
+    useEditStore.setState({ singleTabMode: false, pendingSingleTab: null, openTabs: [], activeTabId: null });
+  });
+
+  it("is a full-window overlay with exactly four categories, in order, General selected", async () => {
+    render(<SettingsSurface open onClose={() => {}} />);
+    const surface = await screen.findByTestId("settings-surface");
+    expect(surface).toHaveClass("h-screen", "w-screen");
+    const rail = screen.getByRole("tablist", { name: "Settings categories" });
+    const tabs = within(rail).getAllByRole("tab");
+    expect(tabs.map((tab) => tab.textContent)).toEqual([
+      "General",
+      "Agents",
+      "Sandbox & worktrees",
+      "Diagnostics",
+    ]);
+    expect(screen.getByTestId("settings-category-general")).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("lists the sections of the open category in the second column", async () => {
+    render(<SettingsSurface open onClose={() => {}} />);
+    await screen.findByTestId("setting-session-cap");
+    const entries = () =>
+      within(screen.getByTestId("settings-page-general").querySelector("nav") as HTMLElement)
+        .getAllByRole("button")
+        .map((button) => button.textContent);
+    expect(entries()).toEqual(["Interface", "Runtime limits", "Runs"]);
+    expect(screen.getByTestId("settings-section-interface")).toHaveAttribute("aria-current", "true");
+
+    fireEvent.click(screen.getByTestId("settings-category-diagnostics"));
+    expect(screen.getByTestId("settings-page-general")).toHaveAttribute("hidden");
+    const diagnostics = screen.getByTestId("settings-page-diagnostics");
+    expect(diagnostics).not.toHaveAttribute("hidden");
+    expect(
+      within(diagnostics.querySelector("nav") as HTMLElement)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Price table", "Harness descriptors"]);
+    // Read-only: values are there, nothing to edit, and the sync lives in Stats.
+    expect(screen.getByTestId("setting-price-table-fetched-path")).toHaveTextContent("fetched.json");
+    expect(screen.getByTestId("setting-harness-descriptors-names")).toHaveTextContent("claude");
+    expect(within(diagnostics).getAllByText("read-only")).toHaveLength(2);
+  });
+
+  it("arrow keys on the rail move between categories, wrapping", async () => {
+    render(<SettingsSurface open onClose={() => {}} />);
+    await screen.findByTestId("setting-session-cap");
+    const rail = screen.getByRole("tablist", { name: "Settings categories" });
+    fireEvent.keyDown(rail, { key: "ArrowDown" });
+    expect(screen.getByTestId("settings-category-agents")).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(rail, { key: "ArrowUp" });
+    fireEvent.keyDown(rail, { key: "ArrowUp" });
+    expect(screen.getByTestId("settings-category-diagnostics")).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
+
+  it("clicking a section entry scrolls its section into view and highlights it", async () => {
+    const scrollIntoView = vi.fn();
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrollIntoView;
+    try {
+      render(<SettingsSurface open onClose={() => {}} />);
+      await screen.findByTestId("setting-session-cap");
+      fireEvent.click(screen.getByTestId("settings-section-runs"));
+      expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
+      const target = scrollIntoView.mock.instances[0] as HTMLElement;
+      expect(target).toBe(screen.getByTestId("settings-section-body-runs"));
+      expect(screen.getByTestId("settings-section-runs")).toHaveAttribute("aria-current", "true");
+      expect(screen.getByTestId("settings-section-interface")).not.toHaveAttribute("aria-current");
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
+  });
+
+  it("keeps the draft across categories and rolls the dirty state up to the rail", async () => {
+    render(<SettingsSurface open onClose={() => {}} />);
+    const cap = (await screen.findByTestId("setting-session-cap")) as HTMLInputElement;
+    expect(screen.queryByTestId("settings-category-general-dirty")).not.toBeInTheDocument();
+
+    fireEvent.change(cap, { target: { value: "12" } });
+    // Three altitudes: field, section, category — plus the footer names the place.
+    expect(cap).toHaveClass("border-st-await");
+    expect(screen.getByTestId("settings-section-runtime-limits-dirty")).toBeInTheDocument();
+    expect(screen.getByTestId("settings-category-general-dirty")).toBeInTheDocument();
+    expect(screen.getByTestId("settings-footer-status")).toHaveTextContent(
+      "Unsaved changes in General (1 field)",
+    );
+
+    fireEvent.click(screen.getByTestId("settings-category-diagnostics"));
+    // Still dirty from Diagnostics, and the footer is still there.
+    expect(screen.getByTestId("settings-category-general-dirty")).toBeInTheDocument();
+    expect(screen.getByTestId("settings-save")).toBeInTheDocument();
+    expect(screen.queryByTestId("settings-category-diagnostics-dirty")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("settings-category-general"));
+    expect((screen.getByTestId("setting-session-cap") as HTMLInputElement).value).toBe("12");
+  });
+
+  it("Save sends only the changed fields and clears the indicator", async () => {
+    updateSettingsMock.mockResolvedValue(
+      sample({
+        session_cap: { effective: 12, source: "stored", stored: 12, env: 9, default: 20 },
+        updated_at: "2026-07-01T11:00:00.000Z",
+      }),
+    );
+    render(<SettingsSurface open onClose={() => {}} />);
+    const cap = await screen.findByTestId("setting-session-cap");
+    fireEvent.change(cap, { target: { value: "12" } });
+    fireEvent.click(screen.getByTestId("settings-category-sandbox"));
+    fireEvent.change(screen.getByTestId("setting-default-sandbox"), { target: { value: "full" } });
+    expect(screen.getByTestId("settings-category-sandbox-dirty")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("settings-save"));
+    await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
+    expect(updateSettingsMock).toHaveBeenCalledWith({ session_cap: 12, default_sandbox: "full" });
+    await waitFor(() =>
+      expect(screen.getByTestId("settings-footer-status")).toHaveTextContent("Saved"),
+    );
+    expect(screen.queryByTestId("settings-category-general-dirty")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("settings-category-sandbox-dirty")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("settings-error")).not.toBeInTheDocument();
+    // The saved value is what the form now shows.
+    fireEvent.click(screen.getByTestId("settings-category-general"));
+    expect((screen.getByTestId("setting-session-cap") as HTMLInputElement).value).toBe("12");
+  });
+
+  it("shows a rejected save next to the Save button and keeps the draft", async () => {
+    updateSettingsMock.mockRejectedValue(new Error("session_cap must be between 1 and 64"));
+    const onClose = vi.fn();
+    render(<SettingsSurface open onClose={onClose} />);
+    const cap = await screen.findByTestId("setting-session-cap");
+    fireEvent.change(cap, { target: { value: "99" } });
+    fireEvent.click(screen.getByTestId("settings-save"));
+
+    const error = await screen.findByTestId("settings-error");
+    expect(error).toHaveTextContent("session_cap must be between 1 and 64");
+    expect(error.parentElement).toContainElement(screen.getByTestId("settings-save"));
+    expect(screen.getByTestId("settings-category-general-dirty")).toBeInTheDocument();
+    expect((screen.getByTestId("setting-session-cap") as HTMLInputElement).value).toBe("99");
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("asks before closing with a dirty draft: Keep editing, Discard, Save & close", async () => {
+    updateSettingsMock.mockResolvedValue(sample());
+    const onClose = vi.fn();
+    render(<SettingsSurface open onClose={onClose} />);
+    const cap = await screen.findByTestId("setting-session-cap");
+    fireEvent.change(cap, { target: { value: "12" } });
+
+    // ✕ with a dirty draft → confirm, naming the place.
+    fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
+    const confirm = await screen.findByTestId("settings-confirm-close");
+    expect(confirm).toHaveTextContent("General › Runtime limits");
+    expect(confirm).toHaveTextContent("1 field");
+    expect(screen.getByTestId("settings-confirm-keep")).toHaveFocus();
+
+    fireEvent.click(screen.getByTestId("settings-confirm-keep"));
+    expect(screen.queryByTestId("settings-confirm-close")).not.toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+    expect((screen.getByTestId("setting-session-cap") as HTMLInputElement).value).toBe("12");
+
+    // Escape → confirm → Save & close: one PUT, then closed.
+    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.click(await screen.findByTestId("settings-confirm-save-close"));
+    await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledWith({ session_cap: 12 }));
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+  });
+
+  it("Discard closes and drops the draft", async () => {
+    const onClose = vi.fn();
+    const { rerender } = render(<SettingsSurface open onClose={onClose} />);
+    fireEvent.change(await screen.findByTestId("setting-session-cap"), { target: { value: "12" } });
+    fireEvent.click(screen.getByTestId("settings-cancel"));
+    fireEvent.click(await screen.findByTestId("settings-confirm-discard"));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(updateSettingsMock).not.toHaveBeenCalled();
+
+    rerender(<SettingsSurface open={false} onClose={onClose} />);
+    rerender(<SettingsSurface open onClose={onClose} />);
+    expect((await screen.findByTestId("setting-session-cap") as HTMLInputElement).value).toBe("9");
+    expect(screen.queryByTestId("settings-category-general-dirty")).not.toBeInTheDocument();
+  });
+
+  it("Escape closes a clean surface", async () => {
+    const onClose = vi.fn();
+    render(<SettingsSurface open onClose={onClose} />);
+    await screen.findByTestId("setting-session-cap");
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("Escape closes an open drawer before Settings", async () => {
+    const onClose = vi.fn();
+    render(<SettingsSurface open onClose={onClose} />);
+    await screen.findByTestId("setting-session-cap");
+    fireEvent.click(screen.getByTestId("settings-category-sandbox"));
+    fireEvent.click(screen.getByTestId("setting-manage-staging-profiles"));
+    await screen.findByTestId("staging-profiles-panel");
+    expect(screen.getByTestId("settings-drawer")).toHaveAttribute("data-drawer", "staging-profiles");
+    // The rail stays visible under the drawer.
+    expect(screen.getByRole("tablist", { name: "Settings categories" })).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByTestId("settings-drawer")).not.toBeInTheDocument());
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the agent profile and skill panels in the drawer from Agents", async () => {
+    render(<SettingsSurface open onClose={() => {}} />);
+    await screen.findByTestId("setting-session-cap");
+    fireEvent.click(screen.getByTestId("settings-category-agents"));
+    fireEvent.click(screen.getByTestId("setting-manage-agent-profiles"));
+    expect(screen.getByTestId("settings-drawer")).toHaveAttribute("data-drawer", "agent-profiles");
+    fireEvent.click(screen.getByTestId("settings-drawer-close"));
+    fireEvent.click(screen.getByTestId("setting-manage-skills"));
+    expect(screen.getByTestId("settings-drawer")).toHaveAttribute("data-drawer", "skills");
+  });
+
+  it("the single-tab toggle persists immediately and never dirties the draft", async () => {
+    render(<SettingsSurface open onClose={() => {}} />);
+    await screen.findByTestId("setting-session-cap");
+    fireEvent.click(screen.getByTestId("setting-tabs-disabled"));
+    expect(localStorage.getItem("pdo.ui.tabsDisabled")).toBe("true");
+    expect(screen.getByTestId("setting-tabs-disabled-badge")).toHaveTextContent(/device-local/i);
+    expect(screen.queryByTestId("settings-category-general-dirty")).not.toBeInTheDocument();
+    expect(screen.getByTestId("settings-footer-status")).toHaveTextContent("No unsaved changes");
+    // Closing needs no confirmation.
+    const onClose = vi.fn();
+    fireEvent.click(screen.getByTestId("settings-cancel"));
+    expect(screen.queryByTestId("settings-confirm-close")).not.toBeInTheDocument();
+    void onClose;
+  });
+
+  it("remembers the last category for the page session; a fresh mount lands on General", async () => {
+    const onClose = vi.fn();
+    const { rerender, unmount } = render(<SettingsSurface open onClose={onClose} />);
+    await screen.findByTestId("setting-session-cap");
+    fireEvent.click(screen.getByTestId("settings-category-diagnostics"));
+    fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
+    expect(onClose).toHaveBeenCalled();
+
+    rerender(<SettingsSurface open={false} onClose={onClose} />);
+    expect(screen.queryByTestId("settings-surface")).not.toBeInTheDocument();
+    rerender(<SettingsSurface open onClose={onClose} />);
+    expect(await screen.findByTestId("settings-category-diagnostics")).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+
+    // A reload = a fresh mount.
+    unmount();
+    render(<SettingsSurface open onClose={onClose} />);
+    expect(await screen.findByTestId("settings-category-general")).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
+
+  it("lands on a programmatic position and links Diagnostics to Stats › Cost › Pricing details", async () => {
+    const onOpenStats = vi.fn();
+    render(
+      <SettingsSurface
+        open
+        onClose={() => {}}
+        initialPosition={{ category: "diagnostics", section: "harness-descriptors" }}
+        onOpenStats={onOpenStats}
+      />,
+    );
+    await screen.findByTestId("setting-harness-descriptors-names");
+    expect(screen.getByTestId("settings-category-diagnostics")).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("settings-section-harness-descriptors")).toHaveAttribute(
+      "aria-current",
+      "true",
+    );
+    fireEvent.click(screen.getByTestId("settings-open-stats-pricing"));
+    expect(onOpenStats).toHaveBeenCalledWith({ tab: "cost", pricingOpen: true });
+  });
+
+  it("names a refused harness descriptor as a red row, the only place it is named", async () => {
+    fetchSettingsMock.mockResolvedValue(
+      sample({
+        harness_descriptors: {
+          path: "/home/user/.pdo/harnesses/descriptors.yaml",
+          names: ["claude", "opencode"],
+          rejected: [{ name: "opencode", why: "missing `command`" }],
+          reason: "harness descriptors (#553) — refused 1 descriptor(s)",
+        },
+      }),
+    );
+    render(<SettingsSurface open onClose={() => {}} />);
+    const row = await screen.findByTestId("setting-harness-descriptor-rejected-opencode");
+    expect(row).toHaveTextContent("refused: missing `command`");
+    expect(row).toHaveClass("text-st-failed");
   });
 });

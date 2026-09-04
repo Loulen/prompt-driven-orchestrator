@@ -1,5 +1,6 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
-import { RotateCw, X } from "lucide-react";
+import { lazy, Suspense, useMemo, useState } from "react";
+import { RotateCw } from "lucide-react";
+import FullWindowShell from "./FullWindowShell";
 import { syncCostPrices } from "../api";
 import { useStats } from "../hooks/useStats";
 import type { PriceRow, StatsCost, SyncCostPricesReport } from "../types";
@@ -10,6 +11,13 @@ const StatsCharts = lazy(() => import("./StatsCharts"));
 interface Props {
   open: boolean;
   onClose: () => void;
+  /**
+   * Programmatic entry (#690): the tab to land on and whether the pricing drawer opens
+   * with it — Settings › Diagnostics links to Cost › Pricing details. Read once at mount,
+   * so the host bumps the component `key` when it wants them applied.
+   */
+  initialTab?: StatsTab;
+  initialPricingOpen?: boolean;
 }
 
 type Preset = "7d" | "30d" | "90d" | "all";
@@ -166,10 +174,15 @@ function PricingDetails({
   );
 }
 
-export default function StatsModal({ open, onClose }: Props) {
+export default function StatsModal({
+  open,
+  onClose,
+  initialTab = "runs",
+  initialPricingOpen = false,
+}: Props) {
   const [preset, setPreset] = useState<Preset>("30d");
-  const [tab, setTab] = useState<StatsTab>("runs");
-  const [pricingOpen, setPricingOpen] = useState(false);
+  const [tab, setTab] = useState<StatsTab>(initialTab);
+  const [pricingOpen, setPricingOpen] = useState(initialPricingOpen && initialTab === "cost");
   const [reloadKey, setReloadKey] = useState(0);
   const [syncReport, setSyncReport] = useState<SyncCostPricesReport | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -197,24 +210,6 @@ export default function StatsModal({ open, onClose }: Props) {
     reloadKey,
   );
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented) return;
-      if (
-        document.querySelector(
-          '[data-testid="tooltip-content"][data-state="delayed-open"], [data-testid="tooltip-content"][data-state="instant-open"]',
-        )
-      ) {
-        return;
-      }
-      if (pricingOpen) setPricingOpen(false);
-      else onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose, pricingOpen]);
-
   if (!open) return null;
 
   const refreshing =
@@ -241,32 +236,53 @@ export default function StatsModal({ open, onClose }: Props) {
     }
   };
 
+  // Escape order (Stats behaviour, kept by the shell contract): drawer first, then Stats.
+  const onEscape = () => {
+    if (pricingOpen) setPricingOpen(false);
+    else onClose();
+  };
+
   return (
-    <div className="fixed inset-0 z-50 bg-bg-2">
-      <div className="relative flex h-screen w-screen flex-col bg-bg-4" data-testid="stats-modal">
-        <header className="flex min-h-14 items-center gap-4 border-b border-line px-4">
-          <h2 className="font-semibold text-fg">Stats</h2>
-          <div className="flex items-center gap-1" role="group" aria-label="Period">
-            {PRESETS.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                aria-pressed={preset === item.id}
-                data-testid={`stats-period-${item.id}`}
-                onClick={() => setPreset(item.id)}
-                className={`rounded-md border px-2.5 py-1 ${
-                  preset === item.id
-                    ? "border-acc bg-acc/15 text-fg"
-                    : "border-line-strong bg-bg-3 text-fg-2"
-                }`}
-                style={{ fontSize: "11px" }}
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
+    <FullWindowShell
+      title="Stats"
+      testId="stats-modal"
+      onClose={onClose}
+      onEscape={onEscape}
+      closeLabel="Close stats"
+      rail={TABS}
+      activeRail={tab}
+      onRailChange={(id) => {
+        setTab(id as StatsTab);
+        if (id !== "cost") setPricingOpen(false);
+      }}
+      railAriaLabel="Stats sections"
+      railTestIdPrefix="stats-tab"
+      mainClassName={`min-w-0 flex-1 overflow-y-auto p-5 ${refreshing ? "opacity-65" : ""}`}
+      headerExtras={
+        <div className="flex items-center gap-1" role="group" aria-label="Period">
+          {PRESETS.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              aria-pressed={preset === item.id}
+              data-testid={`stats-period-${item.id}`}
+              onClick={() => setPreset(item.id)}
+              className={`rounded-md border px-2.5 py-1 ${
+                preset === item.id
+                  ? "border-acc bg-acc/15 text-fg"
+                  : "border-line-strong bg-bg-3 text-fg-2"
+              }`}
+              style={{ fontSize: "11px" }}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      }
+      headerActions={
+        <>
           <div
-            className="ml-auto text-fg-4"
+            className="text-fg-4"
             style={{ fontSize: "10.5px" }}
             data-testid="stats-computed-at"
           >
@@ -297,84 +313,10 @@ export default function StatsModal({ open, onClose }: Props) {
                 : ""}
             </button>
           )}
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close stats"
-            className="grid h-7 w-7 place-items-center rounded text-fg-3 hover:bg-bg-5"
-          >
-            <X size={15} />
-          </button>
-        </header>
-
-        <div className="flex min-h-0 flex-1">
-          <nav
-            className="flex w-36 shrink-0 flex-col gap-1 border-r border-line bg-bg-3 p-3"
-            role="tablist"
-            aria-label="Stats sections"
-            onKeyDown={(event) => {
-              if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-              event.preventDefault();
-              const index = TABS.findIndex((item) => item.id === tab);
-              const delta = event.key === "ArrowDown" ? 1 : -1;
-              const next = TABS[(index + delta + TABS.length) % TABS.length];
-              setTab(next.id);
-              document.querySelector<HTMLElement>(`[data-testid='stats-tab-${next.id}']`)?.focus();
-            }}
-          >
-            {TABS.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                role="tab"
-                aria-selected={tab === item.id}
-                tabIndex={tab === item.id ? 0 : -1}
-                data-testid={`stats-tab-${item.id}`}
-                onClick={() => {
-                  setTab(item.id);
-                  if (item.id !== "cost") setPricingOpen(false);
-                }}
-                className={`rounded px-3 py-2 text-left ${
-                  tab === item.id ? "bg-bg-5 text-fg" : "text-fg-3 hover:bg-bg-4"
-                }`}
-              >
-                {item.label}
-              </button>
-            ))}
-          </nav>
-
-          <main className={`min-w-0 flex-1 overflow-y-auto p-5 ${refreshing ? "opacity-65" : ""}`}>
-            {error && (
-              <div
-                className="mb-3 rounded-md border border-st-failed/30 bg-st-failed-bg px-3 py-2 text-st-failed"
-                data-testid="stats-error"
-              >
-                {error}
-              </div>
-            )}
-            <Suspense
-              fallback={
-                <div
-                  className="min-h-[220px] px-1 py-8 text-center text-fg-4"
-                  data-testid="stats-charts-loading"
-                >
-                  Loading charts…
-                </div>
-              }
-            >
-              <StatsCharts
-                tab={tab}
-                overview={overview}
-                cost={cost}
-                costError={costError}
-                performance={performance}
-                performanceError={performanceError}
-              />
-            </Suspense>
-          </main>
-        </div>
-
-        {pricingOpen && (
+        </>
+      }
+      drawer={
+        pricingOpen ? (
           <PricingDetails
             cost={cost}
             syncing={syncing}
@@ -382,8 +324,36 @@ export default function StatsModal({ open, onClose }: Props) {
             syncReport={syncReport}
             onSync={onSyncPrices}
           />
-        )}
-      </div>
-    </div>
+        ) : null
+      }
+    >
+      {error && (
+        <div
+          className="mb-3 rounded-md border border-st-failed/30 bg-st-failed-bg px-3 py-2 text-st-failed"
+          data-testid="stats-error"
+        >
+          {error}
+        </div>
+      )}
+      <Suspense
+        fallback={
+          <div
+            className="min-h-[220px] px-1 py-8 text-center text-fg-4"
+            data-testid="stats-charts-loading"
+          >
+            Loading charts…
+          </div>
+        }
+      >
+        <StatsCharts
+          tab={tab}
+          overview={overview}
+          cost={cost}
+          costError={costError}
+          performance={performance}
+          performanceError={performanceError}
+        />
+      </Suspense>
+    </FullWindowShell>
   );
 }

@@ -3,7 +3,7 @@ import { fetchSettings, updateSettings } from "../api";
 import type { InstanceSettings, UpdateSettingsRequest } from "../types";
 
 /**
- * Instance-wide settings state for the SettingsModal (#129, ADR-0015).
+ * Instance-wide settings state for the Settings surface (#129, ADR-0015; #690).
  *
  * Mirrors `useLibrary`: a one-shot fetch plus `refresh`/`save`. The fetch is
  * keyed on `open` so reopening the modal re-reads the current values (a knob may

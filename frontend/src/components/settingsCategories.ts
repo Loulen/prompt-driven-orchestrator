@@ -26,10 +26,11 @@ export interface SettingsSection {
   description: string;
   /** Diagnostics: observed state, nothing to PUT. */
   readOnly?: boolean;
-  /** Inline panel with its own REST resource: every edit is written at once, Save ignores it. */
+  /**
+   * Inline panel with its own REST resource (#691): every edit is written at once, the
+   * form's Save ignores it. Rendered as a `saves as you go` badge next to the title.
+   */
   ownPersistence?: boolean;
-  /** Needs the full pane width (two-column panels), not the 640px form column. */
-  wide?: boolean;
 }
 
 export interface SettingsCategory {

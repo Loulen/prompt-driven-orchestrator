@@ -15,6 +15,7 @@ import AgentControl from "./AgentControl";
 import HarnessSelect from "./HarnessSelect";
 import SkillSelector from "./SkillSelector";
 import { useAgentProfiles } from "../hooks/useAgentProfiles";
+import { SETTINGS_CHANGED } from "../hooks/useSettings";
 import { useSkillBank } from "../hooks/useSkillBank";
 import { useSkillTiers } from "../hooks/useSkillTiers";
 import type { AgentChoice, SkillRef } from "../types";
@@ -61,7 +62,11 @@ interface Props {
   openIntent?: OpenIntent;
   /** Called after a trigger is created/edited so the list can refresh. */
   onTriggerSaved?: () => void;
-  /** #691: opens Settings on Sandbox & worktrees › Staging profiles, over this dialog. */
+  /**
+   * #691: opens Settings on Sandbox & worktrees › Staging profiles, over this dialog. The
+   * dialog stays mounted underneath with its half-filled form; it refetches `GET /settings`
+   * on `pdo:settings-changed` so a profile created there is offered when Settings closes.
+   */
   onManageStagingProfiles?: () => void;
 }
 
@@ -359,20 +364,30 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
   // sandbox value is seeded synchronously, below), but it silently shrinks the option list
   // to `off` alone, which looks exactly like an instance without Docker. `settingsFailed`
   // makes the difference visible instead of leaving the user to misread it.
+  //
+  // #691: Settings opens OVER this dialog ("Manage staging profiles…" below) and this dialog
+  // stays mounted under it. A staging profile created there, or a changed default, fires
+  // `pdo:settings-changed`; re-reading here is what lets the sandbox `<select>` offer the
+  // new name without a reload. The field's value is never touched by the refetch (#452).
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    fetchSettings()
-      .then((s) => {
-        if (cancelled) return;
-        setSettings(s);
-        setSettingsFailed(false);
-      })
-      .catch(() => {
-        if (!cancelled) setSettingsFailed(true);
-      });
+    const load = () => {
+      fetchSettings()
+        .then((s) => {
+          if (cancelled) return;
+          setSettings(s);
+          setSettingsFailed(false);
+        })
+        .catch(() => {
+          if (!cancelled) setSettingsFailed(true);
+        });
+    };
+    load();
+    window.addEventListener(SETTINGS_CHANGED, load);
     return () => {
       cancelled = true;
+      window.removeEventListener(SETTINGS_CHANGED, load);
     };
   }, [open]);
 

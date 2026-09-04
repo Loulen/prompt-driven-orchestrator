@@ -12,6 +12,8 @@ const saveSandboxProfileMock = vi.fn();
 const deleteSandboxProfileMock = vi.fn();
 const fetchSandboxProfileReferentsMock = vi.fn();
 const fetchInstanceProvisioningMock = vi.fn();
+const fetchAgentProfilesMock = vi.fn().mockResolvedValue({ profiles: [] });
+const createAgentProfileMock = vi.fn();
 
 // #431: `browseFs` MUST be in this factory now that the Dockerfile picker renders
 // `FsExplorerModal`. Vitest 4 wraps the factory's return in a Proxy whose `get` trap
@@ -23,7 +25,13 @@ const fetchInstanceProvisioningMock = vi.fn();
 // that would let every un-stubbed function reach the real `fetch` under jsdom, trading a
 // loud error for a silent one.
 vi.mock("../api", () => ({
-  fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
+  fetchAgentProfiles: (...args: unknown[]) => fetchAgentProfilesMock(...args),
+  // #691: the agent-profiles panel is mounted inline; its writes must exist here too.
+  createAgentProfile: (...args: unknown[]) => createAgentProfileMock(...args),
+  updateAgentProfile: vi.fn(),
+  deleteAgentProfile: vi.fn(),
+  fetchAgentProfileReferents: vi.fn(),
+  saveInstanceProvisioning: vi.fn().mockResolvedValue({ copy: [], hardlink: [], symlink: [] }),
   fetchSettings: (...args: unknown[]) => fetchSettingsMock(...args),
   updateSettings: (...args: unknown[]) => updateSettingsMock(...args),
   browseFs: (...args: unknown[]) => browseFsMock(...args),
@@ -298,7 +306,7 @@ describe("SettingsSurface", () => {
 
     expect(await screen.findByTestId("setting-default-sandbox")).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("settings-category-sandbox"));
-    fireEvent.click(screen.getByRole("button", { name: "Configure worktree provisioning…" }));
+    // #691: the provisioning editor is the Worktree provisioning section, no button to open it.
     expect(await screen.findByRole("button", { name: "Save provisioning" })).toBeInTheDocument();
     // The page scrolls, not the surface: the shell is fixed, each category page owns its
     // scroll container.
@@ -660,11 +668,16 @@ describe("SettingsSurface", () => {
    * future slice that re-adds an instance-wide sandbox knob has to come and edit this list —
    * which is the whole point of "one axis per screen".
    */
-  it("keeps only Default sandbox and the profiles button on the sandbox side (#471)", async () => {
+  it("keeps only Default sandbox in its section; the profiles are the next section (#471, #691)", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
     render(<SettingsSurface open onClose={() => {}} />);
     expect(await screen.findByTestId("setting-default-sandbox")).toBeInTheDocument();
-    expect(screen.getByTestId("setting-manage-staging-profiles")).toBeInTheDocument();
+    expect(screen.queryByTestId("setting-manage-staging-profiles")).not.toBeInTheDocument();
+    expect(
+      within(screen.getByTestId("settings-section-body-staging-profiles")).getByTestId(
+        "staging-profiles-panel",
+      ),
+    ).toBeInTheDocument();
     for (const gone of [
       "setting-image-source",
       "setting-source-image-source",
@@ -1068,35 +1081,41 @@ describe("SettingsSurface — staging profiles panel (#432)", () => {
     fetchSettingsMock.mockResolvedValue(sample());
   });
 
+  /** #691: the panel is the Staging profiles section of Sandbox & worktrees — inline. */
   async function openPanel() {
     render(<SettingsSurface open onClose={() => {}} />);
-    fireEvent.click(await screen.findByTestId("setting-manage-staging-profiles"));
+    await screen.findByTestId("setting-session-cap");
+    fireEvent.click(screen.getByTestId("settings-category-sandbox"));
     return screen.findByTestId("staging-profiles-panel");
   }
 
   /**
-   * The drawer overlays the page, it does not unmount it (#690): the draft lives in the
-   * surface, so opening and closing the panel never discards an unsaved edit.
+   * Inline, not a drawer (#691): no Done footer (nothing is batched behind one), no drawer
+   * element, and the form's unsaved edits sit on the same page as the panel's own writes.
    */
-  it("keeps the form and its unsaved edits under the drawer", async () => {
-    await openPanel();
-    const cap = screen.getByTestId("setting-session-cap") as HTMLInputElement;
-    // Still mounted (hence still holding state) while the panel is open…
-    expect(cap).toBeInTheDocument();
+  it("is mounted inline with its own persistence, no drawer and no Done", async () => {
+    const panel = await openPanel();
+    expect(panel.closest('[data-testid="settings-section-body-staging-profiles"]')).not.toBeNull();
+    expect(screen.queryByTestId("settings-drawer")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("staging-profiles-done")).not.toBeInTheDocument();
+    // No inner scroll: the category page is the one scroll container.
+    expect(panel).not.toHaveClass("overflow-y-auto");
+    expect(screen.getByTestId("settings-scroll-sandbox")).toHaveClass("overflow-y-auto");
+    expect(
+      within(screen.getByTestId("settings-section-body-staging-profiles")).getByText(
+        "saves as you go",
+      ),
+    ).toBeInTheDocument();
 
-    fireEvent.click(screen.getByTestId("settings-drawer-close"));
-    await waitFor(() =>
-      expect(screen.queryByTestId("staging-profiles-panel")).not.toBeInTheDocument(),
-    );
+    // The form's draft and the panel's edits never compete: a panel write leaves the form
+    // clean and Save disabled; a form edit enables Save without touching the panel.
+    const cap = screen.getByTestId("setting-session-cap") as HTMLInputElement;
+    expect(screen.getByTestId("settings-save")).toBeDisabled();
     fireEvent.change(cap, { target: { value: "7" } });
-    fireEvent.click(screen.getByTestId("setting-manage-staging-profiles"));
-    await screen.findByTestId("staging-profiles-panel");
-    fireEvent.click(screen.getByTestId("settings-drawer-close"));
-    await waitFor(() =>
-      expect(
-        (screen.getByTestId("setting-session-cap") as HTMLInputElement).value,
-      ).toBe("7"),
-    );
+    expect(screen.getByTestId("settings-save")).toBeEnabled();
+    expect(screen.getByTestId("settings-footer-status")).toHaveAttribute("data-dirty", "true");
+    fireEvent.click(screen.getByTestId("settings-category-general"));
+    expect((screen.getByTestId("setting-session-cap") as HTMLInputElement).value).toBe("7");
   });
 
   it("unchecking a default entry PUTs the diff, not a snapshot", async () => {
@@ -1687,14 +1706,14 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("Escape closes an open drawer before Settings", async () => {
+  it("Escape returns from the skill bank to Settings before closing Settings (#691)", async () => {
     const onClose = vi.fn();
     render(<SettingsSurface open onClose={onClose} />);
     await screen.findByTestId("setting-session-cap");
-    fireEvent.click(screen.getByTestId("settings-category-sandbox"));
-    fireEvent.click(screen.getByTestId("setting-manage-staging-profiles"));
-    await screen.findByTestId("staging-profiles-panel");
-    expect(screen.getByTestId("settings-drawer")).toHaveAttribute("data-drawer", "staging-profiles");
+    fireEvent.click(screen.getByTestId("settings-category-agents"));
+    fireEvent.click(screen.getByTestId("setting-open-skill-bank"));
+    expect(screen.getByTestId("settings-drawer")).toHaveAttribute("data-drawer", "skills");
+    expect(screen.getByTestId("settings-drawer")).toHaveTextContent("Esc returns to Settings");
     // The rail stays visible under the drawer.
     expect(screen.getByRole("tablist", { name: "Settings categories" })).toBeInTheDocument();
 
@@ -1705,15 +1724,19 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("opens the agent profile and skill panels in the drawer from Agents", async () => {
+  it("has no drawer kind left for the agent and staging profiles, and no Manage… buttons (#691)", async () => {
     render(<SettingsSurface open onClose={() => {}} />);
     await screen.findByTestId("setting-session-cap");
-    fireEvent.click(screen.getByTestId("settings-category-agents"));
-    fireEvent.click(screen.getByTestId("setting-manage-agent-profiles"));
-    expect(screen.getByTestId("settings-drawer")).toHaveAttribute("data-drawer", "agent-profiles");
-    fireEvent.click(screen.getByTestId("settings-drawer-close"));
-    fireEvent.click(screen.getByTestId("setting-manage-skills"));
-    expect(screen.getByTestId("settings-drawer")).toHaveAttribute("data-drawer", "skills");
+    for (const gone of [
+      "setting-manage-agent-profiles",
+      "setting-manage-skills",
+      "setting-manage-staging-profiles",
+    ]) {
+      expect(screen.queryByTestId(gone)).not.toBeInTheDocument();
+    }
+    expect(screen.queryByRole("button", { name: /Manage/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Configure worktree provisioning/ })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("settings-drawer")).not.toBeInTheDocument();
   });
 
   it("the single-tab toggle persists immediately and never dirties the draft", async () => {
@@ -1791,5 +1814,279 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
     const row = await screen.findByTestId("setting-harness-descriptor-rejected-opencode");
     expect(row).toHaveTextContent("refused: missing `command`");
     expect(row).toHaveClass("text-st-failed");
+  });
+});
+
+describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections (#691)", () => {
+  beforeEach(() => {
+    fetchSettingsMock.mockReset();
+    updateSettingsMock.mockReset();
+    browseFsMock.mockReset();
+    browseFsMock.mockResolvedValue(BROWSE_HOME);
+    resetProfileMocks();
+    fetchSettingsMock.mockResolvedValue(sample());
+    fetchInstanceProvisioningMock.mockReset();
+    fetchInstanceProvisioningMock.mockResolvedValue({ copy: [], hardlink: [], symlink: [] });
+    fetchAgentProfilesMock.mockReset();
+    fetchAgentProfilesMock.mockResolvedValue({
+      profiles: [
+        { id: "default", name: "Default", harness: "claude", model: null, effort: null },
+        { id: "p-easy", name: "claude very easy", harness: "claude", model: "sonnet", effort: "low" },
+      ],
+    });
+    createAgentProfileMock.mockReset();
+    createAgentProfileMock.mockResolvedValue({
+      id: "p-new",
+      name: "fast",
+      harness: "claude",
+      model: null,
+      effort: null,
+    });
+  });
+
+  function sectionLabels(page: HTMLElement): string[] {
+    return within(within(page).getByTestId("settings-subcolumn"))
+      .getAllByRole("button")
+      .map((b) => b.textContent?.replace("Unsaved changes", "").trim() ?? "");
+  }
+
+  it("Agents lists Harness & models, Agent profiles, Skills and mounts the profiles panel inline", async () => {
+    render(<SettingsSurface open onClose={() => {}} />);
+    await screen.findByTestId("setting-session-cap");
+    fireEvent.click(screen.getByTestId("settings-category-agents"));
+    const page = screen.getByTestId("settings-page-agents");
+    expect(sectionLabels(page)).toEqual(["Harness & models", "Agent profiles", "Skills"]);
+
+    // The instance form fields sit in Harness & models.
+    const harness = screen.getByTestId("settings-section-body-harness-models");
+    expect(within(harness).getByTestId("setting-default-harness")).toBeInTheDocument();
+    expect(within(harness).queryByTestId("instance-skill-selector")).not.toBeInTheDocument();
+
+    // Agent profiles: inline, `saves as you go`, list-first (editor folded).
+    const profiles = screen.getByTestId("settings-section-body-agent-profiles");
+    expect(within(profiles).getByText("saves as you go")).toHaveAttribute(
+      "title",
+      expect.stringMatching(/Save button below does not apply/),
+    );
+    const panel = within(profiles).getByTestId("agent-profiles-panel");
+    expect(await within(panel).findByText("claude very easy")).toBeInTheDocument();
+    expect(within(panel).queryByRole("button", { name: /Save profile|Create/ })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("settings-drawer")).not.toBeInTheDocument();
+  });
+
+  it("creates an agent profile from the inline section through the same endpoint, and folds back", async () => {
+    const user = userEvent.setup();
+    render(<SettingsSurface open onClose={() => {}} />);
+    await screen.findByTestId("setting-session-cap");
+    fireEvent.click(screen.getByTestId("settings-category-agents"));
+    const panel = screen.getByTestId("agent-profiles-panel");
+    await within(panel).findByText("claude very easy");
+
+    fireEvent.click(within(panel).getByTestId("agent-profile-new"));
+    const create = within(panel).getByRole("button", { name: "Create" });
+    expect(create).toBeDisabled();
+    const inputs = within(panel).getAllByRole("textbox");
+    fireEvent.change(inputs[0], { target: { value: "fast" } });
+    await user.click(within(panel).getByTestId("agent-profile-harness"));
+    await user.click(await screen.findByTestId("agent-profile-harness-option-claude"));
+    expect(create).toBeEnabled();
+
+    fetchAgentProfilesMock.mockResolvedValue({
+      profiles: [
+        { id: "default", name: "Default", harness: "claude", model: null, effort: null },
+        { id: "p-new", name: "fast", harness: "claude", model: null, effort: null },
+      ],
+    });
+    fireEvent.click(create);
+    await waitFor(() => expect(createAgentProfileMock).toHaveBeenCalledTimes(1));
+    expect(createAgentProfileMock.mock.calls[0][0]).toMatchObject({ name: "fast", harness: "claude" });
+    expect(await within(screen.getByTestId("agent-profiles-panel")).findByText("fast")).toBeInTheDocument();
+    // Folded again; the form stayed clean, so Save stayed disabled — panel writes are not form writes.
+    expect(screen.queryByRole("button", { name: "Create" })).not.toBeInTheDocument();
+    expect(screen.getByTestId("settings-save")).toBeDisabled();
+    expect(screen.getByTestId("settings-footer-status")).toHaveTextContent("No unsaved changes");
+    expect(updateSettingsMock).not.toHaveBeenCalled();
+  });
+
+  it("Skills: the instance selector saves with the form; the bank is a summary card that opens its own surface", async () => {
+    render(<SettingsSurface open onClose={() => {}} />);
+    await screen.findByTestId("setting-session-cap");
+    fireEvent.click(screen.getByTestId("settings-category-agents"));
+    const skills = screen.getByTestId("settings-section-body-skills");
+    expect(within(skills).getByTestId("instance-skill-selector")).toBeInTheDocument();
+    expect(within(skills).queryByText("saves as you go")).not.toBeInTheDocument();
+    const card = within(skills).getByTestId("setting-skill-bank-card");
+    await waitFor(() =>
+      expect(within(card).getByTestId("setting-skills-count")).toHaveTextContent(
+        "0 skills · 0 folders · ~/.pdo/skills",
+      ),
+    );
+    expect(within(skills).queryByTestId("skill-bank-panel")).not.toBeInTheDocument();
+    fireEvent.click(within(card).getByTestId("setting-open-skill-bank"));
+    const drawer = screen.getByTestId("settings-drawer");
+    expect(drawer).toHaveAttribute("data-drawer", "skills");
+    expect(drawer).toHaveTextContent("Skill bank");
+    fireEvent.click(screen.getByTestId("settings-drawer-close"));
+    await waitFor(() => expect(screen.queryByTestId("settings-drawer")).not.toBeInTheDocument());
+    // Back on Settings › Skills, nothing moved.
+    expect(screen.getByTestId("settings-category-agents")).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("Sandbox & worktrees lists Default sandbox, Staging profiles, Worktree provisioning, each inline", async () => {
+    render(<SettingsSurface open onClose={() => {}} />);
+    await screen.findByTestId("setting-session-cap");
+    fireEvent.click(screen.getByTestId("settings-category-sandbox"));
+    const page = screen.getByTestId("settings-page-sandbox");
+    expect(sectionLabels(page)).toEqual([
+      "Default sandbox",
+      "Staging profiles",
+      "Worktree provisioning",
+    ]);
+    const defaultSandbox = screen.getByTestId("settings-section-body-sandbox");
+    expect(within(defaultSandbox).getByTestId("setting-default-sandbox")).toBeInTheDocument();
+    expect(within(defaultSandbox).queryByText("saves as you go")).not.toBeInTheDocument();
+
+    const staging = screen.getByTestId("settings-section-body-staging-profiles");
+    expect(within(staging).getByText("saves as you go")).toBeInTheDocument();
+    expect((await within(staging).findAllByText("full")).length).toBeGreaterThan(0);
+    expect(within(staging).getAllByText("minimal").length).toBeGreaterThan(0);
+
+    const provisioning = screen.getByTestId("settings-section-body-worktree-provisioning");
+    expect(within(provisioning).getByText("saves as you go")).toBeInTheDocument();
+    expect(
+      await within(provisioning).findByRole("button", { name: "Save provisioning" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("settings-drawer")).not.toBeInTheDocument();
+  });
+
+  it("a dangling default sandbox still shows its reason in the inline layout", async () => {
+    fetchSettingsMock.mockResolvedValue(
+      sample({
+        default_sandbox: {
+          effective: "gone",
+          source: "env",
+          stored: null,
+          env: "gone",
+          default: "off",
+          reason: "no staging profile named `gone` (tier: env)",
+        },
+      }),
+    );
+    render(<SettingsSurface open onClose={() => {}} />);
+    const reason = await screen.findByTestId("setting-default-sandbox-reason");
+    expect(reason).toHaveTextContent("no staging profile named `gone`");
+    expect(reason.closest('[data-testid="settings-section-body-sandbox"]')).not.toBeNull();
+  });
+
+  it("creating a staging profile inline refetches settings and announces pdo:settings-changed", async () => {
+    const heard = vi.fn();
+    window.addEventListener("pdo:settings-changed", heard);
+    try {
+      render(<SettingsSurface open onClose={() => {}} />);
+      await screen.findByTestId("setting-session-cap");
+      fireEvent.click(screen.getByTestId("settings-category-sandbox"));
+      const staging = screen.getByTestId("settings-section-body-staging-profiles");
+      await within(staging).findAllByText("full");
+      expect(fetchSettingsMock).toHaveBeenCalled();
+      const before = fetchSettingsMock.mock.calls.length;
+
+      fireEvent.click(within(staging).getByTestId("staging-profile-new"));
+      const nameInput = within(staging).getByTestId("staging-profile-new-name");
+      fireEvent.change(nameInput, { target: { value: "mine" } });
+      fireEvent.click(within(staging).getByTestId("staging-profile-create"));
+      await waitFor(() => expect(saveSandboxProfileMock).toHaveBeenCalledWith("mine", expect.anything()));
+      await waitFor(() => expect(heard).toHaveBeenCalledTimes(1));
+      expect(fetchSettingsMock.mock.calls.length).toBeGreaterThan(before);
+      // The form is still clean: the panel's write went straight to the daemon.
+      expect(screen.getByTestId("settings-save")).toBeDisabled();
+      expect(updateSettingsMock).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("pdo:settings-changed", heard);
+    }
+  });
+
+  it("a programmatic open lands on Sandbox & worktrees › Staging profiles and pulses it once", async () => {
+    render(
+      <SettingsSurface
+        open
+        onClose={() => {}}
+        initialPosition={{ category: "sandbox", section: "staging-profiles" }}
+      />,
+    );
+    await screen.findByTestId("staging-profiles-panel");
+    expect(screen.getByTestId("settings-category-sandbox")).toHaveAttribute("aria-selected", "true");
+    await waitFor(() =>
+      expect(screen.getByTestId("settings-section-staging-profiles")).toHaveAttribute(
+        "aria-current",
+        "true",
+      ),
+    );
+    expect(screen.getByTestId("settings-section-body-staging-profiles")).toHaveAttribute(
+      "data-landed",
+      "true",
+    );
+    // Only the requested section is pulsed.
+    expect(screen.getByTestId("settings-section-body-sandbox")).not.toHaveAttribute("data-landed");
+  });
+
+  it("a user click on the second column never pulses", async () => {
+    render(<SettingsSurface open onClose={() => {}} />);
+    await screen.findByTestId("setting-session-cap");
+    fireEvent.click(screen.getByTestId("settings-category-sandbox"));
+    fireEvent.click(screen.getByTestId("settings-section-worktree-provisioning"));
+    expect(screen.getByTestId("settings-section-worktree-provisioning")).toHaveAttribute(
+      "aria-current",
+      "true",
+    );
+    expect(screen.getByTestId("settings-section-body-worktree-provisioning")).not.toHaveAttribute(
+      "data-landed",
+    );
+  });
+
+  it("Save is disabled while the form is clean and enabled once a field changes", async () => {
+    const user = userEvent.setup();
+    render(<SettingsSurface open onClose={() => {}} />);
+    await screen.findByTestId("setting-session-cap");
+    const save = screen.getByTestId("settings-save");
+    expect(save).toBeDisabled();
+    fireEvent.click(screen.getByTestId("settings-category-agents"));
+    await user.click(screen.getByTestId("setting-default-harness-select"));
+    await user.click(await screen.findByTestId("setting-default-harness-select-option-opencode"));
+    expect(save).toBeEnabled();
+    expect(screen.getByTestId("settings-section-harness-models-dirty")).toBeInTheDocument();
+    updateSettingsMock.mockResolvedValue(
+      sample({
+        default_harness: { effective: "opencode", source: "stored", stored: "opencode", env: null, default: null },
+      }),
+    );
+    fireEvent.click(save);
+    await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledWith({ default_harness: "opencode" }));
+    await waitFor(() => expect(screen.getByTestId("settings-footer-status")).toHaveTextContent("Saved"));
+    expect(screen.queryByTestId("settings-section-harness-models-dirty")).not.toBeInTheDocument();
+    expect(save).toBeDisabled();
+  });
+
+  it("a changed instance-tier skill selection dirties the Skills row and persists with Save", async () => {
+    const { fetchSkillBank } = await import("../api");
+    vi.mocked(fetchSkillBank).mockResolvedValue({
+      skills: [
+        { id: "sk-1", name: "tdd", description: "test first", folder_id: null, created_at: "x", updated_at: "x" },
+      ],
+      folders: [],
+      root_path: "/home/user/.pdo/skills",
+    });
+    render(<SettingsSurface open onClose={() => {}} />);
+    await screen.findByTestId("setting-session-cap");
+    fireEvent.click(screen.getByTestId("settings-category-agents"));
+    fireEvent.click(screen.getByTestId("instance-skill-selector"));
+    fireEvent.click(await screen.findByTestId("instance-skill-selector-check-sk-1"));
+    expect(screen.getByTestId("settings-section-skills-dirty")).toBeInTheDocument();
+    expect(screen.queryByTestId("settings-section-harness-models-dirty")).not.toBeInTheDocument();
+    updateSettingsMock.mockResolvedValue(sample({ skills: [{ id: "sk-1", name: "tdd" }] }));
+    fireEvent.click(screen.getByTestId("settings-save"));
+    await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
+    expect(updateSettingsMock.mock.calls[0][0].skills).toEqual([
+      expect.objectContaining({ id: "sk-1" }),
+    ]);
   });
 });

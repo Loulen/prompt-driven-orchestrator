@@ -825,7 +825,11 @@ export default function App() {
         }}
         openIntent={openIntent}
         onTriggerSaved={refreshTriggers}
-        onManageStagingProfiles={() => openSettings({ category: "sandbox", section: "staging-profiles" })}
+        // #691: the one programmatic door into Settings from New Run — lands on the section,
+        // pulses it once; New Run stays mounted underneath.
+        onManageStagingProfiles={() =>
+          openSettings({ category: "sandbox", section: "staging-profiles" })
+        }
       />
       <SettingsSurface
         key={settingsEntry.key}

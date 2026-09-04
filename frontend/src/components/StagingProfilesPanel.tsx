@@ -58,8 +58,6 @@ export function relativiseToHome(abs: string, home: string | null): string | nul
 interface PanelProps {
   /** Host `$HOME`, from `GET /settings`. `null` disables the pickers' relativisation. */
   home: string | null;
-  /** Drawer/dialog host: renders a Done footer. Absent when mounted inline (#691). */
-  onDone?: () => void;
   /** Called after every successful write so the parent can refetch `GET /settings`. */
   onChanged: () => void;
 }
@@ -77,7 +75,7 @@ interface PanelProps {
  *   grouped `PUT /settings`.
  */
 
-export default function StagingProfilesPanel({ home, onDone, onChanged }: PanelProps) {
+export default function StagingProfilesPanel({ home, onChanged }: PanelProps) {
   const [profiles, setProfiles] = useState<SandboxProfile[] | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -106,8 +104,8 @@ export default function StagingProfilesPanel({ home, onDone, onChanged }: PanelP
     }
   }, []);
 
-  // One fetch on mount — the panel is mounted only when the drill-down opens, so mounting
-  // IS "the user opened the editor". `load` sets state after its `await`, which the rule
+  // One fetch on mount — the panel is mounted with its Settings section (#691), so mounting
+  // IS "the user opened the Sandbox & worktrees page". `load` sets state after its `await`, which the rule
   // cannot see through; same trade-off and same disable as `FsExplorerModal`'s initial
   // navigate.
   useEffect(() => {
@@ -308,7 +306,9 @@ export default function StagingProfilesPanel({ home, onDone, onChanged }: PanelP
   return (
     <>
       <div
-        className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4"
+        // #691: mounted inline in Settings › Sandbox & worktrees › Staging profiles. Natural
+        // height, no inner scroll: the category page is the one scroll container.
+        className="flex flex-col gap-4 px-4 py-4"
         data-testid="staging-profiles-panel"
       >
         {/* ── the profile list ── */}
@@ -726,20 +726,8 @@ export default function StagingProfilesPanel({ home, onDone, onChanged }: PanelP
         )}
       </div>
 
-      {/* Footer says DONE, not Save: every edit above already went to the daemon. That
-          difference is what makes the drill-down honest — nothing is batched behind it. */}
-      {onDone && (
-        <div className="flex items-center justify-end gap-2 border-t border-line px-4 py-3">
-          <button
-            onClick={onDone}
-            data-testid="staging-profiles-done"
-            className="rounded-md bg-acc px-3 py-1.5 font-medium text-[#04140d] transition-colors hover:bg-acc-dim"
-            style={{ fontSize: "11.5px" }}
-          >
-            Done
-          </button>
-        </div>
-      )}
+      {/* No footer: every edit above already went to the daemon (the section header says
+          `saves as you go`), and the form's Save below never batches anything from here. */}
 
       {pickerMode && (
         <FsExplorerModal

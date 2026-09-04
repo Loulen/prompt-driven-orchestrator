@@ -9,7 +9,7 @@ import {
 } from "react";
 import { ExternalLink, FileText, X } from "lucide-react";
 import FullWindowShell from "./FullWindowShell";
-import { useSettings } from "../hooks/useSettings";
+import { announceSettingsChanged, useSettings } from "../hooks/useSettings";
 import { useEditStore } from "../stores/editStore";
 import type {
   AgentChoice,
@@ -181,7 +181,12 @@ type SaveState =
   | { status: "saved" }
   | { status: "error"; message: string };
 
-type DrawerKind = "staging-profiles" | "agent-profiles" | "skills";
+/**
+ * The one panel that still opens over Settings (#691, user decision 2026-09-04): the skill
+ * bank. Browsing a folder, reading a skill, importing, updating from source is a journey of
+ * its own, not a settings field — every other former drill-down is an inline section now.
+ */
+type DrawerKind = "skills";
 
 const RAIL_WIDTH = 176;
 
@@ -189,6 +194,12 @@ const RAIL_WIDTH = 176;
  * Instance-wide settings (#129, ADR-0015; full-window surface since #690 / CONTEXT.md
  * « Surface Settings »): the shell Stats uses, a rail of four categories, and per category
  * a scrollable page cut into sections that a second column lists and scroll-spies.
+ *
+ * Agents and Sandbox & worktrees (#691) mix two kinds of sections: fields of the instance
+ * form (Save), and inline **panels with their own persistence** — agent profiles, staging
+ * profiles, worktree provisioning — whose every edit is written at once (`saves as you go`
+ * badge). A panel's write never touches the dirty set and Save never sends panel data; the
+ * footer Save is disabled while the form is clean so the two never compete for the eye.
  *
  * One explicit **Save** for the whole instance form, visible on every category. The draft
  * lives here, in the outer component, as **overrides** on top of the loaded settings: a
@@ -357,6 +368,7 @@ export default function SettingsSurface({
     try {
       await save(built.patch);
       if (built.patch.skills) announceSkillTiersChanged();
+      announceSettingsChanged();
       onSaved?.();
       setDraft({});
       setSaveState({ status: "saved" });
@@ -388,6 +400,8 @@ export default function SettingsSurface({
     else closeNow();
   };
 
+  // Escape order: tooltip (Radix, before us) → skill bank if open → confirm-close if dirty
+  // → close.
   const onEscape = () => {
     if (confirmClose) {
       setConfirmClose(false);
@@ -461,7 +475,12 @@ export default function SettingsSurface({
           ref={saveButtonRef}
           type="button"
           onClick={() => void handleSave()}
-          disabled={saveState.status === "saving" || !settings || !isDirty}
+          // Disabled while the form is clean (#691): on a clean page the only enabled primary
+          // is a panel's own. A dangling stored default keeps it clickable so the blocker
+          // is read next to the button, not guessed.
+          disabled={
+            saveState.status === "saving" || !settings || (!isDirty && !missingDefaultProfile)
+          }
           className="rounded-md bg-acc px-3 py-1.5 font-medium text-[#04140d] transition-colors hover:bg-acc-dim disabled:opacity-40"
           style={{ fontSize: "11.5px" }}
           data-testid="settings-save"
@@ -473,45 +492,16 @@ export default function SettingsSurface({
   );
 
   const drawerNode = drawer ? (
-    <SettingsDrawer
-      kind={drawer}
-      onClose={() => setDrawer(null)}
-      wide={drawer === "skills"}
-    >
-      {drawer === "staging-profiles" && (
-        <StagingProfilesPanel
-          home={settings?.home ?? null}
-          onDone={() => setDrawer(null)}
-          // Refetch `GET /settings` so the Default-sandbox `<select>` sees the new name
-          // list (and a freshly dangling `reason`) without a reopen.
-          onChanged={() => {
-            void refresh();
-            onSaved?.();
-          }}
-        />
-      )}
-      {drawer === "skills" && (
-        <SkillBankPanel
-          bank={skillBank}
-          loaded={skillsLoaded}
-          home={settings?.home ?? null}
-          onChanged={async () => {
-            await refreshSkills();
-            announceSkillsChanged();
-          }}
-        />
-      )}
-      {drawer === "agent-profiles" && (
-        <AgentProfilesPanel
-          key={agentProfiles[0]?.id ?? "loading"}
-          profiles={agentProfiles}
-          onChanged={async () => {
-            await refreshAgentProfiles();
-            announceAgentProfilesChanged();
-            onSaved?.();
-          }}
-        />
-      )}
+    <SettingsDrawer onClose={() => setDrawer(null)}>
+      <SkillBankPanel
+        bank={skillBank}
+        loaded={skillsLoaded}
+        home={settings?.home ?? null}
+        onChanged={async () => {
+          await refreshSkills();
+          announceSkillsChanged();
+        }}
+      />
     </SettingsDrawer>
   ) : null;
 
@@ -773,6 +763,7 @@ export default function SettingsSurface({
                   </FieldBlock>
                 </Section>
                 <Section section={item.sections[1]}>
+                  {/* Inline, list-first (#691): its own REST resource, its own buttons. */}
                   <AgentProfilesPanel
                     key={agentProfiles[0]?.id ?? "loading"}
                     profiles={agentProfiles}
@@ -786,19 +777,20 @@ export default function SettingsSurface({
                 <Section section={item.sections[2]}>
                   {/* #669/ADR-0062: the instance tier of the skills selection — part of the
                       instance form (Save), unlike the bank below it. */}
-                  <div className="max-w-[640px]">
-                    <SkillSelector
-                      tier="instance"
-                      own={values.instanceSkills}
-                      onChange={(skills) => setField("instanceSkills", skills)}
-                      bank={skillBank}
-                      label="Skills — Instance settings"
-                      testId="instance-skill-selector"
-                    />
-                  </div>
+                  <SkillSelector
+                    tier="instance"
+                    own={values.instanceSkills}
+                    onChange={(skills) => setField("instanceSkills", skills)}
+                    bank={skillBank}
+                    label="Skills — Instance settings"
+                    testId="instance-skill-selector"
+                  />
                   {/* The bank is a journey of its own (browse, read, import, update from
                       source): it opens as its own surface, not inline. */}
-                  <div className="flex max-w-[640px] items-center justify-between gap-3 rounded-md border border-line bg-bg-3/40 px-3 py-2.5">
+                  <div
+                    className="flex items-center justify-between gap-3 rounded-md border border-line bg-bg-3/40 px-3 py-2.5"
+                    data-testid="setting-skill-bank-card"
+                  >
                     <div className="flex flex-col gap-0.5">
                       <span className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
                         Skill bank
@@ -888,19 +880,23 @@ export default function SettingsSurface({
                   </FieldBlock>
                 </Section>
                 <Section section={item.sections[1]}>
+                  {/* Inline (#691), natural height: the page scrolls, not the panel. */}
                   <div className="rounded-md border border-line bg-bg-3/40">
                     <StagingProfilesPanel
                       home={settings?.home ?? null}
                       // Refetch `GET /settings` so the Default-sandbox `<select>` above sees the
-                      // new name list (and a freshly dangling `reason`) without a reopen.
+                      // new name list (and a freshly dangling `reason`) without a reopen, and
+                      // tell New Run (mounted underneath) the same thing.
                       onChanged={() => {
                         void refresh();
+                        announceSettingsChanged();
                         onSaved?.();
                       }}
                     />
                   </div>
                 </Section>
                 <Section section={item.sections[2]}>
+                  {/* The instance-scope editor IS the section; its own Save provisioning stays. */}
                   <PersistedProvisioningEditor scope="instance" />
                 </Section>
                 </>
@@ -970,31 +966,41 @@ function CategoryPage({
   const { active: activeSection, scrollTo } = useScrollSpy(sectionIds, scrollRef, active);
   const restored = useRef(false);
 
-  // Land on the remembered section (story 17) — once, instantly, before paint.
-  // No dependency list on purpose: the sections mount after `GET /settings` resolves, so
-  // the effect re-checks on each render until the target section exists, then stops.
-  // Captured once: while the page still shows "loading", the spy reports the first section
-  // and the parent remembers it, which would silently replace the requested target.
+  // Land on the remembered / requested section (stories 17 and 18) — once, instantly,
+  // before paint. No dependency list on purpose: the sections mount after `GET /settings`
+  // resolves, so the effect re-checks on each render until the target exists, then stops.
+  // The target is captured once: while the page still shows "loading", the spy reports the
+  // first section and the parent remembers it, which would silently replace the request.
   const target = useRef(initialSection);
+  const landedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useLayoutEffect(() => {
     if (!active || restored.current) return;
-    const initialSection = target.current;
-    if (!initialSection || initialSection === sectionIds[0]) {
+    const wanted = target.current;
+    if (!wanted || wanted === sectionIds[0]) {
       restored.current = true;
       return;
     }
-    const el = scrollRef.current?.querySelector<HTMLElement>(
-      `[data-section-id="${initialSection}"]`,
-    );
+    const el = scrollRef.current?.querySelector<HTMLElement>(`[data-section-id="${wanted}"]`);
     if (!el) return;
     restored.current = true;
-    el.scrollIntoView?.({ block: "start" });
-    scrollTo(initialSection);
+    // Instant, not smooth: the panels below still grow while they load, and a smooth scroll
+    // racing that growth ends short. The spy re-picks on the content's ResizeObserver.
+    el.scrollIntoView?.({ behavior: "auto", block: "start" });
+    scrollTo(wanted);
     if (highlight) {
+      // Pulse once (2.2 s, `index.css`): only on a programmatic open, never on a click.
       el.dataset.landed = "true";
-      setTimeout(() => delete el.dataset.landed, 2200);
+      landedTimer.current = setTimeout(() => {
+        delete el.dataset.landed;
+      }, 2200);
     }
   });
+  useEffect(
+    () => () => {
+      if (landedTimer.current) clearTimeout(landedTimer.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (active) onSectionChange(activeSection);
@@ -1055,7 +1061,7 @@ function CategoryPage({
         className="min-w-0 flex-1 overflow-y-auto px-7 py-5"
         data-testid={`settings-scroll-${categoryId}`}
       >
-        <div className="flex max-w-[920px] flex-col gap-7 pb-10">{children}</div>
+        <div className="flex max-w-[640px] flex-col gap-7 pb-10">{children}</div>
       </div>
     </div>
   );
@@ -1067,7 +1073,7 @@ function Section({ section, children }: { section: SettingsSection; children: Re
       id={`settings-section-${section.id}`}
       data-section-id={section.id}
       data-testid={`settings-section-body-${section.id}`}
-      className={`settings-section flex flex-col gap-4 ${section.wide ? "" : "max-w-[640px]"}`}
+      className="settings-section flex flex-col gap-4"
       style={{ scrollMarginTop: 16 }}
     >
       <div className="flex flex-col gap-1">
@@ -1152,60 +1158,6 @@ function InterfaceSection({ section }: { section: SettingsSection }) {
         </div>
       </div>
     </Section>
-  );
-}
-
-/**
- * A bordered, fixed-height frame for a panel that manages its own scrolling (list + editor).
- * Keeps the page's scroll-spy meaningful: the section is one anchor, the panel scrolls inside.
- */
-function InlinePanelFrame({
-  height = 440,
-  title,
-  note,
-  children,
-}: {
-  height?: number;
-  title?: string;
-  note?: string;
-  children: ReactNode;
-}) {
-  return (
-    <div
-      className="flex flex-col overflow-hidden rounded-md border border-line bg-bg-3/40"
-      style={{ height }}
-      data-testid="settings-inline-panel"
-    >
-      {title && (
-        <div className="flex items-baseline gap-2 border-b border-line px-3 py-2">
-          <span className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
-            {title}
-          </span>
-          {note && (
-            <span className="text-fg-4" style={{ fontSize: "10px" }}>
-              {note}
-            </span>
-          )}
-        </div>
-      )}
-      <div className="flex min-h-0 flex-1">{children}</div>
-    </div>
-  );
-}
-
-/** Worktree provisioning rules (instance tier): the editor has its own Save. */
-function ProvisioningBlock() {
-  const [openEditor, setOpenEditor] = useState(false);
-  if (openEditor) return <PersistedProvisioningEditor scope="instance" />;
-  return (
-    <button
-      type="button"
-      onClick={() => setOpenEditor(true)}
-      className="self-start rounded border border-line-strong bg-bg-3 px-2.5 py-1.5 text-fg-2 hover:border-acc"
-      style={{ fontSize: 11 }}
-    >
-      Configure worktree provisioning…
-    </button>
   );
 }
 
@@ -1342,39 +1294,22 @@ function HarnessDescriptorRows({ settings }: { settings: InstanceSettings }) {
 /* Drawer + confirm                                                                      */
 /* ------------------------------------------------------------------------------------ */
 
-const DRAWER_TITLES: Record<DrawerKind, string> = {
-  "staging-profiles": "Staging profiles",
-  "agent-profiles": "Agent profiles",
-  skills: "Skills",
-};
-
 /**
- * The shell's right drawer hosting a panel with its own persistence (#690 decision 5):
- * the rail stays visible, Escape closes the drawer first, and the Save footer hides under
- * it so "Done" and "Save" are never both visible.
+ * The shell's right drawer hosting the skill bank (#690 decision 5, kept by #691 for this
+ * one panel): the rail stays visible, Escape returns to Settings › Skills first, and the
+ * Save footer hides under it so its own writes and Save are never both in view.
  */
-function SettingsDrawer({
-  kind,
-  wide,
-  onClose,
-  children,
-}: {
-  kind: DrawerKind;
-  wide?: boolean;
-  onClose: () => void;
-  children: ReactNode;
-}) {
+function SettingsDrawer({ onClose, children }: { onClose: () => void; children: ReactNode }) {
+  const kind: DrawerKind = "skills";
   return (
     <aside
-      className={`absolute bottom-0 right-0 top-14 z-20 flex flex-col border-l border-line bg-bg-4 shadow-2xl ${
-        wide ? "w-[min(880px,90vw)]" : "w-[min(560px,90vw)]"
-      }`}
+      className="absolute bottom-0 right-0 top-14 z-20 flex w-[min(880px,90vw)] flex-col border-l border-line bg-bg-4 shadow-2xl"
       data-testid="settings-drawer"
       data-drawer={kind}
     >
       <div className="flex items-center gap-3 border-b border-line px-4 py-3">
         <h3 className="font-semibold text-fg" style={{ fontSize: "13px" }}>
-          {DRAWER_TITLES[kind]}
+          Skill bank
         </h3>
         <span className="ml-auto text-fg-4" style={{ fontSize: "10.5px" }}>
           saves as you go · Esc returns to Settings

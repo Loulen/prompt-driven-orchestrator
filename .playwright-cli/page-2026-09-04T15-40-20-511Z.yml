@@ -1,0 +1,24 @@
+- generic [ref=f4e3]:
+  - banner [ref=f4e4]:
+    - generic [ref=f4e5]: PDO
+    - generic [ref=f4e10]:
+      - button "Open stats" [ref=f4e11]
+      - button "Settings" [ref=f4e14]
+  - main [ref=f4e18]:
+    - generic [ref=f4e19]:
+      - complementary [ref=f4e22]:
+        - tablist [ref=f4e23]:
+          - tab "Runs" [selected] [ref=f4e24] [cursor=pointer]
+          - tab "Triggers" [ref=f4e25] [cursor=pointer]
+          - tab "Pipelines" [ref=f4e26] [cursor=pointer]
+        - tabpanel [ref=f4e27]:
+          - generic [ref=f4e28]:
+            - text: Runs
+            - button "New Run" [ref=f4e29] [cursor=pointer]
+          - generic [ref=f4e31]: No runs yet
+      - separator [ref=f4e33]
+      - generic [ref=f4e34]: Select a run or open a pipeline to get started
+      - separator [ref=f4e37]
+  - contentinfo [ref=f4e40]:
+    - generic [ref=f4e41]: "Daemon: connected"
+    - generic "Live NodeRun sessions (manager sessions excluded)" [ref=f4e43]: 0 / 0 sessions

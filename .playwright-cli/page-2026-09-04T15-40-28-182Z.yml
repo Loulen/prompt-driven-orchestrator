@@ -1,0 +1,140 @@
+- generic [ref=f4e3]:
+  - banner [ref=f4e4]:
+    - generic [ref=f4e5]: PDO
+    - generic [ref=f4e10]:
+      - button "Open stats" [ref=f4e11]
+      - button "Settings" [ref=f4e14]
+  - main [ref=f4e18]:
+    - generic [ref=f4e19]:
+      - complementary [ref=f4e22]:
+        - tablist [ref=f4e23]:
+          - tab "Runs" [ref=f4e24] [cursor=pointer]
+          - tab "Triggers" [ref=f4e25] [cursor=pointer]
+          - tab "Pipelines" [selected] [ref=f4e26] [cursor=pointer]
+        - tabpanel [ref=f4e120]:
+          - generic [ref=f4e121]:
+            - text: Pipelines
+            - button "Import a workflow" [ref=f4e122] [cursor=pointer]
+            - button "New pipeline" [ref=f4e127] [cursor=pointer]
+          - generic [ref=f4e129]:
+            - button "Select Bugfix-auto-clean Bugfix-auto-clean 7 nodes · edited 9/1/2026" [ref=f4e130] [cursor=pointer]:
+              - checkbox "Select Bugfix-auto-clean" [ref=f4e131]
+              - generic [ref=f4e133]:
+                - generic [ref=f4e134]: Bugfix-auto-clean
+                - generic [ref=f4e136]:
+                  - generic [ref=f4e137]: 7 nodes
+                  - generic [ref=f4e138]: ·
+                  - generic [ref=f4e139]: edited 9/1/2026
+            - button "Select grill-implement-loop grill-implement-loop 8 nodes · edited 9/3/2026" [ref=f4e140] [cursor=pointer]:
+              - checkbox "Select grill-implement-loop" [ref=f4e141]
+              - generic [ref=f4e143]:
+                - generic [ref=f4e144]: grill-implement-loop
+                - generic [ref=f4e146]:
+                  - generic [ref=f4e147]: 8 nodes
+                  - generic [ref=f4e148]: ·
+                  - generic [ref=f4e149]: edited 9/3/2026
+            - button "Select grill-orchestrate grill-orchestrate 5 nodes · edited 9/3/2026" [ref=f4e150] [cursor=pointer]:
+              - checkbox "Select grill-orchestrate" [ref=f4e151]
+              - generic [ref=f4e153]:
+                - generic [ref=f4e154]: grill-orchestrate
+                - generic [ref=f4e156]:
+                  - generic [ref=f4e157]: 5 nodes
+                  - generic [ref=f4e158]: ·
+                  - generic [ref=f4e159]: edited 9/3/2026
+            - button "Select grill-orchestrate grill-orchestrate 5 nodes · edited 9/4/2026" [ref=f4e160] [cursor=pointer]:
+              - checkbox "Select grill-orchestrate" [ref=f4e161]
+              - generic [ref=f4e163]:
+                - generic [ref=f4e164]: grill-orchestrate
+                - generic [ref=f4e166]:
+                  - generic [ref=f4e167]: 5 nodes
+                  - generic [ref=f4e168]: ·
+                  - generic [ref=f4e169]: edited 9/4/2026
+            - button "Select implement-loop implement-loop 7 nodes · edited 9/3/2026" [ref=f4e170] [cursor=pointer]:
+              - checkbox "Select implement-loop" [ref=f4e171]
+              - generic [ref=f4e173]:
+                - generic [ref=f4e174]: implement-loop
+                - generic [ref=f4e176]:
+                  - generic [ref=f4e177]: 7 nodes
+                  - generic [ref=f4e178]: ·
+                  - generic [ref=f4e179]: edited 9/3/2026
+            - button "Select interactive interactive 3 nodes · edited 9/2/2026" [active] [ref=f4e180] [cursor=pointer]:
+              - checkbox "Select interactive" [ref=f4e181]
+              - generic [ref=f4e183]:
+                - generic [ref=f4e184]: interactive
+                - generic [ref=f4e186]:
+                  - generic [ref=f4e187]: 3 nodes
+                  - generic [ref=f4e188]: ·
+                  - generic [ref=f4e189]: edited 9/2/2026
+              - button "Duplicate pipeline" [ref=f4e211]
+              - button "Delete pipeline" [ref=f4e215]
+            - button "Select PDO---orchestrator PDO---orchestrator 4 nodes · edited 9/1/2026" [ref=f4e190] [cursor=pointer]:
+              - checkbox "Select PDO---orchestrator" [ref=f4e191]
+              - generic [ref=f4e193]:
+                - generic [ref=f4e194]: PDO---orchestrator
+                - generic [ref=f4e196]:
+                  - generic [ref=f4e197]: 4 nodes
+                  - generic [ref=f4e198]: ·
+                  - generic [ref=f4e199]: edited 9/1/2026
+            - button "Select plan-implem plan-implem 5 nodes · edited 9/3/2026" [ref=f4e200] [cursor=pointer]:
+              - checkbox "Select plan-implem" [ref=f4e201]
+              - generic [ref=f4e203]:
+                - generic [ref=f4e204]: plan-implem
+                - generic [ref=f4e206]:
+                  - generic [ref=f4e207]: 5 nodes
+                  - generic [ref=f4e208]: ·
+                  - generic [ref=f4e209]: edited 9/3/2026
+      - separator [ref=f4e33]
+      - generic [ref=f4e36]:
+        - generic [ref=f4e219]:
+          - button "interactive.yaml" [ref=f4e221] [cursor=pointer]
+          - button "Save" [disabled] [ref=f4e224] [cursor=pointer]
+        - generic [ref=f4e229]:
+          - generic [ref=f4e230]:
+            - button "Add" [ref=f4e231] [cursor=pointer]
+            - button "Library · L" [ref=f4e235]
+            - button "Merge node" [ref=f4e238] [cursor=pointer]
+            - button "Script node (deterministic bash)" [ref=f4e243] [cursor=pointer]
+            - button "Undo · Ctrl+Z" [disabled] [ref=f4e248]
+            - button "Redo · Ctrl+Y" [disabled] [ref=f4e252]
+            - button "Pipeline assistant" [ref=f4e257] [cursor=pointer]
+            - button "Pipeline info" [ref=f4e261] [cursor=pointer]
+          - application [ref=f4e264]:
+            - generic [ref=f4e266]:
+              - generic:
+                - generic:
+                  - img:
+                    - group "Edge from YVG2GXDd to end" [ref=f4e267] [cursor=pointer]
+                  - img:
+                    - group "Edge from start to YVG2GXDd" [ref=f4e271] [cursor=pointer]
+                - generic:
+                  - group [ref=f4e275]:
+                    - generic [ref=f4e276]: Start
+                  - group [ref=f4e283]:
+                    - generic [ref=f4e284]: End
+                  - group [ref=f4e290]:
+                    - generic [ref=f4e291]: Computer use
+      - separator [ref=f4e37]
+      - complementary [ref=f4e300]:
+        - generic [ref=f4e301]: Pipeline Inspector
+        - generic [ref=f4e303]:
+          - generic [ref=f4e304]: Identity
+          - generic [ref=f4e306]:
+            - generic [ref=f4e307]: Name
+            - textbox [ref=f4e308]: interactive
+          - generic [ref=f4e309]:
+            - generic [ref=f4e310]: Version
+            - textbox "1.0" [ref=f4e311]
+          - generic [ref=f4e312]:
+            - checkbox "Prompt required" [ref=f4e313]
+            - text: Prompt required
+          - generic [ref=f4e314]:
+            - generic [ref=f4e315]: Variables0
+            - button "+ Add" [ref=f4e316] [cursor=pointer]
+          - generic [ref=f4e317]: Stats
+          - generic [ref=f4e319]:
+            - generic [ref=f4e320]: 3 nodes
+            - generic [ref=f4e321]: 2 edges
+  - contentinfo [ref=f4e40]:
+    - generic [ref=f4e41]: "Daemon: connected"
+    - generic "Live NodeRun sessions (manager sessions excluded)" [ref=f4e43]: 1 / 20 sessions
+    - generic [ref=f4e119]: v1.56.0

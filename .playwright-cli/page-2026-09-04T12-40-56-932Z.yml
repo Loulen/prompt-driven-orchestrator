@@ -1,0 +1,206 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]: PDO
+    - generic [ref=e10]:
+      - button "Open stats" [ref=e11]
+      - button "Settings" [ref=e14]
+  - main [ref=e18]:
+    - generic [ref=e19]:
+      - complementary [ref=e22]:
+        - tablist [ref=e23]:
+          - tab "Runs" [ref=e24] [cursor=pointer]
+          - tab "Triggers" [ref=e25] [cursor=pointer]
+          - tab "Pipelines" [selected] [ref=e26] [cursor=pointer]
+        - tabpanel [ref=e120]:
+          - generic [ref=e121]:
+            - text: Pipelines
+            - button "Import a workflow" [ref=e122] [cursor=pointer]
+            - button "New pipeline" [ref=e127] [cursor=pointer]
+          - generic [ref=e129]:
+            - button "Select Bugfix-auto-clean Bugfix-auto-clean 7 nodes · edited 9/1/2026" [ref=e130] [cursor=pointer]:
+              - checkbox "Select Bugfix-auto-clean" [ref=e131]
+              - generic [ref=e133]:
+                - generic [ref=e134]: Bugfix-auto-clean
+                - generic [ref=e136]:
+                  - generic [ref=e137]: 7 nodes
+                  - generic [ref=e138]: ·
+                  - generic [ref=e139]: edited 9/1/2026
+            - button "Select grill-implement-loop grill-implement-loop 8 nodes · edited 9/3/2026" [ref=e140] [cursor=pointer]:
+              - checkbox "Select grill-implement-loop" [ref=e141]
+              - generic [ref=e143]:
+                - generic [ref=e144]: grill-implement-loop
+                - generic [ref=e146]:
+                  - generic [ref=e147]: 8 nodes
+                  - generic [ref=e148]: ·
+                  - generic [ref=e149]: edited 9/3/2026
+            - button "Select grill-orchestrate grill-orchestrate 5 nodes · edited 9/3/2026" [ref=e150] [cursor=pointer]:
+              - checkbox "Select grill-orchestrate" [ref=e151]
+              - generic [ref=e153]:
+                - generic [ref=e154]: grill-orchestrate
+                - generic [ref=e156]:
+                  - generic [ref=e157]: 5 nodes
+                  - generic [ref=e158]: ·
+                  - generic [ref=e159]: edited 9/3/2026
+            - button "Select grill-orchestrate grill-orchestrate 5 nodes · edited 9/4/2026" [ref=e160] [cursor=pointer]:
+              - checkbox "Select grill-orchestrate" [ref=e161]
+              - generic [ref=e163]:
+                - generic [ref=e164]: grill-orchestrate
+                - generic [ref=e166]:
+                  - generic [ref=e167]: 5 nodes
+                  - generic [ref=e168]: ·
+                  - generic [ref=e169]: edited 9/4/2026
+            - button "Select implement-loop implement-loop 7 nodes · edited 9/3/2026" [ref=e170] [cursor=pointer]:
+              - checkbox "Select implement-loop" [ref=e171]
+              - generic [ref=e173]:
+                - generic [ref=e174]: implement-loop
+                - generic [ref=e176]:
+                  - generic [ref=e177]: 7 nodes
+                  - generic [ref=e178]: ·
+                  - generic [ref=e179]: edited 9/3/2026
+            - button "Select interactive interactive 3 nodes · edited 9/2/2026" [ref=e180] [cursor=pointer]:
+              - checkbox "Select interactive" [ref=e181]
+              - generic [ref=e183]:
+                - generic [ref=e184]: interactive
+                - generic [ref=e186]:
+                  - generic [ref=e187]: 3 nodes
+                  - generic [ref=e188]: ·
+                  - generic [ref=e189]: edited 9/2/2026
+            - button "Select PDO---orchestrator PDO---orchestrator 4 nodes · edited 9/1/2026" [ref=e190] [cursor=pointer]:
+              - checkbox "Select PDO---orchestrator" [ref=e191]
+              - generic [ref=e193]:
+                - generic [ref=e194]: PDO---orchestrator
+                - generic [ref=e196]:
+                  - generic [ref=e197]: 4 nodes
+                  - generic [ref=e198]: ·
+                  - generic [ref=e199]: edited 9/1/2026
+            - button "Select plan-implem plan-implem 5 nodes · edited 9/3/2026" [ref=e200] [cursor=pointer]:
+              - checkbox "Select plan-implem" [ref=e201]
+              - generic [ref=e203]:
+                - generic [ref=e204]: plan-implem
+                - generic [ref=e206]:
+                  - generic [ref=e207]: 5 nodes
+                  - generic [ref=e208]: ·
+                  - generic [ref=e209]: edited 9/3/2026
+      - separator [ref=e33]
+      - generic [ref=e36]:
+        - generic [ref=e219]:
+          - button "interactive.yaml" [ref=e221] [cursor=pointer]
+          - button "Save" [disabled] [ref=e224] [cursor=pointer]
+        - generic [ref=e229]:
+          - generic [ref=e230]:
+            - button "Add" [ref=e231] [cursor=pointer]
+            - button "Library · L" [ref=e235]
+            - button "Merge node" [ref=e238] [cursor=pointer]
+            - button "Script node (deterministic bash)" [ref=e243] [cursor=pointer]
+            - button "Undo · Ctrl+Z" [disabled] [ref=e248]
+            - button "Redo · Ctrl+Y" [disabled] [ref=e252]
+            - button "Pipeline assistant" [ref=e257] [cursor=pointer]
+            - button "Pipeline info" [ref=e261] [cursor=pointer]
+          - application [ref=e264]:
+            - generic [ref=e266]:
+              - generic:
+                - generic:
+                  - img:
+                    - group "Edge from YVG2GXDd to end" [ref=e267] [cursor=pointer]
+                  - img:
+                    - group "Edge from start to YVG2GXDd" [ref=e271] [cursor=pointer]
+                - generic:
+                  - group [ref=e275]:
+                    - generic [ref=e276]: Start
+                  - group [ref=e283]:
+                    - generic [ref=e284]: End
+                  - group [active] [ref=e290]:
+                    - generic [ref=e291]: Computer use
+      - separator [ref=e37]
+      - generic [ref=e346]:
+        - generic [ref=e347]:
+          - button "Run" [ref=e348] [cursor=pointer]
+          - button "Edit" [ref=e349] [cursor=pointer]
+        - complementary [ref=e352]:
+          - generic [ref=e353]:
+            - generic [ref=e354]: Node Inspector
+            - button "Save to library" [ref=e356]
+          - generic [ref=e360]:
+            - generic [ref=e361]: Identity
+            - generic [ref=e363]:
+              - generic [ref=e364]: ID
+              - generic "Click to copy" [ref=e365] [cursor=pointer]: YVG2GXDd
+            - generic [ref=e366]:
+              - generic [ref=e367]: Name
+              - textbox "YVG2GXDd" [ref=e368]: Computer use
+            - generic [ref=e369]: Type
+            - generic [ref=e371]: agent
+            - generic [ref=e376]: Workspace
+            - generic [ref=e378]:
+              - radio "Isolated worktree a sub-worktree of the Node's own" [ref=e379] [cursor=pointer]:
+                - generic [ref=e381]:
+                  - generic [ref=e382]: Isolated worktree
+                  - generic [ref=e383]: a sub-worktree of the Node's own
+              - radio "Run worktree shared with the whole Run" [checked] [ref=e384] [cursor=pointer]:
+                - generic [ref=e386]:
+                  - generic [ref=e387]: Run worktree
+                  - generic [ref=e388]: shared with the whole Run
+            - generic [ref=e389]: .pdo/runs/<run>/worktree
+            - generic [ref=e390]: Behavior
+            - generic [ref=e392]:
+              - generic [ref=e393]: Interactive
+              - button [ref=e394] [cursor=pointer]
+            - generic [ref=e396]:
+              - generic [ref=e397]: Agent
+              - button "Inherit claude · — · —" [ref=e398]:
+                - generic [ref=e404]:
+                  - generic [ref=e405]: Inherit
+                  - generic [ref=e406]: claude · — · —
+            - generic [ref=e409]:
+              - button "Default (claude floor)" [ref=e411] [cursor=pointer]
+              - text: claude
+              - button "default model" [ref=e415] [cursor=pointer]
+              - radiogroup "Effort" [ref=e419]:
+                - radio "Default" [ref=e420] [cursor=pointer]
+                - radio "low" [ref=e421] [cursor=pointer]
+                - radio "medium" [ref=e422] [cursor=pointer]
+                - radio "high" [checked] [ref=e423] [cursor=pointer]
+                - radio "xhigh" [ref=e424] [cursor=pointer]
+                - radio "max" [ref=e425] [cursor=pointer]
+            - generic [ref=e426]: Prompt
+            - textbox "Enter the node's role prompt..." [ref=e428]: just do whatever the user asks
+            - generic [ref=e429]: Inputs1
+            - generic [ref=e434]:
+              - generic [ref=e435]: in
+              - generic [ref=e437]:
+                - generic [ref=e438]: ←
+                - generic [ref=e440]:
+                  - text: Start
+                  - button "Delete input source Start" [ref=e441] [cursor=pointer]: ×
+            - generic [ref=e442]:
+              - generic [ref=e443]: Outputs1
+              - button "+ Add" [ref=e444] [cursor=pointer]
+            - generic [ref=e446]:
+              - generic [ref=e447]:
+                - button "Toggle output body" [ref=e448] [cursor=pointer]
+                - generic [ref=e451]:
+                  - textbox [ref=e453]: out
+                  - generic "Handle side" [ref=e454]:
+                    - button "L" [ref=e455] [cursor=pointer]
+                    - button "T" [ref=e456] [cursor=pointer]
+                    - button "R" [ref=e457] [cursor=pointer]
+                    - button "B" [ref=e458] [cursor=pointer]
+                  - switch "repeated" [ref=e459] [cursor=pointer]:
+                    - generic [ref=e460]: rpt
+                  - button "Delete port" [ref=e463] [cursor=pointer]: ×
+              - generic [ref=e464]:
+                - generic [ref=e465]:
+                  - generic [ref=e466]: Type
+                  - combobox [ref=e467]:
+                    - option "Markdown" [selected]
+                    - option "Image"
+                    - option "Image List"
+                    - option "HTML"
+                - button "Add expected content" [ref=e469] [cursor=pointer]:
+                  - generic [ref=e473]: Expected content
+                  - generic [ref=e474]: + add
+                - button "+ field" [ref=e478] [cursor=pointer]
+  - contentinfo [ref=e40]:
+    - generic [ref=e41]: "Daemon: connected"
+    - generic "Live NodeRun sessions (manager sessions excluded)" [ref=e43]: 1 / 20 sessions
+    - generic [ref=e119]: v1.56.0

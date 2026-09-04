@@ -1,0 +1,146 @@
+- generic [ref=f1e3]:
+  - banner [ref=f1e4]:
+    - generic [ref=f1e5]: PDO
+    - generic [ref=f1e10]:
+      - button "Open stats" [ref=f1e11]
+      - button "Settings" [ref=f1e14]
+  - main [ref=f1e18]:
+    - generic [ref=f1e19]:
+      - complementary [ref=f1e22]:
+        - tablist [ref=f1e23]:
+          - tab "Runs" [selected] [ref=f1e24] [cursor=pointer]
+          - tab "Triggers" [ref=f1e25] [cursor=pointer]
+          - tab "Pipelines" [ref=f1e26] [cursor=pointer]
+        - tabpanel [ref=f1e27]:
+          - generic [ref=f1e28]:
+            - text: Runs
+            - button "New Run" [ref=f1e29] [cursor=pointer]
+          - generic [ref=f1e44]:
+            - button "Project" [ref=f1e45] [cursor=pointer]
+            - button "Pipeline" [ref=f1e49] [cursor=pointer]
+            - button "Trigger" [ref=f1e53] [cursor=pointer]
+          - generic [ref=f1e31]:
+            - button "Select Start/End nodes non-interactive Start/End nodes non-interactive Bugfix-auto-clean" [ref=f1e57] [cursor=pointer]:
+              - checkbox "Select Start/End nodes non-interactive" [ref=f1e58]
+              - generic [ref=f1e60]:
+                - generic [ref=f1e61]: Start/End nodes non-interactive
+                - generic [ref=f1e62]: Bugfix-auto-clean
+            - 'button "Select #673 Skills: voyage par document, export sidecar et import dans la banque #673 Skills: voyage par document, export sidecar et import dans la banque implement-loop" [ref=f1e64] [cursor=pointer]':
+              - 'checkbox "Select #673 Skills: voyage par document, export sidecar et import dans la banque" [ref=f1e65]'
+              - generic [ref=f1e67]:
+                - generic [ref=f1e68]: "#673 Skills: voyage par document, export sidecar et import dans la banque"
+                - generic [ref=f1e69]: implement-loop
+            - 'button "Select #672 Skills: livraison in-worktree des skills effectifs, exclus du versionnage, gelés au Run #672 Skills: livraison in-worktree des skills effectifs, exclus du versionnage, gelés au Run implement-loop" [ref=f1e71] [cursor=pointer]':
+              - 'checkbox "Select #672 Skills: livraison in-worktree des skills effectifs, exclus du versionnage, gelés au Run" [ref=f1e72]'
+              - generic [ref=f1e74]:
+                - generic [ref=f1e75]: "#672 Skills: livraison in-worktree des skills effectifs, exclus du versionnage, gelés au Run"
+                - generic [ref=f1e76]: implement-loop
+            - 'button "Select #671 Skills: fichiers de référence, explorateur et glisser-déposer #671 Skills: fichiers de référence, explorateur et glisser-déposer implement-loop" [ref=f1e78] [cursor=pointer]':
+              - 'checkbox "Select #671 Skills: fichiers de référence, explorateur et glisser-déposer" [ref=f1e79]'
+              - generic [ref=f1e81]:
+                - generic [ref=f1e82]: "#671 Skills: fichiers de référence, explorateur et glisser-déposer"
+                - generic [ref=f1e83]: implement-loop
+            - 'button "Select #670 Skills: import depuis une Source vers un dossier de la banque #670 Skills: import depuis une Source vers un dossier de la banque implement-loop" [ref=f1e85] [cursor=pointer]':
+              - 'checkbox "Select #670 Skills: import depuis une Source vers un dossier de la banque" [ref=f1e86]'
+              - generic [ref=f1e88]:
+                - generic [ref=f1e89]: "#670 Skills: import depuis une Source vers un dossier de la banque"
+                - generic [ref=f1e90]: implement-loop
+            - 'button "Select #669 Skills: sélection par tier et skills effectifs avec origine #669 Skills: sélection par tier et skills effectifs avec origine implement-loop" [ref=f1e92] [cursor=pointer]':
+              - 'checkbox "Select #669 Skills: sélection par tier et skills effectifs avec origine" [ref=f1e93]'
+              - generic [ref=f1e95]:
+                - generic [ref=f1e96]: "#669 Skills: sélection par tier et skills effectifs avec origine"
+                - generic [ref=f1e97]: implement-loop
+            - 'button "Select #668 Skill bank: model, API, Settings panel #668 Skill bank: model, API, Settings panel implement-loop" [ref=f1e99] [cursor=pointer]':
+              - 'checkbox "Select #668 Skill bank: model, API, Settings panel" [ref=f1e100]'
+              - generic [ref=f1e102]:
+                - generic [ref=f1e103]: "#668 Skill bank: model, API, Settings panel"
+                - generic [ref=f1e104]: implement-loop
+            - button "Select Skill bank layered installs Skill bank layered installs grill-orchestrate" [ref=f1e106] [cursor=pointer]:
+              - checkbox "Select Skill bank layered installs" [ref=f1e107]
+              - generic [ref=f1e109]:
+                - generic [ref=f1e110]: Skill bank layered installs
+                - generic [ref=f1e111]: grill-orchestrate
+            - button "Archived (17)" [ref=f1e114] [cursor=pointer]:
+              - generic [ref=f1e117]:
+                - text: Archived
+                - generic [ref=f1e118]: (17)
+      - separator [ref=f1e33]
+      - generic [ref=f1e36]:
+        - generic [ref=f1e133]:
+          - button "__run__20260904-122155-0fcb4da.yaml" [ref=f1e135] [cursor=pointer]
+          - button "Save" [disabled] [ref=f1e138] [cursor=pointer]
+        - generic [ref=f1e143]:
+          - generic [ref=f1e144]:
+            - button "Add" [ref=f1e145] [cursor=pointer]
+            - button "Library · L" [ref=f1e149]
+            - button "Merge node" [ref=f1e152] [cursor=pointer]
+            - button "Script node (deterministic bash)" [ref=f1e157] [cursor=pointer]
+            - button "Undo · Ctrl+Z" [disabled] [ref=f1e162]
+            - button "Redo · Ctrl+Y" [disabled] [ref=f1e166]
+            - button "Run repositories" [ref=f1e171] [cursor=pointer]
+            - button "Pipeline info" [ref=f1e177] [cursor=pointer]
+          - application [ref=f1e180]:
+            - generic [ref=f1e182]:
+              - generic:
+                - generic:
+                  - img:
+                    - group "Edge from start to A2dN0u97" [ref=f1e183] [cursor=pointer]
+                  - img:
+                    - group "Edge from A2dN0u97 to kJjySS5r" [ref=f1e187] [cursor=pointer]
+                  - img:
+                    - group "Edge from kvqucVtl to end" [ref=f1e191] [cursor=pointer]
+                  - img:
+                    - group "Edge from kJjySS5r to enN5BZ0P" [ref=f1e195] [cursor=pointer]
+                  - img:
+                    - group "Edge from kJjySS5r to end" [ref=f1e199] [cursor=pointer]
+                  - img:
+                    - group "Edge from enN5BZ0P to bTRWGz25" [ref=f1e203] [cursor=pointer]
+                  - img:
+                    - group "Edge from bTRWGz25 to kvqucVtl" [ref=f1e207] [cursor=pointer]
+                  - img:
+                    - group "Edge from bTRWGz25 to enN5BZ0P" [ref=f1e211] [cursor=pointer]
+                  - img:
+                    - group "Edge from kJjySS5r to bTRWGz25" [ref=f1e215] [cursor=pointer]
+                - generic:
+                  - generic: Verdict = Bug
+                  - generic: Verdict != Bug
+                  - generic: Verdict = Pass
+                  - generic: else
+                - generic:
+                  - generic [ref=f1e219] [cursor=pointer]:
+                    - generic [ref=f1e220]: ↻
+                    - generic [ref=f1e221]: 1/5
+                  - group [ref=f1e222]:
+                    - generic [ref=f1e223]: Start
+                  - group [active] [ref=f1e230]:
+                    - generic [ref=f1e231]: End
+                  - group [ref=f1e237]:
+                    - generic [ref=f1e238]: Debugger
+                  - group [ref=f1e248]:
+                    - generic [ref=f1e249]: implementer
+                  - group [ref=f1e257]:
+                    - generic [ref=f1e258]: Ship It
+                  - group [ref=f1e266]:
+                    - generic [ref=f1e267]: bug-fetcher
+                  - group [ref=f1e275]:
+                    - generic [ref=f1e276]: agentic tester
+                  - group [ref=f1e285]:
+                    - generic [ref=f1e286]:
+                      - generic [ref=f1e287]: Note
+                      - text: Reproduces a bug, fixes it with visual checks in a loop, then ships.
+      - separator [ref=f1e37]
+      - complementary [ref=f1e407]:
+        - generic [ref=f1e408]:
+          - generic [ref=f1e409]:
+            - generic [ref=f1e410]: Run end
+            - generic [ref=f1e411]: runtime
+          - generic [ref=f1e412]: end
+        - generic [ref=f1e413]:
+          - generic [ref=f1e414]: Termination reasons
+          - generic [ref=f1e417]:
+            - generic [ref=f1e419]: result
+            - generic [ref=f1e420]: pending
+  - contentinfo [ref=f1e40]:
+    - generic [ref=f1e41]: "Daemon: connected"
+    - generic "Live NodeRun sessions (manager sessions excluded)" [ref=f1e43]: 1 / 20 sessions
+    - generic [ref=f1e119]: v1.56.0

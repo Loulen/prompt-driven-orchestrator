@@ -295,6 +295,7 @@ mod tests {
 
     fn make_node(id: &str, outputs: Vec<Port>) -> NodeDef {
         NodeDef {
+            skills: Vec::new(),
             isolated_worktree: None,
             id: id.into(),
             name: id.into(),

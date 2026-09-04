@@ -22,6 +22,9 @@ const makePipeline = (overrides: Partial<PipelineListEntry> = {}): PipelineListE
 
 vi.mock("../api", () => ({
   fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
+  // #669: the skills selector's reads (bank + inherited tiers), empty by default.
+  fetchSkillBank: vi.fn().mockResolvedValue({ skills: [], folders: [], root_path: "" }),
+  fetchProjects: vi.fn().mockResolvedValue([]),
   fetchPipelines: vi.fn().mockResolvedValue([]),
   // #410: the modal fetches settings on open (default_sandbox prefill +
   // sandbox_docker greying). Default: off + Docker available. Tests override per case.

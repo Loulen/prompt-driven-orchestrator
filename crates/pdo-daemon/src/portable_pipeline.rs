@@ -185,6 +185,7 @@ mod tests {
 
     fn node(id: &str, name: &str, node_type: NodeType) -> NodeDef {
         NodeDef {
+            skills: Vec::new(),
             isolated_worktree: None,
             id: id.into(),
             name: name.into(),

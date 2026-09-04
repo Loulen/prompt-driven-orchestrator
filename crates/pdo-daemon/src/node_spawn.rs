@@ -65,6 +65,10 @@ pub(crate) struct SpawnDeps<'a> {
     /// user-declared harness resolves at spawn — and so a layer-3 test that sets
     /// the override reads descriptors from its own tempdir, never the real home.
     pub(crate) home_override: Option<&'a std::path::Path>,
+    /// #672: the daemon's repo root, where the Banque de skills keeps its content
+    /// (`.pdo/skills/<id>/`) — distinct from the Run's target repo, which is
+    /// where the snapshot and the worktrees live.
+    pub(crate) bank_root: &'a std::path::Path,
 }
 
 impl<'a> SpawnDeps<'a> {
@@ -79,6 +83,7 @@ impl<'a> SpawnDeps<'a> {
             tmux_cmd_override: state.tmux_cmd_override.as_deref(),
             docker_cmd_override: state.docker_cmd_override.as_deref(),
             home_override: state.sandbox_home_override.as_deref(),
+            bank_root: &state.repo_root,
         }
     }
 }
@@ -164,6 +169,26 @@ fn warn_missing_agent_profile_once(
             "run {run_id}: agent profile '{}' referenced at tier {:?} no longer exists — \
              falling through as if that tier stated no choice",
             warning.profile_id, warning.tier
+        );
+    }
+}
+
+/// #669 (ADR-0062): say ONCE per `(run, skill id)` that a tier selected a skill
+/// the bank no longer has — the node runs without it, the inspector and the
+/// pipeline banner carry the warning, and the Run is never refused. Same dedupe
+/// as [`warn_missing_agent_profile_once`].
+fn warn_missing_skill_once(run_id: &str, missing: &crate::skill_selection::MissingSkill) {
+    use std::collections::HashSet;
+    use std::sync::Mutex;
+    static SAID: Mutex<Option<HashSet<(String, String)>>> = Mutex::new(None);
+
+    let mut guard = SAID.lock().unwrap_or_else(|e| e.into_inner());
+    let said = guard.get_or_insert_with(HashSet::new);
+    if said.insert((run_id.to_string(), missing.id.clone())) {
+        warn!(
+            "run {run_id}: skill '{}' ({}) selected at {:?} no longer exists in the bank — \
+             the node runs without it",
+            missing.name, missing.id, missing.tiers
         );
     }
 }
@@ -494,6 +519,105 @@ pub(crate) async fn spawn_node(
         }
         Some(resolved.combo)
     };
+    // #669 / ADR-0062: the **skills effectifs** of this NodeRun — the strict
+    // additive union of the four tiers, resolved HERE at spawn like the harness
+    // (ADR-0046 sharing: editing a tier reaches a node not yet launched, never a
+    // live one). The Run tier is the list FROZEN on `RunStarted`; the Projet and
+    // instance tiers are read fresh, keyed by the same primary repo as the harness
+    // above; the Node tier is the document's `skills`. The bank snapshot is taken
+    // ONCE so every id resolves against the same point in time. A DB error
+    // degrades a tier to empty — a skill lookup never fails a spawn. A `script`
+    // node carries none (refused at parse) and launches no agent: `None`.
+    //
+    // #672: the instance + Projet + Run tiers come from the selection FROZEN on
+    // `RunStarted` (ids AND names — the delivered folder is named after the frozen
+    // name, so a rename in the bank after the Run started never delivers the same
+    // skill twice under two names). Only the Node tier is read from the document
+    // here. A Run created before #672 has no frozen base: its outer tiers are read
+    // fresh, as #669 did.
+    let resolved_skills = if node.node_type == pipeline::NodeType::Script {
+        None
+    } else {
+        let frozen_base = loaded
+            .as_ref()
+            .and_then(|(events, _)| crate::skill_delivery::frozen_run_skills(events));
+        let mut bank = crate::skill_bank::snapshot_names(deps.db)
+            .await
+            .unwrap_or_default();
+        let (instance_skills, project_skills, run_skills): (
+            Vec<crate::skill_selection::SkillRef>,
+            Vec<crate::skill_selection::SkillRef>,
+            Vec<crate::skill_selection::SkillRef>,
+        ) = match &frozen_base {
+            Some(base) => {
+                let mut by_tier = (Vec::new(), Vec::new(), Vec::new());
+                // Known skills pin their frozen name in the bank map; the ids the bank
+                // had already lost at create are re-posed in their tiers WITHOUT a
+                // bank entry, so `resolve` reports them missing again on this node.
+                let frozen_refs = base
+                    .skills
+                    .iter()
+                    .map(|s| {
+                        bank.insert(s.id.clone(), s.name.clone());
+                        (s.id.clone(), s.name.clone(), s.tiers.clone())
+                    })
+                    .chain(
+                        base.missing
+                            .iter()
+                            .map(|m| (m.id.clone(), m.name.clone(), m.tiers.clone())),
+                    );
+                for (id, name, tiers) in frozen_refs {
+                    let sref = crate::skill_selection::SkillRef { id, name };
+                    for tier in &tiers {
+                        match tier {
+                            crate::skill_selection::SkillTier::Instance => {
+                                by_tier.0.push(sref.clone())
+                            }
+                            crate::skill_selection::SkillTier::Project => {
+                                by_tier.1.push(sref.clone())
+                            }
+                            crate::skill_selection::SkillTier::Run => by_tier.2.push(sref.clone()),
+                            crate::skill_selection::SkillTier::Node => {}
+                        }
+                    }
+                }
+                by_tier
+            }
+            None => {
+                let primary_repo = projected
+                    .and_then(|s| s.target_repo.clone())
+                    .unwrap_or_else(|| spawn_ctx.repo_root.to_string_lossy().into_owned());
+                let project_skills =
+                    match crate::project_store::skills_for_path(deps.db, &primary_repo).await {
+                        Ok(skills) => skills,
+                        Err(e) => {
+                            warn!("project skills lookup failed for {primary_repo}: {e}");
+                            Vec::new()
+                        }
+                    };
+                let instance_skills = crate::instance_config::get(deps.db)
+                    .await
+                    .map(|c| c.skills)
+                    .unwrap_or_default();
+                (
+                    instance_skills,
+                    project_skills,
+                    projected.map(|s| s.skills.clone()).unwrap_or_default(),
+                )
+            }
+        };
+        let tiers = crate::skill_selection::SkillTiers {
+            instance: Some(&instance_skills),
+            project: Some(&project_skills),
+            run: Some(&run_skills),
+            node: Some(&node.skills),
+        };
+        let resolved = crate::skill_selection::resolve(&tiers, &bank);
+        for missing in &resolved.missing {
+            warn_missing_skill_once(run_id, missing);
+        }
+        Some(resolved)
+    };
     let harness_descriptor = match &resolved_harness {
         None => None,
         Some(r) => {
@@ -684,6 +808,62 @@ pub(crate) async fn spawn_node(
     } else {
         spawn_ctx.worktree_dir.to_path_buf()
     };
+
+    // #672 / ADR-0062: deliver the skills effectifs into the tree this NodeRun works
+    // in — its own sub-worktree, or the shared Run worktree (where the Run's frozen
+    // base already sits since create; only what is new is written). The content
+    // comes from the Run snapshot, extended here (additively) with what this node's
+    // own tier adds; `.agents/skills/<name>` + `.claude/skills/<name>` are excluded
+    // per skill in the target repo's `info/exclude` and recorded for the completion
+    // commit's filter. A versioned homonym is skipped and recorded on `NodeStarted`
+    // (visible on the node); an I/O failure refuses the spawn like provisioning.
+    let mut skipped_skills: Vec<crate::skill_delivery::SkippedSkill> = Vec::new();
+    if let Some(resolved) = resolved_skills.as_ref() {
+        let delivery = crate::skill_delivery::snapshot_skills(
+            deps.bank_root,
+            spawn_ctx.repo_root,
+            run_id,
+            &resolved.skills,
+        )
+        .and_then(|mut skipped| {
+            let mut report = crate::skill_delivery::deliver(
+                &working_dir,
+                &crate::skill_delivery::snapshot_root(spawn_ctx.repo_root, run_id),
+                run_id,
+                &resolved.skills,
+            )?;
+            skipped.append(&mut report.skipped);
+            Ok(skipped)
+        });
+        match delivery {
+            Ok(skipped) => {
+                for s in &skipped {
+                    warn!(
+                        "run {run_id} node {}: skill '{}' not delivered: {}",
+                        node.id, s.name, s.reason
+                    );
+                }
+                skipped_skills = skipped;
+            }
+            Err(e) => {
+                let reason = format!(
+                    "skill delivery failed for {}: {e:#}; no node was spawned",
+                    node.id
+                );
+                interrupt_spawn_before_start(
+                    deps,
+                    spawn_ctx.repo_root,
+                    run_id,
+                    &node.id,
+                    iter,
+                    orphan_to_reap.as_ref(),
+                    &reason,
+                )
+                .await;
+                return SpawnOutcome::Failed { reason };
+            }
+        }
+    }
 
     // #550/#347/#424: the model and effort come from the harness resolved above
     // (post node → instance precedence, post empty-string collapse), read from the
@@ -891,6 +1071,19 @@ pub(crate) async fn spawn_node(
                 // resume path re-poses what was launched, never what the YAML or a
                 // tier says now (ADR-0007). `null` for a `script` node (no agent).
                 "harness": resolved_harness.as_ref().map(|r| r.harness.as_str()),
+                // #669/ADR-0062: the skills effectifs this session receives, FROZEN
+                // with their origin tier (ids + current bank names), and the ids the
+                // bank no longer had — the node runs without those, and the Run view
+                // says so. `null` / empty for a `script` node (no agent).
+                "skills": resolved_skills.as_ref().map(|r| &r.skills),
+                "missing_skills": resolved_skills
+                    .as_ref()
+                    .map(|r| r.missing.clone())
+                    .unwrap_or_default(),
+                // #672: what the delivery could not write into the worktree (a
+                // versioned homonym, an occupied path, content gone) — the node
+                // runs without those and the node view says so.
+                "skipped_skills": skipped_skills,
                 // #473: the pinned Claude Code session id the agent launches with
                 // (`claude --session-id <uuid>`). The sweep resolves this node's
                 // transcript by it (`<uuid>.jsonl`), and the resume path re-enters

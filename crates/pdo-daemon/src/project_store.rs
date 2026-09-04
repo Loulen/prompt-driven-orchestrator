@@ -36,6 +36,11 @@ pub(crate) struct Project {
     /// wins outright at this tier over [`Self::harness`] (never merges).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_choice: Option<crate::agent_choice::AgentChoice>,
+    /// The Projet tier of the **skills** selection (#669, ADR-0062): unioned with
+    /// the instance, Run and Node tiers by `skill_selection::resolve` for every
+    /// Run whose primary repo this Projet owns. Empty ⇒ transparent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<crate::skill_selection::SkillRef>,
     /// Member repository paths, compared **verbatim** (ADR-0033). Ordered by
     /// attach time (the `rowid` of `project_members`).
     #[serde(default)]
@@ -97,6 +102,19 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
+    // Pre-#669 databases have no `skills` column. Guarded `ADD COLUMN`, NULLABLE
+    // so an existing Projet selects nothing.
+    let has_skills =
+        sqlx::query("SELECT 1 FROM pragma_table_info('projects') WHERE name = 'skills'")
+            .fetch_optional(db)
+            .await?
+            .is_some();
+    if !has_skills {
+        sqlx::query("ALTER TABLE projects ADD COLUMN skills TEXT")
+            .execute(db)
+            .await?;
+    }
+
     // `path` is the PRIMARY KEY: at-most-one-Projet-per-path is a schema
     // invariant. `project_id` is indexed for the members-of lookup. No FK
     // ON DELETE cascade — deletes clear members explicitly (portable, and the
@@ -139,6 +157,10 @@ fn row_to_project(row: &sqlx::sqlite::SqliteRow, members: Vec<String>) -> Projec
         agent_choice: row
             .get::<Option<String>, _>("agent_choice")
             .and_then(|s| serde_json::from_str(&s).ok()),
+        // #669: NULL / unparseable ⇒ empty selection (transparent tier).
+        skills: crate::skill_selection::from_stored_json(
+            row.try_get::<Option<String>, _>("skills").unwrap_or(None),
+        ),
         members,
     }
 }
@@ -169,6 +191,7 @@ pub(crate) async fn create(db: &SqlitePool, name: &str) -> Result<Project, sqlx:
         harness: None,
         auto_fail: None,
         agent_choice: None,
+        skills: Vec::new(),
         members: Vec::new(),
     })
 }
@@ -264,6 +287,34 @@ pub(crate) async fn set_agent_choice(
         .execute(db)
         .await?;
     Ok(res.rows_affected() > 0)
+}
+
+/// Replace the Projet's skills selection wholesale (#669). An empty list clears
+/// to SQL `NULL` — the tier goes transparent.
+pub(crate) async fn set_skills(
+    db: &SqlitePool,
+    id: &str,
+    skills: Vec<crate::skill_selection::SkillRef>,
+) -> Result<bool, sqlx::Error> {
+    let stored = crate::skill_selection::to_stored_json(&crate::skill_selection::normalise(skills));
+    let res = sqlx::query("UPDATE projects SET skills = ? WHERE id = ?")
+        .bind(stored)
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+/// The Projet tier of `skill_selection::resolve`: the skills selected by the
+/// Projet owning `path`, or empty when no Projet owns it.
+pub(crate) async fn skills_for_path(
+    db: &SqlitePool,
+    path: &str,
+) -> Result<Vec<crate::skill_selection::SkillRef>, sqlx::Error> {
+    Ok(owner_of(db, path)
+        .await?
+        .map(|p| p.skills)
+        .unwrap_or_default())
 }
 
 /// The Projet tier of [`crate::agent_choice::resolve`]. `None` ⇒ transparent —

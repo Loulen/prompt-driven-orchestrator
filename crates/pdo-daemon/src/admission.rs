@@ -154,6 +154,9 @@ mod tests {
             run.nodes.insert(
                 (*id).into(),
                 NodeState {
+                    missing_skills: Vec::new(),
+                    skipped_skills: Vec::new(),
+                    skills: None,
                     isolated_worktree: None,
                     harness: None,
                     cost: None,

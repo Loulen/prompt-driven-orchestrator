@@ -259,6 +259,8 @@ export interface InstanceSettings {
     stored: Record<string, string>;
   };
   agent_choice?: AgentChoice | null;
+  /** #669/ADR-0062: the Instance tier of the skills selection (ids + labels). */
+  skills?: SkillRef[];
   /**
    * Instance-wide default sandbox (#410/#432): `"off"` (host, default) or the name of a
    * **staging profile**. No longer a closed enum — its value space is the user's profile
@@ -443,6 +445,8 @@ export interface UpdateSettingsRequest {
   default_harness_model?: Record<string, string>;
   /** Atomic instance agent selection. `null` clears to the Default floor. */
   agent_choice?: AgentChoice | null;
+  /** #669: replace the Instance tier's skills wholesale; `[]` clears. */
+  skills?: SkillRef[];
   /** Default sandbox (#410/#432): `"off"` or a staging-profile name, or `""` to clear
    *  back to the built-in default (`off`). Same `""`-sentinel discipline as
    *  `default_model`. The daemon 400s a name that does not resolve.
@@ -517,6 +521,8 @@ export interface Project {
   /** The harness this Projet carries, or absent/null when it carries none. */
   harness?: string | null;
   agent_choice?: AgentChoice | null;
+  /** #669/ADR-0062: the Projet tier of the skills selection. Absent ⇒ none. */
+  skills?: SkillRef[];
   /** Member repository paths (the effective-repo keys the lists group by). */
   members: string[];
 }
@@ -603,6 +609,8 @@ export interface Trigger {
    *  separate Trigger tier — a cron tick and a "Run now" produce the same one). */
   harness?: string | null;
   agent_choice?: AgentChoice | null;
+  /** #669: the Run-tier skills every fired Run carries. Absent ⇒ none. */
+  skills?: SkillRef[];
   /** Whether Runs this Trigger fires are auto-named (#338). Frozen at creation from the
    *  instance default; `true` is the pre-#338 behaviour. A flat bool (no inherit state). */
   auto_name: boolean;
@@ -702,6 +710,20 @@ export interface NodeState {
    * node that never started, a structural node, or a pre-#653 daemon.
    */
   isolated_worktree?: boolean;
+  /**
+   * #669/ADR-0062: the skills effectifs this NodeRun was FROZEN with at spawn
+   * (union of the four tiers, each with its origin). Absent for a node that never
+   * started, a `script` node, or a pre-#669 daemon.
+   */
+  skills?: EffectiveSkill[];
+  /** #669: selected ids the bank no longer knew at spawn — the node ran without them. */
+  missing_skills?: MissingSkill[];
+  /**
+   * #672: skills promised to this NodeRun that the delivery could not write into
+   * its worktree (a versioned homonym in the target repo, an occupied path, content
+   * gone from the bank) — the node ran without them.
+   */
+  skipped_skills?: SkippedSkill[];
   /** Node provisioning recipe frozen into this iteration's NodeStarted event. */
   provisioning?: ProvisioningRules;
   /** Time this iteration's isolated worktree recipe was first materialized. */
@@ -848,6 +870,8 @@ export interface RunState {
   pipeline_name: string;
   name?: string | null;
   input: string | null;
+  /** #669: the Run tier of the skills selection, frozen on `RunStarted`. Absent ⇒ none. */
+  skills?: SkillRef[];
   started_at: string | null;
   completed_at: string | null;
   /**
@@ -1108,6 +1132,10 @@ export interface NodeDef {
   harnesses?: Record<string, HarnessSettings>;
   /** Atomic agent selection for this node. Missing/`inherit` continues precedence. */
   agent_choice?: AgentChoice | null;
+  /** #669/ADR-0062: the Node tier of the skills selection — ids with their label,
+   *  unioned with the instance, Projet and Run tiers at spawn. Semantic. Never
+   *  carried by a `script` node (refused at parse). */
+  skills?: SkillRef[];
   /** Resources added only when this isolated node worktree is first created. */
   provisioning?: ProvisioningRules;
   /** #653/ADR-0060: where this node's NodeRun works — `true` a sub-worktree of
@@ -1442,4 +1470,218 @@ export interface StatsPerformance {
   infrastructure_total: StatsPerformanceAggregate;
   by_pipeline: StatsPerformanceEntity[];
   infrastructure: StatsPerformanceEntity[];
+}
+
+// ---------------------------------------------------------------------------
+// Banque de skills (#668, ADR-0062)
+// ---------------------------------------------------------------------------
+
+/**
+ * Where an imported skill comes from (#670): repository URL or local folder,
+ * the ref asked for, the commit read, and the skill's folder path inside the
+ * source. A skill keeps it even when moved out of its Source folder.
+ */
+export interface SkillProvenance {
+  url: string;
+  ref: string | null;
+  commit: string | null;
+  /** `/`-separated path inside the source; `""` at its root. */
+  path: string;
+}
+
+/** A Source folder's provenance: the scan root plus what the last import saw. */
+export interface FolderProvenance extends SkillProvenance {
+  imported_at: string;
+  /** Skills found at the source at that time, valid or not. */
+  found: number;
+  invalid: number;
+}
+
+/** One row of the bank's index. Identity is `id`; `name` is a unique label. */
+export interface Skill {
+  id: string;
+  name: string;
+  description: string;
+  /** `null` at the root of the bank. */
+  folder_id: string | null;
+  /** Provenance of an import; absent for a pasted skill. */
+  source?: SkillProvenance | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** A folder of the bank's free hierarchy. A UI gesture, never a reference. */
+export interface SkillFolder {
+  id: string;
+  name: string;
+  parent_id: string | null;
+  /** Present on a folder created by an import (a Source folder). */
+  source?: FolderProvenance | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** The daemon's reading of a typed source (`POST /settings/skills/scan`). */
+export interface ParsedSkillSource {
+  kind: "git" | "local";
+  url: string;
+  ref: string | null;
+  path: string;
+  repo: string;
+  suggested_folder: string;
+}
+
+export type SkillCandidateStatus = "new" | "name_taken" | "same_commit" | "invalid";
+
+/** One folder holding a `SKILL.md` at the source, with its collision status. */
+export interface SkillCandidate {
+  path: string;
+  name: string;
+  description: string;
+  valid: boolean;
+  reason?: string;
+  code?: string;
+  file_count: number;
+  status: SkillCandidateStatus;
+  existing?: { id: string; name: string; folder_id: string | null; folder_name: string | null };
+}
+
+export interface SkillScanResult {
+  scan_id: string;
+  source: ParsedSkillSource;
+  commit: string | null;
+  candidates: SkillCandidate[];
+  /** When the sub-path held nothing: folders elsewhere in the repo that do. */
+  elsewhere: string[];
+  elsewhere_count: number;
+}
+
+export type SkillImportAction = "import" | "replace" | "rename" | "skip";
+
+export interface SkillImportItem {
+  path: string;
+  action: SkillImportAction;
+  name?: string;
+}
+
+export interface SkillImportReport {
+  folder: SkillFolder;
+  imported: { path: string; skill: Skill; action: string }[];
+  failed: { path: string; error: string; code: string }[];
+  commit: string | null;
+}
+
+export type SkillUpdateStatus = "updated" | "unchanged" | "new" | "skipped" | "gone" | "invalid";
+
+export interface SkillUpdateEntry {
+  path: string;
+  name: string;
+  description: string;
+  status: SkillUpdateStatus;
+  skill_id?: string;
+  reason?: string;
+  skill_md_changed: boolean;
+  files_added: number;
+  files_removed: number;
+  files_changed: number;
+  name_taken_by?: string;
+}
+
+export interface SkillRescanReport {
+  scan_id: string;
+  source: ParsedSkillSource;
+  previous_commit: string | null;
+  commit: string | null;
+  entries: SkillUpdateEntry[];
+}
+
+export interface RecentSkillSource {
+  url: string;
+  ref: string | null;
+  path: string;
+  last_used_at: string;
+  folder_id?: string;
+  folder_name?: string;
+}
+
+/** `GET /settings/skills`: the whole bank in one read. */
+export interface SkillBank {
+  skills: Skill[];
+  folders: SkillFolder[];
+  /** Where the skill folders live on disk (`<root>/<id>/SKILL.md`). */
+  root_path: string;
+}
+
+/** A reference file of a skill (anything in its folder but `SKILL.md`). */
+export interface SkillFile {
+  /** Relative to the skill folder, `/`-separated; sub-folders are kept. */
+  path: string;
+  size: number;
+}
+
+/** `GET /settings/skills/{id}/files/{path}`: one file for the plain-text editor (#671). */
+export interface SkillFileContent {
+  path: string;
+  size: number;
+  /** `true` when the bytes are not UTF-8: `text` is `null` and the editor says so. */
+  binary: boolean;
+  text: string | null;
+}
+
+/** `POST /settings/skills/{id}/files`: what landed, and the whole list after. */
+export interface SkillFilesUpload {
+  uploaded: SkillFile[];
+  files: SkillFile[];
+}
+
+/** `GET /settings/skills/{id}`: the row plus its content. */
+export interface SkillDetail extends Skill {
+  /** Raw `SKILL.md`; `null` if the folder vanished from disk. */
+  content: string | null;
+  frontmatter: Record<string, unknown> | null;
+  /** Keys of `frontmatter` in the author's order (JSON objects do not keep it). */
+  frontmatter_keys?: string[] | null;
+  body: string | null;
+  files: SkillFile[];
+  path: string;
+}
+
+/** Who selects a skill, by tier (#669). */
+export interface SkillReferents {
+  skill_id: string;
+  instance: boolean;
+  projects: { id: string; name: string }[];
+  triggers?: { id: string; name: string; pipeline_id: string }[];
+  pipelines: { id: string; name: string; node_id?: string; scope?: string }[];
+  runs: { run_id: string; name?: string | null; pipeline_name?: string | null }[];
+}
+
+/**
+ * One selected skill as a tier stores it (#669, ADR-0062): the stable id and the
+ * label shown when it was picked. Identity is the id; the bank's current name
+ * wins at display and at spawn.
+ */
+export interface SkillRef {
+  id: string;
+  name: string;
+}
+
+/** The four additive tiers, coarsest first. */
+export type SkillTier = "instance" | "project" | "run" | "node";
+
+/** An effective skill frozen on a NodeRun, with every tier that selected it. */
+export interface EffectiveSkill extends SkillRef {
+  tiers: SkillTier[];
+}
+
+/** A selected id the bank no longer knew at spawn. */
+export interface MissingSkill extends SkillRef {
+  tiers: SkillTier[];
+}
+
+/** #672: a skill not delivered into a worktree, with the reason it was skipped. */
+export interface SkippedSkill {
+  id: string;
+  name: string;
+  reason: string;
 }

@@ -111,6 +111,11 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
     if (n.agent_choice && n.agent_choice.mode !== "inherit") {
       node.agent_choice = n.agent_choice;
     }
+    // #669/ADR-0062: the node's skills, by id with their label, emitted only when
+    // non-empty so an unset node stays byte-identical to its pre-#669 document.
+    if (n.skills && n.skills.length > 0) {
+      node.skills = n.skills.map((skill) => ({ id: skill.id, name: skill.name }));
+    }
     const harnesses = foldNodeIntoHarnesses(n);
     if (harnesses) node.harnesses = harnesses;
     if (n.provisioning && hasProvisioningRules(n.provisioning)) {
@@ -301,6 +306,9 @@ export function exportNodeAsYaml(node: NodeDef, prompt: string): string {
   if (node.pin_harness) obj.pin_harness = node.pin_harness;
   if (node.agent_choice && node.agent_choice.mode !== "inherit") {
     obj.agent_choice = node.agent_choice;
+  }
+  if (node.skills && node.skills.length > 0) {
+    obj.skills = node.skills.map((skill) => ({ id: skill.id, name: skill.name }));
   }
   const harnesses = foldNodeIntoHarnesses(node);
   if (harnesses) obj.harnesses = harnesses;

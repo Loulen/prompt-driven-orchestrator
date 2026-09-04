@@ -35,6 +35,21 @@ vi.mock("../api", () => ({
   fetchSandboxProfileReferents: (...args: unknown[]) =>
     fetchSandboxProfileReferentsMock(...args),
   fetchInstanceProvisioning: (...args: unknown[]) => fetchInstanceProvisioningMock(...args),
+  // #668: the skill bank drill-down. Same Proxy trap: every function `SkillBankPanel`
+  // / `PasteSkillModal` import must exist here or the panel throws on first access.
+  fetchSkillBank: vi.fn().mockResolvedValue({ skills: [], folders: [], root_path: "/home/user/.pdo/skills" }),
+  createSkill: vi.fn(),
+  fetchSkill: vi.fn(),
+  updateSkill: vi.fn(),
+  deleteSkill: vi.fn(),
+  fetchSkillReferents: vi.fn(),
+  createSkillFolder: vi.fn(),
+  updateSkillFolder: vi.fn(),
+  deleteSkillFolder: vi.fn(),
+  ApiError: class ApiError extends Error {
+    status?: number;
+    body?: unknown;
+  },
 }));
 
 import SettingsModal, { relativiseToHome } from "./SettingsModal";

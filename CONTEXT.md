@@ -271,9 +271,17 @@ Le préambule contient au minimum : les **inputs disponibles** (nom du port + ch
 
 Conséquence : le designer n'a pas à se soucier dans son prompt de « où écrire / quoi mettre en frontmatter / comment signaler la fin » — c'est imposé par le runtime. Il se concentre sur le *rôle*.
 
-### Skills et extensions — délégués au harnais
+### Banque de skills — livrés dans le worktree, jamais commités
 
-PDO **ne gère pas** les skills, sous-agents, plugins ou MCP d'un harnais. Ce qui est disponible dans une session NodeRun est ce que le harnais charge naturellement depuis son propre home et le repo cible. Pas d'attachement par-Node, pas de mécanisme custom.
+La **Banque de skills** est le réglage d'instance qui héberge les **Skills** que PDO met à disposition d'un NodeRun. PDO ne gère toujours ni sous-agents, ni plugins, ni MCP d'un harnais : ce qu'un harnais charge depuis son propre home reste hors de PDO. Contrat → ADR-0062.
+
+- **Skill** *(terme)* : un dossier contenant un `SKILL.md` (frontmatter `name` + `description` obligatoires) et d'éventuels **fichiers de référence** (#671 : déposés depuis le poste ou pris dans l'explorateur, **éditables en texte brut** dans le détail, toujours **dans le dossier du skill** — un chemin qui en sort est refusé). Un `SKILL.md` déposé **remplace le texte du skill** après les cinq checks, jamais listé comme fichier. Identifié par un **id stable** ; le **nom** est un libellé unique dans la banque, renommable sans casser ses référents. Créé par collage de texte dans la banque, ou importé. _Éviter_ : « fichiers en lecture seule » (c'était le périmètre initial de #671, abandonné le 2026-09-03).
+- **Dossier de skills** *(terme)* : hiérarchie libre de la banque, un skill dans un seul dossier. Cocher un dossier coche ses skills **à cet instant** (instantané, pas un abonnement) ; un dossier n'est jamais référencé par un tier. _Éviter_ : « plugin » (englobe hooks, commands et MCP chez Claude Code, hors périmètre), « catégorie », « pack ».
+- **Source** *(terme)* : provenance d'un import — URL d'un dépôt (ou d'un sous-dossier, ou un dossier local), branche, commit, chemin. L'import scanne tout dossier contenant un `SKILL.md`, présente la liste, et range les skills cochés dans un dossier nommé d'après la Source ; un ré-import met ce dossier à jour après confirmation. Un nom déjà pris est refusé : remplacer, renommer ou ignorer. Un `SKILL.md` sans frontmatter valide est listé grisé, non importable.
+- **Skills effectifs** *(terme)* : l'**union** des skills sélectionnés sur les quatre tiers Configuration d'instance → Projet → Run → Node. Additif strict : aucun tier ne retire un skill hérité. Chaque sélecteur montre ses propres skills et les hérités avec leur tier d'origine. Le Node référence les skills par **id** dans le Document de pipeline (nom en libellé) ; c'est de la **sémantique** (diff sémantique, `content_hash`). Un Node `script` n'en porte pas ; les sessions d'infra reçoivent ceux du Run. _Éviter_ : « skills du run » pour l'union, « skills installés » (installer, c'est importer dans la banque).
+- **Résolution et gel** : la sélection se résout au **spawn** du Node comme le harnais (ADR-0046) ; le **contenu** est figé au Run (instantané additif, jamais purgé pendant le Run). Un skill sélectionné puis supprimé produit un avertissement sur le Node et le pipeline, jamais un échec ; la suppression liste d'abord ses référents vivants, comme un profil agentique.
+- **Livraison** : les skills effectifs sont copiés dans `.agents/skills/<name>/` de chaque worktree que PDO crée, avec un lien `.claude/skills/<name>` par skill, seul emplacement lu nativement par `claude`, `copilot` et `opencode`. Ils sont exclus du contrôle de version au grain du skill : un `.agents/` ou `.claude/` versionné du dépôt cible reste intact, et un skill homonyme d'un skill versionné n'est pas écrasé. _Éviter_ : « plugin-dir » (propre à `claude`), « le harnais charge les skills de PDO » (il ne connaît que le worktree).
+- **Voyage par document** (#673) : l'export d'un pipeline embarque le contenu de ses skills dans un **sidecar** `<pipeline>.skills/<id>/…` (`SKILL.md` + fichiers de référence), livré en zip `<pipeline>.skills.zip` à côté du YAML — le YAML ne change pas hors champ `skills`. L'import prend le sidecar dans la même requête ; il **crée** les ids inconnus (même id, dans un dossier « importés avec <pipeline> », nommé d'après le document), **conserve** un id connu tel quel, **suffixe** (`-2`, `-3`…) un nom déjà pris par un autre id avec un avertissement, et signale « skill absent » — jamais un échec — pour un id ni en banque ni dans le sidecar. Amende la frontière d'ADR-0059 : un skill est du contenu, pas une configuration d'instance. _Éviter_ : « le YAML embarque les skills » (il ne porte que les références).
 
 ---
 
@@ -484,7 +492,7 @@ Un **Projet** est un regroupement **nommé** de dépôts qui se travaillent ense
 
 - **Un chemin appartient à au plus un Projet**, et le Projet d'un Run est celui qui possède son **dépôt primaire**. Un secondaire membre d'un autre Projet n'y change rien : c'est un contexte read-only, pas une appartenance (ADR-0042).
 - **Matérialisé à la demande, jamais seedé** : tant qu'aucun nom n'est donné ni aucun réglage attaché, il n'existe pas de Projet — les listes se groupent sur le libellé dérivé du chemin. Nommer un en-tête de groupe est ce qui crée l'entité.
-- **Premier réglage porté** : le harnais agentique, dont il est le tier intermédiaire (ADR-0046).
+- **Réglages portés** : le harnais agentique, dont il est le tier intermédiaire (ADR-0046), et ses skills sélectionnés (cf. *Banque de skills*).
 
 _Éviter_ : « projet » pour un dépôt seul (c'est le *repo cible*) ou pour le `projects/` d'un home stagé.
 
@@ -613,7 +621,7 @@ Le préambule inclut **l'URL de base du daemon** pour les nœuds qui en ont beso
 Réglages **daemon-wide** (ADR-0015), à distinguer d'une variable *pipeline* ou d'un override de Run. _Éviter_ : « préférences globales », « config » tout court.
 
 - **Store** : table SQLite singleton (même justification que les Triggers : config + état mutable, mauvais fit YAML).
-- **Réglages** : cap de sessions, reaper TTL, timeout du guard de Trigger, `default_model`, `default_sandbox`.
+- **Réglages** : cap de sessions, reaper TTL, timeout du guard de Trigger, `default_model`, `default_sandbox`, la Banque de skills et les skills sélectionnés au tier instance.
 - **Précédence `stored → env → default`** : la valeur **stockée (UI) gagne**, l'env est un bootstrap. _Éviter_ : « l'env gagne » (rendrait la page no-op pour ses propres opérateurs).
 - **Prise d'effet sans redémarrage** : tous les réglages sont lus frais — aucun `PUT` n'est no-op jusqu'au redémarrage.
 - **Frontière** : « le manager vérifie périodiquement le pipeline » reste exclu — réveiller le manager depuis le runtime renverse *Pas de polling actif* et l'origine-de-l'autonomie d'ADR-0012.

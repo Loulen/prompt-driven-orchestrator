@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { Star } from "lucide-react";
 import { useEditStore } from "../stores/editStore";
 import type { NodeDef, NodeState, NodeType, PortDef } from "../types";
@@ -9,6 +9,10 @@ import PooledInputRow from "./PooledInputRow";
 import { useHarnessCatalog } from "../hooks/useHarnessCatalog";
 import { useAgentProfiles } from "../hooks/useAgentProfiles";
 import AgentControl from "./AgentControl";
+import SkillSelector from "./SkillSelector";
+import { useSkillBank } from "../hooks/useSkillBank";
+import { useSkillTiers } from "../hooks/useSkillTiers";
+import type { InheritedTier } from "../lib/skillSelection";
 import HarnessSelect from "./HarnessSelect";
 import ModelPicker from "./ModelPicker";
 import EffortPicker from "./EffortPicker";
@@ -44,9 +48,12 @@ export default function NodeInspector({
   inheritedProvisioning,
   provisioningGitRef = "HEAD",
   runNode,
+  runSkills,
 }: {
   libraryEntries: LibraryEntry[];
   onLibraryChanged: () => void;
+  /** #669: the Run tier's frozen skills, on a run canvas — shown as inherited. */
+  runSkills?: import("../types").SkillRef[];
   /** #653: the live NodeRun's projected state, on a run canvas. Its frozen
    *  `isolated_worktree` is what the Workspace section reads in run mode —
    *  where the iteration ACTUALLY works, which an edit no longer moves. */
@@ -104,6 +111,19 @@ export default function NodeInspector({
   // each installed/not). Called before the early return so the hook order is stable.
   const harnessCatalog = useHarnessCatalog();
   const { profiles: agentProfiles } = useAgentProfiles();
+  // #669/ADR-0062: the bank (names, folders) and the coarser tiers this node
+  // inherits — the instance selection, the Projet owning the Run's repo when one
+  // is known (run canvas), and the Run's frozen list. Called before the early
+  // return so the hook order is stable.
+  const { bank: skillBank } = useSkillBank();
+  const { inherited: inheritedTiers } = useSkillTiers(provisioningRepository || null);
+  const inheritedSkillTiers = useMemo<InheritedTier[]>(
+    () =>
+      runSkills && runSkills.length > 0
+        ? [...inheritedTiers, { tier: "run", skills: runSkills }]
+        : inheritedTiers,
+    [inheritedTiers, runSkills],
+  );
 
   if (!tab || !node) return null;
   const provisioningOpen = provisioningOpenFor === node.id;
@@ -349,6 +369,41 @@ export default function NodeInspector({
               label="Agent"
               testId="node-agent-control"
             />
+            {/* #669/ADR-0062: the Node tier of the skills selection. Own skills are
+                live; inherited ones (instance, Projet, Run) are greyed with their
+                origin; the total is the strict additive union. An id the bank lost
+                warns here and on the pipeline banner — the node still runs. */}
+            <SkillSelector
+              tier="node"
+              own={node.skills ?? []}
+              onChange={(skills) => handleField("skills", skills.length > 0 ? skills : undefined)}
+              inherited={inheritedSkillTiers}
+              bank={skillBank}
+              label="Skills"
+              testId="node-skill-selector"
+            />
+            {runNode?.skills && (
+              <p className="text-fg-4" style={{ fontSize: 9.5 }} data-testid="node-skills-frozen">
+                Frozen at spawn:{" "}
+                {runNode.skills.length === 0
+                  ? "none"
+                  : runNode.skills.map((skill) => skill.name).join(", ")}
+                {runNode.missing_skills && runNode.missing_skills.length > 0 && (
+                  <span className="text-st-blocked">
+                    {" "}· missing: {runNode.missing_skills.map((skill) => skill.name || skill.id).join(", ")}
+                  </span>
+                )}
+                {runNode.skipped_skills && runNode.skipped_skills.length > 0 && (
+                  <span
+                    className="text-st-blocked"
+                    data-testid="node-skills-skipped"
+                    title={runNode.skipped_skills.map((skill) => `${skill.name}: ${skill.reason}`).join("\n")}
+                  >
+                    {" "}· not delivered: {runNode.skipped_skills.map((skill) => skill.name || skill.id).join(", ")}
+                  </span>
+                )}
+              </p>
+            )}
             <div className="sr-only">
               <div data-testid="node-harness" data-resolved={resolvedHarness}>
                 <HarnessSelect

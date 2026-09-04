@@ -10,6 +10,86 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.56.0
+
+**Voyage des skills par document** (#673 ; story #666, spec #667, ADR-0062). Exporter un pipeline dont
+des nœuds sélectionnent des skills produit, à côté du YAML, un **sidecar** `<pipeline>.skills.zip`
+(entrées `<pipeline>.skills/<id>/SKILL.md` + fichiers de référence) : bouton *Skills (N)* dans la barre
+du document portable, endpoints `GET /pipelines/{id}/document/skills` et
+`GET /runs/{run_id}/pipeline/document/skills` (204 sans skill). L'import (*load files…* accepte YAML +
+zip ; `POST /pipelines/import` prend un `skills_sidecar` base64) recrée dans la banque les skills dont
+l'id est inconnu, **avec le même id**, dans un dossier racine *importés avec <pipeline>* ; un id connu
+reste intact ; un nom déjà pris est suffixé `-2`, `-3`… avec avertissement ; un id absent de la banque
+et du sidecar produit un avertissement, jamais un échec. La réponse porte un rapport `skills`
+(`created`, `kept`, `renamed`, `missing`, `folder`). Le YAML du document ne change pas.
+## 1.55.0
+
+**Livraison des skills effectifs dans le worktree** (#672 ; story #666, spec #667 ; ADR-0062). Quand
+PDO crée un worktree (celui du Run ou le sous-worktree d'un nœud isolé), il y copie les skills
+effectifs du nœud dans `.agents/skills/<name>/` et pose un lien relatif `.claude/skills/<name>` par
+skill. Le contenu est **gelé au Run** : instantané additif sous `.pdo/runs/<run>/skills/`, hors
+worktree ; éditer la banque après le lancement ne change rien aux nœuds suivants. Les chemins livrés
+sont exclus du versionnage au grain du skill (lignes `# pdo <run>` dans `info/exclude` du dépôt
+cible, retirées au nettoyage du Run) et filtrés du commit de complétion même après `git add -A`.
+Un `.agents/skills/<name>` versionné reste intact et suivi ; le skill PDO homonyme est ignoré et
+signalé (`skipped_skills` sur `RunStarted` / `NodeStarted`, visible dans l'inspecteur du nœud).
+
+## 1.54.0
+
+**Import de skills depuis une Source** (#670 ; story #666, spec #667). Depuis la banque, *+ Add ▾ ›
+Import from a source…* accepte une URL de dépôt GitHub (racine, branche, `/tree/<branche>/<chemin>`),
+une URL SSH ou un dossier local : PDO clone en shallow avec les credentials git de l'utilisateur du
+daemon, scanne récursivement les `SKILL.md`, valide chaque frontmatter et présente une liste cochable
+(invalides grisés avec la raison, collisions de nom à résoudre explicitement : remplacer / renommer /
+ignorer — rien n'est écrit tant qu'un choix manque). Les skills cochés atterrissent dans un **dossier
+Source** nommé d'après la Source, qui porte sa provenance (URL, ref, commit, chemin) ; chaque skill
+importé garde la sienne, même déplacé. *Update from source…* re-scanne, montre le diff (mis à jour,
+inchangé, nouveau à la source, sorti du dossier, disparu) et met à jour après confirmation. Les
+fichiers de référence sont copiés intégralement. Endpoints : `POST /settings/skills/scan`,
+`/import`, `/settings/skill-folders/{id}/rescan`, `/update`. Schéma : la provenance des skills passe
+de `(source, source_commit)` à un objet `{url, ref, commit, path}` (colonnes additives, base 1.51
+lisible telle quelle).
+
+Retouches après le Feature Path #670 : *Update from source* ne touche que les skills du dossier
+ciblé (deux dossiers importés du même dépôt ne s'écrasent plus l'un l'autre ; un skill de la même
+source rangé ailleurs est signalé « already in “<dossier>” ») ; le clone d'un scan est isolé par
+processus daemon ; un skill « same commit » coché propose remplacer / renommer / ignorer au lieu
+d'échouer à l'import ; la modale avertit quand un dossier homonyme existe déjà à la destination et
+propose d'importer dedans ; `Esc` ferme la modale après un import partiel ; le diff d'update libelle
+« N reference files changed ».
+
+## 1.53.0
+
+**Skills : sélection par tier et skills effectifs avec origine** (#669 ; story #666, spec #667 ;
+ADR-0062). Un skill se coche à trois niveaux — Instance (réglages), Projet (fiche projet) et Nœud
+(inspecteur du pipeline) — et un lancement de Run hérite des deux premiers, avec des skills RUN
+ajoutés à la volée (cocher un dossier coche ses skills). L'inspecteur d'un nœud affiche la liste des
+*skills effectifs* avec l'origine de chacun (INSTANCE / PROJECT / NODE / RUN) et la liste figée au
+spawn (`NodeStarted.skills`). Supprimer un skill de la banque liste ses référents (projets, nœuds) ;
+les références orphelines gardent l'id, s'affichent barrées avec un avertissement (inspecteur, bandeau
+de lint du pipeline, modale New Run) et le Run se lance quand même, le skill étant ignoré
+(`missing_skills`). API : `GET /settings/skills/{id}/referents`.
+
+## 1.52.0
+
+**Fichiers de référence d'un skill** (#671 ; story #666, spec #667 ; ADR-0062). Un skill peut
+embarquer des fichiers à côté de son `SKILL.md` : glisser-déposer dans la modale de collage
+(fichiers stagés avant la création, « Create skill + N files ») ou dans l'onglet *Files* du détail,
+explorateur multi-sélection (chemin hôte), suppression avec confirmation inline, édition texte brut
+avec sauvegarde explicite (`⌘S`). Un `SKILL.md` déposé remplace le texte courant (annulable). Limite
+10 MB par fichier, sous-dossiers conservés, chemins traversants refusés. API REST sous
+`/settings/skills/{id}/files`.
+
+## 1.51.0
+
+**Banque de skills** (#668 ; story #666, spec #667 ; ADR-0062). L'instance gère une banque de
+skills depuis *Instance settings › Manage skills…* : création par collage d'un `SKILL.md`
+(frontmatter validé en direct — nom kebab-case, description obligatoire —, refus sans écriture
+disque), rangement en dossiers par glisser-déposer, renommage inline (unicité insensible à la
+casse) et suppression précédée d'un inventaire des référents (instance, projets, pipelines, runs).
+Chaque skill vit sous `<repo>/.pdo/skills/<id>/SKILL.md`, à côté de `pdo.db`. API REST sous
+`/settings/skills`.
+
 ## 1.50.0
 
 **Provisionnement déclaratif des worktrees** (#630 ; ADR-0061). Un worktree de Run ou de Node

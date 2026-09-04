@@ -31,6 +31,8 @@ import PipelineInspector from "./components/PipelineInspector";
 import PipelineInfoPanel from "./components/PipelineInfoPanel";
 import StartInspector from "./components/StartInspector";
 import EndInspector from "./components/EndInspector";
+import MarkerInspector from "./components/MarkerInspector";
+import { resolveNodeInspector } from "./lib/structuralMarkers";
 import EdgeDetailPanel from "./components/EdgeDetailPanel";
 import RegionInspector from "./components/RegionInspector";
 import NoteInspector from "./components/NoteInspector";
@@ -211,9 +213,10 @@ export default function App() {
   const pipelines = useEditStore((s) => s.pipelines);
 
   const editTab = openTabs.find((t) => t.id === editActiveTabId);
-  const editNodeType = editTab && selection.kind === "node" && selection.id
-    ? editTab.pipeline.nodes.find((n) => n.id === selection.id)?.type ?? null
+  const editNode = editTab && selection.kind === "node" && selection.id
+    ? editTab.pipeline.nodes.find((n) => n.id === selection.id) ?? null
     : null;
+  const editNodeType = editNode?.type ?? null;
 
   // Runtime trigger status for the selected edge (#147). Derived from the run
   // state when editing a run; the canvas never renders it.
@@ -228,6 +231,14 @@ export default function App() {
 
   const isEditingRun = editTab?.scope === "run";
   const hasEditTab = editTab != null;
+  // #684: which pane a selected node gets. Markers (start/end) never reach the
+  // generic `NodeInspector` — outside a run they get a read-only pane.
+  const nodeInspectorKind = resolveNodeInspector({
+    nodeType: editNodeType,
+    isEditingRun,
+    hasRunStart: selectedRun?.start_node != null,
+    hasRunEnd: selectedRun?.end_node != null,
+  });
 
   // #302 / ADR-0048: the Assistant authors a library *template*, so it targets the
   // active edit tab's pipeline id + scope — never a run. `null` on a run tab hides
@@ -699,7 +710,7 @@ export default function App() {
               />
             ) : paneOwner === "editTab" ? (
               <>
-                {selection.kind === "node" && editNodeType != null && editNodeType !== "start" && editNodeType !== "end" ? (
+                {selection.kind === "node" && editNodeType != null && nodeInspectorKind === "node" ? (
                   <InspectorTabs activeTab={inspectorTab} onTabChange={setInspectorTab}>
                     <div hidden={inspectorTab !== "run"} className="h-full" data-testid="inspector-pane-run">
                       {inspectorRunPane()}
@@ -708,16 +719,18 @@ export default function App() {
                       {inspectorEditPane()}
                     </div>
                   </InspectorTabs>
-                ) : selection.kind === "node" && editNodeType === "start" && isEditingRun && selectedRun?.start_node && selection.id ? (
+                ) : selection.kind === "node" && nodeInspectorKind === "run-start" && selectedRun?.start_node && selection.id ? (
                   <StartInspector
                     startNode={selectedRun.start_node}
                     runId={selectedRun.run_id}
                     nodeId={selection.id}
                   />
-                ) : selection.kind === "node" && editNodeType === "end" && isEditingRun && selectedRun?.end_node ? (
+                ) : selection.kind === "node" && nodeInspectorKind === "run-end" && selectedRun?.end_node ? (
                   <EndInspector
                     endNode={selectedRun.end_node}
                   />
+                ) : selection.kind === "node" && nodeInspectorKind === "marker" && editNode ? (
+                  <MarkerInspector key={editNode.id} node={editNode} />
                 ) : selection.kind === "node" ? (
                   <NodeInspector
                     libraryEntries={libraryEntries}

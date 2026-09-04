@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, Folder, FolderOpen, Sparkles, TriangleAlert, X } from "lucide-react";
 import type { SkillBank, SkillRef, SkillTier } from "../types";
 import { buildRows } from "../lib/skillTree";
@@ -47,6 +47,28 @@ export default function SkillSelector({
 }) {
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState("");
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  // Dismiss on outside click and Escape (#686, same pattern as AgentControl):
+  // the picker is an absolute overlay that hides the fields below it, so it
+  // must close on any gesture that is not aimed at it.
+  useEffect(() => {
+    if (!open) return;
+    const onMouseDown = (event: MouseEvent) => {
+      if (rootRef.current?.contains(event.target as Node)) return;
+      setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      setOpen(false);
+    };
+    document.addEventListener("mousedown", onMouseDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onMouseDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
   // Folders start expanded (every skill visible at a glance); `null` = untouched.
   const [collapsedOverride, setCollapsedOverride] = useState<Set<string> | null>(null);
   const expanded = useMemo(() => {
@@ -104,7 +126,7 @@ export default function SkillSelector({
   };
 
   return (
-    <div className="relative" data-testid={`${testId}-root`}>
+    <div ref={rootRef} className="relative" data-testid={`${testId}-root`}>
       <span className="mb-1 block uppercase tracking-wider text-fg-4" style={{ fontSize: 9 }}>{label}</span>
       <button
         type="button"

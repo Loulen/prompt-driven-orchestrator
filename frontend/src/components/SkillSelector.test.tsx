@@ -141,4 +141,28 @@ describe("SkillSelector", () => {
     fireEvent.click(screen.getByTestId("sel"));
     expect(screen.getByTestId("sel-empty")).toHaveTextContent("The bank is empty");
   });
+
+  it("closes on a mousedown outside the picker (#686)", () => {
+    render(<SkillSelector tier="node" own={[]} bank={bank} onChange={vi.fn()} testId="sel" />);
+    fireEvent.click(screen.getByTestId("sel"));
+    expect(screen.getByTestId("sel-popover")).toBeInTheDocument();
+    fireEvent.mouseDown(document.body);
+    expect(screen.queryByTestId("sel-popover")).toBeNull();
+    expect(screen.getByTestId("sel")).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("stays open on a mousedown inside the picker (#686)", () => {
+    render(<SkillSelector tier="node" own={[]} bank={bank} onChange={vi.fn()} testId="sel" />);
+    fireEvent.click(screen.getByTestId("sel"));
+    fireEvent.mouseDown(screen.getByTestId("sel-option-c"));
+    expect(screen.getByTestId("sel-popover")).toBeInTheDocument();
+  });
+
+  it("closes on Escape (#686)", () => {
+    render(<SkillSelector tier="node" own={[]} bank={bank} onChange={vi.fn()} testId="sel" />);
+    fireEvent.click(screen.getByTestId("sel"));
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByTestId("sel-popover")).toBeNull();
+    expect(screen.getByTestId("sel")).toHaveAttribute("aria-expanded", "false");
+  });
 });

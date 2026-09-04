@@ -330,7 +330,7 @@ export interface InstanceSettings {
    * descriptor went inert or was refused — the only honest place to say so, since
    * a hand-edited descriptor passes through no validator (ADR-0001).
    *
-   * Optional in the type (the SettingsModal guards on it) so a UI built against a
+   * Optional in the type (the Settings surface guards on it) so a UI built against a
    * daemon that predates #553 still typechecks — same defensive posture the modal
    * takes for `price_table`. In production the SPA is embedded, so they agree.
    */

@@ -1855,6 +1855,56 @@ describe("NewRunModal — sandbox selector (#410)", () => {
     expect(select.value).toBe("");
     expect(screen.queryByTestId("sandbox-missing-profile")).not.toBeInTheDocument();
   });
+
+  describe("Manage staging profiles opens Settings on the section (#691)", () => {
+    it("renders the link on the Sandbox label row only when a host wires it, and calls it", async () => {
+      vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: "repo" })]);
+      const onManage = vi.fn();
+      const { unmount } = render(
+        <NewRunModal open onClose={noop} onCreated={noop} onManageStagingProfiles={onManage} />,
+      );
+      await screen.findByTestId("sandbox-select");
+      const link = screen.getByTestId("new-run-manage-staging-profiles");
+      expect(link).toHaveTextContent("Manage staging profiles…");
+      // Same label row as the Sandbox field: the link is the field's escape hatch, not a section.
+      expect(link.parentElement).toContainElement(screen.getByText("Sandbox", { selector: "label" }));
+      fireEvent.click(link);
+      expect(onManage).toHaveBeenCalledTimes(1);
+      // Opening Settings over the dialog never touches the field (#452).
+      expect((screen.getByTestId("sandbox-select") as HTMLSelectElement).value).toBe("");
+      unmount();
+
+      renderModal();
+      await screen.findByTestId("sandbox-select");
+      expect(screen.queryByTestId("new-run-manage-staging-profiles")).not.toBeInTheDocument();
+    });
+
+    it("refetches settings on pdo:settings-changed so a profile created in Settings is offered without reload", async () => {
+      vi.mocked(fetchSettings).mockResolvedValue(settingsFixture());
+      vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: "repo" })]);
+      render(<NewRunModal open onClose={noop} onCreated={noop} onManageStagingProfiles={noop} />);
+      const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
+      await waitFor(() =>
+        expect(Array.from(select.options).map((o) => o.value)).toEqual(["", "off", "full", "minimal"]),
+      );
+      const calls = vi.mocked(fetchSettings).mock.calls.length;
+
+      vi.mocked(fetchSettings).mockResolvedValue(
+        settingsFixture({
+          sandbox_profiles: [
+            { name: "full", virtual: true },
+            { name: "minimal", virtual: true },
+            { name: "mine", virtual: false },
+          ],
+        }),
+      );
+      window.dispatchEvent(new Event("pdo:settings-changed"));
+      await waitFor(() => expect(vi.mocked(fetchSettings).mock.calls.length).toBeGreaterThan(calls));
+      await waitFor(() => expect(Array.from(select.options).map((o) => o.value)).toContain("mine"));
+      // Offered, not selected: the field still asserts nothing.
+      expect(select.value).toBe("");
+    });
+  });
 });
 
 /**

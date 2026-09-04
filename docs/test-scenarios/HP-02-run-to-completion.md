@@ -92,9 +92,10 @@ Features validated while crossing the run screens (grafted from retired per-issu
 12. **Control twin.** Relaunch the same pipeline with sandbox **`off`**: no preparation phase, the
     node starts straight away, the Run reaches **Completed**. Compare the two Runs — same business
     outcome, visibly different route.
-13. Open **Settings** → on the sandbox side there is **only** `Default sandbox` and
-    **Manage staging profiles…** (#471: the image source and Dockerfile fields moved to the profile).
-    Open the profile editor → it lists the floor entry by entry, and its **Image** control offers
+13. Open **Settings** → **Sandbox & worktrees** › **Default sandbox** shows **only** the default
+    sandbox select (#471: the image source and Dockerfile fields moved to the profile). The next
+    section, **Staging profiles**, is inline (#691: no drawer, no dialog; its header says `saves as
+    you go`) → it lists the floor entry by entry, and its **Image** control offers
     `default` / `dockerfile` / `registry`, the `default` option saying in one sentence that the tag is
     the SHA-256 of the seeded Dockerfile's bytes.
 14. **Three-way harness pin.** Seed a **three-node** pipeline: three parallel nodes, each asked for a

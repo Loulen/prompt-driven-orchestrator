@@ -25,7 +25,8 @@ export default function AgentProfilesPanel({
   profiles: AgentProfile[];
   onChanged: () => Promise<void>;
 }) {
-  const [selectedId, setSelectedId] = useState<string | null>(profiles[0]?.id ?? null);
+  // #691 inline: the editor stays folded until a row or "New profile" opens it.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [draft, setDraft] = useState(() => {
     const profile = profiles[0];
@@ -213,7 +214,7 @@ export default function AgentProfilesPanel({
           )}
           {error && <p className="text-st-failed" style={{ fontSize: 10 }}>{error}</p>}
           <div className="flex justify-end gap-2">
-            <button onClick={() => setDraft({ name: "", harness: "", model: null, effort: null })} className="rounded border border-line px-2 py-1 text-fg-3">Cancel</button>
+            <button onClick={() => { setSelectedId(null); setCreating(false); setDraft({ name: "", harness: "", model: null, effort: null }); }} className="rounded border border-line px-2 py-1 text-fg-3">Cancel</button>
             <button disabled={!draft.name.trim() || !draft.harness || profiles.some((p) => p.id !== selectedId && p.name.toLowerCase() === draft.name.trim().toLowerCase())} onClick={() => void save()} className="rounded bg-acc px-2 py-1 text-bg-1 disabled:opacity-40">
               {creating ? "Create" : "Save profile"}
             </button>

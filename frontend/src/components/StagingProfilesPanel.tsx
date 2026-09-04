@@ -58,7 +58,8 @@ export function relativiseToHome(abs: string, home: string | null): string | nul
 interface PanelProps {
   /** Host `$HOME`, from `GET /settings`. `null` disables the pickers' relativisation. */
   home: string | null;
-  onDone: () => void;
+  /** Drawer/dialog host: renders a Done footer. Absent when mounted inline (#691). */
+  onDone?: () => void;
   /** Called after every successful write so the parent can refetch `GET /settings`. */
   onChanged: () => void;
 }
@@ -727,16 +728,18 @@ export default function StagingProfilesPanel({ home, onDone, onChanged }: PanelP
 
       {/* Footer says DONE, not Save: every edit above already went to the daemon. That
           difference is what makes the drill-down honest — nothing is batched behind it. */}
-      <div className="flex items-center justify-end gap-2 border-t border-line px-4 py-3">
-        <button
-          onClick={onDone}
-          data-testid="staging-profiles-done"
-          className="rounded-md bg-acc px-3 py-1.5 font-medium text-[#04140d] transition-colors hover:bg-acc-dim"
-          style={{ fontSize: "11.5px" }}
-        >
-          Done
-        </button>
-      </div>
+      {onDone && (
+        <div className="flex items-center justify-end gap-2 border-t border-line px-4 py-3">
+          <button
+            onClick={onDone}
+            data-testid="staging-profiles-done"
+            className="rounded-md bg-acc px-3 py-1.5 font-medium text-[#04140d] transition-colors hover:bg-acc-dim"
+            style={{ fontSize: "11.5px" }}
+          >
+            Done
+          </button>
+        </div>
+      )}
 
       {pickerMode && (
         <FsExplorerModal

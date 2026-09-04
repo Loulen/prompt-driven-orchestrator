@@ -825,6 +825,7 @@ export default function App() {
         }}
         openIntent={openIntent}
         onTriggerSaved={refreshTriggers}
+        onManageStagingProfiles={() => openSettings({ category: "sandbox", section: "staging-profiles" })}
       />
       <SettingsSurface
         key={settingsEntry.key}

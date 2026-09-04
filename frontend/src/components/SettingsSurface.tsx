@@ -461,7 +461,7 @@ export default function SettingsSurface({
           ref={saveButtonRef}
           type="button"
           onClick={() => void handleSave()}
-          disabled={saveState.status === "saving" || !settings}
+          disabled={saveState.status === "saving" || !settings || !isDirty}
           className="rounded-md bg-acc px-3 py-1.5 font-medium text-[#04140d] transition-colors hover:bg-acc-dim disabled:opacity-40"
           style={{ fontSize: "11.5px" }}
           data-testid="settings-save"
@@ -559,6 +559,7 @@ export default function SettingsSurface({
             categoryId={item.id}
             active={category === item.id}
             initialSection={lastSection[item.id]}
+            highlight={initialPosition?.category === item.id && !!initialPosition.section}
             dirtySections={rollup.sections}
             onSectionChange={(section) => rememberSection(item.id, section)}
           >
@@ -674,6 +675,7 @@ export default function SettingsSurface({
 
             {item.id === "agents" &&
               (values && settings && catalog ? (
+                <>
                 <Section section={item.sections[0]}>
                   <AgentControl
                     choice={values.agentChoice}
@@ -684,15 +686,6 @@ export default function SettingsSurface({
                     allowInherit={false}
                     label="Agent — Instance settings"
                     testId="instance-agent-control"
-                  />
-                  {/* #669/ADR-0062: the instance tier of the skills selection. */}
-                  <SkillSelector
-                    tier="instance"
-                    own={values.instanceSkills}
-                    onChange={(skills) => setField("instanceSkills", skills)}
-                    bank={skillBank}
-                    label="Skills — Instance settings"
-                    testId="instance-skill-selector"
                   />
                   {/* Default harness (#550/ADR-0046). Precedence at spawn:
                       node → Run → Projet → instance (this) → claude floor. */}
@@ -778,51 +771,64 @@ export default function SettingsSurface({
                       </label>
                     ))}
                   </FieldBlock>
-                  {/* Ticket 1 (#690): the profile and skill editors still open as panels,
-                      in the shell's right drawer. #691 lays them out inline. */}
-                  <FieldBlock label="Agent profiles & skills for the instance">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <button
-                        type="button"
-                        data-testid="setting-manage-agent-profiles"
-                        onClick={() => setDrawer("agent-profiles")}
-                        className="rounded border border-line-strong bg-bg-3 px-2.5 py-1.5 text-fg-2 hover:border-acc"
-                        style={{ fontSize: 11 }}
-                      >
-                        Manage agent profiles… ›
-                      </button>
-                      <button
-                        type="button"
-                        data-testid="setting-manage-skills"
-                        onClick={() => setDrawer("skills")}
-                        className="flex items-center gap-1.5 rounded border border-line-strong bg-bg-3 px-2.5 py-1.5 text-fg-2 hover:border-acc"
-                        style={{ fontSize: 11 }}
-                      >
-                        <FileText size={11} />
-                        Manage skills… ›
-                      </button>
-                      <span
-                        className="text-fg-4"
-                        style={{ fontSize: "10.5px" }}
-                        data-testid="setting-skills-count"
-                      >
+                </Section>
+                <Section section={item.sections[1]}>
+                  <AgentProfilesPanel
+                    key={agentProfiles[0]?.id ?? "loading"}
+                    profiles={agentProfiles}
+                    onChanged={async () => {
+                      await refreshAgentProfiles();
+                      announceAgentProfilesChanged();
+                      onSaved?.();
+                    }}
+                  />
+                </Section>
+                <Section section={item.sections[2]}>
+                  {/* #669/ADR-0062: the instance tier of the skills selection — part of the
+                      instance form (Save), unlike the bank below it. */}
+                  <div className="max-w-[640px]">
+                    <SkillSelector
+                      tier="instance"
+                      own={values.instanceSkills}
+                      onChange={(skills) => setField("instanceSkills", skills)}
+                      bank={skillBank}
+                      label="Skills — Instance settings"
+                      testId="instance-skill-selector"
+                    />
+                  </div>
+                  {/* The bank is a journey of its own (browse, read, import, update from
+                      source): it opens as its own surface, not inline. */}
+                  <div className="flex max-w-[640px] items-center justify-between gap-3 rounded-md border border-line bg-bg-3/40 px-3 py-2.5">
+                    <div className="flex flex-col gap-0.5">
+                      <span className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
+                        Skill bank
+                      </span>
+                      <span className="text-fg-4" style={{ fontSize: "10.5px" }} data-testid="setting-skills-count">
                         {skillsLoaded
-                          ? `${skillBank.skills.length} skill${skillBank.skills.length === 1 ? "" : "s"} · ${skillBank.folders.length} folder${skillBank.folders.length === 1 ? "" : "s"}`
+                          ? `${skillBank.skills.length} skill${skillBank.skills.length === 1 ? "" : "s"} · ${skillBank.folders.length} folder${skillBank.folders.length === 1 ? "" : "s"} · ~/.pdo/skills`
                           : ""}
                       </span>
                     </div>
-                    <p className="text-fg-4" style={{ fontSize: "10.5px" }}>
-                      Opens in a side drawer until the next ticket lays them out inline. Escape
-                      closes the drawer first. Their edits save on their own — Done, not Save.
-                    </p>
-                  </FieldBlock>
+                    <button
+                      type="button"
+                      data-testid="setting-open-skill-bank"
+                      onClick={() => setDrawer("skills")}
+                      className="flex items-center gap-1.5 rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5 text-fg-2 transition-colors hover:border-acc"
+                      style={{ fontSize: 11 }}
+                    >
+                      <FileText size={11} />
+                      Open skill bank
+                    </button>
+                  </div>
                 </Section>
+                </>
               ) : (
                 loading
               ))}
 
             {item.id === "sandbox" &&
               (values && settings ? (
+                <>
                 <Section section={item.sections[0]}>
                   {/* Default sandbox (#410/#432): options are DATA — `off` plus the
                       instance's staging profiles — and a stored name can dangle. */}
@@ -868,15 +874,6 @@ export default function SettingsSurface({
                         </option>
                       )}
                     </select>
-                    <button
-                      type="button"
-                      onClick={() => setDrawer("staging-profiles")}
-                      data-testid="setting-manage-staging-profiles"
-                      className="self-start rounded-md border border-line-strong bg-bg-3 px-2.5 py-1 text-fg-2 transition-colors hover:border-acc hover:bg-bg-4"
-                      style={{ fontSize: "11px" }}
-                    >
-                      Manage staging profiles… ›
-                    </button>
                     {/* Server-supplied: a `PDO_DEFAULT_SANDBOX` naming a vanished profile is
                         only visible here. */}
                     {settings.default_sandbox.reason && (
@@ -889,10 +886,24 @@ export default function SettingsSurface({
                       </div>
                     )}
                   </FieldBlock>
-                  <FieldBlock label="Worktree provisioning">
-                    <ProvisioningBlock />
-                  </FieldBlock>
                 </Section>
+                <Section section={item.sections[1]}>
+                  <div className="rounded-md border border-line bg-bg-3/40">
+                    <StagingProfilesPanel
+                      home={settings?.home ?? null}
+                      // Refetch `GET /settings` so the Default-sandbox `<select>` above sees the
+                      // new name list (and a freshly dangling `reason`) without a reopen.
+                      onChanged={() => {
+                        void refresh();
+                        onSaved?.();
+                      }}
+                    />
+                  </div>
+                </Section>
+                <Section section={item.sections[2]}>
+                  <PersistedProvisioningEditor scope="instance" />
+                </Section>
+                </>
               ) : (
                 loading
               ))}
@@ -939,6 +950,7 @@ function CategoryPage({
   categoryId,
   active,
   initialSection,
+  highlight,
   dirtySections,
   onSectionChange,
   children,
@@ -946,6 +958,8 @@ function CategoryPage({
   categoryId: SettingsCategoryId;
   active: boolean;
   initialSection?: SettingsSectionId;
+  /** Programmatic open (story 18): pulse the landed section so the eye finds it. */
+  highlight?: boolean;
   dirtySections: Set<SettingsSectionId>;
   onSectionChange: (section: SettingsSectionId) => void;
   children: ReactNode;
@@ -957,17 +971,30 @@ function CategoryPage({
   const restored = useRef(false);
 
   // Land on the remembered section (story 17) — once, instantly, before paint.
+  // No dependency list on purpose: the sections mount after `GET /settings` resolves, so
+  // the effect re-checks on each render until the target section exists, then stops.
+  // Captured once: while the page still shows "loading", the spy reports the first section
+  // and the parent remembers it, which would silently replace the requested target.
+  const target = useRef(initialSection);
   useLayoutEffect(() => {
     if (!active || restored.current) return;
-    restored.current = true;
-    if (initialSection && initialSection !== sectionIds[0]) {
-      const el = scrollRef.current?.querySelector<HTMLElement>(
-        `[data-section-id="${initialSection}"]`,
-      );
-      el?.scrollIntoView?.({ block: "start" });
-      scrollTo(initialSection);
+    const initialSection = target.current;
+    if (!initialSection || initialSection === sectionIds[0]) {
+      restored.current = true;
+      return;
     }
-  }, [active, initialSection, sectionIds, scrollTo]);
+    const el = scrollRef.current?.querySelector<HTMLElement>(
+      `[data-section-id="${initialSection}"]`,
+    );
+    if (!el) return;
+    restored.current = true;
+    el.scrollIntoView?.({ block: "start" });
+    scrollTo(initialSection);
+    if (highlight) {
+      el.dataset.landed = "true";
+      setTimeout(() => delete el.dataset.landed, 2200);
+    }
+  });
 
   useEffect(() => {
     if (active) onSectionChange(activeSection);
@@ -1028,7 +1055,7 @@ function CategoryPage({
         className="min-w-0 flex-1 overflow-y-auto px-7 py-5"
         data-testid={`settings-scroll-${categoryId}`}
       >
-        <div className="flex max-w-[640px] flex-col gap-7 pb-10">{children}</div>
+        <div className="flex max-w-[920px] flex-col gap-7 pb-10">{children}</div>
       </div>
     </div>
   );
@@ -1040,7 +1067,7 @@ function Section({ section, children }: { section: SettingsSection; children: Re
       id={`settings-section-${section.id}`}
       data-section-id={section.id}
       data-testid={`settings-section-body-${section.id}`}
-      className="flex flex-col gap-4"
+      className={`settings-section flex flex-col gap-4 ${section.wide ? "" : "max-w-[640px]"}`}
       style={{ scrollMarginTop: 16 }}
     >
       <div className="flex flex-col gap-1">
@@ -1052,6 +1079,15 @@ function Section({ section, children }: { section: SettingsSection; children: Re
               style={{ fontSize: "9.5px" }}
             >
               read-only
+            </span>
+          )}
+          {section.ownPersistence && (
+            <span
+              className="rounded bg-bg-3 px-1.5 py-0.5 font-normal text-fg-4"
+              style={{ fontSize: "9.5px" }}
+              title="Each edit is written when you make it. The Save button below does not apply here."
+            >
+              saves as you go
             </span>
           )}
         </h3>
@@ -1116,6 +1152,44 @@ function InterfaceSection({ section }: { section: SettingsSection }) {
         </div>
       </div>
     </Section>
+  );
+}
+
+/**
+ * A bordered, fixed-height frame for a panel that manages its own scrolling (list + editor).
+ * Keeps the page's scroll-spy meaningful: the section is one anchor, the panel scrolls inside.
+ */
+function InlinePanelFrame({
+  height = 440,
+  title,
+  note,
+  children,
+}: {
+  height?: number;
+  title?: string;
+  note?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      className="flex flex-col overflow-hidden rounded-md border border-line bg-bg-3/40"
+      style={{ height }}
+      data-testid="settings-inline-panel"
+    >
+      {title && (
+        <div className="flex items-baseline gap-2 border-b border-line px-3 py-2">
+          <span className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
+            {title}
+          </span>
+          {note && (
+            <span className="text-fg-4" style={{ fontSize: "10px" }}>
+              {note}
+            </span>
+          )}
+        </div>
+      )}
+      <div className="flex min-h-0 flex-1">{children}</div>
+    </div>
   );
 }
 
@@ -1303,7 +1377,7 @@ function SettingsDrawer({
           {DRAWER_TITLES[kind]}
         </h3>
         <span className="ml-auto text-fg-4" style={{ fontSize: "10.5px" }}>
-          own persistence · Done, not Save
+          saves as you go · Esc returns to Settings
         </span>
         <button
           type="button"

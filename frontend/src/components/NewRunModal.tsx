@@ -61,9 +61,11 @@ interface Props {
   openIntent?: OpenIntent;
   /** Called after a trigger is created/edited so the list can refresh. */
   onTriggerSaved?: () => void;
+  /** #691: opens Settings on Sandbox & worktrees › Staging profiles, over this dialog. */
+  onManageStagingProfiles?: () => void;
 }
 
-export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN_INTENT, onTriggerSaved }: Props) {
+export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN_INTENT, onTriggerSaved, onManageStagingProfiles }: Props) {
   // What this Run/Trigger can be launched against: the instance's pipelines and the
   // target repo's branches, both served by the daemon (#359).
   const {
@@ -1057,13 +1059,26 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
                 remains authoritative), and neither an unavailable Docker nor a vanished
                 profile rewrites the field: both block the action and say so. */}
             <div className="flex flex-col gap-1.5">
-              <label
-                htmlFor="sandbox-select"
-                className="font-medium text-fg-2"
-                style={{ fontSize: "11.5px" }}
-              >
-                Sandbox
-              </label>
+              <div className="flex items-baseline justify-between">
+                <label
+                  htmlFor="sandbox-select"
+                  className="font-medium text-fg-2"
+                  style={{ fontSize: "11.5px" }}
+                >
+                  Sandbox
+                </label>
+                {onManageStagingProfiles && (
+                  <button
+                    type="button"
+                    onClick={onManageStagingProfiles}
+                    data-testid="new-run-manage-staging-profiles"
+                    className="text-fg-3 underline-offset-2 hover:text-acc hover:underline"
+                    style={{ fontSize: "10.5px" }}
+                  >
+                    Manage staging profiles…
+                  </button>
+                )}
+              </div>
               <select
                 id="sandbox-select"
                 data-testid="sandbox-select"

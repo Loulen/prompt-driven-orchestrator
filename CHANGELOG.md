@@ -10,6 +10,15 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.57.0
+
+**Settings pleine fenêtre** (#690 ; story #688, spec #689). Les Settings s'ouvrent sur la même coquille
+que Stats : rail de quatre catégories (General, Agents, Sandbox & worktrees, Diagnostics), colonne de
+sous-catégories par ancre, un seul Save avec indicateur de brouillon par catégorie et confirmation à la
+fermeture si des modifications ne sont pas sauvées. Aucun réglage ne disparaît ; le mode mono-onglet reste
+persisté par appareil sous General › Interface. Agents et Sandbox gardent leurs panneaux existants
+(« Manage… ») en attendant le second ticket.
+
 ## 1.56.0
 
 **Voyage des skills par document** (#673 ; story #666, spec #667, ADR-0062). Exporter un pipeline dont

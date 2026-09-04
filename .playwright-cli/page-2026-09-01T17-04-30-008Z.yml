@@ -1,0 +1,31 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]: PDO
+    - generic [ref=e10]:
+      - button "Open stats" [ref=e11]
+      - button "Settings" [ref=e14]
+  - main [ref=e18]:
+    - generic [ref=e19]:
+      - complementary [ref=e22]:
+        - tablist [ref=e23]:
+          - tab "Runs" [ref=e24] [cursor=pointer]
+          - tab "Triggers" [active] [selected] [ref=e25] [cursor=pointer]
+          - tab "Pipelines" [ref=e26] [cursor=pointer]
+        - tabpanel [ref=e209]:
+          - generic [ref=e210]:
+            - generic [ref=e211]:
+              - text: Triggers
+              - generic [ref=e212]:
+                - switch "Pause all triggers" [ref=e213] [cursor=pointer]: Pause all
+                - button "New Trigger" [ref=e216] [cursor=pointer]
+            - generic [ref=e218]:
+              - generic [ref=e221]: No triggers yet
+              - generic [ref=e222]: Triggers start a Run on a schedule, so recurring work happens without you launching it by hand.
+              - button "New Trigger" [ref=e223] [cursor=pointer]
+      - separator [ref=e33]
+      - generic [ref=e34]: Select a run or open a pipeline to get started
+      - separator [ref=e37]
+  - contentinfo [ref=e40]:
+    - generic [ref=e41]: "Daemon: connected"
+    - generic "Live NodeRun sessions (manager sessions excluded)" [ref=e43]: 0 / 20 sessions
+    - generic [ref=e44]: v1.49.0

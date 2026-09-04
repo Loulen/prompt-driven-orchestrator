@@ -1,0 +1,134 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]: PDO
+    - generic [ref=e10]:
+      - button "Open stats" [ref=e11]
+      - button "Settings" [active] [ref=e14]
+  - main [ref=e18]:
+    - generic [ref=e19]:
+      - complementary [ref=e22]:
+        - tablist [ref=e23]:
+          - tab "Runs" [selected] [ref=e24] [cursor=pointer]
+          - tab "Triggers" [ref=e25] [cursor=pointer]
+          - tab "Pipelines" [ref=e26] [cursor=pointer]
+        - tabpanel [ref=e27]:
+          - generic [ref=e28]:
+            - text: Runs
+            - button "New Run" [ref=e29] [cursor=pointer]
+          - generic [ref=e31]: No runs yet
+      - separator [ref=e33]
+      - generic [ref=e34]: Select a run or open a pipeline to get started
+      - separator [ref=e37]
+  - contentinfo [ref=e40]:
+    - generic [ref=e41]: "Daemon: connected"
+    - generic "Live NodeRun sessions (manager sessions excluded)" [ref=e43]: 0 / 20 sessions
+    - generic [ref=e44]: v1.49.0
+  - generic [ref=e46]:
+    - generic [ref=e47]:
+      - heading "Instance settings" [level=2] [ref=e49]
+      - button "Close settings" [ref=e50]
+    - generic [ref=e54]:
+      - generic [ref=e55]:
+        - heading "Interface" [level=3] [ref=e56]
+        - switch "Single-tab mode Opening a pipeline or run replaces the current tab instead of stacking a new one. Enabling it closes the other open tabs." [ref=e57]:
+          - generic [ref=e58]:
+            - generic [ref=e59]: Single-tab mode
+            - generic [ref=e60]: Opening a pipeline or run replaces the current tab instead of stacking a new one. Enabling it closes the other open tabs.
+      - button "Configure worktree provisioning…" [ref=e64]
+      - button "Manage agent profiles…" [ref=e66]
+    - generic [ref=e67]:
+      - generic [ref=e68]:
+        - generic [ref=e69]:
+          - generic [ref=e70]: Agent — Instance settings
+          - button "Inherit claude · — · —" [ref=e71]:
+            - generic [ref=e77]:
+              - generic [ref=e78]: Inherit
+              - generic [ref=e79]: claude · — · —
+        - generic [ref=e82]:
+          - generic [ref=e83]: Concurrent session cap
+          - spinbutton "Concurrent session cap" [ref=e84]: "20"
+          - generic [ref=e85]: Max live NodeRun sessions daemon-wide. Kept below the tmux-collapse zone (#77/#78).
+          - generic [ref=e86]: "Source: built-in default (20)."
+          - generic [ref=e87]:
+            - generic [ref=e88]: "Preview:"
+            - generic "Live NodeRun sessions (manager sessions excluded)" [ref=e89]: 0 / 20 sessions
+        - generic [ref=e90]:
+          - generic [ref=e91]: Reaper TTL (seconds)
+          - spinbutton "Reaper TTL (seconds)" [ref=e92]: "3600"
+          - generic [ref=e93]: Seconds after a node completes before its idle tmux session is reaped. Sweep runs every 60 s, so values below ~60 s add little.
+          - generic [ref=e94]: "Source: built-in default (3600 s)."
+        - generic [ref=e95]:
+          - generic [ref=e96]: Trigger guard timeout (seconds)
+          - spinbutton "Trigger guard timeout (seconds)" [ref=e97]: "60"
+          - generic [ref=e98]: Hard timeout for a Trigger guard command. 1–600 s.
+          - generic [ref=e99]: "Source: built-in default (60 s)."
+        - generic [ref=e100]:
+          - generic [ref=e101] [cursor=pointer]:
+            - checkbox "Try to auto-complete a node when its agent has clearly finished its turn" [ref=e102]
+            - generic [ref=e103]: Try to auto-complete a node when its agent has clearly finished its turn
+          - generic [ref=e104]:
+            - text: When an agent stops without running pdo complete, PDO can finish the node for it — but only when its transcript shows the turn actually ended (no tool call in flight)
+            - strong [ref=e105]: and
+            - text: its declared outputs validate. An agent still inside a long tool call, waiting on a reply, or stopped to ask a question is never touched. Leave this off and such a node waits for you.
+          - generic [ref=e106]: "Source: built-in default (off)."
+        - generic [ref=e107]:
+          - generic [ref=e108] [cursor=pointer]:
+            - checkbox "Let the manager auto-name a Run created without a name" [checked] [ref=e109]
+            - generic [ref=e110]: Let the manager auto-name a Run created without a name
+          - generic [ref=e111]:
+            - text: When a Run starts with no name — from the New Run dialog with "Auto-generated" left on, or from a Trigger — the Pipeline Manager gives it a short descriptive name (from the input, or a placeholder it renames once the run's purpose is clear). Turn this off and such a Run keeps a stable Untitled run … placeholder instead. This is only the
+            - strong [ref=e112]: default
+            - text: ": the New Run box and each Trigger can override it."
+          - generic [ref=e113]: "Source: built-in default (on)."
+        - generic [ref=e114]:
+          - generic [ref=e115]: Default model
+          - button "default model" [ref=e116] [cursor=pointer]
+          - generic [ref=e120]: The model every work node launches with unless it sets its own. "Default" leaves it to your Claude account (no --model).
+          - generic [ref=e121]: "Source: your Claude account default (no --model)."
+        - generic [ref=e122]:
+          - generic [ref=e123]: Default harness
+          - button "Default (claude floor)" [ref=e124] [cursor=pointer]
+          - generic [ref=e128]: Every new node runs on this harness unless it pins its own. "Default" leaves it to the claude floor.
+          - generic [ref=e129]: "Source: your Claude account default (no --model)."
+        - generic [ref=e130]:
+          - generic [ref=e131]: Default model per harness
+          - generic [ref=e132]:
+            - generic [ref=e133]: claude
+            - textbox "claude" [ref=e134]:
+              - /placeholder: account default
+          - generic [ref=e135]:
+            - generic [ref=e136]: opencode
+            - textbox "opencode" [ref=e137]:
+              - /placeholder: account default
+          - generic [ref=e138]:
+            - generic [ref=e139]: copilot
+            - textbox "copilot" [ref=e140]:
+              - /placeholder: account default
+          - generic [ref=e141]:
+            - generic [ref=e142]: pi
+            - textbox "pi" [ref=e143]:
+              - /placeholder: account default
+          - generic [ref=e144]: The model a node runs with on that harness when it sets none. Empty = the harness account default.
+        - generic [ref=e145]:
+          - generic [ref=e146]: Default sandbox
+          - combobox "Default sandbox" [ref=e147]:
+            - option "off (run on the host)" [selected]
+            - option "full (built-in)"
+            - option "minimal (built-in)"
+          - generic [ref=e148]: What a Run uses when neither the launch dialog nor a firing Trigger picks one. off runs on the host; a staging profile runs it inside a Docker sandbox with that profile's home content (requires Docker).
+          - button "Manage staging profiles…" [ref=e149]
+          - generic [ref=e150]: "Source: built-in default (off)."
+        - generic [ref=e151]:
+          - generic [ref=e152]: Cost price table
+          - generic [ref=e153]: Costs resolve manual → fetched → built-in, per model family. Neither file exists until you create one (or press “Sync costs” in Stats); the built-in table is the floor.
+          - generic [ref=e154]: "Yours (wins): /tmp/pdo-fp-b4kko9SV/home/.pdo/prices/models.yaml"
+          - generic [ref=e155]: "Synced (PDO writes this): /tmp/pdo-fp-b4kko9SV/home/.pdo/prices/fetched.json — 0 model(s)"
+          - generic [ref=e156]: Never synced — only the built-in prices apply.
+        - generic [ref=e157]:
+          - generic [ref=e158]: Harness descriptors
+          - generic [ref=e159]: Declare a harness PDO does not ship by writing this file; it merges over the built-in claude / opencode by name. Nothing is ever seeded — the built-in harnesses are the floor.
+          - generic [ref=e160]: "File: /tmp/pdo-fp-b4kko9SV/home/.pdo/harnesses/descriptors.yaml"
+          - generic [ref=e161]: "Harnesses: claude, opencode, copilot, pi"
+      - generic [ref=e162]:
+        - button "Cancel" [ref=e163]
+        - button "Save" [ref=e164]

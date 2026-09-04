@@ -1,0 +1,2 @@
+[     236ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://localhost:5199/node_modules/.vite/deps/react-dom_client.js?v=da468f71:14337
+[     318ms] [WARNING] WebSocket connection to 'ws://localhost:5199/ws' failed: WebSocket is closed before the connection is established. @ http://localhost:5199/src/hooks/useDaemonSocket.ts:44

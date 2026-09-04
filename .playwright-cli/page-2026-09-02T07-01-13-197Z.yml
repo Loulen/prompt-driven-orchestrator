@@ -1,0 +1,34 @@
+- generic [ref=f3e3]:
+  - banner [ref=f3e4]:
+    - generic [ref=f3e5]: PDO
+    - generic [ref=f3e10]:
+      - button "Open stats" [ref=f3e11]
+      - button "Settings" [ref=f3e14]
+  - main [ref=f3e18]:
+    - generic [ref=f3e19]:
+      - complementary [ref=f3e22]:
+        - tablist [ref=f3e23]:
+          - tab "Runs" [selected] [ref=f3e24] [cursor=pointer]
+          - tab "Triggers" [ref=f3e25] [cursor=pointer]
+          - tab "Pipelines" [ref=f3e26] [cursor=pointer]
+        - tabpanel [ref=f3e27]:
+          - generic [ref=f3e28]:
+            - text: Runs
+            - button "Configure project" [ref=f3e29] [cursor=pointer]: Project
+            - button "New Run" [ref=f3e30] [cursor=pointer]
+          - generic [ref=f3e32]:
+            - button "Project" [ref=f3e33] [cursor=pointer]
+            - button "Pipeline" [ref=f3e37] [cursor=pointer]
+            - button "Trigger" [ref=f3e41] [cursor=pointer]
+          - button "Select 20260902-065745-8fd26f8 20260902-065745-8fd2 fp-prov" [ref=f3e46] [cursor=pointer]:
+            - checkbox "Select 20260902-065745-8fd26f8" [ref=f3e47]
+            - generic [ref=f3e49]:
+              - generic [ref=f3e50]: 20260902-065745-8fd2
+              - generic [ref=f3e51]: fp-prov
+      - separator [ref=f3e53]
+      - generic [ref=f3e54]: Select a run or open a pipeline to get started
+      - separator [ref=f3e57]
+  - contentinfo [ref=f3e60]:
+    - generic [ref=f3e61]: "Daemon: connected"
+    - generic "Live NodeRun sessions (manager sessions excluded)" [ref=f3e63]: 1 / 20 sessions
+    - generic [ref=f3e64]: v1.49.0

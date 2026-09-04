@@ -17,6 +17,7 @@ import {
   deletePipeline as apiDeletePipeline,
 } from "../api";
 import { generateNodeId } from "../lib/nanoid";
+import { isStructuralMarker } from "../lib/structuralMarkers";
 import { serializePipeline } from "../lib/serializePipeline";
 import { loadTabsDisabled, saveTabsDisabled } from "../lib/uiPrefs";
 import {
@@ -623,7 +624,13 @@ export const useEditStore = create<EditState>((set, get) => ({
   },
 
   deleteNode: (nodeId: string) => {
-    set((s) => ({
+    set((s) => {
+      // #684: start/end are structural markers, not nodes the user owns. The
+      // rule lived only in the context-menu gesture until now; enforcing it here
+      // covers every present and future entry point (shortcuts, multi-select,
+      // assistant actions).
+      if (isStructuralMarker(s.openTabs.find((t) => t.id === s.activeTabId)?.pipeline.nodes.find((n) => n.id === nodeId))) return s;
+      return {
       ...mutateActiveTabWithHistory(s, (tab) => {
         tab.pipeline.nodes = tab.pipeline.nodes.filter((n) => n.id !== nodeId);
         tab.pipeline.edges = tab.pipeline.edges.filter((e) => !edgeReferencesNode(e, nodeId));
@@ -640,11 +647,17 @@ export const useEditStore = create<EditState>((set, get) => ({
         }
       }),
       selection: { kind: "none" as const, id: null },
-    }));
+      };
+    });
   },
 
   duplicateNode: (nodeId: string) => {
-    set((s) => mutateActiveTabWithHistory(s, (tab) => {
+    set((s) => {
+      // #684: a pipeline has exactly one start and one end marker. Bail before
+      // the mutator so a refused duplicate neither dirties the tab nor records
+      // an empty undo step.
+      if (isStructuralMarker(s.openTabs.find((t) => t.id === s.activeTabId)?.pipeline.nodes.find((n) => n.id === nodeId))) return s;
+      return mutateActiveTabWithHistory(s, (tab) => {
       const src = tab.pipeline.nodes.find((n) => n.id === nodeId);
       if (!src) return;
       const newId = generateNodeId();
@@ -658,7 +671,8 @@ export const useEditStore = create<EditState>((set, get) => ({
         view: src.view ? { x: src.view.x + 40, y: src.view.y + 40 } : { x: 200, y: 200 },
       };
       tab.pipeline.nodes = [...tab.pipeline.nodes, copy];
-    }));
+      });
+    });
   },
 
   addEdge: (edge: EdgeDef) => {

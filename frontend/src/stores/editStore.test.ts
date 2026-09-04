@@ -695,6 +695,57 @@ describe("edge selection (ADR-0011 edge detail panel, #147)", () => {
   });
 });
 
+describe("start/end markers are structural (#684)", () => {
+  function markerPipeline(): PipelineDef {
+    const start = makeNode({ id: "start", name: "Start", type: "start", inputs: [],
+      outputs: [{ name: "user_prompt", repeated: false, side: "right" }] });
+    const worker = makeNode({ id: "work1234", name: "worker" });
+    const end = makeNode({ id: "end", name: "End", type: "end", outputs: [],
+      inputs: [{ name: "result", repeated: false, side: "left" }] });
+    const edges: EdgeDef[] = [
+      { source: { node: "start", port: "user_prompt" }, target: { node: "work1234", port: "in" } },
+      { source: { node: "work1234", port: "out" }, target: { node: "end", port: "result" } },
+    ];
+    return makePipeline([start, worker, end], edges);
+  }
+
+  it.each(["start", "end"])("deleteNode('%s') is a no-op that keeps the tab clean", (id) => {
+    seedTabWithPipeline(markerPipeline());
+    useEditStore.getState().setSelection({ kind: "node", id });
+
+    useEditStore.getState().deleteNode(id);
+
+    const state = useEditStore.getState();
+    const tab = state.openTabs[0];
+    expect(tab.pipeline.nodes.map((n) => n.id)).toEqual(["start", "work1234", "end"]);
+    expect(tab.pipeline.edges).toHaveLength(2);
+    expect(tab.dirty).toBe(false);
+    expect(state.selection).toEqual({ kind: "node", id });
+    expect(state.history["test-tab"]?.past ?? []).toHaveLength(0);
+  });
+
+  it.each(["start", "end"])("duplicateNode('%s') is a no-op that keeps the tab clean", (id) => {
+    seedTabWithPipeline(markerPipeline());
+
+    useEditStore.getState().duplicateNode(id);
+
+    const state = useEditStore.getState();
+    const tab = state.openTabs[0];
+    expect(tab.pipeline.nodes).toHaveLength(3);
+    expect(tab.dirty).toBe(false);
+    expect(state.history["test-tab"]?.past ?? []).toHaveLength(0);
+  });
+
+  it("still deletes and duplicates ordinary nodes", () => {
+    seedTabWithPipeline(markerPipeline());
+    useEditStore.getState().duplicateNode("work1234");
+    expect(useEditStore.getState().openTabs[0].pipeline.nodes).toHaveLength(4);
+    useEditStore.getState().deleteNode("work1234");
+    expect(useEditStore.getState().openTabs[0].pipeline.nodes.map((n) => n.id))
+      .not.toContain("work1234");
+  });
+});
+
 describe("duplicateNode", () => {
   it("generates a new id different from the original", () => {
     const original = makeNode({ id: "orig1234", name: "my-node" });

@@ -10,6 +10,17 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.58.0
+
+**Settings : catégories Agents et Sandbox & worktrees en sections inline** (#691 ; story #688, spec #689).
+Agents expose Harness & models, Agent profiles et Skills ; Sandbox & worktrees expose Default sandbox,
+Staging profiles et Worktree provisioning. Les anciens panneaux « Manage… » sont montés inline et gardent
+leur propre persistance (« saves as you go »), hors du Save du formulaire d'instance. L'ancienne boîte de
+dialogue centrée et le drill-down (chevron retour) sont supprimés. « Manage staging profiles » dans New Run
+ouvre les Settings directement sur Sandbox & worktrees › Staging profiles ; New Run voit un profil créé ou
+un défaut modifié sans rechargement. Exception assumée : le Skill bank reste un tiroir large ouvert
+par-dessus les Settings (Esc y revient). HP-02 étape 13 mise à jour.
+
 ## 1.57.0
 
 **Settings pleine fenêtre** (#690 ; story #688, spec #689). Les Settings s'ouvrent sur la même coquille

@@ -10,6 +10,11 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.58.1
+
+**Livraison de la story Settings revamp** (#688 ; spec #689) : fusion de `integration/688-settings-revamp`
+(#690, #691) dans `main`. Aucun changement fonctionnel par rapport à 1.58.0.
+
 ## 1.58.0
 
 **Settings : catégories Agents et Sandbox & worktrees en sections inline** (#691 ; story #688, spec #689).

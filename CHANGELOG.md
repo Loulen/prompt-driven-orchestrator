@@ -10,6 +10,41 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.61.1
+
+**Story #695 livrée** (spec #696) : l'intégration `integration/695-in-app-update` (#697, #698, #699)
+rejoint `main`. Suite HP non rejouée pour cette fusion (décision humaine) ; la vérification systemd du
+chemin stable (`systemctl --user cat pdo` pointe `bin/pdo`) reste manuelle, voir #699.
+
+## 1.61.0
+
+**Mise à jour depuis l'app : exécutant détaché** (#699 ; story #695, spec #696).
+Un bouton **Update** apparaît dans la modale « What's new » et dans Settings › Version & update
+quand une version plus récente existe (méthode d'installation Homebrew ou script ; désactivé avec
+motif si elle est inconnue). Après confirmation (commande affichée, mode de relance, Runs actifs,
+survie des sessions tmux), `POST /update/apply` lance un exécutant détaché qui met à jour, arrête
+puis relance le daemon avec ses arguments courants (ou via le superviseur systemd/launchd, chemin
+stable de l'unité). L'UI attend, se reconnecte et recharge sur la nouvelle version ; la tentative
+(statut, versions, journal) est consultable dans Settings via `GET /update/attempts/{id}/log`.
+
+## 1.60.0
+
+**Modale « What's new » au clic sur la version** (#698 ; story #695, spec #696).
+Cliquer la version dans la barre de statut ouvre une modale markdown listant les notes des
+versions manquées (plus récente en premier, pré-releases exclues, liens vers les releases GitHub),
+servie par `GET /update/changelog`. Si le check est désactivé ou la source injoignable, la modale
+signale le repli et affiche le `CHANGELOG.md` embarqué dans le binaire ; à jour, elle l'indique et
+affiche ce même changelog. Le pied de page rappelle la commande de mise à jour manuelle (copie en un clic).
+
+## 1.59.0
+
+**Vérification de version par le daemon et section « Version & update » en lecture** (#697 ; story #695).
+Le daemon interroge la dernière release publiée (source configurable, cache, check désactivable) et
+expose `GET /update` / `POST /update/check`. Le pied de page porte un badge « → x.y.z » quand une
+version plus récente existe ; il ouvre Settings › General › « Version & update », qui affiche la version
+installée, la dernière publiée, la date du dernier check, la méthode d'installation et la commande de
+mise à jour manuelle. Aucune mise à jour automatique : lecture seule.
+
 ## 1.58.1
 
 **Livraison de la story Settings revamp** (#688 ; spec #689) : fusion de `integration/688-settings-revamp`

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import { X, ChevronLeft, ChevronRight } from "lucide-react";
 import Markdown from "react-markdown";
 import type { Components } from "react-markdown";
@@ -28,7 +29,11 @@ export type ArtifactSource =
       portKind: "input" | "output";
       iterations: IterationInfo[];
       initialIter: number;
-    };
+    }
+  // #698: an in-memory markdown document (the « What's new » changelog). Nothing is
+  // fetched: `content` IS the body; `loading` shows the viewer's own loading text
+  // while the caller is still fetching. `runId` is unused for this kind (pass `""`).
+  | { kind: "inline"; content: string | null; loading?: boolean };
 
 interface Props {
   runId: string;
@@ -36,6 +41,15 @@ interface Props {
   portType?: PortType;
   source: ArtifactSource;
   onClose: () => void;
+  /** #698: replaces the `portName` + path header block. The close X stays. */
+  header?: ReactNode;
+  /** #698: rendered at the top of the body, above the markdown. */
+  banner?: ReactNode;
+  /** #698: a fixed bar under the scrolling body. */
+  footer?: ReactNode;
+  /** #698: Tailwind width class; artifacts use the 560px default. */
+  widthClass?: string;
+  testId?: string;
 }
 
 export default function MarkdownArtifactModal({
@@ -44,7 +58,15 @@ export default function MarkdownArtifactModal({
   portType = "markdown",
   source,
   onClose,
+  header,
+  banner,
+  footer,
+  widthClass = "w-[560px]",
+  testId,
 }: Props) {
+  const isInline = source.kind === "inline";
+  const inlineContent = source.kind === "inline" ? source.content : null;
+  const inlineLoading = source.kind === "inline" ? !!source.loading : false;
   const iterNumbers = useMemo(
     () =>
       source.kind === "iter-nav"
@@ -114,14 +136,18 @@ export default function MarkdownArtifactModal({
   // markdown (and unlike image), its content flows through `fetchArtifact`, so
   // the fetch effect below (which only short-circuits on `isImage`) still runs.
   const isHtml = portType === "html";
-  const [content, setContent] = useState<string | null>(null);
-  const [loading, setLoading] = useState(!isImage);
+  const [fetchedContent, setContent] = useState<string | null>(null);
+  const [fetchedLoading, setLoading] = useState(!isImage && !isInline);
+  // #698: an inline source never fetches — its content/loading are read straight from
+  // the prop (the caller fetches, the viewer renders), no state to keep in sync.
+  const content = isInline ? inlineContent : fetchedContent;
+  const loading = isInline ? inlineLoading : fetchedLoading;
   // The ordered image list + clicked index currently shown fullscreen in the
   // lightbox, or null when it is closed (#312).
   const [lightbox, setLightbox] = useState<{ images: string[]; index: number } | null>(null);
 
   useEffect(() => {
-    if (isImage) return;
+    if (isImage || isInline) return;
 
     let cancelled = false;
 
@@ -150,7 +176,7 @@ export default function MarkdownArtifactModal({
     return () => {
       cancelled = true;
     };
-  }, [runId, file?.path, file?.exists, isImage]);
+  }, [runId, file?.path, file?.exists, isImage, isInline]);
 
   const goPrevIter = useCallback(() => {
     if (!hasIterNav || iterIndex <= 0) return;
@@ -195,6 +221,20 @@ export default function MarkdownArtifactModal({
   // the routed <MermaidDiagram>, hence no flicker.
   const markdownComponents = useMemo<Components>(
     () => ({
+      // #698: an absolute http(s) link leaves the app in a new tab — a release note
+      // pointing at GitHub must never navigate the SPA away. Relative links stay.
+      a: ({ href, children, ...rest }) => {
+        const external = typeof href === "string" && /^https?:\/\//i.test(href);
+        return (
+          <a
+            href={href}
+            {...rest}
+            {...(external ? { target: "_blank", rel: "noreferrer" } : {})}
+          >
+            {children}
+          </a>
+        );
+      },
       img: ({ src, alt }) => {
         const url = typeof src === "string" ? src : undefined;
         return (
@@ -239,7 +279,8 @@ export default function MarkdownArtifactModal({
   );
 
   const frontmatter = file?.frontmatter;
-  const bodyContent = content ? stripFrontmatter(content) : null;
+  // An inline document is rendered as given (a release note may open on a `---` rule).
+  const bodyContent = content ? (isInline ? content : stripFrontmatter(content)) : null;
 
   return (
     <div
@@ -250,24 +291,27 @@ export default function MarkdownArtifactModal({
       }}
     >
       <div
-        className="flex max-h-[80vh] w-[560px] flex-col overflow-hidden rounded-lg border border-line-strong bg-bg-2"
+        className={`flex max-h-[80vh] ${widthClass} max-w-[calc(100vw-32px)] flex-col overflow-hidden rounded-lg border border-line-strong bg-bg-2`}
         style={{ boxShadow: "0 30px 80px rgba(0,0,0,0.6)" }}
+        data-testid={testId}
       >
         {/* Header */}
         <div className="flex items-center justify-between border-b border-line px-4 py-3">
-          <div className="flex items-center gap-2">
-            <span className="font-medium text-fg" style={{ fontSize: "13px" }}>
-              {portName}
-            </span>
-            {file?.path && (
-              <span
-                className="font-mono text-fg-4"
-                style={{ fontSize: "10px" }}
-              >
-                {file.path}
+          {header ?? (
+            <div className="flex items-center gap-2">
+              <span className="font-medium text-fg" style={{ fontSize: "13px" }}>
+                {portName}
               </span>
-            )}
-          </div>
+              {file?.path && (
+                <span
+                  className="font-mono text-fg-4"
+                  style={{ fontSize: "10px" }}
+                >
+                  {file.path}
+                </span>
+              )}
+            </div>
+          )}
           <div className="flex items-center gap-2">
             {hasIterNav && (
               <div className="flex items-center gap-1" data-testid="iter-nav">
@@ -328,6 +372,7 @@ export default function MarkdownArtifactModal({
             <button
               onClick={onClose}
               className="rounded p-1 text-fg-3 hover:bg-bg-3 hover:text-fg"
+              aria-label="Close"
             >
               <X size={14} />
             </button>
@@ -378,6 +423,7 @@ export default function MarkdownArtifactModal({
             )
           ) : (
             <>
+              {banner}
               {/* Frontmatter card */}
               {frontmatter && Object.keys(frontmatter).length > 0 && (
                 <div
@@ -408,7 +454,7 @@ export default function MarkdownArtifactModal({
                     {bodyContent}
                   </Markdown>
                 </div>
-              ) : (
+              ) : isInline ? null : (
                 <span className="text-fg-4" style={{ fontSize: "11px" }}>
                   {file?.exists ? "Could not load content." : "File does not exist yet."}
                 </span>
@@ -416,6 +462,10 @@ export default function MarkdownArtifactModal({
             </>
           )}
         </div>
+
+        {footer && (
+          <div className="shrink-0 border-t border-line bg-bg-1 px-4 py-3">{footer}</div>
+        )}
       </div>
 
       {lightbox && (

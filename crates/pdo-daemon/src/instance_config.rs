@@ -110,6 +110,12 @@ pub(crate) struct InstanceConfig {
     /// [`Self::autocomplete_turn_end`]: `NULL` makes the `stored → env → default`
     /// fall-through work; a stored `0` is a decision that beats the env.
     pub auto_fail: Option<i64>,
+    /// Stored `update_check` flag as `0`/`1`, or `None` when unset (#697): may the
+    /// daemon ask the release source for the latest published version? `None`
+    /// falls through to the env seam ([`crate::update_check::UPDATE_CHECK_ENV`])
+    /// then the built-in default (`true`). A stored `0` is a decision that beats
+    /// the env — same `0`-not-`NULL` discipline as [`Self::autocomplete_turn_end`].
+    pub update_check: Option<i64>,
     /// The Instance tier of the agentic-profile union (#563, ADR-0057) — the
     /// **coarsest** tier `agent_choice::resolve` consults, just above the
     /// reserved Default profile floor. `None` (unset) preserves the pre-#563
@@ -179,6 +185,9 @@ pub(crate) struct UpdateInstanceConfig {
     /// `1`, `Some(false)` stores `0`, `None` leaves it untouched. Same set-only,
     /// `0`-not-`NULL` discipline as [`Self::autocomplete_turn_end`].
     pub auto_fail: Option<bool>,
+    /// Set the `update_check` flag (#697): `Some(true)` stores `1`, `Some(false)`
+    /// stores `0`, `None` leaves it untouched.
+    pub update_check: Option<bool>,
     /// Set the Instance tier of the agentic-profile union (#563): `Some(None)`
     /// clears it back to unset (legacy `default_harness`/`default_harness_model`
     /// decide again); `Some(Some(choice))` sets it; `None` leaves it untouched.
@@ -206,6 +215,7 @@ impl UpdateInstanceConfig {
             && self.default_harness.is_none()
             && self.default_harness_model.is_none()
             && self.auto_fail.is_none()
+            && self.update_check.is_none()
             && self.agent_choice.is_none()
             && self.skills.is_none()
     }
@@ -234,6 +244,7 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             auto_fail          INTEGER,
             libassist_idle_ttl_secs INTEGER,
             agent_choice       TEXT,
+            update_check       INTEGER,
             updated_at         TEXT NOT NULL
         )",
     )
@@ -397,6 +408,20 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
+    // Additive migration, pre-#697: NULLABLE keeps the check ON by default (the
+    // env tier still able to speak), a stored `0` turns it off.
+    let has_update_check = sqlx::query(
+        "SELECT 1 FROM pragma_table_info('instance_config') WHERE name = 'update_check'",
+    )
+    .fetch_optional(db)
+    .await?
+    .is_some();
+    if !has_update_check {
+        sqlx::query("ALTER TABLE instance_config ADD COLUMN update_check INTEGER")
+            .execute(db)
+            .await?;
+    }
+
     Ok(())
 }
 
@@ -419,6 +444,8 @@ fn row_to_config(row: &sqlx::sqlite::SqliteRow) -> InstanceConfig {
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default(),
         auto_fail: row.get("auto_fail"),
+        // #697: `try_get` so a row read before the column migration still maps.
+        update_check: row.try_get("update_check").unwrap_or(None),
         // #563: NULL / unparseable ⇒ `None` — the tier is simply transparent,
         // never an error (mirrors `default_harness_model`'s degrade-to-empty).
         agent_choice: row
@@ -488,6 +515,9 @@ pub(crate) async fn update(
     if edit.auto_fail.is_some() {
         sets.push("auto_fail = ?");
     }
+    if edit.update_check.is_some() {
+        sets.push("update_check = ?");
+    }
     if edit.agent_choice.is_some() {
         sets.push("agent_choice = ?");
     }
@@ -549,6 +579,11 @@ pub(crate) async fn update(
     if let Some(v) = edit.auto_fail {
         // 0/1, never NULL: unchecking must persist a stored `0` that beats a
         // `PDO_AUTO_FAIL=1`, not fall through to it (ADR-0049).
+        query = query.bind(if v { 1_i64 } else { 0_i64 });
+    }
+    if let Some(v) = edit.update_check {
+        // 0/1, never NULL: turning the check off must persist a stored `0` that
+        // beats a `PDO_UPDATE_CHECK=1` (#697).
         query = query.bind(if v { 1_i64 } else { 0_i64 });
     }
     if let Some(v) = edit.agent_choice {

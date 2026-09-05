@@ -822,6 +822,17 @@ Choix et pourquoi → ADR-0003. Daemon **Rust**, frontend **React + Vite** (canv
 
 **Source de vérité unique : le `version` du `Cargo.toml` workspace.** `frontend/package.json` reste à `0.0.0` en permanence — intentionnel. Le daemon expose sa version compilée via `GET /sessions` (l'endpoint de la status-bar — pas de route dédiée : un champ JSON additionnel est rétro-compatible et évite une entrée de whitelist proxy). En prod le binaire embarque le frontend, donc daemon et UI ne divergent pas.
 
+### Mise à jour depuis l'app (#695)
+
+**Mise à jour** : remplacer le binaire installé par la dernière **version publiée** (GitHub Releases) et relancer l'instance, depuis l'UI. PDO **délègue à la méthode d'installation** détectée (Homebrew via le tap, script cargo-dist) : il n'embarque pas de self-updater qui remplacerait le binaire lui-même, ce qui casserait Homebrew. La mise à jour ne fait rien de plus que la commande que l'utilisateur taperait — sharp tool (ADR-0001).
+
+- **Méthode d'installation** *(terme)* : ce que PDO déduit du chemin de son propre binaire et des reçus d'installeur — `homebrew`, `script`, ou `inconnue`. Inconnue = pas de bouton Update, seulement la commande manuelle affichée avec la raison (absence déclarée, ADR-0045). _Éviter_ : « essayer brew puis le script » ; deviner.
+- **Exécutant de mise à jour** *(terme)* : processus **détaché du daemon** qui enchaîne upgrade → réinstallation de l'unité de service → redémarrage (service) ou relance du daemon manuel avec ses arguments d'origine. Détaché parce que le daemon meurt au redémarrage : celui qui met à jour n'est jamais celui qui s'arrête. Il tient un journal consultable après coup. Le succès observable est la **nouvelle version dans la status-bar après reconnexion**, jamais un code retour.
+- **Check de version** : le **daemon** (jamais le navigateur) interroge GitHub Releases au boot, périodiquement et à la demande, avec cache. Désactivable dans la Configuration d'instance, activé par défaut. Hors ligne ou désactivé : « — », jamais un faux « à jour ». Egress opt-in et tolérant à l'échec, comme les autres (cf. *Mono-user, local*).
+- **Changelog** : au clic sur la version, les release notes des versions **postérieures à l'installée**, rendues comme un artefact markdown, repli sur le `CHANGELOG.md` embarqué (qui ne liste que les ruptures). Propose la mise à jour au même endroit.
+- **Runs actifs** : avertir (« le daemon redémarre, les sessions tmux survivent »), jamais bloquer.
+- **Chemin stable dans l'unité de service** : l'unité pointe le binaire par son chemin **non résolu** (le lien `bin/pdo` de Homebrew, pas `Cellar/pdo/<version>/`), sinon l'upgrade supprime la cible et le service ne redémarre plus. Le flux de mise à jour ré-écrit l'unité pour rattraper celles déjà installées. _Éviter_ : « désinstaller/réinstaller le service après upgrade » comme procédure normale.
+
 ### Mono-user, local
 
 Le daemon bind **`0.0.0.0:<port>`** — joignable depuis le LAN, c'est **délibéré** (#260 est closed, pas différée). Pas d'auth, pas de TLS, pas de multi-user : single-user local par design, sur un réseau de confiance.

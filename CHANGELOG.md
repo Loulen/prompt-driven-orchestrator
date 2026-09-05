@@ -10,6 +10,12 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.61.1
+
+**Story #695 livrée** (spec #696) : l'intégration `integration/695-in-app-update` (#697, #698, #699)
+rejoint `main`. Suite HP non rejouée pour cette fusion (décision humaine) ; la vérification systemd du
+chemin stable (`systemctl --user cat pdo` pointe `bin/pdo`) reste manuelle, voir #699.
+
 ## 1.61.0
 
 **Mise à jour depuis l'app : exécutant détaché** (#699 ; story #695, spec #696).

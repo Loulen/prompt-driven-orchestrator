@@ -45,7 +45,7 @@ pub(crate) struct SandboxContext {
     /// the repo + every node sub-worktree under `.pdo/runs/` + `.pdo/prompts`.
     pub(crate) repo_root: PathBuf,
     /// The Run's pipeline worktree (`-w` cosmetic at create; the trust dialog is
-    /// seeded by the staging floor on `repo_root`, the common ancestor of every
+    /// seeded by the staging set's trust fixup on `repo_root`, the common ancestor of every
     /// worktree, in BOTH sandboxed modes — #426).
     pub(crate) run_worktree: PathBuf,
     pub(crate) daemon_port: u16,
@@ -324,7 +324,7 @@ pub(crate) fn transcripts_root(
 /// where each session's event journal lives at `<session-id>/events.jsonl` (#615).
 ///
 /// Always the **host** home, unlike [`transcripts_root`]: `copilot` declares **no
-/// staging floor** (ADR-0031 / #615), so a sandboxed Run has no staged copilot home
+/// staging set** (ADR-0063 / #615), so a sandboxed Run has no staged copilot home
 /// to mirror — the journal is read where the harness wrote it. Path math only; this
 /// module never reads `$HOME` (the caller injects `home_root`).
 pub(crate) fn copilot_store_root(home_root: &Path) -> PathBuf {
@@ -381,8 +381,8 @@ pub(crate) fn ensure_ready(ctx: &SandboxContext) -> Result<()> {
 
     // 1. Stage the Claude home ONCE. The ~1 GB `full` walk must not repeat on
     //    every ensure_ready — gate on the staging dir already existing.
-    //    `prepare` then holds the **staging floor** (#426, ADR-0031 §1) in BOTH
-    //    sandboxed modes, mode-agnostically: valid credentials, the org managed-
+    //    `prepare` then applies `claude`'s **staging set** (#426, ADR-0031 §1;
+    //    ADR-0063) in BOTH sandboxed modes, mode-agnostically: valid credentials, the org managed-
     //    settings baseline, the accepted permissions bypass, trust pre-granted on
     //    `repo_root` (the common ancestor of the pipeline worktree AND every node
     //    sub-worktree), and an empty `projects/` sink. Each guarantee is met either
@@ -823,7 +823,7 @@ mod tests {
             "full must pre-approve the repo_root trust dialog: {json}"
         );
 
-        // #426: the staging floor runs through the REAL caller, not just a direct
+        // #426: the staging set runs through the REAL caller, not just a direct
         // `prepare` call. `test_ctx`'s home carries credentials only, so G3 lands on
         // its synthesis branch.
         let staged_settings =
@@ -833,7 +833,7 @@ mod tests {
         assert_eq!(
             settings["skipDangerousModePermissionPrompt"],
             serde_json::json!(true),
-            "ensure_ready must hold the staging floor: {settings}"
+            "ensure_ready must hold the staging set: {settings}"
         );
     }
 

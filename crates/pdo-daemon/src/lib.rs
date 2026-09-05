@@ -10894,7 +10894,7 @@ fn sandbox_profile_view(
         let enabled = profile.resolved.entries.iter().any(|e| e == extra);
         entries.push(sandbox_entry_view(home_root, extra, None, enabled));
     }
-    let floor: Vec<serde_json::Value> = sandbox_profile::FLOOR_GUARANTEES
+    let floor: Vec<serde_json::Value> = sandbox_profile::STAGING_GUARANTEES
         .iter()
         .map(|g| serde_json::json!({ "id": g.id, "label": g.label, "path": g.path }))
         .collect();
@@ -11611,7 +11611,7 @@ async fn get_run(
             // are an instance concept) while transcripts come from `projects_root`,
             // which moves for a sandboxed Run.
             let prices = price_table::PriceTable::load(&home_root);
-            // Copilot has no staging floor, so its session journals are read from the
+            // Copilot has no staging set, so its session journals are read from the
             // host `.copilot/session-state/`.
             let copilot_root = sandbox_run::copilot_store_root(&home_root);
             augment_run_state_from_disk(
@@ -12314,7 +12314,7 @@ async fn run_stale_detection(state: &Arc<AppState>) {
             &home_root,
             &sandbox_root,
         );
-        // Copilot has no staging floor, so it resolves its transcript from the host
+        // Copilot has no staging set, so it resolves its transcript from the host
         // `.copilot/session-state/`. Picked per node below by the frozen harness.
         let copilot_root = sandbox_run::copilot_store_root(&home_root);
 

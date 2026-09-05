@@ -274,7 +274,7 @@ async fn minimal_run_prepares_wraps_and_completes() {
     assert_eq!(
         settings,
         serde_json::json!({ BYPASS_PERMISSIONS_KEY: true }),
-        "minimal must synthesise settings.json to the floor's single key"
+        "minimal must synthesise settings.json to the staging set's single key"
     );
 
     write_node_output(&daemon, &run_id, "hello from the sandbox\n");
@@ -496,13 +496,13 @@ async fn kill_node_issues_exactly_one_in_container_kill() {
 // what PDO **stages** and the **argv/mounts** it hands `docker create`.
 
 /// Org managed-settings baseline cached by Claude Code in `~/.claude/` — the
-/// guarantee G2 of the staging floor (#426).
+/// guarantee G2 of the staging set (#426).
 const ORG_BASELINE_FILE: &str = "remote-settings.json";
 /// Stand-in content for [`ORG_BASELINE_FILE`]. The real host file carries an org
 /// OTEL bearer: assertions here compare against this fixture, never the real one.
 const ORG_BASELINE: &str = r#"{"org":"baseline"}"#;
 /// The top-level key that disarms the `--dangerously-skip-permissions` prompt —
-/// guarantee G3 of the staging floor (#426).
+/// guarantee G3 of the staging set (#426).
 const BYPASS_PERMISSIONS_KEY: &str = "skipDangerousModePermissionPrompt";
 
 /// A realistic host `~/.claude` (+ sibling `.claude.json`) under `home`. Deliberate
@@ -538,7 +538,7 @@ fn fabricate_host_claude(home: &Path) {
     write(claude.join("output-styles/s.md"), "style\n");
     write(claude.join("settings.json"), r#"{"hooks":{"Stop":[]}}"#);
     write(claude.join("settings.local.json"), r#"{"local":true}"#);
-    // OUTSIDE the `full` allowlist: the staging floor is its single writer, in BOTH
+    // OUTSIDE the `full` allowlist: the staging set is its single writer, in BOTH
     // modes. Stand-in content — the real host file carries an org OTEL bearer.
     write(claude.join(ORG_BASELINE_FILE), ORG_BASELINE);
     write_mode(
@@ -557,7 +557,7 @@ fn fabricate_host_claude(home: &Path) {
         claude.join("projects/-enc-host/old.jsonl"),
         "{\"host\":1}\n",
     );
-    // PII-bearing: `full` stages it, then the floor merges onboarding + trust into it.
+    // PII-bearing: `full` stages it, then the set's fixup merges onboarding + trust into it.
     write(
         home.join(".claude.json"),
         r#"{"host":"profile","oauthAccount":{"x":1}}"#,
@@ -622,7 +622,7 @@ async fn full_run_stages_allowlist_and_completes() {
         "run must project sandbox=full: {run}"
     );
 
-    // Running ⇒ eager prep (the full walk + the floor) is done.
+    // Running ⇒ eager prep (the full walk + the staging set) is done.
     let run = wait_node_status(&daemon, &run_id, "running").await;
     assert_eq!(run["nodes"][NODE_ID]["status"], "running", "run: {run}");
 
@@ -652,7 +652,7 @@ async fn full_run_stages_allowlist_and_completes() {
         .unwrap()
         .contains("hooks"));
     // Floor guarantee G2: the org baseline is staged VERBATIM though it lives OUTSIDE
-    // the `full` allowlist — the floor is its single writer.
+    // the `full` allowlist — the staging set is its single writer.
     assert_eq!(
         std::fs::read_to_string(home.join(ORG_BASELINE_FILE)).unwrap(),
         ORG_BASELINE,
@@ -690,7 +690,7 @@ async fn full_run_stages_allowlist_and_completes() {
     assert_eq!(
         json["projects"][&repo_key]["hasTrustDialogAccepted"],
         serde_json::json!(true),
-        "the floor seeds trust for the Run's repo_root: {json}"
+        "the staging set seeds trust for the Run's repo_root: {json}"
     );
     assert!(
         !home.join(".claude.json").exists(),
@@ -707,10 +707,10 @@ async fn full_run_stages_allowlist_and_completes() {
 }
 
 /// The only layer-3 test driving `minimal` with a real host `~/.claude` present, which is
-/// where the floor's copy-vs-synthesis fork lives. Without a fabricated host, G2 takes its
+/// where the set's copy-vs-synthesis fork lives. Without a fabricated host, G2 takes its
 /// no-op branch in every layer-3 test.
 #[tokio::test]
-async fn minimal_run_stages_the_floor_against_a_fabricated_host() {
+async fn minimal_run_stages_the_staging_set_against_a_fabricated_host() {
     ensure_pdo_on_path();
     let (_fake_dir, docker, _log) = write_fake_docker();
     let daemon =
@@ -732,7 +732,7 @@ async fn minimal_run_stages_the_floor_against_a_fabricated_host() {
     assert_eq!(
         std::fs::read_to_string(home.join(ORG_BASELINE_FILE)).unwrap(),
         ORG_BASELINE,
-        "the floor stages the org baseline in `minimal` too"
+        "the staging set stages the org baseline in `minimal` too"
     );
 
     // G3, SYNTHESIS branch: the host `settings.json` carries `hooks`; the staged one
@@ -755,7 +755,7 @@ async fn minimal_run_stages_the_floor_against_a_fabricated_host() {
     assert_eq!(
         std::fs::read_to_string(&host_settings).unwrap(),
         r#"{"hooks":{"Stop":[]}}"#,
-        "the floor must never write to the host `~/.claude`"
+        "the staging set must never write to the host `~/.claude`"
     );
 
     write_node_output(&daemon, &run_id, "minimal output\n");

@@ -137,7 +137,7 @@ export interface SandboxProfileEntry {
   from_default: boolean;
   enabled: boolean;
   /**
-   * Class (b): unchecking does NOT make the file absent — the staging floor
+   * Class (b): unchecking does NOT make the file absent — the staging set's fixup
    * re-synthesises the keys it needs. Exactly two entries. The UI must say so, or
    * unchecking reads as more destructive than it is.
    */
@@ -151,12 +151,12 @@ export interface SandboxProfileEntry {
 }
 
 /**
- * One class-(c) floor guarantee (#432): satisfied by the WHOLE file, so it is neither
- * checkable nor addable. Rendered read-only — without this block a `minimal` profile's
- * screen looks broken and the user wrongly concludes the container starts with no
- * credentials.
+ * One class-(c) staging-set guarantee (#432, ADR-0063): satisfied by the WHOLE file, so it
+ * is neither checkable nor addable. Rendered read-only — without this block a `minimal`
+ * profile's screen looks broken and the user wrongly concludes the container starts with no
+ * credentials. Served under the historical wire key `floor`.
  */
-export interface SandboxFloorGuarantee {
+export interface SandboxStagingGuarantee {
   id: string;
   label: string;
   path: string | null;
@@ -177,7 +177,7 @@ export interface SandboxProfile {
   /** Signalled no-ops, never errors (ADR-0031 §2). */
   redundant_extras: string[];
   inactive_disabled: string[];
-  floor: SandboxFloorGuarantee[];
+  floor: SandboxStagingGuarantee[];
   sensitive_prefixes: string[];
   /**
    * Environment variables posed at `docker create` for every Run on this profile (#468,

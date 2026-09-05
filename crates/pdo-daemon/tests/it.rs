@@ -28,6 +28,8 @@ mod cost_prices;
 
 #[path = "update_check.rs"]
 mod update_check;
+#[path = "update_apply.rs"]
+mod update_apply;
 
 #[path = "edit_self_write_loop.rs"]
 mod edit_self_write_loop;

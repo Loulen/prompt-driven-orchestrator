@@ -50,7 +50,7 @@ pub(crate) const CACHE_SCHEMA: &str = "update-check-v1";
 pub(crate) const HOMEBREW_COMMAND: &str = "brew update && brew upgrade Loulen/tap/pdo";
 /// Re-running the cargo-dist installer replaces `~/.local/bin/pdo` the supported way.
 pub(crate) const SCRIPT_COMMAND: &str = "curl --proto '=https' --tlsv1.2 -LsSf \
-    https://github.com/Loulen/prompt-driven-orchestrator/releases/latest/download/pdo-installer.sh | sh";
+    https://github.com/Loulen/prompt-driven-orchestrator/releases/latest/download/pdo-daemon-installer.sh | sh";
 /// No installer to delegate to: the user rebuilds, PDO does not update itself.
 pub(crate) const UNKNOWN_COMMAND: &str = "Build from source, then restart the daemon.";
 
@@ -120,10 +120,16 @@ pub fn detect_install_method(
     InstallMethod::Unknown
 }
 
-/// Where cargo-dist writes its install receipt: `$XDG_CONFIG_HOME/pdo/pdo-receipt.json`
-/// (falling back to `~/.config/pdo/`).
-pub(crate) fn receipt_path(config_home: &Path) -> PathBuf {
-    config_home.join("pdo").join("pdo-receipt.json")
+/// Where cargo-dist writes its install receipt: `$XDG_CONFIG_HOME/<app>/<app>-receipt.json`
+/// (falling back to `~/.config/<app>/`). The app is the Cargo **package** (`pdo-daemon`,
+/// see `dist-workspace`'s note in `Cargo.toml`); the `pdo` spelling is kept as a second
+/// candidate so a future package rename does not silently turn every script install
+/// into `unknown`.
+pub(crate) fn receipt_paths(config_home: &Path) -> [PathBuf; 2] {
+    [
+        config_home.join("pdo-daemon").join("pdo-daemon-receipt.json"),
+        config_home.join("pdo").join("pdo-receipt.json"),
+    ]
 }
 
 /// Impure wrapper: read the environment once and feed the pure detector.
@@ -133,10 +139,94 @@ pub(crate) fn detect_install_method_from_env() -> InstallMethod {
         .map(|p| std::fs::canonicalize(&p).unwrap_or(p))
         .unwrap_or_default();
     let receipt = crate::service_unit::resolve_config_home()
-        .map(|h| receipt_path(&h).is_file())
+        .map(|h| receipt_paths(&h).iter().any(|p| p.is_file()))
         .unwrap_or(false);
     let prefix = std::env::var_os("HOMEBREW_PREFIX").map(PathBuf::from);
     detect_install_method(&exe, receipt, prefix.as_deref())
+}
+
+// ------------------------------------------------------------------------------------
+// Stable binary path (#699)
+// ------------------------------------------------------------------------------------
+
+/// The path the user **invoked** — `argv[0]` made absolute — without following
+/// symlinks. This is what a service unit must point at: Homebrew's `bin/pdo` is a
+/// symlink into `Cellar/pdo/<version>/`, and `brew upgrade` deletes that target, so a
+/// unit written from `/proc/self/exe` stops starting on the very first upgrade.
+///
+/// Pure over (`argv[0]`, `$PATH`, cwd):
+/// * absolute `argv[0]` → as is;
+/// * `argv[0]` with a slash (`./pdo`, `bin/pdo`) → joined to `cwd`, `.`/`..` folded
+///   lexically (no filesystem resolution);
+/// * bare name → the first `$PATH` dir holding a file of that name (`exists` is
+///   evaluated by the caller through `dir_has_file`, so this stays testable), else
+///   `None` — the caller falls back to the resolved path.
+pub fn stable_exe_path(
+    argv0: &str,
+    path_env: Option<&str>,
+    cwd: &Path,
+    dir_has_file: &dyn Fn(&Path) -> bool,
+) -> Option<PathBuf> {
+    if argv0.is_empty() {
+        return None;
+    }
+    let candidate = Path::new(argv0);
+    if candidate.is_absolute() {
+        return Some(normalize_lexically(candidate));
+    }
+    if argv0.contains('/') {
+        return Some(normalize_lexically(&cwd.join(candidate)));
+    }
+    let path_env = path_env?;
+    for dir in std::env::split_paths(path_env) {
+        if dir.as_os_str().is_empty() {
+            continue;
+        }
+        let dir = if dir.is_absolute() {
+            dir
+        } else {
+            cwd.join(dir)
+        };
+        let full = dir.join(argv0);
+        if dir_has_file(&full) {
+            return Some(normalize_lexically(&full));
+        }
+    }
+    None
+}
+
+/// Fold `.` and `..` components without touching the filesystem — the whole point
+/// is NOT to resolve symlinks.
+fn normalize_lexically(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for c in path.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// Impure wrapper: `argv[0]`, `$PATH` and the cwd from the process, files probed
+/// with `is_file` (which follows symlinks to answer "is there a binary here", while
+/// the RETURNED path stays the unresolved one).
+pub(crate) fn stable_exe_path_from_env() -> Option<PathBuf> {
+    let argv0 = std::env::args_os().next()?.to_str()?.to_string();
+    let path_env = std::env::var("PATH").ok();
+    let cwd = std::env::current_dir().ok()?;
+    stable_exe_path(&argv0, path_env.as_deref(), &cwd, &|p| p.is_file())
+}
+
+/// The binary a detached executor should call and a unit should point at: the
+/// stable (unresolved) path when it can be derived, else the resolved
+/// `current_exe`. Never `None` for a running process short of a broken `/proc`.
+pub(crate) fn invoked_exe_path() -> Option<PathBuf> {
+    stable_exe_path_from_env().or_else(|| std::env::current_exe().ok())
 }
 
 // ------------------------------------------------------------------------------------
@@ -584,10 +674,51 @@ mod tests {
         );
         assert!(InstallMethod::Script
             .manual_command()
-            .contains("pdo-installer.sh"));
+            .contains("pdo-daemon-installer.sh"));
         assert!(InstallMethod::Unknown
             .manual_command()
             .starts_with("Build from source"));
+    }
+
+    #[test]
+    fn stable_exe_path_keeps_the_invoked_path_unresolved() {
+        let cwd = Path::new("/home/u/work");
+        let none = |_: &Path| false;
+        // Absolute argv[0]: verbatim — the Homebrew symlink, not the Cellar target.
+        assert_eq!(
+            stable_exe_path("/home/linuxbrew/.linuxbrew/bin/pdo", None, cwd, &none),
+            Some(PathBuf::from("/home/linuxbrew/.linuxbrew/bin/pdo"))
+        );
+        // Relative with a slash: joined to cwd, `.`/`..` folded lexically.
+        assert_eq!(
+            stable_exe_path("./bin/../bin/pdo", None, cwd, &none),
+            Some(PathBuf::from("/home/u/work/bin/pdo"))
+        );
+        // Bare name: the first PATH dir that has it wins; the dir is not canonicalised.
+        let has = |p: &Path| p == Path::new("/opt/homebrew/bin/pdo");
+        assert_eq!(
+            stable_exe_path(
+                "pdo",
+                Some("/usr/local/bin:/opt/homebrew/bin:/home/u/.local/bin"),
+                cwd,
+                &has
+            ),
+            Some(PathBuf::from("/opt/homebrew/bin/pdo"))
+        );
+        // Bare name found nowhere (or no PATH): None → the caller falls back.
+        assert_eq!(stable_exe_path("pdo", Some("/usr/bin"), cwd, &none), None);
+        assert_eq!(stable_exe_path("pdo", None, cwd, &has), None);
+        assert_eq!(stable_exe_path("", Some("/opt/homebrew/bin"), cwd, &has), None);
+    }
+
+    #[test]
+    fn receipt_paths_name_the_cargo_package_first() {
+        let paths = receipt_paths(Path::new("/home/u/.config"));
+        assert_eq!(
+            paths[0],
+            Path::new("/home/u/.config/pdo-daemon/pdo-daemon-receipt.json")
+        );
+        assert_eq!(paths[1], Path::new("/home/u/.config/pdo/pdo-receipt.json"));
     }
 
     #[test]

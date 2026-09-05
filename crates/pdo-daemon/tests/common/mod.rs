@@ -99,6 +99,10 @@ impl TestDaemon {
                 price_refresh_at_boot: false,
                 update_source_url: None,
                 run_update_check_loop: false,
+                update_executor_override: None,
+                install_method_override: None,
+                supervision_override: None,
+                relaunch_command: None,
                 allowed_ws_origins: Vec::new(),
                 // #450: tests drive firing via the `run_trigger_tick` seam; the
                 // heartbeat's boot tick would race it.
@@ -150,6 +154,10 @@ impl TestDaemon {
                 price_refresh_at_boot: false,
                 update_source_url: None,
                 run_update_check_loop: false,
+                update_executor_override: None,
+                install_method_override: None,
+                supervision_override: None,
+                relaunch_command: None,
                 allowed_ws_origins: Vec::new(),
                 // #450: tests drive firing via the `run_trigger_tick` seam; the
                 // heartbeat's boot tick would race it.
@@ -202,6 +210,10 @@ impl TestDaemon {
                 price_refresh_at_boot: false,
                 update_source_url: None,
                 run_update_check_loop: false,
+                update_executor_override: None,
+                install_method_override: None,
+                supervision_override: None,
+                relaunch_command: None,
                 allowed_ws_origins: Vec::new(),
                 // #450: tests drive firing via the `run_trigger_tick` seam; the
                 // heartbeat's boot tick would race it.
@@ -257,6 +269,10 @@ impl TestDaemon {
                 price_refresh_at_boot: false,
                 update_source_url: None,
                 run_update_check_loop: false,
+                update_executor_override: None,
+                install_method_override: None,
+                supervision_override: None,
+                relaunch_command: None,
                 allowed_ws_origins: Vec::new(),
                 // #450: tests drive firing via the `run_trigger_tick` seam; the
                 // heartbeat's boot tick would race it.
@@ -301,6 +317,10 @@ impl TestDaemon {
                 price_refresh_at_boot: false,
                 update_source_url: None,
                 run_update_check_loop: false,
+                update_executor_override: None,
+                install_method_override: None,
+                supervision_override: None,
+                relaunch_command: None,
                 allowed_ws_origins: Vec::new(),
                 // #450: tests drive firing via the `run_trigger_tick` seam; the
                 // heartbeat's boot tick would race it.
@@ -354,10 +374,64 @@ impl TestDaemon {
                 price_refresh_at_boot: true,
                 update_source_url: None,
                 run_update_check_loop: false,
+                update_executor_override: None,
+                install_method_override: None,
+                supervision_override: None,
+                relaunch_command: None,
                 allowed_ws_origins: Vec::new(),
                 // #450: deterministic tick seam — no background heartbeat.
                 run_trigger_scheduler_loop: false,
                 // See the sibling literals: armed sweeps, per-daemon opt-out.
+                nested_daemon: false,
+            },
+        )
+        .await?;
+
+        Ok(Self {
+            addr: handle.addr,
+            tempdir,
+            handle: Some(handle),
+        })
+    }
+
+    /// Spawn a daemon whose `POST /update/apply` runs the **fixture executor**
+    /// `executor` instead of `sh <script>` (#699), with the installation method and
+    /// the supervision forced: a test binary is neither brewed nor supervised, and the
+    /// AC is about what the executor RECEIVES for each method. Home override → the
+    /// journal (`~/.pdo/update/`) lands under the tempdir.
+    pub async fn spawn_with_update_executor<F>(
+        setup: F,
+        executor: String,
+        install_method: pdo_daemon::update_check::InstallMethod,
+        supervision: pdo_daemon::update_check::Supervision,
+    ) -> Result<Self>
+    where
+        F: FnOnce(&Path) -> Result<()>,
+    {
+        let tempdir = tempfile::tempdir()?;
+        setup(tempdir.path())?;
+
+        let handle = serve_with_config(
+            SocketAddr::from(([127, 0, 0, 1], 0)),
+            tempdir.path().to_path_buf(),
+            DaemonConfig {
+                tmux_cmd_override: Some("exec sleep 600".to_string()),
+                panic_on_trigger_name: None,
+                panic_on_stale_sweep: false,
+                panic_on_spawn: false,
+                service_health_override: None,
+                docker_cmd_override: None,
+                sandbox_home_override: Some(tempdir.path().to_path_buf()),
+                price_source_url: None,
+                price_refresh_at_boot: false,
+                update_source_url: None,
+                run_update_check_loop: false,
+                update_executor_override: Some(executor),
+                install_method_override: Some(install_method),
+                supervision_override: Some(supervision),
+                relaunch_command: None,
+                allowed_ws_origins: Vec::new(),
+                run_trigger_scheduler_loop: false,
                 nested_daemon: false,
             },
         )
@@ -395,6 +469,10 @@ impl TestDaemon {
                 price_refresh_at_boot: false,
                 update_source_url: Some(update_source_url),
                 run_update_check_loop: false,
+                update_executor_override: None,
+                install_method_override: None,
+                supervision_override: None,
+                relaunch_command: None,
                 allowed_ws_origins: Vec::new(),
                 // #450: deterministic tick seam — no background heartbeat.
                 run_trigger_scheduler_loop: false,
@@ -443,6 +521,10 @@ impl TestDaemon {
                 price_refresh_at_boot: false,
                 update_source_url: None,
                 run_update_check_loop: false,
+                update_executor_override: None,
+                install_method_override: None,
+                supervision_override: None,
+                relaunch_command: None,
                 // #450: deterministic tick seam — no background heartbeat.
                 run_trigger_scheduler_loop: false,
                 // See the sibling literals: armed sweeps, per-daemon opt-out.

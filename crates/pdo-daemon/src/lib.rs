@@ -88,6 +88,7 @@ mod trigger_scheduler;
 #[allow(dead_code)]
 mod trigger_store;
 pub mod update_check;
+pub mod update_executor;
 #[allow(dead_code)]
 mod variable_resolver;
 mod workflow_importer;
@@ -407,6 +408,20 @@ struct AppState {
     /// `(latest_version, releases)`. Opening the modal twice on the same latest
     /// costs one request to the release source, not two.
     update_releases: tokio::sync::Mutex<Option<(String, Vec<update_check::Release>)>>,
+    /// Executor command override (#699, [`update_executor::EXECUTOR_OVERRIDE_ENV`]):
+    /// `Some(cmd)` runs `<cmd> <script>` instead of `sh <script>`, so a layer-3 test
+    /// exercises the whole apply path against a fixture that never touches brew.
+    update_executor_override: Option<String>,
+    /// Forced installation method (#699, [`update_executor::INSTALL_METHOD_OVERRIDE_ENV`]).
+    /// `None` → detected from the binary path and the installer receipt.
+    install_method_override: Option<update_check::InstallMethod>,
+    /// Forced supervision (#699); `None` → detected from the supervisor's env.
+    supervision_override: Option<update_check::Supervision>,
+    /// The command line an unsupervised relaunch runs, argv form (#699). `pdo daemon`
+    /// records its stable exe + `daemon --port <port>`; `None` → derived at apply time.
+    relaunch_command: Option<Vec<String>>,
+    /// Serialises `POST /update/apply`: one executor at a time.
+    update_apply_lock: tokio::sync::Mutex<()>,
     /// Extra WebSocket Origin allowlist entries from `PDO_ALLOWED_WS_ORIGINS`,
     /// parsed + normalised at boot. Shared by BOTH WS upgrades (`/ws` and
     /// `/sessions/{id}/pty`) via [`pty_bridge::check_origin`]; the four localhost
@@ -1425,9 +1440,14 @@ struct RealServiceEnv;
 
 impl ServiceEnv for RealServiceEnv {
     fn current_exe(&self) -> Result<PathBuf> {
+        // #699: the unit points at the binary by the path the user INVOKED —
+        // Homebrew's stable `bin/pdo` symlink, never the `Cellar/pdo/<version>/`
+        // target it resolves to, which `brew upgrade` deletes (and with it the
+        // service's ability to restart). Resolved path only as a fallback.
+        if let Some(stable) = update_check::stable_exe_path_from_env() {
+            return Ok(stable);
+        }
         let exe = std::env::current_exe().context("failed to determine current executable path")?;
-        // Canonicalise so the unit points at the resolved binary, not a symlink
-        // that might move. Fall back to the raw path if canonicalisation fails.
         Ok(std::fs::canonicalize(&exe).unwrap_or(exe))
     }
 
@@ -2229,6 +2249,17 @@ pub struct DaemonConfig {
     /// [`DaemonHandle::run_update_check_tick`] deterministically instead of racing
     /// a detached task. The `update_check` instance setting is honoured either way.
     pub run_update_check_loop: bool,
+    /// Executor command override for `POST /update/apply` (#699); `None` → `sh <script>`.
+    /// Env: `PDO_UPDATE_EXECUTOR`. Tests point it at a fixture script.
+    pub update_executor_override: Option<String>,
+    /// Forced installation method (#699); `None` → detected. Env: `PDO_INSTALL_METHOD`.
+    pub install_method_override: Option<update_check::InstallMethod>,
+    /// Forced supervision (#699); `None` → detected from `INVOCATION_ID` /
+    /// `XPC_SERVICE_NAME`. No env seam: a test sets those variables on a real binary.
+    pub supervision_override: Option<update_check::Supervision>,
+    /// The daemon's own command line for an unsupervised relaunch (#699), argv form.
+    /// `run_daemon` fills it; `None` → `<stable exe> daemon --port <bound port>`.
+    pub relaunch_command: Option<Vec<String>>,
     /// Run the ~30 s background Trigger-scheduler loop. `true` in production;
     /// `false` in the layer-3 test literals, because `tokio::time::interval` fires
     /// its FIRST tick immediately and that boot tick races the deterministic
@@ -2327,6 +2358,19 @@ impl DaemonConfig {
             // Core daemon behaviour; the `update_check` SETTING is the user's
             // off switch, not an env var. Only the layer-3 literals opt out.
             run_update_check_loop: true,
+            update_executor_override: std::env::var(update_executor::EXECUTOR_OVERRIDE_ENV)
+                .ok()
+                .filter(|s| !s.trim().is_empty()),
+            install_method_override: std::env::var(update_executor::INSTALL_METHOD_OVERRIDE_ENV)
+                .ok()
+                .and_then(|v| match v.trim() {
+                    "homebrew" => Some(update_check::InstallMethod::Homebrew),
+                    "script" => Some(update_check::InstallMethod::Script),
+                    "unknown" => Some(update_check::InstallMethod::Unknown),
+                    _ => None,
+                }),
+            supervision_override: None,
+            relaunch_command: None,
             // No env seam: the loop is core daemon behaviour; only the layer-3
             // test literals opt out.
             run_trigger_scheduler_loop: true,
@@ -2467,6 +2511,11 @@ pub async fn serve_with_config(
         update_cache: tokio::sync::Mutex::new(None),
         update_check_lock: tokio::sync::Mutex::new(()),
         update_releases: tokio::sync::Mutex::new(None),
+        update_executor_override: config.update_executor_override,
+        install_method_override: config.install_method_override,
+        supervision_override: config.supervision_override,
+        relaunch_command: config.relaunch_command,
+        update_apply_lock: tokio::sync::Mutex::new(()),
         allowed_ws_origins: config.allowed_ws_origins,
         libassist_focus: Mutex::new(None),
     });
@@ -2661,7 +2710,19 @@ pub async fn serve_with_config(
 pub async fn run_daemon(port: u16) -> Result<()> {
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let repo_root = std::env::current_dir().context("failed to determine current directory")?;
-    let handle = serve(addr, repo_root).await?;
+    let mut config = DaemonConfig::from_env();
+    // #699: the command line an unsupervised update relaunches — the STABLE binary
+    // path (Homebrew's `bin/pdo`, not the Cellar target `brew upgrade` deletes) and
+    // the same port, whether it came from `--port` or `PDO_PORT`.
+    config.relaunch_command = update_check::invoked_exe_path().map(|exe| {
+        vec![
+            exe.display().to_string(),
+            "daemon".to_string(),
+            "--port".to_string(),
+            port.to_string(),
+        ]
+    });
+    let handle = serve_with_config(addr, repo_root, config).await?;
     handle.task.await.context("daemon task join error")?
 }
 
@@ -4130,6 +4191,8 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/update", get(get_update_status))
         .route("/update/check", post(check_update_now))
         .route("/update/changelog", get(get_update_changelog))
+        .route("/update/apply", post(apply_update))
+        .route("/update/attempts/{id}/log", get(get_update_attempt_log))
         .route(
             "/settings/agent-profiles",
             get(list_agent_profiles).post(create_agent_profile),
@@ -9807,8 +9870,11 @@ async fn update_status_view(state: &Arc<AppState>) -> serde_json::Value {
     let cache = state.update_cache.lock().await.clone();
     let installed = env!("CARGO_PKG_VERSION");
     let url = update_source_url(state);
-    let method = update_check::detect_install_method_from_env();
-    let supervision = update_check::detect_supervision_from_env();
+    let method = effective_install_method(state);
+    let supervision = effective_supervision(state);
+    let active_runs = count_live_runs(state).await;
+    let last_attempt = read_last_attempt(state);
+    let (can_apply, apply_blocked_reason) = apply_gate(method, last_attempt.as_ref());
 
     let (latest, checked_at, error, reason): (
         Option<String>,
@@ -9857,7 +9923,291 @@ async fn update_status_view(state: &Arc<AppState>) -> serde_json::Value {
         "supervision": supervision,
         "reason": reason,
         "last_error": error,
+        "active_runs": active_runs,
+        "can_apply": can_apply,
+        "apply_blocked_reason": apply_blocked_reason,
+        "last_attempt": last_attempt,
     })
+}
+
+/* ------------------------------------------------------------------------------------ */
+/* Update executor (#699)                                                                */
+/* ------------------------------------------------------------------------------------ */
+
+/// The installation method this daemon delegates to: the per-daemon override (layer-3
+/// seam, FP container) else the detection over the binary path and the receipt.
+fn effective_install_method(state: &AppState) -> update_check::InstallMethod {
+    state
+        .install_method_override
+        .unwrap_or_else(update_check::detect_install_method_from_env)
+}
+
+/// Who restarts the daemon: override else the supervisor's env.
+fn effective_supervision(state: &AppState) -> update_check::Supervision {
+    state
+        .supervision_override
+        .unwrap_or_else(update_check::detect_supervision_from_env)
+}
+
+/// Live Runs (`Running` / `AwaitingUser` / `Paused`) — what the confirm dialog
+/// counts. Informational only: an update is never refused for active Runs (the
+/// daemon restarts, tmux sessions survive — `KillMode=process`).
+async fn count_live_runs(state: &AppState) -> usize {
+    let Ok(run_ids) = load_all_run_ids(&state.db).await else {
+        return 0;
+    };
+    let mut live = 0;
+    for run_id in run_ids {
+        let Ok(events) = load_events(&state.db, &run_id).await else {
+            continue;
+        };
+        if let Some(run_state) = event_log::project(&events) {
+            if run_state.status.is_live() {
+                live += 1;
+            }
+        }
+    }
+    live
+}
+
+/// The last attempt record, from `<home>/.pdo/update/last-attempt.json`.
+fn read_last_attempt(state: &AppState) -> Option<update_executor::UpdateAttempt> {
+    let (home, _) = sandbox_run::sandbox_home_roots(state).ok()?;
+    update_executor::read_attempt(&update_executor::attempt_path(&home))
+}
+
+/// A `running` attempt is considered stale — the daemon it belonged to is gone or the
+/// executor crashed without recording — after this long. Past it, apply is allowed
+/// again and the record is shown as failed.
+const ATTEMPT_STALE_AFTER: Duration = Duration::from_secs(30 * 60);
+
+fn attempt_is_running(attempt: &update_executor::UpdateAttempt) -> bool {
+    if attempt.status != update_executor::AttemptStatus::Running {
+        return false;
+    }
+    let started = chrono::DateTime::parse_from_rfc3339(&attempt.started_at)
+        .ok()
+        .map(|d| d.with_timezone(&chrono::Utc));
+    match started {
+        Some(at) => {
+            chrono::Utc::now().signed_duration_since(at)
+                < chrono::Duration::from_std(ATTEMPT_STALE_AFTER)
+                    .unwrap_or_else(|_| chrono::Duration::minutes(30))
+        }
+        None => false,
+    }
+}
+
+/// Can `POST /update/apply` run? `unknown` method → no, with the reason (ADR-0045:
+/// declared absence, never a guess); an attempt still running → no.
+fn apply_gate(
+    method: update_check::InstallMethod,
+    last: Option<&update_executor::UpdateAttempt>,
+) -> (bool, Option<String>) {
+    if method == update_check::InstallMethod::Unknown {
+        return (
+            false,
+            Some(
+                "Install method not detected (neither a Homebrew Cellar path nor a cargo-dist \
+                 receipt): PDO will not guess how to replace its own binary. Update manually, \
+                 then restart the daemon."
+                    .to_string(),
+            ),
+        );
+    }
+    if let Some(a) = last {
+        if attempt_is_running(a) {
+            return (
+                false,
+                Some(format!(
+                    "An update attempt ({}) is already running.",
+                    a.attempt_id
+                )),
+            );
+        }
+    }
+    (true, None)
+}
+
+/// `POST /update/apply` (#699) — spawn the detached executor and answer at once with
+/// the attempt id. 409 with the reason when the method is `unknown` or an attempt is
+/// running; 500 when the script cannot be written or spawned (the record then says
+/// `failed` with the error in the log). Never refused for active Runs.
+async fn apply_update(State(state): State<Arc<AppState>>) -> Response {
+    let _serial = state.update_apply_lock.lock().await;
+    let method = effective_install_method(&state);
+    let supervision = effective_supervision(&state);
+    let last = read_last_attempt(&state);
+    let (ok, reason) = apply_gate(method, last.as_ref());
+    if !ok {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": reason,
+                "install_method": method,
+                "manual_command": method.manual_command(),
+            })),
+        )
+            .into_response();
+    }
+    let Ok((home, _)) = sandbox_run::sandbox_home_roots(&state) else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "HOME is not set; cannot place the update journal" })),
+        )
+            .into_response();
+    };
+    let attempt_id = update_executor::new_attempt_id();
+    let exe = update_check::invoked_exe_path().unwrap_or_else(|| PathBuf::from("pdo"));
+    let relaunch = state.relaunch_command.clone().unwrap_or_else(|| {
+        vec![
+            exe.display().to_string(),
+            "daemon".to_string(),
+            "--port".to_string(),
+            state.port.to_string(),
+        ]
+    });
+    let plan = update_executor::UpdatePlan {
+        attempt_id: attempt_id.clone(),
+        method,
+        supervision,
+        exe,
+        port: state.port,
+        working_dir: state.repo_root.clone(),
+        daemon_pid: std::process::id(),
+        relaunch,
+        log_path: update_executor::log_path(&home, &attempt_id),
+        attempt_path: update_executor::attempt_path(&home),
+        from_version: env!("CARGO_PKG_VERSION").to_string(),
+    };
+    let mut attempt = update_executor::UpdateAttempt {
+        schema: update_executor::ATTEMPT_SCHEMA.to_string(),
+        attempt_id: attempt_id.clone(),
+        status: update_executor::AttemptStatus::Running,
+        started_at: event_log::now_iso(),
+        finished_at: None,
+        exit_code: None,
+        method,
+        command: plan.upgrade_command().to_string(),
+        supervision,
+        log_path: plan.log_path.clone(),
+        from_version: plan.from_version.clone(),
+    };
+    let script_path = update_executor::script_path(&home, &attempt_id);
+    let spawned = (|| -> Result<std::process::Child, String> {
+        if let Some(dir) = script_path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(&script_path, update_executor::render_update_script(&plan))
+            .map_err(|e| format!("cannot write {}: {e}", script_path.display()))?;
+        update_executor::write_attempt(&plan.attempt_path, &attempt)?;
+        update_executor::spawn_detached(
+            &plan,
+            &script_path,
+            state.update_executor_override.as_deref(),
+        )
+        .map_err(|e| format!("cannot spawn the update executor: {e}"))
+    })();
+    match spawned {
+        Ok(mut child) => {
+            info!(
+                "update {attempt_id}: executor spawned (pid {}), method {method:?}, supervision {supervision:?}, log {}",
+                child.id(),
+                plan.log_path.display()
+            );
+            // Reap the child if we outlive it (fixture executor, failed upgrade):
+            // record the exit code so a non-zero exit is visible in Settings even
+            // when the script died before its own `record`.
+            let attempt_path = plan.attempt_path.clone();
+            let id_for_wait = attempt_id.clone();
+            tokio::task::spawn_blocking(move || {
+                let Ok(status) = child.wait() else {
+                    return;
+                };
+                let code = status.code().unwrap_or(-1);
+                if let Some(mut a) = update_executor::read_attempt(&attempt_path) {
+                    if a.attempt_id != id_for_wait {
+                        return; // a newer attempt owns the record
+                    }
+                    a.exit_code = Some(code);
+                    a.finished_at
+                        .get_or_insert_with(event_log::now_iso);
+                    a.status = if code == 0 {
+                        update_executor::AttemptStatus::Succeeded
+                    } else {
+                        update_executor::AttemptStatus::Failed
+                    };
+                    if let Err(e) = update_executor::write_attempt(&attempt_path, &a) {
+                        warn!("update {id_for_wait}: cannot record the exit: {e}");
+                    }
+                }
+            });
+            (
+                StatusCode::ACCEPTED,
+                Json(serde_json::json!({
+                    "attempt_id": attempt_id,
+                    "status": "running",
+                    "method": method,
+                    "command": plan.upgrade_command(),
+                    "supervision": supervision,
+                    "log_path": plan.log_path,
+                    "started_at": attempt.started_at,
+                    "from_version": plan.from_version,
+                })),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            error!("update {attempt_id}: {e}");
+            attempt.status = update_executor::AttemptStatus::Failed;
+            attempt.finished_at = Some(event_log::now_iso());
+            let _ = update_executor::write_attempt(&plan.attempt_path, &attempt);
+            let _ = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&plan.log_path)
+                .and_then(|mut f| {
+                    use std::io::Write;
+                    writeln!(f, "== pdo update {attempt_id}: {e}")
+                });
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e, "attempt_id": attempt_id })),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// `GET /update/attempts/{id}/log` (#699) — the executor's journal, `text/plain`.
+/// 404 when no such attempt was journaled here. The id is filesystem-safe by
+/// construction; anything else is refused before touching the disk.
+async fn get_update_attempt_log(
+    State(state): State<Arc<AppState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    if id.is_empty()
+        || !id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return (StatusCode::BAD_REQUEST, "invalid attempt id").into_response();
+    }
+    let Ok((home, _)) = sandbox_run::sandbox_home_roots(&state) else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "HOME is not set").into_response();
+    };
+    match std::fs::read_to_string(update_executor::log_path(&home, &id)) {
+        Ok(text) => (
+            StatusCode::OK,
+            [("content-type", "text/plain; charset=utf-8")],
+            text,
+        )
+            .into_response(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            (StatusCode::NOT_FOUND, "no log for this attempt").into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
 }
 
 /// `GET /update` — the cached version-check state (#697). Reads the cache, never the
@@ -18929,6 +19279,11 @@ mod tests {
             update_cache: tokio::sync::Mutex::new(None),
             update_check_lock: tokio::sync::Mutex::new(()),
             update_releases: tokio::sync::Mutex::new(None),
+            update_executor_override: None,
+            install_method_override: None,
+            supervision_override: None,
+            relaunch_command: None,
+            update_apply_lock: tokio::sync::Mutex::new(()),
             allowed_ws_origins: Vec::new(),
             libassist_focus: Mutex::new(None),
         })
@@ -20862,6 +21217,11 @@ mod tests {
             update_cache: tokio::sync::Mutex::new(None),
             update_check_lock: tokio::sync::Mutex::new(()),
             update_releases: tokio::sync::Mutex::new(None),
+            update_executor_override: None,
+            install_method_override: None,
+            supervision_override: None,
+            relaunch_command: None,
+            update_apply_lock: tokio::sync::Mutex::new(()),
             allowed_ws_origins: Vec::new(),
             libassist_focus: Mutex::new(None),
         })
@@ -25329,6 +25689,11 @@ mod tests {
             update_cache: tokio::sync::Mutex::new(None),
             update_check_lock: tokio::sync::Mutex::new(()),
             update_releases: tokio::sync::Mutex::new(None),
+            update_executor_override: None,
+            install_method_override: None,
+            supervision_override: None,
+            relaunch_command: None,
+            update_apply_lock: tokio::sync::Mutex::new(()),
             allowed_ws_origins: Vec::new(),
             libassist_focus: Mutex::new(None),
         })
@@ -27555,6 +27920,37 @@ edges:
                 stderr: String::new(),
             })
         }
+    }
+
+    /// #699: the unit carries the path it was GIVEN — Homebrew's stable `bin/pdo`
+    /// symlink — verbatim, never the resolved `Cellar/pdo/<version>/` target that
+    /// `brew upgrade` deletes. `--dry-run` on such an install shows `bin/pdo`.
+    #[test]
+    fn service_install_writes_the_given_stable_path_verbatim() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut env = FakeServiceEnv::new(tmp.path().to_path_buf(), PortState::Free);
+        env.exe = PathBuf::from("/home/linuxbrew/.linuxbrew/bin/pdo");
+        let mut out: Vec<u8> = Vec::new();
+        run_service_with(
+            ServiceAction::Install {
+                port: 5172,
+                dry_run: true,
+            },
+            &env,
+            &mut out,
+        )
+        .unwrap();
+        let s = String::from_utf8(out).unwrap();
+        if cfg!(target_os = "macos") {
+            assert!(s.contains("<string>/home/linuxbrew/.linuxbrew/bin/pdo</string>"));
+        } else {
+            assert!(
+                s.contains("ExecStart=/home/linuxbrew/.linuxbrew/bin/pdo daemon"),
+                "the stable path, verbatim: {s}"
+            );
+            assert!(s.contains("Environment=PATH=/home/linuxbrew/.linuxbrew/bin:"));
+        }
+        assert!(!s.contains("Cellar"), "never the versioned target: {s}");
     }
 
     #[test]
@@ -31405,6 +31801,11 @@ edges: []
             update_cache: tokio::sync::Mutex::new(None),
             update_check_lock: tokio::sync::Mutex::new(()),
             update_releases: tokio::sync::Mutex::new(None),
+            update_executor_override: None,
+            install_method_override: None,
+            supervision_override: None,
+            relaunch_command: None,
+            update_apply_lock: tokio::sync::Mutex::new(()),
             allowed_ws_origins: Vec::new(),
             libassist_focus: Mutex::new(None),
         });
@@ -31608,6 +32009,11 @@ edges: []
             update_cache: tokio::sync::Mutex::new(None),
             update_check_lock: tokio::sync::Mutex::new(()),
             update_releases: tokio::sync::Mutex::new(None),
+            update_executor_override: None,
+            install_method_override: None,
+            supervision_override: None,
+            relaunch_command: None,
+            update_apply_lock: tokio::sync::Mutex::new(()),
             allowed_ws_origins: Vec::new(),
             libassist_focus: Mutex::new(None),
         });

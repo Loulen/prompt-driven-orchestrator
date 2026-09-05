@@ -311,6 +311,12 @@ export interface InstanceSettings {
    */
   default_auto_name: BoolSettingField;
   /**
+   * May the daemon ask the release source which version is the latest (#697)? On by
+   * default; off, no request ever leaves the daemon and `GET /update` answers `null`.
+   * Saved at the change from the Version & update section (own persistence).
+   */
+  update_check: BoolSettingField;
+  /**
    * Which price tiers are in force (#427, ADR-0034) — an observed STATE, not a
    * settings knob, hence no `{effective, source, stored, env, default}` shape.
    *
@@ -462,6 +468,41 @@ export interface UpdateSettingsRequest {
    *  `autocomplete_turn_end`: `false` persists as a stored `0`, so unticking overrides a
    *  `PDO_DEFAULT_AUTO_NAME=1` rather than falling back to it. */
   default_auto_name?: boolean;
+  /** Version check switch (#697). Same plain-bool discipline: `false` persists as a
+   *  stored `0` that beats a `PDO_UPDATE_CHECK=1`. */
+  update_check?: boolean;
+}
+
+/** How the running binary was installed (#697) — what a future Update delegates to. */
+export type InstallMethod = "homebrew" | "script" | "unknown";
+/** Who restarts the daemon after an update, or nobody (#697). */
+export type Supervision = "systemd" | "launchd" | "none";
+
+/**
+ * `GET /update` (#697): the daemon's cached version-check state. Every field is read
+ * from the cache — a page load never triggers a request to the release source.
+ * `latest_version` is `null` when unknown, unreachable at last check, or the check is
+ * off; `reason` then says which. Never a false "up to date".
+ */
+export interface UpdateStatus {
+  installed_version: string;
+  latest_version: string | null;
+  /** `true` exactly when `latest_version` is strictly newer than the installed one. */
+  newer_available: boolean;
+  /** RFC3339 date of the last check, success or failure; `null` if never. */
+  checked_at: string | null;
+  /** Human label of the source (`GitHub Releases`, or the override's host). */
+  source: string;
+  source_url: string;
+  check_enabled: boolean;
+  install_method: InstallMethod;
+  /** The exact command a manual update runs for this install method. */
+  manual_command: string;
+  supervision: Supervision;
+  /** Why `latest_version` is `null`, when it is. */
+  reason: string | null;
+  /** The last check's error, kept beside the last good values. */
+  last_error: string | null;
 }
 // `for-each` was removed (ADR-0011 / #151): a fan-out is now a `collection`
 // loop region, not a node. The backend keeps the variant only to migrate old

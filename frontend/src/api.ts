@@ -1,4 +1,4 @@
-import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, StatsPerformance, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, Project, BranchRef, AgentChoice, AgentProfile, AgentProfileReferents, ProvisioningPlan, ProvisioningRules, Skill, SkillBank, SkillDetail, SkillFile, SkillFileContent, SkillFilesUpload, SkillFolder, SkillReferents, SkillRef, SkillScanResult, SkillImportItem, SkillImportReport, SkillRescanReport, RecentSkillSource } from "./types";
+import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, StatsPerformance, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, UpdateStatus, Project, BranchRef, AgentChoice, AgentProfile, AgentProfileReferents, ProvisioningPlan, ProvisioningRules, Skill, SkillBank, SkillDetail, SkillFile, SkillFileContent, SkillFilesUpload, SkillFolder, SkillReferents, SkillRef, SkillScanResult, SkillImportItem, SkillImportReport, SkillRescanReport, RecentSkillSource } from "./types";
 import { foldHarnessOntoNode } from "./lib/harness";
 
 const BASE = "";
@@ -152,6 +152,20 @@ export function fetchRuns(): Promise<RunListEntry[]> {
 
 export function fetchSessions(): Promise<DaemonStatus> {
   return request<DaemonStatus>("GET", "/sessions");
+}
+
+/**
+ * Version check (#697). `GET /update` reads the daemon's cache (zero egress);
+ * `POST /update/check` forces one request to the release source and answers the
+ * refreshed state — 502 with `error` + the refreshed state when the source is down,
+ * 409 when the check is off or already in flight.
+ */
+export function fetchUpdateStatus(): Promise<UpdateStatus> {
+  return request<UpdateStatus>("GET", "/update");
+}
+
+export function checkForUpdateNow(): Promise<UpdateStatus> {
+  return request<UpdateStatus>("POST", "/update/check", { label: "POST /update/check" });
 }
 
 export function fetchSettings(): Promise<InstanceSettings> {

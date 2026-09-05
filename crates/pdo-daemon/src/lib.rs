@@ -87,6 +87,7 @@ mod transition_guard;
 mod trigger_scheduler;
 #[allow(dead_code)]
 mod trigger_store;
+pub mod update_check;
 #[allow(dead_code)]
 mod variable_resolver;
 mod workflow_importer;
@@ -391,6 +392,17 @@ struct AppState {
     /// Whether the boot pass may refresh the fetched tier. See
     /// [`DaemonConfig::price_refresh_at_boot`].
     price_refresh_at_boot: bool,
+    /// Release-source URL override (#697); `None` →
+    /// [`update_check::RELEASE_SOURCE_URL_DEFAULT`]. Seeded per-daemon so a layer-3
+    /// test points the check at its own fixture, never at GitHub.
+    update_source_url: Option<String>,
+    /// The last version-check result (#697), mirrored on disk at
+    /// [`update_check::cache_path`]. `None` = never checked. Every read of
+    /// `GET /update` and the status-bar badge comes from HERE, never from a live
+    /// request: a page load costs no egress.
+    update_cache: tokio::sync::Mutex<Option<update_check::UpdateCache>>,
+    /// Serialises version checks; a second concurrent "Check now" answers 409.
+    update_check_lock: tokio::sync::Mutex<()>,
     /// Extra WebSocket Origin allowlist entries from `PDO_ALLOWED_WS_ORIGINS`,
     /// parsed + normalised at boot. Shared by BOTH WS upgrades (`/ws` and
     /// `/sessions/{id}/pty`) via [`pty_bridge::check_origin`]; the four localhost
@@ -1901,6 +1913,14 @@ impl DaemonHandle {
         refresh_prices_at_boot(&self.state).await;
     }
 
+    /// Run one periodic version-check pass synchronously (#697): loads the disk
+    /// cache if not yet done, then checks ONLY if the setting is on and the cache is
+    /// older than the interval — production's own gates, driven deterministically.
+    pub async fn run_update_check_tick(&self) {
+        load_update_cache(&self.state).await;
+        periodic_update_check(&self.state).await;
+    }
+
     /// Warm the harness-catalogue cache synchronously. Production spawns it
     /// DETACHED at boot, so a test drives it here instead of racing that task.
     pub async fn run_catalogue_probe_tick(&self) {
@@ -2196,6 +2216,15 @@ pub struct DaemonConfig {
     /// user has clicked "Sync costs" once (ADR-0034 — the click IS the consent).
     /// `PDO_PRICE_SYNC=off|0|""` disarms it.
     pub price_refresh_at_boot: bool,
+    /// Release-source URL for the version check (#697); `None` →
+    /// [`update_check::RELEASE_SOURCE_URL_DEFAULT`]. `Some(url)` points the check at
+    /// a local fixture, same seam as [`Self::price_source_url`].
+    pub update_source_url: Option<String>,
+    /// Run the boot check + 6 h periodic version-check loop. `true` in production;
+    /// `false` in the layer-3 literals, which drive
+    /// [`DaemonHandle::run_update_check_tick`] deterministically instead of racing
+    /// a detached task. The `update_check` instance setting is honoured either way.
+    pub run_update_check_loop: bool,
     /// Run the ~30 s background Trigger-scheduler loop. `true` in production;
     /// `false` in the layer-3 test literals, because `tokio::time::interval` fires
     /// its FIRST tick immediately and that boot tick races the deterministic
@@ -2288,6 +2317,12 @@ impl DaemonConfig {
             price_refresh_at_boot: std::env::var("PDO_PRICE_SYNC")
                 .map(|v| !v.is_empty() && v != "0" && v != "off")
                 .unwrap_or(true),
+            update_source_url: std::env::var("PDO_UPDATE_SOURCE_URL")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            // Core daemon behaviour; the `update_check` SETTING is the user's
+            // off switch, not an env var. Only the layer-3 literals opt out.
+            run_update_check_loop: true,
             // No env seam: the loop is core daemon behaviour; only the layer-3
             // test literals opt out.
             run_trigger_scheduler_loop: true,
@@ -2388,6 +2423,7 @@ pub async fn serve_with_config(
 
     // Captured before `config` is consumed into `AppState` below.
     let run_trigger_scheduler_loop = config.run_trigger_scheduler_loop;
+    let run_update_check_loop = config.run_update_check_loop;
     let nested_daemon = config.nested_daemon;
 
     let state = Arc::new(AppState {
@@ -2423,6 +2459,9 @@ pub async fn serve_with_config(
         price_sync_lock: tokio::sync::Mutex::new(()),
         price_source_url: config.price_source_url,
         price_refresh_at_boot: config.price_refresh_at_boot,
+        update_source_url: config.update_source_url,
+        update_cache: tokio::sync::Mutex::new(None),
+        update_check_lock: tokio::sync::Mutex::new(()),
         allowed_ws_origins: config.allowed_ws_origins,
         libassist_focus: Mutex::new(None),
     });
@@ -2569,6 +2608,28 @@ pub async fn serve_with_config(
                 refresh_prices_at_boot(&price_state).await;
             })
             .await;
+        });
+    }
+
+    // Version check (#697): load the on-disk cache so `GET /update` answers from
+    // it immediately, then boot check + 6 h loop — detached, like the price
+    // refresh, so a slow GitHub never delays the first `accept()`.
+    {
+        let update_state = state.clone();
+        tokio::spawn(async move {
+            load_update_cache(&update_state).await;
+            if !run_update_check_loop {
+                return;
+            }
+            let mut ticker = tokio::time::interval(update_check::UPDATE_CHECK_INTERVAL);
+            loop {
+                ticker.tick().await; // fires immediately: this IS the boot check
+                let s = update_state.clone();
+                run_isolated("update check", async move {
+                    periodic_update_check(&s).await;
+                })
+                .await;
+            }
         });
     }
 
@@ -4061,6 +4122,8 @@ fn build_router(state: Arc<AppState>) -> Router {
         //
         // Price sync (ADR-0034) — the ONLY route in the crate that reaches the network.
         .route("/settings/cost-prices/sync", post(sync_cost_prices))
+        .route("/update", get(get_update_status))
+        .route("/update/check", post(check_update_now))
         .route(
             "/settings/agent-profiles",
             get(list_agent_profiles).post(create_agent_profile),
@@ -9164,6 +9227,18 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
         "default"
     };
 
+    // #697: the version-check switch, same `0`/`1` stored discipline.
+    let uc_stored = cfg.update_check.map(|v| v != 0);
+    let uc_env = update_check::env_update_check();
+    let uc_effective = update_check::update_check_with(cfg.update_check);
+    let uc_source = if uc_stored.is_some() {
+        "stored"
+    } else if uc_env.is_some() {
+        "env"
+    } else {
+        "default"
+    };
+
     // Not a `settings_field` — it has no stored/env/default tier. Folded in here so
     // the modal learns the default AND whether Docker can run a sandbox in ONE fetch.
     // Advisory: it grays out `full`/`minimal`, but the run-advance fail-fast
@@ -9346,6 +9421,14 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
         // The global tier of `auto_fail`. Default `false`: an agent `pdo fail` parks
         // the run for a human to confirm.
         "auto_fail": settings_field_bool(af_effective, af_source, af_stored, af_env, false),
+        // #697: may the daemon ask the release source at all. Default ON.
+        "update_check": settings_field_bool(
+            uc_effective,
+            uc_source,
+            uc_stored,
+            uc_env,
+            update_check::UPDATE_CHECK_DEFAULT,
+        ),
         "updated_at": cfg.updated_at,
     }))
 }
@@ -9617,6 +9700,197 @@ async fn refresh_prices_at_boot(state: &Arc<AppState>) {
     }
 }
 
+/* ------------------------------------------------------------------------------------ */
+/* Version check (#697)                                                                  */
+/* ------------------------------------------------------------------------------------ */
+
+/// The release-source URL for this daemon: the per-daemon override (layer-3 seam)
+/// else the shipped GitHub Releases endpoint.
+fn update_source_url(state: &AppState) -> String {
+    state
+        .update_source_url
+        .clone()
+        .unwrap_or_else(|| update_check::RELEASE_SOURCE_URL_DEFAULT.to_string())
+}
+
+/// Is the version check on? `stored → env → default(true)`, read FRESH so a toggle
+/// takes effect on the next pass without a restart.
+async fn update_check_enabled(db: &sqlx::SqlitePool) -> bool {
+    let stored = instance_config::get(db)
+        .await
+        .ok()
+        .and_then(|c| c.update_check);
+    update_check::update_check_with(stored)
+}
+
+/// Load the on-disk cache into memory once (a no-op once something is loaded).
+async fn load_update_cache(state: &Arc<AppState>) {
+    let mut memo = state.update_cache.lock().await;
+    if memo.is_some() {
+        return;
+    }
+    let Ok((home, _)) = sandbox_run::sandbox_home_roots(state) else {
+        return;
+    };
+    *memo = update_check::read_cache(&update_check::cache_path(&home));
+}
+
+/// One periodic pass: honours the setting and the interval, then checks.
+async fn periodic_update_check(state: &Arc<AppState>) {
+    if !update_check_enabled(&state.db).await {
+        return; // off: no request ever leaves the daemon
+    }
+    let fresh = state
+        .update_cache
+        .lock()
+        .await
+        .as_ref()
+        .is_some_and(|c| c.is_fresh(update_check::UPDATE_CHECK_INTERVAL));
+    if fresh {
+        return; // checked within the interval: the cache IS the answer
+    }
+    match perform_update_check(state).await {
+        Ok(_) => {}
+        Err(e) => warn!("update check: {e} — keeping the last known values"),
+    }
+}
+
+/// Hit the release source once and record the outcome — success or failure — in
+/// memory and on disk. `checked_at` moves either way; `latest_version` only on
+/// success (a failed check keeps the last good value, with the error beside it).
+///
+/// Returns the recorded cache on success, the error message on failure. Does NOT
+/// consult the setting: the callers do, each at its own edge.
+async fn perform_update_check(state: &Arc<AppState>) -> Result<update_check::UpdateCache, String> {
+    let Ok(_guard) = state.update_check_lock.try_lock() else {
+        return Err("a version check is already in flight".to_string());
+    };
+    let url = update_source_url(state);
+    let outcome = update_check::fetch_latest(&url).await;
+    let mut memo = state.update_cache.lock().await;
+    let mut cache = memo.clone().unwrap_or_default();
+    cache.schema = update_check::CACHE_SCHEMA.to_string();
+    cache.source = url.clone();
+    cache.checked_at = Some(event_log::now_iso());
+    match &outcome {
+        Ok(latest) => {
+            cache.latest_version = Some(latest.clone());
+            cache.error = None;
+        }
+        Err(e) => {
+            cache.error = Some(format!("release source unreachable: {url}: {e}"));
+        }
+    }
+    if let Ok((home, _)) = sandbox_run::sandbox_home_roots(state) {
+        if let Err(e) = update_check::write_cache(&update_check::cache_path(&home), &cache) {
+            warn!("update check: cannot write the cache: {e}");
+        }
+    }
+    *memo = Some(cache.clone());
+    match outcome {
+        Ok(_) => Ok(cache),
+        Err(_) => Err(cache.error.clone().unwrap_or_default()),
+    }
+}
+
+/// Build the `GET /update` payload from the cache and the setting. When the check is
+/// off, `latest_version` is `null` whatever the cache holds — never a stale claim
+/// the user asked us not to make — and `reason` says why.
+async fn update_status_view(state: &Arc<AppState>) -> serde_json::Value {
+    let enabled = update_check_enabled(&state.db).await;
+    let cache = state.update_cache.lock().await.clone();
+    let installed = env!("CARGO_PKG_VERSION");
+    let url = update_source_url(state);
+    let method = update_check::detect_install_method_from_env();
+    let supervision = update_check::detect_supervision_from_env();
+
+    let (latest, checked_at, error, reason): (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<&str>,
+    ) = match (&enabled, &cache) {
+        (false, c) => (
+            None,
+            c.as_ref().and_then(|c| c.checked_at.clone()),
+            None,
+            Some("Update check is off."),
+        ),
+        (true, None) => (None, None, None, Some("Not checked yet.")),
+        (true, Some(c)) => {
+            let reason = if c.latest_version.is_none() {
+                if c.error.is_some() {
+                    Some("Release source unreachable at last check.")
+                } else {
+                    Some("Not checked yet.")
+                }
+            } else {
+                None
+            };
+            (
+                c.latest_version.clone(),
+                c.checked_at.clone(),
+                c.error.clone(),
+                reason,
+            )
+        }
+    };
+    let newer = latest
+        .as_deref()
+        .is_some_and(|l| update_check::is_newer(installed, l));
+    serde_json::json!({
+        "installed_version": installed,
+        "latest_version": latest,
+        "newer_available": newer,
+        "checked_at": checked_at,
+        "source": update_check::source_label(&url),
+        "source_url": url,
+        "check_enabled": enabled,
+        "install_method": method,
+        "manual_command": method.manual_command(),
+        "supervision": supervision,
+        "reason": reason,
+        "last_error": error,
+    })
+}
+
+/// `GET /update` — the cached version-check state (#697). Reads the cache, never the
+/// network: two page loads are zero requests.
+async fn get_update_status(State(state): State<Arc<AppState>>) -> Response {
+    load_update_cache(&state).await;
+    Json(update_status_view(&state).await).into_response()
+}
+
+/// `POST /update/check` — force a check now (#697). Refused with 409 when the setting
+/// is off (the UI disables the button, a stale client is told) or when a check is
+/// already in flight. A failed fetch answers 502 **with the refreshed state**: the
+/// date moved, the last good version is kept, the error is in `last_error`.
+async fn check_update_now(State(state): State<Arc<AppState>>) -> Response {
+    load_update_cache(&state).await;
+    if !update_check_enabled(&state.db).await {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "the update check is off — turn it on to check now"
+            })),
+        )
+            .into_response();
+    }
+    match perform_update_check(&state).await {
+        Ok(_) => Json(update_status_view(&state).await).into_response(),
+        Err(e) if e.contains("already in flight") => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": e })),
+        )
+            .into_response(),
+        Err(e) => {
+            let mut view = update_status_view(&state).await;
+            view["error"] = serde_json::json!(e);
+            (StatusCode::BAD_GATEWAY, Json(view)).into_response()
+        }
+    }
+}
+
 /// `GET /settings` — the instance-wide config, per knob, as
 /// `{effective, source, stored, env, default}` (ADR-0015). `GET /sessions` stays the
 /// lean status-bar view.
@@ -9781,15 +10055,30 @@ async fn put_settings(
         }
     }
 
+    let update_check_edit = req.update_check;
     match instance_config::update(&state.db, req).await {
-        Ok(_) => match build_settings_view(&state).await {
-            Ok(view) => Json(view).into_response(),
-            Err(e) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response(),
-        },
+        Ok(_) => {
+            // #697: re-enabling the check runs one at once, detached — the section
+            // reads "Not checked yet since re-enabling." until it lands. Turning it
+            // off needs nothing: the read path already answers `null` when off.
+            if update_check_edit == Some(true) {
+                let s = state.clone();
+                tokio::spawn(async move {
+                    run_isolated("update check (re-enabled)", async move {
+                        let _ = perform_update_check(&s).await;
+                    })
+                    .await;
+                });
+            }
+            match build_settings_view(&state).await {
+                Ok(view) => Json(view).into_response(),
+                Err(e) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": e.to_string() })),
+                )
+                    .into_response(),
+            }
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e.to_string() })),
@@ -18555,6 +18844,9 @@ mod tests {
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: None,
             price_refresh_at_boot: false,
+            update_source_url: None,
+            update_cache: tokio::sync::Mutex::new(None),
+            update_check_lock: tokio::sync::Mutex::new(()),
             allowed_ws_origins: Vec::new(),
             libassist_focus: Mutex::new(None),
         })
@@ -20484,6 +20776,9 @@ mod tests {
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: None,
             price_refresh_at_boot: false,
+            update_source_url: None,
+            update_cache: tokio::sync::Mutex::new(None),
+            update_check_lock: tokio::sync::Mutex::new(()),
             allowed_ws_origins: Vec::new(),
             libassist_focus: Mutex::new(None),
         })
@@ -24947,6 +25242,9 @@ mod tests {
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: None,
             price_refresh_at_boot: false,
+            update_source_url: None,
+            update_cache: tokio::sync::Mutex::new(None),
+            update_check_lock: tokio::sync::Mutex::new(()),
             allowed_ws_origins: Vec::new(),
             libassist_focus: Mutex::new(None),
         })
@@ -31019,6 +31317,9 @@ edges: []
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: None,
             price_refresh_at_boot: false,
+            update_source_url: None,
+            update_cache: tokio::sync::Mutex::new(None),
+            update_check_lock: tokio::sync::Mutex::new(()),
             allowed_ws_origins: Vec::new(),
             libassist_focus: Mutex::new(None),
         });
@@ -31218,6 +31519,9 @@ edges: []
             price_sync_lock: tokio::sync::Mutex::new(()),
             price_source_url: None,
             price_refresh_at_boot: false,
+            update_source_url: None,
+            update_cache: tokio::sync::Mutex::new(None),
+            update_check_lock: tokio::sync::Mutex::new(()),
             allowed_ws_origins: Vec::new(),
             libassist_focus: Mutex::new(None),
         });

@@ -13,6 +13,21 @@ const deleteSandboxProfileMock = vi.fn();
 const fetchSandboxProfileReferentsMock = vi.fn();
 const fetchInstanceProvisioningMock = vi.fn();
 const fetchAgentProfilesMock = vi.fn().mockResolvedValue({ profiles: [] });
+const fetchUpdateStatusMock = vi.fn().mockResolvedValue({
+  installed_version: "1.58.1",
+  latest_version: null,
+  newer_available: false,
+  checked_at: null,
+  source: "GitHub Releases",
+  source_url: "https://api.github.com/repos/Loulen/prompt-driven-orchestrator/releases/latest",
+  check_enabled: true,
+  install_method: "unknown",
+  manual_command: "Build from source, then restart the daemon.",
+  supervision: "none",
+  reason: "Not checked yet.",
+  last_error: null,
+});
+const checkForUpdateNowMock = vi.fn();
 const createAgentProfileMock = vi.fn();
 
 // #431: `browseFs` MUST be in this factory now that the Dockerfile picker renders
@@ -34,6 +49,9 @@ vi.mock("../api", () => ({
   saveInstanceProvisioning: vi.fn().mockResolvedValue({ copy: [], hardlink: [], symlink: [] }),
   fetchSettings: (...args: unknown[]) => fetchSettingsMock(...args),
   updateSettings: (...args: unknown[]) => updateSettingsMock(...args),
+  // #697: the Version & update section reads `GET /update` on mount. Same Proxy trap.
+  fetchUpdateStatus: (...args: unknown[]) => fetchUpdateStatusMock(...args),
+  checkForUpdateNow: (...args: unknown[]) => checkForUpdateNowMock(...args),
   browseFs: (...args: unknown[]) => browseFsMock(...args),
   // #432: same Proxy trap as `browseFs` above — a missing key here throws the moment the
   // staging-profile panel mounts, not at import.
@@ -106,6 +124,7 @@ function sample(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
     },
     // Price table (#427): the default state of every instance — neither file exists,
     // never synced, nothing inert. The paths are reported all the same.
+    update_check: { effective: true, source: "default", stored: null, env: null, default: true },
     price_table: {
       manual_path: "/home/user/.pdo/prices/models.yaml",
       fetched_path: "/home/user/.pdo/prices/fetched.json",
@@ -347,6 +366,7 @@ describe("SettingsSurface", () => {
     // recurring blind spot.
     fetchSettingsMock.mockResolvedValue(
       sample({
+        update_check: { effective: true, source: "default", stored: null, env: null, default: true },
         price_table: {
           manual_path: "/home/user/.pdo/prices/models.yaml",
           fetched_path: "/home/user/.pdo/prices/fetched.json",
@@ -1539,7 +1559,7 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
       within(screen.getByTestId("settings-page-general").querySelector("nav") as HTMLElement)
         .getAllByRole("button")
         .map((button) => button.textContent);
-    expect(entries()).toEqual(["Interface", "Runtime limits", "Runs"]);
+    expect(entries()).toEqual(["Interface", "Runtime limits", "Runs", "Version & update"]);
     expect(screen.getByTestId("settings-section-interface")).toHaveAttribute("aria-current", "true");
 
     fireEvent.click(screen.getByTestId("settings-category-diagnostics"));

@@ -331,6 +331,56 @@ pub(crate) fn copilot_store_root(home_root: &Path) -> PathBuf {
     home_root.join(".copilot").join("session-state")
 }
 
+/// The `pi` sessions store root — `<home_root>/.pi/agent/sessions/`, where each
+/// working directory's folder holds `<timestamp>_<session-id>.jsonl` files (#707,
+/// [`crate::pi_session`]).
+///
+/// The **host** home, like [`copilot_store_root`]: `pi` declares no staging set in
+/// this ticket (#708 brings it, ADR-0063), so its session is read where the harness
+/// wrote it. A sandboxed pi node mounts its worktree at the same absolute path, so
+/// the cwd-keyed folder name is identical host-side. Path math only.
+pub(crate) fn pi_store_root(home_root: &Path) -> PathBuf {
+    home_root.join(".pi").join("agent").join("sessions")
+}
+
+/// The store roots of the first-party harnesses whose transcripts are read from the
+/// **host** home rather than a Run's staged home (#707): one field per harness, so a
+/// consumer that reads several harnesses' stores threads one value instead of one
+/// root per harness. `claude`'s root is not here: it moves per Run
+/// ([`transcripts_root`]), and stays the caller's separate `claude_root`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HarnessStores {
+    /// [`copilot_store_root`].
+    pub(crate) copilot: PathBuf,
+    /// [`pi_store_root`].
+    pub(crate) pi: PathBuf,
+}
+
+impl HarnessStores {
+    /// Both host-home roots derived from `home_root`.
+    pub(crate) fn from_home(home_root: &Path) -> Self {
+        HarnessStores {
+            copilot: copilot_store_root(home_root),
+            pi: pi_store_root(home_root),
+        }
+    }
+
+    /// The store root `harness`'s transcript resolution reads from: this struct's
+    /// own for `copilot` / `pi`, `claude_root` for `claude` **and for any other
+    /// name** — a data-declared harness resolves no transcript at all
+    /// (`harness_probes::resolve_transcript` answers `None` before the root is ever
+    /// joined), so handing it the claude root is inert. Picks between independently
+    /// computed roots, not between behaviours (ADR-0051): behaviour dispatch stays in
+    /// `harness_probes`.
+    pub(crate) fn root_for<'a>(&'a self, harness: &str, claude_root: &'a Path) -> &'a Path {
+        match harness {
+            crate::harness_registry::COPILOT => &self.copilot,
+            crate::harness_registry::PI => &self.pi,
+            _ => claude_root,
+        }
+    }
+}
+
 /// Merge a Run's staged transcripts back to `~/.claude/projects/` at its terminal
 /// transition (#408), so cost + stale-detection see them at the standard encoded
 /// dirname once the staging is eventually purged. No-op for `off`.

@@ -1034,7 +1034,9 @@ pub(crate) async fn stats_cost(
     // not this one. The table's fingerprint is the memo's third key component, so a
     // sync is visible here without a daemon restart.
     let prices = crate::price_table::PriceTable::load(&home_root);
-    let copilot_root = crate::sandbox_run::copilot_store_root(&home_root);
+    // Host-home stores of the reported-cost harnesses (`copilot`, `pi`): neither
+    // declares a staging set, so their files are read where the harness wrote them.
+    let stores = crate::sandbox_run::HarnessStores::from_home(&home_root);
     let stored_projects = match crate::project_store::list(&state.db).await {
         Ok(projects) => projects,
         Err(error) => {
@@ -1102,7 +1104,7 @@ pub(crate) async fn stats_cost(
         let breakdown = crate::run_cost::compute_run_cost_breakdown_cached(
             &events,
             &projects_root,
-            &copilot_root,
+            &stores,
             &repo_root,
             &run_id,
             &prices,
@@ -1448,6 +1450,7 @@ mod tests {
                     readable_executions: 1,
                     usd: Some(0.0),
                     form: Some(crate::event_log::CostForm::Derived),
+                    reported_in_usd: false,
                     partial: true,
                     unpriced_models: vec!["claude-fable-5".to_string()],
                     unavailable_reasons: Vec::new(),
@@ -1460,6 +1463,7 @@ mod tests {
                     readable_executions: 0,
                     usd: None,
                     form: None,
+                    reported_in_usd: false,
                     partial: false,
                     unpriced_models: Vec::new(),
                     unavailable_reasons: vec!["harness has no cost source".to_string()],

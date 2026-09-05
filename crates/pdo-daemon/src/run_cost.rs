@@ -12,7 +12,12 @@
 //! by session identity, never through the price table (so it can never flag an
 //! unpriced model). One attributed fold pairs the two into one summable dollar
 //! total that *says* itself per harness (`CostStat::by_harness`): "X via `copilot`,
-//! Y via `claude`". A harness with no cost source at all (`opencode`) still makes
+//! Y via `claude`". A third first-party harness, `pi`, reports a cost **already in
+//! dollars** per message (`usage.cost.total`, [`crate::pi_session`]) — a reported
+//! cost of constant 1.0, flagged `reported_in_usd` so the surfaces drop the `~`;
+//! a pi message with tokens but no cost makes its node's total unavailable, never
+//! `$0` (#707, ADR-0052 §2 amended). A harness with no cost source at all
+//! (`opencode`) still makes
 //! the whole aggregate "—" with a reason (never `$0`), as before — but only the
 //! **total** goes: the per-harness slices are computed and carried alongside the
 //! absence, so a Run mixing `opencode` with instrumented harnesses still says where
@@ -25,7 +30,9 @@
 //! The `projects_root` is injected by the caller (the #408 observability seam,
 //! [`crate::sandbox_run::transcripts_root`]): `~/.claude/projects/` for an
 //! `off`/archived run, the staged home while a sandboxed run is live. This
-//! module never reads `$HOME` — one root in, path-math + `std::fs` out.
+//! module never reads `$HOME` — one root in, path-math + `std::fs` out. The
+//! host-home stores of the reported-cost harnesses travel together as a
+//! [`HarnessStores`] (`copilot`'s journal store, `pi`'s sessions store).
 //!
 //! Claude cost is an **estimate, not an invoice**: public list prices, and any
 //! model absent from the table contributes $0, flips `partial`, and is named in
@@ -46,6 +53,7 @@
 
 use crate::event_log::{CostForm, CostStat, HarnessCost};
 use crate::price_table::{strip_date_suffix, PriceTable};
+use crate::sandbox_run::HarnessStores;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -68,6 +76,9 @@ pub(crate) struct CostContribution {
     pub readable_executions: i64,
     pub usd: Option<f64>,
     pub form: Option<CostForm>,
+    /// A reported cost already in dollars (constant 1.0, `pi`) — see
+    /// [`HarnessCost::reported_in_usd`]. `false` for derived and converted slices.
+    pub reported_in_usd: bool,
     pub partial: bool,
     pub unpriced_models: Vec<String>,
     pub unavailable_reasons: Vec<String>,
@@ -125,19 +136,24 @@ struct Execution {
     harness: String,
     node_id: Option<String>,
     session_id: Option<String>,
+    /// Where this execution worked (#653): the store folder of a cwd-keyed harness
+    /// (`claude`'s encoded project dir, `pi`'s session folder) derives from it.
+    working_dir: Option<PathBuf>,
     project: Option<PathBuf>,
     legacy_claim: bool,
     unavailable_reason: Option<String>,
 }
 
-pub(crate) fn compute_run_cost_breakdown(
+/// The Run's **frozen executions** — one per distinct `NodeStarted` identity, with
+/// the harness, session id and working directory attribution reads from. Shared by
+/// the fold and by the cache key ([`reported_stores_mtime_millis`]), so the two can
+/// never disagree about which file belongs to which node.
+fn collect_executions(
     events: &[crate::event_log::Event],
     claude_root: &Path,
-    copilot_root: &Path,
     repo_root: &Path,
     run_id: &str,
-    prices: &PriceTable,
-) -> RunCostBreakdown {
+) -> Vec<Execution> {
     let node_defs: Vec<&serde_json::Value> = events
         .iter()
         .find(|event| event.kind == crate::event_log::EventKind::RunStarted)
@@ -248,8 +264,9 @@ pub(crate) fn compute_run_cost_breakdown(
         } else {
             Some(crate::worktree_ops::worktree_dir_for_run(repo_root, run_id))
         };
-        let project =
-            working_dir.map(|working_dir| claude_root.join(cc_project_dirname(&working_dir)));
+        let project = working_dir
+            .as_ref()
+            .map(|working_dir| claude_root.join(cc_project_dirname(working_dir)));
         let legacy_claim = harness == crate::harness_registry::CLAUDE
             && session_id.is_none()
             && is_isolated
@@ -271,11 +288,83 @@ pub(crate) fn compute_run_cost_breakdown(
             harness: harness.to_string(),
             node_id: event.node_id.clone(),
             session_id: session_id.map(str::to_string),
+            working_dir,
             project,
             legacy_claim,
             unavailable_reason,
         });
     }
+    executions
+}
+
+/// A **reported** cost for one execution (ADR-0052 §2), read from the store its
+/// harness's probes resolve: `(usd, unavailable_reason, reported_in_usd)`.
+///
+/// - `copilot`: the journal's cumulative `totalNanoAiu` × the published constant
+///   ([`crate::copilot_journal`]); converted, so not `reported_in_usd`.
+/// - `pi`: the sum of `usage.cost.total` over the session's assistant messages,
+///   **already in dollars** (constant 1.0, [`crate::pi_session`]) — `reported_in_usd`.
+///   A message with tokens but no cost makes the figure **unavailable** with its
+///   reason ("catalogue absent"), never `$0`.
+///
+/// Attribution is by the imposed session identity (both harnesses); `pi` also needs
+/// the working directory, whose folder its file lives in. A reading exists
+/// mid-session for both, so a live node has a cost rather than a "—" until its reap.
+fn reported_execution_cost(
+    execution: &Execution,
+    stores: &HarnessStores,
+) -> (Option<f64>, Option<String>, bool) {
+    let Some(session_id) = execution.session_id.as_deref() else {
+        return (None, Some("missing session identity".to_string()), false);
+    };
+    if execution.harness == crate::harness_registry::COPILOT {
+        let usd = std::fs::read_to_string(stores.copilot.join(session_id).join("events.jsonl"))
+            .ok()
+            .and_then(|journal| crate::copilot_journal::reported_cost_usd(&journal));
+        return (
+            usd,
+            usd.is_none()
+                .then(|| "no reported cost reading".to_string()),
+            false,
+        );
+    }
+    if execution.harness == crate::harness_registry::PI {
+        let Some(working_dir) = execution.working_dir.as_deref() else {
+            return (None, Some("missing node identity".to_string()), true);
+        };
+        let text = crate::harness_probes::resolve_transcript(
+            &execution.harness,
+            &stores.pi,
+            working_dir,
+            Some(session_id),
+        )
+        .and_then(|path| std::fs::read_to_string(path).ok());
+        return match text.as_deref().map(crate::pi_session::reported_cost) {
+            Some(crate::pi_session::ReportedCost::Usd(usd)) => (Some(usd), None, true),
+            Some(crate::pi_session::ReportedCost::Unavailable { reason }) => {
+                (None, Some(reason), true)
+            }
+            Some(crate::pi_session::ReportedCost::NoReading) | None => {
+                (None, Some("no reported cost reading".to_string()), true)
+            }
+        };
+    }
+    (
+        None,
+        Some("harness has no reported cost".to_string()),
+        false,
+    )
+}
+
+pub(crate) fn compute_run_cost_breakdown(
+    events: &[crate::event_log::Event],
+    claude_root: &Path,
+    stores: &HarnessStores,
+    repo_root: &Path,
+    run_id: &str,
+    prices: &PriceTable,
+) -> RunCostBreakdown {
+    let executions = collect_executions(events, claude_root, repo_root, run_id);
 
     let run_dir = repo_root.join(".pdo").join("runs").join(run_id);
     let prefix = format!("{}-", cc_project_dirname(&run_dir));
@@ -330,15 +419,17 @@ pub(crate) fn compute_run_cost_breakdown(
     let mut contributions = Vec::new();
     let mut seen_messages = HashSet::new();
     for (index, execution) in executions.iter().enumerate() {
+        let mut reported_in_usd = false;
         let (cost, form, reason) = if !crate::harness_probes::can_cost(&execution.harness) {
             (None, None, Some("harness has no cost source".to_string()))
-        } else if execution.harness == crate::harness_registry::COPILOT {
-            let usd = execution.session_id.as_deref().and_then(|session_id| {
-                let journal =
-                    std::fs::read_to_string(copilot_root.join(session_id).join("events.jsonl"))
-                        .ok()?;
-                crate::copilot_journal::reported_cost_usd(&journal)
-            });
+        } else if crate::harness_probes::probes_for(&execution.harness)
+            .and_then(|p| p.cost_source())
+            == Some(crate::harness_probes::CostSource::ReportedByConstant)
+        {
+            // #615/#707, ADR-0052: a reported cost — `copilot`'s journal, `pi`'s
+            // session — read by identity, never through the price table.
+            let (usd, unavailable, in_usd) = reported_execution_cost(execution, stores);
+            reported_in_usd = in_usd;
             (
                 usd.map(|usd| CostStat {
                     usd,
@@ -348,11 +439,7 @@ pub(crate) fn compute_run_cost_breakdown(
                     by_harness: Vec::new(),
                 }),
                 Some(CostForm::Reported),
-                Some(if execution.session_id.is_some() {
-                    "no reported cost reading".to_string()
-                } else {
-                    "missing session identity".to_string()
-                }),
+                unavailable,
             )
         } else if execution.harness == crate::harness_registry::CLAUDE
             && execution.unavailable_reason.is_none()
@@ -386,6 +473,7 @@ pub(crate) fn compute_run_cost_breakdown(
             readable_executions: i64::from(usd.is_some()),
             usd,
             form: usd.and(form),
+            reported_in_usd: usd.is_some() && reported_in_usd,
             partial: cost.as_ref().is_some_and(|cost| cost.partial),
             unpriced_models: cost
                 .as_ref()
@@ -443,6 +531,7 @@ pub(crate) fn compute_run_cost_breakdown(
                 .then(|| leftover.as_ref().map(|cost| cost.usd))
                 .flatten(),
             form: (attributable && leftover.is_some()).then_some(CostForm::Derived),
+            reported_in_usd: false,
             partial: attributable && leftover.as_ref().is_some_and(|cost| cost.partial),
             unpriced_models: if attributable {
                 leftover
@@ -470,6 +559,7 @@ pub(crate) fn compute_run_cost_breakdown(
             readable_executions: 0,
             usd: Some(cost.usd),
             form: Some(CostForm::Derived),
+            reported_in_usd: false,
             partial: cost.partial,
             unpriced_models: cost.unpriced_models,
             unavailable_reasons: vec![
@@ -511,8 +601,12 @@ pub(crate) fn compute_run_cost_breakdown(
                 form,
                 partial: false,
                 unpriced_models: Vec::new(),
+                // A slice is "in dollars" only if every contribution is: ANDed
+                // below, seeded true so the first one decides.
+                reported_in_usd: true,
             });
         entry.usd += usd;
+        entry.reported_in_usd &= contribution.reported_in_usd;
         entry.partial |= contribution.partial;
         entry
             .unpriced_models
@@ -747,11 +841,14 @@ fn copilot_session_ids(events: &[crate::event_log::Event]) -> Vec<String> {
 /// mid-session (each turn writes a `session.usage_checkpoint`), so a live
 /// copilot node has a cost rather than a "—" until its reap.
 #[cfg(test)]
-fn copilot_reported_cost(events: &[crate::event_log::Event], copilot_root: &Path) -> Option<f64> {
+fn copilot_reported_cost(
+    events: &[crate::event_log::Event],
+    stores: &HarnessStores,
+) -> Option<f64> {
     let mut usd = 0.0;
     let mut any = false;
     for sid in copilot_session_ids(events) {
-        let journal = copilot_root.join(&sid).join("events.jsonl");
+        let journal = stores.copilot.join(&sid).join("events.jsonl");
         let Ok(text) = std::fs::read_to_string(&journal) else {
             continue;
         };
@@ -769,9 +866,9 @@ fn copilot_reported_cost(events: &[crate::event_log::Event], copilot_root: &Path
 fn ventilate(
     claude: Option<CostStat>,
     events: &[crate::event_log::Event],
-    copilot_root: &Path,
+    stores: &HarnessStores,
 ) -> Option<CostStat> {
-    let copilot_usd = copilot_reported_cost(events, copilot_root);
+    let copilot_usd = copilot_reported_cost(events, stores);
     if claude.is_none() && copilot_usd.is_none() {
         return None;
     }
@@ -791,6 +888,7 @@ fn ventilate(
             form: CostForm::Derived,
             partial: c.partial,
             unpriced_models: c.unpriced_models.clone(),
+            reported_in_usd: false,
         });
     }
     if let Some(usd) = copilot_usd {
@@ -803,6 +901,7 @@ fn ventilate(
             // be a lower bound nor name an unpriced model (ADR-0052 §2).
             partial: false,
             unpriced_models: Vec::new(),
+            reported_in_usd: false,
         });
     }
     by_harness.sort_by(|a, b| a.harness.cmp(&b.harness));
@@ -856,14 +955,14 @@ fn slices_or_empty(ventilated: Option<CostStat>) -> Vec<HarnessCost> {
 pub(crate) fn run_cost_or_absence(
     events: &[crate::event_log::Event],
     claude_root: &Path,
-    copilot_root: &Path,
+    stores: &HarnessStores,
     repo_root: &Path,
     run_id: &str,
     prices: &PriceTable,
 ) -> Option<CostStat> {
     let uncosted = uncosted_harnesses(events);
     let claude = compute_run_cost(claude_root, repo_root, run_id, prices);
-    let ventilated = ventilate(claude, events, copilot_root);
+    let ventilated = ventilate(claude, events, stores);
     if !uncosted.is_empty() {
         return Some(cost_unavailable(uncosted, slices_or_empty(ventilated)));
     }
@@ -1012,25 +1111,37 @@ fn breakdown_memo() -> &'static Mutex<BreakdownMemoMap> {
     BREAKDOWN_MEMO.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// The Copilot mirror of [`max_transcript_mtime_millis`]. `pub(crate)` so a
-/// whole-cohort cache key (`stats_performance`'s) can fold a Run's Copilot
-/// contribution alongside its Claude one without re-deriving this lookup.
-pub(crate) fn copilot_mtime_millis(events: &[crate::event_log::Event], copilot_root: &Path) -> i64 {
-    events
+/// The reported-cost mirror of [`max_transcript_mtime_millis`]: the newest mtime of
+/// every `copilot` journal and `pi` session file the Run's executions resolve to
+/// (#615/#707). `pub(crate)` so a whole-cohort cache key (`stats_performance`'s) can
+/// fold a Run's reported-store contribution alongside its Claude one without
+/// re-deriving the lookup. Resolution is the fold's own ([`collect_executions`] +
+/// the per-harness `resolve_transcript`), so the key tracks exactly the files the
+/// fold reads.
+pub(crate) fn reported_stores_mtime_millis(
+    events: &[crate::event_log::Event],
+    claude_root: &Path,
+    stores: &HarnessStores,
+    repo_root: &Path,
+    run_id: &str,
+) -> i64 {
+    collect_executions(events, claude_root, repo_root, run_id)
         .iter()
-        .filter_map(|event| {
-            event
-                .payload
-                .as_ref()
-                .and_then(|payload| payload.get("session_id"))
-                .and_then(|value| value.as_str())
-        })
-        .collect::<HashSet<_>>()
-        .into_iter()
-        .filter_map(|session_id| {
-            std::fs::metadata(copilot_root.join(session_id).join("events.jsonl"))
-                .and_then(|metadata| metadata.modified())
-                .ok()
+        .filter_map(|execution| {
+            let session_id = execution.session_id.as_deref()?;
+            let path = if execution.harness == crate::harness_registry::COPILOT {
+                stores.copilot.join(session_id).join("events.jsonl")
+            } else if execution.harness == crate::harness_registry::PI {
+                crate::harness_probes::resolve_transcript(
+                    &execution.harness,
+                    &stores.pi,
+                    execution.working_dir.as_deref()?,
+                    Some(session_id),
+                )?
+            } else {
+                return None;
+            };
+            std::fs::metadata(path).and_then(|m| m.modified()).ok()
         })
         .map(|modified| {
             modified
@@ -1067,19 +1178,20 @@ pub(crate) fn event_fingerprint(events: &[crate::event_log::Event]) -> u64 {
 pub(crate) fn compute_run_cost_breakdown_cached(
     events: &[crate::event_log::Event],
     claude_root: &Path,
-    copilot_root: &Path,
+    stores: &HarnessStores,
     repo_root: &Path,
     run_id: &str,
     prices: &PriceTable,
 ) -> RunCostBreakdown {
     let mut roots = DefaultHasher::new();
     claude_root.hash(&mut roots);
-    copilot_root.hash(&mut roots);
+    stores.copilot.hash(&mut roots);
+    stores.pi.hash(&mut roots);
     repo_root.hash(&mut roots);
     let key = (
         run_id.to_string(),
         max_transcript_mtime_millis(claude_root, repo_root, run_id),
-        copilot_mtime_millis(events, copilot_root),
+        reported_stores_mtime_millis(events, claude_root, stores, repo_root, run_id),
         prices.fingerprint(),
         event_fingerprint(events),
         roots.finish(),
@@ -1092,8 +1204,7 @@ pub(crate) fn compute_run_cost_breakdown_cached(
             return hit.clone();
         }
     }
-    let value =
-        compute_run_cost_breakdown(events, claude_root, copilot_root, repo_root, run_id, prices);
+    let value = compute_run_cost_breakdown(events, claude_root, stores, repo_root, run_id, prices);
     let mut guard = breakdown_memo()
         .lock()
         .unwrap_or_else(|error| error.into_inner());
@@ -1498,7 +1609,7 @@ mod tests {
         // and names the harness.
         let home = tempfile::tempdir().unwrap();
         let projects = home.path().join(".claude").join("projects");
-        let copilot = home.path().join(".copilot").join("session-state");
+        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
         std::fs::create_dir_all(&projects).unwrap();
         let repo = tempfile::tempdir().unwrap();
         let events = vec![node_started("n", Some("opencode"))];
@@ -1506,7 +1617,7 @@ mod tests {
         let cost = run_cost_or_absence(
             &events,
             &projects,
-            &copilot,
+            &stores,
             repo.path(),
             "run-x",
             &builtin(),
@@ -1566,7 +1677,7 @@ mod tests {
         // dollars, now ventilated as a single `claude` derived slice.
         let home = tempfile::tempdir().unwrap();
         let projects = home.path().join(".claude").join("projects");
-        let copilot = home.path().join(".copilot").join("session-state");
+        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let run_id = "claude-run";
         seed_transcript(
@@ -1577,15 +1688,9 @@ mod tests {
         );
         let events = vec![node_started("n", Some("claude")), node_started("s", None)];
 
-        let honest = run_cost_or_absence(
-            &events,
-            &projects,
-            &copilot,
-            repo.path(),
-            run_id,
-            &builtin(),
-        )
-        .unwrap();
+        let honest =
+            run_cost_or_absence(&events, &projects, &stores, repo.path(), run_id, &builtin())
+                .unwrap();
         assert!(honest.uncosted_harnesses.is_empty());
         assert!((honest.usd - 5.0).abs() < 1e-9);
         // Ventilated: one derived slice, on `claude`, carrying the whole figure.
@@ -1603,6 +1708,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let projects = home.path().join(".claude").join("projects");
         let copilot = home.path().join(".copilot").join("session-state");
+        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let run_id = "mixed-run";
         seed_transcript(
@@ -1618,15 +1724,9 @@ mod tests {
             node_started_sid("p", "copilot", "sid-cop"),
         ];
 
-        let cost = run_cost_or_absence(
-            &events,
-            &projects,
-            &copilot,
-            repo.path(),
-            run_id,
-            &builtin(),
-        )
-        .unwrap();
+        let cost =
+            run_cost_or_absence(&events, &projects, &stores, repo.path(), run_id, &builtin())
+                .unwrap();
         // Summable total = $5 (claude) + $2 (copilot).
         assert!((cost.usd - 7.0).abs() < 1e-9, "usd = {}", cost.usd);
         assert!(cost.uncosted_harnesses.is_empty());
@@ -1657,6 +1757,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let projects = home.path().join(".claude").join("projects");
         let copilot = home.path().join(".copilot").join("session-state");
+        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let run_id = "trio-run";
         seed_transcript(
@@ -1672,15 +1773,9 @@ mod tests {
             node_started_sid("p", "copilot", "sid-cop"),
         ];
 
-        let cost = run_cost_or_absence(
-            &events,
-            &projects,
-            &copilot,
-            repo.path(),
-            run_id,
-            &builtin(),
-        )
-        .unwrap();
+        let cost =
+            run_cost_or_absence(&events, &projects, &stores, repo.path(), run_id, &builtin())
+                .unwrap();
 
         // The total is still withheld, and still names why.
         assert_eq!(cost.usd, 0.0, "never half a sum standing in for a total");
@@ -1710,6 +1805,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let projects = home.path().join(".claude").join("projects");
         let copilot = home.path().join(".copilot").join("session-state");
+        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let run_id = "trio-run-cached";
         seed_transcript(
@@ -1725,15 +1821,9 @@ mod tests {
             node_started_sid("p", "copilot", "sid-cop-cached"),
         ];
 
-        let cost = run_cost_or_absence(
-            &events,
-            &projects,
-            &copilot,
-            repo.path(),
-            run_id,
-            &builtin(),
-        )
-        .unwrap();
+        let cost =
+            run_cost_or_absence(&events, &projects, &stores, repo.path(), run_id, &builtin())
+                .unwrap();
         assert_eq!(cost.uncosted_harnesses, vec!["opencode".to_string()]);
         assert_eq!(
             cost.by_harness
@@ -1752,6 +1842,7 @@ mod tests {
         let projects = home.path().join(".claude").join("projects");
         std::fs::create_dir_all(&projects).unwrap();
         let copilot = home.path().join(".copilot").join("session-state");
+        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         seed_copilot_journal(&copilot, "sid-live", 100_000_000_000); // $1.00
         let events = vec![node_started_sid("p", "copilot", "sid-live")];
@@ -1759,7 +1850,7 @@ mod tests {
         let cost = run_cost_or_absence(
             &events,
             &projects,
-            &copilot,
+            &stores,
             repo.path(),
             "cop-run",
             &builtin(),
@@ -1781,14 +1872,14 @@ mod tests {
         let projects = home.path().join(".claude").join("projects");
         std::fs::create_dir_all(&projects).unwrap();
         let copilot = home.path().join(".copilot").join("session-state");
+        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         seed_copilot_journal(&copilot, "sid-mine", 100_000_000_000); // $1.00, this run
         seed_copilot_journal(&copilot, "sid-stranger", 900_000_000_000); // $9.00, NOT this run
         let events = vec![node_started_sid("p", "copilot", "sid-mine")];
 
-        let cost =
-            run_cost_or_absence(&events, &projects, &copilot, repo.path(), "run", &builtin())
-                .unwrap();
+        let cost = run_cost_or_absence(&events, &projects, &stores, repo.path(), "run", &builtin())
+            .unwrap();
         assert!(
             (cost.usd - 1.0).abs() < 1e-9,
             "only sid-mine is attributed, not the stranger session: usd = {}",
@@ -1816,6 +1907,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let claude = home.path().join(".claude").join("projects");
         let copilot = home.path().join(".copilot").join("session-state");
+        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(&claude).unwrap();
 
@@ -1850,7 +1942,7 @@ mod tests {
         let events = vec![started("sid-first"), started("sid-restart")];
 
         let breakdown =
-            compute_run_cost_breakdown(&events, &claude, &copilot, repo.path(), "r", &builtin());
+            compute_run_cost_breakdown(&events, &claude, &stores, repo.path(), "r", &builtin());
         let node: Vec<&CostContribution> = breakdown
             .contributions
             .iter()
@@ -1871,6 +1963,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let claude = home.path().join(".claude").join("projects");
         let copilot = home.path().join(".copilot").join("session-state");
+        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let run_id = "resurrected-pane";
 
@@ -1916,7 +2009,7 @@ mod tests {
         ];
 
         let breakdown =
-            compute_run_cost_breakdown(&events, &claude, &copilot, repo.path(), run_id, &builtin());
+            compute_run_cost_breakdown(&events, &claude, &stores, repo.path(), run_id, &builtin());
         let nodes: Vec<_> = breakdown
             .contributions
             .iter()
@@ -1931,7 +2024,7 @@ mod tests {
     fn legacy_starts_without_session_identity_remain_distinct() {
         let home = tempfile::tempdir().unwrap();
         let claude = home.path().join(".claude").join("projects");
-        let copilot = home.path().join(".copilot").join("session-state");
+        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let start = Event {
             id: None,
@@ -1946,7 +2039,7 @@ mod tests {
         let breakdown = compute_run_cost_breakdown(
             &[start.clone(), start],
             &claude,
-            &copilot,
+            &stores,
             repo.path(),
             "legacy-restarts",
             &builtin(),
@@ -1965,7 +2058,7 @@ mod tests {
     fn claude_adapter_attaches_subagent_cost_to_its_parent_execution() {
         let home = tempfile::tempdir().unwrap();
         let claude = home.path().join(".claude").join("projects");
-        let copilot = home.path().join(".copilot").join("session-state");
+        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let run_id = "r";
         let working_dir = repo
@@ -2006,7 +2099,7 @@ mod tests {
         }];
 
         let breakdown =
-            compute_run_cost_breakdown(&events, &claude, &copilot, repo.path(), run_id, &builtin());
+            compute_run_cost_breakdown(&events, &claude, &stores, repo.path(), run_id, &builtin());
 
         assert_eq!(breakdown.contributions.len(), 1);
         let contribution = &breakdown.contributions[0];
@@ -2026,7 +2119,7 @@ mod tests {
     fn claude_fold_deduplicates_replayed_parent_and_subagent_messages_run_wide() {
         let home = tempfile::tempdir().unwrap();
         let claude = home.path().join(".claude").join("projects");
-        let copilot = home.path().join(".copilot").join("session-state");
+        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let run_id = "dedup";
         let working_dir = crate::worktree_ops::sub_worktree_path(repo.path(), run_id, "worker", 1);
@@ -2056,7 +2149,7 @@ mod tests {
         let breakdown = compute_run_cost_breakdown(
             &[started("first"), started("second")],
             &claude,
-            &copilot,
+            &stores,
             repo.path(),
             run_id,
             &builtin(),
@@ -2070,6 +2163,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let claude = home.path().join(".claude").join("projects");
         let copilot = home.path().join(".copilot").join("session-state");
+        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         seed_copilot_journal(&copilot, "known", 100_000_000_000);
         let events = vec![
@@ -2078,7 +2172,7 @@ mod tests {
         ];
 
         let breakdown =
-            compute_run_cost_breakdown(&events, &claude, &copilot, repo.path(), "r", &builtin());
+            compute_run_cost_breakdown(&events, &claude, &stores, repo.path(), "r", &builtin());
         let cost = breakdown.cost.unwrap();
 
         assert_eq!(cost.usd, 0.0);
@@ -2091,7 +2185,7 @@ mod tests {
     fn claude_cost_outside_node_sessions_is_infrastructure() {
         let home = tempfile::tempdir().unwrap();
         let claude = home.path().join(".claude").join("projects");
-        let copilot = home.path().join(".copilot").join("session-state");
+        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let run_id = "infra-run";
         let worktree = repo.path().join(".pdo/runs").join(run_id).join("worktree");
@@ -2127,7 +2221,7 @@ mod tests {
         ];
 
         let breakdown =
-            compute_run_cost_breakdown(&events, &claude, &copilot, repo.path(), run_id, &builtin());
+            compute_run_cost_breakdown(&events, &claude, &stores, repo.path(), run_id, &builtin());
 
         assert_eq!(breakdown.contributions.len(), 1);
         let infra = &breakdown.contributions[0];
@@ -2142,7 +2236,7 @@ mod tests {
     fn non_claude_infrastructure_keeps_run_harness_and_unknown_session_cost() {
         let home = tempfile::tempdir().unwrap();
         let claude = home.path().join(".claude").join("projects");
-        let copilot = home.path().join(".copilot").join("session-state");
+        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let event = |kind| Event {
             id: None,
@@ -2161,7 +2255,7 @@ mod tests {
         let breakdown = compute_run_cost_breakdown(
             &events,
             &claude,
-            &copilot,
+            &stores,
             repo.path(),
             "copilot-infra",
             &builtin(),
@@ -2185,7 +2279,7 @@ mod tests {
     fn legacy_agent_is_claude_script_is_excluded_and_ambiguous_cost_is_unassigned() {
         let home = tempfile::tempdir().unwrap();
         let claude = home.path().join(".claude").join("projects");
-        let copilot = home.path().join(".copilot").join("session-state");
+        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let run_id = "legacy-run";
         let worktree = repo.path().join(".pdo/runs").join(run_id).join("worktree");
@@ -2226,7 +2320,7 @@ mod tests {
         ];
 
         let breakdown =
-            compute_run_cost_breakdown(&events, &claude, &copilot, repo.path(), run_id, &builtin());
+            compute_run_cost_breakdown(&events, &claude, &stores, repo.path(), run_id, &builtin());
 
         let node: Vec<_> = breakdown
             .contributions
@@ -2264,6 +2358,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let claude = home.path().join(".claude").join("projects");
         let copilot = home.path().join(".copilot").join("session-state");
+        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let run_id = "mixed";
 
@@ -2309,7 +2404,7 @@ mod tests {
         ];
 
         let breakdown =
-            compute_run_cost_breakdown(&events, &claude, &copilot, repo.path(), run_id, &builtin());
+            compute_run_cost_breakdown(&events, &claude, &stores, repo.path(), run_id, &builtin());
         let run_cost = breakdown.cost.clone().unwrap();
         let node_sum: f64 = breakdown
             .contributions
@@ -2333,6 +2428,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let claude = home.path().join(".claude").join("projects");
         let copilot = home.path().join(".copilot").join("session-state");
+        let stores = crate::sandbox_run::HarnessStores::from_home(home.path());
         let repo = tempfile::tempdir().unwrap();
         let journal = copilot.join("memo-session").join("events.jsonl");
         std::fs::create_dir_all(journal.parent().unwrap()).unwrap();
@@ -2358,7 +2454,7 @@ mod tests {
         let first = compute_run_cost_breakdown_cached(
             &events,
             &claude,
-            &copilot,
+            &stores,
             repo.path(),
             "memo-run",
             &builtin(),
@@ -2374,7 +2470,7 @@ mod tests {
         let refreshed = compute_run_cost_breakdown_cached(
             &events,
             &claude,
-            &copilot,
+            &stores,
             repo.path(),
             "memo-run",
             &builtin(),

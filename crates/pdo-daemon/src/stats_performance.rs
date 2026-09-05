@@ -45,7 +45,8 @@
 //! Context usage is resolved via [`crate::context_peak`] from the same
 //! transcript/journal locations [`crate::run_cost`] already reads (Claude:
 //! `<projects_root>/<encoded_cwd>/<session_id>.jsonl`; Copilot:
-//! `<copilot_root>/<session_id>/events.jsonl`).
+//! `<copilot_root>/<session_id>/events.jsonl`; `pi`'s session by identity inside its
+//! cwd folder, #707 — the host-home roots travel as a [`HarnessStores`]).
 //!
 //! ## Infrastructure subagents — a resolved-by-exclusion session identity
 //!
@@ -86,6 +87,7 @@
 //! path or timing alone (issue: "Une session historique sans identité fiable
 //! n'est jamais attribuée par proximité temporelle ou par chemin").
 
+use crate::sandbox_run::HarnessStores;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -415,17 +417,14 @@ fn duration_millis(started_at: &str, completed_at: &str) -> Option<f64> {
     Some((end - start).num_milliseconds() as f64)
 }
 
-/// The one remaining harness-name check in this module, deliberately NOT moved
-/// into [`crate::harness_probes`]: it picks between two independently computed
-/// roots (per-Run sandbox-aware Claude vs global home-based Copilot), not
-/// between two behaviours. Behaviour dispatch goes through `harness_probes`
-/// (ADR-0051), never a `match harness` written here.
-fn source_root<'a>(harness: &str, claude_root: &'a Path, copilot_root: &'a Path) -> &'a Path {
-    if harness == crate::harness_registry::COPILOT {
-        copilot_root
-    } else {
-        claude_root
-    }
+/// Pick the store root a harness's transcript is read from: the per-Run,
+/// sandbox-aware Claude root, or one of the host-home stores (`copilot`'s journal
+/// store, `pi`'s sessions store, #707). Picks between independently computed
+/// roots, not between behaviours — behaviour dispatch goes through
+/// `harness_probes` (ADR-0051); the name match lives once, in
+/// [`HarnessStores::root_for`].
+fn source_root<'a>(harness: &str, claude_root: &'a Path, stores: &'a HarnessStores) -> &'a Path {
+    stores.root_for(harness, claude_root)
 }
 
 /// One harness's context peak for one main session, or the absence reason.
@@ -536,14 +535,14 @@ fn record_node_success(
     pipeline_by_harness: &mut BTreeMap<String, HarnessAcc>,
     total_by_harness: &mut BTreeMap<String, HarnessAcc>,
     claude_root: &Path,
-    copilot_root: &Path,
+    stores: &HarnessStores,
     working_dir: &Path,
     pending: &PendingNode,
     completed_at: &str,
     seen_roots: &mut HashSet<PathBuf>,
 ) -> Result<(), PerformanceError> {
     let harness = pending.harness.clone();
-    let root = source_root(&harness, claude_root, copilot_root);
+    let root = source_root(&harness, claude_root, stores);
     let (context, reason) = main_session_context(
         &harness,
         root,
@@ -849,7 +848,7 @@ async fn compute_performance(
             let sandbox = home.join(".pdo").join("sandbox");
             (home, sandbox)
         });
-    let copilot_root = crate::sandbox_run::copilot_store_root(&home_root);
+    let stores = HarnessStores::from_home(&home_root);
 
     let mut contexts: Vec<RunContext> = Vec::new();
     let mut key_hasher = DefaultHasher::new();
@@ -881,7 +880,14 @@ async fn compute_performance(
         crate::run_cost::event_fingerprint(&events).hash(&mut key_hasher);
         crate::run_cost::max_transcript_mtime_millis(&claude_root, &repo_root, &run_id)
             .hash(&mut key_hasher);
-        crate::run_cost::copilot_mtime_millis(&events, &copilot_root).hash(&mut key_hasher);
+        crate::run_cost::reported_stores_mtime_millis(
+            &events,
+            &claude_root,
+            &stores,
+            &repo_root,
+            &run_id,
+        )
+        .hash(&mut key_hasher);
 
         contexts.push(RunContext {
             run_id,
@@ -905,7 +911,7 @@ async fn compute_performance(
     #[cfg(test)]
     record_recompute_for_test(&key);
 
-    let value = fold_performance(contexts, &copilot_root)?;
+    let value = fold_performance(contexts, &stores)?;
 
     let mut guard = performance_memo()
         .lock()
@@ -922,7 +928,7 @@ async fn compute_performance(
 /// so nothing here touches `state.db` again.
 fn fold_performance(
     contexts: Vec<RunContext>,
-    copilot_root: &Path,
+    stores: &HarnessStores,
 ) -> Result<StatsPerformance, PerformanceError> {
     let mut seen_roots: HashSet<PathBuf> = HashSet::new();
     let mut pipelines: BTreeMap<String, PipelineAcc> = BTreeMap::new();
@@ -1052,7 +1058,7 @@ fn fold_performance(
                             &mut pipeline_acc.by_harness,
                             &mut total_by_harness,
                             &claude_root,
-                            copilot_root,
+                            stores,
                             &working_dir,
                             &p,
                             &event.ts,

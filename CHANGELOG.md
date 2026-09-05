@@ -10,6 +10,19 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.60.0
+
+**Harnais `pi` instrumenté** (#707 ; story #702, spec #704). Le descripteur embarqué `pi` remplit les
+capacités laissées à `None` en 1.59.0 : **transcript par identité** (JSONL `*_<session_id>.jsonl` dans le
+dossier `~/.pi/agent/sessions/<cwd encodé>/`), **coût rapporté** en dollars (somme des `usage.cost.total`
+assistant, constante 1.0 — affiché sans `~`, `—` si un message n'est pas chiffrable), **contexte** (pic de
+`usage.totalTokens` lu contre la fenêtre du catalogue) et **fin de tour** par extension `agent_settled`
+injectée dans le trou `{settings}` (`-e <fichier>`), qui lance `pdo complete --auto` quand
+`autocomplete_turn_end` est coché — sans sortie forcée du TUI, la reprise reste possible. Le sweep garde la
+queue de session comme repli. Le coût d'un Run mixte est ventilé par harnais (`by_harness`, tranches
+`derived`/`reported`). Tableau de support et prérequis README (catalogue de modèles `pi` joignable) mis à
+jour.
+
 ## 1.59.0
 
 **Harnais `pi`, descripteur first-party** (#705 ; story #702, spec #704, ADR-0045/0046/0056 amendés).

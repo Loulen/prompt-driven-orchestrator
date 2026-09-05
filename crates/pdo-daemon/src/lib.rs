@@ -43,6 +43,7 @@ mod node_io_resolver;
 mod node_primitives;
 mod node_spawn;
 mod outputs_validator;
+mod pi_session;
 mod pipeline;
 mod pipeline_migrator;
 #[cfg(test)]
@@ -11611,14 +11612,15 @@ async fn get_run(
             // are an instance concept) while transcripts come from `projects_root`,
             // which moves for a sandboxed Run.
             let prices = price_table::PriceTable::load(&home_root);
-            // Copilot has no staging set, so its session journals are read from the
-            // host `.copilot/session-state/`.
-            let copilot_root = sandbox_run::copilot_store_root(&home_root);
+            // Neither `copilot` nor `pi` declares a staging set, so their session
+            // stores are read from the host home (`.copilot/session-state/`,
+            // `.pi/agent/sessions/`).
+            let stores = sandbox_run::HarnessStores::from_home(&home_root);
             augment_run_state_from_disk(
                 &mut run_state,
                 &events,
                 &projects_root,
-                &copilot_root,
+                &stores,
                 &repo_root,
                 &prices,
             );
@@ -12314,9 +12316,10 @@ async fn run_stale_detection(state: &Arc<AppState>) {
             &home_root,
             &sandbox_root,
         );
-        // Copilot has no staging set, so it resolves its transcript from the host
-        // `.copilot/session-state/`. Picked per node below by the frozen harness.
-        let copilot_root = sandbox_run::copilot_store_root(&home_root);
+        // Neither `copilot` nor `pi` declares a staging set, so each resolves its
+        // transcript from its host-home store. Picked per node below by the frozen
+        // harness (`HarnessStores::root_for`).
+        let stores = sandbox_run::HarnessStores::from_home(&home_root);
 
         let running = stale_detector::running_nodes(&run_state);
         for (node_id, iter) in &running {
@@ -12343,11 +12346,7 @@ async fn run_stale_detection(state: &Arc<AppState>) {
 
             // The store ROOT is the resolved harness's own; the per-harness
             // `resolve_transcript` joins the right leaf.
-            let node_store_root: &Path = if node_harness == harness_registry::COPILOT {
-                &copilot_root
-            } else {
-                &projects_root
-            };
+            let node_store_root: &Path = stores.root_for(&node_harness, &projects_root);
 
             let probes = SweepNodeProbes {
                 socket: &socket,
@@ -17248,7 +17247,7 @@ fn augment_run_state_from_disk(
     run_state: &mut event_log::RunState,
     events: &[event_log::Event],
     projects_root: &std::path::Path,
-    copilot_root: &std::path::Path,
+    stores: &sandbox_run::HarnessStores,
     repo_root: &std::path::Path,
     prices: &price_table::PriceTable,
 ) {
@@ -17262,7 +17261,7 @@ fn augment_run_state_from_disk(
     let breakdown = run_cost::compute_run_cost_breakdown_cached(
         events,
         projects_root,
-        copilot_root,
+        stores,
         repo_root,
         &run_state.run_id,
         prices,
@@ -17284,6 +17283,9 @@ fn augment_run_state_from_disk(
                 event_log::NodeCost {
                     usd: Some(0.0),
                     form: contribution.form,
+                    // ANDed over the node's contributions below (#707): a node is
+                    // "in dollars" only if every execution's reported cost is.
+                    reported_in_usd: true,
                     partial: false,
                     unpriced_models: Vec::new(),
                     unavailable_reasons: Vec::new(),
@@ -17298,6 +17300,7 @@ fn augment_run_state_from_disk(
         } else if cost.executions == 0 {
             cost.form = contribution.form;
         }
+        cost.reported_in_usd &= contribution.reported_in_usd;
         if let Some(usd) = contribution.usd {
             if !*has_unknown {
                 cost.usd = Some(cost.usd.unwrap_or_default() + usd);
@@ -17306,6 +17309,7 @@ fn augment_run_state_from_disk(
             *has_unknown = true;
             cost.usd = None;
             cost.form = None;
+            cost.reported_in_usd = false;
         }
         cost.partial |= contribution.partial;
         cost.executions += contribution.executions;
@@ -21813,7 +21817,6 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let repo = tempfile::tempdir().unwrap();
         let projects = home.path().join(".claude/projects");
-        let copilot = home.path().join(".copilot/session-state");
         let run_id = "node-cost";
         let working_dir = worktree_ops::worktree_dir_for_run(repo.path(), run_id);
         let project = projects.join(run_cost::cc_project_dirname(&working_dir));
@@ -21853,7 +21856,7 @@ mod tests {
             &mut run_state,
             &events,
             &projects,
-            &copilot,
+            &sandbox_run::HarnessStores::from_home(home.path()),
             repo.path(),
             &price_table::PriceTable::load(home.path()),
         );

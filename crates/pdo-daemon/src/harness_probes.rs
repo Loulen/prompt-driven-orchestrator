@@ -80,7 +80,9 @@ pub(crate) enum CostSource {
     /// **reported** cost: it cannot produce an `unpriced_models` signal, and it does
     /// not re-derive from tokens (which would double-count the cache). `copilot`'s:
     /// the `totalNanoAiu` its event journal reports, × [`crate::copilot_journal`]'s
-    /// constant.
+    /// constant. `pi`'s: the `usage.cost.total` its session reports, **already in
+    /// dollars** — constant **1.0** ([`crate::pi_session::REPORTED_USD_CONSTANT`]), so
+    /// the surfaces show it without `~` (ADR-0052 §2 amended, #707).
     ReportedByConstant,
 }
 
@@ -117,6 +119,12 @@ pub(crate) enum TranscriptResolution {
     /// encoding, so two nodes sharing a worktree have distinct journals structurally
     /// (the #473 collision has no equivalent here).
     CopilotEventsJsonl,
+    /// pi's `<sessions>/<encoded-cwd>/<timestamp>_<session-id>.jsonl` (#707): a
+    /// directory keyed by working directory, a **file keyed by the session identity
+    /// PDO imposed** — resolved by globbing `*_<id>.jsonl` inside the cwd's
+    /// directory ([`crate::pi_session::resolve_by_id`]), never by newest mtime, so
+    /// two nodes sharing a worktree have distinct files structurally.
+    PiJsonlById,
 }
 
 impl TranscriptResolution {
@@ -125,6 +133,10 @@ impl TranscriptResolution {
             TranscriptResolution::ClaudeJsonl => "the JSONL transcript, keyed by working directory",
             TranscriptResolution::CopilotEventsJsonl => {
                 "the event journal, keyed by the session identity PDO imposed"
+            }
+            TranscriptResolution::PiJsonlById => {
+                "the session JSONL in the working directory's folder, keyed by the session \
+                 identity PDO imposed"
             }
         }
     }
@@ -143,6 +155,13 @@ pub(crate) enum TurnEndSubstrate {
     /// classified by [`crate::copilot_journal::turn_ended`] (#615). Depends on no
     /// instance setting and writes nothing into the user's config.
     CopilotEventJournal,
+    /// pi's **turn-end extension** (#707, ADR-0043 applied): an ephemeral extension
+    /// the daemon writes per node and pi loads through `-e`, which runs
+    /// `pdo complete --auto` on `agent_settled`
+    /// ([`crate::pi_session::TURN_END_EXTENSION_TS`]). The sweep's fallback reads the
+    /// session tail's `stopReason` ([`crate::pi_session::turn_state`]). Governed by
+    /// the same `autocomplete_turn_end` setting as `claude`'s hook — no second switch.
+    PiAgentSettled,
 }
 
 impl TurnEndSubstrate {
@@ -153,6 +172,10 @@ impl TurnEndSubstrate {
             }
             TurnEndSubstrate::CopilotEventJournal => {
                 "the journal's explicit `assistant.turn_end` event"
+            }
+            TurnEndSubstrate::PiAgentSettled => {
+                "an injected `agent_settled` extension, plus the session tail as the sweep's \
+                 fallback"
             }
         }
     }
@@ -190,6 +213,10 @@ impl UsageLimitAnchor {
 ///
 /// Absent ⇒ Performance shows no Context column for this harness at all (it
 /// never invents a boxplot from a metric it cannot read).
+// The shared `Peak` postfix is the point: each variant names WHOSE per-turn peak
+// (claude's transcript, copilot's journal, pi's session), on the model of the other
+// capability enums above.
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ContextUsageSource {
     /// Claude Code's per-message `usage` (input + both cache buckets + output),
@@ -200,6 +227,11 @@ pub(crate) enum ContextUsageSource {
     /// cumulative-since-session-start counters to a per-turn contribution before
     /// the max is sought — [`crate::context_peak::copilot_session_peak`].
     CopilotJournalPeak,
+    /// pi's per-message `usage.totalTokens` (the turn's full occupancy), deduplicated
+    /// by entry id and maxed — [`crate::pi_session::session_peak`]. The ceiling a
+    /// reader holds it against is the model's context window as `pi --list-models`
+    /// publishes it (#705, `Catalogue::model_contexts`).
+    PiSessionPeak,
 }
 
 impl ContextUsageSource {
@@ -211,6 +243,10 @@ impl ContextUsageSource {
             ContextUsageSource::CopilotJournalPeak => {
                 "derived — the journal's cumulative usage counters, converted to a per-turn \
                  contribution and maxed"
+            }
+            ContextUsageSource::PiSessionPeak => {
+                "derived — per-message `usage.totalTokens` from the session, deduplicated and \
+                 maxed, read against the catalogue's context window"
             }
         }
     }
@@ -669,43 +705,89 @@ impl HarnessProbes for CopilotProbes {
 /// The single `copilot` instance handed out by [`probes_for`]. Zero-sized.
 static COPILOT_PROBES: CopilotProbes = CopilotProbes;
 
-/// The `pi` capabilities (#705, story #702; ADR-0051) — **all six declared absent**,
-/// explicitly, in this ticket: cost, transcript resolution, end-of-turn substrate,
-/// usage-limit anchor, context usage, staging set. `pi` is first-party (it has a
-/// row in the support table and code here) but its instrumentation lands in the
-/// follow-up tickets — the reported dollar cost from the session JSONL's
-/// `usage.cost.total` (CONTEXT.md § "Coût rapporté en dollars", ADR-0052), the
-/// turn-end extension on `agent_settled` (#707, CONTEXT.md § "Extension de fin de
-/// tour"), the staging set (ADR-0063). Until then each is a `None` a reader can see
-/// — in the table, in Stats ("—" with its reason), in the sandbox note — never a
-/// `$0`, never a silent no-op.
+/// The `pi` capabilities (#705/#707, story #702; ADR-0051/0052/0043) — **five**
+/// present, **two** declared absent with their motive:
 ///
-/// Why a type rather than the [`NullProbes`] default: ADR-0051 §2 — `None` is a
-/// *declared* value. Falling through to the data-declared arm would make pi's
-/// absences indistinguishable from "PDO carries no code for this name", and the
-/// support table would have no row to publish.
+/// - **cost**: a **reported** cost of constant **1.0** — pi writes `usage.cost.total`
+///   in dollars on every assistant message, from its embedded catalogue; PDO sums
+///   it, deduplicated by entry id, and never re-derives from tokens
+///   ([`crate::pi_session::reported_cost`]). A message with tokens but no cost
+///   makes the node's total unavailable, never `$0` (ADR-0052 §2 amended);
+/// - **transcript**: the session JSONL, by the identity PDO imposed, globbed inside
+///   the working directory's folder ([`crate::pi_session::resolve_by_id`]);
+/// - **end of turn**: the injected `agent_settled` extension as the primary
+///   substrate (ADR-0043 applied through the `{settings}` hole — see
+///   [`turn_end_injection`]), the session tail's `stopReason` as the sweep's fallback;
+/// - **context usage**: the per-message `usage.totalTokens` peak, read against the
+///   catalogue's context window (#705);
+/// - **hard error**: pi stays resident after a `stopReason: "error"`, so its exit
+///   code is no verdict ([`HarnessProbes::exit_code_is_verdict`] is `false`) and the
+///   session text is ([`crate::pi_session::hard_error`]);
+/// - the **usage-limit menu anchor** is absent, explicitly: the probe is
+///   informational, its anchor is claude's wording, and it triggers no recovery
+///   (ADR-0012, ADR-0051 §"Limites");
+/// - the **staging set** is absent in this ticket: #708 declares it (ADR-0063).
+///
+/// `subagent_transcripts` stays at the trait's default (empty): pi's session store is
+/// flat per cwd (one file per session id, no nesting under a session to enumerate).
 struct PiProbes;
 
 impl HarnessProbes for PiProbes {
-    // Every capability method stays at the trait's `None` default — declared here
-    // by naming each one, so the next ticket has to *change* a line, not add one.
+    /// A **reported** cost (ADR-0052) of constant 1.0: already in dollars.
     fn cost_source(&self) -> Option<CostSource> {
-        None
+        Some(CostSource::ReportedByConstant)
     }
     fn transcript_resolution(&self) -> Option<TranscriptResolution> {
-        None
+        Some(TranscriptResolution::PiJsonlById)
     }
     fn turn_end_substrate(&self) -> Option<TurnEndSubstrate> {
-        None
+        Some(TurnEndSubstrate::PiAgentSettled)
     }
+    /// Declared absent, explicitly (see above).
     fn usage_limit_anchor(&self) -> Option<UsageLimitAnchor> {
         None
     }
+    /// Declared absent until #708 (ADR-0063).
     fn staging_set(&self) -> Option<StagingSet> {
         None
     }
     fn context_usage_source(&self) -> Option<ContextUsageSource> {
-        None
+        Some(ContextUsageSource::PiSessionPeak)
+    }
+
+    /// pi's transcript resolution: `<store>/<encoded-cwd>/*_<session-id>.jsonl` — by
+    /// the **session identity PDO imposed**, inside the working directory's folder.
+    /// Without a pinned session id there is nothing to resolve (pi never
+    /// blind-continues), so this returns `None`.
+    fn resolve_transcript(
+        &self,
+        store_root: &Path,
+        working_dir: &Path,
+        session_id: Option<&str>,
+    ) -> Option<PathBuf> {
+        crate::pi_session::resolve_by_id(store_root, working_dir, session_id?)
+    }
+
+    /// The sweep's fallback: a tail whose last substantial record is an assistant
+    /// message with `stopReason` `stop`/`length` and no tool call pending. A trailing
+    /// `error` is never a finished turn.
+    fn classify_turn_ended(&self, tail: &str) -> bool {
+        crate::pi_session::turn_ended(tail)
+    }
+
+    fn context_peak(&self, text: &str) -> Option<u64> {
+        crate::pi_session::session_peak(text)
+    }
+
+    /// pi survives a hard model failure (it stays resident and says
+    /// `stopReason: "error"`), so its exit is not a verdict — the session text is.
+    fn exit_code_is_verdict(&self) -> bool {
+        false
+    }
+
+    /// The session's trailing `stopReason: "error"` with its `errorMessage`.
+    fn classify_hard_error(&self, tail: &str) -> Option<String> {
+        crate::pi_session::hard_error(tail)
     }
 }
 
@@ -800,8 +882,8 @@ pub(crate) fn exit_code_is_verdict(harness: &str) -> bool {
 }
 
 /// Whether `harness`'s `{settings}` hole takes PDO's **claude-format settings
-/// file** — the `Stop`-hook JSON of #433 and the library assistant's focus-hook
-/// JSON (#705).
+/// file** — the library assistant's focus-hook JSON (#705) and, for the turn-end
+/// hook, the claude half of [`turn_end_injection`].
 ///
 /// The hole means "an injected settings file" (ADR-0043), but the *format* of what
 /// PDO writes is claude's. `pi` has the hole too and fills it with `-e <extension>`
@@ -810,7 +892,7 @@ pub(crate) fn exit_code_is_verdict(harness: &str) -> bool {
 ///
 /// - a **first-party** harness takes the file only if its end-of-turn substrate is
 ///   claude's transcript (the `Stop` hook is that substrate) — `claude` yes, `pi`
-///   no (its substrate is `None` until #707, and will be its own extension then);
+///   no (its substrate is its own extension, [`TurnEndSubstrate::PiAgentSettled`]);
 /// - a **data-declared** harness (no probes) keeps the pre-#705 behaviour: a hole
 ///   means the file — a user wrapping `claude` in their own descriptor still gets
 ///   the hook.
@@ -824,6 +906,57 @@ pub(crate) fn settings_hole_takes_claude_file(harness: &str) -> bool {
             p.turn_end_substrate(),
             Some(TurnEndSubstrate::ClaudeTranscript)
         ),
+    }
+}
+
+/// The per-node **turn-end file** a harness's `{settings}` hole takes when
+/// `autocomplete_turn_end` is on (ADR-0043 and its application to `pi`, #707): what
+/// to name it (a suffix after `<node>-iter-<n>`) and what to write in it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TurnEndInjection {
+    /// File-name suffix beside the prompt: `.settings.json` (claude), `.turn-end.ts`
+    /// (pi). Distinct suffixes, so a resumed node on either harness rewrites its own
+    /// file idempotently and never another harness's.
+    pub(crate) suffix: &'static str,
+    /// The file body, byte for byte.
+    pub(crate) body: &'static str,
+}
+
+/// `claude`'s injection: the `Stop`-hook settings JSON of #433, through `--settings`.
+const CLAUDE_TURN_END_INJECTION: TurnEndInjection = TurnEndInjection {
+    suffix: ".settings.json",
+    body: crate::tmux_session_manager::STOP_HOOK_SETTINGS_JSON,
+};
+
+/// `pi`'s injection: the `agent_settled` extension, through `-e`.
+const PI_TURN_END_INJECTION: TurnEndInjection = TurnEndInjection {
+    suffix: crate::pi_session::TURN_END_EXTENSION_SUFFIX,
+    body: crate::pi_session::TURN_END_EXTENSION_TS,
+};
+
+/// What PDO writes into `harness`'s `{settings}` hole to arm turn-end
+/// auto-completion, or `None` when nothing must be written (the token then drops at
+/// render, so `-e`/`--settings` never reach the argv empty).
+///
+/// A dispatch point (ADR-0051): read off the declared end-of-turn substrate, never
+/// off the name —
+/// - [`TurnEndSubstrate::ClaudeTranscript`] ⇒ the claude `Stop`-hook JSON;
+/// - [`TurnEndSubstrate::PiAgentSettled`] ⇒ the pi extension;
+/// - [`TurnEndSubstrate::CopilotEventJournal`] ⇒ `None` (the journal needs no
+///   injection, and `copilot` has no hole anyway);
+/// - a **data-declared** harness (no probes) ⇒ the claude file, the pre-#705
+///   behaviour: a user wrapping `claude` in their own descriptor keeps the hook.
+///
+/// One switch governs every harness: the caller checks `autocomplete_turn_end` once,
+/// then asks here what the harness takes — no `pi`-specific setting.
+pub(crate) fn turn_end_injection(harness: &str) -> Option<TurnEndInjection> {
+    match probes_for(harness) {
+        None => Some(CLAUDE_TURN_END_INJECTION),
+        Some(p) => match p.turn_end_substrate() {
+            Some(TurnEndSubstrate::ClaudeTranscript) => Some(CLAUDE_TURN_END_INJECTION),
+            Some(TurnEndSubstrate::PiAgentSettled) => Some(PI_TURN_END_INJECTION),
+            Some(TurnEndSubstrate::CopilotEventJournal) | None => None,
+        },
     }
 }
 
@@ -856,7 +989,8 @@ pub(crate) fn probes_for(harness: &str) -> Option<&'static dyn HarnessProbes> {
         // #615: `copilot`'s three capabilities (reported cost, transcript, turn-end)
         // — the second first-party harness. Its two others are declared absent.
         harness_registry::COPILOT => Some(&COPILOT_PROBES),
-        // #705: `pi` — first-party, every capability explicitly absent for now.
+        // #705/#707: `pi` — first-party; five capabilities present, usage-limit and
+        // staging declared absent (the latter until #708).
         harness_registry::PI => Some(&PI_PROBES),
         // `opencode` (resident but un-instrumented in v1) and every data-declared
         // harness: no capability. A launch is data; a capability is code (ADR-0045).
@@ -1016,6 +1150,7 @@ mod tests {
         );
         assert!(capabilities(CLAUDE).context_usage);
         assert!(capabilities(COPILOT).context_usage);
+        assert!(capabilities(PI).context_usage);
         assert!(!capabilities(OPENCODE).context_usage);
         assert!(!capabilities("never-seen").context_usage);
     }
@@ -1056,18 +1191,22 @@ mod tests {
     }
 
     #[test]
-    fn pi_is_first_party_and_declares_every_capability_absent() {
-        // #705 / ADR-0051: `pi` has probes (a row in the support table) and answers
-        // `None` on all six — an explicit absence, not a missing dispatch.
+    fn pi_has_its_five_capabilities_and_declares_two_absent() {
+        // #707 / ADR-0051: `pi` is instrumented — five capabilities dispatch to ITS
+        // implementation (`crate::pi_session`), two are explicit `None`s.
         let p = probes_for(PI).expect("pi has probes (first-party)");
-        assert!(p.cost_source().is_none(), "cost declared absent");
-        assert!(
-            p.transcript_resolution().is_none(),
-            "transcript declared absent"
+        assert_eq!(p.cost_source(), Some(CostSource::ReportedByConstant));
+        assert_eq!(
+            p.transcript_resolution(),
+            Some(TranscriptResolution::PiJsonlById)
         );
-        assert!(
-            p.turn_end_substrate().is_none(),
-            "end of turn declared absent"
+        assert_eq!(
+            p.turn_end_substrate(),
+            Some(TurnEndSubstrate::PiAgentSettled)
+        );
+        assert_eq!(
+            p.context_usage_source(),
+            Some(ContextUsageSource::PiSessionPeak)
         );
         assert!(
             p.usage_limit_anchor().is_none(),
@@ -1075,23 +1214,111 @@ mod tests {
         );
         assert!(
             p.staging_set().is_none(),
-            "staging declared absent (ADR-0063 later)"
+            "staging declared absent (#708, ADR-0063)"
         );
-        assert!(
-            p.context_usage_source().is_none(),
-            "context usage declared absent"
+        assert_eq!(
+            capabilities(PI),
+            Capabilities {
+                cost: true,
+                transcript: true,
+                turn_end: true,
+                usage_limit: false,
+                staging: false,
+                context_usage: true,
+            }
         );
-        assert_eq!(capabilities(PI), Capabilities::NONE);
-        // Consequences a reader sees: Stats says "—" (never $0), no turn-end probe,
-        // and the turn-end setting says so once instead of silently doing nothing.
-        assert!(!can_cost(PI));
-        assert!(!can_measure_context(PI));
-        assert!(turn_end_absence_note(PI).is_some());
+        // Consequences a reader sees: a pi Run is costable and measurable, the
+        // turn-end setting is honoured (no absence note), the sandbox still says its
+        // absence once.
+        assert!(can_cost(PI));
+        assert!(can_measure_context(PI));
+        assert_eq!(turn_end_absence_note(PI), None);
         assert!(staging_set_absence_note(PI).is_some());
-        // Behaviour stays absent too: never claude's parsers on pi's store.
-        assert!(!turn_ended(PI, "{\"type\":\"assistant\"}"));
+        // The exit code is no verdict: pi stays resident after a hard error.
+        assert!(!exit_code_is_verdict(PI));
+        // Behaviour is pi's own, never claude's parsers on pi's store.
+        assert!(!turn_ended(PI, FIXTURE_CLAUDE_TURN_ENDED));
         assert!(!usage_limit_shown(PI, "wait for limit to reset"));
-        assert!(exit_code_is_verdict(PI));
+    }
+
+    #[test]
+    fn pi_dispatches_to_its_own_session_parsers_not_claudes_or_copilots() {
+        let settled = concat!(
+            r#"{"type":"message","id":"u1","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}"#,
+            "\n",
+            r#"{"type":"message","id":"a1","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"usage":{"input":10,"output":5,"cacheRead":0,"cacheWrite":0,"totalTokens":15,"cost":{"total":0.001}},"stopReason":"stop"}}"#,
+            "\n"
+        );
+        assert!(turn_ended(PI, settled));
+        // (claude's parser happens to accept this shape too — both stores carry a
+        // `message.role` — which is exactly why the DISPATCH, not the parser, is
+        // what keeps a claude verdict off a pi store: see the copilot control.)
+        assert!(!turn_ended(COPILOT, settled), "not copilot's journal shape");
+        assert_eq!(context_peak(PI, settled), Some(15));
+        assert_eq!(context_peak(CLAUDE, settled), None);
+        // A trailing hard error is a hard error for pi, and not a finished turn.
+        let errored = concat!(
+            r#"{"type":"message","id":"u1","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}"#,
+            "\n",
+            r#"{"type":"message","id":"a1","message":{"role":"assistant","content":[],"usage":{"totalTokens":0,"cost":{"total":0}},"stopReason":"error","errorMessage":"boom"}}"#,
+            "\n"
+        );
+        assert!(!turn_ended(PI, errored));
+        assert_eq!(hard_error(PI, errored).as_deref(), Some("boom"));
+        assert!(
+            hard_error(CLAUDE, errored).is_none(),
+            "claude's exit is its verdict"
+        );
+    }
+
+    #[test]
+    fn pi_resolves_its_session_by_identity_inside_the_cwd_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("sessions");
+        let wd = Path::new("/shared/wt");
+        let dir = store.join(crate::pi_session::session_dir_name(wd));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("2026-09-05T15-00-00-000Z_sid-a.jsonl");
+        let b = dir.join("2026-09-05T15-00-01-000Z_sid-b.jsonl");
+        std::fs::write(&a, "").unwrap();
+        std::fs::write(&b, "").unwrap();
+        let p = probes_for(PI).unwrap();
+        assert_eq!(p.resolve_transcript(&store, wd, Some("sid-a")), Some(a));
+        assert_eq!(p.resolve_transcript(&store, wd, Some("sid-b")), Some(b));
+        // No pinned identity ⇒ nothing to resolve (pi never blind-continues).
+        assert!(p.resolve_transcript(&store, wd, None).is_none());
+        // And never claude's `<uuid>.jsonl` under an encoded cwd.
+        assert!(resolve_transcript(PI, &store, wd, Some("missing")).is_none());
+    }
+
+    #[test]
+    fn turn_end_injection_is_read_off_the_substrate_never_the_name() {
+        // #707: claude takes its Stop-hook JSON, pi its agent_settled extension,
+        // copilot nothing (no hole, journal substrate), a data-declared harness the
+        // claude file (pre-#705 behaviour: hole ⇒ file).
+        let claude = turn_end_injection(CLAUDE).expect("claude is injected");
+        assert_eq!(claude.suffix, ".settings.json");
+        assert_eq!(
+            claude.body,
+            crate::tmux_session_manager::STOP_HOOK_SETTINGS_JSON
+        );
+        let pi = turn_end_injection(PI).expect("pi is injected");
+        assert_eq!(pi.suffix, ".turn-end.ts");
+        assert_eq!(pi.body, crate::pi_session::TURN_END_EXTENSION_TS);
+        assert!(pi.body.contains("agent_settled"));
+        assert_ne!(
+            claude.suffix, pi.suffix,
+            "distinct files, idempotent rewrites"
+        );
+        assert_eq!(turn_end_injection(COPILOT), None);
+        // `opencode` and a user's descriptor have no probes: the hole-means-file
+        // pre-#705 behaviour (inert for opencode, whose templates carry no hole).
+        assert_eq!(turn_end_injection(OPENCODE), Some(claude));
+        assert_eq!(
+            turn_end_injection("my-claude-wrapper"),
+            Some(claude),
+            "a data-declared harness keeps the claude hook"
+        );
     }
 
     #[test]
@@ -1214,7 +1441,7 @@ mod tests {
         // AC #1/#4: the generic by-name dispatch for a harness PDO carries no code
         // for resolves to "absent" on every behaviour — it must NOT reach claude's
         // implementation. This is the path a liveness sweep takes.
-        for name in [OPENCODE, "pi", "not-a-harness"] {
+        for name in [OPENCODE, "my-custom-harness", "not-a-harness"] {
             assert!(
                 resolve_transcript(name, Path::new("/proj"), Path::new("/wd"), Some("abc"))
                     .is_none(),
@@ -1266,8 +1493,13 @@ mod tests {
     #[test]
     fn turn_end_absence_note_fires_only_for_a_harness_without_the_substrate() {
         assert_eq!(turn_end_absence_note(CLAUDE), None);
-        let note = turn_end_absence_note("pi").expect("a note for a substrate-less harness");
-        assert!(note.contains("`pi`"));
+        assert_eq!(
+            turn_end_absence_note(PI),
+            None,
+            "pi has a substrate since #707"
+        );
+        let note = turn_end_absence_note(OPENCODE).expect("a note for a substrate-less harness");
+        assert!(note.contains("`opencode`"));
         assert!(note.contains("no end-of-turn substrate"));
         assert!(note.contains("not be auto-completed"));
     }
@@ -1304,8 +1536,8 @@ mod tests {
         assert!(set.excludes.is_empty());
     }
 
-    /// Only `claude` declares a set today; `copilot` and `opencode` are explicit
-    /// `None`s, so the generic consumers see exactly one set.
+    /// Only `claude` declares a set today; `copilot`, `pi` (until #708) and
+    /// `opencode` are explicit `None`s, so the generic consumers see exactly one set.
     #[test]
     fn staging_sets_lists_claude_only() {
         let sets = staging_sets();

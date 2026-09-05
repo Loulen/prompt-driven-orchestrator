@@ -668,6 +668,11 @@ export interface FrontmatterViolation {
 export interface NodeCost {
   usd: number | null;
   form: "derived" | "reported" | null;
+  /** #707: every contribution is a reported cost **already in dollars** (conversion
+   *  constant 1.0 — `pi`'s `usage.cost.total`), so the figure renders without `~`.
+   *  Absent/false for derived costs and for a reported cost converted from another
+   *  billing unit (`copilot`). */
+  reported_in_usd?: boolean;
   partial: boolean;
   unpriced_models?: string[];
   unavailable_reasons?: string[];
@@ -1004,6 +1009,9 @@ export interface HarnessCost {
   form: "derived" | "reported";
   partial: boolean;
   unpriced_models: string[];
+  /** #707: a reported slice already in dollars (constant 1.0, `pi`) — rendered
+   *  without `~`. See `NodeCost.reported_in_usd`. */
+  reported_in_usd?: boolean;
 }
 
 export interface DaemonEvent {

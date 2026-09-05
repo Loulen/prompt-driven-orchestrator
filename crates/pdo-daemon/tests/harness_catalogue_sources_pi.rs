@@ -14,9 +14,9 @@
 //! reads off `GET /settings` is what the inspector's pickers render for a node pinned
 //! on `pi`.
 //!
-//! The probe `PATH` is process-global (a `OnceLock`), so this test serialises on
+//! The probe `PATH` is process-global, so this test serialises on
 //! `HARNESS_PROBE_ENV_LOCK` with the other catalogue tests and installs its fake beside
-//! theirs only for its own duration.
+//! theirs in the shared, process-wide dir `common::fake_harness_bindir`.
 
 use crate::common::TestDaemon;
 
@@ -71,23 +71,10 @@ fn strings(v: &serde_json::Value) -> Vec<String> {
 #[tokio::test]
 async fn pis_catalogue_comes_from_its_model_table_and_its_thinking_line() {
     let _probe_env = crate::HARNESS_PROBE_ENV_LOCK.lock().await;
-    // The probe PATH is a process-global `OnceLock`: the first catalogue test to run
-    // fixes it. Install the fake in THAT dir when it is already set (the sibling
-    // copilot test's tempdir), else in a fresh one this test sets.
-    let bindir: std::path::PathBuf = match std::env::var_os("PDO_HARNESS_PROBE_PATH") {
-        Some(p) => std::path::PathBuf::from(p),
-        None => {
-            let dir = std::env::temp_dir().join(format!("pdo-pi-probe-{}", std::process::id()));
-            // SAFETY: set under the lock, before any probe reads the `OnceLock`.
-            unsafe {
-                std::env::set_var("PDO_HARNESS_PROBE_PATH", &dir);
-                std::env::set_var(pdo_daemon::CATALOGUE_VERSION_TTL_MS_ENV, "1");
-            }
-            dir
-        }
-    };
-    // A sibling test may have dropped its tempdir after fixing the PATH: recreate.
-    std::fs::create_dir_all(&bindir).unwrap();
+    // The process-wide fake-binary dir, first on the probe PATH (shared with the
+    // sibling copilot test, alive for the whole process — see
+    // `common::fake_harness_bindir`).
+    let bindir = crate::common::fake_harness_bindir();
     write_fake_pi(&bindir, "0.85.1", LIST_MODELS);
 
     // No descriptor to seed: `pi` is a **builtin** harness whose binary is `pi` —

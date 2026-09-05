@@ -5,9 +5,10 @@
 //! `has_effort: true`, and a `version`; the client renders that instead of knowing
 //! a catalogue.
 //!
-//! Layer-3, through the real HTTP surface. Its own test binary (one process) so the
-//! process-global `PDO_HARNESS_PROBE_PATH` (a `OnceLock`) is set once, before any
-//! probe runs, pointing at a tempdir holding a self-contained fake binary.
+//! Layer-3, through the real HTTP surface. The probe `PATH` is process-global, so
+//! this test serialises on `HARNESS_PROBE_ENV_LOCK` with the other catalogue tests and
+//! installs its self-contained fake binary in the shared, process-wide dir
+//! `common::fake_harness_bindir` fixes first on that PATH.
 
 use crate::common::TestDaemon;
 
@@ -30,15 +31,13 @@ fn write_fake_binary(dir: &std::path::Path, name: &str) {
 #[tokio::test]
 async fn get_settings_serves_the_catalogue_deduced_from_the_binary() {
     let _probe_env = crate::HARNESS_PROBE_ENV_LOCK.lock().await;
-    // A tempdir holding the fake binary, wired as the harness probe PATH BEFORE the
-    // daemon boots (so the boot probe and every settings fetch resolve it here).
-    let bindir = tempfile::tempdir().unwrap();
-    write_fake_binary(bindir.path(), "probe-harness");
-    // SAFETY: set once, at the top of this dedicated single-test binary, before any
-    // probe reads the `OnceLock`-cached probe path.
-    unsafe {
-        std::env::set_var("PDO_HARNESS_PROBE_PATH", bindir.path());
-    }
+    // The process-wide fake-binary dir, wired FIRST on the harness probe PATH before
+    // the daemon boots (so the boot probe and every settings fetch resolve it here).
+    // Shared with the other catalogue tests and kept alive for the whole process:
+    // see `common::fake_harness_bindir` for why a dropped tempdir here broke every
+    // session spawned later in this binary.
+    let bindir = crate::common::fake_harness_bindir();
+    write_fake_binary(&bindir, "probe-harness");
 
     // The daemon's home carries a descriptor declaring the fake harness. `spawn_with
     // _home_override` roots `sandbox_home_roots` at the tempdir, which is where the

@@ -611,6 +611,11 @@ pub struct NodeDelivery {
 pub struct NodeCost {
     pub usd: Option<f64>,
     pub form: Option<CostForm>,
+    /// True when every contribution is a reported cost **already in dollars**
+    /// (constant 1.0, `pi`): rendered without `~` (#707). See
+    /// [`HarnessCost::reported_in_usd`].
+    #[serde(default)]
+    pub reported_in_usd: bool,
     pub partial: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unpriced_models: Vec<String>,
@@ -807,6 +812,13 @@ pub struct HarnessCost {
     /// reported one.
     #[serde(default)]
     pub unpriced_models: Vec<String>,
+    /// True when this **reported** slice is already in dollars — a conversion
+    /// constant of 1.0 (`pi`'s `usage.cost.total`, #707, ADR-0052 §2 amended) — so
+    /// the surface shows it **without `~`**. `false` for a derived slice (an
+    /// estimate) and for a reported slice converted from another billing unit
+    /// (`copilot`'s nano-AIU).
+    #[serde(default)]
+    pub reported_in_usd: bool,
 }
 
 /// A secondary repository pinned to a Run (#465, ADR-0042).

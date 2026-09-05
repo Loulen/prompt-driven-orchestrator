@@ -7,11 +7,11 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Check, Copy, ExternalLink, FileText, RefreshCw, X } from "lucide-react";
+import { Check, Copy, Download, ExternalLink, FileText, RefreshCw, TriangleAlert, X } from "lucide-react";
 import FullWindowShell from "./FullWindowShell";
 import { announceSettingsChanged, useSettings } from "../hooks/useSettings";
 import { useUpdateStatus } from "../hooks/useUpdateStatus";
-import { checkForUpdateNow, updateSettings } from "../api";
+import { checkForUpdateNow, fetchUpdateAttemptLog, updateSettings } from "../api";
 import {
   INSTALL_METHOD_LABEL,
   SUPERVISION_LABEL,
@@ -91,6 +91,8 @@ interface Props {
   onOpenStats?: (intent: StatsOpenIntent) => void;
   /** #698: Version & update › « What's new » opens the changelog modal over the surface. */
   onOpenChangelog?: () => void;
+  /** #699: Version & update › « Update » — the host owns the confirm and the waiting flow. */
+  onRequestUpdate?: () => void;
 }
 
 /** Advisory ceiling: caps above this enter the tmux-server-collapse zone
@@ -232,6 +234,7 @@ export default function SettingsSurface({
   initialPosition,
   onOpenStats,
   onOpenChangelog,
+  onRequestUpdate,
 }: Props) {
   const { settings, settled, save, refresh } = useSettings(open);
   const { profiles: agentProfiles, refresh: refreshAgentProfiles } = useAgentProfiles(open);
@@ -676,6 +679,7 @@ export default function SettingsSurface({
                   loading
                 )}
                 <VersionUpdateSection
+                  onRequestUpdate={onRequestUpdate}
                   section={item.sections[3]}
                   active={open}
                   onOpenChangelog={onOpenChangelog}
@@ -1205,12 +1209,33 @@ function VersionUpdateSection({
   section,
   active,
   onOpenChangelog,
+  onRequestUpdate,
 }: {
   section: SettingsSection;
   active: boolean;
   onOpenChangelog?: () => void;
+  onRequestUpdate?: () => void;
 }) {
   const { status, setStatus, refresh } = useUpdateStatus(active);
+  // #699: the last attempt's journal, fetched on demand (« View log »).
+  const [logOpen, setLogOpen] = useState(false);
+  const [log, setLog] = useState<string | null>(null);
+  const [logError, setLogError] = useState<string | null>(null);
+  const attemptId = status?.last_attempt?.attempt_id ?? null;
+  useEffect(() => {
+    if (!logOpen || !attemptId) return;
+    let cancelled = false;
+    fetchUpdateAttemptLog(attemptId)
+      .then((text) => {
+        if (!cancelled) setLog(text);
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) setLogError(e instanceof Error ? e.message : String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [logOpen, attemptId]);
   const [checking, setChecking] = useState(false);
   const [toggling, setToggling] = useState(false);
   const [checkError, setCheckError] = useState<string | null>(null);
@@ -1356,7 +1381,7 @@ function VersionUpdateSection({
             <span className="text-fg-4">
               {status.install_method === "unknown"
                 ? "Install method not detected — PDO will not update itself. To update:"
-                : "To update manually (the future Update button runs exactly this):"}
+                : "To update manually (the Update button runs exactly this, detached from the daemon):"}
             </span>
             <code className="truncate font-mono text-fg-2">{status.manual_command}</code>
           </div>
@@ -1374,12 +1399,95 @@ function VersionUpdateSection({
             </button>
           )}
         </div>
+        {status.install_method === "unknown" && status.apply_blocked_reason && (
+          <div
+            className="flex items-start gap-1.5 text-fg-4"
+            style={{ fontSize: "10.5px" }}
+            data-testid="setting-version-apply-blocked"
+          >
+            <TriangleAlert size={11} className="mt-px shrink-0 text-st-await" />
+            <span>{status.apply_blocked_reason}</span>
+          </div>
+        )}
+        {status.last_attempt && (
+          <div className="flex flex-col gap-1" data-testid="setting-version-last-attempt">
+            <KeyValueRow
+              label="Last update"
+              tone={status.last_attempt.status === "failed" ? "failed" : undefined}
+              testId="setting-version-last-attempt-row"
+            >
+              <span
+                className={`rounded-full px-1.5 py-px ${
+                  status.last_attempt.status === "succeeded"
+                    ? "bg-st-done-bg text-st-done"
+                    : status.last_attempt.status === "failed"
+                      ? "bg-st-failed-bg text-st-failed"
+                      : "bg-st-await-bg text-st-await"
+                }`}
+                style={{ fontSize: "9.5px" }}
+                data-testid="setting-version-last-attempt-status"
+              >
+                {status.last_attempt.status === "failed" && status.last_attempt.exit_code != null
+                  ? `failed (exit ${status.last_attempt.exit_code})`
+                  : status.last_attempt.status}
+              </span>
+              <span className="ml-2">{absoluteTime(status.last_attempt.started_at)}</span>
+              <span className="text-fg-4">
+                {" "}
+                · {relativeTime(status.last_attempt.started_at)} · from v{status.last_attempt.from_version} ·{" "}
+                {INSTALL_METHOD_LABEL[status.last_attempt.method]}
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setLog(null);
+                  setLogError(null);
+                  setLogOpen((o) => !o);
+                }}
+                className="ml-2 inline-flex items-center gap-1 text-fg-3 underline decoration-fg-5 underline-offset-2 hover:text-fg"
+                data-testid="setting-version-attempt-log-toggle"
+                title={status.last_attempt.log_path}
+              >
+                <FileText size={10} />
+                {logOpen ? "Hide log" : "View log"}
+              </button>
+            </KeyValueRow>
+            {logOpen && (
+              <pre
+                className="max-h-56 overflow-auto rounded border border-line bg-bg-0 px-2.5 py-2 font-mono text-fg-2"
+                style={{ fontSize: "10.5px", lineHeight: 1.4 }}
+                data-testid="setting-version-attempt-log"
+              >
+                {logError ? `Could not load the log: ${logError}` : log ?? "Loading…"}
+              </pre>
+            )}
+          </div>
+        )}
         {checkError && (
           <KeyValueRow label="Check failed" tone="failed" testId="setting-version-check-error">
             {checkError}
           </KeyValueRow>
         )}
         <div className="mt-1 flex flex-wrap items-center gap-4">
+          <button
+            type="button"
+            onClick={() => onRequestUpdate?.()}
+            disabled={!status.can_apply || !onRequestUpdate}
+            data-testid="setting-version-update-button"
+            title={
+              status.apply_blocked_reason ??
+              (newer ? `Update to v${status.latest_version}` : "Re-run the install method's update command")
+            }
+            className={`flex items-center gap-1.5 rounded border px-2.5 py-1.5 disabled:opacity-40 ${
+              newer
+                ? "border-acc bg-acc text-bg-0 hover:bg-acc/90"
+                : "border-line-strong bg-bg-3 text-fg-2 hover:border-acc"
+            }`}
+            style={{ fontSize: 11 }}
+          >
+            <Download size={11} />
+            {newer && status.latest_version ? `Update to v${status.latest_version}` : "Update"}
+          </button>
           <button
             type="button"
             onClick={() => void checkNow()}

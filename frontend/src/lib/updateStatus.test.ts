@@ -16,6 +16,10 @@ function status(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
     supervision: "none",
     reason: null,
     last_error: null,
+    active_runs: 0,
+    can_apply: true,
+    apply_blocked_reason: null,
+    last_attempt: null,
     ...overrides,
   };
 }

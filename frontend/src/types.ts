@@ -503,6 +503,45 @@ export interface UpdateStatus {
   reason: string | null;
   /** The last check's error, kept beside the last good values. */
   last_error: string | null;
+  /** Live Runs (running / awaiting user / paused) — the confirm dialog's count (#699). Informational: never a block. */
+  active_runs: number;
+  /** `POST /update/apply` would be accepted: a known install method and no attempt running. */
+  can_apply: boolean;
+  /** Why `can_apply` is false, when it is (unknown method, attempt running). */
+  apply_blocked_reason: string | null;
+  /** The last update attempt journaled under `~/.pdo/update/`, including a failed one. */
+  last_attempt: UpdateAttempt | null;
+}
+
+/** Outcome of an update attempt as its on-disk record reports it (#699). */
+export type UpdateAttemptStatus = "running" | "succeeded" | "failed";
+
+/** One journaled update attempt (#699). */
+export interface UpdateAttempt {
+  attempt_id: string;
+  status: UpdateAttemptStatus;
+  started_at: string;
+  finished_at: string | null;
+  exit_code: number | null;
+  method: InstallMethod;
+  /** The upgrade command the executor ran, verbatim. */
+  command: string;
+  supervision: Supervision;
+  log_path: string;
+  /** The version the daemon ran when the attempt started. */
+  from_version: string;
+}
+
+/** `POST /update/apply` — 202 with the attempt just spawned (#699). */
+export interface UpdateApplyResponse {
+  attempt_id: string;
+  status: UpdateAttemptStatus;
+  method: InstallMethod;
+  command: string;
+  supervision: Supervision;
+  log_path: string;
+  started_at: string;
+  from_version: string;
 }
 
 /** Where the « What's new » body comes from (#698). */

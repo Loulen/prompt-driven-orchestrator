@@ -34,7 +34,8 @@ Both methods install a checksum-verified `pdo` binary on your `PATH`.
 
 | Task | Command |
 | --- | --- |
-| Update with Homebrew | `brew upgrade pdo` |
+| Update from the app | Click the version in the status bar (or Settings › General › Version & update) → **Update**. PDO runs your install method's command in a detached process, reinstalls the service unit, restarts, and the page reloads on the new version |
+| Update with Homebrew | `brew update && brew upgrade Loulen/tap/pdo` (`brew update` first: a stale tap hides the latest formula) |
 | Update with the script | Run the install script again |
 | Install a specific release | Replace `latest` with a tag such as `v1.31.2` |
 

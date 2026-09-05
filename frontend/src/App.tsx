@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { Settings, BarChart3 } from "lucide-react";
 import { useDaemonSocket } from "./hooks/useDaemonSocket";
 import type { ConnectionStatus } from "./hooks/useDaemonSocket";
@@ -19,6 +19,10 @@ import NewRunModal, { RUN_INTENT } from "./components/NewRunModal";
 import SettingsSurface, { type SettingsPosition, type StatsOpenIntent } from "./components/SettingsSurface";
 import VersionBadge from "./components/VersionBadge";
 import ChangelogModal from "./components/ChangelogModal";
+import UpdateConfirmModal from "./components/UpdateConfirmModal";
+import UpdateWaitingOverlay from "./components/UpdateWaitingOverlay";
+import { applyUpdate, fetchUpdateStatus } from "./api";
+import { IDLE as UPDATE_IDLE, isUpdateInProgress, reduceUpdateFlow, type UpdateFlowEvent } from "./lib/updateFlow";
 import { useUpdateStatus } from "./hooks/useUpdateStatus";
 import type { UpdateStatus } from "./types";
 import StatsModal from "./components/StatsModal";
@@ -183,6 +187,66 @@ export default function App() {
   // #698: the « What's new » changelog modal, opened from the status-bar version (and
   // from Settings › Version & update). Lives here next to the other modals.
   const [changelogOpen, setChangelogOpen] = useState(false);
+  // #699: the in-app update — a confirm (active Runs count, tmux survival), then the
+  // pure flow machine: applying → restarting → verifying → reload / failed.
+  const [updateConfirmOpen, setUpdateConfirmOpen] = useState(false);
+  const [updateStarting, setUpdateStarting] = useState(false);
+  const [updateFlow, dispatchUpdateFlow] = useReducer(reduceUpdateFlow, UPDATE_IDLE);
+  const startUpdate = useCallback(async () => {
+    setUpdateStarting(true);
+    try {
+      const fresh = updateStatus ?? (await fetchUpdateStatus());
+      const res = await applyUpdate();
+      dispatchUpdateFlow({
+        type: "applied",
+        attemptId: res.attempt_id,
+        fromVersion: res.from_version || fresh.installed_version,
+        now: Date.now(),
+      });
+    } catch (e) {
+      dispatchUpdateFlow({ type: "apply-failed", error: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setUpdateStarting(false);
+      setUpdateConfirmOpen(false);
+      setChangelogOpen(false);
+    }
+  }, [updateStatus]);
+  // Feed the machine: the socket's transitions, and a poll of `GET /update` for the
+  // whole in-progress window — while the old daemon still answers it reports a failed
+  // executor; once the new one answers, its `installed_version` is the verdict (reload
+  // when it differs from the one we started on). Polling rather than trusting the
+  // cached `/sessions` value: right after a reconnect the cache still holds the OLD
+  // version and would read as « nothing changed ».
+  useEffect(() => {
+    const ev: UpdateFlowEvent = { type: "socket", connected: status === "connected" };
+    dispatchUpdateFlow(ev);
+  }, [status]);
+  useEffect(() => {
+    if (!isUpdateInProgress(updateFlow)) return;
+    let cancelled = false;
+    const poll = () => {
+      fetchUpdateStatus()
+        .then((s) => {
+          if (cancelled) return;
+          dispatchUpdateFlow({ type: "status", status: s });
+          dispatchUpdateFlow({ type: "version", version: s.installed_version });
+        })
+        .catch(() => {
+          /* the daemon is down or restarting: the next tick retries */
+        });
+    };
+    poll();
+    const id = window.setInterval(poll, 1500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [updateFlow]);
+  useEffect(() => {
+    if (updateFlow.phase !== "reload") return;
+    const t = window.setTimeout(() => window.location.reload(), 600);
+    return () => window.clearTimeout(t);
+  }, [updateFlow.phase]);
   // #690: Settings and Stats are full-window surfaces on one shared shell, one open at a
   // time. `openSettings` / `openStats` are the single openers: the gear and the chart icon
   // call them bare (the surface lands where the user last was), programmatic entries pass a
@@ -841,8 +905,25 @@ export default function App() {
             setChangelogOpen(false);
             openSettings({ category: "general", section: "version-update" });
           }}
+          onRequestUpdate={() => setUpdateConfirmOpen(true)}
         />
       )}
+      {updateConfirmOpen && updateStatus && (
+        <UpdateConfirmModal
+          update={updateStatus}
+          busy={updateStarting}
+          onConfirm={() => void startUpdate()}
+          onCancel={() => setUpdateConfirmOpen(false)}
+        />
+      )}
+      <UpdateWaitingOverlay
+        flow={updateFlow}
+        onDismiss={() => dispatchUpdateFlow({ type: "dismiss" })}
+        onOpenVersionSettings={() => {
+          dispatchUpdateFlow({ type: "dismiss" });
+          openSettings({ category: "general", section: "version-update" });
+        }}
+      />
       <NewRunModal
         open={newRunModalOpen}
         onClose={handleCloseNewRunModal}
@@ -867,6 +948,7 @@ export default function App() {
         initialPosition={settingsEntry.position}
         onOpenStats={openStats}
         onOpenChangelog={() => setChangelogOpen(true)}
+        onRequestUpdate={() => setUpdateConfirmOpen(true)}
       />
       <StatsModal
         key={statsEntry.key}

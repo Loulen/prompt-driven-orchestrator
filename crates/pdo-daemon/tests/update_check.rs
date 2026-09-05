@@ -217,7 +217,7 @@ async fn routes_are_registered_and_a_newer_release_is_reported() {
     let cmd = body["manual_command"].as_str().unwrap();
     match method {
         "homebrew" => assert_eq!(cmd, "brew update && brew upgrade Loulen/tap/pdo"),
-        "script" => assert!(cmd.contains("pdo-installer.sh")),
+        "script" => assert!(cmd.contains("pdo-daemon-installer.sh")),
         _ => assert!(cmd.starts_with("Build from source")),
     }
     let sup = body["supervision"].as_str().unwrap();

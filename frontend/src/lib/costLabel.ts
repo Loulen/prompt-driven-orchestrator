@@ -38,9 +38,19 @@ export const COST_ESTIMATE_NOTE =
 export const COST_REPORTED_NOTE =
   "Reported by the harness in its own billing unit, converted by a published constant — not re-derived from tokens.";
 
+/**
+ * Note framing a reported slice that is **already in dollars** (#707, ADR-0052 §2
+ * amended): the harness priced each message itself from its model catalogue, and
+ * PDO summed it with a conversion constant of 1.0 — so no `~`.
+ */
+export const COST_REPORTED_IN_USD_NOTE =
+  "Reported by the harness in dollars per message (conversion constant 1.0) — not an estimate, not re-derived from tokens.";
+
 export function nodeCostTitle(cost: NodeCost): string {
   const base =
-    cost.form === "reported"
+    cost.form === "reported" && cost.reported_in_usd
+      ? COST_REPORTED_IN_USD_NOTE
+      : cost.form === "reported"
       ? COST_REPORTED_NOTE
       : cost.form === "derived"
         ? COST_ESTIMATE_NOTE
@@ -68,10 +78,23 @@ export interface CostVentilationSlice {
   form: "derived" | "reported";
 }
 
+/** Whether a slice is an exact reported dollar figure (no `~`): reported AND
+ *  already in dollars. A derived slice and a converted reported slice keep the `~`. */
+function sliceIsExact(h: HarnessCost): boolean {
+  return h.form === "reported" && h.reported_in_usd === true;
+}
+
+/** `$X` for an exact slice, `~$X` otherwise, at adaptive precision. */
+function sliceAmount(h: HarnessCost): string {
+  const amount = `$${h.usd.toFixed(costPrecision(h.usd))}`;
+  return sliceIsExact(h) ? amount : `~${amount}`;
+}
+
 /** The `via` sentence for a harness slice, form-aware — the Claude-Code estimate
  *  wording appears only under a derived slice, never a reported one. */
 function ventilationSentence(h: HarnessCost): string {
-  const amount = `~$${h.usd.toFixed(costPrecision(h.usd))} via \`${h.harness}\``;
+  const amount = `${sliceAmount(h)} via \`${h.harness}\``;
+  if (sliceIsExact(h)) return `${amount} (reported). ${COST_REPORTED_IN_USD_NOTE}`;
   if (h.form === "reported") return `${amount} (reported). ${COST_REPORTED_NOTE}`;
   const lb =
     h.partial ? lowerBoundClause(h.unpriced_models) : "";
@@ -83,7 +106,7 @@ function ventilationSentence(h: HarnessCost): string {
 function ventilationSlice(h: HarnessCost): CostVentilationSlice {
   return {
     harness: h.harness,
-    text: `~$${h.usd.toFixed(costPrecision(h.usd))}`,
+    text: sliceAmount(h),
     form: h.form,
   };
 }
@@ -190,7 +213,11 @@ export function formatEstCost(
     };
   }
 
-  const text = `~$${usd.toFixed(costPrecision(usd))}`;
+  // #707: a total made only of exact reported dollars (every slice `reported_in_usd`,
+  // e.g. an all-`pi` Run) is not an estimate and drops the `~`; any derived or
+  // converted slice in the mix keeps it.
+  const exactTotal = byHarness.length > 0 && byHarness.every(sliceIsExact);
+  const text = `${exactTotal ? "" : "~"}$${usd.toFixed(costPrecision(usd))}`;
 
   // #615: a ventilated Run (mixed, or a single non-claude harness) says itself per
   // harness. The dagger reflects any DERIVED slice that is a lower bound; a reported

@@ -521,7 +521,7 @@ describe("harnessState (#551/#452)", () => {
     // #616: each option now also carries the served offer; these entries served
     // none, so the offer defaults (empty catalogues, hasEffort=true when
     // `has_effort` is absent, no version).
-    const off = { models: [], efforts: [], hasEffort: true, version: null };
+    const off = { models: [], modelContexts: {}, efforts: [], hasEffort: true, version: null };
     expect(catalog.builtin).toEqual([
       { name: "claude", installed: true, ...off },
       { name: "opencode", installed: false, ...off },

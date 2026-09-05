@@ -45,7 +45,7 @@ pub(crate) struct SandboxContext {
     /// the repo + every node sub-worktree under `.pdo/runs/` + `.pdo/prompts`.
     pub(crate) repo_root: PathBuf,
     /// The Run's pipeline worktree (`-w` cosmetic at create; the trust dialog is
-    /// seeded by the staging floor on `repo_root`, the common ancestor of every
+    /// seeded by the staging set's trust fixup on `repo_root`, the common ancestor of every
     /// worktree, in BOTH sandboxed modes — #426).
     pub(crate) run_worktree: PathBuf,
     pub(crate) daemon_port: u16,
@@ -324,11 +324,98 @@ pub(crate) fn transcripts_root(
 /// where each session's event journal lives at `<session-id>/events.jsonl` (#615).
 ///
 /// Always the **host** home, unlike [`transcripts_root`]: `copilot` declares **no
-/// staging floor** (ADR-0031 / #615), so a sandboxed Run has no staged copilot home
+/// staging set** (ADR-0063 / #615), so a sandboxed Run has no staged copilot home
 /// to mirror — the journal is read where the harness wrote it. Path math only; this
 /// module never reads `$HOME` (the caller injects `home_root`).
 pub(crate) fn copilot_store_root(home_root: &Path) -> PathBuf {
     home_root.join(".copilot").join("session-state")
+}
+
+/// The `pi` sessions store root on the **host** — `<home_root>/.pi/agent/sessions/`,
+/// where each working directory's folder holds `<timestamp>_<session-id>.jsonl`
+/// files (#707, [`crate::pi_session`]). Path math only; the per-Run seam that moves
+/// it while a sandboxed Run lives is [`HarnessStores::for_run`].
+pub(crate) fn pi_store_root(home_root: &Path) -> PathBuf {
+    home_root.join(".pi").join("agent").join("sessions")
+}
+
+/// Where a Run's `pi` sessions are read (#708, ADR-0063): the **staged** sink
+/// (`<staging>/home/.pi/agent/sessions/`) while a sandboxed Run's staging exists —
+/// pi writes there in real time through the rw mount of its home root — else the
+/// host store where `merge_back` flushed them. The same dispatch rule as
+/// [`transcripts_root`] (keyed on the staging dir's existence, never on the Run's
+/// status), so the cost of a sandboxed pi Run reads while the Run lives AND after
+/// its merge-back. The cwd-encoded folder name is identical on both sides because
+/// the worktree is mounted at its host path (ADR-0030).
+pub(crate) fn pi_sessions_root(
+    sandboxed: bool,
+    run_id: &str,
+    home_root: &Path,
+    sandbox_root: &Path,
+) -> PathBuf {
+    if sandboxed && sandbox_staging::staging_dir_for_run(sandbox_root, run_id).exists() {
+        sandbox_staging::staged_path(sandbox_root, run_id, ".pi/agent/sessions")
+    } else {
+        pi_store_root(home_root)
+    }
+}
+
+/// The store roots of the reported-cost harnesses (#707): one field per harness, so a
+/// consumer that reads several harnesses' stores threads one value instead of one
+/// root per harness. `copilot` (no staging set) is always the host store; `pi` moves
+/// per Run like `claude` does ([`pi_sessions_root`], #708) — build the struct with
+/// [`HarnessStores::for_run`] for a Run, [`HarnessStores::from_home`] for the host
+/// only. `claude`'s root is not here: it stays the caller's separate `claude_root`
+/// ([`transcripts_root`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HarnessStores {
+    /// [`copilot_store_root`].
+    pub(crate) copilot: PathBuf,
+    /// [`pi_store_root`].
+    pub(crate) pi: PathBuf,
+}
+
+impl HarnessStores {
+    /// Both **host**-home roots derived from `home_root` — the `off` Run's view, and
+    /// the view of a sandboxed Run whose staging is gone. Test-only since #708: every
+    /// production caller now threads the per-Run [`Self::for_run`] (pi's store moves
+    /// with the sandbox), and the cost/perf unit tests exercise the host-only view.
+    #[cfg(test)]
+    pub(crate) fn from_home(home_root: &Path) -> Self {
+        HarnessStores {
+            copilot: copilot_store_root(home_root),
+            pi: pi_store_root(home_root),
+        }
+    }
+
+    /// The roots **for one Run** (#708): `copilot` on the host, `pi` on the staged
+    /// sink while a sandboxed Run's staging exists ([`pi_sessions_root`]).
+    pub(crate) fn for_run(
+        sandboxed: bool,
+        run_id: &str,
+        home_root: &Path,
+        sandbox_root: &Path,
+    ) -> Self {
+        HarnessStores {
+            copilot: copilot_store_root(home_root),
+            pi: pi_sessions_root(sandboxed, run_id, home_root, sandbox_root),
+        }
+    }
+
+    /// The store root `harness`'s transcript resolution reads from: this struct's
+    /// own for `copilot` / `pi`, `claude_root` for `claude` **and for any other
+    /// name** — a data-declared harness resolves no transcript at all
+    /// (`harness_probes::resolve_transcript` answers `None` before the root is ever
+    /// joined), so handing it the claude root is inert. Picks between independently
+    /// computed roots, not between behaviours (ADR-0051): behaviour dispatch stays in
+    /// `harness_probes`.
+    pub(crate) fn root_for<'a>(&'a self, harness: &str, claude_root: &'a Path) -> &'a Path {
+        match harness {
+            crate::harness_registry::COPILOT => &self.copilot,
+            crate::harness_registry::PI => &self.pi,
+            _ => claude_root,
+        }
+    }
 }
 
 /// Merge a Run's staged transcripts back to `~/.claude/projects/` at its terminal
@@ -366,6 +453,39 @@ pub(crate) async fn merge_back_best_effort(state: &AppState, run_id: &str) {
     });
 }
 
+/// Fill `harness`'s staging set into a sandboxed Run's staging **once per Run**,
+/// and return the env the session's `docker exec` must carry (#708, ADR-0063 §3).
+/// The AppState-side entry point for the infra sessions (manager, merge resolver,
+/// reattach); `spawn_node` calls the pure [`sandbox_staging::fill_staging_set`]
+/// with the roots it already holds. A no-op (empty env) for `off`, and for a harness
+/// with no set — whose absence is said once by the caller. Hard error when the set
+/// cannot be copied: a session on an unfillable home would hang on a dialog.
+pub(crate) fn stage_harness_set(
+    state: &AppState,
+    run_state: &RunState,
+    harness: &str,
+    trusted_root: &Path,
+) -> Result<Vec<(String, String)>> {
+    if run_state.sandbox.is_off() {
+        return Ok(Vec::new());
+    }
+    let (home_root, sandbox_root) = sandbox_home_roots(state)?;
+    let fill = sandbox_staging::fill_staging_set(
+        &home_root,
+        &sandbox_root,
+        &run_state.run_id,
+        harness,
+        Some(trusted_root),
+    )
+    .with_context(|| {
+        format!(
+            "failed to stage the `{harness}` set for run {}",
+            run_state.run_id
+        )
+    })?;
+    Ok(fill.env())
+}
+
 /// Guarantee the Run's sandbox is ready to accept `docker exec` tails: staged
 /// home present, image built, container up. Idempotent — safe to call at
 /// create-time, boot recovery, spawn-time, and run-shell open.
@@ -379,16 +499,14 @@ pub(crate) fn ensure_ready(ctx: &SandboxContext) -> Result<()> {
         return Ok(()); // off: gated by callers; no docker touched.
     };
 
-    // 1. Stage the Claude home ONCE. The ~1 GB `full` walk must not repeat on
-    //    every ensure_ready — gate on the staging dir already existing.
-    //    `prepare` then holds the **staging floor** (#426, ADR-0031 §1) in BOTH
-    //    sandboxed modes, mode-agnostically: valid credentials, the org managed-
-    //    settings baseline, the accepted permissions bypass, trust pre-granted on
-    //    `repo_root` (the common ancestor of the pipeline worktree AND every node
-    //    sub-worktree), and an empty `projects/` sink. Each guarantee is met either
-    //    by a copy of the host file or by a fallback synthesis — which is why an
-    //    autonomous Run never blocks on the "trust this folder?", "managed settings
-    //    require approval" or bypass-permissions dialogs.
+    // 1. Stage the profile ONCE. The ~1 GB `full` walk must not repeat on every
+    //    ensure_ready — gate on the staging dir already existing. No harness
+    //    **staging set** is applied here any more (#708, ADR-0063 §3): `claude`'s
+    //    five guarantees (credentials, org managed-settings baseline, permissions
+    //    bypass, trust pre-granted on `repo_root`, empty `projects/` sink) and `pi`'s
+    //    home are copied by `stage_harness_set` at the spawn of the first session of
+    //    the Run that resolves that harness — so a claude-only Run never carries pi's
+    //    auth, and vice versa.
     let staging_dir = sandbox_staging::staging_dir_for_run(&ctx.sandbox_root, &ctx.run_id);
     if !staging_dir.exists() {
         // Name the profile AND the list once per staging, so "why does this Run carry
@@ -418,15 +536,17 @@ pub(crate) fn ensure_ready(ctx: &SandboxContext) -> Result<()> {
         }
         // `Some(repo_root)` unconditionally: the `off` arm of the old match was DEAD —
         // the `let Some(entries) = … else { return }` above has already excluded it.
-        sandbox_staging::prepare(
-            &ctx.home_root,
-            &ctx.sandbox_root,
-            entries,
-            &ctx.run_id,
-            Some(ctx.repo_root.as_path()),
-        )
-        .with_context(|| format!("failed to stage the sandbox home for run {}", ctx.run_id))?;
+        sandbox_staging::prepare(&ctx.home_root, &ctx.sandbox_root, entries, &ctx.run_id)
+            .with_context(|| format!("failed to stage the sandbox home for run {}", ctx.run_id))?;
     }
+    // #708 / ADR-0063 §3: the sources of the fixed mounts exist — every first-party
+    // harness home root, EMPTY until the first node that resolves the harness fills
+    // it at spawn (`fill_staging_set`), and the `.claude.json` sibling. Unconditional
+    // (cheap, idempotent): a staging prepared by a pre-#708 daemon lacks the `pi` root,
+    // and a `docker create` whose mount source is missing yields a root-owned
+    // directory (rule M1 of `extra_mounts`).
+    sandbox_staging::ensure_mount_anchors(&ctx.sandbox_root, &ctx.run_id)
+        .with_context(|| format!("failed to anchor the sandbox mounts for run {}", ctx.run_id))?;
 
     // 2. Ensure the Run's image exists locally, per the plan resolved at the edge:
     //    pull-then-retag `<name>:h-<hash>` from GHCR (registry, default) or build it from the
@@ -465,6 +585,10 @@ pub(crate) fn ensure_ready(ctx: &SandboxContext) -> Result<()> {
     // and this derivation gives the same answer either way.
     let extra =
         sandbox_staging::extra_mounts(&ctx.sandbox_root, &ctx.run_id, &ctx.host_home, entries);
+    // #708: the empty home root of every first-party harness whose root is not
+    // already a fixed mount (`pi`'s `.pi/agent`; `claude`'s is `claude-home`).
+    let harness_homes =
+        sandbox_staging::harness_home_mounts(&ctx.sandbox_root, &ctx.run_id, &ctx.host_home);
     let spec = sandbox_container::ContainerSpec {
         image_ref: &image_ref,
         repo_root: &ctx.repo_root,
@@ -477,6 +601,7 @@ pub(crate) fn ensure_ready(ctx: &SandboxContext) -> Result<()> {
         gid: ctx.gid,
         daemon_port: ctx.daemon_port,
         extra_mounts: &extra,
+        harness_homes: &harness_homes,
         // #468: the FROZEN env. `ensure_running` only consults the spec on its `Absent`
         // arm — `docker start` never re-evaluates a pre-existing container's env, any more
         // than its mounts. That is exactly the freeze of ADR-0031 §6/§8, guaranteed twice.
@@ -801,31 +926,46 @@ mod tests {
         );
     }
 
+    /// #708 / ADR-0063 §3: `ensure_ready` no longer applies `claude`'s staging set —
+    /// it anchors an EMPTY `.claude.json` (no trust) so the fixed mount has a source.
+    /// The five guarantees (trust, bypass) are filled at the first claude spawn by
+    /// `fill_staging_set`, which this test drives directly (as `spawn_node` does).
     #[test]
-    fn ensure_ready_full_seeds_trust_for_repo_root() {
+    fn ensure_ready_anchors_empty_json_and_the_first_claude_spawn_seeds_trust() {
         let tmp = tempfile::tempdir().unwrap();
         let (docker, _log) = write_fake_docker(tmp.path());
         let ctx = test_ctx(tmp.path(), docker, full());
 
         retry_etxtbsy(|| ensure_ready(&ctx)).unwrap();
 
-        // #409 D5: full stages a `.claude.json`, and ensure_ready pre-approves the
-        // Run's repo_root trust dialog in it — even when the host had no
-        // `.claude.json` (an autonomous Run must not block on "trust this folder?").
+        // ensure_ready anchors a `.claude.json` for the fixed mount, but WITHOUT trust.
         let staged = sandbox_staging::staged_claude_json(&ctx.sandbox_root, "r1");
-        assert!(staged.is_file(), "full staging writes a .claude.json");
-        let json: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&staged).unwrap()).unwrap();
+        assert!(staged.is_file(), "ensure_ready anchors a .claude.json");
         let key = ctx.repo_root.to_string_lossy().into_owned();
-        assert_eq!(
-            json["projects"][&key]["hasTrustDialogAccepted"],
-            serde_json::json!(true),
-            "full must pre-approve the repo_root trust dialog: {json}"
+        let before: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&staged).unwrap()).unwrap();
+        assert!(
+            before["projects"][&key]["hasTrustDialogAccepted"].is_null(),
+            "no trust before the first claude spawn: {before}"
         );
 
-        // #426: the staging floor runs through the REAL caller, not just a direct
-        // `prepare` call. `test_ctx`'s home carries credentials only, so G3 lands on
-        // its synthesis branch.
+        // The first claude spawn fills the set: trust on repo_root + bypass permissions.
+        sandbox_staging::fill_staging_set(
+            &ctx.home_root,
+            &ctx.sandbox_root,
+            "r1",
+            crate::harness_registry::CLAUDE,
+            Some(ctx.repo_root.as_path()),
+        )
+        .unwrap();
+
+        let after: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&staged).unwrap()).unwrap();
+        assert_eq!(
+            after["projects"][&key]["hasTrustDialogAccepted"],
+            serde_json::json!(true),
+            "the claude spawn pre-approves the repo_root trust dialog: {after}"
+        );
         let staged_settings =
             sandbox_staging::staged_claude_home(&ctx.sandbox_root, "r1").join("settings.json");
         let settings: serde_json::Value =
@@ -833,7 +973,89 @@ mod tests {
         assert_eq!(
             settings["skipDangerousModePermissionPrompt"],
             serde_json::json!(true),
-            "ensure_ready must hold the staging floor: {settings}"
+            "the claude spawn holds the bypass fixup: {settings}"
+        );
+    }
+
+    /// #708: filling `pi`'s set copies `.pi/agent` (minus `sessions/`) into the staged
+    /// pi home, creates the empty `sessions/` sink, and reports pi's two env vars — no
+    /// fixup, no `.claude` write. A second fill is a marker no-op.
+    #[test]
+    fn filling_pi_set_stages_the_agent_home_and_reports_env() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(home.join(".pi/agent/extensions")).unwrap();
+        std::fs::write(home.join(".pi/agent/auth.json"), "{\"token\":1}").unwrap();
+        std::fs::write(home.join(".pi/agent/models.json"), "[]").unwrap();
+        // A host session file that must NOT be copied on the way in.
+        std::fs::create_dir_all(home.join(".pi/agent/sessions/enc")).unwrap();
+        std::fs::write(home.join(".pi/agent/sessions/enc/s.jsonl"), "x\n").unwrap();
+        let sandbox_root = tmp.path().join("sandbox");
+
+        let fill = sandbox_staging::fill_staging_set(
+            &home,
+            &sandbox_root,
+            "r1",
+            crate::harness_registry::PI,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            fill.env(),
+            vec![
+                ("PI_SKIP_VERSION_CHECK".to_string(), "1".to_string()),
+                ("PI_TELEMETRY".to_string(), "0".to_string()),
+            ]
+        );
+        let staged = sandbox_staging::staged_path(&sandbox_root, "r1", ".pi/agent");
+        assert!(staged.join("auth.json").is_file(), "auth copied");
+        assert!(staged.join("models.json").is_file(), "catalogue copied");
+        assert!(staged.join("extensions").is_dir(), "extensions copied");
+        let sink = staged.join("sessions");
+        assert!(sink.is_dir(), "sessions sink created");
+        assert!(
+            !sink.join("enc/s.jsonl").exists(),
+            "host sessions are NOT copied in (transcripts sink is empty)"
+        );
+
+        // Idempotent: second fill is a marker no-op (AlreadyFilled), env still reported.
+        let again = sandbox_staging::fill_staging_set(
+            &home,
+            &sandbox_root,
+            "r1",
+            crate::harness_registry::PI,
+            None,
+        )
+        .unwrap();
+        assert!(!again.env().is_empty());
+    }
+
+    /// A claude-only Run never carries pi's auth: filling only `claude` leaves the
+    /// staged pi home empty (it exists as a mount anchor, but nothing was copied).
+    #[test]
+    fn a_claude_only_run_has_no_pi_auth_in_its_staging() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(home.join(".claude")).unwrap();
+        std::fs::write(home.join(".claude/.credentials.json"), "{}").unwrap();
+        std::fs::create_dir_all(home.join(".pi/agent")).unwrap();
+        std::fs::write(home.join(".pi/agent/auth.json"), "{}").unwrap();
+        let sandbox_root = tmp.path().join("sandbox");
+
+        sandbox_staging::prepare(&home, &sandbox_root, &[], "r1").unwrap();
+        sandbox_staging::fill_staging_set(
+            &home,
+            &sandbox_root,
+            "r1",
+            crate::harness_registry::CLAUDE,
+            None,
+        )
+        .unwrap();
+
+        let pi_home = sandbox_staging::staged_path(&sandbox_root, "r1", ".pi/agent");
+        assert!(
+            !pi_home.join("auth.json").exists(),
+            "a claude-only Run must not have pi's auth in its staging"
         );
     }
 

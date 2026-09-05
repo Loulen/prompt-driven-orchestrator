@@ -165,6 +165,14 @@ pub(crate) struct ContainerSpec<'a> {
     /// **réévalue jamais** les mounts. Cohérent avec le gel d'ADR-0031 §6 — un profil
     /// édité en cours de Run ne remonte rien — mais jusqu'ici non dit.
     pub extra_mounts: &'a [crate::sandbox_staging::StagedMount],
+    /// Racines de home des harnais first-party **hors `.claude`** (#708, ADR-0063 §3)
+    /// — calculées par [`crate::sandbox_staging::harness_home_mounts`] : un
+    /// `-v <staging>/home/.pi/agent:<host_home>/.pi/agent:rw` par staging set dont la
+    /// racine n'est pas déjà un mount fixe. Montées **vides** au create, remplies au
+    /// spawn du premier nœud qui résout le harnais (`fill_staging_set`). Posées juste
+    /// après les 4 `-v` fixes, avant la queue du profil : ce sont des mounts **de
+    /// PDO**, pas de l'utilisateur, et leur liste ne dépend que du registre embarqué.
+    pub harness_homes: &'a [crate::sandbox_staging::StagedMount],
     /// Env du profil de staging (#468, ADR-0031 §8) — la liste GELÉE à la création du Run,
     /// résolue au bord par `sandbox_run::frozen_env`. Queue **variable** comme
     /// [`ContainerSpec::extra_mounts`] : vide ⇒ argv byte-identique à #432 (propriété que
@@ -240,9 +248,10 @@ fn create_env(run_id: &str, spec: &ContainerSpec) -> Vec<(String, String)> {
 
 /// Argv `docker create` (après le binaire `docker`). Ordre canonique FIGÉ par le golden test :
 /// `--init`, `--name`, `--user` numérique, `--add-host`, `-w`, les `-e` fusionnés
-/// ([`create_env`] : 4 fixes + la queue du profil, #468), les 4 `-v` **fixes**, puis la
-/// **queue variable** des mounts d'exception `$HOME` (#432), l'image, et le trailing
-/// `sleep infinity` (le conteneur dort ; les tails entrent par `docker exec`).
+/// ([`create_env`] : 4 fixes + la queue du profil, #468), les 4 `-v` **fixes**, les
+/// racines de home des harnais first-party montées **vides** (#708 : `.pi/agent`),
+/// puis la **queue variable** des mounts d'exception `$HOME` (#432), l'image, et le
+/// trailing `sleep infinity` (le conteneur dort ; les tails entrent par `docker exec`).
 ///
 /// La queue de mounts est **entre** les `-v` fixes et l'image — position forcée par Docker :
 /// après l'image, tout argument devient la commande. Elle est triée par chemin relatif
@@ -296,6 +305,17 @@ pub(crate) fn create_args(run_id: &str, spec: &ContainerSpec) -> Vec<String> {
         "-v".to_string(),
         format!("{}:/usr/local/bin/pdo:ro", spec.pdo_bin.display()),
     ]);
+    // Racines de home des harnais first-party (#708, ADR-0063 §3) : montées VIDES,
+    // remplies au spawn. Après les 4 fixes (ce sont des mounts de PDO), avant la queue
+    // du profil (celle de l'utilisateur).
+    for mount in spec.harness_homes {
+        args.push("-v".to_string());
+        args.push(format!(
+            "{}:{}:rw",
+            mount.source.display(),
+            mount.target.display()
+        ));
+    }
     // Queue variable (#432) : un `-v <source>:<target>:rw` par entrée d'exception
     // `$HOME` réellement stagée. Vide ⇒ l'argv reste byte-identique à #406.
     for mount in spec.extra_mounts {
@@ -597,8 +617,8 @@ fn start_container(docker_bin: &str, name: &str) -> Result<()> {
 /// **Best-effort, par choix** : la grande majorité des Runs n'invoquent jamais `sudo`. Faire
 /// échouer un Run parce qu'une commodité n'a pas pu être posée serait pire que le défaut
 /// corrigé — donc `warn!` et on continue, jamais de `?` vers l'appelant (miroir de
-/// `sandbox_run::kill_session_best_effort`). C'est l'exact opposé de la politique du plancher de
-/// staging, et pour une raison nette : le plancher désarme des dialogues qui **bloquent** un
+/// `sandbox_run::kill_session_best_effort`). C'est l'exact opposé de la politique des autonomy fixups du
+/// staging set, et pour une raison nette : un fixup désarme des dialogues qui **bloquent** un
 /// agent non surveillé, ici l'agent voit juste une commande échouer.
 ///
 /// Sur les trois branches et pas seulement `Absent` : un conteneur créé par un daemon antérieur
@@ -675,6 +695,61 @@ pub(crate) fn kill_session_in_container(
          `docker exec` exited with {}: {stderr}",
         output.status
     )
+}
+
+/// Le binaire `binary` est-il résolvable **dans le conteneur** du Run (#708, ADR-0063 §5) ?
+/// Un `docker exec --user <uid>:<gid> <name> bash -lc 'command -v -- <binary>'` — le
+/// **même** shell de login que la tail de la session, donc le même `PATH` qu'elle
+/// verra. `Ok(true)` / `Ok(false)` sur un verdict du shell ; `Err` quand `docker`
+/// lui-même n'a pas pu rendre de verdict (binaire absent, conteneur disparu) — que
+/// l'appelant distingue : une sonde qui n'a pas répondu n'est pas un binaire absent.
+///
+/// **Jamais** une validation d'image : un binaire présent mais d'une version non
+/// validée passe, comme sur l'hôte (ADR-0063 « limites »). Et pas de `--version` : un
+/// `which` n'exécute pas le harnais.
+pub(crate) fn binary_present_in_container(
+    docker_bin: &str,
+    run_id: &str,
+    uid: u32,
+    gid: u32,
+    binary: &str,
+) -> Result<bool> {
+    let name = container_name(run_id);
+    let user = format!("{uid}:{gid}");
+    let script = format!("command -v -- {} >/dev/null 2>&1", sh_single_quote(binary));
+    let output = match Command::new(docker_bin)
+        .arg("exec")
+        .arg("--user")
+        .arg(&user)
+        .arg(&name)
+        .arg("bash")
+        .arg("-lc")
+        .arg(&script)
+        .output()
+    {
+        Ok(output) => output,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(anyhow::Error::new(e)).context(DOCKER_NOT_FOUND_MSG);
+        }
+        Err(e) => {
+            return Err(e).context("failed to run `docker exec` to probe a harness binary");
+        }
+    };
+    if output.status.success() {
+        return Ok(true);
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if is_absent_stderr(&stderr) || stderr.contains("is not running") {
+        anyhow::bail!(
+            "sandbox container `{name}` cannot answer a binary probe — `docker exec` exited \
+             with {}: {stderr}",
+            output.status
+        );
+    }
+    // `command -v` exits 1 (or 127 from a `bash -lc` that could not find it) when
+    // the name does not resolve; any other shell verdict is read the same way — the
+    // only thing that says "present" is a zero exit.
+    Ok(false)
 }
 
 /// `docker rm -f <name>` au `cleanup_run`. Idempotent : conteneur déjà absent (sentinelle) →
@@ -879,6 +954,9 @@ mod tests {
         /// Queue variable (#432). Vide par défaut — c'est ce qui garde l'argv
         /// byte-identique à #406 pour un profil sans entrée d'exception `$HOME`.
         extras: Vec<crate::sandbox_staging::StagedMount>,
+        /// Racines de home des harnais first-party hors `.claude` (#708). Par
+        /// défaut celle de `pi`, comme en production (le registre embarqué la porte).
+        harness_homes: Vec<crate::sandbox_staging::StagedMount>,
         /// Queue variable (#468). Vide par défaut, pour la même raison.
         env: BTreeMap<String, String>,
         /// Queue variable (ADR-0047). Vide par défaut — un Run sans secondaire
@@ -897,6 +975,10 @@ mod tests {
                 host_home: PathBuf::from("/home/u"),
                 image: "pdo-sandbox:h-abc123".to_string(),
                 extras: Vec::new(),
+                harness_homes: vec![crate::sandbox_staging::StagedMount {
+                    source: PathBuf::from("/sb/r1/home/.pi/agent"),
+                    target: PathBuf::from("/home/u/.pi/agent"),
+                }],
                 env: BTreeMap::new(),
                 writable_gitdirs: Vec::new(),
             }
@@ -939,6 +1021,7 @@ mod tests {
                 gid: 1000,
                 daemon_port: 6172,
                 extra_mounts: &self.extras,
+                harness_homes: &self.harness_homes,
                 env: &self.env,
                 writable_secondary_gitdirs: &self.writable_gitdirs,
             }
@@ -1055,7 +1138,8 @@ mod tests {
         ])
     }
 
-    /// Les 4 `-v` fixes (identity mounts).
+    /// Les 4 `-v` fixes (identity mounts) + la racine de home de `pi` montée vide
+    /// (#708, ADR-0063 §3 — `.claude` est déjà le mount `claude-home`).
     fn create_argv_mounts() -> Vec<String> {
         strings(&[
             "-v",
@@ -1066,6 +1150,8 @@ mod tests {
             "/sb/r1/.claude.json:/home/u/.claude.json:rw",
             "-v",
             "/host/bin/pdo:/usr/local/bin/pdo:ro",
+            "-v",
+            "/sb/r1/home/.pi/agent:/home/u/.pi/agent:rw",
         ])
     }
 
@@ -1089,6 +1175,36 @@ mod tests {
         let mut expected = create_argv_fixed();
         expected.extend(create_argv_suffix());
         assert_eq!(create_args("r1", &fx.spec()), expected);
+    }
+
+    /// #708 : la racine de home d'un harnais first-party est montée VIDE, juste après
+    /// les 4 `-v` fixes et AVANT la queue du profil. Sans aucune racine (un registre
+    /// où seul `claude` déclare un set), l'argv est byte-identique à celui d'avant.
+    #[test]
+    fn harness_home_roots_sit_between_the_fixed_mounts_and_the_profile_queue() {
+        let mut fx = Fixtures::sample().with_extras(&[".gitconfig"]);
+        let with = create_args("r1", &fx.spec());
+        let pi_at = with
+            .iter()
+            .position(|a| a == "/sb/r1/home/.pi/agent:/home/u/.pi/agent:rw")
+            .expect("pi's home root is mounted");
+        let pdo_at = with
+            .iter()
+            .position(|a| a == "/host/bin/pdo:/usr/local/bin/pdo:ro")
+            .unwrap();
+        let gitconfig_at = with
+            .iter()
+            .position(|a| a == "/sb/r1/home/.gitconfig:/home/u/.gitconfig:rw")
+            .unwrap();
+        assert!(pdo_at < pi_at && pi_at < gitconfig_at, "{with:?}");
+
+        fx.harness_homes.clear();
+        let without = create_args("r1", &fx.spec());
+        assert_eq!(without.len(), with.len() - 2, "one root = exactly 2 args");
+        assert!(
+            !without.iter().any(|a| a.contains(".pi/agent")),
+            "no set ⇒ no pi mount: {without:?}"
+        );
     }
 
     /// Une liste précise → une queue précise, insérée entre les `-v` fixes et l'image.
@@ -1846,5 +1962,53 @@ mod tests {
     fn container_name_schema() {
         assert_eq!(container_name("r"), "pdo-sbx-r");
         assert_eq!(container_name("20260101-abcdef"), "pdo-sbx-20260101-abcdef");
+    }
+
+    /// #708 / ADR-0063 §5: a `which` in the container. `command -v` exits 0 ⇒ present.
+    #[test]
+    fn binary_present_in_container_true_on_zero_exit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (docker, log) = write_fake_docker(tmp.path(), &FakeSpec::default());
+        assert!(binary_present_in_container(&docker, "r1", 1000, 1000, "pi").unwrap());
+        // It really ran a `docker exec` (never the binary itself).
+        assert!(log_lines(&log).contains(&"exec".to_string()));
+    }
+
+    /// A non-zero shell exit (the name did not resolve) is a clean `Ok(false)`, not an
+    /// error — the caller turns it into a node `Interrupted`, said once per Run.
+    #[test]
+    fn binary_present_in_container_false_when_command_v_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let spec = FakeSpec {
+            exec_exit: 1,
+            ..FakeSpec::default()
+        };
+        let (docker, _log) = write_fake_docker(tmp.path(), &spec);
+        assert!(!binary_present_in_container(&docker, "r1", 1000, 1000, "pi").unwrap());
+    }
+
+    /// A container that is gone / not running is NOT a binary absence: it is an `Err`,
+    /// so the caller can tell "image lacks the binary" from "could not probe".
+    #[test]
+    fn binary_present_in_container_errors_when_the_container_is_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let spec = FakeSpec {
+            exec_exit: 1,
+            exec_stderr: "Error: No such container: pdo-sbx-r1".to_string(),
+            ..FakeSpec::default()
+        };
+        let (docker, _log) = write_fake_docker(tmp.path(), &spec);
+        let err = binary_present_in_container(&docker, "r1", 1000, 1000, "pi").unwrap_err();
+        assert!(format!("{err:#}").contains("cannot answer a binary probe"));
+    }
+
+    /// A missing `docker` binary is an `Err` naming the absence (never `Ok(false)`).
+    #[test]
+    fn binary_present_in_container_errors_when_docker_is_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("no-such-docker");
+        let err = binary_present_in_container(missing.to_str().unwrap(), "r1", 1000, 1000, "pi")
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("not found on PATH"));
     }
 }

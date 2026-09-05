@@ -10,6 +10,59 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.63.0
+
+**Story #702 livrée** (spec #704) : `pi` devient le troisième harnais first-party. Fusion de
+`integration/702-pi-harness` (#705, #706, #707, #708) dans `main` ; les quatre sous-tickets ci-dessous
+avaient été numérotés 1.58.2 → 1.62.0 sur la branche d'intégration pendant que `main` publiait la ligne
+1.59–1.61 (mise à jour in-app) : ils sortent ensemble en 1.63.0.
+
+### #708 — set de staging `pi`
+
+**Set de staging `pi` rempli au spawn du nœud** (#708 ; story #702, spec #704, ADR-0063). Le conteneur
+sandbox naît avec les homes des harnais first-party montés **vides** (`~/.pi/agent`) ; le set d'un harnais
+(auth, settings, catalogue, extensions, skills — jamais `sessions/`) est copié **une fois par (Run,
+harnais)**, au spawn du premier nœud qui le résout, derrière un marqueur `<staging>/sets/<harnais>`. Un Run
+claude-only n'embarque donc jamais l'auth `pi`. L'env du set (`PI_SKIP_VERSION_CHECK`, `PI_TELEMETRY`) voyage
+dans le `docker exec` ; les sessions `pi` sont rapatriées sur l'hôte au merge-back sous le même dossier
+encodé, et le coût/contexte lit le sink stagé tant que le Run vit. Au spawn sandboxé, PDO fait un `which`
+du binaire dans le conteneur : absent ⇒ un WARN par Run et le nœud passe **Interrupted** avec la raison
+`harness_binary_missing` (PDO ne fournit pas l'image, ajoutez `pi` au profil).
+
+### #707 — harnais `pi` instrumenté
+
+**Harnais `pi` instrumenté** (#707 ; story #702, spec #704). Le descripteur embarqué `pi` remplit les
+capacités laissées à `None` par #705 : **transcript par identité** (JSONL `*_<session_id>.jsonl` dans le
+dossier `~/.pi/agent/sessions/<cwd encodé>/`), **coût rapporté** en dollars (somme des `usage.cost.total`
+assistant, constante 1.0 — affiché sans `~`, `—` si un message n'est pas chiffrable), **contexte** (pic de
+`usage.totalTokens` lu contre la fenêtre du catalogue) et **fin de tour** par extension `agent_settled`
+injectée dans le trou `{settings}` (`-e <fichier>`), qui lance `pdo complete --auto` quand
+`autocomplete_turn_end` est coché — sans sortie forcée du TUI, la reprise reste possible. Le sweep garde la
+queue de session comme repli. Le coût d'un Run mixte est ventilé par harnais (`by_harness`, tranches
+`derived`/`reported`). Tableau de support et prérequis README (catalogue de modèles `pi` joignable) mis à
+jour.
+
+### #705 — descripteur first-party `pi`
+
+**Harnais `pi`, descripteur first-party** (#705 ; story #702, spec #704, ADR-0045/0046/0056 amendés).
+`pi` rejoint le tier embarqué (`claude`, `opencode`, `copilot`, `pi`) : TUI résident dans son pane
+(`exec pi -a … --session-id <id>`), fichiers projet pré-approuvés, identité de session imposée par PDO,
+reprise **par identité** uniquement (aucune reprise aveugle). Le catalogue lit `--list-models`
+(modèles `provider/model` avec fenêtre de contexte, servie dans `GET /settings.model_contexts`) et la
+ligne `--thinking` de `--help` (efforts). Les probes déclarent `None` pour coût, transcript, fin de tour,
+ancre de limite, staging et contexte : le tableau de support gagne la colonne `pi` 0.85.1. Le trou
+`{settings}` porte `-e` et reste vide jusqu'à #707 ; le JSON de hook `Stop` n'est plus écrit que pour un
+harnais dont le substrat de fin de tour est le transcript claude. Prérequis README : auth `pi` faite sur
+l'hôte, binaire dans le PATH utilisateur.
+
+### #706 — prefactor `StagingSet`
+
+**Prefactor sandbox : `StagingFloor` devient `StagingSet`** (#706 ; story #702, spec #704, ADR-0063).
+La capacité de staging rend désormais, par harnais, un set (entrées `$HOME`-relatives, exclusions, env,
+entrées *transcripts*) plus des autonomy fixups ; le merge-back parcourt les entrées *transcripts* de tous
+les sets. `claude` est ré-exprimé dans cette forme, octet pour octet (cinq garanties ADR-0031 intactes) ;
+`copilot` et `opencode` déclarent `None`. Aucun changement observable ; la ligne « Sandbox staging set »
+du tableau de support remplace « staging floor ».
 ## 1.61.1
 
 **Story #695 livrée** (spec #696) : l'intégration `integration/695-in-app-update` (#697, #698, #699)

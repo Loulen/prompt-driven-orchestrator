@@ -271,7 +271,11 @@ async fn resume_reposes_the_frozen_harness() {
 async fn wait_for_manager_session(daemon: &TestDaemon, run_id: &str) -> bool {
     let socket = daemon.tmux_socket();
     let session = format!("pdo-mgr-{run_id}");
-    for _ in 0..50 {
+    // 30 s, not 5: the manager spawn resolves its harness binary and opens a tmux
+    // session behind the node spawns, and under the shared-process test load of
+    // `tests/it.rs` that has been measured to overrun a 5 s poll (#705 run) while
+    // passing alone in 2 s. A generous bound costs nothing on the passing path.
+    for _ in 0..300 {
         let up = std::process::Command::new("tmux")
             .args(["-L", &socket, "has-session", "-t", &session])
             .output()

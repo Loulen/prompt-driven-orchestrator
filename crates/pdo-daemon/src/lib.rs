@@ -43,6 +43,7 @@ mod node_io_resolver;
 mod node_primitives;
 mod node_spawn;
 mod outputs_validator;
+mod pi_session;
 mod pipeline;
 mod pipeline_migrator;
 #[cfg(test)]
@@ -8801,14 +8802,6 @@ async fn spawn_manager_session(
         prompt_augmenter::build_manager_prompt(run_id, &daemon_url, &static_prompt, name_hint);
 
     let session_name = tmux_session_manager::manager_session_name(run_id);
-    // The manager runs inside the Run's container too when sandboxed.
-    let sandbox_wrap = sandboxed.then(|| tmux_session_manager::SandboxWrap {
-        docker_bin: state.docker_cmd_override.as_deref().unwrap_or("docker"),
-        uid: sandbox_container::host_uid(),
-        gid: sandbox_container::host_gid(),
-        marker: &session_name,
-        workdir: worktree_dir,
-    });
     // The manager follows the harness OF THE RUN — `Run → instance → floor`, no node
     // tier and deliberately no model/effort — so "this Run runs on X" holds with no
     // exception. An unknown name falls back to `claude` with a warning rather than
@@ -8844,6 +8837,31 @@ async fn spawn_manager_session(
             );
             harness_registry::claude()
         });
+    // #708: the manager runs the Run's harness inside the container, so it fills that
+    // harness's staging set (once per Run — the first node may not have spawned yet)
+    // and carries its env on the exec. Best-effort: a fill error must not wedge the
+    // best-effort manager assist, so it degrades to no env (the first NODE spawn is
+    // the authoritative fail-fast on an unfillable set).
+    let manager_set_env: Vec<(String, String)> = match (sandboxed, run_state.as_ref()) {
+        (true, Some(rs)) => {
+            let trusted = effective_repo_root(state, rs);
+            sandbox_run::stage_harness_set(state, rs, &manager_harness_name, &trusted)
+                .unwrap_or_else(|e| {
+                    warn!("manager for run {run_id}: staging `{manager_harness_name}` set failed (best-effort): {e:#}");
+                    Vec::new()
+                })
+        }
+        _ => Vec::new(),
+    };
+    // The manager runs inside the Run's container too when sandboxed.
+    let sandbox_wrap = sandboxed.then(|| tmux_session_manager::SandboxWrap {
+        docker_bin: state.docker_cmd_override.as_deref().unwrap_or("docker"),
+        uid: sandbox_container::host_uid(),
+        gid: sandbox_container::host_gid(),
+        marker: &session_name,
+        workdir: worktree_dir,
+        set_env: &manager_set_env,
+    });
     if let Err(e) = tmux_session_manager::spawn(
         &session_name,
         &full_prompt,
@@ -9407,6 +9425,10 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
             "installed": installed,
             "version": cached.version,
             "models": cached.catalogue.models,
+            // #705: the context window a source published beside each id (`pi
+            // --list-models`), keyed by id — a picker hint, verbatim. Empty when no
+            // source names one.
+            "model_contexts": cached.catalogue.model_contexts,
             "efforts": cached.catalogue.efforts,
             "has_effort": has_effort,
         }));
@@ -11611,7 +11633,7 @@ fn sandbox_profile_view(
         let enabled = profile.resolved.entries.iter().any(|e| e == extra);
         entries.push(sandbox_entry_view(home_root, extra, None, enabled));
     }
-    let floor: Vec<serde_json::Value> = sandbox_profile::FLOOR_GUARANTEES
+    let floor: Vec<serde_json::Value> = sandbox_profile::STAGING_GUARANTEES
         .iter()
         .map(|g| serde_json::json!({ "id": g.id, "label": g.label, "path": g.path }))
         .collect();
@@ -12328,14 +12350,20 @@ async fn get_run(
             // are an instance concept) while transcripts come from `projects_root`,
             // which moves for a sandboxed Run.
             let prices = price_table::PriceTable::load(&home_root);
-            // Copilot has no staging floor, so its session journals are read from the
-            // host `.copilot/session-state/`.
-            let copilot_root = sandbox_run::copilot_store_root(&home_root);
+            // `copilot`'s journal is on the host; `pi`'s moves per Run (#708) — the
+            // staged sink while this sandboxed Run lives, the host store after
+            // merge-back — mirroring the Claude root's sandbox-aware seam above.
+            let stores = sandbox_run::HarnessStores::for_run(
+                !run_state.sandbox.is_off(),
+                &run_state.run_id,
+                &home_root,
+                &sandbox_root,
+            );
             augment_run_state_from_disk(
                 &mut run_state,
                 &events,
                 &projects_root,
-                &copilot_root,
+                &stores,
                 &repo_root,
                 &prices,
             );
@@ -13031,9 +13059,15 @@ async fn run_stale_detection(state: &Arc<AppState>) {
             &home_root,
             &sandbox_root,
         );
-        // Copilot has no staging floor, so it resolves its transcript from the host
-        // `.copilot/session-state/`. Picked per node below by the frozen harness.
-        let copilot_root = sandbox_run::copilot_store_root(&home_root);
+        // `copilot` resolves from the host journal; `pi` from the sandbox-aware store
+        // (#708). Picked per node below by the frozen harness
+        // (`HarnessStores::root_for`).
+        let stores = sandbox_run::HarnessStores::for_run(
+            !run_state.sandbox.is_off(),
+            run_id,
+            &home_root,
+            &sandbox_root,
+        );
 
         let running = stale_detector::running_nodes(&run_state);
         for (node_id, iter) in &running {
@@ -13060,11 +13094,7 @@ async fn run_stale_detection(state: &Arc<AppState>) {
 
             // The store ROOT is the resolved harness's own; the per-harness
             // `resolve_transcript` joins the right leaf.
-            let node_store_root: &Path = if node_harness == harness_registry::COPILOT {
-                &copilot_root
-            } else {
-                &projects_root
-            };
+            let node_store_root: &Path = stores.root_for(&node_harness, &projects_root);
 
             let probes = SweepNodeProbes {
                 socket: &socket,
@@ -13476,14 +13506,6 @@ pub(crate) async fn reattach_node_session(
         return ReattachOutcome::WorkingDirMissing;
     }
 
-    // A resumed sandboxed session re-enters its container.
-    let sandbox_wrap = (!run_state.sandbox.is_off()).then(|| tmux_session_manager::SandboxWrap {
-        docker_bin: state.docker_cmd_override.as_deref().unwrap_or("docker"),
-        uid: sandbox_container::host_uid(),
-        gid: sandbox_container::host_gid(),
-        marker: session_name,
-        workdir: &working_dir,
-    });
     // A resume restores the model but loses the effort level, so re-pose the level
     // the node was LAUNCHED with, and resume by the pinned session id.
     let launch_effort = find_launch_effort(events, node_id, iter);
@@ -13552,6 +13574,28 @@ pub(crate) async fn reattach_node_session(
         };
     }
     drop(admission_guard);
+
+    // #708: the frozen harness's staging set is already on disk (filled at the first
+    // spawn, marker present) — `stage_harness_set` returns its env idempotently, which
+    // the re-entered container session carries. Best-effort: never block a recovery.
+    let set_env = if run_state.sandbox.is_off() {
+        Vec::new()
+    } else {
+        sandbox_run::stage_harness_set(state, run_state, &descriptor.name, repo_root)
+            .unwrap_or_else(|e| {
+                warn!("reattach run {run_id} node {node_id}: staging `{}` set failed (best-effort): {e:#}", descriptor.name);
+                Vec::new()
+            })
+    };
+    // A resumed sandboxed session re-enters its container.
+    let sandbox_wrap = (!run_state.sandbox.is_off()).then(|| tmux_session_manager::SandboxWrap {
+        docker_bin: state.docker_cmd_override.as_deref().unwrap_or("docker"),
+        uid: sandbox_container::host_uid(),
+        gid: sandbox_container::host_gid(),
+        marker: session_name,
+        workdir: &working_dir,
+        set_env: &set_env,
+    });
 
     if let Err(e) = tmux_session_manager::resume(
         session_name,
@@ -14099,12 +14143,16 @@ async fn spawn_merge_resolver(
     };
     let _ = append_event(state, &resolver_started).await;
 
+    // DEAD in production (ADR-0006); the resolver would follow the Run's harness, so
+    // an empty set env is acceptable here — it never runs a real pi session.
+    let resolver_set_env: Vec<(String, String)> = Vec::new();
     let sandbox_wrap = (!sandbox_mode.is_off()).then(|| tmux_session_manager::SandboxWrap {
         docker_bin: state.docker_cmd_override.as_deref().unwrap_or("docker"),
         uid: sandbox_container::host_uid(),
         gid: sandbox_container::host_gid(),
         marker: &session_name,
         workdir: worktree_dir,
+        set_env: &resolver_set_env,
     });
     // Follows the harness OF THE RUN, exactly like the manager: `Run → instance →
     // floor`, no node tier, no model/effort. An unknown name falls back to `claude`
@@ -15559,6 +15607,10 @@ async fn force_spawn_node(
         // silently misses the `Stop` hook on this seam alone.
         inject_hook: stored_autocomplete_turn_end(&state.db).await,
         harness_registry: Some(&harness_registry),
+        // #708: a sandboxed force-spawn fills the resolved harness's staging set at
+        // this spawn, exactly like the scheduler. `harness_home_root` is already the
+        // host `$HOME` (or the embedded-floor fallback); pass it only when sandboxed.
+        sandbox_home_root: (!run_state.sandbox.is_off()).then_some(harness_home_root.as_path()),
     };
 
     // Hold the lock from the count until the reservation event is appended — exactly
@@ -16201,12 +16253,17 @@ async fn open_run_shell(
         }
     }
 
+    // A run shell runs bash, not a harness tail: no staging-set env to forward. A
+    // hand-typed `pi` inside it still reads the staged `.pi/agent` home (mounted),
+    // and can export the two vars itself; PDO does not pre-pose them for a shell.
+    const NO_SET_ENV: &[(String, String)] = &[];
     let sandbox_wrap = (!run_state.sandbox.is_off()).then(|| tmux_session_manager::SandboxWrap {
         docker_bin: state.docker_cmd_override.as_deref().unwrap_or("docker"),
         uid: sandbox_container::host_uid(),
         gid: sandbox_container::host_gid(),
         marker: &session,
         workdir: &worktree,
+        set_env: NO_SET_ENV,
     });
     match tmux_session_manager::spawn_shell(
         &session,
@@ -16344,10 +16401,12 @@ async fn open_library_assistant(State(state): State<Arc<AppState>>) -> Response 
     // launch template has. On another harness the token is dropped silently and the
     // primer's fetch-the-focus instruction becomes the only mechanism — say so once,
     // at spawn, rather than let it be discovered from an assistant guessing wrong.
-    if !harness.can_inject_hooks() {
+    if !harness.can_inject_hooks()
+        || !harness_probes::settings_hole_takes_claude_file(&harness.name)
+    {
         warn!(
-            "library assistant on harness '{}': its launch template has no {{settings}} hole, \
-             so the UserPromptSubmit focus hook is NOT armed. The assistant will know the open \
+            "library assistant on harness '{}': its launch template has no {{settings}} hole \
+             that takes the claude-format hook file, so the UserPromptSubmit focus hook is NOT armed. The assistant will know the open \
              pipeline only if it follows its primer's instruction to fetch \
              GET /sessions/libassist/focus before acting (ADR-0051 §3).",
             harness.name
@@ -17963,7 +18022,7 @@ fn augment_run_state_from_disk(
     run_state: &mut event_log::RunState,
     events: &[event_log::Event],
     projects_root: &std::path::Path,
-    copilot_root: &std::path::Path,
+    stores: &sandbox_run::HarnessStores,
     repo_root: &std::path::Path,
     prices: &price_table::PriceTable,
 ) {
@@ -17977,7 +18036,7 @@ fn augment_run_state_from_disk(
     let breakdown = run_cost::compute_run_cost_breakdown_cached(
         events,
         projects_root,
-        copilot_root,
+        stores,
         repo_root,
         &run_state.run_id,
         prices,
@@ -17999,6 +18058,9 @@ fn augment_run_state_from_disk(
                 event_log::NodeCost {
                     usd: Some(0.0),
                     form: contribution.form,
+                    // ANDed over the node's contributions below (#707): a node is
+                    // "in dollars" only if every execution's reported cost is.
+                    reported_in_usd: true,
                     partial: false,
                     unpriced_models: Vec::new(),
                     unavailable_reasons: Vec::new(),
@@ -18013,6 +18075,7 @@ fn augment_run_state_from_disk(
         } else if cost.executions == 0 {
             cost.form = contribution.form;
         }
+        cost.reported_in_usd &= contribution.reported_in_usd;
         if let Some(usd) = contribution.usd {
             if !*has_unknown {
                 cost.usd = Some(cost.usd.unwrap_or_default() + usd);
@@ -18021,6 +18084,7 @@ fn augment_run_state_from_disk(
             *has_unknown = true;
             cost.usd = None;
             cost.form = None;
+            cost.reported_in_usd = false;
         }
         cost.partial |= contribution.partial;
         cost.executions += contribution.executions;
@@ -22546,7 +22610,6 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let repo = tempfile::tempdir().unwrap();
         let projects = home.path().join(".claude/projects");
-        let copilot = home.path().join(".copilot/session-state");
         let run_id = "node-cost";
         let working_dir = worktree_ops::worktree_dir_for_run(repo.path(), run_id);
         let project = projects.join(run_cost::cc_project_dirname(&working_dir));
@@ -22586,7 +22649,7 @@ mod tests {
             &mut run_state,
             &events,
             &projects,
-            &copilot,
+            &sandbox_run::HarnessStores::from_home(home.path()),
             repo.path(),
             &price_table::PriceTable::load(home.path()),
         );
@@ -36497,9 +36560,9 @@ edges:
             );
         }
 
-        // The embedded floor always resolves, always as `builtin` — copilot is the
-        // third arm, listed under "Built-in" like the other two.
-        for floor in ["claude", "opencode", "copilot"] {
+        // The embedded floor always resolves, always as `builtin` — copilot and pi
+        // are the third and fourth arms, listed under "Built-in" like the other two.
+        for floor in ["claude", "opencode", "copilot", "pi"] {
             let entry = harnesses
                 .iter()
                 .find(|h| h["name"] == floor)

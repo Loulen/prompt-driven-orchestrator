@@ -5,7 +5,7 @@ qu'un binaire qui y décrit `--model` en prose « n'a pas de catalogue » alors 
 ailleurs.
 
 > Statut : accepted (2026-08-26, sous-ticket #629 de la spec « copilot, deuxième harnais
-> first-party »). **Amende ADR-0053 §1** : le catalogue reste déduit du binaire installé ; ce qu'on
+> first-party » ; amendé le 2026-09-05 par #702 : `--list-models` entre dans l'échelle). **Amende ADR-0053 §1** : le catalogue reste déduit du binaire installé ; ce qu'on
 > décide ici, c'est *où* on le lit dans ce binaire, et dans quel ordre.
 
 ## Contexte
@@ -21,11 +21,12 @@ d'une release à l'autre. Une seule source, c'est un point de cécité.
 
 ## Ce qu'on décide
 
-### 1. Trois sources, par préférence décroissante
+### 1. Quatre sources, par préférence décroissante
 
 1. **`<binaire> completion bash`** — le script de complétion **généré**.
-2. **`<binaire> help config`** — le sujet d'aide des réglages, valeurs autorisées en liste à puces.
-3. **`<binaire> --help`** — le lecteur de #616.
+2. **`<binaire> --list-models`** — la table de modèles **générée** depuis le catalogue embarqué, qui porte aussi la fenêtre de contexte par modèle (ajouté par #702 : `pi` n'a ni `completion` ni `help config`, mais annonce `--list-models` dans son `--help` ; le lire dans la prose de `--help` aurait conclu « pas de catalogue », la même erreur que #629).
+3. **`<binaire> help config`** — le sujet d'aide des réglages, valeurs autorisées en liste à puces.
+4. **`<binaire> --help`** — le lecteur de #616.
 
 ### 1 bis. On n'exécute qu'une sous-commande que le binaire **déclare**
 

@@ -866,6 +866,40 @@ pub fn lock_guard_timeout_ms(value: impl AsRef<str>) -> EnvVarGuard {
     )
 }
 
+/// The process-wide directory the catalogue tests install their **fake harness
+/// binaries** in, with the harness probe `PATH` fixed to `<this dir>:<process PATH>`
+/// — once per process, on first call.
+///
+/// Why one dir and why the process PATH appended: `PDO_HARNESS_PROBE_PATH` is read
+/// by *every* session spawn in this test binary (the live session inherits the very
+/// PATH the preflight resolved the harness on, ADR-0055), and `cargo test` runs all
+/// the integration modules as threads of ONE process. A test that pointed the
+/// variable at a bare tempdir of fakes — then dropped that tempdir — left every
+/// later-spawned session (libassist, script nodes, shells…) with a PATH holding
+/// neither `bash`, `tmux` nor `pdo`: they died at once, and dozens of unrelated
+/// tests failed whenever the catalogue tests ran in the same process. The fakes
+/// still win (their dir comes first), the sessions still boot (the real tools come
+/// after), and the dir outlives every test.
+///
+/// Also collapses the catalogue version TTL to a millisecond, so the
+/// re-probe-on-version-change contract is provable without waiting a minute.
+pub fn fake_harness_bindir() -> std::path::PathBuf {
+    static DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        ensure_pdo_on_path();
+        let dir = std::env::temp_dir().join(format!("pdo-fake-harness-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("fake harness bindir is creatable");
+        let process_path = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var(
+            "PDO_HARNESS_PROBE_PATH",
+            format!("{}:{process_path}", dir.display()),
+        );
+        std::env::set_var(pdo_daemon::CATALOGUE_VERSION_TTL_MS_ENV, "1");
+        dir
+    })
+    .clone()
+}
+
 /// Prepend the directory holding the freshly built `pdo` binary to `PATH`, once
 /// per process. Shared so per-file `Once`s can't read-modify-write `PATH`
 /// concurrently.

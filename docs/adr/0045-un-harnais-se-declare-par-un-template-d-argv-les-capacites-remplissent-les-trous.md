@@ -73,8 +73,8 @@ permission, que **rien** ne détecte depuis #469.
 - **Un modèle qu'un harnais ne peut pas honorer ne fait pas forcément échouer le lancement.** Mesuré
   : `opencode` avec un modèle valide mais injoignable **retombe en silence** sur son défaut et rend
   un tour vert sous un autre modèle. PDO ne peut donc pas compter sur un échec bruyant.
-- **Le sandbox est hors périmètre** : le plancher de staging reste propre à `claude` (ADR-0031). Un
-  autre harnais dans un Run sandboxé ne tient que par le Dockerfile de l'utilisateur — et PDO le dit
-  une fois, visiblement.
+- **Le sandbox n'est plus hors périmètre** (amendé par ADR-0063) : chaque harnais first-party déclare
+  un *staging set*, copié au spawn du premier nœud qui le résout ; l'image reste l'affaire de
+  l'utilisateur et PDO dit une fois, visiblement, quand le binaire en est absent.
 - **Un harnais déclaré sans capacité est utilisable mais aveugle** : il tourne, on l'attache, il
   complète ; il ne rapporte ni coût ni fin de tour.

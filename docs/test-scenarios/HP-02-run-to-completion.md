@@ -39,20 +39,20 @@ Features validated while crossing the run screens (grafted from retired per-issu
   business outcome by two visibly different routes. The `off` twin is the **control**: without it, a
   green sandboxed Run proves nothing (a Run that silently fell back to the host path also looks
   green). See the journey's §10-12 and the dedicated checks below.
-- **Agentic harness, as a three-way pin** (PRD #549 / #612, ADR-0045, ADR-0046, ADR-0051, ADR-0052):
-  a **three-node** pipeline runs one node pinned to **`claude`**, one to **`opencode`** and one to
-  **`copilot`** in the **same Run**. The set is the control, exactly as for the sandbox: a
-  single-harness Run that silently resolved to the `claude` floor is indistinguishable from a
-  correctly resolved one, so the other two are what make the four-tier resolution observable at all.
-  The three are also the whole spread of PDO's instrumentation in one Run — five capabilities, three,
-  and none — which is what the README's **Support** table publishes. See the journey's §14-16.
+- **Agentic harness, as a four-way pin** (PRD #549 / #612 / #702, ADR-0045, ADR-0046, ADR-0051,
+  ADR-0052, ADR-0063): a **four-node** pipeline runs one node pinned to **`claude`**, one to
+  **`opencode`**, one to **`copilot`** and one to **`pi`** in the **same Run**. The set is the
+  control, exactly as for the sandbox: a single-harness Run that silently resolved to the `claude`
+  floor is indistinguishable from a correctly resolved one, so the others are what make the four-tier
+  resolution observable at all. The four are also the whole spread of PDO's instrumentation in one Run
+  — which is what the README's **Support** table publishes. See the journey's §14-16.
 
 ## Preconditions
 
 - The app is running locally and reachable in a browser; status bar shows the daemon **connected**.
 - `claude` is on `PATH` (the daemon shells out to it for each node session).
-- `opencode` and `copilot` are on `PATH` too: the two other harnesses of the embedded floor
-  (ADR-0045), and the three-way pin needs all three binaries resident. `PATH` here means the
+- `opencode`, `copilot` and `pi` are on `PATH` too: the three other harnesses of the embedded floor
+  (ADR-0045), and the four-way pin needs all four binaries resident. `PATH` here means the
   **daemon's**, enriched from your login shell (ADR-0055) — a harness installed by a user package
   manager and invisible to a systemd service is the usual reason a pin fails to spawn.
 - Each harness is **logged in**, and the target repository's root has been **trusted once** for
@@ -98,20 +98,26 @@ Features validated while crossing the run screens (grafted from retired per-issu
     you go`) → it lists the floor entry by entry, and its **Image** control offers
     `default` / `dockerfile` / `registry`, the `default` option saying in one sentence that the tag is
     the SHA-256 of the seeded Dockerfile's bytes.
-14. **Three-way harness pin.** Seed a **three-node** pipeline: three parallel nodes, each asked for a
+14. **Four-way harness pin.** Seed a **four-node** pipeline: four parallel nodes, each asked for a
     single line of output. In the **node inspector**, pin the first node's harness to **`claude`**, the
-    second's to **`opencode`** and the third's to **`copilot`**; each node's inspector reads back which
-    harness it **resolves** to. On the `opencode` node, also set a **model** through the picker's
-    `Custom…` escape hatch — a `provider/model` slug that supports tool use (e.g.
+    second's to **`opencode`**, the third's to **`copilot`** and the fourth's to **`pi`**; each node's
+    inspector reads back which harness it **resolves** to. On the `opencode` node, also set a **model**
+    through the picker's `Custom…` escape hatch — a `provider/model` slug that supports tool use (e.g.
     `openrouter/anthropic/claude-haiku-4.5`). **This is not optional**, and the notes say why. On the
     `copilot` node, read the **effort** picker and **leave it alone**: its stops come from the
     installed binary (ADR-0053), and reading them is the cheapest proof the served catalogue reached
-    the UI. Its **model** control is a free-text field, not a list — see the checks.
+    the UI. Its **model** control is a free-text field, not a list — see the checks. On the `pi` node,
+    the effort picker offers pi's `--thinking` stops and the cost column is live (pi reports its cost
+    in dollars, #707).
 15. Open **New Run** on it. Set the Run's **Harness** field to **`claude`** and sandbox to **`off`**,
     then Launch. Setting the Run tier to `claude` is what turns the other two pins into a real proof:
-    they must still run `opencode` and `copilot` *against* the tier above them. All three nodes start,
-    all three reach **completed**, and the Run reaches **Completed** with the End `result` port
-    **received**: one Run, three harnesses, one outcome.
+    they must still run `opencode`, `copilot` and `pi` *against* the tier above them. All four nodes
+    start, all four reach **completed**, and the Run reaches **Completed** with the End `result` port
+    **received**: one Run, four harnesses, one outcome. Run it **sandboxed** too (a profile whose image
+    carries all four binaries): the `claude` and `pi` nodes both complete, and Stats shows a cost slice
+    for each **while the Run lives and after it ends** — pi's sessions are harvested back from the
+    container (ADR-0063). A sandboxed Run whose image lacks `pi` leaves the `pi` node **Interrupted**
+    with « binary absent from the image », said once in the Run.
 16. **The `copilot` node, end to end.** Watch that node specifically, without touching it: it starts,
     its pane shows an **interactive** `copilot` session (not a one-shot that exits), and when its turn
     ends the node goes **completed on its own** — nobody typed `pdo complete`, and no one attached.
@@ -153,7 +159,7 @@ Features validated while crossing the run screens (grafted from retired per-issu
   announced is a **blocking finding** — that inversion is the #445 regression.
 - The sandboxed node's terminal preview shows a live `claude` session **with no interactive dialog**:
   no managed-settings approval, no bypass-permissions warning. That silence is the entire point of
-  the staging floor (#426) and it is only observable here.
+  the staging set's autonomy fixups (#426, ADR-0063) and it is only observable here.
 - **Both** Runs reach **Completed**, End `result` **received**, and the output artifact opens from
   the host UI in both cases (for the sandboxed one, that is the merge-back).
 - The `off` twin shows **no** preparation phase.
@@ -162,9 +168,9 @@ Features validated while crossing the run screens (grafted from retired per-issu
   floor entry by entry, offers the three-way **Image** control, warns on credential-bearing entries,
   and lists a profile's referents before confirming its deletion.
 
-#### Harness three-way pin (steps 14-16)
+#### Harness four-way pin (steps 14-16)
 
-- The node inspector offers **Default / claude / opencode / copilot** and reads back the **resolved**
+- The node inspector offers **Default / claude / opencode / copilot / pi** and reads back the **resolved**
   harness, saying whether that is a **pin** or the **floor** ("Resolved: opencode (pinned)" vs
   "Resolved: claude (floor — no pin)").
 - Saving writes the pin as the node's own `pin_harness`, and the custom model under the **resolved

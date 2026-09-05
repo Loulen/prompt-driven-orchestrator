@@ -121,6 +121,8 @@ pub const CLAUDE: &str = "claude";
 pub const OPENCODE: &str = "opencode";
 /// The `copilot` harness name — PDO's second first-party harness (#614).
 pub const COPILOT: &str = "copilot";
+/// The `pi` harness name — PDO's third first-party harness (#705, story #702).
+pub const PI: &str = "pi";
 
 /// The `claude` build PDO's capabilities were last measured against.
 pub const CLAUDE_VALIDATED_VERSION: &str = "2.1.246";
@@ -132,6 +134,11 @@ pub const OPENCODE_VALIDATED_VERSION: &str = "1.18.18";
 /// #615 measured the `-i` interactive launch, the event journal's `assistant.turn_end`,
 /// and the `session.usage_checkpoint` reported cost on.
 pub const COPILOT_VALIDATED_VERSION: &str = "1.0.80";
+/// The `pi` build PDO's descriptor was last measured against (#705). The grilling
+/// of #702 measured 0.84.2; the descriptor was validated on 0.85.1, whose `--help`
+/// declares the same launch surface (`-a`, `--session-id`, `--thinking`, `-e`,
+/// `--list-models`) — no divergence found between the two on the tokens PDO uses.
+pub const PI_VALIDATED_VERSION: &str = "0.85.1";
 
 /// The **last validated version** of `name`'s binary — the release PDO's knowledge
 /// of that harness was measured against (#617). `None` for a data-declared harness:
@@ -149,6 +156,7 @@ pub fn validated_version(name: &str) -> Option<&'static str> {
         CLAUDE => Some(CLAUDE_VALIDATED_VERSION),
         OPENCODE => Some(OPENCODE_VALIDATED_VERSION),
         COPILOT => Some(COPILOT_VALIDATED_VERSION),
+        PI => Some(PI_VALIDATED_VERSION),
         _ => None,
     }
 }
@@ -314,10 +322,92 @@ pub fn copilot() -> HarnessDescriptor {
     }
 }
 
+/// The `pi` descriptor — pi coding agent as PDO's third first-party harness (#705,
+/// story #702; measured on 0.85.1). Embedded, for the same reason as `copilot`: the
+/// picker decides provenance by name, and the support table publishes its row.
+///
+/// Its capabilities are declared in [`crate::harness_probes`] — all **explicitly
+/// absent** in this ticket (cost, transcript, end of turn, usage-limit anchor,
+/// context usage, staging): the descriptor lands first, the instrumentation follows
+/// (#706/#707). The support table says so rather than implying it.
+///
+/// The launch enters pi's **resident TUI** with the prompt auto-executed as a
+/// positional message (`pi [options] [messages...]`), so the harness stays attachable
+/// after the turn — PDO's core contract (CONTEXT.md § "Harnais agentique", ADR-0012).
+/// `-p` is deliberately *not* used: it exits at turn end (ineligible, ADR-0032). The
+/// tokens:
+/// - `-a` (`--approve`) trusts the project-local files (`AGENTS.md`, `.pi/`
+///   extensions) for this run — no trust dialog on first turn, the "dossier de
+///   travail approuvé" prerequisite met by argv instead of a staged home;
+/// - `--model {model}` is `provider/model` (an alias like `~anthropic/...-latest`
+///   included), absent when unset so pi picks its own default;
+/// - `--thinking {effort}` is pi's effort axis (`off … max`, read off `--help`);
+/// - `-e {settings}` is the **turn-end extension** slot (CONTEXT.md § "Extension de
+///   fin de tour"): the `{settings}` hole carries the "injected settings file" meaning
+///   it has for `claude`, here an extension file loaded by `-e`. It stays **empty in
+///   #705** — the extension the daemon writes arrives with #707 — so the token drops
+///   and nothing claude-shaped is ever handed to pi (see
+///   [`crate::harness_probes::settings_hole_takes_claude_file`]);
+/// - `--session-id {session_id}` is the **imposed session identity**: pi creates the
+///   session under that exact id if missing and reopens it otherwise (measured on
+///   `--help`: "Use exact project session ID, creating it if missing"), so two
+///   concurrent nodes in one worktree never share a session file, and resume re-enters
+///   *this* node's conversation by identity.
+///
+/// Resume uses the **same** flag — `--session-id '<id>'` is created-or-resumed — and
+/// pi never blind-continues (`--continue` would reopen the cwd's latest session, the
+/// collision the imposed identity removes): `resume_blind` is empty, so a row with no
+/// identity renders no resume flag at all. The effort is re-posed from the start
+/// event (`--thinking {effort}`), as `claude`'s is (#424).
+///
+/// Env: `PI_SKIP_VERSION_CHECK=1` (PDO decides when the target moves, not a startup
+/// banner) and `PI_TELEMETRY=0` (install telemetry off inside a PDO node).
+///
+/// **Prerequisites (not PDO code):** provider auth done on the host (`pi auth`, or
+/// the provider env var), and the `pi` binary on the *user's* PATH (ADR-0055).
+pub fn pi() -> HarnessDescriptor {
+    HarnessDescriptor {
+        name: PI.to_string(),
+        binary: "pi".to_string(),
+        launch: [
+            "exec",
+            "pi",
+            "-a",
+            "--model {model}",
+            "--thinking {effort}",
+            "-e {settings}",
+            "--session-id {session_id}",
+            "{prompt}",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect(),
+        resume: [
+            "exec",
+            "pi",
+            "-a",
+            "{resume}",
+            "--thinking {effort}",
+            "-e {settings}",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect(),
+        // Same flag at launch and resume: `--session-id` is created-or-resumed.
+        // Never a blind continue (imposed identity, CONTEXT.md § "Harnais agentique").
+        resume_by_id: "--session-id".to_string(),
+        resume_blind: String::new(),
+        env: vec![
+            ("PI_SKIP_VERSION_CHECK".to_string(), "1".to_string()),
+            ("PI_TELEMETRY".to_string(), "0".to_string()),
+        ],
+    }
+}
+
 /// The embedded floor: the harnesses PDO ships compiled in, in precedence-neutral
 /// declaration order.
 pub fn embedded_floor() -> Vec<HarnessDescriptor> {
-    vec![claude(), opencode(), copilot()]
+    vec![claude(), opencode(), copilot(), pi()]
 }
 
 /// Merge a user-declared disk tier over the embedded floor, **by name**: a disk
@@ -759,6 +849,50 @@ mod tests {
     }
 
     #[test]
+    fn pi_is_on_the_floor_imposes_identity_and_resumes_by_the_same_flag_only() {
+        // #705: the third first-party harness. Resident TUI, project files
+        // pre-approved, imposed session identity, model, effort, positional prompt.
+        assert!(resolve(PI).is_some());
+        let d = pi();
+        assert_eq!(d.binary, "pi");
+        assert!(
+            d.launch.iter().any(|t| t == "-a"),
+            "project files pre-approved"
+        );
+        assert!(d.launch.iter().any(|t| t.contains("{model}")));
+        assert!(d.has_effort_hole(), "pi has an effort axis (--thinking)");
+        assert!(d.pins_session_id(), "pi imposes --session-id");
+        assert!(
+            d.launch.last().is_some_and(|t| t == "{prompt}"),
+            "positional prompt"
+        );
+        assert!(
+            !d.launch.iter().any(|t| t == "-p" || t == "--print"),
+            "never the one-shot mode: it exits at turn end (ineligible, ADR-0032)"
+        );
+        // The `{settings}` hole carries the `-e` extension token (turn-end extension,
+        // #707) — present in the shape, empty in this ticket.
+        assert!(d.has_settings_hole());
+        assert!(d.launch.iter().any(|t| t == "-e {settings}"));
+        assert!(d.resume.iter().any(|t| t == "-e {settings}"));
+        // Resume by identity only, with the SAME created-or-resumed flag; never blind.
+        assert!(d.can_resume());
+        assert_eq!(d.resume_by_id, "--session-id");
+        assert!(d.resume_blind.is_empty(), "pi never blind-continues");
+        assert!(
+            d.resume.iter().any(|t| t.contains("{effort}")),
+            "effort is re-posed on resume from the start event"
+        );
+        assert_eq!(
+            d.env,
+            vec![
+                ("PI_SKIP_VERSION_CHECK".to_string(), "1".to_string()),
+                ("PI_TELEMETRY".to_string(), "0".to_string()),
+            ]
+        );
+    }
+
+    #[test]
     fn the_whole_floor_makes_its_binary_the_pane_leader() {
         // ADR-0054: PDO's one descriptor invariant holds for every embedded harness
         // — each launch begins `exec <binary> …`, so the harness leads the pane.
@@ -863,7 +997,7 @@ mod tests {
         };
         let merged = merge_by_name(embedded_floor(), vec![novel]);
         assert!(merged.iter().any(|d| d.name == "novel"));
-        assert_eq!(merged.len(), 4);
+        assert_eq!(merged.len(), embedded_floor().len() + 1);
     }
 
     #[test]
@@ -947,7 +1081,8 @@ mod tests {
             vec![
                 CLAUDE.to_string(),
                 OPENCODE.to_string(),
-                COPILOT.to_string()
+                COPILOT.to_string(),
+                PI.to_string()
             ]
         );
     }
@@ -1039,7 +1174,7 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(
             &path,
-            "harnesses:\n  pi:\n    binary: pi-runner\n    launch: [\"exec\", \"pi-runner\"]\n",
+            "harnesses:\n  my-runner:\n    binary: my-runner-bin\n    launch: [\"exec\", \"my-runner-bin\"]\n",
         )
         .unwrap();
 
@@ -1053,10 +1188,10 @@ mod tests {
         let opencode = listing.iter().find(|h| h.name == OPENCODE).unwrap();
         assert_eq!(opencode.source, HarnessSource::Builtin);
 
-        let pi = listing.iter().find(|h| h.name == "pi").unwrap();
-        assert_eq!(pi.source, HarnessSource::Descriptor);
+        let custom = listing.iter().find(|h| h.name == "my-runner").unwrap();
+        assert_eq!(custom.source, HarnessSource::Descriptor);
         assert_eq!(
-            pi.binary, "pi-runner",
+            custom.binary, "my-runner-bin",
             "the probe binary is exposed by name"
         );
 
@@ -1094,11 +1229,12 @@ mod tests {
     #[test]
     fn builtin_listing_is_the_floor_as_builtin() {
         let listing = HarnessRegistry::builtin().listing();
-        assert_eq!(listing.len(), 3);
+        assert_eq!(listing.len(), 4);
         assert!(listing.iter().all(|h| h.source == HarnessSource::Builtin));
         assert_eq!(listing[0].name, CLAUDE);
         assert_eq!(listing[1].name, OPENCODE);
         assert_eq!(listing[2].name, COPILOT);
+        assert_eq!(listing[3].name, PI);
     }
 
     #[test]

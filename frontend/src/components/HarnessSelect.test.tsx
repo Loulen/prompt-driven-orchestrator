@@ -10,6 +10,7 @@ const opt = (name: string, installed: boolean): HarnessOption => ({
   name,
   installed,
   models: [],
+  modelContexts: {},
   efforts: [],
   hasEffort: true,
   version: null,

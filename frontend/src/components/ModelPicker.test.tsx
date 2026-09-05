@@ -36,6 +36,33 @@ describe("ModelPicker (#324, #616)", () => {
     expect(screen.getByTestId("node-model-option-custom")).toBeInTheDocument();
   });
 
+  it("shows the served context window beside an id, and nothing for an id without one (#705)", async () => {
+    // pi's `--list-models` publishes a window per model; other sources none. The
+    // hint is a hint: it never changes what onChange receives.
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <ModelPicker
+        value={null}
+        onChange={onChange}
+        models={["openrouter/anthropic/claude-sonnet-4.5", "gpt-5"]}
+        contexts={{ "openrouter/anthropic/claude-sonnet-4.5": "1M" }}
+        testid="node-model"
+        subject="n1"
+      />,
+    );
+
+    await user.click(screen.getByTestId("node-model-trigger"));
+
+    expect(
+      await screen.findByTestId("node-model-context-openrouter/anthropic/claude-sonnet-4.5"),
+    ).toHaveTextContent("1M");
+    expect(screen.queryByTestId("node-model-context-gpt-5")).toBeNull();
+
+    await user.click(screen.getByTestId("node-model-option-openrouter/anthropic/claude-sonnet-4.5"));
+    expect(onChange).toHaveBeenCalledWith("openrouter/anthropic/claude-sonnet-4.5");
+  });
+
   it("clicking a served id calls onChange with it", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();

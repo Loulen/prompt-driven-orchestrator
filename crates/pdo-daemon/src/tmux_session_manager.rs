@@ -197,6 +197,13 @@ pub struct SandboxWrap<'a> {
     /// The node's working dir → `docker exec -w <workdir>` (the load-bearing cwd
     /// inside the container).
     pub workdir: &'a Path,
+    /// The env of the resolved harness's **staging set** (#708, ADR-0063 §1 —
+    /// `pi`: `PI_SKIP_VERSION_CHECK=1`, `PI_TELEMETRY=0`), forwarded on the exec as
+    /// explicit `-e K=V` **before** the per-node catalogue. The descriptor's own
+    /// `env` block is exported host-side and never crosses the exec, so this is the
+    /// only way a set's env reaches the container. Empty for `claude` (no env) ⇒ its
+    /// exec argv is byte-identical to before.
+    pub set_env: &'a [(String, String)],
 }
 
 /// Splice the container-exec prefix (from [`crate::sandbox_container`]) around a
@@ -210,6 +217,14 @@ fn wrap_tail_in_docker_exec(
     extra_env: &[(String, String)],
     base_tail: &str,
 ) -> String {
+    // #708: the staging set's env leads, then the per-node catalogue. Both are
+    // valued `-e K=V` on the exec — a host-side export would not cross it.
+    let exec_env: Vec<(String, String)> = wrap
+        .set_env
+        .iter()
+        .cloned()
+        .chain(extra_env.iter().cloned())
+        .collect();
     let mut argv = vec![wrap.docker_bin.to_string()];
     argv.extend(crate::sandbox_container::exec_prefix_with_env(
         run_id,
@@ -217,7 +232,7 @@ fn wrap_tail_in_docker_exec(
         wrap.gid,
         wrap.workdir,
         wrap.marker,
-        extra_env,
+        &exec_env,
     ));
     argv.push("bash".to_string());
     argv.push("-lc".to_string());
@@ -367,8 +382,10 @@ pub(crate) const STOP_HOOK_SETTINGS_JSON: &str = r#"{"hooks":{"Stop":[{"matcher"
 /// the hook contract allows.
 ///
 /// **This only applies on a harness whose launch template has a `{settings}`
-/// hole** — the registry's `claude` does, `opencode` and `pi` do not, and there
-/// the token is dropped silently. On those the primer's equivalent instruction
+/// hole that takes the claude-format file** — the registry's `claude` does;
+/// `opencode` has no hole and `pi`'s hole takes an extension, not this JSON
+/// (`harness_probes::settings_hole_takes_claude_file`), and there the token is
+/// dropped silently. On those the primer's equivalent instruction
 /// (fetch the focus before acting) is the only mechanism: degraded, deliberately,
 /// rather than absent (ADR-0051 §3).
 pub(crate) const LIBASSIST_HOOK_SETTINGS_JSON: &str = r#"{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"curl -sf \"$PDO_DAEMON_URL/sessions/libassist/focus?format=text\" || true; exit 0","timeout":10}]}]}}"#;
@@ -764,14 +781,29 @@ pub fn spawn(
     // with none (`opencode`) would never reference the file — writing it beside the
     // prompt was the one place "absence is supplied, not said" leaked. Now the
     // absence is honoured: no hole, no file.
-    let harness_takes_settings =
-        matches!(&tail, SessionTail::Agent { harness, .. } if harness.has_settings_hole());
-    let settings_path = if inject_hook && harness_takes_settings {
-        let p = prompt_dir.join(format!("{node_id}-iter-{iter}.settings.json"));
-        std::fs::write(&p, STOP_HOOK_SETTINGS_JSON)?;
-        Some(p)
-    } else {
-        None
+    //
+    // #705/#707: the hole is not enough on its own — WHAT goes in it is the
+    // harness's. `pi` carries a `{settings}` hole too, but fills it with
+    // `-e <extension>`: handed the claude-format hook JSON it would load a JSON file
+    // as an extension and refuse to start. So the file written is the one the
+    // harness's declared end-of-turn substrate takes
+    // (`harness_probes::turn_end_injection`): the `Stop`-hook JSON for `claude` (and
+    // any data-declared harness), the `agent_settled` extension for `pi`, nothing for
+    // a harness without a substrate. One switch (`inject_hook`, i.e.
+    // `autocomplete_turn_end`) governs all of them; off ⇒ no file, and the token
+    // (`--settings` / `-e`) drops at render.
+    let settings_path = match &tail {
+        SessionTail::Agent { harness, .. } if inject_hook && harness.has_settings_hole() => {
+            match crate::harness_probes::turn_end_injection(&harness.name) {
+                Some(injection) => {
+                    let p = prompt_dir.join(format!("{node_id}-iter-{iter}{}", injection.suffix));
+                    std::fs::write(&p, injection.body)?;
+                    Some(p)
+                }
+                None => None,
+            }
+        }
+        _ => None,
     };
 
     // #661/ADR-0055: resolve the session PATH at the impure spawn edge (cached
@@ -907,8 +939,17 @@ pub fn spawn_libassist(
 
     // The per-message focus hook, beside the primer and with the same lifecycle.
     // Not the `Stop` hook of #433: the assistant never calls `pdo complete`.
-    let settings_path = prompt_path.with_file_name("settings.json");
-    std::fs::write(&settings_path, LIBASSIST_HOOK_SETTINGS_JSON)?;
+    //
+    // #705: written only for a harness whose `{settings}` hole takes the claude-format
+    // file. `pi` has the hole but fills it with `-e <extension>`; this JSON would be
+    // loaded as an extension and break the launch. `None` ⇒ the `{settings}` token
+    // drops at render and the primer's fetch-the-focus instruction is the mechanism
+    // (the caller has already said so once, ADR-0051 §3).
+    let settings_path = crate::harness_probes::settings_hole_takes_claude_file(&harness.name)
+        .then(|| prompt_path.with_file_name("settings.json"));
+    if let Some(p) = &settings_path {
+        std::fs::write(p, LIBASSIST_HOOK_SETTINGS_JSON)?;
+    }
 
     // #661/ADR-0055: the assistant is a `claude` REPL, so it needs the same
     // interactive PATH the preflight resolves the binary on.
@@ -928,7 +969,7 @@ pub fn spawn_libassist(
             session_id: None,
         },
         None, // never sandboxed
-        Some(&settings_path),
+        settings_path.as_deref(),
     );
     let socket = tmux_socket_name(daemon_port);
 
@@ -983,13 +1024,21 @@ pub fn resume(
     // `build_resume_script` emits a byte-identical `--continue` tail.
     //
     // #613/ADR-0051 (correctif 8): as at spawn, only a harness with a `{settings}`
-    // hole gets the file — a resumed `opencode` node writes none.
+    // hole gets a file — a resumed `opencode` node writes none. #705/#707: and the
+    // file is the one its substrate takes (`harness_probes::turn_end_injection`) —
+    // a resumed `pi` node re-arms its `agent_settled` extension (ADR-0043 D7: the
+    // primary substrate must survive a resume), never the claude JSON.
     let settings_path = if inject_hook && descriptor.has_settings_hole() {
-        let prompt_dir = working_dir.join(".pdo").join("prompts");
-        std::fs::create_dir_all(&prompt_dir)?;
-        let p = prompt_dir.join(format!("{node_id}-iter-{iter}.settings.json"));
-        std::fs::write(&p, STOP_HOOK_SETTINGS_JSON)?;
-        Some(p)
+        match crate::harness_probes::turn_end_injection(&descriptor.name) {
+            Some(injection) => {
+                let prompt_dir = working_dir.join(".pdo").join("prompts");
+                std::fs::create_dir_all(&prompt_dir)?;
+                let p = prompt_dir.join(format!("{node_id}-iter-{iter}{}", injection.suffix));
+                std::fs::write(&p, injection.body)?;
+                Some(p)
+            }
+            None => None,
+        }
     } else {
         None
     };
@@ -1516,7 +1565,7 @@ pub(crate) fn probe_version_on(binary: &str, path: &str) -> Option<String> {
 }
 
 /// [`probe_catalogue`] with an explicit `PATH` — the testable core, and where #629's
-/// three sources (ADR-0056) are actually run.
+/// (and #705's) four sources (ADR-0056) are actually run.
 ///
 /// `--help` is run **first, always**: it is universal, it is one of the three sources,
 /// and — the reason it leads — it is where a CLI **declares its subcommands**. Only the
@@ -1533,8 +1582,9 @@ pub(crate) fn probe_version_on(binary: &str, path: &str) -> Option<String> {
 /// effort stops from another. `--help` folds in last precisely because it is the
 /// lowest-preference source, not because it ran first.
 ///
-/// Cost, measured on the three first-party harnesses: `claude` one subprocess (as
-/// before #629), `copilot` two, `opencode` two — never a hang, never an error. A binary
+/// Cost, measured on the first-party harnesses: `claude` one subprocess (as before
+/// #629), `copilot` two, `opencode` two, `pi` two (`--help` then `--list-models`) —
+/// never a hang, never an error. A binary
 /// that answers no `--help` at all yields the free-text fallback without any subcommand
 /// being guessed at.
 pub(crate) fn probe_catalogue_on(binary: &str, path: &str) -> crate::harness_catalogue::Catalogue {
@@ -1550,13 +1600,22 @@ pub(crate) fn probe_catalogue_on(binary: &str, path: &str) -> crate::harness_cat
             catalogue.fill_missing_from(cat::parse_completion_script(&script));
         }
     }
-    // Preference 2: the settings help topic, if an axis is still unanswered.
+    // Preference 2 (#705, ADR-0056 §1 as amended by #702): the generated model table,
+    // if the binary declares `--list-models` and the model axis is still unanswered.
+    // Gated on the declaration like the subcommands: `claude` has no such flag, and an
+    // unknown flag must never be guessed at inside a `/settings` response.
+    if !catalogue.is_complete() && cat::advertises_flag(&help, "--list-models") {
+        if let Some(table) = run_probe(binary, &["--list-models"], path) {
+            catalogue.fill_missing_from(cat::parse_list_models(&table));
+        }
+    }
+    // Preference 3: the settings help topic, if an axis is still unanswered.
     if !catalogue.is_complete() && cat::advertises_subcommand(&help, "help") {
         if let Some(topic) = run_probe(binary, &["help", "config"], path) {
             catalogue.fill_missing_from(cat::parse_settings_prose(&topic));
         }
     }
-    // Preference 3: what `--help` itself enumerates.
+    // Preference 4: what `--help` itself enumerates.
     catalogue.fill_missing_from(cat::parse_help(&help));
     catalogue
 }
@@ -3418,12 +3477,25 @@ mod tests {
     }
 
     /// Drive the real `spawn` with a benign tail and report whether it dropped the
-    /// turn-end settings file beside the prompt. Kills the ephemeral tmux server on
-    /// its own socket afterwards. `port` isolates the socket from sibling tests.
+    /// claude turn-end settings file beside the prompt. Kills the ephemeral tmux
+    /// server on its own socket afterwards. `port` isolates the socket from sibling
+    /// tests.
     fn spawn_and_check_settings_file(
         port: u16,
         harness: &crate::harness_registry::HarnessDescriptor,
     ) -> bool {
+        spawn_turn_end_files(port, harness, true).0
+    }
+
+    /// The general form (#707): drive the real `spawn` with `inject_hook` and report
+    /// which turn-end file landed beside the prompt — `(claude settings JSON, pi
+    /// extension)`. Exactly one may be true for an instrumented harness, none for a
+    /// harness without a hole or with the setting off.
+    fn spawn_turn_end_files(
+        port: u16,
+        harness: &crate::harness_registry::HarnessDescriptor,
+        inject_hook: bool,
+    ) -> (bool, bool) {
         let wd = tempfile::tempdir().unwrap();
         let session = node_session_name("run-c8", "n", 1);
         // The tail runs `true` (exits at once); we only assert on the file the write
@@ -3444,20 +3516,31 @@ mod tests {
                 session_id: None,
             },
             None,
-            true, // inject_hook ON — the setting is enabled
+            inject_hook,
         );
-        let settings = wd
-            .path()
-            .join(".pdo")
-            .join("prompts")
-            .join("n-iter-1.settings.json");
-        let present = settings.is_file();
+        let prompts = wd.path().join(".pdo").join("prompts");
+        let settings_json = prompts.join("n-iter-1.settings.json");
+        let turn_end_ts = prompts.join("n-iter-1.turn-end.ts");
+        let found = (settings_json.is_file(), turn_end_ts.is_file());
+        if found.1 {
+            // The extension body is pi's, byte for byte.
+            assert_eq!(
+                std::fs::read_to_string(&turn_end_ts).unwrap(),
+                crate::pi_session::TURN_END_EXTENSION_TS
+            );
+        }
+        if found.0 {
+            assert_eq!(
+                std::fs::read_to_string(&settings_json).unwrap(),
+                STOP_HOOK_SETTINGS_JSON
+            );
+        }
         // Tear down the ephemeral server (ignore errors — the `true` tail may have
         // already ended the only session, leaving no server to kill).
         let _ = std::process::Command::new("tmux")
             .args(["-L", &tmux_socket_name(port), "kill-server"])
             .output();
-        present
+        found
     }
 
     #[test]
@@ -3467,6 +3550,35 @@ mod tests {
         assert!(
             spawn_and_check_settings_file(58231, &crate::harness_registry::claude()),
             "claude must still get its turn-end settings file"
+        );
+    }
+
+    #[test]
+    fn spawn_writes_the_pi_turn_end_extension_not_the_claude_json() {
+        // #707: `pi` has a `{settings}` hole that takes an extension. With the
+        // setting on, PDO writes `<node>-iter-<n>.turn-end.ts` (the `agent_settled`
+        // extension) beside the prompt — and never the claude Stop-hook JSON, which
+        // pi would try to load as an extension.
+        assert_eq!(
+            spawn_turn_end_files(58233, &crate::harness_registry::pi(), true),
+            (false, true),
+            "pi gets its extension and never the claude JSON"
+        );
+        // The control: claude gets its JSON and never pi's extension.
+        assert_eq!(
+            spawn_turn_end_files(58234, &crate::harness_registry::claude(), true),
+            (true, false)
+        );
+    }
+
+    #[test]
+    fn spawn_writes_no_pi_extension_when_the_setting_is_off() {
+        // #707 AC: unchecked ⇒ no file at all, so the `-e` token drops from the argv
+        // (the `harness_argv` golden pins the argv side).
+        assert_eq!(
+            spawn_turn_end_files(58235, &crate::harness_registry::pi(), false),
+            (false, false),
+            "setting off ⇒ nothing written"
         );
     }
 
@@ -3604,6 +3716,7 @@ mod tests {
             gid: 1000,
             marker: "pdo-run-abc-solo-iter-1",
             workdir: Path::new("/wd"),
+            set_env: &[],
         };
         let script = build_tmux_script(
             "run-abc",
@@ -4173,7 +4286,78 @@ mod tests {
             gid: 1000,
             marker,
             workdir,
+            set_env: &[],
         }
+    }
+
+    /// #708: a staging set's env (pi's two vars) rides the exec as valued `-e K=V`,
+    /// before the catalogue and never as a host-side export; an empty set env leaves
+    /// the exec argv byte-identical (claude).
+    #[test]
+    fn sandbox_wrap_forwards_the_staging_set_env_on_the_exec() {
+        let harness = crate::harness_registry::pi();
+        let set_env = vec![
+            ("PI_SKIP_VERSION_CHECK".to_string(), "1".to_string()),
+            ("PI_TELEMETRY".to_string(), "0".to_string()),
+        ];
+        let wrap = SandboxWrap {
+            docker_bin: "docker",
+            uid: 1000,
+            gid: 1000,
+            marker: "pdo-run-abc-solo-iter-1",
+            workdir: Path::new("/wd"),
+            set_env: &set_env,
+        };
+        let tail = SessionTail::Agent {
+            harness: &harness,
+            model: None,
+            effort: None,
+            session_id: Some("sid-1"),
+        };
+        let with = build_tmux_script(
+            "run-abc",
+            "solo",
+            1,
+            5172,
+            TEST_SESSION_PATH,
+            Path::new("/wd/.pdo/prompts/solo.md"),
+            None,
+            tail,
+            Some(&wrap),
+            None,
+        );
+        let exec_at = with.find(" exec -i -t ").expect("a docker exec");
+        let container_at = with.find("pdo-sbx-run-abc").expect("the container name");
+        let exec_argv = &with[exec_at..container_at];
+        assert!(
+            exec_argv.contains("-e PI_SKIP_VERSION_CHECK=1 -e PI_TELEMETRY=0 --user 1000:1000"),
+            "the set env is valued `-e` pairs on the exec, before --user: {exec_argv}"
+        );
+
+        let bare = sample_wrap("pdo-run-abc-solo-iter-1", Path::new("/wd"));
+        let without = build_tmux_script(
+            "run-abc",
+            "solo",
+            1,
+            5172,
+            TEST_SESSION_PATH,
+            Path::new("/wd/.pdo/prompts/solo.md"),
+            None,
+            SessionTail::Agent {
+                harness: &harness,
+                model: None,
+                effort: None,
+                session_id: Some("sid-1"),
+            },
+            Some(&bare),
+            None,
+        );
+        let exec_at = without.find(" exec -i -t ").unwrap();
+        let container_at = without.find("pdo-sbx-run-abc").unwrap();
+        assert!(
+            !without[exec_at..container_at].contains("PI_TELEMETRY"),
+            "no set env ⇒ nothing added to the exec: {without}"
+        );
     }
 
     #[test]
@@ -4496,6 +4680,61 @@ mod tests {
             !no_id.contains("--resume") && !no_id.contains("--continue"),
             "with no identity copilot renders no resume flag at all (AC): {no_id}"
         );
+    }
+
+    #[test]
+    fn build_resume_script_re_arms_the_pi_turn_end_extension_only_when_given() {
+        // #707 / ADR-0043 D7: a resumed pi node re-carries its `agent_settled`
+        // extension through the SAME `{settings}` hole (`-e <file>`), and re-poses
+        // its effort; with no file (setting off) the `-e` token drops whole — pi is
+        // never handed an empty `-e`.
+        let sid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let ext = Path::new("/repo/.pdo/prompts/solo-iter-1.turn-end.ts");
+        let armed = build_resume_script(
+            "r1",
+            "solo",
+            1,
+            6172,
+            TEST_SESSION_PATH,
+            &crate::harness_registry::pi(),
+            Some("high"),
+            Some(sid),
+            None,
+            None,
+            Some(ext),
+        );
+        assert!(
+            armed.contains(&format!(r"--session-id '\''{sid}'\''")),
+            "pi resumes by identity with its created-or-resumed flag: {armed}"
+        );
+        assert!(
+            armed.contains(r"-e '\''/repo/.pdo/prompts/solo-iter-1.turn-end.ts'\''"),
+            "the extension is re-armed at resume: {armed}"
+        );
+        assert!(armed.contains(r"--thinking '\''high'\''"), "{armed}");
+        assert!(
+            !armed.contains("--settings"),
+            "never claude's flag: {armed}"
+        );
+
+        let off = build_resume_script(
+            "r1",
+            "solo",
+            1,
+            6172,
+            TEST_SESSION_PATH,
+            &crate::harness_registry::pi(),
+            None,
+            Some(sid),
+            None,
+            None,
+            None,
+        );
+        assert!(
+            !off.contains("-e "),
+            "setting off ⇒ no -e token at all: {off}"
+        );
+        assert!(!off.contains("turn-end.ts"), "{off}");
     }
 
     #[test]

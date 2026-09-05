@@ -100,18 +100,18 @@ fn spawn_home_root(deps: &SpawnDeps<'_>) -> PathBuf {
         .unwrap_or_default()
 }
 
-/// #553 / ADR-0031: say ONCE per `(run, harness)` that a sandboxed Run's node runs
-/// on a harness with no staging floor. The message is the pure
-/// [`crate::harness_probes::staging_floor_absence_note`] (so it is unit-tested
+/// #553 / ADR-0063: say ONCE per `(run, harness)` that a sandboxed Run's node runs
+/// on a harness with no staging set. The message is the pure
+/// [`crate::harness_probes::staging_set_absence_note`] (so it is unit-tested
 /// there, not against a terminal); the process-static dedup keeps a busy scheduler
 /// from repeating it on every retry or collection lap. A no-op for `claude`, which
-/// has the floor.
-fn warn_missing_staging_floor_once(run_id: &str, harness: &str) {
+/// declares a set.
+fn warn_missing_staging_set_once(run_id: &str, harness: &str) {
     use std::collections::HashSet;
     use std::sync::Mutex;
     static SAID: Mutex<Option<HashSet<(String, String)>>> = Mutex::new(None);
 
-    let Some(note) = crate::harness_probes::staging_floor_absence_note(harness) else {
+    let Some(note) = crate::harness_probes::staging_set_absence_note(harness) else {
         return;
     };
     let mut guard = SAID.lock().unwrap_or_else(|e| e.into_inner());
@@ -120,6 +120,33 @@ fn warn_missing_staging_floor_once(run_id: &str, harness: &str) {
         warn!("run {run_id}: {note}");
     }
 }
+
+/// #708 / ADR-0063 §5: say ONCE per `(run, harness)` that the resolved harness's
+/// binary is absent from the sandbox image. Every node of the Run that resolves
+/// that harness then goes `Interrupted` with the same reason (ADR-0049), but the
+/// log carries the sentence once — a retry loop must not turn one missing binary
+/// into a wall of warnings. PDO does not provide the image (the profile does), so
+/// the sentence tells the user what to change: their image.
+fn warn_binary_missing_in_image_once(run_id: &str, harness: &str, binary: &str) {
+    use std::collections::HashSet;
+    use std::sync::Mutex;
+    static SAID: Mutex<Option<HashSet<(String, String)>>> = Mutex::new(None);
+
+    let mut guard = SAID.lock().unwrap_or_else(|e| e.into_inner());
+    let said = guard.get_or_insert_with(HashSet::new);
+    if said.insert((run_id.to_string(), harness.to_string())) {
+        warn!(
+            "run {run_id}: sandbox: harness `{harness}` binary `{binary}` is absent from the \
+             sandbox image — PDO does not provide the image; add `{binary}` to the profile's \
+             image (ADR-0063). Every node of this Run resolving `{harness}` is Interrupted"
+        );
+    }
+}
+
+/// The `reason_code` of a node interrupted because its harness binary is absent from
+/// the sandbox image (#708, ADR-0063 §5 / ADR-0049). Distinct from `spawn_aborted`:
+/// nothing broke in PDO — the image lacks the binary, and only the user can fix that.
+pub(crate) const HARNESS_BINARY_MISSING_CODE: &str = "harness_binary_missing";
 
 /// #613 / ADR-0051 (AC #7): say ONCE per `(run, harness)` that turn-end
 /// auto-completion is enabled but the node's harness has no end-of-turn substrate,
@@ -147,7 +174,7 @@ fn warn_turn_end_unsupported_once(run_id: &str, harness: &str) {
 /// #563 (AC13/AC14): say ONCE per `(run, tier, profile_id)` that a tier named a
 /// `Profile` reference absent from the atomic snapshot — the walk warned and
 /// behaved as `Inherit` for that tier rather than failing the spawn. Deduped the
-/// same way as [`warn_missing_staging_floor_once`] so a busy scheduler replaying
+/// same way as [`warn_missing_staging_set_once`] so a busy scheduler replaying
 /// the same stale reference doesn't spam the log every retry.
 fn warn_missing_agent_profile_once(
     run_id: &str,
@@ -628,12 +655,12 @@ pub(crate) async fn spawn_node(
             let registry = harness_registry::HarnessRegistry::load(&spawn_home_root(&deps));
             match registry.resolve(&r.harness) {
                 Some(d) => {
-                    // #553 / ADR-0031: a sandboxed Run whose node runs on a harness
-                    // with no staging floor holds only by the profile's image and
-                    // its `$HOME` exceptions — say it once, visibly (the plancher is
-                    // claude-specific and built per-Run regardless of the harness).
+                    // #553 / ADR-0063: a sandboxed Run whose node runs on a harness
+                    // with no staging set holds only by the profile's image and
+                    // its `$HOME` exceptions — say it once, visibly. A harness WITH
+                    // a set gets it filled below, at this very spawn (#708).
                     if run_sandboxed {
-                        warn_missing_staging_floor_once(run_id, &r.harness);
+                        warn_missing_staging_set_once(run_id, &r.harness);
                     }
                     Some(d)
                 }
@@ -645,8 +672,99 @@ pub(crate) async fn spawn_node(
             }
         }
     };
+    // #708 / ADR-0063 §3: the env of the resolved harness's staging set, forwarded on
+    // the `docker exec` of a sandboxed node. Empty on the host path and for a harness
+    // whose set declares none (`claude`).
+    let mut set_env: Vec<(String, String)> = Vec::new();
     if let Some(d) = &harness_descriptor {
-        if deps.tmux_cmd_override.is_none() && !tmux_session_manager::binary_available(&d.binary) {
+        if run_sandboxed {
+            // ADR-0063 §5: the binary must exist IN THE CONTAINER — the host's PATH says
+            // nothing about the profile's image. A `which` at spawn, never a version
+            // check; absent ⇒ said once per Run, node `Interrupted` with that reason
+            // (ADR-0049), nothing created. A probe that could not answer (docker itself
+            // failed) is not an absence: warn and let the spawn fail on its own terms.
+            let docker_bin = deps.docker_cmd_override.unwrap_or("docker").to_string();
+            let (rid, binary) = (run_id.to_string(), d.binary.clone());
+            let uid = crate::sandbox_container::host_uid();
+            let gid = crate::sandbox_container::host_gid();
+            let probe = tokio::task::spawn_blocking(move || {
+                crate::sandbox_container::binary_present_in_container(
+                    &docker_bin,
+                    &rid,
+                    uid,
+                    gid,
+                    &binary,
+                )
+            })
+            .await
+            .unwrap_or_else(|je| Err(anyhow::anyhow!("binary probe panicked: {je}")));
+            match probe {
+                Ok(true) => {}
+                Ok(false) => {
+                    warn_binary_missing_in_image_once(run_id, &d.name, &d.binary);
+                    let reason = format!(
+                        "harness `{}` binary `{}` is absent from the sandbox image — PDO does \
+                         not provide the image; add `{}` to the profile's image (ADR-0063)",
+                        d.name, d.binary, d.binary
+                    );
+                    interrupt_spawn_before_start_with_code(
+                        deps,
+                        spawn_ctx.repo_root,
+                        run_id,
+                        &node.id,
+                        iter,
+                        None,
+                        HARNESS_BINARY_MISSING_CODE,
+                        &reason,
+                    )
+                    .await;
+                    return SpawnOutcome::Failed {
+                        reason: format!("node {}: {reason}", node.id),
+                    };
+                }
+                Err(e) => {
+                    warn!(
+                        "run {run_id}: node {}: could not probe `{}` in the sandbox container \
+                         ({e:#}); spawning anyway",
+                        node.id, d.binary
+                    );
+                }
+            }
+            // ADR-0063 §3: fill the harness's staging set NOW if this Run has not yet —
+            // the first node that resolves `pi` copies `.pi/agent`, the second finds
+            // the marker, a claude-only Run never copies it. Trust is pre-granted on
+            // `repo_root`, the common ancestor of every worktree (claude's fixup).
+            let home_root = spawn_home_root(&deps);
+            let sandbox_root = home_root.join(".pdo").join("sandbox");
+            match crate::sandbox_staging::fill_staging_set(
+                &home_root,
+                &sandbox_root,
+                run_id,
+                &d.name,
+                Some(spawn_ctx.repo_root),
+            ) {
+                Ok(fill) => set_env = fill.env(),
+                Err(e) => {
+                    let reason = format!(
+                        "node {}: failed to stage the `{}` set into the sandbox: {e:#}",
+                        node.id, d.name
+                    );
+                    interrupt_spawn_before_start(
+                        deps,
+                        spawn_ctx.repo_root,
+                        run_id,
+                        &node.id,
+                        iter,
+                        None,
+                        &reason,
+                    )
+                    .await;
+                    return SpawnOutcome::Failed { reason };
+                }
+            }
+        } else if deps.tmux_cmd_override.is_none()
+            && !tmux_session_manager::binary_available(&d.binary)
+        {
             return SpawnOutcome::Failed {
                 reason: format!(
                     "node {}: harness '{}' binary '{}' not found in PATH {} \
@@ -1196,6 +1314,7 @@ pub(crate) async fn spawn_node(
         gid: crate::sandbox_container::host_gid(),
         marker: &session_name,
         workdir: &working_dir,
+        set_env: &set_env,
     });
     // #433 / ADR-0043: arm the turn-end `Stop` hook only when the operator has
     // opted into turn-end auto-completion (the SAME setting as the daemon sweep,
@@ -1295,7 +1414,35 @@ async fn interrupt_spawn_before_start(
     orphan: Option<&(PathBuf, String)>,
     reason: &str,
 ) {
-    error!("Run {run_id}: node {node_id} spawn aborted before NodeStarted — {reason}");
+    interrupt_spawn_before_start_with_code(
+        deps,
+        repo_root,
+        run_id,
+        node_id,
+        iter,
+        orphan,
+        "spawn_aborted",
+        reason,
+    )
+    .await
+}
+
+/// [`interrupt_spawn_before_start`] with an explicit machine `reason_code` (#601):
+/// `spawn_aborted` for a PDO-side abort, [`HARNESS_BINARY_MISSING_CODE`] when the
+/// sandbox image lacks the harness binary (#708) — a distinct code, because the fix
+/// is the user's image, not a retry.
+#[allow(clippy::too_many_arguments)]
+async fn interrupt_spawn_before_start_with_code(
+    deps: SpawnDeps<'_>,
+    repo_root: &std::path::Path,
+    run_id: &str,
+    node_id: &str,
+    iter: i64,
+    orphan: Option<&(PathBuf, String)>,
+    code: &str,
+    reason: &str,
+) {
+    error!("Run {run_id}: node {node_id} spawn aborted before NodeStarted — {code}: {reason}");
     if let Some((sub_worktree_dir, sub_branch)) = orphan {
         reap_orphan_sub_worktree(repo_root, sub_worktree_dir, sub_branch);
     }
@@ -1308,10 +1455,11 @@ async fn interrupt_spawn_before_start(
         iter: Some(iter),
         // #601: prefix the machine slug so the node reason is `<code>: <prose>`
         // and [`finalize`](crate::event_log) derives `awaiting_reason_code`
-        // (`spawn_aborted`). `source: "spawn"` is retained for existing readers.
+        // (`spawn_aborted`, `harness_binary_missing`). `source: "spawn"` is retained
+        // for existing readers.
         payload: Some(serde_json::json!({
-            "reason": format!("spawn_aborted: {reason}"),
-            "reason_code": "spawn_aborted",
+            "reason": format!("{code}: {reason}"),
+            "reason_code": code,
             "source": "spawn",
         })),
     };

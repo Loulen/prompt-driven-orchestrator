@@ -1034,7 +1034,9 @@ pub(crate) async fn stats_cost(
     // not this one. The table's fingerprint is the memo's third key component, so a
     // sync is visible here without a daemon restart.
     let prices = crate::price_table::PriceTable::load(&home_root);
-    let copilot_root = crate::sandbox_run::copilot_store_root(&home_root);
+    // `copilot`'s store is always the host journal (no staging set); `pi`'s moves per
+    // Run (#708) — the staged sink while a sandboxed Run lives, the host store after
+    // merge-back — so `stores` is rebuilt inside the per-Run loop below, not here.
     let stored_projects = match crate::project_store::list(&state.db).await {
         Ok(projects) => projects,
         Err(error) => {
@@ -1089,6 +1091,13 @@ pub(crate) async fn stats_cost(
             });
         let projects_root =
             crate::sandbox_run::transcripts_root(sandboxed, &run_id, &home_root, &sandbox_root);
+        // #708: pi's store follows the same sandbox-aware seam as the Claude root.
+        let stores = crate::sandbox_run::HarnessStores::for_run(
+            sandboxed,
+            &run_id,
+            &home_root,
+            &sandbox_root,
+        );
         let events = match crate::load_events(&state.db, &run_id).await {
             Ok(events) => events,
             Err(error) => {
@@ -1102,7 +1111,7 @@ pub(crate) async fn stats_cost(
         let breakdown = crate::run_cost::compute_run_cost_breakdown_cached(
             &events,
             &projects_root,
-            &copilot_root,
+            &stores,
             &repo_root,
             &run_id,
             &prices,
@@ -1448,6 +1457,7 @@ mod tests {
                     readable_executions: 1,
                     usd: Some(0.0),
                     form: Some(crate::event_log::CostForm::Derived),
+                    reported_in_usd: false,
                     partial: true,
                     unpriced_models: vec!["claude-fable-5".to_string()],
                     unavailable_reasons: Vec::new(),
@@ -1460,6 +1470,7 @@ mod tests {
                     readable_executions: 0,
                     usd: None,
                     form: None,
+                    reported_in_usd: false,
                     partial: false,
                     unpriced_models: Vec::new(),
                     unavailable_reasons: vec!["harness has no cost source".to_string()],

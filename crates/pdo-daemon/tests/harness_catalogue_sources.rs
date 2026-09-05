@@ -12,9 +12,9 @@
 //! test reads off `GET /settings` is what the inspector's model picker renders for a
 //! node pinned on `copilot`.
 //!
-//! ONE test in its own binary: it sets the process-global `PDO_HARNESS_PROBE_PATH`
-//! (a `OnceLock`) and `PDO_CATALOGUE_VERSION_TTL_MS`, which two concurrent tests
-//! could not share safely.
+//! The probe `PATH` and the catalogue TTL are process-global: this test serialises on
+//! `HARNESS_PROBE_ENV_LOCK` with the other catalogue tests and installs its fake in the
+//! shared, process-wide dir `common::fake_harness_bindir` fixes first on that PATH.
 
 use crate::common::TestDaemon;
 
@@ -114,20 +114,16 @@ fn served_harness(settings: &serde_json::Value, harness: &str) -> serde_json::Va
 #[tokio::test]
 async fn copilots_catalogue_is_deduced_from_its_binary_and_re_read_when_it_updates() {
     let _probe_env = crate::HARNESS_PROBE_ENV_LOCK.lock().await;
-    let bindir = tempfile::tempdir().unwrap();
+    // The process-wide fake-binary dir, first on the probe PATH, with the catalogue
+    // TTL collapsed to a millisecond (the production window is a minute, ADR-0053
+    // §3) so the re-probe-on-version-change contract is provable here. See
+    // `common::fake_harness_bindir` for why this is shared and never a dropped tempdir.
+    let bindir = crate::common::fake_harness_bindir();
     write_fake_copilot(
-        bindir.path(),
+        &bindir,
         "GitHub Copilot CLI 1.0.80.",
         "auto claude-opus-5 gpt-5.5 kimi-k2.7-code",
     );
-    // SAFETY: set once, at the top of this dedicated single-test binary, before any
-    // probe reads the `OnceLock`-cached probe path or the TTL.
-    unsafe {
-        std::env::set_var("PDO_HARNESS_PROBE_PATH", bindir.path());
-        // The production window is a minute (ADR-0053 §3). Collapse it so the
-        // re-probe-on-version-change contract is provable in milliseconds.
-        std::env::set_var(pdo_daemon::CATALOGUE_VERSION_TTL_MS_ENV, "1");
-    }
 
     // No descriptor to seed: `copilot` is a **builtin** harness, and its descriptor
     // names the binary `copilot` — which now resolves to the fake on the probe PATH.
@@ -176,7 +172,7 @@ async fn copilots_catalogue_is_deduced_from_its_binary_and_re_read_when_it_updat
     // AC #5: the binary auto-updates under the running daemon and its list changes.
     // No restart, no manual re-probe — the next read past the version window follows.
     write_fake_copilot(
-        bindir.path(),
+        &bindir,
         "GitHub Copilot CLI 1.1.0.",
         "auto claude-opus-6 gpt-6",
     );

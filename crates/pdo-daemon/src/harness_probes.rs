@@ -2,8 +2,8 @@
 //!
 //! Everything PDO knows how to do **beyond launching** a harness is a
 //! **capability**, written harness by harness: estimate a cost, resolve a
-//! transcript, constate an end of turn, spot a usage-limit menu, hold a staging
-//! floor. This module is the factory for those capabilities — and its whole
+//! transcript, constate an end of turn, spot a usage-limit menu, declare a staging
+//! set. This module is the factory for those capabilities — and its whole
 //! point is to make their **absence legible**: never supplied, never silent.
 //!
 //! The shape is deliberate and was settled at the grilling (do not redraw it):
@@ -52,9 +52,9 @@
 //!   harness with no substrate is **said once** ([`turn_end_absence_note`]) rather
 //!   than being a silent no-op.
 //! - **sandbox** ([`crate::node_spawn`]): a sandboxed Run on a harness with no
-//!   [`HarnessProbes::staging_floor`] is **said once, visibly** — it holds only by
-//!   the user's image and the profile's `$HOME` exceptions, without the plancher's
-//!   guarantees (ADR-0031).
+//!   [`HarnessProbes::staging_set`] is **said once, visibly** — it holds only by
+//!   the user's image and the profile's `$HOME` exceptions, with no staged home and
+//!   no autonomy fixups (ADR-0063).
 //!
 //! This module is narrow on purpose: it fabricates **capabilities, never a
 //! launch** (a launch is data — the argv template of [`crate::harness_registry`]).
@@ -80,7 +80,9 @@ pub(crate) enum CostSource {
     /// **reported** cost: it cannot produce an `unpriced_models` signal, and it does
     /// not re-derive from tokens (which would double-count the cache). `copilot`'s:
     /// the `totalNanoAiu` its event journal reports, × [`crate::copilot_journal`]'s
-    /// constant.
+    /// constant. `pi`'s: the `usage.cost.total` its session reports, **already in
+    /// dollars** — constant **1.0** ([`crate::pi_session::REPORTED_USD_CONSTANT`]), so
+    /// the surfaces show it without `~` (ADR-0052 §2 amended, #707).
     ReportedByConstant,
 }
 
@@ -117,6 +119,12 @@ pub(crate) enum TranscriptResolution {
     /// encoding, so two nodes sharing a worktree have distinct journals structurally
     /// (the #473 collision has no equivalent here).
     CopilotEventsJsonl,
+    /// pi's `<sessions>/<encoded-cwd>/<timestamp>_<session-id>.jsonl` (#707): a
+    /// directory keyed by working directory, a **file keyed by the session identity
+    /// PDO imposed** — resolved by globbing `*_<id>.jsonl` inside the cwd's
+    /// directory ([`crate::pi_session::resolve_by_id`]), never by newest mtime, so
+    /// two nodes sharing a worktree have distinct files structurally.
+    PiJsonlById,
 }
 
 impl TranscriptResolution {
@@ -125,6 +133,10 @@ impl TranscriptResolution {
             TranscriptResolution::ClaudeJsonl => "the JSONL transcript, keyed by working directory",
             TranscriptResolution::CopilotEventsJsonl => {
                 "the event journal, keyed by the session identity PDO imposed"
+            }
+            TranscriptResolution::PiJsonlById => {
+                "the session JSONL in the working directory's folder, keyed by the session \
+                 identity PDO imposed"
             }
         }
     }
@@ -143,6 +155,13 @@ pub(crate) enum TurnEndSubstrate {
     /// classified by [`crate::copilot_journal::turn_ended`] (#615). Depends on no
     /// instance setting and writes nothing into the user's config.
     CopilotEventJournal,
+    /// pi's **turn-end extension** (#707, ADR-0043 applied): an ephemeral extension
+    /// the daemon writes per node and pi loads through `-e`, which runs
+    /// `pdo complete --auto` on `agent_settled`
+    /// ([`crate::pi_session::TURN_END_EXTENSION_TS`]). The sweep's fallback reads the
+    /// session tail's `stopReason` ([`crate::pi_session::turn_state`]). Governed by
+    /// the same `autocomplete_turn_end` setting as `claude`'s hook — no second switch.
+    PiAgentSettled,
 }
 
 impl TurnEndSubstrate {
@@ -153,6 +172,10 @@ impl TurnEndSubstrate {
             }
             TurnEndSubstrate::CopilotEventJournal => {
                 "the journal's explicit `assistant.turn_end` event"
+            }
+            TurnEndSubstrate::PiAgentSettled => {
+                "an injected `agent_settled` extension, plus the session tail as the sweep's \
+                 fallback"
             }
         }
     }
@@ -190,6 +213,10 @@ impl UsageLimitAnchor {
 ///
 /// Absent ⇒ Performance shows no Context column for this harness at all (it
 /// never invents a boxplot from a metric it cannot read).
+// The shared `Peak` postfix is the point: each variant names WHOSE per-turn peak
+// (claude's transcript, copilot's journal, pi's session), on the model of the other
+// capability enums above.
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ContextUsageSource {
     /// Claude Code's per-message `usage` (input + both cache buckets + output),
@@ -200,6 +227,11 @@ pub(crate) enum ContextUsageSource {
     /// cumulative-since-session-start counters to a per-turn contribution before
     /// the max is sought — [`crate::context_peak::copilot_session_peak`].
     CopilotJournalPeak,
+    /// pi's per-message `usage.totalTokens` (the turn's full occupancy), deduplicated
+    /// by entry id and maxed — [`crate::pi_session::session_peak`]. The ceiling a
+    /// reader holds it against is the model's context window as `pi --list-models`
+    /// publishes it (#705, `Catalogue::model_contexts`).
+    PiSessionPeak,
 }
 
 impl ContextUsageSource {
@@ -212,30 +244,173 @@ impl ContextUsageSource {
                 "derived — the journal's cumulative usage counters, converted to a per-turn \
                  contribution and maxed"
             }
-        }
-    }
-}
-
-/// The sandbox staging floor a harness guarantees (ADR-0031).
-///
-/// Absent ⇒ a sandboxed Run on this harness holds only by the user's image and
-/// the profile's `$HOME` exceptions, without the plancher's guarantees — and PDO
-/// says so once (see [`staging_floor_absence_note`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum StagingFloor {
-    /// The `.claude` staged home: valid credentials, org managed settings, bypass
-    /// permissions accepted, trust pre-granted to the Run root, empty `projects/`.
-    ClaudeDotClaude,
-}
-
-impl StagingFloor {
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            StagingFloor::ClaudeDotClaude => {
-                "a staged `.claude` home — credentials, org managed settings, pre-granted trust"
+            ContextUsageSource::PiSessionPeak => {
+                "derived — per-message `usage.totalTokens` from the session, deduplicated and \
+                 maxed, read against the catalogue's context window"
             }
         }
     }
+}
+
+/// One `$HOME`-relative entry of a harness's staging set (ADR-0063 §1): copied
+/// from the host into the Run's staging on the way in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct StagingEntry {
+    /// `$HOME`-relative path (`.claude/.credentials.json`, `.pi/agent/auth.json`).
+    /// Routed by the same classifier as a profile entry
+    /// ([`crate::sandbox_profile::landing`]), so the copy view and the mount view
+    /// cannot drift.
+    pub(crate) rel: &'static str,
+    /// What to log at `info` when the host lacks the entry, or `None` for a silent
+    /// skip. `Some` is for an entry whose absence is the **common** case yet worth a
+    /// line (an org baseline on an install with no org): a `warn!` per Run would
+    /// train the reader to ignore warnings.
+    pub(crate) absent_note: Option<&'static str>,
+}
+
+/// A write that disarms a **blocking dialog** once a staging set is copied
+/// (ADR-0063 §2). Distinct from the set itself: the set is what the harness
+/// *reads* to behave as on the host; a fixup is what PDO *writes* so an unattended
+/// session never waits for a human. `claude` has them; `copilot` and `pi` carry the
+/// equivalent on their argv (`--allow-all`, `-a`) and declare none.
+///
+/// Each variant is applied by [`crate::sandbox_staging`], the only module that
+/// writes into a staging — this enum only *names* the write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AutonomyFixup {
+    /// `skipDangerousModePermissionPrompt: true` in the staged `.claude/settings.json`
+    /// — merged into the host copy when the profile staged it, synthesised as a
+    /// one-key file otherwise (ADR-0031 §1 G3).
+    ClaudeBypassPermissions,
+    /// The staged `.claude.json` baseline: `hasCompletedOnboarding`, plus trust
+    /// pre-granted on the Run root when there is one (ADR-0031 §1 G4).
+    ClaudeJsonBaseline,
+}
+
+/// The sandbox **staging set** a harness declares (ADR-0063 §1): the `$HOME`
+/// entries and env that make a session in the container behave as on the host,
+/// plus its **transcript sinks** and its [`AutonomyFixup`]s.
+///
+/// Absent ⇒ a sandboxed Run on this harness holds only by the user's image and
+/// the profile's `$HOME` exceptions — and PDO says so once (see
+/// [`staging_set_absence_note`]). `None` is a declared value (ADR-0051), published
+/// in the support table.
+///
+/// The set is **data**; [`crate::sandbox_staging`] is the one interpreter. It is
+/// copied at the spawn of the **first** session of the Run that resolves the harness
+/// (`sandbox_staging::fill_staging_set`, #708, ADR-0063 §3) — never at `RunStarted`,
+/// never for a harness the Run does not launch. Its `home_root` is mounted **empty**
+/// at container creation so that later copy lands under a mount.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct StagingSet {
+    /// The support-table cell: what this harness stages, in the reader's words.
+    pub(crate) label: &'static str,
+    /// The harness's home root under `$HOME` (`.claude`, `.pi/agent`): the directory
+    /// mounted (empty until filled) for every first-party harness (ADR-0063 §3).
+    pub(crate) home_root: &'static str,
+    /// Entries copied from the host, whole. Refused as profile entries: the set owns
+    /// them in every profile.
+    pub(crate) entries: &'static [StagingEntry],
+    /// `$HOME`-relative sub-paths **skipped** when an entry above is a directory.
+    pub(crate) excludes: &'static [&'static str],
+    /// Env vars the harness needs inside the container (`PI_TELEMETRY=0`). Posed
+    /// with the set; `claude` needs none.
+    pub(crate) env: &'static [(&'static str, &'static str)],
+    /// `$HOME`-relative transcript sinks: created **empty** on the way in (never
+    /// copied — copying would break the merge-back idempotence and the cost fold),
+    /// **harvested** at merge-back under the same encoded dirname. Refused as
+    /// profile entries.
+    pub(crate) transcripts: &'static [&'static str],
+    /// The blocking-dialog disarms applied once the set is on disk.
+    pub(crate) fixups: &'static [AutonomyFixup],
+}
+
+impl StagingSet {
+    pub(crate) fn label(self) -> &'static str {
+        self.label
+    }
+}
+
+/// `claude`'s staging set — the five guarantees of ADR-0031 §1, byte for byte,
+/// re-expressed as data (ADR-0063 amends §1: they are *claude's*, one set among
+/// others):
+///
+/// - **G1 credentials** → entry `.claude/.credentials.json` (0600 preserved by
+///   `std::fs::copy`; absent on the host → silent no-op, auth fails later and it is
+///   not `prepare`'s call);
+/// - **G2 org managed settings** → entry `.claude/remote-settings.json` (absent →
+///   `info!` no-op, the majority case; present but uncopyable → hard error, a
+///   compliance surprise);
+/// - **G3 bypass permissions** → [`AutonomyFixup::ClaudeBypassPermissions`];
+/// - **G4 `.claude.json` baseline** → [`AutonomyFixup::ClaudeJsonBaseline`];
+/// - **G5 empty transcript sink** → transcripts `.claude/projects`.
+///
+/// The `~/.claude` allowlist itself (skills, plugins, settings…) is NOT here: it is
+/// the user's `full` profile ([`crate::sandbox_profile::DEFAULT_FULL_ENTRIES`]),
+/// the harness-agnostic diff of ADR-0063 §4.
+pub(crate) const CLAUDE_STAGING_SET: StagingSet = StagingSet {
+    label: "the `.claude` home — credentials and org managed settings copied, trust and \
+            permissions bypass fixed up, transcripts harvested back",
+    home_root: ".claude",
+    entries: &[
+        StagingEntry {
+            rel: ".claude/.credentials.json",
+            absent_note: None,
+        },
+        StagingEntry {
+            rel: ".claude/remote-settings.json",
+            absent_note: Some("nothing to consent to (no-op)"),
+        },
+    ],
+    excludes: &[],
+    env: &[],
+    transcripts: &[".claude/projects"],
+    fixups: &[
+        AutonomyFixup::ClaudeBypassPermissions,
+        AutonomyFixup::ClaudeJsonBaseline,
+    ],
+};
+
+/// `pi`'s staging set (#708, ADR-0063): the whole `.pi/agent/` home **except**
+/// `sessions/` — `auth.json`, `settings.json`, the model catalogue (`models.json`),
+/// extensions, skills, prompts, themes and `bin/` — so a session in the container
+/// authenticates, prices its messages and finds its extensions exactly as on the
+/// host. Two env vars ride the `docker exec` with it: `PI_SKIP_VERSION_CHECK=1` (PDO
+/// decides when the target moves, not a startup banner) and `PI_TELEMETRY=0`. **No**
+/// `PI_OFFLINE` — the catalogue is copied, the network is not cut.
+///
+/// `sessions/` is the transcript sink: created empty on the way in and harvested at
+/// merge-back under the same cwd-encoded dirname (the worktree is mounted at its
+/// host path, ADR-0030, so pi names the folder identically inside and out). **No**
+/// autonomy fixup: `-a` on pi's argv already disarms every approval dialog.
+pub(crate) const PI_STAGING_SET: StagingSet = StagingSet {
+    label: "the `.pi/agent` home — auth, settings, model catalogue, extensions, skills, \
+            prompts, themes and bin copied, sessions harvested back",
+    home_root: ".pi/agent",
+    entries: &[StagingEntry {
+        rel: ".pi/agent",
+        absent_note: Some(
+            "pi is not set up on this host; the container starts with an empty pi home",
+        ),
+    }],
+    excludes: &[],
+    env: &[("PI_SKIP_VERSION_CHECK", "1"), ("PI_TELEMETRY", "0")],
+    transcripts: &[".pi/agent/sessions"],
+    fixups: &[],
+};
+
+/// Every staging set a first-party harness declares, in registry order. The
+/// generic consumers (the transcript merge-back, the profile grammar's refusals)
+/// iterate this rather than naming `claude`, so a harness that declares a set is
+/// harvested and protected with no second edit (ADR-0063).
+pub(crate) fn staging_sets() -> Vec<(String, StagingSet)> {
+    crate::harness_registry::embedded_floor()
+        .into_iter()
+        .filter_map(|d| {
+            let set = probes_for(&d.name)?.staging_set()?;
+            Some((d.name, set))
+        })
+        .collect()
 }
 
 /// The capabilities of one harness. **Every method defaults to "absent"**
@@ -262,9 +437,9 @@ pub(crate) trait HarnessProbes: Sync {
     fn usage_limit_anchor(&self) -> Option<UsageLimitAnchor> {
         None
     }
-    /// The sandbox staging floor, or `None` (a sandboxed Run says its absence
-    /// once).
-    fn staging_floor(&self) -> Option<StagingFloor> {
+    /// The sandbox staging set, or `None` (a sandboxed Run says its absence
+    /// once). ADR-0063.
+    fn staging_set(&self) -> Option<StagingSet> {
         None
     }
     /// The context-usage source, or `None` (Performance shows no Context column
@@ -390,8 +565,8 @@ impl HarnessProbes for ClaudeProbes {
     fn usage_limit_anchor(&self) -> Option<UsageLimitAnchor> {
         Some(UsageLimitAnchor::ClaudePaneMenu)
     }
-    fn staging_floor(&self) -> Option<StagingFloor> {
-        Some(StagingFloor::ClaudeDotClaude)
+    fn staging_set(&self) -> Option<StagingSet> {
+        Some(CLAUDE_STAGING_SET)
     }
 
     fn context_usage_source(&self) -> Option<ContextUsageSource> {
@@ -484,8 +659,8 @@ static CLAUDE_PROBES: ClaudeProbes = ClaudeProbes;
 ///   own documentation admits the textual anchor drifts each version, and it
 ///   triggers no recovery (ADR-0012) — a second harness declaring it absent
 ///   degrades nothing actionable (ADR-0051 §"Limites");
-/// - the **staging floor** is absent: configuring a harness is a documented
-///   prerequisite, not PDO code (ADR-0031 / CONTEXT.md § "Harnais agentique").
+/// - the **staging set** is absent: configuring `copilot` is a documented
+///   prerequisite, not PDO code (ADR-0063 / CONTEXT.md § "Harnais agentique").
 ///
 /// The three present capabilities dispatch to `copilot`'s own implementation — its
 /// event journal, never `claude`'s cwd-keyed JSONL store.
@@ -510,7 +685,7 @@ impl HarnessProbes for CopilotProbes {
     fn turn_end_substrate(&self) -> Option<TurnEndSubstrate> {
         Some(TurnEndSubstrate::CopilotEventJournal)
     }
-    // usage_limit_anchor / staging_floor stay `None` — declared absent (see above).
+    // usage_limit_anchor / staging_set stay `None` — declared absent (see above).
 
     fn context_usage_source(&self) -> Option<ContextUsageSource> {
         Some(ContextUsageSource::CopilotJournalPeak)
@@ -559,6 +734,97 @@ impl HarnessProbes for CopilotProbes {
 
 /// The single `copilot` instance handed out by [`probes_for`]. Zero-sized.
 static COPILOT_PROBES: CopilotProbes = CopilotProbes;
+
+/// The `pi` capabilities (#705/#707/#708, story #702; ADR-0051/0052/0043/0063) —
+/// **six** present, **one** declared absent with its motive:
+///
+/// - **cost**: a **reported** cost of constant **1.0** — pi writes `usage.cost.total`
+///   in dollars on every assistant message, from its embedded catalogue; PDO sums
+///   it, deduplicated by entry id, and never re-derives from tokens
+///   ([`crate::pi_session::reported_cost`]). A message with tokens but no cost
+///   makes the node's total unavailable, never `$0` (ADR-0052 §2 amended);
+/// - **transcript**: the session JSONL, by the identity PDO imposed, globbed inside
+///   the working directory's folder ([`crate::pi_session::resolve_by_id`]);
+/// - **end of turn**: the injected `agent_settled` extension as the primary
+///   substrate (ADR-0043 applied through the `{settings}` hole — see
+///   [`turn_end_injection`]), the session tail's `stopReason` as the sweep's fallback;
+/// - **context usage**: the per-message `usage.totalTokens` peak, read against the
+///   catalogue's context window (#705);
+/// - **hard error**: pi stays resident after a `stopReason: "error"`, so its exit
+///   code is no verdict ([`HarnessProbes::exit_code_is_verdict`] is `false`) and the
+///   session text is ([`crate::pi_session::hard_error`]);
+/// - the **usage-limit menu anchor** is absent, explicitly: the probe is
+///   informational, its anchor is claude's wording, and it triggers no recovery
+///   (ADR-0012, ADR-0051 §"Limites");
+/// - the **staging set**: `.pi/agent/` minus `sessions/`, plus two env vars, no
+///   autonomy fixup ([`PI_STAGING_SET`], #708, ADR-0063).
+///
+/// `subagent_transcripts` stays at the trait's default (empty): pi's session store is
+/// flat per cwd (one file per session id, no nesting under a session to enumerate).
+struct PiProbes;
+
+impl HarnessProbes for PiProbes {
+    /// A **reported** cost (ADR-0052) of constant 1.0: already in dollars.
+    fn cost_source(&self) -> Option<CostSource> {
+        Some(CostSource::ReportedByConstant)
+    }
+    fn transcript_resolution(&self) -> Option<TranscriptResolution> {
+        Some(TranscriptResolution::PiJsonlById)
+    }
+    fn turn_end_substrate(&self) -> Option<TurnEndSubstrate> {
+        Some(TurnEndSubstrate::PiAgentSettled)
+    }
+    /// Declared absent, explicitly (see above).
+    fn usage_limit_anchor(&self) -> Option<UsageLimitAnchor> {
+        None
+    }
+    /// [`PI_STAGING_SET`]: `.pi/agent/` minus `sessions/`, two env vars, no fixup
+    /// (#708, ADR-0063).
+    fn staging_set(&self) -> Option<StagingSet> {
+        Some(PI_STAGING_SET)
+    }
+    fn context_usage_source(&self) -> Option<ContextUsageSource> {
+        Some(ContextUsageSource::PiSessionPeak)
+    }
+
+    /// pi's transcript resolution: `<store>/<encoded-cwd>/*_<session-id>.jsonl` — by
+    /// the **session identity PDO imposed**, inside the working directory's folder.
+    /// Without a pinned session id there is nothing to resolve (pi never
+    /// blind-continues), so this returns `None`.
+    fn resolve_transcript(
+        &self,
+        store_root: &Path,
+        working_dir: &Path,
+        session_id: Option<&str>,
+    ) -> Option<PathBuf> {
+        crate::pi_session::resolve_by_id(store_root, working_dir, session_id?)
+    }
+
+    /// The sweep's fallback: a tail whose last substantial record is an assistant
+    /// message with `stopReason` `stop`/`length` and no tool call pending. A trailing
+    /// `error` is never a finished turn.
+    fn classify_turn_ended(&self, tail: &str) -> bool {
+        crate::pi_session::turn_ended(tail)
+    }
+
+    fn context_peak(&self, text: &str) -> Option<u64> {
+        crate::pi_session::session_peak(text)
+    }
+
+    /// pi survives a hard model failure (it stays resident and says
+    /// `stopReason: "error"`), so its exit is not a verdict — the session text is.
+    fn exit_code_is_verdict(&self) -> bool {
+        false
+    }
+
+    /// The session's trailing `stopReason: "error"` with its `errorMessage`.
+    fn classify_hard_error(&self, tail: &str) -> Option<String> {
+        crate::pi_session::hard_error(tail)
+    }
+}
+
+/// The single `pi` instance handed out by [`probes_for`]. Zero-sized.
+static PI_PROBES: PiProbes = PiProbes;
 
 /// The capabilities of a **data-declared** harness (a user's disk descriptor, or
 /// `opencode` in v1): every method inherits the trait's "absent" default. This is
@@ -647,11 +913,90 @@ pub(crate) fn exit_code_is_verdict(harness: &str) -> bool {
     resolved(harness).exit_code_is_verdict()
 }
 
+/// Whether `harness`'s `{settings}` hole takes PDO's **claude-format settings
+/// file** — the library assistant's focus-hook JSON (#705) and, for the turn-end
+/// hook, the claude half of [`turn_end_injection`].
+///
+/// The hole means "an injected settings file" (ADR-0043), but the *format* of what
+/// PDO writes is claude's. `pi` has the hole too and fills it with `-e <extension>`
+/// (CONTEXT.md § "Extension de fin de tour"): handed the claude JSON, pi would load
+/// it as an extension and refuse to start. So the writers ask here before writing:
+///
+/// - a **first-party** harness takes the file only if its end-of-turn substrate is
+///   claude's transcript (the `Stop` hook is that substrate) — `claude` yes, `pi`
+///   no (its substrate is its own extension, [`TurnEndSubstrate::PiAgentSettled`]);
+/// - a **data-declared** harness (no probes) keeps the pre-#705 behaviour: a hole
+///   means the file — a user wrapping `claude` in their own descriptor still gets
+///   the hook.
+///
+/// A dispatch point, not a presence guard (ADR-0051): the answer is read off the
+/// harness's declared substrate, never off its name.
+pub(crate) fn settings_hole_takes_claude_file(harness: &str) -> bool {
+    match probes_for(harness) {
+        None => true,
+        Some(p) => matches!(
+            p.turn_end_substrate(),
+            Some(TurnEndSubstrate::ClaudeTranscript)
+        ),
+    }
+}
+
+/// The per-node **turn-end file** a harness's `{settings}` hole takes when
+/// `autocomplete_turn_end` is on (ADR-0043 and its application to `pi`, #707): what
+/// to name it (a suffix after `<node>-iter-<n>`) and what to write in it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TurnEndInjection {
+    /// File-name suffix beside the prompt: `.settings.json` (claude), `.turn-end.ts`
+    /// (pi). Distinct suffixes, so a resumed node on either harness rewrites its own
+    /// file idempotently and never another harness's.
+    pub(crate) suffix: &'static str,
+    /// The file body, byte for byte.
+    pub(crate) body: &'static str,
+}
+
+/// `claude`'s injection: the `Stop`-hook settings JSON of #433, through `--settings`.
+const CLAUDE_TURN_END_INJECTION: TurnEndInjection = TurnEndInjection {
+    suffix: ".settings.json",
+    body: crate::tmux_session_manager::STOP_HOOK_SETTINGS_JSON,
+};
+
+/// `pi`'s injection: the `agent_settled` extension, through `-e`.
+const PI_TURN_END_INJECTION: TurnEndInjection = TurnEndInjection {
+    suffix: crate::pi_session::TURN_END_EXTENSION_SUFFIX,
+    body: crate::pi_session::TURN_END_EXTENSION_TS,
+};
+
+/// What PDO writes into `harness`'s `{settings}` hole to arm turn-end
+/// auto-completion, or `None` when nothing must be written (the token then drops at
+/// render, so `-e`/`--settings` never reach the argv empty).
+///
+/// A dispatch point (ADR-0051): read off the declared end-of-turn substrate, never
+/// off the name —
+/// - [`TurnEndSubstrate::ClaudeTranscript`] ⇒ the claude `Stop`-hook JSON;
+/// - [`TurnEndSubstrate::PiAgentSettled`] ⇒ the pi extension;
+/// - [`TurnEndSubstrate::CopilotEventJournal`] ⇒ `None` (the journal needs no
+///   injection, and `copilot` has no hole anyway);
+/// - a **data-declared** harness (no probes) ⇒ the claude file, the pre-#705
+///   behaviour: a user wrapping `claude` in their own descriptor keeps the hook.
+///
+/// One switch governs every harness: the caller checks `autocomplete_turn_end` once,
+/// then asks here what the harness takes — no `pi`-specific setting.
+pub(crate) fn turn_end_injection(harness: &str) -> Option<TurnEndInjection> {
+    match probes_for(harness) {
+        None => Some(CLAUDE_TURN_END_INJECTION),
+        Some(p) => match p.turn_end_substrate() {
+            Some(TurnEndSubstrate::ClaudeTranscript) => Some(CLAUDE_TURN_END_INJECTION),
+            Some(TurnEndSubstrate::PiAgentSettled) => Some(PI_TURN_END_INJECTION),
+            Some(TurnEndSubstrate::CopilotEventJournal) | None => None,
+        },
+    }
+}
+
 /// The one-time note for a node whose harness has **no turn-end substrate** while
 /// turn-end auto-completion is enabled (ADR-0051 / correctif AC #7). `Some(msg)`
 /// when the setting cannot be honoured for `harness`, `None` for a harness that
 /// has the substrate (`claude`). Pure and testable, the twin of
-/// [`staging_floor_absence_note`]: the setting stops being a silent no-op.
+/// [`staging_set_absence_note`]: the setting stops being a silent no-op.
 pub(crate) fn turn_end_absence_note(harness: &str) -> Option<String> {
     if capabilities(harness).turn_end {
         return None;
@@ -676,6 +1021,9 @@ pub(crate) fn probes_for(harness: &str) -> Option<&'static dyn HarnessProbes> {
         // #615: `copilot`'s three capabilities (reported cost, transcript, turn-end)
         // — the second first-party harness. Its two others are declared absent.
         harness_registry::COPILOT => Some(&COPILOT_PROBES),
+        // #705/#707: `pi` — first-party; five capabilities present, usage-limit and
+        // staging declared absent (the latter until #708).
+        harness_registry::PI => Some(&PI_PROBES),
         // `opencode` (resident but un-instrumented in v1) and every data-declared
         // harness: no capability. A launch is data; a capability is code (ADR-0045).
         _ => None,
@@ -720,7 +1068,7 @@ pub(crate) fn capabilities(harness: &str) -> Capabilities {
             transcript: p.transcript_resolution().is_some(),
             turn_end: p.turn_end_substrate().is_some(),
             usage_limit: p.usage_limit_anchor().is_some(),
-            staging: p.staging_floor().is_some(),
+            staging: p.staging_set().is_some(),
             context_usage: p.context_usage_source().is_some(),
         },
     }
@@ -745,24 +1093,24 @@ pub(crate) fn can_measure_context(harness: &str) -> bool {
 }
 
 /// The one-time note for a sandboxed Run whose node runs on a harness with no
-/// staging floor (ADR-0031). `Some(msg)` when `harness` lacks the floor,
-/// `None` when it has it (`claude`). Pure and testable, modelled on
+/// staging set (ADR-0063). `Some(msg)` when `harness` lacks a set, `None` when it
+/// declares one (`claude`). Pure and testable, modelled on
 /// `price_table::diagnostic`.
-pub(crate) fn staging_floor_absence_note(harness: &str) -> Option<String> {
+pub(crate) fn staging_set_absence_note(harness: &str) -> Option<String> {
     if capabilities(harness).staging {
         return None;
     }
     Some(format!(
-        "sandbox: harness `{harness}` has no staging floor (#553, ADR-0031) — this Run's session \
-         holds only by the profile's image and its `$HOME` exceptions, without the plancher's \
-         guarantees (credentials, org managed settings, pre-granted trust, empty projects/)"
+        "sandbox: harness `{harness}` has no staging set (#553, ADR-0063) — this Run's session \
+         holds only by the profile's image and its `$HOME` exceptions, without a staged home \
+         (credentials, settings) or autonomy fixups (pre-granted trust, permissions bypass)"
     ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::harness_registry::{CLAUDE, COPILOT, OPENCODE};
+    use crate::harness_registry::{CLAUDE, COPILOT, OPENCODE, PI};
 
     /// A struct that overrides nothing: the demonstration that **every trait
     /// method defaults to "absent"**. This is the shape of a harness declared in
@@ -777,7 +1125,7 @@ mod tests {
         assert!(bare.transcript_resolution().is_none());
         assert!(bare.turn_end_substrate().is_none());
         assert!(bare.usage_limit_anchor().is_none());
-        assert!(bare.staging_floor().is_none());
+        assert!(bare.staging_set().is_none());
         assert!(bare.context_peak("anything").is_none());
         assert!(bare
             .subagent_transcripts(Path::new("/root"), Path::new("/wd"), "sid")
@@ -802,7 +1150,7 @@ mod tests {
             p.usage_limit_anchor(),
             Some(UsageLimitAnchor::ClaudePaneMenu)
         );
-        assert_eq!(p.staging_floor(), Some(StagingFloor::ClaudeDotClaude));
+        assert_eq!(p.staging_set(), Some(CLAUDE_STAGING_SET));
     }
 
     #[test]
@@ -834,6 +1182,7 @@ mod tests {
         );
         assert!(capabilities(CLAUDE).context_usage);
         assert!(capabilities(COPILOT).context_usage);
+        assert!(capabilities(PI).context_usage);
         assert!(!capabilities(OPENCODE).context_usage);
         assert!(!capabilities("never-seen").context_usage);
     }
@@ -855,7 +1204,7 @@ mod tests {
             p.usage_limit_anchor().is_none(),
             "usage-limit declared absent"
         );
-        assert!(p.staging_floor().is_none(), "staging floor declared absent");
+        assert!(p.staging_set().is_none(), "staging set declared absent");
 
         assert_eq!(
             capabilities(COPILOT),
@@ -871,6 +1220,150 @@ mod tests {
         // A reported cost is still a cost PDO can produce (source + a resolvable
         // journal), so a copilot Run is costable — never "—" for lack of a source.
         assert!(can_cost(COPILOT));
+    }
+
+    #[test]
+    fn pi_has_its_six_capabilities_and_declares_one_absent() {
+        // #707/#708 / ADR-0051: `pi` is instrumented — five capabilities dispatch to
+        // ITS implementation (`crate::pi_session`), the staging set is its own data,
+        // one capability is an explicit `None`.
+        let p = probes_for(PI).expect("pi has probes (first-party)");
+        assert_eq!(p.cost_source(), Some(CostSource::ReportedByConstant));
+        assert_eq!(
+            p.transcript_resolution(),
+            Some(TranscriptResolution::PiJsonlById)
+        );
+        assert_eq!(
+            p.turn_end_substrate(),
+            Some(TurnEndSubstrate::PiAgentSettled)
+        );
+        assert_eq!(
+            p.context_usage_source(),
+            Some(ContextUsageSource::PiSessionPeak)
+        );
+        assert!(
+            p.usage_limit_anchor().is_none(),
+            "usage-limit anchor declared absent"
+        );
+        assert_eq!(
+            p.staging_set(),
+            Some(PI_STAGING_SET),
+            "pi's own staging set (#708, ADR-0063)"
+        );
+        assert_eq!(
+            capabilities(PI),
+            Capabilities {
+                cost: true,
+                transcript: true,
+                turn_end: true,
+                usage_limit: false,
+                staging: true,
+                context_usage: true,
+            }
+        );
+        // Consequences a reader sees: a pi Run is costable and measurable, the
+        // turn-end setting is honoured (no absence note), and a sandboxed Run stages
+        // its home (no absence note either).
+        assert!(can_cost(PI));
+        assert!(can_measure_context(PI));
+        assert_eq!(turn_end_absence_note(PI), None);
+        assert_eq!(staging_set_absence_note(PI), None);
+        // The exit code is no verdict: pi stays resident after a hard error.
+        assert!(!exit_code_is_verdict(PI));
+        // Behaviour is pi's own, never claude's parsers on pi's store.
+        assert!(!turn_ended(PI, FIXTURE_CLAUDE_TURN_ENDED));
+        assert!(!usage_limit_shown(PI, "wait for limit to reset"));
+    }
+
+    #[test]
+    fn pi_dispatches_to_its_own_session_parsers_not_claudes_or_copilots() {
+        let settled = concat!(
+            r#"{"type":"message","id":"u1","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}"#,
+            "\n",
+            r#"{"type":"message","id":"a1","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"usage":{"input":10,"output":5,"cacheRead":0,"cacheWrite":0,"totalTokens":15,"cost":{"total":0.001}},"stopReason":"stop"}}"#,
+            "\n"
+        );
+        assert!(turn_ended(PI, settled));
+        // (claude's parser happens to accept this shape too — both stores carry a
+        // `message.role` — which is exactly why the DISPATCH, not the parser, is
+        // what keeps a claude verdict off a pi store: see the copilot control.)
+        assert!(!turn_ended(COPILOT, settled), "not copilot's journal shape");
+        assert_eq!(context_peak(PI, settled), Some(15));
+        assert_eq!(context_peak(CLAUDE, settled), None);
+        // A trailing hard error is a hard error for pi, and not a finished turn.
+        let errored = concat!(
+            r#"{"type":"message","id":"u1","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}"#,
+            "\n",
+            r#"{"type":"message","id":"a1","message":{"role":"assistant","content":[],"usage":{"totalTokens":0,"cost":{"total":0}},"stopReason":"error","errorMessage":"boom"}}"#,
+            "\n"
+        );
+        assert!(!turn_ended(PI, errored));
+        assert_eq!(hard_error(PI, errored).as_deref(), Some("boom"));
+        assert!(
+            hard_error(CLAUDE, errored).is_none(),
+            "claude's exit is its verdict"
+        );
+    }
+
+    #[test]
+    fn pi_resolves_its_session_by_identity_inside_the_cwd_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("sessions");
+        let wd = Path::new("/shared/wt");
+        let dir = store.join(crate::pi_session::session_dir_name(wd));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("2026-09-05T15-00-00-000Z_sid-a.jsonl");
+        let b = dir.join("2026-09-05T15-00-01-000Z_sid-b.jsonl");
+        std::fs::write(&a, "").unwrap();
+        std::fs::write(&b, "").unwrap();
+        let p = probes_for(PI).unwrap();
+        assert_eq!(p.resolve_transcript(&store, wd, Some("sid-a")), Some(a));
+        assert_eq!(p.resolve_transcript(&store, wd, Some("sid-b")), Some(b));
+        // No pinned identity ⇒ nothing to resolve (pi never blind-continues).
+        assert!(p.resolve_transcript(&store, wd, None).is_none());
+        // And never claude's `<uuid>.jsonl` under an encoded cwd.
+        assert!(resolve_transcript(PI, &store, wd, Some("missing")).is_none());
+    }
+
+    #[test]
+    fn turn_end_injection_is_read_off_the_substrate_never_the_name() {
+        // #707: claude takes its Stop-hook JSON, pi its agent_settled extension,
+        // copilot nothing (no hole, journal substrate), a data-declared harness the
+        // claude file (pre-#705 behaviour: hole ⇒ file).
+        let claude = turn_end_injection(CLAUDE).expect("claude is injected");
+        assert_eq!(claude.suffix, ".settings.json");
+        assert_eq!(
+            claude.body,
+            crate::tmux_session_manager::STOP_HOOK_SETTINGS_JSON
+        );
+        let pi = turn_end_injection(PI).expect("pi is injected");
+        assert_eq!(pi.suffix, ".turn-end.ts");
+        assert_eq!(pi.body, crate::pi_session::TURN_END_EXTENSION_TS);
+        assert!(pi.body.contains("agent_settled"));
+        assert_ne!(
+            claude.suffix, pi.suffix,
+            "distinct files, idempotent rewrites"
+        );
+        assert_eq!(turn_end_injection(COPILOT), None);
+        // `opencode` and a user's descriptor have no probes: the hole-means-file
+        // pre-#705 behaviour (inert for opencode, whose templates carry no hole).
+        assert_eq!(turn_end_injection(OPENCODE), Some(claude));
+        assert_eq!(
+            turn_end_injection("my-claude-wrapper"),
+            Some(claude),
+            "a data-declared harness keeps the claude hook"
+        );
+    }
+
+    #[test]
+    fn the_claude_settings_file_goes_only_to_a_hole_that_takes_it() {
+        // #705: `claude` takes the Stop-hook JSON; `pi` has a `{settings}` hole but
+        // fills it with `-e <extension>`, so the claude file must never be written
+        // for it; a data-declared harness keeps hole ⇒ file.
+        assert!(settings_hole_takes_claude_file(CLAUDE));
+        assert!(!settings_hole_takes_claude_file(PI));
+        assert!(!settings_hole_takes_claude_file(COPILOT));
+        assert!(settings_hole_takes_claude_file("my-claude-wrapper"));
     }
 
     #[test]
@@ -982,7 +1475,7 @@ mod tests {
         // AC #1/#4: the generic by-name dispatch for a harness PDO carries no code
         // for resolves to "absent" on every behaviour — it must NOT reach claude's
         // implementation. This is the path a liveness sweep takes.
-        for name in [OPENCODE, "pi", "not-a-harness"] {
+        for name in [OPENCODE, "my-custom-harness", "not-a-harness"] {
             assert!(
                 resolve_transcript(name, Path::new("/proj"), Path::new("/wd"), Some("abc"))
                     .is_none(),
@@ -1034,19 +1527,86 @@ mod tests {
     #[test]
     fn turn_end_absence_note_fires_only_for_a_harness_without_the_substrate() {
         assert_eq!(turn_end_absence_note(CLAUDE), None);
-        let note = turn_end_absence_note("pi").expect("a note for a substrate-less harness");
-        assert!(note.contains("`pi`"));
+        assert_eq!(
+            turn_end_absence_note(PI),
+            None,
+            "pi has a substrate since #707"
+        );
+        let note = turn_end_absence_note(OPENCODE).expect("a note for a substrate-less harness");
+        assert!(note.contains("`opencode`"));
         assert!(note.contains("no end-of-turn substrate"));
         assert!(note.contains("not be auto-completed"));
     }
 
     #[test]
-    fn staging_floor_absence_note_fires_only_for_a_harness_without_the_floor() {
-        assert_eq!(staging_floor_absence_note(CLAUDE), None);
-        let note = staging_floor_absence_note("my-custom-harness").expect("a note");
+    fn staging_set_absence_note_fires_only_for_a_harness_without_a_set() {
+        assert_eq!(staging_set_absence_note(CLAUDE), None);
+        let note = staging_set_absence_note("my-custom-harness").expect("a note");
         assert!(note.contains("`my-custom-harness`"));
-        assert!(note.contains("no staging floor"));
+        assert!(note.contains("no staging set"));
         assert!(note.contains("$HOME"));
+    }
+
+    /// ADR-0063: the five guarantees of ADR-0031 §1 are `claude`'s set, as data.
+    /// Pinned here so a later edit to the set is a visible change of contract.
+    #[test]
+    fn claude_staging_set_carries_the_five_guarantees_of_adr_0031() {
+        let set = CLAUDE_STAGING_SET;
+        assert_eq!(set.home_root, ".claude");
+        let entries: Vec<&str> = set.entries.iter().map(|e| e.rel).collect();
+        assert_eq!(
+            entries,
+            [".claude/.credentials.json", ".claude/remote-settings.json"]
+        );
+        assert_eq!(set.transcripts, [".claude/projects"]);
+        assert_eq!(
+            set.fixups,
+            [
+                AutonomyFixup::ClaudeBypassPermissions,
+                AutonomyFixup::ClaudeJsonBaseline
+            ]
+        );
+        assert!(set.env.is_empty(), "claude needs no env in the container");
+        assert!(set.excludes.is_empty());
+    }
+
+    /// `claude` and `pi` declare a set; `copilot` and `opencode` are explicit
+    /// `None`s, so the generic consumers (mounts, merge-back, profile refusals) see
+    /// exactly two sets, in registry order.
+    #[test]
+    fn staging_sets_lists_claude_then_pi() {
+        let sets = staging_sets();
+        assert_eq!(sets.len(), 2, "{sets:?}");
+        assert_eq!(sets[0].0, CLAUDE);
+        assert_eq!(sets[0].1, CLAUDE_STAGING_SET);
+        assert_eq!(sets[1].0, PI);
+        assert_eq!(sets[1].1, PI_STAGING_SET);
+    }
+
+    /// ADR-0063 / #708: pi's set is the whole `.pi/agent` minus `sessions/`, two env
+    /// vars, no fixup, and never `PI_OFFLINE`. Pinned so a later edit is a visible
+    /// change of contract.
+    #[test]
+    fn pi_staging_set_is_the_agent_home_minus_sessions_with_two_env_vars_and_no_fixup() {
+        let set = PI_STAGING_SET;
+        assert_eq!(set.home_root, ".pi/agent");
+        let entries: Vec<&str> = set.entries.iter().map(|e| e.rel).collect();
+        assert_eq!(entries, [".pi/agent"]);
+        assert_eq!(set.transcripts, [".pi/agent/sessions"]);
+        assert!(
+            set.fixups.is_empty(),
+            "`-a` on the argv disarms pi's dialogs"
+        );
+        assert_eq!(
+            set.env,
+            [("PI_SKIP_VERSION_CHECK", "1"), ("PI_TELEMETRY", "0")]
+        );
+        assert!(
+            set.env.iter().all(|(k, _)| *k != "PI_OFFLINE"),
+            "the catalogue is copied, the network is not cut"
+        );
+        assert!(set.label.contains("auth"));
+        assert!(set.label.contains("sessions harvested back"));
     }
 
     fn claude_turn(id: &str, input: u64, output: u64) -> String {

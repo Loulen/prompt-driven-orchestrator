@@ -137,7 +137,7 @@ export interface SandboxProfileEntry {
   from_default: boolean;
   enabled: boolean;
   /**
-   * Class (b): unchecking does NOT make the file absent — the staging floor
+   * Class (b): unchecking does NOT make the file absent — the staging set's fixup
    * re-synthesises the keys it needs. Exactly two entries. The UI must say so, or
    * unchecking reads as more destructive than it is.
    */
@@ -151,12 +151,12 @@ export interface SandboxProfileEntry {
 }
 
 /**
- * One class-(c) floor guarantee (#432): satisfied by the WHOLE file, so it is neither
- * checkable nor addable. Rendered read-only — without this block a `minimal` profile's
- * screen looks broken and the user wrongly concludes the container starts with no
- * credentials.
+ * One class-(c) staging-set guarantee (#432, ADR-0063): satisfied by the WHOLE file, so it
+ * is neither checkable nor addable. Rendered read-only — without this block a `minimal`
+ * profile's screen looks broken and the user wrongly concludes the container starts with no
+ * credentials. Served under the historical wire key `floor`.
  */
-export interface SandboxFloorGuarantee {
+export interface SandboxStagingGuarantee {
   id: string;
   label: string;
   path: string | null;
@@ -177,7 +177,7 @@ export interface SandboxProfile {
   /** Signalled no-ops, never errors (ADR-0031 §2). */
   redundant_extras: string[];
   inactive_disabled: string[];
-  floor: SandboxFloorGuarantee[];
+  floor: SandboxStagingGuarantee[];
   sensitive_prefixes: string[];
   /**
    * Environment variables posed at `docker create` for every Run on this profile (#468,
@@ -378,6 +378,10 @@ export interface HarnessListItem {
    *  the binary enumerates none, so the client falls back to free text (a declared
    *  absence). Optional so a daemon predating #616 still typechecks. */
   models?: string[];
+  /** #705: the context window a source published beside a model id (`pi
+   *  --list-models`), keyed by id, verbatim (`200K`, `1M`). A picker hint, never a
+   *  guard. Absent/empty when no source names one. */
+  model_contexts?: Record<string, string>;
   /** #616/ADR-0053: the effort levels the binary offers. Empty ⇒ no effort axis. */
   efforts?: string[];
   /** #616/ADR-0053: the served effort-axis fact — whether this harness has an
@@ -763,6 +767,11 @@ export interface FrontmatterViolation {
 export interface NodeCost {
   usd: number | null;
   form: "derived" | "reported" | null;
+  /** #707: every contribution is a reported cost **already in dollars** (conversion
+   *  constant 1.0 — `pi`'s `usage.cost.total`), so the figure renders without `~`.
+   *  Absent/false for derived costs and for a reported cost converted from another
+   *  billing unit (`copilot`). */
+  reported_in_usd?: boolean;
   partial: boolean;
   unpriced_models?: string[];
   unavailable_reasons?: string[];
@@ -993,7 +1002,8 @@ export interface RunState {
   /**
    * The machine slug companion of {@link awaiting_reason} (#601): a stable
    * snake_case code (`session_died`, `run_stalled`, `unrouted`,
-   * `region_exhausted`, `spawn_aborted`, `merge_conflict`, …) to branch on —
+   * `region_exhausted`, `spawn_aborted`, `harness_binary_missing`,
+   * `merge_conflict`, …) to branch on —
    * next to the human prose, the same slug+prose contract as a refusal body
    * (ADR-0035). Absent for an interactive wait.
    */
@@ -1099,6 +1109,9 @@ export interface HarnessCost {
   form: "derived" | "reported";
   partial: boolean;
   unpriced_models: string[];
+  /** #707: a reported slice already in dollars (constant 1.0, `pi`) — rendered
+   *  without `~`. See `NodeCost.reported_in_usd`. */
+  reported_in_usd?: boolean;
 }
 
 export interface DaemonEvent {

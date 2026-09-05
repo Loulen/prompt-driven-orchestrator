@@ -6,6 +6,7 @@ import {
   nodeCostTitle,
   COST_ESTIMATE_NOTE,
   COST_REPORTED_NOTE,
+  COST_REPORTED_IN_USD_NOTE,
 } from "./costLabel";
 import type { NodeCost } from "../types";
 
@@ -30,6 +31,12 @@ describe("costPrecision", () => {
     it("describes derived, reported, partial, unavailable, and repeated execution costs honestly", () => {
       expect(nodeCostTitle(cost())).toContain(COST_ESTIMATE_NOTE);
       expect(nodeCostTitle(cost({ form: "reported" }))).toContain(COST_REPORTED_NOTE);
+      expect(nodeCostTitle(cost({ form: "reported", reported_in_usd: true }))).toContain(
+        COST_REPORTED_IN_USD_NOTE,
+      );
+      expect(nodeCostTitle(cost({ form: "reported", reported_in_usd: true }))).not.toContain(
+        COST_REPORTED_NOTE,
+      );
       expect(nodeCostTitle(cost({ form: null }))).not.toContain(COST_ESTIMATE_NOTE);
       expect(nodeCostTitle(cost({ form: null }))).not.toContain(COST_REPORTED_NOTE);
       expect(nodeCostTitle(cost({ form: null }))).toMatch(
@@ -194,6 +201,44 @@ describe("formatEstCost (single run, #272)", () => {
     expect(c.text).toBe("—");
     expect(c.ventilation).toBeUndefined();
     expect(c.title).toMatch(/cost unavailable/i);
+  });
+
+  it("shows a pi slice reported in dollars without `~`, and the mixed total with it (#707)", () => {
+    // claude (derived estimate) + pi (reported, constant 1.0): the pi slice is an
+    // exact figure and drops the `~`; the total still contains an estimate and keeps it.
+    const c = formatEstCost(5.02, false, [], [], [
+      { harness: "claude", usd: 5.0, form: "derived", partial: false, unpriced_models: [] },
+      { harness: "pi", usd: 0.020682, form: "reported", partial: false, unpriced_models: [], reported_in_usd: true },
+    ]);
+    expect(c.text).toBe("~$5.02");
+    expect(c.ventilation).toEqual([
+      { harness: "claude", text: "~$5.00", form: "derived" },
+      { harness: "pi", text: "$0.0207", form: "reported" },
+    ]);
+    expect(c.title).toMatch(/\$0\.0207 via `pi` \(reported\)/);
+    expect(c.title).toContain(COST_REPORTED_IN_USD_NOTE);
+    expect(c.title).not.toContain(COST_REPORTED_NOTE);
+    expect(c.title).toContain(COST_ESTIMATE_NOTE);
+  });
+
+  it("drops the `~` on the total of an all-pi Run, and keeps it for copilot (#707)", () => {
+    const pi = formatEstCost(0.020682, false, [], [], [
+      { harness: "pi", usd: 0.020682, form: "reported", partial: false, unpriced_models: [], reported_in_usd: true },
+    ]);
+    expect(pi.text).toBe("$0.0207");
+    expect(pi.dagger).toBe(false);
+    expect(pi.title).not.toContain(COST_ESTIMATE_NOTE);
+    // A copilot slice is reported but CONVERTED (nano-AIU × a constant): still `~`.
+    const copilot = formatEstCost(1.0, false, [], [], [
+      { harness: "copilot", usd: 1.0, form: "reported", partial: false, unpriced_models: [] },
+    ]);
+    expect(copilot.text).toBe("~$1.00");
+    // And a pi slice keeps its exact figure under an unavailable total (ADR-0052 §3).
+    const mixed = formatEstCost(0, false, [], ["opencode"], [
+      { harness: "pi", usd: 0.5, form: "reported", partial: false, unpriced_models: [], reported_in_usd: true },
+    ]);
+    expect(mixed.text).toBe("—");
+    expect(mixed.ventilation).toEqual([{ harness: "pi", text: "$0.5000", form: "reported" }]);
   });
 
   it("daggers a mixed Run only when a DERIVED slice is a lower bound (#615)", () => {

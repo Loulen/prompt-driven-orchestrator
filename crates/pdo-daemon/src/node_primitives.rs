@@ -57,6 +57,11 @@ pub(crate) struct StartNodeParams<'a> {
     /// honours the **disk tier**, so a force-spawn reaches a user-declared harness
     /// exactly like the scheduler does; `None` is the embedded floor only.
     pub harness_registry: Option<&'a harness_registry::HarnessRegistry>,
+    /// Host `$HOME` for a sandboxed Run (#708): the root under which the resolved
+    /// harness's staging set is filled at this spawn, mirroring `spawn_node`. `None`
+    /// on the host path and when the daemon cannot resolve `$HOME` — the set is then
+    /// not filled here (a scheduler spawn or the manager already did, idempotently).
+    pub sandbox_home_root: Option<&'a Path>,
 }
 
 /// Everything needed to launch the node's tmux session, once its reservation has
@@ -111,6 +116,9 @@ struct StartNodeSandbox {
     docker_bin: String,
     uid: u32,
     gid: u32,
+    /// The resolved harness's staging-set env (#708), forwarded on the `docker exec`.
+    /// Empty for `claude` and for a fill that could not run.
+    set_env: Vec<(String, String)>,
 }
 
 impl StartNodeSpawn {
@@ -149,6 +157,7 @@ impl StartNodeSpawn {
                 gid: sbx.gid,
                 marker: &self.session_name,
                 workdir: &self.working_dir,
+                set_env: &sbx.set_env,
             });
         tmux_session_manager::spawn(
             &self.session_name,
@@ -473,6 +482,39 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
     }
     // Model + effort feed both the tail and the `NodeStarted` payload, which the
     // resume path reads back to re-pose `--effort`.
+    // #708 / ADR-0063 §3: fill the resolved harness's staging set into this Run's
+    // staging (once per Run, idempotent behind the marker) so a force-spawned node
+    // carries the same staged home + env as a scheduled one. `None` home ⇒ skip (a
+    // scheduler spawn or the manager fills it). A fill error degrades to no env
+    // rather than failing this manual path — the scheduler spawn is the fail-fast.
+    let sandbox_set_env: Vec<(String, String)> = match (
+        sandboxed,
+        params.sandbox_home_root,
+        harness_descriptor.as_ref(),
+    ) {
+        (true, Some(home), Some(d)) => {
+            let sandbox_root = home.join(".pdo").join("sandbox");
+            match crate::sandbox_staging::fill_staging_set(
+                home,
+                &sandbox_root,
+                params.run_id,
+                &d.name,
+                Some(params.repo_root),
+            ) {
+                Ok(fill) => fill.env(),
+                Err(e) => {
+                    tracing::warn!(
+                        "force-spawn of node {}: staging `{}` set failed (best-effort): {e:#}",
+                        params.node_id,
+                        d.name
+                    );
+                    Vec::new()
+                }
+            }
+        }
+        _ => Vec::new(),
+    };
+
     let resolved_model = resolved_harness.as_ref().and_then(|r| r.model.clone());
     let resolved_effort = resolved_harness.as_ref().and_then(|r| r.effort.clone());
     // Pin a session id only for a harness that can honour it (`claude`).
@@ -537,6 +579,7 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         docker_bin: params.docker_cmd_override.unwrap_or("docker").to_string(),
         uid: crate::sandbox_container::host_uid(),
         gid: crate::sandbox_container::host_gid(),
+        set_env: sandbox_set_env,
     });
     let spawn = StartNodeSpawn {
         session_name,
@@ -1103,6 +1146,7 @@ mod tests {
             project_harness: None,
             inject_hook: false,
             harness_registry: None,
+            sandbox_home_root: None,
         };
 
         let result = start_node(&params);
@@ -1147,6 +1191,7 @@ mod tests {
             project_harness: None,
             inject_hook: false,
             harness_registry: None,
+            sandbox_home_root: None,
         };
 
         let result = start_node(&params);
@@ -1191,6 +1236,7 @@ mod tests {
             project_harness: None,
             inject_hook: true,
             harness_registry: None,
+            sandbox_home_root: None,
         };
         let result = start_node(&params);
         assert_eq!(result.outcome, PrimitiveOutcome::Executed);
@@ -1243,6 +1289,7 @@ mod tests {
             project_harness: None,
             inject_hook: true,
             harness_registry: None,
+            sandbox_home_root: None,
         };
         let result = start_node(&params);
         assert_eq!(result.outcome, PrimitiveOutcome::Executed);
@@ -1306,6 +1353,7 @@ mod tests {
             project_harness: None,
             inject_hook: false,
             harness_registry: None,
+            sandbox_home_root: None,
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -1369,6 +1417,7 @@ mod tests {
             project_harness: None,
             inject_hook: false,
             harness_registry: None,
+            sandbox_home_root: None,
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -1429,6 +1478,7 @@ mod tests {
             project_harness: None,
             inject_hook: false,
             harness_registry: None,
+            sandbox_home_root: None,
         };
         let input_paths = resolve_inputs(&params, node);
         assert_eq!(
@@ -1533,6 +1583,7 @@ mod tests {
             project_harness: None,
             inject_hook: false,
             harness_registry: None,
+            sandbox_home_root: None,
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -1606,6 +1657,7 @@ mod tests {
             project_harness: None,
             inject_hook: false,
             harness_registry: None,
+            sandbox_home_root: None,
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -1709,6 +1761,7 @@ mod tests {
             project_harness: None,
             inject_hook: false,
             harness_registry: None,
+            sandbox_home_root: None,
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -1777,6 +1830,7 @@ mod tests {
             project_harness: None,
             inject_hook: false,
             harness_registry: None,
+            sandbox_home_root: None,
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -1845,6 +1899,7 @@ mod tests {
             project_harness: None,
             inject_hook: false,
             harness_registry: None,
+            sandbox_home_root: None,
         };
 
         let input_paths = resolve_inputs(&params, node);
@@ -2094,6 +2149,7 @@ mod tests {
             project_harness: None,
             inject_hook: false,
             harness_registry: None,
+            sandbox_home_root: None,
         };
 
         let result = start_node(&params);

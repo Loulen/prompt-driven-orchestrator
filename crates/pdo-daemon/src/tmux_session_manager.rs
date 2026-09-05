@@ -197,6 +197,13 @@ pub struct SandboxWrap<'a> {
     /// The node's working dir → `docker exec -w <workdir>` (the load-bearing cwd
     /// inside the container).
     pub workdir: &'a Path,
+    /// The env of the resolved harness's **staging set** (#708, ADR-0063 §1 —
+    /// `pi`: `PI_SKIP_VERSION_CHECK=1`, `PI_TELEMETRY=0`), forwarded on the exec as
+    /// explicit `-e K=V` **before** the per-node catalogue. The descriptor's own
+    /// `env` block is exported host-side and never crosses the exec, so this is the
+    /// only way a set's env reaches the container. Empty for `claude` (no env) ⇒ its
+    /// exec argv is byte-identical to before.
+    pub set_env: &'a [(String, String)],
 }
 
 /// Splice the container-exec prefix (from [`crate::sandbox_container`]) around a
@@ -210,6 +217,14 @@ fn wrap_tail_in_docker_exec(
     extra_env: &[(String, String)],
     base_tail: &str,
 ) -> String {
+    // #708: the staging set's env leads, then the per-node catalogue. Both are
+    // valued `-e K=V` on the exec — a host-side export would not cross it.
+    let exec_env: Vec<(String, String)> = wrap
+        .set_env
+        .iter()
+        .cloned()
+        .chain(extra_env.iter().cloned())
+        .collect();
     let mut argv = vec![wrap.docker_bin.to_string()];
     argv.extend(crate::sandbox_container::exec_prefix_with_env(
         run_id,
@@ -217,7 +232,7 @@ fn wrap_tail_in_docker_exec(
         wrap.gid,
         wrap.workdir,
         wrap.marker,
-        extra_env,
+        &exec_env,
     ));
     argv.push("bash".to_string());
     argv.push("-lc".to_string());
@@ -3701,6 +3716,7 @@ mod tests {
             gid: 1000,
             marker: "pdo-run-abc-solo-iter-1",
             workdir: Path::new("/wd"),
+            set_env: &[],
         };
         let script = build_tmux_script(
             "run-abc",
@@ -4270,7 +4286,78 @@ mod tests {
             gid: 1000,
             marker,
             workdir,
+            set_env: &[],
         }
+    }
+
+    /// #708: a staging set's env (pi's two vars) rides the exec as valued `-e K=V`,
+    /// before the catalogue and never as a host-side export; an empty set env leaves
+    /// the exec argv byte-identical (claude).
+    #[test]
+    fn sandbox_wrap_forwards_the_staging_set_env_on_the_exec() {
+        let harness = crate::harness_registry::pi();
+        let set_env = vec![
+            ("PI_SKIP_VERSION_CHECK".to_string(), "1".to_string()),
+            ("PI_TELEMETRY".to_string(), "0".to_string()),
+        ];
+        let wrap = SandboxWrap {
+            docker_bin: "docker",
+            uid: 1000,
+            gid: 1000,
+            marker: "pdo-run-abc-solo-iter-1",
+            workdir: Path::new("/wd"),
+            set_env: &set_env,
+        };
+        let tail = SessionTail::Agent {
+            harness: &harness,
+            model: None,
+            effort: None,
+            session_id: Some("sid-1"),
+        };
+        let with = build_tmux_script(
+            "run-abc",
+            "solo",
+            1,
+            5172,
+            TEST_SESSION_PATH,
+            Path::new("/wd/.pdo/prompts/solo.md"),
+            None,
+            tail,
+            Some(&wrap),
+            None,
+        );
+        let exec_at = with.find(" exec -i -t ").expect("a docker exec");
+        let container_at = with.find("pdo-sbx-run-abc").expect("the container name");
+        let exec_argv = &with[exec_at..container_at];
+        assert!(
+            exec_argv.contains("-e PI_SKIP_VERSION_CHECK=1 -e PI_TELEMETRY=0 --user 1000:1000"),
+            "the set env is valued `-e` pairs on the exec, before --user: {exec_argv}"
+        );
+
+        let bare = sample_wrap("pdo-run-abc-solo-iter-1", Path::new("/wd"));
+        let without = build_tmux_script(
+            "run-abc",
+            "solo",
+            1,
+            5172,
+            TEST_SESSION_PATH,
+            Path::new("/wd/.pdo/prompts/solo.md"),
+            None,
+            SessionTail::Agent {
+                harness: &harness,
+                model: None,
+                effort: None,
+                session_id: Some("sid-1"),
+            },
+            Some(&bare),
+            None,
+        );
+        let exec_at = without.find(" exec -i -t ").unwrap();
+        let container_at = without.find("pdo-sbx-run-abc").unwrap();
+        assert!(
+            !without[exec_at..container_at].contains("PI_TELEMETRY"),
+            "no set env ⇒ nothing added to the exec: {without}"
+        );
     }
 
     #[test]

@@ -268,6 +268,11 @@ async fn minimal_run_prepares_wraps_and_completes() {
     // is SYNTHESISED down to the bypass key — otherwise the session stalls on the
     // bypass-permissions prompt with nobody watching.
     let home = staged_home(&daemon, &run_id);
+    // #708: `claude`'s set is filled at the node's spawn — wait on its marker.
+    assert!(
+        wait_until(|| staged_set_marker(&daemon, &run_id, "claude").exists()).await,
+        "the claude set must be staged once the node is running"
+    );
     let settings: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(home.join("settings.json")).unwrap())
             .unwrap();
@@ -583,6 +588,19 @@ fn staged_home(daemon: &TestDaemon, run_id: &str) -> PathBuf {
         .join("claude-home")
 }
 
+/// The `<staging>/sets/<harness>` marker fill_staging_set writes AFTER copying the
+/// whole set (#708). Waiting on it is the reliable "the claude set is fully staged"
+/// signal — unlike `settings.json`, which the `full` profile copies during the eager
+/// prep, before the set is filled at the node's spawn.
+fn staged_set_marker(daemon: &TestDaemon, run_id: &str, harness: &str) -> PathBuf {
+    daemon
+        .repo_root()
+        .join(".pdo/sandbox")
+        .join(run_id)
+        .join("sets")
+        .join(harness)
+}
+
 fn staged_json(daemon: &TestDaemon, run_id: &str) -> PathBuf {
     daemon
         .repo_root()
@@ -627,9 +645,11 @@ async fn full_run_stages_allowlist_and_completes() {
     assert_eq!(run["nodes"][NODE_ID]["status"], "running", "run: {run}");
 
     let home = staged_home(&daemon, &run_id);
+    // #708: the claude set is filled at the node's SPAWN. Wait on its marker (written
+    // after the whole set) rather than settings.json, which `full` copies earlier.
     assert!(
-        wait_until(|| home.join("settings.json").is_file()).await,
-        "staged settings.json should exist once the node is running"
+        wait_until(|| staged_set_marker(&daemon, &run_id, "claude").exists()).await,
+        "the claude set must be staged once the node is running"
     );
 
     assert!(home.join("skills/foo/skill.md").is_file());
@@ -724,7 +744,7 @@ async fn minimal_run_stages_the_staging_set_against_a_fabricated_host() {
 
     let home = staged_home(&daemon, &run_id);
     assert!(
-        wait_until(|| home.join("settings.json").is_file()).await,
+        wait_until(|| staged_set_marker(&daemon, &run_id, "claude").exists()).await,
         "staging should be seeded once the node is running"
     );
 
@@ -781,9 +801,12 @@ async fn full_excludes_projects_and_bulky_host_state() {
     wait_node_status(&daemon, &run_id, "running").await;
 
     let home = staged_home(&daemon, &run_id);
+    // #708: the `projects/` sink is created by the claude set at the node's SPAWN
+    // (not by the eager prep). For `full`, `settings.json` arrives earlier via the
+    // profile copy, so wait on the fill-created sink, not on settings.json.
     assert!(
-        wait_until(|| home.join("settings.json").is_file()).await,
-        "staging should be seeded once the node is running"
+        wait_until(|| home.join("projects").is_dir()).await,
+        "the claude spawn must create the projects/ sink"
     );
 
     // Allowlist, not denylist.
@@ -842,12 +865,17 @@ async fn full_never_mounts_the_real_host_claude() {
             );
         }
     }
-    // The `full` default declares nothing outside `~/.claude`, so the extra-mount queue is
-    // empty: exactly the 4 fixed mounts.
+    // The `full` default declares nothing outside `~/.claude`, so the profile extra-mount
+    // queue is empty: the 4 fixed mounts + pi's empty home root anchor (#708), whose
+    // source is a staged path, never the host.
     assert_eq!(
         specs.len(),
-        4,
-        "`full` must add no `$HOME`-exception mount; specs={specs:?}"
+        5,
+        "`full` adds no `$HOME`-exception mount, only pi's home root; specs={specs:?}"
+    );
+    assert!(
+        specs.iter().any(|s| s.contains("/home/.pi/agent:")),
+        "pi's home root is mounted empty; specs={specs:?}"
     );
 }
 

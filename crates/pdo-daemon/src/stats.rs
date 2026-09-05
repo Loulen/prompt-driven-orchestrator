@@ -1034,9 +1034,9 @@ pub(crate) async fn stats_cost(
     // not this one. The table's fingerprint is the memo's third key component, so a
     // sync is visible here without a daemon restart.
     let prices = crate::price_table::PriceTable::load(&home_root);
-    // Host-home stores of the reported-cost harnesses (`copilot`, `pi`): neither
-    // declares a staging set, so their files are read where the harness wrote them.
-    let stores = crate::sandbox_run::HarnessStores::from_home(&home_root);
+    // `copilot`'s store is always the host journal (no staging set); `pi`'s moves per
+    // Run (#708) — the staged sink while a sandboxed Run lives, the host store after
+    // merge-back — so `stores` is rebuilt inside the per-Run loop below, not here.
     let stored_projects = match crate::project_store::list(&state.db).await {
         Ok(projects) => projects,
         Err(error) => {
@@ -1091,6 +1091,13 @@ pub(crate) async fn stats_cost(
             });
         let projects_root =
             crate::sandbox_run::transcripts_root(sandboxed, &run_id, &home_root, &sandbox_root);
+        // #708: pi's store follows the same sandbox-aware seam as the Claude root.
+        let stores = crate::sandbox_run::HarnessStores::for_run(
+            sandboxed,
+            &run_id,
+            &home_root,
+            &sandbox_root,
+        );
         let events = match crate::load_events(&state.db, &run_id).await {
             Ok(events) => events,
             Err(error) => {

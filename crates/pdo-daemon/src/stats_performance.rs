@@ -824,6 +824,10 @@ struct RunContext {
     events: Vec<crate::event_log::Event>,
     claude_root: PathBuf,
     repo_root: PathBuf,
+    /// The reported-cost stores FOR THIS RUN (#708): `pi`'s follows the same
+    /// sandbox-aware seam as `claude_root` (staged sink while a sandboxed Run lives,
+    /// host store after merge-back), `copilot`'s is always the host journal.
+    stores: HarnessStores,
 }
 
 async fn compute_performance(
@@ -848,7 +852,6 @@ async fn compute_performance(
             let sandbox = home.join(".pdo").join("sandbox");
             (home, sandbox)
         });
-    let stores = HarnessStores::from_home(&home_root);
 
     let mut contexts: Vec<RunContext> = Vec::new();
     let mut key_hasher = DefaultHasher::new();
@@ -871,6 +874,8 @@ async fn compute_performance(
             });
         let claude_root =
             crate::sandbox_run::transcripts_root(sandboxed, &run_id, &home_root, &sandbox_root);
+        // #708: pi's store follows the same sandbox-aware seam as the Claude root.
+        let stores = HarnessStores::for_run(sandboxed, &run_id, &home_root, &sandbox_root);
 
         let events = crate::load_events(&state.db, &run_id)
             .await
@@ -895,6 +900,7 @@ async fn compute_performance(
             events,
             claude_root,
             repo_root,
+            stores,
         });
     }
     let key: PerformanceMemoKey = (from.to_string(), to.to_string(), key_hasher.finish());
@@ -911,7 +917,7 @@ async fn compute_performance(
     #[cfg(test)]
     record_recompute_for_test(&key);
 
-    let value = fold_performance(contexts, &stores)?;
+    let value = fold_performance(contexts)?;
 
     let mut guard = performance_memo()
         .lock()
@@ -926,10 +932,7 @@ async fn compute_performance(
 /// The heavy fold — every transcript read and subagent directory scan, gated
 /// behind the memo. Synchronous: events are already loaded into [`RunContext`],
 /// so nothing here touches `state.db` again.
-fn fold_performance(
-    contexts: Vec<RunContext>,
-    stores: &HarnessStores,
-) -> Result<StatsPerformance, PerformanceError> {
+fn fold_performance(contexts: Vec<RunContext>) -> Result<StatsPerformance, PerformanceError> {
     let mut seen_roots: HashSet<PathBuf> = HashSet::new();
     let mut pipelines: BTreeMap<String, PipelineAcc> = BTreeMap::new();
     let mut total_by_harness: BTreeMap<String, HarnessAcc> = BTreeMap::new();
@@ -944,6 +947,7 @@ fn fold_performance(
         events,
         claude_root,
         repo_root,
+        stores,
     } in contexts
     {
         let pipeline_id = payload
@@ -1058,7 +1062,7 @@ fn fold_performance(
                             &mut pipeline_acc.by_harness,
                             &mut total_by_harness,
                             &claude_root,
-                            stores,
+                            &stores,
                             &working_dir,
                             &p,
                             &event.ts,

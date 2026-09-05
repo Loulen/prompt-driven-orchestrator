@@ -2,11 +2,12 @@ import type { UpdateStatus } from "../types";
 import { newerAvailable } from "../lib/updateStatus";
 
 /**
- * The status-bar version (#697): a BUTTON that opens Settings › General › Version &
- * update. When the daemon's cache knows a newer release, an amber pill `→ <latest>`
- * says how far behind we are (same family as the `ephemeral` pill). Nothing else:
- * up to date, offline, disabled or never checked all render the bare version — the
- * bar never claims "up to date".
+ * The status-bar version (#697): a BUTTON that opens the « What's new » changelog
+ * modal (#698 — Settings › Version & update stays one click away from its footer).
+ * When the daemon's cache knows a newer release, an amber pill `→ <latest>` says how
+ * far behind we are (same family as the `ephemeral` pill). Nothing else: up to date,
+ * offline, disabled or never checked all render the bare version — the bar never
+ * claims "up to date".
  */
 export default function VersionBadge({
   version,
@@ -19,8 +20,8 @@ export default function VersionBadge({
 }) {
   const newer = newerAvailable(update);
   const title = newer
-    ? `v${update!.latest_version} is available — open Version & update`
-    : "Open Version & update";
+    ? `v${update!.latest_version} is available — see what's new`
+    : "What's new in this build";
   return (
     <button
       type="button"

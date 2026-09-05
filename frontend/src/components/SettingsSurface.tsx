@@ -89,6 +89,8 @@ interface Props {
   initialPosition?: SettingsPosition;
   /** Diagnostics › Price table links to Stats › Cost › Pricing details (one surface at a time). */
   onOpenStats?: (intent: StatsOpenIntent) => void;
+  /** #698: Version & update › « What's new » opens the changelog modal over the surface. */
+  onOpenChangelog?: () => void;
 }
 
 /** Advisory ceiling: caps above this enter the tmux-server-collapse zone
@@ -229,6 +231,7 @@ export default function SettingsSurface({
   onSaved,
   initialPosition,
   onOpenStats,
+  onOpenChangelog,
 }: Props) {
   const { settings, settled, save, refresh } = useSettings(open);
   const { profiles: agentProfiles, refresh: refreshAgentProfiles } = useAgentProfiles(open);
@@ -672,7 +675,11 @@ export default function SettingsSurface({
                 ) : (
                   loading
                 )}
-                <VersionUpdateSection section={item.sections[3]} active={open} />
+                <VersionUpdateSection
+                  section={item.sections[3]}
+                  active={open}
+                  onOpenChangelog={onOpenChangelog}
+                />
               </>
             )}
 
@@ -1194,7 +1201,15 @@ function InterfaceSection({ section }: { section: SettingsSection }) {
  * unknown (off / unreachable / never) → `—` + the reason. The bar's badge follows via
  * the bus, so disabling the check removes it immediately.
  */
-function VersionUpdateSection({ section, active }: { section: SettingsSection; active: boolean }) {
+function VersionUpdateSection({
+  section,
+  active,
+  onOpenChangelog,
+}: {
+  section: SettingsSection;
+  active: boolean;
+  onOpenChangelog?: () => void;
+}) {
   const { status, setStatus, refresh } = useUpdateStatus(active);
   const [checking, setChecking] = useState(false);
   const [toggling, setToggling] = useState(false);
@@ -1293,7 +1308,21 @@ function VersionUpdateSection({ section, active }: { section: SettingsSection; a
         </KeyValueRow>
         <KeyValueRow label="Latest release" testId="setting-version-latest">
           {status.latest_version ? (
-            <span className={`font-mono ${newer ? "text-st-await" : ""}`}>v{status.latest_version}</span>
+            <>
+              <span className={`font-mono ${newer ? "text-st-await" : ""}`}>v{status.latest_version}</span>
+              {onOpenChangelog && (
+                <button
+                  type="button"
+                  onClick={onOpenChangelog}
+                  className="ml-2 inline-flex items-center gap-1 text-fg-3 underline decoration-fg-5 underline-offset-2 hover:text-fg"
+                  data-testid="setting-version-whats-new"
+                  title={newer ? "See what changed since your version" : "See the changelog of this build"}
+                >
+                  <FileText size={10} />
+                  What's new
+                </button>
+              )}
+            </>
           ) : (
             <>
               <span className="font-mono">—</span>

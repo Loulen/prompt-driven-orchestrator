@@ -18,6 +18,7 @@ import RunInfoSidebar from "./components/RunInfoSidebar";
 import NewRunModal, { RUN_INTENT } from "./components/NewRunModal";
 import SettingsSurface, { type SettingsPosition, type StatsOpenIntent } from "./components/SettingsSurface";
 import VersionBadge from "./components/VersionBadge";
+import ChangelogModal from "./components/ChangelogModal";
 import { useUpdateStatus } from "./hooks/useUpdateStatus";
 import type { UpdateStatus } from "./types";
 import StatsModal from "./components/StatsModal";
@@ -179,6 +180,9 @@ export default function App() {
   const { run: selectedRun, select: selectRun, refresh: refreshRun } = useSelectedRun();
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [newRunModalOpen, setNewRunModalOpen] = useState(false);
+  // #698: the « What's new » changelog modal, opened from the status-bar version (and
+  // from Settings › Version & update). Lives here next to the other modals.
+  const [changelogOpen, setChangelogOpen] = useState(false);
   // #690: Settings and Stats are full-window surfaces on one shared shell, one open at a
   // time. `openSettings` / `openStats` are the single openers: the gear and the chart icon
   // call them bare (the surface lands where the user last was), programmatic entries pass a
@@ -827,8 +831,18 @@ export default function App() {
         status={status}
         sessions={sessions}
         update={updateStatus}
-        onOpenVersion={() => openSettings({ category: "general", section: "version-update" })}
+        onOpenVersion={() => setChangelogOpen(true)}
       />
+      {changelogOpen && (
+        <ChangelogModal
+          update={updateStatus}
+          onClose={() => setChangelogOpen(false)}
+          onOpenVersionSettings={() => {
+            setChangelogOpen(false);
+            openSettings({ category: "general", section: "version-update" });
+          }}
+        />
+      )}
       <NewRunModal
         open={newRunModalOpen}
         onClose={handleCloseNewRunModal}
@@ -852,6 +866,7 @@ export default function App() {
         onSaved={refreshSessions}
         initialPosition={settingsEntry.position}
         onOpenStats={openStats}
+        onOpenChangelog={() => setChangelogOpen(true)}
       />
       <StatsModal
         key={statsEntry.key}

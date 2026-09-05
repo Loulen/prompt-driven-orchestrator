@@ -16,7 +16,13 @@
 //!      value `null`, `POST /update/check` refused 409, setting persisted in `/settings`;
 //!   6. « Check now » forces a hit and moves `checked_at`;
 //!   7. the install-method / supervision fields are one of the declared values with
-//!      the manual command that matches.
+//!      the manual command that matches;
+//!   8. (#698) `GET /update/changelog` assembles the release notes strictly newer than
+//!      the installed version, newest first, one heading per version, from the
+//!      fixture's release LIST (memoised: one hit per latest version); it falls back
+//!      to the embedded `CHANGELOG.md` with an explicit reason when the check is off
+//!      or the source unreachable, and reports « up to date » with the embedded body
+//!      when the fixture publishes the installed version.
 
 use crate::common::TestDaemon;
 use std::net::SocketAddr;
@@ -27,9 +33,19 @@ use std::sync::Arc;
 /// The shape of GitHub's `releases/latest`, trimmed to what the parser reads.
 const RELEASE_NEWER: &str = r#"{"tag_name":"v99.0.0","name":"pdo 99.0.0","prerelease":false}"#;
 
+/// The shape of GitHub's `releases` list, trimmed to what the changelog reads: two
+/// newer versions (out of order on purpose), one pre-release, one ancient release.
+const RELEASES_LIST: &str = r###"[
+  {"tag_name":"v98.0.0","published_at":"2026-09-04T10:00:00Z","html_url":"https://example.test/releases/tag/v98.0.0","body":"## Highlights\n\n- ninety-eight\n"},
+  {"tag_name":"v99.0.0","published_at":"2026-09-05T10:00:00Z","html_url":"https://example.test/releases/tag/v99.0.0","body":"- ninety-nine\n\n| a | b |\n|---|---|\n| 1 | 2 |\n"},
+  {"tag_name":"v100.0.0-rc.1","prerelease":true,"body":"rc"},
+  {"tag_name":"v0.0.1","published_at":"2020-01-01T00:00:00Z","body":"ancient"}
+]"###;
+
 struct Fixture {
     addr: SocketAddr,
     hits: Arc<AtomicUsize>,
+    list_hits: Arc<AtomicUsize>,
     _task: tokio::task::JoinHandle<()>,
 }
 
@@ -40,21 +56,43 @@ impl Fixture {
     fn hits(&self) -> usize {
         self.hits.load(Ordering::SeqCst)
     }
+    fn list_hits(&self) -> usize {
+        self.list_hits.load(Ordering::SeqCst)
+    }
 }
 
 async fn spawn_fixture(body: &'static str) -> Fixture {
+    spawn_fixture_with_list(body, RELEASES_LIST).await
+}
+
+/// A fixture serving `releases/latest` AND the `releases` list (#698), each with
+/// its own hit counter.
+async fn spawn_fixture_with_list(body: &'static str, list: &'static str) -> Fixture {
     let hits = Arc::new(AtomicUsize::new(0));
+    let list_hits = Arc::new(AtomicUsize::new(0));
     let counter = hits.clone();
-    let app = axum::Router::new().route(
-        "/releases/latest",
-        axum::routing::get(move || {
-            let counter = counter.clone();
-            async move {
-                counter.fetch_add(1, Ordering::SeqCst);
-                ([("content-type", "application/json")], body)
-            }
-        }),
-    );
+    let list_counter = list_hits.clone();
+    let app = axum::Router::new()
+        .route(
+            "/releases/latest",
+            axum::routing::get(move || {
+                let counter = counter.clone();
+                async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    ([("content-type", "application/json")], body)
+                }
+            }),
+        )
+        .route(
+            "/releases",
+            axum::routing::get(move || {
+                let counter = list_counter.clone();
+                async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    ([("content-type", "application/json")], list)
+                }
+            }),
+        );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let task = tokio::spawn(async move {
@@ -63,6 +101,7 @@ async fn spawn_fixture(body: &'static str) -> Fixture {
     Fixture {
         addr,
         hits,
+        list_hits,
         _task: task,
     }
 }
@@ -313,4 +352,142 @@ async fn disabling_the_check_stops_all_egress_and_persists() {
     );
     put_update_check(&daemon, true).await;
     assert_eq!(update_json(&daemon).await["latest_version"], "99.0.0");
+}
+
+async fn changelog(daemon: &TestDaemon) -> serde_json::Value {
+    let resp = reqwest::get(format!("{}/update/changelog", daemon.url()))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "the changelog always answers");
+    assert!(
+        content_type(&resp).starts_with("application/json"),
+        "GET /update/changelog must be registered (the SPA fallback answers text/html)"
+    );
+    resp.json().await.unwrap()
+}
+
+#[tokio::test]
+async fn changelog_assembles_missed_releases_newest_first_and_memoises_the_list() {
+    let fixture = spawn_fixture(RELEASE_NEWER).await;
+    let daemon = TestDaemon::spawn_with_update_source(seed, fixture.url())
+        .await
+        .unwrap();
+
+    // Before any check: honest fallback, zero egress (the list is never fetched
+    // without a known newer version).
+    let body = changelog(&daemon).await;
+    assert_eq!(body["source"], "embedded");
+    assert_eq!(body["latest_version"], serde_json::Value::Null);
+    assert_eq!(
+        body["fallback_reason"],
+        "The release source has not been checked yet."
+    );
+    assert!(body["markdown"]
+        .as_str()
+        .unwrap()
+        .starts_with("# Changelog"));
+    assert_eq!(fixture.list_hits(), 0);
+
+    daemon.run_update_check_tick().await;
+    let body = changelog(&daemon).await;
+    assert_eq!(body["installed_version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(body["latest_version"], "99.0.0");
+    assert_eq!(body["source"], "releases");
+    assert_eq!(body["fallback_reason"], serde_json::Value::Null);
+    assert_eq!(
+        body["missed_versions"],
+        serde_json::json!(["99.0.0", "98.0.0"]),
+        "strictly newer, sorted desc, pre-release and ancient dropped"
+    );
+    let md = body["markdown"].as_str().unwrap();
+    let h99 = md.find("## v99.0.0").expect("one heading per version");
+    let h98 = md.find("## v98.0.0").expect("one heading per version");
+    assert!(h99 < h98, "newest first:\n{md}");
+    assert!(!md.contains("## v0.0.1"), "older releases are not listed");
+    assert!(!md.contains("100.0.0"), "pre-releases are not listed");
+    assert!(md.contains("Released 2026-09-05"));
+    assert!(md.contains("[GitHub release](https://example.test/releases/tag/v99.0.0)"));
+    assert!(md.contains("- ninety-nine"), "notes verbatim");
+    assert!(md.contains("| a | b |"), "GFM table verbatim");
+
+    // Memoised per latest version: another read costs no list fetch.
+    changelog(&daemon).await;
+    assert_eq!(
+        fixture.list_hits(),
+        1,
+        "the list is fetched once per latest version"
+    );
+}
+
+#[tokio::test]
+async fn changelog_falls_back_to_the_embedded_file_with_a_reason() {
+    // Check off: no egress at all, explicit reason.
+    let fixture = spawn_fixture(RELEASE_NEWER).await;
+    let daemon = TestDaemon::spawn_with_update_source(seed, fixture.url())
+        .await
+        .unwrap();
+    daemon.run_update_check_tick().await;
+    put_update_check(&daemon, false).await;
+    let body = changelog(&daemon).await;
+    assert_eq!(body["source"], "embedded");
+    assert_eq!(body["fallback_reason"], "The update check is off.");
+    assert_eq!(body["latest_version"], serde_json::Value::Null);
+    assert_eq!(body["missed_versions"], serde_json::json!([]));
+    assert!(body["markdown"]
+        .as_str()
+        .unwrap()
+        .starts_with("# Changelog"));
+    assert_eq!(fixture.list_hits(), 0, "off: the list is never fetched");
+
+    // Source unreachable at the last check: same body, the other reason.
+    let dead = TestDaemon::spawn_with_update_source(seed, dead_url().await)
+        .await
+        .unwrap();
+    dead.run_update_check_tick().await;
+    let body = changelog(&dead).await;
+    assert_eq!(body["source"], "embedded");
+    assert_eq!(
+        body["fallback_reason"],
+        "The release source was unreachable at the last check."
+    );
+    assert!(body["markdown"].as_str().unwrap().contains("## 1.59.0"));
+}
+
+#[tokio::test]
+async fn changelog_on_an_up_to_date_daemon_says_so_with_the_embedded_body() {
+    // The fixture publishes exactly the installed version.
+    let latest: &'static str = Box::leak(
+        format!(
+            r#"{{"tag_name":"v{}","name":"pdo","prerelease":false}}"#,
+            env!("CARGO_PKG_VERSION")
+        )
+        .into_boxed_str(),
+    );
+    let fixture = spawn_fixture_with_list(latest, "[]").await;
+    let daemon = TestDaemon::spawn_with_update_source(seed, fixture.url())
+        .await
+        .unwrap();
+    daemon.run_update_check_tick().await;
+    let body = changelog(&daemon).await;
+    assert_eq!(body["latest_version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        body["missed_versions"],
+        serde_json::json!([]),
+        "nothing missed"
+    );
+    assert_eq!(body["source"], "embedded");
+    assert_eq!(
+        body["fallback_reason"],
+        serde_json::Value::Null,
+        "up to date is nominal, not a fallback"
+    );
+    assert!(body["markdown"]
+        .as_str()
+        .unwrap()
+        .starts_with("# Changelog"));
+    assert_eq!(
+        fixture.list_hits(),
+        0,
+        "no list fetch when nothing is newer"
+    );
 }

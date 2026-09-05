@@ -7,8 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { ExternalLink, FileText, X, RefreshCw, Copy, Check } from "lucide-react";
-import { mockUpdateStatus, newerAvailable, absoluteTime, relativeTime, PROTO_SCENARIO, type UpdateStatus } from "../design-proto/updateMock";
+import { ExternalLink, FileText, X } from "lucide-react";
 import FullWindowShell from "./FullWindowShell";
 import { announceSettingsChanged, useSettings } from "../hooks/useSettings";
 import { useEditStore } from "../stores/editStore";
@@ -657,7 +656,6 @@ export default function SettingsSurface({
                         source={autocompleteSourceNote(settings.autocomplete_turn_end)}
                       />
                     </Section>
-                    <VersionUpdateSection section={item.sections[3]} />
                   </>
                 ) : (
                   loading
@@ -1157,176 +1155,6 @@ function InterfaceSection({ section }: { section: SettingsSection }) {
         </div>
         <div className="text-fg-3" style={{ fontSize: "10.5px" }}>
           Stored in this browser's localStorage. Not shared with other browsers or the daemon.
-        </div>
-      </div>
-    </Section>
-  );
-}
-
-/**
- * DESIGN PROTOTYPE (#697) — Version & update. Read view of the daemon's version check +
- * two controls: "Check now" (immediate POST) and the `update_check` toggle. In the
- * prototype the toggle saves at the change (own persistence) so the FP reads
- * "disable → latest becomes —, badge disappears" without a Save round-trip; whether it
- * should instead join the form's dirty set is an open design question.
- */
-function VersionUpdateSection({ section }: { section: SettingsSection }) {
-  const [status, setStatus] = useState<UpdateStatus>(() => mockUpdateStatus());
-  const [checking, setChecking] = useState(false);
-  const [checkError, setCheckError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-  const newer = newerAvailable(status);
-  const upToDate =
-    status.check_enabled && status.latest_version != null && status.latest_version === status.installed_version;
-
-  const checkNow = () => {
-    setChecking(true);
-    setCheckError(null);
-    window.setTimeout(() => {
-      setChecking(false);
-      if (PROTO_SCENARIO === "offline") {
-        setCheckError("Release source unreachable (github.com timed out after 5 s). Last known values kept.");
-        setStatus((s) => ({ ...s, checked_at: new Date().toISOString() }));
-      } else {
-        setStatus((s) => ({ ...s, ...mockUpdateStatus("newer"), check_enabled: s.check_enabled, checked_at: new Date().toISOString(), reason: null }));
-      }
-    }, 900);
-  };
-  const toggle = (on: boolean) => {
-    setCheckError(null);
-    setStatus((s) =>
-      on
-        ? { ...s, check_enabled: true, reason: "Not checked yet since re-enabling." }
-        : { ...s, check_enabled: false, latest_version: null, reason: "Update check is off." },
-    );
-  };
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(status.manual_command);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard unavailable: the command is selectable text anyway */
-    }
-  };
-
-  const methodLabel: Record<UpdateStatus["install_method"], string> = {
-    homebrew: "Homebrew",
-    script: "Install script (cargo-dist)",
-    unknown: "Unknown",
-  };
-  const supervisionLabel: Record<UpdateStatus["supervision"], string> = {
-    systemd: "systemd service",
-    launchd: "launchd agent",
-    none: "manual (no service)",
-  };
-
-  return (
-    <Section section={section}>
-      <div className="flex flex-col gap-1.5" data-testid="setting-version-update">
-        <KeyValueRow label="Installed version" testId="setting-version-installed">
-          <span className="font-mono">v{status.installed_version}</span>
-          {upToDate && (
-            <span className="ml-2 rounded-full bg-st-done-bg px-1.5 py-px text-st-done" style={{ fontSize: "9.5px" }}>
-              up to date
-            </span>
-          )}
-        </KeyValueRow>
-        <KeyValueRow label="Latest release" testId="setting-version-latest">
-          {status.latest_version ? (
-            <>
-              <span className={`font-mono ${newer ? "text-st-await" : ""}`}>v{status.latest_version}</span>
-            </>
-          ) : (
-            <>
-              <span className="font-mono">—</span>
-              {status.reason && <span className="ml-2 text-fg-4">{status.reason}</span>}
-            </>
-          )}
-        </KeyValueRow>
-        <KeyValueRow label="Last check" testId="setting-version-checked-at">
-          {status.checked_at ? (
-            <>
-              {absoluteTime(status.checked_at)}
-              <span className="text-fg-4"> · {relativeTime(status.checked_at)} · {status.source}</span>
-            </>
-          ) : (
-            <span className="font-mono">—</span>
-          )}
-        </KeyValueRow>
-        <KeyValueRow label="Install method" testId="setting-version-install-method">
-          {methodLabel[status.install_method]}
-          <span className="text-fg-4"> · {supervisionLabel[status.supervision]}</span>
-        </KeyValueRow>
-        <div
-          className="flex items-center justify-between gap-3 rounded border border-line bg-bg-2 px-2.5 py-1.5"
-          style={{ fontSize: "10.5px" }}
-          data-testid="setting-version-manual-command"
-        >
-          <div className="min-w-0 flex flex-col gap-0.5">
-            <span className="text-fg-4">
-              {status.install_method === "unknown"
-                ? "Install method not detected — PDO will not update itself. To update:"
-                : "To update manually (the future Update button runs exactly this):"}
-            </span>
-            <code className="truncate font-mono text-fg-2">{status.manual_command}</code>
-          </div>
-          {status.install_method !== "unknown" && (
-            <button
-              type="button"
-              onClick={copy}
-              className="flex shrink-0 items-center gap-1 rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg-2 hover:border-acc"
-              style={{ fontSize: 10.5 }}
-              title="Copy command"
-            >
-              {copied ? <Check size={11} /> : <Copy size={11} />}
-              {copied ? "Copied" : "Copy"}
-            </button>
-          )}
-        </div>
-        {checkError && (
-          <KeyValueRow label="Check failed" tone="failed" testId="setting-version-check-error">
-            {checkError}
-          </KeyValueRow>
-        )}
-        <div className="mt-1 flex flex-wrap items-center gap-4">
-          <button
-            type="button"
-            onClick={checkNow}
-            disabled={checking || !status.check_enabled}
-            data-testid="setting-version-check-now"
-            title={!status.check_enabled ? "Turn the update check on to check now." : undefined}
-            className="flex items-center gap-1.5 rounded border border-line-strong bg-bg-3 px-2.5 py-1.5 text-fg-2 hover:border-acc disabled:opacity-40"
-            style={{ fontSize: 11 }}
-          >
-            <RefreshCw size={11} className={checking ? "animate-spin" : ""} />
-            {checking ? "Checking…" : "Check now"}
-          </button>
-          <label className="flex cursor-pointer items-center gap-2.5">
-            <button
-              type="button"
-              role="switch"
-              aria-checked={status.check_enabled}
-              aria-label="Check for updates"
-              data-testid="setting-update-check"
-              onClick={() => toggle(!status.check_enabled)}
-              className={`relative h-3.5 w-6 shrink-0 rounded-full transition-colors ${
-                status.check_enabled ? "bg-acc" : "bg-fg-5"
-              }`}
-            >
-              <span
-                className={`absolute top-0.5 h-2.5 w-2.5 rounded-full bg-bg-1 transition-all ${
-                  status.check_enabled ? "left-3" : "left-0.5"
-                }`}
-              />
-            </button>
-            <span className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
-              Check for updates
-            </span>
-            <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
-              at start, every 6 h and on demand. Off: no request ever leaves the daemon.
-            </span>
-          </label>
         </div>
       </div>
     </Section>

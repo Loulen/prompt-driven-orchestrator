@@ -11,7 +11,6 @@ export type SettingsSectionId =
   | "interface"
   | "runtime-limits"
   | "runs"
-  | "version-update"
   | "harness-models"
   | "agent-profiles"
   | "skills"
@@ -59,12 +58,6 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
         id: "runs",
         label: "Runs",
         description: "Defaults a new Run starts from. New Run and Triggers can override.",
-      },
-      {
-        id: "version-update",
-        label: "Version & update",
-        description:
-          "Which PDO this daemon runs, and whether a newer release is published. The daemon does the check, never this browser.",
       },
     ],
   },
@@ -157,8 +150,7 @@ export type SettingsFieldId =
   | "default-model"
   | "default-harness"
   | "harness-models"
-  | "default-sandbox"
-  | "update-check";
+  | "default-sandbox";
 
 export const FIELD_SECTION: Record<SettingsFieldId, SettingsSectionId> = {
   "session-cap": "runtime-limits",
@@ -172,7 +164,6 @@ export const FIELD_SECTION: Record<SettingsFieldId, SettingsSectionId> = {
   "default-harness": "harness-models",
   "harness-models": "harness-models",
   "default-sandbox": "sandbox",
-  "update-check": "version-update",
 };
 
 export function categoryOf(section: SettingsSectionId): SettingsCategory {

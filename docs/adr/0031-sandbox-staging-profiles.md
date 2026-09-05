@@ -5,7 +5,9 @@ sandbox comme le seul levier — c'est-à-dire qu'un pipeline ayant besoin des s
 MCP paierait ~1 Go par Run ou perdrait tout, et qu'aucun Run sandboxé n'aurait accès à ce qui vit hors
 de `~/.claude` (identité git, auth `gh`).
 
-> Statut : accepted (PRD #403 ; amendements repliés dans le corps). Complète
+> Statut : accepted (PRD #403 ; amendements repliés dans le corps). **Amendé par ADR-0063** : le « plancher » de §1 est
+> le *staging set* + les *autonomy fixups* de `claude` ; chaque harnais first-party déclare le sien,
+> copié au spawn du nœud qui le résout, et le profil reste un diff harnais-agnostique. Complète
 > ADR-0030 : celle-là dit *où* tourne un Run sandboxé, celle-ci *avec quoi*. Le nom de stockage
 > `sandbox_profiles` est conservé malgré ce périmètre élargi : le renommer coûterait une repointe des
 > trois stockages qui comparent son nom pour un gain de prose.

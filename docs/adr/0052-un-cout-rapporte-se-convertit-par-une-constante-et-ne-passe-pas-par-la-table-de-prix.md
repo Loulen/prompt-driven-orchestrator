@@ -42,6 +42,11 @@ La conversion vers le dollar est une **constante documentée par le fournisseur*
 coût rapporté ne consulte aucune table — il ne peut donc pas produire de `unpriced_models`, ni faire
 grossir une table Anthropic avec des familles qui n'en relèvent pas.
 
+La constante peut valoir **1.0** : un harnais qui calcule lui-même un coût **déjà en dollars** par
+message (`pi`, depuis son catalogue embarqué, #702) est un coût rapporté comme un autre, sans `~`.
+Mais un message qui porte des **tokens sans coût** (catalogue absent du home stagé : le harnais
+prévient et tourne) n'est pas gratuit — il rend le total du nœud **indisponible** (§3), jamais `$0`.
+
 ### 3. Un total de Run est ventilé par harnais
 
 Le total reste sommable en dollars, mais il se **dit** par harnais : « X via `copilot`, Y via

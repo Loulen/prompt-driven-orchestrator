@@ -504,6 +504,25 @@ export interface UpdateStatus {
   /** The last check's error, kept beside the last good values. */
   last_error: string | null;
 }
+
+/** Where the « What's new » body comes from (#698). */
+export type ChangelogSource = "releases" | "embedded";
+
+/** `GET /update/changelog` — the release notes strictly newer than the installed version. */
+export interface UpdateChangelog {
+  installed_version: string;
+  latest_version: string | null;
+  /** Versions strictly newer than the installed one, newest first; empty when up to date or unavailable. */
+  missed_versions: string[];
+  source: ChangelogSource;
+  /**
+   * Set exactly when the body is the embedded changelog BECAUSE the releases were not
+   * available (check off, source unreachable). `null` for an up-to-date daemon.
+   */
+  fallback_reason: string | null;
+  /** Markdown, newest version first, one `## vX.Y.Z` heading per version. */
+  markdown: string;
+}
 // `for-each` was removed (ADR-0011 / #151): a fan-out is now a `collection`
 // loop region, not a node. The backend keeps the variant only to migrate old
 // YAML into a region. `loop` was likewise removed in #171.

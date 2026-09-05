@@ -403,6 +403,10 @@ struct AppState {
     update_cache: tokio::sync::Mutex<Option<update_check::UpdateCache>>,
     /// Serialises version checks; a second concurrent "Check now" answers 409.
     update_check_lock: tokio::sync::Mutex<()>,
+    /// The release list behind « What's new » (#698), memoised per latest version:
+    /// `(latest_version, releases)`. Opening the modal twice on the same latest
+    /// costs one request to the release source, not two.
+    update_releases: tokio::sync::Mutex<Option<(String, Vec<update_check::Release>)>>,
     /// Extra WebSocket Origin allowlist entries from `PDO_ALLOWED_WS_ORIGINS`,
     /// parsed + normalised at boot. Shared by BOTH WS upgrades (`/ws` and
     /// `/sessions/{id}/pty`) via [`pty_bridge::check_origin`]; the four localhost
@@ -2462,6 +2466,7 @@ pub async fn serve_with_config(
         update_source_url: config.update_source_url,
         update_cache: tokio::sync::Mutex::new(None),
         update_check_lock: tokio::sync::Mutex::new(()),
+        update_releases: tokio::sync::Mutex::new(None),
         allowed_ws_origins: config.allowed_ws_origins,
         libassist_focus: Mutex::new(None),
     });
@@ -4124,6 +4129,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/settings/cost-prices/sync", post(sync_cost_prices))
         .route("/update", get(get_update_status))
         .route("/update/check", post(check_update_now))
+        .route("/update/changelog", get(get_update_changelog))
         .route(
             "/settings/agent-profiles",
             get(list_agent_profiles).post(create_agent_profile),
@@ -9887,6 +9893,81 @@ async fn check_update_now(State(state): State<Arc<AppState>>) -> Response {
             let mut view = update_status_view(&state).await;
             view["error"] = serde_json::json!(e);
             (StatusCode::BAD_GATEWAY, Json(view)).into_response()
+        }
+    }
+}
+
+/// `GET /update/changelog` — the « What's new » document (#698): the release notes
+/// of every version strictly newer than the installed one, newest first, one `##`
+/// heading per version. The release list is fetched from the source on demand (and
+/// memoised per latest version); the payload says where its body comes from:
+///
+/// - `source: "releases"` — assembled from the missed releases;
+/// - `source: "embedded"`, `fallback_reason: null` — up to date, the embedded
+///   `CHANGELOG.md` is the nominal body;
+/// - `source: "embedded"`, `fallback_reason: "…"` — the list was NOT available
+///   (check off, source unreachable at last check, list fetch failed).
+///
+/// Never an error to the caller: the embedded changelog always answers.
+async fn get_update_changelog(State(state): State<Arc<AppState>>) -> Response {
+    load_update_cache(&state).await;
+    let installed = env!("CARGO_PKG_VERSION");
+    let enabled = update_check_enabled(&state.db).await;
+    let cache = state.update_cache.lock().await.clone();
+
+    if !enabled {
+        return Json(update_check::embedded_changelog(
+            installed,
+            None,
+            "The update check is off.",
+        ))
+        .into_response();
+    }
+    let latest = cache.as_ref().and_then(|c| c.latest_version.clone());
+    let Some(latest) = latest else {
+        let reason = match cache.as_ref().and_then(|c| c.error.as_deref()) {
+            Some(_) => "The release source was unreachable at the last check.",
+            None => "The release source has not been checked yet.",
+        };
+        return Json(update_check::embedded_changelog(installed, None, reason)).into_response();
+    };
+    if !update_check::is_newer(installed, &latest) {
+        // Up to date: nothing to assemble, the embedded changelog is the body.
+        return Json(update_check::assemble_changelog(
+            installed,
+            Some(&latest),
+            &[],
+        ))
+        .into_response();
+    }
+
+    let memo = state.update_releases.lock().await.clone();
+    let releases = match memo {
+        Some((for_latest, rels)) if for_latest == latest => Ok(rels),
+        _ => {
+            let url = update_check::releases_list_url(&update_source_url(&state));
+            let fetched = update_check::fetch_releases(&url).await;
+            if let Ok(rels) = &fetched {
+                *state.update_releases.lock().await = Some((latest.clone(), rels.clone()));
+            }
+            fetched.map_err(|e| format!("release list unavailable: {url}: {e}"))
+        }
+    };
+    match releases {
+        Ok(rels) => Json(update_check::assemble_changelog(
+            installed,
+            Some(&latest),
+            &rels,
+        ))
+        .into_response(),
+        Err(e) => {
+            warn!("update changelog: {e} — falling back to the embedded changelog");
+            Json(update_check::embedded_changelog(
+                installed,
+                Some(&latest),
+                "The release source was unreachable when loading the release notes.",
+            ))
+            .into_response()
         }
     }
 }
@@ -18847,6 +18928,7 @@ mod tests {
             update_source_url: None,
             update_cache: tokio::sync::Mutex::new(None),
             update_check_lock: tokio::sync::Mutex::new(()),
+            update_releases: tokio::sync::Mutex::new(None),
             allowed_ws_origins: Vec::new(),
             libassist_focus: Mutex::new(None),
         })
@@ -20779,6 +20861,7 @@ mod tests {
             update_source_url: None,
             update_cache: tokio::sync::Mutex::new(None),
             update_check_lock: tokio::sync::Mutex::new(()),
+            update_releases: tokio::sync::Mutex::new(None),
             allowed_ws_origins: Vec::new(),
             libassist_focus: Mutex::new(None),
         })
@@ -25245,6 +25328,7 @@ mod tests {
             update_source_url: None,
             update_cache: tokio::sync::Mutex::new(None),
             update_check_lock: tokio::sync::Mutex::new(()),
+            update_releases: tokio::sync::Mutex::new(None),
             allowed_ws_origins: Vec::new(),
             libassist_focus: Mutex::new(None),
         })
@@ -31320,6 +31404,7 @@ edges: []
             update_source_url: None,
             update_cache: tokio::sync::Mutex::new(None),
             update_check_lock: tokio::sync::Mutex::new(()),
+            update_releases: tokio::sync::Mutex::new(None),
             allowed_ws_origins: Vec::new(),
             libassist_focus: Mutex::new(None),
         });
@@ -31522,6 +31607,7 @@ edges: []
             update_source_url: None,
             update_cache: tokio::sync::Mutex::new(None),
             update_check_lock: tokio::sync::Mutex::new(()),
+            update_releases: tokio::sync::Mutex::new(None),
             allowed_ws_origins: Vec::new(),
             libassist_focus: Mutex::new(None),
         });

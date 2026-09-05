@@ -24,7 +24,7 @@ function status(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
 // #697 — the status-bar version is a button; the `→ latest` pill appears ONLY when the
 // daemon's cache knows a strictly newer release AND the check is on.
 describe("VersionBadge", () => {
-  it("shows the installed version as a button that opens Version & update", () => {
+  it("shows the installed version as a button that opens What's new", () => {
     const onClick = vi.fn();
     render(<VersionBadge version="1.58.1" update={status()} onClick={onClick} />);
     const btn = screen.getByTestId("statusbar-version");
@@ -40,6 +40,10 @@ describe("VersionBadge", () => {
     expect(screen.getByTestId("statusbar-version")).toHaveAttribute(
       "title",
       expect.stringContaining("v1.59.0 is available"),
+    );
+    expect(screen.getByTestId("statusbar-version")).toHaveAttribute(
+      "title",
+      expect.stringContaining("what's new"),
     );
   });
 

@@ -800,8 +800,14 @@ body {
 .artifact-markdown h2 { font-size: 13px; }
 .artifact-markdown h3 { font-size: 12px; }
 .artifact-markdown p { margin: 0.5em 0; }
+/* Tailwind preflight strips `list-style`; artifacts (and the #698 changelog) are
+   bullet-heavy, so restore the markers. */
 .artifact-markdown ul,
 .artifact-markdown ol { margin: 0.5em 0; padding-left: 1.5em; }
+.artifact-markdown ul { list-style: disc; }
+.artifact-markdown ol { list-style: decimal; }
+.artifact-markdown a { color: var(--color-acc); text-decoration: underline; text-underline-offset: 2px; }
+.artifact-markdown a:hover { color: var(--color-fg); }
 .artifact-markdown li { margin: 0.25em 0; }
 .artifact-markdown code {
   font-family: var(--font-mono);

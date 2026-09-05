@@ -372,6 +372,10 @@ export interface HarnessListItem {
    *  the binary enumerates none, so the client falls back to free text (a declared
    *  absence). Optional so a daemon predating #616 still typechecks. */
   models?: string[];
+  /** #705: the context window a source published beside a model id (`pi
+   *  --list-models`), keyed by id, verbatim (`200K`, `1M`). A picker hint, never a
+   *  guard. Absent/empty when no source names one. */
+  model_contexts?: Record<string, string>;
   /** #616/ADR-0053: the effort levels the binary offers. Empty ⇒ no effort axis. */
   efforts?: string[];
   /** #616/ADR-0053: the served effort-axis fact — whether this harness has an

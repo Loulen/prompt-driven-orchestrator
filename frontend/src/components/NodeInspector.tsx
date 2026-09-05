@@ -419,6 +419,7 @@ export default function NodeInspector({
                 value={node.model ?? null}
                 onChange={(value) => handleField("model", value)}
                 models={harnessOption?.models ?? []}
+                contexts={harnessOption?.modelContexts}
                 testid="node-model"
                 subject={node.id}
               />

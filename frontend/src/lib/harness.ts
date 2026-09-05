@@ -41,6 +41,9 @@ export interface HarnessOption {
   installed: boolean;
   /** Offered model ids, served (ADR-0053). Empty ⇒ free-text model. */
   models: string[];
+  /** #705: context window per offered id, served verbatim (`pi --list-models`).
+   *  Empty when the source names none. */
+  modelContexts: Record<string, string>;
   /** Offered effort levels, served. Empty ⇒ no effort axis. */
   efforts: string[];
   /** The served effort-axis fact — whether to grey the effort picker. */
@@ -66,8 +69,8 @@ const FLOOR_CATALOG: HarnessCatalog = {
     // with `GET /settings`. `hasEffort` seeds the two embedded facts so the picker
     // is not mis-greyed for the split-second before the fetch resolves; the served
     // value replaces it. Not a source of truth (the daemon re-resolves at spawn).
-    { name: "claude", installed: true, models: [], efforts: [], hasEffort: true, version: null },
-    { name: "opencode", installed: true, models: [], efforts: [], hasEffort: false, version: null },
+    { name: "claude", installed: true, models: [], modelContexts: {}, efforts: [], hasEffort: true, version: null },
+    { name: "opencode", installed: true, models: [], modelContexts: {}, efforts: [], hasEffort: false, version: null },
   ],
   descriptors: [],
 };
@@ -92,6 +95,7 @@ export function harnessCatalog(
       // `has_effort` absent → don't grey (the old conservative default) — never a
       // client-side per-name map.
       models: h.models ?? [],
+      modelContexts: h.model_contexts ?? {},
       efforts: h.efforts ?? [],
       hasEffort: h.has_effort ?? true,
       version: h.version ?? null,

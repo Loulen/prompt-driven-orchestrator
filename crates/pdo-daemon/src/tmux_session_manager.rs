@@ -764,8 +764,20 @@ pub fn spawn(
     // with none (`opencode`) would never reference the file — writing it beside the
     // prompt was the one place "absence is supplied, not said" leaked. Now the
     // absence is honoured: no hole, no file.
-    let harness_takes_settings =
-        matches!(&tail, SessionTail::Agent { harness, .. } if harness.has_settings_hole());
+    //
+    // #705: the hole is not enough on its own. `pi` carries a `{settings}` hole too,
+    // but it fills it with `-e <extension>` — handing it this claude-format hook JSON
+    // would make pi load a JSON file as an extension and refuse to start. So the file
+    // is written only for a harness whose `{settings}` hole takes the claude file
+    // (`claude`, and any data-declared harness — see
+    // `harness_probes::settings_hole_takes_claude_file`). pi's turn-end extension is
+    // #707's; until then its token drops and the absence is said by the probes.
+    let harness_takes_settings = matches!(
+        &tail,
+        SessionTail::Agent { harness, .. }
+            if harness.has_settings_hole()
+                && crate::harness_probes::settings_hole_takes_claude_file(&harness.name)
+    );
     let settings_path = if inject_hook && harness_takes_settings {
         let p = prompt_dir.join(format!("{node_id}-iter-{iter}.settings.json"));
         std::fs::write(&p, STOP_HOOK_SETTINGS_JSON)?;
@@ -907,8 +919,17 @@ pub fn spawn_libassist(
 
     // The per-message focus hook, beside the primer and with the same lifecycle.
     // Not the `Stop` hook of #433: the assistant never calls `pdo complete`.
-    let settings_path = prompt_path.with_file_name("settings.json");
-    std::fs::write(&settings_path, LIBASSIST_HOOK_SETTINGS_JSON)?;
+    //
+    // #705: written only for a harness whose `{settings}` hole takes the claude-format
+    // file. `pi` has the hole but fills it with `-e <extension>`; this JSON would be
+    // loaded as an extension and break the launch. `None` ⇒ the `{settings}` token
+    // drops at render and the primer's fetch-the-focus instruction is the mechanism
+    // (the caller has already said so once, ADR-0051 §3).
+    let settings_path = crate::harness_probes::settings_hole_takes_claude_file(&harness.name)
+        .then(|| prompt_path.with_file_name("settings.json"));
+    if let Some(p) = &settings_path {
+        std::fs::write(p, LIBASSIST_HOOK_SETTINGS_JSON)?;
+    }
 
     // #661/ADR-0055: the assistant is a `claude` REPL, so it needs the same
     // interactive PATH the preflight resolves the binary on.
@@ -928,7 +949,7 @@ pub fn spawn_libassist(
             session_id: None,
         },
         None, // never sandboxed
-        Some(&settings_path),
+        settings_path.as_deref(),
     );
     let socket = tmux_socket_name(daemon_port);
 
@@ -983,8 +1004,13 @@ pub fn resume(
     // `build_resume_script` emits a byte-identical `--continue` tail.
     //
     // #613/ADR-0051 (correctif 8): as at spawn, only a harness with a `{settings}`
-    // hole gets the file — a resumed `opencode` node writes none.
-    let settings_path = if inject_hook && descriptor.has_settings_hole() {
+    // hole gets the file — a resumed `opencode` node writes none. #705: and only one
+    // whose hole takes the claude-format file — a resumed `pi` node writes none either
+    // (its `-e` slot is for #707's extension, never this JSON).
+    let settings_path = if inject_hook
+        && descriptor.has_settings_hole()
+        && crate::harness_probes::settings_hole_takes_claude_file(&descriptor.name)
+    {
         let prompt_dir = working_dir.join(".pdo").join("prompts");
         std::fs::create_dir_all(&prompt_dir)?;
         let p = prompt_dir.join(format!("{node_id}-iter-{iter}.settings.json"));
@@ -1516,7 +1542,7 @@ pub(crate) fn probe_version_on(binary: &str, path: &str) -> Option<String> {
 }
 
 /// [`probe_catalogue`] with an explicit `PATH` — the testable core, and where #629's
-/// three sources (ADR-0056) are actually run.
+/// (and #705's) four sources (ADR-0056) are actually run.
 ///
 /// `--help` is run **first, always**: it is universal, it is one of the three sources,
 /// and — the reason it leads — it is where a CLI **declares its subcommands**. Only the
@@ -1533,8 +1559,9 @@ pub(crate) fn probe_version_on(binary: &str, path: &str) -> Option<String> {
 /// effort stops from another. `--help` folds in last precisely because it is the
 /// lowest-preference source, not because it ran first.
 ///
-/// Cost, measured on the three first-party harnesses: `claude` one subprocess (as
-/// before #629), `copilot` two, `opencode` two — never a hang, never an error. A binary
+/// Cost, measured on the first-party harnesses: `claude` one subprocess (as before
+/// #629), `copilot` two, `opencode` two, `pi` two (`--help` then `--list-models`) —
+/// never a hang, never an error. A binary
 /// that answers no `--help` at all yields the free-text fallback without any subcommand
 /// being guessed at.
 pub(crate) fn probe_catalogue_on(binary: &str, path: &str) -> crate::harness_catalogue::Catalogue {
@@ -1550,13 +1577,22 @@ pub(crate) fn probe_catalogue_on(binary: &str, path: &str) -> crate::harness_cat
             catalogue.fill_missing_from(cat::parse_completion_script(&script));
         }
     }
-    // Preference 2: the settings help topic, if an axis is still unanswered.
+    // Preference 2 (#705, ADR-0056 §1 as amended by #702): the generated model table,
+    // if the binary declares `--list-models` and the model axis is still unanswered.
+    // Gated on the declaration like the subcommands: `claude` has no such flag, and an
+    // unknown flag must never be guessed at inside a `/settings` response.
+    if !catalogue.is_complete() && cat::advertises_flag(&help, "--list-models") {
+        if let Some(table) = run_probe(binary, &["--list-models"], path) {
+            catalogue.fill_missing_from(cat::parse_list_models(&table));
+        }
+    }
+    // Preference 3: the settings help topic, if an axis is still unanswered.
     if !catalogue.is_complete() && cat::advertises_subcommand(&help, "help") {
         if let Some(topic) = run_probe(binary, &["help", "config"], path) {
             catalogue.fill_missing_from(cat::parse_settings_prose(&topic));
         }
     }
-    // Preference 3: what `--help` itself enumerates.
+    // Preference 4: what `--help` itself enumerates.
     catalogue.fill_missing_from(cat::parse_help(&help));
     catalogue
 }

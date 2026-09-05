@@ -2,7 +2,7 @@
 //! registration**, exactly as the default sandbox already is — never accepted and
 //! then breaking every spawn that falls through to it.
 //!
-//! Layer-3, through `PUT /settings`. An embedded name (`claude`, `copilot`)
+//! Layer-3, through `PUT /settings`. An embedded name (`claude`, `copilot`, `pi`)
 //! resolves and is accepted; an unknown name is a `400` that names the knobs.
 
 use crate::common::TestDaemon;
@@ -41,7 +41,7 @@ async fn put_default_harness(daemon: &TestDaemon, name: &str) -> reqwest::Respon
 #[tokio::test]
 async fn an_embedded_default_harness_is_accepted() {
     let daemon = TestDaemon::spawn(seed()).await.unwrap();
-    for name in ["claude", "opencode", "copilot"] {
+    for name in ["claude", "opencode", "copilot", "pi"] {
         let resp = put_default_harness(&daemon, name).await;
         assert_eq!(
             resp.status(),

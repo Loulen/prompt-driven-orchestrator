@@ -50,7 +50,7 @@ Both methods install a checksum-verified `pdo` binary on your `PATH`.
 brew install tmux git
 ```
 
-PDO includes descriptors for `claude`, `opencode`, and `copilot`.
+PDO includes descriptors for `claude`, `opencode`, `copilot`, and `pi`.
 
 ### 3. Start PDO
 
@@ -98,14 +98,14 @@ Add `PDO_ALLOWED_WS_ORIGINS` to the service environment when the daemon runs as 
 
 PDO can launch, attach, resume, and complete nodes with every built-in harness.
 
-| Capability | What PDO does with it | `claude` 2.1.246 | `opencode` 1.18.18 | `copilot` 1.0.80 |
-| --- | --- | --- | --- | --- |
-| **Cost** | Show the Run cost | ✅ derived: per-message token usage × the price table | ❌ | ✅ reported: the harness's own billing unit × a published constant |
-| **Transcript** | Find the session transcript | ✅ the JSONL transcript, keyed by working directory | ❌ | ✅ the event journal, keyed by the session identity PDO imposed |
-| **End of turn** | Complete a node when its turn ends | ✅ an injected `Stop` hook, plus the transcript tail as the sweep's fallback | ❌ | ✅ the journal's explicit `assistant.turn_end` event |
-| **Usage-limit menu** | Detect the harness usage-limit menu | ✅ the interactive "wait for limit to reset" menu, matched in a pane capture | ❌ | ❌ |
-| **Sandbox staging floor** | Stage credentials, settings, and trust in a sandbox | ✅ a staged `.claude` home: credentials, org managed settings, pre-granted trust | ❌ | ❌ |
-| **Context usage** | Show peak context-window usage | ✅ derived: per-turn token usage from the transcript, deduplicated and maxed | ❌ | ✅ derived: the journal's cumulative usage counters, converted to a per-turn contribution and maxed |
+| Capability | What PDO does with it | `claude` 2.1.246 | `opencode` 1.18.18 | `copilot` 1.0.80 | `pi` 0.85.1 |
+| --- | --- | --- | --- | --- | --- |
+| **Cost** | Show the Run cost | ✅ derived: per-message token usage × the price table | ❌ | ✅ reported: the harness's own billing unit × a published constant | ❌ |
+| **Transcript** | Find the session transcript | ✅ the JSONL transcript, keyed by working directory | ❌ | ✅ the event journal, keyed by the session identity PDO imposed | ❌ |
+| **End of turn** | Complete a node when its turn ends | ✅ an injected `Stop` hook, plus the transcript tail as the sweep's fallback | ❌ | ✅ the journal's explicit `assistant.turn_end` event | ❌ |
+| **Usage-limit menu** | Detect the harness usage-limit menu | ✅ the interactive "wait for limit to reset" menu, matched in a pane capture | ❌ | ❌ | ❌ |
+| **Sandbox staging floor** | Stage credentials, settings, and trust in a sandbox | ✅ a staged `.claude` home: credentials, org managed settings, pre-granted trust | ❌ | ❌ | ❌ |
+| **Context usage** | Show peak context-window usage | ✅ derived: per-turn token usage from the transcript, deduplicated and maxed | ❌ | ✅ derived: the journal's cumulative usage counters, converted to a per-turn contribution and maxed | ❌ |
 
 Each header shows the last validated harness version; PDO does not enforce it.
 
@@ -120,6 +120,8 @@ Custom descriptors in `~/.pdo/harnesses/descriptors.yaml` can launch, attach, re
 | Authentication | Log in with each harness before using it through PDO |
 | An approved working directory | Trust the target repository root once; trust cascades to subdirectories |
 | An installed version | Compare your installed harness with the last validated version in the support table |
+
+For `pi`: authenticate on the host first (`pi auth` or the provider's API-key env var — PDO stages no credentials), and make sure the `pi` binary is on your **user** PATH (an nvm/npm install is fine; PDO resolves harness binaries from the login shell's PATH, not the service's). Nodes launch `pi -a`, so project-local files (`AGENTS.md`, `.pi/` extensions) are pre-approved for the run; no trust dialog is shown.
 
 Outside sandboxed runs, PDO does not stage any harness's home.
 

@@ -9263,6 +9263,10 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
             "installed": installed,
             "version": cached.version,
             "models": cached.catalogue.models,
+            // #705: the context window a source published beside each id (`pi
+            // --list-models`), keyed by id — a picker hint, verbatim. Empty when no
+            // source names one.
+            "model_contexts": cached.catalogue.model_contexts,
             "efforts": cached.catalogue.efforts,
             "has_effort": has_effort,
         }));
@@ -15623,10 +15627,12 @@ async fn open_library_assistant(State(state): State<Arc<AppState>>) -> Response 
     // launch template has. On another harness the token is dropped silently and the
     // primer's fetch-the-focus instruction becomes the only mechanism — say so once,
     // at spawn, rather than let it be discovered from an assistant guessing wrong.
-    if !harness.can_inject_hooks() {
+    if !harness.can_inject_hooks()
+        || !harness_probes::settings_hole_takes_claude_file(&harness.name)
+    {
         warn!(
-            "library assistant on harness '{}': its launch template has no {{settings}} hole, \
-             so the UserPromptSubmit focus hook is NOT armed. The assistant will know the open \
+            "library assistant on harness '{}': its launch template has no {{settings}} hole \
+             that takes the claude-format hook file, so the UserPromptSubmit focus hook is NOT armed. The assistant will know the open \
              pipeline only if it follows its primer's instruction to fetch \
              GET /sessions/libassist/focus before acting (ADR-0051 §3).",
             harness.name
@@ -35700,9 +35706,9 @@ edges:
             );
         }
 
-        // The embedded floor always resolves, always as `builtin` — copilot is the
-        // third arm, listed under "Built-in" like the other two.
-        for floor in ["claude", "opencode", "copilot"] {
+        // The embedded floor always resolves, always as `builtin` — copilot and pi
+        // are the third and fourth arms, listed under "Built-in" like the other two.
+        for floor in ["claude", "opencode", "copilot", "pi"] {
             let entry = harnesses
                 .iter()
                 .find(|h| h["name"] == floor)

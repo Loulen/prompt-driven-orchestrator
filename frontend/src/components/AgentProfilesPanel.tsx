@@ -197,6 +197,7 @@ export default function AgentProfilesPanel({
                   value={draft.model}
                   onChange={(model) => setDraft({ ...draft, model })}
                   models={harnessOption?.models ?? []}
+                  contexts={harnessOption?.modelContexts}
                   testid="agent-profile-model"
                   subject={selectedId ?? "new"}
                 />

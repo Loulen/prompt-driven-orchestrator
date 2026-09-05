@@ -1371,7 +1371,6 @@ async fn referents_list_every_tier_that_selects_the_skill() {
     assert_eq!(referents["triggers"], serde_json::json!([]));
 }
 
-
 // ---------------------------------------------------------------------------
 // Import from a Source (#670) — over a local fixture git repository, no network.
 // ---------------------------------------------------------------------------

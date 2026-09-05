@@ -560,6 +560,49 @@ impl HarnessProbes for CopilotProbes {
 /// The single `copilot` instance handed out by [`probes_for`]. Zero-sized.
 static COPILOT_PROBES: CopilotProbes = CopilotProbes;
 
+/// The `pi` capabilities (#705, story #702; ADR-0051) — **all six declared absent**,
+/// explicitly, in this ticket: cost, transcript resolution, end-of-turn substrate,
+/// usage-limit anchor, context usage, staging set. `pi` is first-party (it has a
+/// row in the support table and code here) but its instrumentation lands in the
+/// follow-up tickets — the reported dollar cost from the session JSONL's
+/// `usage.cost.total` (CONTEXT.md § "Coût rapporté en dollars", ADR-0052), the
+/// turn-end extension on `agent_settled` (#707, CONTEXT.md § "Extension de fin de
+/// tour"), the staging set (ADR-0063). Until then each is a `None` a reader can see
+/// — in the table, in Stats ("—" with its reason), in the sandbox note — never a
+/// `$0`, never a silent no-op.
+///
+/// Why a type rather than the [`NullProbes`] default: ADR-0051 §2 — `None` is a
+/// *declared* value. Falling through to the data-declared arm would make pi's
+/// absences indistinguishable from "PDO carries no code for this name", and the
+/// support table would have no row to publish.
+struct PiProbes;
+
+impl HarnessProbes for PiProbes {
+    // Every capability method stays at the trait's `None` default — declared here
+    // by naming each one, so the next ticket has to *change* a line, not add one.
+    fn cost_source(&self) -> Option<CostSource> {
+        None
+    }
+    fn transcript_resolution(&self) -> Option<TranscriptResolution> {
+        None
+    }
+    fn turn_end_substrate(&self) -> Option<TurnEndSubstrate> {
+        None
+    }
+    fn usage_limit_anchor(&self) -> Option<UsageLimitAnchor> {
+        None
+    }
+    fn staging_floor(&self) -> Option<StagingFloor> {
+        None
+    }
+    fn context_usage_source(&self) -> Option<ContextUsageSource> {
+        None
+    }
+}
+
+/// The single `pi` instance handed out by [`probes_for`]. Zero-sized.
+static PI_PROBES: PiProbes = PiProbes;
+
 /// The capabilities of a **data-declared** harness (a user's disk descriptor, or
 /// `opencode` in v1): every method inherits the trait's "absent" default. This is
 /// the dispatch target that makes ADR-0051 §2 hold — a harness PDO carries no code
@@ -647,6 +690,34 @@ pub(crate) fn exit_code_is_verdict(harness: &str) -> bool {
     resolved(harness).exit_code_is_verdict()
 }
 
+/// Whether `harness`'s `{settings}` hole takes PDO's **claude-format settings
+/// file** — the `Stop`-hook JSON of #433 and the library assistant's focus-hook
+/// JSON (#705).
+///
+/// The hole means "an injected settings file" (ADR-0043), but the *format* of what
+/// PDO writes is claude's. `pi` has the hole too and fills it with `-e <extension>`
+/// (CONTEXT.md § "Extension de fin de tour"): handed the claude JSON, pi would load
+/// it as an extension and refuse to start. So the writers ask here before writing:
+///
+/// - a **first-party** harness takes the file only if its end-of-turn substrate is
+///   claude's transcript (the `Stop` hook is that substrate) — `claude` yes, `pi`
+///   no (its substrate is `None` until #707, and will be its own extension then);
+/// - a **data-declared** harness (no probes) keeps the pre-#705 behaviour: a hole
+///   means the file — a user wrapping `claude` in their own descriptor still gets
+///   the hook.
+///
+/// A dispatch point, not a presence guard (ADR-0051): the answer is read off the
+/// harness's declared substrate, never off its name.
+pub(crate) fn settings_hole_takes_claude_file(harness: &str) -> bool {
+    match probes_for(harness) {
+        None => true,
+        Some(p) => matches!(
+            p.turn_end_substrate(),
+            Some(TurnEndSubstrate::ClaudeTranscript)
+        ),
+    }
+}
+
 /// The one-time note for a node whose harness has **no turn-end substrate** while
 /// turn-end auto-completion is enabled (ADR-0051 / correctif AC #7). `Some(msg)`
 /// when the setting cannot be honoured for `harness`, `None` for a harness that
@@ -676,6 +747,8 @@ pub(crate) fn probes_for(harness: &str) -> Option<&'static dyn HarnessProbes> {
         // #615: `copilot`'s three capabilities (reported cost, transcript, turn-end)
         // — the second first-party harness. Its two others are declared absent.
         harness_registry::COPILOT => Some(&COPILOT_PROBES),
+        // #705: `pi` — first-party, every capability explicitly absent for now.
+        harness_registry::PI => Some(&PI_PROBES),
         // `opencode` (resident but un-instrumented in v1) and every data-declared
         // harness: no capability. A launch is data; a capability is code (ADR-0045).
         _ => None,
@@ -762,7 +835,7 @@ pub(crate) fn staging_floor_absence_note(harness: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::harness_registry::{CLAUDE, COPILOT, OPENCODE};
+    use crate::harness_registry::{CLAUDE, COPILOT, OPENCODE, PI};
 
     /// A struct that overrides nothing: the demonstration that **every trait
     /// method defaults to "absent"**. This is the shape of a harness declared in
@@ -871,6 +944,56 @@ mod tests {
         // A reported cost is still a cost PDO can produce (source + a resolvable
         // journal), so a copilot Run is costable — never "—" for lack of a source.
         assert!(can_cost(COPILOT));
+    }
+
+    #[test]
+    fn pi_is_first_party_and_declares_every_capability_absent() {
+        // #705 / ADR-0051: `pi` has probes (a row in the support table) and answers
+        // `None` on all six — an explicit absence, not a missing dispatch.
+        let p = probes_for(PI).expect("pi has probes (first-party)");
+        assert!(p.cost_source().is_none(), "cost declared absent");
+        assert!(
+            p.transcript_resolution().is_none(),
+            "transcript declared absent"
+        );
+        assert!(
+            p.turn_end_substrate().is_none(),
+            "end of turn declared absent"
+        );
+        assert!(
+            p.usage_limit_anchor().is_none(),
+            "usage-limit anchor declared absent"
+        );
+        assert!(
+            p.staging_floor().is_none(),
+            "staging declared absent (ADR-0063 later)"
+        );
+        assert!(
+            p.context_usage_source().is_none(),
+            "context usage declared absent"
+        );
+        assert_eq!(capabilities(PI), Capabilities::NONE);
+        // Consequences a reader sees: Stats says "—" (never $0), no turn-end probe,
+        // and the turn-end setting says so once instead of silently doing nothing.
+        assert!(!can_cost(PI));
+        assert!(!can_measure_context(PI));
+        assert!(turn_end_absence_note(PI).is_some());
+        assert!(staging_floor_absence_note(PI).is_some());
+        // Behaviour stays absent too: never claude's parsers on pi's store.
+        assert!(!turn_ended(PI, "{\"type\":\"assistant\"}"));
+        assert!(!usage_limit_shown(PI, "wait for limit to reset"));
+        assert!(exit_code_is_verdict(PI));
+    }
+
+    #[test]
+    fn the_claude_settings_file_goes_only_to_a_hole_that_takes_it() {
+        // #705: `claude` takes the Stop-hook JSON; `pi` has a `{settings}` hole but
+        // fills it with `-e <extension>`, so the claude file must never be written
+        // for it; a data-declared harness keeps hole ⇒ file.
+        assert!(settings_hole_takes_claude_file(CLAUDE));
+        assert!(!settings_hole_takes_claude_file(PI));
+        assert!(!settings_hole_takes_claude_file(COPILOT));
+        assert!(settings_hole_takes_claude_file("my-claude-wrapper"));
     }
 
     #[test]

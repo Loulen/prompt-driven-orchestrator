@@ -141,6 +141,7 @@ export default function AgentControl({
                     value={custom.model ?? null}
                     onChange={(model) => setCustom({ ...custom, model })}
                     models={harnessOption?.models ?? []}
+                    contexts={harnessOption?.modelContexts}
                     testid={`${testId}-custom-model`}
                     subject={testId}
                   />

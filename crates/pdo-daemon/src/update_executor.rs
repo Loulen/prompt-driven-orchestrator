@@ -257,7 +257,9 @@ pub fn render_update_script(plan: &UpdatePlan) -> String {
         sh_quote(plan.upgrade_command())
     ));
     s.push_str("if [ \"$rc\" -ne 0 ]; then\n");
-    s.push_str("  echo \"== upgrade command failed (exit $rc); the running daemon is left untouched\"\n");
+    s.push_str(
+        "  echo \"== upgrade command failed (exit $rc); the running daemon is left untouched\"\n",
+    );
     s.push_str("  record failed \"$rc\"\n  exit \"$rc\"\nfi\n");
     s.push_str(&format!(
         "echo \"== installed: $({} --version 2>/dev/null || echo unknown)\"\n",
@@ -448,11 +450,23 @@ mod tests {
             .find("/home/linuxbrew/.linuxbrew/bin/pdo service install --port 5172")
             .expect("idempotent service install through the STABLE path");
         let restart = s.find("systemctl --user restart pdo").unwrap();
-        assert!(up < install && install < restart, "order: upgrade → install → restart");
-        assert!(s.contains("cd /home/u/.pdo/app"), "install from the daemon's cwd");
+        assert!(
+            up < install && install < restart,
+            "order: upgrade → install → restart"
+        );
+        assert!(
+            s.contains("cd /home/u/.pdo/app"),
+            "install from the daemon's cwd"
+        );
         assert!(!s.contains("Cellar"), "never the versioned target");
-        assert!(!s.contains("kill -TERM"), "supervised: the supervisor restarts");
-        assert!(s.contains("record failed \"$rc\""), "a failed upgrade is recorded");
+        assert!(
+            !s.contains("kill -TERM"),
+            "supervised: the supervisor restarts"
+        );
+        assert!(
+            s.contains("record failed \"$rc\""),
+            "a failed upgrade is recorded"
+        );
         assert!(s.contains("update-attempt-v1"));
         assert!(s.contains("/home/linuxbrew/.linuxbrew/bin:/opt/homebrew/bin"));
     }
@@ -474,7 +488,10 @@ mod tests {
             s.contains("setsid /home/linuxbrew/.linuxbrew/bin/pdo daemon --port 5172"),
             "same arguments (port):\n{s}"
         );
-        assert!(!s.contains("service install"), "no unit when not supervised");
+        assert!(
+            !s.contains("service install"),
+            "no unit when not supervised"
+        );
         assert!(!s.contains("systemctl"));
     }
 
@@ -533,7 +550,11 @@ mod tests {
             .env("HOME", dir.path())
             .output()
             .unwrap();
-        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         let a = read_attempt(&p.attempt_path).expect("readable JSON");
         assert_eq!(a.status, AttemptStatus::Failed);
         assert_eq!(a.exit_code, Some(7));

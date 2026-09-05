@@ -35,6 +35,10 @@ function status(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
     supervision: "systemd",
     reason: null,
     last_error: null,
+    active_runs: 0,
+    can_apply: true,
+    apply_blocked_reason: null,
+    last_attempt: null,
     ...overrides,
   };
 }
@@ -169,6 +173,58 @@ describe("ChangelogModal (#698)", () => {
     expect(screen.getByTestId("changelog-manual-command")).toHaveTextContent("Build from source");
     expect(screen.queryByTestId("changelog-copy-command")).not.toBeInTheDocument();
     expect(screen.getByTestId("changelog-open-settings")).toBeInTheDocument();
+  });
+
+  it("offers Update in the footer (#699) and forwards the click to the host", async () => {
+    fetchUpdateChangelogMock.mockResolvedValue(NEWER);
+    const onRequestUpdate = vi.fn();
+    render(
+      <ChangelogModal update={status()} onClose={() => {}} onOpenVersionSettings={() => {}} onRequestUpdate={onRequestUpdate} />,
+    );
+    await screen.findByTestId("markdown-body");
+    const btn = screen.getByTestId("changelog-update");
+    expect(btn).toHaveTextContent("Update");
+    expect(btn).not.toBeDisabled();
+    fireEvent.click(btn);
+    expect(onRequestUpdate).toHaveBeenCalledTimes(1);
+    // Copy stays beside it.
+    expect(screen.getByTestId("changelog-copy-command")).toBeInTheDocument();
+  });
+
+  it("unknown install method: no Update button, the daemon's reason shown (#699)", async () => {
+    fetchUpdateChangelogMock.mockResolvedValue(NEWER);
+    render(
+      <ChangelogModal
+        update={status({
+          install_method: "unknown",
+          manual_command: "Build from source, then restart the daemon.",
+          can_apply: false,
+          apply_blocked_reason: "Install method not detected: PDO will not guess.",
+        })}
+        onClose={() => {}}
+        onOpenVersionSettings={() => {}}
+        onRequestUpdate={() => {}}
+      />,
+    );
+    await screen.findByTestId("markdown-body");
+    expect(screen.queryByTestId("changelog-update")).not.toBeInTheDocument();
+    expect(screen.getByTestId("changelog-apply-blocked")).toHaveTextContent("will not guess");
+  });
+
+  it("an attempt already running disables Update with the reason (#699)", async () => {
+    fetchUpdateChangelogMock.mockResolvedValue(NEWER);
+    render(
+      <ChangelogModal
+        update={status({ can_apply: false, apply_blocked_reason: "An update attempt (x) is already running." })}
+        onClose={() => {}}
+        onOpenVersionSettings={() => {}}
+        onRequestUpdate={() => {}}
+      />,
+    );
+    await screen.findByTestId("markdown-body");
+    const btn = screen.getByTestId("changelog-update");
+    expect(btn).toBeDisabled();
+    expect(btn).toHaveAttribute("title", "An update attempt (x) is already running.");
   });
 
   it("copies the command, then reads « Copied » for a moment", async () => {

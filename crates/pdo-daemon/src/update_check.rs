@@ -127,7 +127,9 @@ pub fn detect_install_method(
 /// into `unknown`.
 pub(crate) fn receipt_paths(config_home: &Path) -> [PathBuf; 2] {
     [
-        config_home.join("pdo-daemon").join("pdo-daemon-receipt.json"),
+        config_home
+            .join("pdo-daemon")
+            .join("pdo-daemon-receipt.json"),
         config_home.join("pdo").join("pdo-receipt.json"),
     ]
 }
@@ -708,7 +710,10 @@ mod tests {
         // Bare name found nowhere (or no PATH): None → the caller falls back.
         assert_eq!(stable_exe_path("pdo", Some("/usr/bin"), cwd, &none), None);
         assert_eq!(stable_exe_path("pdo", None, cwd, &has), None);
-        assert_eq!(stable_exe_path("", Some("/opt/homebrew/bin"), cwd, &has), None);
+        assert_eq!(
+            stable_exe_path("", Some("/opt/homebrew/bin"), cwd, &has),
+            None
+        );
     }
 
     #[test]

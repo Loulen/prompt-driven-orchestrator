@@ -1,4 +1,4 @@
-import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, StatsPerformance, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, UpdateStatus, UpdateChangelog, Project, BranchRef, AgentChoice, AgentProfile, AgentProfileReferents, ProvisioningPlan, ProvisioningRules, Skill, SkillBank, SkillDetail, SkillFile, SkillFileContent, SkillFilesUpload, SkillFolder, SkillReferents, SkillRef, SkillScanResult, SkillImportItem, SkillImportReport, SkillRescanReport, RecentSkillSource } from "./types";
+import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, StatsPerformance, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, UpdateStatus, UpdateChangelog, UpdateApplyResponse, Project, BranchRef, AgentChoice, AgentProfile, AgentProfileReferents, ProvisioningPlan, ProvisioningRules, Skill, SkillBank, SkillDetail, SkillFile, SkillFileContent, SkillFilesUpload, SkillFolder, SkillReferents, SkillRef, SkillScanResult, SkillImportItem, SkillImportReport, SkillRescanReport, RecentSkillSource } from "./types";
 import { foldHarnessOntoNode } from "./lib/harness";
 
 const BASE = "";
@@ -175,6 +175,25 @@ export function checkForUpdateNow(): Promise<UpdateStatus> {
  */
 export function fetchUpdateChangelog(): Promise<UpdateChangelog> {
   return request<UpdateChangelog>("GET", "/update/changelog");
+}
+
+/**
+ * Update (#699): `POST /update/apply` spawns the detached executor and answers 202 at
+ * once with the attempt id — 409 with `error` when the install method is unknown or
+ * an attempt is already running. `GET /update/attempts/{id}/log` is the journal, text.
+ */
+export function applyUpdate(): Promise<UpdateApplyResponse> {
+  return request<UpdateApplyResponse>("POST", "/update/apply", { label: "POST /update/apply" });
+}
+
+export async function fetchUpdateAttemptLog(attemptId: string): Promise<string> {
+  const res = await fetch(`/update/attempts/${encodeURIComponent(attemptId)}/log`);
+  if (!res.ok) {
+    throw new ApiError(`GET /update/attempts/${attemptId}/log failed: ${res.status}`, {
+      status: res.status,
+    });
+  }
+  return res.text();
 }
 
 export function fetchSettings(): Promise<InstanceSettings> {

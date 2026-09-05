@@ -26,8 +26,13 @@ const fetchUpdateStatusMock = vi.fn().mockResolvedValue({
   supervision: "none",
   reason: "Not checked yet.",
   last_error: null,
+  active_runs: 0,
+  can_apply: true,
+  apply_blocked_reason: null,
+  last_attempt: null,
 });
 const checkForUpdateNowMock = vi.fn();
+const fetchUpdateAttemptLogMock = vi.fn();
 const createAgentProfileMock = vi.fn();
 
 // #431: `browseFs` MUST be in this factory now that the Dockerfile picker renders
@@ -51,6 +56,8 @@ vi.mock("../api", () => ({
   updateSettings: (...args: unknown[]) => updateSettingsMock(...args),
   // #697: the Version & update section reads `GET /update` on mount. Same Proxy trap.
   fetchUpdateStatus: (...args: unknown[]) => fetchUpdateStatusMock(...args),
+  applyUpdate: vi.fn(),
+  fetchUpdateAttemptLog: (...args: unknown[]) => fetchUpdateAttemptLogMock(...args),
   checkForUpdateNow: (...args: unknown[]) => checkForUpdateNowMock(...args),
   browseFs: (...args: unknown[]) => browseFsMock(...args),
   // #432: same Proxy trap as `browseFs` above — a missing key here throws the moment the

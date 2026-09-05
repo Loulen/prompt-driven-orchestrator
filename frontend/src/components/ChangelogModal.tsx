@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { Check, Copy, SlidersHorizontal, TriangleAlert, WifiOff } from "lucide-react";
+import { Check, Copy, Download, SlidersHorizontal, TriangleAlert, WifiOff } from "lucide-react";
 import MarkdownArtifactModal from "./MarkdownArtifactModal";
 import { fetchUpdateChangelog } from "../api";
 import type { UpdateChangelog, UpdateStatus } from "../types";
@@ -17,18 +17,22 @@ import type { UpdateChangelog, UpdateStatus } from "../types";
  * the embedded changelog as a FALLBACK (source unreachable / check off), red when the
  * endpoint itself failed. The words « up to date » appear here and in Settings only —
  * never in the bar (#697 rule).
- * Footer: the manual command with « Copy command » (the next ticket's Update button
- * takes that slot), and a « Version & update » link to Settings. An unknown install
- * method declares its absence: warning + the manual text, no Copy (ADR-0045).
+ * Footer: the manual command with « Copy command », the **Update** button (#699 — the
+ * host owns the confirm and the waiting flow; disabled with the reason when the daemon
+ * refuses: unknown method, attempt running), and a « Version & update » link to
+ * Settings. An unknown install method declares its absence: warning + the manual text,
+ * no Copy, no Update (ADR-0045).
  */
 export default function ChangelogModal({
   update,
   onClose,
   onOpenVersionSettings,
+  onRequestUpdate,
 }: {
   update: UpdateStatus | null;
   onClose: () => void;
   onOpenVersionSettings: () => void;
+  onRequestUpdate?: () => void;
 }) {
   const [changelog, setChangelog] = useState<UpdateChangelog | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -120,7 +124,12 @@ export default function ChangelogModal({
         ) : null
       }
       footer={
-        <ChangelogFooter update={update} upToDate={upToDate} onOpenVersionSettings={onOpenVersionSettings} />
+        <ChangelogFooter
+          update={update}
+          upToDate={upToDate}
+          onOpenVersionSettings={onOpenVersionSettings}
+          onRequestUpdate={onRequestUpdate}
+        />
       }
     />
   );
@@ -159,10 +168,12 @@ function ChangelogFooter({
   update,
   upToDate,
   onOpenVersionSettings,
+  onRequestUpdate,
 }: {
   update: UpdateStatus | null;
   upToDate: boolean;
   onOpenVersionSettings: () => void;
+  onRequestUpdate?: () => void;
 }) {
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -201,6 +212,11 @@ function ChangelogFooter({
             <span className="text-fg-4" data-testid="changelog-manual-command">
               {update.manual_command}
             </span>
+            {update.apply_blocked_reason && (
+              <span className="text-fg-4" data-testid="changelog-apply-blocked">
+                {update.apply_blocked_reason}
+              </span>
+            )}
           </>
         ) : (
           <>
@@ -241,6 +257,27 @@ function ChangelogFooter({
           >
             {copied ? <Check size={12} /> : <Copy size={12} />}
             {copied ? "Copied" : "Copy command"}
+          </button>
+        )}
+        {update && !unknown && onRequestUpdate && (
+          <button
+            type="button"
+            onClick={onRequestUpdate}
+            disabled={!update.can_apply}
+            className={`flex items-center gap-1.5 rounded border px-2.5 py-1.5 disabled:opacity-40 ${
+              upToDate
+                ? "border-line-strong bg-bg-3 text-fg-2 hover:border-acc"
+                : "border-acc bg-acc text-bg-0 hover:bg-acc/90"
+            }`}
+            style={{ fontSize: "11px" }}
+            title={
+              update.apply_blocked_reason ??
+              (upToDate ? "Re-run the install method's update command" : "Update PDO from the app")
+            }
+            data-testid="changelog-update"
+          >
+            <Download size={12} />
+            {upToDate ? "Reinstall" : "Update"}
           </button>
         )}
       </div>

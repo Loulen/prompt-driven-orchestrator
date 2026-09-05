@@ -10053,7 +10053,9 @@ async fn apply_update(State(state): State<Arc<AppState>>) -> Response {
     let Ok((home, _)) = sandbox_run::sandbox_home_roots(&state) else {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "HOME is not set; cannot place the update journal" })),
+            Json(
+                serde_json::json!({ "error": "HOME is not set; cannot place the update journal" }),
+            ),
         )
             .into_response();
     };
@@ -10130,8 +10132,7 @@ async fn apply_update(State(state): State<Arc<AppState>>) -> Response {
                         return; // a newer attempt owns the record
                     }
                     a.exit_code = Some(code);
-                    a.finished_at
-                        .get_or_insert_with(event_log::now_iso);
+                    a.finished_at.get_or_insert_with(event_log::now_iso);
                     a.status = if code == 0 {
                         update_executor::AttemptStatus::Succeeded
                     } else {

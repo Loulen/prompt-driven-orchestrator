@@ -26,10 +26,10 @@ mod cli_complete_does_not_panic;
 #[path = "cost_prices.rs"]
 mod cost_prices;
 
-#[path = "update_check.rs"]
-mod update_check;
 #[path = "update_apply.rs"]
 mod update_apply;
+#[path = "update_check.rs"]
+mod update_check;
 
 #[path = "edit_self_write_loop.rs"]
 mod edit_self_write_loop;

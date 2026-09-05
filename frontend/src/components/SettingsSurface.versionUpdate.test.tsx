@@ -9,6 +9,7 @@ import type { InstanceSettings, UpdateStatus } from "../types";
 const fetchSettingsMock = vi.fn();
 const updateSettingsMock = vi.fn();
 const fetchUpdateStatusMock = vi.fn();
+const fetchUpdateAttemptLogMock = vi.fn();
 const checkForUpdateNowMock = vi.fn();
 
 vi.mock("../api", () => ({
@@ -36,6 +37,8 @@ vi.mock("../api", () => ({
   updateSkillFolder: vi.fn(),
   deleteSkillFolder: vi.fn(),
   fetchUpdateStatus: (...args: unknown[]) => fetchUpdateStatusMock(...args),
+  applyUpdate: vi.fn(),
+  fetchUpdateAttemptLog: (...args: unknown[]) => fetchUpdateAttemptLogMock(...args),
   checkForUpdateNow: (...args: unknown[]) => checkForUpdateNowMock(...args),
   ApiError: class ApiError extends Error {
     status?: number;
@@ -99,6 +102,10 @@ function status(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
     supervision: "systemd",
     reason: null,
     last_error: null,
+    active_runs: 0,
+    can_apply: true,
+    apply_blocked_reason: null,
+    last_attempt: null,
     ...overrides,
   };
 }
@@ -123,6 +130,119 @@ beforeEach(() => {
   updateSettingsMock.mockReset();
   fetchUpdateStatusMock.mockReset();
   checkForUpdateNowMock.mockReset();
+  fetchUpdateAttemptLogMock.mockReset();
+});
+
+describe("Settings › General › Version & update — Update (#699)", () => {
+  it("offers Update to the latest version when a newer release is known and apply is allowed", async () => {
+    fetchUpdateStatusMock.mockResolvedValue(status());
+    const onRequestUpdate = vi.fn();
+    render(
+      <SettingsSurface
+        open
+        onClose={() => {}}
+        initialPosition={{ category: "general", section: "version-update" }}
+        onRequestUpdate={onRequestUpdate}
+      />,
+    );
+    const btn = await screen.findByTestId("setting-version-update-button");
+    expect(btn).toHaveTextContent("Update to v1.59.0");
+    expect(btn).not.toBeDisabled();
+    fireEvent.click(btn);
+    expect(onRequestUpdate).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("setting-version-last-attempt")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("setting-version-apply-blocked")).not.toBeInTheDocument();
+  });
+
+  it("unknown install method: Update disabled with the reason, manual command shown", async () => {
+    fetchUpdateStatusMock.mockResolvedValue(
+      status({
+        install_method: "unknown",
+        manual_command: "Build from source, then restart the daemon.",
+        can_apply: false,
+        apply_blocked_reason: "Install method not detected (neither a Homebrew Cellar path nor a cargo-dist receipt): PDO will not guess.",
+      }),
+    );
+    render(
+      <SettingsSurface
+        open
+        onClose={() => {}}
+        initialPosition={{ category: "general", section: "version-update" }}
+        onRequestUpdate={() => {}}
+      />,
+    );
+    const btn = await screen.findByTestId("setting-version-update-button");
+    expect(btn).toBeDisabled();
+    expect(btn).toHaveAttribute("title", expect.stringContaining("Install method not detected"));
+    expect(screen.getByTestId("setting-version-apply-blocked")).toHaveTextContent("will not guess");
+    expect(screen.getByTestId("setting-version-manual-command")).toHaveTextContent("Build from source");
+  });
+
+  it("shows the last attempt — a failure with its exit code — and its log on demand", async () => {
+    fetchUpdateStatusMock.mockResolvedValue(
+      status({
+        last_attempt: {
+          attempt_id: "20260905-120000-abc123",
+          status: "failed",
+          started_at: new Date(Date.now() - 10 * 60_000).toISOString(),
+          finished_at: new Date(Date.now() - 9 * 60_000).toISOString(),
+          exit_code: 1,
+          method: "homebrew",
+          command: "brew update && brew upgrade Loulen/tap/pdo",
+          supervision: "systemd",
+          log_path: "/home/user/.pdo/update/20260905-120000-abc123.log",
+          from_version: "1.58.0",
+        },
+      }),
+    );
+    fetchUpdateAttemptLogMock.mockResolvedValue("== pdo update started\nError: brew upgrade failed\n");
+    renderVersionSection();
+    const row = await screen.findByTestId("setting-version-last-attempt");
+    expect(within(row).getByTestId("setting-version-last-attempt-status")).toHaveTextContent("failed (exit 1)");
+    expect(row).toHaveTextContent("10 min ago");
+    expect(row).toHaveTextContent("from v1.58.0");
+    expect(row).toHaveTextContent("Homebrew");
+    expect(screen.queryByTestId("setting-version-attempt-log")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("setting-version-attempt-log-toggle"));
+    const log = await screen.findByTestId("setting-version-attempt-log");
+    await waitFor(() => expect(log).toHaveTextContent("brew upgrade failed"));
+    expect(fetchUpdateAttemptLogMock).toHaveBeenCalledWith("20260905-120000-abc123");
+    fireEvent.click(screen.getByTestId("setting-version-attempt-log-toggle"));
+    expect(screen.queryByTestId("setting-version-attempt-log")).not.toBeInTheDocument();
+  });
+
+  it("a succeeded attempt is a green pill; a running one disables Update with its id", async () => {
+    fetchUpdateStatusMock.mockResolvedValue(
+      status({
+        can_apply: false,
+        apply_blocked_reason: "An update attempt (20260905-1) is already running.",
+        last_attempt: {
+          attempt_id: "20260905-1",
+          status: "running",
+          started_at: new Date().toISOString(),
+          finished_at: null,
+          exit_code: null,
+          method: "homebrew",
+          command: "brew update && brew upgrade Loulen/tap/pdo",
+          supervision: "systemd",
+          log_path: "/x.log",
+          from_version: "1.58.1",
+        },
+      }),
+    );
+    render(
+      <SettingsSurface
+        open
+        onClose={() => {}}
+        initialPosition={{ category: "general", section: "version-update" }}
+        onRequestUpdate={() => {}}
+      />,
+    );
+    const btn = await screen.findByTestId("setting-version-update-button");
+    expect(btn).toBeDisabled();
+    expect(btn).toHaveAttribute("title", "An update attempt (20260905-1) is already running.");
+    expect(screen.getByTestId("setting-version-last-attempt-status")).toHaveTextContent("running");
+  });
 });
 
 describe("Settings › General › Version & update (#697)", () => {

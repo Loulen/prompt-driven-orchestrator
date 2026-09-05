@@ -10,6 +10,19 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.59.0
+
+**Harnais `pi`, descripteur first-party** (#705 ; story #702, spec #704, ADR-0045/0046/0056 amendés).
+`pi` rejoint le tier embarqué (`claude`, `opencode`, `copilot`, `pi`) : TUI résident dans son pane
+(`exec pi -a … --session-id <id>`), fichiers projet pré-approuvés, identité de session imposée par PDO,
+reprise **par identité** uniquement (aucune reprise aveugle). Le catalogue lit `--list-models`
+(modèles `provider/model` avec fenêtre de contexte, servie dans `GET /settings.model_contexts`) et la
+ligne `--thinking` de `--help` (efforts). Les probes déclarent `None` pour coût, transcript, fin de tour,
+ancre de limite, staging et contexte : le tableau de support gagne la colonne `pi` 0.85.1. Le trou
+`{settings}` porte `-e` et reste vide jusqu'à #707 ; le JSON de hook `Stop` n'est plus écrit que pour un
+harnais dont le substrat de fin de tour est le transcript claude. Prérequis README : auth `pi` faite sur
+l'hôte, binaire dans le PATH utilisateur.
+
 ## 1.58.2
 
 **Prefactor sandbox : `StagingFloor` devient `StagingSet`** (#706 ; story #702, spec #704, ADR-0063).

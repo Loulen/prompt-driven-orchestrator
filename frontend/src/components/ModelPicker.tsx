@@ -42,6 +42,7 @@ export default function ModelPicker({
   value,
   onChange,
   models,
+  contexts,
   testid,
   subject,
 }: {
@@ -50,6 +51,10 @@ export default function ModelPicker({
   /** #616/ADR-0053: the model ids the resolved harness's binary offers, served by
    *  the daemon. Empty ⇒ no catalogue ⇒ the free-text field. */
   models: string[];
+  /** #705: the context window served beside an id (`pi --list-models`: `200K`,
+   *  `1M`), keyed by id. Rendered as a muted hint next to the id; an id with no
+   *  entry shows none. Optional: every other source names no window. */
+  contexts?: Record<string, string>;
   testid: string; // "node-model" | "merge-model"
   /** Identity of what this picker edits — a node id, or a stable key for a
    *  singleton like the Settings default. Changing it resets the draft and the
@@ -145,11 +150,19 @@ export default function ModelPicker({
           <DropdownMenuItem
             key={m}
             data-testid={`${testid}-option-${m}`}
-            className={`${ITEM_CLASSES} font-mono ${value === m ? "bg-bg-4" : ""}`}
+            className={`${ITEM_CLASSES} justify-between font-mono ${value === m ? "bg-bg-4" : ""}`}
             style={{ fontSize: "11px" }}
             onClick={() => onChange(m)}
           >
-            {m}
+            <span>{m}</span>
+            {contexts?.[m] ? (
+              <span
+                data-testid={`${testid}-context-${m}`}
+                className="ml-3 shrink-0 text-fg-4"
+              >
+                {contexts[m]}
+              </span>
+            ) : null}
           </DropdownMenuItem>
         ))}
         <DropdownMenuSeparator />

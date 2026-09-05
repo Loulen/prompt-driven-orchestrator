@@ -47,6 +47,9 @@ mod harness_catalogue_served;
 #[path = "harness_catalogue_sources.rs"]
 mod harness_catalogue_sources;
 
+#[path = "harness_catalogue_sources_pi.rs"]
+mod harness_catalogue_sources_pi;
+
 #[path = "harness_default_registration.rs"]
 mod harness_default_registration;
 

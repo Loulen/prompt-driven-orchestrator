@@ -225,7 +225,7 @@ fn first_difference(committed: &str, expected: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::harness_registry::{CLAUDE, COPILOT, OPENCODE};
+    use crate::harness_registry::{CLAUDE, COPILOT, OPENCODE, PI};
 
     #[test]
     fn the_matrix_reads_the_dispatch_table_not_a_hand_written_list() {
@@ -242,6 +242,10 @@ mod tests {
         assert!(Capability::ALL
             .iter()
             .all(|c| c.mechanism(OPENCODE).is_none()));
+        // #705: pi is on the floor with every capability explicitly absent — a
+        // column of ❌ that says so, never an implied one.
+        assert!(Capability::ALL.iter().all(|c| c.mechanism(PI).is_none()));
+        assert!(render().contains("`pi` 0.85.1"));
         assert!(Capability::ALL
             .iter()
             .all(|c| c.mechanism("my-custom-harness").is_none()));

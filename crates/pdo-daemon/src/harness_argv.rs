@@ -280,6 +280,80 @@ mod tests {
         );
     }
 
+    // #705. pi: resident TUI with a positional prompt, project files pre-approved
+    // (`-a`), imposed session identity, `--thinking` as the effort axis, and the
+    // `{settings}` hole carrying the `-e` extension token (empty in #705).
+
+    #[test]
+    fn pi_launch_no_holes_is_the_bare_resident_launch() {
+        let d = harness_registry::resolve("pi").unwrap();
+        let holes = Holes {
+            prompt: prompt_hole("/tmp/p.md"),
+            ..Default::default()
+        };
+        assert_eq!(
+            render(&d.launch, &holes),
+            "exec pi -a \"$(cat '/tmp/p.md')\""
+        );
+    }
+
+    #[test]
+    fn pi_launch_fills_every_hole_in_order() {
+        let d = harness_registry::resolve("pi").unwrap();
+        let holes = Holes {
+            prompt: prompt_hole("/tmp/p.md"),
+            model: "'openrouter/anthropic/claude-sonnet-4.5'".to_string(),
+            effort: "'high'".to_string(),
+            settings: "'/tmp/turn-end.ts'".to_string(),
+            session_id: "'abc-123'".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            render(&d.launch, &holes),
+            "exec pi -a --model 'openrouter/anthropic/claude-sonnet-4.5' --thinking 'high' \
+             -e '/tmp/turn-end.ts' --session-id 'abc-123' \"$(cat '/tmp/p.md')\""
+        );
+    }
+
+    #[test]
+    fn pi_launch_with_identity_and_effort_but_no_settings_drops_the_extension_token() {
+        // The #705 shape: the `{settings}` hole exists but nothing fills it, so `-e`
+        // disappears whole — pi is never handed an empty `-e`.
+        let d = harness_registry::resolve("pi").unwrap();
+        let holes = Holes {
+            prompt: prompt_hole("/tmp/p.md"),
+            effort: "'medium'".to_string(),
+            session_id: "'abc-123'".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            render(&d.launch, &holes),
+            "exec pi -a --thinking 'medium' --session-id 'abc-123' \"$(cat '/tmp/p.md')\""
+        );
+    }
+
+    #[test]
+    fn pi_resume_by_identity_reuses_the_session_id_flag_and_re_poses_effort() {
+        let d = harness_registry::resolve("pi").unwrap();
+        let holes = Holes {
+            resume: "--session-id 'abc-123'".to_string(),
+            effort: "'high'".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            render(&d.resume, &holes),
+            "exec pi -a --session-id 'abc-123' --thinking 'high'"
+        );
+    }
+
+    #[test]
+    fn pi_resume_with_no_identity_renders_no_resume_flag() {
+        // `resume_blind` is empty on purpose: never a blind `--continue` (imposed
+        // identity, CONTEXT.md § "Harnais agentique").
+        let d = harness_registry::resolve("pi").unwrap();
+        assert_eq!(render(&d.resume, &Holes::default()), "exec pi -a");
+    }
+
     #[test]
     fn opencode_resume_stays_a_blind_continue_byte_for_byte() {
         // opencode cannot pin a session identity, so it only ever blind-continues.

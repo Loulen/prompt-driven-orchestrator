@@ -17,19 +17,24 @@
 //! environment. The two responsibilities meet in [`crate::lib`]'s settings view and
 //! the boot probe.
 //!
-//! ## Three sources, machine-generated first (#629, ADR-0056)
+//! ## Four sources, machine-generated first (#629, #705, ADR-0056)
 //!
 //! A binary does not always print its enumeration where a `--help` reader looks.
 //! Measured on `copilot` 1.0.80: `--help` enumerates the effort stops but describes
-//! `--model` in prose, while the ids live in two other places. So the module exposes
-//! **three readers**, which the runner tries in preference order:
+//! `--model` in prose, while the ids live in two other places. Measured on `pi`
+//! 0.85.1: `--help` describes `--model` as a pattern but a `--list-models` flag prints
+//! the whole embedded catalogue as a table. So the module exposes **four readers**,
+//! which the runner tries in preference order:
 //!
 //! 1. [`parse_completion_script`] — the shell-completion script (`<bin> completion
 //!    bash`). Machine-**generated** from the CLI's own declared choices, so it is the
-//!    most stable of the three and the one ADR-0056 prefers.
-//! 2. [`parse_settings_prose`] — the settings help topic (`<bin> help config`), where
+//!    most stable of the four and the one ADR-0056 prefers.
+//! 2. [`parse_list_models`] — the model table (`<bin> --list-models`), generated from
+//!    the binary's embedded catalogue, carrying each model's **context window** (#705,
+//!    ADR-0056 §1 as amended by #702).
+//! 3. [`parse_settings_prose`] — the settings help topic (`<bin> help config`), where
 //!    a CLI documents each setting and bullets its allowed values.
-//! 3. [`parse_help`] — the `--help` reader of #616.
+//! 4. [`parse_help`] — the `--help` reader of #616.
 //!
 //! Each axis (models, efforts) takes the **highest-preference source that offers one**
 //! — see [`Catalogue::fill_missing_from`]. The two richer sources are only *run*
@@ -38,8 +43,8 @@
 //!
 //! ## Best-effort, never a contract (ADR-0053 §Limites)
 //!
-//! None of the three is an API: `--help` and `help config` are prose, a completion
-//! script is generated bash. Each reader scans for the enumerations a CLI
+//! None of the four is an API: `--help` and `help config` are prose, a completion
+//! script is generated bash, a model table is aligned text. Each reader scans for the enumerations a CLI
 //! conventionally prints beside `--model` / `--effort` (`[a|b|c]`, `<a|b|c>`,
 //! `Choices: a, b, c`, `One of: …`, a bare parenthesised `(a, b, c)`, a run of quoted
 //! ids `'a', 'b', 'c'`). Every reader is best-effort and can go **blind** to a
@@ -64,6 +69,14 @@ pub(crate) struct Catalogue {
     /// Offered effort levels (`--effort` enumeration). Empty ⇒ this binary exposes
     /// no effort axis; the client greys the picker.
     pub(crate) efforts: Vec<String>,
+    /// The **context window** a source published beside a model id, keyed by the id
+    /// exactly as it appears in [`Self::models`] (#705: `pi --list-models` prints one
+    /// per row — `200K`, `1M`). A hint the picker shows next to the id, verbatim as
+    /// the binary spells it; never parsed into a number, never a guard. Empty for a
+    /// source that names no window (every source but the model table). Rides with
+    /// `models`: [`Self::fill_missing_from`] moves the two together, so a window can
+    /// never describe a model from another source.
+    pub(crate) model_contexts: std::collections::BTreeMap<String, String>,
 }
 
 impl Catalogue {
@@ -87,6 +100,7 @@ impl Catalogue {
     pub(crate) fn fill_missing_from(&mut self, other: Catalogue) {
         if self.models.is_empty() {
             self.models = other.models;
+            self.model_contexts = other.model_contexts;
         }
         if self.efforts.is_empty() {
             self.efforts = other.efforts;
@@ -133,9 +147,16 @@ const OPTION_INDENT: usize = 8;
 pub(crate) fn parse_help(help: &str) -> Catalogue {
     Catalogue {
         models: extract_choices(help, &["--model", "-m"]),
-        efforts: extract_choices(help, &["--effort", "--reasoning-effort"]),
+        efforts: extract_choices(help, EFFORT_FLAGS),
+        ..Default::default()
     }
 }
+
+/// The flags a CLI spells its effort axis under. `--thinking` is `pi`'s (#705,
+/// measured on 0.85.1: `--thinking <level>  Set thinking level: off, minimal, low,
+/// medium, high, xhigh, max`); it fills the descriptor's `{effort}` hole exactly as
+/// `--effort` does for `claude`, so it is the same axis under another name.
+const EFFORT_FLAGS: &[&str] = &["--effort", "--reasoning-effort", "--thinking"];
 
 /// Extract the enumerated choices printed beside the first of `flags` that appears
 /// in `help`. Returns an empty vec when no flag matches or the matched flag carries
@@ -306,7 +327,15 @@ fn bracketed_pipe_list(window: &str) -> Option<(usize, Vec<String>)> {
 /// The words a CLI puts in front of an enumeration. Shared with
 /// [`parenthesised_list`], which stands aside whenever one of these opens the group
 /// — the keyword reader is the one that knows how to bound a wrapped list.
-const KEYS: &[&str] = &["choices:", "one of:", "values:", "allowed:", "supported:"];
+const KEYS: &[&str] = &[
+    "choices:",
+    "one of:",
+    "values:",
+    "allowed:",
+    "supported:",
+    // `pi` 0.85.1: `Set thinking level: off, minimal, low, medium, high, xhigh, max`.
+    "level:",
+];
 
 /// A flat list ends at its line (`Choices: a, b, c`). But a CLI may **wrap** a long
 /// enumeration across continuation lines *inside a parenthesis* — copilot 1.0.80
@@ -464,6 +493,91 @@ pub(crate) fn advertises_subcommand(help: &str, name: &str) -> bool {
     })
 }
 
+/// Whether `help` (a binary's `--help`) declares the flag `flag` (#705, ADR-0056
+/// §1 bis). PURE; the runner uses it to decide whether `--list-models` may be run at
+/// all. The same load-bearing gate as [`advertises_subcommand`]: `claude` has no
+/// `--list-models` and would read an unknown flag as an error at best, a prompt at
+/// worst — a flag is only run when the binary itself announces it.
+///
+/// A flag is declared when it opens an option line — `  --list-models [search]  List
+/// available models` — i.e. it is the first word of a line, possibly followed by a
+/// `,`-joined alias (`--print, -p`). Loose on purpose, like its sibling: a false
+/// positive costs one bounded probe, a false negative costs the catalogue.
+pub(crate) fn advertises_flag(help: &str, flag: &str) -> bool {
+    help.lines().any(|line| {
+        line.split_whitespace()
+            .next()
+            .is_some_and(|w| w.trim_end_matches(',') == flag)
+    })
+}
+
+/// Parse a binary's **model table** (`<bin> --list-models`) into its offered
+/// catalogue (#705, ADR-0056 §1 as amended by #702). Generated from the embedded
+/// catalogue, so preferred over prose; carries the **context window** per model,
+/// which no other source does.
+///
+/// The shape read is `pi` 0.85.1's: a header line naming its columns, then one row
+/// per model, whitespace-aligned:
+///
+/// ```text
+/// provider    model                             context  max-out  thinking  images
+/// openrouter  ~anthropic/claude-sonnet-latest   1M       128K     yes       yes
+/// openrouter  anthropic/claude-sonnet-4.5       1M       64K      yes       yes
+/// ```
+///
+/// Each model is offered as **`provider/model`** — the form `--model` accepts with no
+/// `--provider` (`pi --model openai/gpt-4o`) — an alias row (`~…-latest`) included,
+/// verbatim. The `context` column, when the header names one, is kept beside the id
+/// in [`Catalogue::model_contexts`]. A table with no `provider`/`model` columns, or
+/// no rows, yields [`Catalogue::default`] — the runner falls through. This reader
+/// never answers the effort axis: `--list-models` says nothing about it.
+pub(crate) fn parse_list_models(table: &str) -> Catalogue {
+    let mut lines = table.lines().filter(|l| !l.trim().is_empty());
+    let Some(header) = lines.next() else {
+        return Catalogue::default();
+    };
+    let columns: Vec<&str> = header.split_whitespace().collect();
+    let col = |name: &str| columns.iter().position(|c| c.eq_ignore_ascii_case(name));
+    let (Some(provider_col), Some(model_col)) = (col("provider"), col("model")) else {
+        return Catalogue::default();
+    };
+    let context_col = col("context");
+
+    let mut out = Catalogue::default();
+    for line in lines {
+        let cells: Vec<&str> = line.split_whitespace().collect();
+        let (Some(provider), Some(model)) = (cells.get(provider_col), cells.get(model_col)) else {
+            continue;
+        };
+        if !is_plausible_model_row_cell(provider) || !is_plausible_model_row_cell(model) {
+            continue;
+        }
+        let id = format!("{provider}/{model}");
+        if out.models.contains(&id) {
+            continue;
+        }
+        if let Some(ctx) = context_col.and_then(|c| cells.get(c)) {
+            if !ctx.is_empty() && *ctx != "-" {
+                out.model_contexts.insert(id.clone(), ctx.to_string());
+            }
+        }
+        out.models.push(id);
+    }
+    out
+}
+
+/// A provider or model cell of the model table: [`is_plausible_value`] plus the `~`
+/// an alias row opens with (`~anthropic/claude-sonnet-latest`) and the `@`/`+` some
+/// provider ids carry. Kept apart from the prose readers' filter so a `~` never
+/// starts passing as a word harvested from help text.
+fn is_plausible_model_row_cell(cell: &str) -> bool {
+    !cell.is_empty()
+        && cell.len() <= 80
+        && cell.chars().all(|c| {
+            c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '/' | ':' | '~' | '@' | '+')
+        })
+}
+
 /// Backstop bound on one case arm's body, for a generator that ends its arms some
 /// way other than `;;` / `esac`. The `compgen -W` list *itself* may be far longer
 /// (copilot's is ~700 chars); this bounds only where we look for the `-W`.
@@ -490,7 +604,8 @@ const COMPGEN_WINDOW: usize = 200;
 pub(crate) fn parse_completion_script(script: &str) -> Catalogue {
     Catalogue {
         models: completion_words(script, &["--model", "-m"]),
-        efforts: completion_words(script, &["--effort", "--reasoning-effort"]),
+        efforts: completion_words(script, EFFORT_FLAGS),
+        ..Default::default()
     }
 }
 
@@ -564,6 +679,7 @@ pub(crate) fn parse_settings_prose(text: &str) -> Catalogue {
     Catalogue {
         models: settings_values(text, &["model"]),
         efforts: settings_values(text, &["effort", "effortLevel", "reasoningEffort"]),
+        ..Default::default()
     }
 }
 
@@ -653,6 +769,113 @@ fn is_plausible_value(tok: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The real `pi --help` of 0.85.1, captured verbatim (#705). Beside copilot's
+    /// fixtures in spirit: the shapes measured on the installed binary, not invented.
+    const PI_HELP: &str = include_str!("../tests/fixtures/catalogue/pi-0.85.1-help.txt");
+    /// The real `pi --list-models` of 0.85.1, abridged to its alias rows plus a few
+    /// concrete ones (the full table is 366 rows on this host's providers).
+    const PI_LIST_MODELS: &str =
+        include_str!("../tests/fixtures/catalogue/pi-0.85.1-list-models.txt");
+
+    #[test]
+    fn pi_help_declares_list_models_but_neither_subcommand_source() {
+        // ADR-0056 §1 bis: only what the binary announces is run. pi's `Commands:`
+        // block names install/remove/update/list/config/auth — never `completion` nor
+        // `help` — and its options name `--list-models`.
+        assert!(advertises_flag(PI_HELP, "--list-models"));
+        assert!(!advertises_subcommand(PI_HELP, "completion"));
+        assert!(!advertises_subcommand(PI_HELP, "help"));
+        // A flag it does not have is not declared — the claude hazard, mirrored.
+        assert!(!advertises_flag(PI_HELP, "--list-efforts"));
+        assert!(!advertises_flag(
+            "  --model <m>  the model\n",
+            "--list-models"
+        ));
+        // An alias-joined option line still declares its long flag.
+        assert!(advertises_flag(
+            "  --print, -p   Non-interactive\n",
+            "--print"
+        ));
+    }
+
+    #[test]
+    fn pi_help_enumerates_its_thinking_levels_as_the_effort_axis() {
+        // `--thinking <level>  Set thinking level: off, minimal, low, medium, high,
+        // xhigh, max` — pi's effort axis, read off `--help` (AC: efforts = the
+        // `--thinking` line). `--model <pattern>` is prose, so no model list here.
+        let cat = parse_help(PI_HELP);
+        assert_eq!(
+            cat.efforts,
+            vec!["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+        );
+        assert!(
+            cat.models.is_empty(),
+            "pi's --help describes --model as a pattern, not a list: {:?}",
+            cat.models
+        );
+    }
+
+    #[test]
+    fn pi_list_models_offers_provider_slash_model_with_the_context_window() {
+        let cat = parse_list_models(PI_LIST_MODELS);
+        // Aliases (the `~…-latest` rows) are offered like any model, verbatim.
+        assert_eq!(cat.models[0], "openrouter/~anthropic/claude-fable-latest");
+        assert!(cat
+            .models
+            .iter()
+            .any(|m| m == "openrouter/anthropic/claude-sonnet-4.5"));
+        assert_eq!(cat.models.len(), 17, "one offer per row, header excluded");
+        // The context window rides beside each id, as the binary spells it.
+        assert_eq!(
+            cat.model_contexts
+                .get("openrouter/anthropic/claude-opus-4")
+                .map(String::as_str),
+            Some("200K")
+        );
+        assert_eq!(
+            cat.model_contexts
+                .get("openrouter/~anthropic/claude-sonnet-latest")
+                .map(String::as_str),
+            Some("1M")
+        );
+        assert_eq!(cat.model_contexts.len(), cat.models.len());
+        // The table says nothing about effort.
+        assert!(cat.efforts.is_empty());
+    }
+
+    #[test]
+    fn a_model_table_without_the_expected_columns_is_no_offer() {
+        assert_eq!(parse_list_models(""), Catalogue::default());
+        assert_eq!(
+            parse_list_models("Usage: thing --list-models\n  nothing here\n"),
+            Catalogue::default()
+        );
+        // Header only: no rows, no offer.
+        assert_eq!(
+            parse_list_models("provider  model  context\n"),
+            Catalogue::default()
+        );
+    }
+
+    #[test]
+    fn model_contexts_travel_with_the_models_they_describe() {
+        // ADR-0056 §3, per axis: when a higher-preference source already answered
+        // the model axis, a lower one's windows must not be grafted onto its ids.
+        let mut top = Catalogue {
+            models: vec!["from-completion".into()],
+            ..Default::default()
+        };
+        let table = parse_list_models(PI_LIST_MODELS);
+        top.fill_missing_from(table.clone());
+        assert_eq!(top.models, vec!["from-completion"]);
+        assert!(top.model_contexts.is_empty());
+        // And when the model axis is empty, the windows arrive with the ids.
+        let mut empty = Catalogue::default();
+        empty.fill_missing_from(table);
+        assert_eq!(empty.models.len(), 17);
+        assert_eq!(empty.model_contexts.len(), 17);
+    }
 
     #[test]
     fn parses_a_bracketed_pipe_model_list() {
@@ -1157,11 +1380,12 @@ Commands:
     fn a_filled_axis_is_never_overwritten_by_a_later_source() {
         let mut cat = Catalogue {
             models: vec!["preferred".into()],
-            efforts: Vec::new(),
+            ..Default::default()
         };
         cat.fill_missing_from(Catalogue {
             models: vec!["fallback".into()],
             efforts: vec!["low".into()],
+            ..Default::default()
         });
         assert_eq!(cat.models, vec!["preferred"]);
         assert_eq!(cat.efforts, vec!["low"]);

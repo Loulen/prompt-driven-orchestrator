@@ -79,6 +79,7 @@ export default function MergeInspector() {
             value={node.model ?? null}
             onChange={(v) => updateNode(node.id, { model: v })}
             models={harnessOption?.models ?? []}
+            contexts={harnessOption?.modelContexts}
             testid="merge-model"
             subject={node.id}
           />

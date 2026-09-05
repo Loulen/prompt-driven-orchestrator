@@ -230,7 +230,7 @@ export default function SettingsSurface({
   initialPosition,
   onOpenStats,
 }: Props) {
-  const { settings, save, refresh } = useSettings(open);
+  const { settings, settled, save, refresh } = useSettings(open);
   const { profiles: agentProfiles, refresh: refreshAgentProfiles } = useAgentProfiles(open);
   const { bank: skillBank, loaded: skillsLoaded, refresh: refreshSkills } = useSkillBank(open);
 
@@ -559,6 +559,7 @@ export default function SettingsSurface({
             key={item.id}
             categoryId={item.id}
             active={category === item.id}
+            ready={settled}
             initialSection={lastSection[item.id]}
             highlight={initialPosition?.category === item.id && !!initialPosition.section}
             dirtySections={rollup.sections}
@@ -957,6 +958,7 @@ export default function SettingsSurface({
 function CategoryPage({
   categoryId,
   active,
+  ready,
   initialSection,
   highlight,
   dirtySections,
@@ -965,6 +967,12 @@ function CategoryPage({
 }: {
   categoryId: SettingsCategoryId;
   active: boolean;
+  /**
+   * `GET /settings` has answered (ok or not). Landing waits for it: a section that
+   * renders on its own (Version & update, #697) exists before the ones above it, and a
+   * scroll made then lands on a page the loading sections are about to push down.
+   */
+  ready: boolean;
   initialSection?: SettingsSectionId;
   /** Programmatic open (story 18): pulse the landed section so the eye finds it. */
   highlight?: boolean;
@@ -983,10 +991,11 @@ function CategoryPage({
   // resolves, so the effect re-checks on each render until the target exists, then stops.
   // The target is captured once: while the page still shows "loading", the spy reports the
   // first section and the parent remembers it, which would silently replace the request.
+  // `ready` gates the whole thing: the target may exist before its predecessors do.
   const target = useRef(initialSection);
   const landedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useLayoutEffect(() => {
-    if (!active || restored.current) return;
+    if (!active || !ready || restored.current) return;
     const wanted = target.current;
     if (!wanted || wanted === sectionIds[0]) {
       restored.current = true;

@@ -1,5 +1,5 @@
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { InstanceSettings, UpdateStatus } from "../types";
 
 // #697 — Settings › General › Version & update. Every api function the surface (and the
@@ -112,6 +112,11 @@ function renderVersionSection() {
     />,
   );
 }
+
+const originalScrollIntoView = Element.prototype.scrollIntoView;
+afterEach(() => {
+  Element.prototype.scrollIntoView = originalScrollIntoView;
+});
 
 beforeEach(() => {
   fetchSettingsMock.mockReset().mockResolvedValue(settings());
@@ -296,5 +301,54 @@ describe("Settings › General › Version & update (#697)", () => {
     fetchUpdateStatusMock.mockResolvedValue(status());
     renderVersionSection();
     expect(await screen.findByTestId("setting-version-installed")).toHaveTextContent("v1.58.1");
+  });
+  it("the badge's deep-link lands on the section only once GET /settings has answered (the sections above mount on it)", async () => {
+    // Regression (#697 agentic finding): the section renders on its own, so it exists before
+    // Agents / Runs do. A scroll made then is undone when those sections mount and push it
+    // down — the pane stayed at the top and the rail highlighted « Interface ».
+    fetchUpdateStatusMock.mockResolvedValue(status());
+    let resolveSettings!: (value: InstanceSettings) => void;
+    fetchSettingsMock.mockReset().mockImplementation(
+      () =>
+        new Promise<InstanceSettings>((resolve) => {
+          resolveSettings = resolve;
+        }),
+    );
+    const scrolled = vi.fn();
+    Element.prototype.scrollIntoView = scrolled;
+
+    renderVersionSection();
+    const body = await screen.findByTestId("settings-section-body-version-update");
+    // The target exists, its predecessors do not: no landing yet.
+    expect(screen.getAllByTestId("settings-loading").length).toBeGreaterThan(0);
+    expect(scrolled).not.toHaveBeenCalled();
+    expect(body).not.toHaveAttribute("data-landed");
+
+    resolveSettings(settings());
+    await screen.findByTestId("setting-session-cap");
+    // Instant landing scroll (then the spy's smooth pin on the same element).
+    await waitFor(() => expect(scrolled).toHaveBeenCalled());
+    expect(scrolled.mock.instances[0]).toBe(body);
+    expect(scrolled.mock.calls[0][0]).toEqual({ behavior: "auto", block: "start" });
+    expect(body).toHaveAttribute("data-landed", "true");
+    await waitFor(() =>
+      expect(screen.getByTestId("settings-section-version-update")).toHaveAttribute(
+        "aria-current",
+        "true",
+      ),
+    );
+  });
+
+  it("still lands when GET /settings failed (the read answered, the page will not grow)", async () => {
+    fetchUpdateStatusMock.mockResolvedValue(status());
+    fetchSettingsMock.mockReset().mockRejectedValue(new Error("boom"));
+    const scrolled = vi.fn();
+    Element.prototype.scrollIntoView = scrolled;
+
+    renderVersionSection();
+    const body = await screen.findByTestId("settings-section-body-version-update");
+    await waitFor(() => expect(scrolled).toHaveBeenCalled());
+    expect(scrolled.mock.instances[0]).toBe(body);
+    expect(body).toHaveAttribute("data-landed", "true");
   });
 });

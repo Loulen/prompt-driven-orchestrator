@@ -2,8 +2,8 @@
 //!
 //! Everything PDO knows how to do **beyond launching** a harness is a
 //! **capability**, written harness by harness: estimate a cost, resolve a
-//! transcript, constate an end of turn, spot a usage-limit menu, hold a staging
-//! floor. This module is the factory for those capabilities — and its whole
+//! transcript, constate an end of turn, spot a usage-limit menu, declare a staging
+//! set. This module is the factory for those capabilities — and its whole
 //! point is to make their **absence legible**: never supplied, never silent.
 //!
 //! The shape is deliberate and was settled at the grilling (do not redraw it):
@@ -52,9 +52,9 @@
 //!   harness with no substrate is **said once** ([`turn_end_absence_note`]) rather
 //!   than being a silent no-op.
 //! - **sandbox** ([`crate::node_spawn`]): a sandboxed Run on a harness with no
-//!   [`HarnessProbes::staging_floor`] is **said once, visibly** — it holds only by
-//!   the user's image and the profile's `$HOME` exceptions, without the plancher's
-//!   guarantees (ADR-0031).
+//!   [`HarnessProbes::staging_set`] is **said once, visibly** — it holds only by
+//!   the user's image and the profile's `$HOME` exceptions, with no staged home and
+//!   no autonomy fixups (ADR-0063).
 //!
 //! This module is narrow on purpose: it fabricates **capabilities, never a
 //! launch** (a launch is data — the argv template of [`crate::harness_registry`]).
@@ -216,26 +216,135 @@ impl ContextUsageSource {
     }
 }
 
-/// The sandbox staging floor a harness guarantees (ADR-0031).
-///
-/// Absent ⇒ a sandboxed Run on this harness holds only by the user's image and
-/// the profile's `$HOME` exceptions, without the plancher's guarantees — and PDO
-/// says so once (see [`staging_floor_absence_note`]).
+/// One `$HOME`-relative entry of a harness's staging set (ADR-0063 §1): copied
+/// from the host into the Run's staging on the way in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum StagingFloor {
-    /// The `.claude` staged home: valid credentials, org managed settings, bypass
-    /// permissions accepted, trust pre-granted to the Run root, empty `projects/`.
-    ClaudeDotClaude,
+pub(crate) struct StagingEntry {
+    /// `$HOME`-relative path (`.claude/.credentials.json`, `.pi/agent/auth.json`).
+    /// Routed by the same classifier as a profile entry
+    /// ([`crate::sandbox_profile::landing`]), so the copy view and the mount view
+    /// cannot drift.
+    pub(crate) rel: &'static str,
+    /// What to log at `info` when the host lacks the entry, or `None` for a silent
+    /// skip. `Some` is for an entry whose absence is the **common** case yet worth a
+    /// line (an org baseline on an install with no org): a `warn!` per Run would
+    /// train the reader to ignore warnings.
+    pub(crate) absent_note: Option<&'static str>,
 }
 
-impl StagingFloor {
+/// A write that disarms a **blocking dialog** once a staging set is copied
+/// (ADR-0063 §2). Distinct from the set itself: the set is what the harness
+/// *reads* to behave as on the host; a fixup is what PDO *writes* so an unattended
+/// session never waits for a human. `claude` has them; `copilot` and `pi` carry the
+/// equivalent on their argv (`--allow-all`, `-a`) and declare none.
+///
+/// Each variant is applied by [`crate::sandbox_staging`], the only module that
+/// writes into a staging — this enum only *names* the write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AutonomyFixup {
+    /// `skipDangerousModePermissionPrompt: true` in the staged `.claude/settings.json`
+    /// — merged into the host copy when the profile staged it, synthesised as a
+    /// one-key file otherwise (ADR-0031 §1 G3).
+    ClaudeBypassPermissions,
+    /// The staged `.claude.json` baseline: `hasCompletedOnboarding`, plus trust
+    /// pre-granted on the Run root when there is one (ADR-0031 §1 G4).
+    ClaudeJsonBaseline,
+}
+
+/// The sandbox **staging set** a harness declares (ADR-0063 §1): the `$HOME`
+/// entries and env that make a session in the container behave as on the host,
+/// plus its **transcript sinks** and its [`AutonomyFixup`]s.
+///
+/// Absent ⇒ a sandboxed Run on this harness holds only by the user's image and
+/// the profile's `$HOME` exceptions — and PDO says so once (see
+/// [`staging_set_absence_note`]). `None` is a declared value (ADR-0051), published
+/// in the support table.
+///
+/// The set is **data**; [`crate::sandbox_staging`] is the one interpreter. Today it
+/// is applied at `prepare` (the Run's staging), #708 moves the copy to the spawn of
+/// the first node that resolves the harness (ADR-0063 §3) — same data, later moment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct StagingSet {
+    /// The support-table cell: what this harness stages, in the reader's words.
+    pub(crate) label: &'static str,
+    /// The harness's home root under `$HOME` (`.claude`, `.pi/agent`): the directory
+    /// mounted (empty until filled) for every first-party harness (ADR-0063 §3).
+    pub(crate) home_root: &'static str,
+    /// Entries copied from the host, whole. Refused as profile entries: the set owns
+    /// them in every profile.
+    pub(crate) entries: &'static [StagingEntry],
+    /// `$HOME`-relative sub-paths **skipped** when an entry above is a directory.
+    pub(crate) excludes: &'static [&'static str],
+    /// Env vars the harness needs inside the container (`PI_TELEMETRY=0`). Posed
+    /// with the set; `claude` needs none.
+    pub(crate) env: &'static [(&'static str, &'static str)],
+    /// `$HOME`-relative transcript sinks: created **empty** on the way in (never
+    /// copied — copying would break the merge-back idempotence and the cost fold),
+    /// **harvested** at merge-back under the same encoded dirname. Refused as
+    /// profile entries.
+    pub(crate) transcripts: &'static [&'static str],
+    /// The blocking-dialog disarms applied once the set is on disk.
+    pub(crate) fixups: &'static [AutonomyFixup],
+}
+
+impl StagingSet {
     pub(crate) fn label(self) -> &'static str {
-        match self {
-            StagingFloor::ClaudeDotClaude => {
-                "a staged `.claude` home — credentials, org managed settings, pre-granted trust"
-            }
-        }
+        self.label
     }
+}
+
+/// `claude`'s staging set — the five guarantees of ADR-0031 §1, byte for byte,
+/// re-expressed as data (ADR-0063 amends §1: they are *claude's*, one set among
+/// others):
+///
+/// - **G1 credentials** → entry `.claude/.credentials.json` (0600 preserved by
+///   `std::fs::copy`; absent on the host → silent no-op, auth fails later and it is
+///   not `prepare`'s call);
+/// - **G2 org managed settings** → entry `.claude/remote-settings.json` (absent →
+///   `info!` no-op, the majority case; present but uncopyable → hard error, a
+///   compliance surprise);
+/// - **G3 bypass permissions** → [`AutonomyFixup::ClaudeBypassPermissions`];
+/// - **G4 `.claude.json` baseline** → [`AutonomyFixup::ClaudeJsonBaseline`];
+/// - **G5 empty transcript sink** → transcripts `.claude/projects`.
+///
+/// The `~/.claude` allowlist itself (skills, plugins, settings…) is NOT here: it is
+/// the user's `full` profile ([`crate::sandbox_profile::DEFAULT_FULL_ENTRIES`]),
+/// the harness-agnostic diff of ADR-0063 §4.
+pub(crate) const CLAUDE_STAGING_SET: StagingSet = StagingSet {
+    label: "the `.claude` home — credentials and org managed settings copied, trust and \
+            permissions bypass fixed up, transcripts harvested back",
+    home_root: ".claude",
+    entries: &[
+        StagingEntry {
+            rel: ".claude/.credentials.json",
+            absent_note: None,
+        },
+        StagingEntry {
+            rel: ".claude/remote-settings.json",
+            absent_note: Some("nothing to consent to (no-op)"),
+        },
+    ],
+    excludes: &[],
+    env: &[],
+    transcripts: &[".claude/projects"],
+    fixups: &[
+        AutonomyFixup::ClaudeBypassPermissions,
+        AutonomyFixup::ClaudeJsonBaseline,
+    ],
+};
+
+/// Every staging set a first-party harness declares, in registry order. The
+/// generic consumers (the transcript merge-back, the profile grammar's refusals)
+/// iterate this rather than naming `claude`, so a harness that declares a set is
+/// harvested and protected with no second edit (ADR-0063).
+pub(crate) fn staging_sets() -> Vec<(String, StagingSet)> {
+    crate::harness_registry::embedded_floor()
+        .into_iter()
+        .filter_map(|d| {
+            let set = probes_for(&d.name)?.staging_set()?;
+            Some((d.name, set))
+        })
+        .collect()
 }
 
 /// The capabilities of one harness. **Every method defaults to "absent"**
@@ -262,9 +371,9 @@ pub(crate) trait HarnessProbes: Sync {
     fn usage_limit_anchor(&self) -> Option<UsageLimitAnchor> {
         None
     }
-    /// The sandbox staging floor, or `None` (a sandboxed Run says its absence
-    /// once).
-    fn staging_floor(&self) -> Option<StagingFloor> {
+    /// The sandbox staging set, or `None` (a sandboxed Run says its absence
+    /// once). ADR-0063.
+    fn staging_set(&self) -> Option<StagingSet> {
         None
     }
     /// The context-usage source, or `None` (Performance shows no Context column
@@ -390,8 +499,8 @@ impl HarnessProbes for ClaudeProbes {
     fn usage_limit_anchor(&self) -> Option<UsageLimitAnchor> {
         Some(UsageLimitAnchor::ClaudePaneMenu)
     }
-    fn staging_floor(&self) -> Option<StagingFloor> {
-        Some(StagingFloor::ClaudeDotClaude)
+    fn staging_set(&self) -> Option<StagingSet> {
+        Some(CLAUDE_STAGING_SET)
     }
 
     fn context_usage_source(&self) -> Option<ContextUsageSource> {
@@ -484,8 +593,8 @@ static CLAUDE_PROBES: ClaudeProbes = ClaudeProbes;
 ///   own documentation admits the textual anchor drifts each version, and it
 ///   triggers no recovery (ADR-0012) — a second harness declaring it absent
 ///   degrades nothing actionable (ADR-0051 §"Limites");
-/// - the **staging floor** is absent: configuring a harness is a documented
-///   prerequisite, not PDO code (ADR-0031 / CONTEXT.md § "Harnais agentique").
+/// - the **staging set** is absent: configuring `copilot` is a documented
+///   prerequisite, not PDO code (ADR-0063 / CONTEXT.md § "Harnais agentique").
 ///
 /// The three present capabilities dispatch to `copilot`'s own implementation — its
 /// event journal, never `claude`'s cwd-keyed JSONL store.
@@ -510,7 +619,7 @@ impl HarnessProbes for CopilotProbes {
     fn turn_end_substrate(&self) -> Option<TurnEndSubstrate> {
         Some(TurnEndSubstrate::CopilotEventJournal)
     }
-    // usage_limit_anchor / staging_floor stay `None` — declared absent (see above).
+    // usage_limit_anchor / staging_set stay `None` — declared absent (see above).
 
     fn context_usage_source(&self) -> Option<ContextUsageSource> {
         Some(ContextUsageSource::CopilotJournalPeak)
@@ -651,7 +760,7 @@ pub(crate) fn exit_code_is_verdict(harness: &str) -> bool {
 /// turn-end auto-completion is enabled (ADR-0051 / correctif AC #7). `Some(msg)`
 /// when the setting cannot be honoured for `harness`, `None` for a harness that
 /// has the substrate (`claude`). Pure and testable, the twin of
-/// [`staging_floor_absence_note`]: the setting stops being a silent no-op.
+/// [`staging_set_absence_note`]: the setting stops being a silent no-op.
 pub(crate) fn turn_end_absence_note(harness: &str) -> Option<String> {
     if capabilities(harness).turn_end {
         return None;
@@ -720,7 +829,7 @@ pub(crate) fn capabilities(harness: &str) -> Capabilities {
             transcript: p.transcript_resolution().is_some(),
             turn_end: p.turn_end_substrate().is_some(),
             usage_limit: p.usage_limit_anchor().is_some(),
-            staging: p.staging_floor().is_some(),
+            staging: p.staging_set().is_some(),
             context_usage: p.context_usage_source().is_some(),
         },
     }
@@ -745,17 +854,17 @@ pub(crate) fn can_measure_context(harness: &str) -> bool {
 }
 
 /// The one-time note for a sandboxed Run whose node runs on a harness with no
-/// staging floor (ADR-0031). `Some(msg)` when `harness` lacks the floor,
-/// `None` when it has it (`claude`). Pure and testable, modelled on
+/// staging set (ADR-0063). `Some(msg)` when `harness` lacks a set, `None` when it
+/// declares one (`claude`). Pure and testable, modelled on
 /// `price_table::diagnostic`.
-pub(crate) fn staging_floor_absence_note(harness: &str) -> Option<String> {
+pub(crate) fn staging_set_absence_note(harness: &str) -> Option<String> {
     if capabilities(harness).staging {
         return None;
     }
     Some(format!(
-        "sandbox: harness `{harness}` has no staging floor (#553, ADR-0031) — this Run's session \
-         holds only by the profile's image and its `$HOME` exceptions, without the plancher's \
-         guarantees (credentials, org managed settings, pre-granted trust, empty projects/)"
+        "sandbox: harness `{harness}` has no staging set (#553, ADR-0063) — this Run's session \
+         holds only by the profile's image and its `$HOME` exceptions, without a staged home \
+         (credentials, settings) or autonomy fixups (pre-granted trust, permissions bypass)"
     ))
 }
 
@@ -777,7 +886,7 @@ mod tests {
         assert!(bare.transcript_resolution().is_none());
         assert!(bare.turn_end_substrate().is_none());
         assert!(bare.usage_limit_anchor().is_none());
-        assert!(bare.staging_floor().is_none());
+        assert!(bare.staging_set().is_none());
         assert!(bare.context_peak("anything").is_none());
         assert!(bare
             .subagent_transcripts(Path::new("/root"), Path::new("/wd"), "sid")
@@ -802,7 +911,7 @@ mod tests {
             p.usage_limit_anchor(),
             Some(UsageLimitAnchor::ClaudePaneMenu)
         );
-        assert_eq!(p.staging_floor(), Some(StagingFloor::ClaudeDotClaude));
+        assert_eq!(p.staging_set(), Some(CLAUDE_STAGING_SET));
     }
 
     #[test]
@@ -855,7 +964,7 @@ mod tests {
             p.usage_limit_anchor().is_none(),
             "usage-limit declared absent"
         );
-        assert!(p.staging_floor().is_none(), "staging floor declared absent");
+        assert!(p.staging_set().is_none(), "staging set declared absent");
 
         assert_eq!(
             capabilities(COPILOT),
@@ -1041,12 +1150,45 @@ mod tests {
     }
 
     #[test]
-    fn staging_floor_absence_note_fires_only_for_a_harness_without_the_floor() {
-        assert_eq!(staging_floor_absence_note(CLAUDE), None);
-        let note = staging_floor_absence_note("my-custom-harness").expect("a note");
+    fn staging_set_absence_note_fires_only_for_a_harness_without_a_set() {
+        assert_eq!(staging_set_absence_note(CLAUDE), None);
+        let note = staging_set_absence_note("my-custom-harness").expect("a note");
         assert!(note.contains("`my-custom-harness`"));
-        assert!(note.contains("no staging floor"));
+        assert!(note.contains("no staging set"));
         assert!(note.contains("$HOME"));
+    }
+
+    /// ADR-0063: the five guarantees of ADR-0031 §1 are `claude`'s set, as data.
+    /// Pinned here so a later edit to the set is a visible change of contract.
+    #[test]
+    fn claude_staging_set_carries_the_five_guarantees_of_adr_0031() {
+        let set = CLAUDE_STAGING_SET;
+        assert_eq!(set.home_root, ".claude");
+        let entries: Vec<&str> = set.entries.iter().map(|e| e.rel).collect();
+        assert_eq!(
+            entries,
+            [".claude/.credentials.json", ".claude/remote-settings.json"]
+        );
+        assert_eq!(set.transcripts, [".claude/projects"]);
+        assert_eq!(
+            set.fixups,
+            [
+                AutonomyFixup::ClaudeBypassPermissions,
+                AutonomyFixup::ClaudeJsonBaseline
+            ]
+        );
+        assert!(set.env.is_empty(), "claude needs no env in the container");
+        assert!(set.excludes.is_empty());
+    }
+
+    /// Only `claude` declares a set today; `copilot` and `opencode` are explicit
+    /// `None`s, so the generic consumers see exactly one set.
+    #[test]
+    fn staging_sets_lists_claude_only() {
+        let sets = staging_sets();
+        assert_eq!(sets.len(), 1, "{sets:?}");
+        assert_eq!(sets[0].0, CLAUDE);
+        assert_eq!(sets[0].1, CLAUDE_STAGING_SET);
     }
 
     fn claude_turn(id: &str, input: u64, output: u64) -> String {

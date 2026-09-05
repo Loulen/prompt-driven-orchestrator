@@ -100,18 +100,18 @@ fn spawn_home_root(deps: &SpawnDeps<'_>) -> PathBuf {
         .unwrap_or_default()
 }
 
-/// #553 / ADR-0031: say ONCE per `(run, harness)` that a sandboxed Run's node runs
-/// on a harness with no staging floor. The message is the pure
-/// [`crate::harness_probes::staging_floor_absence_note`] (so it is unit-tested
+/// #553 / ADR-0063: say ONCE per `(run, harness)` that a sandboxed Run's node runs
+/// on a harness with no staging set. The message is the pure
+/// [`crate::harness_probes::staging_set_absence_note`] (so it is unit-tested
 /// there, not against a terminal); the process-static dedup keeps a busy scheduler
 /// from repeating it on every retry or collection lap. A no-op for `claude`, which
-/// has the floor.
-fn warn_missing_staging_floor_once(run_id: &str, harness: &str) {
+/// declares a set.
+fn warn_missing_staging_set_once(run_id: &str, harness: &str) {
     use std::collections::HashSet;
     use std::sync::Mutex;
     static SAID: Mutex<Option<HashSet<(String, String)>>> = Mutex::new(None);
 
-    let Some(note) = crate::harness_probes::staging_floor_absence_note(harness) else {
+    let Some(note) = crate::harness_probes::staging_set_absence_note(harness) else {
         return;
     };
     let mut guard = SAID.lock().unwrap_or_else(|e| e.into_inner());
@@ -147,7 +147,7 @@ fn warn_turn_end_unsupported_once(run_id: &str, harness: &str) {
 /// #563 (AC13/AC14): say ONCE per `(run, tier, profile_id)` that a tier named a
 /// `Profile` reference absent from the atomic snapshot — the walk warned and
 /// behaved as `Inherit` for that tier rather than failing the spawn. Deduped the
-/// same way as [`warn_missing_staging_floor_once`] so a busy scheduler replaying
+/// same way as [`warn_missing_staging_set_once`] so a busy scheduler replaying
 /// the same stale reference doesn't spam the log every retry.
 fn warn_missing_agent_profile_once(
     run_id: &str,
@@ -628,12 +628,13 @@ pub(crate) async fn spawn_node(
             let registry = harness_registry::HarnessRegistry::load(&spawn_home_root(&deps));
             match registry.resolve(&r.harness) {
                 Some(d) => {
-                    // #553 / ADR-0031: a sandboxed Run whose node runs on a harness
-                    // with no staging floor holds only by the profile's image and
-                    // its `$HOME` exceptions — say it once, visibly (the plancher is
-                    // claude-specific and built per-Run regardless of the harness).
+                    // #553 / ADR-0063: a sandboxed Run whose node runs on a harness
+                    // with no staging set holds only by the profile's image and
+                    // its `$HOME` exceptions — say it once, visibly (today only
+                    // `claude`'s set is applied, per Run, whatever the harness; #708
+                    // fills each set at the spawn that resolves its harness).
                     if run_sandboxed {
-                        warn_missing_staging_floor_once(run_id, &r.harness);
+                        warn_missing_staging_set_once(run_id, &r.harness);
                     }
                     Some(d)
                 }

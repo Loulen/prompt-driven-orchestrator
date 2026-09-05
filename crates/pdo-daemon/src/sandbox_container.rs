@@ -597,8 +597,8 @@ fn start_container(docker_bin: &str, name: &str) -> Result<()> {
 /// **Best-effort, par choix** : la grande majorité des Runs n'invoquent jamais `sudo`. Faire
 /// échouer un Run parce qu'une commodité n'a pas pu être posée serait pire que le défaut
 /// corrigé — donc `warn!` et on continue, jamais de `?` vers l'appelant (miroir de
-/// `sandbox_run::kill_session_best_effort`). C'est l'exact opposé de la politique du plancher de
-/// staging, et pour une raison nette : le plancher désarme des dialogues qui **bloquent** un
+/// `sandbox_run::kill_session_best_effort`). C'est l'exact opposé de la politique des autonomy fixups du
+/// staging set, et pour une raison nette : un fixup désarme des dialogues qui **bloquent** un
 /// agent non surveillé, ici l'agent voit juste une commande échouer.
 ///
 /// Sur les trois branches et pas seulement `Absent` : un conteneur créé par un daemon antérieur

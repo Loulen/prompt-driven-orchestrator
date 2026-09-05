@@ -153,7 +153,7 @@ Features validated while crossing the run screens (grafted from retired per-issu
   announced is a **blocking finding** — that inversion is the #445 regression.
 - The sandboxed node's terminal preview shows a live `claude` session **with no interactive dialog**:
   no managed-settings approval, no bypass-permissions warning. That silence is the entire point of
-  the staging floor (#426) and it is only observable here.
+  the staging set's autonomy fixups (#426, ADR-0063) and it is only observable here.
 - **Both** Runs reach **Completed**, End `result` **received**, and the output artifact opens from
   the host UI in both cases (for the sandboxed one, that is the merge-back).
 - The `off` twin shows **no** preparation phase.

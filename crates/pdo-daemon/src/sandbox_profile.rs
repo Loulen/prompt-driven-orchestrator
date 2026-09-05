@@ -45,12 +45,13 @@
 //!    [`DEFAULT_FULL_ENTRIES`]. It is still not a *diff* — an image is one value, not a list, so
 //!    "poses nothing" resolves to the default outright rather than folding against it.
 //!
-//! 4. **The floor is not editable, and not an entry either** (ADR-0031 §1). The five
-//!    guarantees [`crate::sandbox_staging`] holds in every profile are satisfied either
-//!    by an entry or by a fallback synthesis. Two of them need *keys* in a file the
-//!    profile may also carry (class **(b)** below) — unchecking those is safe. Three
-//!    need the *whole* file, so they are class **(c)**: shown read-only, never
-//!    checkable, and **refused as extras** too.
+//! 4. **A harness's staging set is not editable, and not an entry either** (ADR-0031
+//!    §1, ADR-0063). The five guarantees [`crate::sandbox_staging`] holds for `claude`
+//!    in every profile are satisfied either by an entry or by a fallback synthesis. Two
+//!    of them need *keys* in a file the profile may also carry (class **(b)** below) —
+//!    unchecking those is safe. Three need the *whole* file, so they are class **(c)**:
+//!    shown read-only, never checkable, and **refused as extras** too — for the entries
+//!    and transcript sinks of **every** declared set ([`set_owned_paths`]).
 //!
 //! ## No rename in v1
 //!
@@ -68,7 +69,7 @@ use sqlx::{Row, SqlitePool};
 /// The virtual default that carries the full replica of the host `~/.claude`.
 pub(crate) const FULL_PROFILE: &str = "full";
 /// The virtual default that carries **nothing** in its own right: `minimal` *is* the
-/// staging floor, which is exactly the empty entry list.
+/// harness staging set alone, which is exactly the empty entry list.
 pub(crate) const MINIMAL_PROFILE: &str = "minimal";
 
 /// The two names that resolve with no database row (ADR-0031 §2). Creating one *is*
@@ -102,8 +103,8 @@ pub(crate) struct DefaultEntry {
     /// `$HOME`-relative path or one-level glob.
     pub path: &'static str,
     pub kind: EntryKind,
-    /// Class **(b)**: unchecking it does NOT make the file absent — the staging floor
-    /// re-synthesises the keys it needs. Exactly two entries, and the UI must say so,
+    /// Class **(b)**: unchecking it does NOT make the file absent — an autonomy fixup
+    /// of the staging set re-synthesises the keys it needs. Exactly two entries, and the UI must say so,
     /// or unchecking looks more destructive than it is.
     pub resynthesised: bool,
     /// Static, server-owned advisory shown under the entry. Static on purpose: a real
@@ -116,7 +117,7 @@ pub(crate) struct DefaultEntry {
 /// The `full` profile — the built-in default every profile except `minimal` diffs
 /// against. Order here is the *editor's* reading order; [`resolve_entry_list`] sorts.
 ///
-/// `.credentials.json` is deliberately absent: it is a **floor** guarantee (G1), and
+/// `.credentials.json` is deliberately absent: it is a **staging set** entry (G1), and
 /// having it in both places made the constant lie about being a list of entries.
 pub(crate) const DEFAULT_FULL_ENTRIES: &[DefaultEntry] = &[
     DefaultEntry {
@@ -209,56 +210,71 @@ pub(crate) const DEFAULT_PROFILE_IMAGE: DefaultProfileImage = DefaultProfileImag
     dockerfile: None,
 };
 
-/// One class-**(c)** floor guarantee: satisfied by the *whole* file, so it is neither
-/// checkable nor addable. Shown read-only in the editor because without that block a
-/// `minimal` profile's screen looks broken and the user wrongly concludes the container
-/// starts with no credentials.
-pub(crate) struct FloorGuarantee {
+/// One class-**(c)** staging-set guarantee: satisfied by the *whole* file, so it is
+/// neither checkable nor addable. Shown read-only in the editor because without that
+/// block a `minimal` profile's screen looks broken and the user wrongly concludes the
+/// container starts with no credentials.
+pub(crate) struct StagingGuarantee {
     pub id: &'static str,
     /// What the container gets, in the user's words.
     pub label: &'static str,
-    /// The `$HOME`-relative path the floor owns, when there is one.
+    /// The `$HOME`-relative path the staging set owns, when there is one.
     pub path: Option<&'static str>,
 }
 
-/// The staging floor, verbatim from [`crate::sandbox_staging::enforce_staging_floor`].
-/// G3/G4 appear here as guarantees even though their files are class-(b) *entries* —
-/// the difference is the rule that decides the classes: **(b) = the floor needs keys in
-/// the file; (c) = the floor needs the file whole.**
-pub(crate) const FLOOR_GUARANTEES: &[FloorGuarantee] = &[
-    FloorGuarantee {
+/// `claude`'s staging set in the user's words, verbatim from
+/// [`crate::harness_probes::CLAUDE_STAGING_SET`] (ADR-0031 §1 G1–G5). G3/G4 appear
+/// here as guarantees even though their files are class-(b) *entries* — the
+/// difference is the rule that decides the classes: **(b) = the fixup needs keys in
+/// the file; (c) = the set needs the file whole.**
+///
+/// Served on the wire under the historical key `floor` (the editor's read-only block):
+/// a wire field, frozen for the frontend and its tests, not a term this code uses.
+pub(crate) const STAGING_GUARANTEES: &[StagingGuarantee] = &[
+    StagingGuarantee {
         id: "credentials",
         label: "Valid Claude credentials",
         path: Some(".claude/.credentials.json"),
     },
-    FloorGuarantee {
+    StagingGuarantee {
         id: "org-managed-settings",
         label: "Your organisation's managed settings, consented",
         path: Some(".claude/remote-settings.json"),
     },
-    FloorGuarantee {
+    StagingGuarantee {
         id: "bypass-permissions",
         label: "Permissions bypass accepted (no blocking dialog)",
         path: None,
     },
-    FloorGuarantee {
+    StagingGuarantee {
         id: "run-root-trust",
         label: "Trust pre-granted on the Run's repo root",
         path: None,
     },
-    FloorGuarantee {
+    StagingGuarantee {
         id: "empty-projects",
         label: "An empty projects/ transcript sink",
         path: Some(".claude/projects"),
     },
 ];
 
-/// Paths the floor owns **whole** — refused as extras, never checkable.
-const FLOOR_OWNED_PATHS: &[&str] = &[
-    ".claude/.credentials.json",
-    ".claude/remote-settings.json",
-    ".claude/projects",
-];
+/// Paths a staging set owns **whole** — refused as extras, never checkable: the
+/// entries and the transcript sinks of **every** declared set (ADR-0063), read from
+/// the dispatch table so a harness that declares a set is protected with no second
+/// edit. Copying a transcript sink would break the merge-back idempotence and the
+/// cost fold; copying a set entry would make the profile lie about owning it.
+pub(crate) fn set_owned_paths() -> Vec<&'static str> {
+    crate::harness_probes::staging_sets()
+        .into_iter()
+        .flat_map(|(_, set)| {
+            set.entries
+                .iter()
+                .map(|e| e.rel)
+                .chain(set.transcripts.iter().copied())
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
 
 /// Where an entry lands in the staging. The SINGLE classifier shared by the copy view
 /// and the mount view (see the module header, idea 2).
@@ -391,13 +407,10 @@ pub(crate) fn validate_entry(raw: &str) -> Result<String, String> {
              every other Run's staging into this one"
         ));
     }
-    if FLOOR_OWNED_PATHS.contains(&norm.as_str())
-        || FLOOR_OWNED_PATHS
-            .iter()
-            .any(|p| norm.starts_with(&format!("{p}/")))
-    {
+    let owned = set_owned_paths();
+    if owned.contains(&norm.as_str()) || owned.iter().any(|p| norm.starts_with(&format!("{p}/"))) {
         return Err(format!(
-            "`{norm}`: the staging floor owns that path in every profile — it is \
+            "`{norm}`: the harness staging set owns that path in every profile — it is \
              guaranteed, not selectable"
         ));
     }
@@ -405,7 +418,7 @@ pub(crate) fn validate_entry(raw: &str) -> Result<String, String> {
 }
 
 /// The built-in default a profile diffs against: **empty** for `minimal` (which *is*
-/// the floor), the `full` list for every other name.
+/// the staging set alone), the `full` list for every other name.
 ///
 /// So a brand-new profile starts as a copy of `full` with everything checked — which is
 /// what makes "uncheck `.claude/plugins`" the two-click operation the issue asks for.
@@ -990,7 +1003,7 @@ mod tests {
         assert!(got.inactive_disabled.is_empty());
     }
 
-    /// `minimal` IS the floor: the empty list, not an error and not a special case.
+    /// `minimal` IS the staging set alone: the empty list, not an error and not a special case.
     #[test]
     fn minimal_default_resolves_to_the_empty_list() {
         let base = base_entries(MINIMAL_PROFILE);
@@ -1350,10 +1363,10 @@ mod tests {
         assert!(validate_profile_image(&reg(&"a".repeat(MAX_IMAGE_REF_LEN))).is_ok());
     }
 
-    /// Exactly two class-(b) entries — the floor re-synthesises those two files, so
+    /// Exactly two class-(b) entries — the set's fixups re-synthesise those two files, so
     /// unchecking them is safe. The UI copy depends on this count being right.
     #[test]
-    fn exactly_two_default_entries_are_resynthesised_by_the_floor() {
+    fn exactly_two_default_entries_are_resynthesised_by_the_fixups() {
         let resynth: Vec<&str> = DEFAULT_FULL_ENTRIES
             .iter()
             .filter(|e| e.resynthesised)

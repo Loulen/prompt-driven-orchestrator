@@ -903,7 +903,8 @@ export interface RunState {
   /**
    * The machine slug companion of {@link awaiting_reason} (#601): a stable
    * snake_case code (`session_died`, `run_stalled`, `unrouted`,
-   * `region_exhausted`, `spawn_aborted`, `merge_conflict`, …) to branch on —
+   * `region_exhausted`, `spawn_aborted`, `harness_binary_missing`,
+   * `merge_conflict`, …) to branch on —
    * next to the human prose, the same slug+prose contract as a refusal body
    * (ADR-0035). Absent for an interactive wait.
    */

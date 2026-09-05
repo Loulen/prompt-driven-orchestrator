@@ -820,14 +820,22 @@ async fn an_entry_under_claude_adds_no_mount() {
     assert!(wait_until(|| log_text(&log).contains("create")).await);
 
     let specs = mount_specs(&log);
+    // The 4 FIXED mounts + pi's empty home root anchor (#708, ADR-0063 §3), which is a
+    // PDO mount, not a profile `$HOME` exception.
     assert_eq!(
         specs.len(),
-        4,
-        "only the 4 FIXED mounts (repo, claude-home, .claude.json, pdo bin); specs={specs:?}"
+        5,
+        "the 4 FIXED mounts + pi's home root; specs={specs:?}"
     );
     assert!(
-        !staged_extras(&daemon, &run_id).exists(),
-        "no `$HOME` exception ⇒ no <staging>/home at all"
+        specs.iter().any(|s| s.contains("/home/.pi/agent:")),
+        "pi's home root is mounted empty; specs={specs:?}"
+    );
+    // The only thing under `<staging>/home` is pi's anchor — no profile exception.
+    assert!(
+        staged_extras(&daemon, &run_id).join(".pi/agent").is_dir()
+            && !staged_extras(&daemon, &run_id).join(".gitconfig").exists(),
+        "no `$HOME` exception ⇒ nothing under <staging>/home but pi's anchor"
     );
 }
 

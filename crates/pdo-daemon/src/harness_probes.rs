@@ -296,9 +296,11 @@ pub(crate) enum AutonomyFixup {
 /// [`staging_set_absence_note`]). `None` is a declared value (ADR-0051), published
 /// in the support table.
 ///
-/// The set is **data**; [`crate::sandbox_staging`] is the one interpreter. Today it
-/// is applied at `prepare` (the Run's staging), #708 moves the copy to the spawn of
-/// the first node that resolves the harness (ADR-0063 §3) — same data, later moment.
+/// The set is **data**; [`crate::sandbox_staging`] is the one interpreter. It is
+/// copied at the spawn of the **first** session of the Run that resolves the harness
+/// (`sandbox_staging::fill_staging_set`, #708, ADR-0063 §3) — never at `RunStarted`,
+/// never for a harness the Run does not launch. Its `home_root` is mounted **empty**
+/// at container creation so that later copy lands under a mount.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct StagingSet {
     /// The support-table cell: what this harness stages, in the reader's words.
@@ -367,6 +369,34 @@ pub(crate) const CLAUDE_STAGING_SET: StagingSet = StagingSet {
         AutonomyFixup::ClaudeBypassPermissions,
         AutonomyFixup::ClaudeJsonBaseline,
     ],
+};
+
+/// `pi`'s staging set (#708, ADR-0063): the whole `.pi/agent/` home **except**
+/// `sessions/` — `auth.json`, `settings.json`, the model catalogue (`models.json`),
+/// extensions, skills, prompts, themes and `bin/` — so a session in the container
+/// authenticates, prices its messages and finds its extensions exactly as on the
+/// host. Two env vars ride the `docker exec` with it: `PI_SKIP_VERSION_CHECK=1` (PDO
+/// decides when the target moves, not a startup banner) and `PI_TELEMETRY=0`. **No**
+/// `PI_OFFLINE` — the catalogue is copied, the network is not cut.
+///
+/// `sessions/` is the transcript sink: created empty on the way in and harvested at
+/// merge-back under the same cwd-encoded dirname (the worktree is mounted at its
+/// host path, ADR-0030, so pi names the folder identically inside and out). **No**
+/// autonomy fixup: `-a` on pi's argv already disarms every approval dialog.
+pub(crate) const PI_STAGING_SET: StagingSet = StagingSet {
+    label: "the `.pi/agent` home — auth, settings, model catalogue, extensions, skills, \
+            prompts, themes and bin copied, sessions harvested back",
+    home_root: ".pi/agent",
+    entries: &[StagingEntry {
+        rel: ".pi/agent",
+        absent_note: Some(
+            "pi is not set up on this host; the container starts with an empty pi home",
+        ),
+    }],
+    excludes: &[],
+    env: &[("PI_SKIP_VERSION_CHECK", "1"), ("PI_TELEMETRY", "0")],
+    transcripts: &[".pi/agent/sessions"],
+    fixups: &[],
 };
 
 /// Every staging set a first-party harness declares, in registry order. The
@@ -705,8 +735,8 @@ impl HarnessProbes for CopilotProbes {
 /// The single `copilot` instance handed out by [`probes_for`]. Zero-sized.
 static COPILOT_PROBES: CopilotProbes = CopilotProbes;
 
-/// The `pi` capabilities (#705/#707, story #702; ADR-0051/0052/0043) — **five**
-/// present, **two** declared absent with their motive:
+/// The `pi` capabilities (#705/#707/#708, story #702; ADR-0051/0052/0043/0063) —
+/// **six** present, **one** declared absent with its motive:
 ///
 /// - **cost**: a **reported** cost of constant **1.0** — pi writes `usage.cost.total`
 ///   in dollars on every assistant message, from its embedded catalogue; PDO sums
@@ -726,7 +756,8 @@ static COPILOT_PROBES: CopilotProbes = CopilotProbes;
 /// - the **usage-limit menu anchor** is absent, explicitly: the probe is
 ///   informational, its anchor is claude's wording, and it triggers no recovery
 ///   (ADR-0012, ADR-0051 §"Limites");
-/// - the **staging set** is absent in this ticket: #708 declares it (ADR-0063).
+/// - the **staging set**: `.pi/agent/` minus `sessions/`, plus two env vars, no
+///   autonomy fixup ([`PI_STAGING_SET`], #708, ADR-0063).
 ///
 /// `subagent_transcripts` stays at the trait's default (empty): pi's session store is
 /// flat per cwd (one file per session id, no nesting under a session to enumerate).
@@ -747,9 +778,10 @@ impl HarnessProbes for PiProbes {
     fn usage_limit_anchor(&self) -> Option<UsageLimitAnchor> {
         None
     }
-    /// Declared absent until #708 (ADR-0063).
+    /// [`PI_STAGING_SET`]: `.pi/agent/` minus `sessions/`, two env vars, no fixup
+    /// (#708, ADR-0063).
     fn staging_set(&self) -> Option<StagingSet> {
-        None
+        Some(PI_STAGING_SET)
     }
     fn context_usage_source(&self) -> Option<ContextUsageSource> {
         Some(ContextUsageSource::PiSessionPeak)
@@ -1191,9 +1223,10 @@ mod tests {
     }
 
     #[test]
-    fn pi_has_its_five_capabilities_and_declares_two_absent() {
-        // #707 / ADR-0051: `pi` is instrumented — five capabilities dispatch to ITS
-        // implementation (`crate::pi_session`), two are explicit `None`s.
+    fn pi_has_its_six_capabilities_and_declares_one_absent() {
+        // #707/#708 / ADR-0051: `pi` is instrumented — five capabilities dispatch to
+        // ITS implementation (`crate::pi_session`), the staging set is its own data,
+        // one capability is an explicit `None`.
         let p = probes_for(PI).expect("pi has probes (first-party)");
         assert_eq!(p.cost_source(), Some(CostSource::ReportedByConstant));
         assert_eq!(
@@ -1212,9 +1245,10 @@ mod tests {
             p.usage_limit_anchor().is_none(),
             "usage-limit anchor declared absent"
         );
-        assert!(
-            p.staging_set().is_none(),
-            "staging declared absent (#708, ADR-0063)"
+        assert_eq!(
+            p.staging_set(),
+            Some(PI_STAGING_SET),
+            "pi's own staging set (#708, ADR-0063)"
         );
         assert_eq!(
             capabilities(PI),
@@ -1223,17 +1257,17 @@ mod tests {
                 transcript: true,
                 turn_end: true,
                 usage_limit: false,
-                staging: false,
+                staging: true,
                 context_usage: true,
             }
         );
         // Consequences a reader sees: a pi Run is costable and measurable, the
-        // turn-end setting is honoured (no absence note), the sandbox still says its
-        // absence once.
+        // turn-end setting is honoured (no absence note), and a sandboxed Run stages
+        // its home (no absence note either).
         assert!(can_cost(PI));
         assert!(can_measure_context(PI));
         assert_eq!(turn_end_absence_note(PI), None);
-        assert!(staging_set_absence_note(PI).is_some());
+        assert_eq!(staging_set_absence_note(PI), None);
         // The exit code is no verdict: pi stays resident after a hard error.
         assert!(!exit_code_is_verdict(PI));
         // Behaviour is pi's own, never claude's parsers on pi's store.
@@ -1536,14 +1570,43 @@ mod tests {
         assert!(set.excludes.is_empty());
     }
 
-    /// Only `claude` declares a set today; `copilot`, `pi` (until #708) and
-    /// `opencode` are explicit `None`s, so the generic consumers see exactly one set.
+    /// `claude` and `pi` declare a set; `copilot` and `opencode` are explicit
+    /// `None`s, so the generic consumers (mounts, merge-back, profile refusals) see
+    /// exactly two sets, in registry order.
     #[test]
-    fn staging_sets_lists_claude_only() {
+    fn staging_sets_lists_claude_then_pi() {
         let sets = staging_sets();
-        assert_eq!(sets.len(), 1, "{sets:?}");
+        assert_eq!(sets.len(), 2, "{sets:?}");
         assert_eq!(sets[0].0, CLAUDE);
         assert_eq!(sets[0].1, CLAUDE_STAGING_SET);
+        assert_eq!(sets[1].0, PI);
+        assert_eq!(sets[1].1, PI_STAGING_SET);
+    }
+
+    /// ADR-0063 / #708: pi's set is the whole `.pi/agent` minus `sessions/`, two env
+    /// vars, no fixup, and never `PI_OFFLINE`. Pinned so a later edit is a visible
+    /// change of contract.
+    #[test]
+    fn pi_staging_set_is_the_agent_home_minus_sessions_with_two_env_vars_and_no_fixup() {
+        let set = PI_STAGING_SET;
+        assert_eq!(set.home_root, ".pi/agent");
+        let entries: Vec<&str> = set.entries.iter().map(|e| e.rel).collect();
+        assert_eq!(entries, [".pi/agent"]);
+        assert_eq!(set.transcripts, [".pi/agent/sessions"]);
+        assert!(
+            set.fixups.is_empty(),
+            "`-a` on the argv disarms pi's dialogs"
+        );
+        assert_eq!(
+            set.env,
+            [("PI_SKIP_VERSION_CHECK", "1"), ("PI_TELEMETRY", "0")]
+        );
+        assert!(
+            set.env.iter().all(|(k, _)| *k != "PI_OFFLINE"),
+            "the catalogue is copied, the network is not cut"
+        );
+        assert!(set.label.contains("auth"));
+        assert!(set.label.contains("sessions harvested back"));
     }
 
     fn claude_turn(id: &str, input: u64, output: u64) -> String {

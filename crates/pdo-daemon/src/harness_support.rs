@@ -242,14 +242,14 @@ mod tests {
         assert!(Capability::ALL
             .iter()
             .all(|c| c.mechanism(OPENCODE).is_none()));
-        // #707: pi is instrumented — cost, transcript, end of turn and context
-        // present, usage-limit and staging explicitly absent (the latter until #708).
+        // #707/#708: pi is instrumented — cost, transcript, end of turn, context and
+        // the staging set present, only the usage-limit menu explicitly absent.
         assert!(Capability::Cost.mechanism(PI).is_some());
         assert!(Capability::Transcript.mechanism(PI).is_some());
         assert!(Capability::TurnEnd.mechanism(PI).is_some());
         assert!(Capability::ContextUsage.mechanism(PI).is_some());
         assert!(Capability::UsageLimit.mechanism(PI).is_none());
-        assert!(Capability::Staging.mechanism(PI).is_none());
+        assert!(Capability::Staging.mechanism(PI).is_some());
         assert!(render().contains("`pi` 0.85.1"));
         assert!(render().contains("`agent_settled` extension"));
         assert!(Capability::ALL

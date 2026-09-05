@@ -10,6 +10,15 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.58.2
+
+**Prefactor sandbox : `StagingFloor` devient `StagingSet`** (#706 ; story #702, spec #704, ADR-0063).
+La capacité de staging rend désormais, par harnais, un set (entrées `$HOME`-relatives, exclusions, env,
+entrées *transcripts*) plus des autonomy fixups ; le merge-back parcourt les entrées *transcripts* de tous
+les sets. `claude` est ré-exprimé dans cette forme, octet pour octet (cinq garanties ADR-0031 intactes) ;
+`copilot` et `opencode` déclarent `None`. Aucun changement observable ; la ligne « Sandbox staging set »
+du tableau de support remplace « staging floor ».
+
 ## 1.58.1
 
 **Livraison de la story Settings revamp** (#688 ; spec #689) : fusion de `integration/688-settings-revamp`

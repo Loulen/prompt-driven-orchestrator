@@ -10,6 +10,15 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.59.0
+
+**Vérification de version par le daemon et section « Version & update » en lecture** (#697 ; story #695).
+Le daemon interroge la dernière release publiée (source configurable, cache, check désactivable) et
+expose `GET /update` / `POST /update/check`. Le pied de page porte un badge « → x.y.z » quand une
+version plus récente existe ; il ouvre Settings › General › « Version & update », qui affiche la version
+installée, la dernière publiée, la date du dernier check, la méthode d'installation et la commande de
+mise à jour manuelle. Aucune mise à jour automatique : lecture seule.
+
 ## 1.58.1
 
 **Livraison de la story Settings revamp** (#688 ; spec #689) : fusion de `integration/688-settings-revamp`

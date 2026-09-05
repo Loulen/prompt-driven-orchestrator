@@ -460,6 +460,8 @@ async fn the_bank_survives_a_daemon_restart() {
         sandbox_home_override: None,
         price_source_url: None,
         price_refresh_at_boot: false,
+        update_source_url: None,
+        run_update_check_loop: false,
         allowed_ws_origins: Vec::new(),
         run_trigger_scheduler_loop: false,
         nested_daemon: true,
@@ -1370,7 +1372,6 @@ async fn referents_list_every_tier_that_selects_the_skill() {
     assert_eq!(referents["instance"], false);
     assert_eq!(referents["triggers"], serde_json::json!([]));
 }
-
 
 // ---------------------------------------------------------------------------
 // Import from a Source (#670) — over a local fixture git repository, no network.

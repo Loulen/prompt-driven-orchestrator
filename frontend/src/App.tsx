@@ -17,6 +17,9 @@ import NodeDetailPanel from "./components/NodeDetailPanel";
 import RunInfoSidebar from "./components/RunInfoSidebar";
 import NewRunModal, { RUN_INTENT } from "./components/NewRunModal";
 import SettingsSurface, { type SettingsPosition, type StatsOpenIntent } from "./components/SettingsSurface";
+import VersionBadge from "./components/VersionBadge";
+import { useUpdateStatus } from "./hooks/useUpdateStatus";
+import type { UpdateStatus } from "./types";
 import StatsModal from "./components/StatsModal";
 import ConflictModal from "./components/ConflictModal";
 import SaveErrorModal from "./components/SaveErrorModal";
@@ -150,6 +153,8 @@ export default function App() {
   const { entries: libraryEntries, refresh: refreshLibrary } = useLibrary();
   const { runs, refresh: refreshRuns } = useRuns();
   const { sessions, refresh: refreshSessions } = useSessions();
+  // #697: the daemon's cached version-check state, for the status-bar badge.
+  const { status: updateStatus, refresh: refreshUpdateStatus } = useUpdateStatus();
   const { triggers, refresh: refreshTriggers } = useTriggers();
   const { projects, refresh: refreshProjects } = useProjects();
   // #348: global Trigger pause. Lifted here (not in a per-panel hook) so the WS
@@ -495,8 +500,11 @@ export default function App() {
   useEffect(() => {
     if (status === "connected") {
       refreshSessions();
+      // #697: a reconnect is how a completed update becomes visible — and how a
+      // periodic check that landed while the socket was down reaches the badge.
+      refreshUpdateStatus();
     }
-  }, [status, refreshSessions]);
+  }, [status, refreshSessions, refreshUpdateStatus]);
 
   // On a live run with nothing selected, snap selection to the latest
   // running (or awaiting_user) node so the user immediately sees its terminal.
@@ -815,7 +823,12 @@ export default function App() {
           </ResizablePanel>
         </ResizablePanelGroup>
       </main>
-      <StatusBar status={status} sessions={sessions} />
+      <StatusBar
+        status={status}
+        sessions={sessions}
+        update={updateStatus}
+        onOpenVersion={() => openSettings({ category: "general", section: "version-update" })}
+      />
       <NewRunModal
         open={newRunModalOpen}
         onClose={handleCloseNewRunModal}
@@ -991,11 +1004,18 @@ const STATUS_CONFIG: Record<ConnectionStatus, { dot: string; label: string }> = 
 function StatusBar({
   status,
   sessions,
+  update,
+  onOpenVersion,
 }: {
   status: ConnectionStatus;
   sessions: DaemonStatus;
+  update: UpdateStatus | null;
+  onOpenVersion: () => void;
 }) {
   const { dot: dotClass, label } = STATUS_CONFIG[status];
+  // The version string comes from `/sessions` (refreshed on reconnect, #139) with the
+  // update payload as fallback — both are the daemon's own `CARGO_PKG_VERSION`.
+  const version = sessions.version ?? update?.installed_version;
 
   return (
     <footer
@@ -1009,7 +1029,7 @@ function StatusBar({
       <span className="flex-1" />
       <ServiceHealthIndicator service={sessions.service} />
       <SessionCounter live={sessions.live} cap={sessions.cap} />
-      {sessions.version && <span>v{sessions.version}</span>}
+      {version && <VersionBadge version={version} update={update} onClick={onOpenVersion} />}
     </footer>
   );
 }

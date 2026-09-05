@@ -24,6 +24,10 @@ export function announceSettingsChanged() {
 export function useSettings(open: boolean) {
   const [settings, setSettings] = useState<InstanceSettings | null>(null);
   const [loading, setLoading] = useState(false);
+  // #697: true once the initial read has answered (ok or not). The Settings page waits for
+  // it before landing on a requested section: the sections above the target mount on that
+  // read, and a scroll made before they exist ends up pointing at the wrong place.
+  const [settled, setSettled] = useState(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -43,7 +47,10 @@ export function useSettings(open: boolean) {
       .then((data) => {
         if (!cancelled) setSettings(data);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setSettled(true);
+      });
     return () => {
       cancelled = true;
     };
@@ -56,5 +63,5 @@ export function useSettings(open: boolean) {
     return updated;
   }, []);
 
-  return { settings, loading, refresh, save };
+  return { settings, loading, settled, refresh, save };
 }

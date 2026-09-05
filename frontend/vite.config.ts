@@ -53,6 +53,10 @@ export default defineConfig({
       // GET/POST /projects answers 200 with the SPA and the pencil would silently
       // no-op.
       '/projects': daemonTarget,
+      // #697: version check (`GET /update`, `POST /update/check`). New top-level
+      // prefix — same trap as the others: without it a dev GET /update answers 200
+      // with the SPA and the section would render nothing, silently.
+      '/update': daemonTarget,
     },
   },
   test: {

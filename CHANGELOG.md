@@ -10,6 +10,15 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.60.0
+
+**Modale « What's new » au clic sur la version** (#698 ; story #695, spec #696).
+Cliquer la version dans la barre de statut ouvre une modale markdown listant les notes des
+versions manquées (plus récente en premier, pré-releases exclues, liens vers les releases GitHub),
+servie par `GET /update/changelog`. Si le check est désactivé ou la source injoignable, la modale
+signale le repli et affiche le `CHANGELOG.md` embarqué dans le binaire ; à jour, elle l'indique et
+affiche ce même changelog. Le pied de page rappelle la commande de mise à jour manuelle (copie en un clic).
+
 ## 1.59.0
 
 **Vérification de version par le daemon et section « Version & update » en lecture** (#697 ; story #695).

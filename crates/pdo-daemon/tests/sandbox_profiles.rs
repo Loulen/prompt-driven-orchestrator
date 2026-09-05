@@ -845,10 +845,10 @@ async fn a_bad_entry_is_rejected_at_profile_write() {
         "../outside",                   // escapes $HOME
         ".config/../../etc/passwd",     // escapes after a normalisation
         "..\\..\\etc",                  // a backslash is a legal Linux filename char
-        ".claude/projects",             // the runtime transcripts sink (floor-owned)
+        ".claude/projects",             // the runtime transcripts sink (set-owned)
         ".claude/projects/-enc",        // …and anything under it
-        ".claude/.credentials.json",    // floor-owned whole
-        ".claude/remote-settings.json", // floor-owned whole
+        ".claude/.credentials.json",    // set-owned whole
+        ".claude/remote-settings.json", // set-owned whole
         ".claude",                      // the staged home is already mounted whole
         ".pdo",                         // holds the staging root itself
         ".claude/*.md",                 // a glob: authored by the default, never by hand
@@ -1237,13 +1237,13 @@ async fn unedited_defaults_have_no_row_and_editing_stores_a_diff() {
         );
         assert!(view["updated_at"].is_null(), "{name}: {view}");
     }
-    // `minimal` IS the floor. Without the read-only floor block the screen looks broken and
+    // `minimal` IS the staging set alone. Without the read-only guarantees block (wire key `floor`) the screen looks broken and
     // the user wrongly concludes the container starts with no credentials.
     let minimal: serde_json::Value = get_profile(&daemon, "minimal").await.json().await.unwrap();
     assert_eq!(minimal["resolved"], serde_json::json!([]));
     assert!(
         minimal["floor"].as_array().unwrap().len() >= 5,
-        "the floor block must be present and read-only: {minimal}"
+        "the guarantees block must be present and read-only: {minimal}"
     );
 
     let view: serde_json::Value = put_profile(&daemon, "full", &[".claude/plugins"], &[])
@@ -1307,10 +1307,10 @@ async fn unedited_defaults_have_no_row_and_editing_stores_a_diff() {
     assert_eq!(view["resolved"], serde_json::json!([]));
 }
 
-/// The floor re-synthesises a one-key `settings.json` carrying the permissions bypass. This
-/// is why ADR-0031 §1 states the floor as *guarantees* rather than as *files*.
+/// The staging set's fixup re-synthesises a one-key `settings.json` carrying the permissions
+/// bypass. This is why ADR-0031 §1 states the set as *guarantees* rather than as *files*.
 #[tokio::test]
-async fn unchecking_settings_json_still_starts_thanks_to_the_floor() {
+async fn unchecking_settings_json_still_starts_thanks_to_the_staging_set() {
     ensure_pdo_on_path();
     let (_fake, docker, _log) = write_fake_docker();
     let daemon = TestDaemon::spawn_with_docker_override(seed(), docker)
@@ -1334,7 +1334,7 @@ async fn unchecking_settings_json_still_starts_thanks_to_the_floor() {
     let staged = staged_home(&daemon, &run_id).join("settings.json");
     assert!(
         wait_until(|| staged.is_file()).await,
-        "the floor must synthesise settings.json even when unchecked"
+        "the staging set must synthesise settings.json even when unchecked"
     );
     let settings: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&staged).unwrap()).unwrap();

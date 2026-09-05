@@ -60,7 +60,7 @@ impl Capability {
             Capability::Transcript => "Transcript",
             Capability::TurnEnd => "End of turn",
             Capability::UsageLimit => "Usage-limit menu",
-            Capability::Staging => "Sandbox staging floor",
+            Capability::Staging => "Sandbox staging set",
             Capability::ContextUsage => "Context usage",
         }
     }
@@ -73,7 +73,9 @@ impl Capability {
             Capability::Transcript => "Find the session transcript",
             Capability::TurnEnd => "Complete a node when its turn ends",
             Capability::UsageLimit => "Detect the harness usage-limit menu",
-            Capability::Staging => "Stage credentials, settings, and trust in a sandbox",
+            Capability::Staging => {
+                "Stage the harness home in a sandbox and disarm its blocking dialogs"
+            }
             Capability::ContextUsage => "Show peak context-window usage",
         }
     }
@@ -88,7 +90,7 @@ impl Capability {
             Capability::Transcript => p.transcript_resolution().map(|t| t.label()),
             Capability::TurnEnd => p.turn_end_substrate().map(|t| t.label()),
             Capability::UsageLimit => p.usage_limit_anchor().map(|u| u.label()),
-            Capability::Staging => p.staging_floor().map(|s| s.label()),
+            Capability::Staging => p.staging_set().map(|s| s.label()),
             Capability::ContextUsage => p.context_usage_source().map(|c| c.label()),
         }
     }
@@ -136,7 +138,9 @@ pub fn render() -> String {
     }
 
     out.push_str(
-        "\nEach header shows the last validated harness version; PDO does not enforce it.\n",
+        "\nEach header shows the last validated harness version; PDO does not enforce it. \
+         The sandbox image is not provided by PDO: it is the profile's image, and the harness \
+         binary must already be in it (ADR-0063).\n",
     );
 
     out.push_str(

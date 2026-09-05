@@ -10,6 +10,19 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.62.0
+
+**Set de staging `pi` rempli au spawn du nœud** (#708 ; story #702, spec #704, ADR-0063). Le conteneur
+sandbox naît avec les homes des harnais first-party montés **vides** (`~/.pi/agent`) ; le set d'un harnais
+(auth, settings, catalogue, extensions, skills — jamais `sessions/`) est copié **une fois par (Run,
+harnais)**, au spawn du premier nœud qui le résout, derrière un marqueur `<staging>/sets/<harnais>`. Un Run
+claude-only n'embarque donc jamais l'auth `pi`. L'env du set (`PI_SKIP_VERSION_CHECK`, `PI_TELEMETRY`) voyage
+dans le `docker exec` ; les sessions `pi` sont rapatriées sur l'hôte au merge-back sous le même dossier
+encodé, et le coût/contexte lit le sink stagé tant que le Run vit. Au spawn sandboxé, PDO fait un `which`
+du binaire dans le conteneur : absent ⇒ un WARN par Run et le nœud passe **Interrupted** avec la raison
+`harness_binary_missing` (PDO ne fournit pas l'image, ajoutez `pi` au profil). Numérotation : `main` porte
+déjà 1.61.x (mise à jour in-app), la ligne `pi` saute donc à 1.62.0.
+
 ## 1.60.0
 
 **Harnais `pi` instrumenté** (#707 ; story #702, spec #704). Le descripteur embarqué `pi` remplit les

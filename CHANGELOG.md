@@ -10,7 +10,14 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## 1.62.0
+## 1.63.0
+
+**Story #702 livrée** (spec #704) : `pi` devient le troisième harnais first-party. Fusion de
+`integration/702-pi-harness` (#705, #706, #707, #708) dans `main` ; les quatre sous-tickets ci-dessous
+avaient été numérotés 1.58.2 → 1.62.0 sur la branche d'intégration pendant que `main` publiait la ligne
+1.59–1.61 (mise à jour in-app) : ils sortent ensemble en 1.63.0.
+
+### #708 — set de staging `pi`
 
 **Set de staging `pi` rempli au spawn du nœud** (#708 ; story #702, spec #704, ADR-0063). Le conteneur
 sandbox naît avec les homes des harnais first-party montés **vides** (`~/.pi/agent`) ; le set d'un harnais
@@ -20,13 +27,12 @@ claude-only n'embarque donc jamais l'auth `pi`. L'env du set (`PI_SKIP_VERSION_C
 dans le `docker exec` ; les sessions `pi` sont rapatriées sur l'hôte au merge-back sous le même dossier
 encodé, et le coût/contexte lit le sink stagé tant que le Run vit. Au spawn sandboxé, PDO fait un `which`
 du binaire dans le conteneur : absent ⇒ un WARN par Run et le nœud passe **Interrupted** avec la raison
-`harness_binary_missing` (PDO ne fournit pas l'image, ajoutez `pi` au profil). Numérotation : `main` porte
-déjà 1.61.x (mise à jour in-app), la ligne `pi` saute donc à 1.62.0.
+`harness_binary_missing` (PDO ne fournit pas l'image, ajoutez `pi` au profil).
 
-## 1.60.0
+### #707 — harnais `pi` instrumenté
 
 **Harnais `pi` instrumenté** (#707 ; story #702, spec #704). Le descripteur embarqué `pi` remplit les
-capacités laissées à `None` en 1.59.0 : **transcript par identité** (JSONL `*_<session_id>.jsonl` dans le
+capacités laissées à `None` par #705 : **transcript par identité** (JSONL `*_<session_id>.jsonl` dans le
 dossier `~/.pi/agent/sessions/<cwd encodé>/`), **coût rapporté** en dollars (somme des `usage.cost.total`
 assistant, constante 1.0 — affiché sans `~`, `—` si un message n'est pas chiffrable), **contexte** (pic de
 `usage.totalTokens` lu contre la fenêtre du catalogue) et **fin de tour** par extension `agent_settled`
@@ -36,7 +42,7 @@ queue de session comme repli. Le coût d'un Run mixte est ventilé par harnais (
 `derived`/`reported`). Tableau de support et prérequis README (catalogue de modèles `pi` joignable) mis à
 jour.
 
-## 1.59.0
+### #705 — descripteur first-party `pi`
 
 **Harnais `pi`, descripteur first-party** (#705 ; story #702, spec #704, ADR-0045/0046/0056 amendés).
 `pi` rejoint le tier embarqué (`claude`, `opencode`, `copilot`, `pi`) : TUI résident dans son pane
@@ -49,7 +55,7 @@ ancre de limite, staging et contexte : le tableau de support gagne la colonne `p
 harnais dont le substrat de fin de tour est le transcript claude. Prérequis README : auth `pi` faite sur
 l'hôte, binaire dans le PATH utilisateur.
 
-## 1.58.2
+### #706 — prefactor `StagingSet`
 
 **Prefactor sandbox : `StagingFloor` devient `StagingSet`** (#706 ; story #702, spec #704, ADR-0063).
 La capacité de staging rend désormais, par harnais, un set (entrées `$HOME`-relatives, exclusions, env,
@@ -57,6 +63,40 @@ entrées *transcripts*) plus des autonomy fixups ; le merge-back parcourt les en
 les sets. `claude` est ré-exprimé dans cette forme, octet pour octet (cinq garanties ADR-0031 intactes) ;
 `copilot` et `opencode` déclarent `None`. Aucun changement observable ; la ligne « Sandbox staging set »
 du tableau de support remplace « staging floor ».
+## 1.61.1
+
+**Story #695 livrée** (spec #696) : l'intégration `integration/695-in-app-update` (#697, #698, #699)
+rejoint `main`. Suite HP non rejouée pour cette fusion (décision humaine) ; la vérification systemd du
+chemin stable (`systemctl --user cat pdo` pointe `bin/pdo`) reste manuelle, voir #699.
+
+## 1.61.0
+
+**Mise à jour depuis l'app : exécutant détaché** (#699 ; story #695, spec #696).
+Un bouton **Update** apparaît dans la modale « What's new » et dans Settings › Version & update
+quand une version plus récente existe (méthode d'installation Homebrew ou script ; désactivé avec
+motif si elle est inconnue). Après confirmation (commande affichée, mode de relance, Runs actifs,
+survie des sessions tmux), `POST /update/apply` lance un exécutant détaché qui met à jour, arrête
+puis relance le daemon avec ses arguments courants (ou via le superviseur systemd/launchd, chemin
+stable de l'unité). L'UI attend, se reconnecte et recharge sur la nouvelle version ; la tentative
+(statut, versions, journal) est consultable dans Settings via `GET /update/attempts/{id}/log`.
+
+## 1.60.0
+
+**Modale « What's new » au clic sur la version** (#698 ; story #695, spec #696).
+Cliquer la version dans la barre de statut ouvre une modale markdown listant les notes des
+versions manquées (plus récente en premier, pré-releases exclues, liens vers les releases GitHub),
+servie par `GET /update/changelog`. Si le check est désactivé ou la source injoignable, la modale
+signale le repli et affiche le `CHANGELOG.md` embarqué dans le binaire ; à jour, elle l'indique et
+affiche ce même changelog. Le pied de page rappelle la commande de mise à jour manuelle (copie en un clic).
+
+## 1.59.0
+
+**Vérification de version par le daemon et section « Version & update » en lecture** (#697 ; story #695).
+Le daemon interroge la dernière release publiée (source configurable, cache, check désactivable) et
+expose `GET /update` / `POST /update/check`. Le pied de page porte un badge « → x.y.z » quand une
+version plus récente existe ; il ouvre Settings › General › « Version & update », qui affiche la version
+installée, la dernière publiée, la date du dernier check, la méthode d'installation et la commande de
+mise à jour manuelle. Aucune mise à jour automatique : lecture seule.
 
 ## 1.58.1
 

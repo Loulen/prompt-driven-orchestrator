@@ -10,6 +10,17 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.61.0
+
+**Mise à jour depuis l'app : exécutant détaché** (#699 ; story #695, spec #696).
+Un bouton **Update** apparaît dans la modale « What's new » et dans Settings › Version & update
+quand une version plus récente existe (méthode d'installation Homebrew ou script ; désactivé avec
+motif si elle est inconnue). Après confirmation (commande affichée, mode de relance, Runs actifs,
+survie des sessions tmux), `POST /update/apply` lance un exécutant détaché qui met à jour, arrête
+puis relance le daemon avec ses arguments courants (ou via le superviseur systemd/launchd, chemin
+stable de l'unité). L'UI attend, se reconnecte et recharge sur la nouvelle version ; la tentative
+(statut, versions, journal) est consultable dans Settings via `GET /update/attempts/{id}/log`.
+
 ## 1.60.0
 
 **Modale « What's new » au clic sur la version** (#698 ; story #695, spec #696).

@@ -16,6 +16,7 @@ import UnifiedLeftPanel from "./components/UnifiedLeftPanel";
 import NodeDetailPanel from "./components/NodeDetailPanel";
 import RunInfoSidebar from "./components/RunInfoSidebar";
 import NewRunModal, { RUN_INTENT } from "./components/NewRunModal";
+import { mockUpdateStatus, newerAvailable, type UpdateStatus } from "./design-proto/updateMock";
 import SettingsSurface, { type SettingsPosition, type StatsOpenIntent } from "./components/SettingsSurface";
 import StatsModal from "./components/StatsModal";
 import ConflictModal from "./components/ConflictModal";
@@ -815,7 +816,7 @@ export default function App() {
           </ResizablePanel>
         </ResizablePanelGroup>
       </main>
-      <StatusBar status={status} sessions={sessions} />
+      <StatusBar status={status} sessions={sessions} onOpenVersion={() => openSettings({ category: "general", section: "version-update" })} />
       <NewRunModal
         open={newRunModalOpen}
         onClose={handleCloseNewRunModal}
@@ -991,11 +992,16 @@ const STATUS_CONFIG: Record<ConnectionStatus, { dot: string; label: string }> = 
 function StatusBar({
   status,
   sessions,
+  onOpenVersion,
 }: {
   status: ConnectionStatus;
   sessions: DaemonStatus;
+  onOpenVersion: () => void;
 }) {
   const { dot: dotClass, label } = STATUS_CONFIG[status];
+  // DESIGN PROTOTYPE (#697): mocked update status, real one comes from the daemon.
+  const update = mockUpdateStatus();
+  const version = sessions.version ?? update.installed_version;
 
   return (
     <footer
@@ -1009,7 +1015,41 @@ function StatusBar({
       <span className="flex-1" />
       <ServiceHealthIndicator service={sessions.service} />
       <SessionCounter live={sessions.live} cap={sessions.cap} />
-      {sessions.version && <span>v{sessions.version}</span>}
+      <VersionBadge version={version} update={update} onClick={onOpenVersion} />
     </footer>
+  );
+}
+
+/** DESIGN PROTOTYPE (#697): the status-bar version, with a "→ latest" pill when behind. */
+function VersionBadge({
+  version,
+  update,
+  onClick,
+}: {
+  version: string;
+  update: UpdateStatus;
+  onClick: () => void;
+}) {
+  const newer = newerAvailable(update);
+  const title = newer
+    ? `v${update.latest_version} is available — open Version & update`
+    : "Open Version & update";
+  const common =
+    "flex items-center gap-1.5 rounded px-1 -mx-1 hover:bg-bg-3 hover:text-fg-2 focus:outline-none focus-visible:ring-1 focus-visible:ring-acc";
+  if (!newer) {
+    return (
+      <button type="button" onClick={onClick} title={title} className={common} data-testid="statusbar-version">
+        v{version}
+      </button>
+    );
+  }
+  // The pill says how far behind the daemon is: version → latest, amber like "ephemeral".
+  return (
+    <button type="button" onClick={onClick} title={title} className={common} data-testid="statusbar-version">
+      v{version}
+      <span className="rounded-full border border-st-await/40 bg-st-await-bg px-1.5 leading-[14px] text-st-await" style={{ fontSize: "9.5px" }}>
+        → {update.latest_version}
+      </span>
+    </button>
   );
 }

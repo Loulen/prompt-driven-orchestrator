@@ -9,6 +9,8 @@ import {
   Play,
   Maximize2,
   GitCompareArrows,
+  LockOpen,
+  LoaderCircle,
 } from "lucide-react";
 import type {
   IterationInfo,
@@ -20,7 +22,7 @@ import { artifactUrl } from "../api";
 import type { PortIO, FileInfo } from "../api";
 import type { PortType } from "../types";
 import { useNodeRun } from "../hooks/useNodeRun";
-import type { MarkVerdict } from "../hooks/useNodeRun";
+import type { MarkVerdict, ReleaseVerdict } from "../hooks/useNodeRun";
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -209,6 +211,60 @@ function MarkCompleteVerdict({ verdict }: { verdict: MarkVerdict }) {
   );
 }
 
+function ReleaseCompletionVerdict({
+  verdict,
+}: {
+  verdict: ReleaseVerdict | { kind: "released" };
+}) {
+  const refused = verdict.kind === "refused" ? verdict : null;
+  const failed = verdict.kind === "refused" || verdict.kind === "error";
+  const toneClass =
+    verdict.kind === "released"
+      ? "border-st-running/30 bg-st-running-bg text-st-running"
+      : failed
+        ? "border-st-failed/30 bg-st-failed-bg text-st-failed"
+        : "border-line-strong bg-bg-3 text-fg-3";
+  const headline =
+    verdict.kind === "released"
+      ? "Completion released — the agent will complete when ready."
+      : verdict.kind === "pending"
+        ? "Releasing completion…"
+        : verdict.kind === "error"
+          ? `Could not reach the daemon — ${verdict.message}`
+          : `Release refused — ${verdict.message}`;
+
+  return (
+    <div
+      className={`flex flex-col gap-1 rounded-md border px-2.5 py-1.5 ${toneClass}`}
+      style={{ fontSize: "10.5px" }}
+      data-testid="release-verdict"
+      data-verdict={verdict.kind}
+      data-slug={refused?.slug ?? ""}
+      data-recoverable={refused ? String(refused.recoverable) : ""}
+    >
+      <div className="flex items-start gap-1.5">
+        {verdict.kind === "released" ? (
+          <CheckCircle size={12} className="mt-px shrink-0" />
+        ) : verdict.kind === "pending" ? (
+          <LoaderCircle size={12} className="mt-px shrink-0 animate-spin" />
+        ) : (
+          <AlertCircle size={12} className="mt-px shrink-0" />
+        )}
+        <span>{headline}</span>
+      </div>
+      {verdict.kind === "released" && (
+        <span className="pl-5">
+          Now tell the agent in the terminal that you are done. Mark complete still
+          forces it.
+        </span>
+      )}
+      {verdict.kind === "refused" && (
+        <span className="pl-5">Retry the node, then release again.</span>
+      )}
+    </div>
+  );
+}
+
 // The session is settled — the tmux session is gone, so the terminal WebSocket
 // would attach to a dead session. `{completed, skipped, failed, stopped,
 // interrupted}` is exactly the "settled" tier of `pollInterval` (5s). A `skipped`
@@ -304,6 +360,7 @@ export default function NodeDetailPanel({
     inputs,
     outputs,
     markVerdict,
+    releaseVerdict,
     actionVerdict,
     retryConfirm,
     stop,
@@ -312,6 +369,7 @@ export default function NodeDetailPanel({
     cancelRetry,
     start,
     markComplete,
+    releaseCompletion,
     killStale,
     restartIteration,
   } = useNodeRun(runId, node, selectedIter, {
@@ -329,6 +387,14 @@ export default function NodeDetailPanel({
   // The terminal reads this to decide whether to attach or to read the frozen pane.
   const selectedIterStatus =
     node.iterations?.find((i) => i.iter === selectedIter)?.status ?? node.status;
+  const selectedIteration = node.iterations?.find((i) => i.iter === selectedIter);
+  const completionReleased = selectedIteration?.completion_released === true;
+  const isReleasing =
+    releaseVerdict?.iter === selectedIter && releaseVerdict.kind === "pending";
+  const canReleaseCompletion =
+    selectedIteration?.interactive === true &&
+    (selectedIterStatus === "running" || selectedIterStatus === "awaiting_user") &&
+    !isArchived;
 
   // #369: the I/O poll (`setInputs`/`setOutputs`) re-renders this panel every
   // tick (1s live, 5s settled). Building the modal's `source` prop as an inline
@@ -513,15 +579,29 @@ export default function NodeDetailPanel({
         </div>
       )}
 
+      {completionReleased && selectedIterStatus === "running" && (
+        <div className="flex items-center gap-2 border-b border-st-running/30 bg-st-running-bg px-3 py-2">
+          <CheckCircle size={14} className="shrink-0 text-st-running" />
+          <span
+            className="text-st-running"
+            style={{ fontSize: "11.5px", fontWeight: 500 }}
+          >
+            Running — completion released. Tell the agent when you are done.
+          </span>
+        </div>
+      )}
+
       {/* Awaiting user banner */}
-      {node.status === "awaiting_user" && (
+      {selectedIterStatus === "awaiting_user" && !completionReleased && (
         <div className="flex items-center gap-2 border-b border-st-await/30 bg-st-await-bg px-3 py-2">
           <AlertCircle size={14} className="shrink-0 text-st-await" />
           <span
             className="text-st-await"
             style={{ fontSize: "11.5px", fontWeight: 500 }}
           >
-            Awaiting user — interact in the terminal below, then mark complete
+            {selectedIteration?.interactive
+              ? "Awaiting user — when done, release completion so the agent can finish, or mark complete to take the artifacts as they are"
+              : "Awaiting user — interact in the terminal below, then mark complete"}
           </span>
         </div>
       )}
@@ -789,15 +869,52 @@ export default function NodeDetailPanel({
                   is genuinely incomplete. */}
               {(node.status === "awaiting_user" || node.status === "running" || node.status === "failed" || node.status === "stale" || node.status === "interrupted") && !isArchived && (
                 <>
-                  <button
-                    onClick={markComplete}
-                    data-testid="mark-complete-btn"
-                    className="flex w-full cursor-pointer items-center justify-center gap-1.5 rounded-md border border-st-done/40 bg-st-done-bg px-3 py-1.5 text-st-done transition-colors hover:border-st-done/60 hover:bg-st-done/20"
-                    style={{ fontSize: "11.5px", fontWeight: 500 }}
-                  >
-                    <CheckCircle size={12} />
-                    Mark complete
-                  </button>
+                  <div className="flex flex-wrap gap-1.5">
+                    {canReleaseCompletion && (
+                        <button
+                          onClick={releaseCompletion}
+                          title="Enables the node to call pdo complete when it chooses and to proceed with the run"
+                          disabled={isReleasing}
+                          data-testid="release-completion-btn"
+                          className={`flex min-w-[140px] flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md border border-st-await/40 bg-st-await-bg px-3 py-1.5 text-st-await transition-colors hover:border-st-await/60 hover:bg-st-await/20 disabled:cursor-wait disabled:opacity-70 ${
+                            completionReleased ? "border-dashed" : ""
+                          }`}
+                          style={{ fontSize: "11.5px", fontWeight: 500 }}
+                        >
+                          {isReleasing ? (
+                            <LoaderCircle size={12} className="animate-spin" />
+                          ) : completionReleased ? (
+                            <CheckCircle size={12} />
+                          ) : (
+                            <LockOpen size={12} />
+                          )}
+                          {isReleasing
+                            ? "Releasing…"
+                            : completionReleased
+                              ? "Completion released"
+                              : "Mark ready for completion"}
+                        </button>
+                    )}
+                      <button
+                        onClick={markComplete}
+                        title="Take the artifacts as they are and complete the node now"
+                        data-testid="mark-complete-btn"
+                        className="flex min-w-[140px] flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md border border-st-done/40 bg-st-done-bg px-3 py-1.5 text-st-done transition-colors hover:border-st-done/60 hover:bg-st-done/20"
+                        style={{ fontSize: "11.5px", fontWeight: 500 }}
+                      >
+                        <CheckCircle size={12} />
+                        Mark complete
+                      </button>
+                  </div>
+
+                  {completionReleased ? (
+                    <ReleaseCompletionVerdict verdict={{ kind: "released" }} />
+                  ) : (
+                    releaseVerdict &&
+                    releaseVerdict.iter === selectedIter && (
+                      <ReleaseCompletionVerdict verdict={releaseVerdict} />
+                    )
+                  )}
 
                   {/* #490: the verdict of the click, AT the gesture. Rendered for
                       every outcome including `pending`, so nothing ever blinks out

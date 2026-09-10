@@ -890,6 +890,12 @@ struct NodeDoneRequest {
 }
 
 #[derive(Deserialize)]
+struct ReleaseNodeCompletionRequest {
+    #[serde(default)]
+    iter: Option<i64>,
+}
+
+#[derive(Deserialize)]
 struct NodeFailRequest {
     reason: String,
     #[serde(default)]
@@ -1032,14 +1038,19 @@ pub fn run_complete(auto: bool) -> std::process::ExitCode {
         )),
     }
     out.push_str(&refusal_detail_lines(slug, &body));
-    out.push_str(match recoverable {
-        Some(true) => {
+    out.push_str(match (slug, recoverable) {
+        ("completion_not_released", Some(true)) => {
+            "Ask the user to click **Mark ready for completion** (or **Mark complete** to \
+             force completion). After release, run `pdo complete` again.\n\
+             Do NOT run `pdo fail`."
+        }
+        (_, Some(true)) => {
             "Fix what is listed above, then run `pdo complete` again.\nDo NOT run `pdo fail`."
         }
-        Some(false) => {
+        (_, Some(false)) => {
             "Do NOT run `pdo fail` — the failure is already recorded. Stop here and report it."
         }
-        None => "Re-read the run state before acting. Do NOT run `pdo fail` blindly.",
+        (_, None) => "Re-read the run state before acting. Do NOT run `pdo fail` blindly.",
     });
     eprintln!("{out}");
 
@@ -1090,6 +1101,9 @@ fn refusal_headline(slug: &str, body: &serde_json::Value) -> String {
             .and_then(|v| v.as_str())
             .unwrap_or("the run does not accept this completion")
             .to_string(),
+        "completion_not_released" => {
+            "the user has not released this interactive node for completion".into()
+        }
         "run_forgotten" => "this run has been forgotten (archived); it accepts nothing".into(),
         // Unknown slug: hand it over as-is, plus whatever prose came with it.
         other => match body.get("message").and_then(|v| v.as_str()) {
@@ -4580,6 +4594,10 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/runs/{run_id}/children", get(list_run_children))
         .route("/runs/{run_id}/events", get(get_run_events))
         .route("/runs/{run_id}/nodes/{node_id}/done", post(node_done))
+        .route(
+            "/runs/{run_id}/nodes/{node_id}/release",
+            post(node_release_completion),
+        )
         .route("/runs/{run_id}/nodes/{node_id}/fail", post(node_fail))
         .route("/runs/{run_id}/nodes/{node_id}/skip", post(node_skip))
         .route("/runs/{run_id}/nodes/{node_id}/pane", get(node_pane))
@@ -17084,6 +17102,10 @@ pub(crate) async fn complete_node_iteration(
         };
     }
 
+    if let Some(refusal) = interactive_completion_refusal(&pre_run_state, &node_id, iter) {
+        return CompletionAttempt::refused(refusal);
+    }
+
     // Liaison forte orchestrateur ↔ enfants (#724 / ADR-0064): a node with the
     // « Orchestrator » toggle does not terminate while its child runs are
     // non-terminal. The gate sits after the transition guard but BEFORE any
@@ -17210,6 +17232,128 @@ pub(crate) async fn complete_node_iteration(
         }
     });
     CompletionAttempt::Completed
+}
+
+fn interactive_completion_refusal(
+    run_state: &event_log::RunState,
+    node_id: &str,
+    iter: i64,
+) -> Option<completion_refusal::CompletionRefusal> {
+    let attempt = run_state
+        .nodes
+        .get(node_id)?
+        .iterations
+        .iter()
+        .find(|attempt| attempt.iter == iter)?;
+    (attempt.interactive && !attempt.completion_released)
+        .then_some(completion_refusal::CompletionRefusal::CompletionNotReleased)
+}
+
+fn release_refusal(slug: &str, message: impl Into<String>) -> Response {
+    (
+        StatusCode::CONFLICT,
+        Json(serde_json::json!({
+            "error": slug,
+            "recoverable": false,
+            "message": message.into(),
+        })),
+    )
+        .into_response()
+}
+
+pub(crate) async fn release_node_completion(
+    state: &Arc<AppState>,
+    run_id: &str,
+    node_id: &str,
+    iter: i64,
+) -> Response {
+    let events = match load_events(&state.db, run_id).await {
+        Ok(events) => events,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("error: {e}") })),
+            )
+                .into_response();
+        }
+    };
+    let Some(run_state) = event_log::project(&events) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "run_not_found", "recoverable": false })),
+        )
+            .into_response();
+    };
+    if !run_state.status.is_live() {
+        return release_refusal(
+            "run_not_live",
+            format!("run {run_id} has no live session to release"),
+        );
+    }
+    let Some(node) = run_state.nodes.get(node_id) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "node_not_found", "recoverable": false })),
+        )
+            .into_response();
+    };
+    let Some(attempt) = node.iterations.iter().find(|attempt| attempt.iter == iter) else {
+        return release_refusal(
+            "node_session_not_live",
+            format!("node {node_id} iter {iter} has no live session"),
+        );
+    };
+    if !attempt.interactive {
+        return release_refusal(
+            "node_not_interactive",
+            format!("node {node_id} is not interactive"),
+        );
+    }
+    if !attempt.status.holds_session() {
+        return release_refusal(
+            "node_session_not_live",
+            format!("node {node_id} iter {iter} has no live session"),
+        );
+    }
+    if attempt.completion_released {
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({ "ok": true, "released": true, "noop": true })),
+        )
+            .into_response();
+    }
+
+    let event = event_log::Event {
+        id: None,
+        run_id: run_id.to_string(),
+        ts: event_log::now_iso(),
+        kind: event_log::EventKind::NodeCompletionReleased,
+        node_id: Some(node_id.to_string()),
+        iter: Some(iter),
+        payload: None,
+    };
+    if let Err(e) = append_event(state, &event).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("error: {e}") })),
+        )
+            .into_response();
+    }
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "ok": true, "released": true })),
+    )
+        .into_response()
+}
+
+async fn node_release_completion(
+    State(state): State<Arc<AppState>>,
+    AxumPath((run_id, node_id)): AxumPath<(String, String)>,
+    body: Option<Json<ReleaseNodeCompletionRequest>>,
+) -> Response {
+    let iter = body.and_then(|Json(body)| body.iter).unwrap_or(1);
+    release_node_completion(&state, &run_id, &node_id, iter).await
 }
 
 /// Resolve a node's effective `auto_fail` (ADR-0049) — gather all four tiers and
@@ -26956,7 +27100,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mark_node_done_command_completes_awaiting_node() {
+    async fn mark_node_done_force_completes_unreleased_interactive_node() {
         let state = test_state().await;
 
         let run_id = "test-interactive-run";
@@ -26978,7 +27122,7 @@ mod tests {
                 kind: event_log::EventKind::NodeStarted,
                 node_id: Some("griller".into()),
                 iter: Some(1),
-                payload: None,
+                payload: Some(serde_json::json!({ "interactive": true })),
             },
             event_log::Event {
                 id: None,
@@ -27023,6 +27167,12 @@ mod tests {
         assert_eq!(
             run_state.nodes["griller"].status,
             event_log::NodeStatus::Completed
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| event.kind == event_log::EventKind::NodeCompletionReleased),
+            "force completion must bypass the release guard"
         );
     }
 
@@ -27088,6 +27238,260 @@ mod tests {
         let payload = cmd_events[0].payload.as_ref().unwrap();
         assert_eq!(payload["command"], "mark_node_done");
         assert_eq!(payload["node_id"], "griller");
+        assert!(
+            !events
+                .iter()
+                .any(|event| event.kind == event_log::EventKind::NodeCompletionReleased),
+            "force completion must not require a prior release"
+        );
+    }
+
+    async fn seed_interactive_node(
+        state: &Arc<AppState>,
+        run_id: &str,
+        status: event_log::EventKind,
+    ) {
+        for event in [
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::RunStarted,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({ "pipeline_name": "interactive" })),
+            },
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeStarted,
+                node_id: Some("griller".into()),
+                iter: Some(1),
+                payload: Some(serde_json::json!({ "interactive": true })),
+            },
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: status,
+                node_id: Some("griller".into()),
+                iter: Some(1),
+                payload: None,
+            },
+        ] {
+            append_event(state, &event).await.unwrap();
+        }
+    }
+
+    async fn response_json(response: Response) -> serde_json::Value {
+        serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn every_completion_source_is_refused_until_interactive_release() {
+        let state = test_state().await;
+        let run_id = "interactive-completion-guard";
+        seed_interactive_node(&state, run_id, event_log::EventKind::NodeAwaitingUser).await;
+
+        for source in [
+            CompletionSource::Explicit,
+            CompletionSource::StopHook,
+            CompletionSource::TurnEnded,
+            CompletionSource::ChildrenSettled,
+        ] {
+            let attempt =
+                complete_node_iteration(&state, run_id.into(), "griller".into(), 1, source).await;
+            assert!(matches!(
+                attempt,
+                CompletionAttempt::Refused {
+                    refusal: completion_refusal::CompletionRefusal::CompletionNotReleased
+                }
+            ));
+        }
+
+        let response = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/nodes/griller/done"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"iter":1}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = response_json(response).await;
+        assert_eq!(body["error"], "completion_not_released");
+        assert_eq!(body["recoverable"], true);
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert!(!events.iter().any(|event| matches!(
+            event.kind,
+            event_log::EventKind::NodeCompleted
+                | event_log::EventKind::NodeAutoCompleted
+                | event_log::EventKind::NodeFailed
+        )));
+    }
+
+    #[tokio::test]
+    async fn release_route_is_projection_backed_and_idempotent() {
+        let state = test_state().await;
+        let run_id = "interactive-release-route";
+        seed_interactive_node(&state, run_id, event_log::EventKind::NodeAwaitingUser).await;
+
+        for expected_noop in [false, true] {
+            let response = build_router(state.clone())
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("/runs/{run_id}/nodes/griller/release"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(r#"{"iter":1}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = response_json(response).await;
+            assert_eq!(body["released"], true);
+            assert_eq!(
+                body.get("noop").and_then(|v| v.as_bool()),
+                expected_noop.then_some(true)
+            );
+        }
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.kind == event_log::EventKind::NodeCompletionReleased)
+                .count(),
+            1
+        );
+        let run = event_log::project(&events).unwrap();
+        assert_eq!(run.status, event_log::RunStatus::Running);
+        assert_eq!(run.nodes["griller"].status, event_log::NodeStatus::Running);
+        assert!(run.nodes["griller"].iterations[0].completion_released);
+        assert!(interactive_completion_refusal(&run, "griller", 1).is_none());
+    }
+
+    #[tokio::test]
+    async fn release_command_uses_the_same_operation() {
+        let state = test_state().await;
+        let run_id = "interactive-release-command";
+        seed_interactive_node(&state, run_id, event_log::EventKind::NodeAwaitingUser).await;
+
+        let response = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/commands"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"kind":"release_node_completion","node_id":"griller","iter":1}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.kind == event_log::EventKind::NodeCompletionReleased)
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn release_refuses_noninteractive_and_dead_sessions() {
+        let state = test_state().await;
+        for (run_id, interactive, terminal_node, terminal_run, expected) in [
+            (
+                "release-noninteractive",
+                false,
+                false,
+                false,
+                "node_not_interactive",
+            ),
+            (
+                "release-dead-session",
+                true,
+                true,
+                false,
+                "node_session_not_live",
+            ),
+            ("release-dead-run", true, true, true, "run_not_live"),
+        ] {
+            for event in [
+                event_log::Event {
+                    id: None,
+                    run_id: run_id.into(),
+                    ts: event_log::now_iso(),
+                    kind: event_log::EventKind::RunStarted,
+                    node_id: None,
+                    iter: None,
+                    payload: Some(serde_json::json!({ "pipeline_name": "interactive" })),
+                },
+                event_log::Event {
+                    id: None,
+                    run_id: run_id.into(),
+                    ts: event_log::now_iso(),
+                    kind: event_log::EventKind::NodeStarted,
+                    node_id: Some("worker".into()),
+                    iter: Some(1),
+                    payload: Some(serde_json::json!({ "interactive": interactive })),
+                },
+            ] {
+                append_event(&state, &event).await.unwrap();
+            }
+            if terminal_node {
+                append_event(
+                    &state,
+                    &event_log::Event {
+                        id: None,
+                        run_id: run_id.into(),
+                        ts: event_log::now_iso(),
+                        kind: event_log::EventKind::NodeCompleted,
+                        node_id: Some("worker".into()),
+                        iter: Some(1),
+                        payload: None,
+                    },
+                )
+                .await
+                .unwrap();
+            }
+            if terminal_run {
+                append_event(
+                    &state,
+                    &event_log::Event {
+                        id: None,
+                        run_id: run_id.into(),
+                        ts: event_log::now_iso(),
+                        kind: event_log::EventKind::RunCompleted,
+                        node_id: None,
+                        iter: None,
+                        payload: None,
+                    },
+                )
+                .await
+                .unwrap();
+            }
+
+            let response = release_node_completion(&state, run_id, "worker", 1).await;
+            assert_eq!(response.status(), StatusCode::CONFLICT);
+            assert_eq!(response_json(response).await["error"], expected);
+        }
     }
 
     // Node-completion tail convergence: the *observable* behaviour `complete_node`
@@ -28309,6 +28713,8 @@ mod tests {
                             status: event_log::NodeStatus::Completed,
                             started_at: None,
                             completed_at: None,
+                            interactive: false,
+                            completion_released: false,
                         })
                         .collect(),
                     frontmatter_retries: 0,

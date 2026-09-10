@@ -10,6 +10,15 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.80.0
+**Nœud interactif — « Mark ready for completion » rend la complétion à l'agent** (#764 ; story #763, ADR-0068).
+Sur un nœud `interactive`, `pdo complete` lancé par l'agent est désormais **refusé** (exit 3, garde
+`completion_not_released`) tant que l'utilisateur n'a pas libéré la complétion : l'agent est invité à demander le clic.
+Le panneau du nœud propose deux boutons côte à côte : **Mark complete** (prend les artefacts tels quels, complète
+immédiatement — comportement inchangé) et **Mark ready for completion** (`POST /runs/{id}/nodes/{node}/release`,
+commande `release_node_completion`, évènement `node_completion_released`, idempotent). Une fois libéré, le nœud repasse
+`running`, le Run n'est plus `awaiting_user`, et c'est l'agent qui complète quand il a fini. La libération est
+refusée (409 `run_not_live`) sans session vivante.
 ## 1.79.0
 **Page de Review — report / outdated des commentaires, accès rapide Review, onglet Repositories** (#752 ; story #746, ADR-0067).
 Quand la paire affichée a bougé depuis l'écriture d'un commentaire (relivraison d'un nœud, merge-back), le daemon

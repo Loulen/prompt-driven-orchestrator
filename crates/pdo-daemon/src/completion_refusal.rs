@@ -32,6 +32,9 @@ pub(crate) enum CompletionRefusal {
     CompletionRejected {
         message: String,
     },
+    /// An interactive node remains under human control until the user releases
+    /// this exact session. No terminal event is written.
+    CompletionNotReleased,
     /// La livraison (#654 / ADR-0060) a échoué — staging, commit ou merge. Panne,
     /// pas verdict, donc `500`. Un `NodeInterrupted` est déjà appendé et le Run
     /// est parqué `AwaitingUser` : le travail reste sur disque, intact.
@@ -120,6 +123,7 @@ impl CompletionRefusal {
             Self::RunNotFound => "run_not_found",
             Self::Internal { .. } => "internal_error",
             Self::CompletionRejected { .. } => "completion_rejected",
+            Self::CompletionNotReleased => "completion_not_released",
             Self::DeliveryFailed { .. } => "delivery_failed",
             Self::MergeConflict { .. } => "merge_conflict",
             Self::MissingOutputs { .. } => "missing_outputs",
@@ -142,6 +146,7 @@ impl CompletionRefusal {
         matches!(
             self,
             Self::MissingOutputs { .. }
+                | Self::CompletionNotReleased
                 | Self::FrontmatterRetryPending { .. }
                 // Des enfants simplement en cours : l'agent garde la main — il
                 // attend qu'ils se terminent et re-complète. Avec un enfant
@@ -162,6 +167,7 @@ impl CompletionRefusal {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
             Self::CompletionRejected { .. }
+            | Self::CompletionNotReleased
             | Self::MergeConflict { .. }
             | Self::MissingOutputs { .. }
             | Self::ScriptValidationFailed { .. }
@@ -185,6 +191,9 @@ impl CompletionRefusal {
             Self::RunNotFound => serde_json::json!({ "message": "run not found" }),
             Self::Internal { error } => serde_json::json!({ "message": error }),
             Self::CompletionRejected { message } => serde_json::json!({ "message": message }),
+            Self::CompletionNotReleased => serde_json::json!({
+                "message": "this interactive node has not been released; ask the user to click \"Mark ready for completion\" (or \"Mark complete\"), then retry"
+            }),
             Self::AppendFailed { error } => serde_json::json!({ "message": error }),
             Self::DeliveryFailed { node_id, error } => serde_json::json!({
                 "message": format!("failed to deliver {node_id}'s work: {error}")
@@ -230,6 +239,9 @@ impl CompletionRefusal {
             Self::RunNotFound => "run not found".into(),
             Self::Internal { error } => error.clone(),
             Self::CompletionRejected { message } => message.clone(),
+            Self::CompletionNotReleased => {
+                "interactive node completion has not been released by the user".into()
+            }
             Self::DeliveryFailed { node_id, error } => {
                 format!("failed to deliver {node_id}'s work: {error}")
             }
@@ -328,6 +340,7 @@ mod tests {
             CompletionRefusal::CompletionRejected {
                 message: "resume the run first".into(),
             },
+            CompletionRefusal::CompletionNotReleased,
             CompletionRefusal::DeliveryFailed {
                 node_id: "impl".into(),
                 error: "git add -A failed".into(),
@@ -379,6 +392,7 @@ mod tests {
                 CompletionRefusal::RunNotFound => "RunNotFound",
                 CompletionRefusal::Internal { .. } => "Internal",
                 CompletionRefusal::CompletionRejected { .. } => "CompletionRejected",
+                CompletionRefusal::CompletionNotReleased => "CompletionNotReleased",
                 CompletionRefusal::DeliveryFailed { .. } => "DeliveryFailed",
                 CompletionRefusal::MergeConflict { .. } => "MergeConflict",
                 CompletionRefusal::MissingOutputs { .. } => "MissingOutputs",
@@ -446,11 +460,12 @@ mod tests {
 
     /// `recoverable` arbitre entre exit `3` et exit `4` de `pdo complete`.
     #[test]
-    fn only_the_two_still_your_turn_refusals_are_recoverable() {
+    fn only_still_your_turn_refusals_are_recoverable() {
         for r in every_refusal() {
             let expected = matches!(
                 r,
                 CompletionRefusal::MissingOutputs { .. }
+                    | CompletionRefusal::CompletionNotReleased
                     | CompletionRefusal::FrontmatterRetryPending { .. }
                     // La liaison forte laisse la main à l'agent tant qu'aucun
                     // enfant n'a échoué (#724).

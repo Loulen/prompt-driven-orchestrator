@@ -223,6 +223,8 @@ mod tests {
                     status: status.clone(),
                     started_at: None,
                     completed_at: None,
+                    interactive: false,
+                    completion_released: false,
                 })
                 .collect(),
             frontmatter_retries: 0,

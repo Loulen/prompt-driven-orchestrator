@@ -74,6 +74,7 @@ pub enum EventKind {
     /// holds no tmux session yet and waits for an admission slot (#159).
     NodeWaiting,
     NodeAwaitingUser,
+    NodeCompletionReleased,
     NodeCompleted,
     NodeFailed,
     /// An **infra** incident killed the node's session — session death, boot
@@ -556,6 +557,10 @@ pub struct IterationInfo {
     pub status: NodeStatus,
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub interactive: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub completion_released: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1474,6 +1479,8 @@ fn entry_node_ids(edges: &[EdgeInfo], node_defs: &[NodeDefInfo]) -> Vec<String> 
 fn upsert_iteration(iterations: &mut Vec<IterationInfo>, new: IterationInfo) {
     if let Some(existing) = iterations.iter_mut().find(|i| i.iter == new.iter) {
         existing.status = new.status;
+        existing.interactive = new.interactive;
+        existing.completion_released = new.completion_released;
         if new.started_at.is_some() {
             existing.started_at = new.started_at;
         }
@@ -1511,6 +1518,7 @@ pub(crate) fn project(events: &[Event]) -> Option<RunState> {
 
             EventKind::NodeWaiting
             | EventKind::NodeStarted
+            | EventKind::NodeCompletionReleased
             | EventKind::NodeCompleted
             | EventKind::NodeAutoCompleted
             | EventKind::NodeAwaitingUser
@@ -2102,6 +2110,13 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                     status: NodeStatus::Running,
                     started_at: Some(event.ts.clone()),
                     completed_at: None,
+                    interactive: event
+                        .payload
+                        .as_ref()
+                        .and_then(|p| p.get("interactive"))
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                    completion_released: false,
                 };
                 let node = state
                     .nodes
@@ -2189,6 +2204,20 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                 upsert_iteration(&mut node.iterations, iteration);
             }
         }
+        EventKind::NodeCompletionReleased => {
+            if let Some(ref node_id) = event.node_id {
+                if let Some(node) = state.nodes.get_mut(node_id) {
+                    let iter = event.iter.unwrap_or(node.iter);
+                    if iter == node.iter {
+                        node.status = NodeStatus::Running;
+                    }
+                    if let Some(it) = node.iterations.iter_mut().find(|i| i.iter == iter) {
+                        it.status = NodeStatus::Running;
+                        it.completion_released = true;
+                    }
+                }
+            }
+        }
         EventKind::NodeCompleted | EventKind::NodeAutoCompleted => {
             if let Some(ref node_id) = event.node_id {
                 // #600: a **skip** (`skip_node` / reachability auto-skip) can
@@ -2247,6 +2276,8 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                                 status: done_status.clone(),
                                 started_at: Some(event.ts.clone()),
                                 completed_at: Some(event.ts.clone()),
+                                interactive: false,
+                                completion_released: false,
                             }],
                             frontmatter_retries: 0,
                             frontmatter_violations: Vec::new(),
@@ -2530,6 +2561,8 @@ fn apply_switch_event(state: &mut RunState, event: &Event) {
                     status: NodeStatus::Completed,
                     started_at: Some(event.ts.clone()),
                     completed_at: Some(event.ts.clone()),
+                    interactive: false,
+                    completion_released: false,
                 },
             );
         }
@@ -4487,6 +4520,41 @@ mod tests {
         let state = project(&events).unwrap();
         assert_eq!(state.status, RunStatus::AwaitingUser);
         assert_eq!(state.nodes["griller"].status, NodeStatus::AwaitingUser);
+    }
+
+    #[test]
+    fn completion_release_is_iteration_scoped_and_restart_rearms_it() {
+        let mut events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "interactive-pipe" }),
+            ),
+            make_event_with_payload(
+                EventKind::NodeStarted,
+                Some("griller"),
+                serde_json::json!({ "interactive": true }),
+            ),
+            make_event(EventKind::NodeAwaitingUser, Some("griller"), Some(1)),
+            make_event(EventKind::NodeCompletionReleased, Some("griller"), Some(1)),
+        ];
+
+        let released = project(&events).unwrap();
+        assert_eq!(released.status, RunStatus::Running);
+        assert_eq!(released.nodes["griller"].status, NodeStatus::Running);
+        assert!(released.nodes["griller"].iterations[0].interactive);
+        assert!(released.nodes["griller"].iterations[0].completion_released);
+
+        events.push(make_event(EventKind::NodeStarted, Some("griller"), Some(1)));
+        events.push(make_event(
+            EventKind::NodeAwaitingUser,
+            Some("griller"),
+            Some(1),
+        ));
+
+        let restarted = project(&events).unwrap();
+        assert_eq!(restarted.status, RunStatus::AwaitingUser);
+        assert!(!restarted.nodes["griller"].iterations[0].completion_released);
     }
 
     #[test]
@@ -6679,6 +6747,8 @@ mod tests {
                     status: s.clone(),
                     started_at: None,
                     completed_at: None,
+                    interactive: false,
+                    completion_released: false,
                 })
                 .collect(),
             frontmatter_retries: 0,

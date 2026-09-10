@@ -34,11 +34,13 @@ const previewProvisioningMock = vi.fn().mockResolvedValue({
 // had ever exercised a *Mark complete* click. Made controllable so the verdict
 // branches can be driven. Vitest compares arity strictly, hence the spread.
 const markNodeDoneMock = vi.fn().mockResolvedValue({ kind: "completed" });
+const releaseNodeCompletionMock = vi.fn().mockResolvedValue({ kind: "released" });
 
 vi.mock("../api", () => ({
   fetchPrompt: (...args: unknown[]) => fetchPromptMock(...args),
   fetchNodeIO: (...args: unknown[]) => fetchNodeIOMock(...args),
   markNodeDone: (...args: unknown[]) => markNodeDoneMock(...args),
+  releaseNodeCompletion: (...args: unknown[]) => releaseNodeCompletionMock(...args),
   killNode: (...args: unknown[]) => killNodeMock(...args),
   restartNode: (...args: unknown[]) => restartNodeMock(...args),
   stopNode: (...args: unknown[]) => stopNodeMock(...args),
@@ -142,6 +144,8 @@ describe("NodeDetailPanel", () => {
     retryNodePreviewMock.mockResolvedValue({ downstream: [], affected_count: 0, with_artifacts: [] });
     markNodeDoneMock.mockClear();
     markNodeDoneMock.mockResolvedValue({ kind: "completed" });
+    releaseNodeCompletionMock.mockClear();
+    releaseNodeCompletionMock.mockResolvedValue({ kind: "released" });
     tmuxMountCount.current = 0;
     tmuxUnmountCount.current = 0;
   });
@@ -1810,6 +1814,142 @@ describe("NodeDetailPanel", () => {
         fireEvent.click(option);
       });
       expect(screen.queryByTestId("mark-complete-verdict")).not.toBeInTheDocument();
+    });
+
+    describe("release completion (#764)", () => {
+      const liveInteractive = (overrides?: Partial<NodeState>) =>
+        makeNode({
+          status: "awaiting_user",
+          iterations: [
+            {
+              iter: 1,
+              status: "awaiting_user",
+              started_at: null,
+              completed_at: null,
+              interactive: true,
+              completion_released: false,
+            },
+          ],
+          ...overrides,
+        });
+
+      it("shows both exits only for a live interactive iteration", () => {
+        const { rerender } = render(
+          <TooltipProvider>
+            <NodeDetailPanel node={liveInteractive()} runId="run-1" />
+          </TooltipProvider>,
+        );
+        expect(screen.getByTestId("release-completion-btn")).toBeInTheDocument();
+        expect(screen.getByTestId("mark-complete-btn")).toBeInTheDocument();
+
+        rerender(
+          <TooltipProvider>
+            <NodeDetailPanel
+              node={liveInteractive({
+                iterations: [
+                  {
+                    iter: 1,
+                    status: "awaiting_user",
+                    started_at: null,
+                    completed_at: null,
+                    interactive: false,
+                    completion_released: false,
+                  },
+                ],
+              })}
+              runId="run-1"
+            />
+          </TooltipProvider>,
+        );
+        expect(screen.queryByTestId("release-completion-btn")).not.toBeInTheDocument();
+
+        rerender(
+          <TooltipProvider>
+            <NodeDetailPanel
+              node={liveInteractive({ status: "completed" })}
+              runId="run-1"
+            />
+          </TooltipProvider>,
+        );
+        expect(screen.queryByTestId("release-completion-btn")).not.toBeInTheDocument();
+      });
+
+      it("calls release and renders the projected released state", async () => {
+        const { rerender } = render(
+          <TooltipProvider>
+            <NodeDetailPanel node={liveInteractive()} runId="run-1" />
+          </TooltipProvider>,
+        );
+        await act(async () => {
+          fireEvent.click(screen.getByTestId("release-completion-btn"));
+        });
+        expect(releaseNodeCompletionMock).toHaveBeenCalledWith("run-1", "test-node", 1);
+        expect(screen.queryByTestId("release-verdict")).not.toBeInTheDocument();
+
+        rerender(
+          <TooltipProvider>
+            <NodeDetailPanel
+              node={liveInteractive({
+                status: "running",
+                iterations: [
+                  {
+                    iter: 1,
+                    status: "running",
+                    started_at: null,
+                    completed_at: null,
+                    interactive: true,
+                    completion_released: true,
+                  },
+                ],
+              })}
+              runId="run-1"
+            />
+          </TooltipProvider>,
+        );
+        expect(screen.getByTestId("release-verdict")).toHaveAttribute(
+          "data-verdict",
+          "released",
+        );
+        expect(screen.getByTestId("release-verdict")).toHaveTextContent(
+          "tell the agent in the terminal",
+        );
+      });
+
+      it("renders projected release state after reload and scopes it to the displayed iteration", () => {
+        render(
+          <TooltipProvider>
+            <NodeDetailPanel
+              node={liveInteractive({
+                status: "running",
+                iter: 2,
+                iterations: [
+                  {
+                    iter: 1,
+                    status: "running",
+                    started_at: null,
+                    completed_at: null,
+                    interactive: true,
+                    completion_released: true,
+                  },
+                  {
+                    iter: 2,
+                    status: "awaiting_user",
+                    started_at: null,
+                    completed_at: null,
+                    interactive: true,
+                    completion_released: false,
+                  },
+                ],
+              })}
+              runId="run-1"
+            />
+          </TooltipProvider>,
+        );
+
+        expect(screen.getByTestId("release-completion-btn")).toHaveTextContent(
+          "Mark ready for completion",
+        );
+      });
     });
   });
 });

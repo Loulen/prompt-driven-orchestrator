@@ -47,6 +47,26 @@ describe("buildRunTree", () => {
     expect(forest.find((n) => n.run.run_id === "orphan")?.depth).toBe(0);
   });
 
+  it("makes the children of an ARCHIVED parent roots — archive does not touch the child (ADR-0064)", () => {
+    const archived: RunListEntry[] = [
+      run("old", { status: "archived" }),
+      run("live", { parent_run_id: "old" }),
+      run("done", { parent_run_id: "old", status: "completed" }),
+      run("grand", { parent_run_id: "live", status: "failed" }),
+    ];
+    const forest = buildRunTree(archived);
+    expect(forest.map((n) => n.run.run_id)).toEqual(["old", "live", "done"]);
+    // The archived parent is a leaf: no chevron, no pills.
+    expect(forest[0].children).toEqual([]);
+    expect(forest[0].counts).toEqual({ finished: 0, failed: 0, stale: 0, running: 0 });
+    // The released child keeps its own subtree.
+    expect(forest[1].children.map((n) => n.run.run_id)).toEqual(["grand"]);
+    expect(forest[1].counts).toEqual({ finished: 0, failed: 1, stale: 0, running: 0 });
+    expect(ancestorIds(archived, "grand")).toEqual(["live"]);
+    expect(rootOf(archived, "grand")?.run_id).toBe("live");
+    expect(ancestorIds(archived, "live")).toEqual([]);
+  });
+
   it("aggregates the four disjoint counts over the WHOLE subtree", () => {
     const [epic] = buildRunTree(list);
     // kid (live+stalled ⇒ stale), kid2 (failed), grandkid (completed ⇒ finished)

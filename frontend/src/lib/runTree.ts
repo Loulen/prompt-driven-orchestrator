@@ -3,16 +3,19 @@
  * rendering. See CONTEXT.md § "Orchestration récursive — arbre de runs".
  *
  * Everything that is NOT rendering lives here: building the tree from the flat
- * `GET /runs` list (a child hangs under its parent when the parent is listed;
- * an orphan — parent forgotten or absent — is a root), the aggregated child
+ * `GET /runs` list (a child hangs under its parent when the parent is listed
+ * AND alive — i.e. not `archived`; an orphan — parent forgotten, absent or
+ * archived — is a root, cf. CONTEXT.md « Run racine »), the aggregated child
  * counts over a whole subtree (four disjoint pills whose sum is the number of
  * descendants), the filter that keeps a parent as long as a descendant matches,
  * the ancestor walk that reveals a hidden run, and the flattening into the
  * visible row order (the basis for shift-range and select-all-visible).
  *
- * "Archived" is NOT a tree concept here: a child follows its parent into the
- * Archived section whatever its own status, so the caller splits on the ROOT's
- * status after `buildRunTree` and before `filterRunTree`.
+ * "Archived" enters the tree in exactly one way: an archived run never RETAINS
+ * children (archive of the parent does not touch the child, which becomes a
+ * root again — ADR-0064), so an archived run is always a leaf. Otherwise a
+ * child follows its parent whatever its own status, and the caller splits on
+ * the ROOT's status after `buildRunTree` and before `filterRunTree`.
  */
 import type { RunListEntry } from "../types";
 import { isLiveRun } from "../types";
@@ -28,6 +31,14 @@ export interface RunTreeNode {
    * children) — always the real subtree, never the filtered view.
    */
   counts: ChildCounts;
+}
+
+/**
+ * Whether `parent` can hold children in the tree: it must be listed and not
+ * archived (an archived parent has released its children, which are roots).
+ */
+function retainsChildren(parent: RunListEntry | undefined): parent is RunListEntry {
+  return parent !== undefined && parent.status !== "archived";
 }
 
 /** The bucket a single run falls in: the four sets are disjoint by construction. */
@@ -51,8 +62,9 @@ function addCounts(into: ChildCounts, from: ChildCounts): void {
 /**
  * Build the forest from the flat list. Sibling order is the list's own order
  * (the daemon already sorts by start date), so children read like the list.
- * A run whose `parent_run_id` names a run that is NOT in the list is a root:
- * a forgotten parent must not swallow its children.
+ * A run whose `parent_run_id` names a run that is NOT in the list — or that is
+ * `archived` — is a root: a forgotten or archived parent must not swallow its
+ * children (they would otherwise vanish from the active section).
  *
  * Cycles cannot arise from real daemon data (a parent always predates its
  * child), but a defensive guard keeps a corrupted pair from recursing forever:
@@ -64,7 +76,7 @@ export function buildRunTree(runs: RunListEntry[]): RunTreeNode[] {
   const roots: RunListEntry[] = [];
   for (const r of runs) {
     const pid = r.parent_run_id;
-    if (pid && pid !== r.run_id && byId.has(pid)) {
+    if (pid && pid !== r.run_id && retainsChildren(byId.get(pid))) {
       const list = childrenOf.get(pid) ?? [];
       list.push(r);
       childrenOf.set(pid, list);
@@ -151,15 +163,19 @@ export function pathOnlyIds(
 
 /**
  * The ancestors of `runId` in the flat list, nearest first — following
- * `parent_run_id` only through parents that ARE listed (an orphan has none).
- * Guarded against cycles.
+ * `parent_run_id` only through parents that ARE listed and not archived (an
+ * orphan has none) — the same rule as `buildRunTree`. Guarded against cycles.
  */
 export function ancestorIds(runs: RunListEntry[], runId: string): string[] {
   const byId = new Map(runs.map((r) => [r.run_id, r]));
   const out: string[] = [];
   const seen = new Set<string>([runId]);
   let cur = byId.get(runId);
-  while (cur?.parent_run_id && byId.has(cur.parent_run_id) && !seen.has(cur.parent_run_id)) {
+  while (
+    cur?.parent_run_id &&
+    retainsChildren(byId.get(cur.parent_run_id)) &&
+    !seen.has(cur.parent_run_id)
+  ) {
     out.push(cur.parent_run_id);
     seen.add(cur.parent_run_id);
     cur = byId.get(cur.parent_run_id);

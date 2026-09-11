@@ -564,9 +564,9 @@ export default function UnifiedLeftPanel({
 
   // #783 — the run tree, built from ALL runs so a child follows its parent into
   // whatever section / group the ROOT lands in, whatever the child's own status
-  // or repo. The archived split is on the root: a live child of an archived
-  // parent sits in the Archived section under it (the parent stays listed, so
-  // the child is not an orphan); once the parent is forgotten the child is a root.
+  // or repo. The archived split is on the root — and an archived run is always
+  // a leaf (`buildRunTree` releases its children as roots, ADR-0064), so the
+  // Archived section only ever holds archived runs, never a live child.
   const tree = useMemo(() => buildRunTree(runs), [runs]);
   const { activeTree, archivedTree } = useMemo(() => {
     const match = (r: RunListEntry) => runMatchesFilter(r, runFilter);
@@ -628,12 +628,13 @@ export default function UnifiedLeftPanel({
 
   // #136 — archived runs live in their own flat, collapsible section below the
   // active list; the active list keeps the #258 per-repo grouping. #783: the
-  // section holds archived ROOTS and their subtrees.
+  // section holds archived roots (always leaves — an archived parent releases
+  // its children, which climb back to the active section as roots).
   const archivedCount = archivedTree.length;
 
   // Identity of the selected run *iff* its tree currently sits in the archived
-  // set (its root is archived), else null — the signal that must reveal the
-  // section. A live child of an archived parent counts: it lives there too.
+  // set (its root is archived — i.e. it IS archived, since an archived run
+  // retains no children), else null — the signal that must reveal the section.
   const selectedArchivedId =
     selectedRunId != null && rootOf(runs, selectedRunId)?.status === "archived"
       ? selectedRunId

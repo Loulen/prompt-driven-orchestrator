@@ -1869,21 +1869,28 @@ describe("UnifiedLeftPanel run tree (#783)", () => {
     expect(scrollSpy).toHaveBeenCalled();
   });
 
-  it("a child of an archived parent follows it into the Archived section; the section count is roots only", () => {
+  it("archiving a parent releases its children as ACTIVE roots; the Archived section holds the parent alone (AC #2, ADR-0064)", () => {
     const archivedParent = runs.map((r) => (r.run_id === "epic" ? { ...r, status: "archived" as const } : r));
     renderPanel({ runs: archivedParent });
-    // Active list: only the orphan and solo remain.
-    expect(labels()).toEqual(["#700 spike", "triage nightly"]);
-    expect(screen.getByTestId("run-archived-count")).toHaveTextContent("(1)");
-    fireEvent.click(screen.getByTestId("run-archived-toggle"));
+    // Active list: the released children climb back to depth 0 (the grandchild
+    // stays under its own live parent), alongside the orphan and solo. A released
+    // child is grouped by its OWN repo again (kid-trig lives in /repos/b).
+    expect(row("kid")).toHaveAttribute("data-depth", "0");
+    expect(row("kid-trig")).toHaveAttribute("data-depth", "0");
+    expect(row("grandkid")).toHaveAttribute("data-depth", "1");
     expect(labels()).toEqual([
-      "#700 spike",
-      "triage nightly",
-      "Refonte auth — orchestrateur",
       "#731 login form",
       "review 731",
+      "#700 spike",
+      "triage nightly",
       "#733 logout — nightly",
     ]);
+    expect(screen.getByTestId("run-archived-count")).toHaveTextContent("(1)");
+    fireEvent.click(screen.getByTestId("run-archived-toggle"));
+    // The archived parent is a leaf: no chevron, no pills, no nested rows.
+    expect(labels().slice(-1)).toEqual(["Refonte auth — orchestrateur"]);
+    expect(within(row("epic")).queryByTestId("run-tree-chevron")).toBeNull();
+    expect(within(row("epic")).queryByTestId("run-child-pills-failed")).toBeNull();
   });
 
   it("an archived parent that is FORGOTTEN releases its children as roots", () => {

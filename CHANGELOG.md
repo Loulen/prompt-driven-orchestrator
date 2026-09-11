@@ -10,6 +10,12 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## Licence — MIT, explicitement
+
+Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les métadonnées Cargo
+déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
+contribution sont dans `CONTRIBUTING.md`.
+
 ## 1.79.0
 **Page de Review — report / outdated des commentaires, accès rapide Review, onglet Repositories** (#752 ; story #746, ADR-0067).
 Quand la paire affichée a bougé depuis l'écriture d'un commentaire (relivraison d'un nœud, merge-back), le daemon

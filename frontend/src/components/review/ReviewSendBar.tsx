@@ -59,7 +59,7 @@ export default function ReviewSendBar({ drafts, sentCount, sending, managerRunni
           disabled={!!sendDisabledReason || sending}
           title={sendDisabledReason ?? undefined}
           data-testid="review-send-all"
-          className="inline-flex cursor-pointer items-center gap-1.5 rounded border border-acc bg-acc px-2 py-0.5 font-semibold text-[#04140d] hover:bg-[#14cf92] disabled:cursor-not-allowed disabled:opacity-45"
+          className="inline-flex cursor-pointer items-center gap-1.5 rounded border border-acc bg-acc px-2 py-0.5 font-semibold text-on-acc hover:bg-acc-hi disabled:cursor-not-allowed disabled:opacity-45"
           style={{ fontSize: "10.5px" }}
         >
           {sending ? <Spinner /> : "↗"} Send all to manager

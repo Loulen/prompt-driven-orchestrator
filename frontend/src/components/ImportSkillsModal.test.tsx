@@ -255,6 +255,20 @@ describe("ImportSkillsModal (#670)", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it("Deselect all unchecks every pre-checked row and Select all valid brings them back (#771)", async () => {
+    setup();
+    await scanned();
+    const list = screen.getByTestId("import-candidates");
+    expect(within(list).getAllByRole("checkbox").some((box) => (box as HTMLInputElement).checked)).toBe(true);
+    fireEvent.click(screen.getByTestId("import-deselect-all"));
+    for (const box of within(list).getAllByRole("checkbox")) {
+      expect(box).not.toBeChecked();
+    }
+    expect(screen.getByTestId("import-submit")).toBeDisabled();
+    fireEvent.click(screen.getByTestId("import-select-all"));
+    expect(within(screen.getByTestId("import-candidate-frontend-design")).getByRole("checkbox")).toBeChecked();
+  });
+
   it("a clone refusal reads in place with git's message, the credential hint and Retry", async () => {
     setup();
     scanMock.mockRejectedValueOnce(

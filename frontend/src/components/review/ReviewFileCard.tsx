@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, Copy, History, SquareArrowOutUpRight } from "lucide-react";
 import { DiffView, DiffModeEnum, SplitSide } from "@git-diff-view/react";
+import { useTheme } from "../../hooks/useTheme";
 import type { DiffFile, ReviewSide } from "../../types";
 import { fetchRunFileAtRef } from "../../api";
 import { baseName, fileHunks, filePath, langOf, statusLetter } from "../../lib/runRefs";
@@ -137,6 +138,7 @@ export default function ReviewFileCard({
   entries = NO_ENTRIES,
   comments,
 }: Props) {
+  const { resolved } = useTheme();
   const path = filePath(file);
   const letter = statusLetter(file);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -491,7 +493,10 @@ export default function ReviewFileCard({
               data={data}
               extendData={extendData}
               diffViewMode={view === "split" ? DiffModeEnum.Split : DiffModeEnum.Unified}
-              diffViewTheme="dark"
+              // #759: the library ships its own light/dark syntax theme; handing it the
+              // resolved theme keeps code colours legible. `index.css` then maps the
+              // wrapper's surface variables onto PDO tokens for both.
+              diffViewTheme={resolved}
               diffViewFontSize={11}
               diffViewHighlight={false}
               diffViewWrap={false}

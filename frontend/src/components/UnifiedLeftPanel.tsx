@@ -691,7 +691,7 @@ export default function UnifiedLeftPanel({
             {activeTab !== tab.id && selCounts[tab.id] > 0 && (
               <span
                 data-testid={`tab-badge-${tab.id}`}
-                className="rounded-full bg-acc px-1.5 font-semibold text-[#04140d]"
+                className="rounded-full bg-acc px-1.5 font-semibold text-on-acc"
                 style={{ fontSize: "9px" }}
               >
                 {selCounts[tab.id]}
@@ -748,7 +748,7 @@ export default function UnifiedLeftPanel({
             )}
             <button
               onClick={onNewRun}
-              className={`${availableRepos.length > 0 ? "ml-1.5" : "ml-auto"} flex cursor-pointer items-center gap-1 rounded bg-acc px-1.5 py-0.5 font-medium text-[#04140d] transition-colors hover:bg-acc-dim`}
+              className={`${availableRepos.length > 0 ? "ml-1.5" : "ml-auto"} flex cursor-pointer items-center gap-1 rounded bg-acc px-1.5 py-0.5 font-medium text-on-acc transition-colors hover:bg-acc-dim`}
               style={{ fontSize: "10.5px" }}
             >
               <Plus size={10} />

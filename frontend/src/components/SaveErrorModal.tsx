@@ -66,7 +66,7 @@ export default function SaveErrorModal({
           </button>
           <button
             onClick={onViewYaml}
-            className="rounded-md bg-acc px-3 py-1.5 text-[#04140d] font-medium transition-colors hover:bg-acc-dim cursor-pointer"
+            className="rounded-md bg-acc px-3 py-1.5 text-on-acc font-medium transition-colors hover:bg-acc-dim cursor-pointer"
             style={{ fontSize: "11.5px" }}
             data-testid="save-error-view-yaml"
           >

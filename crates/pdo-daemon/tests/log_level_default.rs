@@ -49,6 +49,7 @@ fn info_logs_emitted_when_rust_log_is_unset() {
             if n == 0 {
                 break;
             }
+
             if let Ok(mut g) = buf_w.lock() {
                 g.push_str(&String::from_utf8_lossy(&chunk[..n]));
             }

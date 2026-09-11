@@ -12,6 +12,9 @@ import {
   isMacPlatform,
   writeClipboardText,
 } from "../lib/terminalClipboard";
+import { resizeAvoidingAltBufferCorruption } from "../lib/altBufferResize";
+import { terminalTheme } from "../lib/terminalTheme";
+import { useTheme } from "../hooks/useTheme";
 
 /** Which node iteration's frozen pane to read when the live session is gone (#617). */
 export interface PaneSource {
@@ -77,6 +80,10 @@ export default function TmuxTerminal({
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
+  // #759: the live theme. Used to build the palette at mount and to repaint an
+  // already-open terminal when the theme switches (xterm paints on a canvas, so
+  // it cannot follow a CSS token on its own).
+  const { resolved } = useTheme();
   const fitAddonRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const [connected, setConnected] = useState(false);
@@ -181,32 +188,7 @@ export default function TmuxTerminal({
       disableStdin: isFrozen,
       fontSize: 11,
       fontFamily: "'Geist Mono Variable', monospace",
-      theme: {
-        background: "#0f1115",
-        foreground: "#e6e8eb",
-        cursor: "#10b981",
-        // #772: the old "#2a2d35" on a "#0f1115" background was one shade of
-        // grey apart — a selection the user could not see. Accent at ~35% alpha
-        // keeps the glyphs readable and the highlight obvious.
-        selectionBackground: "#3b82f659",
-        selectionInactiveBackground: "#3b82f633",
-        black: "#0f1115",
-        red: "#ef4444",
-        green: "#10b981",
-        yellow: "#f59e0b",
-        blue: "#3b82f6",
-        magenta: "#8b5cf6",
-        cyan: "#06b6d4",
-        white: "#e6e8eb",
-        brightBlack: "#5a6270",
-        brightRed: "#f87171",
-        brightGreen: "#34d399",
-        brightYellow: "#fbbf24",
-        brightBlue: "#60a5fa",
-        brightMagenta: "#a78bfa",
-        brightCyan: "#22d3ee",
-        brightWhite: "#f8fafc",
-      },
+      theme: terminalTheme(resolved),
       allowTransparency: false,
       scrollback: 5000,
       // #772: on macOS Option+drag is xterm's "force selection while the pty
@@ -353,9 +335,20 @@ export default function TmuxTerminal({
       capture: true,
     });
 
+    // #771: a live pane in the alternate screen may be in the state xterm's
+    // resize corrupts (see `altBufferResize.ts`); the helper resets it first and
+    // runs the fit once xterm has processed the reset. A frozen pane has no
+    // alternate screen to reset, and nothing to redraw it — plain fit.
     const resizeObserver = new ResizeObserver(() => {
-      fitAddon.fit();
-      if (ws) sendResize(ws, fitAddon);
+      const apply = () => {
+        fitAddon.fit();
+        if (ws) sendResize(ws, fitAddon);
+      };
+      if (!ws) {
+        apply();
+        return;
+      }
+      resizeAvoidingAltBufferCorruption(term, fitAddon.proposeDimensions(), apply);
     });
     resizeObserver.observe(container);
 
@@ -373,7 +366,18 @@ export default function TmuxTerminal({
       fitAddonRef.current = null;
       wsRef.current = null;
     };
+    // `resolved` is deliberately NOT a dependency: recreating the Terminal on a
+    // theme switch would drop the scrollback and the attached socket. The effect
+    // below repaints the live instance instead.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session, mode, frozen]);
+
+  // #759: repaint an already-open terminal when the theme switches.
+  useEffect(() => {
+    const term = terminalRef.current;
+    // `options` is absent when the Terminal is a test double — nothing to repaint.
+    if (term?.options) term.options.theme = terminalTheme(resolved);
+  }, [resolved]);
 
   const isActive =
     status === "running" || status === "awaiting_user" || status === "stale";

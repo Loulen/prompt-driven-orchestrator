@@ -182,7 +182,7 @@ export default function CommentEditor({ anchor, initial, wipKey, sendDisabledRea
             onClick={save}
             disabled={!canSubmit}
             data-testid="review-editor-save"
-            className="cursor-pointer rounded border border-acc bg-acc px-2 py-0.5 font-semibold text-[#04140d] hover:bg-[#14cf92] disabled:cursor-not-allowed disabled:opacity-45"
+            className="cursor-pointer rounded border border-acc bg-acc px-2 py-0.5 font-semibold text-on-acc hover:bg-acc-hi disabled:cursor-not-allowed disabled:opacity-45"
             style={{ fontSize: "10.5px" }}
           >
             {editing ? "Update draft" : "Save draft"}

@@ -44,18 +44,30 @@
   --color-acc-dim: #0e8f66;
   --color-acc-bg: rgba(16, 185, 129, 0.12);
   --color-acc-border: rgba(16, 185, 129, 0.32);
+  /* Brighter accent for the hover of a filled accent button (#759 —
+     was a hard-coded #14cf92 in three review controls). */
+  --color-acc-hi: #14cf92;
+  /* Text ON a filled accent surface. Near-black over the light-on-dark
+     green; near-white once the light theme darkens the accent (#759). */
+  --color-on-acc: #04140d;
+  /* Same, for the Inspector's amber scope (`.panel-r`). */
+  --color-on-acc-warn: #1a0f00;
 
   /* PDO status */
   --color-st-running: #3b82f6;
   --color-st-running-bg: rgba(59, 130, 246, 0.14);
   --color-st-await: #f59e0b;
   --color-st-await-bg: rgba(245, 158, 11, 0.14);
+  --color-st-await-border: rgba(245, 158, 11, 0.34);
   --color-st-done: #10b981;
   --color-st-done-bg: rgba(16, 185, 129, 0.14);
+  --color-st-done-hl: rgba(16, 185, 129, 0.28);
   --color-st-blocked: #f97316;
   --color-st-blocked-bg: rgba(249, 115, 22, 0.14);
   --color-st-failed: #ef4444;
   --color-st-failed-bg: rgba(239, 68, 68, 0.14);
+  --color-st-failed-hl: rgba(239, 68, 68, 0.30);
+  --color-st-failed-border: rgba(239, 68, 68, 0.30);
   /* Graceful no-op terminal (#245): a calm slate, distinct from failed (red),
      done (green) and archived (gray) — "fired but nothing to do". */
   --color-st-skipped: #64748b;
@@ -80,6 +92,19 @@
      (PRD #143): the selected edge is orange, every other edge is grey. */
   --color-edge-selected: #fdba74;
 
+  /* Stats charts (#759). recharts takes resolved colours as props, so these are
+     read at render time through `cssColor` rather than applied as classes. */
+  --color-chart-runs: #58a6ff;
+  --color-chart-errors: #f85149;
+  --color-chart-fires: #3fb950;
+  --color-chart-grid: #30363d;
+  --color-chart-axis: #8b949e;
+  --color-chart-tooltip-bg: #161b22;
+
+  /* Drop shadow. Deeper on a dark ground, where a shadow has to fight the
+     surface; softer on a light one, where black at 0.4 reads as grime. */
+  --color-shadow: rgba(0, 0, 0, 0.4);
+
   /* Typography */
   --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-mono: "Geist Mono", ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
@@ -99,7 +124,7 @@
   --color-popover: var(--color-bg-2);
   --color-popover-foreground: var(--color-fg);
   --color-primary: var(--color-acc);
-  --color-primary-foreground: #04140d;
+  --color-primary-foreground: var(--color-on-acc);
   --color-secondary: var(--color-bg-3);
   --color-secondary-foreground: var(--color-fg);
   --color-muted: var(--color-bg-3);
@@ -115,6 +140,104 @@
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+/* ---------------------------------------------------------------------------
+ * Light theme (#759). One override block, not a second stylesheet: every
+ * component already paints through the semantic tokens above, so redefining the
+ * tokens here re-themes the whole app.
+ *
+ * `data-theme` carries a RESOLVED value — `light` or `dark`, never `system`.
+ * `main.tsx` (and the inline script in `index.html`, before first paint) writes
+ * it from the stored preference or `prefers-color-scheme`. No media query here:
+ * one source of truth, so the stored choice and the OS default can never fight.
+ *
+ * Surfaces invert their ROLE, not their index: `bg-2` is the panel that pops
+ * (white on a grey page), `bg-3` the control that recedes, `bg-4`/`bg-5` hover
+ * and pressed — which darken here where they lightened in the dark theme. Both
+ * directions mean the same thing: more separation from the page.
+ *
+ * Every text colour is measured against every copy-bearing surface in
+ * `themePalette.test.ts`; nothing below is eyeballed.
+ * ------------------------------------------------------------------------- */
+:root[data-theme="light"] {
+  /* PDO surfaces */
+  --color-bg-0: #e7eaee;
+  --color-bg-1: #f6f7f9;
+  --color-bg-2: #ffffff;
+  --color-bg-3: #eef0f4;
+  --color-bg-4: #e3e6eb;
+  --color-bg-5: #d7dbe2;
+
+  /* PDO lines */
+  --color-line: #dfe3e9;
+  --color-line-strong: #c9cfd8;
+  --color-line-soft: #ebeef2;
+
+  /* PDO text */
+  --color-fg: #14181f;
+  --color-fg-2: #3d4553;
+  --color-fg-3: #4a5261;
+  /* Captions and helper copy. `text-fg-4` appears 500+ times in this codebase,
+     so it is TEXT and owes 4.5:1 — which squeezes it close to fg-3. The dark
+     theme keeps its historical 2.40:1 here (declared debt, see
+     themePalette.test.ts); the light theme starts clean and does not inherit it. */
+  --color-fg-4: #5e6674;
+  --color-fg-5: #8b93a1;
+
+  /* PDO accent — the green darkens so it can carry text on white */
+  --color-acc: #03714f;
+  --color-acc-dim: #065f46;
+  --color-acc-hi: #04996b;
+  --color-acc-bg: rgba(3, 113, 79, 0.10);
+  --color-acc-border: rgba(3, 113, 79, 0.30);
+  --color-on-acc: #f2fbf7;
+  --color-on-acc-warn: #fff7ed;
+
+  /* PDO status */
+  --color-st-running: #1d4ed8;
+  --color-st-running-bg: rgba(29, 78, 216, 0.10);
+  --color-st-await: #8f4506;
+  --color-st-await-bg: rgba(143, 69, 6, 0.10);
+  --color-st-await-border: rgba(143, 69, 6, 0.30);
+  --color-st-done: #03714f;
+  --color-st-done-bg: rgba(3, 113, 79, 0.10);
+  --color-st-done-hl: rgba(3, 113, 79, 0.24);
+  --color-st-blocked: #9a3412;
+  --color-st-blocked-bg: rgba(154, 52, 18, 0.10);
+  --color-st-failed: #b91c1c;
+  --color-st-failed-bg: rgba(185, 28, 28, 0.10);
+  --color-st-failed-hl: rgba(185, 28, 28, 0.24);
+  --color-st-failed-border: rgba(185, 28, 28, 0.30);
+  --color-st-skipped: #475569;
+  --color-st-skipped-bg: rgba(71, 85, 105, 0.10);
+  --color-st-archived: #4b5563;
+  --color-st-stopped: #565e6c;
+  --color-st-stopped-bg: rgba(86, 94, 108, 0.10);
+  --color-st-stale: #8f4506;
+  --color-st-stale-bg: rgba(143, 69, 6, 0.10);
+  --color-st-interrupted: #8f4506;
+  --color-st-interrupted-bg: rgba(143, 69, 6, 0.10);
+  --color-st-paused: #9a3412;
+  --color-st-paused-bg: rgba(154, 52, 18, 0.10);
+  --color-st-pending: #767e8c;
+
+  /* Edit-mode chrome */
+  --color-edit-tint: #6d28d9;
+
+  /* Selected edge */
+  --color-edge-selected: #9a3412;
+
+  /* Stats charts */
+  --color-chart-runs: #0b5cc4;
+  --color-chart-errors: #b0201a;
+  --color-chart-fires: #1a7f37;
+  --color-chart-grid: #d6dae0;
+  --color-chart-axis: #4a5261;
+  --color-chart-tooltip-bg: #ffffff;
+
+  /* Shadow */
+  --color-shadow: rgba(20, 24, 31, 0.16);
 }
 
 *,
@@ -277,7 +400,7 @@ body {
   border-radius: 4px;
   white-space: nowrap;
   pointer-events: none;
-  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 4px 10px var(--color-shadow);
   z-index: 7;
 }
 
@@ -285,7 +408,7 @@ body {
    (refs docs/design/project/winners.css §2, .port-pill.is-drop) */
 .port-pill.is-drop {
   background: var(--color-st-await-bg);
-  border-color: rgba(245, 158, 11, 0.34);
+  border-color: var(--color-st-await-border);
   color: var(--color-st-await);
 }
 .port-pill.is-drop .pp-chev {
@@ -295,10 +418,12 @@ body {
 /* Inspector scope — amber accent (refs docs/design/project/winners.css §3) */
 .panel-r {
   --color-acc: var(--color-st-await);
-  --color-acc-dim: #d97706;
-  --color-acc-bg: rgba(245, 158, 11, 0.12);
-  --color-acc-border: rgba(245, 158, 11, 0.34);
-  --color-primary-foreground: #1a0f00;
+  --color-acc-dim: var(--color-st-stale);
+  --color-acc-hi: var(--color-st-await);
+  --color-acc-bg: var(--color-st-await-bg);
+  --color-acc-border: var(--color-st-await-border);
+  --color-on-acc: var(--color-on-acc-warn);
+  --color-primary-foreground: var(--color-on-acc-warn);
 }
 
 /* Inspector output card — O3 tab head (refs docs/design/project/winners.css §5) */
@@ -502,8 +627,8 @@ body {
 }
 .fld .fld-del:hover {
   color: var(--color-st-failed);
-  background: rgba(239, 68, 68, 0.10);
-  border-color: rgba(239, 68, 68, 0.30);
+  background: var(--color-st-failed-bg);
+  border-color: var(--color-st-failed-border);
 }
 .fld-enum {
   flex: 1 1 100%;
@@ -655,8 +780,8 @@ body {
 }
 .sb-card .sb-icon-btn:hover {
   color: var(--color-st-failed);
-  background: rgba(239, 68, 68, 0.10);
-  border-color: rgba(239, 68, 68, 0.30);
+  background: var(--color-st-failed-bg);
+  border-color: var(--color-st-failed-border);
 }
 .sb-card .sb-body {
   padding: 10px 12px 12px;
@@ -890,35 +1015,35 @@ body {
  * the third-party body reads like the rest of the app (added = st-done,
  * deleted = st-failed, plain = bg-2). Scoped to the page so nothing else moves.
  * ------------------------------------------------------------------------- */
-.pdo-review .diff-tailwindcss-wrapper[data-theme="dark"] {
-  --diff-border--: #1f242c;
-  --diff-plain-content--: #14171d;
-  --diff-plain-lineNumber--: #14171d;
-  --diff-plain-lineNumber-color--: #525a68;
-  --diff-expand-content--: #14171d;
-  --diff-expand-lineNumber--: #14171d;
-  --diff-expand-lineNumber-color--: #525a68;
-  --diff-add-content--: rgba(16, 185, 129, 0.1);
-  --diff-add-content-highlight--: rgba(16, 185, 129, 0.28);
-  --diff-add-lineNumber--: rgba(16, 185, 129, 0.16);
-  --diff-del-content--: rgba(239, 68, 68, 0.1);
-  --diff-del-content-highlight--: rgba(239, 68, 68, 0.3);
-  --diff-del-lineNumber--: rgba(239, 68, 68, 0.16);
-  --diff-empty-content--: #1a1e25;
-  --diff-hunk-content--: #1a1e25;
-  --diff-hunk-content-color--: #525a68;
-  --diff-hunk-lineNumber--: #1a1e25;
-  --diff-hunk-lineNumber-hover--: #2c323d;
-  --diff-add-widget--: #10b981;
-  --diff-add-widget-color--: #04140d;
-  color: #e6e8eb;
+.pdo-review .diff-tailwindcss-wrapper {
+  --diff-border--: var(--color-line);
+  --diff-plain-content--: var(--color-bg-2);
+  --diff-plain-lineNumber--: var(--color-bg-2);
+  --diff-plain-lineNumber-color--: var(--color-fg-4);
+  --diff-expand-content--: var(--color-bg-2);
+  --diff-expand-lineNumber--: var(--color-bg-2);
+  --diff-expand-lineNumber-color--: var(--color-fg-4);
+  --diff-add-content--: var(--color-st-done-bg);
+  --diff-add-content-highlight--: var(--color-st-done-hl);
+  --diff-add-lineNumber--: var(--color-st-done-bg);
+  --diff-del-content--: var(--color-st-failed-bg);
+  --diff-del-content-highlight--: var(--color-st-failed-hl);
+  --diff-del-lineNumber--: var(--color-st-failed-bg);
+  --diff-empty-content--: var(--color-bg-3);
+  --diff-hunk-content--: var(--color-bg-3);
+  --diff-hunk-content-color--: var(--color-fg-4);
+  --diff-hunk-lineNumber--: var(--color-bg-3);
+  --diff-hunk-lineNumber-hover--: var(--color-bg-5);
+  --diff-add-widget--: var(--color-acc);
+  --diff-add-widget-color--: var(--color-on-acc);
+  color: var(--color-fg);
 }
 .pdo-review .diff-tailwindcss-wrapper .diff-style-root {
   font-family: var(--font-mono);
 }
 /* The hunk-separator expanders: PDO accent on hover, like the prototype. */
 .pdo-review .diff-line-hunk-action button:hover {
-  color: #10b981;
+  color: var(--color-acc);
 }
 
 /* #751: a review reply that just landed over the WebSocket — 2 s outline flash. */

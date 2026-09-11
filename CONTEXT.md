@@ -848,6 +848,10 @@ Choix et pourquoi → ADR-0003. Daemon **Rust**, frontend **React + Vite** (canv
 
 **Service unit** : l'unité OS qui fait démarrer le daemon au boot et survivre au logout (systemd `--user` sous Linux, LaunchAgent best-effort sous macOS) — la différence entre « les Triggers ne tournent que tant que tu es loggé » et un orchestrateur autonome fiable. CLI `pdo service {install|uninstall|status}`. Garde de conflit de port à l'install (deux daemons ne partagent jamais un port). La status-bar affiche une pastille `ephemeral` quand le daemon ne survit pas au reboot — le seul signal que le dot de connexion ne peut pas exprimer (joignable ≠ persistant). Lignes load-bearing de l'unité et pourquoi → ADR-0019.
 
+- **Adresse d'écoute (bind)** *(terme, #766)* : l'interface réseau sur laquelle le daemon accepte des connexions TCP — `0.0.0.0` (toutes) par défaut, restreignable à `127.0.0.1` derrière un reverse proxy (`--bind` / `PDO_BIND`, propagé dans l'unité par `pdo service install --bind`, préservé par la réinstallation de l'Update). À distinguer de l'**origine WS** (`PDO_ALLOWED_WS_ORIGINS`), qui filtre *quel site* le navigateur affiche, pas *qui* peut ouvrir un TCP ; les deux étages se complètent. _Éviter_ : « host » (ambigu avec le nom de domaine du proxy), « adresse du daemon » (c'est l'URL annoncée).
+- **Le PATH de l'unité n'est pas celui des harnais** : les harnais se résolvent dans le PATH du shell interactif de l'utilisateur (ADR-0055) ; l'unité générée le dit en commentaire, pour qu'un lecteur ne conclue pas à un harnais introuvable. _Éviter_ : enrichir le PATH de l'unité pour « trouver » un harnais.
+- **Drop-in** *(terme)* : le fichier `pdo.service.d/override.conf` où l'opérateur pose durablement les variables env-only (`PDO_ALLOWED_WS_ORIGINS`) — il survit à chaque réécriture de l'unité, y compris celle de l'Update. Documenté en une phrase dans la table des commandes du README, pas davantage.
+
 ### Versioning (#139)
 
 **Source de vérité unique : le `version` du `Cargo.toml` workspace.** `frontend/package.json` reste à `0.0.0` en permanence — intentionnel. Le daemon expose sa version compilée via `GET /sessions` (l'endpoint de la status-bar — pas de route dédiée : un champ JSON additionnel est rétro-compatible et évite une entrée de whitelist proxy). En prod le binaire embarque le frontend, donc daemon et UI ne divergent pas.
@@ -865,7 +869,7 @@ Choix et pourquoi → ADR-0003. Daemon **Rust**, frontend **React + Vite** (canv
 
 ### Mono-user, local
 
-Le daemon bind **`0.0.0.0:<port>`** — joignable depuis le LAN, c'est **délibéré** (#260 est closed, pas différée). Pas d'auth, pas de TLS, pas de multi-user : single-user local par design, sur un réseau de confiance.
+Le daemon bind **`0.0.0.0:<port>`** par défaut — joignable depuis le LAN, c'est **délibéré** (#260 est closed, pas différée) ; `--bind 127.0.0.1` est l'opt-out derrière un reverse proxy (#766, cf. *Adresse d'écoute*). Pas d'auth, pas de TLS, pas de multi-user : single-user local par design, sur un réseau de confiance.
 
 **Le chemin de lecture ne dépend jamais d'Internet.** Les egress du produit sont tous **opt-in et tolérants à l'échec** : `docker pull`, guards de Trigger shellés, sync de la table de prix. Chaque nœud est par ailleurs une session `claude`, donc le produit ne fonctionne pas hors ligne — « pas de dépendance réseau » n'a jamais été littéral.
 

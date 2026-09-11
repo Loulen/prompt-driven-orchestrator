@@ -577,7 +577,7 @@ function DecisionButton({
   ghost?: boolean;
 }) {
   const look = primary
-    ? "border-acc bg-acc font-semibold text-[#04140d] hover:bg-[#14cf92]"
+    ? "border-acc bg-acc font-semibold text-on-acc hover:bg-acc-hi"
     : ghost
       ? "border-transparent bg-transparent text-fg-4 hover:bg-bg-4 hover:text-fg-2"
       : "border-line-strong bg-bg-3 text-fg-2 hover:bg-bg-4 hover:text-fg";

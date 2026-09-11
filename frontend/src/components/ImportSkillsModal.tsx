@@ -224,6 +224,22 @@ export default function ImportSkillsModal({
     });
   };
 
+  // #771: the bulk counterpart of "Select all valid" — until it existed a user who
+  // wanted 2 skills out of 40 pre-checked ones had to uncheck 38 boxes one by one.
+  const deselectAll = () => {
+    setTouched(true);
+    setRows((prev) => {
+      const next = new Map(prev);
+      for (const candidate of candidates) {
+        const current = next.get(candidate.path);
+        if (current && !doneRows.has(candidate.path)) {
+          next.set(candidate.path, { ...current, checked: false });
+        }
+      }
+      return next;
+    });
+  };
+
   const owner = scan?.source.repo.split("/")[0] ?? "";
   const renameTargets = useMemo(() => {
     const out = new Map<string, string>();
@@ -732,6 +748,15 @@ export default function ImportSkillsModal({
                     className="text-acc hover:underline"
                   >
                     Select all valid
+                  </button>
+                  <span className="text-fg-5">·</span>
+                  <button
+                    type="button"
+                    onClick={deselectAll}
+                    data-testid="import-deselect-all"
+                    className="text-acc hover:underline"
+                  >
+                    Deselect all
                   </button>
                 </div>
                 <ul className="min-h-0 flex-1 overflow-y-auto" data-testid="import-candidates">

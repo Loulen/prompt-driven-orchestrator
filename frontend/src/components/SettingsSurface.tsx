@@ -1340,8 +1340,9 @@ function InterfaceSection({ section }: { section: SettingsSection }) {
         </div>
         <ThemeSelect />
         <div className="text-fg-3" style={{ fontSize: "10.5px" }}>
-          System follows your operating system's light/dark setting and keeps following it.
-          Light and dark pin PDO, whatever the system does.
+          With nothing chosen, PDO paints dark — the look it has always had.
+          System follows your operating system's light/dark setting and keeps
+          following it. Light and dark pin PDO, whatever the system does.
         </div>
       </div>
       <div className="flex flex-col gap-1.5">

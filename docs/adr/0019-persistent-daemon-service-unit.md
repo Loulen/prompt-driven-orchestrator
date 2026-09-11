@@ -1,5 +1,8 @@
 # Service unit persistant pour le daemon (systemd `--user` / launchd)
 
+> Amendé par le grilling #766 : `Environment=PDO_BIND=` optionnel dans l'unité ; le `PATH` de l'unité
+> n'est plus la référence des harnais (ADR-0055) et l'unité le dit en commentaire.
+
 Sans cette ADR, on laisse le daemon en `pdo daemon` best-effort (ADR-0012) : fermer son laptop ou
 rebooter arrête silencieusement toute autonomie planifiée — la différence entre « ça tourne tant que
 tu es loggé » et un orchestrateur autonome.
@@ -15,9 +18,11 @@ purement **additive** — aucun couplage au scheduler, à la projection ou au ru
   - `KillMode=process` — le défaut `control-group` SIGKILL-erait tout le cgroup, donc le **serveur
     tmux enfant** (qui tient toutes les sessions live) mourrait ; `process` le laisse ré-adoptable
     (cohérent avec « tuer par nom de session, jamais par pid »).
-  - `Environment=PATH=…` — le daemon shelle vers `claude`/`node`/`git`/`tmux` ; sous l'env minimal
-    d'une unité, un PATH nu casse **silencieusement** les spawns. (Analogue macOS :
-    `AbandonProcessGroup=true` + PATH explicite.)
+  - `Environment=PATH=…` — le daemon shelle vers `node`/`git`/`tmux` ; sous l'env minimal d'une
+    unité, un PATH nu casse **silencieusement** ces appels. Dédupliqué. Les **harnais** ne s'y
+    résolvent **pas** (ADR-0055 : PATH du shell interactif de l'utilisateur) et l'unité porte un
+    commentaire qui le dit — un lecteur voyant `~/.npm-global/bin` absent en déduisait à tort un
+    harnais introuvable (#766). (Analogue macOS : `AbandonProcessGroup=true` + PATH explicite.)
   - `WorkingDirectory=` — le daemon dérive sa racine du cwd ; sans lui il tournerait depuis `/`.
     Depuis ADR-0033 cette racine est celle du **stockage**, **plus jamais** le dépôt qu'un Run mute
     (champ requis de chaque Run). Sans ce qualificatif, la phrase décrit la panne du 2026-07-29 :
@@ -52,7 +57,10 @@ purement **additive** — aucun couplage au scheduler, à la projection ou au ru
   déloggé**.
 - La valeur `persistent` cachée peut être **stale** si on installe le service pendant qu'un daemon
   non-service tourne déjà (reflétée au prochain restart).
-- Le bind réseau du daemon reste inchangé (durcissement = #260).
+- Le bind par défaut reste `0.0.0.0` (#260, accès LAN assumé). Depuis #766, `pdo daemon --bind <ip>`
+  (`PDO_BIND`) restreint l'écoute, et `pdo service install --bind` l'écrit dans l'unité
+  (`Environment=PDO_BIND=`), préservé par la réinstallation de l'Update comme `PDO_PORT`. Défense en
+  profondeur derrière un reverse proxy, pas un substitut à l'auth (toujours hors scope).
 
 ## Relations
 

@@ -452,7 +452,7 @@ function ManagerTab({
         </div>
         <button
           onClick={() => void start()}
-          className="rounded-md bg-acc px-3 py-1.5 font-medium text-[#04140d] transition-colors hover:bg-acc-dim"
+          className="rounded-md bg-acc px-3 py-1.5 font-medium text-on-acc transition-colors hover:bg-acc-dim"
           style={{ fontSize: "11.5px" }}
           data-testid="manager-retry"
         >
@@ -484,7 +484,7 @@ function ManagerTab({
       </p>
       <button
         onClick={() => void start()}
-        className="mt-1 flex items-center gap-1.5 rounded-md bg-acc px-3.5 py-2 font-medium text-[#04140d] transition-colors hover:bg-acc-dim"
+        className="mt-1 flex items-center gap-1.5 rounded-md bg-acc px-3.5 py-2 font-medium text-on-acc transition-colors hover:bg-acc-dim"
         style={{ fontSize: "12px" }}
         data-testid="manager-start"
       >

@@ -135,7 +135,7 @@ export default function TabBar() {
         <button
           onClick={() => { if (activeTabId) save(activeTabId); }}
           disabled={!anyDirty}
-          className="flex cursor-pointer items-center gap-1 rounded-md bg-acc px-2 py-0.5 font-medium text-[#04140d] transition-colors hover:bg-acc-dim disabled:opacity-40"
+          className="flex cursor-pointer items-center gap-1 rounded-md bg-acc px-2 py-0.5 font-medium text-on-acc transition-colors hover:bg-acc-dim disabled:opacity-40"
           style={{ fontSize: "11px" }}
           data-testid="save-button"
         >

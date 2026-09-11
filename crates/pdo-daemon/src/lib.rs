@@ -100,7 +100,7 @@ mod workflow_importer;
 mod worktree_ops;
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -158,6 +158,9 @@ pub struct Cli {
 pub enum Commands {
     /// Start the PDO daemon
     Daemon {
+        /// Address to listen on. Defaults to all interfaces.
+        #[arg(long, env = "PDO_BIND")]
+        bind: Option<IpAddr>,
         #[arg(short, long, env = "PDO_PORT", default_value_t = DEFAULT_PORT)]
         port: u16,
     },
@@ -387,6 +390,9 @@ pub enum DocsAction {
 pub enum ServiceAction {
     /// Generate + enable the service unit so the daemon starts at boot / survives logout.
     Install {
+        /// Address the service daemon listens on. Omit to keep the default.
+        #[arg(long)]
+        bind: Option<IpAddr>,
         #[arg(short, long, env = "PDO_PORT", default_value_t = DEFAULT_PORT)]
         port: u16,
         /// Print the unit file + the exact commands, make NO changes. Still
@@ -1880,8 +1886,8 @@ trait ServiceEnv {
     fn home(&self) -> Result<PathBuf>;
     /// `$USER` — for `loginctl enable-linger $USER`.
     fn user(&self) -> Result<String>;
-    /// Classify `127.0.0.1:<port>` for the conflict guard.
-    fn probe_port(&self, port: u16) -> PortState;
+    /// Classify the address the service daemon would occupy.
+    fn probe_port(&self, addr: SocketAddr) -> PortState;
     /// Write a unit/plist file, creating parent dirs.
     fn write_file(&self, path: &Path, contents: &str) -> Result<()>;
     /// Remove a unit/plist file (uninstall); Ok if already absent.
@@ -1931,11 +1937,14 @@ impl ServiceEnv for RealServiceEnv {
         std::env::var("USER").context("$USER is not set")
     }
 
-    fn probe_port(&self, port: u16) -> PortState {
+    fn probe_port(&self, addr: SocketAddr) -> PortState {
         use std::net::TcpStream;
-        let addr = SocketAddr::from(([127, 0, 0, 1], port));
-        if TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_err() {
+        if std::net::TcpListener::bind(addr).is_ok() {
             return PortState::Free;
+        }
+        let addr = connect_addr(addr);
+        if TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_err() {
+            return PortState::Foreign;
         }
         let client = match reqwest::blocking::Client::builder()
             .timeout(Duration::from_millis(800))
@@ -1944,10 +1953,7 @@ impl ServiceEnv for RealServiceEnv {
             Ok(c) => c,
             Err(_) => return PortState::Foreign,
         };
-        match client
-            .get(format!("http://127.0.0.1:{port}/sessions"))
-            .send()
-        {
+        match client.get(format!("http://{addr}/sessions")).send() {
             Ok(resp) if resp.status().is_success() => {
                 let body = resp.text().unwrap_or_default();
                 // The `/sessions` payload carries `cap` + `version` — markers no
@@ -2007,11 +2013,15 @@ fn run_service_with(
 ) -> Result<()> {
     let is_macos = cfg!(target_os = "macos");
     match action {
-        ServiceAction::Install { port, dry_run } => {
+        ServiceAction::Install {
+            bind,
+            port,
+            dry_run,
+        } => {
             if is_macos {
-                service_install_launchd(env, out, port, dry_run)
+                service_install_launchd(env, out, bind, port, dry_run)
             } else {
-                service_install_systemd(env, out, port, dry_run)
+                service_install_systemd(env, out, bind, port, dry_run)
             }
         }
         ServiceAction::Uninstall => {
@@ -2032,14 +2042,33 @@ fn run_service_with(
 }
 
 /// Human-readable description of a port-probe result, for the plan / guard output.
-fn describe_port_state(port: u16, state: &PortState) -> String {
+fn service_addr(bind: Option<IpAddr>, port: u16) -> SocketAddr {
+    SocketAddr::new(bind.unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED)), port)
+}
+
+fn connect_addr(listen_addr: SocketAddr) -> SocketAddr {
+    match listen_addr.ip() {
+        IpAddr::V4(ip) if ip.is_unspecified() => {
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), listen_addr.port())
+        }
+        IpAddr::V6(ip) if ip.is_unspecified() => {
+            SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), listen_addr.port())
+        }
+        _ => listen_addr,
+    }
+}
+
+fn describe_port_state(addr: SocketAddr, state: &PortState) -> String {
     match state {
-        PortState::Free => format!("port {port} is free"),
+        PortState::Free => format!("{addr} is free"),
         PortState::PdoDaemon => {
-            format!("a PDO daemon is already answering on 127.0.0.1:{port}")
+            format!(
+                "a PDO daemon is already answering on {}",
+                connect_addr(addr)
+            )
         }
         PortState::Foreign => {
-            format!("port {port} is already bound by a non-PDO process (or a not-yet-ready daemon)")
+            format!("{addr} is already bound by a non-PDO process (or a not-yet-ready daemon)")
         }
     }
 }
@@ -2048,6 +2077,7 @@ fn describe_port_state(port: u16, state: &PortState) -> String {
 fn service_install_systemd(
     env: &dyn ServiceEnv,
     out: &mut dyn std::io::Write,
+    bind: Option<IpAddr>,
     port: u16,
     dry_run: bool,
 ) -> Result<()> {
@@ -2058,8 +2088,9 @@ fn service_install_systemd(
     let user = env.user().unwrap_or_else(|_| "$USER".to_string());
     let config_home = env.config_home()?;
     let unit_path = service_unit::systemd_unit_path(&config_home);
-    let unit = service_unit::render_systemd_unit(&exe, port, &working_dir, &path_env);
-    let state = env.probe_port(port);
+    let unit = service_unit::render_systemd_unit(&exe, port, bind, &working_dir, &path_env);
+    let service_addr = service_addr(bind, port);
+    let state = env.probe_port(service_addr);
 
     // `--now` only when the port is free: never start a competitor onto a port a
     // PDO daemon already owns.
@@ -2080,7 +2111,7 @@ fn service_install_systemd(
 
     if dry_run {
         writeln!(out, "# pdo service install --dry-run (NO changes made)")?;
-        writeln!(out, "# {}", describe_port_state(port, &state))?;
+        writeln!(out, "# {}", describe_port_state(service_addr, &state))?;
         if state == PortState::Foreign {
             writeln!(
                 out,
@@ -2109,14 +2140,14 @@ fn service_install_systemd(
             "refusing to install: {}. The enabled unit's daemon would crash-loop on \
              EADDRINUSE (Restart=on-failure). Stop the process on port {port}, or install \
              with a free --port.",
-            describe_port_state(port, &state)
+            describe_port_state(service_addr, &state)
         );
     }
     if state == PortState::PdoDaemon {
         writeln!(
             out,
             "note: {} — enabling the unit for boot but NOT starting a competing instance.",
-            describe_port_state(port, &state)
+            describe_port_state(service_addr, &state)
         )?;
     }
 
@@ -2204,6 +2235,7 @@ fn service_status_systemd(env: &dyn ServiceEnv, out: &mut dyn std::io::Write) ->
 fn service_install_launchd(
     env: &dyn ServiceEnv,
     out: &mut dyn std::io::Write,
+    bind: Option<IpAddr>,
     port: u16,
     dry_run: bool,
 ) -> Result<()> {
@@ -2213,8 +2245,10 @@ fn service_install_launchd(
     let node_dir = env.node_dir();
     let path_env = service_unit::build_path_env(&exe, node_dir.as_deref());
     let plist_path = service_unit::launchd_plist_path(&home);
-    let plist = service_unit::render_launchd_plist(&exe, port, &working_dir, &home, &path_env);
-    let state = env.probe_port(port);
+    let plist =
+        service_unit::render_launchd_plist(&exe, port, bind, &working_dir, &home, &path_env);
+    let service_addr = service_addr(bind, port);
+    let state = env.probe_port(service_addr);
     let label = service_unit::LAUNCHD_LABEL;
 
     if node_dir.is_none() {
@@ -2227,7 +2261,7 @@ fn service_install_launchd(
 
     if dry_run {
         writeln!(out, "# pdo service install --dry-run (NO changes made)")?;
-        writeln!(out, "# {}", describe_port_state(port, &state))?;
+        writeln!(out, "# {}", describe_port_state(service_addr, &state))?;
         if state == PortState::Foreign {
             writeln!(
                 out,
@@ -2263,7 +2297,7 @@ fn service_install_launchd(
     if state == PortState::Foreign {
         anyhow::bail!(
             "refusing to install: {}. Free the port or pass a free --port.",
-            describe_port_state(port, &state)
+            describe_port_state(service_addr, &state)
         );
     }
 
@@ -3210,21 +3244,29 @@ pub async fn serve_with_config(
     })
 }
 
-pub async fn run_daemon(port: u16) -> Result<()> {
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+fn daemon_relaunch_command(exe: &Path, bind: Option<IpAddr>, port: u16) -> Vec<String> {
+    let mut command = vec![
+        exe.display().to_string(),
+        "daemon".to_string(),
+        "--port".to_string(),
+        port.to_string(),
+    ];
+    if let Some(bind) = bind {
+        command.push("--bind".to_string());
+        command.push(bind.to_string());
+    }
+    command
+}
+
+pub async fn run_daemon(bind: Option<IpAddr>, port: u16) -> Result<()> {
+    let addr = SocketAddr::new(bind.unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED)), port);
     let repo_root = std::env::current_dir().context("failed to determine current directory")?;
     let mut config = DaemonConfig::from_env();
     // #699: the command line an unsupervised update relaunches — the STABLE binary
     // path (Homebrew's `bin/pdo`, not the Cellar target `brew upgrade` deletes) and
     // the same port, whether it came from `--port` or `PDO_PORT`.
-    config.relaunch_command = update_check::invoked_exe_path().map(|exe| {
-        vec![
-            exe.display().to_string(),
-            "daemon".to_string(),
-            "--port".to_string(),
-            port.to_string(),
-        ]
-    });
+    config.relaunch_command =
+        update_check::invoked_exe_path().map(|exe| daemon_relaunch_command(&exe, bind, port));
     let handle = serve_with_config(addr, repo_root, config).await?;
     handle.task.await.context("daemon task join error")?
 }
@@ -11162,6 +11204,7 @@ async fn apply_update(State(state): State<Arc<AppState>>) -> Response {
         supervision,
         exe,
         port: state.port,
+        bind: update_executor::explicit_bind_from_relaunch(&relaunch),
         working_dir: state.repo_root.clone(),
         daemon_pid: std::process::id(),
         relaunch,
@@ -21140,6 +21183,26 @@ mod tests {
         assert_eq!(advertised_url(lo), "http://127.0.0.1:0");
         let lan: SocketAddr = "192.168.1.20:5172".parse().unwrap();
         assert_eq!(advertised_url(lan), "http://192.168.1.20:5172");
+    }
+
+    #[test]
+    fn daemon_relaunch_preserves_only_an_explicit_bind() {
+        let exe = Path::new("/usr/local/bin/pdo");
+        assert_eq!(
+            daemon_relaunch_command(exe, None, 5172),
+            vec!["/usr/local/bin/pdo", "daemon", "--port", "5172"]
+        );
+        assert_eq!(
+            daemon_relaunch_command(exe, Some("127.0.0.1".parse().unwrap()), 5172),
+            vec![
+                "/usr/local/bin/pdo",
+                "daemon",
+                "--port",
+                "5172",
+                "--bind",
+                "127.0.0.1"
+            ]
+        );
     }
 
     /// A unique fake daemon port per test state, so the derived tmux socket
@@ -31338,7 +31401,13 @@ edges:
             .and_then(|v| v.parse::<u16>().ok())
             .unwrap_or(DEFAULT_PORT);
         match cli.command {
-            Commands::Daemon { port } => assert_eq!(port, expected),
+            Commands::Daemon { bind, port } => {
+                assert_eq!(
+                    bind,
+                    std::env::var("PDO_BIND").ok().and_then(|v| v.parse().ok())
+                );
+                assert_eq!(port, expected);
+            }
             _ => panic!("expected Daemon subcommand"),
         }
     }
@@ -31347,7 +31416,20 @@ edges:
     fn cli_parses_daemon_with_port() {
         let cli = Cli::try_parse_from(["pdo", "daemon", "--port", "9999"]).unwrap();
         match cli.command {
-            Commands::Daemon { port } => assert_eq!(port, 9999),
+            Commands::Daemon { port, .. } => assert_eq!(port, 9999),
+            _ => panic!("expected Daemon subcommand"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_daemon_with_bind() {
+        let cli = Cli::try_parse_from(["pdo", "daemon", "--bind", "127.0.0.1", "--port", "9999"])
+            .unwrap();
+        match cli.command {
+            Commands::Daemon { bind, port } => {
+                assert_eq!(bind, Some("127.0.0.1".parse().unwrap()));
+                assert_eq!(port, 9999);
+            }
             _ => panic!("expected Daemon subcommand"),
         }
     }
@@ -31474,8 +31556,14 @@ edges:
             .unwrap_or(DEFAULT_PORT);
         match cli.command {
             Commands::Service {
-                action: ServiceAction::Install { port, dry_run },
+                action:
+                    ServiceAction::Install {
+                        bind,
+                        port,
+                        dry_run,
+                    },
             } => {
+                assert_eq!(bind, None);
                 assert_eq!(port, expected_port);
                 assert!(!dry_run);
             }
@@ -31489,8 +31577,47 @@ edges:
             .unwrap();
         match cli.command {
             Commands::Service {
-                action: ServiceAction::Install { port, dry_run },
+                action:
+                    ServiceAction::Install {
+                        bind,
+                        port,
+                        dry_run,
+                    },
             } => {
+                assert_eq!(
+                    bind,
+                    std::env::var("PDO_BIND").ok().and_then(|v| v.parse().ok())
+                );
+                assert_eq!(port, 6183);
+                assert!(dry_run);
+            }
+            _ => panic!("expected Service Install"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_service_install_with_bind() {
+        let cli = Cli::try_parse_from([
+            "pdo",
+            "service",
+            "install",
+            "--bind",
+            "127.0.0.1",
+            "--port",
+            "6183",
+            "--dry-run",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Service {
+                action:
+                    ServiceAction::Install {
+                        bind,
+                        port,
+                        dry_run,
+                    },
+            } => {
+                assert_eq!(bind, Some("127.0.0.1".parse().unwrap()));
                 assert_eq!(port, 6183);
                 assert!(dry_run);
             }
@@ -31720,7 +31847,7 @@ edges:
         fn user(&self) -> Result<String> {
             Ok(self.user.clone())
         }
-        fn probe_port(&self, _port: u16) -> PortState {
+        fn probe_port(&self, _addr: SocketAddr) -> PortState {
             self.port_state.clone()
         }
         fn write_file(&self, path: &Path, contents: &str) -> Result<()> {
@@ -31761,6 +31888,7 @@ edges:
         let mut out: Vec<u8> = Vec::new();
         run_service_with(
             ServiceAction::Install {
+                bind: None,
                 port: 5172,
                 dry_run: true,
             },
@@ -31788,6 +31916,7 @@ edges:
         let mut out: Vec<u8> = Vec::new();
         run_service_with(
             ServiceAction::Install {
+                bind: None,
                 port: 6183,
                 dry_run: true,
             },
@@ -31800,6 +31929,7 @@ edges:
         if !cfg!(target_os = "macos") {
             assert!(s.contains("KillMode=process"), "unit missing KillMode: {s}");
             assert!(s.contains("Environment=PDO_PORT=6183"));
+            assert!(!s.contains("Environment=PDO_BIND="));
             assert!(s.contains("ExecStart=/home/user/.local/bin/pdo daemon"));
             assert!(s.contains("WorkingDirectory=/home/user/.pdo/app"));
             // Command plan, in order.
@@ -31815,6 +31945,54 @@ edges:
         );
     }
 
+    #[test]
+    fn service_dry_run_carries_bind_and_the_harness_path_comment() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let env = FakeServiceEnv::new(tmp.path().to_path_buf(), PortState::Free);
+        let mut out: Vec<u8> = Vec::new();
+        run_service_with(
+            ServiceAction::Install {
+                bind: Some("127.0.0.1".parse().unwrap()),
+                port: 6183,
+                dry_run: true,
+            },
+            &env,
+            &mut out,
+        )
+        .unwrap();
+        let s = String::from_utf8(out).unwrap();
+        if cfg!(target_os = "macos") {
+            assert!(s.contains("<key>PDO_BIND</key><string>127.0.0.1</string>"));
+        } else {
+            assert!(s.contains("Environment=PDO_BIND=127.0.0.1"));
+        }
+        assert!(s.contains("interactive shell PATH (ADR-0055)"));
+    }
+
+    #[test]
+    fn service_conflict_probe_uses_the_effective_bind_address() {
+        assert_eq!(
+            service_addr(Some("192.0.2.10".parse().unwrap()), 6183),
+            "192.0.2.10:6183".parse().unwrap()
+        );
+        assert_eq!(
+            service_addr(Some("0.0.0.0".parse().unwrap()), 6183),
+            "0.0.0.0:6183".parse().unwrap()
+        );
+        assert_eq!(
+            connect_addr(service_addr(Some("::".parse().unwrap()), 6183)),
+            "[::1]:6183".parse().unwrap()
+        );
+    }
+
+    #[test]
+    fn wildcard_service_probe_detects_a_listener_on_another_local_address() {
+        let listener = std::net::TcpListener::bind("127.0.1.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let state = RealServiceEnv.probe_port(SocketAddr::from(([0, 0, 0, 0], port)));
+        assert_eq!(state, PortState::Foreign);
+    }
+
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn service_install_writes_unit_and_runs_exact_systemctl_sequence() {
@@ -31823,6 +32001,7 @@ edges:
         let mut out: Vec<u8> = Vec::new();
         run_service_with(
             ServiceAction::Install {
+                bind: None,
                 port: 6183,
                 dry_run: false,
             },
@@ -31837,6 +32016,7 @@ edges:
         let expected = service_unit::render_systemd_unit(
             Path::new("/home/user/.local/bin/pdo"),
             6183,
+            None,
             Path::new("/home/user/.pdo/app"),
             "/home/user/.local/bin:/opt/node/bin:/usr/local/bin:/usr/bin:/bin",
         );
@@ -31876,6 +32056,7 @@ edges:
         let mut out: Vec<u8> = Vec::new();
         let err = run_service_with(
             ServiceAction::Install {
+                bind: None,
                 port: 6183,
                 dry_run: false,
             },
@@ -31900,6 +32081,7 @@ edges:
         let mut out: Vec<u8> = Vec::new();
         run_service_with(
             ServiceAction::Install {
+                bind: None,
                 port: 6183,
                 dry_run: false,
             },

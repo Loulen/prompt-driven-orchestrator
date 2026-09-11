@@ -47,3 +47,43 @@ fn the_readme_carries_the_harness_prerequisites() {
         );
     }
 }
+
+#[test]
+fn the_readme_has_one_command_table_and_no_scattered_daemon_or_service_blocks() {
+    let document = std::fs::read_to_string(readme()).expect("README is readable");
+    let commands = [
+        "pdo daemon",
+        "pdo service install",
+        "pdo service status",
+        "pdo service uninstall",
+        "pdo complete",
+        "pdo fail",
+        "pdo skip",
+        "pdo migrate",
+        "pdo reap",
+        "pdo run create",
+        "pdo page mount",
+        "pdo review list",
+        "pdo review reply",
+    ];
+    for command in commands {
+        assert!(
+            document
+                .lines()
+                .any(|line| line.starts_with("| `pdo ") && line.contains(command)),
+            "CLI command table is missing `{command}`"
+        );
+    }
+
+    let mut in_code_block = false;
+    for line in document.lines() {
+        if line.starts_with("```") {
+            in_code_block = !in_code_block;
+        } else if in_code_block {
+            assert!(
+                !line.contains("pdo daemon") && !line.contains("pdo service"),
+                "daemon and service examples belong in the CLI command table: {line}"
+            );
+        }
+    }
+}

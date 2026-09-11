@@ -55,21 +55,32 @@ PDO includes descriptors for `claude`, `opencode`, and `copilot`.
 
 ### 3. Start PDO
 
-```bash
-pdo daemon
-```
+Run `pdo daemon`, then open [http://localhost:5172](http://localhost:5172).
 
-Open [http://localhost:5172](http://localhost:5172).
+### 4. Keep PDO running
 
-### 4. Run PDO as a service
+Run `pdo service install` to start PDO at boot and keep it running after logout. Check it with `pdo service status` or remove it with `pdo service uninstall`.
 
-```bash
-pdo service install
-pdo service status
-pdo service uninstall
-```
+## CLI commands
 
-`pdo service install --port <port>` changes the default port, and `--dry-run` previews the service definition.
+| Command | Description |
+| --- | --- |
+| `pdo daemon [--port <port>] [--bind <ip>]` | Start the daemon. `PDO_PORT` and `PDO_BIND` provide defaults, while command-line flags take precedence. |
+| `pdo service install [--port <port>] [--bind <ip>] [--dry-run]` | Install the systemd user service or launchd agent; `--dry-run` prints the definition without changing the host. Keep `PDO_ALLOWED_WS_ORIGINS` in a `pdo.service.d/override.conf` drop-in, which survives unit rewrites including Update. |
+| `pdo service status` | Show the installed service status. |
+| `pdo service uninstall` | Stop, disable, and remove the installed service. |
+| `pdo complete [--auto]` | Complete the current node; `--auto` is reserved for runtime hooks. |
+| `pdo fail --reason <text>` | Fail the current node with a recorded reason. |
+| `pdo skip --reason <text>` | End the current run as skipped when there is legitimately no work. |
+| `pdo migrate [--dir <path>] [--dry-run]` | Migrate legacy pipeline YAML files. |
+| `pdo reap [--count] [--dry-run] [--ttl-hours <hours>] [--terminal-ttl-hours <hours>] [--budget-secs <seconds>]` | Report or archive old terminal runs according to the retention policy. |
+| `pdo docs support-table [--check\|--write] [--file <path>]` | Check or regenerate the README harness support table. |
+| `pdo run create <pipeline> [options]` | Create a run through the daemon, with optional input, repository, harness, sandbox, and provisioning settings. |
+| `pdo page mount <name> <directory>` | Serve a directory under `/pages/<name>/`. |
+| `pdo page list` | List active page mounts. |
+| `pdo page unmount <name>` | Remove a page mount. |
+| `pdo review list [--state <state>] [--run <id>]` | List review comments for a run. |
+| `pdo review reply <id> --text <markdown> [--resolved] [--run <id>]` | Reply to a review comment and optionally propose or record its resolution. |
 
 ## Reverse proxy
 
@@ -77,11 +88,10 @@ The daemon listens on `0.0.0.0:<port>` without authentication or TLS.
 
 Put authentication and TLS in front of PDO before exposing it beyond a trusted network.
 
-Set every public browser origin as an exact `scheme://host[:port]` value.
+Behind a proxy on the same machine, start the daemon with `--bind 127.0.0.1`.
 
-```bash
-PDO_ALLOWED_WS_ORIGINS="https://pdo.example.tld,https://pdo.internal:8443" pdo daemon
-```
+Set every public browser origin as an exact `scheme://host[:port]` value, for example
+`PDO_ALLOWED_WS_ORIGINS="https://pdo.example.tld,https://pdo.internal:8443" pdo daemon`.
 
 | Setting | Behavior |
 | --- | --- |
@@ -206,3 +216,9 @@ cargo run -p pdo-daemon -- --help
 | --- | --- |
 | [CONTEXT.md](CONTEXT.md) | Domain glossary and module map |
 | [`docs/adr/`](docs/adr/) | Architecture decisions |
+
+## License
+
+PDO is released under the [MIT License](LICENSE). Use it, modify it, embed it, host it,
+for any purpose. Contributions are accepted under the same license; see
+[CONTRIBUTING.md](CONTRIBUTING.md).

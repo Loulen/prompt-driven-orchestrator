@@ -16,16 +16,29 @@ describe("Inspector amber accent scope", () => {
       expect(indexCss).toContain("--color-acc: var(--color-st-await)");
     });
 
-    it("defines .panel-r with --color-acc-bg using amber rgba", () => {
-      expect(indexCss).toMatch(/\.panel-r[\s\S]*rgba\(245,\s*158,\s*11/);
+    // #759 tokenised the amber literals so the scope follows the theme. The
+    // behaviour is unchanged — the inspector is still amber — so these assert
+    // the binding and the amber declaration separately, instead of pinning an
+    // rgba triple to the `.panel-r` rule where it no longer lives.
+    it("binds .panel-r's accent tint and border to the amber status tokens", () => {
+      expect(indexCss).toMatch(/\.panel-r[\s\S]*?--color-acc-bg:\s*var\(--color-st-await-bg\)/);
+      expect(indexCss).toMatch(
+        /\.panel-r[\s\S]*?--color-acc-border:\s*var\(--color-st-await-border\)/,
+      );
     });
 
-    it("defines .panel-r with --color-acc-border using amber rgba", () => {
-      expect(indexCss).toContain("--color-acc-border");
-      expect(indexCss).toMatch(/--color-acc-border:\s*rgba\(245,\s*158,\s*11/);
+    it("declares the amber tint and border as amber in the base palette", () => {
+      expect(indexCss).toMatch(/--color-st-await-bg:\s*rgba\(245,\s*158,\s*11/);
+      expect(indexCss).toMatch(/--color-st-await-border:\s*rgba\(245,\s*158,\s*11/);
     });
 
-    it("defines .panel-r with --color-primary-foreground for dark-on-amber text", () => {
+    it("keeps the inspector amber in the light theme too", () => {
+      const light = indexCss.slice(indexCss.indexOf(':root[data-theme="light"]'));
+      expect(light).toMatch(/--color-st-await-bg:\s*rgba\(143,\s*69,\s*6/);
+      expect(light).toMatch(/--color-st-await-border:\s*rgba\(143,\s*69,\s*6/);
+    });
+
+    it("defines .panel-r with --color-primary-foreground for legible text on amber", () => {
       expect(indexCss).toMatch(/\.panel-r[\s\S]*--color-primary-foreground/);
     });
   });

@@ -256,7 +256,7 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
                   aria-hidden
                   className={`absolute -right-[5px] -top-1 box-border grid h-[15px] min-w-[15px] place-items-center rounded-[8px] border-2 border-bg-2 px-1 font-sans font-semibold leading-none ${
                     reviewTone === "proposed"
-                      ? "bg-st-await text-[#1a0f00]"
+                      ? "bg-st-await text-on-acc-warn"
                       : reviewTone === "unread"
                         ? "bg-st-running text-white"
                         : "bg-st-running-bg text-st-running shadow-[inset_0_0_0_1px_rgba(59,130,246,.35)]"

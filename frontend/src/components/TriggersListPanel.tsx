@@ -367,7 +367,7 @@ export default function TriggersListPanel({
           </span>
           <button
             onClick={onNewTrigger}
-            className="flex cursor-pointer items-center gap-1 rounded bg-acc px-1.5 py-0.5 font-medium text-[#04140d] transition-colors hover:bg-acc-dim"
+            className="flex cursor-pointer items-center gap-1 rounded bg-acc px-1.5 py-0.5 font-medium text-on-acc transition-colors hover:bg-acc-dim"
             style={{ fontSize: "10.5px" }}
           >
             <Plus size={10} />
@@ -406,7 +406,7 @@ export default function TriggersListPanel({
           </div>
           <button
             onClick={onNewTrigger}
-            className="mt-1 flex cursor-pointer items-center gap-1 rounded bg-acc px-2 py-1 font-medium text-[#04140d] transition-colors hover:bg-acc-dim"
+            className="mt-1 flex cursor-pointer items-center gap-1 rounded bg-acc px-2 py-1 font-medium text-on-acc transition-colors hover:bg-acc-dim"
             style={{ fontSize: "10.5px" }}
           >
             <Plus size={11} />

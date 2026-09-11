@@ -1969,7 +1969,9 @@ mod tests {
     fn binary_present_in_container_true_on_zero_exit() {
         let tmp = tempfile::tempdir().unwrap();
         let (docker, log) = write_fake_docker(tmp.path(), &FakeSpec::default());
-        assert!(binary_present_in_container(&docker, "r1", 1000, 1000, "pi").unwrap());
+        assert!(
+            retry_etxtbsy(|| binary_present_in_container(&docker, "r1", 1000, 1000, "pi")).unwrap()
+        );
         // It really ran a `docker exec` (never the binary itself).
         assert!(log_lines(&log).contains(&"exec".to_string()));
     }
@@ -1984,7 +1986,10 @@ mod tests {
             ..FakeSpec::default()
         };
         let (docker, _log) = write_fake_docker(tmp.path(), &spec);
-        assert!(!binary_present_in_container(&docker, "r1", 1000, 1000, "pi").unwrap());
+        assert!(
+            !retry_etxtbsy(|| binary_present_in_container(&docker, "r1", 1000, 1000, "pi"))
+                .unwrap()
+        );
     }
 
     /// A container that is gone / not running is NOT a binary absence: it is an `Err`,
@@ -1998,7 +2003,8 @@ mod tests {
             ..FakeSpec::default()
         };
         let (docker, _log) = write_fake_docker(tmp.path(), &spec);
-        let err = binary_present_in_container(&docker, "r1", 1000, 1000, "pi").unwrap_err();
+        let err = retry_etxtbsy(|| binary_present_in_container(&docker, "r1", 1000, 1000, "pi"))
+            .unwrap_err();
         assert!(format!("{err:#}").contains("cannot answer a binary probe"));
     }
 

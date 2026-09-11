@@ -147,7 +147,7 @@ fn iteration_status(state: &RunState, node_id: &str, iter: i64) -> Option<NodeSt
 /// The iteration currently holding (or owed) a live agent session for this
 /// node, if any: `Running` or `AwaitingUser` iteration rows, or the node-level
 /// `Waiting` marker (throttled, no iteration row yet — #159).
-fn live_iteration(state: &RunState, node_id: &str) -> Option<i64> {
+pub(crate) fn live_iteration(state: &RunState, node_id: &str) -> Option<i64> {
     let node = state.nodes.get(node_id)?;
     if node.status == NodeStatus::Waiting {
         return Some(node.iter);

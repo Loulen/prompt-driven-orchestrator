@@ -4451,6 +4451,33 @@ mod tests {
         assert_eq!(state.nodes["planner"].status, NodeStatus::Running);
     }
 
+    /// #785 / ADR-0050 §2: the redundant `NodeStarted` a losing duplicate spawn
+    /// appends on the SAME `(node, iter)` re-stamps the winner's live row — it
+    /// never opens a phantom second iteration.
+    #[test]
+    fn duplicate_node_started_on_same_iter_keeps_one_live_iteration() {
+        let mut loser = make_event(EventKind::NodeStarted, Some("a"), Some(1));
+        loser.ts = "2026-01-01T00:00:00.040Z".into();
+        let events = vec![
+            make_event(EventKind::RunStarted, None, None),
+            make_event(EventKind::NodeStarted, Some("a"), Some(1)),
+            loser,
+        ];
+
+        let state = project(&events).unwrap();
+        let node = &state.nodes["a"];
+        assert_eq!(
+            node.iterations.len(),
+            1,
+            "no phantom iteration: {:?}",
+            node.iterations
+        );
+        assert_eq!(node.iterations[0].iter, 1);
+        assert_eq!(node.iterations[0].status, NodeStatus::Running);
+        assert_eq!(node.status, NodeStatus::Running);
+        assert_eq!(state.status, RunStatus::Running);
+    }
+
     #[test]
     fn sessions_spawned_counts_raw_node_started_not_distinct_iters() {
         // #100: `sessions_spawned` is the RAW count of `NodeStarted` events, so

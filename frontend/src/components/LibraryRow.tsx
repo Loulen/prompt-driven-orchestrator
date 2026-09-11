@@ -1,5 +1,5 @@
 import type { MouseEvent } from "react";
-import { Copy, Trash2 } from "lucide-react";
+import { Copy, Pencil, Trash2 } from "lucide-react";
 import SelectControl from "./SelectControl";
 
 interface Props {
@@ -16,6 +16,18 @@ interface Props {
    */
   onOpen?: () => void;
   onDuplicate?: () => void;
+  /**
+   * #774 — present ⇒ the row grows a hover pencil that starts an inline
+   * rename. Only instance rows offer it: a rename moves the backing file, so
+   * there must be a real pipeline behind the row.
+   */
+  onRenameStart?: () => void;
+  /** Inline-rename state, all owned by the parent (mirror of the run rows). */
+  renaming?: boolean;
+  renameValue?: string;
+  onRenameValueChange?: (value: string) => void;
+  onRenameCommit?: () => void;
+  onRenameCancel?: () => void;
   /**
    * Fired on the trash affordance. A plain callback on purpose: the parent owns
    * *how* the delete happens (confirm modal + optional #227 cascade for a
@@ -51,6 +63,12 @@ export default function LibraryRow({
   showDuplicate,
   onOpen,
   onDuplicate,
+  onRenameStart,
+  renaming = false,
+  renameValue = "",
+  onRenameValueChange,
+  onRenameCommit,
+  onRenameCancel,
   onDelete,
   deleteTitle,
   testId,
@@ -69,7 +87,24 @@ export default function LibraryRow({
       )}
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
-          <span className="truncate font-medium">{name}</span>
+          {renaming ? (
+            <input
+              autoFocus
+              className="w-full rounded border border-acc bg-bg-3 px-1 py-0.5 font-medium text-fg outline-none"
+              style={{ fontSize: "11.5px" }}
+              value={renameValue}
+              onChange={(e) => onRenameValueChange?.(e.target.value)}
+              onBlur={() => onRenameCommit?.()}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") onRenameCommit?.();
+                if (e.key === "Escape") onRenameCancel?.();
+              }}
+              onClick={(e) => e.stopPropagation()}
+              data-testid="library-rename-input"
+            />
+          ) : (
+            <span className="truncate font-medium">{name}</span>
+          )}
         </div>
         <div
           className="mt-0.5 flex items-center gap-1.5 text-fg-4"
@@ -84,6 +119,20 @@ export default function LibraryRow({
           )}
         </div>
       </div>
+      {onRenameStart && !renaming && (
+        <span
+          className="hidden shrink-0 group-hover:inline-flex"
+          data-testid="library-rename-button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onRenameStart();
+          }}
+          role="button"
+          title="Rename pipeline"
+        >
+          <Pencil size={14} className="text-fg-4 transition-colors hover:text-acc" />
+        </span>
+      )}
       {showDuplicate && (
         <span
           className="hidden shrink-0 group-hover:inline-flex"

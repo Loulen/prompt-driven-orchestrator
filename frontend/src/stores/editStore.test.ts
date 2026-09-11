@@ -4,7 +4,7 @@ import { serializePipeline } from "../lib/serializePipeline";
 import type { OpenPipeline, Selection } from "./editStore";
 import { generatedRegionId } from "../lib/loopRegions";
 import { pipelinesEquivalent } from "../hooks/useLibraryPipelines";
-import { ApiError, savePipeline, fetchPipeline, saveRunPipeline, deletePipeline } from "../api";
+import { ApiError, savePipeline, fetchPipeline, fetchPipelines, saveRunPipeline, deletePipeline, renamePipeline } from "../api";
 import type { PipelineDef, NodeDef, EdgeDef } from "../types";
 
 vi.mock("../api", async (importOriginal) => ({
@@ -36,15 +36,18 @@ vi.mock("../api", async (importOriginal) => ({
     prompts: {},
     diagnostics: [],
   }),
-  savePipeline: vi.fn().mockResolvedValue(undefined),
+  savePipeline: vi.fn().mockResolvedValue({ ok: true }),
   saveRunPipeline: vi.fn().mockResolvedValue(undefined),
   deletePipeline: vi.fn().mockResolvedValue(undefined),
+  renamePipeline: vi.fn().mockResolvedValue({ ok: true }),
   saveLibraryPipeline: vi.fn().mockResolvedValue({ id: "x", scope: "user" }),
 }));
 
 const mockSavePipeline = vi.mocked(savePipeline);
 const mockSaveRunPipeline = vi.mocked(saveRunPipeline);
 const mockDeletePipeline = vi.mocked(deletePipeline);
+const mockRenamePipeline = vi.mocked(renamePipeline);
+const mockFetchPipelines = vi.mocked(fetchPipelines);
 
 function makePipeline(
   nodes: NodeDef[] = [],
@@ -1083,7 +1086,7 @@ describe("save error storage", () => {
     useEditStore.setState((s) => ({
       openTabs: s.openTabs.map((t) => (t.id === "p1" ? { ...t, dirty: true } : t)),
     }));
-    mockSavePipeline.mockImplementationOnce(() => Promise.resolve(undefined));
+    mockSavePipeline.mockImplementationOnce(() => Promise.resolve({ ok: true }));
     await useEditStore.getState().save("p1");
 
     const tab = useEditStore.getState().openTabs.find((t) => t.id === "p1");
@@ -2020,7 +2023,7 @@ describe("undo/redo history (ADR-0014 / #226)", () => {
 
     it("CLEAR: reloadFromLibrary clears the stack", async () => {
       seedWithHistory("my-pipe", true);
-      mockSavePipeline.mockResolvedValueOnce(undefined);
+      mockSavePipeline.mockResolvedValueOnce({ ok: true });
       mockFetchPipeline.mockResolvedValueOnce({
         id: "my-pipe", scope: "repo", path: "/p.yaml", yaml: "",
         pipeline: EXTERNAL_PIPELINE, prompts: {}, diagnostics: [],
@@ -2031,7 +2034,7 @@ describe("undo/redo history (ADR-0014 / #226)", () => {
 
     it("KEEP: a successful save keeps the stack", async () => {
       seedWithHistory("my-pipe", true);
-      mockSavePipeline.mockResolvedValueOnce(undefined);
+      mockSavePipeline.mockResolvedValueOnce({ ok: true });
       await useEditStore.getState().save("my-pipe");
       expect(useEditStore.getState().openTabs[0].dirty).toBe(false);
       expect(useEditStore.getState().history["my-pipe"].past.length).toBeGreaterThan(0);
@@ -2384,5 +2387,106 @@ describe("single-tab mode (#342)", () => {
       expect(useEditStore.getState().openTabs.map((t) => t.id)).toEqual(["a"]);
       expect(useEditStore.getState().pendingSingleTab).toBeNull();
     });
+  });
+});
+
+// #774 — rename: the visible name and the file stem move together, so any
+// id-keyed store slot must follow the daemon's final id.
+describe("pipeline rename (#774)", () => {
+  const before = {
+    openTabs: [
+      {
+        id: "old-name",
+        scope: "instance" as const,
+        pipeline: { name: "old-name", version: "1.0", variables: {}, nodes: [], edges: [] },
+        prompts: {},
+        diagnostics: [],
+        dirty: true,
+        externalDirty: false,
+      },
+    ],
+    activeTabId: "old-name" as const,
+    lastSavedAt: { "old-name": 111 },
+    history: {
+      "old-name": {
+        past: [{ name: "old-name", version: "1.0", variables: {}, nodes: [], edges: [] }],
+        future: [],
+        lastKey: null,
+        lastAt: 0,
+      },
+    },
+  };
+
+  it("save rekeys the open tab when the daemon renamed the file", async () => {
+    useEditStore.setState({ ...before });
+    mockSavePipeline.mockResolvedValueOnce({ ok: true, id: "fresh-stem", renamed: true });
+
+    await useEditStore.getState().save("old-name");
+
+    const s = useEditStore.getState();
+    expect(s.openTabs).toHaveLength(1);
+    expect(s.openTabs[0].id).toBe("fresh-stem");
+    expect(s.openTabs[0].dirty).toBe(false);
+    expect(s.activeTabId).toBe("fresh-stem");
+    // Every id-keyed slot moved with the tab; no stale "old-name" residue.
+    expect(s.lastSavedAt["fresh-stem"]).toBeGreaterThan(0);
+    expect(s.lastSavedAt["old-name"]).toBeUndefined();
+    expect(s.history["fresh-stem"]).toBeDefined();
+    expect(s.history["old-name"]).toBeUndefined();
+  });
+
+  it("save keeps the tab in place when the stem is unchanged", async () => {
+    useEditStore.setState({ ...before, activeTabId: "old-name" });
+    mockSavePipeline.mockResolvedValueOnce({ ok: true, id: "old-name", renamed: false });
+
+    await useEditStore.getState().save("old-name");
+
+    const s = useEditStore.getState();
+    expect(s.openTabs[0].id).toBe("old-name");
+    expect(s.openTabs[0].dirty).toBe(false);
+    expect(s.activeTabId).toBe("old-name");
+  });
+
+  it("renamePipeline refreshes the list and rekeys the open tab", async () => {
+    useEditStore.setState({ ...before });
+    mockRenamePipeline.mockResolvedValueOnce({
+      ok: true,
+      id: "renamed-pipeline",
+      name: "Renamed Pipeline",
+    });
+    mockFetchPipelines.mockResolvedValueOnce([
+      {
+        id: "renamed-pipeline",
+        name: "Renamed Pipeline",
+        scope: "instance",
+        path: "",
+        node_count: 0,
+        modified: null,
+        variables: {},
+      },
+    ]);
+
+    await useEditStore.getState().renamePipeline("old-name", "Renamed Pipeline");
+
+    expect(mockRenamePipeline).toHaveBeenCalledWith("old-name", "Renamed Pipeline");
+    const s = useEditStore.getState();
+    expect(s.pipelines).toHaveLength(1);
+    expect(s.pipelines[0].id).toBe("renamed-pipeline");
+    expect(s.openTabs[0].id).toBe("renamed-pipeline");
+    expect(s.openTabs[0].pipeline.name).toBe("Renamed Pipeline");
+    expect(s.activeTabId).toBe("renamed-pipeline");
+    // Undo history survives: a rename is an identity change, not a content change.
+    expect(s.history["renamed-pipeline"]).toBeDefined();
+    expect(s.history["old-name"]).toBeUndefined();
+  });
+
+  it("renamePipeline leaves the tab untouched when the stem is unchanged", async () => {
+    useEditStore.setState({ ...before });
+    mockRenamePipeline.mockResolvedValueOnce({ ok: true, id: "old-name", renamed: false });
+    mockFetchPipelines.mockResolvedValueOnce([]);
+
+    await useEditStore.getState().renamePipeline("old-name", "old-name");
+
+    expect(useEditStore.getState().openTabs[0].id).toBe("old-name");
   });
 });

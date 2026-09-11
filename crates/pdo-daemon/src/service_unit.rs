@@ -18,8 +18,10 @@
 //!     cgroup on stop/restart, which would nuke the child tmux server holding
 //!     every live Claude session (#234). `process` kills only the daemon pid.
 //!   * `Environment=PATH=…<node dir>…` — the daemon shells out to
-//!     `claude`/`node`/`git`/`tmux`; a bare unit PATH silently breaks spawns.
+//!     `node`/`git`/`tmux`; a bare unit PATH silently breaks those operations.
+//!     Harness binaries use the user's interactive shell PATH (ADR-0055).
 
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
 /// launchd label / plist basename for the macOS LaunchAgent (#156, D6).
@@ -45,9 +47,13 @@ pub(crate) const SYSTEMD_UNIT_NAME: &str = "pdo.service";
 pub(crate) fn render_systemd_unit(
     exe: &Path,
     port: u16,
+    bind: Option<IpAddr>,
     working_dir: &Path,
     path_env: &str,
 ) -> String {
+    let bind_env = bind
+        .map(|ip| format!("Environment=PDO_BIND={ip}\n"))
+        .unwrap_or_default();
     format!(
         "[Unit]\n\
          Description=PDO (Prompt-Driven Orchestrator) daemon\n\
@@ -58,6 +64,8 @@ pub(crate) fn render_systemd_unit(
          Type=simple\n\
          WorkingDirectory={working_dir}\n\
          Environment=PDO_PORT={port}\n\
+         {bind_env}\
+         # Harness binaries resolve through the user's interactive shell PATH (ADR-0055).\n\
          Environment=PATH={path_env}\n\
          ExecStart={exe} daemon\n\
          Restart=on-failure\n\
@@ -68,6 +76,7 @@ pub(crate) fn render_systemd_unit(
          WantedBy=default.target\n",
         working_dir = working_dir.display(),
         port = port,
+        bind_env = bind_env,
         path_env = path_env,
         exe = exe.display(),
     )
@@ -84,10 +93,14 @@ pub(crate) fn render_systemd_unit(
 pub(crate) fn render_launchd_plist(
     exe: &Path,
     port: u16,
+    bind: Option<IpAddr>,
     working_dir: &Path,
     home: &Path,
     path_env: &str,
 ) -> String {
+    let bind_env = bind
+        .map(|ip| format!("\x20 \x20 <key>PDO_BIND</key><string>{ip}</string>\n"))
+        .unwrap_or_default();
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\"\n\
@@ -105,6 +118,8 @@ pub(crate) fn render_launchd_plist(
          \x20 <key>EnvironmentVariables</key>\n\
          \x20 <dict>\n\
          \x20 \x20 <key>PDO_PORT</key><string>{port}</string>\n\
+         {bind_env}\
+         \x20 \x20 <!-- Harness binaries resolve through the user's interactive shell PATH (ADR-0055). -->\n\
          \x20 \x20 <key>PATH</key><string>{path_env}</string>\n\
          \x20 \x20 <key>HOME</key><string>{home}</string>\n\
          \x20 </dict>\n\
@@ -116,6 +131,7 @@ pub(crate) fn render_launchd_plist(
         exe = exe.display(),
         working_dir = working_dir.display(),
         port = port,
+        bind_env = bind_env,
         path_env = path_env,
         home = home.display(),
     )
@@ -126,7 +142,7 @@ pub(crate) fn render_launchd_plist(
 /// Faithful to the Makefile recipe:
 /// `<exe dir>:<node dir>:/usr/local/bin:/usr/bin:/bin`. The exe dir first so the
 /// service resolves the very `pdo` it was installed from; the node dir so
-/// `claude`/`node` spawns work under the minimal env systemd hands a unit.
+/// node-backed operations work under the minimal env systemd hands a unit.
 ///
 /// `node_dir` is passed in (resolved impurely by [`resolve_node_dir`]) to keep
 /// this pure and golden-testable. When `None` (node not found) the node segment
@@ -134,15 +150,19 @@ pub(crate) fn render_launchd_plist(
 /// dir is the single most likely silent-spawn-failure on a shipped unit.
 pub(crate) fn build_path_env(exe: &Path, node_dir: Option<&Path>) -> String {
     let mut parts: Vec<String> = Vec::with_capacity(5);
-    if let Some(dir) = exe.parent() {
-        parts.push(dir.display().to_string());
+    let candidates = [
+        exe.parent(),
+        node_dir,
+        Some(Path::new("/usr/local/bin")),
+        Some(Path::new("/usr/bin")),
+        Some(Path::new("/bin")),
+    ];
+    for dir in candidates.into_iter().flatten() {
+        let dir = dir.display().to_string();
+        if !parts.contains(&dir) {
+            parts.push(dir);
+        }
     }
-    if let Some(dir) = node_dir {
-        parts.push(dir.display().to_string());
-    }
-    parts.push("/usr/local/bin".to_string());
-    parts.push("/usr/bin".to_string());
-    parts.push("/bin".to_string());
     parts.join(":")
 }
 
@@ -207,7 +227,7 @@ mod tests {
         let exe = Path::new("/home/user/.local/bin/pdo");
         let wd = Path::new("/home/user/.pdo/app");
         let path_env = "/home/user/.local/bin:/opt/node/bin:/usr/local/bin:/usr/bin:/bin";
-        let unit = render_systemd_unit(exe, 6160, wd, path_env);
+        let unit = render_systemd_unit(exe, 6160, None, wd, path_env);
 
         let expected = "\
 [Unit]
@@ -219,6 +239,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/home/user/.pdo/app
 Environment=PDO_PORT=6160
+# Harness binaries resolve through the user's interactive shell PATH (ADR-0055).
 Environment=PATH=/home/user/.local/bin:/opt/node/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=/home/user/.local/bin/pdo daemon
 Restart=on-failure
@@ -236,6 +257,7 @@ WantedBy=default.target
         let unit = render_systemd_unit(
             Path::new("/x/pdo"),
             5172,
+            None,
             Path::new("/repo"),
             "/x:/opt/node/bin:/usr/bin",
         );
@@ -247,6 +269,9 @@ WantedBy=default.target
         assert!(unit.contains("WorkingDirectory=/repo"));
         assert!(unit.contains("Environment=PDO_PORT=5172"));
         assert!(unit.contains("Environment=PATH=/x:/opt/node/bin:/usr/bin"));
+        assert!(unit.contains(
+            "# Harness binaries resolve through the user's interactive shell PATH (ADR-0055)."
+        ));
         assert!(unit.contains("Restart=on-failure"));
         assert!(unit.contains("RestartSec=3"));
         assert!(unit.contains("WantedBy=default.target"));
@@ -257,6 +282,7 @@ WantedBy=default.target
         let plist = render_launchd_plist(
             Path::new("/Users/u/.local/bin/pdo"),
             6160,
+            None,
             Path::new("/Users/u/.pdo/app"),
             Path::new("/Users/u"),
             "/Users/u/.local/bin:/opt/node/bin:/usr/bin",
@@ -278,6 +304,38 @@ WantedBy=default.target
     }
 
     #[test]
+    fn service_definitions_include_bind_only_when_requested() {
+        let bind = Some("127.0.0.1".parse().unwrap());
+        let unit = render_systemd_unit(
+            Path::new("/x/pdo"),
+            5172,
+            bind,
+            Path::new("/repo"),
+            "/usr/bin",
+        );
+        assert!(unit.contains("Environment=PDO_BIND=127.0.0.1\n"));
+
+        let plist = render_launchd_plist(
+            Path::new("/x/pdo"),
+            5172,
+            bind,
+            Path::new("/repo"),
+            Path::new("/home/user"),
+            "/usr/bin",
+        );
+        assert!(plist.contains("<key>PDO_BIND</key><string>127.0.0.1</string>"));
+
+        let default_unit = render_systemd_unit(
+            Path::new("/x/pdo"),
+            5172,
+            None,
+            Path::new("/repo"),
+            "/usr/bin",
+        );
+        assert!(!default_unit.contains("PDO_BIND"));
+    }
+
+    #[test]
     fn build_path_env_orders_exe_then_node_then_std_dirs() {
         let got = build_path_env(
             Path::new("/home/user/.local/bin/pdo"),
@@ -293,6 +351,15 @@ WantedBy=default.target
     fn build_path_env_omits_node_segment_when_absent() {
         let got = build_path_env(Path::new("/home/user/.local/bin/pdo"), None);
         assert_eq!(got, "/home/user/.local/bin:/usr/local/bin:/usr/bin:/bin");
+    }
+
+    #[test]
+    fn build_path_env_deduplicates_node_and_standard_directories() {
+        let got = build_path_env(
+            Path::new("/home/user/.local/bin/pdo"),
+            Some(Path::new("/usr/bin")),
+        );
+        assert_eq!(got, "/home/user/.local/bin:/usr/bin:/usr/local/bin:/bin");
     }
 
     #[test]

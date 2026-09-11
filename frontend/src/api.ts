@@ -568,6 +568,47 @@ export async function markNodeDone(
   return { kind: "completed" };
 }
 
+export type ReleaseNodeCompletionOutcome =
+  | { kind: "released" }
+  | {
+      kind: "refused";
+      slug: string | null;
+      recoverable: boolean | null;
+      message: string;
+    };
+
+export async function releaseNodeCompletion(
+  runId: string,
+  nodeId: string,
+  iter: number,
+): Promise<ReleaseNodeCompletionOutcome> {
+  const resp = await request<Response>(
+    "POST",
+    `/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/release`,
+    { body: { iter }, responseMode: "raw" },
+  );
+  const body: unknown = await resp.json().catch(() => null);
+  if (resp.status === 409) {
+    const refusal = body as
+      | { error?: unknown; recoverable?: unknown; message?: unknown }
+      | null;
+    return {
+      kind: "refused",
+      slug: typeof refusal?.error === "string" ? refusal.error : null,
+      recoverable:
+        typeof refusal?.recoverable === "boolean" ? refusal.recoverable : null,
+      message: apiErrorMessage(body, `release refused: ${resp.status}`),
+    };
+  }
+  if (!resp.ok) {
+    throw new ApiError(
+      apiErrorMessage(body, `release completion failed: ${resp.status}`),
+      { status: resp.status, body },
+    );
+  }
+  return { kind: "released" };
+}
+
 export function attachSession(sessionId: string): Promise<void> {
   return request<void>(
     "POST",

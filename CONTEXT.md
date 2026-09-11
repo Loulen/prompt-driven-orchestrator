@@ -348,7 +348,7 @@ Point clé : **l'autonomie est une propriété du *pipeline*, jamais une faveur 
 Conséquences :
 
 - **Tout NodeRun est attachable** en tmux ; l'utilisateur peut intervenir, converser, corriger.
-- **Un Node peut être marqué `interactive: true`** : son NodeRun attend que l'utilisateur attache la session et signale la complétion.
+- **Un Node peut être marqué `interactive: true`** : son NodeRun attend que l'utilisateur attache la session et signale la complétion — en forçant (« Mark complete ») ou en **libérant** la complétion à l'agent (« Mark ready for completion », ADR-0068).
 - **Le Pipeline Manager** est conversationnel et permet de débloquer des Runs — pas juste de lire l'état.
 - **Aucune action durable auto par le runtime lui-même.** PDO ne merge, ne PR, ne cleanup **jamais de sa propre initiative**. Si ces effets se produisent, c'est qu'un **nœud du pipeline** les exécute — choix explicite du designer, versionné, auditable.
   - **« auto-cleanup » vs « reapable surfacing » (#128)** : faire supprimer worktrees/branches par le runtime de lui-même = interdit (ADR-0012). **Exposer** les candidats sans rien supprimer = autorisé : le runtime *liste* (`GET /runs/reapable`, lecture seule), la suppression reste au pipeline/humain via `cleanup_run`. La recette `docs/recipes/disk-janitor.md` câble ce surfacing à un Trigger cron — l'autonomie reste *dans le pipeline*.
@@ -601,6 +601,7 @@ Exposées comme `POST /runs/<id>/commands` :
 | `kill_node` | Tue un NodeRun en cours (le marque `failed`) |
 | `restart_node` | Re-spawn un NodeRun au **même `iter`** ; sur un nœud isolé, le sous-worktree est réutilisé en place — le travail non commité survit (#489). Préconditions et refus → ADR-0037 |
 | `mark_node_done` | Force la complétion (nœud `interactive`, ou récupération d'un failed corrigé à la main). Même corps que `pdo complete` : refus 409 nommé → ADR-0035 |
+| `release_node_completion` | **Libère la complétion** d'un nœud `interactive` : lève la garde qui refuse `pdo complete` ; le nœud repasse `running`. Idempotent ; refus 409 nommé sur un nœud non interactif ou sans session vivante → ADR-0068 |
 | `inject_artifact` | Pose un artefact à la main dans le Blackboard |
 | `cleanup_run` | Supprime branches, worktrees, artefacts (archive d'abord — ADR-0020) |
 | `rename_run` | Donne au Run un nom descriptif |
@@ -727,7 +728,12 @@ Multi-client par session : gratuit côté tmux. Sécurité : un contrôle d'`Ori
 
 ### Nœuds interactifs — signal de complétion
 
-Un Node `interactive: true` spawn une session normale et **n'auto-complète jamais**. La complétion est signalée **depuis l'UI** par un bouton « Mark complete » (pas de slash-command in-session : le bouton reste accessible sans être attaché). Les artefacts présents sur disque sont alors pris tels quels — le préambule le dit à l'agent et au user.
+Un Node `interactive: true` spawn une session normale et **n'auto-complète jamais tant que sa complétion n'est pas libérée**. Deux gestes, **depuis l'UI**, côte à côte (pas de slash-command in-session : les boutons restent accessibles sans être attaché) :
+
+- **« Mark complete »** (`mark_node_done`) : **force** la complétion ; les artefacts présents sur disque sont pris tels quels. Échappatoire inconditionnelle, disponible aussi après libération.
+- **« Mark ready for completion »** (`release_node_completion`) : **libère** la complétion — l'utilisateur a fini d'interagir et **pré-autorise** l'agent à appeler `pdo complete` quand il le juge bon, pour faire avancer le run. Visible seulement sur un nœud interactif à session vivante.
+
+**Libération de la complétion** *(terme, ADR-0068 — release completion)* : événement sur `(node, iter)` qui lève la **garde de complétion** : tant qu'il est absent, **toute** complétion d'un nœud interactif (`pdo complete` explicite, hook Stop, fin de tour) est refusée — 409 `completion_not_released`, *recoverable* (exit 3 : l'agent garde la main et attend le mot de l'utilisateur). Après libération le nœud repasse **`running`** (l'attente n'est plus sur l'humain). Un retry ou un `restart_node` **réarme** la garde. Le runtime **n'injecte rien** dans le pane (ADR-0051) : l'utilisateur attaché dit lui-même à l'agent qu'il a fini ; le préambule interactif décrit ce contrat à l'agent. _Éviter_ : « débloquer » (= `AwaitingUser` sur incident), « auto-complétion » (ADR-0032 §2, réglage d'instance — la libération ne l'arme pas), « autoriser pdo complete » sans dire par qui (c'est un geste humain, jamais du runtime).
 
 Le bouton **n'est pas une garantie** : il est gaté sur le seul statut, et le garde autorise explicitement « mark complete sur un nœud failed corrigé à la main » comme chemin de récupération. Le clic peut donc être **refusé** (409 nommé, affiché au niveau du bouton) — cf. ADR-0035.
 

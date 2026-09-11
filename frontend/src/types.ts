@@ -792,6 +792,8 @@ export interface IterationInfo {
   status: NodeStatus;
   started_at: string | null;
   completed_at: string | null;
+  interactive?: boolean;
+  completion_released?: boolean;
 }
 
 /**

@@ -823,7 +823,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
                   setGuardTestError(null);
                 }}
                 className={`rounded px-2 py-0.5 font-medium transition-colors ${
-                  mode === "run" ? "bg-acc text-[#04140d]" : "text-fg-3 hover:text-fg"
+                  mode === "run" ? "bg-acc text-on-acc" : "text-fg-3 hover:text-fg"
                 }`}
                 data-testid="mode-run"
               >
@@ -838,7 +838,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
                   setGuardTestError(null);
                 }}
                 className={`rounded px-2 py-0.5 font-medium transition-colors ${
-                  mode === "trigger" ? "bg-acc text-[#04140d]" : "text-fg-3 hover:text-fg"
+                  mode === "trigger" ? "bg-acc text-on-acc" : "text-fg-3 hover:text-fg"
                 }`}
                 data-testid="mode-trigger"
               >
@@ -1685,7 +1685,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
             <button
               onClick={handleLaunch}
               disabled={submitting || !canLaunch}
-              className="flex items-center gap-1.5 rounded-md bg-acc px-3 py-1.5 font-medium text-[#04140d] transition-colors hover:bg-acc-dim disabled:opacity-40"
+              className="flex items-center gap-1.5 rounded-md bg-acc px-3 py-1.5 font-medium text-on-acc transition-colors hover:bg-acc-dim disabled:opacity-40"
               style={{ fontSize: "11.5px" }}
               data-testid="launch-button"
             >
@@ -1696,7 +1696,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
             <button
               onClick={handleCreateTrigger}
               disabled={submitting || !canCreateTrigger}
-              className="flex items-center gap-1.5 rounded-md bg-acc px-3 py-1.5 font-medium text-[#04140d] transition-colors hover:bg-acc-dim disabled:opacity-40"
+              className="flex items-center gap-1.5 rounded-md bg-acc px-3 py-1.5 font-medium text-on-acc transition-colors hover:bg-acc-dim disabled:opacity-40"
               style={{ fontSize: "11.5px" }}
               data-testid={editingTriggerId ? "save-trigger-button" : "create-trigger-button"}
             >

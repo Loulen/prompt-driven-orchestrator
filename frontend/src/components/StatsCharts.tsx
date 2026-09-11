@@ -33,22 +33,48 @@ import type {
 } from "../types";
 import { formatCostAmount } from "../lib/costLabel";
 import { harnessColor } from "../lib/harness";
+import { cssColor } from "../lib/cssColor";
+import { useTheme } from "../hooks/useTheme";
 import { Tooltip, TooltipProvider } from "./ui/tooltip";
 
 export type StatsTab = "runs" | "sessions" | "triggers" | "cost" | "performance";
 
+/**
+ * Chart colours (#759). Getters, not constants: recharts takes resolved colours
+ * as props, so each read must happen at RENDER time against the live palette.
+ * The call sites are unchanged — `CHART.grid` and `{...AXIS_PROPS}` now resolve
+ * the token instead of returning a frozen hex. `StatsCharts` subscribes to the
+ * theme so a switch re-renders the subtree and these are read again.
+ */
 const CHART = {
-  runs: "#58a6ff",
-  errors: "#f85149",
-  fires: "#3fb950",
-  grid: "#30363d",
-  axis: "#8b949e",
-} as const;
+  get runs() {
+    return cssColor("--color-chart-runs", "#58a6ff");
+  },
+  get errors() {
+    return cssColor("--color-chart-errors", "#f85149");
+  },
+  get fires() {
+    return cssColor("--color-chart-fires", "#3fb950");
+  },
+  get grid() {
+    return cssColor("--color-chart-grid", "#30363d");
+  },
+  get axis() {
+    return cssColor("--color-chart-axis", "#8b949e");
+  },
+  get tooltipBg() {
+    return cssColor("--color-chart-tooltip-bg", "#161b22");
+  },
+};
 
 const AXIS_PROPS = {
-  stroke: CHART.axis,
-  tick: { fill: CHART.axis, fontSize: 10 },
-} as const;
+  get stroke() {
+    return CHART.axis;
+  },
+  get tick() {
+    return { fill: CHART.axis, fontSize: 10 };
+  },
+};
 
 function ChartFrame({ children }: { children: React.ReactElement }) {
   return (
@@ -123,7 +149,7 @@ function HarnessBars({
         <XAxis dataKey="bucket" {...AXIS_PROPS} />
         <YAxis allowDecimals={value === "usd"} {...AXIS_PROPS} />
         <RTooltip
-          contentStyle={{ background: "#161b22", border: `1px solid ${CHART.grid}`, fontSize: 11 }}
+          contentStyle={{ background: CHART.tooltipBg, border: `1px solid ${CHART.grid}`, fontSize: 11 }}
           formatter={(raw, name) => {
             if (raw == null) return ["—", String(name)];
             const amount = typeof raw === "number" ? raw : Number(raw);
@@ -174,7 +200,7 @@ function RunsTab({ overview }: { overview: StatsOverview }) {
           <XAxis dataKey="bucket" {...AXIS_PROPS} />
           <YAxis allowDecimals={false} {...AXIS_PROPS} />
           <RTooltip
-            contentStyle={{ background: "#161b22", border: `1px solid ${CHART.grid}`, fontSize: 11 }}
+            contentStyle={{ background: CHART.tooltipBg, border: `1px solid ${CHART.grid}`, fontSize: 11 }}
           />
           <Legend wrapperStyle={{ fontSize: 11 }} />
           <Bar dataKey="runs" name="Runs" fill={CHART.runs} />
@@ -354,7 +380,7 @@ function TriggersTab({ overview }: { overview: StatsOverview }) {
             <YAxis allowDecimals={false} {...AXIS_PROPS} />
             <RTooltip
               contentStyle={{
-                background: "#161b22",
+                background: CHART.tooltipBg,
                 border: `1px solid ${CHART.grid}`,
                 fontSize: 11,
               }}
@@ -1707,6 +1733,11 @@ export default function StatsCharts({
   performance = null,
   performanceError = null,
 }: StatsChartsProps) {
+  // #759: subscribing here re-renders the whole chart subtree on a theme switch,
+  // so every `CHART.*` / `harnessColor()` read below resolves against the new
+  // palette. Recharts bakes colours into props; nothing re-themes on its own.
+  useTheme();
+
   if (tab === "performance") {
     return <PerformanceTab performance={performance} error={performanceError} />;
   }

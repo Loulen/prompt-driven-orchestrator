@@ -69,7 +69,7 @@ export default function SelectControl({
     >
       {selected ? (
         <span
-          className="grid h-4 w-4 place-items-center rounded-full bg-acc text-[#04140d]"
+          className="grid h-4 w-4 place-items-center rounded-full bg-acc text-on-acc"
           data-testid="select-check"
         >
           <Check size={11} strokeWidth={3} />

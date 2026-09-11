@@ -32,13 +32,13 @@ afterEach(() => {
 });
 
 describe("useTheme (#759)", () => {
-  it("starts on the OS preference when nothing is stored", () => {
+  it("starts dark when nothing is stored, whatever the OS asks (#781)", () => {
     stubOs(false);
     initTheme();
     const { result } = renderHook(() => useTheme());
-    expect(result.current.preference).toBe("system");
-    expect(result.current.resolved).toBe("light");
-    expect(document.documentElement.getAttribute("data-theme")).toBe("light");
+    expect(result.current.preference).toBe("dark");
+    expect(result.current.resolved).toBe("dark");
+    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
   });
 
   it("starts on the stored choice, whatever the OS says", () => {
@@ -64,6 +64,9 @@ describe("useTheme (#759)", () => {
     const os = stubOs(true);
     initTheme();
     const { result } = renderHook(() => useTheme());
+    // #781: nothing stored now pins `dark` — following the OS requires an
+    // explicit `system` choice.
+    act(() => result.current.setPreference("system"));
     expect(result.current.resolved).toBe("dark");
     act(() => os.flip(false));
     expect(result.current.resolved).toBe("light");

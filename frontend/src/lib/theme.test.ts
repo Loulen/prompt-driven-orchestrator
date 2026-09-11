@@ -30,20 +30,20 @@ describe("theme preference — persistence (#759)", () => {
     expect(localStorage.getItem("pdo.ui.theme")).toBe("light");
   });
 
-  it("defaults to system when nothing is stored", () => {
-    expect(loadThemePreference()).toBe("system");
+  it("defaults to dark when nothing is stored (#781)", () => {
+    expect(loadThemePreference()).toBe("dark");
   });
 
-  it("defaults to system for an unknown stored value", () => {
+  it("defaults to dark for an unknown stored value", () => {
     localStorage.setItem("pdo.ui.theme", "solarized");
-    expect(loadThemePreference()).toBe("system");
+    expect(loadThemePreference()).toBe("dark");
   });
 
-  it("degrades to system when getItem throws (private mode)", () => {
+  it("degrades to dark when getItem throws (private mode)", () => {
     vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
       throw new Error("SecurityError");
     });
-    expect(loadThemePreference()).toBe("system");
+    expect(loadThemePreference()).toBe("dark");
   });
 
   it("swallows a throwing setItem (quota / disabled) without raising", () => {

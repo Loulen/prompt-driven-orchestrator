@@ -6,6 +6,7 @@ import "@xterm/xterm/css/xterm.css";
 import { Maximize2, Minimize2, ExternalLink } from "lucide-react";
 import { Tooltip } from "./ui/tooltip";
 import { attachSession, fetchPane } from "../api";
+import { resizeAvoidingAltBufferCorruption } from "../lib/altBufferResize";
 
 /** Which node iteration's frozen pane to read when the live session is gone (#617). */
 export interface PaneSource {
@@ -279,9 +280,20 @@ export default function TmuxTerminal({
       capture: true,
     });
 
+    // #771: a live pane in the alternate screen may be in the state xterm's
+    // resize corrupts (see `altBufferResize.ts`); the helper resets it first and
+    // runs the fit once xterm has processed the reset. A frozen pane has no
+    // alternate screen to reset, and nothing to redraw it — plain fit.
     const resizeObserver = new ResizeObserver(() => {
-      fitAddon.fit();
-      if (ws) sendResize(ws, fitAddon);
+      const apply = () => {
+        fitAddon.fit();
+        if (ws) sendResize(ws, fitAddon);
+      };
+      if (!ws) {
+        apply();
+        return;
+      }
+      resizeAvoidingAltBufferCorruption(term, fitAddon.proposeDimensions(), apply);
     });
     resizeObserver.observe(container);
 

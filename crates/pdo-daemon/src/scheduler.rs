@@ -464,10 +464,20 @@ pub(crate) fn evaluate_outgoing_edges_full(
                                 });
                             }
                         }
-                        actions.push(SchedulerAction::Spawn {
+                        // #785: two edges of this producer wired to the SAME target
+                        // (e.g. `out` and `Chosen design` both → the loop input) must
+                        // yield ONE `Spawn`, exactly as the adjacent `LoopIterStarted`
+                        // is deduplicated. Without this, the completion path (which
+                        // runs `SpawnDedup::InternalOnly`) drove two spawns of the
+                        // same `(node, iter)`: the loser hit tmux `duplicate session`
+                        // and parked the run `spawn_aborted` over a live winner.
+                        let spawn = SchedulerAction::Spawn {
                             node_id: target_id.clone(),
                             iter: next_iter,
-                        });
+                        };
+                        if !actions.contains(&spawn) {
+                            actions.push(spawn);
+                        }
                     }
                 }
             }
@@ -2252,6 +2262,44 @@ mod tests {
             node_id: "c".into(),
             iter: 1,
         }));
+    }
+
+    /// #785: a producer whose TWO fired edges both land on the same target
+    /// (two output ports wired to one input, `in · repeated` in the UI) produces
+    /// ONE `Spawn` — never two spawns of the same `(node, iter)`.
+    #[test]
+    fn two_edges_to_the_same_target_spawn_it_once() {
+        let pipeline = PipelineDef {
+            name: "double-wire".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("prototype", &["task"], &["out", "chosen"]),
+                make_node("implementer", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("prototype", "out", "implementer", "in"),
+                make_edge("prototype", "chosen", "implementer", "in"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("prototype".into(), completed_node("prototype"));
+
+        let actions = evaluate_outgoing_edges(&pipeline, &state, "prototype");
+        assert_eq!(
+            actions,
+            vec![SchedulerAction::Spawn {
+                node_id: "implementer".into(),
+                iter: 1,
+            }],
+            "two edges to one target must not double-spawn it"
+        );
     }
 
     #[test]

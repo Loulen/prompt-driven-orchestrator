@@ -10,6 +10,13 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.81.0
+**Déploiement derrière un reverse proxy** (#769 ; story #766, ADR-0019).
+`pdo daemon` et `pdo service install` acceptent désormais `--bind <ip>` ou `PDO_BIND`.
+L'adresse explicite survit aux mises à jour, les unités de service dédupliquent leur `PATH` et
+précisent que les harnais utilisent le `PATH` du shell interactif (ADR-0055). Le README regroupe
+les commandes `pdo` dans une table et documente le drop-in systemd persistant.
+
 ## 1.80.0
 **Nœud interactif — « Mark ready for completion » rend la complétion à l'agent** (#764 ; story #763, ADR-0068).
 Sur un nœud `interactive`, `pdo complete` lancé par l'agent est désormais **refusé** (exit 3, garde

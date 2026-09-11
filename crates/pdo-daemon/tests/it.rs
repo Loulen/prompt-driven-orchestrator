@@ -29,6 +29,9 @@ mod cli_run_create;
 #[path = "cost_prices.rs"]
 mod cost_prices;
 
+#[path = "daemon_bind.rs"]
+mod daemon_bind;
+
 #[path = "stats_cost_by_model.rs"]
 mod stats_cost_by_model;
 
@@ -192,6 +195,9 @@ mod serializer_round_trip;
 
 #[path = "session_cap_admission.rs"]
 mod session_cap_admission;
+
+#[path = "service_bind_cli.rs"]
+mod service_bind_cli;
 
 #[path = "smoke_daemon.rs"]
 mod smoke_daemon;

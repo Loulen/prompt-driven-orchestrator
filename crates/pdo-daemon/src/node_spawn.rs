@@ -1165,6 +1165,7 @@ pub(crate) async fn spawn_node(
             payload: Some(serde_json::json!({
                 "prompt_preview": full_prompt.chars().take(500).collect::<String>(),
                 "node_type": node.node_type.as_str(),
+                "interactive": node.interactive,
                 // #653/ADR-0060: FREEZE where this NodeRun works. Every later
                 // reader — the re-spawn above, the restart probe, the completion
                 // path's merge-back decision — asks this event, never the

@@ -550,6 +550,7 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         payload: Some(serde_json::json!({
             "prompt_preview": full_prompt.chars().take(500).collect::<String>(),
             "node_type": node_type_str(&node.node_type),
+            "interactive": node.interactive,
             // #653/ADR-0060: FREEZE where this NodeRun works. Mirrors the
             // `spawn_node` payload — every later reader asks this event.
             "isolated_worktree": has_sub_worktree,
@@ -1046,6 +1047,8 @@ mod tests {
                 status: NodeStatus::Running,
                 started_at: Some("t0".into()),
                 completed_at: None,
+                interactive: false,
+                completion_released: false,
             }],
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
@@ -1074,6 +1077,8 @@ mod tests {
                 status: NodeStatus::Completed,
                 started_at: Some("t0".into()),
                 completed_at: Some("t1".into()),
+                interactive: false,
+                completion_released: false,
             }],
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
@@ -1690,6 +1695,8 @@ mod tests {
                     status: status.clone(),
                     started_at: Some("t0".into()),
                     completed_at: None,
+                    interactive: false,
+                    completion_released: false,
                 })
                 .collect(),
             frontmatter_retries: 0,

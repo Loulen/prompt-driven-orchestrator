@@ -763,10 +763,15 @@ pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
     preamble.push_str("## Completion\n\n");
     if ctx.node.interactive {
         preamble.push_str(
-            "This is an **interactive** node. Do NOT call `pdo complete`.\n\
-             The user will attach to this terminal session, interact with you,\n\
-             and click **\"Mark complete\"** in the PDO UI when done.\n\
-             Write your outputs to the paths listed above before the user marks complete.\n\n\
+            "For this **interactive** node, once the user says they are done, finish your \
+             work, write the outputs listed above, and run `pdo complete`.\n\
+             Completion is guarded until the user clicks **\"Mark ready for completion\"** \
+             in the PDO UI. If you call `pdo complete` before that release, the daemon \
+             refuses it with `completion_not_released` and exit code 3. Ask the user to \
+             click **\"Mark ready for completion\"**, then run `pdo complete` again.\n\
+             The user may instead click **\"Mark complete\"** to force completion with the \
+             artifacts as they are.\n\
+             A refused completion leaves this node running. **Do NOT run `pdo fail`.**\n\n\
              If you cannot complete the task, signal failure:\n\
              ```\n\
              pdo fail --reason \"<description of the problem>\"\n\
@@ -1045,7 +1050,19 @@ curl -X POST {daemon_url}/runs/{run_id}/commands \
 
 This goes through the same shared completion body as `pdo complete`, so it answers truthfully (#490): `200 {{"ok":true}}` when the node completed, `200 {{"ok":true,"noop":true,"reason":"…"}}` on a legal duplicate, and **`409 {{"error":"<slug>","recoverable":<bool>, …}}`** when the completion is refused — `missing_outputs`, `frontmatter_retry_pending`, `frontmatter_retry_exhausted`, `script_validation_failed`, `completion_rejected`, … Discriminate on `error`, never on the status. `recoverable:false` means the runtime already recorded the terminal event: do not try to record it again.
 
-### 7. inject_artifact
+### 7. release_node_completion
+
+Release the daemon completion guard for one live interactive NodeRun. The agent may then call `pdo complete` when ready. This is idempotent and does not inject text into the node session.
+
+```bash
+curl -X POST {daemon_url}/runs/{run_id}/commands \
+  -H 'Content-Type: application/json' \
+  -d '{{"kind":"release_node_completion","node_id":"<node-id>","iter":<N>}}'
+```
+
+Returns `200 {{"ok":true,"released":true}}`, with `"noop":true` when already released. Named `409` refusals include `node_not_interactive` and `node_session_not_live`; discriminate on `error`, never on the status.
+
+### 8. inject_artifact
 
 Write an artifact directly into the Blackboard.
 
@@ -1055,7 +1072,7 @@ curl -X POST {daemon_url}/runs/{run_id}/commands \
   -d '{{"kind":"inject_artifact","path":"<node-id>/iter-<N>/<port>/output.md","content":"<markdown content>"}}'
 ```
 
-### 8. cleanup_run
+### 9. cleanup_run
 
 Archive the run: remove worktrees, branches, and artifacts from disk. Events are preserved.
 
@@ -1067,7 +1084,7 @@ curl -X POST {daemon_url}/runs/{run_id}/commands \
 
 **Never call `cleanup_run` on your own initiative.** It is destructive and irreversible: it kills every active node session and removes the run's worktrees, branches, and artifacts from disk. Always check with the user first and wait for explicit confirmation before issuing it — even if you believe the run is stuck or finished.
 
-### 9. rename_run
+### 10. rename_run
 
 Set or update the display name of this run.
 
@@ -1077,7 +1094,7 @@ curl -X POST {daemon_url}/runs/{run_id}/commands \
   -d '{{"kind":"rename_run","name":"<display name>"}}'
 ```
 
-### 10. start_node
+### 11. start_node
 
 Force-spawn a node now, without waiting for its upstream producers to complete. Use when you deliberately want to start a node ahead of its dependencies. Inputs resolve best-effort: any not-yet-produced upstream artifact resolves to the path where it *will* appear, so the node may run against missing or stale inputs. This is reversible — `restart_node` or `kill_node` it if it ran too early.
 
@@ -1087,7 +1104,7 @@ curl -X POST {daemon_url}/runs/{run_id}/commands \
   -d '{{"kind":"start_node","node_id":"<node-id>"}}'
 ```
 
-### 11. extend_cycle (legacy)
+### 12. extend_cycle (legacy)
 
 Increment the iteration ceiling of a *legacy drawn cycle* (a pipeline without a `loops:` block) and re-evaluate. `node_id` is the node whose **outgoing exit condition** references the `$max_iter`-style variable to bump — never the cycle's head/entry node. For any node that belongs to a bounded loop region this command is rejected with 409 — use `bump_region` instead. An unknown `node_id` is rejected with 400. Same truthful response body as `bump_region`.
 
@@ -1902,12 +1919,10 @@ mod tests {
         let ctx = sample_ctx(&pipeline, node, &vars);
 
         let preamble = build_preamble(&ctx);
-        assert!(
-            !preamble.contains("signal completion by running"),
-            "interactive node should not instruct to run pdo complete"
-        );
-        assert!(preamble.contains("Do NOT call `pdo complete`"));
-        assert!(preamble.contains("Mark complete"));
+        assert!(preamble.contains("once the user says they are done"));
+        assert!(preamble.contains("completion_not_released"));
+        assert!(preamble.contains("Mark ready for completion"));
+        assert!(preamble.contains("Do NOT run `pdo fail`"));
         assert!(preamble.contains("pdo fail --reason"));
     }
 
@@ -2353,6 +2368,7 @@ mod tests {
             "kill_node",
             "restart_node",
             "mark_node_done",
+            "release_node_completion",
             "inject_artifact",
             "cleanup_run",
             "rename_run",
@@ -2455,15 +2471,15 @@ mod tests {
         let preamble =
             build_manager_preamble("run-1", "http://localhost:5172", RunNameHint::UserProvided);
         let section = preamble
-            .split("### 8. cleanup_run")
+            .split("### 9. cleanup_run")
             .nth(1)
             .expect("preamble should contain the cleanup_run section")
-            .split("### 9.")
+            .split("### 10.")
             .next()
-            .expect("cleanup_run section should be delimited by section 9");
+            .expect("cleanup_run section should be delimited by section 10");
         assert!(
-            preamble.contains("### 9. rename_run"),
-            "renumbering drifted: section 9 should be rename_run"
+            preamble.contains("### 10. rename_run"),
+            "renumbering drifted: section 10 should be rename_run"
         );
         assert!(
             section.contains("Never call `cleanup_run` on your own initiative"),

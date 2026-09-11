@@ -12,6 +12,7 @@ import {
   editRunRepos,
   fetchPipeline,
   markNodeDone,
+  releaseNodeCompletion,
   request,
   savePipeline,
   saveRunPipeline,
@@ -323,6 +324,32 @@ describe("markNodeDone outcome union (#490)", () => {
   it("reads a plain 200 as completed", async () => {
     stubFetchWith(200, { ok: true });
     await expect(markNodeDone("r1", "n1", 1)).resolves.toEqual({ kind: "completed" });
+  });
+
+  describe("releaseNodeCompletion (#764)", () => {
+    it("posts the displayed iteration to the release route", async () => {
+      const fetchMock = captureFetch(200, { ok: true, released: true });
+      await expect(releaseNodeCompletion("r1", "n1", 3)).resolves.toEqual({
+        kind: "released",
+      });
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(url).toContain("/runs/r1/nodes/n1/release");
+      expect(JSON.parse(init?.body as string)).toEqual({ iter: 3 });
+    });
+
+    it("returns a named 409 refusal as a verdict", async () => {
+      stubFetchWith(409, {
+        error: "node_session_not_live",
+        recoverable: true,
+        message: "no live session",
+      });
+      await expect(releaseNodeCompletion("r1", "n1", 1)).resolves.toEqual({
+        kind: "refused",
+        slug: "node_session_not_live",
+        recoverable: true,
+        message: "no live session",
+      });
+    });
   });
 
   it("reads a 200 with noop:true as a legal duplicate, not a refusal", async () => {

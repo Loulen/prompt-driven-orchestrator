@@ -9,6 +9,7 @@ vi.mock("../api", () => ({
   fetchPrompt: vi.fn(),
   fetchNodeIO: vi.fn(),
   markNodeDone: vi.fn(),
+  releaseNodeCompletion: vi.fn(),
   killNode: vi.fn(),
   restartNode: vi.fn(),
   startNode: vi.fn(),
@@ -58,6 +59,7 @@ beforeEach(() => {
   vi.mocked(api.fetchPrompt).mockReset().mockResolvedValue("PROMPT");
   vi.mocked(api.fetchNodeIO).mockReset().mockResolvedValue(IO);
   vi.mocked(api.markNodeDone).mockReset().mockResolvedValue({ kind: "completed" });
+  vi.mocked(api.releaseNodeCompletion).mockReset().mockResolvedValue({ kind: "released" });
   vi.mocked(api.retryNodePreview)
     .mockReset()
     .mockResolvedValue({ downstream: [], affected_count: 0, with_artifacts: [] });
@@ -215,6 +217,7 @@ describe("useNodeRun — mark complete (#490)", () => {
     await act(async () => {
       result.current.markComplete();
     });
+
     expect(result.current.markVerdict).toEqual({ iter: 3, kind: "pending" });
   });
 
@@ -269,6 +272,45 @@ describe("useNodeRun — mark complete (#490)", () => {
       await result.current.markComplete();
     });
     expect(result.current.markVerdict).toEqual({ iter: 1, kind: "error", message: "boom" });
+  });
+});
+
+describe("useNodeRun — release completion (#764)", () => {
+  it("stamps the release verdict with the selected iteration", async () => {
+    const { result } = renderHook(() =>
+      useNodeRun("run-1", makeNode({ status: "awaiting_user", iter: 4 }), 2, {}),
+    );
+    await flush();
+
+    await act(async () => {
+      await result.current.releaseCompletion();
+    });
+
+    expect(api.releaseNodeCompletion).toHaveBeenCalledWith("run-1", "n1", 2);
+    expect(result.current.releaseVerdict).toBeNull();
+  });
+
+  it("surfaces a release refusal at the gesture", async () => {
+    vi.mocked(api.releaseNodeCompletion).mockResolvedValue({
+      kind: "refused",
+      slug: "node_session_not_live",
+      recoverable: true,
+      message: "no live session",
+    });
+    const { result } = renderHook(() =>
+      useNodeRun("run-1", makeNode({ status: "awaiting_user" }), 1, {}),
+    );
+    await flush();
+
+    await act(async () => {
+      await result.current.releaseCompletion();
+    });
+
+    expect(result.current.releaseVerdict).toMatchObject({
+      iter: 1,
+      kind: "refused",
+      slug: "node_session_not_live",
+    });
   });
 });
 

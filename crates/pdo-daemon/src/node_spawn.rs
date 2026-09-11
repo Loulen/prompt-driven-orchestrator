@@ -1041,10 +1041,13 @@ pub(crate) async fn spawn_node(
                     .iter()
                     .any(|n| n.id == e.source.node && n.node_type == pipeline::NodeType::Start)
         });
-        let input_images = if is_entry_node {
-            prompt_augmenter::discover_input_images(spawn_ctx.artifacts_dir)
+        let (input_images, input_files) = if is_entry_node {
+            (
+                prompt_augmenter::discover_input_images(spawn_ctx.artifacts_dir),
+                prompt_augmenter::discover_input_files(spawn_ctx.artifacts_dir),
+            )
         } else {
-            Vec::new()
+            (Vec::new(), Vec::new())
         };
 
         // Canonical input resolution (#194 / #210): re-project the run state at
@@ -1129,6 +1132,7 @@ pub(crate) async fn spawn_node(
             // two are exhaustive and mutually exclusive.
             shared_worktree_dir: (!has_sub_worktree).then_some(working_dir.as_path()),
             input_images,
+            input_files,
             start_prompt_present,
             source_iters,
             repeated_iters,

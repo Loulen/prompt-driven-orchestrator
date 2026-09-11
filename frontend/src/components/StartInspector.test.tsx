@@ -12,14 +12,48 @@ vi.mock("../api", () => ({
 import StartInspector from "./StartInspector";
 import type { StartNodeInfo } from "../types";
 
-function makeStart(input_images: string[] = []): StartNodeInfo {
+function makeStart(input_images: string[] = [], input_files: string[] = []): StartNodeInfo {
   return {
     input_path: "_input/output.md",
     started_at: "2026-01-01T00:00:00.000Z",
     target_node_ids: ["work"],
     input_images,
+    input_files,
   };
 }
+
+describe("StartInspector — input files (#779)", () => {
+  beforeEach(() => {
+    fetchArtifactMock.mockReset();
+    fetchArtifactMock.mockResolvedValue("look at these");
+  });
+
+  it("lists one chip per non-image attachment, linking to its _input artifact", async () => {
+    render(
+      <StartInspector
+        startNode={makeStart(["proto.png"], ["SPEC-779.md", "fixtures.json"])}
+        runId="run-1"
+        nodeId="start"
+      />,
+    );
+    const section = await screen.findByTestId("start-inspector-files");
+    const chips = within(section).getAllByTestId("start-input-file");
+    expect(chips).toHaveLength(2);
+    expect(chips[0]).toHaveTextContent("MD");
+    expect(chips[0]).toHaveTextContent("SPEC-779.md");
+    expect(chips[0].getAttribute("href")).toBe(
+      "/runs/run-1/artifact?path=_input%2FSPEC-779.md",
+    );
+    // Images keep their own surface.
+    expect(within(screen.getByTestId("start-inspector-images")).getAllByTestId("start-input-thumbnail")).toHaveLength(1);
+  });
+
+  it("renders no file section when the run has none (or the field is absent)", async () => {
+    render(<StartInspector startNode={{ ...makeStart([]), input_files: undefined }} runId="run-1" nodeId="start" />);
+    await screen.findByText("look at these");
+    expect(screen.queryByTestId("start-inspector-files")).toBeNull();
+  });
+});
 
 describe("StartInspector — input images (issue #145)", () => {
   beforeEach(() => {

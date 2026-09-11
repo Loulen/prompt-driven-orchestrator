@@ -247,6 +247,9 @@ export interface InstanceSettings {
   session_cap: SettingField;
   reaper_ttl_secs: SettingField;
   guard_timeout_secs: SettingField;
+  /** #779: images + files budget per Run, in MB (`stored → env → default 50`). Bounds the
+   *  multipart body of `POST /runs` and drives the « New run » modal's client-side gate. */
+  max_attachments_mb: SettingField;
   default_model: StringSettingField;
   /** #550/ADR-0046: instance-wide default harness (`stored → env → floor claude`).
    *  `effective: null` ⇒ the `claude` floor applies at resolve. */
@@ -470,6 +473,8 @@ export interface UpdateSettingsRequest {
   session_cap?: number;
   reaper_ttl_secs?: number;
   guard_timeout_secs?: number;
+  /** #779: per-run attachment budget in MB (1–4096). */
+  max_attachments_mb?: number;
   default_model?: string;
   /** #550: instance default harness; `""` clears it (same sentinel as
    *  `default_model`). */
@@ -948,6 +953,9 @@ export interface StartNodeInfo {
   // Filenames of images uploaded alongside the text prompt (stored in
   // `_input/`). Empty when the run was launched without images (issue #145).
   input_images: string[];
+  // Filenames of the NON-image files uploaded alongside the prompt (#779),
+  // also stored in `_input/`. Empty when the run was launched without files.
+  input_files?: string[];
 }
 
 export interface EndPortStatus {

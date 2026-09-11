@@ -35,6 +35,7 @@ function settings(over: Partial<InstanceSettings> = {}): InstanceSettings {
     session_cap: { effective: 20, source: "default", stored: null, env: null, default: 20 },
     reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
     guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
+    max_attachments_mb: { effective: 50, source: "default", stored: null, env: null, default: 50 },
     default_model: { effective: null, source: "default", stored: null, env: null, default: null },
     default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
     default_harness_model: { effective: {}, stored: {} },
@@ -144,7 +145,7 @@ describe("buildVariables", () => {
       runName: "",
       sandbox: "",
       harness: "",
-      images: [],
+      attachments: [],
     };
     const triggerFields = {
       selectedPipeline: declared,
@@ -547,7 +548,10 @@ describe("buildRunPayload", () => {
     runName: "  Fix bug  ",
     sandbox: "full",
     harness: "",
-    images: [new File(["png"], "design.png", { type: "image/png" })],
+    attachments: [
+      new File(["png"], "design.png", { type: "image/png" }),
+      new File(["{}"], "fixtures.json", { type: "application/json" }),
+    ],
   };
 
   /**
@@ -573,6 +577,8 @@ describe("buildRunPayload", () => {
       sandbox: "full",
     });
     expect(buildRunPayload(fields).images).toHaveLength(1);
+    expect(buildRunPayload(fields).files).toHaveLength(1);
+    expect(buildRunPayload(fields).files?.[0].name).toBe("fixtures.json");
   });
 
   // #338: the box wins over whatever is left in the name field — the daemon never has to
@@ -590,7 +596,7 @@ describe("buildRunPayload", () => {
       runName: "   ",
       targetRepo: "  ",
       sourceBranch: "",
-      images: [],
+      attachments: [],
     });
     expect(payload.name).toBeUndefined();
     expect(payload.target_repo).toBeUndefined();

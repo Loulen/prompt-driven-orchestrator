@@ -50,7 +50,8 @@ async fn startup_seeds_the_skill_in_the_pdo_folder_and_flags_it_locked() {
     let detail = get_json(&daemon, &format!("/settings/skills/{SEEDED_ID}")).await;
     assert_eq!(detail["name"], "pdo-orchestrate");
     assert_eq!(detail["locked"], true);
-    assert_eq!(detail["frontmatter"]["skill_version"], 1);
+    // #779 bumped the seeded guidance (attachment flags, fixed examples).
+    assert_eq!(detail["frontmatter"]["skill_version"], 2);
     assert!(detail["content"]
         .as_str()
         .unwrap()

@@ -1162,7 +1162,7 @@ pub(crate) fn is_seeded(id: &str) -> bool {
 pub(crate) const SEEDED_SKILL_MD: &str = r#"---
 name: pdo-orchestrate
 description: Orchestrate child runs with PDO — create runs from this node session, follow them, and complete truthfully.
-skill_version: 1
+skill_version: 2
 ---
 
 # Orchestrating with PDO
@@ -1178,12 +1178,38 @@ and node — the daemon sets the parent itself; you never declare it.
 Prefer the CLI (same session, one short command):
 
 ```bash
-pdo run create --pipeline <pipeline-name> --input "<what the child must do>"
+pdo run create <pipeline-name> --input "<what the child must do>"
 ```
 
-The child inherits your run's project by default; pass `--project`, `--input`
-or `--variable key=value` to steer it. Out of a node session the same command
-works, without a parent.
+The pipeline is **positional**. The child inherits your run's project by
+default; steer it with `--target-repo <path>`, `--variables '{"key":"value"}'`
+(one JSON object), `--name "<title>"`, `--skills a,b`. Out of a node session the
+same command works, without a parent.
+
+### Passing files and images to the child
+
+Your inputs are files on disk — `PDO_INPUT_<PORT>` names each input port's
+path (a file, or a directory for an image list). Hand them to the child with:
+
+- `--input-file <path>`: the child's prompt read from a file (instead of
+  `--input`) — e.g. the spec an upstream node wrote.
+- `--image <path>` (repeatable): sent as `images`; the child's entry node sees
+  them under `## Input Images`.
+- `--file <path>` (repeatable): any other file, sent as `files`; listed under
+  `## Input Files` and exposed on the entry node's input port.
+
+```bash
+pdo run create <pipeline-name> \
+  --input-file "$PDO_INPUT_SPEC" \
+  --image "$PDO_INPUT_PROTO"/*.png \
+  --file "$PDO_INPUT_FIXTURES" \
+  --name "Implement the prototype"
+```
+
+All attachments land in the child's `.pdo/artifacts/_input/`. One size budget
+per run (default 50 MB, `max_attachments_mb` in Settings); a duplicate
+filename or an over-budget upload is refused with a named error — rename or
+attach less, then retry.
 
 The HTTP surface is equivalent — the CLI is a thin client:
 
@@ -2074,7 +2100,7 @@ mod tests {
         seed(&db, root.path()).await.unwrap();
         let before = get(&db, SEEDED_SKILL_ID).await.unwrap().unwrap();
 
-        let bumped = SEEDED_SKILL_MD.replace("skill_version: 1", "skill_version: 2");
+        let bumped = SEEDED_SKILL_MD.replace("skill_version: 2", "skill_version: 3");
         let outcome = seed_with(
             &db,
             root.path(),

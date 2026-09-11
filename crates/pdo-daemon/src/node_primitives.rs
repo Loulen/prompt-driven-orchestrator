@@ -344,6 +344,7 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         // two are exhaustive and mutually exclusive.
         shared_worktree_dir: (!has_sub_worktree).then_some(working_dir.as_path()),
         input_images: Vec::new(),
+        input_files: Vec::new(),
         start_prompt_present,
         source_iters: crate::input_resolution::resolved_source_iters(
             params.pipeline,

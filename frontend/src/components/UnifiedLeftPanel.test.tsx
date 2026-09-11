@@ -5,11 +5,12 @@ import userEvent from "@testing-library/user-event";
 import UnifiedLeftPanel from "./UnifiedLeftPanel";
 import type { PipelineListEntry, RunListEntry, Trigger } from "../types";
 import type { LibraryPipelineEntry } from "../api";
-import { cleanupRun, deleteLibraryPipeline, deletePipeline, duplicateLibraryPipeline, fetchPipelines, importPipelineDocument, importWorkflow, openRunShell, pauseRun, renameRun, resumeRun, retryAll } from "../api";
+import { cleanupRun, deleteLibraryPipeline, deletePipeline, duplicateLibraryPipeline, fetchPipelines, importPipelineDocument, importWorkflow, openRunShell, pauseRun, renamePipeline, renameRun, resumeRun, retryAll } from "../api";
 import { useEditStore } from "../stores/editStore";
 import { useRecentReposStore } from "../stores/recentReposStore";
 
 const mockRenameRun = vi.mocked(renameRun);
+const mockRenamePipeline = vi.mocked(renamePipeline);
 const mockDeletePipeline = vi.mocked(deletePipeline);
 const mockFetchPipelines = vi.mocked(fetchPipelines);
 const mockDuplicateLibraryPipeline = vi.mocked(duplicateLibraryPipeline);
@@ -30,6 +31,7 @@ vi.mock("../api", () => ({
   resumeRun: vi.fn().mockResolvedValue(undefined),
   retryAll: vi.fn().mockResolvedValue({ run_id: "offspring-1" }),
   renameRun: vi.fn().mockResolvedValue(undefined),
+  renamePipeline: vi.fn().mockResolvedValue({ ok: true }),
   createPipeline: vi.fn().mockResolvedValue({ id: "new-pipe", scope: "repo", path: "/tmp" }),
   duplicatePipeline: vi.fn().mockResolvedValue({ id: "copy", scope: "instance", path: "/tmp" }),
   importPipelineDocument: vi
@@ -769,6 +771,66 @@ describe("UnifiedLeftPanel pipeline delete", () => {
     await waitFor(() =>
       expect(mockDeletePipeline).toHaveBeenCalledWith("simple-bugfix", undefined),
     );
+  });
+});
+
+// #774 — a hover pencil on Pipelines-tab rows flips the name into an inline
+// input; Enter commits through the store's renamePipeline action.
+describe("UnifiedLeftPanel pipeline rename", () => {
+  const entry: PipelineListEntry = {
+    id: "simple-bugfix",
+    name: "simple-bugfix",
+    scope: "instance",
+    path: "/home/u/.pdo/pipelines/simple-bugfix.yaml",
+    node_count: 3,
+    modified: null,
+    variables: {},
+  };
+
+  it("renders a rename pencil on a pipeline row", async () => {
+    mockFetchPipelines.mockResolvedValueOnce([entry]);
+
+    renderPanel();
+    fireEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
+    await screen.findByText("simple-bugfix");
+
+    expect(screen.getByTestId("library-rename-button")).toBeInTheDocument();
+  });
+
+  it("commits the typed name through renamePipeline on Enter", async () => {
+    mockFetchPipelines.mockResolvedValueOnce([entry]);
+
+    renderPanel();
+    fireEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
+    await screen.findByText("simple-bugfix");
+
+    fireEvent.click(screen.getByTestId("library-rename-button"));
+    const input = screen.getByTestId("library-rename-input");
+    expect(input).toHaveValue("simple-bugfix");
+
+    fireEvent.change(input, { target: { value: "Renamed Pipeline" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() =>
+      expect(mockRenamePipeline).toHaveBeenCalledWith("simple-bugfix", "Renamed Pipeline"),
+    );
+  });
+
+  it("swallows a refusal: the row stays under its current name", async () => {
+    mockFetchPipelines.mockResolvedValueOnce([entry]);
+    mockRenamePipeline.mockRejectedValueOnce(new Error("Cannot rename: collision"));
+
+    renderPanel();
+    fireEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
+    await screen.findByText("simple-bugfix");
+
+    fireEvent.click(screen.getByTestId("library-rename-button"));
+    const input = screen.getByTestId("library-rename-input");
+    fireEvent.change(input, { target: { value: "Renamed Pipeline" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => expect(mockRenamePipeline).toHaveBeenCalled());
+    expect(screen.getByText("simple-bugfix")).toBeInTheDocument();
   });
 });
 

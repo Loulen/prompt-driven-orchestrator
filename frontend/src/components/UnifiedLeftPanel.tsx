@@ -99,6 +99,11 @@ export default function UnifiedLeftPanel({
   const [renamingRunId, setRenamingRunId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const renameInputRef = useRef<HTMLInputElement>(null);
+  // #774 — inline rename of a Pipelines-tab row. Same pattern as the run rows
+  // above: the pencil flips the row's name into an input; Enter/blur commits,
+  // Escape cancels.
+  const [renamingPipelineId, setRenamingPipelineId] = useState<string | null>(null);
+  const [pipelineRenameValue, setPipelineRenameValue] = useState("");
   // #552 — the group-header pencil. Holds the Projet being edited (or `null` for
   // a fresh one, when the header is a derived path group) plus the pre-fill.
   const [projectEditor, setProjectEditor] = useState<{
@@ -111,6 +116,7 @@ export default function UnifiedLeftPanel({
   const loadPipelines = useEditStore((s) => s.loadPipelines);
   const openPipeline = useEditStore((s) => s.openPipeline);
   const removePipeline = useEditStore((s) => s.removePipeline);
+  const renamePipeline = useEditStore((s) => s.renamePipeline);
   const activeTabId = useEditStore((s) => s.activeTabId);
   const recentRepos = useRecentReposStore((s) => s.recentRepos);
 
@@ -210,6 +216,34 @@ export default function UnifiedLeftPanel({
   function cancelRename() {
     setRenamingRunId(null);
     setRenameValue("");
+  }
+
+  // #774 — inline rename of a pipeline row. The store action drives everything
+  // (daemon rename, list refresh, open-tab rekey); a refusal (409 collision,
+  // active runs) is silently swallowed like every other row action — the list
+  // simply stays as it was.
+  function startPipelineRename(p: PipelineListEntry) {
+    setRenamingPipelineId(p.id);
+    setPipelineRenameValue(p.name);
+  }
+
+  async function commitPipelineRename() {
+    const id = renamingPipelineId;
+    const name = pipelineRenameValue.trim();
+    setRenamingPipelineId(null);
+    setPipelineRenameValue("");
+    if (!id || !name) return;
+    try {
+      await renamePipeline(id, name);
+    } catch {
+      // 409 (name/file collision, active runs) and network errors: the row
+      // stays under its current name.
+    }
+  }
+
+  function cancelPipelineRename() {
+    setRenamingPipelineId(null);
+    setPipelineRenameValue("");
   }
 
   async function handleConfirmDelete() {
@@ -1044,6 +1078,12 @@ export default function UnifiedLeftPanel({
               modified={p.modified}
               onOpen={() => openPipeline(p.id)}
               onDuplicate={() => handleDuplicate(p.id)}
+              onRenameStart={() => startPipelineRename(p)}
+              renaming={renamingPipelineId === p.id}
+              renameValue={pipelineRenameValue}
+              onRenameValueChange={setPipelineRenameValue}
+              onRenameCommit={commitPipelineRename}
+              onRenameCancel={cancelPipelineRename}
               // Confirm-gated, because this row is a working pipeline file and
               // the delete may cascade to its Library twin (#227).
               onDelete={() => setDeleteTarget(p)}

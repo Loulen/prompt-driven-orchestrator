@@ -15,6 +15,7 @@ import {
   fetchRunPipeline,
   saveRunPipeline,
   deletePipeline as apiDeletePipeline,
+  renamePipeline as apiRenamePipeline,
 } from "../api";
 import { generateNodeId } from "../lib/nanoid";
 import { isStructuralMarker } from "../lib/structuralMarkers";
@@ -222,6 +223,14 @@ interface EditState {
 
   removePipeline: (id: string, scope?: PipelineScope) => Promise<void>;
 
+  /**
+   * #774 — rename a pipeline: the daemon moves `<id>.yaml` + its sidecar to
+   * the slug of the new name and answers with the new id, so this action also
+   * rekeys the open tab (and its undo history / last-saved stamp) when the
+   * stem changed.
+   */
+  renamePipeline: (id: string, name: string) => Promise<void>;
+
   save: (id: string) => Promise<void>;
   flushPendingSaves: () => Promise<void>;
   clearSaveError: (id: string) => void;
@@ -328,6 +337,35 @@ function droppedHistory(
   const next = { ...history };
   delete next[tabId];
   return next;
+}
+
+// REKEY (#774): the pipeline a tab was opened under changed identity (its file
+// stem moved with a visible-name rename). The tab survives — content, dirty
+// state and undo stack are the user's work, none of it belongs to the old
+// stem — but every id-keyed slot (openTabs, activeTabId, lastSavedAt, history)
+// must follow to the new id, or the next save/watcher event would operate on a
+// tab the store can no longer find.
+function rekeyTab(
+  state: EditState,
+  oldId: string,
+  newId: string,
+  extra?: Partial<OpenPipeline>,
+): Partial<EditState> {
+  const tab = state.openTabs.find((t) => t.id === oldId);
+  if (!tab) return {};
+  const openTabs = state.openTabs.map((t) => (t.id === oldId ? { ...t, id: newId, ...extra } : t));
+  const activeTabId = state.activeTabId === oldId ? newId : state.activeTabId;
+  const lastSavedAt = { ...state.lastSavedAt };
+  if (lastSavedAt[oldId] !== undefined) {
+    lastSavedAt[newId] = lastSavedAt[oldId];
+    delete lastSavedAt[oldId];
+  }
+  const history = { ...state.history };
+  if (history[oldId]) {
+    history[newId] = history[oldId];
+    delete history[oldId];
+  }
+  return { openTabs, activeTabId, lastSavedAt, history };
 }
 
 // Single-tab replace (#342): `tab` becomes the sole open tab, every `victims`
@@ -905,6 +943,23 @@ export const useEditStore = create<EditState>((set, get) => ({
     });
   },
 
+  // #774 — rename a pipeline: the daemon moves `<id>.yaml` + its `.prompts/`
+  // sidecar to the slug of the new name (refusing collisions and active-run
+  // renames), and answers with the final id. The list refreshes under the new
+  // id and the open tab — if the renamed pipeline is open — is rekeyed to it
+  // with its undo history intact: a rename is an identity change, not a
+  // content change, so the user's work follows.
+  renamePipeline: async (id: string, name: string) => {
+    const result = await apiRenamePipeline(id, name);
+    await get().loadPipelines();
+    const newId = result?.id && result.id !== id ? result.id : null;
+    if (!newId) return;
+    const tab = get().openTabs.find((t) => t.id === id);
+    set((s) =>
+      rekeyTab(s, id, newId, tab ? { pipeline: { ...tab.pipeline, name: result.name ?? name } } : undefined),
+    );
+  },
+
   save: async (id: string) => {
     const tab = get().openTabs.find((t) => t.id === id);
     if (!tab) return;
@@ -912,17 +967,40 @@ export const useEditStore = create<EditState>((set, get) => ({
       const yaml = serializePipeline(tab.pipeline);
       if (tab.runId) {
         await saveRunPipeline(tab.runId, yaml, tab.prompts);
+        set((s) => ({
+          openTabs: s.openTabs.map((t) =>
+            t.id === id ? { ...t, dirty: false, saveError: undefined } : t,
+          ),
+          lastSavedAt: { ...s.lastSavedAt, [id]: Date.now() },
+        }));
       } else {
         // Save back into the same store the tab was opened from, so a
         // `library`-scoped edit never overwrites a same-named repo file (#216).
-        await savePipeline(id, yaml, tab.prompts, tab.scope);
+        const result = await savePipeline(id, yaml, tab.prompts, tab.scope);
+        // #774 — the save may have RENAMED the pipeline (a `name:` edit moved
+        // the file): rekey the tab to the daemon's final id in the same
+        // gesture, so the store never keeps a tab pointing at a dead stem.
+        const newId = result?.id && result.id !== id ? result.id : null;
+        if (newId) {
+          set((s) => {
+            const patch = rekeyTab(s, id, newId);
+            return {
+              ...patch,
+              openTabs: (patch.openTabs ?? s.openTabs).map((t) =>
+                t.id === newId ? { ...t, dirty: false, saveError: undefined } : t,
+              ),
+              lastSavedAt: { ...patch.lastSavedAt, [newId]: Date.now() },
+            };
+          });
+        } else {
+          set((s) => ({
+            openTabs: s.openTabs.map((t) =>
+              t.id === id ? { ...t, dirty: false, saveError: undefined } : t,
+            ),
+            lastSavedAt: { ...s.lastSavedAt, [id]: Date.now() },
+          }));
+        }
       }
-      set((s) => ({
-        openTabs: s.openTabs.map((t) =>
-          t.id === id ? { ...t, dirty: false, saveError: undefined } : t,
-        ),
-        lastSavedAt: { ...s.lastSavedAt, [id]: Date.now() },
-      }));
     } catch (err: unknown) {
       // One typed error contract (`ApiError`) — no more sniffing an `unknown`
       // shape. `status`/`line` are typed fields; a non-`ApiError` (unexpected)
@@ -1087,25 +1165,32 @@ export const useEditStore = create<EditState>((set, get) => ({
           history: clearedHistory(s.history, tabId),
         }));
       } else {
-        await savePipeline(tabId, libraryYaml, tab.prompts, tab.scope);
-        const detail = await fetchPipeline(tabId, tab.scope);
-        set((s) => ({
-          openTabs: s.openTabs.map((t) =>
-            t.id === tabId
-              ? {
-                  ...t,
-                  pipeline: detail.pipeline,
-                  prompts: detail.prompts,
-                  diagnostics: detail.diagnostics ?? [],
-                  dirty: false,
-                  saveError: undefined,
-                }
-              : t,
-          ),
-          lastSavedAt: { ...s.lastSavedAt, [tabId]: Date.now() },
-          // CLEAR — "Reload changes" overwrote this tab with the library YAML.
-          history: clearedHistory(s.history, tabId),
-        }));
+        const result = await savePipeline(tabId, libraryYaml, tab.prompts, tab.scope);
+        // #774 — the save may have moved the file to a new stem; everything
+        // below must address the tab (and rekey its slots) under the final id.
+        const newId = result?.id && result.id !== tabId ? result.id : tabId;
+        const detail = await fetchPipeline(newId, tab.scope);
+        set((s) => {
+          const patch = newId !== tabId ? rekeyTab(s, tabId, newId) : {};
+          return {
+            ...patch,
+            openTabs: (patch.openTabs ?? s.openTabs).map((t) =>
+              t.id === newId
+                ? {
+                    ...t,
+                    pipeline: detail.pipeline,
+                    prompts: detail.prompts,
+                    diagnostics: detail.diagnostics ?? [],
+                    dirty: false,
+                    saveError: undefined,
+                  }
+                : t,
+            ),
+            lastSavedAt: { ...(patch.lastSavedAt ?? s.lastSavedAt), [newId]: Date.now() },
+            // CLEAR — "Reload changes" overwrote this tab with the library YAML.
+            history: clearedHistory(patch.history ?? s.history, newId),
+          };
+        });
       }
     } catch (err: unknown) {
       const apiErr = err instanceof ApiError ? err : null;

@@ -1532,12 +1532,32 @@ export function savePipeline(
   yaml: string,
   prompts: Record<string, string>,
   scope?: string,
-): Promise<void> {
+): Promise<{ ok: boolean; id?: string; renamed?: boolean }> {
   void scope;
-  return request<void>(
+  // #774 — the daemon answers with the FINAL id: a save whose `name:` field
+  // changed moves the registry entry (`<old>.yaml` + sidecar) and returns the
+  // new stem, so the caller can rekey the open tab in the same gesture.
+  return request<{ ok: boolean; id?: string; renamed?: boolean }>(
     "PUT",
     `/pipelines/${encodeURIComponent(id)}`,
-    { body: { yaml, prompts }, responseMode: "void", label: `PUT /pipelines/${id}` },
+    { body: { yaml, prompts }, label: `PUT /pipelines/${id}` },
+  );
+}
+
+/**
+ * #774 — rename a pipeline: the visible name and the backing `.yaml` file move
+ * together (visible name 1:1 with the file stem, so two distinct pipelines can
+ * never share a name). 409 when the target stem or visible name is already
+ * taken, or when active runs reference the pipeline.
+ */
+export function renamePipeline(
+  id: string,
+  name: string,
+): Promise<{ ok: boolean; id: string; name?: string; renamed?: boolean }> {
+  return request<{ ok: boolean; id: string; name?: string; renamed?: boolean }>(
+    "PUT",
+    `/pipelines/${encodeURIComponent(id)}/rename`,
+    { body: { name }, label: `PUT /pipelines/${id}/rename` },
   );
 }
 

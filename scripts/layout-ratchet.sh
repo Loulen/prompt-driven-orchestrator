@@ -29,8 +29,11 @@ cd "$(git rev-parse --show-toplevel)"
 #   (the review UI itself lives under components/review/, not counted); 87 admits
 #   review_comments.rs, the review-comment concern (ids, excerpt, batch message,
 #   projection fold — ADR-0067 §2). Ratchet down when tidied.
+# frontend/src/components: 190 re-admits ThemeSelect.tsx and its test (#767, light
+#   theme), which landed on main past the 188 baseline and left the gate red. Ratchet
+#   down when tidied.
 BASELINES='
-frontend/src/components 188
+frontend/src/components 190
 crates/pdo-daemon/src 87
 '
 

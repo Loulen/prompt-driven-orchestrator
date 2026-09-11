@@ -24,22 +24,39 @@ import {
 
 export interface ThemeSnapshot {
   preference: ThemePreference;
+  /** What is painted on `<html>` right now. */
   resolved: ResolvedTheme;
+  /** What `system` would resolve to — the OS preference, whatever is pinned. */
+  systemResolved: ResolvedTheme;
 }
 
-let snapshot: ThemeSnapshot = { preference: "system", resolved: "dark" };
+let snapshot: ThemeSnapshot = { preference: "system", resolved: "dark", systemResolved: "dark" };
+
+function computeSnapshot(preference: ThemePreference): ThemeSnapshot {
+  const systemDark = systemPrefersDark();
+  return {
+    preference,
+    resolved: resolveTheme(preference, systemDark),
+    systemResolved: systemDark ? "dark" : "light",
+  };
+}
 const listeners = new Set<() => void>();
 let unbindOs: (() => void) | null = null;
 
 function publish(next: ThemeSnapshot): void {
-  if (next.preference === snapshot.preference && next.resolved === snapshot.resolved) return;
+  if (
+    next.preference === snapshot.preference &&
+    next.resolved === snapshot.resolved &&
+    next.systemResolved === snapshot.systemResolved
+  )
+    return;
   snapshot = next;
   applyResolvedTheme(snapshot.resolved);
   for (const notify of listeners) notify();
 }
 
 function recompute(preference: ThemePreference): void {
-  publish({ preference, resolved: resolveTheme(preference, systemPrefersDark()) });
+  publish(computeSnapshot(preference));
 }
 
 /**
@@ -53,7 +70,7 @@ export function initTheme(): ResolvedTheme {
   unbindOs = null;
 
   const preference = loadThemePreference();
-  snapshot = { preference, resolved: resolveTheme(preference, systemPrefersDark()) };
+  snapshot = computeSnapshot(preference);
   applyResolvedTheme(snapshot.resolved);
   for (const notify of listeners) notify();
 

@@ -52,6 +52,17 @@ describe("ThemeSelect — choosing a theme (#759)", () => {
     render(<ThemeSelect />);
     expect(screen.getByTestId("theme-option-system")).toHaveTextContent(/dark/i);
   });
+
+  it("keeps naming the OS theme when another one is pinned", async () => {
+    stubOs(false);
+    initTheme();
+    const user = userEvent.setup();
+    render(<ThemeSelect />);
+    await user.click(screen.getByTestId("theme-option-dark"));
+    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+    expect(screen.getByTestId("theme-option-system")).toHaveTextContent(/light/i);
+    expect(screen.getByTestId("theme-option-system")).not.toHaveTextContent(/dark/i);
+  });
 });
 
 describe("ThemeSelect — keyboard (#759)", () => {

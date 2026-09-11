@@ -2,8 +2,10 @@
    Lives in Settings › General › Interface next to Single-tab mode — same nature
    (a presentation preference this browser owns, never `instance_config`).
 
-   `System` carries the theme it currently resolves to, because "System" alone
-   tells you nothing about what you are about to get.
+   `System` carries the theme it WOULD resolve to (the OS preference), because
+   "System" alone tells you nothing about what you are about to get. Not the
+   painted theme: with Dark pinned on a light OS, "System (dark)" would promise
+   the opposite of what clicking it does.
 
    Keyboard: the full ARIA radiogroup pattern — ONE tab stop on the group (roving
    tabindex), arrows to move-and-select, Home/End to jump. EffortPicker
@@ -23,7 +25,7 @@ const OPTIONS: { id: ThemePreference; label: string; Icon: typeof Sun }[] = [
 ];
 
 export default function ThemeSelect() {
-  const { preference, resolved, setPreference } = useTheme();
+  const { preference, systemResolved, setPreference } = useTheme();
   const buttons = useRef<(HTMLButtonElement | null)[]>([]);
 
   const move = (to: number) => {
@@ -74,7 +76,7 @@ export default function ThemeSelect() {
             <span>{label}</span>
             {id === "system" && (
               <span className="opacity-70" style={{ fontSize: "9px" }}>
-                ({resolved})
+                ({systemResolved})
               </span>
             )}
           </button>

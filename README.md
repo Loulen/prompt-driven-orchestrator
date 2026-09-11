@@ -216,3 +216,9 @@ cargo run -p pdo-daemon -- --help
 | --- | --- |
 | [CONTEXT.md](CONTEXT.md) | Domain glossary and module map |
 | [`docs/adr/`](docs/adr/) | Architecture decisions |
+
+## License
+
+PDO is released under the [MIT License](LICENSE). Use it, modify it, embed it, host it,
+for any purpose. Contributions are accepted under the same license; see
+[CONTRIBUTING.md](CONTRIBUTING.md).

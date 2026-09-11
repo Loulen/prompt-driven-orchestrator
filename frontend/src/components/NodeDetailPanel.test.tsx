@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, act } from "@testing-library/react";
+import { render, screen, fireEvent, act, within } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { useEffect } from "react";
 
@@ -787,6 +787,43 @@ describe("NodeDetailPanel", () => {
 
       await act(async () => {});
       expect(screen.getByTestId("port-type-badge")).toHaveTextContent("image_list");
+    });
+
+    // #779: a Start-sourced input carries the run's non-image attachments after
+    // the prompt — shown as « Input files » chips, never as thumbnails.
+    it("lists input files as chips under a start-sourced markdown input", async () => {
+      fetchNodeIOMock.mockResolvedValue({
+        inputs: [
+          {
+            port: "task",
+            repeated: false,
+            port_type: "markdown",
+            files: [
+              { path: "_input/output.md", exists: true, size: 100, frontmatter: null },
+              { path: "_input/SPEC-779.md", exists: true, size: 18_432, frontmatter: null },
+              { path: "_input/fixtures.json", exists: true, size: 402_432, frontmatter: null },
+            ],
+          },
+        ],
+        outputs: [],
+      });
+
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+
+      await act(async () => {});
+      const list = screen.getByTestId("input-files");
+      const chips = within(list).getAllByTestId("input-file-chip");
+      expect(chips).toHaveLength(2);
+      expect(chips[0]).toHaveTextContent("MD");
+      expect(chips[0]).toHaveTextContent("SPEC-779.md");
+      expect(chips[0]).toHaveTextContent("18.0 KB");
+      expect(chips[1]).toHaveTextContent("JSON");
+      expect(chips[1]).toHaveAttribute("href", expect.stringContaining("_input%2Ffixtures.json"));
+      expect(screen.queryByTestId("image-thumbnails")).not.toBeInTheDocument();
     });
 
     it("does not show thumbnails for markdown ports", async () => {

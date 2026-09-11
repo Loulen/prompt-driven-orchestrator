@@ -362,7 +362,9 @@ export interface RunPayloadInput {
   harness: string;
   /** #669: the Run tier of the skills selection. Empty ⇒ the key is omitted. */
   skills?: SkillRef[];
-  images: File[];
+  /** #779: every attachment of the modal, images and files alike. Split by MIME at
+   *  build time: `image/*` → `images`, the rest → `files`. */
+  attachments: File[];
   /** #465: `[0]` = primary, `[1..]` = secondaries. Omit / `undefined` for a mono-repo Run. */
   targetRepos?: TargetRepoInput[];
 }
@@ -378,9 +380,11 @@ export function buildRunPayload({
   sandbox,
   harness,
   skills,
-  images,
+  attachments,
   targetRepos,
 }: RunPayloadInput): CreateRunRequest {
+  const images = attachments.filter(isImageAttachment);
+  const files = attachments.filter((f) => !isImageAttachment(f));
   return {
     pipeline: selectedPipeline.name,
     input: input.trim(),
@@ -408,7 +412,13 @@ export function buildRunPayload({
     // Run adds none and the payload stays byte-identical to the pre-#669 shape.
     skills: skills && skills.length > 0 ? skills : undefined,
     images: images.length > 0 ? images : undefined,
+    files: files.length > 0 ? files : undefined,
   };
+}
+
+/** #779: an attachment is an image when its MIME type says so (`image/*`). */
+export function isImageAttachment(file: File): boolean {
+  return file.type.startsWith("image/");
 }
 
 /** The form values a Trigger create / edit reads. */

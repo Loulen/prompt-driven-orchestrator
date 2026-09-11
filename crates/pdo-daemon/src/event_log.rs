@@ -681,6 +681,10 @@ pub struct StartNodeInfo {
     /// the Start node and in the Start inspector (issue #145).
     #[serde(default)]
     pub input_images: Vec<String>,
+    /// Filenames of the NON-image files uploaded alongside the prompt (#779),
+    /// also stored in `_input/`. Empty for a run launched without files.
+    #[serde(default)]
+    pub input_files: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1882,21 +1886,26 @@ fn apply_run_event(state: &mut RunState, event: &Event) {
                     state.pipeline_id = Some(pid.to_string());
                 }
 
-                let input_images = payload
-                    .get("image_filenames")
-                    .and_then(|v| v.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_str().map(str::to_string))
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                let string_list = |key: &str| -> Vec<String> {
+                    payload
+                        .get(key)
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_str().map(str::to_string))
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                };
+                let input_images = string_list("image_filenames");
+                let input_files = string_list("file_filenames");
 
                 state.start_node = Some(StartNodeInfo {
                     input_path: "_input/output.md".to_string(),
                     started_at: event.ts.clone(),
                     target_node_ids: entry_node_ids(&state.edges, &state.node_defs),
                     input_images,
+                    input_files,
                 });
 
                 if let Some(end_def) = state.node_defs.iter().find(|n| n.node_type == "end") {
@@ -7683,6 +7692,7 @@ mod tests {
             "sessions_spawned": 8,
             "source_branch": "main",
             "start_node": {
+                "input_files": [],
                 "input_images": [ "screenshot.png" ],
                 "input_path": "_input/output.md",
                 "started_at": "2026-02-01T00:00:00.000Z",

@@ -75,7 +75,7 @@ Run `pdo service install` to start PDO at boot and keep it running after logout.
 | `pdo migrate [--dir <path>] [--dry-run]` | Migrate legacy pipeline YAML files. |
 | `pdo reap [--count] [--dry-run] [--ttl-hours <hours>] [--terminal-ttl-hours <hours>] [--budget-secs <seconds>]` | Report or archive old terminal runs according to the retention policy. |
 | `pdo docs support-table [--check\|--write] [--file <path>]` | Check or regenerate the README harness support table. |
-| `pdo run create <pipeline> [options]` | Create a run through the daemon, with optional input, repository, harness, sandbox, and provisioning settings. |
+| `pdo run create <pipeline> [options]` | Create a run through the daemon, with optional input, repository, harness, sandbox, and provisioning settings. `--input-file <path>` reads the prompt from a file; `--image <path>` / `--file <path>` (repeatable) attach files the entry node sees under `## Input Images` / `## Input Files` (one budget per run, `max_attachments_mb` in Settings). |
 | `pdo page mount <name> <directory>` | Serve a directory under `/pages/<name>/`. |
 | `pdo page list` | List active page mounts. |
 | `pdo page unmount <name>` | Remove a page mount. |

@@ -105,6 +105,8 @@ interface DraftValues {
   capStr: string;
   ttlStr: string;
   guardStr: string;
+  /** #779: the per-run attachment budget (MB), as typed. */
+  attachmentsStr: string;
   model: string | null;
   defaultHarness: string;
   agentChoice: AgentChoice | null;
@@ -124,6 +126,7 @@ function seedFrom(settings: InstanceSettings): DraftValues {
     capStr: String(settings.session_cap.effective),
     ttlStr: String(settings.reaper_ttl_secs.effective),
     guardStr: String(settings.guard_timeout_secs.effective),
+    attachmentsStr: String(settings.max_attachments_mb.effective),
     model: settings.default_model.effective,
     defaultHarness: settings.default_harness.effective ?? "",
     agentChoice: settings.agent_choice ?? null,
@@ -172,6 +175,9 @@ function computeDirty(values: DraftValues, settings: InstanceSettings): Set<Sett
   if (numericDirty(values.ttlStr, settings.reaper_ttl_secs.effective)) dirty.add("reaper-ttl");
   if (numericDirty(values.guardStr, settings.guard_timeout_secs.effective)) {
     dirty.add("guard-timeout");
+  }
+  if (numericDirty(values.attachmentsStr, settings.max_attachments_mb.effective)) {
+    dirty.add("max-attachments-mb");
   }
   if (values.autocompleteTurnEnd !== settings.autocomplete_turn_end.effective) {
     dirty.add("autocomplete-turn-end");
@@ -355,6 +361,17 @@ export default function SettingsSurface({
       }
     } else if (guard !== settings.guard_timeout_secs.effective) {
       patch.guard_timeout_secs = guard;
+    }
+
+    // #779: the attachment budget — the daemon refuses outside 1–4096 MB.
+    const attT = values.attachmentsStr.trim();
+    const att = Number(attT);
+    if (attT === "" || !Number.isInteger(att) || att < 1 || att > 4096) {
+      if (attT !== "" || rollup.fields.has("max-attachments-mb")) {
+        return { error: "Max attachments per run must be a whole number between 1 and 4096 MB." };
+      }
+    } else if (att !== settings.max_attachments_mb.effective) {
+      patch.max_attachments_mb = att;
     }
 
     // Model: `null` (Default) clears via the "" sentinel; a string sets it.
@@ -666,6 +683,20 @@ export default function SettingsSurface({
                         envVar="PDO_GUARD_TIMEOUT_MS"
                         unit=" ms"
                         envIsMs
+                      />
+                      {/* #779: one budget for images + files per Run. Bounds the
+                          multipart body of POST /runs; the New run dialog reads the
+                          same value for its client-side gate. */}
+                      <SettingRow
+                        id="max-attachments-mb"
+                        label="Max attachments per run (MB)"
+                        help="Total size of the images and files attached to a Run (New run dialog, `pdo run create --image/--file`). One budget per run; a single file may use all of it. 1–4096 MB."
+                        value={values.attachmentsStr}
+                        onChange={(v) => setField("attachmentsStr", v)}
+                        dirty={rollup.fields.has("max-attachments-mb")}
+                        field={settings.max_attachments_mb}
+                        envVar="PDO_MAX_ATTACHMENTS_MB"
+                        unit=" MB"
                       />
                     </Section>
                     <Section section={item.sections[2]}>

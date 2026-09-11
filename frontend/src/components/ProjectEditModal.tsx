@@ -320,7 +320,7 @@ export default function ProjectEditModal({
           <button
             onClick={handleSave}
             disabled={!canSave}
-            className="cursor-pointer rounded bg-acc px-3 py-1 font-medium text-[#04140d] transition-colors hover:bg-acc-dim disabled:cursor-not-allowed disabled:opacity-50"
+            className="cursor-pointer rounded bg-acc px-3 py-1 font-medium text-on-acc transition-colors hover:bg-acc-dim disabled:cursor-not-allowed disabled:opacity-50"
             style={{ fontSize: "11px" }}
             data-testid="project-edit-save"
           >

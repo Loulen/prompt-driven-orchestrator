@@ -4,6 +4,28 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Prompt Driven Orchestrator</title>
+    <!-- Theme guard (#759): stamps the resolved theme on <html> before the
+         bundle loads, so the page never paints one theme and flips to the
+         other. Deliberately duplicates the rule in `src/lib/theme.ts` — a
+         module import would be too late; `src/noFlashTheme.test.ts` runs THIS
+         script and asserts the two agree. Keep it dependency-free and total:
+         a throwing store must not blank the page. -->
+    <script>
+      try {
+        var stored = null;
+        try {
+          stored = localStorage.getItem("pdo.ui.theme");
+        } catch (e) {}
+        var osDark = true;
+        try {
+          osDark = matchMedia("(prefers-color-scheme: dark)").matches;
+        } catch (e) {}
+        var theme =
+          stored === "light" || stored === "dark" ? stored : osDark ? "dark" : "light";
+        document.documentElement.setAttribute("data-theme", theme);
+        document.documentElement.style.colorScheme = theme;
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

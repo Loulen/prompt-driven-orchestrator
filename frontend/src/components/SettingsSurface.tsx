@@ -35,6 +35,7 @@ import type {
 import ModelPicker from "./ModelPicker";
 import SessionCounter from "./SessionCounter";
 import HarnessSelect from "./HarnessSelect";
+import ThemeSelect from "./ThemeSelect";
 import { harnessCatalog, findHarnessOption } from "../lib/harness";
 import AgentControl from "./AgentControl";
 import { announceAgentProfilesChanged, useAgentProfiles } from "../hooks/useAgentProfiles";
@@ -535,7 +536,7 @@ export default function SettingsSurface({
           disabled={
             saveState.status === "saving" || !settings || (!isDirty && !missingDefaultProfile)
           }
-          className="rounded-md bg-acc px-3 py-1.5 font-medium text-[#04140d] transition-colors hover:bg-acc-dim disabled:opacity-40"
+          className="rounded-md bg-acc px-3 py-1.5 font-medium text-on-acc transition-colors hover:bg-acc-dim disabled:opacity-40"
           style={{ fontSize: "11.5px" }}
           data-testid="settings-save"
         >
@@ -1283,9 +1284,9 @@ function Section({ section, children }: { section: SettingsSection; children: Re
 }
 
 /**
- * Per-client UI preferences (#342). The single-tab toggle persists to localStorage AT
- * THE CHANGE via `setSingleTabMode` (Trap B) — NOT behind the instance form's Save, and
- * never part of the dirty set. Rendered even when `GET /settings` failed (Trap A).
+ * Per-client UI preferences (#342, #759). Both controls persist to localStorage AT
+ * THE CHANGE — NOT behind the instance form's Save, and never part of the dirty set.
+ * Rendered even when `GET /settings` failed (Trap A).
  */
 function InterfaceSection({ section }: { section: SettingsSection }) {
   const singleTabMode = useEditStore((s) => s.singleTabMode);
@@ -1293,6 +1294,25 @@ function InterfaceSection({ section }: { section: SettingsSection }) {
 
   return (
     <Section section={section}>
+      <div className="flex flex-col gap-1.5">
+        <div className="flex items-center gap-2">
+          <span className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
+            Theme
+          </span>
+          <span
+            className="rounded-full border border-acc-border bg-acc-bg px-2 py-0.5 text-acc"
+            style={{ fontSize: "9.5px" }}
+            data-testid="setting-theme-badge"
+          >
+            Device-local · saved immediately
+          </span>
+        </div>
+        <ThemeSelect />
+        <div className="text-fg-3" style={{ fontSize: "10.5px" }}>
+          System follows your operating system's light/dark setting and keeps following it.
+          Light and dark pin PDO, whatever the system does.
+        </div>
+      </div>
       <div className="flex flex-col gap-1.5">
         <div className="flex items-center gap-2">
           <span className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
@@ -1921,7 +1941,7 @@ function ConfirmCloseDialog({
             onClick={onSaveAndClose}
             disabled={saving}
             data-testid="settings-confirm-save-close"
-            className="rounded-md bg-acc px-3 py-1.5 font-medium text-[#04140d] hover:bg-acc-dim disabled:opacity-40"
+            className="rounded-md bg-acc px-3 py-1.5 font-medium text-on-acc hover:bg-acc-dim disabled:opacity-40"
             style={{ fontSize: "11.5px" }}
           >
             {saving ? "Saving…" : "Save & close"}

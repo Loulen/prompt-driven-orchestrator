@@ -3,9 +3,18 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
-import { Maximize2, Minimize2, ExternalLink } from "lucide-react";
+import { Maximize2, Minimize2, ExternalLink, Copy } from "lucide-react";
 import { Tooltip } from "./ui/tooltip";
 import { attachSession, fetchPane } from "../api";
+import {
+  clipboardKeyAction,
+  forcedSelectionEvent,
+  isMacPlatform,
+  writeClipboardText,
+} from "../lib/terminalClipboard";
+import { resizeAvoidingAltBufferCorruption } from "../lib/altBufferResize";
+import { terminalTheme } from "../lib/terminalTheme";
+import { useTheme } from "../hooks/useTheme";
 
 /** Which node iteration's frozen pane to read when the live session is gone (#617). */
 export interface PaneSource {
@@ -71,9 +80,16 @@ export default function TmuxTerminal({
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
+  // #759: the live theme. Used to build the palette at mount and to repaint an
+  // already-open terminal when the theme switches (xterm paints on a canvas, so
+  // it cannot follow a CSS token on its own).
+  const { resolved } = useTheme();
   const fitAddonRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const [connected, setConnected] = useState(false);
+  // #772: drives the toolbar Copy button; xterm's selection lives outside React.
+  const [hasSelection, setHasSelection] = useState(false);
+  const [copyFeedback, setCopyFeedback] = useState<"copied" | "failed" | null>(null);
   const [frozen, setFrozen] = useState<{
     content: string;
     /** `false` ⇒ the daemon has no snapshot either; say so instead of pretending. */
@@ -97,6 +113,18 @@ export default function TmuxTerminal({
     setMode(reaped ? "probing" : "live");
     setFrozen(null);
   }
+
+  // #772: an explicit Copy button for the keyboard-less case (touch, remote
+  // desktop) and as the visible hint that selection is browser-side. Uses the
+  // execCommand fallback, so it works on a plain-http remote origin too.
+  const handleCopy = useCallback(async () => {
+    const term = terminalRef.current;
+    if (!term || !term.hasSelection()) return;
+    const ok = await writeClipboardText(term.getSelection());
+    setCopyFeedback(ok ? "copied" : "failed");
+    if (ok) term.clearSelection();
+    window.setTimeout(() => setCopyFeedback(null), 1500);
+  }, []);
 
   const handleDetach = useCallback(async () => {
     try {
@@ -160,30 +188,13 @@ export default function TmuxTerminal({
       disableStdin: isFrozen,
       fontSize: 11,
       fontFamily: "'Geist Mono Variable', monospace",
-      theme: {
-        background: "#0f1115",
-        foreground: "#e6e8eb",
-        cursor: "#10b981",
-        selectionBackground: "#2a2d35",
-        black: "#0f1115",
-        red: "#ef4444",
-        green: "#10b981",
-        yellow: "#f59e0b",
-        blue: "#3b82f6",
-        magenta: "#8b5cf6",
-        cyan: "#06b6d4",
-        white: "#e6e8eb",
-        brightBlack: "#5a6270",
-        brightRed: "#f87171",
-        brightGreen: "#34d399",
-        brightYellow: "#fbbf24",
-        brightBlue: "#60a5fa",
-        brightMagenta: "#a78bfa",
-        brightCyan: "#22d3ee",
-        brightWhite: "#f8fafc",
-      },
+      theme: terminalTheme(resolved),
       allowTransparency: false,
       scrollback: 5000,
+      // #772: on macOS Option+drag is xterm's "force selection while the pty
+      // tracks the mouse" modifier only with this on; off it means column select.
+      // `forcedSelectionEvent` relies on it.
+      macOptionClickForcesSelection: true,
     });
 
     const fitAddon = new FitAddon();
@@ -197,6 +208,51 @@ export default function TmuxTerminal({
 
     terminalRef.current = term;
     fitAddonRef.current = fitAddon;
+
+    // #772: copy/paste from the pane. tmux mouse mode (enabled by the daemon so
+    // the wheel scrolls tmux scrollback) makes xterm.js report every drag to the
+    // pty instead of selecting: the text ends up in tmux's paste buffer on the
+    // daemon host, xterm drops tmux's OSC 52 reply, and Ctrl+Shift+C copies "".
+    // Rewrite a plain mousedown into the platform's "force selection" form in
+    // capture phase, before xterm's own listeners, so the browser owns the drag
+    // while the wheel path below stays untouched. Shift/Option+drag already
+    // worked and still does.
+    const isMac = isMacPlatform();
+    const handleMouseDown = (e: MouseEvent) => {
+      const clone = forcedSelectionEvent(e, {
+        mouseTrackingActive: term.modes.mouseTrackingMode !== "none",
+        isMac,
+      });
+      if (!clone) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      e.target?.dispatchEvent(clone);
+    };
+    container.addEventListener("mousedown", handleMouseDown, { capture: true });
+
+    // Ctrl+C with a selection copies it (SIGINT otherwise); Ctrl+V pastes like
+    // Ctrl+Shift+V instead of sending ^V, which Claude Code reads as "paste
+    // image". Returning `false` hands the key to the browser, whose native
+    // copy/paste events xterm already serves — no navigator.clipboard, so this
+    // works over plain http on a remote daemon.
+    term.attachCustomKeyEventHandler((ev) => {
+      const action = clipboardKeyAction(ev, {
+        hasSelection: term.hasSelection(),
+        isMac,
+      });
+      if (action === "copy") {
+        // Let the native copy event read the selection first, then drop it so
+        // the next Ctrl+C is a SIGINT again.
+        window.setTimeout(() => term.clearSelection(), 0);
+        return false;
+      }
+      if (action === "paste") return false;
+      return true;
+    });
+
+    const selectionDisposable = term.onSelectionChange(() => {
+      setHasSelection(term.hasSelection());
+    });
 
     // #617: a frozen pane opens **no** socket. Attaching a PTY to a session the
     // daemon already reaped is what put tmux's `can't find session:` on the primary
@@ -279,14 +335,28 @@ export default function TmuxTerminal({
       capture: true,
     });
 
+    // #771: a live pane in the alternate screen may be in the state xterm's
+    // resize corrupts (see `altBufferResize.ts`); the helper resets it first and
+    // runs the fit once xterm has processed the reset. A frozen pane has no
+    // alternate screen to reset, and nothing to redraw it — plain fit.
     const resizeObserver = new ResizeObserver(() => {
-      fitAddon.fit();
-      if (ws) sendResize(ws, fitAddon);
+      const apply = () => {
+        fitAddon.fit();
+        if (ws) sendResize(ws, fitAddon);
+      };
+      if (!ws) {
+        apply();
+        return;
+      }
+      resizeAvoidingAltBufferCorruption(term, fitAddon.proposeDimensions(), apply);
     });
     resizeObserver.observe(container);
 
     return () => {
       container.removeEventListener("wheel", handleWheel, { capture: true });
+      container.removeEventListener("mousedown", handleMouseDown, { capture: true });
+      selectionDisposable.dispose();
+      setHasSelection(false);
       resizeObserver.disconnect();
       inputDisposable.dispose();
       binaryDisposable.dispose();
@@ -296,7 +366,18 @@ export default function TmuxTerminal({
       fitAddonRef.current = null;
       wsRef.current = null;
     };
+    // `resolved` is deliberately NOT a dependency: recreating the Terminal on a
+    // theme switch would drop the scrollback and the attached socket. The effect
+    // below repaints the live instance instead.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session, mode, frozen]);
+
+  // #759: repaint an already-open terminal when the theme switches.
+  useEffect(() => {
+    const term = terminalRef.current;
+    // `options` is absent when the Terminal is a test double — nothing to repaint.
+    if (term?.options) term.options.theme = terminalTheme(resolved);
+  }, [resolved]);
 
   const isActive =
     status === "running" || status === "awaiting_user" || status === "stale";
@@ -348,6 +429,32 @@ export default function TmuxTerminal({
           {statusLabel}
         </span>
         <span className="flex-1" />
+        {/* #772: copy the browser-side selection; the tooltip doubles as the
+            discoverable hint for the keyboard shortcuts. */}
+        <Tooltip
+          content={
+            copyFeedback === "copied"
+              ? "Copied"
+              : copyFeedback === "failed"
+                ? "Copy failed — select the text and press Ctrl+Shift+C"
+                : "Copy selection · drag to select, Ctrl+Shift+C / Ctrl+C copies, Ctrl+Shift+V / Ctrl+V pastes"
+          }
+        >
+          <button
+            onClick={handleCopy}
+            disabled={!hasSelection}
+            aria-label="Copy selection"
+            className={`flex h-5 w-5 items-center justify-center rounded transition-colors ${
+              hasSelection
+                ? "cursor-pointer text-fg-3 hover:bg-bg-4 hover:text-fg"
+                : "cursor-default text-fg-5"
+            }`}
+            data-testid="term-copy"
+            data-feedback={copyFeedback ?? undefined}
+          >
+            <Copy size={12} />
+          </button>
+        </Tooltip>
         {onExpand && (
           <Tooltip
             content={

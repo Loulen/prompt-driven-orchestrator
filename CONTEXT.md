@@ -478,6 +478,19 @@ Trois commandes agissent sur le **Run entier** — `pause_run`, `resume_run`, `r
 - **Pause / Resume** : `pause_run` fait passer un Run vivant en `Paused` (aucun nouveau spawn, l'horloge continue). `resume_run` est **dual-purpose** : sur un Run `Halted`/`Failed` il **relance** depuis l'état courant. C'est le seul levier qui ré-ouvre un Run failed ; il ne réanime jamais un `completed`.
 - **Retry-all** *(terme canonique)* : sur un Run terminal, archive l'original puis crée un Run **neuf** avec les mêmes paramètres — sans référence de filiation, indiscernable d'un lancement manuel. _Éviter_ : « retry » tout court (réservé au niveau nœud), « relancer le même Run » (le run-id change).
 
+### Orchestration récursive — arbre de runs (#709, ADR-0064 ; #783)
+
+Un run créé depuis la session d'un nœud porte une **filiation** posée par le daemon (`parent_run_id`, jamais déclarée par l'appelant). La liste de runs la rend en **arbre**, pas en liste plate.
+
+- **Run racine** *(terme)* : run sans parent **vivant dans la liste** — soit il n'a pas de parent, soit son parent a été oublié ou archivé. Il s'affiche au premier niveau.
+- **Run enfant** *(terme)* : run dont le parent est présent dans la liste. Il ne s'affiche **jamais** au premier niveau : il se replie sous son parent, indenté, ouvert par la **flèche** du parent (chevron sous le dot de statut). Un enfant suit son parent partout : même section actifs/archivés, même groupe Projet, quels que soient son propre statut ou son propre repo. Un enfant qui a des enfants porte sa propre flèche.
+- **Arbre de runs** *(terme)* : une racine et tous ses descendants. Un filtre (Projet, Pipeline, Trigger) garde un parent dès qu'un descendant matche, et l'ouvre sur les enfants qui matchent. Sélectionner un run masqué (onglet Orchestration, retour arrière) ouvre ses ancêtres.
+- **Compteurs d'enfants** *(terme)* : quatre pastilles à nombre — **finished** (terminal non failed), **failed**, **stale** (vivant et `stalled`, orange), **running** (vivant non stalled : running, awaiting_user, paused) — quatre ensembles disjoints dont la somme est le nombre de descendants. Sur une ligne de la liste ils agrègent **tout le sous-arbre** ; sur un nœud orchestrateur ils portent sur les enfants de ce nœud. Une pastille à zéro ne s'affiche pas. `stalled` d'un enfant est dérivé par le daemon à la lecture, comme sur la liste (#180).
+- **Déplié / replié par défaut** : préférence d'interface **par navigateur** (comme le thème), déplié par défaut. Elle fixe l'état au chargement et celui du bouton global **déplier tout / replier tout** (chevron haut quand tout est déplié) ; les bascules par ligne ne sont pas mémorisées.
+- **Cycle de vie** : inchangé (ADR-0064) — stop, archive et forget du parent ne touchent pas l'enfant, qui remonte alors racine. Une garde interdisant d'archiver un parent aux enfants vivants est une décision **reportée**, hors #783.
+
+_Éviter_ : « run orchestré » pour désigner un enfant (le badge « orchestrated » de #725 disparaît, l'indentation dit la filiation) ; « dropdown » ; « racines seules » comme filtre (remplacé par déplier/replier tout).
+
 ## Repo cible (`target_repo`)
 
 Le **repo cible** d'un Run ou d'un Trigger est le dépôt git dans lequel il travaille. Chemin absolu, stocké **verbatim** — jamais canonicalisé.

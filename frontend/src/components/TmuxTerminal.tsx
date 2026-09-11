@@ -6,6 +6,8 @@ import "@xterm/xterm/css/xterm.css";
 import { Maximize2, Minimize2, ExternalLink } from "lucide-react";
 import { Tooltip } from "./ui/tooltip";
 import { attachSession, fetchPane } from "../api";
+import { terminalTheme } from "../lib/terminalTheme";
+import { useTheme } from "../hooks/useTheme";
 
 /** Which node iteration's frozen pane to read when the live session is gone (#617). */
 export interface PaneSource {
@@ -71,6 +73,10 @@ export default function TmuxTerminal({
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
+  // #759: the live theme. Used to build the palette at mount and to repaint an
+  // already-open terminal when the theme switches (xterm paints on a canvas, so
+  // it cannot follow a CSS token on its own).
+  const { resolved } = useTheme();
   const fitAddonRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const [connected, setConnected] = useState(false);
@@ -160,28 +166,7 @@ export default function TmuxTerminal({
       disableStdin: isFrozen,
       fontSize: 11,
       fontFamily: "'Geist Mono Variable', monospace",
-      theme: {
-        background: "#0f1115",
-        foreground: "#e6e8eb",
-        cursor: "#10b981",
-        selectionBackground: "#2a2d35",
-        black: "#0f1115",
-        red: "#ef4444",
-        green: "#10b981",
-        yellow: "#f59e0b",
-        blue: "#3b82f6",
-        magenta: "#8b5cf6",
-        cyan: "#06b6d4",
-        white: "#e6e8eb",
-        brightBlack: "#5a6270",
-        brightRed: "#f87171",
-        brightGreen: "#34d399",
-        brightYellow: "#fbbf24",
-        brightBlue: "#60a5fa",
-        brightMagenta: "#a78bfa",
-        brightCyan: "#22d3ee",
-        brightWhite: "#f8fafc",
-      },
+      theme: terminalTheme(resolved),
       allowTransparency: false,
       scrollback: 5000,
     });
@@ -296,7 +281,18 @@ export default function TmuxTerminal({
       fitAddonRef.current = null;
       wsRef.current = null;
     };
+    // `resolved` is deliberately NOT a dependency: recreating the Terminal on a
+    // theme switch would drop the scrollback and the attached socket. The effect
+    // below repaints the live instance instead.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session, mode, frozen]);
+
+  // #759: repaint an already-open terminal when the theme switches.
+  useEffect(() => {
+    const term = terminalRef.current;
+    // `options` is absent when the Terminal is a test double — nothing to repaint.
+    if (term?.options) term.options.theme = terminalTheme(resolved);
+  }, [resolved]);
 
   const isActive =
     status === "running" || status === "awaiting_user" || status === "stale";

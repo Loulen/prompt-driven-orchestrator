@@ -377,7 +377,7 @@ export default function StagingProfilesPanel({ home, onChanged }: PanelProps) {
                 onClick={() => void create()}
                 disabled={busy || newName.trim().length === 0}
                 data-testid="staging-profile-create"
-                className="shrink-0 rounded-md bg-acc px-2.5 py-1.5 font-medium text-[#04140d] transition-colors hover:bg-acc-dim disabled:opacity-40"
+                className="shrink-0 rounded-md bg-acc px-2.5 py-1.5 font-medium text-on-acc transition-colors hover:bg-acc-dim disabled:opacity-40"
                 style={{ fontSize: "11px" }}
               >
                 Create

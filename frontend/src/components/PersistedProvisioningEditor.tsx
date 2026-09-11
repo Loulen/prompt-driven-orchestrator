@@ -87,7 +87,7 @@ export default function PersistedProvisioningEditor({
           type="button"
           onClick={save}
           disabled={!valid || saving || (scope === "project" && !projectId)}
-          className="rounded bg-acc px-2.5 py-1 font-medium text-[#04140d] disabled:opacity-40"
+          className="rounded bg-acc px-2.5 py-1 font-medium text-on-acc disabled:opacity-40"
         >
           {saving ? "Saving…" : "Save provisioning"}
         </button>

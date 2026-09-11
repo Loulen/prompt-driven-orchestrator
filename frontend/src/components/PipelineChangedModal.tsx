@@ -60,7 +60,7 @@ export default function PipelineChangedModal({
           </button>
           <button
             onClick={onReload}
-            className="cursor-pointer rounded-md bg-acc px-3 py-1.5 font-medium text-[#04140d] transition-colors hover:bg-acc-dim"
+            className="cursor-pointer rounded-md bg-acc px-3 py-1.5 font-medium text-on-acc transition-colors hover:bg-acc-dim"
             style={{ fontSize: "11.5px" }}
             data-testid="pipeline-changed-reload"
           >

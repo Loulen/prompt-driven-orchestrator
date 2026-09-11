@@ -140,7 +140,7 @@ export default function BulkActionModal({
                 onClick={begin}
                 data-testid="bulk-confirm"
                 className={`cursor-pointer rounded-md px-3 py-1.5 text-white transition-colors ${
-                  destructive ? "bg-st-failed hover:bg-st-failed/80" : "bg-acc text-[#04140d] hover:bg-acc-dim"
+                  destructive ? "bg-st-failed hover:bg-st-failed/80" : "bg-acc text-on-acc hover:bg-acc-dim"
                 }`}
                 style={{ fontSize: "11.5px" }}
               >

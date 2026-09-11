@@ -25,6 +25,7 @@
 //! executor** (`PDO_UPDATE_EXECUTOR`) that receives the plan through env variables.
 
 use serde::{Deserialize, Serialize};
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
 use crate::update_check::{InstallMethod, Supervision};
@@ -86,6 +87,8 @@ pub struct UpdatePlan {
     /// relaunch invoke): Homebrew's `bin/pdo`, never `Cellar/pdo/<v>/bin/pdo`.
     pub exe: PathBuf,
     pub port: u16,
+    /// Explicit bind passed to the daemon, if any. `None` preserves the default.
+    pub bind: Option<IpAddr>,
     /// The daemon's cwd: `service install` derives `WorkingDirectory` from it and
     /// the relaunch must resolve the same repo root.
     pub working_dir: PathBuf,
@@ -126,6 +129,13 @@ pub(crate) fn log_path(home_root: &Path, attempt_id: &str) -> PathBuf {
 /// `<home>/.pdo/update/<attempt_id>.sh`.
 pub(crate) fn script_path(home_root: &Path, attempt_id: &str) -> PathBuf {
     update_dir(home_root).join(format!("{attempt_id}.sh"))
+}
+
+pub(crate) fn explicit_bind_from_relaunch(relaunch: &[String]) -> Option<IpAddr> {
+    relaunch
+        .windows(2)
+        .find(|pair| pair[0] == "--bind")
+        .and_then(|pair| pair[1].parse().ok())
 }
 
 /// A fresh attempt id: UTC timestamp + short random suffix, filesystem-safe.
@@ -276,8 +286,12 @@ pub fn render_update_script(plan: &UpdatePlan) -> String {
                 "echo \"== reinstalling the service unit (stable path {})\"\n",
                 plan.exe.display()
             ));
+            let bind_arg = plan
+                .bind
+                .map(|ip| format!(" --bind {}", sh_quote(&ip.to_string())))
+                .unwrap_or_default();
             s.push_str(&format!(
-                "{} service install --port {}\nrc=$?\n",
+                "{} service install --port {}{bind_arg}\nrc=$?\n",
                 sh_quote(&plan.exe.display().to_string()),
                 plan.port
             ));
@@ -426,6 +440,7 @@ mod tests {
             supervision,
             exe: PathBuf::from("/home/linuxbrew/.linuxbrew/bin/pdo"),
             port: 5172,
+            bind: None,
             working_dir: PathBuf::from("/home/u/.pdo/app"),
             daemon_pid: 4242,
             relaunch: vec![
@@ -476,6 +491,34 @@ mod tests {
         let s = render_update_script(&plan(InstallMethod::Homebrew, Supervision::Launchd));
         assert!(s.contains("launchctl kickstart -k \"gui/$(id -u)/com.pdo.daemon\""));
         assert!(!s.contains("systemctl"));
+    }
+
+    #[test]
+    fn supervised_update_preserves_an_explicit_bind() {
+        let mut plan = plan(InstallMethod::Homebrew, Supervision::Systemd);
+        plan.bind = Some("127.0.0.1".parse().unwrap());
+        let s = render_update_script(&plan);
+        assert!(s.contains("service install --port 5172 --bind 127.0.0.1"));
+    }
+
+    #[test]
+    fn relaunch_bind_is_read_only_when_explicit() {
+        let explicit = vec![
+            "pdo".into(),
+            "daemon".into(),
+            "--port".into(),
+            "5172".into(),
+            "--bind".into(),
+            "127.0.0.1".into(),
+        ];
+        assert_eq!(
+            explicit_bind_from_relaunch(&explicit),
+            Some("127.0.0.1".parse().unwrap())
+        );
+        assert_eq!(
+            explicit_bind_from_relaunch(&["pdo".into(), "daemon".into()]),
+            None
+        );
     }
 
     #[test]

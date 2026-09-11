@@ -82,6 +82,10 @@ enum RunCommand {
         node_id: String,
         iter: i64,
     },
+    ReleaseNodeCompletion {
+        node_id: String,
+        iter: i64,
+    },
     ExtendCycle {
         node_id: String,
         additional_iter: i64,
@@ -191,6 +195,7 @@ impl RunCommand {
     fn kind_str(&self) -> &'static str {
         match self {
             RunCommand::MarkNodeDone { .. } => "mark_node_done",
+            RunCommand::ReleaseNodeCompletion { .. } => "release_node_completion",
             RunCommand::ExtendCycle { .. } => "extend_cycle",
             RunCommand::Region {
                 action: RegionAction::Bump { .. },
@@ -253,6 +258,10 @@ fn parse_run_command(req: RunCommandRequest) -> Result<RunCommand, CommandParseE
     match req.kind.as_str() {
         "mark_node_done" => Ok(RunCommand::MarkNodeDone {
             node_id: required(req.node_id, "node_id", "mark_node_done")?,
+            iter: req.iter.unwrap_or(1),
+        }),
+        "release_node_completion" => Ok(RunCommand::ReleaseNodeCompletion {
+            node_id: required(req.node_id, "node_id", "release_node_completion")?,
             iter: req.iter.unwrap_or(1),
         }),
         "extend_cycle" => {
@@ -498,6 +507,9 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
     let kind_str = cmd.kind_str();
 
     match cmd {
+        RunCommand::ReleaseNodeCompletion { node_id, iter } => {
+            crate::release_node_completion(&state, &run_id, &node_id, iter).await
+        }
         RunCommand::MarkNodeDone { node_id, iter } => {
             // NOT `load_projected`, which would 404 on an unstarted run: this arm
             // needs the `Option<RunState>` itself, so `None` maps to `Allow` and
@@ -2680,11 +2692,18 @@ mod tests {
     }
 
     #[test]
-    fn parse_accepts_the_fourteen_kinds() {
-        let cases: [(serde_json::Value, RunCommand); 14] = [
+    fn parse_accepts_the_fifteen_kinds() {
+        let cases: [(serde_json::Value, RunCommand); 15] = [
             (
                 serde_json::json!({ "kind": "mark_node_done", "node_id": "n1", "iter": 3 }),
                 RunCommand::MarkNodeDone {
+                    node_id: "n1".into(),
+                    iter: 3,
+                },
+            ),
+            (
+                serde_json::json!({ "kind": "release_node_completion", "node_id": "n1", "iter": 3 }),
+                RunCommand::ReleaseNodeCompletion {
                     node_id: "n1".into(),
                     iter: 3,
                 },
@@ -2781,6 +2800,10 @@ mod tests {
             (
                 serde_json::json!({ "kind": "mark_node_done" }),
                 "node_id required for mark_node_done",
+            ),
+            (
+                serde_json::json!({ "kind": "release_node_completion" }),
+                "node_id required for release_node_completion",
             ),
             (
                 serde_json::json!({ "kind": "extend_cycle" }),
@@ -2927,6 +2950,7 @@ mod tests {
         // distinguished in the type.
         for kind in [
             "mark_node_done",
+            "release_node_completion",
             "extend_cycle",
             "bump_region",
             "end_region",

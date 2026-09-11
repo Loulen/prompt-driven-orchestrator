@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   markNodeDone,
+  releaseNodeCompletion,
   killNode,
   restartNode,
   startNode,
@@ -10,7 +11,11 @@ import {
   fetchPrompt,
   fetchNodeIO,
 } from "../api";
-import type { PortIO, MarkNodeDoneOutcome } from "../api";
+import type {
+  PortIO,
+  MarkNodeDoneOutcome,
+  ReleaseNodeCompletionOutcome,
+} from "../api";
 import type { NodeState, NodeStatus } from "../types";
 
 function pollInterval(status: NodeStatus): number | null {
@@ -44,6 +49,11 @@ function pollInterval(status: NodeStatus): number | null {
 export type MarkVerdict =
   | { kind: "pending" }
   | MarkNodeDoneOutcome
+  | { kind: "error"; message: string };
+
+export type ReleaseVerdict =
+  | { kind: "pending" }
+  | Extract<ReleaseNodeCompletionOutcome, { kind: "refused" }>
   | { kind: "error"; message: string };
 
 /**
@@ -112,6 +122,9 @@ export function useNodeRun(
   // kills a latent second bug: a verdict from iter 3 surviving a switch back to iter 1.
   const [markVerdict, setMarkVerdict] = useState<
     ({ iter: number } & MarkVerdict) | null
+  >(null);
+  const [releaseVerdict, setReleaseVerdict] = useState<
+    ({ iter: number } & ReleaseVerdict) | null
   >(null);
   const [retryConfirm, setRetryConfirm] = useState<{
     affectedCount: number;
@@ -275,6 +288,23 @@ export function useNodeRun(
     }
   }, [runId, node.node_id, selectedIter]);
 
+  const releaseCompletion = useCallback(async () => {
+    const iter = selectedIter;
+    setReleaseVerdict({ iter, kind: "pending" });
+    try {
+      const outcome = await releaseNodeCompletion(runId, node.node_id, iter);
+      setReleaseVerdict(
+        outcome.kind === "released" ? null : { iter, ...outcome },
+      );
+    } catch (e) {
+      setReleaseVerdict({
+        iter,
+        kind: "error",
+        message: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }, [runId, node.node_id, selectedIter]);
+
   // The two stale-banner actions (ADR-0032 §1: historical runs only). Iter-scoped
   // like the reads — the banner acts on the iteration on screen, not on
   // `node.iter`.
@@ -300,6 +330,7 @@ export function useNodeRun(
     inputs,
     outputs,
     markVerdict,
+    releaseVerdict,
     actionVerdict,
     retryConfirm,
     stop,
@@ -308,6 +339,7 @@ export function useNodeRun(
     cancelRetry,
     start,
     markComplete,
+    releaseCompletion,
     killStale,
     restartIteration,
   };

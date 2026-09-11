@@ -21,7 +21,7 @@ fn main() -> ExitCode {
     }
 
     let res: Result<()> = match cli.command {
-        Commands::Daemon { port } => {
+        Commands::Daemon { bind, port } => {
             tracing_subscriber::fmt()
                 .with_env_filter(
                     tracing_subscriber::EnvFilter::try_from_default_env()
@@ -36,7 +36,7 @@ fn main() -> ExitCode {
                 .enable_all()
                 .build()
                 .context("failed to build tokio runtime")
-                .and_then(|rt| rt.block_on(run_daemon(port)))
+                .and_then(|rt| rt.block_on(run_daemon(bind, port)))
         }
         Commands::Complete { .. } => unreachable!("`complete` returns its own ExitCode"),
         Commands::Fail { reason } => run_fail(reason),

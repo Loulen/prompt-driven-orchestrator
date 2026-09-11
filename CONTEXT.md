@@ -348,7 +348,7 @@ Point clé : **l'autonomie est une propriété du *pipeline*, jamais une faveur 
 Conséquences :
 
 - **Tout NodeRun est attachable** en tmux ; l'utilisateur peut intervenir, converser, corriger.
-- **Un Node peut être marqué `interactive: true`** : son NodeRun attend que l'utilisateur attache la session et signale la complétion.
+- **Un Node peut être marqué `interactive: true`** : son NodeRun attend que l'utilisateur attache la session et signale la complétion — en forçant (« Mark complete ») ou en **libérant** la complétion à l'agent (« Mark ready for completion », ADR-0068).
 - **Le Pipeline Manager** est conversationnel et permet de débloquer des Runs — pas juste de lire l'état.
 - **Aucune action durable auto par le runtime lui-même.** PDO ne merge, ne PR, ne cleanup **jamais de sa propre initiative**. Si ces effets se produisent, c'est qu'un **nœud du pipeline** les exécute — choix explicite du designer, versionné, auditable.
   - **« auto-cleanup » vs « reapable surfacing » (#128)** : faire supprimer worktrees/branches par le runtime de lui-même = interdit (ADR-0012). **Exposer** les candidats sans rien supprimer = autorisé : le runtime *liste* (`GET /runs/reapable`, lecture seule), la suppression reste au pipeline/humain via `cleanup_run`. La recette `docs/recipes/disk-janitor.md` câble ce surfacing à un Trigger cron — l'autonomie reste *dans le pipeline*.
@@ -601,6 +601,7 @@ Exposées comme `POST /runs/<id>/commands` :
 | `kill_node` | Tue un NodeRun en cours (le marque `failed`) |
 | `restart_node` | Re-spawn un NodeRun au **même `iter`** ; sur un nœud isolé, le sous-worktree est réutilisé en place — le travail non commité survit (#489). Préconditions et refus → ADR-0037 |
 | `mark_node_done` | Force la complétion (nœud `interactive`, ou récupération d'un failed corrigé à la main). Même corps que `pdo complete` : refus 409 nommé → ADR-0035 |
+| `release_node_completion` | **Libère la complétion** d'un nœud `interactive` : lève la garde qui refuse `pdo complete` ; le nœud repasse `running`. Idempotent ; refus 409 nommé sur un nœud non interactif ou sans session vivante → ADR-0068 |
 | `inject_artifact` | Pose un artefact à la main dans le Blackboard |
 | `cleanup_run` | Supprime branches, worktrees, artefacts (archive d'abord — ADR-0020) |
 | `rename_run` | Donne au Run un nom descriptif |
@@ -727,7 +728,12 @@ Multi-client par session : gratuit côté tmux. Sécurité : un contrôle d'`Ori
 
 ### Nœuds interactifs — signal de complétion
 
-Un Node `interactive: true` spawn une session normale et **n'auto-complète jamais**. La complétion est signalée **depuis l'UI** par un bouton « Mark complete » (pas de slash-command in-session : le bouton reste accessible sans être attaché). Les artefacts présents sur disque sont alors pris tels quels — le préambule le dit à l'agent et au user.
+Un Node `interactive: true` spawn une session normale et **n'auto-complète jamais tant que sa complétion n'est pas libérée**. Deux gestes, **depuis l'UI**, côte à côte (pas de slash-command in-session : les boutons restent accessibles sans être attaché) :
+
+- **« Mark complete »** (`mark_node_done`) : **force** la complétion ; les artefacts présents sur disque sont pris tels quels. Échappatoire inconditionnelle, disponible aussi après libération.
+- **« Mark ready for completion »** (`release_node_completion`) : **libère** la complétion — l'utilisateur a fini d'interagir et **pré-autorise** l'agent à appeler `pdo complete` quand il le juge bon, pour faire avancer le run. Visible seulement sur un nœud interactif à session vivante.
+
+**Libération de la complétion** *(terme, ADR-0068 — release completion)* : événement sur `(node, iter)` qui lève la **garde de complétion** : tant qu'il est absent, **toute** complétion d'un nœud interactif (`pdo complete` explicite, hook Stop, fin de tour) est refusée — 409 `completion_not_released`, *recoverable* (exit 3 : l'agent garde la main et attend le mot de l'utilisateur). Après libération le nœud repasse **`running`** (l'attente n'est plus sur l'humain). Un retry ou un `restart_node` **réarme** la garde. Le runtime **n'injecte rien** dans le pane (ADR-0051) : l'utilisateur attaché dit lui-même à l'agent qu'il a fini ; le préambule interactif décrit ce contrat à l'agent. _Éviter_ : « débloquer » (= `AwaitingUser` sur incident), « auto-complétion » (ADR-0032 §2, réglage d'instance — la libération ne l'arme pas), « autoriser pdo complete » sans dire par qui (c'est un geste humain, jamais du runtime).
 
 Le bouton **n'est pas une garantie** : il est gaté sur le seul statut, et le garde autorise explicitement « mark complete sur un nœud failed corrigé à la main » comme chemin de récupération. Le clic peut donc être **refusé** (409 nommé, affiché au niveau du bouton) — cf. ADR-0035.
 
@@ -842,6 +848,10 @@ Choix et pourquoi → ADR-0003. Daemon **Rust**, frontend **React + Vite** (canv
 
 **Service unit** : l'unité OS qui fait démarrer le daemon au boot et survivre au logout (systemd `--user` sous Linux, LaunchAgent best-effort sous macOS) — la différence entre « les Triggers ne tournent que tant que tu es loggé » et un orchestrateur autonome fiable. CLI `pdo service {install|uninstall|status}`. Garde de conflit de port à l'install (deux daemons ne partagent jamais un port). La status-bar affiche une pastille `ephemeral` quand le daemon ne survit pas au reboot — le seul signal que le dot de connexion ne peut pas exprimer (joignable ≠ persistant). Lignes load-bearing de l'unité et pourquoi → ADR-0019.
 
+- **Adresse d'écoute (bind)** *(terme, #766)* : l'interface réseau sur laquelle le daemon accepte des connexions TCP — `0.0.0.0` (toutes) par défaut, restreignable à `127.0.0.1` derrière un reverse proxy (`--bind` / `PDO_BIND`, propagé dans l'unité par `pdo service install --bind`, préservé par la réinstallation de l'Update). À distinguer de l'**origine WS** (`PDO_ALLOWED_WS_ORIGINS`), qui filtre *quel site* le navigateur affiche, pas *qui* peut ouvrir un TCP ; les deux étages se complètent. _Éviter_ : « host » (ambigu avec le nom de domaine du proxy), « adresse du daemon » (c'est l'URL annoncée).
+- **Le PATH de l'unité n'est pas celui des harnais** : les harnais se résolvent dans le PATH du shell interactif de l'utilisateur (ADR-0055) ; l'unité générée le dit en commentaire, pour qu'un lecteur ne conclue pas à un harnais introuvable. _Éviter_ : enrichir le PATH de l'unité pour « trouver » un harnais.
+- **Drop-in** *(terme)* : le fichier `pdo.service.d/override.conf` où l'opérateur pose durablement les variables env-only (`PDO_ALLOWED_WS_ORIGINS`) — il survit à chaque réécriture de l'unité, y compris celle de l'Update. Documenté en une phrase dans la table des commandes du README, pas davantage.
+
 ### Versioning (#139)
 
 **Source de vérité unique : le `version` du `Cargo.toml` workspace.** `frontend/package.json` reste à `0.0.0` en permanence — intentionnel. Le daemon expose sa version compilée via `GET /sessions` (l'endpoint de la status-bar — pas de route dédiée : un champ JSON additionnel est rétro-compatible et évite une entrée de whitelist proxy). En prod le binaire embarque le frontend, donc daemon et UI ne divergent pas.
@@ -859,7 +869,7 @@ Choix et pourquoi → ADR-0003. Daemon **Rust**, frontend **React + Vite** (canv
 
 ### Mono-user, local
 
-Le daemon bind **`0.0.0.0:<port>`** — joignable depuis le LAN, c'est **délibéré** (#260 est closed, pas différée). Pas d'auth, pas de TLS, pas de multi-user : single-user local par design, sur un réseau de confiance.
+Le daemon bind **`0.0.0.0:<port>`** par défaut — joignable depuis le LAN, c'est **délibéré** (#260 est closed, pas différée) ; `--bind 127.0.0.1` est l'opt-out derrière un reverse proxy (#766, cf. *Adresse d'écoute*). Pas d'auth, pas de TLS, pas de multi-user : single-user local par design, sur un réseau de confiance.
 
 **Le chemin de lecture ne dépend jamais d'Internet.** Les egress du produit sont tous **opt-in et tolérants à l'échec** : `docker pull`, guards de Trigger shellés, sync de la table de prix. Chaque nœud est par ailleurs une session `claude`, donc le produit ne fonctionne pas hors ligne — « pas de dépendance réseau » n'a jamais été littéral.
 

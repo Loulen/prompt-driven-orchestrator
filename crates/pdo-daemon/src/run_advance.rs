@@ -1133,6 +1133,8 @@ mod tests {
                 status,
                 started_at: Some("t0".into()),
                 completed_at,
+                interactive: false,
+                completion_released: false,
             }],
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),

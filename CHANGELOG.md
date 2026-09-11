@@ -16,6 +16,16 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.84.0
+**Liste de runs en arbre** (#784 ; story #783).
+Les runs enfants (créés via `pdo run create` depuis une session de nœud) se replient sous leur
+parent : seules les racines sont au niveau 0, un chevron déplie chaque parent, et une rangée de
+compteurs agrège le sous-arbre (finished / failed / stale / running). Un bouton global déplie ou
+replie tout ; la préférence « Child runs » des Settings (locale à l'appareil) fixe l'état par
+défaut. Le filtre pipeline garde le parent d'un enfant filtré ; un parent archivé redevient
+feuille et ses enfants remontent en racines. Le nœud orchestrateur et son onglet Orchestration
+affichent une pastille orange pour les enfants « stale ».
+
 ## 1.83.0
 **Fichiers et images transmis au run enfant** (#779).
 `POST /runs` multipart accepte un champ répétable `files` à côté d'`images` : tout fichier atterrit dans

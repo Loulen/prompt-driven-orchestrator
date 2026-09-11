@@ -1,4 +1,4 @@
-import { ChevronDown, GitFork, X } from "lucide-react";
+import { ChevronDown, ChevronsDownUp, ChevronsUpDown, X } from "lucide-react";
 import type { RunListEntry, Trigger } from "../types";
 import {
   DropdownMenu,
@@ -11,7 +11,6 @@ import {
   MANUAL_TRIGGER,
   NONE,
   isFilterActive,
-  isRootRun,
   pipelineKey,
   repoKey,
   triggerKey,
@@ -105,16 +104,30 @@ function FilterDropdown({
   );
 }
 
+/**
+ * #783 — the expand/collapse-all control's view state, derived by the caller
+ * from the TREE (not from the filter): `null` when no parent exists (the
+ * button is then absent — an instance that never orchestrates sees exactly
+ * the #336 strip).
+ */
+export interface TreeToggle {
+  /** Every visible parent is expanded ⇒ the button offers to collapse. */
+  allExpanded: boolean;
+  onToggle: () => void;
+}
+
 export default function RunFilters({
   runs,
   triggers,
   value,
   onChange,
+  treeToggle = null,
 }: {
   runs: RunListEntry[];
   triggers: Trigger[];
   value: RunFilterValue;
   onChange: (v: RunFilterValue) => void;
+  treeToggle?: TreeToggle | null;
 }) {
   const repoOptions: Option[] = uniqueSorted(runs.map(repoKey)).map((v) => ({
     value: v,
@@ -135,11 +148,6 @@ export default function RunFilters({
         : triggers.find((t) => t.id === v)?.name ?? v,
   }));
 
-  // #725 — the orchestrated toggle is offered only when at least one orchestrated
-  // run exists: an instance that never orchestrates sees exactly the old strip.
-  // Counted over ALL runs, not the filtered view, so the toggle never flickers
-  // away while it is doing the hiding.
-  const childCount = runs.filter((r) => !isRootRun(r)).length;
   const anyActive = isFilterActive(value);
 
   return (
@@ -165,32 +173,22 @@ export default function RunFilters({
         selected={value.trigger}
         onSelect={(trigger) => onChange({ ...value, trigger })}
       />
-      {/* #725 — « show orchestrated runs » as an icon-only chip (lucide GitFork;
-          the words live in the tooltip — user decision 2026-09-06). Deliberate
-          inversion vs the dropdowns, where accent means "narrowing": here ON
-          (accent) means everything is shown; OFF greys the chip and narrows the
-          list to roots. The clear ✕ appearing alongside keeps the strip honest. */}
-      {childCount > 0 && (
+      {/* #783 — expand / collapse all, in the slot the #725 GitFork chip held.
+          NOT a filter: neutral colours (never accent), never part of
+          `isFilterActive`, so it never summons the clear ✕. `ChevronsDownUp`
+          when every visible parent is open (click collapses), `ChevronsUpDown`
+          otherwise (click expands). */}
+      {treeToggle && (
         <button
           type="button"
-          data-testid="run-filter-orchestrated"
-          aria-pressed={value.showOrchestrated}
-          title={
-            value.showOrchestrated
-              ? `Orchestrated runs shown — click to hide the ${childCount} run${childCount === 1 ? "" : "s"} started by another run (roots only).`
-              : `Orchestrated runs hidden — ${childCount} run${childCount === 1 ? "" : "s"} started by another run. Click to show them.`
-          }
-          aria-label={
-            value.showOrchestrated ? "Hide orchestrated runs" : "Show orchestrated runs"
-          }
-          className={`flex shrink-0 cursor-pointer items-center rounded border bg-bg-3 px-2 py-[3px] transition-colors hover:bg-bg-4 ${
-            value.showOrchestrated
-              ? "border-acc text-acc"
-              : "border-line-strong text-fg-4"
-          }`}
-          onClick={() => onChange({ ...value, showOrchestrated: !value.showOrchestrated })}
+          data-testid="run-tree-toggle-all"
+          data-state={treeToggle.allExpanded ? "expanded" : "collapsed"}
+          title={treeToggle.allExpanded ? "Collapse all child runs" : "Expand all child runs"}
+          aria-label={treeToggle.allExpanded ? "Collapse all child runs" : "Expand all child runs"}
+          className="flex shrink-0 cursor-pointer items-center rounded border border-line-strong bg-bg-3 px-2 py-[3px] text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2"
+          onClick={treeToggle.onToggle}
         >
-          <GitFork size={10} />
+          {treeToggle.allExpanded ? <ChevronsDownUp size={10} /> : <ChevronsUpDown size={10} />}
         </button>
       )}
       {anyActive && (

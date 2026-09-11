@@ -1118,6 +1118,40 @@ describe("SettingsSurface — Pipeline Manager section (manager on demand)", () 
   });
 });
 
+describe("SettingsSurface — Interface / child runs default (#783)", () => {
+  beforeEach(() => {
+    fetchSettingsMock.mockReset();
+    updateSettingsMock.mockReset();
+    localStorage.clear();
+  });
+
+  it("defaults to « Expanded by default » and writes the pick to localStorage at once", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    render(<SettingsSurface open onClose={() => {}} />);
+
+    const expanded = await screen.findByTestId("setting-child-runs-expanded");
+    const collapsed = screen.getByTestId("setting-child-runs-collapsed");
+    expect(expanded).toHaveAttribute("aria-checked", "true");
+    expect(collapsed).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByTestId("setting-child-runs-badge")).toHaveTextContent("Device-local · saved immediately");
+
+    fireEvent.click(collapsed);
+    expect(localStorage.getItem("pdo.ui.childRunsExpanded")).toBe("false");
+    expect(collapsed).toHaveAttribute("aria-checked", "true");
+    expect(updateSettingsMock).not.toHaveBeenCalled();
+
+    fireEvent.click(expanded);
+    expect(localStorage.getItem("pdo.ui.childRunsExpanded")).toBe("true");
+  });
+
+  it("seeds the control from the stored preference", async () => {
+    localStorage.setItem("pdo.ui.childRunsExpanded", "false");
+    fetchSettingsMock.mockResolvedValue(sample());
+    render(<SettingsSurface open onClose={() => {}} />);
+    expect(await screen.findByTestId("setting-child-runs-collapsed")).toHaveAttribute("aria-checked", "true");
+  });
+});
+
 describe("SettingsSurface — Interface / single-tab toggle (#342)", () => {
   beforeEach(() => {
     fetchSettingsMock.mockReset();

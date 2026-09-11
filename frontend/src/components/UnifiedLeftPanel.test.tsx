@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import UnifiedLeftPanel from "./UnifiedLeftPanel";
 import type { PipelineListEntry, RunListEntry, Trigger } from "../types";
 import type { LibraryPipelineEntry } from "../api";
 import { cleanupRun, deleteLibraryPipeline, deletePipeline, duplicateLibraryPipeline, fetchPipelines, importPipelineDocument, importWorkflow, openRunShell, pauseRun, renamePipeline, renameRun, resumeRun, retryAll } from "../api";
 import { useEditStore } from "../stores/editStore";
+import { useSelectionStore } from "../stores/selectionStore";
 import { useRecentReposStore } from "../stores/recentReposStore";
 
 const mockRenameRun = vi.mocked(renameRun);
@@ -1681,10 +1682,12 @@ describe("UnifiedLeftPanel run filters (#336)", () => {
 });
 
 // #577 — multi-select + bulk actions on the Runs list.
-// #725 — provenance badge « orchestrated » on child runs (click → parent) and
-// the « show orchestrated runs » toggle in the filter strip (ON by default; OFF
-// narrows to roots). Same session-only filter state; the clear ✕ resets it.
-describe("UnifiedLeftPanel orchestrated badge + roots-only toggle (#725)", () => {
+// #783 — the Runs list is a TREE: a child run nests under its parent (chevron
+// under the status dot, 14px indent per level), the parent carries the
+// aggregated child counts, the filter strip's fourth control is expand /
+// collapse all, and Settings › Interface seeds the default. The tree logic is
+// unit-tested in `lib/runTree.test.ts`; this block checks the rendering seams.
+describe("UnifiedLeftPanel run tree (#783)", () => {
   const trig: Trigger = {
     id: "trg-1",
     name: "Nightly audit",
@@ -1699,129 +1702,276 @@ describe("UnifiedLeftPanel orchestrated badge + roots-only toggle (#725)", () =>
   };
 
   const runs: RunListEntry[] = [
-    { run_id: "epic", pipeline_name: "orchestrate-epic", status: "running", started_at: null, name: "Refonte auth — orchestrateur" },
-    { run_id: "kid", pipeline_name: "implement-loop", status: "running", started_at: null, name: "#731 login form", parent_run_id: "epic" },
-    { run_id: "kid-trig", pipeline_name: "implement-loop", status: "running", started_at: null, name: "#733 logout — nightly", parent_run_id: "epic", triggered_by: "trg-1" },
-    { run_id: "orphan", pipeline_name: "implement-loop", status: "failed", started_at: null, name: "#700 spike", parent_run_id: "forgotten" },
-    { run_id: "arch-kid", pipeline_name: "implement-loop", status: "archived", started_at: null, name: "old child", parent_run_id: "epic" },
+    { run_id: "epic", pipeline_name: "orchestrate-epic", status: "running", started_at: null, name: "Refonte auth — orchestrateur", effective_repo: "/repos/a" },
+    { run_id: "kid", pipeline_name: "implement-loop", status: "running", started_at: null, name: "#731 login form", parent_run_id: "epic", effective_repo: "/repos/a" },
+    { run_id: "kid-trig", pipeline_name: "implement-loop", status: "failed", started_at: null, name: "#733 logout — nightly", parent_run_id: "epic", triggered_by: "trg-1", effective_repo: "/repos/b" },
+    { run_id: "grandkid", pipeline_name: "code-review", status: "completed", started_at: null, name: "review 731", parent_run_id: "kid", effective_repo: "/repos/a" },
+    { run_id: "orphan", pipeline_name: "implement-loop", status: "failed", started_at: null, name: "#700 spike", parent_run_id: "forgotten", effective_repo: "/repos/a" },
+    { run_id: "solo", pipeline_name: "triage", status: "completed", started_at: null, name: "triage nightly", effective_repo: "/repos/a" },
   ];
 
-  it("shows the orchestrated badge on a child run and not on a root", () => {
-    renderPanel({ runs: [runs[0], runs[1]] });
-    expect(screen.getByTestId("run-orchestrated-badge")).toBeInTheDocument();
-    // Only the child row carries it — one badge for one child.
-    expect(screen.getAllByTestId("run-orchestrated-badge")).toHaveLength(1);
+  beforeEach(() => {
+    localStorage.clear();
   });
 
-  it("coexists with the trigger badge on the same run", () => {
-    renderPanel({ runs: [runs[2]] });
-    expect(screen.getByTestId("run-trigger-badge")).toBeInTheDocument();
-    expect(screen.getByTestId("run-orchestrated-badge")).toBeInTheDocument();
+  const labels = () => screen.getAllByTestId("run-display-label").map((el) => el.textContent);
+  const row = (id: string) => document.querySelector(`[data-run-row="${id}"]`) as HTMLElement;
+
+  it("nests children under their parent, in list order, indented 14px per level (expanded by default)", () => {
+    renderPanel({ runs });
+    expect(labels()).toEqual([
+      "Refonte auth — orchestrateur",
+      "#731 login form",
+      "review 731",
+      "#733 logout — nightly",
+      "#700 spike",
+      "triage nightly",
+    ]);
+    expect(row("epic")).toHaveAttribute("data-depth", "0");
+    expect(row("kid")).toHaveAttribute("data-depth", "1");
+    expect(row("grandkid")).toHaveAttribute("data-depth", "2");
+    expect(row("kid").style.paddingLeft).toBe("26px");
+    expect(row("grandkid").style.paddingLeft).toBe("40px");
+    // An orphan (parent forgotten) is a root.
+    expect(row("orphan")).toHaveAttribute("data-depth", "0");
   });
 
-  it("names the parent run in the badge tooltip", () => {
-    renderPanel({ runs: [runs[0], runs[1]] });
-    expect(screen.getByTestId("run-orchestrated-badge")).toHaveAttribute(
-      "title",
-      "Orchestrated by “Refonte auth — orchestrateur” — click to open the parent run",
-    );
+  it("a child follows its parent's Project group, whatever its own repo", () => {
+    const twoRepos: RunListEntry[] = [
+      ...runs,
+      { run_id: "other", pipeline_name: "deploy", status: "completed", started_at: null, name: "deploy preview", effective_repo: "/repos/b" },
+    ];
+    renderPanel({ runs: twoRepos });
+    const groups = screen.getAllByTestId("run-repo-group");
+    expect(groups).toHaveLength(2);
+    // kid-trig is on /repos/b but sits under its parent in the /repos/a group.
+    expect(within(groups[0]).getByText("#733 logout — nightly")).toBeInTheDocument();
+    expect(within(groups[1]).queryByText("#733 logout — nightly")).not.toBeInTheDocument();
   });
 
-  it("clicking the badge selects the parent run, not the child", () => {
-    const onSelectRun = vi.fn();
-    render(
-      <UnifiedLeftPanel
-        runs={[runs[0], runs[1]]}
-        selectedRunId={null}
-        onSelectRun={onSelectRun}
-        onNewRun={noop}
-        libraryPipelines={[]}
-        onLibraryPipelinesChanged={noop}
-      />,
-    );
-    fireEvent.click(screen.getByTestId("run-orchestrated-badge"));
-    expect(onSelectRun).toHaveBeenCalledTimes(1);
-    expect(onSelectRun).toHaveBeenCalledWith("epic");
+  it("puts a chevron under the dot of every row with children — and only there", () => {
+    renderPanel({ runs });
+    const chevrons = screen.getAllByTestId("run-tree-chevron");
+    expect(chevrons).toHaveLength(2); // epic + kid
+    expect(within(row("epic")).getByTestId("run-tree-chevron")).toHaveAttribute("aria-expanded", "true");
+    expect(within(row("kid")).getByTestId("run-tree-chevron")).toBeInTheDocument();
+    expect(within(row("grandkid")).queryByTestId("run-tree-chevron")).not.toBeInTheDocument();
+    expect(within(row("solo")).queryByTestId("run-tree-chevron")).not.toBeInTheDocument();
   });
 
-  it("dims an orphan badge (parent forgotten) and makes its click a no-op", () => {
-    const onSelectRun = vi.fn();
-    render(
-      <UnifiedLeftPanel
-        runs={[runs[3]]}
-        selectedRunId={null}
-        onSelectRun={onSelectRun}
-        onNewRun={noop}
-        libraryPipelines={[]}
-        onLibraryPipelinesChanged={noop}
-      />,
-    );
-    const badge = screen.getByTestId("run-orchestrated-badge");
-    expect(badge).toHaveAttribute("aria-disabled", "true");
-    expect(badge).toHaveAttribute(
-      "title",
-      "Orchestrated by a run that was forgotten",
-    );
-    fireEvent.click(badge);
-    expect(onSelectRun).not.toHaveBeenCalled();
-  });
-
-  it("tooltip of the trigger badge names the trigger", () => {
-    renderPanel({ runs: [runs[2]], triggers: [trig] });
+  it("the orchestrated badge is gone; the trigger badge stays", () => {
+    renderPanel({ runs, triggers: [trig] });
+    expect(screen.queryByTestId("run-orchestrated-badge")).not.toBeInTheDocument();
     expect(screen.getByTestId("run-trigger-badge")).toHaveAttribute(
       "title",
       "Created by trigger “Nightly audit” — click to open it in the Triggers tab",
     );
   });
 
-  it("hides the toggle when no orchestrated run exists", () => {
-    renderPanel({ runs: [runs[0]] });
+  it("aggregates the child counts over the whole subtree, zero pills hidden, none on a leaf", () => {
+    renderPanel({ runs });
+    const epicPills = within(row("epic")).getByTestId("run-child-pills");
+    // epic's descendants: kid (running), grandkid (finished), kid-trig (failed).
+    expect(within(epicPills).getByTestId("run-child-pills-finished")).toHaveTextContent("1");
+    expect(within(epicPills).getByTestId("run-child-pills-failed")).toHaveTextContent("1");
+    expect(within(epicPills).getByTestId("run-child-pills-running")).toHaveTextContent("1");
+    expect(within(epicPills).queryByTestId("run-child-pills-stale")).not.toBeInTheDocument();
+    // kid: one finished grandchild only.
+    const kidPills = within(row("kid")).getByTestId("run-child-pills");
+    expect(within(kidPills).getByTestId("run-child-pills-finished")).toHaveTextContent("1");
+    expect(within(kidPills).queryByTestId("run-child-pills-running")).not.toBeInTheDocument();
+    // Leaves and childless roots carry no pills at all.
+    expect(within(row("grandkid")).queryByTestId("run-child-pills")).not.toBeInTheDocument();
+    expect(within(row("solo")).queryByTestId("run-child-pills")).not.toBeInTheDocument();
+  });
+
+  it("counts a live stalled descendant as STALE (orange), disjoint from running", () => {
+    const stalled = runs.map((r) => (r.run_id === "kid" ? { ...r, stalled: true } : r));
+    renderPanel({ runs: stalled });
+    const pills = within(row("epic")).getByTestId("run-child-pills");
+    expect(within(pills).getByTestId("run-child-pills-stale")).toHaveTextContent("1");
+    expect(within(pills).queryByTestId("run-child-pills-running")).not.toBeInTheDocument();
+    expect(within(pills).getByTestId("run-child-pills-stale").querySelector(".bg-st-stale")).not.toBeNull();
+  });
+
+  it("the chevron collapses / expands the subtree without selecting the run", () => {
+    const onSelectRun = vi.fn();
+    render(
+      <UnifiedLeftPanel runs={runs} selectedRunId={null} onSelectRun={onSelectRun} onNewRun={noop} libraryPipelines={[]} onLibraryPipelinesChanged={noop} />,
+    );
+    fireEvent.click(within(row("epic")).getByTestId("run-tree-chevron"));
+    expect(onSelectRun).not.toHaveBeenCalled();
+    expect(labels()).toEqual(["Refonte auth — orchestrateur", "#700 spike", "triage nightly"]);
+    expect(within(row("epic")).getByTestId("run-tree-chevron")).toHaveAttribute("aria-expanded", "false");
+    // The pills describe the real subtree even while collapsed…
+    expect(within(row("epic")).getByTestId("run-child-pills-failed")).toHaveTextContent("1");
+    fireEvent.click(within(row("epic")).getByTestId("run-tree-chevron"));
+    expect(labels()).toHaveLength(6);
+    expect(onSelectRun).not.toHaveBeenCalled();
+  });
+
+  it("clicking the pills of a collapsed parent expands it (decision 1)", () => {
+    const onSelectRun = vi.fn();
+    render(
+      <UnifiedLeftPanel runs={runs} selectedRunId={null} onSelectRun={onSelectRun} onNewRun={noop} libraryPipelines={[]} onLibraryPipelinesChanged={noop} />,
+    );
+    fireEvent.click(within(row("epic")).getByTestId("run-tree-chevron"));
+    const pills = within(row("epic")).getByTestId("run-child-pills");
+    expect(within(pills).getByTestId("run-child-pills-failed")).toHaveAttribute("title", "1 failed child run — click to expand");
+    fireEvent.click(pills);
+    expect(onSelectRun).not.toHaveBeenCalled();
+    expect(labels()).toHaveLength(6);
+    // Once expanded the pills are inert: the click reaches the row.
+    expect(within(row("epic")).getByTestId("run-child-pills-failed")).toHaveAttribute("title", "1 failed child run");
+    fireEvent.click(within(row("epic")).getByTestId("run-child-pills"));
+    expect(onSelectRun).toHaveBeenCalledWith("epic");
+  });
+
+  it("← collapses / climbs to the parent, → expands, on the focused row (decision 2)", () => {
+    renderPanel({ runs });
+    fireEvent.keyDown(row("epic"), { key: "ArrowLeft" });
+    expect(labels()).toHaveLength(3);
+    fireEvent.keyDown(row("epic"), { key: "ArrowRight" });
+    expect(labels()).toHaveLength(6);
+    // On a leaf, ← moves focus to the parent row.
+    row("grandkid").focus();
+    fireEvent.keyDown(row("grandkid"), { key: "ArrowLeft" });
+    expect(document.activeElement).toBe(row("kid"));
+  });
+
+  it("the expand/collapse-all button replaces the GitFork chip: neutral, no clear ✕, absent without a parent", () => {
+    renderPanel({ runs: [runs[5]] });
+    expect(screen.queryByTestId("run-tree-toggle-all")).not.toBeInTheDocument();
     expect(screen.queryByTestId("run-filter-orchestrated")).not.toBeInTheDocument();
-  });
+    cleanup();
 
-  it("shows the toggle pressed ON by default and hides children when switched off", async () => {
-    const user = userEvent.setup();
     renderPanel({ runs });
-    const toggle = screen.getByTestId("run-filter-orchestrated");
-    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    const toggle = screen.getByTestId("run-tree-toggle-all");
+    expect(toggle).toHaveAttribute("data-state", "expanded");
+    expect(toggle).toHaveAttribute("aria-label", "Collapse all child runs");
+    expect(toggle.className).not.toContain("border-acc");
 
-    await user.click(toggle);
-    expect(screen.getByTestId("run-filter-orchestrated")).toHaveAttribute("aria-pressed", "false");
-    // Only roots remain — the epic; every child (incl. the archived one) hides,
-    // and with zero archived runs left the whole section disappears.
-    const labels = screen.getAllByTestId("run-display-label").map((el) => el.textContent);
-    expect(labels).toEqual(["Refonte auth — orchestrateur"]);
-    expect(screen.queryByTestId("run-archived-section")).not.toBeInTheDocument();
-
-    await user.click(screen.getByTestId("run-filter-orchestrated"));
-    expect(screen.getAllByTestId("run-display-label")).toHaveLength(4);
-  });
-
-  it("composes with the other filter axes (AND)", async () => {
-    const user = userEvent.setup();
-    renderPanel({ runs });
-
-    await user.click(screen.getByTestId("run-filter-orchestrated"));
-    await user.click(screen.getByTestId("run-filter-pipeline"));
-    await user.click(await screen.findByTestId("run-filter-option-implement-loop"));
-
-    // implement-loop runs are all children; roots-only leaves nothing.
-    expect(screen.queryAllByTestId("run-display-label")).toHaveLength(0);
-    expect(screen.getByTestId("run-filter-empty")).toBeInTheDocument();
-  });
-
-  it("the clear control resets the toggle to ON", async () => {
-    const user = userEvent.setup();
-    renderPanel({ runs });
-
-    await user.click(screen.getByTestId("run-filter-orchestrated"));
-    // Narrowed to roots ⇒ the strip grew a clear ✕.
-    expect(screen.getByTestId("run-filter-clear")).toBeInTheDocument();
-
-    await user.click(screen.getByTestId("run-filter-clear"));
-    expect(screen.getByTestId("run-filter-orchestrated")).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(toggle);
+    expect(labels()).toEqual(["Refonte auth — orchestrateur", "#700 spike", "triage nightly"]);
+    expect(screen.getByTestId("run-tree-toggle-all")).toHaveAttribute("data-state", "collapsed");
+    expect(screen.getByTestId("run-tree-toggle-all")).toHaveAttribute("aria-label", "Expand all child runs");
+    // Not a filter: no clear ✕ appears.
     expect(screen.queryByTestId("run-filter-clear")).not.toBeInTheDocument();
-    expect(screen.getAllByTestId("run-display-label")).toHaveLength(4);
+
+    fireEvent.click(screen.getByTestId("run-tree-toggle-all"));
+    expect(labels()).toHaveLength(6);
+    expect(screen.getByTestId("run-tree-toggle-all")).toHaveAttribute("data-state", "expanded");
+  });
+
+  it("one collapsed parent flips the global button to « expand »", () => {
+    renderPanel({ runs });
+    fireEvent.click(within(row("kid")).getByTestId("run-tree-chevron"));
+    expect(screen.getByTestId("run-tree-toggle-all")).toHaveAttribute("data-state", "collapsed");
+  });
+
+  it("honours the « collapsed by default » preference at load", () => {
+    localStorage.setItem("pdo.ui.childRunsExpanded", "false");
+    renderPanel({ runs });
+    expect(labels()).toEqual(["Refonte auth — orchestrateur", "#700 spike", "triage nightly"]);
+    expect(screen.getByTestId("run-tree-toggle-all")).toHaveAttribute("data-state", "collapsed");
+    // Per-row toggles are NOT persisted.
+    fireEvent.click(within(row("epic")).getByTestId("run-tree-chevron"));
+    expect(localStorage.getItem("pdo.ui.childRunsExpanded")).toBe("false");
+  });
+
+  it("a filter keeps a non-matching parent as the path to a matching child, opened, siblings hidden", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem("pdo.ui.childRunsExpanded", "false");
+    renderPanel({ runs });
+    await user.click(screen.getByTestId("run-filter-pipeline"));
+    await user.click(await screen.findByTestId("run-filter-option-code-review"));
+    // epic → kid → grandkid is the only path; kid-trig (implement-loop) and the
+    // roots that don't match are gone. The parents open on the match even
+    // though the default is collapsed.
+    expect(labels()).toEqual(["Refonte auth — orchestrateur", "#731 login form", "review 731"]);
+    // The pills still describe the REAL subtree, not the filtered view.
+    expect(within(row("epic")).getByTestId("run-child-pills-failed")).toHaveTextContent("1");
+    // The chevron stays active under the filter.
+    fireEvent.click(within(row("kid")).getByTestId("run-tree-chevron"));
+    expect(labels()).toEqual(["Refonte auth — orchestrateur", "#731 login form"]);
+    // Clearing the filter brings everything back (default collapsed ⇒ roots).
+    await user.click(screen.getByTestId("run-filter-clear"));
+    expect(labels()).toEqual(["Refonte auth — orchestrateur", "#700 spike", "triage nightly"]);
+  });
+
+  it("a filter matching only a root shows no chevron path for children", async () => {
+    const user = userEvent.setup();
+    renderPanel({ runs });
+    await user.click(screen.getByTestId("run-filter-pipeline"));
+    await user.click(await screen.findByTestId("run-filter-option-triage"));
+    expect(labels()).toEqual(["triage nightly"]);
+  });
+
+  it("selecting a hidden run opens its ancestors and scrolls to it (#725 mechanism)", () => {
+    const scrollSpy = vi.fn();
+    Element.prototype.scrollIntoView = scrollSpy;
+    localStorage.setItem("pdo.ui.childRunsExpanded", "false");
+    const { rerender } = render(
+      <UnifiedLeftPanel runs={runs} selectedRunId={null} onSelectRun={noop} onNewRun={noop} libraryPipelines={[]} onLibraryPipelinesChanged={noop} />,
+    );
+    expect(labels()).toHaveLength(3);
+    rerender(
+      <UnifiedLeftPanel runs={runs} selectedRunId="grandkid" onSelectRun={noop} onNewRun={noop} libraryPipelines={[]} onLibraryPipelinesChanged={noop} />,
+    );
+    // Every ancestor of grandkid (epic, kid) opened — which also reveals epic's
+    // other child, kid-trig: a row is expanded or not, never partially.
+    expect(labels()).toEqual([
+      "Refonte auth — orchestrateur",
+      "#731 login form",
+      "review 731",
+      "#733 logout — nightly",
+      "#700 spike",
+      "triage nightly",
+    ]);
+    expect(scrollSpy).toHaveBeenCalled();
+  });
+
+  it("archiving a parent releases its children as ACTIVE roots; the Archived section holds the parent alone (AC #2, ADR-0064)", () => {
+    const archivedParent = runs.map((r) => (r.run_id === "epic" ? { ...r, status: "archived" as const } : r));
+    renderPanel({ runs: archivedParent });
+    // Active list: the released children climb back to depth 0 (the grandchild
+    // stays under its own live parent), alongside the orphan and solo. A released
+    // child is grouped by its OWN repo again (kid-trig lives in /repos/b).
+    expect(row("kid")).toHaveAttribute("data-depth", "0");
+    expect(row("kid-trig")).toHaveAttribute("data-depth", "0");
+    expect(row("grandkid")).toHaveAttribute("data-depth", "1");
+    expect(labels()).toEqual([
+      "#731 login form",
+      "review 731",
+      "#700 spike",
+      "triage nightly",
+      "#733 logout — nightly",
+    ]);
+    expect(screen.getByTestId("run-archived-count")).toHaveTextContent("(1)");
+    fireEvent.click(screen.getByTestId("run-archived-toggle"));
+    // The archived parent is a leaf: no chevron, no pills, no nested rows.
+    expect(labels().slice(-1)).toEqual(["Refonte auth — orchestrateur"]);
+    expect(within(row("epic")).queryByTestId("run-tree-chevron")).toBeNull();
+    expect(within(row("epic")).queryByTestId("run-child-pills-failed")).toBeNull();
+  });
+
+  it("an archived parent that is FORGOTTEN releases its children as roots", () => {
+    const forgotten = runs.filter((r) => r.run_id !== "epic");
+    renderPanel({ runs: forgotten });
+    expect(row("kid")).toHaveAttribute("data-depth", "0");
+    expect(row("kid-trig")).toHaveAttribute("data-depth", "0");
+    expect(row("grandkid")).toHaveAttribute("data-depth", "1");
+  });
+
+  it("shift-range spans only the VISIBLE rows (collapsed subtree skipped)", () => {
+    useSelectionStore.getState().clearAll();
+    renderPanel({ runs });
+    fireEvent.click(within(row("epic")).getByTestId("run-tree-chevron")); // collapse epic
+    const dotOf = (id: string) => within(row(id)).getByRole("checkbox");
+    fireEvent.click(dotOf("epic"));
+    fireEvent.click(dotOf("solo"), { shiftKey: true });
+    expect(useSelectionStore.getState().runs.sort()).toEqual(["epic", "orphan", "solo"]);
+    useSelectionStore.getState().clearAll();
   });
 });
 

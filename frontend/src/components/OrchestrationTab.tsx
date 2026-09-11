@@ -33,29 +33,42 @@ function runStatusDot(status: RunStatus): string {
 }
 
 /**
- * The green / red / blue counters: a coloured dot with the number beside it.
- * Same component on the canvas node and in the tab header, so the two can
- * never disagree; a zero counter is omitted, and the whole cluster is omitted
- * when there is no child at all (nodes that never orchestrated stay clean).
+ * The green / red / orange / blue counters (« compteurs d'enfants », #723/#783):
+ * a coloured dot with the number beside it. ONE component for the canvas node,
+ * the tab header and the run list's parent rows, so the surfaces can never
+ * disagree; a zero counter is omitted, and the whole cluster is omitted when
+ * there is no child at all (nodes that never orchestrated stay clean).
+ *
+ * `onClick` (run list) makes the cluster a button — clicking the pills of a
+ * collapsed parent expands it (design decision 1, 2026-09-11); the tooltip then
+ * says so. `subject` names what is counted in the tooltip ("child run" on a
+ * node, "descendant" would be wrong there).
  */
 export function ChildCountPills({
   counts,
   size = "sm",
   testId = "child-count-pills",
+  onClick,
+  clickHint,
 }: {
   counts: ChildCounts;
   size?: "sm" | "xs";
   testId?: string;
+  /** When set, the cluster is clickable and stops the click from reaching the row. */
+  onClick?: () => void;
+  /** Appended to every pill's tooltip when `onClick` is set (e.g. "click to expand"). */
+  clickHint?: string;
 }) {
   if (totalChildren(counts) === 0) return null;
   const dot = size === "xs" ? 6 : 7;
   const fs = size === "xs" ? 9.5 : 10.5;
+  const hint = onClick && clickHint ? ` — ${clickHint}` : "";
   const item = (n: number, bg: string, label: string, id: string) =>
     n > 0 ? (
       <span
         key={id}
         data-testid={`${testId}-${id}`}
-        title={`${n} ${label} child run${n > 1 ? "s" : ""}`}
+        title={`${n} ${label} child run${n > 1 ? "s" : ""}${hint}`}
         className="inline-flex items-center gap-1 font-mono text-fg-2"
         style={{ fontSize: fs, lineHeight: 1 }}
       >
@@ -63,15 +76,35 @@ export function ChildCountPills({
         {n}
       </span>
     ) : null;
-  return (
-    <span
-      className="inline-flex items-center gap-2"
-      data-testid={testId}
-      aria-label={`${counts.finished} finished, ${counts.failed} failed, ${counts.running} running child runs`}
-    >
+  const label = `${counts.finished} finished, ${counts.failed} failed, ${counts.stale} stale, ${counts.running} running child runs`;
+  const body = (
+    <>
       {item(counts.finished, "bg-st-done", "finished", "finished")}
       {item(counts.failed, "bg-st-failed", "failed", "failed")}
+      {item(counts.stale, "bg-st-stale", "stale", "stale")}
       {item(counts.running, "bg-st-running", "running", "running")}
+    </>
+  );
+  if (onClick) {
+    return (
+      <span
+        role="button"
+        tabIndex={-1}
+        className="inline-flex cursor-pointer items-center gap-2 rounded px-0.5 hover:bg-bg-4"
+        data-testid={testId}
+        aria-label={label}
+        onClick={(e) => {
+          e.stopPropagation();
+          onClick();
+        }}
+      >
+        {body}
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-2" data-testid={testId} aria-label={label}>
+      {body}
     </span>
   );
 }

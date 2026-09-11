@@ -217,8 +217,11 @@ async fn node_status(daemon: &TestDaemon, run_id: &str, node_id: &str) -> String
         .to_string()
 }
 
+/// 30 s budget: under the full `it` target (hundreds of tests spawning tmux
+/// sessions concurrently) a retried child can take well over 10 s to settle,
+/// which made `retrying_the_failed_child_lets_the_node_complete_itself` flaky.
 async fn wait_node_status(daemon: &TestDaemon, run_id: &str, node_id: &str, want: &str) {
-    for _ in 0..200 {
+    for _ in 0..600 {
         if node_status(daemon, run_id, node_id).await == want {
             return;
         }

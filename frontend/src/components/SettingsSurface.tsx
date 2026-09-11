@@ -36,6 +36,7 @@ import ModelPicker from "./ModelPicker";
 import SessionCounter from "./SessionCounter";
 import HarnessSelect from "./HarnessSelect";
 import ThemeSelect from "./ThemeSelect";
+import { loadChildRunsExpanded, saveChildRunsExpanded } from "../lib/uiPrefs";
 import { harnessCatalog, findHarnessOption } from "../lib/harness";
 import AgentControl from "./AgentControl";
 import { announceAgentProfilesChanged, useAgentProfiles } from "../hooks/useAgentProfiles";
@@ -1322,6 +1323,13 @@ function Section({ section, children }: { section: SettingsSection; children: Re
 function InterfaceSection({ section }: { section: SettingsSection }) {
   const singleTabMode = useEditStore((s) => s.singleTabMode);
   const setSingleTabMode = useEditStore((s) => s.setSingleTabMode);
+  // #783 — « Child runs » default. Read once from localStorage, written at the
+  // change; the run list reads the key when it mounts (a reload applies it).
+  const [childRunsExpanded, setChildRunsExpanded] = useState(loadChildRunsExpanded);
+  const pickChildRuns = (v: boolean) => {
+    saveChildRunsExpanded(v);
+    setChildRunsExpanded(v);
+  };
 
   return (
     <Section section={section}>
@@ -1383,6 +1391,64 @@ function InterfaceSection({ section }: { section: SettingsSection }) {
         </div>
         <div className="text-fg-3" style={{ fontSize: "10.5px" }}>
           Stored in this browser's localStorage. Not shared with other browsers or the daemon.
+        </div>
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <div className="flex items-center gap-2">
+          <span className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
+            Child runs
+          </span>
+          <span
+            className="rounded-full border border-acc-border bg-acc-bg px-2 py-0.5 text-acc"
+            style={{ fontSize: "9.5px" }}
+            data-testid="setting-child-runs-badge"
+          >
+            Device-local · saved immediately
+          </span>
+        </div>
+        <div
+          role="radiogroup"
+          aria-label="Child runs"
+          className="flex gap-1"
+          data-testid="setting-child-runs"
+        >
+          {(
+            [
+              { v: true, id: "expanded", label: "Expanded by default" },
+              { v: false, id: "collapsed", label: "Collapsed by default" },
+            ] as const
+          ).map(({ v, id, label }) => {
+            const selected = childRunsExpanded === v;
+            return (
+              <button
+                key={id}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                tabIndex={selected ? 0 : -1}
+                data-testid={`setting-child-runs-${id}`}
+                onClick={() => pickChildRuns(v)}
+                onKeyDown={(e) => {
+                  if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) {
+                    e.preventDefault();
+                    pickChildRuns(!v);
+                  }
+                }}
+                className={`flex flex-1 cursor-pointer items-center justify-center rounded border px-2 py-1.5 font-medium transition-colors ${
+                  selected
+                    ? "border-acc bg-acc-bg text-acc"
+                    : "border-line-strong bg-bg-3 text-fg-4 hover:text-fg-3"
+                }`}
+                style={{ fontSize: "10px" }}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+        <div className="text-fg-3" style={{ fontSize: "10.5px" }}>
+          Applied when the run list loads. Toggling a row or the expand/collapse-all button only
+          affects the current session.
         </div>
       </div>
     </Section>

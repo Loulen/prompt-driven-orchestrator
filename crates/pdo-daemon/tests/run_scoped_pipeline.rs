@@ -185,14 +185,18 @@ async fn external_write_to_run_pipeline_emits_pipeline_modified() {
     let updated_yaml = PIPELINE_YAML.replace("version: \"1.0\"", "version: \"2.0\"");
     std::fs::write(&yaml_path, updated_yaml).unwrap();
 
-    // Should receive a pipeline_modified event within the debounce window.
+    // Should receive a pipeline_modified event within the debounce window. The
+    // budget is generous on purpose: under the full parallel suite the file
+    // watcher's notify + debounce can take well over the ~1s it needs alone,
+    // and a tight 4s budget made this flake (#784 run). The assertion is about
+    // the event, not its latency.
     // Filter on kind "yaml": the watcher may also surface a "prompt" event from
     // the initial prompt copy, and grabbing whichever event arrives first would
     // let the test pass without the external YAML edit being detected at all
     // (same under-assertion class as #182).
-    let evt = next_pipeline_modified_event(&mut ws, &run_id, Some("yaml"), Duration::from_secs(4))
+    let evt = next_pipeline_modified_event(&mut ws, &run_id, Some("yaml"), Duration::from_secs(20))
         .await
-        .expect("external write to run-scoped pipeline should emit pipeline_modified within 4s");
+        .expect("external write to run-scoped pipeline should emit pipeline_modified within 20s");
 
     assert_eq!(evt["kind"], "pipeline_modified");
     assert_eq!(evt["run_id"], run_id);

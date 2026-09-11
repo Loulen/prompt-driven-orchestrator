@@ -32,8 +32,10 @@ cd "$(git rev-parse --show-toplevel)"
 # frontend/src/components: 190 re-admits ThemeSelect.tsx and its test (#767, light
 #   theme), which landed on main past the 188 baseline and left the gate red. Ratchet
 #   down when tidied.
+# frontend/src/components: 191 admits OrchestrationTab.test.tsx (#783) — the tab
+#   and its shared pastilles had no component test; the stale pill needed one.
 BASELINES='
-frontend/src/components 190
+frontend/src/components 191
 crates/pdo-daemon/src 87
 '
 

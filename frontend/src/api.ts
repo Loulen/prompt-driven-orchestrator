@@ -821,6 +821,8 @@ export interface CreateRunRequest {
    *  the server resolves back-compat by the presence of `name`, then the instance default. */
   auto_name?: boolean;
   images?: File[];
+  /** #779: non-image attachments, sent as the multipart `files` field. */
+  files?: File[];
   provisioning?: ProvisioningRules;
 }
 
@@ -830,8 +832,9 @@ export interface CreateRunResponse {
 
 export function createRun(req: CreateRunRequest): Promise<CreateRunResponse> {
   const hasImages = req.images && req.images.length > 0;
+  const hasFiles = req.files && req.files.length > 0;
 
-  if (hasImages) {
+  if (hasImages || hasFiles) {
     const form = new FormData();
     form.append("pipeline", req.pipeline);
     form.append("input", req.input);
@@ -851,8 +854,13 @@ export function createRun(req: CreateRunRequest): Promise<CreateRunResponse> {
     if (req.skills && req.skills.length > 0) form.append("skills", JSON.stringify(req.skills));
     if (req.auto_name !== undefined) form.append("auto_name", String(req.auto_name));
     if (req.provisioning) form.append("provisioning", JSON.stringify(req.provisioning));
-    for (const file of req.images!) {
+    for (const file of req.images ?? []) {
       form.append("images", file, file.name);
+    }
+    // #779: everything that is not an image rides in `files` — same `_input/`
+    // destination on the daemon, listed under `## Input Files` for the entry node.
+    for (const file of req.files ?? []) {
+      form.append("files", file, file.name);
     }
 
     // FormData → no manual Content-Type, so the browser sets the boundary.
@@ -860,7 +868,7 @@ export function createRun(req: CreateRunRequest): Promise<CreateRunResponse> {
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { images: _omitted, ...jsonBody } = req;
+  const { images: _omitted, files: _omittedFiles, ...jsonBody } = req;
   return request<CreateRunResponse>("POST", "/runs", { body: jsonBody, label: "POST /runs" });
 }
 
@@ -1532,12 +1540,32 @@ export function savePipeline(
   yaml: string,
   prompts: Record<string, string>,
   scope?: string,
-): Promise<void> {
+): Promise<{ ok: boolean; id?: string; renamed?: boolean }> {
   void scope;
-  return request<void>(
+  // #774 — the daemon answers with the FINAL id: a save whose `name:` field
+  // changed moves the registry entry (`<old>.yaml` + sidecar) and returns the
+  // new stem, so the caller can rekey the open tab in the same gesture.
+  return request<{ ok: boolean; id?: string; renamed?: boolean }>(
     "PUT",
     `/pipelines/${encodeURIComponent(id)}`,
-    { body: { yaml, prompts }, responseMode: "void", label: `PUT /pipelines/${id}` },
+    { body: { yaml, prompts }, label: `PUT /pipelines/${id}` },
+  );
+}
+
+/**
+ * #774 — rename a pipeline: the visible name and the backing `.yaml` file move
+ * together (visible name 1:1 with the file stem, so two distinct pipelines can
+ * never share a name). 409 when the target stem or visible name is already
+ * taken, or when active runs reference the pipeline.
+ */
+export function renamePipeline(
+  id: string,
+  name: string,
+): Promise<{ ok: boolean; id: string; name?: string; renamed?: boolean }> {
+  return request<{ ok: boolean; id: string; name?: string; renamed?: boolean }>(
+    "PUT",
+    `/pipelines/${encodeURIComponent(id)}/rename`,
+    { body: { name }, label: `PUT /pipelines/${id}/rename` },
   );
 }
 

@@ -11,6 +11,12 @@ function renderRow(
     showDuplicate?: boolean;
     onOpen?: () => void;
     onDuplicate?: () => void;
+    onRenameStart?: () => void;
+    renaming?: boolean;
+    renameValue?: string;
+    onRenameValueChange?: (value: string) => void;
+    onRenameCommit?: () => void;
+    onRenameCancel?: () => void;
     onDelete?: () => void;
     deleteTitle?: string;
   } = {},
@@ -144,5 +150,96 @@ describe("LibraryRow selection", () => {
   it("defaults to unselected when `selected` is omitted", () => {
     renderRow({ onOpen: () => {} });
     expect(screen.getByTestId("row").className).toContain("hover:bg-bg-3/50");
+  });
+});
+
+// #774 — inline rename: a hover pencil flips the row's name into an input.
+// Enter/blur commits, Escape cancels; the pencil never opens the row.
+describe("LibraryRow inline rename", () => {
+  it("shows a rename pencil only when onRenameStart is wired", () => {
+    const { unmount } = renderRow({ onOpen: () => {} });
+    expect(screen.queryByTestId("library-rename-button")).not.toBeInTheDocument();
+    unmount();
+
+    renderRow({ onOpen: () => {}, onRenameStart: () => {} });
+    expect(screen.getByTestId("library-rename-button")).toBeInTheDocument();
+  });
+
+  it("clicking the pencil starts the rename without opening the row", () => {
+    const onOpen = vi.fn();
+    const onRenameStart = vi.fn();
+    renderRow({ onOpen, onRenameStart });
+
+    fireEvent.click(screen.getByTestId("library-rename-button"));
+    expect(onRenameStart).toHaveBeenCalledTimes(1);
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it("renders an inline input while renaming, prefilled with the current name", () => {
+    renderRow({ onOpen: () => {}, renaming: true, renameValue: "fixture" });
+    const input = screen.getByTestId("library-rename-input");
+    expect(input).toHaveValue("fixture");
+    expect(screen.queryByTestId("library-rename-button")).not.toBeInTheDocument();
+    expect(screen.queryByText("fixture")).not.toBeInTheDocument();
+  });
+
+  it("commits on Enter", () => {
+    const onRenameCommit = vi.fn();
+    renderRow({
+      onOpen: () => {},
+      renaming: true,
+      renameValue: "renamed",
+      onRenameCommit,
+    });
+    fireEvent.keyDown(screen.getByTestId("library-rename-input"), { key: "Enter" });
+    expect(onRenameCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels on Escape", () => {
+    const onRenameCancel = vi.fn();
+    const onRenameCommit = vi.fn();
+    renderRow({
+      onOpen: () => {},
+      renaming: true,
+      renameValue: "renamed",
+      onRenameCommit,
+      onRenameCancel,
+    });
+    fireEvent.keyDown(screen.getByTestId("library-rename-input"), { key: "Escape" });
+    expect(onRenameCancel).toHaveBeenCalledTimes(1);
+    expect(onRenameCommit).not.toHaveBeenCalled();
+  });
+
+  it("commits on blur", () => {
+    const onRenameCommit = vi.fn();
+    renderRow({
+      onOpen: () => {},
+      renaming: true,
+      renameValue: "renamed",
+      onRenameCommit,
+    });
+    fireEvent.blur(screen.getByTestId("library-rename-input"));
+    expect(onRenameCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports typed value changes to the parent", () => {
+    const onRenameValueChange = vi.fn();
+    renderRow({
+      onOpen: () => {},
+      renaming: true,
+      renameValue: "ren",
+      onRenameValueChange,
+    });
+    fireEvent.change(screen.getByTestId("library-rename-input"), {
+      target: { value: "renamed" },
+    });
+    expect(onRenameValueChange).toHaveBeenCalledWith("renamed");
+  });
+
+  it("clicking the input does not open the row", () => {
+    const onOpen = vi.fn();
+    renderRow({ onOpen: () => {}, renaming: true, renameValue: "x" });
+    fireEvent.click(screen.getByTestId("library-rename-input"));
+    expect(onOpen).not.toHaveBeenCalled();
   });
 });

@@ -160,6 +160,7 @@ export type SettingsFieldId =
   | "session-cap"
   | "reaper-ttl"
   | "guard-timeout"
+  | "max-attachments-mb"
   | "autocomplete-turn-end"
   | "default-auto-name"
   | "review-agent-can-resolve"
@@ -177,6 +178,7 @@ export const FIELD_SECTION: Record<SettingsFieldId, SettingsSectionId> = {
   "session-cap": "runtime-limits",
   "reaper-ttl": "runtime-limits",
   "guard-timeout": "runtime-limits",
+  "max-attachments-mb": "runtime-limits",
   "autocomplete-turn-end": "runs",
   "default-auto-name": "runs",
   "review-agent-can-resolve": "runs",

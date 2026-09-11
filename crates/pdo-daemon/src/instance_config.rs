@@ -166,6 +166,12 @@ pub(crate) struct InstanceConfig {
     /// time, never a silent rewrite of the stored value (the #432 tombstone
     /// treatment; `GET /settings` names the dangle in the UI).
     pub manager_profile: Option<String>,
+    /// Stored per-run attachment budget in MB (#779), or `None` when unset
+    /// (`stored → env PDO_MAX_ATTACHMENTS_MB → default 50`). The SAME value
+    /// bounds the `POST /runs` multipart body and is disclosed to the « New
+    /// run » modal through `GET /settings`, so the client-side gate and the
+    /// daemon's refusal cannot disagree.
+    pub max_attachments_mb: Option<i64>,
     /// RFC3339-millis UTC timestamp of the last write (or the seed).
     pub updated_at: String,
 }
@@ -248,6 +254,9 @@ pub(crate) struct UpdateInstanceConfig {
     /// back to unset (« Follow the Run », same `""`-sentinel as
     /// `default_model`); `None` leaves it untouched.
     pub manager_profile: Option<String>,
+    /// Set the per-run attachment budget in MB (#779). Set-only like the other
+    /// numeric knobs; `PUT /settings` refuses `< 1`.
+    pub max_attachments_mb: Option<i64>,
 }
 
 impl UpdateInstanceConfig {
@@ -269,6 +278,7 @@ impl UpdateInstanceConfig {
             && self.skills.is_none()
             && self.manager_enabled.is_none()
             && self.manager_profile.is_none()
+            && self.max_attachments_mb.is_none()
     }
 }
 
@@ -520,6 +530,20 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
+    // Additive migration (#779): the per-run attachment budget, NULLABLE so
+    // unset falls through to env → default.
+    let has_max_attachments = sqlx::query(
+        "SELECT 1 FROM pragma_table_info('instance_config') WHERE name = 'max_attachments_mb'",
+    )
+    .fetch_optional(db)
+    .await?
+    .is_some();
+    if !has_max_attachments {
+        sqlx::query("ALTER TABLE instance_config ADD COLUMN max_attachments_mb INTEGER")
+            .execute(db)
+            .await?;
+    }
+
     Ok(())
 }
 
@@ -559,6 +583,7 @@ fn row_to_config(row: &sqlx::sqlite::SqliteRow) -> InstanceConfig {
         // still maps (same posture as `update_check` above).
         manager_enabled: row.try_get("manager_enabled").unwrap_or(None),
         manager_profile: row.try_get("manager_profile").unwrap_or(None),
+        max_attachments_mb: row.try_get("max_attachments_mb").unwrap_or(None),
         updated_at: row.get("updated_at"),
     }
 }
@@ -636,6 +661,9 @@ pub(crate) async fn update(
     }
     if edit.manager_profile.is_some() {
         sets.push("manager_profile = ?");
+    }
+    if edit.max_attachments_mb.is_some() {
+        sets.push("max_attachments_mb = ?");
     }
     // Always bump the write timestamp on a real edit.
     sets.push("updated_at = ?");
@@ -726,6 +754,9 @@ pub(crate) async fn update(
         // default_model/default_harness: a stored "" would win precedence and be
         // read as a pin to nothing.
         query = query.bind(if v.is_empty() { None } else { Some(v) });
+    }
+    if let Some(v) = edit.max_attachments_mb {
+        query = query.bind(v);
     }
     query = query.bind(crate::event_log::now_iso());
     query.execute(db).await?;

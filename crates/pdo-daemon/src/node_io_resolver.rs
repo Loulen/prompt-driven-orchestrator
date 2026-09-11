@@ -80,11 +80,17 @@ pub(crate) fn resolve(
     let mut input_index: HashMap<String, usize> = HashMap::new();
 
     for input in resolved {
-        let files: Vec<FileInfo> = input
+        let mut files: Vec<FileInfo> = input
             .paths
             .iter()
             .map(|p| file_info(artifacts_dir, p))
             .collect();
+        // #779: a Start-sourced input also exposes the run's non-image
+        // attachments (`_input/<file>`), so the panel shows they arrived. Images
+        // stay on the Start inspector's thumbnails (`input_images`).
+        if input.from_start {
+            files.extend(input_attachment_files(artifacts_dir));
+        }
 
         match input_index.get(&input.port) {
             // Two edges sharing a target name make the input a list, whatever
@@ -110,11 +116,13 @@ pub(crate) fn resolve(
     // `task` reads the run's `_input` (preserves existing single-entry pipelines).
     if inputs.is_empty() && node.inputs.iter().any(|p| p.name == "task") {
         let path = crate::blackboard::input_path(artifacts_dir);
+        let mut files = vec![file_info(artifacts_dir, &path)];
+        files.extend(input_attachment_files(artifacts_dir));
         inputs.push(PortIO {
             port: "task".into(),
             repeated: false,
             port_type: PortType::Markdown,
-            files: vec![file_info(artifacts_dir, &path)],
+            files,
         });
     }
 
@@ -174,6 +182,16 @@ fn relative_path(artifacts_dir: &Path, abs_path: &Path) -> String {
         .strip_prefix(artifacts_dir)
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| abs_path.to_string_lossy().to_string())
+}
+
+/// The non-image attachments of `_input/` as `FileInfo`s (#779) — the same
+/// discovery the preamble's `## Input Files` uses, so the two never disagree.
+fn input_attachment_files(artifacts_dir: &Path) -> Vec<FileInfo> {
+    let input_dir = artifacts_dir.join("_input");
+    crate::prompt_augmenter::discover_input_files(artifacts_dir)
+        .iter()
+        .map(|name| file_info(artifacts_dir, &input_dir.join(name)))
+        .collect()
 }
 
 fn file_info(artifacts_dir: &Path, path: &Path) -> FileInfo {
@@ -731,6 +749,30 @@ mod tests {
         assert_eq!(io.inputs[0].files.len(), 1);
         assert_eq!(io.inputs[0].files[0].path, "_input/output.md");
         assert!(io.inputs[0].files[0].exists);
+    }
+
+    #[test]
+    fn entry_node_input_exposes_non_image_attachments() {
+        // #779: the files uploaded with the run ride on the entry node's input
+        // port after the prompt; images do not (they have their own surface).
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+        let input_dir = artifacts.join("_input");
+        fs::create_dir_all(&input_dir).unwrap();
+        fs::write(input_dir.join("output.md"), "Do the thing").unwrap();
+        fs::write(input_dir.join("SPEC-779.md"), "# spec").unwrap();
+        fs::write(input_dir.join("fixtures.json"), "{}").unwrap();
+        fs::write(input_dir.join("proto.png"), b"\x89PNG").unwrap();
+
+        let pipeline = simple_pipeline();
+        let io = resolve(&pipeline, &artifacts, "planner", 1, &empty_run_state());
+
+        let paths: Vec<&str> = io.inputs[0].files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec!["_input/output.md", "_input/SPEC-779.md", "_input/fixtures.json"]
+        );
+        assert!(io.inputs[0].files.iter().all(|f| f.exists));
     }
 
     #[test]

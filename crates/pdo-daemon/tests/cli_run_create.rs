@@ -343,3 +343,124 @@ async fn daemon_refusals_surface_readably() {
     assert_ne!(code, Some(0));
     assert!(stderr.contains("failed to reach daemon"), "{stderr}");
 }
+
+/// Fetch a raw artifact of a run (`GET /runs/{id}/artifact?path=…`).
+async fn get_artifact(daemon: &TestDaemon, run_id: &str, rel: &str) -> (u16, String) {
+    let resp = reqwest::get(format!(
+        "{}/runs/{run_id}/artifact?path={rel}",
+        daemon.url()
+    ))
+    .await
+    .unwrap();
+    (resp.status().as_u16(), resp.text().await.unwrap_or_default())
+}
+
+#[tokio::test]
+async fn attachments_reach_the_child_input_dir() {
+    // #779: `--input-file` / `--image` / `--file` from a node session — the
+    // body switches to multipart, provenance is kept, and every attachment
+    // lands in the child's `_input/` where the entry node's preamble lists it.
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let parent = create_root_run(&daemon).await;
+    wait_node_running(&daemon, &parent, "worker").await;
+
+    let scratch = tempfile::tempdir().unwrap();
+    let spec = scratch.path().join("SPEC-779.md");
+    std::fs::write(&spec, "# Spec 779\n\nImplement the prototype.\n").unwrap();
+    let proto = scratch.path().join("proto.png");
+    std::fs::write(&proto, b"\x89PNG\r\n\x1a\nfake").unwrap();
+    let fixtures = scratch.path().join("fixtures.json");
+    std::fs::write(&fixtures, r#"{"ok":true}"#).unwrap();
+
+    let (code, stdout, stderr) = run_pdo_run_create(
+        &daemon.url(),
+        &[
+            CHILD_PIPELINE_NAME,
+            "--input-file",
+            spec.to_str().unwrap(),
+            "--image",
+            proto.to_str().unwrap(),
+            "--file",
+            fixtures.to_str().unwrap(),
+            "--name",
+            "with attachments",
+            "--auto-fail",
+            "true",
+        ],
+        Some((&parent, "worker")),
+    )
+    .await;
+    assert_eq!(code, Some(0), "stderr=\n{stderr}\nstdout=\n{stdout}");
+    let child_id = run_id_from_stdout(&stdout);
+
+    let (status, run) = get_json(&daemon, &format!("/runs/{child_id}")).await;
+    assert_eq!(status, 200);
+    assert_eq!(run["parent_run_id"], parent, "multipart keeps provenance");
+    assert_eq!(run["name"], "with attachments", "text fields ride along");
+    assert_eq!(run["auto_fail"], true, "bools survive the multipart round trip");
+    assert_eq!(
+        run["start_node"]["input_images"],
+        serde_json::json!(["proto.png"])
+    );
+    assert_eq!(
+        run["start_node"]["input_files"],
+        serde_json::json!(["fixtures.json"])
+    );
+
+    // The prompt came from the file, the attachments sit beside it.
+    let (st, prompt) = get_artifact(&daemon, &child_id, "_input/output.md").await;
+    assert_eq!(st, 200);
+    assert!(prompt.contains("Implement the prototype"), "{prompt}");
+    let (st, body) = get_artifact(&daemon, &child_id, "_input/fixtures.json").await;
+    assert_eq!(st, 200, "{body}");
+    assert_eq!(body, r#"{"ok":true}"#);
+    let (st, _) = get_artifact(&daemon, &child_id, "_input/proto.png").await;
+    assert_eq!(st, 200);
+}
+
+#[tokio::test]
+async fn attachment_refusals_surface_readably() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let a = scratch.path().join("a").join("notes.md");
+    let b = scratch.path().join("b").join("notes.md");
+    std::fs::create_dir_all(a.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(b.parent().unwrap()).unwrap();
+    std::fs::write(&a, "one").unwrap();
+    std::fs::write(&b, "two").unwrap();
+
+    // Two files with the same name: the daemon refuses, nothing is overwritten.
+    let (code, stdout, stderr) = run_pdo_run_create(
+        &daemon.url(),
+        &[
+            CHILD_PIPELINE_NAME,
+            "--target-repo",
+            &daemon.target_repo(),
+            "--file",
+            a.to_str().unwrap(),
+            "--file",
+            b.to_str().unwrap(),
+        ],
+        None,
+    )
+    .await;
+    assert_ne!(code, Some(0));
+    assert!(stderr.contains("duplicate attachment filename"), "{stderr}");
+    assert!(stdout.trim().is_empty());
+
+    // A missing local file is named before any request.
+    let (code, _stdout, stderr) = run_pdo_run_create(
+        &daemon.url(),
+        &[
+            CHILD_PIPELINE_NAME,
+            "--target-repo",
+            &daemon.target_repo(),
+            "--file",
+            "/nonexistent/thing.bin",
+        ],
+        None,
+    )
+    .await;
+    assert_ne!(code, Some(0));
+    assert!(stderr.contains("failed to read --file"), "{stderr}");
+}

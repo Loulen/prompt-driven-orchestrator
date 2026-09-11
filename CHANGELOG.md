@@ -16,6 +16,17 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.83.0
+**Fichiers et images transmis au run enfant** (#779).
+`POST /runs` multipart accepte un champ répétable `files` à côté d'`images` : tout fichier atterrit dans
+`_input/` du worktree enfant, le nœud d'entrée le voit sous `## Input Files` dans son préambule et sur son
+port d'entrée. Un doublon de nom est **refusé** (400 nommé) au lieu d'écraser en silence. `pdo run create`
+gagne `--input-file`, `--image` et `--file` et bascule en multipart dès qu'une pièce jointe est présente.
+La modale « New run » remplace le champ « Images » par « Attachments » (vignettes + puces, compteur, budget).
+**Nouveau réglage** `max_attachments_mb` (défaut 50, env `PDO_MAX_ATTACHMENTS_MB`) : un seul budget par run,
+partagé entre la limite du corps `POST /runs` et la garde côté client. Le skill seedé `pdo-orchestrate` passe
+en `skill_version: 2` et corrige ses exemples (`--pipeline`/`--project`/`--variable` n'existaient pas).
+
 ## 1.81.0
 **Déploiement derrière un reverse proxy** (#769 ; story #766, ADR-0019).
 `pdo daemon` et `pdo service install` acceptent désormais `--bind <ip>` ou `PDO_BIND`.

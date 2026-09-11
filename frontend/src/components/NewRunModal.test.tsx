@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import NewRunModal from "./NewRunModal";
+import { mergeAttachments, overLimitIndices } from "../lib/attachments";
 import { useEditStore } from "../stores/editStore";
 import type { BranchRef, InstanceSettings, PipelineListEntry, Trigger } from "../types";
 
@@ -32,6 +33,7 @@ vi.mock("../api", () => ({
     session_cap: { effective: 20, source: "default", stored: null, env: null, default: 20 },
     reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
     guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
+    max_attachments_mb: { effective: 50, source: "default", stored: null, env: null, default: 50 },
     default_model: { effective: null, source: "default", stored: null, env: null, default: null },
     default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
     default_harness_model: { effective: {}, stored: {} },
@@ -564,7 +566,8 @@ describe("NewRunModal — image upload", () => {
       const thumbnails = screen.getAllByTestId("image-thumbnail");
       expect(thumbnails).toHaveLength(1);
     });
-    expect(screen.getByText("1 image attached")).toBeInTheDocument();
+    expect(screen.getByTestId("attachments-counter")).toHaveTextContent(/^1 image · /);
+    expect(screen.getByTestId("attachments-counter")).toHaveTextContent("/ 50.0 MB");
   });
 
   it("shows remove button and removes image on click", async () => {
@@ -598,7 +601,7 @@ describe("NewRunModal — image upload", () => {
     await waitFor(() => {
       expect(screen.getAllByTestId("image-thumbnail")).toHaveLength(2);
     });
-    expect(screen.getByText("2 images attached")).toBeInTheDocument();
+    expect(screen.getByTestId("attachments-counter")).toHaveTextContent(/^2 images · /);
   });
 
   it("shows add-more button when images exist", async () => {
@@ -689,17 +692,185 @@ describe("NewRunModal — image upload", () => {
     });
   });
 
-  it("filters non-image files from file input", async () => {
+  // #779: the field is « Attachments » — any file is accepted, non-images as chips.
+  it("shows non-image files as chips beside the thumbnails", async () => {
     renderModal();
     const fileInput = screen.getByTestId("image-file-input") as HTMLInputElement;
+    expect(fileInput.accept).toBe("");
 
-    const textFile = new File(["text"], "notes.txt", { type: "text/plain" });
+    const textFile = new File(["# spec"], "SPEC-779.md", { type: "text/markdown" });
     const imageFile = new File(["png"], "img.png", { type: "image/png" });
     fireEvent.change(fileInput, { target: { files: [textFile, imageFile] } });
 
     await waitFor(() => {
       expect(screen.getAllByTestId("image-thumbnail")).toHaveLength(1);
     });
+    const chips = screen.getAllByTestId("file-chip");
+    expect(chips).toHaveLength(1);
+    expect(chips[0]).toHaveTextContent("MD");
+    expect(chips[0]).toHaveTextContent("SPEC-779.md");
+    expect(chips[0]).toHaveTextContent("6 B");
+    expect(screen.getByTestId("attachments-counter")).toHaveTextContent(/^1 image, 1 file · /);
+    expect(screen.getByText(/passed to the entry node as/i)).toBeInTheDocument();
+    expect(screen.getByTestId("attachments-meter")).toBeInTheDocument();
+  });
+
+  it("removes a chip with its × button or the Delete key", async () => {
+    renderModal();
+    const fileInput = screen.getByTestId("image-file-input") as HTMLInputElement;
+    fireEvent.change(fileInput, {
+      target: {
+        files: [
+          new File(["{}"], "fixtures.json", { type: "application/json" }),
+          new File(["x"], "dump.sql", { type: "" }),
+        ],
+      },
+    });
+    await waitFor(() => expect(screen.getAllByTestId("file-chip")).toHaveLength(2));
+
+    fireEvent.click(screen.getAllByTestId("file-remove-button")[0]);
+    await waitFor(() => expect(screen.getAllByTestId("file-chip")).toHaveLength(1));
+    expect(screen.getByTestId("file-chip")).toHaveTextContent("dump.sql");
+
+    fireEvent.keyDown(screen.getByTestId("file-chip"), { key: "Delete" });
+    await waitFor(() => expect(screen.queryAllByTestId("file-chip")).toHaveLength(0));
+    expect(screen.getByText(/optional — passed to the entry node/i)).toBeInTheDocument();
+  });
+
+  it("replaces an attachment with the same name and says so", async () => {
+    renderModal();
+    const fileInput = screen.getByTestId("image-file-input") as HTMLInputElement;
+    fireEvent.change(fileInput, {
+      target: { files: [new File(["v1"], "SPEC-779.md", { type: "text/markdown" })] },
+    });
+    await waitFor(() => expect(screen.getAllByTestId("file-chip")).toHaveLength(1));
+    fireEvent.change(fileInput, {
+      target: { files: [new File(["v2 longer"], "SPEC-779.md", { type: "text/markdown" })] },
+    });
+    await waitFor(() => expect(screen.getByText(/Replaced SPEC-779.md\./)).toBeInTheDocument());
+    expect(screen.getAllByTestId("file-chip")).toHaveLength(1);
+    expect(screen.getByTestId("file-chip")).toHaveTextContent("9 B");
+    expect(screen.getByTestId("attachments-counter")).toHaveTextContent(/^1 file · /);
+  });
+
+  it("refuses a drop that would exceed the per-run budget, keeps the rest", async () => {
+    // The budget comes from Settings: 1 MB here.
+    const base = await fetchSettings();
+    vi.mocked(fetchSettings).mockResolvedValueOnce({
+      ...base,
+      max_attachments_mb: { effective: 1, source: "stored", stored: 1, env: null, default: 50 },
+    });
+    renderModal();
+    await waitFor(() =>
+      expect(screen.getByText(/up to 1\.0 MB per run/i)).toBeInTheDocument(),
+    );
+
+    const zone = screen.getByTestId("image-drop-zone");
+    const small = new File(["ok"], "notes.md", { type: "text/markdown" });
+    const big = new File([new Uint8Array(2 * 1024 * 1024)], "recording.mov", {
+      type: "video/quicktime",
+    });
+    fireEvent.drop(zone, { dataTransfer: { files: [big, small] } });
+
+    await waitFor(() => expect(screen.getByTestId("attachments-error")).toBeInTheDocument());
+    expect(screen.getByTestId("attachments-error")).toHaveTextContent(
+      "recording.mov (2.0 MB) not added: total would exceed 1.0 MB per run.",
+    );
+    expect(screen.getAllByTestId("file-chip")).toHaveLength(1);
+    expect(screen.getByTestId("file-chip")).toHaveTextContent("notes.md");
+  });
+
+  it("highlights the zone while dragging over it", () => {
+    renderModal();
+    const zone = screen.getByTestId("image-drop-zone");
+    fireEvent.dragOver(zone, { dataTransfer: { files: [] } });
+    expect(zone).toHaveAttribute("data-drag-over", "true");
+    fireEvent.dragLeave(zone);
+    expect(zone).not.toHaveAttribute("data-drag-over");
+  });
+
+  it("passes non-image files to createRun in `files`, images in `images`", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Test Pipeline" }),
+    ]);
+    render(<NewRunModal open={true} onClose={noop} onCreated={noop} />);
+    await enterValidRepo();
+    fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), {
+      target: { value: "implement the spec" },
+    });
+    const fileInput = screen.getByTestId("image-file-input") as HTMLInputElement;
+    fireEvent.change(fileInput, {
+      target: {
+        files: [
+          new File(["png"], "proto.png", { type: "image/png" }),
+          new File(["# spec"], "SPEC-779.md", { type: "text/markdown" }),
+        ],
+      },
+    });
+    await waitFor(() => expect(screen.getAllByTestId("file-chip")).toHaveLength(1));
+
+    vi.useRealTimers();
+    fireEvent.click(screen.getByRole("button", { name: /launch/i }));
+    await waitFor(() => {
+      expect(createRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          images: [expect.objectContaining({ name: "proto.png" })],
+          files: [expect.objectContaining({ name: "SPEC-779.md" })],
+        }),
+      );
+    });
+  });
+
+  it("warns once before closing with attachments present", async () => {
+    const onClose = vi.fn();
+    render(<NewRunModal open={true} onClose={onClose} onCreated={noop} />);
+    const fileInput = screen.getByTestId("image-file-input") as HTMLInputElement;
+    fireEvent.change(fileInput, {
+      target: { files: [new File(["{}"], "fixtures.json", { type: "application/json" })] },
+    });
+    await waitFor(() => expect(screen.getAllByTestId("file-chip")).toHaveLength(1));
+
+    fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId("attachments-close-warning")).toHaveTextContent(
+      "1 attachment will be lost",
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("NewRunModal — attachment budget rules (#779)", () => {
+  const mb = 1024 * 1024;
+  const file = (name: string, size: number, type = "application/octet-stream") =>
+    new File([new Uint8Array(size)], name, { type });
+
+  it("replaces a same-named file and refuses only what overflows", () => {
+    const current = [file("a.bin", 10), file("b.bin", 20)];
+    const { next, replaced, refused } = mergeAttachments(
+      current,
+      [file("a.bin", 15), file("huge.bin", 2 * mb), file("c.bin", 5)],
+      mb,
+    );
+    expect(next.map((f) => [f.name, f.size])).toEqual([
+      ["a.bin", 15],
+      ["b.bin", 20],
+      ["c.bin", 5],
+    ]);
+    expect(replaced).toEqual(["a.bin"]);
+    expect(refused.map((f) => f.name)).toEqual(["huge.bin"]);
+  });
+
+  it("a single file may use the whole budget", () => {
+    const { next, refused } = mergeAttachments([], [file("all.bin", mb)], mb);
+    expect(next).toHaveLength(1);
+    expect(refused).toHaveLength(0);
+  });
+
+  it("flags the chips past the budget line when the limit was lowered", () => {
+    const list = [file("a.parquet", 0.4 * mb), file("b.parquet", 0.4 * mb), file("c.sql", 0.4 * mb)];
+    expect([...overLimitIndices(list, mb)]).toEqual([2]);
+    expect([...overLimitIndices(list, 2 * mb)]).toEqual([]);
   });
 });
 
@@ -850,6 +1021,7 @@ describe("NewRunModal — auto-naming default (#338)", () => {
       session_cap: { effective: 20, source: "default", stored: null, env: null, default: 20 },
       reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
       guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
+      max_attachments_mb: { effective: 50, source: "default", stored: null, env: null, default: 50 },
       default_model: { effective: null, source: "default", stored: null, env: null, default: null },
       default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
       default_harness_model: { effective: {}, stored: {} },
@@ -1598,6 +1770,7 @@ describe("NewRunModal — sandbox selector (#410)", () => {
       session_cap: { effective: 20, source: "default", stored: null, env: null, default: 20 },
       reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
       guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
+      max_attachments_mb: { effective: 50, source: "default", stored: null, env: null, default: 50 },
       default_model: { effective: null, source: "default", stored: null, env: null, default: null },
       default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
       default_harness_model: { effective: {}, stored: {} },
@@ -1937,6 +2110,7 @@ describe("NewRunModal — the launch dialog can defer to default_sandbox (#452)"
       session_cap: { effective: 20, source: "default", stored: null, env: null, default: 20 },
       reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
       guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
+      max_attachments_mb: { effective: 50, source: "default", stored: null, env: null, default: 50 },
       default_model: { effective: null, source: "default", stored: null, env: null, default: null },
       default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
       default_harness_model: { effective: {}, stored: {} },
@@ -2154,6 +2328,7 @@ describe("NewRunModal — the target repo is required at the boundary (#470)", (
       session_cap: { effective: 20, source: "default", stored: null, env: null, default: 20 },
       reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
       guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
+      max_attachments_mb: { effective: 50, source: "default", stored: null, env: null, default: 50 },
       default_model: { effective: null, source: "default", stored: null, env: null, default: null },
       default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
       default_harness_model: { effective: {}, stored: {} },
@@ -2516,6 +2691,7 @@ describe("NewRunModal — harness selector (#551)", () => {
       session_cap: { effective: 20, source: "default", stored: null, env: null, default: 20 },
       reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
       guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
+      max_attachments_mb: { effective: 50, source: "default", stored: null, env: null, default: 50 },
       default_model: { effective: null, source: "default", stored: null, env: null, default: null },
       default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
       default_harness_model: { effective: {}, stored: {} },

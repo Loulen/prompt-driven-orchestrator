@@ -30,7 +30,10 @@ export interface ThemeSnapshot {
   systemResolved: ResolvedTheme;
 }
 
-let snapshot: ThemeSnapshot = { preference: "system", resolved: "dark", systemResolved: "dark" };
+// Pre-`initTheme()` placeholder. The default preference is `dark` (#781) — the
+// look PDO has always had — and the OS answer defaults to dark too (see
+// `systemPrefersDark`), so the placeholder resolves dark on every axis.
+let snapshot: ThemeSnapshot = { preference: "dark", resolved: "dark", systemResolved: "dark" };
 
 function computeSnapshot(preference: ThemePreference): ThemeSnapshot {
   const systemDark = systemPrefersDark();

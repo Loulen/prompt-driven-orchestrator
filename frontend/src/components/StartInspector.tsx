@@ -11,6 +11,13 @@ interface Props {
   nodeId: string;
 }
 
+/** #779: the uppercase extension badge of an input-file chip. */
+function startFileBadge(name: string): string {
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0 || dot === name.length - 1) return "FILE";
+  return name.slice(dot + 1).toUpperCase().slice(0, 4);
+}
+
 export default function StartInspector({ startNode, runId, nodeId }: Props) {
   const [inputText, setInputText] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
@@ -20,6 +27,8 @@ export default function StartInspector({ startNode, runId, nodeId }: Props) {
 
   // Images uploaded with the run are stored in `_input/` alongside the prompt.
   const inputImages = startNode.input_images ?? [];
+  // #779: the non-image attachments, same folder.
+  const inputFiles = startNode.input_files ?? [];
 
   useEffect(() => {
     let cancelled = false;
@@ -119,6 +128,41 @@ export default function StartInspector({ startNode, runId, nodeId }: Props) {
                   </button>
                 );
               })}
+            </div>
+          </div>
+        )}
+
+        {inputFiles.length > 0 && (
+          <div className="mt-3" data-testid="start-inspector-files">
+            <div
+              className="mb-2 text-fg-3"
+              style={{ fontSize: "11px", fontWeight: 500 }}
+            >
+              Input files
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {inputFiles.map((name) => (
+                <a
+                  key={name}
+                  href={artifactUrl(runId, `_input/${name}`)}
+                  target="_blank"
+                  rel="noreferrer"
+                  title={name}
+                  className="flex h-9 max-w-[220px] items-center gap-1.5 rounded border border-line bg-bg-0 px-1.5 transition-colors hover:border-fg-4"
+                  data-testid="start-input-file"
+                >
+                  <span
+                    className="grid h-6 w-6 flex-shrink-0 place-items-center rounded border border-line bg-bg-3 font-mono font-medium text-fg-3"
+                    style={{ fontSize: "7.5px" }}
+                    aria-hidden="true"
+                  >
+                    {startFileBadge(name)}
+                  </span>
+                  <span className="truncate text-fg-2" style={{ fontSize: "10.5px" }}>
+                    {name}
+                  </span>
+                </a>
+              ))}
             </div>
           </div>
         )}

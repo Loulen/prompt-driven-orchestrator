@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, Clock, FolderGit2, GitBranch, ImagePlus, Save, Sparkles, X } from "lucide-react";
+import { ChevronDown, Clock, FolderGit2, GitBranch, Paperclip, Plus, Save, Sparkles, X } from "lucide-react";
 import type { InstanceSettings, Trigger } from "../types";
 import type { TestGuardResponse } from "../api";
 import { createRun, createTrigger, updateTrigger, fetchSettings, testGuard } from "../api";
@@ -23,11 +23,17 @@ import { CRON_PRESETS, cronToPreset, parseDailyTime, type CronPresetId } from ".
 import { useLaunchTargets } from "../hooks/useLaunchTargets";
 import { useRepoValidation } from "../hooks/useRepoValidation";
 import * as newRunForm from "../lib/newRunForm";
+import {
+  DEFAULT_MAX_ATTACHMENTS_MB,
+  attachmentBadge,
+  formatAttachmentSize,
+  mergeAttachments,
+  overLimitIndices,
+} from "../lib/attachments";
 import ProvisioningRulesEditor from "./ProvisioningRulesEditor";
 import { EMPTY_PROVISIONING_RULES, hasProvisioningRules } from "../lib/provisioning";
 import type { ProvisioningRules } from "../types";
 
-const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml", "image/bmp"];
 
 /**
  * How the always-mounted modal should open (#386). Because the modal is never
@@ -138,7 +144,17 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
   // `[1..]` lines.
   const [secondaryRepos, setSecondaryRepos] = useState<SecondaryRepo[]>([]);
 
-  const [images, setImages] = useState<File[]>([]);
+  // #779: images AND files, one list in upload order. Split by MIME at submit
+  // (`image/*` → `images`, the rest → `files`). File objects are never persisted
+  // in the draft store, hence the close warning below.
+  const [attachments, setAttachments] = useState<File[]>([]);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [attachmentHint, setAttachmentHint] = useState<string | null>(null);
+  const [attachmentDragOver, setAttachmentDragOver] = useState(false);
+  const [attachmentShake, setAttachmentShake] = useState(false);
+  // Set when the user asked to close with attachments present: the second
+  // Cancel / ✕ closes for real (a one-line warning, not a modal).
+  const [closeWarning, setCloseWarning] = useState(false);
 
   // Sandbox (#410/#432/#452). `settings` carries the instance `default_sandbox` (it
   // LABELS the inherit option — it no longer seeds the value), the advisory
@@ -500,45 +516,88 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     setOverrides((prev) => ({ ...prev, [key]: value }));
   }, []);
 
-  const addImages = useCallback((files: FileList | File[]) => {
-    const valid = Array.from(files).filter((f) => ACCEPTED_IMAGE_TYPES.includes(f.type));
-    if (valid.length > 0) {
-      setImages((prev) => [...prev, ...valid]);
-    }
+  // #779: the per-run budget the daemon enforces on `POST /runs`, read from the
+  // same setting so the client-side gate and the refusal cannot disagree.
+  const maxAttachmentsMb = settings?.max_attachments_mb?.effective ?? DEFAULT_MAX_ATTACHMENTS_MB;
+  const maxAttachmentBytes = maxAttachmentsMb * 1024 * 1024;
+  const attachmentsTotal = attachments.reduce((sum, f) => sum + f.size, 0);
+  const attachmentsOverLimit = attachmentsTotal > maxAttachmentBytes;
+  const overLimitChips = useMemo(
+    () => overLimitIndices(attachments, maxAttachmentBytes),
+    [attachments, maxAttachmentBytes],
+  );
+  const imageCount = attachments.filter(newRunForm.isImageAttachment).length;
+  const fileCount = attachments.length - imageCount;
+
+  const addAttachments = useCallback(
+    (files: FileList | File[]) => {
+      const incoming = Array.from(files).filter((f) => f.size > 0 || f.type !== "");
+      if (incoming.length === 0) return;
+      const { next, replaced, refused } = mergeAttachments(attachments, incoming, maxAttachmentBytes);
+      setAttachments(next);
+      setAttachmentHint(replaced.length > 0 ? `Replaced ${replaced.join(", ")}.` : null);
+      if (refused.length > 0) {
+        const names = refused.map((f) => `${f.name} (${formatAttachmentSize(f.size)})`).join(", ");
+        setAttachmentError(
+          `${names} not added: total would exceed ${maxAttachmentsMb.toFixed(1)} MB per run.`,
+        );
+        setAttachmentShake(true);
+        window.setTimeout(() => setAttachmentShake(false), 300);
+      } else {
+        setAttachmentError(null);
+      }
+    },
+    [attachments, maxAttachmentBytes, maxAttachmentsMb],
+  );
+
+  const removeAttachment = useCallback((index: number) => {
+    setAttachments((prev) => prev.filter((_, i) => i !== index));
+    setAttachmentError(null);
+    setAttachmentHint(null);
   }, []);
 
-  const removeImage = useCallback((index: number) => {
-    setImages((prev) => prev.filter((_, i) => i !== index));
-  }, []);
-
+  // Modal-wide: pasting a file anywhere in the dialog attaches it; a text paste
+  // is left alone (no preventDefault).
   const handlePaste = useCallback(
     (e: React.ClipboardEvent) => {
       const files = e.clipboardData?.files;
       if (files && files.length > 0) {
-        const imageFiles = Array.from(files).filter((f) => ACCEPTED_IMAGE_TYPES.includes(f.type));
-        if (imageFiles.length > 0) {
-          e.preventDefault();
-          addImages(imageFiles);
-        }
+        e.preventDefault();
+        addAttachments(files);
       }
     },
-    [addImages],
+    [addAttachments],
   );
 
+  // Drop target: the zone only, not the whole modal.
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
+      setAttachmentDragOver(false);
       const files = e.dataTransfer?.files;
       if (files && files.length > 0) {
-        addImages(files);
+        addAttachments(files);
       }
     },
-    [addImages],
+    [addAttachments],
   );
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
+    setAttachmentDragOver(true);
   }, []);
+
+  const handleDragLeave = useCallback(() => setAttachmentDragOver(false), []);
+
+  // Close with attachments present: warn once, close on the second ask.
+  const requestClose = useCallback(() => {
+    if (attachments.length > 0 && !closeWarning) {
+      setCloseWarning(true);
+      return;
+    }
+    setCloseWarning(false);
+    onClose();
+  }, [attachments.length, closeWarning, onClose]);
 
   // Whether this pipeline may launch with an empty prompt (#158) — see `newRunForm`.
   const promptOptional = newRunForm.promptOptional(selectedPipeline);
@@ -615,7 +674,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
           sandbox,
           harness,
           skills,
-          images,
+          attachments,
           // #465: full list ([0] = primary, [1..] = secondaries), or undefined
           // for a mono-repo Run (keeps the request byte-identical).
           targetRepos: buildTargetRepos(),
@@ -631,7 +690,9 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
       setAutoName(settings?.default_auto_name.effective ?? true);
       setInput("");
       setOverrides({});
-      setImages([]);
+      setAttachments([]);
+      setAttachmentError(null);
+      setAttachmentHint(null);
       setSkills([]);
       setProvisioning(EMPTY_PROVISIONING_RULES);
       onClose();
@@ -640,9 +701,9 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     } finally {
       setSubmitting(false);
     }
-  }, [selectedPipeline, input, hasRequiredPrompt, overrides, onCreated, onClose, flushPendingSaves, repoValid, targetRepo, sourceBranch, buildTargetRepos, autoName, runName, images, sandbox, harness, skills, agentChoice, settings, refreshRecentRepos, provisioning]);
+  }, [selectedPipeline, input, hasRequiredPrompt, overrides, onCreated, onClose, flushPendingSaves, repoValid, targetRepo, sourceBranch, buildTargetRepos, autoName, runName, attachments, sandbox, harness, skills, agentChoice, settings, refreshRecentRepos, provisioning]);
 
-  const canLaunch = provisioningValid && newRunForm.canLaunch({
+  const canLaunch = provisioningValid && !attachmentsOverLimit && newRunForm.canLaunch({
     repoValid,
     selectedPipeline,
     hasRequiredPrompt,
@@ -795,7 +856,8 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-      onClick={onClose}
+      onClick={requestClose}
+      onPaste={handlePaste}
     >
       <div
         className="w-[480px] max-h-[85vh] flex flex-col rounded-lg border border-line bg-bg-4 shadow-xl"
@@ -847,8 +909,9 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
             </div>
           </div>
           <button
-            onClick={onClose}
+            onClick={requestClose}
             className="grid h-6 w-6 place-items-center rounded text-fg-3 transition-colors hover:bg-bg-5 hover:text-fg"
+            aria-label="Close"
           >
             <X size={14} />
           </button>
@@ -1484,7 +1547,6 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
                 placeholder="Free-text prompt, a GitHub issue link, or a mix."
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                onPaste={handlePaste}
                 data-testid="input-textarea"
               />
               <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
@@ -1496,34 +1558,59 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
               </span>
             </div>
 
-            {/* Image upload area */}
-            <div className="flex flex-col gap-1.5">
-              <label
-                className="font-medium text-fg-2"
-                style={{ fontSize: "11.5px" }}
-              >
-                Images
-              </label>
+            {/* #779 Attachments — images as thumbnails, other files as chips, one
+                wrapping row. One budget per run, read from Settings. */}
+            <div className="flex flex-col gap-1.5" data-testid="attachments-field">
+              <div className="flex items-baseline justify-between gap-2">
+                <label
+                  className="font-medium text-fg-2"
+                  style={{ fontSize: "11.5px" }}
+                >
+                  Attachments
+                </label>
+                {attachments.length > 0 && (
+                  <span
+                    className={attachmentsOverLimit ? "text-st-failed" : "text-fg-4"}
+                    style={{ fontSize: "10.5px" }}
+                    data-testid="attachments-counter"
+                  >
+                    {[
+                      imageCount > 0 ? `${imageCount} image${imageCount > 1 ? "s" : ""}` : null,
+                      fileCount > 0 ? `${fileCount} file${fileCount > 1 ? "s" : ""}` : null,
+                    ]
+                      .filter(Boolean)
+                      .join(", ")}
+                    {" · "}
+                    {formatAttachmentSize(attachmentsTotal)} / {maxAttachmentsMb.toFixed(1)} MB
+                  </span>
+                )}
+              </div>
               <input
                 ref={fileInputRef}
                 type="file"
-                accept={ACCEPTED_IMAGE_TYPES.join(",")}
                 multiple
                 className="hidden"
                 data-testid="image-file-input"
                 onChange={(e) => {
-                  if (e.target.files) addImages(e.target.files);
+                  if (e.target.files) addAttachments(e.target.files);
                   e.target.value = "";
                 }}
               />
               <div
-                className="flex min-h-[60px] flex-wrap items-center gap-2 rounded-md border border-dashed border-line-strong bg-bg-3 px-2.5 py-2 transition-colors hover:border-fg-4"
+                className={`flex min-h-[60px] flex-wrap items-center gap-2 rounded-md border bg-bg-3 px-2.5 py-2 transition-colors ${
+                  attachmentDragOver
+                    ? "border-solid border-acc bg-acc/10"
+                    : attachmentsOverLimit
+                      ? "border-dashed border-st-failed"
+                      : "border-dashed border-line-strong hover:border-fg-4"
+                } ${attachmentShake ? "pdo-attach-shake border-st-failed" : ""}`}
                 data-testid="image-drop-zone"
+                data-drag-over={attachmentDragOver ? "true" : undefined}
                 onDrop={handleDrop}
                 onDragOver={handleDragOver}
-                onPaste={handlePaste}
+                onDragLeave={handleDragLeave}
               >
-                {images.length === 0 && (
+                {attachments.length === 0 && (
                   <button
                     type="button"
                     className="flex w-full items-center justify-center gap-1.5 py-1 text-fg-4 transition-colors hover:text-fg-3"
@@ -1531,50 +1618,151 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
                     onClick={() => fileInputRef.current?.click()}
                     data-testid="image-upload-button"
                   >
-                    <ImagePlus size={14} />
-                    Paste, drag-drop, or click to add images
+                    <Paperclip size={14} />
+                    Paste, drag-drop, or click to add images or files
                   </button>
                 )}
-                {images.map((file, idx) => (
-                  <div
-                    key={`${file.name}-${idx}`}
-                    className="group relative h-12 w-12 flex-shrink-0 overflow-hidden rounded border border-line"
-                    data-testid="image-thumbnail"
-                  >
-                    <img
-                      src={URL.createObjectURL(file)}
-                      alt={file.name}
-                      className="h-full w-full object-cover"
+                {attachments.map((file, idx) => {
+                  const over = overLimitChips.has(idx);
+                  const remove = () => removeAttachment(idx);
+                  const onKeyDown = (e: React.KeyboardEvent) => {
+                    if (e.key === "Delete" || e.key === "Backspace") {
+                      e.preventDefault();
+                      remove();
+                    }
+                  };
+                  if (newRunForm.isImageAttachment(file)) {
+                    return (
+                      <div
+                        key={`${file.name}-${idx}`}
+                        className={`group relative h-12 w-12 flex-shrink-0 overflow-hidden rounded border focus:outline-none focus:ring-1 focus:ring-acc ${
+                          over ? "border-st-failed" : "border-line"
+                        }`}
+                        data-testid="image-thumbnail"
+                        tabIndex={0}
+                        onKeyDown={onKeyDown}
+                        title={over ? `${file.name} · over limit` : file.name}
+                      >
+                        <img
+                          src={URL.createObjectURL(file)}
+                          alt={file.name}
+                          className="h-full w-full object-cover"
+                          title={file.name}
+                        />
+                        <button
+                          type="button"
+                          className="absolute -right-0.5 -top-0.5 grid h-4 w-4 place-items-center rounded-full bg-bg-4 text-fg-3 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+                          onClick={remove}
+                          data-testid="image-remove-button"
+                          aria-label={`Remove ${file.name}`}
+                        >
+                          <X size={10} />
+                        </button>
+                      </div>
+                    );
+                  }
+                  return (
+                    <div
+                      key={`${file.name}-${idx}`}
+                      className={`group relative flex h-12 max-w-[220px] flex-shrink-0 items-center gap-2 rounded border bg-bg-2 px-2 focus:outline-none focus:ring-1 focus:ring-acc ${
+                        over ? "border-st-failed" : "border-line"
+                      }`}
+                      data-testid="file-chip"
+                      data-over-limit={over ? "true" : undefined}
+                      tabIndex={0}
+                      onKeyDown={onKeyDown}
                       title={file.name}
-                    />
-                    <button
-                      type="button"
-                      className="absolute -right-0.5 -top-0.5 grid h-4 w-4 place-items-center rounded-full bg-bg-4 text-fg-3 opacity-0 transition-opacity group-hover:opacity-100"
-                      onClick={() => removeImage(idx)}
-                      data-testid="image-remove-button"
-                      aria-label={`Remove ${file.name}`}
                     >
-                      <X size={10} />
-                    </button>
-                  </div>
-                ))}
-                {images.length > 0 && (
+                      <span
+                        className="grid h-8 w-8 flex-shrink-0 place-items-center rounded border border-line bg-bg-3 font-mono font-medium text-fg-3"
+                        style={{ fontSize: "8.5px", letterSpacing: "0.02em" }}
+                        aria-hidden="true"
+                      >
+                        {attachmentBadge(file.name)}
+                      </span>
+                      <span className="flex min-w-0 flex-col leading-tight">
+                        <span className="truncate text-fg" style={{ fontSize: "11.5px" }}>
+                          {file.name}
+                        </span>
+                        <span
+                          className={over ? "text-st-failed" : "text-fg-4"}
+                          style={{ fontSize: "10px" }}
+                        >
+                          {formatAttachmentSize(file.size)}
+                          {over ? " · over limit" : ""}
+                        </span>
+                      </span>
+                      <button
+                        type="button"
+                        className="absolute -right-0.5 -top-0.5 grid h-4 w-4 place-items-center rounded-full bg-bg-4 text-fg-3 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+                        onClick={remove}
+                        data-testid="file-remove-button"
+                        aria-label={`Remove ${file.name}`}
+                      >
+                        <X size={10} />
+                      </button>
+                    </div>
+                  );
+                })}
+                {attachments.length > 0 && (
                   <button
                     type="button"
                     className="grid h-12 w-12 flex-shrink-0 place-items-center rounded border border-dashed border-line-strong text-fg-4 transition-colors hover:border-fg-3 hover:text-fg-3"
                     onClick={() => fileInputRef.current?.click()}
                     data-testid="image-add-more-button"
-                    aria-label="Add more images"
+                    aria-label="Add more attachments"
                   >
-                    <ImagePlus size={14} />
+                    <Plus size={14} />
                   </button>
                 )}
               </div>
-              <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
-                {images.length > 0
-                  ? `${images.length} image${images.length > 1 ? "s" : ""} attached`
-                  : "Optional — images are passed to the entry node."}
-              </span>
+              {attachments.length > 0 && (
+                <div
+                  className="h-[3px] w-full overflow-hidden rounded-full bg-bg-4"
+                  data-testid="attachments-meter"
+                  aria-hidden="true"
+                >
+                  <div
+                    className={`h-full rounded-full transition-[width] ${
+                      attachmentsOverLimit ? "bg-st-failed" : "bg-acc"
+                    }`}
+                    style={{
+                      width: `${Math.min(100, (attachmentsTotal / maxAttachmentBytes) * 100)}%`,
+                    }}
+                  />
+                </div>
+              )}
+              {attachmentError ? (
+                <span
+                  className="text-st-failed"
+                  style={{ fontSize: "10.5px" }}
+                  data-testid="attachments-error"
+                >
+                  {attachmentError}
+                </span>
+              ) : attachmentsOverLimit ? (
+                <span
+                  className="text-st-failed"
+                  style={{ fontSize: "10.5px" }}
+                  data-testid="attachments-error"
+                >
+                  Total exceeds {maxAttachmentsMb.toFixed(1)} MB per run. Remove{" "}
+                  {formatAttachmentSize(attachmentsTotal - maxAttachmentBytes)} to continue.
+                </span>
+              ) : (
+                <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
+                  {attachmentHint ? `${attachmentHint} ` : ""}
+                  {attachments.length > 0 ? (
+                    <>
+                      Passed to the entry node as{" "}
+                      <span className="font-mono">images</span> and{" "}
+                      <span className="font-mono">files</span>.
+                    </>
+                  ) : (
+                    `Optional — passed to the entry node. Up to ${maxAttachmentsMb.toFixed(1)} MB per run (configurable in Settings).`
+                  )}
+                </span>
+              )}
             </div>
           </div>
 
@@ -1674,8 +1862,27 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
 
         {/* Footer */}
         <div className="flex items-center justify-end gap-2 border-t border-line px-4 py-3">
+          {closeWarning && attachments.length > 0 && (
+            <span
+              className="mr-auto text-st-await"
+              style={{ fontSize: "10.5px" }}
+              data-testid="attachments-close-warning"
+            >
+              {attachments.length} attachment{attachments.length > 1 ? "s" : ""} will be lost
+              when the dialog closes — Cancel again to confirm.
+            </span>
+          )}
+          {mode === "run" && attachmentsOverLimit && (
+            <span
+              className="text-fg-4"
+              style={{ fontSize: "10.5px" }}
+              data-testid="attachments-fix-hint"
+            >
+              Fix attachments to create the run
+            </span>
+          )}
           <button
-            onClick={onClose}
+            onClick={requestClose}
             className="rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
             style={{ fontSize: "11.5px" }}
           >
@@ -1690,7 +1897,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
               data-testid="launch-button"
             >
               <Sparkles size={12} />
-              {submitting ? "Launching…" : "Launch"}
+              {submitting ? (attachments.length > 0 ? "Uploading…" : "Launching…") : "Launch"}
             </button>
           ) : (
             <button

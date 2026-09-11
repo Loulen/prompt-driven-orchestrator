@@ -1058,3 +1058,14 @@ body {
 .pdo-review-flash {
   animation: pdo-review-flash 2.4s ease-out;
 }
+
+/* #779: the attachments zone flashes once when a drop is refused. */
+@keyframes pdo-attach-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-3px); }
+  50% { transform: translateX(3px); }
+  75% { transform: translateX(-2px); }
+}
+.pdo-attach-shake {
+  animation: pdo-attach-shake 300ms ease-in-out;
+}

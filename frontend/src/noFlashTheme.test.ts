@@ -46,7 +46,7 @@ describe("index.html theme guard (#759)", () => {
     for (const stored of ["light", "dark", "system", null, "nonsense"]) {
       for (const osDark of [true, false]) {
         const preference = (
-          ["light", "dark", "system"].includes(stored ?? "") ? stored : "system"
+          ["light", "dark", "system"].includes(stored ?? "") ? stored : "dark"
         ) as ThemePreference;
         expect({ stored, osDark, got: runGuard(stored, osDark) }).toEqual({
           stored,

@@ -286,7 +286,10 @@ pub(crate) enum SpawnOutcome {
     /// appended); `retry_waiting_nodes` re-drives it later.
     Throttled,
     /// The transition guard refused the spawn before any side effect
-    /// (already live / already completed iteration).
+    /// (already live / already completed iteration) — or the spawn turned out to
+    /// be the **benign loser** of a duplicate: the same `(node, iter)` already
+    /// owns a live tmux session (#785 / ADR-0050 §2). Either way the work is
+    /// live or done and there is nothing to retry.
     Refused { reason: String },
     /// The Run is sandboxed and its container is not up yet (#445): the spawn was
     /// declined before any side effect and **no event was appended**, so the node
@@ -340,6 +343,33 @@ pub(crate) async fn spawn_node(
             let reason = reason.to_string();
             warn!("spawn_node refused for {} iter {iter}: {reason}", node.id);
             return SpawnOutcome::Refused { reason };
+        }
+    }
+
+    // #785 / ADR-0050 §2 — the BENIGN LOSER, caught before any side effect. The
+    // guard above admits a `NodeStarted` on an iteration that is already live
+    // (a "legal restart": `restart_node` / `retry_node` kill the session FIRST, so
+    // for them the session is gone by the time they get here). A second spawn of
+    // the same `(node, iter)` whose tmux session is STILL ALIVE is not a restart:
+    // it is a racing duplicate (two edges to one target, a `resume_run` ↔ sweep
+    // race, …) and the winner owns the iteration. Refuse it here — no redundant
+    // `NodeStarted`, no sub-worktree work, and above all no `spawn_aborted`
+    // parking of a run whose winner is healthy. The post-`NodeStarted` branch on
+    // the tmux error below covers the residual window where both spawns pass this
+    // probe before either creates its session.
+    if let Some(state) = projected {
+        if transition_guard::live_iteration(state, &node.id) == Some(iter) {
+            let session_name = tmux_session_manager::node_session_name(run_id, &node.id, iter);
+            let socket = tmux_session_manager::tmux_socket_name(deps.port);
+            if tmux_session_manager::session_exists(&socket, &session_name) {
+                let reason = format!(
+                    "node {} iter {iter} already has a live session {session_name}: \
+                     duplicate spawn is a benign no-op (ADR-0050 §2)",
+                    node.id
+                );
+                warn!("Run {run_id}: {reason}");
+                return SpawnOutcome::Refused { reason };
+            }
         }
     }
 
@@ -1041,10 +1071,13 @@ pub(crate) async fn spawn_node(
                     .iter()
                     .any(|n| n.id == e.source.node && n.node_type == pipeline::NodeType::Start)
         });
-        let input_images = if is_entry_node {
-            prompt_augmenter::discover_input_images(spawn_ctx.artifacts_dir)
+        let (input_images, input_files) = if is_entry_node {
+            (
+                prompt_augmenter::discover_input_images(spawn_ctx.artifacts_dir),
+                prompt_augmenter::discover_input_files(spawn_ctx.artifacts_dir),
+            )
         } else {
-            Vec::new()
+            (Vec::new(), Vec::new())
         };
 
         // Canonical input resolution (#194 / #210): re-project the run state at
@@ -1129,6 +1162,7 @@ pub(crate) async fn spawn_node(
             // two are exhaustive and mutually exclusive.
             shared_worktree_dir: (!has_sub_worktree).then_some(working_dir.as_path()),
             input_images,
+            input_files,
             start_prompt_present,
             source_iters,
             repeated_iters,
@@ -1345,6 +1379,29 @@ pub(crate) async fn spawn_node(
         sandbox_wrap.as_ref(),
         inject_hook,
     ) {
+        // #785 / ADR-0050 §2: `duplicate session` while the session of this very
+        // `(run, node, iter)` is alive means a WINNER already runs this iteration —
+        // this spawn is the benign loser, never a failure. No `NodeInterrupted`, no
+        // `RunInterrupted`: parking the run `spawn_aborted` over a healthy winner
+        // is exactly what the ADR forbids (and what made "Reopen" fail ten times
+        // in a row on the pipeline `grill-with-docs`). The redundant `NodeStarted`
+        // this loser appended is harmless to the projection: `upsert_iteration`
+        // keeps ONE iteration row per `(node, iter)`, so it re-stamps the winner's
+        // live row rather than opening a phantom one. Nothing is reaped either —
+        // the sub-worktree, if any, is the winner's.
+        let msg = format!("{e:#}");
+        if msg.contains("duplicate session") {
+            let socket = tmux_session_manager::tmux_socket_name(deps.port);
+            if tmux_session_manager::session_exists(&socket, &session_name) {
+                let reason = format!(
+                    "node {} iter {iter}: tmux reported duplicate session {session_name} \
+                     and it is alive — losing spawn is a benign no-op (ADR-0050 §2)",
+                    node.id
+                );
+                warn!("Run {run_id}: {reason}");
+                return SpawnOutcome::Refused { reason };
+            }
+        }
         // #508: the tmux spawn itself failed *after* `NodeStarted` is durable. It
         // used to be swallowed (`error!` + fall through), leaving the node
         // projected `Running` with NO session — the liveness sweep then rewrote it

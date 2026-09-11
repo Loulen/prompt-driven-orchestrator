@@ -800,6 +800,116 @@ async fn force_spawn_reserves_before_it_spawns() {
     std::env::remove_var(tmux_session_manager::REAPER_INTERVAL_SECS_ENV);
 }
 
+/// #785 / ADR-0050 §2: a spawn that loses to a live session of the SAME
+/// `(run, node, iter)` — tmux answers `duplicate session` — is a **benign
+/// no-op**. Driven through the path the issue names: the completion of the
+/// upstream node, whose scheduler `Spawn` lands in `spawn_node`. It must append
+/// neither `NodeInterrupted` nor `RunInterrupted`, the run stays `running`, the
+/// winner's session stays alive, and the projection keeps exactly one iteration
+/// for the node. Before the fix the loser parked the run `spawn_aborted` over a
+/// healthy winner, and every "Reopen" re-drove the same collision.
+#[tokio::test]
+// Intentional: the guard must span the `.await`s so env-var-sensitive reaper
+// tests can't race.
+#[allow(clippy::await_holding_lock)]
+async fn duplicate_session_loser_is_a_benign_no_op() {
+    if !tmux_available() {
+        eprintln!("tmux not on PATH — skipping");
+        return;
+    }
+    let _serial = serial_guard();
+
+    std::env::set_var(tmux_session_manager::REAPER_TTL_SECS_ENV, "3600");
+    std::env::set_var(tmux_session_manager::REAPER_INTERVAL_SECS_ENV, "3600");
+
+    let daemon = TestDaemon::spawn(seed_two_node).await.unwrap();
+    let socket = daemon.tmux_socket();
+    let run_id = create_run_of(&daemon, TWO_NODE_PIPELINE).await;
+    let worker = tmux_session_manager::node_session_name(&run_id, "worker", 1);
+    assert!(
+        wait_for_session(&socket, &worker, Duration::from_secs(5)).await,
+        "pre-condition: the entry node should be running"
+    );
+
+    // The "winner": a live session already holding the exact name the spawn of
+    // `second` iter 1 will claim. Its `NodeStarted` is not on the log yet, so the
+    // pre-`NodeStarted` probe cannot catch this — it exercises the post-failure
+    // `duplicate session` branch, the residual-race net.
+    let second = tmux_session_manager::node_session_name(&run_id, "second", 1);
+    create_fake_tmux_session(&socket, &second);
+    assert!(
+        tmux_has_session(&socket, &second),
+        "pre-condition: winner alive"
+    );
+
+    // Complete `worker` → the scheduler spawns `second` iter 1 → collision.
+    let port_dir = daemon
+        .repo_root()
+        .join(".pdo/runs")
+        .join(&run_id)
+        .join("worktree/.pdo/artifacts/worker/iter-1/out");
+    std::fs::create_dir_all(&port_dir).unwrap();
+    std::fs::write(port_dir.join("output.md"), "# Output\nDone.").unwrap();
+    let resp = reqwest::Client::new()
+        .post(format!("{}/runs/{run_id}/nodes/worker/done", daemon.url()))
+        .json(&serde_json::json!({ "iter": 1 }))
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success(), "node done: {}", resp.status());
+
+    // The completion handler is fire-and-forget: wait for the loser's
+    // `NodeStarted` to land, then give the tmux failure branch a beat.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline
+        && !node_started_is_recorded(&daemon, &run_id, "second", 1).await
+    {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        node_started_is_recorded(&daemon, &run_id, "second", 1).await,
+        "pre-condition: the completion should have driven a spawn of `second`"
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let events = run_events(&daemon, &run_id).await;
+    let interrupting: Vec<&serde_json::Value> = events
+        .iter()
+        .filter(|e| e["kind"] == "node_interrupted" || e["kind"] == "run_interrupted")
+        .collect();
+    assert!(
+        interrupting.is_empty(),
+        "#785 REGRESSION: the loser parked the run over a live winner: {interrupting:?}"
+    );
+    assert!(
+        tmux_has_session(&socket, &second),
+        "the winner's session must survive the losing spawn"
+    );
+
+    let run = reqwest::get(format!("{}/runs/{run_id}", daemon.url()))
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(run["status"], "running", "run state was: {run}");
+    let iterations = run["nodes"]["second"]["iterations"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(
+        iterations.len(),
+        1,
+        "exactly one live iteration for the node, no phantom: {iterations:?}"
+    );
+    assert_eq!(iterations[0]["status"], "running");
+
+    tmux_session_manager::kill(&socket, &second);
+    tmux_session_manager::kill(&socket, &worker);
+    std::env::remove_var(tmux_session_manager::REAPER_TTL_SECS_ENV);
+    std::env::remove_var(tmux_session_manager::REAPER_INTERVAL_SECS_ENV);
+}
+
 /// Layer 3a (#485, slice A — `node_retry`, the UI **Retry** button): same
 /// invariant on the more exposed of the two paths. Retry appends
 /// `NodeInvalidated` for the node itself, and that applier does an unconditional

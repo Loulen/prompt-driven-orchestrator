@@ -31,11 +31,11 @@ describe("ThemeSelect — choosing a theme (#759)", () => {
     expect(screen.getAllByRole("radio")).toHaveLength(3);
   });
 
-  it("checks the active preference and only that one", () => {
+  it("checks the active preference and only that one (#781: dark by default)", () => {
     render(<ThemeSelect />);
-    expect(screen.getByTestId("theme-option-system")).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByTestId("theme-option-dark")).toHaveAttribute("aria-checked", "true");
     expect(screen.getByTestId("theme-option-light")).toHaveAttribute("aria-checked", "false");
-    expect(screen.getByTestId("theme-option-dark")).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByTestId("theme-option-system")).toHaveAttribute("aria-checked", "false");
   });
 
   it("repaints the document and persists the choice on click", async () => {
@@ -68,21 +68,21 @@ describe("ThemeSelect — choosing a theme (#759)", () => {
 describe("ThemeSelect — keyboard (#759)", () => {
   it("puts one tab stop on the group: only the checked option is tabbable", () => {
     render(<ThemeSelect />);
-    expect(screen.getByTestId("theme-option-system")).toHaveAttribute("tabindex", "0");
+    expect(screen.getByTestId("theme-option-dark")).toHaveAttribute("tabindex", "0");
     expect(screen.getByTestId("theme-option-light")).toHaveAttribute("tabindex", "-1");
-    expect(screen.getByTestId("theme-option-dark")).toHaveAttribute("tabindex", "-1");
+    expect(screen.getByTestId("theme-option-system")).toHaveAttribute("tabindex", "-1");
   });
 
   it("moves and selects with the arrow keys, wrapping around", async () => {
     const user = userEvent.setup();
     render(<ThemeSelect />);
     await user.tab();
-    expect(screen.getByTestId("theme-option-system")).toHaveFocus();
+    expect(screen.getByTestId("theme-option-dark")).toHaveFocus();
     await user.keyboard("{ArrowRight}");
-    expect(screen.getByTestId("theme-option-light")).toHaveAttribute("aria-checked", "true");
-    expect(screen.getByTestId("theme-option-light")).toHaveFocus();
-    await user.keyboard("{ArrowLeft}");
     expect(screen.getByTestId("theme-option-system")).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByTestId("theme-option-system")).toHaveFocus();
+    await user.keyboard("{ArrowLeft}");
+    expect(screen.getByTestId("theme-option-dark")).toHaveAttribute("aria-checked", "true");
   });
 
   it("selects with Home and End", async () => {

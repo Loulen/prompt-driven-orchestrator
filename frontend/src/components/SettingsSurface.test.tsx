@@ -96,6 +96,7 @@ function sample(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
     session_cap: { effective: 9, source: "env", stored: null, env: 9, default: 20 },
     reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
     guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
+    max_attachments_mb: { effective: 50, source: "default", stored: null, env: null, default: 50 },
     // Unset by default (account default): effective/stored/env/default all null.
     default_model: { effective: null, source: "default", stored: null, env: null, default: null },
     default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
@@ -350,6 +351,31 @@ describe("SettingsSurface", () => {
     expect(cap.value).toBe("9");
     expect((screen.getByTestId("setting-reaper-ttl") as HTMLInputElement).value).toBe("3600");
     expect((screen.getByTestId("setting-guard-timeout") as HTMLInputElement).value).toBe("60");
+    // #779: the per-run attachment budget sits with the other runtime limits.
+    expect((screen.getByTestId("setting-max-attachments-mb") as HTMLInputElement).value).toBe("50");
+  });
+
+  it("saves the attachment budget and refuses one outside 1–4096 MB (#779)", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    updateSettingsMock.mockResolvedValue(
+      sample({
+        max_attachments_mb: { effective: 120, source: "stored", stored: 120, env: null, default: 50 },
+      }),
+    );
+    render(<SettingsSurface open onClose={() => {}} />);
+    const field = await screen.findByTestId("setting-max-attachments-mb");
+
+    fireEvent.change(field, { target: { value: "5000" } });
+    fireEvent.click(screen.getByTestId("settings-save"));
+    expect(await screen.findByTestId("settings-error")).toHaveTextContent(
+      /between 1 and 4096 MB/,
+    );
+    expect(updateSettingsMock).not.toHaveBeenCalled();
+
+    fireEvent.change(field, { target: { value: "120" } });
+    fireEvent.click(screen.getByTestId("settings-save"));
+    await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
+    expect(updateSettingsMock).toHaveBeenCalledWith({ max_attachments_mb: 120 });
   });
 
   it("names both price paths even though neither file exists", async () => {

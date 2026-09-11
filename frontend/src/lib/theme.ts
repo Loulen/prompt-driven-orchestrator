@@ -8,8 +8,11 @@
  * and write so private mode / a disabled or full store degrades to an in-memory
  * default for the session instead of throwing.
  *
- * `system` is the default (the ticket's recommendation): PDO follows the OS
- * rather than imposing a look. An explicit `light` / `dark` pins it.
+ * `dark` is the default (#781): PDO has always had the dark look, so a client
+ * with no stored preference paints dark whatever the OS asks — a light-mode OS
+ * must not silently restyle the app on first paint. `system` stays available
+ * in Settings for whoever wants to follow the OS; an explicit `light` / `dark`
+ * pins it.
  */
 
 export const THEME_STORAGE_KEY = "pdo.ui.theme";
@@ -26,13 +29,13 @@ function isThemePreference(v: unknown): v is ThemePreference {
   return typeof v === "string" && (PREFERENCES as readonly string[]).includes(v);
 }
 
-/** Stored preference. Absent / unknown / unreadable → `system`. */
+/** Stored preference. Absent / unknown / unreadable → `dark` (#781). */
 export function loadThemePreference(): ThemePreference {
   try {
     const raw = localStorage.getItem(THEME_STORAGE_KEY);
-    return isThemePreference(raw) ? raw : "system";
+    return isThemePreference(raw) ? raw : "dark";
   } catch {
-    return "system";
+    return "dark";
   }
 }
 

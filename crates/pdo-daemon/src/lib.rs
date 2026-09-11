@@ -318,8 +318,23 @@ pub enum RunAction {
         pipeline: String,
         /// Prompt for the Run's start node. A prompt-optional pipeline accepts
         /// the empty default.
-        #[arg(short, long, default_value = "")]
+        #[arg(short, long, default_value = "", conflicts_with = "input_file")]
         input: String,
+        /// Read the prompt from a file instead of `--input` (#779) — e.g. the
+        /// spec an upstream node wrote: `--input-file "$PDO_INPUT_SPEC"`.
+        #[arg(long, value_name = "PATH")]
+        input_file: Option<std::path::PathBuf>,
+        /// Attach an image (#779, repeatable): sent in the multipart `images`
+        /// field, written to the child's `_input/`, listed under
+        /// `## Input Images` in its entry node's preamble.
+        #[arg(long, value_name = "PATH")]
+        image: Vec<std::path::PathBuf>,
+        /// Attach any file (#779, repeatable): sent in the multipart `files`
+        /// field, written to the child's `_input/`, listed under
+        /// `## Input Files`. Any extension; one size budget per run
+        /// (`max_attachments_mb` in Settings); duplicate names are refused.
+        #[arg(long, value_name = "PATH")]
+        file: Vec<std::path::PathBuf>,
         /// Run variables as a JSON object: `--variables '{"pool":"a"}'`.
         #[arg(long)]
         variables: Option<String>,
@@ -1279,6 +1294,9 @@ pub fn run_run_create(action: RunAction) -> Result<()> {
     let RunAction::Create {
         pipeline,
         input,
+        input_file,
+        image,
+        file,
         variables,
         skills,
         agent_choice,
@@ -1294,6 +1312,15 @@ pub fn run_run_create(action: RunAction) -> Result<()> {
     } = action;
 
     let url = cli_daemon_url();
+
+    // #779: `--input-file` reads the prompt from disk (clap already refuses it
+    // together with `--input`). Read eagerly so a missing file fails before
+    // the daemon is even reached.
+    let input = match input_file {
+        Some(path) => std::fs::read_to_string(&path)
+            .with_context(|| format!("failed to read --input-file {}", path.display()))?,
+        None => input,
+    };
 
     let mut body = serde_json::Map::new();
     body.insert("pipeline".into(), serde_json::json!(pipeline));
@@ -1339,9 +1366,16 @@ pub fn run_run_create(action: RunAction) -> Result<()> {
     }
 
     let session = session_env_claim();
-    let mut req = reqwest::blocking::Client::new()
-        .post(format!("{url}/runs"))
-        .json(&body);
+    let client = reqwest::blocking::Client::new().post(format!("{url}/runs"));
+    // #779: any `--image` / `--file` switches the body to multipart — the same
+    // text fields as the JSON shape (non-scalars as JSON strings, like the UI),
+    // plus one `images` / `files` part per attachment. Files are read here so a
+    // missing path is named locally, before any request.
+    let mut req = if image.is_empty() && file.is_empty() {
+        client.json(&body)
+    } else {
+        client.multipart(run_create_multipart(&body, &image, &file)?)
+    };
     if let Some((run_id, node_id)) = &session {
         req = req
             .header(SESSION_RUN_HEADER, run_id)
@@ -1377,6 +1411,40 @@ pub fn run_run_create(action: RunAction) -> Result<()> {
         None => println!("Run {run_id} created (root run)."),
     }
     Ok(())
+}
+
+/// The multipart body of a `pdo run create` carrying attachments (#779). Text
+/// fields mirror the JSON body one-to-one: strings verbatim, everything else
+/// (`variables`, `skills`, `auto_name`, …) serialised the way the daemon's
+/// multipart parser reads them back — JSON text for objects/lists, `true`/
+/// `false` for bools.
+fn run_create_multipart(
+    body: &serde_json::Map<String, serde_json::Value>,
+    images: &[std::path::PathBuf],
+    files: &[std::path::PathBuf],
+) -> Result<reqwest::blocking::multipart::Form> {
+    let mut form = reqwest::blocking::multipart::Form::new();
+    for (key, value) in body {
+        let text = match value {
+            serde_json::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        };
+        form = form.text(key.clone(), text);
+    }
+    for (field, paths) in [("images", images), ("files", files)] {
+        for path in paths {
+            let data = std::fs::read(path)
+                .with_context(|| format!("failed to read --{} {}", field.trim_end_matches('s'), path.display()))?;
+            let filename = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .with_context(|| format!("--{} {} has no usable filename", field.trim_end_matches('s'), path.display()))?
+                .to_string();
+            let part = reqwest::blocking::multipart::Part::bytes(data).file_name(filename);
+            form = form.part(field, part);
+        }
+    }
+    Ok(form)
 }
 
 /// One-shot `pdo review list` / `pdo review reply` (#751): the thin CLI client of
@@ -4596,6 +4664,7 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/pipelines/{pipeline_id}/duplicate",
             post(duplicate_pipeline),
         )
+        .route("/pipelines/{pipeline_id}/rename", put(rename_pipeline))
         .route(
             "/pipelines/{pipeline_id}/document",
             get(get_pipeline_document),
@@ -4619,7 +4688,14 @@ fn build_router(state: Arc<AppState>) -> Router {
             axum::routing::put(save_pipeline).delete(delete_pipeline),
         )
         .route("/pipelines", post(create_pipeline))
-        .route("/runs", post(create_run))
+        // #779: the multipart body of `POST /runs` is bounded by the
+        // `max_attachments_mb` setting, enforced IN the handler on the attachment
+        // parts (read fresh per request) — not by a static limit frozen at
+        // router build. The JSON branch keeps its own 10 MB `to_bytes` cap.
+        .route(
+            "/runs",
+            post(create_run).route_layer(axum::extract::DefaultBodyLimit::disable()),
+        )
         .route("/runs", get(list_runs))
         .route("/pages", get(list_page_mounts).post(create_page_mount))
         .route("/pages/", get(list_page_mounts))
@@ -6776,6 +6852,79 @@ async fn save_pipeline(
         }
     };
 
+    // #774 — the visible name and the file stem are 1:1: a save that changes
+    // the `name:` field MOVES the registry entry (`<old>.yaml` + `.prompts/`
+    // sidecar → the slug of the new name) instead of leaving a stale id
+    // behind. Collisions are refused, so two distinct pipelines can never end
+    // up listed under the same name.
+    let new_name = saved.name.trim().to_string();
+    let desired_id = pipeline_slug(&new_name);
+    if desired_id != pipeline_id {
+        let Some(dir) = instance_pipeline_dir(&state.repo_root) else {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "cannot determine instance pipeline directory",
+            )
+                .into_response();
+        };
+        if let Some(conflict) = pipeline_name_conflict(&dir, &pipeline_id, &new_name, &desired_id) {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": format!("Cannot rename: {conflict}"),
+                    "message": conflict,
+                })),
+            )
+                .into_response();
+        }
+        let active_count = active_runs_using_pipeline(&state, &pipeline_id).await;
+        if active_count > 0 {
+            let message = format!(
+                "Cannot rename while runs are active: {active_count} active run(s) reference this pipeline"
+            );
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({ "error": message.clone(), "message": message })),
+            )
+                .into_response();
+        }
+        mark_self_write(&state.recent_writes, &path);
+        let new_path = match move_pipeline_entry(&dir, &path, &desired_id, &req.yaml) {
+            Ok(p) => p,
+            Err(error) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": error.clone(), "message": error })),
+                )
+                    .into_response()
+            }
+        };
+        mark_self_write(&state.recent_writes, &new_path);
+        for (node_id, content) in &req.prompts {
+            let prompt_path = pipeline::canonical_prompt_path(&new_path, node_id);
+            if let Some(parent) = prompt_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            mark_self_write(&state.recent_writes, &prompt_path);
+            if let Err(e) = std::fs::write(&prompt_path, content) {
+                warn!("failed to write prompt for {node_id}: {e}");
+            }
+        }
+        prune_orphan_prompts(&state, &new_path, &saved);
+
+        let _ = state.pipeline_tx.send(serde_json::json!({
+            "type": "pipeline_changed",
+            "pipeline_id": desired_id,
+            "path": new_path.to_string_lossy(),
+        }));
+        info!("Pipeline {pipeline_id} saved as {desired_id} (name changed)");
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({ "ok": true, "id": desired_id, "renamed": true })),
+        )
+            .into_response();
+    }
+
     mark_self_write(&state.recent_writes, &path);
     if let Err(e) = std::fs::write(&path, &req.yaml) {
         let msg = format!("write failed: {e}");
@@ -6799,7 +6948,185 @@ async fn save_pipeline(
     prune_orphan_prompts(&state, &path, &saved);
 
     info!("Pipeline {pipeline_id} saved");
-    (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "ok": true, "id": pipeline_id, "renamed": false })),
+    )
+        .into_response()
+}
+
+#[derive(Deserialize)]
+struct RenamePipelineRequest {
+    name: String,
+}
+
+/// #774 — rename a pipeline: the visible name and the file stem move together
+/// (`<old>.yaml` + `.prompts/` sidecar → the slug of the new name). The YAML is
+/// NOT round-tripped: only its top-level `name:` line is spliced (#682), so
+/// comments and unknown keys survive. Collisions (target file stem or visible
+/// name already taken) and active runs referencing the pipeline are refused.
+async fn rename_pipeline(
+    State(state): State<Arc<AppState>>,
+    AxumPath(pipeline_id): AxumPath<String>,
+    Json(req): Json<RenamePipelineRequest>,
+) -> Response {
+    let path = resolve_pipeline_path(&state.repo_root, &pipeline_id);
+    let yaml = match std::fs::read_to_string(&path) {
+        Ok(y) => y,
+        Err(_) => return (StatusCode::NOT_FOUND, "pipeline not found").into_response(),
+    };
+    let new_name = req.name.trim().to_string();
+    if new_name.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "name is required",
+                "message": "name is required",
+            })),
+        )
+            .into_response();
+    }
+    let parsed = match pipeline::parse_pipeline(&yaml) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            let (message, line) = parse_error_to_structured(&error);
+            let mut body =
+                serde_json::json!({ "error": format!("invalid pipeline: {error}"), "message": message });
+            if let Some(l) = line {
+                body["line"] = serde_json::json!(l);
+            }
+            return (StatusCode::BAD_REQUEST, Json(body)).into_response();
+        }
+    };
+
+    // Renaming to the current visible name is a no-op — never a move.
+    if parsed.pipeline.name.trim() == new_name {
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "ok": true,
+                "id": pipeline_id,
+                "name": new_name,
+                "renamed": false,
+            })),
+        )
+            .into_response();
+    }
+
+    let Some(dir) = instance_pipeline_dir(&state.repo_root) else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "cannot determine instance pipeline directory",
+        )
+            .into_response();
+    };
+    let new_id = pipeline_slug(&new_name);
+    // Display-only rename (same stem, e.g. "foo-bar" → "foo bar"): splice the
+    // `name:` line in place — nothing moves, nothing can collide.
+    if new_id == pipeline_id {
+        let new_yaml = match rewrite_pipeline_name_field(&yaml, &new_name) {
+            Some(y) => y,
+            None => {
+                let msg = "pipeline has no top-level 'name:' key".to_string();
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": msg.clone(), "message": msg })),
+                )
+                    .into_response();
+            }
+        };
+        mark_self_write(&state.recent_writes, &path);
+        if let Err(e) = std::fs::write(&path, new_yaml.as_bytes()) {
+            let msg = format!("write failed: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": msg.clone(), "message": msg })),
+            )
+                .into_response();
+        }
+        let _ = state.pipeline_tx.send(serde_json::json!({
+            "type": "pipeline_changed",
+            "pipeline_id": pipeline_id,
+            "path": path.to_string_lossy(),
+        }));
+        info!("Pipeline {pipeline_id} display name updated to {new_name}");
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "ok": true,
+                "id": pipeline_id,
+                "name": new_name,
+                "renamed": true,
+            })),
+        )
+            .into_response();
+    }
+    if let Some(conflict) = pipeline_name_conflict(&dir, &pipeline_id, &new_name, &new_id) {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": format!("Cannot rename: {conflict}"),
+                "message": conflict,
+            })),
+        )
+            .into_response();
+    }
+    let active_count = active_runs_using_pipeline(&state, &pipeline_id).await;
+    if active_count > 0 {
+        let message = format!(
+            "Cannot rename while runs are active: {active_count} active run(s) reference this pipeline"
+        );
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": message.clone(), "message": message })),
+        )
+            .into_response();
+    }
+    let new_yaml = match rewrite_pipeline_name_field(&yaml, &new_name) {
+        Some(y) => y,
+        None => {
+            let msg = "pipeline has no top-level 'name:' key".to_string();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": msg.clone(), "message": msg })),
+            )
+                .into_response();
+        }
+    };
+
+    mark_self_write(&state.recent_writes, &path);
+    let new_path = match move_pipeline_entry(&dir, &path, &new_id, &new_yaml) {
+        Ok(p) => p,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": error.clone(), "message": error })),
+            )
+                .into_response()
+        }
+    };
+    mark_self_write(&state.recent_writes, &new_path);
+
+    // Announce the move ourselves: self-writes are suppressed by the watcher,
+    // and clients must refresh the list under the NEW id at once.
+    let _ = state.pipeline_tx.send(serde_json::json!({
+        "type": "pipeline_changed",
+        "pipeline_id": new_id,
+        "path": new_path.to_string_lossy(),
+    }));
+
+    info!("Pipeline {pipeline_id} renamed to {new_id}");
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "ok": true,
+            "id": new_id,
+            "name": new_name,
+            "path": new_path.to_string_lossy(),
+            "renamed": true,
+        })),
+    )
+        .into_response()
 }
 
 async fn create_pipeline(
@@ -6910,6 +7237,143 @@ fn read_prompts_from_dir(prompts_dir: &Path) -> HashMap<String, String> {
     prompts
 }
 
+/// #774 — the registry file stem a visible pipeline name maps to. One
+/// definition shared by identity allocation (create/duplicate/import) and by
+/// the rename paths (dedicated endpoint + save-with-changed-name), so "the
+/// visible name and the file stem are 1:1" can never drift between surfaces.
+fn pipeline_slug(requested_name: &str) -> String {
+    let slug = requested_name.trim().chars().fold(String::new(), |mut slug, c| {
+        if c.is_ascii_alphanumeric() || c == '_' {
+            slug.push(c.to_ascii_lowercase());
+        } else if !slug.ends_with('-') {
+            slug.push('-');
+        }
+        slug
+    });
+    let slug = slug.trim_matches('-');
+    if slug.is_empty() { "pipeline".to_string() } else { slug.to_string() }
+}
+
+/// #774 — rewrite ONLY the top-level `name:` scalar of a pipeline YAML, leaving
+/// every other byte (comments, unknown keys, formatting) untouched. A rename
+/// must never round-trip the document through parse/serialize (#682: that loses
+/// comments and unknown keys), so the new name is spliced into the existing
+/// text. `None` when the document has no top-level `name:` key — a malformed
+/// pipeline the caller must refuse rather than silently rename.
+fn rewrite_pipeline_name_field(yaml: &str, new_name: &str) -> Option<String> {
+    // `serde_yaml` scalar serialization quotes exactly when the value needs it
+    // (`my: name` → `'my: name'`), so the spliced line always re-parses.
+    let scalar = serde_yaml::to_string(new_name).ok()?.trim_end().to_string();
+    let mut replaced = false;
+    let mut out = String::with_capacity(yaml.len() + scalar.len() + 8);
+    for line in yaml.split_inclusive('\n') {
+        if !replaced && line.starts_with("name:") {
+            out.push_str("name: ");
+            out.push_str(&scalar);
+            if line.ends_with('\n') {
+                out.push('\n');
+            }
+            replaced = true;
+        } else {
+            out.push_str(line);
+        }
+    }
+    if replaced { Some(out) } else { None }
+}
+
+/// #774 — the two collisions a visible-name change must REFUSE: another
+/// pipeline file already owns the target stem, and another pipeline already
+/// carries the target visible name. Either would recreate the exact
+/// indistinguishable-rows state the name ⇄ stem 1:1 rule exists to prevent.
+/// Returns the human-readable refusal reason when conflicted.
+fn pipeline_name_conflict(dir: &Path, self_id: &str, new_name: &str, new_id: &str) -> Option<String> {
+    // A display-only change whose slug maps back to the own stem ("foo-bar" →
+    // "foo bar") targets the pipeline's own file — never a collision.
+    if new_id != self_id && dir.join(format!("{new_id}.yaml")).exists() {
+        return Some(format!("a pipeline file '{new_id}.yaml' already exists"));
+    }
+    for entry in scan_pipeline_dir(dir, "instance") {
+        if entry.id != self_id && entry.name.trim() == new_name {
+            return Some(format!("a pipeline already uses the name \"{new_name}\""));
+        }
+    }
+    None
+}
+
+/// #774 — shared with `delete_pipeline`: the number of non-terminal runs whose
+/// `pipeline_name` resolves to this registry id. Rename, like delete, would
+/// silently orphan the completion path of a live run (its fallback resolves the
+/// pipeline by stem), so the gate is a refusal, not a migration.
+async fn active_runs_using_pipeline(state: &AppState, pipeline_id: &str) -> usize {
+    let mut active_count: usize = 0;
+    if let Ok(run_ids) = load_all_run_ids(&state.db).await {
+        for run_id in &run_ids {
+            let Ok(events) = load_events(&state.db, run_id).await else {
+                continue;
+            };
+            let Some(run_state) = event_log::project(&events) else {
+                continue;
+            };
+            // A third "active run" predicate, deliberately distinct from
+            // `RunStatus::is_terminal()`, which also treats Failed/Skipped/Halted as
+            // non-active.
+            if run_state.pipeline_name == pipeline_id
+                && run_state.status != event_log::RunStatus::Completed
+                && run_state.status != event_log::RunStatus::Archived
+            {
+                active_count += 1;
+            }
+        }
+    }
+    active_count
+}
+
+/// #774 — move one registry entry to a new stem: the YAML (written from
+/// `new_yaml`) and its `.prompts/` sidecar travel together. Collisions are the
+/// caller's refusal (`pipeline_name_conflict`); this only stages, publishes
+/// and rolls the whole move back on any failure — a half-done rename (new
+/// yaml without the sidecar, or both files present) must never be observable.
+/// The old sidecar is moved wholesale first so prompts the caller didn't carry
+/// survive the move (the save path prunes orphans afterwards).
+fn move_pipeline_entry(
+    dir: &Path,
+    old_path: &Path,
+    new_id: &str,
+    new_yaml: &str,
+) -> Result<PathBuf, String> {
+    let new_path = dir.join(format!("{new_id}.yaml"));
+    if new_path == *old_path {
+        return Ok(new_path);
+    }
+    let old_prompts = old_path.with_extension("prompts");
+    let new_prompts = new_path.with_extension("prompts");
+    let nonce = format!(
+        "{}.{}",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    );
+    let staged = dir.join(format!(".{new_id}.yaml.renaming-{nonce}"));
+    let prompts_moved = old_prompts.is_dir();
+    let result = (|| -> Result<(), String> {
+        if prompts_moved {
+            std::fs::rename(&old_prompts, &new_prompts)
+                .map_err(|e| format!("move prompts: {e}"))?;
+        }
+        std::fs::write(&staged, new_yaml.as_bytes()).map_err(|e| format!("write pipeline: {e}"))?;
+        std::fs::rename(&staged, &new_path).map_err(|e| format!("publish pipeline: {e}"))?;
+        std::fs::remove_file(old_path).map_err(|e| format!("retire old pipeline: {e}"))
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&staged);
+        let _ = std::fs::remove_file(&new_path);
+        if prompts_moved && new_prompts.is_dir() {
+            let _ = std::fs::rename(&new_prompts, &old_prompts);
+        }
+        return result.map(|()| new_path);
+    }
+    Ok(new_path)
+}
+
 fn available_pipeline_identity(dir: &Path, requested_name: &str) -> (String, String) {
     let existing_names = std::fs::read_dir(dir)
         .into_iter()
@@ -6933,16 +7397,7 @@ fn available_pipeline_identity(dir: &Path, requested_name: &str) -> (String, Str
     } else {
         base_name
     };
-    let slug = base_name.chars().fold(String::new(), |mut slug, c| {
-        if c.is_ascii_alphanumeric() || c == '_' {
-            slug.push(c.to_ascii_lowercase());
-        } else if !slug.ends_with('-') {
-            slug.push('-');
-        }
-        slug
-    });
-    let slug = slug.trim_matches('-');
-    let slug = if slug.is_empty() { "pipeline" } else { slug };
+    let slug = pipeline_slug(&base_name);
     let mut id = slug.to_string();
     let mut name = base_name.clone();
     let mut suffix = 2u32;
@@ -7647,34 +8102,15 @@ async fn delete_pipeline(
         return (StatusCode::NOT_FOUND, "pipeline not found").into_response();
     }
 
-    if let Ok(run_ids) = load_all_run_ids(&state.db).await {
-        let mut active_count: usize = 0;
-        for run_id in &run_ids {
-            let Ok(events) = load_events(&state.db, run_id).await else {
-                continue;
-            };
-            let Some(run_state) = event_log::project(&events) else {
-                continue;
-            };
-            // A third "active run" predicate, deliberately distinct from
-            // `RunStatus::is_terminal()`, which also treats Failed/Skipped/Halted as
-            // non-active.
-            if run_state.pipeline_name == pipeline_id
-                && run_state.status != event_log::RunStatus::Completed
-                && run_state.status != event_log::RunStatus::Archived
-            {
-                active_count += 1;
-            }
-        }
-        if active_count > 0 {
-            return (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({
-                    "error": format!("Cannot delete: {active_count} active run(s)")
-                })),
-            )
-                .into_response();
-        }
+    let active_count = active_runs_using_pipeline(&state, &pipeline_id).await;
+    if active_count > 0 {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": format!("Cannot delete: {active_count} active run(s)")
+            })),
+        )
+            .into_response();
     }
 
     let prompts_dir = path.with_extension("prompts");
@@ -8400,13 +8836,105 @@ fn resolve_completed_frontmatter(
     by_node
 }
 
-struct ImageFile {
+/// One attachment of a `POST /runs` multipart body (#779): an image (the
+/// `images` field, image extension required) or any other file (the `files`
+/// field). Both land in the child's `_input/` beside `output.md`; the entry
+/// node sees them under `## Input Images` / `## Input Files`.
+struct InputFile {
     filename: String,
     data: Vec<u8>,
+    /// Classified by EXTENSION, whatever field carried the file — so a `.png`
+    /// sent under `files` is still discovered as an image at spawn.
+    is_image: bool,
 }
 
 pub(crate) const ALLOWED_IMAGE_EXTENSIONS: &[&str] =
     &["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"];
+
+/// Built-in per-run attachment budget (images + files, bytes counted on the
+/// multipart parts) when neither the stored setting nor
+/// [`MAX_ATTACHMENTS_MB_ENV`] speaks: 50 MB. The modal reads the SAME value
+/// from `GET /settings` so its client-side gate and the daemon's agree (#779).
+pub(crate) const MAX_ATTACHMENTS_MB_DEFAULT: i64 = 50;
+/// Env seam of the attachment budget, read only inside
+/// [`resolve_max_attachments_mb`].
+pub(crate) const MAX_ATTACHMENTS_MB_ENV: &str = "PDO_MAX_ATTACHMENTS_MB";
+
+/// The attachment budget in MB, `stored → env → default(50)`. A stored `0` or
+/// negative is impossible (`PUT /settings` refuses `< 1`), an unparsable env
+/// falls through to the default.
+pub(crate) fn resolve_max_attachments_mb(stored: Option<i64>) -> i64 {
+    if let Some(n) = stored.filter(|&n| n >= 1) {
+        return n;
+    }
+    if let Some(n) = env_max_attachments_mb() {
+        return n;
+    }
+    MAX_ATTACHMENTS_MB_DEFAULT
+}
+
+pub(crate) fn env_max_attachments_mb() -> Option<i64> {
+    std::env::var(MAX_ATTACHMENTS_MB_ENV)
+        .ok()
+        .and_then(|s| s.trim().parse::<i64>().ok())
+        .filter(|&n| n >= 1)
+}
+
+/// The prompt file every Run writes into `_input/` — an attachment may not
+/// take its name, it would clobber the user prompt.
+const INPUT_PROMPT_FILENAME: &str = "output.md";
+
+/// Sanitize the filename of a `files` attachment: keep the last path component
+/// only (no traversal), refuse empty / dot names and a collision with the
+/// prompt file. Every extension is accepted — the per-run size budget is the
+/// guard, not a type list (#779).
+fn sanitize_attachment_filename(raw: &str) -> Result<String, String> {
+    let name = Path::new(raw)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .trim();
+    if name.is_empty() || name == "." || name == ".." {
+        return Err(format!("invalid attachment filename: {raw:?}"));
+    }
+    if name == INPUT_PROMPT_FILENAME {
+        return Err(format!(
+            "attachment `{name}` is reserved for the run prompt; rename the file"
+        ));
+    }
+    Ok(name.to_string())
+}
+
+fn has_image_extension(name: &str) -> bool {
+    let ext = Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+    ALLOWED_IMAGE_EXTENSIONS.contains(&ext.as_str())
+}
+
+/// A refused multipart body: the status the client gets and the sentence that
+/// names why. `PAYLOAD_TOO_LARGE` for the budget, `BAD_REQUEST` otherwise.
+struct MultipartRefusal {
+    status: StatusCode,
+    message: String,
+}
+
+impl From<String> for MultipartRefusal {
+    fn from(message: String) -> Self {
+        MultipartRefusal {
+            status: StatusCode::BAD_REQUEST,
+            message,
+        }
+    }
+}
+
+impl From<&str> for MultipartRefusal {
+    fn from(message: &str) -> Self {
+        MultipartRefusal::from(message.to_string())
+    }
+}
 
 fn sanitize_image_filename(raw: &str) -> Option<String> {
     let name = Path::new(raw)
@@ -8427,7 +8955,8 @@ fn sanitize_image_filename(raw: &str) -> Option<String> {
 
 async fn parse_multipart_create_run(
     mut multipart: Multipart,
-) -> std::result::Result<(CreateRunRequest, Vec<ImageFile>), String> {
+    max_attachment_bytes: u64,
+) -> std::result::Result<(CreateRunRequest, Vec<InputFile>), MultipartRefusal> {
     let mut pipeline = None;
     let mut input = None;
     let mut variables: HashMap<String, serde_yaml::Value> = HashMap::new();
@@ -8443,7 +8972,43 @@ async fn parse_multipart_create_run(
     let mut auto_name: Option<bool> = None;
     let mut auto_fail: Option<bool> = None;
     let mut provisioning = provisioning::ProvisioningRules::default();
-    let mut images = Vec::new();
+    let mut attachments: Vec<InputFile> = Vec::new();
+    let mut attachment_bytes: u64 = 0;
+
+    // The budget is enforced on the ATTACHMENT parts (what the user chose),
+    // never on the text fields — a long prompt does not eat the file budget.
+    // Refused at the first part that crosses the line, so a runaway upload is
+    // cut without buffering the whole body.
+    let mut push_attachment = |filename: String,
+                               data: Vec<u8>,
+                               attachments: &mut Vec<InputFile>|
+     -> std::result::Result<(), MultipartRefusal> {
+        attachment_bytes += data.len() as u64;
+        if attachment_bytes > max_attachment_bytes {
+            return Err(MultipartRefusal {
+                status: StatusCode::PAYLOAD_TOO_LARGE,
+                message: format!(
+                    "attachments exceed the per-run limit of {} MB (at `{filename}`); \
+                     raise `max_attachments_mb` in Settings or attach less",
+                    max_attachment_bytes / (1024 * 1024)
+                ),
+            });
+        }
+        // #779: a duplicate name never overwrites — today the second silently
+        // replaced the first. Named 400 so the caller can rename or drop one.
+        if attachments.iter().any(|a| a.filename == filename) {
+            return Err(MultipartRefusal::from(format!(
+                "duplicate attachment filename `{filename}`: each attachment needs a distinct name"
+            )));
+        }
+        let is_image = has_image_extension(&filename);
+        attachments.push(InputFile {
+            filename,
+            data,
+            is_image,
+        });
+        Ok(())
+    };
 
     while let Ok(Some(field)) = multipart.next_field().await {
         let field_name = field.name().unwrap_or("").to_string();
@@ -8607,19 +9172,29 @@ async fn parse_multipart_create_run(
                 }
                 let filename = sanitize_image_filename(&raw_filename)
                     .ok_or_else(|| format!("unsupported image type: {raw_filename}"))?;
-                images.push(ImageFile {
-                    filename,
-                    data: data.to_vec(),
-                });
+                push_attachment(filename, data.to_vec(), &mut attachments)?;
+            }
+            "files" => {
+                // #779: any file. Extension-free, budget-guarded, name-checked.
+                let raw_filename = field.file_name().unwrap_or("").to_string();
+                let data = field
+                    .bytes()
+                    .await
+                    .map_err(|e| format!("failed to read file: {e}"))?;
+                if data.is_empty() {
+                    continue;
+                }
+                let filename = sanitize_attachment_filename(&raw_filename)?;
+                push_attachment(filename, data.to_vec(), &mut attachments)?;
             }
             // An unknown form field is a client mistake, named — never silently
-            // dropped. `images` is the multipart-only field; the rest mirror
-            // `CREATE_RUN_FIELDS`.
+            // dropped. `images` and `files` are the multipart-only fields; the
+            // rest mirror `CREATE_RUN_FIELDS`.
             other => {
-                return Err(format!(
-                    "unknown field `{other}` in POST /runs multipart body; accepted fields: {}, images",
+                return Err(MultipartRefusal::from(format!(
+                    "unknown field `{other}` in POST /runs multipart body; accepted fields: {}, images, files",
                     CREATE_RUN_FIELDS.join(", ")
-                ));
+                )));
             }
         }
     }
@@ -8642,7 +9217,7 @@ async fn parse_multipart_create_run(
         auto_fail,
         provisioning,
     };
-    Ok((req, images))
+    Ok((req, attachments))
 }
 
 /// The session identity a `POST /runs` caller carries via the
@@ -8732,7 +9307,17 @@ async fn create_run(State(state): State<Arc<AppState>>, req: axum::extract::Requ
         .unwrap_or("")
         .to_string();
 
-    let (parsed_req, images) = if content_type.starts_with("multipart/form-data") {
+    let (parsed_req, attachments) = if content_type.starts_with("multipart/form-data") {
+        // #779: the body limit of this route is the attachment budget, read
+        // FRESH from the instance setting (the route has no static
+        // `DefaultBodyLimit`, see the router). Text fields ride on top of it.
+        let max_mb = resolve_max_attachments_mb(
+            instance_config::get(&state.db)
+                .await
+                .ok()
+                .and_then(|cfg| cfg.max_attachments_mb),
+        );
+        let max_attachment_bytes = (max_mb as u64) * 1024 * 1024;
         let multipart = match Multipart::from_request(req, &()).await {
             Ok(m) => m,
             Err(e) => {
@@ -8743,12 +9328,12 @@ async fn create_run(State(state): State<Arc<AppState>>, req: axum::extract::Requ
                     .into_response();
             }
         };
-        match parse_multipart_create_run(multipart).await {
+        match parse_multipart_create_run(multipart, max_attachment_bytes).await {
             Ok(r) => r,
-            Err(msg) => {
+            Err(refusal) => {
                 return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({ "error": msg })),
+                    refusal.status,
+                    Json(serde_json::json!({ "error": refusal.message })),
                 )
                     .into_response();
             }
@@ -8792,7 +9377,7 @@ async fn create_run(State(state): State<Arc<AppState>>, req: axum::extract::Requ
         (parsed, Vec::new())
     };
 
-    create_run_core(&state, parsed_req, images, session).await
+    create_run_core(&state, parsed_req, attachments, session).await
 }
 
 /// Validate the user input against the pipeline's `prompt_required` flag. A
@@ -8842,10 +9427,10 @@ fn run_name_hint(
 async fn create_run_core(
     state: &Arc<AppState>,
     req: CreateRunRequest,
-    images: Vec<ImageFile>,
+    attachments: Vec<InputFile>,
     session: Option<SessionClaim>,
 ) -> Response {
-    match create_run_inner(state, req, images, session).await {
+    match create_run_inner(state, req, attachments, session).await {
         Ok(run_id) => (StatusCode::CREATED, Json(CreateRunResponse { run_id })).into_response(),
         Err((status, body)) => (status, Json(body)).into_response(),
     }
@@ -8859,7 +9444,7 @@ async fn create_run_core(
 async fn create_run_inner(
     state: &Arc<AppState>,
     req: CreateRunRequest,
-    images: Vec<ImageFile>,
+    attachments: Vec<InputFile>,
     session: Option<SessionClaim>,
 ) -> Result<String, (StatusCode, serde_json::Value)> {
     // ADR-0064: provenance is mechanical. Verify the session claim FIRST — before
@@ -9374,9 +9959,23 @@ async fn create_run_inner(
             run_payload["pipeline_id"] = serde_json::json!(pid);
         }
     }
-    if !images.is_empty() {
-        let image_names: Vec<&str> = images.iter().map(|i| i.filename.as_str()).collect();
+    // Upload order is kept: what the user sees on the Start node is what they
+    // attached, in that order.
+    let image_names: Vec<&str> = attachments
+        .iter()
+        .filter(|a| a.is_image)
+        .map(|a| a.filename.as_str())
+        .collect();
+    if !image_names.is_empty() {
         run_payload["image_filenames"] = serde_json::json!(image_names);
+    }
+    let file_names: Vec<&str> = attachments
+        .iter()
+        .filter(|a| !a.is_image)
+        .map(|a| a.filename.as_str())
+        .collect();
+    if !file_names.is_empty() {
+        run_payload["file_filenames"] = serde_json::json!(file_names);
     }
     if frozen_provisioning
         .iter()
@@ -9545,10 +10144,10 @@ async fn create_run_inner(
         error!("failed to write _input/output.md: {e}");
     }
 
-    for image in &images {
-        let image_path = input_dir.join(&image.filename);
-        if let Err(e) = std::fs::write(&image_path, &image.data) {
-            error!("failed to write image {}: {e}", image.filename);
+    for attachment in &attachments {
+        let path = input_dir.join(&attachment.filename);
+        if let Err(e) = std::fs::write(&path, &attachment.data) {
+            error!("failed to write attachment {}: {e}", attachment.filename);
         }
     }
 
@@ -10400,6 +10999,18 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
     } else {
         "default"
     };
+    // #779: the per-run attachment budget, `stored → env → default(50 MB)` —
+    // the SAME resolver the `POST /runs` multipart branch consumes.
+    let att_stored = cfg.max_attachments_mb.filter(|&n| n >= 1);
+    let att_env = env_max_attachments_mb();
+    let att_effective = resolve_max_attachments_mb(cfg.max_attachments_mb);
+    let att_source = if att_stored.is_some() {
+        "stored"
+    } else if att_env.is_some() {
+        "env"
+    } else {
+        "default"
+    };
     // The profile pin: a stored agent-profile NAME, or unset (« Follow the
     // Run »). No env tier — unlike the flag, a pin is a pure stored decision.
     let mp_stored = cfg.manager_profile.as_deref().filter(|s| !s.is_empty());
@@ -10627,6 +11238,15 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
         // name whose profile was deleted dangles: the UI renders the #432
         // tombstone, and the spawn falls back to « Follow the Run ».
         "manager_profile": settings_field_str(mp_stored, mp_source, mp_stored, None),
+        // #779: images + files budget per Run, in MB. Bounds the multipart body
+        // of `POST /runs` and drives the modal's client-side gate.
+        "max_attachments_mb": settings_field(
+            att_effective,
+            att_source,
+            att_stored,
+            att_env,
+            MAX_ATTACHMENTS_MB_DEFAULT,
+        ),
         "updated_at": cfg.updated_at,
     }))
 }
@@ -11588,6 +12208,13 @@ async fn put_settings(
     if let Some(g) = req.guard_timeout_secs {
         if !(1..=600).contains(&g) {
             return bad("guard_timeout_secs must be between 1 and 600 seconds");
+        }
+    }
+    if let Some(m) = req.max_attachments_mb {
+        // #779: at least 1 MB, and bounded so the budget stays a sane
+        // in-memory multipart body (the parts are buffered before the write).
+        if !(1..=4096).contains(&m) {
+            return bad("max_attachments_mb must be between 1 and 4096");
         }
     }
     if let Some(s) = req.default_sandbox.as_deref() {
@@ -30595,6 +31222,336 @@ edges:
         assert_eq!(content, "You are a worker agent.");
     }
 
+    // --- #774 — pipeline rename (visible name ⇄ file stem 1:1) ---
+
+    #[tokio::test]
+    async fn rename_pipeline_moves_file_sidecar_and_name_field() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "old-name");
+        let dir = tmp.path().join(".pdo/pipelines");
+        // Comments + unknown keys on disk: a rename must NOT round-trip (#682).
+        let yaml = format!(
+            "# my pipeline, hand-annotated\nname: old-name\ncustom-field: keep-me\nversion: \"1.0\"\nnodes:\n{START_END_YAML}edges: []\n"
+        );
+        std::fs::write(dir.join("old-name.yaml"), yaml).unwrap();
+        std::fs::create_dir_all(dir.join("old-name.prompts")).unwrap();
+        std::fs::write(dir.join("old-name.prompts/worker.md"), "Role prompt.").unwrap();
+
+        let state = test_state_with_dir(tmp.path()).await;
+        let app = build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/pipelines/old-name/rename")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name": "Renamed Pipeline"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let val: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(val["renamed"], true);
+        assert_eq!(val["id"], "renamed-pipeline");
+        assert_eq!(val["name"], "Renamed Pipeline");
+
+        assert!(!dir.join("old-name.yaml").exists(), "old yaml must be gone");
+        assert!(!dir.join("old-name.prompts").exists(), "old sidecar must be gone");
+        let new_yaml = std::fs::read_to_string(dir.join("renamed-pipeline.yaml")).unwrap();
+        assert!(new_yaml.contains("name: Renamed Pipeline"));
+        assert!(new_yaml.contains("# my pipeline, hand-annotated"), "comments must survive");
+        assert!(new_yaml.contains("custom-field: keep-me"), "unknown keys must survive");
+        let prompt = std::fs::read_to_string(dir.join("renamed-pipeline.prompts/worker.md")).unwrap();
+        assert_eq!(prompt, "Role prompt.");
+    }
+
+    #[tokio::test]
+    async fn rename_pipeline_refuses_when_target_file_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "collider-a");
+        write_test_pipeline(tmp.path(), "collider-b");
+
+        let state = test_state_with_dir(tmp.path()).await;
+        let app = build_router(state);
+
+        // "collider-b" slugs to collider-b, an existing FILE.
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/pipelines/collider-a/rename")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name": "Collider B"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let dir = tmp.path().join(".pdo/pipelines");
+        assert!(dir.join("collider-a.yaml").exists(), "source must be untouched");
+        assert!(dir.join("collider-b.yaml").exists());
+    }
+
+    #[tokio::test]
+    async fn rename_pipeline_refuses_duplicated_visible_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "first");
+        // A pre-existing divergence: file stem `other`, visible name "Second".
+        let dir = tmp.path().join(".pdo/pipelines");
+        let yaml = format!("name: Second\nversion: \"1.0\"\nnodes:\n{START_END_YAML}edges: []\n");
+        std::fs::write(dir.join("other.yaml"), yaml).unwrap();
+
+        let state = test_state_with_dir(tmp.path()).await;
+        let app = build_router(state);
+
+        // Renaming `first` to "Second" would create two distinct pipelines
+        // listed under the same visible name — the exact state #774 refuses.
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/pipelines/first/rename")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name": "Second"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        assert!(dir.join("first.yaml").exists(), "source must be untouched");
+    }
+
+    #[tokio::test]
+    async fn rename_pipeline_returns_404_when_not_found() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state_with_dir(tmp.path()).await;
+        let app = build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/pipelines/ghost/rename")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name": "Whatever"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn rename_pipeline_empty_name_is_400() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "quiet");
+        let state = test_state_with_dir(tmp.path()).await;
+        let app = build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/pipelines/quiet/rename")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name": "   "}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn rename_pipeline_same_name_is_a_noop() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "steady");
+        let state = test_state_with_dir(tmp.path()).await;
+        let app = build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/pipelines/steady/rename")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name": "steady"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let val: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(val["renamed"], false);
+        assert_eq!(val["id"], "steady");
+        assert!(tmp.path().join(".pdo/pipelines/steady.yaml").exists());
+    }
+
+    #[tokio::test]
+    async fn rename_pipeline_returns_409_when_active_runs_exist() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "busy-rename");
+
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_started = event_log::Event {
+            id: None,
+            run_id: "run-774".into(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::RunStarted,
+            node_id: None,
+            iter: None,
+            payload: Some(serde_json::json!({ "pipeline_name": "busy-rename" })),
+        };
+        append_event(&state, &run_started).await.unwrap();
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/pipelines/busy-rename/rename")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name": "Free"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let val: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(val["error"].as_str().unwrap().contains("active run"));
+        assert!(tmp.path().join(".pdo/pipelines/busy-rename.yaml").exists());
+    }
+
+    #[tokio::test]
+    async fn rename_pipeline_succeeds_when_runs_completed() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "done-rename");
+
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_started = event_log::Event {
+            id: None,
+            run_id: "run-done-774".into(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::RunStarted,
+            node_id: None,
+            iter: None,
+            payload: Some(serde_json::json!({ "pipeline_name": "done-rename" })),
+        };
+        append_event(&state, &run_started).await.unwrap();
+        let run_completed = event_log::Event {
+            id: None,
+            run_id: "run-done-774".into(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::RunCompleted,
+            node_id: None,
+            iter: None,
+            payload: None,
+        };
+        append_event(&state, &run_completed).await.unwrap();
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/pipelines/done-rename/rename")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name": "Done Renamed"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let dir = tmp.path().join(".pdo/pipelines");
+        assert!(!dir.join("done-rename.yaml").exists());
+        assert!(dir.join("done-renamed.yaml").exists());
+    }
+
+    #[tokio::test]
+    async fn save_pipeline_moves_file_when_name_changes() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "stale-stem");
+        let dir = tmp.path().join(".pdo/pipelines");
+        std::fs::create_dir_all(dir.join("stale-stem.prompts")).unwrap();
+        std::fs::write(dir.join("stale-stem.prompts/worker.md"), "Role prompt.").unwrap();
+
+        let state = test_state_with_dir(tmp.path()).await;
+        let app = build_router(state);
+
+        let new_yaml =
+            format!("name: fresh stem\nversion: \"2.0\"\nnodes:\n{START_END_YAML}edges: []\n");
+        let body = serde_json::json!({ "yaml": new_yaml, "prompts": { "start": "New prompt." } });
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/pipelines/stale-stem")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let val: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(val["renamed"], true);
+        assert_eq!(val["id"], "fresh-stem");
+
+        assert!(!dir.join("stale-stem.yaml").exists());
+        assert!(!dir.join("stale-stem.prompts").exists(), "old sidecar must not survive the move");
+        assert!(dir.join("fresh-stem.yaml").exists());
+        let prompt = std::fs::read_to_string(dir.join("fresh-stem.prompts/start.md")).unwrap();
+        assert_eq!(prompt, "New prompt.");
+    }
+
+    #[tokio::test]
+    async fn save_pipeline_refuses_name_collision_and_keeps_old_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "moving");
+        write_test_pipeline(tmp.path(), "occupied");
+
+        let state = test_state_with_dir(tmp.path()).await;
+        let app = build_router(state);
+
+        let new_yaml =
+            format!("name: occupied\nversion: \"1.0\"\nnodes:\n{START_END_YAML}edges: []\n");
+        let body = serde_json::json!({ "yaml": new_yaml, "prompts": {} });
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/pipelines/moving")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let val: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(val.get("message").is_some());
+        let dir = tmp.path().join(".pdo/pipelines");
+        assert!(dir.join("moving.yaml").exists(), "old file must be untouched");
+        assert!(dir.join("occupied.yaml").exists());
+    }
+
     #[tokio::test]
     async fn get_pipeline_reads_prompts_from_canonical_path() {
         let tmp = tempfile::tempdir().unwrap();
@@ -31732,6 +32689,9 @@ edges:
         let RunAction::Create {
             pipeline,
             input,
+            input_file,
+            image,
+            file,
             variables,
             skills,
             agent_choice,
@@ -31747,6 +32707,9 @@ edges:
         } = *action;
         assert_eq!(pipeline, "my-pipeline");
         assert_eq!(input, "do the work");
+        assert!(input_file.is_none());
+        assert!(image.is_empty());
+        assert!(file.is_empty());
         assert_eq!(variables.as_deref(), Some(r#"{"pool":"a"}"#));
         assert_eq!(skills.as_deref(), Some("alpha,beta"));
         assert_eq!(
@@ -31765,6 +32728,56 @@ edges:
         assert_eq!(auto_name, Some(false));
         assert_eq!(auto_fail, Some(true));
         assert_eq!(provisioning.as_deref(), Some("{}"));
+    }
+
+    #[test]
+    fn cli_parses_run_create_attachments() {
+        // #779: `--image` / `--file` repeat, `--input-file` replaces `--input`.
+        let cli = Cli::try_parse_from([
+            "pdo",
+            "run",
+            "create",
+            "my-pipeline",
+            "--input-file",
+            "/tmp/spec.md",
+            "--image",
+            "/tmp/a.png",
+            "--image",
+            "/tmp/b.png",
+            "--file",
+            "/tmp/fixtures.json",
+        ])
+        .unwrap();
+        let Commands::Run { action } = cli.command else {
+            panic!("expected Run subcommand")
+        };
+        let RunAction::Create {
+            input_file,
+            image,
+            file,
+            ..
+        } = *action;
+        assert_eq!(
+            input_file.as_deref(),
+            Some(std::path::Path::new("/tmp/spec.md"))
+        );
+        assert_eq!(image.len(), 2);
+        assert_eq!(file.len(), 1);
+    }
+
+    #[test]
+    fn cli_refuses_input_and_input_file_together() {
+        assert!(Cli::try_parse_from([
+            "pdo",
+            "run",
+            "create",
+            "p",
+            "--input",
+            "x",
+            "--input-file",
+            "/tmp/spec.md",
+        ])
+        .is_err());
     }
 
     #[test]
@@ -37653,6 +38666,40 @@ edges: []
     }
 
     #[test]
+    fn sanitize_attachment_filename_accepts_any_extension_and_strips_paths() {
+        assert_eq!(
+            sanitize_attachment_filename("SPEC-779.md"),
+            Ok("SPEC-779.md".into())
+        );
+        assert_eq!(
+            sanitize_attachment_filename("../../etc/fixtures.json"),
+            Ok("fixtures.json".into())
+        );
+        assert_eq!(
+            sanitize_attachment_filename("/tmp/dump.sql"),
+            Ok("dump.sql".into())
+        );
+        assert_eq!(sanitize_attachment_filename("noext"), Ok("noext".into()));
+    }
+
+    #[test]
+    fn sanitize_attachment_filename_refuses_empty_dots_and_the_prompt_name() {
+        assert!(sanitize_attachment_filename("").is_err());
+        assert!(sanitize_attachment_filename("..").is_err());
+        assert!(sanitize_attachment_filename("/").is_err());
+        let err = sanitize_attachment_filename("output.md").unwrap_err();
+        assert!(err.contains("reserved"), "{err}");
+    }
+
+    #[test]
+    fn resolve_max_attachments_mb_stored_beats_default() {
+        assert_eq!(resolve_max_attachments_mb(Some(120)), 120);
+        // A stored value below 1 cannot be persisted, but the resolver still
+        // treats it as unset rather than a 0-byte budget.
+        assert!(resolve_max_attachments_mb(Some(0)) >= 1);
+    }
+
+    #[test]
     fn passthrough_switch_artifact_noop_when_no_source() {
         let tmp = tempfile::tempdir().unwrap();
         let artifacts_dir = tmp.path().join("artifacts");
@@ -37710,13 +38757,15 @@ edges: []
         std::fs::write(input_dir.join("output.md"), "hello").unwrap();
 
         let images = vec![
-            ImageFile {
+            InputFile {
                 filename: "screenshot.png".into(),
                 data: vec![0x89, 0x50, 0x4E, 0x47],
+                is_image: true,
             },
-            ImageFile {
+            InputFile {
                 filename: "diagram.jpg".into(),
                 data: vec![0xFF, 0xD8, 0xFF],
+                is_image: true,
             },
         ];
         for image in &images {
@@ -42663,5 +43712,38 @@ edges:
         std::fs::write(repo.join("tracked.txt"), "immutable\n").unwrap();
         git(&["add", "-A"]);
         git(&["commit", "-q", "-m", "init"]);
+    }
+
+    #[tokio::test]
+    async fn rename_pipeline_display_only_change_updates_name_in_place() {
+        // "foo-bar" → "foo bar": the slug maps back to the own stem, so the
+        // file must NOT be treated as a collision target and nothing moves —
+        // only the `name:` line is spliced.
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "foo-bar");
+        let state = test_state_with_dir(tmp.path()).await;
+        let app = build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/pipelines/foo-bar/rename")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name": "Foo Bar"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let val: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(val["id"], "foo-bar");
+        assert_eq!(val["name"], "Foo Bar");
+        let dir = tmp.path().join(".pdo/pipelines");
+        assert!(dir.join("foo-bar.yaml").exists());
+        let content = std::fs::read_to_string(dir.join("foo-bar.yaml")).unwrap();
+        assert!(content.contains("name: Foo Bar"));
     }
 }

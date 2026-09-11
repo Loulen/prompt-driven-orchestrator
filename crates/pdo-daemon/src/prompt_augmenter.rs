@@ -84,6 +84,9 @@ pub(crate) struct AugmentContext<'a> {
     /// and `None` for anything that spawns no session.
     pub shared_worktree_dir: Option<&'a Path>,
     pub input_images: Vec<String>,
+    /// Non-image files uploaded alongside the prompt (#779), discovered in
+    /// `_input/` at spawn like `input_images`. Entry nodes only.
+    pub input_files: Vec<String>,
     /// Whether the Start node's user prompt carries non-whitespace content.
     /// Precomputed by the daemon (which owns the artifacts dir and the read
     /// error) so `build_preamble` stays pure. Only consulted for the
@@ -145,6 +148,41 @@ pub(crate) fn discover_input_images(artifacts_dir: &Path) -> Vec<String> {
     }
     images.sort();
     images
+}
+
+/// The NON-image attachments of `_input/` (#779): every regular file that is
+/// neither the prompt (`output.md`) nor an image (those are
+/// [`discover_input_images`]). Sorted for a stable preamble.
+pub(crate) fn discover_input_files(artifacts_dir: &Path) -> Vec<String> {
+    let input_dir = artifacts_dir.join("_input");
+    let entries = match std::fs::read_dir(&input_dir) {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
+    };
+    let mut files = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if name == "output.md" {
+            continue;
+        }
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_lowercase())
+            .unwrap_or_default();
+        if crate::ALLOWED_IMAGE_EXTENSIONS.contains(&ext.as_str()) {
+            continue;
+        }
+        files.push(name.to_string());
+    }
+    files.sort();
+    files
 }
 
 /// `Ok(false)` when the file is absent — the expected prompt-optional case, not
@@ -502,6 +540,20 @@ pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
         preamble.push('\n');
     }
 
+    if !ctx.input_files.is_empty() {
+        preamble.push_str("## Input Files\n\n");
+        preamble.push_str(
+            "The following files were passed to the entry node alongside the text \
+             prompt (the run's attachments). Read them as part of your input:\n",
+        );
+        let input_dir = ctx.artifacts_dir.join("_input");
+        for filename in &ctx.input_files {
+            let path = input_dir.join(filename);
+            preamble.push_str(&format!("- `{}`\n", path.display()));
+        }
+        preamble.push('\n');
+    }
+
     preamble.push_str("## Outputs\n\n");
     if outputs.is_empty() {
         preamble.push_str("No outputs declared.\n\n");
@@ -831,6 +883,13 @@ pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
          `--harness`, `--sandbox`, `--target-repo`, `--target-repos '<json>'`, \
          `--source-branch`, `--name`, `--auto-name`, `--auto-fail`, \
          `--provisioning '<json>'`.\n\
+         - Pass artifacts to the child: `--input-file <path>` reads the prompt \
+         from a file (exclusive with `--input`), `--image <path>` and \
+         `--file <path>` (both repeatable) attach files the child's entry node \
+         finds in its own preamble (input images / input files sections) — e.g. \
+         `--input-file \"$PDO_INPUT_SPEC\" --image \"$PDO_INPUT_PROTO\"/*.png`. \
+         One budget per run (default 50 MB, `max_attachments_mb` in Settings); \
+         a duplicate filename is refused.\n\
          - The daemon's refusals (unknown pipeline, …) print on stderr with a \
          non-zero exit.\n\
          - Mount a directory of generated pages with `pdo page mount <name> <dir>`; \
@@ -1275,6 +1334,7 @@ mod tests {
             source_worktree_dir: None,
             shared_worktree_dir: None,
             input_images: Vec::new(),
+            input_files: Vec::new(),
             start_prompt_present: false,
             source_iters: HashMap::new(),
             repeated_iters: HashMap::new(),
@@ -2711,6 +2771,43 @@ mod tests {
 
         let images = discover_input_images(&artifacts_dir);
         assert!(images.is_empty());
+    }
+
+    #[test]
+    fn discover_input_files_skips_prompt_and_images() {
+        // #779: every non-image regular file but `output.md`, sorted.
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts_dir = tmp.path().join("artifacts");
+        let input_dir = artifacts_dir.join("_input");
+        std::fs::create_dir_all(&input_dir).unwrap();
+        std::fs::write(input_dir.join("output.md"), "text prompt").unwrap();
+        std::fs::write(input_dir.join("screenshot.PNG"), [0x89]).unwrap();
+        std::fs::write(input_dir.join("SPEC-779.md"), "# spec").unwrap();
+        std::fs::write(input_dir.join("fixtures.json"), "{}").unwrap();
+        std::fs::write(input_dir.join("noext"), "raw").unwrap();
+
+        let files = discover_input_files(&artifacts_dir);
+        assert_eq!(files, vec!["SPEC-779.md", "fixtures.json", "noext"]);
+        assert!(discover_input_files(tmp.path()).is_empty(), "no _input dir");
+    }
+
+    #[test]
+    fn preamble_includes_file_section_when_files_present() {
+        let pipeline = sample_pipeline();
+        let node = &pipeline.nodes[0];
+        let vars = HashMap::new();
+        let mut ctx = sample_ctx(&pipeline, node, &vars);
+        ctx.input_files = vec!["SPEC-779.md".into(), "fixtures.json".into()];
+
+        let preamble = build_preamble(&ctx);
+        assert!(preamble.contains("## Input Files"), "{preamble}");
+        assert!(preamble.contains("passed to the entry node"), "{preamble}");
+        assert!(preamble.contains("_input/SPEC-779.md"));
+        assert!(preamble.contains("_input/fixtures.json"));
+        assert!(!preamble.contains("## Input Images"));
+
+        ctx.input_files.clear();
+        assert!(!build_preamble(&ctx).contains("Input Files"));
     }
 
     #[test]

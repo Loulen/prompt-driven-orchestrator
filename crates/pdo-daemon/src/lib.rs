@@ -13582,6 +13582,12 @@ struct RunChildEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<String>,
     status: event_log::RunStatus,
+    /// Display-only "no forward progress" overlay (#180, #783): true when the
+    /// child has no running/waiting node and a stale node, even though `status`
+    /// stays `running`. Derived per read by `event_log::is_stalled`, exactly as
+    /// on `GET /runs`, so the Orchestration tab's stale pill and the run list's
+    /// amber dot can never disagree about the same child.
+    stalled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     started_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -13648,11 +13654,13 @@ async fn list_run_children(
             continue;
         }
         let cost = derive_run_cost(&state, &child, &events);
+        let stalled = event_log::is_stalled(&child);
         let entry = RunChildEntry {
             run_id: child.run_id,
             pipeline_name: child.pipeline_name,
             name: child.name,
             status: child.status,
+            stalled,
             started_at: child.started_at,
             completed_at: child.completed_at,
             cost,

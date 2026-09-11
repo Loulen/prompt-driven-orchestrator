@@ -9,12 +9,16 @@ import {
   type RunChildEntry,
 } from "./orchestration";
 
-function child(status: RunChildEntry["status"], cost?: RunChildEntry["cost"]): RunChildEntry {
-  return { run_id: `run-${status}-${Math.random()}`, pipeline_name: "p", status, cost };
+function child(
+  status: RunChildEntry["status"],
+  cost?: RunChildEntry["cost"],
+  stalled?: boolean,
+): RunChildEntry {
+  return { run_id: `run-${status}-${Math.random()}`, pipeline_name: "p", status, cost, stalled };
 }
 
 describe("countChildren (#723)", () => {
-  it("buckets failed / running / finished with the three pills totalling the children", () => {
+  it("buckets failed / running / finished with the pills totalling the children", () => {
     const counts = countChildren([
       child("completed"),
       child("skipped"),
@@ -23,8 +27,21 @@ describe("countChildren (#723)", () => {
       child("awaiting_user"),
       child("paused"),
     ]);
-    expect(counts).toEqual({ finished: 2, failed: 1, running: 3 });
+    expect(counts).toEqual({ finished: 2, failed: 1, stale: 0, running: 3 });
     expect(totalChildren(counts)).toBe(6);
+  });
+
+  it("#783 — a live stalled child is STALE, carved out of running (disjoint sets)", () => {
+    const counts = countChildren([
+      child("running", undefined, true),
+      child("running", undefined, false),
+      child("awaiting_user", undefined, true),
+      // A terminal run can never be stale, whatever the flag says.
+      child("completed", undefined, true),
+      child("failed", undefined, true),
+    ]);
+    expect(counts).toEqual({ finished: 1, failed: 1, stale: 2, running: 1 });
+    expect(totalChildren(counts)).toBe(5);
   });
 
   it("counts awaiting_user and paused as RUNNING (blue) — design decision 3", () => {

@@ -464,6 +464,14 @@ async fn children_endpoint_lists_children_grouped_by_parent_node() {
             child["status"], "running",
             "a child is an ordinary live run"
         );
+        // #783 — `stalled` is derived on read like on `GET /runs` (#180), so the
+        // Orchestration tab's stale pill has a source. A fresh live child is not
+        // stalled; the field is always present (never omitted like `cost`).
+        assert_eq!(
+            child["stalled"], false,
+            "stalled present and false on a fresh live child: {:?}",
+            child
+        );
         assert!(
             child["started_at"].is_string(),
             "started_at present: {:?}",

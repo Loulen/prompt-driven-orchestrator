@@ -11,6 +11,12 @@ export interface RunChildEntry {
   pipeline_name: string;
   name?: string;
   status: RunStatus;
+  /**
+   * #783 — display-only "no forward progress" overlay, derived per read by the
+   * daemon exactly as on `GET /runs` (#180). Optional so a daemon predating the
+   * field (or a fixture omitting it) still typechecks — absent reads as not stalled.
+   */
+  stalled?: boolean;
   started_at?: string;
   completed_at?: string;
   /** The daemon's CostStat, derived on read (ADR-0052) — never persisted.
@@ -35,30 +41,41 @@ export interface RunChildrenResponse {
   nodes: RunChildrenGroup[];
 }
 
-/** Pastille counters: green / red / blue. */
+/**
+ * Pastille counters — the « compteurs d'enfants » of CONTEXT.md (#783): green
+ * finished / red failed / orange stale / blue running. Four DISJOINT sets whose
+ * sum is the number of children (or descendants, on the run list).
+ */
 export interface ChildCounts {
+  /** Terminal, not failed: completed, halted, skipped, archived. */
   finished: number;
   failed: number;
+  /** Live AND `stalled` (#180): no forward progress, amber like the list dot. */
+  stale: number;
+  /** Live and not stalled: running, awaiting_user, paused. */
   running: number;
 }
 
 /**
  * `awaiting_user` / `paused` count as **running** (decision 3 of the design,
- * 2026-09-07): the blue pill is "still to settle", and a failed child is red
- * — the two sets stay disjoint, so the three pills always total the children.
+ * 2026-09-07): the blue pill is "still to settle", and a failed child is red.
+ * #783 carves **stale** out of running (live + `stalled`) — the four sets stay
+ * disjoint, so the pills always total the children.
  */
 export function countChildren(children: RunChildEntry[]): ChildCounts {
-  const counts: ChildCounts = { finished: 0, failed: 0, running: 0 };
+  const counts: ChildCounts = { finished: 0, failed: 0, stale: 0, running: 0 };
   for (const child of children) {
     if (child.status === "failed") counts.failed += 1;
-    else if (isLiveRun(child.status)) counts.running += 1;
-    else counts.finished += 1;
+    else if (isLiveRun(child.status)) {
+      if (child.stalled) counts.stale += 1;
+      else counts.running += 1;
+    } else counts.finished += 1;
   }
   return counts;
 }
 
 export function totalChildren(counts: ChildCounts): number {
-  return counts.finished + counts.failed + counts.running;
+  return counts.finished + counts.failed + counts.stale + counts.running;
 }
 
 /**

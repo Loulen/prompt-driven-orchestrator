@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { loadTabsDisabled, saveTabsDisabled } from "./uiPrefs";
+import { loadChildRunsExpanded, loadTabsDisabled, saveChildRunsExpanded, saveTabsDisabled } from "./uiPrefs";
 
 beforeEach(() => {
   localStorage.clear();
@@ -50,5 +50,26 @@ describe("uiPrefs — tabsDisabled (#342)", () => {
       throw new Error("QuotaExceededError");
     });
     expect(() => saveTabsDisabled(true)).not.toThrow();
+  });
+});
+
+describe("uiPrefs — childRunsExpanded (#783)", () => {
+  it("defaults to TRUE when absent — « déplié par défaut »", () => {
+    expect(loadChildRunsExpanded()).toBe(true);
+  });
+
+  it("round-trips under the pdo.ui.childRunsExpanded key", () => {
+    saveChildRunsExpanded(false);
+    expect(localStorage.getItem("pdo.ui.childRunsExpanded")).toBe("false");
+    expect(loadChildRunsExpanded()).toBe(false);
+    saveChildRunsExpanded(true);
+    expect(loadChildRunsExpanded()).toBe(true);
+  });
+
+  it("falls back to true for garbage or a non-boolean", () => {
+    localStorage.setItem("pdo.ui.childRunsExpanded", "nope{");
+    expect(loadChildRunsExpanded()).toBe(true);
+    localStorage.setItem("pdo.ui.childRunsExpanded", JSON.stringify("false"));
+    expect(loadChildRunsExpanded()).toBe(true);
   });
 });

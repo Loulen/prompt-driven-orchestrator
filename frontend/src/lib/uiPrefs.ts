@@ -32,3 +32,31 @@ export function saveTabsDisabled(v: boolean): void {
     // quota / disabled / private mode → in-memory only for this session
   }
 }
+
+/**
+ * #783 — whether a parent row's child runs are expanded when the run list
+ * loads (Settings › General › Interface, « Child runs »). Same nature as the
+ * theme: per-browser, saved at the change. Absent / unparseable → `true`
+ * (« déplié par défaut », CONTEXT.md). Per-row toggles and the expand/collapse-all
+ * button are session-only and never write here.
+ */
+const CHILD_RUNS_KEY = "pdo.ui.childRunsExpanded";
+
+export function loadChildRunsExpanded(): boolean {
+  try {
+    const raw = localStorage.getItem(CHILD_RUNS_KEY);
+    if (raw == null) return true;
+    const v: unknown = JSON.parse(raw);
+    return typeof v === "boolean" ? v : true;
+  } catch {
+    return true;
+  }
+}
+
+export function saveChildRunsExpanded(v: boolean): void {
+  try {
+    localStorage.setItem(CHILD_RUNS_KEY, JSON.stringify(v));
+  } catch {
+    // quota / disabled / private mode → in-memory only for this session
+  }
+}

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Copy, FileUp, GitFork, Pause, Pencil, Play, Plus, RotateCcw, SquareTerminal, Trash2, X, Zap } from "lucide-react";
+import { ChevronDown, ChevronRight, Copy, FileUp, Pause, Pencil, Play, Plus, RotateCcw, SquareTerminal, Trash2, X, Zap } from "lucide-react";
 import { isLiveRun, isTerminalRun, type RunListEntry, type RunStatus, type PipelineListEntry, type Trigger, type Project } from "../types";
 import type { LibraryPipelineEntry } from "../api";
 import { cleanupRun, createPipeline, duplicatePipeline, forgetRun, importPipelineDocument, importWorkflow, openRunShell, pauseRun, renameRun, resumeRun, retryAll } from "../api";
@@ -10,6 +10,17 @@ import { useRecentReposStore } from "../stores/recentReposStore";
 import { handleSelectionKeydown } from "../lib/selectionKeys";
 import { type BulkItem, type BulkOutcome } from "../lib/bulk";
 import { groupByProject, type ProjectRef } from "../lib/groupByRepo";
+import {
+  ancestorIds,
+  buildRunTree,
+  filterRunTree,
+  flattenAll,
+  flattenVisible,
+  parentIds,
+  rootOf,
+  type RunTreeNode,
+} from "../lib/runTree";
+import { loadChildRunsExpanded } from "../lib/uiPrefs";
 import { projectLookup } from "../lib/projectLookup";
 import BulkActionBar from "./BulkActionBar";
 import BulkActionModal from "./BulkActionModal";
@@ -20,6 +31,7 @@ import LibraryRow from "./LibraryRow";
 import ProjectEditModal from "./ProjectEditModal";
 import RunFilters from "./RunFilters";
 import { EMPTY_RUN_FILTER, isFilterActive, runMatchesFilter } from "./runFilter";
+import { ChildCountPills } from "./OrchestrationTab";
 import RunShellModal from "./RunShellModal";
 import SelectControl from "./SelectControl";
 import TriggersListPanel from "./TriggersListPanel";
@@ -252,7 +264,14 @@ export default function UnifiedLeftPanel({
 
   // One run row, rendered identically whether the list is flat or grouped by
   // repo (#258). Extracted so both code paths share the exact same markup.
-  function renderRunRow(run: RunListEntry) {
+  // #783 — the row is a TREE node: indented 14px per level, a chevron under the
+  // status dot when it has children, the aggregated child counts bottom-right.
+  // The tree itself (structure, counts, filter) is computed by `lib/runTree.ts`;
+  // this only renders.
+  function renderRunRow(node: RunTreeNode) {
+    const run = node.run;
+    const hasChildren = node.children.length > 0;
+    const expanded = hasChildren && isExpanded(run.run_id);
     const isSelected = run.run_id === selectedRunId;
     const rowSelected = runSel.has(run.run_id);
     // A stalled run (no node running/waiting, nothing schedulable; #180) is
@@ -284,16 +303,43 @@ export default function UnifiedLeftPanel({
       <button
         key={run.run_id}
         data-run-row={run.run_id}
+        data-depth={node.depth}
+        aria-level={node.depth + 1}
+        aria-expanded={hasChildren ? expanded : undefined}
         onClick={() => onSelectRun(run.run_id)}
-        className={`group flex w-full cursor-pointer items-center gap-2 border-b border-l-2 border-line-soft px-3 py-2 text-left transition-colors ${
+        onKeyDown={(e) => {
+          // #783 decision 2 — ← / → drive the tree from the focused row: → opens
+          // a collapsed parent; ← closes an open one, or climbs to the parent
+          // row when there is nothing left to close.
+          if (e.key === "ArrowRight" && hasChildren && !expanded) {
+            e.preventDefault();
+            setExpanded(run.run_id, true);
+          } else if (e.key === "ArrowLeft") {
+            if (hasChildren && expanded) {
+              e.preventDefault();
+              setExpanded(run.run_id, false);
+            } else if (run.parent_run_id) {
+              e.preventDefault();
+              runsScrollRef.current
+                ?.querySelector<HTMLElement>(`[data-run-row="${run.parent_run_id}"]`)
+                ?.focus();
+            }
+          }
+        }}
+        style={{ fontSize: "11.5px", paddingLeft: 12 + node.depth * 14 }}
+        className={`group flex w-full cursor-pointer items-stretch gap-2 border-b border-l-2 border-line-soft py-2 pr-3 text-left transition-colors ${
           rowSelected
             ? "border-l-acc bg-acc-bg text-fg"
             : isSelected
               ? "border-l-transparent bg-bg-3 text-fg"
               : "border-l-transparent text-fg-2 hover:bg-bg-3/50"
         } ${isArchived ? "opacity-60" : ""}`}
-        style={{ fontSize: "11.5px" }}
       >
+        {/* Left column (16px, shared shape with Library / Triggers rows): the
+            #577 select control, and — only on a row with children — the #783
+            chevron stacked under it. Two distinct targets: the chevron never
+            selects nor opens the run. */}
+        <div className="flex w-4 shrink-0 flex-col items-center gap-1">
         {/* #577 — the status dot doubles as the select control: it goes hollow on
             hover and becomes a green check when selected. #503: the resting dot
             still carries the failure reason so a red Run has something to say. */}
@@ -310,6 +356,23 @@ export default function UnifiedLeftPanel({
             else toggleSel("runs", run.run_id);
           }}
         />
+        {hasChildren && (
+          <span
+            role="button"
+            aria-label={expanded ? "Collapse child runs" : "Expand child runs"}
+            aria-expanded={expanded}
+            title={expanded ? "Collapse child runs" : "Expand child runs"}
+            data-testid="run-tree-chevron"
+            className="grid h-3.5 w-4 cursor-pointer place-items-center rounded text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2"
+            onClick={(e) => {
+              e.stopPropagation();
+              setExpanded(run.run_id, !expanded);
+            }}
+          >
+            {expanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+          </span>
+        )}
+        </div>
         <div className="min-w-0 flex-1">
           {isRenaming ? (
             <input
@@ -338,12 +401,10 @@ export default function UnifiedLeftPanel({
             <span className="truncate" data-testid="run-pipeline-name">
               {run.pipeline_name}
             </span>
-            {/* #725 — provenance badges, icon-only (user decision 2026-09-06):
-                the words live in the `title`; `aria-label` carries the word for
-                AT. Same bordered 9px-chip shape so both read as "provenance",
-                different colours so they are never confused: the trigger is
-                accent-green, orchestrated is neutral grey. Both can coexist
-                (a child run may also be trigger-launched). */}
+            {/* Provenance badge, icon-only (#725, user decision 2026-09-06): the
+                words live in the `title`; `aria-label` carries the word for AT.
+                #783 dropped the « orchestrated » badge — the indentation says
+                the filiation; the trigger badge stays. */}
             {run.triggered_by && (
               <span
                 role="button"
@@ -362,41 +423,14 @@ export default function UnifiedLeftPanel({
                 <Zap size={9} />
               </span>
             )}
-            {run.parent_run_id &&
-              (() => {
-                // Parent resolved client-side from the list (no fetch). An
-                // orphan (parent forgotten) keeps its badge — the run WAS
-                // orchestrated — but dimmed and inert.
-                const parent = runs.find((r) => r.run_id === run.parent_run_id);
-                return (
-                  <span
-                    role="button"
-                    aria-label="orchestrated"
-                    aria-disabled={parent ? undefined : true}
-                    title={
-                      parent
-                        ? `Orchestrated by “${parent.name || parent.run_id}” — click to open the parent run`
-                        : "Orchestrated by a run that was forgotten"
-                    }
-                    className={`flex shrink-0 items-center rounded border border-fg-4 px-1.5 py-[2px] text-fg-3 transition-colors ${
-                      parent
-                        ? "cursor-pointer hover:border-fg-3 hover:text-fg-2"
-                        : "cursor-default opacity-70"
-                    }`}
-                    data-testid="run-orchestrated-badge"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (!parent) return;
-                      setScrollRequest(parent.run_id);
-                      if (parent.run_id !== selectedRunId) onSelectRun(parent.run_id);
-                    }}
-                  >
-                    <GitFork size={9} />
-                  </span>
-                );
-              })()}
           </div>
         </div>
+        {/* Right column (#783): line 1 = the hover-revealed action icons, line 2
+            = the aggregated child counts, always visible, bottom-right. The
+            actions row keeps its height at rest so the pills never move when the
+            icons appear. */}
+        <div className="flex shrink-0 flex-col items-end justify-between gap-1">
+        <div className="flex h-4 items-center">
         {!isRenaming && (
           <span
             role="button"
@@ -503,45 +537,105 @@ export default function UnifiedLeftPanel({
             <Trash2 size={12} />
           </span>
         )}
+        </div>
+        {hasChildren && (
+          <ChildCountPills
+            counts={node.counts}
+            size="xs"
+            testId="run-child-pills"
+            // Decision 1 — the pills of a COLLAPSED parent expand it; once open
+            // they are inert and the click reaches the row as usual.
+            onClick={expanded ? undefined : () => setExpanded(run.run_id, true)}
+            clickHint="click to expand"
+          />
+        )}
+        </div>
       </button>
     );
   }
 
   // #336 — client-side run filters (project / pipeline / trigger), AND
-  // semantics, session-only state. Applied to `runs` BEFORE the active/archived
-  // split so grouping, the Archived section and its count all see the same
-  // filtered view.
+  // semantics, session-only state. #783: applied to the TREE (a non-matching
+  // parent is kept as a path to a matching descendant) and BEFORE the
+  // active/archived split, so grouping, the Archived section and its count all
+  // see the same filtered view.
   const [runFilter, setRunFilter] = useState(EMPTY_RUN_FILTER);
-  const filteredRuns = useMemo(
-    () => runs.filter((r) => runMatchesFilter(r, runFilter)),
-    [runs, runFilter],
-  );
   const filterActive = isFilterActive(runFilter);
 
-  // #725 — after an orchestrated-badge click, scroll the parent's row into view:
-  // the parent is usually above its children but can sit off-screen on long
-  // lists (and inside the Archived section, whose auto-expand only lands after
-  // the selection re-renders). The request rides STATE (not a ref) so the row
-  // mapper stays ref-free (react-hooks/refs); the effect consumes it one-shot.
+  // #783 — the run tree, built from ALL runs so a child follows its parent into
+  // whatever section / group the ROOT lands in, whatever the child's own status
+  // or repo. The archived split is on the root: a live child of an archived
+  // parent sits in the Archived section under it (the parent stays listed, so
+  // the child is not an orphan); once the parent is forgotten the child is a root.
+  const tree = useMemo(() => buildRunTree(runs), [runs]);
+  const { activeTree, archivedTree } = useMemo(() => {
+    const match = (r: RunListEntry) => runMatchesFilter(r, runFilter);
+    return {
+      activeTree: filterRunTree(tree.filter((n) => n.run.status !== "archived"), match),
+      archivedTree: filterRunTree(tree.filter((n) => n.run.status === "archived"), match),
+    };
+  }, [tree, runFilter]);
+  const filteredRuns = useMemo(
+    () => [...flattenAll(activeTree), ...flattenAll(archivedTree)],
+    [activeTree, archivedTree],
+  );
+
+  // #783 — expand / collapse state. `sessionDefault` is seeded ONCE from the
+  // per-browser preference (Settings › Interface); per-row toggles land in
+  // `expandOverrides`, the global button rewrites both. Nothing here is
+  // persisted (« bascules par ligne non mémorisées »). While a filter is active
+  // a kept parent opens on its matching children unless the user closed it.
+  const [sessionDefault, setSessionDefault] = useState(loadChildRunsExpanded);
+  const [expandOverrides, setExpandOverrides] = useState<ReadonlyMap<string, boolean>>(
+    () => new Map(),
+  );
+  const isExpanded = (runId: string): boolean =>
+    expandOverrides.get(runId) ?? (filterActive ? true : sessionDefault);
+  const setExpanded = (runId: string, v: boolean) =>
+    setExpandOverrides((m) => new Map(m).set(runId, v));
+  const allParentIds = useMemo(() => parentIds(tree), [tree]);
+
+  // #725/#783 — reveal the selected run: when the selection CHANGES to a run
+  // whose ancestors are collapsed (Orchestration tab, URL, back navigation),
+  // open them and scroll the row into view once it exists. Adjusting state
+  // during render on a tracked-key change is React's reset-on-prop pattern
+  // (cf. `prevSelectedArchivedId` below). The request rides STATE so the row
+  // mapper stays ref-free; the effect scrolls once per new request (the value
+  // changes with every selection change, so no reset is needed).
   const runsScrollRef = useRef<HTMLDivElement>(null);
   const [scrollRequest, setScrollRequest] = useState<string | null>(null);
+  const [prevSelectedRunId, setPrevSelectedRunId] = useState(selectedRunId);
+  if (prevSelectedRunId !== selectedRunId) {
+    setPrevSelectedRunId(selectedRunId);
+    if (selectedRunId !== null) {
+      const chain = ancestorIds(runs, selectedRunId);
+      if (chain.some((id) => !isExpanded(id))) {
+        setExpandOverrides((m) => {
+          const next = new Map(m);
+          for (const id of chain) next.set(id, true);
+          return next;
+        });
+      }
+      if (chain.length > 0) setScrollRequest(selectedRunId);
+    }
+  }
   useEffect(() => {
     if (scrollRequest === null || selectedRunId !== scrollRequest) return;
-    setScrollRequest(null);
     runsScrollRef.current
       ?.querySelector(`[data-run-row="${scrollRequest}"]`)
       ?.scrollIntoView({ block: "nearest" });
   }, [scrollRequest, selectedRunId]);
 
   // #136 — archived runs live in their own flat, collapsible section below the
-  // active list; the active list keeps the #258 per-repo grouping.
-  const activeRuns = filteredRuns.filter((r) => r.status !== "archived");
-  const archivedRuns = filteredRuns.filter((r) => r.status === "archived");
+  // active list; the active list keeps the #258 per-repo grouping. #783: the
+  // section holds archived ROOTS and their subtrees.
+  const archivedCount = archivedTree.length;
 
-  // Identity of the selected run *iff* it currently sits in the archived set,
-  // else null — the signal that must reveal the section.
+  // Identity of the selected run *iff* its tree currently sits in the archived
+  // set (its root is archived), else null — the signal that must reveal the
+  // section. A live child of an archived parent counts: it lives there too.
   const selectedArchivedId =
-    selectedRunId != null && archivedRuns.some((r) => r.run_id === selectedRunId)
+    selectedRunId != null && rootOf(runs, selectedRunId)?.status === "archived"
       ? selectedRunId
       : null;
 
@@ -561,6 +655,24 @@ export default function UnifiedLeftPanel({
     if (selectedArchivedId !== null) setArchivedOpen(true);
   }
 
+  // #783 — the expand/collapse-all button's state, derived from the VISIBLE
+  // parents (the archived ones only while the section is open). Neutral: this
+  // is not a filter and never summons the clear ✕.
+  const visibleParentIds = [
+    ...parentIds(activeTree),
+    ...(archivedOpen ? parentIds(archivedTree) : []),
+  ];
+  const allExpanded =
+    visibleParentIds.length > 0 ? visibleParentIds.every(isExpanded) : sessionDefault;
+  const setAllExpanded = (v: boolean) => {
+    setSessionDefault(v);
+    // Under an active filter the default is "open", so collapsing must pin
+    // every visible parent shut explicitly; expanding just drops the pins.
+    setExpandOverrides(
+      !v && filterActive ? new Map(visibleParentIds.map((id) => [id, false])) : new Map(),
+    );
+  };
+
   // #552 — verbatim `path → Projet` lookup, and the candidate repos the pencil
   // can attach (the distinct effective repos across ALL runs, so a filtered view
   // never hides an attachable repo).
@@ -579,15 +691,20 @@ export default function UnifiedLeftPanel({
   }, [projects, recentRepos, runs]);
 
   // Group the active Runs list by Projet (#552), falling back to the #258
-  // per-path grouping when nothing is named; `null` ⇒ the flat list.
-  const runGroups = groupByProject(activeRuns, (r) => r.effective_repo, projectOf);
+  // per-path grouping when nothing is named; `null` ⇒ the flat list. #783: the
+  // grouping key is the ROOT's repo — a child follows its parent whatever its
+  // own repo.
+  const runGroups = groupByProject(activeTree, (n) => n.run.effective_repo, projectOf);
+  const orderedActive: RunTreeNode[] =
+    runGroups === null ? activeTree : runGroups.flatMap((g) => g.items);
 
   // #577 — Runs multi-select derivations. `visibleRunIds` is the flattened visible
-  // order (grouped active list, then the archived section only when expanded) —
-  // the basis for a shift-range and for select-all-visible.
+  // order (grouped active list, then the archived section only when expanded),
+  // collapsed subtrees excluded (#783) — the basis for a shift-range and for
+  // select-all-visible.
   const visibleRunIds = [
-    ...(runGroups === null ? activeRuns : runGroups.flatMap((g) => g.items)).map((r) => r.run_id),
-    ...(archivedOpen ? archivedRuns.map((r) => r.run_id) : []),
+    ...flattenVisible(orderedActive, isExpanded).map((n) => n.run.run_id),
+    ...(archivedOpen ? flattenVisible(archivedTree, isExpanded).map((n) => n.run.run_id) : []),
   ];
   const selectedRuns = filteredRuns.filter((r) => runSel.has(r.run_id));
   const asRunItem = (r: RunListEntry): BulkItem => ({ id: r.run_id, label: r.name || r.run_id });
@@ -761,6 +878,11 @@ export default function UnifiedLeftPanel({
             triggers={triggers}
             value={runFilter}
             onChange={setRunFilter}
+            treeToggle={
+              allParentIds.length > 0
+                ? { allExpanded, onToggle: () => setAllExpanded(!allExpanded) }
+                : null
+            }
           />
         )}
         <div
@@ -805,7 +927,7 @@ export default function UnifiedLeftPanel({
             </div>
           )}
           {runGroups === null
-            ? activeRuns.map(renderRunRow)
+            ? flattenVisible(activeTree, isExpanded).map(renderRunRow)
             : runGroups.map((group) => (
                 <div
                   key={group.key}
@@ -821,10 +943,15 @@ export default function UnifiedLeftPanel({
                     <SelectControl
                       selected={
                         group.items.length > 0 &&
-                        group.items.every((r) => runSel.has(r.run_id))
+                        flattenVisible(group.items, isExpanded).every((n) => runSel.has(n.run.run_id))
                       }
                       label={`Select all in ${group.label}`}
-                      onSelect={() => selectGroup("runs", group.items.map((r) => r.run_id))}
+                      onSelect={() =>
+                        selectGroup(
+                          "runs",
+                          flattenVisible(group.items, isExpanded).map((n) => n.run.run_id),
+                        )
+                      }
                       testId="run-group-select-all"
                     />
                     <span className="truncate" data-testid="run-repo-label">
@@ -841,7 +968,7 @@ export default function UnifiedLeftPanel({
                       <Pencil size={10} />
                     </button>
                   </div>
-                  {group.items.map(renderRunRow)}
+                  {flattenVisible(group.items, isExpanded).map(renderRunRow)}
                 </div>
               ))}
           {/* #136 — archived runs in their own flat, collapsible section below
@@ -849,7 +976,7 @@ export default function UnifiedLeftPanel({
               styling / Forget action). The rendered gate is `archivedOpen`
               ALONE — never `archivedOpen || some(selected)`, which dead-locks
               the chevron while a selected run is archived (see decision 4). */}
-          {archivedRuns.length > 0 && (
+          {archivedCount > 0 && (
             <div data-testid="run-archived-section" className="border-t border-line">
               <button
                 onClick={() => setArchivedOpen((o) => !o)}
@@ -859,10 +986,10 @@ export default function UnifiedLeftPanel({
               >
                 {archivedOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                 <span className="font-medium">
-                  Archived <span data-testid="run-archived-count">({archivedRuns.length})</span>
+                  Archived <span data-testid="run-archived-count">({archivedCount})</span>
                 </span>
               </button>
-              {archivedOpen && archivedRuns.map(renderRunRow)}
+              {archivedOpen && flattenVisible(archivedTree, isExpanded).map(renderRunRow)}
             </div>
           )}
         </div>

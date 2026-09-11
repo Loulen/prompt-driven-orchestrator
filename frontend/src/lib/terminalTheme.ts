@@ -16,6 +16,7 @@ export interface TerminalTheme {
   foreground: string;
   cursor: string;
   selectionBackground: string;
+  selectionInactiveBackground: string;
   black: string;
   red: string;
   green: string;
@@ -61,7 +62,11 @@ const DARK: TerminalTheme = {
   background: "#0f1115",
   foreground: "#e6e8eb",
   cursor: "#10b981",
-  selectionBackground: "#2a2d35",
+  // #772: the old "#2a2d35" on a "#0f1115" background was one shade of grey
+  // apart — a selection the user could not see. Accent at ~35% alpha keeps the
+  // glyphs readable and the highlight obvious.
+  selectionBackground: "#3b82f659",
+  selectionInactiveBackground: "#3b82f633",
   black: "#0f1115",
   red: "#ef4444",
   green: "#10b981",
@@ -85,6 +90,7 @@ const LIGHT: TerminalTheme = {
   foreground: "#14181f",
   cursor: "#03714f",
   selectionBackground: "#cfe4dc",
+  selectionInactiveBackground: "#e3f0ea",
   // ANSI `black` is the ground, not ink: on a light terminal that is the page.
   black: "#fbfbfc",
   red: "#b91c1c",

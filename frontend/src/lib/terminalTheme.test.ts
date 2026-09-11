@@ -6,11 +6,14 @@ describe("terminalTheme (#759)", () => {
   it("returns the dark terminal byte for byte as it shipped", () => {
     // #759 adds a light terminal; it must not restyle the dark one. Any change
     // to these values is a deliberate decision, not a side effect.
+    // #772 is one such decision: the selection colour moved from an invisible
+    // grey to the accent at ~35% alpha so a drag-selection can be seen.
     expect(terminalTheme("dark")).toEqual({
       background: "#0f1115",
       foreground: "#e6e8eb",
       cursor: "#10b981",
-      selectionBackground: "#2a2d35",
+      selectionBackground: "#3b82f659",
+      selectionInactiveBackground: "#3b82f633",
       black: "#0f1115",
       red: "#ef4444",
       green: "#10b981",

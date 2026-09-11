@@ -79,6 +79,15 @@ interface MockTerminal {
   onBinary: ReturnType<typeof vi.fn>;
   dispose: ReturnType<typeof vi.fn>;
   scrollLines: ReturnType<typeof vi.fn>;
+  attachCustomKeyEventHandler: ReturnType<typeof vi.fn>;
+  onSelectionChange: ReturnType<typeof vi.fn>;
+  hasSelection: ReturnType<typeof vi.fn>;
+  getSelection: ReturnType<typeof vi.fn>;
+  clearSelection: ReturnType<typeof vi.fn>;
+  /** What the component registered via attachCustomKeyEventHandler. */
+  keyHandler: ((ev: KeyboardEvent) => boolean) | null;
+  /** Fire the onSelectionChange subscribers. */
+  emitSelectionChange: () => void;
   buffer: {
     active: { baseY: number; viewportY: number; type: "normal" | "alternate" };
     normal: { baseY: number };
@@ -92,6 +101,7 @@ interface MockTerminal {
 vi.mock("@xterm/xterm", () => ({
   Terminal: function Terminal(config: unknown) {
     mockTerminalCalls.push([config]);
+    const selectionListeners: (() => void)[] = [];
     const instance: MockTerminal = {
       loadAddon: vi.fn(),
       open: vi.fn(),
@@ -100,6 +110,18 @@ vi.mock("@xterm/xterm", () => ({
       onBinary: vi.fn(() => ({ dispose: vi.fn() })),
       dispose: vi.fn(),
       scrollLines: vi.fn(),
+      attachCustomKeyEventHandler: vi.fn((fn: (ev: KeyboardEvent) => boolean) => {
+        instance.keyHandler = fn;
+      }),
+      onSelectionChange: vi.fn((fn: () => void) => {
+        selectionListeners.push(fn);
+        return { dispose: vi.fn() };
+      }),
+      hasSelection: vi.fn(() => false),
+      getSelection: vi.fn(() => ""),
+      clearSelection: vi.fn(),
+      keyHandler: null,
+      emitSelectionChange: () => selectionListeners.forEach((fn) => fn()),
       buffer: {
         active: { baseY: 50, viewportY: 25, type: "normal" },
         normal: { baseY: 50 },
@@ -648,6 +670,122 @@ describe("TmuxTerminal", () => {
         await new Promise((r) => setTimeout(r, 2));
       }
       expect(fetchPaneMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // #772: tmux mouse mode makes xterm.js report drags to the pty instead of
+  // selecting. The pane rewrites a plain mousedown into the "force selection"
+  // form (Shift on non-mac) before xterm sees it, so the browser owns the drag.
+  describe("copy/paste (#772)", () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(navigator, "platform");
+    beforeEach(() => {
+      Object.defineProperty(navigator, "platform", { value: "Linux x86_64", configurable: true });
+    });
+    afterEach(() => {
+      if (originalPlatform) Object.defineProperty(navigator, "platform", originalPlatform);
+    });
+
+    it("rewrites a plain mousedown into a Shift+mousedown when mouse tracking is active", () => {
+      render(<TmuxTerminal session="test-session" />);
+      const term = mockTerminalInstances[0];
+      term.modes.mouseTrackingMode = "drag";
+      const container = screen.getByTestId("xterm-container");
+      const seen: MouseEvent[] = [];
+      container.addEventListener("mousedown", (e) => seen.push(e as MouseEvent));
+
+      const original = new MouseEvent("mousedown", {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        clientX: 40,
+        clientY: 12,
+      });
+      container.dispatchEvent(original);
+
+      expect(original.defaultPrevented).toBe(true);
+      // The bubble listener only ever sees the forced clone.
+      expect(seen).toHaveLength(1);
+      expect(seen[0]).not.toBe(original);
+      expect(seen[0].shiftKey).toBe(true);
+      expect(seen[0].button).toBe(0);
+      expect(seen[0].clientX).toBe(40);
+    });
+
+    it("leaves mousedown alone when mouse tracking is off", () => {
+      render(<TmuxTerminal session="test-session" />);
+      const container = screen.getByTestId("xterm-container");
+      const seen: MouseEvent[] = [];
+      container.addEventListener("mousedown", (e) => seen.push(e as MouseEvent));
+      const original = new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 });
+      container.dispatchEvent(original);
+      expect(seen).toEqual([original]);
+      expect(original.defaultPrevented).toBe(false);
+    });
+
+    it("leaves a Shift+mousedown alone (already a forced selection)", () => {
+      render(<TmuxTerminal session="test-session" />);
+      mockTerminalInstances[0].modes.mouseTrackingMode = "drag";
+      const container = screen.getByTestId("xterm-container");
+      const seen: MouseEvent[] = [];
+      container.addEventListener("mousedown", (e) => seen.push(e as MouseEvent));
+      const original = new MouseEvent("mousedown", {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        shiftKey: true,
+      });
+      container.dispatchEvent(original);
+      expect(seen).toEqual([original]);
+    });
+
+    it("Ctrl+C with a selection is handed to the browser (copy), without one it stays SIGINT", () => {
+      render(<TmuxTerminal session="test-session" />);
+      const term = mockTerminalInstances[0];
+      expect(term.keyHandler).not.toBeNull();
+      const ctrlC = new KeyboardEvent("keydown", { key: "c", ctrlKey: true });
+
+      term.hasSelection.mockReturnValue(false);
+      expect(term.keyHandler!(ctrlC)).toBe(true);
+
+      term.hasSelection.mockReturnValue(true);
+      expect(term.keyHandler!(ctrlC)).toBe(false);
+    });
+
+    it("Ctrl+V is handed to the browser (paste) instead of sending ^V", () => {
+      render(<TmuxTerminal session="test-session" />);
+      const term = mockTerminalInstances[0];
+      expect(term.keyHandler!(new KeyboardEvent("keydown", { key: "v", ctrlKey: true }))).toBe(false);
+      // Plain keys and Ctrl+Shift+V (xterm's own paste path) pass through.
+      expect(term.keyHandler!(new KeyboardEvent("keydown", { key: "a" }))).toBe(true);
+      expect(
+        term.keyHandler!(new KeyboardEvent("keydown", { key: "V", ctrlKey: true, shiftKey: true })),
+      ).toBe(true);
+    });
+
+    it("uses a visible selection colour", () => {
+      render(<TmuxTerminal session="test-session" />);
+      const config = mockTerminalCalls[0][0] as { theme: { selectionBackground: string } };
+      expect(config.theme.selectionBackground).not.toBe("#2a2d35");
+      expect(config.theme.selectionBackground).toMatch(/^#3b82f6/);
+    });
+
+    it("Copy button is disabled without a selection and copies the selection when clicked", async () => {
+      const execCommand = vi.fn(() => true);
+      Object.defineProperty(document, "execCommand", { value: execCommand, configurable: true });
+      render(<TmuxTerminal session="test-session" />);
+      const term = mockTerminalInstances[0];
+      const btn = screen.getByTestId("term-copy") as HTMLButtonElement;
+      expect(btn.disabled).toBe(true);
+
+      term.hasSelection.mockReturnValue(true);
+      term.getSelection.mockReturnValue("PR: https://example/pull/1");
+      term.emitSelectionChange();
+      await waitFor(() => expect(btn.disabled).toBe(false));
+
+      fireEvent.click(btn);
+      await waitFor(() => expect(btn.dataset.feedback).toBe("copied"));
+      expect(execCommand).toHaveBeenCalledWith("copy");
+      expect(term.clearSelection).toHaveBeenCalled();
     });
   });
 });

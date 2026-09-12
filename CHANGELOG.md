@@ -16,6 +16,15 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.85.0
+**Messages de pilotage (Steering) dans Stats › Performance** (#792 ; spec #791, story #790).
+Troisième métrique `Steering` (messages tapés par un humain par exécution) sur les axes pipeline
+et modèle, plus une carte `Steered executions` (part des exécutions réussies avec ≥ 1 message).
+Le compteur est dérivé des transcripts (claude, copilot, pi), jamais persisté : prompt de
+lancement exclu, messages collés par le daemon exclus via le préfixe `[pdo-runtime]` désormais
+posé au goulot tmux (`send_message` / `paste_message`). opencode et Infrastructure affichent « — »
+avec une raison, jamais `0`. Huitième capacité « Steering » dans la table de support des harness.
+
 ## 1.84.1
 **Sélection texte du terminal effacée au premier mouvement de souris** (#788).
 Avec le mode souris de tmux (suivi de tout mouvement, DECSET 1003), xterm.js rapportait chaque

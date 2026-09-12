@@ -3,8 +3,36 @@ import {
   clipboardKeyAction,
   forcedSelectionEvent,
   isMacPlatform,
+  swallowsMotionReport,
   writeClipboardText,
 } from "./terminalClipboard";
+
+describe("swallowsMotionReport (#788)", () => {
+  const move = (init: MouseEventInit = {}) => new MouseEvent("mousemove", { buttons: 0, ...init });
+  const tracking = { hasSelection: true, mouseTrackingActive: true };
+
+  it("swallows a buttonless move over the pane while a selection exists", () => {
+    expect(swallowsMotionReport(move(), tracking)).toBe(true);
+  });
+
+  it("lets a drag through (button held) so a new selection can still be made", () => {
+    expect(swallowsMotionReport(move({ buttons: 1 }), tracking)).toBe(false);
+  });
+
+  it("does nothing without a selection: hover reports keep reaching tmux", () => {
+    expect(swallowsMotionReport(move(), { ...tracking, hasSelection: false })).toBe(false);
+  });
+
+  it("does nothing when the pty does not track the mouse", () => {
+    expect(swallowsMotionReport(move(), { ...tracking, mouseTrackingActive: false })).toBe(false);
+  });
+
+  it("only concerns mousemove: clicks and wheel are untouched", () => {
+    expect(swallowsMotionReport(new MouseEvent("mousedown", { buttons: 0 }), tracking)).toBe(false);
+    expect(swallowsMotionReport(new MouseEvent("mouseup", { buttons: 0 }), tracking)).toBe(false);
+    expect(swallowsMotionReport(new WheelEvent("wheel", { buttons: 0 }), tracking)).toBe(false);
+  });
+});
 
 describe("forcedSelectionEvent (#772)", () => {
   const down = (init: MouseEventInit = {}) =>

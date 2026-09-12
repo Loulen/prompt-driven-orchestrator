@@ -16,6 +16,13 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.84.1
+**Sélection texte du terminal effacée au premier mouvement de souris** (#788).
+Avec le mode souris de tmux (suivi de tout mouvement, DECSET 1003), xterm.js rapportait chaque
+déplacement du pointeur sans bouton au pty et effaçait sa propre sélection sur cette « saisie »,
+rendant la copie quasi impossible. Ces mouvements sont désormais stoppés en phase de capture tant
+qu'une sélection existe ; glisser, clic et molette passent toujours.
+
 ## 1.84.0
 **Liste de runs en arbre** (#784 ; story #783).
 Les runs enfants (créés via `pdo run create` depuis une session de nœud) se replient sous leur

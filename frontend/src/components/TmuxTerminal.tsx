@@ -10,6 +10,7 @@ import {
   clipboardKeyAction,
   forcedSelectionEvent,
   isMacPlatform,
+  swallowsMotionReport,
   writeClipboardText,
 } from "../lib/terminalClipboard";
 import { resizeAvoidingAltBufferCorruption } from "../lib/altBufferResize";
@@ -230,6 +231,22 @@ export default function TmuxTerminal({
     };
     container.addEventListener("mousedown", handleMouseDown, { capture: true });
 
+    // #788: with all-motion tracking xterm reports every buttonless pointer
+    // move to the pty and clears its own selection on that "user input", so
+    // the selection made above dies as soon as the pointer moves again. Stop
+    // such moves in capture phase; drags, clicks and the wheel still go through.
+    const handleMouseMove = (e: MouseEvent) => {
+      if (
+        swallowsMotionReport(e, {
+          hasSelection: term.hasSelection(),
+          mouseTrackingActive: term.modes.mouseTrackingMode !== "none",
+        })
+      ) {
+        e.stopImmediatePropagation();
+      }
+    };
+    container.addEventListener("mousemove", handleMouseMove, { capture: true });
+
     // Ctrl+C with a selection copies it (SIGINT otherwise); Ctrl+V pastes like
     // Ctrl+Shift+V instead of sending ^V, which Claude Code reads as "paste
     // image". Returning `false` hands the key to the browser, whose native
@@ -355,6 +372,7 @@ export default function TmuxTerminal({
     return () => {
       container.removeEventListener("wheel", handleWheel, { capture: true });
       container.removeEventListener("mousedown", handleMouseDown, { capture: true });
+      container.removeEventListener("mousemove", handleMouseMove, { capture: true });
       selectionDisposable.dispose();
       setHasSelection(false);
       resizeObserver.disconnect();

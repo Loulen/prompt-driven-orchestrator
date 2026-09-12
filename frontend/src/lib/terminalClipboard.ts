@@ -60,6 +60,27 @@ export function forcedSelectionEvent(
   return clone;
 }
 
+/**
+ * #788: should a `mousemove` over the pane be stopped before xterm.js sees it?
+ *
+ * With all-motion tracking (DECSET 1003, what tmux mouse mode requests) xterm
+ * reports every pointer move — button held or not — to the pty, and its
+ * SelectionService clears the selection on *any* user input, mouse reports
+ * included. So the first pixel of pointer travel after releasing a drag wipes
+ * the selection #772 made possible, and Ctrl+C is back to SIGINT. Swallow
+ * buttonless motion while a selection exists: tmux does nothing useful with a
+ * hover, and drags (`buttons !== 0`), clicks and the wheel keep flowing.
+ */
+export function swallowsMotionReport(
+  e: Pick<MouseEvent, "type" | "buttons">,
+  opts: { hasSelection: boolean; mouseTrackingActive: boolean },
+): boolean {
+  if (e.type !== "mousemove") return false;
+  if (!opts.mouseTrackingActive) return false;
+  if (!opts.hasSelection) return false;
+  return e.buttons === 0;
+}
+
 export type ClipboardKeyAction = "copy" | "paste" | "pass";
 
 /**

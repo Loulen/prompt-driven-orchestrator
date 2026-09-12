@@ -17,6 +17,21 @@
 //! principale"). Duration is in **milliseconds** (matching the frontend's
 //! `value / 1_000`); Context is a raw peak token count.
 //!
+//! ### Steering (#792, story #790)
+//!
+//! The third metric, additive on the same seam: at every level where `context`
+//! and `duration` exist, a `steering` distribution (unit: **messages** — the
+//! steering messages a human typed into the main session after its launch,
+//! read by [`crate::steering`] through the `harness_probes` dispatch) and a
+//! `steered { steered, readable }` aggregate (executions with ≥ 1 message over
+//! executions whose count is readable). A readable transcript with no message
+//! counts `0` and enters `readable` without entering `steered`; a harness with
+//! no steering source (`opencode`) is an absence **with a reason**, never `0`;
+//! an Infrastructure role is « runtime messages only » (the review batches the
+//! daemon pastes to the manager are not human piloting); a subagent is never
+//! steered (nobody types in one), so its `steering` is a declared absence with
+//! `expected = 0`.
+//!
 //! ### The « By model » axis (#737, ADR-0065)
 //!
 //! `by_model` is a second, additive tree over the SAME observations — Modèle →
@@ -153,13 +168,27 @@ pub(crate) struct StatsDistribution {
     pub missing_reasons: Vec<String>,
 }
 
-/// Matches the frontend's `StatsHarnessPerformance` — `context`/`duration` are
-/// never `null` (see [`StatsDistribution`]).
+/// The steered-executions rate's raw material (#792): `steered` executions with
+/// at least one steering message, over `readable` executions whose count could
+/// be read. The client renders « n % · steered/readable », or « — » when
+/// `readable == 0` — so the numbers travel, never a pre-computed percentage.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub(crate) struct SteeredRate {
+    pub steered: u32,
+    pub readable: u32,
+}
+
+/// Matches the frontend's `StatsHarnessPerformance` — `context`/`duration`/
+/// `steering` are never `null` (see [`StatsDistribution`]).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) struct StatsHarnessPerformance {
     pub harness: String,
     pub context: StatsDistribution,
     pub duration: StatsDistribution,
+    /// Steering messages per execution (#792) — additive, unit « messages ».
+    pub steering: StatsDistribution,
+    /// Share of executions with ≥ 1 steering message (#792).
+    pub steered: SteeredRate,
 }
 
 /// Matches the frontend's `StatsPerformanceAggregate`.
@@ -317,6 +346,22 @@ impl MetricAcc {
             .extend(other.absence_reasons.iter().cloned());
     }
 
+    /// Name why this metric is structurally absent for the row, without
+    /// counting an expected observation: a subagent's Steering (nobody types in
+    /// one) is « — <reason> », not a `0 of n` coverage gap.
+    fn declare_absent(&mut self, reason: &str) {
+        self.absence_reasons.insert(reason.to_string());
+    }
+
+    /// The steered-executions rate this accumulator's raw values carry (#792):
+    /// every readable count is one `readable`, every count ≥ 1 one `steered`.
+    fn steered(&self) -> SteeredRate {
+        SteeredRate {
+            steered: self.values.iter().filter(|v| **v >= 1.0).count() as u32,
+            readable: self.values.len() as u32,
+        }
+    }
+
     fn finish(self) -> StatsDistribution {
         StatsDistribution {
             stats: r7_distribution(&self.values),
@@ -327,10 +372,35 @@ impl MetricAcc {
     }
 }
 
+/// One metric's reading for one observation: the value, or the reason it is
+/// absent. `Steering` for a subagent file is [`Reading::NotApplicable`] — a
+/// declared absence that counts no expected observation.
+#[derive(Debug, Clone, Copy)]
+enum Reading<'a> {
+    Observed(Option<f64>, Option<&'a str>),
+    NotApplicable(&'a str),
+}
+
+impl MetricAcc {
+    fn record(&mut self, reading: Reading<'_>) {
+        match reading {
+            Reading::Observed(value, reason) => self.observe(value, reason),
+            Reading::NotApplicable(reason) => self.declare_absent(reason),
+        }
+    }
+}
+
+/// Why a subagent file carries no Steering (#792): no human types in one.
+const SUBAGENT_STEERING_REASON: &str = "subagents are never steered";
+/// Why an Infrastructure role carries no Steering (#792): the daemon's own
+/// review batches reach the manager, no human pilots it.
+const INFRA_STEERING_REASON: &str = "runtime messages only";
+
 #[derive(Debug, Default)]
 struct HarnessAcc {
     context: MetricAcc,
     duration: MetricAcc,
+    steering: MetricAcc,
 }
 
 impl HarnessAcc {
@@ -339,6 +409,8 @@ impl HarnessAcc {
             harness,
             context: self.context.finish(),
             duration: self.duration.finish(),
+            steered: self.steering.steered(),
+            steering: self.steering.finish(),
         }
     }
 }
@@ -456,18 +528,21 @@ struct ModelPairAcc {
 }
 
 impl ModelPairAcc {
-    /// Observe one session file's context peak + duration into this bucket.
+    /// Observe one session file's context peak + duration + steering into this
+    /// bucket.
     #[allow(clippy::too_many_arguments)]
     fn observe(
         &mut self,
         harness: &str,
-        context: (Option<f64>, Option<&'static str>),
-        duration: (Option<f64>, Option<&'static str>),
+        context: (Option<f64>, Option<&str>),
+        duration: (Option<f64>, Option<&str>),
+        steering: Reading<'_>,
         identity: &ModelIdentity,
     ) {
         let acc = self.by_harness.entry(harness.to_string()).or_default();
         acc.context.observe(context.0, context.1);
         acc.duration.observe(duration.0, duration.1);
+        acc.steering.record(steering);
         if identity.model_observed {
             self.model_observed += 1;
         } else {
@@ -526,14 +601,15 @@ fn record_model_observation(
     node_name: &str,
     harness: &str,
     identity: &ModelIdentity,
-    context: (Option<f64>, Option<&'static str>),
-    duration: (Option<f64>, Option<&'static str>),
+    context: (Option<f64>, Option<&str>),
+    duration: (Option<f64>, Option<&str>),
+    steering: Reading<'_>,
 ) {
     let key = (identity.model.clone(), identity.effort.clone());
     node_pairs
         .entry(key.clone())
         .or_default()
-        .observe(harness, context, duration, identity);
+        .observe(harness, context, duration, steering, identity);
 
     let model_acc = model_axis.entry(identity.model.clone()).or_default();
     let effort_acc = model_acc
@@ -553,7 +629,7 @@ fn record_model_observation(
         pipeline_acc.pairs.entry(key.clone()).or_default(),
         node_acc.pairs.entry(key).or_default(),
     ] {
-        acc.observe(harness, context, duration, identity);
+        acc.observe(harness, context, duration, steering, identity);
     }
 }
 
@@ -566,6 +642,7 @@ fn pool_pairs(pairs: &BTreeMap<ModelEffortKey, ModelPairAcc>) -> PerformanceAggr
             let target = by_harness.entry(harness.clone()).or_default();
             target.context.fold(&acc.context);
             target.duration.fold(&acc.duration);
+            target.steering.fold(&acc.steering);
         }
     }
     PerformanceAggregate {
@@ -778,6 +855,41 @@ fn source_root<'a>(harness: &str, claude_root: &'a Path, stores: &'a HarnessStor
 /// One main session's observation: `(context peak, absence reason, file text)`.
 type MainObservation = (Option<f64>, Option<&'static str>, Option<String>);
 
+/// One main session's Steering reading (#792): `Some(n)` typed human turns after
+/// the launch prompt, or the named reason the count is unavailable — a harness
+/// with no steering source (`opencode`: its session is not resolvable by
+/// identity), no session identity, no transcript, or a transcript with no
+/// readable human turn. Never `0` for an unreadable one. Reads the text the
+/// context peak already loaded when there is one, so the file is read once.
+fn main_session_steering(
+    harness: &str,
+    root: &Path,
+    working_dir: &Path,
+    session_id: Option<&str>,
+    already_read: Option<&str>,
+) -> (Option<f64>, Option<String>) {
+    if !crate::harness_probes::can_count_steering(harness) {
+        return (None, Some(format!("session not resolvable on {harness}")));
+    }
+    let Some(session_id) = session_id.filter(|s| !s.is_empty()) else {
+        return (None, Some("no session identity".to_string()));
+    };
+    let text = match already_read {
+        Some(text) => Some(text.to_string()),
+        None => session_file_text(harness, root, working_dir, Some(session_id)),
+    };
+    let Some(text) = text else {
+        return (None, Some("no attributable transcript".to_string()));
+    };
+    match crate::harness_probes::steering_count(harness, &text) {
+        Some(count) => (Some(f64::from(count)), None),
+        None => (
+            None,
+            Some("no readable human turn in transcript".to_string()),
+        ),
+    }
+}
+
 /// One harness's context peak for one main session, or the absence reason,
 /// plus the session file's text — the same read feeds the peak and the
 /// observed model identity (#737), so the file is read once. The root
@@ -978,6 +1090,10 @@ fn fold_subagents(
                 .is_none()
                 .then_some("no reliable start/end bounds in subagent transcript"),
         );
+        // #792: nobody types in a subagent — a declared absence, no expected
+        // observation, so a Node's steered rate is never diluted by its
+        // subagents.
+        sub_acc.steering.declare_absent(SUBAGENT_STEERING_REASON);
 
         // ADR-0065 §3: the file's peak (and span) follows the file's own model —
         // a subagent on another model lands in its own bucket. A subagent has no
@@ -1025,6 +1141,7 @@ fn fold_subagents(
                                 .is_none()
                                 .then_some("no reliable start/end bounds in subagent transcript"),
                         ),
+                        Reading::NotApplicable(SUBAGENT_STEERING_REASON),
                     );
                 }
             }
@@ -1066,6 +1183,14 @@ fn record_node_success(
     )?;
     let duration = duration_millis(&pending.started_at, completed_at);
     let duration_reason = duration.is_none().then_some("unparseable timestamp");
+    let (steering, steering_reason) = main_session_steering(
+        &harness,
+        root,
+        working_dir,
+        pending.session_id.as_deref(),
+        main_text.as_deref(),
+    );
+    let steering_reading = Reading::Observed(steering, steering_reason.as_deref());
 
     for acc in [
         node_acc.by_harness.entry(harness.clone()).or_default(),
@@ -1074,6 +1199,7 @@ fn record_node_success(
     ] {
         acc.context.observe(context, reason);
         acc.duration.observe(duration, duration_reason);
+        acc.steering.record(steering_reading);
     }
 
     // ADR-0065 §1: the main session's observation is attributed to the model(s)
@@ -1099,6 +1225,7 @@ fn record_node_success(
             &identity,
             (context, reason),
             (duration, duration_reason),
+            steering_reading,
         );
     }
 
@@ -1291,6 +1418,11 @@ fn record_infra_success(
         duration,
         duration.is_none().then_some("unparseable timestamp"),
     );
+    // #792: what reaches an Infrastructure role's session is the daemon's own
+    // text (review batches), never human piloting — unavailable, with the reason.
+    harness_acc
+        .steering
+        .observe(None, Some(INFRA_STEERING_REASON));
 
     let total_acc = infra_total_by_harness
         .entry(run_harness.to_string())
@@ -1300,6 +1432,9 @@ fn record_infra_success(
         duration,
         duration.is_none().then_some("unparseable timestamp"),
     );
+    total_acc
+        .steering
+        .observe(None, Some(INFRA_STEERING_REASON));
 
     if run_harness == crate::harness_registry::CLAUDE {
         // Infrastructure stays off the « By model » axis and its Node couples

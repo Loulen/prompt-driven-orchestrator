@@ -72,10 +72,12 @@ Run `pdo service install` to start PDO at boot and keep it running after logout.
 | `pdo complete [--auto]` | Complete the current node; `--auto` is reserved for runtime hooks. |
 | `pdo fail --reason <text>` | Fail the current node with a recorded reason. |
 | `pdo skip --reason <text>` | End the current run as skipped when there is legitimately no work. |
+| `pdo wait-user [--message <text>]` | Declare that the current node waits on its user: the node and run turn awaiting-user with the message on the banner (capped at 100 characters). Accepted on any node with a live session; refused (exit 3) on a script node or without a session; a repeat is a no-op. Lifted by the user's Enter in the PDO terminal or by the completion release. |
 | `pdo migrate [--dir <path>] [--dry-run]` | Migrate legacy pipeline YAML files. |
 | `pdo reap [--count] [--dry-run] [--ttl-hours <hours>] [--terminal-ttl-hours <hours>] [--budget-secs <seconds>]` | Report or archive old terminal runs according to the retention policy. |
 | `pdo docs support-table [--check\|--write] [--file <path>]` | Check or regenerate the README harness support table. |
 | `pdo run create <pipeline> [options]` | Create a run through the daemon, with optional input, repository, harness, sandbox, and provisioning settings. `--input-file <path>` reads the prompt from a file; `--image <path>` / `--file <path>` (repeatable) attach files the entry node sees under `## Input Images` / `## Input Files` (one budget per run, `max_attachments_mb` in Settings). |
+| `pdo run wait [--all] [--timeout <seconds>]` | From a node session, block until a child run of this node becomes terminal (`--all`: every child). Exit 0 with one JSON line per settled child (`run_id`, `name`, `status`, `reason`, `children_active`), or `{"noop":true}` when no child is active; exit 2 when `--timeout` elapses (nothing on stdout); exit 1 when the daemon is unreachable or outside a node session. |
 | `pdo page mount <name> <directory>` | Serve a directory under `/pages/<name>/`. |
 | `pdo page list` | List active page mounts. |
 | `pdo page unmount <name>` | Remove a page mount. |
@@ -133,6 +135,7 @@ PDO can launch, attach, resume, and complete nodes with every built-in harness.
 | **Usage-limit menu** | Detect the harness usage-limit menu | ✅ the interactive "wait for limit to reset" menu, matched in a pane capture | ❌ | ❌ | ❌ |
 | **Sandbox staging set** | Stage the harness home in a sandbox and disarm its blocking dialogs | ✅ the `.claude` home: credentials and org managed settings copied, trust and permissions bypass fixed up, transcripts harvested back | ❌ | ❌ | ✅ the `.pi/agent` home: auth, settings, model catalogue, extensions, skills, prompts, themes and bin copied, sessions harvested back |
 | **Context usage** | Show peak context-window usage | ✅ derived: per-turn token usage from the transcript, deduplicated and maxed | ❌ | ✅ derived: the journal's cumulative usage counters, converted to a per-turn contribution and maxed | ✅ derived: per-message `usage.totalTokens` from the session, deduplicated and maxed, read against the catalogue's context window |
+| **Steering** | Count the steering messages a human typed per execution (Stats › Performance) | ✅ derived: typed user turns of the transcript, launch prompt and runtime messages excluded | ❌ | ✅ derived: the journal's `user.message` events, launch prompt and runtime messages excluded | ✅ derived: the session's user-role messages, launch prompt and runtime messages excluded |
 
 Each header shows the last validated harness version; PDO does not enforce it. The sandbox image is not provided by PDO: it is the profile's image, and the harness binary must already be in it (ADR-0063).
 

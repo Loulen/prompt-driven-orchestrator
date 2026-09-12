@@ -285,6 +285,7 @@ mod tests {
                     frontmatter_violations: vec![],
                     missing_outputs: vec![],
                     delivery: None,
+                    awaiting: None,
                 },
             );
         }

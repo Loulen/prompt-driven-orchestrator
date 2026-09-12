@@ -410,6 +410,21 @@ const distribution = (mean: number, measured = 2, expected = 2) => ({
   missing_reasons: measured === expected ? [] : ["no reliable bounds"],
 });
 
+/** A Steering distribution (#792): `mean` messages per execution over
+ *  `measured` readable counts, plus the steered rate it carries. */
+const steering = (mean: number, steered = 1, readable = 2, expected = readable) => ({
+  steering: {
+    stats:
+      readable > 0
+        ? { min: 0, q1: 0, median: Math.round(mean), mean, q3: mean + 1, max: mean + 2 }
+        : null,
+    measured: readable,
+    expected,
+    missing_reasons: readable === expected ? [] : ["no readable human turn in transcript"],
+  },
+  steered: { steered, readable },
+});
+
 const DESIGN_MODELS: PerformanceModelEffortPair[] = [
   {
     model: "claude-opus-4-8",
@@ -417,7 +432,7 @@ const DESIGN_MODELS: PerformanceModelEffortPair[] = [
     effort: null,
     effort_provenance: null,
     harnesses: [
-      { harness: "claude", context: distribution(150_000, 1, 1), duration: distribution(360_000, 1, 1) },
+      { harness: "claude", context: distribution(150_000, 1, 1), duration: distribution(360_000, 1, 1), ...steering(0.8) },
     ],
   },
   {
@@ -426,7 +441,7 @@ const DESIGN_MODELS: PerformanceModelEffortPair[] = [
     effort: "high",
     effort_provenance: "requested",
     harnesses: [
-      { harness: "claude", context: distribution(95_000, 1, 1), duration: distribution(340_000, 1, 1) },
+      { harness: "claude", context: distribution(95_000, 1, 1), duration: distribution(340_000, 1, 1), ...steering(0.8) },
     ],
   },
 ];
@@ -435,13 +450,13 @@ const PERFORMANCE: StatsPerformance = {
   harnesses: ["claude", "copilot"],
   total: {
     harnesses: [
-      { harness: "claude", context: distribution(96_000), duration: distribution(410_000) },
-      { harness: "copilot", context: distribution(68_000), duration: distribution(505_000) },
+      { harness: "claude", context: distribution(96_000), duration: distribution(410_000), ...steering(0.8) },
+      { harness: "copilot", context: distribution(68_000), duration: distribution(505_000), ...steering(0.8) },
     ],
   },
   infrastructure_total: {
     harnesses: [
-      { harness: "claude", context: distribution(20_000), duration: distribution(120_000) },
+      { harness: "claude", context: distribution(20_000), duration: distribution(120_000), ...steering(0.8) },
     ],
   },
   by_pipeline: [
@@ -449,16 +464,16 @@ const PERFORMANCE: StatsPerformance = {
       id: "pipeline-id",
       name: "Implement loop",
       harnesses: [
-        { harness: "claude", context: distribution(90_000), duration: distribution(300_000) },
-        { harness: "copilot", context: distribution(60_000), duration: distribution(500_000) },
+        { harness: "claude", context: distribution(90_000), duration: distribution(300_000), ...steering(0.8) },
+        { harness: "copilot", context: distribution(60_000), duration: distribution(500_000), ...steering(0.8) },
       ],
       nodes: [
         {
           id: "design-id",
           name: "Design",
           harnesses: [
-            { harness: "claude", context: distribution(141_000), duration: distribution(350_000) },
-            { harness: "copilot", context: distribution(84_000), duration: distribution(420_000, 1, 2) },
+            { harness: "claude", context: distribution(141_000), duration: distribution(350_000), ...steering(0.8) },
+            { harness: "copilot", context: distribution(84_000), duration: distribution(420_000, 1, 2), ...steering(0.8) },
           ],
           nodes: [],
           models: DESIGN_MODELS,
@@ -476,6 +491,13 @@ const PERFORMANCE: StatsPerformance = {
                     expected: 1,
                     missing_reasons: ["no reliable bounds"],
                   },
+                  steering: {
+                    stats: null,
+                    measured: 0,
+                    expected: 0,
+                    missing_reasons: ["subagents are never steered"],
+                  },
+                  steered: { steered: 0, readable: 0 },
                 },
               ],
               nodes: [],
@@ -492,7 +514,7 @@ const PERFORMANCE: StatsPerformance = {
       id: "pipeline-manager",
       name: "Pipeline Manager",
       harnesses: [
-        { harness: "claude", context: distribution(20_000), duration: distribution(120_000) },
+        { harness: "claude", context: distribution(20_000), duration: distribution(120_000), ...steering(0.8) },
       ],
       nodes: [],
       subagents: [],
@@ -845,6 +867,234 @@ describe("StatsCharts — Performance (#585)", () => {
   });
 });
 
+describe("StatsCharts — Performance › Steering (#792)", () => {
+  /** A payload where claude's executions were steered (7/30), copilot's read
+   *  0 messages everywhere (0/12), and the opencode Node has no readable count. */
+  const infraSteering = {
+    steering: {
+      stats: null,
+      measured: 0,
+      expected: 2,
+      missing_reasons: ["runtime messages only"],
+    },
+    steered: { steered: 0, readable: 0 },
+  };
+  const STEERED: StatsPerformance = {
+    ...PERFORMANCE,
+    harnesses: ["claude", "copilot", "opencode"],
+    infrastructure_total: {
+      harnesses: [
+        {
+          harness: "claude",
+          context: distribution(20_000),
+          duration: distribution(120_000),
+          ...infraSteering,
+        },
+      ],
+    },
+    infrastructure: [
+      {
+        id: "pipeline-manager",
+        name: "Pipeline Manager",
+        harnesses: [
+          {
+            harness: "claude",
+            context: distribution(20_000),
+            duration: distribution(120_000),
+            ...infraSteering,
+          },
+        ],
+        nodes: [],
+        subagents: [],
+      },
+    ],
+    total: {
+      harnesses: [
+        {
+          harness: "claude",
+          context: distribution(96_000),
+          duration: distribution(410_000),
+          ...steering(0.8, 7, 30),
+        },
+        {
+          harness: "copilot",
+          context: distribution(68_000),
+          duration: distribution(505_000),
+          ...steering(0, 0, 12),
+        },
+        {
+          harness: "opencode",
+          context: {
+            stats: null,
+            measured: 0,
+            expected: 3,
+            missing_reasons: ["harness has no context-usage source"],
+          },
+          duration: distribution(60_000, 3, 3),
+          steering: {
+            stats: null,
+            measured: 0,
+            expected: 3,
+            missing_reasons: ["session not resolvable on opencode"],
+          },
+          steered: { steered: 0, readable: 0 },
+        },
+      ],
+    },
+    by_pipeline: [
+      {
+        id: "pipeline-id",
+        name: "Implement loop",
+        harnesses: [
+          {
+            harness: "claude",
+            context: distribution(90_000),
+            duration: distribution(300_000),
+            ...steering(0.8, 7, 30),
+          },
+        ],
+        nodes: [
+          {
+            id: "grill-id",
+            name: "Grill",
+            harnesses: [
+              {
+                harness: "claude",
+                context: distribution(141_000),
+                duration: distribution(350_000),
+                ...steering(2.3, 10, 10),
+              },
+            ],
+            nodes: [],
+            subagents: [],
+            models: [
+              {
+                model: "claude-opus-4-8",
+                model_provenance: "observed",
+                effort: "high",
+                effort_provenance: "requested",
+                harnesses: [
+                  {
+                    harness: "claude",
+                    context: distribution(141_000),
+                    duration: distribution(350_000),
+                    ...steering(2.3, 10, 10),
+                  },
+                ],
+              },
+            ],
+          },
+          {
+            id: "ship-id",
+            name: "Ship",
+            harnesses: [
+              {
+                harness: "opencode",
+                context: {
+                  stats: null,
+                  measured: 0,
+                  expected: 3,
+                  missing_reasons: ["harness has no context-usage source"],
+                },
+                duration: distribution(60_000, 3, 3),
+                steering: {
+                  stats: null,
+                  measured: 0,
+                  expected: 3,
+                  missing_reasons: ["session not resolvable on opencode"],
+                },
+                steered: { steered: 0, readable: 0 },
+              },
+            ],
+            nodes: [],
+            subagents: [],
+          },
+        ],
+        subagents: [],
+      },
+    ],
+  };
+
+  function renderSteered(performance: StatsPerformance = STEERED) {
+    return render(
+      <StatsCharts
+        tab="performance"
+        overview={null}
+        cost={null}
+        costError={null}
+        performance={performance}
+        performanceError={null}
+      />,
+    );
+  }
+
+  it("offers Steering as a third sortable metric with its own column and provenance", async () => {
+    const user = userEvent.setup();
+    renderSteered();
+
+    expect(
+      screen.getByRole("columnheader", { name: /Steering \(messages \/ execution\)/ }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByTestId("performance-steering-boxplot").length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByRole("img", {
+        name: "derived from harness transcripts, launch prompt and runtime messages excluded",
+      }).length,
+    ).toBeGreaterThanOrEqual(2);
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "Performance sort" }), "steering");
+    expect(screen.getByText("Ranked by steering")).toBeInTheDocument();
+    // The master list ranks by mean steering: the pipeline reads 0.8, the
+    // Infrastructure row (runtime messages only) reads « — ».
+    const groups = within(screen.getByRole("listbox", { name: "Performance groups" }));
+    expect(groups.getByRole("option", { name: /Implement loop/ })).toHaveTextContent("0.8");
+    expect(groups.getByRole("option", { name: /Infrastructure/ })).toHaveTextContent("—");
+  });
+
+  it("renders the Steered executions card as « n % · steered/readable », « — » when nothing is readable", () => {
+    renderSteered();
+
+    const card = screen.getByTestId("stats-steered-card");
+    expect(card).toHaveTextContent("Steered executions");
+    expect(within(card).getByTestId("stats-steered-claude")).toHaveTextContent("23 %");
+    expect(within(card).getByTestId("stats-steered-claude")).toHaveTextContent("7/30");
+    // Zero messages on every readable execution is an honest 0 %, never « — ».
+    expect(within(card).getByTestId("stats-steered-copilot")).toHaveTextContent("0 %");
+    expect(within(card).getByTestId("stats-steered-copilot")).toHaveTextContent("0/12");
+    expect(within(card).getByTestId("stats-steered-opencode")).toHaveTextContent(
+      "— session not resolvable on opencode",
+    );
+    expect(card).toHaveTextContent("share of successful executions with ≥ 1 steering message");
+
+    // The headline carries one steered value per harness.
+    expect(screen.getByTestId("stats-performance-headline")).toHaveTextContent(
+      "23 % / 0 % / — steered",
+    );
+    // Each harness card gains its median steering line.
+    expect(screen.getByTestId("stats-performance-card-claude")).toHaveTextContent("1 median steering");
+  });
+
+  it("writes the steered share under the steering plot and the reason where no count is readable", async () => {
+    const user = userEvent.setup();
+    renderSteered();
+    await user.click(screen.getByRole("option", { name: /Implement loop/ }));
+
+    expect(
+      screen.getByRole("button", { name: /Grill · claude · Steering\. Max/ }),
+    ).toHaveTextContent("2.3 avg · n=10 · 100 % steered");
+    // opencode: « — » and the named reason, never 0.
+    const unavailable = screen.getByRole("button", {
+      name: /Ship · opencode · Steering\. 0 measured of 3 successful executions\. Missing: session not resolvable on opencode/,
+    });
+    expect(unavailable).toHaveTextContent("— session not resolvable on opencode");
+
+    // The model × effort couple under the Node carries the same third column.
+    await user.click(screen.getByRole("button", { name: "Expand Grill models" }));
+    const couple = screen.getAllByTestId("stats-performance-model-effort-row")[0];
+    expect(within(couple).getAllByTestId("performance-steering-boxplot")).toHaveLength(1);
+  });
+});
+
 describe("StatsCharts — Performance « By model » (#737, ADR-0065)", () => {
   /** A « By model » payload with one two-model Node: the main sessions ran on
    *  `claude-opus-4-8`, one subagent file on `sonnet` (its own bucket), one
@@ -853,7 +1103,7 @@ describe("StatsCharts — Performance « By model » (#737, ADR-0065)", () => {
     harnesses: ["claude", "copilot"],
     total: {
       harnesses: [
-        { harness: "claude", context: distribution(96_000), duration: distribution(410_000) },
+        { harness: "claude", context: distribution(96_000), duration: distribution(410_000), ...steering(0.8) },
       ],
     },
     infrastructure_total: { harnesses: [] },
@@ -865,7 +1115,7 @@ describe("StatsCharts — Performance « By model » (#737, ADR-0065)", () => {
         name: "claude-opus-4-8",
         provenance: "observed",
         harnesses: [
-          { harness: "claude", context: distribution(140_000), duration: distribution(350_000) },
+          { harness: "claude", context: distribution(140_000), duration: distribution(350_000), ...steering(0.8) },
         ],
         nodes: [],
         subagents: [],
@@ -876,7 +1126,7 @@ describe("StatsCharts — Performance « By model » (#737, ADR-0065)", () => {
             effort: "high",
             provenance: "observed",
             harnesses: [
-              { harness: "claude", context: distribution(140_000), duration: distribution(350_000) },
+              { harness: "claude", context: distribution(140_000), duration: distribution(350_000), ...steering(0.8) },
             ],
             nodes: [],
             subagents: [],
@@ -885,14 +1135,14 @@ describe("StatsCharts — Performance « By model » (#737, ADR-0065)", () => {
                 id: "pipeline-id",
                 name: "Implement loop",
                 harnesses: [
-                  { harness: "claude", context: distribution(140_000), duration: distribution(350_000) },
+                  { harness: "claude", context: distribution(140_000), duration: distribution(350_000), ...steering(0.8) },
                 ],
                 nodes: [
                   {
                     id: "design-id",
                     name: "Design",
                     harnesses: [
-                      { harness: "claude", context: distribution(140_000), duration: distribution(350_000) },
+                      { harness: "claude", context: distribution(140_000), duration: distribution(350_000), ...steering(0.8) },
                     ],
                     nodes: [],
                     subagents: [],
@@ -908,7 +1158,7 @@ describe("StatsCharts — Performance « By model » (#737, ADR-0065)", () => {
             effort: null,
             provenance: null,
             harnesses: [
-              { harness: "claude", context: distribution(55_000), duration: distribution(90_000) },
+              { harness: "claude", context: distribution(55_000), duration: distribution(90_000), ...steering(0.8) },
             ],
             nodes: [],
             subagents: [],
@@ -921,7 +1171,7 @@ describe("StatsCharts — Performance « By model » (#737, ADR-0065)", () => {
         name: "sonnet",
         provenance: "mixed",
         harnesses: [
-          { harness: "claude", context: distribution(95_000), duration: distribution(340_000) },
+          { harness: "claude", context: distribution(95_000), duration: distribution(340_000), ...steering(0.8) },
         ],
         nodes: [],
         subagents: [],
@@ -932,7 +1182,7 @@ describe("StatsCharts — Performance « By model » (#737, ADR-0065)", () => {
             effort: null,
             provenance: null,
             harnesses: [
-              { harness: "claude", context: distribution(95_000), duration: distribution(340_000) },
+              { harness: "claude", context: distribution(95_000), duration: distribution(340_000), ...steering(0.8) },
             ],
             nodes: [],
             subagents: [],

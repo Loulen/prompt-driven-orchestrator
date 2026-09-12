@@ -352,7 +352,10 @@ async fn get_artifact(daemon: &TestDaemon, run_id: &str, rel: &str) -> (u16, Str
     ))
     .await
     .unwrap();
-    (resp.status().as_u16(), resp.text().await.unwrap_or_default())
+    (
+        resp.status().as_u16(),
+        resp.text().await.unwrap_or_default(),
+    )
 }
 
 #[tokio::test]
@@ -397,7 +400,10 @@ async fn attachments_reach_the_child_input_dir() {
     assert_eq!(status, 200);
     assert_eq!(run["parent_run_id"], parent, "multipart keeps provenance");
     assert_eq!(run["name"], "with attachments", "text fields ride along");
-    assert_eq!(run["auto_fail"], true, "bools survive the multipart round trip");
+    assert_eq!(
+        run["auto_fail"], true,
+        "bools survive the multipart round trip"
+    );
     assert_eq!(
         run["start_node"]["input_images"],
         serde_json::json!(["proto.png"])

@@ -827,6 +827,22 @@ export interface NodeCost {
   readable_executions: number;
 }
 
+/**
+ * #588 / ADR-0069 — why a node is `awaiting_user`. `declared`: its agent ran
+ * `pdo wait-user` (the `message` is its question); `completion_not_released`:
+ * the daemon refused an unreleased `pdo complete` and declared the wait for the
+ * agent; `children_pending`: the orchestrator binding marker (ADR-0064);
+ * `child_awaiting`: derived on read from a child run awaiting its user
+ * (`child_run_id` names it). Present only while the node awaits.
+ */
+export interface AwaitingInfo {
+  cause: "declared" | "completion_not_released" | "children_pending" | "child_awaiting" | string;
+  message?: string | null;
+  /** When the wait was declared (the banner's « waiting N min »). */
+  since: string;
+  child_run_id?: string | null;
+}
+
 export interface NodeState {
   node_id: string;
   status: NodeStatus;
@@ -834,6 +850,8 @@ export interface NodeState {
   started_at: string | null;
   completed_at: string | null;
   failure_reason: string | null;
+  /** #588: the declared (or derived) wait this node is parked on, if any. */
+  awaiting?: AwaitingInfo | null;
   /**
    * Why the node was **auto-skipped** as structurally unreachable (#620): its
    * producing branch was not taken, so nothing would ever spawn it. Present only
@@ -1045,12 +1063,13 @@ export interface RunState {
    */
   failure_reason?: string | null;
   /**
-   * Why the Run is parked `awaiting_user` on an INCIDENT (ADR-0049) — a session
+   * Why the Run is parked `awaiting_user`: on an INCIDENT (ADR-0049) — a session
    * death, boot recovery, spawn abort, run-level stall, output-validation miss,
-   * merge conflict or `unrouted` convergence. Distinct from the interactive
-   * `awaiting_user` wait of a node asking its user a question, which carries no
-   * `awaiting_reason`. Cleared by a resume/reopen. Present only while the Run is
-   * `awaiting_user` on an incident.
+   * merge conflict or `unrouted` convergence — or (#588 / ADR-0069) on a
+   * DECLARED wait: the question a node's agent asked with `pdo wait-user`, the
+   * daemon's sentence on a refused unreleased completion, or « child run <name>
+   * is awaiting you » derived from a child run. Only the incident also carries
+   * `awaiting_reason_code`. Cleared by a resume/reopen or when the wait lifts.
    */
   awaiting_reason?: string | null;
   /**
@@ -1670,10 +1689,24 @@ export interface StatsDistribution {
   missing_reasons: string[];
 }
 
+/** The steered-executions rate's raw material (#792): executions with at
+ *  least one steering message over executions whose count could be read.
+ *  Rendered « n % · steered/readable », or « — » when `readable` is 0. */
+export interface StatsSteeredRate {
+  steered: number;
+  readable: number;
+}
+
 export interface StatsHarnessPerformance {
   harness: string;
   context: StatsDistribution;
   duration: StatsDistribution;
+  /** Steering messages per successful execution (#792): the turns a human
+   *  typed into the main session after its launch — derived from the harness
+   *  transcript, launch prompt and `[pdo-runtime]` messages excluded. Unit:
+   *  messages. */
+  steering: StatsDistribution;
+  steered: StatsSteeredRate;
 }
 
 export interface StatsPerformanceAggregate {

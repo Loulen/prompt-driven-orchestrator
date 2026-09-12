@@ -340,6 +340,7 @@ mod tests {
             frontmatter_violations: Vec::new(),
             missing_outputs: Vec::new(),
             delivery: None,
+            awaiting: None,
         };
         let mut s = RunState::new("run-1".into(), "test".into());
         s.nodes.insert(node_id.to_string(), node);
@@ -770,7 +771,11 @@ mod tests {
         let paths: Vec<&str> = io.inputs[0].files.iter().map(|f| f.path.as_str()).collect();
         assert_eq!(
             paths,
-            vec!["_input/output.md", "_input/SPEC-779.md", "_input/fixtures.json"]
+            vec![
+                "_input/output.md",
+                "_input/SPEC-779.md",
+                "_input/fixtures.json"
+            ]
         );
         assert!(io.inputs[0].files.iter().all(|f| f.exists));
     }

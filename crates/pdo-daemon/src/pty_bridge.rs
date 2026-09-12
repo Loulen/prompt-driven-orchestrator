@@ -144,10 +144,15 @@ pub(crate) async fn session_pty_handler(
     }
 
     let tmux_socket = state.tmux_socket();
-    ws.on_upgrade(move |socket| handle_pty_ws(socket, tmux_socket, session_id))
+    ws.on_upgrade(move |socket| handle_pty_ws(socket, tmux_socket, session_id, state))
 }
 
-async fn handle_pty_ws(socket: WebSocket, tmux_socket: String, session_id: String) {
+async fn handle_pty_ws(
+    socket: WebSocket,
+    tmux_socket: String,
+    session_id: String,
+    state: Arc<super::AppState>,
+) {
     info!("PTY WebSocket opened for session {session_id}");
 
     let pty_system = native_pty_system();
@@ -240,13 +245,20 @@ async fn handle_pty_ws(socket: WebSocket, tmux_socket: String, session_id: Strin
     });
 
     // Task 3: read from WebSocket, write to PTY stdin (+ handle resize)
+    let input_session = session_id.clone();
     let ws_recv_handle = tokio::spawn(async move {
         while let Some(Ok(msg)) = ws_stream.next().await {
             match msg {
                 Message::Binary(data) if pty_writer.write_all(&data).is_err() => {
                     break;
                 }
-                Message::Binary(_) => {}
+                Message::Binary(data) => {
+                    // #588 / ADR-0069 §1: a human keystroke crossing the bridge is
+                    // the observable that lifts a declared wait — an Enter after at
+                    // least one typed byte since the declaration. Written to the
+                    // PTY first (above), then read: the bridge never delays input.
+                    super::declared_wait::note_pty_input(&state, &input_session, &data).await;
+                }
                 Message::Text(text) => {
                     if let Some(resize) = decode_resize(&text) {
                         let new_size = PtySize {

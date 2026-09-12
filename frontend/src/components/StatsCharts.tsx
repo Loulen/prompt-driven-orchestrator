@@ -1,5 +1,5 @@
 import { Fragment, useMemo, useState } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, Info } from "lucide-react";
 import {
   Bar,
   BarChart,
@@ -30,6 +30,7 @@ import type {
   StatsSessionEntity,
   StatsSessionHarness,
   StatsSessionPeriod,
+  StatsSteeredRate,
 } from "../types";
 import { formatCostAmount } from "../lib/costLabel";
 import { harnessColor } from "../lib/harness";
@@ -1087,7 +1088,27 @@ function CostTab({
   );
 }
 
-type PerformanceMetric = "context" | "duration";
+type PerformanceMetric = "context" | "duration" | "steering";
+
+const PERFORMANCE_METRICS: readonly PerformanceMetric[] = ["context", "duration", "steering"];
+
+const PERFORMANCE_METRIC_LABEL: Record<PerformanceMetric, string> = {
+  context: "Context",
+  duration: "Duration",
+  steering: "Steering",
+};
+
+/** Where the Steering metric comes from (#792) — the header « i », the card
+ *  « i » and every steering tooltip say it in the same words. */
+const STEERING_PROVENANCE_COPY =
+  "derived from harness transcripts, launch prompt and runtime messages excluded";
+
+/** « 23 % » for a steered rate, or `null` when no execution's count was
+ *  readable — the caller renders « — » and the reason, never 0 %. */
+function steeredPercent(rate: StatsSteeredRate | undefined): string | null {
+  if (!rate || rate.readable === 0) return null;
+  return `${Math.round((rate.steered / rate.readable) * 100)} %`;
+}
 
 function performanceScore(
   aggregate: StatsPerformanceAggregate,
@@ -1117,6 +1138,11 @@ function formatPerformanceValue(value: number, metric: PerformanceMetric): strin
   if (metric === "context") {
     return value >= 1_000 ? `${Math.round(value / 1_000)}k` : Math.round(value).toString();
   }
+  if (metric === "steering") {
+    // Messages: an integer reads as one (`0`, `2`), a mean keeps one decimal (`0.8`).
+    const rounded = Math.round(value * 10) / 10;
+    return Number.isInteger(rounded) ? rounded.toString() : rounded.toFixed(1);
+  }
   const seconds = Math.round(value / 1_000);
   const minutes = Math.floor(seconds / 60);
   return minutes ? `${minutes}m${String(seconds % 60).padStart(2, "0")}s` : `${seconds}s`;
@@ -1128,16 +1154,17 @@ function distributionDetail(
   metric: PerformanceMetric,
   value: StatsDistribution,
 ): string {
-  const label = metric === "context" ? "Context" : "Duration";
+  const label = PERFORMANCE_METRIC_LABEL[metric];
   const fmt = (raw: number) => formatPerformanceValue(raw, metric);
   const stats = value.stats;
+  const provenance = metric === "steering" ? ` Steering ${STEERING_PROVENANCE_COPY}.` : "";
   if (!stats) {
-    return `${name} · ${harness} · ${label}. 0 measured of ${value.expected} successful executions. Missing: ${value.missing_reasons.join("; ")}.`;
+    return `${name} · ${harness} · ${label}. 0 measured of ${value.expected} successful executions. Missing: ${value.missing_reasons.join("; ")}.${provenance}`;
   }
   const reasons = value.missing_reasons.length
     ? ` Missing: ${value.missing_reasons.join("; ")}.`
     : "";
-  return `${name} · ${harness} · ${label}. Max ${fmt(stats.max)} · Q3 ${fmt(stats.q3)} · Mean ${fmt(stats.mean)} · Median ${fmt(stats.median)} · Q1 ${fmt(stats.q1)} · Min ${fmt(stats.min)}. ${value.measured} measured of ${value.expected} successful executions.${reasons}`;
+  return `${name} · ${harness} · ${label}. Max ${fmt(stats.max)} · Q3 ${fmt(stats.q3)} · Mean ${fmt(stats.mean)} · Median ${fmt(stats.median)} · Q1 ${fmt(stats.q1)} · Min ${fmt(stats.min)}. ${value.measured} measured of ${value.expected} successful executions.${reasons}${provenance}`;
 }
 
 function DistributionPlot({
@@ -1146,15 +1173,19 @@ function DistributionPlot({
   metric,
   value,
   scaleMax,
+  steered,
 }: {
   name: string;
   harness: string;
   metric: PerformanceMetric;
   value: StatsDistribution;
   scaleMax: number;
+  /** The row × harness steered rate — read for the Steering metric only, where
+   *  the line under the plot adds « · 23 % steered » (#792). */
+  steered?: StatsSteeredRate;
 }) {
   if (!value.stats) {
-    const detail = `${name} · ${harness} · ${metric === "context" ? "Context" : "Duration"}. 0 measured of ${value.expected} successful executions. Missing: ${value.missing_reasons.join("; ")}.`;
+    const detail = distributionDetail(name, harness, metric, value);
     return (
       <Tooltip content={detail} side="top">
         <button
@@ -1171,6 +1202,7 @@ function DistributionPlot({
   const pct = (raw: number) => `${Math.max(0, Math.min(100, (raw / scaleMax) * 100))}%`;
   const detail = distributionDetail(name, harness, metric, value);
   const partial = value.measured < value.expected;
+  const steeredLine = metric === "steering" ? steeredPercent(steered) : null;
   return (
     <div className="flex min-w-0 flex-col gap-1">
       <div
@@ -1209,6 +1241,7 @@ function DistributionPlot({
         >
           {formatPerformanceValue(stats.mean, metric)} avg · n={value.measured}
           {partial ? " ⚠" : ""}
+          {steeredLine ? ` · ${steeredLine} steered` : ""}
         </button>
       </Tooltip>
     </div>
@@ -1219,7 +1252,11 @@ function PerformanceCards({ aggregate }: { aggregate: StatsPerformanceAggregate 
   return (
     <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
       {aggregate.harnesses.map((item) => (
-        <div key={item.harness} className="rounded-md border border-line bg-bg-3 p-3">
+        <div
+          key={item.harness}
+          className="rounded-md border border-line bg-bg-3 p-3"
+          data-testid={`stats-performance-card-${item.harness}`}
+        >
           <div className="mb-2 flex items-center gap-1.5 text-fg-3">
             <span
               className="h-2 w-2 rounded-full"
@@ -1239,8 +1276,85 @@ function PerformanceCards({ aggregate }: { aggregate: StatsPerformanceAggregate 
               : "—"}{" "}
             median duration
           </div>
+          <div className="font-mono text-fg-3">
+            {item.steering.stats
+              ? formatPerformanceValue(item.steering.stats.median, "steering")
+              : "—"}{" "}
+            median steering
+          </div>
         </div>
       ))}
+      <SteeredCard aggregate={aggregate} />
+    </div>
+  );
+}
+
+/** « Steered executions » (#792): one row per harness — the share of successful
+ *  executions with ≥ 1 steering message, its coverage « steered / readable »
+ *  and a thin bar; « — » with the reason when no count was readable. Follows
+ *  the drill like the other cards (it reads the same aggregate). */
+function SteeredCard({ aggregate }: { aggregate: StatsPerformanceAggregate }) {
+  return (
+    <div
+      className="rounded-md border border-line bg-bg-3 p-3 sm:col-span-2"
+      data-testid="stats-steered-card"
+    >
+      <div className="mb-2 flex items-center justify-between gap-2 text-fg-3">
+        <span>Steered executions</span>
+        <TooltipProvider>
+          <Tooltip content={STEERING_PROVENANCE_COPY} side="top">
+            <span
+              role="img"
+              aria-label={STEERING_PROVENANCE_COPY}
+              className="inline-flex text-fg-4"
+            >
+              <Info size={12} />
+            </span>
+          </Tooltip>
+        </TooltipProvider>
+      </div>
+      <div className="grid gap-1.5">
+        {aggregate.harnesses.map((item) => {
+          const percent = steeredPercent(item.steered);
+          const ratio = item.steered.readable
+            ? (item.steered.steered / item.steered.readable) * 100
+            : 0;
+          return (
+            <div
+              key={item.harness}
+              className="flex items-center gap-2 font-mono"
+              data-testid={`stats-steered-${item.harness}`}
+            >
+              <span
+                className="h-2 w-2 shrink-0 rounded-full"
+                style={{ backgroundColor: harnessColor(item.harness) }}
+              />
+              <span className="w-16 shrink-0 text-fg-2">{item.harness}</span>
+              {percent ? (
+                <>
+                  <span className="w-12 shrink-0 text-fg">{percent}</span>
+                  <span className="shrink-0 text-fg-4">
+                    · {item.steered.steered}/{item.steered.readable}
+                  </span>
+                  <span className="relative h-1 min-w-10 flex-1 rounded bg-bg-2">
+                    <span
+                      className="absolute inset-y-0 left-0 rounded"
+                      style={{ width: `${ratio}%`, backgroundColor: harnessColor(item.harness) }}
+                    />
+                  </span>
+                </>
+              ) : (
+                <span className="text-fg-4">
+                  — {item.steering.missing_reasons[0] ?? "no readable execution"}
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <div className="mt-2 text-fg-4" style={{ fontSize: "10px" }}>
+        share of successful executions with ≥ 1 steering message · steered / readable
+      </div>
     </div>
   );
 }
@@ -1305,8 +1419,11 @@ function PerformanceTable({
         row.harnesses.map((item) => item[metric].stats?.max ?? 0),
       ),
     );
-  const contextMax = scaleMax("context");
-  const durationMax = scaleMax("duration");
+  const maxByMetric: Record<PerformanceMetric, number> = {
+    context: scaleMax("context"),
+    duration: scaleMax("duration"),
+    steering: scaleMax("steering"),
+  };
 
   const metricCell = (
     name: string,
@@ -1315,28 +1432,32 @@ function PerformanceTable({
   ) => (
     <td key={metric} className="py-2 pr-3 align-top">
       <div className="grid gap-1.5">
-        {harnesses.map((harness) => (
-          <div key={harness} className="flex items-start gap-2">
-            <span
-              className="mt-1 h-[7px] w-[7px] shrink-0 rounded-full"
-              style={{ backgroundColor: harnessColor(harness) }}
-            />
-            <DistributionPlot
-              name={name}
-              harness={harness}
-              metric={metric}
-              value={
-                rowHarnesses?.find((item) => item.harness === harness)?.[metric] ?? {
-                  stats: null,
-                  measured: 0,
-                  expected: 0,
-                  missing_reasons: [`never ran on ${harness}`],
+        {harnesses.map((harness) => {
+          const item = rowHarnesses?.find((entry) => entry.harness === harness);
+          return (
+            <div key={harness} className="flex items-start gap-2">
+              <span
+                className="mt-1 h-[7px] w-[7px] shrink-0 rounded-full"
+                style={{ backgroundColor: harnessColor(harness) }}
+              />
+              <DistributionPlot
+                name={name}
+                harness={harness}
+                metric={metric}
+                value={
+                  item?.[metric] ?? {
+                    stats: null,
+                    measured: 0,
+                    expected: 0,
+                    missing_reasons: [`never ran on ${harness}`],
+                  }
                 }
-              }
-              scaleMax={metric === "context" ? contextMax : durationMax}
-            />
-          </div>
-        ))}
+                scaleMax={maxByMetric[metric]}
+                steered={item?.steered}
+              />
+            </div>
+          );
+        })}
       </div>
     </td>
   );
@@ -1349,6 +1470,20 @@ function PerformanceTable({
             <th className="w-48 pb-2 font-medium">Name</th>
             <th className="pb-2 font-medium">Context (peak tokens)</th>
             <th className="pb-2 font-medium">Duration (wall-clock)</th>
+            <th className="pb-2 font-medium">
+              <span className="inline-flex items-center gap-1">
+                Steering (messages / execution)
+                <Tooltip content={STEERING_PROVENANCE_COPY} side="top">
+                  <span
+                    role="img"
+                    aria-label={STEERING_PROVENANCE_COPY}
+                    className="inline-flex text-fg-4"
+                  >
+                    <Info size={11} />
+                  </span>
+                </Tooltip>
+              </span>
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -1419,7 +1554,7 @@ function PerformanceTable({
                       })()}
                     </span>
                   </td>
-                  {(["context", "duration"] as const).map((metric) =>
+                  {PERFORMANCE_METRICS.map((metric) =>
                     metricCell(row.name, row.harnesses, metric),
                   )}
                 </tr>
@@ -1456,7 +1591,7 @@ function PerformanceTable({
                             )}
                           </span>
                         </td>
-                        {(["context", "duration"] as const).map((metric) =>
+                        {PERFORMANCE_METRICS.map((metric) =>
                           metricCell(
                             `${pair.model} · ${pair.effort ?? "not set"}`,
                             pair.harnesses,
@@ -1604,6 +1739,7 @@ function PerformanceTab({
   const durations = aggregate.harnesses.map((item) =>
     item.duration.stats ? formatPerformanceValue(item.duration.stats.median, "duration") : "—",
   );
+  const steered = aggregate.harnesses.map((item) => steeredPercent(item.steered) ?? "—");
 
   // The model axis's breadcrumb; « By pipeline » keeps its one-line header.
   const crumbs: { label: string; onClick?: () => void }[] = [
@@ -1654,6 +1790,7 @@ function PerformanceTab({
             >
               <option value="context">By context</option>
               <option value="duration">By duration</option>
+              <option value="steering">By steering</option>
             </select>
           </span>
         </div>
@@ -1695,7 +1832,7 @@ function PerformanceTab({
         <HarnessLegend harnesses={performance.harnesses} />
         <div className="mt-4 text-fg" data-testid="stats-performance-headline">
           {contexts.join(" / ") || "—"} median peak context · {durations.join(" / ") || "—"} median
-          duration
+          duration · {steered.join(" / ") || "—"} steered
         </div>
         <div className="mt-4">
           <PerformanceCards aggregate={aggregate} />

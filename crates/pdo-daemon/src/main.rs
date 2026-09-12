@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use pdo_daemon::{
     run_complete, run_daemon, run_docs, run_fail, run_migrate, run_page, run_reap, run_review,
-    run_run_create, run_service, run_skip, Cli, Commands,
+    run_run_create, run_run_wait, run_service, run_skip, run_wait_user, Cli, Commands, RunAction,
 };
 use std::process::ExitCode;
 
@@ -18,6 +18,16 @@ fn main() -> ExitCode {
     // plain `Result` → `0`/`1` mapping they have always had.
     if let Commands::Complete { auto } = cli.command {
         return run_complete(auto);
+    }
+    // `wait-user` shares the `3` (refused, still your turn) of that contract, and
+    // `run wait` owns the `2` (timeout, not a failure) — see ADR-0069.
+    if let Commands::WaitUser { message } = cli.command {
+        return run_wait_user(message);
+    }
+    if let Commands::Run { action } = &cli.command {
+        if let RunAction::Wait { all, timeout } = **action {
+            return run_run_wait(all, timeout);
+        }
     }
 
     let res: Result<()> = match cli.command {
@@ -38,7 +48,9 @@ fn main() -> ExitCode {
                 .context("failed to build tokio runtime")
                 .and_then(|rt| rt.block_on(run_daemon(bind, port)))
         }
-        Commands::Complete { .. } => unreachable!("`complete` returns its own ExitCode"),
+        Commands::Complete { .. } | Commands::WaitUser { .. } => {
+            unreachable!("`complete` and `wait-user` return their own ExitCode")
+        }
         Commands::Fail { reason } => run_fail(reason),
         Commands::Skip { reason } => run_skip(reason),
         // Every arm below is a blocking one-shot: no tokio runtime, for the

@@ -661,9 +661,13 @@ pub(crate) fn delivery_commit_message(node_id: &str, iter: i64) -> String {
 /// commit (#654 / ADR-0060).
 ///
 /// Staging starts with `git add -A`, then removes paths PDO materialized through
-/// declarative worktree provisioning (ADR-0061). This second step is required
-/// even when a Node already staged those paths itself: provisioning commonly
-/// carries credentials and host-local links that must never enter the Run branch.
+/// declarative worktree provisioning (ADR-0061) and PDO's own artifact store
+/// [`RUN_ARTIFACTS_RELATIVE`] (#796). This second step is required even when a
+/// Node already staged those paths itself: provisioning commonly carries
+/// credentials and host-local links that must never enter the Run branch, and
+/// committed artifacts travel to the next run of the same pipeline (a child run
+/// created from a branch that carries them), where the same node ids put a
+/// previous execution's `Pass` report exactly where the fresh node will write.
 /// The target repo's `.gitignore` remains the policy for every other path. A node
 /// that already committed its own work reaches this with a clean index and gets
 /// `None` — its commits are kept as they are, and no empty commit is ever written.
@@ -684,6 +688,12 @@ pub(crate) fn delivery_commit_message(node_id: &str, iter: i64) -> String {
 /// uncommitted work vanished with no conflict, no event and no trace — the silent
 /// loss ADR-0004 forbids. `bail!` here surfaces as
 /// `CompletionRefusal::DeliveryFailed`, which is loud and parks the Run.
+/// The run's artifact store, relative to its worktree root. Written by PDO for
+/// every node's ports (`<node>/iter-<N>/<port>/…`) and read back by the inspector;
+/// never a deliverable, so [`stage_and_commit`] keeps it out of the Run branch
+/// whatever the target repo's `.gitignore` says (#796).
+pub(crate) const RUN_ARTIFACTS_RELATIVE: &str = ".pdo/artifacts";
+
 pub(crate) fn stage_and_commit(
     worktree_dir: &std::path::Path,
     node_id: &str,
@@ -703,8 +713,11 @@ pub(crate) fn stage_and_commit(
         );
     }
 
-    let provisioned = crate::provisioning::materialized_paths(worktree_dir)?;
-    if !provisioned.is_empty() {
+    // Paths PDO itself put in the worktree, never the node's deliverable: the
+    // artifact store first (#796), then whatever provisioning materialized.
+    let mut excluded: Vec<Vec<u8>> = vec![RUN_ARTIFACTS_RELATIVE.as_bytes().to_vec()];
+    excluded.extend(crate::provisioning::materialized_paths(worktree_dir)?);
+    {
         let mut child = std::process::Command::new("git")
             .args([
                 "reset",
@@ -719,7 +732,7 @@ pub(crate) fn stage_and_commit(
             .spawn()
             .with_context(|| {
                 format!(
-                    "git reset of provisioned paths failed to run in {}",
+                    "git reset of PDO-owned paths failed to run in {}",
                     worktree_dir.display()
                 )
             })?;
@@ -729,7 +742,7 @@ pub(crate) fn stage_and_commit(
                 .stdin
                 .as_mut()
                 .context("git reset stdin unavailable")?;
-            for path in provisioned {
+            for path in excluded {
                 stdin.write_all(b":(top,literal)")?;
                 stdin.write_all(&path)?;
                 stdin.write_all(&[0])?;
@@ -737,11 +750,11 @@ pub(crate) fn stage_and_commit(
         }
         let output = child
             .wait_with_output()
-            .context("wait for git reset of provisioned paths")?;
+            .context("wait for git reset of PDO-owned paths")?;
         if !output.status.success() {
             anyhow::bail!(
-                "git reset of provisioned paths in {} failed, refusing to commit provisioned \
-                 resources: {}",
+                "git reset of PDO-owned paths in {} failed, refusing to commit provisioned \
+                 resources or run artifacts: {}",
                 worktree_dir.display(),
                 git_report(&output)
             );
@@ -2013,6 +2026,81 @@ mod tests {
             !files.contains("noise.txt"),
             "an ignored file stays out: {files}"
         );
+    }
+
+    /// #796: the run's artifact store never enters the Run branch, even when the
+    /// target repo's `.gitignore` does not cover `.pdo/` — a fresh artifact is left
+    /// untracked, an already-tracked one (inherited from a previous run's commit)
+    /// keeps its committed content, and the node's real work is still delivered.
+    #[test]
+    fn stage_and_commit_keeps_the_run_artifacts_out_of_the_branch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(repo)
+                .output()
+                .unwrap()
+        };
+        // A previous run committed a report at the same node/iter path.
+        let tracked = repo.join(".pdo/artifacts/tester/iter-1/out/output.md");
+        std::fs::create_dir_all(tracked.parent().unwrap()).unwrap();
+        std::fs::write(&tracked, "---\nVerdict: Pass\n---\nold report\n").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-m", "previous run"]);
+
+        std::fs::write(&tracked, "---\nVerdict: Fail\n---\nnew report\n").unwrap();
+        let fresh = repo.join(".pdo/artifacts/tester/iter-1/shots/a.png");
+        std::fs::create_dir_all(fresh.parent().unwrap()).unwrap();
+        std::fs::write(&fresh, b"png").unwrap();
+        std::fs::write(repo.join("src.rs"), "pub fn work() {}\n").unwrap();
+
+        let sha = stage_and_commit(repo, "tester", 1).unwrap().unwrap();
+        assert_eq!(sha, rev_parse(repo, "HEAD").unwrap());
+
+        let files = String::from_utf8_lossy(&git(&["show", "--name-status", "--format="]).stdout)
+            .to_string();
+        assert!(files.contains("A\tsrc.rs"), "{files}");
+        assert!(
+            !files.contains(".pdo/artifacts"),
+            "artifacts stay out: {files}"
+        );
+
+        let status = String::from_utf8_lossy(&git(&["status", "--porcelain"]).stdout).to_string();
+        assert!(
+            status.contains(" M .pdo/artifacts/tester/iter-1/out/output.md"),
+            "{status}"
+        );
+        assert!(
+            status.contains("?? .pdo/artifacts/tester/iter-1/shots/"),
+            "{status}"
+        );
+    }
+
+    /// #796: only artifacts are exempt from the completion commit — nothing else
+    /// under `.pdo/` (a versioned pipeline edited by the node) is.
+    #[test]
+    fn stage_and_commit_still_delivers_other_pdo_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(repo)
+                .output()
+                .unwrap()
+        };
+        let yaml = repo.join(".pdo/pipelines/p.yaml");
+        std::fs::create_dir_all(yaml.parent().unwrap()).unwrap();
+        std::fs::write(&yaml, "name: p\n").unwrap();
+
+        stage_and_commit(repo, "editor", 1).unwrap().unwrap();
+        let files = String::from_utf8_lossy(&git(&["show", "--name-status", "--format="]).stdout)
+            .to_string();
+        assert!(files.contains("A\t.pdo/pipelines/p.yaml"), "{files}");
     }
 
     /// #489: a staging failure is LOUD. A leftover `index.lock` makes `git add -A`

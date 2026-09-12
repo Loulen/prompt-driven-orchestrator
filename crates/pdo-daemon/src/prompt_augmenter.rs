@@ -270,17 +270,28 @@ pub(crate) fn resolve_output_paths(ctx: &AugmentContext<'_>) -> Vec<OutputDeclar
 /// wipes it, so the fresh agent must be shown it and told to build on it. Empty
 /// on a first spawn.
 ///
+/// #796: a path older than `run_started_at` is NOT partial output of this run —
+/// it came in through git (a child run created from a branch that carries a
+/// previous run's `.pdo/artifacts/`, same pipeline hence same node ids and
+/// paths). Handing it to the agent as "your interrupted attempt" misleads it into
+/// building on another ticket's report; such paths are left out. `None` (run
+/// start unknown) keeps the pre-#796 behaviour.
+///
 /// Does I/O, so the daemon computes it and feeds
 /// [`AugmentContext::partial_outputs`]; `build_preamble` itself stays pure.
 pub(crate) fn surviving_partial_outputs(
     node: &NodeDef,
     artifacts_dir: &Path,
     iter: i64,
+    run_started_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Vec<PathBuf> {
     node.outputs
         .iter()
         .map(|port| output_port_path(&node.id, artifacts_dir, iter, port))
         .filter(|path| path_holds_content(path))
+        .filter(|path| {
+            run_started_at.is_none_or(|start| !crate::node_io_resolver::predates(path, start))
+        })
         .collect()
 }
 
@@ -737,7 +748,8 @@ pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
              You do not have to run any git command. When this node finishes, PDO \
              keeps whatever you committed yourself and commits everything else you \
              left behind onto the run's branch. Anything the repository's \
-             `.gitignore` covers stays out; everything else goes in.\n\n",
+             `.gitignore` covers stays out, and so does PDO's own \
+             `.pdo/artifacts/`; everything else goes in.\n\n",
             shared_wt.display()
         ));
     }
@@ -1435,19 +1447,40 @@ mod tests {
         let artifacts = tmp.path();
 
         // Nothing written yet → no partial output (first spawn).
-        assert!(surviving_partial_outputs(node, artifacts, 1).is_empty());
+        assert!(surviving_partial_outputs(node, artifacts, 1, None).is_empty());
 
         // A prior attempt wrote its output.md.
         let out = artifacts.join("planner/iter-1/plan/output.md");
         std::fs::create_dir_all(out.parent().unwrap()).unwrap();
         std::fs::write(&out, "partial work\n").unwrap();
-        assert_eq!(surviving_partial_outputs(node, artifacts, 1), vec![out]);
+        assert_eq!(
+            surviving_partial_outputs(node, artifacts, 1, None),
+            vec![out.clone()]
+        );
 
         // An empty file is not partial work.
         let empty = artifacts.join("planner/iter-2/plan/output.md");
         std::fs::create_dir_all(empty.parent().unwrap()).unwrap();
         std::fs::write(&empty, "   \n").unwrap();
-        assert!(surviving_partial_outputs(node, artifacts, 2).is_empty());
+        assert!(surviving_partial_outputs(node, artifacts, 2, None).is_empty());
+
+        // #796: written during this run → partial output; older than the run
+        // (inherited through git from a previous run) → not this run's work.
+        let run_start = |s: &str| {
+            Some(
+                chrono::DateTime::parse_from_rfc3339(s)
+                    .unwrap()
+                    .with_timezone(&chrono::Utc),
+            )
+        };
+        assert_eq!(
+            surviving_partial_outputs(node, artifacts, 1, run_start("2000-01-01T00:00:00Z")),
+            vec![out]
+        );
+        assert!(
+            surviving_partial_outputs(node, artifacts, 1, run_start("2999-01-01T00:00:00Z"))
+                .is_empty()
+        );
     }
 
     /// #599 AC1: when partial output survives, the preamble surfaces it as input to

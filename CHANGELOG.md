@@ -16,6 +16,20 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## Non publié
+**Outputs hérités d'une exécution précédente** (#796).
+
+- Le commit de complétion d'un nœud **n'embarque plus `.pdo/artifacts/`**, même si le dépôt
+  cible n'ignore pas `.pdo/` (amendement d'ADR-0060). Le reste de `.pdo/` suit toujours le
+  `.gitignore` du dépôt cible.
+- `GET /runs/{run}/nodes/{node}/io` marque `inherited: true` un fichier de sortie plus ancien
+  que le `started_at` de l'itération (ou du Run si le nœud n'a jamais démarré) ; le panneau
+  le badge « inherited » et **n'affiche pas son verdict** de frontmatter. Le fichier reste
+  listé (ADR-0049 : l'agent relancé bâtit dessus).
+- `GET /runs/{run}/artifact` répond `Cache-Control: no-store`.
+- Le préambule ne présente plus comme « sortie partielle de la tentative interrompue » un
+  fichier plus ancien que le Run lui-même.
+
 ## 1.86.0
 **Attente déclarée, préambule de base, attente d'enfants** (#793 ; story #588, ADR-0069).
 

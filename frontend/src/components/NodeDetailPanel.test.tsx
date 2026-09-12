@@ -789,6 +789,82 @@ describe("NodeDetailPanel", () => {
       expect(screen.getByTestId("port-type-badge")).toHaveTextContent("image_list");
     });
 
+    // #796: an output on disk BEFORE the execution started is a previous
+    // execution's result — badged « inherited », its verdict chip withheld.
+    it("badges an inherited output and withholds its frontmatter verdict", async () => {
+      fetchNodeIOMock.mockResolvedValue({
+        inputs: [],
+        outputs: [
+          {
+            port: "out",
+            repeated: false,
+            port_type: "markdown",
+            files: [
+              {
+                path: "tester/iter-1/out/output.md",
+                exists: true,
+                size: 5500,
+                frontmatter: { Verdict: "Pass" },
+                inherited: true,
+              },
+            ],
+          },
+          {
+            port: "feature-screens",
+            repeated: false,
+            port_type: "image_list",
+            files: [
+              { path: "tester/iter-1/feature-screens/a.png", exists: true, size: 10, frontmatter: null, inherited: true },
+            ],
+          },
+        ],
+      });
+
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+
+      await act(async () => {});
+      expect(screen.getAllByTestId("inherited-badge")).toHaveLength(2);
+      expect(screen.queryByTestId("frontmatter-card")).not.toBeInTheDocument();
+      expect(screen.queryByText("Pass")).not.toBeInTheDocument();
+      // The file itself is still listed and its thumbnails shown — flagged, not hidden.
+      expect(screen.getByTestId("image-thumbnails")).toBeInTheDocument();
+    });
+
+    it("shows the frontmatter verdict of an output written by this execution", async () => {
+      fetchNodeIOMock.mockResolvedValue({
+        inputs: [],
+        outputs: [
+          {
+            port: "out",
+            repeated: false,
+            port_type: "markdown",
+            files: [
+              {
+                path: "tester/iter-1/out/output.md",
+                exists: true,
+                size: 5500,
+                frontmatter: { Verdict: "Pass" },
+              },
+            ],
+          },
+        ],
+      });
+
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+
+      await act(async () => {});
+      expect(screen.queryByTestId("inherited-badge")).not.toBeInTheDocument();
+      expect(screen.getByTestId("frontmatter-card")).toHaveTextContent("Pass");
+    });
+
     // #779: a Start-sourced input carries the run's non-image attachments after
     // the prompt — shown as « Input files » chips, never as thumbnails.
     it("lists input files as chips under a start-sourced markdown input", async () => {

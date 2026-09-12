@@ -1534,6 +1534,11 @@ function PortRow({
 }) {
   const firstFile = port.files[0];
   const anyExists = port.files.some((f) => f.exists);
+  // #796: every file on disk predates the execution shown — the port carries a
+  // previous session's result (same-iter re-spawn, or a child run whose branch
+  // brought a previous run's artifacts in). Shown, but never as THIS result.
+  const inheritedOnly =
+    anyExists && port.files.filter((f) => f.exists).every((f) => f.inherited === true);
   const portType = port.port_type ?? "markdown";
   // The ordered image list + clicked index currently shown fullscreen in the
   // lightbox, or null when it is closed (#312).
@@ -1544,7 +1549,9 @@ function PortRow({
   const isHtml = portType === "html";
 
   let dotClass = "bg-fg-5";
-  if (anyExists && port.repeated && port.files.length > 1) {
+  if (inheritedOnly) {
+    dotClass = "bg-fg-5";
+  } else if (anyExists && port.repeated && port.files.length > 1) {
     dotClass = "bg-st-running";
   } else if (anyExists) {
     dotClass = "bg-st-done";
@@ -1557,8 +1564,9 @@ function PortRow({
 
   const totalSize = port.files.reduce((sum, f) => sum + (f.size ?? 0), 0);
 
+  // An inherited file's frontmatter is a previous execution's verdict: no chip.
   const frontmatter =
-    showFrontmatter && !isImage && firstFile?.frontmatter
+    showFrontmatter && !isImage && firstFile?.frontmatter && !firstFile.inherited
       ? firstFile.frontmatter
       : null;
 
@@ -1604,6 +1612,16 @@ function PortRow({
               data-testid="port-type-badge"
             >
               {portType}
+            </span>
+          )}
+          {inheritedOnly && (
+            <span
+              className="rounded border border-st-stopped/50 bg-bg-4 px-1 py-px font-mono text-st-stopped"
+              style={{ fontSize: "9px" }}
+              title="Present before this execution started — a previous execution's output, not this one's result"
+              data-testid="inherited-badge"
+            >
+              inherited
             </span>
           )}
         </div>
@@ -1721,6 +1739,7 @@ function PortRow({
       {frontmatter && Object.keys(frontmatter).length > 0 && (
         <div
           className="col-span-3 mt-1 grid rounded border border-line bg-bg-0 p-1.5 font-mono"
+          data-testid="frontmatter-card"
           style={{
             fontSize: "10px",
             gridTemplateColumns: "auto 1fr",

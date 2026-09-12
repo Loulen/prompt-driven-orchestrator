@@ -17358,16 +17358,22 @@ async fn artifact(
         _ => "text/markdown",
     };
 
+    // #796: an artifact URL is stable across a same-iter re-spawn (same run,
+    // node, iter and path) while its bytes change under it. Without a validator
+    // the browser's heuristic cache may resurface the previous session's report
+    // or screenshot; `no-store` makes every reload show the current bytes.
+    let headers = [
+        (header::CONTENT_TYPE, mime),
+        (header::CACHE_CONTROL, "no-store"),
+    ];
     if mime.starts_with("image/") {
         match std::fs::read(&resolved) {
-            Ok(bytes) => (StatusCode::OK, [(header::CONTENT_TYPE, mime)], bytes).into_response(),
+            Ok(bytes) => (StatusCode::OK, headers, bytes).into_response(),
             Err(_) => (StatusCode::NOT_FOUND, "artifact not found").into_response(),
         }
     } else {
         match std::fs::read_to_string(&resolved) {
-            Ok(content) => {
-                (StatusCode::OK, [(header::CONTENT_TYPE, mime)], content).into_response()
-            }
+            Ok(content) => (StatusCode::OK, headers, content).into_response(),
             Err(_) => (StatusCode::NOT_FOUND, "artifact not found").into_response(),
         }
     }
@@ -28655,6 +28661,8 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.headers().get("content-type").unwrap(), "text/markdown");
+        // #796: never cached — a re-spawned node rewrites the same URL.
+        assert_eq!(resp.headers().get("cache-control").unwrap(), "no-store");
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .unwrap();

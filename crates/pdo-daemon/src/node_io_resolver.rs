@@ -13,6 +13,15 @@ pub(crate) struct FileInfo {
     pub exists: bool,
     pub size: Option<u64>,
     pub frontmatter: Option<HashMap<String, serde_json::Value>>,
+    /// #796: the file predates the execution whose output it is displayed as.
+    /// An output file that was on disk BEFORE this node's iteration started
+    /// (`IterationInfo::started_at`) was not written by the session shown as
+    /// running: it survived a same-iter re-spawn (ADR-0049) or travelled in
+    /// through git from a previous run of the same pipeline (a child run created
+    /// from a branch that carries `.pdo/artifacts/`). Such a file must never be
+    /// read as the current verdict. Absent from the wire when `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub inherited: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -126,13 +135,19 @@ pub(crate) fn resolve(
         });
     }
 
+    // #796: the instant this execution started. Anything on disk older than it
+    // is inherited, not produced — flagged, never hidden (ADR-0049 wants the
+    // human to see the partial output a fresh agent builds on).
+    let not_before = execution_started_at(run_state, node_id, iter);
+
     let mut outputs: Vec<PortIO> = Vec::new();
     for output_port in &node.outputs {
         match output_port.port_type {
             PortType::Image | PortType::ImageList => {
                 let port_dir =
                     crate::blackboard::port_dir(artifacts_dir, node_id, iter, &output_port.name);
-                let files = list_image_files(artifacts_dir, &port_dir);
+                let mut files = list_image_files(artifacts_dir, &port_dir);
+                mark_inherited(artifacts_dir, &mut files, not_before);
                 outputs.push(PortIO {
                     port: output_port.name.clone(),
                     repeated: output_port.repeated,
@@ -147,12 +162,13 @@ pub(crate) fn resolve(
                     iter,
                     &output_port.name,
                 );
-                let info = file_info_with_frontmatter(artifacts_dir, &path);
+                let mut files = vec![file_info_with_frontmatter(artifacts_dir, &path)];
+                mark_inherited(artifacts_dir, &mut files, not_before);
                 outputs.push(PortIO {
                     port: output_port.name.clone(),
                     repeated: output_port.repeated,
                     port_type: output_port.port_type,
-                    files: vec![info],
+                    files,
                 });
             }
             // Plain `file_info`: html has no frontmatter to parse.
@@ -163,18 +179,61 @@ pub(crate) fn resolve(
                     iter,
                     &output_port.name,
                 );
-                let info = file_info(artifacts_dir, &path);
+                let mut files = vec![file_info(artifacts_dir, &path)];
+                mark_inherited(artifacts_dir, &mut files, not_before);
                 outputs.push(PortIO {
                     port: output_port.name.clone(),
                     repeated: output_port.repeated,
                     port_type: output_port.port_type,
-                    files: vec![info],
+                    files,
                 });
             }
         }
     }
 
     NodeIO { inputs, outputs }
+}
+
+/// When the execution of `node_id` at `iter` started (#796): the iteration's
+/// `started_at` — re-posed by every same-iter re-spawn, so it always names the
+/// LATEST session. A node that never started falls back to the run's own start:
+/// a file older than the run itself cannot be this run's work. `None` when
+/// neither is known (no flag is then raised — the wire stays as before).
+pub(crate) fn execution_started_at(
+    run_state: &RunState,
+    node_id: &str,
+    iter: i64,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    let iteration_start = run_state
+        .nodes
+        .get(node_id)
+        .and_then(|n| n.iterations.iter().find(|i| i.iter == iter))
+        .and_then(|i| i.started_at.as_deref());
+    let ts = iteration_start.or(run_state.started_at.as_deref())?;
+    chrono::DateTime::parse_from_rfc3339(ts)
+        .ok()
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+}
+
+/// Does `path` predate `not_before`? A missing file or an unreadable mtime is
+/// never inherited — the ordinary "not written yet" state.
+pub(crate) fn predates(path: &Path, not_before: chrono::DateTime<chrono::Utc>) -> bool {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .map(chrono::DateTime::<chrono::Utc>::from)
+        .is_some_and(|mtime| mtime < not_before)
+}
+
+fn mark_inherited(
+    artifacts_dir: &Path,
+    files: &mut [FileInfo],
+    not_before: Option<chrono::DateTime<chrono::Utc>>,
+) {
+    let Some(not_before) = not_before else { return };
+    for f in files.iter_mut().filter(|f| f.exists) {
+        f.inherited = predates(&artifacts_dir.join(&f.path), not_before);
+    }
 }
 
 fn relative_path(artifacts_dir: &Path, abs_path: &Path) -> String {
@@ -206,6 +265,7 @@ fn file_info(artifacts_dir: &Path, path: &Path) -> FileInfo {
         exists,
         size,
         frontmatter: None,
+        inherited: false,
     }
 }
 
@@ -236,6 +296,7 @@ fn file_info_with_frontmatter(artifacts_dir: &Path, path: &Path) -> FileInfo {
         exists,
         size,
         frontmatter,
+        inherited: false,
     }
 }
 
@@ -286,6 +347,7 @@ fn list_image_files(artifacts_dir: &Path, port_dir: &Path) -> Vec<FileInfo> {
                 exists: true,
                 size,
                 frontmatter: None,
+                inherited: false,
             }
         })
         .collect();
@@ -1284,5 +1346,91 @@ mod tests {
             "designer/iter-1/report/output.html"
         );
         assert!(!io.outputs[0].files[0].exists);
+    }
+
+    /// #796: an output file with a `started_at` for `iter` in the past stays
+    /// unflagged (written by THIS execution); the same file with a `started_at`
+    /// in the future is `inherited` — it predates the session it is shown under.
+    #[test]
+    fn output_older_than_the_iteration_start_is_inherited() {
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+        let dir = artifacts.join("implementer/iter-1/summary");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("output.md"), "---\nverdict: PASS\n---\n\nold").unwrap();
+        let pipeline = simple_pipeline();
+
+        let mut fresh = run_state_with("implementer", &[(1, NodeStatus::Running)]);
+        fresh.nodes.get_mut("implementer").unwrap().iterations[0].started_at =
+            Some("2000-01-01T00:00:00.000Z".into());
+        let io = resolve(&pipeline, &artifacts, "implementer", 1, &fresh);
+        assert!(io.outputs[0].files[0].exists);
+        assert!(!io.outputs[0].files[0].inherited, "written after the start");
+
+        let mut respawned = run_state_with("implementer", &[(1, NodeStatus::Running)]);
+        respawned.nodes.get_mut("implementer").unwrap().iterations[0].started_at =
+            Some("2999-01-01T00:00:00.000Z".into());
+        let io = resolve(&pipeline, &artifacts, "implementer", 1, &respawned);
+        assert!(io.outputs[0].files[0].exists);
+        assert!(
+            io.outputs[0].files[0].inherited,
+            "on disk before the session started"
+        );
+        // The frontmatter is still returned — flagged, not hidden.
+        assert!(io.outputs[0].files[0].frontmatter.is_some());
+    }
+
+    /// #796: a node that never started (a fresh child run whose worktree carries a
+    /// previous run's artifacts through git) compares against the RUN's start.
+    #[test]
+    fn output_older_than_the_run_is_inherited_when_the_node_never_started() {
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+        let dir = artifacts.join("implementer/iter-1/summary");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("output.md"), "stale").unwrap();
+        let pipeline = simple_pipeline();
+
+        let mut state = empty_run_state();
+        state.started_at = Some("2999-01-01T00:00:00.000Z".into());
+        let io = resolve(&pipeline, &artifacts, "implementer", 1, &state);
+        assert!(io.outputs[0].files[0].inherited);
+
+        // No timing at all → no flag, wire unchanged.
+        let io = resolve(&pipeline, &artifacts, "implementer", 1, &empty_run_state());
+        assert!(!io.outputs[0].files[0].inherited);
+        let json = serde_json::to_value(&io.outputs[0].files[0]).unwrap();
+        assert!(json.get("inherited").is_none(), "absent when false: {json}");
+    }
+
+    /// #796: image ports are flagged file by file, and a missing file never is.
+    #[test]
+    fn inherited_images_are_flagged_and_missing_files_are_not() {
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+        let dir = artifacts.join("implementer/iter-1/summary");
+        fs::create_dir_all(&dir).unwrap();
+        let pipeline = simple_pipeline();
+        let mut state = run_state_with("implementer", &[(1, NodeStatus::Running)]);
+        state.nodes.get_mut("implementer").unwrap().iterations[0].started_at =
+            Some("2999-01-01T00:00:00.000Z".into());
+
+        let io = resolve(&pipeline, &artifacts, "implementer", 1, &state);
+        assert!(!io.outputs[0].files[0].exists);
+        assert!(!io.outputs[0].files[0].inherited);
+
+        let img_dir = artifacts.join("capturer/iter-1/shots");
+        fs::create_dir_all(&img_dir).unwrap();
+        fs::write(img_dir.join("a.png"), b"png").unwrap();
+        let mut pipeline = simple_pipeline();
+        pipeline.nodes[1].id = "capturer".into();
+        pipeline.nodes[1].outputs[0].name = "shots".into();
+        pipeline.nodes[1].outputs[0].port_type = PortType::ImageList;
+        let mut state = run_state_with("capturer", &[(1, NodeStatus::Running)]);
+        state.nodes.get_mut("capturer").unwrap().iterations[0].started_at =
+            Some("2999-01-01T00:00:00.000Z".into());
+        let io = resolve(&pipeline, &artifacts, "capturer", 1, &state);
+        assert_eq!(io.outputs[0].files.len(), 1);
+        assert!(io.outputs[0].files[0].inherited);
     }
 }

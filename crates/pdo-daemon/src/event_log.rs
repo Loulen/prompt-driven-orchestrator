@@ -73,7 +73,19 @@ pub enum EventKind {
     /// The node is ready to run but throttled by the global session cap: it
     /// holds no tmux session yet and waits for an admission slot (#159).
     NodeWaiting,
+    /// The node's agent **declared** a wait on its user (`pdo wait-user`, #588 /
+    /// ADR-0069), or the daemon declared it for the agent when it refused an
+    /// unreleased `pdo complete`. Payload: `cause` (`declared` /
+    /// `completion_not_released` / `children_pending`) and an optional prose
+    /// `message` — the question, shown as the banner reason. Never emitted at
+    /// spawn: a fresh interactive node has the colour of a working node.
     NodeAwaitingUser,
+    /// The wait was **lifted** by a human keystroke: an Enter that crossed the
+    /// UI's PTY bridge after at least one typed byte (ADR-0069 §1). Projects the
+    /// node back to `Running` and clears its awaiting info. Wire form:
+    /// `"node_resumed"`. The other lift — the completion release — has its own
+    /// event (`NodeCompletionReleased`).
+    NodeResumed,
     NodeCompletionReleased,
     NodeCompleted,
     NodeFailed,
@@ -641,7 +653,39 @@ pub struct NodeState {
     /// non-isolated NodeRun does not have.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery: Option<NodeDelivery>,
+    /// #588 / ADR-0069: why this node is `AwaitingUser` — the declared wait's
+    /// cause and message, or the derived « a child run is awaiting you » overlay
+    /// ([`crate::child_awaiting`]). Present only while `status == AwaitingUser`;
+    /// cleared by `NodeResumed`, `NodeCompletionReleased` and every re-spawn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub awaiting: Option<AwaitingInfo>,
 }
+
+/// The declared wait of a node (#588 / ADR-0069), as the surfaces read it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AwaitingInfo {
+    /// `declared` (`pdo wait-user`), `completion_not_released` (a refused
+    /// `pdo complete` on an unreleased interactive node), `children_pending`
+    /// (the orchestrator binding marker, ADR-0064) or `child_awaiting` (derived
+    /// on read from an awaiting child run, never written to this run's log).
+    pub cause: String,
+    /// The prose the banner shows: the agent's question (capped at
+    /// [`crate::declared_wait::MESSAGE_MAX_CHARS`] by the CLI), the daemon's
+    /// sentence on a refused completion, or « child run <name> is awaiting you ».
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    /// When the wait was declared (the event's timestamp) — the banner's
+    /// « waiting N min ».
+    pub since: String,
+    /// The awaiting child run, for the `child_awaiting` overlay only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub child_run_id: Option<String>,
+}
+
+/// Cause slugs of [`AwaitingInfo`].
+pub(crate) const AWAITING_CAUSE_DECLARED: &str = "declared";
+pub(crate) const AWAITING_CAUSE_COMPLETION_NOT_RELEASED: &str = "completion_not_released";
+pub(crate) const AWAITING_CAUSE_CHILD_AWAITING: &str = "child_awaiting";
 
 /// The two Run-branch tips one delivery moved between (#654 / ADR-0060).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1191,6 +1235,21 @@ pub struct RunState {
 }
 
 impl RunState {
+    /// #588 / ADR-0069: is this Run parked on a **declared wait** — a node's agent
+    /// asked its user something (or a refused unreleased completion declared it
+    /// for the agent) — rather than on an incident? The prose reason is set in
+    /// both cases; only the incident carries a machine slug, and only the
+    /// declared wait has an awaiting node with a message. The reopen embedding
+    /// asks this so a targeted command never « reopens » a run that is simply
+    /// waiting for an answer.
+    pub fn is_declared_wait(&self) -> bool {
+        self.status == RunStatus::AwaitingUser
+            && self.awaiting_reason_code.is_none()
+            && self.nodes.values().any(|n| {
+                n.status == NodeStatus::AwaitingUser
+                    && n.awaiting.as_ref().is_some_and(|a| a.message.is_some())
+            })
+    }
     pub fn new(run_id: String, pipeline_name: String) -> Self {
         Self {
             run_id,
@@ -1523,6 +1582,7 @@ pub(crate) fn project(events: &[Event]) -> Option<RunState> {
             EventKind::NodeWaiting
             | EventKind::NodeStarted
             | EventKind::NodeCompletionReleased
+            | EventKind::NodeResumed
             | EventKind::NodeCompleted
             | EventKind::NodeAutoCompleted
             | EventKind::NodeAwaitingUser
@@ -2101,6 +2161,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                         frontmatter_violations: Vec::new(),
                         missing_outputs: Vec::new(),
                         delivery: None,
+                        awaiting: None,
                     });
                 node.status = NodeStatus::Waiting;
                 node.iter = iter;
@@ -2149,12 +2210,16 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                         frontmatter_violations: Vec::new(),
                         missing_outputs: Vec::new(),
                         delivery: None,
+                        awaiting: None,
                     });
                 node.status = NodeStatus::Running;
                 node.iter = iter;
                 node.started_at = Some(event.ts.clone());
                 node.completed_at = None;
                 node.failure_reason = None;
+                // #588: a re-spawn (retry / restart) is a fresh agent that knows
+                // no declared wait.
+                node.awaiting = None;
                 // Reset the evidence vectors too, not just `completed_at` /
                 // `failure_reason`: otherwise a *successful* retry leaves stale
                 // violations on a green node.
@@ -2219,6 +2284,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                     let iter = event.iter.unwrap_or(node.iter);
                     if iter == node.iter {
                         node.status = NodeStatus::Running;
+                        node.awaiting = None;
                     }
                     if let Some(it) = node.iterations.iter_mut().find(|i| i.iter == iter) {
                         it.status = NodeStatus::Running;
@@ -2292,6 +2358,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                             frontmatter_violations: Vec::new(),
                             missing_outputs: Vec::new(),
                             delivery: None,
+                            awaiting: None,
                         },
                     );
                 }
@@ -2316,6 +2383,46 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                     let iter = event.iter.unwrap_or(node.iter);
                     if let Some(it) = node.iterations.iter_mut().find(|i| i.iter == iter) {
                         it.status = NodeStatus::AwaitingUser;
+                    }
+                    // #588: the declared wait's cause and message. A legacy
+                    // payload-less event (pre-#588 spawn wait) reads as
+                    // `declared` without a message; the binding marker
+                    // (ADR-0064) keeps its `reason` slug as the cause.
+                    let payload = event.payload.as_ref();
+                    let cause = payload
+                        .and_then(|p| p.get("cause").or_else(|| p.get("reason")))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(AWAITING_CAUSE_DECLARED)
+                        .to_string();
+                    let message = payload
+                        .and_then(|p| p.get("message"))
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.trim().is_empty())
+                        .map(str::to_string);
+                    node.awaiting = Some(AwaitingInfo {
+                        cause,
+                        message,
+                        since: event.ts.clone(),
+                        child_run_id: None,
+                    });
+                }
+            }
+        }
+        EventKind::NodeResumed => {
+            // #588 / ADR-0069: a human keystroke lifted the wait. Only a node
+            // that IS awaiting on its current iteration moves; anything else
+            // (a stale resume racing a completion) is a no-op on projection.
+            if let Some(ref node_id) = event.node_id {
+                if let Some(node) = state.nodes.get_mut(node_id) {
+                    let iter = event.iter.unwrap_or(node.iter);
+                    if let Some(it) = node.iterations.iter_mut().find(|i| i.iter == iter) {
+                        if it.status == NodeStatus::AwaitingUser {
+                            it.status = NodeStatus::Running;
+                        }
+                    }
+                    if iter == node.iter && node.status == NodeStatus::AwaitingUser {
+                        node.status = NodeStatus::Running;
+                        node.awaiting = None;
                     }
                 }
             }
@@ -2409,6 +2516,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                         frontmatter_violations: Vec::new(),
                         missing_outputs: Vec::new(),
                         delivery: None,
+                        awaiting: None,
                     });
                 // Node-level status derives from the LATEST iteration, mirroring
                 // the `NodeFailed` #196/#212 guard: interrupting an older iter
@@ -2559,6 +2667,7 @@ fn apply_switch_event(state: &mut RunState, event: &Event) {
                     frontmatter_violations: Vec::new(),
                     missing_outputs: Vec::new(),
                     delivery: None,
+                    awaiting: None,
                 });
             node.status = NodeStatus::Completed;
             node.completed_at = Some(event.ts.clone());
@@ -3024,6 +3133,36 @@ fn finalize(state: &mut RunState) {
             // `boot_recovery`, …). A node-level interrupt has no run-level
             // `reason_code` payload to read, so the prose prefix is the source.
             state.awaiting_reason_code = node.failure_reason.as_deref().and_then(parse_reason_code);
+        }
+    }
+
+    // #588 / ADR-0069: the awaiting info only means something on an awaiting
+    // node — a terminal or running node keeps none (a `NodeCompleted` after a
+    // wait, a `Failed` after a refused completion, …).
+    for node in state.nodes.values_mut() {
+        if node.status != NodeStatus::AwaitingUser {
+            node.awaiting = None;
+        }
+    }
+
+    // #588: a **declared** wait carries its message as the run's prose reason —
+    // the banner and the run list's dot tooltip read it — but NO machine slug:
+    // `awaiting_reason_code` absent still means « not an incident » (the
+    // manager's contract). Deterministic pick — the lowest node id — as above.
+    if state.status == RunStatus::AwaitingUser
+        && state.awaiting_reason.is_none()
+        && state.awaiting_reason_code.is_none()
+    {
+        if let Some((_, node)) = state
+            .nodes
+            .iter()
+            .filter(|(_, n)| {
+                n.status == NodeStatus::AwaitingUser
+                    && n.awaiting.as_ref().is_some_and(|a| a.message.is_some())
+            })
+            .min_by(|a, b| a.0.cmp(b.0))
+        {
+            state.awaiting_reason = node.awaiting.as_ref().and_then(|a| a.message.clone());
         }
     }
 }
@@ -3745,6 +3884,7 @@ mod tests {
             frontmatter_violations: vec![],
             missing_outputs: vec![],
             delivery: None,
+            awaiting: None,
         };
         assert!(
             serde_json::to_value(&bare)
@@ -6791,6 +6931,7 @@ mod tests {
             frontmatter_violations: Vec::new(),
             missing_outputs: Vec::new(),
             delivery: None,
+            awaiting: None,
         }
     }
 

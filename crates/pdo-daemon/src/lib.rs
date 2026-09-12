@@ -10,6 +10,7 @@ mod audit_log;
 mod auto_fail;
 mod blackboard;
 mod boot_recovery;
+mod child_awaiting;
 pub(crate) mod completion_refusal;
 #[allow(dead_code)]
 mod condition;
@@ -17,6 +18,7 @@ mod context_peak;
 mod copilot_journal;
 #[allow(dead_code)]
 mod cron_schedule;
+mod declared_wait;
 mod distribution;
 mod edge_router;
 mod event_log;
@@ -178,6 +180,17 @@ pub enum Commands {
         #[arg(long)]
         reason: String,
     },
+    /// Declare that you are waiting on the user (#588, ADR-0069): the node and
+    /// its run turn `awaiting_user`, the message is shown on the run's banner.
+    /// Accepted on any node with a live session; refused (exit 3) on a `script`
+    /// node or without a live session; a repeat is a no-op. The wait lifts when
+    /// the user answers in the PDO terminal (Enter) or releases completion.
+    WaitUser {
+        /// The question you are waiting on, shown verbatim on the banner
+        /// (capped at 100 characters).
+        #[arg(long)]
+        message: Option<String>,
+    },
     /// Graceful no-op: there is legitimately nothing to do, so end the run as
     /// `skipped` instead of `failed`. Use when the input/pool is empty, NOT for
     /// genuine errors — reserve `fail` for those.
@@ -302,6 +315,10 @@ pub enum PageAction {
 }
 
 #[derive(Subcommand, Debug)]
+// `Create` carries every creation flag, `Wait` two — a clap enum is parsed once
+// per process, so the size skew buys nothing to box away (it is already boxed
+// behind `Commands::Run`).
+#[allow(clippy::large_enum_variant)]
 pub enum RunAction {
     /// Create a Run — the thin CLI client of the daemon's `POST /runs`
     /// (issue #721, ADR-0064).
@@ -378,6 +395,22 @@ pub enum RunAction {
         /// Run-level provisioning rules as JSON (ADR-0061).
         #[arg(long)]
         provisioning: Option<String>,
+    },
+    /// Block until a child run of this node becomes terminal (#588, ADR-0069):
+    /// a long-poll on the daemon, never a push into your pane. Prints one JSON
+    /// line per child that settled (`run_id`, `name`, `status`, `reason`,
+    /// `children_active`) and exits 0; exits **2** with nothing on stdout when
+    /// `--timeout` elapses (not a failure — call again); exits 1 when the daemon
+    /// is unreachable or you are not in a node session. With no active child at
+    /// the call, exits 0 with `{"noop":true,…}`. A child `awaiting_user` does
+    /// not wake you: its wait shows on your node and run instead.
+    Wait {
+        /// Return only once EVERY child of this node is terminal.
+        #[arg(long)]
+        all: bool,
+        /// Give up after this many seconds (exit 2). Without it, waits forever.
+        #[arg(long)]
+        timeout: Option<u64>,
     },
 }
 
@@ -487,6 +520,12 @@ struct AppState {
     /// heartbeat, the reaper is a separate 60 s loop. Surfaced by `GET /sessions`
     /// as `reaper.last_sweep_at`.
     reaper_last_sweep_ms: Arc<std::sync::atomic::AtomicI64>,
+    /// #588 / ADR-0069: node sessions whose PTY bridge received at least one
+    /// **typed** byte since the wait was declared. The Enter rule reads it: an
+    /// Enter on an empty line (a click to focus the pane) lifts nothing. Cleared
+    /// by the declaration and by the lift; in-memory only — a daemon restart
+    /// forgets it, and the next keystroke re-arms it.
+    pty_typed: std::sync::Mutex<std::collections::HashSet<String>>,
     /// Sessions killed by the orphan sweep **since this daemon booted** — a
     /// cumulative counter, not a per-pass gauge. Don't reset it each pass: the
     /// killing pass is followed within seconds by an idle one, so the surface
@@ -612,6 +651,21 @@ impl AppState {
     /// call from this daemon must go through it, or parallel daemons collide.
     fn tmux_socket(&self) -> String {
         tmux_session_manager::tmux_socket_name(self.port)
+    }
+
+    /// Is this node session really up under the daemon's tmux socket? The
+    /// projection can lag behind a pane that died between two sweeps; the
+    /// callers that need the truth *now* (the declared wait, #588) ask here.
+    /// The crate's own unit tests drive the handlers without a tmux server and
+    /// answer `true`: the integration tests (`tests/`) exercise the real probe.
+    #[cfg(not(test))]
+    fn node_session_alive(&self, session: &str) -> bool {
+        tmux_session_manager::session_exists(&self.tmux_socket(), session)
+    }
+
+    #[cfg(test)]
+    fn node_session_alive(&self, _session: &str) -> bool {
+        true
     }
 }
 
@@ -1062,8 +1116,11 @@ pub fn run_complete(auto: bool) -> std::process::ExitCode {
     out.push_str(&refusal_detail_lines(slug, &body));
     out.push_str(match (slug, recoverable) {
         ("completion_not_released", Some(true)) => {
-            "Ask the user to click **Mark ready for completion** (or **Mark complete** to \
-             force completion). After release, run `pdo complete` again.\n\
+            "The node and its run are now awaiting the user (the daemon declared the \
+             wait for you). Ask the user to click **Mark ready for completion** (or \
+             **Mark complete** to force completion). After release, run `pdo complete` \
+             again. For any later question, declare it with \
+             `pdo wait-user --message \"<question>\"`.\n\
              Do NOT run `pdo fail`."
         }
         (_, Some(true)) => {
@@ -1081,6 +1138,177 @@ pub fn run_complete(auto: bool) -> std::process::ExitCode {
         // Unknown recoverability is treated as terminal: the expensive mistake is
         // appending a second failure, not skipping a retry.
         Some(false) | None => std::process::ExitCode::from(EXIT_REFUSED_TERMINAL),
+    }
+}
+
+/// Exit code of `pdo run wait` when `--timeout` elapsed with no child settled
+/// (ADR-0069 §3). Not a failure: the agent loops and calls again.
+pub const EXIT_WAIT_TIMEOUT: u8 = 2;
+
+/// `pdo wait-user [--message]` — declare the wait (#588 / ADR-0069 §1). Exit `0`
+/// declared or legal no-op · `3` refused by name (script node, no live session:
+/// still your turn, nothing terminal happened) · `1` daemon unreachable.
+pub fn run_wait_user(message: Option<String>) -> std::process::ExitCode {
+    let (rid, nid) = match (cli_run_id(), cli_node_id()) {
+        (Ok(r), Ok(n)) => (r, n),
+        (Err(e), _) | (_, Err(e)) => {
+            eprintln!("pdo wait-user FAILED — {e:#}");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    let url = cli_daemon_url();
+    let iter = cli_node_iter();
+    let message = message
+        .as_deref()
+        .map(declared_wait::truncate_message)
+        .filter(|m| !m.is_empty());
+    let resp = match reqwest::blocking::Client::new()
+        .post(format!("{url}/runs/{rid}/nodes/{nid}/wait-user"))
+        .json(&serde_json::json!({ "iter": iter, "message": message }))
+        .send()
+    {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("pdo wait-user FAILED to reach the daemon — {e}");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    let status = resp.status();
+    let raw = resp.text().unwrap_or_default();
+    let body: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+    if status.is_success() {
+        let noop = body.get("noop").and_then(|v| v.as_bool()) == Some(true);
+        let refreshed = body.get("refreshed").and_then(|v| v.as_bool()) == Some(true);
+        let what = if noop {
+            "already awaiting the user — nothing to do (legal no-op)"
+        } else if refreshed {
+            "still awaiting the user — the banner now shows your new message"
+        } else {
+            "now awaiting the user"
+        };
+        eprintln!(
+            "Node {nid} is {what}.{}\nThe wait lifts when the user answers in the PDO terminal \
+             (Enter) or releases completion. Keep the conversation going; never block on it.",
+            message
+                .as_deref()
+                .map(|m| format!(" Banner: “{m}”"))
+                .unwrap_or_default()
+        );
+        return std::process::ExitCode::SUCCESS;
+    }
+    if status.is_server_error() {
+        eprintln!("pdo wait-user FAILED to get a verdict — daemon returned {status}: {raw}");
+        return std::process::ExitCode::FAILURE;
+    }
+    let slug = body
+        .get("error")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let detail = body
+        .get("message")
+        .and_then(|v| v.as_str())
+        .unwrap_or(raw.as_str());
+    eprintln!(
+        "pdo wait-user REFUSED — {slug}: {detail}.\nNothing changed; the node is still yours. \
+         Do NOT run `pdo fail`."
+    );
+    std::process::ExitCode::from(EXIT_REFUSED_RECOVERABLE)
+}
+
+/// The daemon caps one long-poll at this many seconds; the CLI loops.
+pub const CHILDREN_WAIT_SERVER_MAX_SECS: u64 = 25;
+
+/// `pdo run wait [--all] [--timeout <s>]` — the blocking pull on the children
+/// long-poll (#588 / ADR-0069 §3). Exit `0` with one JSON line per settled child
+/// (or a `noop` line when no child was active) · `2` timeout, nothing on stdout ·
+/// `1` unreachable daemon or not in a node session.
+pub fn run_run_wait(all: bool, timeout: Option<u64>) -> std::process::ExitCode {
+    let Some((run_id, node_id)) = session_env_claim() else {
+        eprintln!(
+            "pdo run wait REFUSED — not_in_node_session: this command only makes sense from a \
+             PDO node session (PDO_RUN_ID / PDO_NODE_ID are not both set)."
+        );
+        return std::process::ExitCode::FAILURE;
+    };
+    let url = cli_daemon_url();
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(
+            CHILDREN_WAIT_SERVER_MAX_SECS + 15,
+        ))
+        .build()
+        .expect("reqwest client");
+    let deadline = timeout.map(|t| std::time::Instant::now() + std::time::Duration::from_secs(t));
+    // `since` comes from the daemon's clock (echoed back on every timeout), so a
+    // child that settles between two polls is still caught and no skew applies.
+    let mut since: Option<String> = None;
+    loop {
+        let mut server_wait = CHILDREN_WAIT_SERVER_MAX_SECS;
+        if let Some(d) = deadline {
+            let remaining = d.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() && since.is_some() {
+                return std::process::ExitCode::from(EXIT_WAIT_TIMEOUT);
+            }
+            server_wait = server_wait.min(remaining.as_secs().max(1));
+        }
+        let mut req = client
+            .get(format!("{url}/runs/{run_id}/nodes/{node_id}/children/wait"))
+            .query(&[
+                ("all", all.to_string()),
+                ("timeout_secs", server_wait.to_string()),
+            ])
+            .header(SESSION_RUN_HEADER, &run_id)
+            .header(SESSION_NODE_HEADER, &node_id);
+        if let Some(s) = &since {
+            req = req.query(&[("since", s)]);
+        }
+        let resp = match req.send() {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("pdo run wait FAILED to reach the daemon — {e}");
+                return std::process::ExitCode::FAILURE;
+            }
+        };
+        let status = resp.status();
+        let raw = resp.text().unwrap_or_default();
+        let body: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+        if !status.is_success() {
+            let slug = body
+                .get("error")
+                .and_then(|v| v.as_str())
+                .unwrap_or(raw.as_str());
+            eprintln!("pdo run wait REFUSED — daemon returned {status}: {slug}");
+            return std::process::ExitCode::FAILURE;
+        }
+        if body.get("noop").and_then(|v| v.as_bool()) == Some(true) {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "noop": true,
+                    "reason": body.get("reason").cloned().unwrap_or(serde_json::Value::Null),
+                })
+            );
+            return std::process::ExitCode::SUCCESS;
+        }
+        if let Some(children) = body.get("children").and_then(|v| v.as_array()) {
+            if !children.is_empty() {
+                for child in children {
+                    println!("{child}");
+                }
+                return std::process::ExitCode::SUCCESS;
+            }
+        }
+        // Server-side timeout: carry its clock forward and poll again, unless the
+        // caller's own deadline has passed.
+        since = body
+            .get("since")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .or(since);
+        if let Some(d) = deadline {
+            if std::time::Instant::now() >= d {
+                return std::process::ExitCode::from(EXIT_WAIT_TIMEOUT);
+            }
+        }
     }
 }
 
@@ -1310,7 +1538,10 @@ pub fn run_run_create(action: RunAction) -> Result<()> {
         auto_name,
         auto_fail,
         provisioning,
-    } = action;
+    } = action
+    else {
+        anyhow::bail!("`pdo run wait` has its own exit-code contract — see `run_run_wait`");
+    };
 
     let url = cli_daemon_url();
 
@@ -3009,12 +3240,16 @@ pub async fn serve_with_config(
     match sqlx::SqlitePool::connect(&format!("sqlite:{}?mode=rwc", db_path.display())).await {
         Ok(seed_db) => {
             match skill_bank::seed(&seed_db, &repo_root).await {
-                Ok(outcome) => match &outcome {
-                    skill_bank::SeedOutcome::Skipped { reason } => {
-                        warn!("skill seed skipped: {reason}")
+                Ok(outcomes) => {
+                    for (id, outcome) in &outcomes {
+                        match outcome {
+                            skill_bank::SeedOutcome::Skipped { reason } => {
+                                warn!("skill seed `{id}` skipped: {reason}")
+                            }
+                            _ => info!("skill seed `{id}`: {outcome:?}"),
+                        }
                     }
-                    _ => info!("skill seed: {outcome:?}"),
-                },
+                }
                 Err(error) => error!("skill seed failed: {error}"),
             }
             seed_db.close().await;
@@ -3105,6 +3340,7 @@ pub async fn serve_with_config(
         reaper_last_sweep_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
         reaper_killed: Arc::new(std::sync::atomic::AtomicI64::new(0)),
         reaper_killed_for_absent_run: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+        pty_typed: std::sync::Mutex::new(std::collections::HashSet::new()),
         panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(
             config.panic_on_stale_sweep,
         )),
@@ -4727,6 +4963,14 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route(
             "/runs/{run_id}/nodes/{node_id}/release",
             post(node_release_completion),
+        )
+        .route(
+            "/runs/{run_id}/nodes/{node_id}/wait-user",
+            post(node_wait_user),
+        )
+        .route(
+            "/runs/{run_id}/nodes/{node_id}/children/wait",
+            get(node_children_wait),
         )
         .route("/runs/{run_id}/nodes/{node_id}/fail", post(node_fail))
         .route("/runs/{run_id}/nodes/{node_id}/skip", post(node_skip))
@@ -13930,13 +14174,22 @@ async fn list_runs(State(state): State<Arc<AppState>>) -> Response {
         }
     };
 
-    let mut runs = Vec::new();
+    let mut states = Vec::new();
     for run_id in run_ids {
         let events = match load_events(&state.db, &run_id).await {
             Ok(e) => e,
             Err(_) => continue,
         };
         if let Some(run_state) = event_log::project(&events) {
+            states.push(run_state);
+        }
+    }
+    // #588 / ADR-0069 §4: a child awaiting its user lifts its parent on read.
+    child_awaiting::overlay(&mut states);
+
+    let mut runs = Vec::new();
+    for run_state in states {
+        {
             let stalled = event_log::is_stalled(&run_state);
             // Must be computed before `run_state`'s fields move into the literal:
             // `effective_repo_root` borrows `&run_state`.
@@ -14124,6 +14377,9 @@ async fn get_run(
 
     match event_log::project(&events) {
         Some(mut run_state) => {
+            // #588 / ADR-0069 §4: derived awaiting from the run's descendants,
+            // computed on read (like `stalled`) and never written.
+            apply_child_awaiting_overlay(&state, &mut run_state).await;
             let repo_root = effective_repo_root(&state, &run_state);
             // Read the cost transcripts from the sandboxed Run's staged home while
             // it is live, `~/.claude/projects/` otherwise. HOME absent → degrade to
@@ -14182,6 +14438,50 @@ async fn get_run(
         }
 
         None => (StatusCode::NOT_FOUND, "run not found").into_response(),
+    }
+}
+
+/// Project every run of the store and hand back the projections with the
+/// child-awaiting overlay applied ([`child_awaiting::overlay`]).
+async fn project_all_runs_overlaid(state: &AppState) -> Vec<event_log::RunState> {
+    let Ok(run_ids) = load_all_run_ids(&state.db).await else {
+        return Vec::new();
+    };
+    let mut states = Vec::new();
+    for run_id in run_ids {
+        let Ok(events) = load_events(&state.db, &run_id).await else {
+            continue;
+        };
+        if let Some(run_state) = event_log::project(&events) {
+            states.push(run_state);
+        }
+    }
+    child_awaiting::overlay(&mut states);
+    states
+}
+
+/// Replace `run_state` by its overlaid twin when the run has a descendant
+/// awaiting its user. A run with no child at all is left untouched without
+/// projecting the store — the common case stays as cheap as before #588.
+async fn apply_child_awaiting_overlay(state: &AppState, run_state: &mut event_log::RunState) {
+    if run_state.status != event_log::RunStatus::Running {
+        return;
+    }
+    let has_children: bool = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM events WHERE kind = 'run_started' \
+         AND json_extract(payload, '$.parent_run_id') = ?",
+    )
+    .bind(&run_state.run_id)
+    .fetch_one(&state.db)
+    .await
+    .map(|n| n > 0)
+    .unwrap_or(true);
+    if !has_children {
+        return;
+    }
+    let overlaid = project_all_runs_overlaid(state).await;
+    if let Some(found) = overlaid.into_iter().find(|r| r.run_id == run_state.run_id) {
+        *run_state = found;
     }
 }
 
@@ -14269,6 +14569,167 @@ struct RunChildrenResponse {
     nodes: Vec<RunChildrenGroup>,
 }
 
+#[derive(Deserialize, Default)]
+struct ChildrenWaitQuery {
+    #[serde(default)]
+    all: Option<bool>,
+    #[serde(default)]
+    since: Option<String>,
+    #[serde(default)]
+    timeout_secs: Option<u64>,
+}
+
+/// One settled child as `pdo run wait` prints it.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+struct SettledChild {
+    run_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    status: event_log::RunStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    /// The child's own live children — a settled child may leave grandchildren
+    /// running (they are ordinary runs, ADR-0064).
+    children_active: usize,
+}
+
+/// One look at the children of `(run, node)`: which are live, which settled
+/// after `since`. Pure over the projected store.
+struct ChildrenWaitSnapshot {
+    active: usize,
+    settled_after: Vec<SettledChild>,
+    total: usize,
+}
+
+fn children_wait_snapshot(
+    runs: &[event_log::RunState],
+    run_id: &str,
+    node_id: &str,
+    since: &str,
+) -> ChildrenWaitSnapshot {
+    let mut snapshot = ChildrenWaitSnapshot {
+        active: 0,
+        settled_after: Vec::new(),
+        total: 0,
+    };
+    for child in runs {
+        if child.parent_run_id.as_deref() != Some(run_id)
+            || child.parent_node_id.as_deref() != Some(node_id)
+        {
+            continue;
+        }
+        snapshot.total += 1;
+        if child.status.is_live() {
+            snapshot.active += 1;
+            continue;
+        }
+        // Terminal *after* the call started: `completed_at` is ISO-8601 with a
+        // fixed width, so the string order is the time order. A terminal child
+        // with no timestamp (an archived legacy run) counts as old.
+        let after = child.completed_at.as_deref().is_some_and(|t| t >= since);
+        if !after {
+            continue;
+        }
+        let children_active = runs
+            .iter()
+            .filter(|r| r.parent_run_id.as_deref() == Some(child.run_id.as_str()))
+            .filter(|r| r.status.is_live())
+            .count();
+        snapshot.settled_after.push(SettledChild {
+            run_id: child.run_id.clone(),
+            name: child.name.clone(),
+            status: child.status.clone(),
+            reason: child.failure_reason.clone(),
+            children_active,
+        });
+    }
+    snapshot
+}
+
+/// `GET /runs/{run_id}/nodes/{node_id}/children/wait` — the children long-poll
+/// (#588 / ADR-0069 §3). Holds the response until a child of this node becomes
+/// terminal after `since` (every child with `all=true`), or `timeout_secs`
+/// (server-capped at [`CHILDREN_WAIT_SERVER_MAX_SECS`]) elapses — then answers
+/// `{"timeout":true,"since":…}` and the CLI calls again. No active child at the
+/// call ⇒ `{"noop":true}` (ADR-0025). Only the node's own session may ask: the
+/// session headers must name this run and node (`not_in_node_session`).
+async fn node_children_wait(
+    State(state): State<Arc<AppState>>,
+    AxumPath((run_id, node_id)): AxumPath<(String, String)>,
+    headers: HeaderMap,
+    Query(query): Query<ChildrenWaitQuery>,
+) -> Response {
+    let claim = session_claim_from_headers(&headers);
+    if claim
+        .as_ref()
+        .is_none_or(|c| c.run_id != run_id || c.node_id != node_id)
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "not_in_node_session",
+                "message": "`pdo run wait` must be run from the node session it waits for",
+            })),
+        )
+            .into_response();
+    }
+    if reload_run_state_with(&state.db, &run_id).await.is_none() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "run_not_found" })),
+        )
+            .into_response();
+    }
+    let all = query.all.unwrap_or(false);
+    let since = query.since.unwrap_or_else(event_log::now_iso);
+    let budget = query
+        .timeout_secs
+        .unwrap_or(CHILDREN_WAIT_SERVER_MAX_SECS)
+        .clamp(1, CHILDREN_WAIT_SERVER_MAX_SECS);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(budget);
+
+    let mut first = true;
+    loop {
+        let runs = project_all_runs_overlaid(&state).await;
+        let snapshot = children_wait_snapshot(&runs, &run_id, &node_id, &since);
+        if first {
+            first = false;
+            if snapshot.active == 0 && snapshot.settled_after.is_empty() {
+                return Json(serde_json::json!({
+                    "noop": true,
+                    "reason": format!("node {node_id} of run {run_id} has no active child run"),
+                    "children": [],
+                    "since": since,
+                }))
+                .into_response();
+            }
+        }
+        let ready = if all {
+            snapshot.active == 0 && !snapshot.settled_after.is_empty()
+        } else {
+            !snapshot.settled_after.is_empty()
+        };
+        if ready {
+            return Json(serde_json::json!({
+                "children": snapshot.settled_after,
+                "all": all,
+                "since": since,
+                "children_total": snapshot.total,
+            }))
+            .into_response();
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Json(serde_json::json!({
+                "timeout": true,
+                "children": [],
+                "since": since,
+            }))
+            .into_response();
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+}
+
 /// `GET /runs/{run_id}/children` — the dedicated children read (ADR-0064):
 /// every Run whose mechanical `parent_run_id` is this Run, grouped by parent
 /// node, in the parent's node-definition order (unknown/absent node last),
@@ -14293,6 +14754,7 @@ async fn list_run_children(
     };
 
     let mut by_node: HashMap<Option<String>, Vec<RunChildEntry>> = HashMap::new();
+    let mut projected: Vec<(Vec<event_log::Event>, event_log::RunState)> = Vec::new();
     for child_id in run_ids {
         if child_id == run_id {
             continue;
@@ -14304,6 +14766,13 @@ async fn list_run_children(
         let Some(child) = event_log::project(&events) else {
             continue;
         };
+        projected.push((events, child));
+    }
+    // #588 / ADR-0069 §4: a grandchild's wait shows on the child row too, so
+    // the Orchestration tab and the run list agree about the same child.
+    let mut states: Vec<event_log::RunState> = projected.iter().map(|(_, s)| s.clone()).collect();
+    child_awaiting::overlay(&mut states);
+    for ((events, _), child) in projected.into_iter().zip(states) {
         if child.parent_run_id.as_deref() != Some(run_id.as_str()) {
             continue;
         }
@@ -17327,6 +17796,54 @@ impl CompletionAttempt {
 /// forgotten-run refusal (#328), the completion guard (#212/#354), the
 /// sub-worktree commit+merge, the non-isolated cleanliness check, output validation,
 /// the terminal append, then the detached reap+advance tail (#304/ADR-0023).
+#[derive(Deserialize, Default)]
+struct WaitUserRequest {
+    #[serde(default)]
+    iter: Option<i64>,
+    #[serde(default)]
+    message: Option<String>,
+}
+
+/// `POST /runs/{run_id}/nodes/{node_id}/wait-user` — the declared wait (#588 /
+/// ADR-0069): the agent says it is waiting on its user. Accepted on any node
+/// holding a live session; named `409` on a `script` node or without a live
+/// session; `noop` on a repeat with the same message.
+async fn node_wait_user(
+    State(state): State<Arc<AppState>>,
+    AxumPath((run_id, node_id)): AxumPath<(String, String)>,
+    body: Option<Json<WaitUserRequest>>,
+) -> Response {
+    let Json(body) = body.unwrap_or_default();
+    let iter = body.iter.unwrap_or(1);
+    match declared_wait::declare_wait(
+        &state,
+        &run_id,
+        &node_id,
+        iter,
+        event_log::AWAITING_CAUSE_DECLARED,
+        body.message.as_deref(),
+        |session| state.node_session_alive(session),
+    )
+    .await
+    {
+        Ok(outcome) => {
+            let noop = outcome == declared_wait::DeclareOutcome::Noop;
+            let refreshed = outcome == declared_wait::DeclareOutcome::Refreshed;
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "ok": true,
+                    "awaiting": true,
+                    "noop": noop,
+                    "refreshed": refreshed,
+                })),
+            )
+                .into_response()
+        }
+        Err(refusal) => refusal.into_response(&run_id, &node_id, iter),
+    }
+}
+
 async fn node_done(
     State(state): State<Arc<AppState>>,
     AxumPath((run_id, node_id)): AxumPath<(String, String)>,
@@ -17808,6 +18325,10 @@ pub(crate) async fn complete_node_iteration(
     }
 
     if let Some(refusal) = interactive_completion_refusal(&pre_run_state, &node_id, iter) {
+        // #588 / ADR-0069 §1: the agent is done and genuinely waits for the
+        // click — the daemon declares the wait for it, so the run turns amber
+        // with the reason on the banner (A3). Best-effort; the refusal stands.
+        declared_wait::declare_completion_not_released(state, &run_id, &node_id, iter).await;
         return CompletionAttempt::refused(refusal);
     }
 
@@ -18143,7 +18664,10 @@ pub(crate) async fn embed_reopen_for_targeted_command(
     let needs_reopen = (run_state.status.is_terminal()
         && run_state.status != event_log::RunStatus::Archived)
         || (run_state.status == event_log::RunStatus::AwaitingUser
-            && run_state.awaiting_reason.is_some());
+            && run_state.awaiting_reason.is_some()
+            // #588: a declared wait carries a prose reason too, but it is not an
+            // incident — nothing to reopen, the agent is simply asking.
+            && !run_state.is_declared_wait());
     if !needs_reopen {
         return Ok(run_state);
     }
@@ -22492,6 +23016,7 @@ mod tests {
             reaper_last_sweep_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             reaper_killed: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             reaper_killed_for_absent_run: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            pty_typed: std::sync::Mutex::new(std::collections::HashSet::new()),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
@@ -25179,6 +25704,7 @@ mod tests {
             reaper_last_sweep_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             reaper_killed: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             reaper_killed_for_absent_run: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            pty_typed: std::sync::Mutex::new(std::collections::HashSet::new()),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
@@ -28385,6 +28911,526 @@ mod tests {
         .unwrap()
     }
 
+    // -----------------------------------------------------------------------
+    // Declared wait (#588 / ADR-0069)
+    // -----------------------------------------------------------------------
+
+    async fn seed_started_node(state: &Arc<AppState>, run_id: &str, interactive: bool) {
+        for event in [
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::RunStarted,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({
+                    "pipeline_name": "declared",
+                    "node_defs": [
+                        { "id": "griller", "node_type": "agent", "inputs": [], "outputs": [] },
+                        { "id": "runner", "node_type": "script", "inputs": [], "outputs": [] },
+                        { "id": "later", "node_type": "agent", "inputs": [], "outputs": [] }
+                    ]
+                })),
+            },
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeStarted,
+                node_id: Some("griller".into()),
+                iter: Some(1),
+                payload: Some(serde_json::json!({ "interactive": interactive })),
+            },
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeStarted,
+                node_id: Some("runner".into()),
+                iter: Some(1),
+                payload: None,
+            },
+        ] {
+            append_event(state, &event).await.unwrap();
+        }
+    }
+
+    async fn post_wait_user(
+        state: &Arc<AppState>,
+        run_id: &str,
+        node_id: &str,
+        body: serde_json::Value,
+    ) -> (StatusCode, serde_json::Value) {
+        let response = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/nodes/{node_id}/wait-user"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        (status, response_json(response).await)
+    }
+
+    async fn projected(state: &Arc<AppState>, run_id: &str) -> event_log::RunState {
+        event_log::project(&load_events(&state.db, run_id).await.unwrap()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn wait_user_declares_the_wait_with_the_message_as_run_reason_and_no_code() {
+        let state = test_state().await;
+        let run_id = "declared-wait-message";
+        seed_started_node(&state, run_id, true).await;
+        // A fresh interactive node is NOT awaiting (ADR-0069: nothing at spawn).
+        let before = projected(&state, run_id).await;
+        assert_eq!(before.status, event_log::RunStatus::Running);
+        assert_eq!(
+            before.nodes["griller"].status,
+            event_log::NodeStatus::Running
+        );
+
+        let (status, body) = post_wait_user(
+            &state,
+            run_id,
+            "griller",
+            serde_json::json!({ "iter": 1, "message": "Which layout: strip or card?" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["noop"], false);
+
+        let after = projected(&state, run_id).await;
+        assert_eq!(after.status, event_log::RunStatus::AwaitingUser);
+        assert_eq!(
+            after.awaiting_reason.as_deref(),
+            Some("Which layout: strip or card?")
+        );
+        assert!(
+            after.awaiting_reason_code.is_none(),
+            "a declared wait has no code"
+        );
+        assert!(after.is_declared_wait());
+        let node = &after.nodes["griller"];
+        assert_eq!(node.status, event_log::NodeStatus::AwaitingUser);
+        let info = node.awaiting.as_ref().expect("awaiting info");
+        assert_eq!(info.cause, event_log::AWAITING_CAUSE_DECLARED);
+        assert_eq!(
+            info.message.as_deref(),
+            Some("Which layout: strip or card?")
+        );
+
+        // Same message again: a legal no-op, nothing appended.
+        let events_before = load_events(&state.db, run_id).await.unwrap().len();
+        let (status, body) = post_wait_user(
+            &state,
+            run_id,
+            "griller",
+            serde_json::json!({ "iter": 1, "message": "Which layout: strip or card?" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["noop"], true);
+        assert_eq!(
+            load_events(&state.db, run_id).await.unwrap().len(),
+            events_before
+        );
+
+        // A new message refreshes the banner.
+        let (status, body) = post_wait_user(
+            &state,
+            run_id,
+            "griller",
+            serde_json::json!({ "iter": 1, "message": "Dark theme too?" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["refreshed"], true);
+        let refreshed = projected(&state, run_id).await;
+        assert_eq!(
+            refreshed.awaiting_reason.as_deref(),
+            Some("Dark theme too?")
+        );
+
+        // A message over the cap is truncated by the daemon too.
+        let long = "z".repeat(300);
+        post_wait_user(
+            &state,
+            run_id,
+            "griller",
+            serde_json::json!({ "iter": 1, "message": long }),
+        )
+        .await;
+        let capped = projected(&state, run_id).await;
+        assert_eq!(
+            capped.awaiting_reason.as_deref().unwrap().chars().count(),
+            declared_wait::MESSAGE_MAX_CHARS
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_user_bare_is_accepted_on_a_non_interactive_node_and_refused_by_name() {
+        let state = test_state().await;
+        let run_id = "declared-wait-refusals";
+        seed_started_node(&state, run_id, false).await;
+
+        // Bare, on a plain (non-interactive) agent node: accepted, no message.
+        let (status, _) =
+            post_wait_user(&state, run_id, "griller", serde_json::json!({ "iter": 1 })).await;
+        assert_eq!(status, StatusCode::OK);
+        let rs = projected(&state, run_id).await;
+        assert_eq!(rs.status, event_log::RunStatus::AwaitingUser);
+        assert!(rs.awaiting_reason.is_none(), "no message ⇒ no prose reason");
+        assert!(rs.awaiting_reason_code.is_none());
+        assert!(rs.nodes["griller"]
+            .awaiting
+            .as_ref()
+            .unwrap()
+            .message
+            .is_none());
+
+        // A script node runs no agent: named refusal, still the caller's turn.
+        let (status, body) =
+            post_wait_user(&state, run_id, "runner", serde_json::json!({ "iter": 1 })).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["error"], "node_is_script");
+        assert_eq!(body["recoverable"], true);
+
+        // A defined node that never spawned has no session.
+        let (status, body) =
+            post_wait_user(&state, run_id, "later", serde_json::json!({ "iter": 1 })).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["error"], "node_session_not_live");
+
+        // An unknown node.
+        let (status, body) =
+            post_wait_user(&state, run_id, "ghost", serde_json::json!({ "iter": 1 })).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body["error"], "node_not_found");
+    }
+
+    #[tokio::test]
+    async fn wait_user_is_refused_by_name_when_tmux_no_longer_has_the_session() {
+        // The projection still says `running`, tmux says the pane is gone (FP
+        // #793, finding 3): the refusal is `node_session_not_live`, nothing is
+        // written, and the node stays `running` for the sweep to judge.
+        let state = test_state().await;
+        let run_id = "declared-wait-dead-pane";
+        seed_started_node(&state, run_id, true).await;
+        let asked = std::sync::Mutex::new(None);
+        let refusal = declared_wait::declare_wait(
+            &state,
+            run_id,
+            "griller",
+            1,
+            event_log::AWAITING_CAUSE_DECLARED,
+            Some("anyone there?"),
+            |session| {
+                *asked.lock().unwrap() = Some(session.to_string());
+                false
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(refusal.slug(), "node_session_not_live");
+        assert_eq!(
+            asked.lock().unwrap().as_deref(),
+            Some(tmux_session_manager::node_session_name(run_id, "griller", 1).as_str()),
+            "the probe is asked about the node's own session"
+        );
+        let rs = projected(&state, run_id).await;
+        assert_eq!(rs.status, event_log::RunStatus::Running);
+        assert_eq!(rs.nodes["griller"].status, event_log::NodeStatus::Running);
+        assert!(rs.nodes["griller"].awaiting.is_none());
+
+        // The same declaration with a live session goes through.
+        let outcome = declared_wait::declare_wait(
+            &state,
+            run_id,
+            "griller",
+            1,
+            event_log::AWAITING_CAUSE_DECLARED,
+            Some("anyone there?"),
+            |_| true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome, declared_wait::DeclareOutcome::Declared);
+    }
+
+    #[test]
+    fn run_wait_settled_children_carry_the_reason_of_a_failed_or_skipped_child() {
+        // `pdo run wait` prints `reason` for a `failed` / `skipped` child (the
+        // agent reads *why*); a `completed` child has none and the key is
+        // omitted rather than `null`.
+        fn run(
+            id: &str,
+            parent: Option<&str>,
+            end: Option<(event_log::EventKind, &str)>,
+        ) -> event_log::RunState {
+            let mut started = serde_json::json!({ "pipeline_name": "p", "name": id });
+            if let Some(p) = parent {
+                started["parent_run_id"] = serde_json::json!(p);
+                started["parent_node_id"] = serde_json::json!("worker");
+            }
+            let mut events = vec![event_log::Event {
+                id: None,
+                run_id: id.into(),
+                ts: "2026-09-12T10:00:00Z".into(),
+                kind: event_log::EventKind::RunStarted,
+                node_id: None,
+                iter: None,
+                payload: Some(started),
+            }];
+            if let Some((kind, reason)) = end {
+                events.push(event_log::Event {
+                    id: None,
+                    run_id: id.into(),
+                    ts: "2026-09-12T10:05:00Z".into(),
+                    kind,
+                    node_id: None,
+                    iter: None,
+                    payload: Some(serde_json::json!({ "reason": reason })),
+                });
+            }
+            event_log::project(&events).unwrap()
+        }
+        let runs = vec![
+            run("parent", None, None),
+            run(
+                "failed-child",
+                Some("parent"),
+                Some((event_log::EventKind::RunFailed, "build broke")),
+            ),
+            run(
+                "skipped-child",
+                Some("parent"),
+                Some((event_log::EventKind::RunSkipped, "nothing to do")),
+            ),
+            run(
+                "completed-child",
+                Some("parent"),
+                Some((event_log::EventKind::RunCompleted, "")),
+            ),
+        ];
+        let snapshot = children_wait_snapshot(&runs, "parent", "worker", "2026-09-12T10:00:00Z");
+        assert_eq!(snapshot.active, 0);
+        assert_eq!(snapshot.total, 3);
+        let by_id: HashMap<&str, serde_json::Value> = snapshot
+            .settled_after
+            .iter()
+            .map(|c| (c.run_id.as_str(), serde_json::to_value(c).unwrap()))
+            .collect();
+        assert_eq!(by_id["failed-child"]["status"], "failed");
+        assert_eq!(by_id["failed-child"]["reason"], "build broke");
+        assert_eq!(by_id["skipped-child"]["status"], "skipped");
+        assert_eq!(by_id["skipped-child"]["reason"], "nothing to do");
+        assert_eq!(by_id["completed-child"]["status"], "completed");
+        assert!(
+            by_id["completed-child"].get("reason").is_none(),
+            "no reason ⇒ key omitted: {}",
+            by_id["completed-child"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_human_enter_after_typed_bytes_lifts_the_wait_but_nothing_else_does() {
+        let state = test_state().await;
+        let run_id = "20260912-100000-a11ce01";
+        seed_started_node(&state, run_id, true).await;
+        post_wait_user(
+            &state,
+            run_id,
+            "griller",
+            serde_json::json!({ "iter": 1, "message": "q?" }),
+        )
+        .await;
+        let session = tmux_session_manager::node_session_name(run_id, "griller", 1);
+
+        // An Enter on an empty line (a click to focus the pane): nothing.
+        declared_wait::note_pty_input(&state, &session, b"\r").await;
+        assert_eq!(
+            projected(&state, run_id).await.status,
+            event_log::RunStatus::AwaitingUser
+        );
+        // Arrows, scroll, mouse: nothing, and they do not arm the rule either.
+        declared_wait::note_pty_input(&state, &session, b"\x1b[A\x1b[B\x1b[<65;3;4M").await;
+        declared_wait::note_pty_input(&state, &session, b"\r").await;
+        assert_eq!(
+            projected(&state, run_id).await.status,
+            event_log::RunStatus::AwaitingUser
+        );
+        // Typed bytes, then Enter: the wait lifts, node and run back to running.
+        declared_wait::note_pty_input(&state, &session, b"the strip").await;
+        declared_wait::note_pty_input(&state, &session, b"\r").await;
+        let lifted = projected(&state, run_id).await;
+        assert_eq!(lifted.status, event_log::RunStatus::Running);
+        assert_eq!(
+            lifted.nodes["griller"].status,
+            event_log::NodeStatus::Running
+        );
+        assert!(lifted.nodes["griller"].awaiting.is_none());
+        assert!(lifted.awaiting_reason.is_none());
+        assert!(load_events(&state.db, run_id)
+            .await
+            .unwrap()
+            .iter()
+            .any(|e| e.kind == event_log::EventKind::NodeResumed));
+
+        // The manager / shell sessions never lift anything.
+        post_wait_user(&state, run_id, "griller", serde_json::json!({ "iter": 1 })).await;
+        declared_wait::note_pty_input(
+            &state,
+            &tmux_session_manager::manager_session_name(run_id),
+            b"hello\r",
+        )
+        .await;
+        assert_eq!(
+            projected(&state, run_id).await.status,
+            event_log::RunStatus::AwaitingUser
+        );
+
+        // Typed bytes BEFORE a re-declaration do not count: the rule restarts.
+        declared_wait::note_pty_input(&state, &session, b"typed before").await;
+        post_wait_user(
+            &state,
+            run_id,
+            "griller",
+            serde_json::json!({ "iter": 1, "message": "another?" }),
+        )
+        .await;
+        declared_wait::note_pty_input(&state, &session, b"\r").await;
+        assert_eq!(
+            projected(&state, run_id).await.status,
+            event_log::RunStatus::AwaitingUser
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refused_unreleased_completion_declares_the_wait_and_release_lifts_it() {
+        let state = test_state().await;
+        let run_id = "declared-wait-refused-completion";
+        seed_started_node(&state, run_id, true).await;
+
+        let attempt = complete_node_iteration(
+            &state,
+            run_id.into(),
+            "griller".into(),
+            1,
+            CompletionSource::Explicit,
+        )
+        .await;
+        assert!(matches!(
+            attempt,
+            CompletionAttempt::Refused {
+                refusal: completion_refusal::CompletionRefusal::CompletionNotReleased
+            }
+        ));
+        let rs = projected(&state, run_id).await;
+        assert_eq!(rs.status, event_log::RunStatus::AwaitingUser);
+        let info = rs.nodes["griller"]
+            .awaiting
+            .as_ref()
+            .expect("declared by the daemon");
+        assert_eq!(
+            info.cause,
+            event_log::AWAITING_CAUSE_COMPLETION_NOT_RELEASED
+        );
+        assert_eq!(
+            rs.awaiting_reason.as_deref(),
+            Some(declared_wait::COMPLETION_NOT_RELEASED_MESSAGE)
+        );
+        assert!(rs.awaiting_reason_code.is_none());
+
+        // A second refusal does not stack a second marker.
+        let n = load_events(&state.db, run_id).await.unwrap().len();
+        complete_node_iteration(
+            &state,
+            run_id.into(),
+            "griller".into(),
+            1,
+            CompletionSource::StopHook,
+        )
+        .await;
+        assert_eq!(load_events(&state.db, run_id).await.unwrap().len(), n);
+
+        // The release (ADR-0068) brings the node back to running — unchanged.
+        let response = release_node_completion(&state, run_id, "griller", 1).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let released = projected(&state, run_id).await;
+        assert_eq!(released.status, event_log::RunStatus::Running);
+        assert_eq!(
+            released.nodes["griller"].status,
+            event_log::NodeStatus::Running
+        );
+        assert!(released.nodes["griller"].awaiting.is_none());
+        assert!(released.nodes["griller"].iterations[0].completion_released);
+    }
+
+    #[tokio::test]
+    async fn a_children_pending_marker_is_not_lifted_by_enter() {
+        let state = test_state().await;
+        let run_id = "20260912-100000-b1nd1e2";
+        seed_started_node(&state, run_id, false).await;
+        append_event(
+            &state,
+            &event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeAwaitingUser,
+                node_id: Some("griller".into()),
+                iter: Some(1),
+                payload: Some(serde_json::json!({
+                    "reason": run_advance::BINDING_MARKER_REASON, "active": 1, "failed": 0
+                })),
+            },
+        )
+        .await
+        .unwrap();
+        let rs = projected(&state, run_id).await;
+        assert_eq!(
+            rs.nodes["griller"].awaiting.as_ref().unwrap().cause,
+            run_advance::BINDING_MARKER_REASON
+        );
+        assert!(rs.awaiting_reason.is_none(), "the marker carries no prose");
+        let session = tmux_session_manager::node_session_name(run_id, "griller", 1);
+        declared_wait::note_pty_input(&state, &session, b"hi\r").await;
+        assert_eq!(
+            projected(&state, run_id).await.nodes["griller"].status,
+            event_log::NodeStatus::AwaitingUser
+        );
+    }
+
+    #[tokio::test]
+    async fn a_declared_wait_is_not_an_incident_for_the_reopen_embedding() {
+        let state = test_state().await;
+        let run_id = "declared-wait-no-reopen";
+        seed_started_node(&state, run_id, true).await;
+        post_wait_user(
+            &state,
+            run_id,
+            "griller",
+            serde_json::json!({ "iter": 1, "message": "q?" }),
+        )
+        .await;
+        let rs = projected(&state, run_id).await;
+        let n = load_events(&state.db, run_id).await.unwrap().len();
+        let same = embed_reopen_for_targeted_command(&state, run_id, rs)
+            .await
+            .unwrap();
+        assert_eq!(same.status, event_log::RunStatus::AwaitingUser);
+        assert_eq!(
+            load_events(&state.db, run_id).await.unwrap().len(),
+            n,
+            "no reopen command was appended for a declared wait"
+        );
+    }
+
     #[tokio::test]
     async fn every_completion_source_is_refused_until_interactive_release() {
         let state = test_state().await;
@@ -29269,6 +30315,7 @@ mod tests {
                 frontmatter_violations: Vec::new(),
                 missing_outputs: Vec::new(),
                 delivery: None,
+                awaiting: None,
             },
         );
         rs
@@ -29487,6 +30534,7 @@ mod tests {
                 frontmatter_violations: Vec::new(),
                 missing_outputs: Vec::new(),
                 delivery: None,
+                awaiting: None,
             },
         );
         // An open loop region (exhausted at max_iter, not done) awaiting a route.
@@ -29545,6 +30593,7 @@ mod tests {
                 frontmatter_violations: Vec::new(),
                 missing_outputs: Vec::new(),
                 delivery: None,
+                awaiting: None,
             },
         );
         // Node `b` is throttled `Waiting`: ready but no admission slot yet. No
@@ -29571,6 +30620,7 @@ mod tests {
                 frontmatter_violations: Vec::new(),
                 missing_outputs: Vec::new(),
                 delivery: None,
+                awaiting: None,
             },
         );
 
@@ -29813,6 +30863,7 @@ mod tests {
                     frontmatter_violations: Vec::new(),
                     missing_outputs: Vec::new(),
                     delivery: None,
+                    awaiting: None,
                 },
             );
         }
@@ -30450,6 +31501,7 @@ mod tests {
             reaper_last_sweep_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             reaper_killed: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             reaper_killed_for_absent_run: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            pty_typed: std::sync::Mutex::new(std::collections::HashSet::new()),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
@@ -33058,7 +34110,10 @@ edges:
             target_repo,
             name,
             ..
-        } = *action;
+        } = *action
+        else {
+            panic!("expected `run create`");
+        };
         assert_eq!(pipeline, "my-pipeline");
         assert_eq!(
             input, "",
@@ -33127,7 +34182,10 @@ edges:
             auto_name,
             auto_fail,
             provisioning,
-        } = *action;
+        } = *action
+        else {
+            panic!("expected `run create`");
+        };
         assert_eq!(pipeline, "my-pipeline");
         assert_eq!(input, "do the work");
         assert!(input_file.is_none());
@@ -33179,7 +34237,10 @@ edges:
             image,
             file,
             ..
-        } = *action;
+        } = *action
+        else {
+            panic!("expected `run create`");
+        };
         assert_eq!(
             input_file.as_deref(),
             Some(std::path::Path::new("/tmp/spec.md"))
@@ -37237,6 +38298,7 @@ edges: []
             reaper_last_sweep_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             reaper_killed: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             reaper_killed_for_absent_run: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            pty_typed: std::sync::Mutex::new(std::collections::HashSet::new()),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),
@@ -37446,6 +38508,7 @@ edges: []
             reaper_last_sweep_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             reaper_killed: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             reaper_killed_for_absent_run: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            pty_typed: std::sync::Mutex::new(std::collections::HashSet::new()),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             node_done_tail_gate: Arc::new(tokio::sync::Notify::new()),

@@ -656,7 +656,11 @@ function InfoTab({
             style={{ fontSize: "10.5px" }}
             data-testid="run-awaiting-reason"
           >
-            <div className="font-medium text-st-await">Interrupted · awaiting you</div>
+            {/* #588: only an incident carries a machine slug; a declared wait is
+                the agent's question (or an awaiting child), not an interruption. */}
+            <div className="font-medium text-st-await">
+              {run.awaiting_reason_code ? "Interrupted · awaiting you" : "Awaiting you"}
+            </div>
             <div className="mt-0.5 break-words">{run.awaiting_reason}</div>
           </div>
         )}

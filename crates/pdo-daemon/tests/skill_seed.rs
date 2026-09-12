@@ -10,6 +10,7 @@ use crate::common::TestDaemon;
 use reqwest::StatusCode;
 
 const SEEDED_ID: &str = "pdo-orchestrate";
+const INTERACTIVE_ID: &str = "pdo-interactive";
 
 async fn get_json(daemon: &TestDaemon, path: &str) -> serde_json::Value {
     reqwest::get(format!("{}{path}", daemon.url()))
@@ -38,20 +39,37 @@ async fn startup_seeds_the_skill_in_the_pdo_folder_and_flags_it_locked() {
     assert_eq!(folders[0]["id"], "skf-pdo");
     assert_eq!(folders[0]["name"], "PDO");
 
+    // #588 / ADR-0069: two seeded skills, one per node toggle, both locked.
     let skills = bank["skills"].as_array().unwrap();
-    assert_eq!(skills.len(), 1, "{bank}");
-    assert_eq!(skills[0]["id"], SEEDED_ID);
-    assert_eq!(skills[0]["name"], "pdo-orchestrate");
-    assert_eq!(skills[0]["folder_id"], "skf-pdo");
-    assert_eq!(skills[0]["locked"], true);
+    assert_eq!(skills.len(), 2, "{bank}");
+    let orchestrate = skills
+        .iter()
+        .find(|s| s["id"] == SEEDED_ID)
+        .expect("pdo-orchestrate");
+    assert_eq!(orchestrate["name"], "pdo-orchestrate");
+    assert_eq!(orchestrate["folder_id"], "skf-pdo");
+    assert_eq!(orchestrate["locked"], true);
+    let interactive = skills
+        .iter()
+        .find(|s| s["id"] == INTERACTIVE_ID)
+        .expect("pdo-interactive");
+    assert_eq!(interactive["name"], "pdo-interactive");
+    assert_eq!(interactive["folder_id"], "skf-pdo");
+    assert_eq!(interactive["locked"], true);
+    let interactive_detail = get_json(&daemon, &format!("/settings/skills/{INTERACTIVE_ID}")).await;
+    assert_eq!(interactive_detail["frontmatter"]["skill_version"], 1);
+    assert!(interactive_detail["content"]
+        .as_str()
+        .unwrap()
+        .contains("pdo wait-user"));
 
     // The detail answers like any skill: content, frontmatter with its
     // `skill_version`, the body the harness will read.
     let detail = get_json(&daemon, &format!("/settings/skills/{SEEDED_ID}")).await;
     assert_eq!(detail["name"], "pdo-orchestrate");
     assert_eq!(detail["locked"], true);
-    // #779 bumped the seeded guidance (attachment flags, fixed examples).
-    assert_eq!(detail["frontmatter"]["skill_version"], 2);
+    // #588 bumped the seeded guidance (`pdo run wait`, binding contract).
+    assert_eq!(detail["frontmatter"]["skill_version"], 3);
     assert!(detail["content"]
         .as_str()
         .unwrap()

@@ -41,8 +41,11 @@ pub(crate) fn skill_dir(repo_root: &Path, id: &str) -> PathBuf {
 
 pub(crate) const SKILL_MD: &str = "SKILL.md";
 
-// The seeded skill (#722, spec #719, ADR-0064) — see the `Seed` section below.
+// The seeded skills (#722, spec #719, ADR-0064; #588, ADR-0069) — see the `Seed`
+// section below. One per node toggle: `orchestrator` seeds `pdo-orchestrate`,
+// `interactive` seeds `pdo-interactive`.
 pub(crate) const SEEDED_SKILL_ID: &str = "pdo-orchestrate";
+pub(crate) const INTERACTIVE_SKILL_ID: &str = "pdo-interactive";
 pub(crate) const SEEDED_FOLDER_ID: &str = "skf-pdo";
 pub(crate) const SEEDED_FOLDER_NAME: &str = "PDO";
 
@@ -1151,18 +1154,41 @@ pub(crate) async fn delete(
 // Seed (#722, spec #719, ADR-0064)
 // ---------------------------------------------------------------------------
 
-/// Is `id` the seeded skill? The one question the lock and the UI ask.
-pub(crate) fn is_seeded(id: &str) -> bool {
-    id == SEEDED_SKILL_ID
+/// One skill PDO seeds at startup: its bank id (also its name) and the built-in
+/// `SKILL.md`. The seed carries a **list** (ADR-0069 §2): adding a toggle skill
+/// is one more entry here, nothing else.
+pub(crate) struct SeededSkill {
+    pub(crate) id: &'static str,
+    pub(crate) content: &'static str,
 }
 
-/// The seeded `SKILL.md`, versioned with this binary. Bump `skill_version` in
-/// the frontmatter whenever the guidance changes: the next start overwrites the
-/// copy in every bank, keeping ids and referents intact.
+pub(crate) const SEEDED_SKILLS: &[SeededSkill] = &[
+    SeededSkill {
+        id: SEEDED_SKILL_ID,
+        content: SEEDED_SKILL_MD,
+    },
+    SeededSkill {
+        id: INTERACTIVE_SKILL_ID,
+        content: INTERACTIVE_SKILL_MD,
+    },
+];
+
+/// Is `id` one of the seeded skills? The one question the lock and the UI ask.
+pub(crate) fn is_seeded(id: &str) -> bool {
+    SEEDED_SKILLS.iter().any(|skill| skill.id == id)
+}
+
+/// The seeded `pdo-orchestrate` `SKILL.md`, versioned with this binary. Bump
+/// `skill_version` in the frontmatter whenever the guidance changes: the next
+/// start overwrites the copy in every bank, keeping ids and referents intact.
+///
+/// v3 (#588 / ADR-0069): « Waiting for your children » around `pdo run wait`
+/// (no more periodic polling), and the binding contract moved here from the
+/// preamble's Orchestration amendment (now the bare `/pdo-orchestrate` line).
 pub(crate) const SEEDED_SKILL_MD: &str = r#"---
 name: pdo-orchestrate
-description: Orchestrate child runs with PDO — create runs from this node session, follow them, and complete truthfully.
-skill_version: 2
+description: Orchestrate child runs with PDO — create runs from this node session, wait for them with `pdo run wait`, and complete truthfully.
+skill_version: 3
 ---
 
 # Orchestrating with PDO
@@ -1223,21 +1249,49 @@ The response carries `{"run_id": "..."}`. A child is an **ordinary run**: its
 own graph, its own worktree, its own harness. Recursive orchestration works —
 a child may orchestrate in turn.
 
-## Following your children
+## Waiting for your children
+
+Never poll on a timer. Block on the daemon instead:
 
 ```bash
-curl -s "$PDO_DAEMON_URL/runs/$PDO_RUN_ID/children"
+pdo run wait --timeout 600
 ```
 
-lists the runs linked to your run: title, status, start time, duration and
-cost. Check it periodically while your children work.
+`pdo run wait` returns as soon as **one** child of this node becomes terminal
+(`--all`: once every child is terminal). Its exit code tells you what happened:
+
+- **0** — something settled: one JSON line per child on stdout —
+  `{"run_id","name","status","reason","children_active"}`. Read the child's
+  outputs (its artifacts, its `reason` when it failed), then decide: create a
+  corrected child, move on, or `pdo fail` if the plan is dead.
+- **2** — `--timeout` elapsed, nothing settled, nothing on stdout. **Not a
+  failure**: call `pdo run wait` again (loop `while ! pdo run wait --timeout 600;
+  do :; done` when your harness caps the length of one tool call).
+- **0 with `{"noop":true,…}`** — no child of this node is active: you have
+  nothing to wait for.
+- **1** — the daemon is unreachable, or you are not in a node session.
+
+A child that is itself `awaiting_user` (its agent asked its user a question)
+does **not** wake you: PDO shows that wait on your node and your run — « child
+run <name> is awaiting you » — and lifts it when the user answers. Keep waiting.
+
+If you need the full picture, `curl -s "$PDO_DAEMON_URL/runs/$PDO_RUN_ID/children"`
+lists every child with status, duration and cost — a read, not a wait.
 
 ## Completing truthfully
 
-The linkage is strong: `pdo complete` is **refused** while any of your child
-runs is still running, and your node lands in `awaiting_user` if a child
-fails — that is your cue to retry it or hand the decision to the user. Never
-declare completion while work you spawned is still in flight; the daemon
+The linkage is strong (ADR-0064): this node completes only once **every** child
+run is terminal.
+
+- `pdo complete` is **refused** (`children_pending`, exit 3) while any child is
+  still running: wait for them with `pdo run wait`, then complete again.
+- When every child is terminal and none failed, the node **completes by itself**
+  the moment you give your turn back — you may simply call `pdo complete`.
+- A **failed** child parks this node `awaiting_user`: the decision is the
+  user's — retry the child, or force the node through (« Mark complete »).
+  Say what failed and stop; do not decide for them.
+
+Never declare completion while work you spawned is still in flight; the daemon
 enforces it, and the honest move is to wait, follow up, or fail loudly.
 
 ## Good practice
@@ -1246,6 +1300,78 @@ enforces it, and the honest move is to wait, follow up, or fail loudly.
 - Orchestrate wide, not deep, unless the work truly nests.
 - Your children outlive your own gestures (stop, archive) — do not use that to
   abandon them; finish what you spawned or leave it in a decided state.
+"#;
+
+/// The seeded `pdo-interactive` `SKILL.md` (#588 / ADR-0069): how a node whose
+/// `interactive` toggle is on conducts itself — declare the wait, never block
+/// the conversation, the release / exit-3 flow.
+pub(crate) const INTERACTIVE_SKILL_MD: &str = r#"---
+name: pdo-interactive
+description: Talk with a human inside a PDO node — declare when you wait for them (`pdo wait-user`), keep the conversation open, complete once released.
+skill_version: 1
+---
+
+# Talking with a human inside a PDO node
+
+You are running inside a PDO **node session** a human can talk to, in a terminal
+they open from the PDO UI. Your identity travels in the environment
+(`PDO_RUN_ID`, `PDO_NODE_ID`, `PDO_NODE_ITER`, `PDO_DAEMON_URL`).
+
+PDO does **not** know when you are waiting for them — you have to say it.
+
+## Declare your wait
+
+Every time you stop and need the user (a question, a choice, a review), run:
+
+```bash
+pdo wait-user --message "<your question, one line, under 100 characters>"
+```
+
+Then ask the question in the conversation as usual. The node and its run turn
+**awaiting-user** in the PDO UI, with your message on the banner: that is how
+the user, who may be elsewhere, learns it is their turn. Do not skip it — a
+node that stays silently « running » while waiting is the failure this skill
+exists to prevent.
+
+- The wait **lifts by itself** when the user types an answer in the PDO
+  terminal (their Enter), or when they release your completion. You have
+  nothing to run afterwards — just continue the conversation.
+- Ask again later ⇒ declare again. A repeat with the same message is a no-op;
+  a new message refreshes the banner.
+- `--message` is optional but always better: a bare `pdo wait-user` shows
+  « the agent is waiting for you » with no hint of what about.
+- The command is refused (exit 3) only when there is no live session to wait
+  in — nothing to do then. Never follow a refusal with `pdo fail`.
+
+## Never block the conversation
+
+`pdo wait-user` returns immediately. Do not loop, sleep, or poll for the
+answer; do not run a blocking command « until the user replies ». The user
+answers in the same conversation you are in.
+
+## Finishing
+
+Your completion is **guarded**: PDO refuses `pdo complete` on this node until
+the user clicks **« Mark ready for completion »** in the PDO UI.
+
+1. When the user says they are done, finish your work and write your outputs.
+2. Run `pdo complete`. Two outcomes:
+   - **exit 0** — the user had already released you: the node is complete.
+   - **exit 3, `completion_not_released`** — not yet released. PDO has just
+     declared the wait for you (the banner says you are done and wait for
+     their go). Tell the user to click **« Mark ready for completion »**, or
+     **« Mark complete »** to take the artifacts as they are. When they say
+     they clicked, run `pdo complete` again.
+3. **Do NOT run `pdo fail`** after an exit 3: nothing failed, the node is still
+   yours.
+
+## Good practice
+
+- One question at a time, in the message and in the conversation.
+- Summarise the decision taken before moving on: the user may read the pane
+  later, not live.
+- If the user goes silent, stay declared and keep the pane readable; do not
+  invent their answer.
 "#;
 
 /// What one pass of the seed did — logged at startup, asserted in tests.
@@ -1262,17 +1388,27 @@ pub(crate) enum SeedOutcome {
     Skipped { reason: String },
 }
 
-/// Seed at startup: [`seed_with`] with the built-in identity and content.
-pub(crate) async fn seed(db: &SqlitePool, repo_root: &Path) -> Result<SeedOutcome, SkillError> {
-    seed_with(
-        db,
-        repo_root,
-        SEEDED_SKILL_ID,
-        SEEDED_FOLDER_ID,
-        SEEDED_FOLDER_NAME,
-        SEEDED_SKILL_MD,
-    )
-    .await
+/// Seed at startup: [`seed_with`] for every entry of [`SEEDED_SKILLS`], in
+/// order, into the one « PDO » folder. One outcome per skill — a skipped skill
+/// (its label owned by a user skill) never blocks the others.
+pub(crate) async fn seed(
+    db: &SqlitePool,
+    repo_root: &Path,
+) -> Result<Vec<(&'static str, SeedOutcome)>, SkillError> {
+    let mut outcomes = Vec::with_capacity(SEEDED_SKILLS.len());
+    for skill in SEEDED_SKILLS {
+        let outcome = seed_with(
+            db,
+            repo_root,
+            skill.id,
+            SEEDED_FOLDER_ID,
+            SEEDED_FOLDER_NAME,
+            skill.content,
+        )
+        .await?;
+        outcomes.push((skill.id, outcome));
+    }
+    Ok(outcomes)
 }
 
 /// The one seed pass, parameterised for tests. Idempotent: `Created` once,
@@ -2066,11 +2202,26 @@ mod tests {
             .to_string()
     }
 
+    /// The outcome of one seed pass for `pdo-orchestrate` — the historical
+    /// assertions read that one; `pdo-interactive` has its own test.
+    async fn seed_orchestrate(db: &SqlitePool, root: &Path) -> SeedOutcome {
+        seed(db, root)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|(id, _)| *id == SEEDED_SKILL_ID)
+            .map(|(_, outcome)| outcome)
+            .expect("pdo-orchestrate is seeded")
+    }
+
     #[tokio::test]
     async fn first_seed_creates_row_folder_and_content() {
         let db = mem_db().await;
         let root = tempfile::tempdir().unwrap();
-        assert_eq!(seed(&db, root.path()).await.unwrap(), SeedOutcome::Created);
+        assert_eq!(
+            seed_orchestrate(&db, root.path()).await,
+            SeedOutcome::Created
+        );
         let skill = get(&db, SEEDED_SKILL_ID).await.unwrap().unwrap();
         assert_eq!(skill.name, "pdo-orchestrate");
         let folder = get_folder(&db, SEEDED_FOLDER_ID).await.unwrap().unwrap();
@@ -2083,14 +2234,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_seed_carries_a_list_both_toggle_skills_land_in_the_pdo_folder() {
+        // #588 / ADR-0069 §2: two seeded skills, one per node toggle, one pass.
+        let db = mem_db().await;
+        let root = tempfile::tempdir().unwrap();
+        let outcomes = seed(&db, root.path()).await.unwrap();
+        assert_eq!(
+            outcomes,
+            vec![
+                (SEEDED_SKILL_ID, SeedOutcome::Created),
+                (INTERACTIVE_SKILL_ID, SeedOutcome::Created),
+            ]
+        );
+        let interactive = get(&db, INTERACTIVE_SKILL_ID).await.unwrap().unwrap();
+        assert_eq!(interactive.name, "pdo-interactive");
+        assert_eq!(interactive.folder_id.as_deref(), Some(SEEDED_FOLDER_ID));
+        assert!(interactive.locked);
+        let on_disk =
+            std::fs::read_to_string(skill_dir(root.path(), INTERACTIVE_SKILL_ID).join(SKILL_MD))
+                .unwrap();
+        assert_eq!(on_disk, INTERACTIVE_SKILL_MD);
+        assert!(on_disk.contains("pdo wait-user --message"));
+        assert!(on_disk.contains("Mark ready for completion"));
+        // Both are locked against every bank write, like the first seed.
+        assert!(is_seeded(SEEDED_SKILL_ID) && is_seeded(INTERACTIVE_SKILL_ID));
+        assert!(!is_seeded("tdd"));
+        assert!(matches!(
+            delete(&db, root.path(), INTERACTIVE_SKILL_ID).await,
+            Err(SkillError::Locked { .. })
+        ));
+        // The orchestrate skill's v3 guidance is the blocking pull, no polling.
+        assert!(SEEDED_SKILL_MD.contains("pdo run wait"));
+        assert!(!SEEDED_SKILL_MD.contains("Check it periodically"));
+        assert!(SEEDED_SKILL_MD.contains("skill_version: 3"));
+    }
+
+    #[tokio::test]
     async fn a_second_seed_is_a_noop() {
         let db = mem_db().await;
         let root = tempfile::tempdir().unwrap();
         seed(&db, root.path()).await.unwrap();
-        assert_eq!(
-            seed(&db, root.path()).await.unwrap(),
-            SeedOutcome::Unchanged
-        );
+        assert!(seed(&db, root.path())
+            .await
+            .unwrap()
+            .iter()
+            .all(|(_, outcome)| *outcome == SeedOutcome::Unchanged));
     }
 
     #[tokio::test]
@@ -2100,7 +2288,7 @@ mod tests {
         seed(&db, root.path()).await.unwrap();
         let before = get(&db, SEEDED_SKILL_ID).await.unwrap().unwrap();
 
-        let bumped = SEEDED_SKILL_MD.replace("skill_version: 2", "skill_version: 3");
+        let bumped = SEEDED_SKILL_MD.replace("skill_version: 3", "skill_version: 4");
         let outcome = seed_with(
             &db,
             root.path(),
@@ -2132,7 +2320,10 @@ mod tests {
 
         // Erased: the whole folder is gone from disk.
         std::fs::remove_dir_all(skill_dir(root.path(), SEEDED_SKILL_ID)).unwrap();
-        assert_eq!(seed(&db, root.path()).await.unwrap(), SeedOutcome::Updated);
+        assert_eq!(
+            seed_orchestrate(&db, root.path()).await,
+            SeedOutcome::Updated
+        );
         let on_disk =
             std::fs::read_to_string(skill_dir(root.path(), SEEDED_SKILL_ID).join(SKILL_MD))
                 .unwrap();
@@ -2144,7 +2335,10 @@ mod tests {
             "corrupted",
         )
         .unwrap();
-        assert_eq!(seed(&db, root.path()).await.unwrap(), SeedOutcome::Updated);
+        assert_eq!(
+            seed_orchestrate(&db, root.path()).await,
+            SeedOutcome::Updated
+        );
         let on_disk =
             std::fs::read_to_string(skill_dir(root.path(), SEEDED_SKILL_ID).join(SKILL_MD))
                 .unwrap();
@@ -2165,10 +2359,12 @@ mod tests {
         .await
         .unwrap();
         assert!(matches!(
-            seed(&db, root.path()).await.unwrap(),
+            seed_orchestrate(&db, root.path()).await,
             SeedOutcome::Skipped { .. }
         ));
         assert!(get(&db, SEEDED_SKILL_ID).await.unwrap().is_none());
+        // The other seeded skill is not held hostage by the skipped one.
+        assert!(get(&db, INTERACTIVE_SKILL_ID).await.unwrap().is_some());
         assert_eq!(
             get(&db, &user.id).await.unwrap().unwrap().name,
             "pdo-orchestrate"

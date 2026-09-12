@@ -29,6 +29,9 @@ mod cli_run_create;
 #[path = "cost_prices.rs"]
 mod cost_prices;
 
+#[path = "declared_wait.rs"]
+mod declared_wait;
+
 #[path = "daemon_bind.rs"]
 mod daemon_bind;
 

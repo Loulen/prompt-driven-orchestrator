@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   CheckCircle,
   AlertCircle,
@@ -13,6 +13,7 @@ import {
   LoaderCircle,
 } from "lucide-react";
 import type {
+  AwaitingInfo,
   IterationInfo,
   NodeState,
   NodeStatus,
@@ -277,6 +278,157 @@ function ReleaseCompletionVerdict({
 // happens *inside* the terminal (nudge / Stop / Retry). An archived run overrides
 // everything (its worktree + session are torn down). An unknown future status
 // falls on the non-terminated (live) side.
+/** « waiting 12 min » — ticks every 30 s; `null` before the first tick is « … ». */
+function useWaitingLabel(since: string | undefined): string | null {
+  const [now, setNow] = useState<number | null>(null);
+  useEffect(() => {
+    if (!since) return;
+    const tick = () => setNow(Date.now());
+    tick();
+    const id = setInterval(tick, 30_000);
+    return () => clearInterval(id);
+  }, [since]);
+  if (!since || now == null) return null;
+  const startedAt = new Date(since).getTime();
+  if (Number.isNaN(startedAt)) return null;
+  const secs = Math.max(0, Math.floor((now - startedAt) / 1000));
+  if (secs < 60) return `waiting ${secs} s`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `waiting ${mins} min`;
+  return `waiting ${Math.floor(mins / 60)} h ${mins % 60} min`;
+}
+
+/**
+ * #588 / ADR-0069 — the awaiting-user banner of a NodeRun (design v2, 2026-09-12).
+ * One amber shape, four contents keyed on `awaiting.cause`:
+ * - `declared` (A1/A2): « The agent is waiting for your answer », the agent's
+ *   message verbatim when there is one, the Enter hint (or the frozen-pane hint
+ *   when no live socket, A4);
+ * - `completion_not_released` (A3): « The agent is done and waits for your go »,
+ *   the daemon's sentence with the two buttons as inline links;
+ * - `child_awaiting` (C): « A child run is waiting for you » + « Open <child> → »,
+ *   and explicitly NO Enter hint — Enter in the parent's pane lifts nothing;
+ * - `children_pending`: the orchestrator gave its turn back (ADR-0064).
+ * `data-cause` is the assertion surface, the copy may move.
+ */
+function AwaitingBanner({
+  awaiting,
+  terminalLive,
+  canRelease,
+  onRelease,
+  onMarkComplete,
+  onOpenChildRun,
+}: {
+  awaiting: AwaitingInfo | null | undefined;
+  /** A live PTY socket is open below: Enter can reach the agent. */
+  terminalLive: boolean;
+  canRelease: boolean;
+  onRelease: () => void;
+  onMarkComplete: () => void;
+  onOpenChildRun?: (childRunId: string) => void;
+}) {
+  const cause = awaiting?.cause ?? "declared";
+  const waitingLabel = useWaitingLabel(awaiting?.since);
+  const linkClass = "cursor-pointer underline decoration-st-await/60 hover:decoration-st-await";
+  let title: string;
+  let body: React.ReactNode;
+  let hint: React.ReactNode = null;
+  if (cause === "completion_not_released") {
+    title = "The agent is done and waits for your go";
+    body = (
+      <>
+        Completion not released. Click{" "}
+        {canRelease ? (
+          <button type="button" className={linkClass} onClick={onRelease} data-testid="awaiting-banner-release">
+            Mark ready for completion
+          </button>
+        ) : (
+          <em>Mark ready for completion</em>
+        )}{" "}
+        so the agent can finish, or{" "}
+        <button type="button" className={linkClass} onClick={onMarkComplete} data-testid="awaiting-banner-mark-complete">
+          Mark complete
+        </button>{" "}
+        to take the artifacts as they are.
+      </>
+    );
+    hint = terminalLive
+      ? "Not done yet? Reply in the terminal and press Enter — the agent keeps working."
+      : "This pane is a snapshot — reopen the session to keep talking, or use the buttons.";
+  } else if (cause === "child_awaiting") {
+    title = "A child run is waiting for you";
+    const childId = awaiting?.child_run_id ?? null;
+    body = (
+      <>
+        {awaiting?.message ?? "a child run is awaiting you"} — answer it there; this node resumes on its own.
+      </>
+    );
+    hint = (
+      <span className="flex items-center gap-2">
+        <span>Nothing to type here: this node is blocked in pdo run wait, not asking a question.</span>
+        {childId && onOpenChildRun && (
+          <button
+            type="button"
+            data-testid="awaiting-open-child"
+            className={`ml-auto shrink-0 ${linkClass}`}
+            onClick={() => onOpenChildRun(childId)}
+          >
+            Open {childId} →
+          </button>
+        )}
+      </span>
+    );
+  } else if (cause === "children_pending") {
+    title = "Waiting for child runs";
+    body = "This node gave its turn back and completes once every child run is terminal.";
+  } else {
+    // `declared` — with or without a message.
+    title = awaiting?.message ? "The agent is waiting for your answer" : "The agent is waiting for you";
+    body = awaiting?.message ?? null;
+    hint = !terminalLive
+      ? "This pane is a snapshot — reopen the session to reply, or use the buttons below."
+      : awaiting?.message
+        ? "Reply in the terminal below and press Enter to resume."
+        : "Open the terminal below to see what it asked, reply and press Enter to resume.";
+  }
+  return (
+    <div
+      className="flex items-start gap-2 border-b border-st-await/30 bg-st-await-bg px-3 py-2"
+      data-testid="awaiting-banner"
+      data-cause={cause}
+      data-terminal-live={terminalLive}
+    >
+      <AlertCircle size={14} className="mt-0.5 shrink-0 text-st-await" />
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <div className="flex items-baseline gap-2">
+          <span
+            className="text-st-await"
+            style={{ fontSize: "11.5px", fontWeight: 600 }}
+            data-testid="awaiting-banner-title"
+          >
+            {title}
+          </span>
+          {waitingLabel && (
+            <span className="ml-auto shrink-0 text-st-await/70" style={{ fontSize: "9.5px" }} data-testid="awaiting-banner-since">
+              {waitingLabel}
+            </span>
+          )}
+        </div>
+        {body && (
+          <span className="break-words text-fg" style={{ fontSize: "11px", lineHeight: 1.45 }} data-testid="awaiting-banner-message">
+            {body}
+          </span>
+        )}
+        {hint && (
+          <span className="text-fg-3" style={{ fontSize: "10px", lineHeight: 1.4 }} data-testid="awaiting-banner-hint">
+            {hint}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function nodeSessionEnded(status: NodeStatus, isArchived?: boolean): boolean {
   if (isArchived) return true;
   return (
@@ -309,6 +461,10 @@ export default function NodeDetailPanel({
   initialDetailTab = "io",
 }: Props) {
   const [modal, setModal] = useState<ModalState | null>(null);
+  // #588: whether the inline terminal has a live PTY socket (the banner's hint
+  // depends on it). `null` before the terminal reported — read as live, so the
+  // frozen hint never flashes while the socket is still connecting.
+  const [terminalLive, setTerminalLive] = useState<boolean | null>(null);
   // #723 — an orchestrator NodeRun splits its lower pane into I/O | Orchestration.
   // I/O stays the default; the choice is per mounted node (remount = back to I/O).
   const [detailTab, setDetailTab] = useState<"io" | "orchestration">(initialDetailTab);
@@ -395,6 +551,18 @@ export default function NodeDetailPanel({
     selectedIteration?.interactive === true &&
     (selectedIterStatus === "running" || selectedIterStatus === "awaiting_user") &&
     !isArchived;
+  // #588 (A3): a refused unreleased completion makes « Mark ready » the primary
+  // call to action — a ring on the button, the banner links to it.
+  // The latest iteration awaits whenever the node rollup says so and carries
+  // the `awaiting` info — even if the iteration row itself still reads
+  // `running` (a derived child wait, FP #793 finding 1).
+  const nodeAwaitsOnLatestIter =
+    selectedIter === node.iter && node.status === "awaiting_user" && node.awaiting != null;
+  const releaseIsPrimary =
+    canReleaseCompletion &&
+    !completionReleased &&
+    selectedIter === node.iter &&
+    node.awaiting?.cause === "completion_not_released";
 
   // #369: the I/O poll (`setInputs`/`setOutputs`) re-renders this panel every
   // tick (1s live, 5s settled). Building the modal's `source` prop as an inline
@@ -591,19 +759,22 @@ export default function NodeDetailPanel({
         </div>
       )}
 
-      {/* Awaiting user banner */}
-      {selectedIterStatus === "awaiting_user" && !completionReleased && (
-        <div className="flex items-center gap-2 border-b border-st-await/30 bg-st-await-bg px-3 py-2">
-          <AlertCircle size={14} className="shrink-0 text-st-await" />
-          <span
-            className="text-st-await"
-            style={{ fontSize: "11.5px", fontWeight: 500 }}
-          >
-            {selectedIteration?.interactive
-              ? "Awaiting user — when done, release completion so the agent can finish, or mark complete to take the artifacts as they are"
-              : "Awaiting user — interact in the terminal below, then mark complete"}
-          </span>
-        </div>
+      {/* #588 / ADR-0069 — the declared wait, on the iteration on screen. Only
+          the latest iteration carries `node.awaiting`; an older awaiting
+          iteration (a reaped one) renders the bare shape. A *derived* wait (a
+          child awaiting) is a read-time overlay on the node rollup: the latest
+          iteration is trusted through `node.awaiting` as well, so the banner
+          cannot vanish when the two disagree. */}
+      {(selectedIterStatus === "awaiting_user" || nodeAwaitsOnLatestIter) &&
+        !completionReleased && (
+        <AwaitingBanner
+          awaiting={selectedIter === node.iter ? node.awaiting : null}
+          terminalLive={terminalLive ?? true}
+          canRelease={canReleaseCompletion && !isReleasing}
+          onRelease={releaseCompletion}
+          onMarkComplete={markComplete}
+          onOpenChildRun={onOpenChildRun}
+        />
       )}
 
       {/* Stale banner — HISTORICAL RUNS ONLY since #469 (ADR-0032 §1).
@@ -817,6 +988,7 @@ export default function NodeDetailPanel({
                 // selected iter — not `node.iter` — because the IterSelector can be
                 // sitting on an older, long-reaped iteration.
                 paneSource={{ runId, nodeId: node.node_id, iter: selectedIter }}
+                onLiveSocketChange={setTerminalLive}
               />
             ) : (
               <div className="flex h-full flex-col" data-testid="pending-placeholder">
@@ -876,9 +1048,10 @@ export default function NodeDetailPanel({
                           title="Enables the node to call pdo complete when it chooses and to proceed with the run"
                           disabled={isReleasing}
                           data-testid="release-completion-btn"
+                          data-primary={releaseIsPrimary || undefined}
                           className={`flex min-w-[140px] flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md border border-st-await/40 bg-st-await-bg px-3 py-1.5 text-st-await transition-colors hover:border-st-await/60 hover:bg-st-await/20 disabled:cursor-wait disabled:opacity-70 ${
                             completionReleased ? "border-dashed" : ""
-                          }`}
+                          } ${releaseIsPrimary ? "ring-2 ring-st-await/50 ring-offset-1 ring-offset-bg" : ""}`}
                           style={{ fontSize: "11.5px", fontWeight: 500 }}
                         >
                           {isReleasing ? (

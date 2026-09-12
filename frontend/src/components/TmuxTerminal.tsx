@@ -32,6 +32,10 @@ interface Props {
   /** #617: where to read the post-mortem pane once the node's iteration is
    *  terminal. Omit ⇒ live attach only (the Run shell has no node identity). */
   paneSource?: PaneSource;
+  /** #588: tells the parent whether a live PTY socket is open (`true`) or the
+   *  pane is a frozen snapshot / disconnected (`false`), so the awaiting banner
+   *  can say « reply below and press Enter » only when Enter can reach anything. */
+  onLiveSocketChange?: (live: boolean) => void;
 }
 
 // A node iteration in one of these states has had its tmux session reaped on the
@@ -78,6 +82,7 @@ export default function TmuxTerminal({
   onExpand,
   status,
   paneSource,
+  onLiveSocketChange,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -114,6 +119,11 @@ export default function TmuxTerminal({
     setMode(reaped ? "probing" : "live");
     setFrozen(null);
   }
+
+  // #588: report the live-socket state to the parent (banner hint A1 vs A4).
+  useEffect(() => {
+    onLiveSocketChange?.(mode === "live" && connected);
+  }, [mode, connected, onLiveSocketChange]);
 
   // #772: an explicit Copy button for the keyboard-less case (touch, remote
   // desktop) and as the visible hint that selection is browser-side. Uses the

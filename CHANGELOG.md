@@ -16,7 +16,7 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
-## Non publié
+## 1.86.1
 **Outputs hérités d'une exécution précédente** (#796).
 
 - Le commit de complétion d'un nœud **n'embarque plus `.pdo/artifacts/`**, même si le dépôt

@@ -834,6 +834,38 @@ describe("NodeDetailPanel", () => {
       expect(screen.getByTestId("image-thumbnails")).toBeInTheDocument();
     });
 
+    // #796: after a re-spawned agent writes fresh screenshots next to a stale
+    // one, the collapsed « 2 files » row counts the inherited ones and dims
+    // their thumbnails — the API flags them file by file, so does the panel.
+    it("counts inherited files on a mixed image list and dims their thumbnails", async () => {
+      fetchNodeIOMock.mockResolvedValue({
+        inputs: [],
+        outputs: [
+          {
+            port: "feature-screens",
+            repeated: false,
+            port_type: "image_list",
+            files: [
+              { path: "tester/iter-1/feature-screens/fresh.png", exists: true, size: 10, frontmatter: null },
+              { path: "tester/iter-1/feature-screens/stale.png", exists: true, size: 10, frontmatter: null, inherited: true },
+            ],
+          },
+        ],
+      });
+
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+
+      await act(async () => {});
+      expect(screen.getByTestId("inherited-badge")).toHaveTextContent("1 inherited");
+      expect(screen.getByText("2 files")).toBeInTheDocument();
+      expect(screen.getByTestId("thumbnail-0")).not.toHaveAttribute("data-inherited");
+      expect(screen.getByTestId("thumbnail-1")).toHaveAttribute("data-inherited", "true");
+    });
+
     it("shows the frontmatter verdict of an output written by this execution", async () => {
       fetchNodeIOMock.mockResolvedValue({
         inputs: [],

@@ -1537,8 +1537,12 @@ function PortRow({
   // #796: every file on disk predates the execution shown — the port carries a
   // previous session's result (same-iter re-spawn, or a child run whose branch
   // brought a previous run's artifacts in). Shown, but never as THIS result.
-  const inheritedOnly =
-    anyExists && port.files.filter((f) => f.exists).every((f) => f.inherited === true);
+  const existing = port.files.filter((f) => f.exists);
+  const inheritedCount = existing.filter((f) => f.inherited === true).length;
+  const inheritedOnly = anyExists && inheritedCount === existing.length;
+  // A multi-file port (image list) where only SOME files predate the execution:
+  // the collapsed « N files » row would hide which ones — count them.
+  const inheritedSome = inheritedCount > 0 && !inheritedOnly;
   const portType = port.port_type ?? "markdown";
   // The ordered image list + clicked index currently shown fullscreen in the
   // lightbox, or null when it is closed (#312).
@@ -1624,6 +1628,16 @@ function PortRow({
               inherited
             </span>
           )}
+          {inheritedSome && (
+            <span
+              className="rounded border border-st-stopped/50 bg-bg-4 px-1 py-px font-mono text-st-stopped"
+              style={{ fontSize: "9px" }}
+              title={`${inheritedCount} of ${existing.length} files were present before this execution started — a previous execution's output, not this one's result`}
+              data-testid="inherited-badge"
+            >
+              {inheritedCount} inherited
+            </span>
+          )}
         </div>
         <div
           className="mt-0.5 truncate font-mono text-fg-3"
@@ -1662,7 +1676,11 @@ function PortRow({
               key={f.path}
               src={artifactUrl(runId, f.path)}
               alt={f.path.split("/").pop() ?? ""}
-              className="h-12 w-12 cursor-zoom-in rounded border border-line object-cover transition-opacity hover:opacity-80"
+              title={f.inherited ? "inherited — present before this execution started" : undefined}
+              data-inherited={f.inherited ? "true" : undefined}
+              className={`h-12 w-12 cursor-zoom-in rounded border border-line object-cover transition-opacity hover:opacity-80${
+                f.inherited ? " opacity-40 grayscale" : ""
+              }`}
               onClick={(e) => {
                 // Open this thumbnail fullscreen instead of bubbling up to the
                 // row button (which opens the artifact modal). Snapshot the

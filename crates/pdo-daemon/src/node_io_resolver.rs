@@ -1,5 +1,5 @@
-use std::collections::HashMap;
-use std::path::Path;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
@@ -139,6 +139,10 @@ pub(crate) fn resolve(
     // is inherited, not produced — flagged, never hidden (ADR-0049 wants the
     // human to see the partial output a fresh agent builds on).
     let not_before = execution_started_at(run_state, node_id, iter);
+    // #796: an artifact git can name was checked out with the worktree, not
+    // written by any session of this run (the completion commit never stages
+    // `.pdo/artifacts/`). Inherited regardless of its mtime.
+    let tracked = git_tracked_paths(artifacts_dir, node_id, iter);
 
     let mut outputs: Vec<PortIO> = Vec::new();
     for output_port in &node.outputs {
@@ -147,7 +151,7 @@ pub(crate) fn resolve(
                 let port_dir =
                     crate::blackboard::port_dir(artifacts_dir, node_id, iter, &output_port.name);
                 let mut files = list_image_files(artifacts_dir, &port_dir);
-                mark_inherited(artifacts_dir, &mut files, not_before);
+                mark_inherited(artifacts_dir, &mut files, not_before, &tracked);
                 outputs.push(PortIO {
                     port: output_port.name.clone(),
                     repeated: output_port.repeated,
@@ -163,7 +167,7 @@ pub(crate) fn resolve(
                     &output_port.name,
                 );
                 let mut files = vec![file_info_with_frontmatter(artifacts_dir, &path)];
-                mark_inherited(artifacts_dir, &mut files, not_before);
+                mark_inherited(artifacts_dir, &mut files, not_before, &tracked);
                 outputs.push(PortIO {
                     port: output_port.name.clone(),
                     repeated: output_port.repeated,
@@ -180,7 +184,7 @@ pub(crate) fn resolve(
                     &output_port.name,
                 );
                 let mut files = vec![file_info(artifacts_dir, &path)];
-                mark_inherited(artifacts_dir, &mut files, not_before);
+                mark_inherited(artifacts_dir, &mut files, not_before, &tracked);
                 outputs.push(PortIO {
                     port: output_port.name.clone(),
                     repeated: output_port.repeated,
@@ -225,14 +229,60 @@ pub(crate) fn predates(path: &Path, not_before: chrono::DateTime<chrono::Utc>) -
         .is_some_and(|mtime| mtime < not_before)
 }
 
+/// The output files of `node_id` at `iter` that git tracks in the worktree
+/// holding `artifacts_dir` (#796), as absolute paths. PDO never commits
+/// `.pdo/artifacts/` (ADR-0060), so a tracked artifact came in with the
+/// checkout — a previous run's report, inherited through the source branch —
+/// whatever its mtime says. One `git ls-files` per call; an artifacts dir
+/// outside any repository (unit tests, a broken worktree) yields the empty set,
+/// which leaves the mtime gate as the only signal.
+pub(crate) fn git_tracked_paths(
+    artifacts_dir: &Path,
+    node_id: &str,
+    iter: i64,
+) -> HashSet<PathBuf> {
+    let rel = format!("{node_id}/iter-{iter}");
+    let Ok(output) = std::process::Command::new("git")
+        .args(["ls-files", "-z", "--", &rel])
+        .current_dir(artifacts_dir)
+        .output()
+    else {
+        return HashSet::new();
+    };
+    if !output.status.success() {
+        return HashSet::new();
+    }
+    output
+        .stdout
+        .split(|b| *b == 0)
+        .filter(|p| !p.is_empty())
+        .map(|p| artifacts_dir.join(String::from_utf8_lossy(p).as_ref()))
+        .collect()
+}
+
+/// Is `path` a previous execution's file rather than this one's (#796)? Yes
+/// when git tracks it (see [`git_tracked_paths`]) or when its mtime predates
+/// `not_before` — `None` when the execution start is unknown, leaving only the
+/// git signal.
+pub(crate) fn is_inherited(
+    path: &Path,
+    not_before: Option<chrono::DateTime<chrono::Utc>>,
+    tracked: &HashSet<PathBuf>,
+) -> bool {
+    tracked.contains(path) || not_before.is_some_and(|start| predates(path, start))
+}
+
 fn mark_inherited(
     artifacts_dir: &Path,
     files: &mut [FileInfo],
     not_before: Option<chrono::DateTime<chrono::Utc>>,
+    tracked: &HashSet<PathBuf>,
 ) {
-    let Some(not_before) = not_before else { return };
+    if not_before.is_none() && tracked.is_empty() {
+        return;
+    }
     for f in files.iter_mut().filter(|f| f.exists) {
-        f.inherited = predates(&artifacts_dir.join(&f.path), not_before);
+        f.inherited = is_inherited(&artifacts_dir.join(&f.path), not_before, tracked);
     }
 }
 
@@ -1401,6 +1451,77 @@ mod tests {
         assert!(!io.outputs[0].files[0].inherited);
         let json = serde_json::to_value(&io.outputs[0].files[0]).unwrap();
         assert!(json.get("inherited").is_none(), "absent when false: {json}");
+    }
+
+    /// #796: a git-tracked artifact came in with the checkout — inherited even
+    /// when its mtime is AFTER every start on record (the checkout happens a few
+    /// ms after the run record starts), and even with no timing at all. An
+    /// untracked sibling written by this session stays unflagged.
+    #[test]
+    fn git_tracked_output_is_inherited_whatever_its_mtime() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(repo)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}: {out:?}");
+        };
+        git(&["init", "-q"]);
+        git(&[
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "root",
+        ]);
+        let artifacts = repo.join(".pdo/artifacts");
+        let dir = artifacts.join("implementer/iter-1/summary");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("output.md"),
+            "---\nverdict: PASS\n---\n\nother ticket",
+        )
+        .unwrap();
+        git(&["add", "-f", ".pdo/artifacts"]);
+        git(&[
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "-m",
+            "stale",
+        ]);
+
+        let pipeline = simple_pipeline();
+        // Iteration started AFTER the file was written: the mtime gate alone says
+        // "this execution's work"; git says otherwise.
+        let mut state = run_state_with("implementer", &[(1, NodeStatus::Running)]);
+        state.nodes.get_mut("implementer").unwrap().iterations[0].started_at =
+            Some("2000-01-01T00:00:00.000Z".into());
+        let io = resolve(&pipeline, &artifacts, "implementer", 1, &state);
+        assert!(io.outputs[0].files[0].inherited, "tracked ⇒ inherited");
+
+        // No timing at all: git is the only signal, still enough.
+        let io = resolve(&pipeline, &artifacts, "implementer", 1, &empty_run_state());
+        assert!(io.outputs[0].files[0].inherited);
+
+        // The same file, once rewritten by this session (untracked change is
+        // not the point — `ls-files` still names it). Replace by an untracked
+        // path: an image next to it written now.
+        let tracked = git_tracked_paths(&artifacts, "implementer", 1);
+        assert_eq!(tracked.len(), 1);
+        assert!(tracked.contains(&dir.join("output.md")));
+        assert!(!is_inherited(&dir.join("fresh.png"), None, &tracked));
+        assert!(git_tracked_paths(&artifacts, "implementer", 2).is_empty());
     }
 
     /// #796: image ports are flagged file by file, and a missing file never is.

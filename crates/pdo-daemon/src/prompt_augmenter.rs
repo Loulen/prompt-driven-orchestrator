@@ -285,14 +285,29 @@ pub(crate) fn surviving_partial_outputs(
     iter: i64,
     run_started_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Vec<PathBuf> {
+    // #796: a file git tracks came in with the worktree checkout — another
+    // run's report inherited through the source branch, never an interrupted
+    // attempt of THIS run. The mtime gate alone misses it: the checkout happens
+    // a few ms AFTER the run record starts.
+    let tracked = crate::node_io_resolver::git_tracked_paths(artifacts_dir, &node.id, iter);
     node.outputs
         .iter()
         .map(|port| output_port_path(&node.id, artifacts_dir, iter, port))
         .filter(|path| path_holds_content(path))
-        .filter(|path| {
-            run_started_at.is_none_or(|start| !crate::node_io_resolver::predates(path, start))
-        })
+        .filter(|path| !crate::node_io_resolver::is_inherited(path, run_started_at, &tracked))
+        .filter(|path| !dir_only_tracked(path, &tracked))
         .collect()
+}
+
+/// An image/html port DIR whose every entry git tracks is inherited as a whole
+/// (`git ls-files` names files, never directories). A dir with at least one
+/// untracked entry keeps some of this run's work and is handed over.
+fn dir_only_tracked(path: &Path, tracked: &std::collections::HashSet<PathBuf>) -> bool {
+    if !path.is_dir() || tracked.is_empty() {
+        return false;
+    }
+    std::fs::read_dir(path)
+        .is_ok_and(|entries| entries.flatten().all(|e| tracked.contains(&e.path())))
 }
 
 /// Does `path` hold real output? A file with non-whitespace bytes, or a directory
@@ -1481,6 +1496,71 @@ mod tests {
             surviving_partial_outputs(node, artifacts, 1, run_start("2999-01-01T00:00:00Z"))
                 .is_empty()
         );
+    }
+
+    /// #796 (FP1c): a file git tracks in the run worktree was checked out with
+    /// it — a previous run's report on the source branch, NOT an interrupted
+    /// attempt of this run — even though the checkout postdates the run's start.
+    /// An untracked file written next to it is still this run's partial work; an
+    /// image dir whose every entry is tracked is inherited as a whole.
+    #[test]
+    fn surviving_partial_outputs_ignores_git_tracked_files() {
+        let pipeline = sample_pipeline();
+        let node = &pipeline.nodes[0]; // planner → markdown output `plan`
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(repo)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}: {out:?}");
+        };
+        git(&["init", "-q"]);
+        let artifacts = repo.join(".pdo/artifacts");
+        let out = artifacts.join("planner/iter-1/plan/output.md");
+        std::fs::create_dir_all(out.parent().unwrap()).unwrap();
+        std::fs::write(&out, "another ticket's Pass report\n").unwrap();
+        git(&["add", "-f", ".pdo/artifacts"]);
+        git(&[
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "-m",
+            "stale",
+        ]);
+
+        // Run started BEFORE the checkout wrote the file (the real ordering):
+        // the mtime gate lets it through, git does not.
+        let run_start = Some(
+            chrono::DateTime::parse_from_rfc3339("2000-01-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        );
+        assert!(surviving_partial_outputs(node, &artifacts, 1, run_start).is_empty());
+        assert!(surviving_partial_outputs(node, &artifacts, 1, None).is_empty());
+
+        // An interrupted attempt of THIS run overwrote it — still tracked by
+        // name, so still left out: the agent must not be told to continue from
+        // a file whose committed version is another ticket's. Iter 2, untracked,
+        // is handed over.
+        let out2 = artifacts.join("planner/iter-2/plan/output.md");
+        std::fs::create_dir_all(out2.parent().unwrap()).unwrap();
+        std::fs::write(&out2, "this run's partial work\n").unwrap();
+        assert_eq!(
+            surviving_partial_outputs(node, &artifacts, 2, run_start),
+            vec![out2]
+        );
+
+        // A dir port: every entry tracked → inherited; one fresh entry → kept.
+        let tracked: std::collections::HashSet<PathBuf> = [out.clone()].into_iter().collect();
+        assert!(dir_only_tracked(out.parent().unwrap(), &tracked));
+        std::fs::write(out.parent().unwrap().join("fresh.md"), "x").unwrap();
+        assert!(!dir_only_tracked(out.parent().unwrap(), &tracked));
     }
 
     /// #599 AC1: when partial output survives, the preamble surfaces it as input to

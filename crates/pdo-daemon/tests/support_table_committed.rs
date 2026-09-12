@@ -59,6 +59,8 @@ fn the_readme_has_one_command_table_and_no_scattered_daemon_or_service_blocks() 
         "pdo complete",
         "pdo fail",
         "pdo skip",
+        "pdo wait-user",
+        "pdo run wait",
         "pdo migrate",
         "pdo reap",
         "pdo run create",

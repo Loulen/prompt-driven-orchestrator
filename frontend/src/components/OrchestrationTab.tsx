@@ -141,12 +141,20 @@ function ChildRow({
   const duration =
     started && ended != null ? formatDuration(ended - started.getTime()) : null;
   const failed = child.status === "failed";
+  // #588: a child awaiting its user (itself or by derivation) is tinted the same
+  // amber as the parent's banner — the row is the signpost to the child.
+  const awaiting = child.status === "awaiting_user";
   return (
     <li
       data-testid="orchestration-child"
       data-run-id={child.run_id}
+      data-awaiting={awaiting || undefined}
       className={`group flex flex-col gap-0.5 rounded border px-2 py-1.5 ${
-        failed ? "border-st-failed/40 bg-st-failed-bg/40" : "border-line bg-bg-3"
+        failed
+          ? "border-st-failed/40 bg-st-failed-bg/40"
+          : awaiting
+            ? "border-st-await/40 bg-st-await-bg/40"
+            : "border-line bg-bg-3"
       }`}
     >
       <div className="flex items-center gap-1.5">
@@ -165,6 +173,15 @@ function ChildRow({
           <span className="truncate">{child.name || child.run_id}</span>
           <ExternalLink size={10} className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100" />
         </button>
+        {awaiting && (
+          <span
+            data-testid="orchestration-child-awaiting"
+            className="shrink-0 text-st-await"
+            style={{ fontSize: "9.5px", fontWeight: 500 }}
+          >
+            awaiting you →
+          </span>
+        )}
       </div>
       <div className="flex items-center gap-1 pl-3 font-mono text-fg-4" style={{ fontSize: "9.5px" }}>
         <span className="truncate">{child.pipeline_name}</span>

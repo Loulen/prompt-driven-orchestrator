@@ -63,3 +63,25 @@ describe("OrchestrationTab with a stalled child (#783)", () => {
     expect(screen.getAllByTestId("orchestration-child")).toHaveLength(3);
   });
 });
+
+describe("OrchestrationTab with an awaiting child (#588)", () => {
+  it("tints the awaiting child's row amber and signposts it", () => {
+    const children = [child("a", { status: "awaiting_user" }), child("b")];
+    render(
+      <OrchestrationTab
+        childRuns={children}
+        counts={countChildren(children)}
+        nodeLive
+        nodeAwaiting
+        onOpenChild={() => {}}
+      />,
+    );
+    const rows = screen.getAllByTestId("orchestration-child");
+    expect(rows[0]).toHaveAttribute("data-awaiting", "true");
+    expect(rows[0].className).toContain("border-st-await");
+    expect(screen.getByTestId("orchestration-child-awaiting")).toHaveTextContent("awaiting you");
+    expect(rows[1]).not.toHaveAttribute("data-awaiting");
+    // An awaiting child stays in the running bucket (no awaiting pill).
+    expect(countChildren(children)).toEqual({ finished: 0, failed: 0, stale: 0, running: 2 });
+  });
+});

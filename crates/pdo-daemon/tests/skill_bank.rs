@@ -56,7 +56,7 @@ fn user_skills(bank: &serde_json::Value) -> Vec<&serde_json::Value> {
         .as_array()
         .unwrap()
         .iter()
-        .filter(|s| s["id"] != "pdo-orchestrate")
+        .filter(|s| s["id"] != "pdo-orchestrate" && s["id"] != "pdo-interactive")
         .collect()
 }
 
@@ -64,7 +64,10 @@ fn user_skill_dirs(root: &Path) -> usize {
     std::fs::read_dir(root)
         .map(|entries| {
             entries
-                .filter(|e| e.as_ref().unwrap().file_name() != "pdo-orchestrate")
+                .filter(|e| {
+                    let name = e.as_ref().unwrap().file_name();
+                    name != "pdo-orchestrate" && name != "pdo-interactive"
+                })
                 .count()
         })
         .unwrap_or(0)
@@ -74,13 +77,15 @@ fn user_skill_dirs(root: &Path) -> usize {
 async fn fp_step_1_a_fresh_instance_has_only_the_seeded_skill() {
     let daemon = TestDaemon::spawn(|_| Ok(())).await.unwrap();
     let bank = get_json(&daemon, "/settings/skills").await;
-    // #722: the seed is the one pre-existing row — `pdo-orchestrate` in « PDO »,
-    // flagged locked; the user-owned bank itself is empty.
+    // #722 / #588: the seeds are the pre-existing rows — `pdo-orchestrate` and
+    // `pdo-interactive` in « PDO », flagged locked; the user-owned bank is empty.
     assert_eq!(user_skills(&bank), Vec::<&serde_json::Value>::new());
     let skills = bank["skills"].as_array().unwrap();
-    assert_eq!(skills.len(), 1, "{bank}");
-    assert_eq!(skills[0]["id"], "pdo-orchestrate");
-    assert_eq!(skills[0]["locked"], true);
+    assert_eq!(skills.len(), 2, "{bank}");
+    let mut ids: Vec<&str> = skills.iter().map(|s| s["id"].as_str().unwrap()).collect();
+    ids.sort();
+    assert_eq!(ids, ["pdo-interactive", "pdo-orchestrate"]);
+    assert!(skills.iter().all(|s| s["locked"] == true), "{bank}");
     let folders = bank["folders"].as_array().unwrap();
     assert_eq!(folders.len(), 1, "{bank}");
     assert_eq!(folders[0]["id"], "skf-pdo");
@@ -1674,8 +1679,8 @@ async fn fp670_step_2_importing_two_skills_creates_a_source_folder_with_provenan
 
     // Each skill carries its own provenance and its whole folder was copied.
     let bank = get_json(&daemon, "/settings/skills").await;
-    let skills = bank["skills"].as_array().unwrap();
-    assert_eq!(skills.len(), 3);
+    let skills = user_skills(&bank);
+    assert_eq!(skills.len(), 2, "{bank}");
     let pdf = skills.iter().find(|s| s["name"] == "pdf").unwrap();
     assert_eq!(pdf["folder_id"], folder_id);
     assert_eq!(pdf["source"]["url"], url);

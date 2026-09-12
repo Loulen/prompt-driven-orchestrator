@@ -356,6 +356,7 @@ mod tests {
                 frontmatter_violations: Vec::new(),
                 missing_outputs: Vec::new(),
                 delivery: None,
+                awaiting: None,
             },
         );
         rs

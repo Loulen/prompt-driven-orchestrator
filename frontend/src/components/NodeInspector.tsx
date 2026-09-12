@@ -151,6 +151,22 @@ export default function NodeInspector({
   // once the NodeRun spawned, its frozen copy applies, so the switch reads off
   // and only says so — an edit applies to the next NodeRun.
   const ORCHESTRATE_SKILL_REF: SkillRef = { id: "pdo-orchestrate", name: "pdo-orchestrate" };
+  // #588/ADR-0069 — the « Interactive » toggle seeds its own skill the same way.
+  const INTERACTIVE_SKILL_REF: SkillRef = { id: "pdo-interactive", name: "pdo-interactive" };
+  const isInteractive = node.interactive ?? false;
+  const hasInteractiveSkill = (node.skills ?? []).some((s) => s.id === INTERACTIVE_SKILL_REF.id);
+  function setInteractive(next: boolean) {
+    const own = node!.skills ?? [];
+    const skills = next
+      ? (own.some((s) => s.id === INTERACTIVE_SKILL_REF.id) ? own : [...own, INTERACTIVE_SKILL_REF])
+      : own.filter((s) => s.id !== INTERACTIVE_SKILL_REF.id);
+    handleField("skills", skills.length > 0 ? skills : undefined);
+    handleField("interactive", next);
+  }
+  function seedInteractiveSkill() {
+    if (hasInteractiveSkill) return;
+    handleField("skills", [...(node!.skills ?? []), INTERACTIVE_SKILL_REF]);
+  }
   const isOrchestrator = node.orchestrator ?? false;
   const orchestratorFrozen = runNode != null && runNode.status !== "pending";
   const hasOrchestrateSkill = (node.skills ?? []).some((s) => s.id === ORCHESTRATE_SKILL_REF.id);
@@ -364,21 +380,53 @@ export default function NodeInspector({
 
         {/* Behavior */}
         <SectionHead title="Behavior" />
-        <Tooltip content="Pauses for human interaction. The node never auto-completes — mark complete from the run-mode UI." side="left">
-          <div className="flex items-center justify-between">
-            <span className="text-fg-3">Interactive</span>
-            <button
-              onClick={() => handleField("interactive", !node.interactive)}
-              className={`relative h-5 w-9 cursor-pointer rounded-full transition-colors ${
-                node.interactive ? "bg-acc" : "bg-bg-5"
-              }`}
-            >
+        {/* #588/ADR-0069: the « Interactive » toggle guards the node's completion
+            (released from the run-mode UI) and seeds the `pdo-interactive` skill —
+            the conduct (declare the wait with `pdo wait-user`, never block the
+            conversation, the release flow) travels in the skill, and PDO files the
+            `/pdo-interactive` line under the prompt at spawn. The wait itself is
+            declared by the agent, never assumed at spawn. */}
+        <Tooltip
+          content="A human talks to this node. Its completion is guarded until you release it from the run-mode UI; the agent declares when it waits for you (pdo wait-user). Adds the pdo-interactive skill and a fixed /pdo-interactive line to the prompt PDO files at spawn."
+          side="left"
+        >
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center justify-between">
+              <span className="text-fg-3">Interactive</span>
+              <button
+                data-testid="node-interactive-toggle"
+                aria-pressed={isInteractive}
+                disabled={readOnly}
+                onClick={() => setInteractive(!isInteractive)}
+                className={`relative h-5 w-9 rounded-full transition-colors ${
+                  readOnly ? "cursor-not-allowed opacity-60" : "cursor-pointer"
+                } ${isInteractive ? "bg-acc" : "bg-bg-5"}`}
+              >
+                <span
+                  className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-fg transition-transform ${
+                    isInteractive ? "translate-x-[16px]" : "translate-x-0"
+                  }`}
+                />
+              </button>
+            </div>
+            {isInteractive && !isScript && !hasInteractiveSkill && (
               <span
-                className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-fg transition-transform ${
-                  node.interactive ? "translate-x-[16px]" : "translate-x-0"
-                }`}
-              />
-            </button>
+                data-testid="node-interactive-skill-missing"
+                className="flex items-start gap-1 rounded border border-st-blocked/40 bg-st-blocked/10 px-2 py-1 text-st-blocked"
+                style={{ fontSize: "9.5px", lineHeight: 1.4 }}
+              >
+                <TriangleAlert size={10} className="mt-[1px] shrink-0" />
+                <span>
+                  The pdo-interactive skill was removed: the agent will get the /pdo-interactive line but no
+                  instructions.{" "}
+                  {!readOnly && (
+                    <button type="button" className="cursor-pointer underline" onClick={seedInteractiveSkill}>
+                      Re-add it
+                    </button>
+                  )}
+                </span>
+              </span>
+            )}
           </div>
         </Tooltip>
 
@@ -548,30 +596,30 @@ export default function NodeInspector({
           value={promptContent}
           onChange={(e) => updatePrompt(node.id, e.target.value)}
           className={`min-h-[120px] w-full resize-y rounded border border-line-strong bg-bg-3 px-2 py-1.5 font-mono text-fg outline-none focus:border-acc ${
-            !isScript && isOrchestrator ? "rounded-b-none border-b-0 border-dashed" : ""
+            !isScript && (isOrchestrator || isInteractive) ? "rounded-b-none border-b-0 border-dashed" : ""
           }`}
           style={{ fontSize: "11px", lineHeight: "1.5" }}
           placeholder={isScript ? "#!/usr/bin/env bash\n# e.g. curl -X POST \"$DISCORD_WEBHOOK\" ..." : "Enter the node's role prompt..."}
         />
 
-        {/* #723 — the amendment PDO files at spawn when Orchestrator is on.
-            Rendered, never editable, never in the textarea: toggle and text
-            cannot drift. Dashed block visually attached under the textarea. */}
-        {!isScript && isOrchestrator && (
+        {/* #723 / #588 — the invocation lines PDO files at spawn for the toggles
+            that are on, in spawn order (interactive, then orchestrate). Rendered,
+            never editable, never in the textarea: toggle and text cannot drift.
+            Byte-for-byte the daemon's `toggle_invocations` (no prose any more —
+            the seeded skills carry the conduct). Dashed block attached under the
+            textarea. */}
+        {!isScript && (isInteractive || isOrchestrator) && (
           <div
-            data-testid="node-orchestrator-prompt-amendment"
+            data-testid="node-toggle-prompt-amendment"
             className="rounded-b border border-t-0 border-dashed border-line-strong bg-bg-2 px-2 py-1.5"
           >
             <div className="mb-1 flex items-center gap-1 text-fg-4" style={{ fontSize: "9.5px" }}>
               <Lock size={9} />
-              Added by PDO at spawn (Orchestrator)
+              Added by PDO at spawn (
+              {[isInteractive && "Interactive", isOrchestrator && "Orchestrator"].filter(Boolean).join(", ")})
             </div>
             <pre className="whitespace-pre-wrap font-mono text-fg-3" style={{ fontSize: "10.5px", lineHeight: 1.5 }}>
-{`/pdo-orchestrate
-
-## Orchestration
-You may create child runs with \`pdo run create\`. This node completes
-only once every child run is terminal; a failed child parks it awaiting you.`}
+              {[isInteractive && "/pdo-interactive", isOrchestrator && "/pdo-orchestrate"].filter(Boolean).join("\n")}
             </pre>
           </div>
         )}

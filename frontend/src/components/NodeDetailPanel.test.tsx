@@ -1659,6 +1659,162 @@ describe("NodeDetailPanel", () => {
   // gesture, and must never blink out. Before this issue `markNodeDone` was mocked
   // as a bare `vi.fn()` resolving `undefined`, so not one of these paths had ever
   // been exercised.
+  describe("declared wait banner (#588 / ADR-0069)", () => {
+    const awaitingNode = (awaiting: NodeState["awaiting"], over?: Partial<NodeState>) =>
+      makeNode({
+        status: "awaiting_user",
+        awaiting,
+        iterations: [
+          {
+            iter: 1,
+            status: "awaiting_user",
+            started_at: null,
+            completed_at: null,
+            interactive: true,
+            completion_released: false,
+          },
+        ],
+        ...over,
+      });
+
+    it("shows the agent's question verbatim with the Enter hint (A1)", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel
+            node={awaitingNode({
+              cause: "declared",
+              message: "Which layout: strip or card?",
+              since: "2026-09-12T10:00:00Z",
+            })}
+            runId="run-1"
+          />
+        </TooltipProvider>,
+      );
+      const banner = screen.getByTestId("awaiting-banner");
+      expect(banner).toHaveAttribute("data-cause", "declared");
+      expect(screen.getByTestId("awaiting-banner-title")).toHaveTextContent(
+        "The agent is waiting for your answer",
+      );
+      expect(screen.getByTestId("awaiting-banner-message")).toHaveTextContent(
+        "Which layout: strip or card?",
+      );
+      expect(screen.getByTestId("awaiting-banner-hint")).toHaveTextContent(/press Enter/);
+      expect(screen.getByTestId("awaiting-banner-since")).toHaveTextContent(/waiting/);
+      // The completion buttons stay the only other interactive marker.
+      expect(screen.getByTestId("release-completion-btn")).not.toHaveAttribute("data-primary");
+    });
+
+    it("says the agent waits for you when the wait carries no message (A2)", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel
+            node={awaitingNode({ cause: "declared", since: "2026-09-12T10:00:00Z" }, {
+              iterations: [
+                {
+                  iter: 1,
+                  status: "awaiting_user",
+                  started_at: null,
+                  completed_at: null,
+                  interactive: false,
+                  completion_released: false,
+                },
+              ],
+            })}
+            runId="run-1"
+          />
+        </TooltipProvider>,
+      );
+      expect(screen.getByTestId("awaiting-banner-title")).toHaveTextContent(
+        "The agent is waiting for you",
+      );
+      expect(screen.queryByTestId("awaiting-banner-message")).toBeNull();
+      // Non-interactive: no release button, « Mark complete » only.
+      expect(screen.queryByTestId("release-completion-btn")).toBeNull();
+      expect(screen.getByTestId("mark-complete-btn")).toBeInTheDocument();
+    });
+
+    it("links both exits from the banner and rings « Mark ready » on a refused completion (A3)", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel
+            node={awaitingNode({
+              cause: "completion_not_released",
+              message: "Completion not released.",
+              since: "2026-09-12T10:00:00Z",
+            })}
+            runId="run-1"
+          />
+        </TooltipProvider>,
+      );
+      expect(screen.getByTestId("awaiting-banner")).toHaveAttribute(
+        "data-cause",
+        "completion_not_released",
+      );
+      expect(screen.getByTestId("awaiting-banner-title")).toHaveTextContent(
+        "The agent is done and waits for your go",
+      );
+      expect(screen.getByTestId("release-completion-btn")).toHaveAttribute("data-primary", "true");
+      fireEvent.click(screen.getByTestId("awaiting-banner-release"));
+      expect(releaseNodeCompletionMock).toHaveBeenCalledWith("run-1", "test-node", 1);
+      fireEvent.click(screen.getByTestId("awaiting-banner-mark-complete"));
+      expect(markNodeDoneMock).toHaveBeenCalled();
+    });
+
+    it("points at the awaiting child and gives no Enter hint on a derived wait (C)", () => {
+      const onOpenChildRun = vi.fn();
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel
+            node={awaitingNode({
+              cause: "child_awaiting",
+              message: "child run grill-588 is awaiting you",
+              since: "2026-09-12T10:00:00Z",
+              child_run_id: "child-42",
+            })}
+            runId="run-1"
+            isOrchestratorNode
+            onOpenChildRun={onOpenChildRun}
+          />
+        </TooltipProvider>,
+      );
+      expect(screen.getByTestId("awaiting-banner-title")).toHaveTextContent(
+        "A child run is waiting for you",
+      );
+      expect(screen.getByTestId("awaiting-banner-message")).toHaveTextContent(
+        "child run grill-588 is awaiting you",
+      );
+      expect(screen.getByTestId("awaiting-banner-hint")).not.toHaveTextContent(/press Enter/);
+      fireEvent.click(screen.getByTestId("awaiting-open-child"));
+      expect(onOpenChildRun).toHaveBeenCalledWith("child-42");
+    });
+
+    it("shows no banner at all for a fresh interactive node that is simply running (A0)", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel
+            node={makeNode({
+              status: "running",
+              iterations: [
+                {
+                  iter: 1,
+                  status: "running",
+                  started_at: null,
+                  completed_at: null,
+                  interactive: true,
+                  completion_released: false,
+                },
+              ],
+            })}
+            runId="run-1"
+          />
+        </TooltipProvider>,
+      );
+      expect(screen.queryByTestId("awaiting-banner")).toBeNull();
+      expect(screen.getByTestId("release-completion-btn")).toBeInTheDocument();
+      expect(screen.getByTestId("mark-complete-btn")).toBeInTheDocument();
+    });
+  });
+
   describe("Mark complete verdict (#490)", () => {
     const awaitingNode = () => makeNode({ status: "awaiting_user" });
 

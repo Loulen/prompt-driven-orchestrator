@@ -492,6 +492,20 @@ describe("UnifiedLeftPanel run status dot", () => {
     );
   });
 
+  // #588: an amber dot says why — the agent's question, or the awaiting child.
+  it("hangs the awaiting reason off an amber dot", () => {
+    renderPanel({
+      runs: run({
+        status: "awaiting_user",
+        awaiting_reason: "child run grill-588 is awaiting you",
+      }),
+    });
+    expect(screen.getByTestId("run-status-dot")).toHaveAttribute(
+      "title",
+      "child run grill-588 is awaiting you",
+    );
+  });
+
   it("leaves the dot untitled when there is nothing to explain", () => {
     renderPanel({ runs: run({ status: "completed" }) });
     expect(screen.getByTestId("run-status-dot")).not.toHaveAttribute("title");

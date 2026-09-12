@@ -812,88 +812,50 @@ pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
         }
     }
 
+    // #588 / ADR-0069 §2: ONE Completion block for every agentic node. The
+    // preamble says nothing about interactivity or orchestration — those
+    // conducts arrive through the toggle skills (`/pdo-interactive`,
+    // `/pdo-orchestrate`, see `build_full_prompt`), and an interactive node
+    // learns what it is from the daemon's refusal, never from a prior warning.
     preamble.push_str("## Completion\n\n");
-    if ctx.node.interactive {
-        preamble.push_str(
-            "For this **interactive** node, once the user says they are done, finish your \
-             work, write the outputs listed above, and run `pdo complete`.\n\
-             Completion is guarded until the user clicks **\"Mark ready for completion\"** \
-             in the PDO UI. If you call `pdo complete` before that release, the daemon \
-             refuses it with `completion_not_released` and exit code 3. Ask the user to \
-             click **\"Mark ready for completion\"**, then run `pdo complete` again.\n\
-             The user may instead click **\"Mark complete\"** to force completion with the \
-             artifacts as they are.\n\
-             A refused completion leaves this node running. **Do NOT run `pdo fail`.**\n\n\
-             If you cannot complete the task, signal failure:\n\
-             ```\n\
-             pdo fail --reason \"<description of the problem>\"\n\
-             ```\n\n",
-        );
-    } else {
-        preamble.push_str(
-            "When you are done, signal completion by running:\n\
-             ```\n\
-             pdo complete\n\
-             ```\n\n\
-             **`pdo complete` can be REFUSED**, and its exit code tells you what to do \
-             next (#490):\n\
-             - **0** — granted, or a legal duplicate. Nothing more to do.\n\
-             - **3** — refused, *and it is still your turn*: your outputs are missing or \
-             their frontmatter does not match the declared schema. The node is still \
-             running and nothing has failed. Fix what stderr lists, then run \
-             `pdo complete` again. **Do NOT run `pdo fail`.**\n\
-             - **4** — refused, *and the runtime has already ruled*: the failure is \
-             already recorded in the run log. **Do NOT run `pdo fail`** — you would \
-             record it a second time, with a wrong reason. Stop and report what \
-             happened.\n\
-             - **1** — the daemon could not be reached or gave no verdict. This is the \
-             only case where signalling failure yourself is right.\n\n\
-             If you cannot complete the task, signal failure:\n\
-             ```\n\
-             pdo fail --reason \"<description of the problem>\"\n\
-             ```\n\n\
-             If there is legitimately nothing to do — your input/pool is empty \
-             through no error (e.g. the eligible items were all claimed before \
-             you ran) — record a graceful no-op instead of a failure. This ends \
-             the run as `skipped` (not `failed`) and short-circuits downstream:\n\
-             ```\n\
-             pdo skip --reason \"<why there is nothing to do>\"\n\
-             ```\n\n",
-        );
-    }
-
-    // CLI capabilities (#721, ADR-0064): `pdo run create` is the universal
-    // create-child-Run lever, documented like `pdo complete` above — any node
-    // session (agent or script) can orchestrate, the provenance is the
-    // daemon's business, never the caller's.
-    preamble.push_str("## Orchestration — creating child Runs\n\n");
     preamble.push_str(
-        "You can create child Runs from this session with the `pdo run create` CLI \
-         capability — a thin client of the daemon's `POST /runs`:\n\
+        "When you are done, signal completion by running:\n\
          ```\n\
-         pdo run create <pipeline> [--input \"…\"] [--name \"…\"] [--target-repo /path/to/repo]\n\
+         pdo complete\n\
          ```\n\n\
-         - Run from a node session (like this one), the created Run is \
-         mechanically linked to this Run and this node — provenance is never \
-         declared by the caller, and the daemon refuses any parent field in the body.\n\
-         - The child's project defaults to this Run's project; override it \
-         explicitly with `--target-repo`.\n\
-         - Every creation field passes through as a flag: `--input`, \
-         `--variables '<json>'`, `--skills a,b`, `--agent-choice '<json>'`, \
-         `--harness`, `--sandbox`, `--target-repo`, `--target-repos '<json>'`, \
-         `--source-branch`, `--name`, `--auto-name`, `--auto-fail`, \
-         `--provisioning '<json>'`.\n\
-         - Pass artifacts to the child: `--input-file <path>` reads the prompt \
-         from a file (exclusive with `--input`), `--image <path>` and \
-         `--file <path>` (both repeatable) attach files the child's entry node \
-         finds in its own preamble (input images / input files sections) — e.g. \
-         `--input-file \"$PDO_INPUT_SPEC\" --image \"$PDO_INPUT_PROTO\"/*.png`. \
-         One budget per run (default 50 MB, `max_attachments_mb` in Settings); \
-         a duplicate filename is refused.\n\
-         - The daemon's refusals (unknown pipeline, …) print on stderr with a \
-         non-zero exit.\n\
-         - Mount a directory of generated pages with `pdo page mount <name> <dir>`; \
-         the daemon serves it live under `/pages/<name>/`.\n\n",
+         **`pdo complete` can be REFUSED**, and its exit code tells you what to do \
+         next (#490):\n\
+         - **0** — granted, or a legal duplicate. Nothing more to do.\n\
+         - **3** — refused, *and it is still your turn*: the refusal names its cause \
+         on stderr (missing outputs, a frontmatter mismatch, a completion the user \
+         has not released yet, child runs still in flight, …) and tells you what to \
+         do. The node is still running and nothing has failed. Do what stderr says, \
+         then run `pdo complete` again. **Do NOT run `pdo fail`.**\n\
+         - **4** — refused, *and the runtime has already ruled*: the failure is \
+         already recorded in the run log. **Do NOT run `pdo fail`** — you would \
+         record it a second time, with a wrong reason. Stop and report what \
+         happened.\n\
+         - **1** — the daemon could not be reached or gave no verdict. This is the \
+         only case where signalling failure yourself is right.\n\n\
+         If you cannot complete the task, signal failure:\n\
+         ```\n\
+         pdo fail --reason \"<description of the problem>\"\n\
+         ```\n\n\
+         If there is legitimately nothing to do — your input/pool is empty \
+         through no error (e.g. the eligible items were all claimed before \
+         you ran) — record a graceful no-op instead of a failure. This ends \
+         the run as `skipped` (not `failed`) and short-circuits downstream:\n\
+         ```\n\
+         pdo skip --reason \"<why there is nothing to do>\"\n\
+         ```\n\n\
+         If you are blocked on a question only your user can answer, declare it \
+         instead of waiting silently:\n\
+         ```\n\
+         pdo wait-user --message \"<your question, under 100 characters>\"\n\
+         ```\n\
+         The run turns awaiting-user with your question on its banner; the wait \
+         lifts by itself when the user answers in the PDO terminal. The command \
+         returns at once — never block or poll for the answer.\n\n",
     );
 
     if !ctx.variables.is_empty() {
@@ -921,26 +883,34 @@ pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
 
 pub(crate) fn build_full_prompt(ctx: &AugmentContext<'_>, role_prompt: &str) -> String {
     let preamble = build_preamble(ctx);
-    if ctx.node.orchestrator {
-        format!("{preamble}---\n\n{role_prompt}{}", orchestrator_amendment())
-    } else {
-        format!("{preamble}---\n\n{role_prompt}")
+    match toggle_invocations(ctx.node.interactive, ctx.node.orchestrator) {
+        Some(lines) => format!("{preamble}---\n\n{role_prompt}\n\n---\n\n{lines}"),
+        None => format!("{preamble}---\n\n{role_prompt}"),
     }
 }
 
-/// The fixed « Orchestration » amendment (#723, ADR-0064) appended AFTER the
-/// role prompt of a node whose `orchestrator` toggle is on. The invocation line
-/// plus the contract block: PDO files it at spawn — rendered to the session,
-/// never editable, never present in the author's prompt textarea — so the
-/// toggle and the text cannot drift. Mirrors the block the UI shows attached
-/// under the prompt textarea (NodeInspector) byte for byte.
-fn orchestrator_amendment() -> String {
-    "\n\n---\n\n/pdo-orchestrate\n\
-     \n\
-     ## Orchestration\n\
-     You may create child runs with `pdo run create`. This node completes\n\
-     only once every child run is terminal; a failed child parks it awaiting you.\n"
-        .to_string()
+/// The invocation lines PDO files AFTER the role prompt for the node's toggles
+/// (#588 / ADR-0069 §2): `/pdo-interactive` when `interactive` is on,
+/// `/pdo-orchestrate` when `orchestrator` is on, in that **spawn order**, one per
+/// line, and nothing else — no prose (the seeded skill carries the conduct).
+/// Rendered to the session, never editable, never in the author's textarea; the
+/// inspector mirrors this exact text under the prompt (`NodeInspector`), byte
+/// for byte, so the toggle and the text cannot drift. `None` when no toggle is
+/// on: the prompt is then byte-identical to a plain node's.
+pub(crate) fn toggle_invocations(interactive: bool, orchestrator: bool) -> Option<String> {
+    let mut lines: Vec<&str> = Vec::new();
+    if interactive {
+        lines.push("/pdo-interactive");
+    }
+    if orchestrator {
+        lines.push("/pdo-orchestrate");
+    }
+    if lines.is_empty() {
+        return None;
+    }
+    let mut out = lines.join("\n");
+    out.push('\n');
+    Some(out)
 }
 
 /// Middle tier of `stored → env → default(true)`; resolved by
@@ -1029,8 +999,10 @@ On `curl {daemon_url}/runs/{run_id}` a parked run carries:
   awaiting your confirmation).
 - **`awaiting_reason`** — the same cause in prose, for the human.
 
-`awaiting_reason_code` **absent** on an `awaiting_user` run means the wait is *interactive*
-(a node is asking its user a question), not an incident — leave it be. Per node, an
+`awaiting_reason_code` **absent** on an `awaiting_user` run means the wait is **declared**
+(a node's agent asked its user a question with `pdo wait-user`, or waits for the completion
+release; `awaiting_reason` then carries the question — or « child run <name> is awaiting
+you » when the wait is a child run's), not an incident — leave it be. Per node, an
 interrupted node carries the same cause in `nodes.<id>.failure_reason`. Recover with the
 lever the code points to (`restart_node`, `bump_region`/`end_region`, a fix + reopen); the
 targeted commands re-open the run themselves.
@@ -1661,12 +1633,11 @@ mod tests {
         assert!(preamble.contains("pdo fail --reason"));
         // #245: non-interactive nodes learn the graceful no-op primitive.
         assert!(preamble.contains("pdo skip --reason"));
-        // #721 / ADR-0064: run creation is a documented CLI capability of every
-        // node session — provenance follows the session, never the caller.
-        assert!(preamble.contains("pdo run create"));
-        assert!(preamble.contains("mechanically linked"));
-        assert!(preamble.contains("--target-repo"));
-        assert!(preamble.contains("pdo page mount"));
+        // #588 / ADR-0069: the declared wait is a capability of every node
+        // session; orchestration prose left the preamble for the seeded skill.
+        assert!(preamble.contains("pdo wait-user --message"));
+        assert!(!preamble.contains("pdo run create"));
+        assert!(!preamble.contains("pdo page mount"));
     }
 
     #[test]
@@ -1971,19 +1942,37 @@ mod tests {
     }
 
     #[test]
-    fn interactive_node_preamble_omits_pdo_complete_instruction() {
-        let mut pipeline = sample_pipeline();
-        pipeline.nodes[0].interactive = true;
-        let node = &pipeline.nodes[0];
+    fn interactive_and_plain_nodes_share_the_same_completion_section() {
+        // #588 / ADR-0069 §2: the base preamble is identical for every agentic
+        // node — no interactive block, no orchestration prose; the toggle
+        // skills carry the conduct.
+        let mut interactive_pipeline = sample_pipeline();
+        interactive_pipeline.nodes[0].interactive = true;
+        let plain_pipeline = sample_pipeline();
         let vars = HashMap::new();
-        let ctx = sample_ctx(&pipeline, node, &vars);
+        let interactive = build_preamble(&sample_ctx(
+            &interactive_pipeline,
+            &interactive_pipeline.nodes[0],
+            &vars,
+        ));
+        let plain = build_preamble(&sample_ctx(
+            &plain_pipeline,
+            &plain_pipeline.nodes[0],
+            &vars,
+        ));
+        assert_eq!(interactive, plain);
 
-        let preamble = build_preamble(&ctx);
-        assert!(preamble.contains("once the user says they are done"));
-        assert!(preamble.contains("completion_not_released"));
-        assert!(preamble.contains("Mark ready for completion"));
-        assert!(preamble.contains("Do NOT run `pdo fail`"));
-        assert!(preamble.contains("pdo fail --reason"));
+        let completion = plain
+            .split("## Completion")
+            .nth(1)
+            .expect("a Completion section");
+        assert!(completion.contains("pdo complete"));
+        assert!(completion.contains("pdo skip --reason"));
+        assert!(completion.contains("pdo wait-user --message"));
+        assert!(!plain.contains("once the user says they are done"));
+        assert!(!plain.contains("Mark ready for completion"));
+        assert!(!plain.contains("## Orchestration"));
+        assert!(!plain.contains("pdo run create"));
     }
 
     #[test]
@@ -2012,38 +2001,55 @@ mod tests {
     }
 
     #[test]
-    fn orchestrator_prompt_carries_the_amendment_after_the_role() {
-        // #723 / ADR-0064: the toggle on ⇒ the invocation line + the contract
-        // block are filed AFTER the role prompt, at spawn — never in the
-        // author's textarea. Toggle off ⇒ byte-identical to the pre-#723
-        // prompt.
-        let mut pipeline = sample_pipeline();
-        pipeline.nodes[0].orchestrator = true;
-        let node = &pipeline.nodes[0];
+    fn toggles_file_their_invocation_lines_after_the_role_prompt() {
+        // #588 / ADR-0069 §2: the toggles add ONLY the invocation lines, in
+        // spawn order (interactive, then orchestrate), after the role prompt —
+        // never in the author's textarea, never any prose. No toggle ⇒
+        // byte-identical to a plain prompt.
         let vars = HashMap::new();
-        let ctx = sample_ctx(&pipeline, node, &vars);
+        let role = "You are a planner. Plan well.";
 
-        let full = build_full_prompt(&ctx, "You are a planner. Plan well.");
-        let after_role = full
-            .split("You are a planner. Plan well.")
-            .nth(1)
-            .expect("role prompt present");
-        assert!(after_role.contains("/pdo-orchestrate"));
-        assert!(after_role.contains("## Orchestration"));
-        assert!(after_role.contains("pdo run create"));
-        assert!(after_role.contains("a failed child parks it awaiting you"));
-        // The role prompt itself is untouched by the amendment.
-        assert!(!full.starts_with("/pdo-orchestrate"));
+        let mut both = sample_pipeline();
+        both.nodes[0].interactive = true;
+        both.nodes[0].orchestrator = true;
+        let full = build_full_prompt(&sample_ctx(&both, &both.nodes[0], &vars), role);
+        let after_role = full.split(role).nth(1).expect("role prompt present");
+        assert_eq!(
+            after_role,
+            "\n\n---\n\n/pdo-interactive\n/pdo-orchestrate\n"
+        );
+        assert!(!full.starts_with("/pdo-"));
+
+        let mut orchestrate_only = sample_pipeline();
+        orchestrate_only.nodes[0].orchestrator = true;
+        let full = build_full_prompt(
+            &sample_ctx(&orchestrate_only, &orchestrate_only.nodes[0], &vars),
+            role,
+        );
+        assert!(full.ends_with("\n\n---\n\n/pdo-orchestrate\n"));
+        assert!(!full.contains("/pdo-interactive"));
+        assert!(!full.contains("## Orchestration"));
+
+        let mut interactive_only = sample_pipeline();
+        interactive_only.nodes[0].interactive = true;
+        let full = build_full_prompt(
+            &sample_ctx(&interactive_only, &interactive_only.nodes[0], &vars),
+            role,
+        );
+        assert!(full.ends_with("\n\n---\n\n/pdo-interactive\n"));
 
         let plain_pipeline = sample_pipeline();
         let plain = sample_ctx(&plain_pipeline, &plain_pipeline.nodes[0], &vars);
         let bare = build_full_prompt(&plain, "You are a worker. Work.");
-        assert!(
-            !bare.contains("/pdo-orchestrate"),
-            "a node without the toggle keeps its pre-#723 prompt"
+        assert!(bare.ends_with("You are a worker. Work."));
+        assert!(!bare.contains("/pdo-orchestrate") && !bare.contains("/pdo-interactive"));
+
+        assert_eq!(toggle_invocations(false, false), None);
+        assert_eq!(
+            toggle_invocations(true, true).as_deref(),
+            Some("/pdo-interactive\n/pdo-orchestrate\n")
         );
     }
-
     #[test]
     fn multi_input_resolution_from_two_upstream_nodes() {
         let pipeline = PipelineDef {

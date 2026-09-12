@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import NodeInspector from "./NodeInspector";
 import type { LibraryEntry } from "../api";
@@ -939,5 +939,49 @@ describe("NodeInspector — Workspace (#653)", () => {
     expect(screen.getByTestId("workspace-shared")).toHaveAttribute("aria-checked", "true");
     expect(screen.getByTestId("workspace-isolated")).toBeDisabled();
     expect(screen.getByTestId("workspace-frozen")).toBeInTheDocument();
+  });
+});
+
+describe("NodeInspector — toggle skills (#588 / ADR-0069)", () => {
+  const node = () => useEditStore.getState().openTabs[0].pipeline.nodes[0];
+
+  it("seeds pdo-interactive when Interactive turns on and removes it when it turns off", () => {
+    seedTabWithReviewer(false);
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    fireEvent.click(screen.getByTestId("node-interactive-toggle"));
+    expect(node().interactive).toBe(true);
+    expect((node().skills ?? []).map((s) => s.id)).toEqual(["pdo-interactive"]);
+    // The invocation block mirrors what PDO files at spawn: the bare line.
+    expect(screen.getByTestId("node-toggle-prompt-amendment")).toHaveTextContent("/pdo-interactive");
+    expect(screen.getByTestId("node-toggle-prompt-amendment")).not.toHaveTextContent("## Orchestration");
+    expect(screen.queryByTestId("node-interactive-skill-missing")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("node-interactive-toggle"));
+    expect(node().interactive).toBe(false);
+    expect(node().skills).toBeUndefined();
+    expect(screen.queryByTestId("node-toggle-prompt-amendment")).toBeNull();
+  });
+
+  it("lists both invocation lines in spawn order when both toggles are on", () => {
+    seedTabWithReviewer(false);
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    fireEvent.click(screen.getByTestId("node-orchestrator-toggle"));
+    fireEvent.click(screen.getByTestId("node-interactive-toggle"));
+    expect((node().skills ?? []).map((s) => s.id)).toEqual(["pdo-orchestrate", "pdo-interactive"]);
+    const pre = screen.getByTestId("node-toggle-prompt-amendment").querySelector("pre");
+    expect(pre?.textContent).toBe("/pdo-interactive\n/pdo-orchestrate");
+  });
+
+  it("warns when the seeded skill is removed by hand while the toggle stays on, and re-adds it", () => {
+    seedTabWithReviewer(false);
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    fireEvent.click(screen.getByTestId("node-interactive-toggle"));
+    // Remove the reference the way the Skills selector would.
+    act(() => useEditStore.getState().updateNode("rv1", { skills: undefined }));
+    expect(node().interactive).toBe(true);
+    const warning = screen.getByTestId("node-interactive-skill-missing");
+    expect(warning).toHaveTextContent("pdo-interactive skill was removed");
+    fireEvent.click(within(warning).getByText("Re-add it"));
+    expect((node().skills ?? []).map((s) => s.id)).toEqual(["pdo-interactive"]);
   });
 });

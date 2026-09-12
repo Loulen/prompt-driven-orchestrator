@@ -16,6 +16,63 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.86.1
+**Outputs hérités d'une exécution précédente** (#796).
+
+- Le commit de complétion d'un nœud **n'embarque plus `.pdo/artifacts/`**, même si le dépôt
+  cible n'ignore pas `.pdo/` (amendement d'ADR-0060). Le reste de `.pdo/` suit toujours le
+  `.gitignore` du dépôt cible.
+- `GET /runs/{run}/nodes/{node}/io` marque `inherited: true` un fichier de sortie plus ancien
+  que le `started_at` de l'itération (ou du Run si le nœud n'a jamais démarré), **ou suivi par
+  git dans le worktree et non modifié** (arrivé avec le checkout, quel que soit son mtime ;
+  un fichier suivi que l'exécution courante a réécrit redevient sa propre sortie) ; le panneau le
+  badge « inherited » et **n'affiche pas son verdict** de frontmatter. Une liste d'images
+  mixte affiche « k inherited » et grise les vignettes concernées. Le fichier reste listé
+  (ADR-0049 : l'agent relancé bâtit dessus).
+- `GET /runs/{run}/artifact` répond `Cache-Control: no-store`.
+- Le préambule ne présente plus comme « sortie partielle de la tentative interrompue » un
+  fichier plus ancien que le Run lui-même, ni un fichier **suivi par git et non modifié** — le
+  checkout du worktree ayant lieu quelques ms *après* le démarrage du Run, seul le signal git
+  écarte le rapport d'un autre ticket hérité via la branche source. Un fichier suivi que la
+  tentative interrompue a réécrit reste transmis à l'agent relancé (ADR-0049).
+
+## 1.86.0
+**Attente déclarée, préambule de base, attente d'enfants** (#793 ; story #588, ADR-0069).
+
+- **Attente déclarée.** Un nœud `interactive` fraîchement spawné n'est plus `awaiting_user` :
+  il a la couleur d'un nœud qui travaille. L'agent déclare son attente avec
+  `pdo wait-user [--message "<question>"]` (accepté sur tout nœud à session vivante,
+  interactif ou non ; refus nommé `node_is_script` / `node_session_not_live` — tmux fait foi,
+  pas la seule projection : un pane mort avant le passage du balayage est refusé — exit 3 ;
+  idempotent) : nœud et run passent `awaiting_user`, le message (≤ 100 caractères) est la
+  raison en bannière et dans `awaiting_reason`, **sans** `awaiting_reason_code`. Le refus
+  `completion_not_released` d'un `pdo complete` déclare aussi l'attente. Retour à `running`
+  sur la **touche Entrée** d'un humain traversant le pont PTY de l'UI (après au moins un
+  octet tapé depuis la déclaration ; flèches, molette, souris et `paste_text` ne comptent
+  pas) — nouvel événement `node_resumed` — ou sur la libération de la complétion (ADR-0068).
+- **Cassant — préambule.** Le préambule est identique pour tous les nœuds agentiques : plus
+  de bloc Completion interactif ni de section « Orchestration — creating child Runs ». Les
+  toggles n'ajoutent que les lignes d'invocation `/pdo-interactive` et/ou `/pdo-orchestrate`
+  après le prompt du rôle (miroir byte à byte dans l'inspecteur). Le skill seedé
+  **`pdo-interactive`** (verrouillé, `skill_version: 1`) porte la conduite ; le toggle
+  `interactive` sème sa référence comme `orchestrator` sème `pdo-orchestrate`.
+  **`pdo-orchestrate`** passe en `skill_version: 3` : section « Waiting for your children »
+  autour de `pdo run wait`, contrat de liaison déplacé depuis l'amendement, plus aucun
+  sondage périodique. Le mécanisme de seed porte une liste.
+- **Attente d'enfants.** `pdo run wait [--all] [--timeout <s>]` depuis une session de nœud :
+  long-poll bloquant sur `GET /runs/{run}/nodes/{node}/children/wait` (retenu côté daemon
+  25 s au plus, la CLI reboucle). Exit 0 + une ligne JSON par enfant devenu terminal
+  (`run_id`, `name`, `status`, `reason`, `children_active`) ; exit **2** sur délai écoulé
+  (rien sur stdout) ; exit 1 daemon injoignable ou hors session (`not_in_node_session`) ;
+  aucun enfant actif ⇒ `{"noop":true,…}`. Un enfant `awaiting_user` ne réveille pas l'appel
+  mais rend le nœud parent et son run `awaiting_user` **par dérivation à la lecture**
+  (liste, détail, enfants ; rien d'écrit dans le log du parent ; récursif sur l'arbre),
+  raison « child run <nom> is awaiting you », nœud parent `awaiting.cause = child_awaiting`
+  (sa dernière itération aussi, pour que la bannière du détail de nœud s'affiche).
+- **Wire.** `nodes.<id>.awaiting` (`cause`, `message`, `since`, `child_run_id`) sur
+  `GET /runs/{id}` ; `awaiting_reason` d'un run peut désormais être une attente déclarée (le
+  slug `awaiting_reason_code` reste le seul marqueur d'incident).
+
 ## 1.85.0
 **Messages de pilotage (Steering) dans Stats › Performance** (#792 ; spec #791, story #790).
 Troisième métrique `Steering` (messages tapés par un humain par exécution) sur les axes pipeline

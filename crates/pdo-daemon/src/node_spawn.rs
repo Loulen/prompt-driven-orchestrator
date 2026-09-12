@@ -1091,7 +1091,7 @@ pub(crate) async fn spawn_node(
         // #465: the secondary repos come from the SAME fresh projection, resolved to
         // absolute snapshot paths for injection (the sub-worktree does not inherit
         // the snapshot files).
-        let (source_iters, repeated_iters, secondary_repos) =
+        let (source_iters, repeated_iters, secondary_repos, run_started_at) =
             match reload_run_state_with(deps.db, run_id).await {
                 Some((_, fresh_state)) => (
                     input_resolution::resolved_source_iters(
@@ -1110,8 +1110,15 @@ pub(crate) async fn spawn_node(
                         run_id,
                         &fresh_state.target_repos,
                     ),
+                    // #796: the run's own start, to tell an interrupted attempt's
+                    // output from one inherited through git.
+                    fresh_state.started_at.as_deref().and_then(|ts| {
+                        chrono::DateTime::parse_from_rfc3339(ts)
+                            .ok()
+                            .map(|dt| dt.with_timezone(&chrono::Utc))
+                    }),
                 ),
-                None => (HashMap::new(), HashMap::new(), Vec::new()),
+                None => (HashMap::new(), HashMap::new(), Vec::new(), None),
             };
 
         // Precompute whether the Start prompt carries content so `build_preamble`
@@ -1139,9 +1146,14 @@ pub(crate) async fn spawn_node(
         // #599 AC1 (ADR-0049): the partial output an interrupted attempt at THIS
         // node left on disk for this iteration. On a same-iter re-spawn
         // (restart-with-artifacts) it is never wiped, so it is surfaced to the
-        // fresh agent as input to build on. Empty on a first spawn.
-        let partial_outputs =
-            prompt_augmenter::surviving_partial_outputs(node, spawn_ctx.artifacts_dir, iter);
+        // fresh agent as input to build on. Empty on a first spawn — and (#796) a
+        // file older than the run itself is not this run's attempt.
+        let partial_outputs = prompt_augmenter::surviving_partial_outputs(
+            node,
+            spawn_ctx.artifacts_dir,
+            iter,
+            run_started_at,
+        );
 
         let aug_ctx = prompt_augmenter::AugmentContext {
             pipeline: spawn_ctx.pipeline,
@@ -1409,8 +1421,7 @@ pub(crate) async fn spawn_node(
         // answered a lying `200 {spawned}`. Fail loud right here instead: append
         // `NodeFailed` (legal now that the iteration is `Running`) → reap only what
         // this spawn created → `RunFailed`, then return `Failed`. This lands BEFORE
-        // the `NodeAwaitingUser` block below, so a session that never launched can
-        // never collect a phantom `NodeAwaitingUser`. (ADR-0037 §1/§3.)
+        // the `Spawned` return below. (ADR-0037 §1/§3.)
         let reason = format!(
             "failed to spawn tmux session {session_name} for node {}: {e}",
             node.id
@@ -1428,20 +1439,9 @@ pub(crate) async fn spawn_node(
         return SpawnOutcome::Failed { reason };
     }
 
-    if node.interactive {
-        let awaiting = event_log::Event {
-            id: None,
-            run_id: run_id.to_string(),
-            ts: event_log::now_iso(),
-            kind: event_log::EventKind::NodeAwaitingUser,
-            node_id: Some(node.id.clone()),
-            iter: Some(iter),
-            payload: None,
-        };
-        if let Err(e) = append_event_with(deps.db, deps.event_tx, &awaiting).await {
-            error!("failed to append node_awaiting_user: {e}");
-        }
-    }
+    // #588 / ADR-0069: NO `NodeAwaitingUser` at spawn, interactive or not. A
+    // fresh node has the colour of a working node; the wait is declared by its
+    // agent (`pdo wait-user`) or by a refused unreleased completion.
 
     SpawnOutcome::Spawned {
         reused_sub_worktree,

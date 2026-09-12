@@ -25,7 +25,7 @@ fn user_skills(bank: &serde_json::Value) -> Vec<&serde_json::Value> {
         .as_array()
         .unwrap()
         .iter()
-        .filter(|s| s["id"] != "pdo-orchestrate")
+        .filter(|s| s["id"] != "pdo-orchestrate" && s["id"] != "pdo-interactive")
         .collect()
 }
 
@@ -317,7 +317,7 @@ async fn fp_round_trip_recreates_deleted_skills_with_the_same_ids_and_no_warning
             .as_array()
             .unwrap()
             .iter()
-            .filter(|s| s["id"] != "pdo-orchestrate")
+            .filter(|s| s["id"] != "pdo-orchestrate" && s["id"] != "pdo-interactive")
             .count(),
         0
     );
@@ -347,8 +347,7 @@ async fn fp_round_trip_recreates_deleted_skills_with_the_same_ids_and_no_warning
     // The bank has both back, same ids, same content, reference file included,
     // filed under the import folder.
     let bank = get_json(&daemon, "/settings/skills").await;
-    let skills = bank["skills"].as_array().unwrap();
-    assert_eq!(skills.len(), 3, "{bank}");
+    assert_eq!(user_skills(&bank).len(), 2, "{bank}");
     let folder_id = body["skills"]["folder"]["id"].as_str().unwrap();
     for skill in user_skills(&bank) {
         assert_eq!(skill["folder_id"], folder_id, "{skill}");
@@ -506,7 +505,7 @@ async fn known_ids_are_kept_and_taken_names_are_suffixed_with_a_warning() {
             .as_array()
             .unwrap()
             .iter()
-            .filter(|s| s["id"] != "pdo-orchestrate")
+            .filter(|s| s["id"] != "pdo-orchestrate" && s["id"] != "pdo-interactive")
             .count(),
         3
     );

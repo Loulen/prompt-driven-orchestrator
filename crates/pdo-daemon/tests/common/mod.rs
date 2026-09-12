@@ -579,6 +579,33 @@ impl TestDaemon {
         format!("http://{}", self.addr)
     }
 
+    /// `GET {path}` decoded as JSON, retried for a few seconds on a transient
+    /// transport failure (connection reset, truncated body, non-2xx while the
+    /// daemon is saturated by the parallel suite). Tests that poll the run
+    /// record are about sequencing, not about one HTTP round trip: a single
+    /// hiccup under load must not fail them. Panics once the window is over.
+    pub async fn get_json(&self, path: &str) -> serde_json::Value {
+        let url = format!("{}{}", self.url(), path);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let attempt = async {
+                reqwest::get(&url)
+                    .await?
+                    .error_for_status()?
+                    .json::<serde_json::Value>()
+                    .await
+            }
+            .await;
+            match attempt {
+                Ok(v) => return v,
+                Err(e) if std::time::Instant::now() >= deadline => {
+                    panic!("GET {url} kept failing: {e}")
+                }
+                Err(_) => tokio::time::sleep(std::time::Duration::from_millis(100)).await,
+            }
+        }
+    }
+
     /// Manager on demand: flip the instance auto-start flag ON for this daemon.
     ///
     /// The default is now OFF — a Run starts managerless — so any test asserting

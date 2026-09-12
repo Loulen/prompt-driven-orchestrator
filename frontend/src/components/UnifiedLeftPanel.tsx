@@ -376,13 +376,15 @@ export default function UnifiedLeftPanel({
         <div className="flex w-4 shrink-0 flex-col items-center gap-1">
         {/* #577 — the status dot doubles as the select control: it goes hollow on
             hover and becomes a green check when selected. #503: the resting dot
-            still carries the failure reason so a red Run has something to say. */}
+            still carries the failure reason so a red Run has something to say;
+            #588: an amber dot carries the awaiting reason (the agent's question,
+            or « child run <name> is awaiting you »). */}
         <SelectControl
           selected={rowSelected}
           dotClass={dot}
           ringClass={ring}
           pulse={run.status === "running" && !run.stalled}
-          dotTitle={run.failure_reason ?? undefined}
+          dotTitle={run.failure_reason ?? run.awaiting_reason ?? undefined}
           dotTestId="run-status-dot"
           label={rowSelected ? `Deselect ${run.name || run.run_id}` : `Select ${run.name || run.run_id}`}
           onSelect={(e) => {

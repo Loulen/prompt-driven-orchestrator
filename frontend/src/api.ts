@@ -727,6 +727,10 @@ export interface FileInfo {
   exists: boolean;
   size: number | null;
   frontmatter: Record<string, unknown> | null;
+  /** #796: on disk before this execution started (survived a same-iter
+   *  re-spawn, or inherited through git from a previous run) — not a result of
+   *  the session shown. Absent when false. */
+  inherited?: boolean;
 }
 
 export interface PortIO {

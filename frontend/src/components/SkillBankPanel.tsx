@@ -1103,6 +1103,16 @@ function SkillDetailView({
             Managed by PDO
           </span>
         )}
+        {locked && frontmatter?.skill_version != null && (
+          <span
+            className="shrink-0 rounded border border-line bg-bg-3 px-1.5 py-0.5 font-mono text-fg-4"
+            style={{ fontSize: "9.5px" }}
+            data-testid="skill-detail-version"
+            title="Version of the built-in copy: PDO rewrites the skill at startup when it changes"
+          >
+            v{String(frontmatter.skill_version)}
+          </span>
+        )}
         <span className="flex items-center gap-1 font-mono text-fg-4" style={{ fontSize: "10.5px" }}>
           id {shortId(skill.id)}
           <button

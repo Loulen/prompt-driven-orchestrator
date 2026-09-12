@@ -24,15 +24,17 @@ contribution sont dans `CONTRIBUTING.md`.
   `.gitignore` du dépôt cible.
 - `GET /runs/{run}/nodes/{node}/io` marque `inherited: true` un fichier de sortie plus ancien
   que le `started_at` de l'itération (ou du Run si le nœud n'a jamais démarré), **ou suivi par
-  git dans le worktree** (arrivé avec le checkout, quel que soit son mtime) ; le panneau le
+  git dans le worktree et non modifié** (arrivé avec le checkout, quel que soit son mtime ;
+  un fichier suivi que l'exécution courante a réécrit redevient sa propre sortie) ; le panneau le
   badge « inherited » et **n'affiche pas son verdict** de frontmatter. Une liste d'images
   mixte affiche « k inherited » et grise les vignettes concernées. Le fichier reste listé
   (ADR-0049 : l'agent relancé bâtit dessus).
 - `GET /runs/{run}/artifact` répond `Cache-Control: no-store`.
 - Le préambule ne présente plus comme « sortie partielle de la tentative interrompue » un
-  fichier plus ancien que le Run lui-même, ni un fichier **suivi par git** — le checkout du
-  worktree ayant lieu quelques ms *après* le démarrage du Run, seul le signal git écarte le
-  rapport d'un autre ticket hérité via la branche source.
+  fichier plus ancien que le Run lui-même, ni un fichier **suivi par git et non modifié** — le
+  checkout du worktree ayant lieu quelques ms *après* le démarrage du Run, seul le signal git
+  écarte le rapport d'un autre ticket hérité via la branche source. Un fichier suivi que la
+  tentative interrompue a réécrit reste transmis à l'agent relancé (ADR-0049).
 
 ## 1.86.0
 **Attente déclarée, préambule de base, attente d'enfants** (#793 ; story #588, ADR-0069).

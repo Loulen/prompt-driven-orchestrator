@@ -285,10 +285,12 @@ pub(crate) fn surviving_partial_outputs(
     iter: i64,
     run_started_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Vec<PathBuf> {
-    // #796: a file git tracks came in with the worktree checkout — another
-    // run's report inherited through the source branch, never an interrupted
-    // attempt of THIS run. The mtime gate alone misses it: the checkout happens
-    // a few ms AFTER the run record starts.
+    // #796: a file git tracks UNMODIFIED came in with the worktree checkout —
+    // another run's report inherited through the source branch, never an
+    // interrupted attempt of THIS run. The mtime gate alone misses it: the
+    // checkout happens a few ms AFTER the run record starts. A tracked file the
+    // working copy has modified is this run's work (an interrupted attempt
+    // overwrote the inherited report) and is handed over like any survivor.
     let tracked = crate::node_io_resolver::git_tracked_paths(artifacts_dir, &node.id, iter);
     node.outputs
         .iter()
@@ -1544,10 +1546,7 @@ mod tests {
         assert!(surviving_partial_outputs(node, &artifacts, 1, run_start).is_empty());
         assert!(surviving_partial_outputs(node, &artifacts, 1, None).is_empty());
 
-        // An interrupted attempt of THIS run overwrote it — still tracked by
-        // name, so still left out: the agent must not be told to continue from
-        // a file whose committed version is another ticket's. Iter 2, untracked,
-        // is handed over.
+        // Iter 2, untracked, is handed over.
         let out2 = artifacts.join("planner/iter-2/plan/output.md");
         std::fs::create_dir_all(out2.parent().unwrap()).unwrap();
         std::fs::write(&out2, "this run's partial work\n").unwrap();
@@ -1561,6 +1560,20 @@ mod tests {
         assert!(dir_only_tracked(out.parent().unwrap(), &tracked));
         std::fs::write(out.parent().unwrap().join("fresh.md"), "x").unwrap();
         assert!(!dir_only_tracked(out.parent().unwrap(), &tracked));
+        std::fs::remove_file(out.parent().unwrap().join("fresh.md")).unwrap();
+
+        // FP1d: an interrupted attempt of THIS run overwrote the tracked path
+        // (same port path every run). Still named by `ls-files`, but modified:
+        // it is this run's partial work and is handed over on the re-spawn.
+        std::fs::write(&out, "this run's partial work over the stale report\n").unwrap();
+        assert_eq!(
+            surviving_partial_outputs(node, &artifacts, 1, run_start),
+            vec![out.clone()]
+        );
+        assert_eq!(
+            surviving_partial_outputs(node, &artifacts, 1, None),
+            vec![out]
+        );
     }
 
     /// #599 AC1: when partial output survives, the preamble surfaces it as input to

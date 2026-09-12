@@ -229,39 +229,63 @@ pub(crate) fn predates(path: &Path, not_before: chrono::DateTime<chrono::Utc>) -
         .is_some_and(|mtime| mtime < not_before)
 }
 
-/// The output files of `node_id` at `iter` that git tracks in the worktree
-/// holding `artifacts_dir` (#796), as absolute paths. PDO never commits
-/// `.pdo/artifacts/` (ADR-0060), so a tracked artifact came in with the
+/// The output files of `node_id` at `iter` that git tracks **unmodified** in
+/// the worktree holding `artifacts_dir` (#796), as absolute paths. PDO never
+/// commits `.pdo/artifacts/` (ADR-0060), so a tracked artifact came in with the
 /// checkout — a previous run's report, inherited through the source branch —
-/// whatever its mtime says. One `git ls-files` per call; an artifacts dir
-/// outside any repository (unit tests, a broken worktree) yields the empty set,
-/// which leaves the mtime gate as the only signal.
+/// whatever its mtime says. A tracked file the working copy has since
+/// **modified** (or deleted) is left out: the current execution rewrote it, so
+/// "tracked" no longer means "came with the checkout" and the mtime gate takes
+/// over (FP1d — the same port path is reused by every run of a pipeline).
+/// Two `git ls-files` per call; an artifacts dir outside any repository (unit
+/// tests, a broken worktree) yields the empty set, which leaves the mtime gate
+/// as the only signal.
 pub(crate) fn git_tracked_paths(
     artifacts_dir: &Path,
     node_id: &str,
     iter: i64,
 ) -> HashSet<PathBuf> {
     let rel = format!("{node_id}/iter-{iter}");
-    let Ok(output) = std::process::Command::new("git")
-        .args(["ls-files", "-z", "--", &rel])
-        .current_dir(artifacts_dir)
-        .output()
-    else {
+    let ls_files = |flag: Option<&str>| -> Option<HashSet<PathBuf>> {
+        let mut cmd = std::process::Command::new("git");
+        cmd.arg("ls-files").arg("-z");
+        if let Some(flag) = flag {
+            cmd.arg(flag);
+        }
+        let output = cmd
+            .args(["--", &rel])
+            .current_dir(artifacts_dir)
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        Some(
+            output
+                .stdout
+                .split(|b| *b == 0)
+                .filter(|p| !p.is_empty())
+                .map(|p| artifacts_dir.join(String::from_utf8_lossy(p).as_ref()))
+                .collect(),
+        )
+    };
+    let Some(mut tracked) = ls_files(None) else {
         return HashSet::new();
     };
-    if !output.status.success() {
-        return HashSet::new();
+    if tracked.is_empty() {
+        return tracked;
     }
-    output
-        .stdout
-        .split(|b| *b == 0)
-        .filter(|p| !p.is_empty())
-        .map(|p| artifacts_dir.join(String::from_utf8_lossy(p).as_ref()))
-        .collect()
+    // `-m`: tracked paths whose working copy differs from the index (modified
+    // or deleted). Without the verdict, be safe and trust nothing from git.
+    let Some(modified) = ls_files(Some("-m")) else {
+        return HashSet::new();
+    };
+    tracked.retain(|p| !modified.contains(p));
+    tracked
 }
 
 /// Is `path` a previous execution's file rather than this one's (#796)? Yes
-/// when git tracks it (see [`git_tracked_paths`]) or when its mtime predates
+/// when git tracks it unmodified (see [`git_tracked_paths`]) or when its mtime predates
 /// `not_before` — `None` when the execution start is unknown, leaving only the
 /// git signal.
 pub(crate) fn is_inherited(
@@ -1514,14 +1538,38 @@ mod tests {
         let io = resolve(&pipeline, &artifacts, "implementer", 1, &empty_run_state());
         assert!(io.outputs[0].files[0].inherited);
 
-        // The same file, once rewritten by this session (untracked change is
-        // not the point — `ls-files` still names it). Replace by an untracked
-        // path: an image next to it written now.
+        // An untracked image written next to it now is this session's work.
         let tracked = git_tracked_paths(&artifacts, "implementer", 1);
         assert_eq!(tracked.len(), 1);
         assert!(tracked.contains(&dir.join("output.md")));
         assert!(!is_inherited(&dir.join("fresh.png"), None, &tracked));
         assert!(git_tracked_paths(&artifacts, "implementer", 2).is_empty());
+
+        // FP1d: THIS execution rewrites the tracked path (every run of a
+        // pipeline reuses the same port path). `ls-files` still names it, but
+        // the working copy is modified: git no longer says "came with the
+        // checkout", and the mtime gate (written after the iteration start)
+        // says "this execution's result".
+        fs::write(
+            dir.join("output.md"),
+            "---\nverdict: PASS\n---\n\nTHIS run's report",
+        )
+        .unwrap();
+        assert!(
+            git_tracked_paths(&artifacts, "implementer", 1).is_empty(),
+            "a modified tracked file is not inherited by construction"
+        );
+        let io = resolve(&pipeline, &artifacts, "implementer", 1, &state);
+        assert!(!io.outputs[0].files[0].inherited, "rewritten ⇒ own result");
+        let io = resolve(&pipeline, &artifacts, "implementer", 1, &empty_run_state());
+        assert!(
+            !io.outputs[0].files[0].inherited,
+            "no timing, modified ⇒ own"
+        );
+
+        // Deleted by this execution: nothing to flag, nothing to list as tracked.
+        fs::remove_file(dir.join("output.md")).unwrap();
+        assert!(git_tracked_paths(&artifacts, "implementer", 1).is_empty());
     }
 
     /// #796: image ports are flagged file by file, and a missing file never is.

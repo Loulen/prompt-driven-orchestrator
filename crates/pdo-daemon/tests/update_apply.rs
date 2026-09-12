@@ -451,7 +451,9 @@ async fn the_executor_survives_the_daemon_death() {
         .expect("spawn the real pdo binary");
 
     let base = format!("http://127.0.0.1:{port}");
-    let deadline = Instant::now() + Duration::from_secs(20);
+    // A REAL process booting (sqlite, boot recovery, embedded UI) next to the
+    // hundreds of in-process daemons of the parallel suite: give it a wide berth.
+    let deadline = Instant::now() + Duration::from_secs(90);
     loop {
         if let Ok(r) = reqwest::get(format!("{base}/sessions")).await {
             if r.status().is_success() {

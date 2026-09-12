@@ -468,6 +468,18 @@ async fn retrying_the_failed_child_lets_the_node_complete_itself() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
+    // `node_fail` answers before its detached tail reaps the session and
+    // appends `RunFailed`. The retry below is about a FAILED child (ADR-0049
+    // re-open), so wait for that state instead of racing the tail — under the
+    // full parallel suite the reap can otherwise collide with the delivery.
+    for _ in 0..600 {
+        let (status, run) = get_json(&daemon, &format!("/runs/{child}")).await;
+        assert_eq!(status, 200);
+        if run["status"] == "failed" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
 
     // The user tranches by RETRYING the failed child: a targeted
     // `mark_node_done` re-opens the failed run and completes it (ADR-0049).
@@ -482,7 +494,9 @@ async fn retrying_the_failed_child_lets_the_node_complete_itself() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 200, "the retried child completes");
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    assert_eq!(status, 200, "the retried child completes: {body}");
     wait_node_status(&daemon, &child, "doer", "completed").await;
 
     // The retried child settled → the orchestrator completes itself.

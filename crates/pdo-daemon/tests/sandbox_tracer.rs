@@ -129,12 +129,7 @@ async fn start_run(daemon: &TestDaemon, sandbox: Option<&str>) -> String {
 }
 
 async fn get_run(daemon: &TestDaemon, run_id: &str) -> serde_json::Value {
-    reqwest::get(format!("{}/runs/{run_id}", daemon.url()))
-        .await
-        .unwrap()
-        .json::<serde_json::Value>()
-        .await
-        .unwrap()
+    daemon.get_json(&format!("/runs/{run_id}")).await
 }
 
 async fn wait_until<F>(mut pred: F) -> bool

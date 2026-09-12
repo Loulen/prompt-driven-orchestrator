@@ -651,6 +651,21 @@ impl AppState {
     fn tmux_socket(&self) -> String {
         tmux_session_manager::tmux_socket_name(self.port)
     }
+
+    /// Is this node session really up under the daemon's tmux socket? The
+    /// projection can lag behind a pane that died between two sweeps; the
+    /// callers that need the truth *now* (the declared wait, #588) ask here.
+    /// The crate's own unit tests drive the handlers without a tmux server and
+    /// answer `true`: the integration tests (`tests/`) exercise the real probe.
+    #[cfg(not(test))]
+    fn node_session_alive(&self, session: &str) -> bool {
+        tmux_session_manager::session_exists(&self.tmux_socket(), session)
+    }
+
+    #[cfg(test)]
+    fn node_session_alive(&self, _session: &str) -> bool {
+        true
+    }
 }
 
 /// TTL during which a recorded self-write suppresses watcher broadcasts.
@@ -17806,6 +17821,7 @@ async fn node_wait_user(
         iter,
         event_log::AWAITING_CAUSE_DECLARED,
         body.message.as_deref(),
+        |session| state.node_session_alive(session),
     )
     .await
     {
@@ -28727,6 +28743,130 @@ mod tests {
             post_wait_user(&state, run_id, "ghost", serde_json::json!({ "iter": 1 })).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(body["error"], "node_not_found");
+    }
+
+    #[tokio::test]
+    async fn wait_user_is_refused_by_name_when_tmux_no_longer_has_the_session() {
+        // The projection still says `running`, tmux says the pane is gone (FP
+        // #793, finding 3): the refusal is `node_session_not_live`, nothing is
+        // written, and the node stays `running` for the sweep to judge.
+        let state = test_state().await;
+        let run_id = "declared-wait-dead-pane";
+        seed_started_node(&state, run_id, true).await;
+        let asked = std::sync::Mutex::new(None);
+        let refusal = declared_wait::declare_wait(
+            &state,
+            run_id,
+            "griller",
+            1,
+            event_log::AWAITING_CAUSE_DECLARED,
+            Some("anyone there?"),
+            |session| {
+                *asked.lock().unwrap() = Some(session.to_string());
+                false
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(refusal.slug(), "node_session_not_live");
+        assert_eq!(
+            asked.lock().unwrap().as_deref(),
+            Some(tmux_session_manager::node_session_name(run_id, "griller", 1).as_str()),
+            "the probe is asked about the node's own session"
+        );
+        let rs = projected(&state, run_id).await;
+        assert_eq!(rs.status, event_log::RunStatus::Running);
+        assert_eq!(rs.nodes["griller"].status, event_log::NodeStatus::Running);
+        assert!(rs.nodes["griller"].awaiting.is_none());
+
+        // The same declaration with a live session goes through.
+        let outcome = declared_wait::declare_wait(
+            &state,
+            run_id,
+            "griller",
+            1,
+            event_log::AWAITING_CAUSE_DECLARED,
+            Some("anyone there?"),
+            |_| true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome, declared_wait::DeclareOutcome::Declared);
+    }
+
+    #[test]
+    fn run_wait_settled_children_carry_the_reason_of_a_failed_or_skipped_child() {
+        // `pdo run wait` prints `reason` for a `failed` / `skipped` child (the
+        // agent reads *why*); a `completed` child has none and the key is
+        // omitted rather than `null`.
+        fn run(
+            id: &str,
+            parent: Option<&str>,
+            end: Option<(event_log::EventKind, &str)>,
+        ) -> event_log::RunState {
+            let mut started = serde_json::json!({ "pipeline_name": "p", "name": id });
+            if let Some(p) = parent {
+                started["parent_run_id"] = serde_json::json!(p);
+                started["parent_node_id"] = serde_json::json!("worker");
+            }
+            let mut events = vec![event_log::Event {
+                id: None,
+                run_id: id.into(),
+                ts: "2026-09-12T10:00:00Z".into(),
+                kind: event_log::EventKind::RunStarted,
+                node_id: None,
+                iter: None,
+                payload: Some(started),
+            }];
+            if let Some((kind, reason)) = end {
+                events.push(event_log::Event {
+                    id: None,
+                    run_id: id.into(),
+                    ts: "2026-09-12T10:05:00Z".into(),
+                    kind,
+                    node_id: None,
+                    iter: None,
+                    payload: Some(serde_json::json!({ "reason": reason })),
+                });
+            }
+            event_log::project(&events).unwrap()
+        }
+        let runs = vec![
+            run("parent", None, None),
+            run(
+                "failed-child",
+                Some("parent"),
+                Some((event_log::EventKind::RunFailed, "build broke")),
+            ),
+            run(
+                "skipped-child",
+                Some("parent"),
+                Some((event_log::EventKind::RunSkipped, "nothing to do")),
+            ),
+            run(
+                "completed-child",
+                Some("parent"),
+                Some((event_log::EventKind::RunCompleted, "")),
+            ),
+        ];
+        let snapshot = children_wait_snapshot(&runs, "parent", "worker", "2026-09-12T10:00:00Z");
+        assert_eq!(snapshot.active, 0);
+        assert_eq!(snapshot.total, 3);
+        let by_id: HashMap<&str, serde_json::Value> = snapshot
+            .settled_after
+            .iter()
+            .map(|c| (c.run_id.as_str(), serde_json::to_value(c).unwrap()))
+            .collect();
+        assert_eq!(by_id["failed-child"]["status"], "failed");
+        assert_eq!(by_id["failed-child"]["reason"], "build broke");
+        assert_eq!(by_id["skipped-child"]["status"], "skipped");
+        assert_eq!(by_id["skipped-child"]["reason"], "nothing to do");
+        assert_eq!(by_id["completed-child"]["status"], "completed");
+        assert!(
+            by_id["completed-child"].get("reason").is_none(),
+            "no reason ⇒ key omitted: {}",
+            by_id["completed-child"]
+        );
     }
 
     #[tokio::test]

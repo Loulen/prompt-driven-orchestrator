@@ -22,7 +22,8 @@ contribution sont dans `CONTRIBUTING.md`.
 - **Attente déclarée.** Un nœud `interactive` fraîchement spawné n'est plus `awaiting_user` :
   il a la couleur d'un nœud qui travaille. L'agent déclare son attente avec
   `pdo wait-user [--message "<question>"]` (accepté sur tout nœud à session vivante,
-  interactif ou non ; refus nommé `node_is_script` / `node_session_not_live`, exit 3 ;
+  interactif ou non ; refus nommé `node_is_script` / `node_session_not_live` — tmux fait foi,
+  pas la seule projection : un pane mort avant le passage du balayage est refusé — exit 3 ;
   idempotent) : nœud et run passent `awaiting_user`, le message (≤ 100 caractères) est la
   raison en bannière et dans `awaiting_reason`, **sans** `awaiting_reason_code`. Le refus
   `completion_not_released` d'un `pdo complete` déclare aussi l'attente. Retour à `running`
@@ -46,7 +47,8 @@ contribution sont dans `CONTRIBUTING.md`.
   aucun enfant actif ⇒ `{"noop":true,…}`. Un enfant `awaiting_user` ne réveille pas l'appel
   mais rend le nœud parent et son run `awaiting_user` **par dérivation à la lecture**
   (liste, détail, enfants ; rien d'écrit dans le log du parent ; récursif sur l'arbre),
-  raison « child run <nom> is awaiting you », nœud parent `awaiting.cause = child_awaiting`.
+  raison « child run <nom> is awaiting you », nœud parent `awaiting.cause = child_awaiting`
+  (sa dernière itération aussi, pour que la bannière du détail de nœud s'affiche).
 - **Wire.** `nodes.<id>.awaiting` (`cause`, `message`, `since`, `child_run_id`) sur
   `GET /runs/{id}` ; `awaiting_reason` d'un run peut désormais être une attente déclarée (le
   slug `awaiting_reason_code` reste le seul marqueur d'incident).

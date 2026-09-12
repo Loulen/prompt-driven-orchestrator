@@ -1788,6 +1788,49 @@ describe("NodeDetailPanel", () => {
       expect(onOpenChildRun).toHaveBeenCalledWith("child-42");
     });
 
+    it("renders banner C when only the node rollup is lifted by a derived child wait (FP #793)", () => {
+      // The read-time overlay lifts `node.status` and serves `node.awaiting`;
+      // the iteration row may still read `running`. The banner must not gate
+      // on the iteration alone.
+      const onOpenChildRun = vi.fn();
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel
+            node={makeNode({
+              status: "awaiting_user",
+              iter: 1,
+              awaiting: {
+                cause: "child_awaiting",
+                message: "child run fp793-child2 is awaiting you",
+                since: "2026-09-12T10:00:00Z",
+                child_run_id: "child-2",
+              },
+              iterations: [
+                {
+                  iter: 1,
+                  status: "running",
+                  started_at: null,
+                  completed_at: null,
+                  interactive: true,
+                  completion_released: false,
+                },
+              ],
+            })}
+            runId="run-1"
+            isOrchestratorNode
+            onOpenChildRun={onOpenChildRun}
+          />
+        </TooltipProvider>,
+      );
+      const banner = screen.getByTestId("awaiting-banner");
+      expect(banner).toHaveAttribute("data-cause", "child_awaiting");
+      expect(screen.getByTestId("awaiting-banner-title")).toHaveTextContent(
+        "A child run is waiting for you",
+      );
+      fireEvent.click(screen.getByTestId("awaiting-open-child"));
+      expect(onOpenChildRun).toHaveBeenCalledWith("child-2");
+    });
+
     it("shows no banner at all for a fresh interactive node that is simply running (A0)", () => {
       render(
         <TooltipProvider>

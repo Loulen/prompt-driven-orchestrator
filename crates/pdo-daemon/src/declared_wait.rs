@@ -124,6 +124,7 @@ pub(crate) async fn declare_wait(
     iter: i64,
     cause: &str,
     message: Option<&str>,
+    session_alive: impl FnOnce(&str) -> bool,
 ) -> Result<DeclareOutcome, WaitRefusal> {
     let events = load_events(&state.db, run_id)
         .await
@@ -153,6 +154,13 @@ pub(crate) async fn declare_wait(
         return Err(WaitRefusal::NodeSessionNotLive);
     };
     if !attempt.status.holds_session() || iter != node.iter {
+        return Err(WaitRefusal::NodeSessionNotLive);
+    }
+    // The projection says the node holds a session; tmux has the last word. A
+    // pane that died before the sweep noticed must not park the run on a
+    // question nobody can answer in it (FP #793, finding 3).
+    let session = tmux_session_manager::node_session_name(run_id, node_id, iter);
+    if !session_alive(&session) {
         return Err(WaitRefusal::NodeSessionNotLive);
     }
 
@@ -194,7 +202,6 @@ pub(crate) async fn declare_wait(
         return Err(WaitRefusal::RunNotLive);
     }
     // The Enter rule counts typed bytes from the declaration on.
-    let session = tmux_session_manager::node_session_name(run_id, node_id, iter);
     state.pty_typed.lock().unwrap().remove(&session);
     info!(
         "Run {run_id}: node {node_id} iter-{iter} declared a wait ({cause}{})",
@@ -225,6 +232,7 @@ pub(crate) async fn declare_completion_not_released(
         iter,
         AWAITING_CAUSE_COMPLETION_NOT_RELEASED,
         Some(COMPLETION_NOT_RELEASED_MESSAGE),
+        |session| state.node_session_alive(session),
     )
     .await
     {

@@ -104,6 +104,16 @@ fn effective_awaiting(
                 if let Some(node) = parent_node.and_then(|id| parent.nodes.get_mut(&id)) {
                     if node.status == NodeStatus::Running {
                         node.status = NodeStatus::AwaitingUser;
+                        // The node detail renders the iteration **on screen**
+                        // (#617), so the latest iteration must agree with the
+                        // rollup or the banner never shows (FP #793, finding 1).
+                        let latest = node.iter;
+                        if let Some(attempt) = node.iterations.iter_mut().find(|a| a.iter == latest)
+                        {
+                            if attempt.status == NodeStatus::Running {
+                                attempt.status = NodeStatus::AwaitingUser;
+                            }
+                        }
                         node.awaiting = Some(AwaitingInfo {
                             cause: AWAITING_CAUSE_CHILD_AWAITING.to_string(),
                             message: Some(child_awaiting_reason(&child_name)),
@@ -203,6 +213,14 @@ mod tests {
         );
         let node = &parent.nodes["worker"];
         assert_eq!(node.status, NodeStatus::AwaitingUser);
+        // The latest iteration follows the rollup: the node detail gates its
+        // banner on the iteration on screen.
+        let latest = node
+            .iterations
+            .iter()
+            .find(|a| a.iter == node.iter)
+            .unwrap();
+        assert_eq!(latest.status, NodeStatus::AwaitingUser);
         let info = node.awaiting.as_ref().unwrap();
         assert_eq!(info.cause, AWAITING_CAUSE_CHILD_AWAITING);
         assert_eq!(info.child_run_id.as_deref(), Some("child"));

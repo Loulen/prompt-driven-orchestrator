@@ -314,6 +314,12 @@ async fn a_childs_wait_climbs_to_its_parent_on_read_and_clears_when_it_resumes()
     );
     assert!(mid["awaiting_reason_code"].is_null());
     assert_eq!(mid["nodes"]["doer"]["status"], "awaiting_user");
+    // The latest iteration agrees with the rollup — the node detail gates its
+    // banner on the iteration on screen (FP #793, finding 1).
+    assert_eq!(
+        mid["nodes"]["doer"]["iterations"][0]["status"], "awaiting_user",
+        "{mid}"
+    );
     assert_eq!(mid["nodes"]["doer"]["awaiting"]["cause"], "child_awaiting");
     assert_eq!(mid["nodes"]["doer"]["awaiting"]["child_run_id"], grandchild);
 
@@ -470,4 +476,35 @@ async fn the_children_long_poll_times_out_then_returns_the_settled_child() {
     // A fresh call (new `since`) has nothing active any more: no-op again.
     let (_, body) = children_wait(&daemon, &parent, "worker", session, &[]).await;
     assert_eq!(body["noop"], true, "{body}");
+}
+
+#[tokio::test]
+async fn wait_user_is_refused_when_the_tmux_session_is_gone() {
+    // The projection still says `running` (the sweep has not judged the dead
+    // pane yet); tmux is the source of truth for the declared wait (FP #793,
+    // finding 3): named `409 node_session_not_live`, nothing written.
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon, PARENT, None).await;
+    wait_node_status(&daemon, &run_id, "worker", "running").await;
+
+    let session = pdo_daemon::tmux_session_manager::node_session_name(&run_id, "worker", 1);
+    let killed = std::process::Command::new("tmux")
+        .args(["-L", &daemon.tmux_socket(), "kill-session", "-t", &session])
+        .status()
+        .unwrap();
+    assert!(killed.success(), "kill-session {session}");
+
+    let (status, body) = wait_user(&daemon, &run_id, "worker", Some("anyone?")).await;
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(body["error"], "node_session_not_live");
+    assert_eq!(body["recoverable"], true);
+    let events = get_json(&daemon, &format!("/runs/{run_id}/events")).await;
+    assert!(
+        !events
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["kind"] == "node_awaiting_user"),
+        "nothing written on refusal"
+    );
 }

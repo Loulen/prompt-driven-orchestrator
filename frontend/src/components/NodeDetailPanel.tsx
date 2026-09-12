@@ -553,6 +553,11 @@ export default function NodeDetailPanel({
     !isArchived;
   // #588 (A3): a refused unreleased completion makes « Mark ready » the primary
   // call to action — a ring on the button, the banner links to it.
+  // The latest iteration awaits whenever the node rollup says so and carries
+  // the `awaiting` info — even if the iteration row itself still reads
+  // `running` (a derived child wait, FP #793 finding 1).
+  const nodeAwaitsOnLatestIter =
+    selectedIter === node.iter && node.status === "awaiting_user" && node.awaiting != null;
   const releaseIsPrimary =
     canReleaseCompletion &&
     !completionReleased &&
@@ -756,8 +761,12 @@ export default function NodeDetailPanel({
 
       {/* #588 / ADR-0069 — the declared wait, on the iteration on screen. Only
           the latest iteration carries `node.awaiting`; an older awaiting
-          iteration (a reaped one) renders the bare shape. */}
-      {selectedIterStatus === "awaiting_user" && !completionReleased && (
+          iteration (a reaped one) renders the bare shape. A *derived* wait (a
+          child awaiting) is a read-time overlay on the node rollup: the latest
+          iteration is trusted through `node.awaiting` as well, so the banner
+          cannot vanish when the two disagree. */}
+      {(selectedIterStatus === "awaiting_user" || nodeAwaitsOnLatestIter) &&
+        !completionReleased && (
         <AwaitingBanner
           awaiting={selectedIter === node.iter ? node.awaiting : null}
           terminalLive={terminalLive ?? true}

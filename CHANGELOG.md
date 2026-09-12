@@ -16,7 +16,7 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
-## 1.85.0
+## 1.86.0
 **Attente déclarée, préambule de base, attente d'enfants** (#793 ; story #588, ADR-0069).
 
 - **Attente déclarée.** Un nœud `interactive` fraîchement spawné n'est plus `awaiting_user` :
@@ -52,6 +52,15 @@ contribution sont dans `CONTRIBUTING.md`.
 - **Wire.** `nodes.<id>.awaiting` (`cause`, `message`, `since`, `child_run_id`) sur
   `GET /runs/{id}` ; `awaiting_reason` d'un run peut désormais être une attente déclarée (le
   slug `awaiting_reason_code` reste le seul marqueur d'incident).
+
+## 1.85.0
+**Messages de pilotage (Steering) dans Stats › Performance** (#792 ; spec #791, story #790).
+Troisième métrique `Steering` (messages tapés par un humain par exécution) sur les axes pipeline
+et modèle, plus une carte `Steered executions` (part des exécutions réussies avec ≥ 1 message).
+Le compteur est dérivé des transcripts (claude, copilot, pi), jamais persisté : prompt de
+lancement exclu, messages collés par le daemon exclus via le préfixe `[pdo-runtime]` désormais
+posé au goulot tmux (`send_message` / `paste_message`). opencode et Infrastructure affichent « — »
+avec une raison, jamais `0`. Huitième capacité « Steering » dans la table de support des harness.
 
 ## 1.84.1
 **Sélection texte du terminal effacée au premier mouvement de souris** (#788).

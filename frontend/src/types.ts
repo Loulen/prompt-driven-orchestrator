@@ -1689,10 +1689,24 @@ export interface StatsDistribution {
   missing_reasons: string[];
 }
 
+/** The steered-executions rate's raw material (#792): executions with at
+ *  least one steering message over executions whose count could be read.
+ *  Rendered « n % · steered/readable », or « — » when `readable` is 0. */
+export interface StatsSteeredRate {
+  steered: number;
+  readable: number;
+}
+
 export interface StatsHarnessPerformance {
   harness: string;
   context: StatsDistribution;
   duration: StatsDistribution;
+  /** Steering messages per successful execution (#792): the turns a human
+   *  typed into the main session after its launch — derived from the harness
+   *  transcript, launch prompt and `[pdo-runtime]` messages excluded. Unit:
+   *  messages. */
+  steering: StatsDistribution;
+  steered: StatsSteeredRate;
 }
 
 export interface StatsPerformanceAggregate {

@@ -26,10 +26,10 @@ use crate::harness_registry::{embedded_floor, validated_version};
 pub const BEGIN_MARKER: &str = "<!-- support-table:begin -->";
 pub const END_MARKER: &str = "<!-- support-table:end -->";
 
-/// One of the seven capabilities the support table publishes, in publication order.
+/// One of the eight capabilities the support table publishes, in publication order.
 ///
-/// A closed enum is right *here* (unlike the harness axis, ADR-0045): the seven are
-/// the trait's methods, so an eighth capability is a code change in
+/// A closed enum is right *here* (unlike the harness axis, ADR-0045): the eight are
+/// the trait's methods, so a ninth capability is a code change in
 /// [`crate::harness_probes`] anyway — and this `match` is then the compiler's
 /// reminder to publish it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,11 +41,12 @@ pub(crate) enum Capability {
     UsageLimit,
     Staging,
     ContextUsage,
+    Steering,
 }
 
 impl Capability {
-    /// The seven, in the order the table lists them.
-    pub(crate) const ALL: [Capability; 7] = [
+    /// The eight, in the order the table lists them.
+    pub(crate) const ALL: [Capability; 8] = [
         Capability::Cost,
         Capability::Transcript,
         Capability::ObservedIdentity,
@@ -53,6 +54,7 @@ impl Capability {
         Capability::UsageLimit,
         Capability::Staging,
         Capability::ContextUsage,
+        Capability::Steering,
     ];
 
     /// The capability's column name in the published table.
@@ -65,6 +67,7 @@ impl Capability {
             Capability::UsageLimit => "Usage-limit menu",
             Capability::Staging => "Sandbox staging set",
             Capability::ContextUsage => "Context usage",
+            Capability::Steering => "Steering",
         }
     }
 
@@ -83,6 +86,9 @@ impl Capability {
                 "Stage the harness home in a sandbox and disarm its blocking dialogs"
             }
             Capability::ContextUsage => "Show peak context-window usage",
+            Capability::Steering => {
+                "Count the steering messages a human typed per execution (Stats › Performance)"
+            }
         }
     }
 
@@ -101,6 +107,7 @@ impl Capability {
             Capability::UsageLimit => p.usage_limit_anchor().map(|u| u.label()),
             Capability::Staging => p.staging_set().map(|s| s.label()),
             Capability::ContextUsage => p.context_usage_source().map(|c| c.label()),
+            Capability::Steering => p.steering_source().map(|c| c.label()),
         }
     }
 }
@@ -248,6 +255,7 @@ mod tests {
         assert!(Capability::UsageLimit.mechanism(COPILOT).is_none());
         assert!(Capability::Staging.mechanism(COPILOT).is_none());
         assert!(Capability::ContextUsage.mechanism(COPILOT).is_some());
+        assert!(Capability::Steering.mechanism(COPILOT).is_some());
         assert!(Capability::ALL
             .iter()
             .all(|c| c.mechanism(OPENCODE).is_none()));
@@ -257,6 +265,7 @@ mod tests {
         assert!(Capability::Transcript.mechanism(PI).is_some());
         assert!(Capability::TurnEnd.mechanism(PI).is_some());
         assert!(Capability::ContextUsage.mechanism(PI).is_some());
+        assert!(Capability::Steering.mechanism(PI).is_some());
         assert!(Capability::UsageLimit.mechanism(PI).is_none());
         assert!(Capability::Staging.mechanism(PI).is_some());
         assert!(render().contains("`pi` 0.85.1"));
@@ -267,7 +276,7 @@ mod tests {
     }
 
     #[test]
-    fn render_names_every_harness_its_version_and_the_seven_capabilities() {
+    fn render_names_every_harness_its_version_and_the_eight_capabilities() {
         let block = render();
         for d in embedded_floor() {
             assert!(

@@ -770,7 +770,11 @@ mod tests {
         let paths: Vec<&str> = io.inputs[0].files.iter().map(|f| f.path.as_str()).collect();
         assert_eq!(
             paths,
-            vec!["_input/output.md", "_input/SPEC-779.md", "_input/fixtures.json"]
+            vec![
+                "_input/output.md",
+                "_input/SPEC-779.md",
+                "_input/fixtures.json"
+            ]
         );
         assert!(io.inputs[0].files.iter().all(|f| f.exists));
     }

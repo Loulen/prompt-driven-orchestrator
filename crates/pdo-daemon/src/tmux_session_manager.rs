@@ -1094,23 +1094,55 @@ pub fn capture(socket: &str, session_name: &str) -> Option<String> {
     }
 }
 
-/// Send keys to a tmux session. Best-effort — does not fail if the session is absent.
+/// Send raw keystrokes to a tmux session. Best-effort — does not fail if the
+/// session is absent.
+///
+/// **Keystrokes, not a message**: a shell command in a `pdo-shell` session, a
+/// bare `Enter`. Text meant for a **harness agent** goes through
+/// [`send_message`] / [`paste_message`], the one place the `[pdo-runtime]`
+/// prefix is posed (#792) — never through here.
 pub fn send_keys(socket: &str, session_name: &str, text: &str) {
     let _ = tmux(socket)
         .args(["send-keys", "-t", session_name, text, "Enter"])
         .output();
 }
 
-/// Paste a **multi-line** message into a tmux session as one bracketed paste,
-/// then submit it with Enter (#750, the review batch to the manager).
+/// Type a **one-line message** from the daemon into a harness session and
+/// submit it (#792): the text is prefixed with [`crate::steering::RUNTIME_PREFIX`]
+/// here, at the bottleneck, so no caller (the frontmatter retry of ADR-0035,
+/// …) knows the marker and none can forget it. The prefix is what lets the
+/// Steering counter tell PDO's turns from a human's, and what tells the agent
+/// itself the line came from the runtime.
+pub fn send_message(socket: &str, session_name: &str, text: &str) {
+    send_keys(
+        socket,
+        session_name,
+        &crate::steering::runtime_message(text),
+    );
+}
+
+/// Paste a **multi-line message** from the daemon into a harness session as
+/// one bracketed paste and submit it (#750, the review batch to the manager) —
+/// prefixed with [`crate::steering::RUNTIME_PREFIX`] at the head of its first
+/// line, same rule as [`send_message`] (#792).
+pub fn paste_message(socket: &str, session_name: &str, text: &str) {
+    paste_text(
+        socket,
+        session_name,
+        &crate::steering::runtime_message(text),
+    );
+}
+
+/// Paste `text` verbatim as one bracketed paste, then submit it with Enter.
 ///
 /// `send_keys` types its text as keystrokes, so an embedded newline is a
 /// keystroke too — for a chat harness that is a premature submit, and a
 /// twenty-comment batch would arrive as twenty half-messages. `load-buffer`
 /// from stdin + `paste-buffer -p` hands the whole text over as a paste the
 /// harness keeps as one message. Best-effort — a missing session is not an
-/// error here (the caller verified it exists).
-pub fn paste_text(socket: &str, session_name: &str, text: &str) {
+/// error here (the caller verified it exists). Private: a daemon message to a
+/// harness goes through [`paste_message`], which poses the runtime prefix.
+fn paste_text(socket: &str, session_name: &str, text: &str) {
     use std::io::Write;
     let buffer = format!("pdo-paste-{}", std::process::id());
     let child = tmux(socket)
@@ -4888,5 +4920,63 @@ mod tests {
         // session-id resume flag survives it.
         assert!(!script.contains("--resume"), "{script}");
         assert!(!script.contains("claude"), "{script}");
+    }
+
+    /// #792: every daemon message to a harness session starts with
+    /// `[pdo-runtime]`, whichever path carries it — typed (`send_message`) or
+    /// pasted (`paste_message`). Observed at the seam: a fake `tmux` on `PATH`
+    /// logs the argv it receives and the stdin it is fed, and the assertion reads
+    /// the text as the session would.
+    #[test]
+    fn daemon_messages_reach_the_session_with_the_runtime_prefix_on_both_paths() {
+        let dir = std::env::temp_dir().join(format!("pdo-fake-tmux-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("calls.log");
+        let script = format!(
+            "#!/usr/bin/env bash\nprintf 'ARGS:' >> \"{log}\"\nfor a in \"$@\"; do printf ' [%s]' \"$a\" >> \"{log}\"; done\nprintf '\\n' >> \"{log}\"\nif [ \"$3\" = load-buffer ]; then printf 'STDIN:' >> \"{log}\"; cat >> \"{log}\"; printf '\\n' >> \"{log}\"; fi\n",
+            log = log.display()
+        );
+        let fake = dir.join("tmux");
+        std::fs::write(&fake, script).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let previous = std::env::var_os("PATH").unwrap_or_default();
+        let mut paths = vec![dir.clone()];
+        paths.extend(std::env::split_paths(&previous));
+        std::env::set_var("PATH", std::env::join_paths(paths).unwrap());
+
+        send_message(
+            "pdo-test",
+            "pdo-r1-solo-iter-1",
+            "your output is missing frontmatter",
+        );
+        paste_message(
+            "pdo-test",
+            "pdo-mgr-r1",
+            "Review batch\n- comment one\n- comment two",
+        );
+
+        std::env::set_var("PATH", previous);
+        let calls = std::fs::read_to_string(&log).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(
+            calls.contains(
+                "[send-keys] [-t] [pdo-r1-solo-iter-1] [[pdo-runtime] your output is missing frontmatter] [Enter]"
+            ),
+            "typed path: {calls}"
+        );
+        assert!(
+            calls.contains("STDIN:[pdo-runtime] Review batch\n- comment one\n- comment two\n"),
+            "pasted path: {calls}"
+        );
+        // The paste is submitted by a bare Enter, which is a keystroke, not a message.
+        assert!(
+            calls.contains("[send-keys] [-t] [pdo-mgr-r1] [Enter]"),
+            "{calls}"
+        );
     }
 }

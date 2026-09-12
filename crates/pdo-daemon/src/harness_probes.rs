@@ -297,6 +297,48 @@ impl ContextUsageSource {
     }
 }
 
+/// How PDO counts a harness's **steering messages** — the turns a human typed
+/// into a session after its launch (#792, Stats → Performance's third metric,
+/// CONTEXT.md « Message de pilotage »). A marker, not the parser itself:
+/// [`crate::steering`] holds the per-harness turn reading, so this enum can
+/// never describe a mechanism that module does not implement.
+///
+/// Absent ⇒ Performance shows « — » with a reason for this harness's Steering
+/// (never `0`: an unreadable transcript is not an autonomous execution).
+/// `opencode` declares it absent — its session is not resolvable by identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SteeringSource {
+    /// Claude Code's `type:"user"` transcript turns with typed text, minus the
+    /// launch prompt, `isMeta`, tool results, compaction summaries and
+    /// runtime-prefixed turns — [`crate::steering::claude_steering_count`].
+    ClaudeTranscriptTurns,
+    /// GitHub Copilot's `user.message` journal events, minus the first and the
+    /// runtime-prefixed ones — [`crate::steering::copilot_steering_count`].
+    CopilotJournalUserMessages,
+    /// pi's `type:"message"` entries of role `user`, minus the first and the
+    /// runtime-prefixed ones — [`crate::steering::pi_steering_count`].
+    PiSessionUserMessages,
+}
+
+impl SteeringSource {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            SteeringSource::ClaudeTranscriptTurns => {
+                "derived — typed user turns of the transcript, launch prompt and runtime \
+                 messages excluded"
+            }
+            SteeringSource::CopilotJournalUserMessages => {
+                "derived — the journal's `user.message` events, launch prompt and runtime \
+                 messages excluded"
+            }
+            SteeringSource::PiSessionUserMessages => {
+                "derived — the session's user-role messages, launch prompt and runtime \
+                 messages excluded"
+            }
+        }
+    }
+}
+
 /// One `$HOME`-relative entry of a harness's staging set (ADR-0063 §1): copied
 /// from the host into the Run's staging on the way in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -498,6 +540,11 @@ pub(crate) trait HarnessProbes: Sync {
     fn context_usage_source(&self) -> Option<ContextUsageSource> {
         None
     }
+    /// The steering-message source, or `None` (Performance shows « — » with a
+    /// reason for this harness's Steering, never `0`). #792.
+    fn steering_source(&self) -> Option<SteeringSource> {
+        None
+    }
 
     // These are the methods a generic consumer actually calls. The default is
     // "absent" — a data-declared harness ([`NullProbes`]) resolves no transcript,
@@ -608,6 +655,15 @@ pub(crate) trait HarnessProbes: Sync {
     fn observed_identities(&self, _text: &str) -> Vec<ObservedIdentity> {
         Vec::new()
     }
+
+    /// This harness's **steering message count** for one main session's `text`
+    /// (#792): `Some(n)` typed human turns after the launch prompt, `None` when
+    /// no human turn is readable. The default is `None` — a harness with no
+    /// [`Self::steering_source`] never reaches a parser, so
+    /// `crate::stats_performance` never names one itself (ADR-0051).
+    fn steering_count(&self, _text: &str) -> Option<u32> {
+        None
+    }
 }
 
 /// The `claude` capabilities — all five, exactly as they are today. This slice is
@@ -641,6 +697,9 @@ impl HarnessProbes for ClaudeProbes {
     fn context_usage_source(&self) -> Option<ContextUsageSource> {
         Some(ContextUsageSource::ClaudeTranscriptPeak)
     }
+    fn steering_source(&self) -> Option<SteeringSource> {
+        Some(SteeringSource::ClaudeTranscriptTurns)
+    }
 
     /// `claude`'s transcript resolution: by the pinned session id when the node
     /// recorded one (`<uuid>.jsonl` — this node's own transcript, #473), else the
@@ -672,6 +731,10 @@ impl HarnessProbes for ClaudeProbes {
 
     fn context_peak(&self, text: &str) -> Option<u64> {
         crate::context_peak::claude_session_peak(text)
+    }
+
+    fn steering_count(&self, text: &str) -> Option<u32> {
+        crate::steering::claude_steering_count(text)
     }
 
     /// `claude` is the only harness with a confirmed nested-subagent convention
@@ -805,6 +868,9 @@ impl HarnessProbes for CopilotProbes {
     fn context_usage_source(&self) -> Option<ContextUsageSource> {
         Some(ContextUsageSource::CopilotJournalPeak)
     }
+    fn steering_source(&self) -> Option<SteeringSource> {
+        Some(SteeringSource::CopilotJournalUserMessages)
+    }
 
     /// `copilot`'s transcript resolution: the session's event journal, at
     /// `<store>/<session-id>/events.jsonl` — by the **session identity PDO
@@ -832,6 +898,10 @@ impl HarnessProbes for CopilotProbes {
 
     fn context_peak(&self, text: &str) -> Option<u64> {
         crate::context_peak::copilot_session_peak(text)
+    }
+
+    fn steering_count(&self, text: &str) -> Option<u32> {
+        crate::steering::copilot_steering_count(text)
     }
 
     /// The model in effect at the journal's usage points, with the reasoning
@@ -920,6 +990,9 @@ impl HarnessProbes for PiProbes {
     fn context_usage_source(&self) -> Option<ContextUsageSource> {
         Some(ContextUsageSource::PiSessionPeak)
     }
+    fn steering_source(&self) -> Option<SteeringSource> {
+        Some(SteeringSource::PiSessionUserMessages)
+    }
 
     /// pi's transcript resolution: `<store>/<encoded-cwd>/*_<session-id>.jsonl` — by
     /// the **session identity PDO imposed**, inside the working directory's folder.
@@ -943,6 +1016,10 @@ impl HarnessProbes for PiProbes {
 
     fn context_peak(&self, text: &str) -> Option<u64> {
         crate::pi_session::session_peak(text)
+    }
+
+    fn steering_count(&self, text: &str) -> Option<u32> {
+        crate::steering::pi_steering_count(text)
     }
 
     /// pi survives a hard model failure (it stays resident and says
@@ -1016,6 +1093,20 @@ pub(crate) fn resolve_transcript(
 /// no [`HarnessProbes::context_usage_source`] answers `None`.
 pub(crate) fn context_peak(harness: &str, text: &str) -> Option<u64> {
     resolved(harness).context_peak(text)
+}
+
+/// Whether `harness` declares a steering-message source (#792) — the gate
+/// [`crate::stats_performance`] reads before asking for a count, so a harness
+/// with none (`opencode`) gets « — » with a reason, never `0`.
+pub(crate) fn can_count_steering(harness: &str) -> bool {
+    resolved(harness).steering_source().is_some()
+}
+
+/// `harness`'s steering-message count for one main session's `text`, dispatched
+/// to its implementation (ADR-0051, #792). A harness with no
+/// [`HarnessProbes::steering_source`] answers `None`.
+pub(crate) fn steering_count(harness: &str, text: &str) -> Option<u32> {
+    resolved(harness).steering_count(text)
 }
 
 /// The observed model × effort identities one session file's `text` reports,

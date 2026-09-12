@@ -84,6 +84,7 @@ mod skill_sidecar;
 pub mod stale_detector;
 mod stats;
 mod stats_performance;
+pub mod steering;
 mod structured_diff;
 mod switch_router;
 pub mod tmux_session_manager;
@@ -1433,12 +1434,23 @@ fn run_create_multipart(
     }
     for (field, paths) in [("images", images), ("files", files)] {
         for path in paths {
-            let data = std::fs::read(path)
-                .with_context(|| format!("failed to read --{} {}", field.trim_end_matches('s'), path.display()))?;
+            let data = std::fs::read(path).with_context(|| {
+                format!(
+                    "failed to read --{} {}",
+                    field.trim_end_matches('s'),
+                    path.display()
+                )
+            })?;
             let filename = path
                 .file_name()
                 .and_then(|n| n.to_str())
-                .with_context(|| format!("--{} {} has no usable filename", field.trim_end_matches('s'), path.display()))?
+                .with_context(|| {
+                    format!(
+                        "--{} {} has no usable filename",
+                        field.trim_end_matches('s'),
+                        path.display()
+                    )
+                })?
                 .to_string();
             let part = reqwest::blocking::multipart::Part::bytes(data).file_name(filename);
             form = form.part(field, part);
@@ -6990,8 +7002,7 @@ async fn rename_pipeline(
         Ok(parsed) => parsed,
         Err(error) => {
             let (message, line) = parse_error_to_structured(&error);
-            let mut body =
-                serde_json::json!({ "error": format!("invalid pipeline: {error}"), "message": message });
+            let mut body = serde_json::json!({ "error": format!("invalid pipeline: {error}"), "message": message });
             if let Some(l) = line {
                 body["line"] = serde_json::json!(l);
             }
@@ -7242,16 +7253,23 @@ fn read_prompts_from_dir(prompts_dir: &Path) -> HashMap<String, String> {
 /// the rename paths (dedicated endpoint + save-with-changed-name), so "the
 /// visible name and the file stem are 1:1" can never drift between surfaces.
 fn pipeline_slug(requested_name: &str) -> String {
-    let slug = requested_name.trim().chars().fold(String::new(), |mut slug, c| {
-        if c.is_ascii_alphanumeric() || c == '_' {
-            slug.push(c.to_ascii_lowercase());
-        } else if !slug.ends_with('-') {
-            slug.push('-');
-        }
-        slug
-    });
+    let slug = requested_name
+        .trim()
+        .chars()
+        .fold(String::new(), |mut slug, c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                slug.push(c.to_ascii_lowercase());
+            } else if !slug.ends_with('-') {
+                slug.push('-');
+            }
+            slug
+        });
     let slug = slug.trim_matches('-');
-    if slug.is_empty() { "pipeline".to_string() } else { slug.to_string() }
+    if slug.is_empty() {
+        "pipeline".to_string()
+    } else {
+        slug.to_string()
+    }
 }
 
 /// #774 — rewrite ONLY the top-level `name:` scalar of a pipeline YAML, leaving
@@ -7278,7 +7296,11 @@ fn rewrite_pipeline_name_field(yaml: &str, new_name: &str) -> Option<String> {
             out.push_str(line);
         }
     }
-    if replaced { Some(out) } else { None }
+    if replaced {
+        Some(out)
+    } else {
+        None
+    }
 }
 
 /// #774 — the two collisions a visible-name change must REFUSE: another
@@ -7286,7 +7308,12 @@ fn rewrite_pipeline_name_field(yaml: &str, new_name: &str) -> Option<String> {
 /// carries the target visible name. Either would recreate the exact
 /// indistinguishable-rows state the name ⇄ stem 1:1 rule exists to prevent.
 /// Returns the human-readable refusal reason when conflicted.
-fn pipeline_name_conflict(dir: &Path, self_id: &str, new_name: &str, new_id: &str) -> Option<String> {
+fn pipeline_name_conflict(
+    dir: &Path,
+    self_id: &str,
+    new_name: &str,
+    new_id: &str,
+) -> Option<String> {
     // A display-only change whose slug maps back to the own stem ("foo-bar" →
     // "foo bar") targets the pipeline's own file — never a collision.
     if new_id != self_id && dir.join(format!("{new_id}.yaml")).exists() {
@@ -15236,7 +15263,7 @@ async fn send_review_comments(
     };
     tokio::spawn(async move {
         time::sleep(delay).await;
-        tmux_session_manager::paste_text(&socket, &session, &message);
+        tmux_session_manager::paste_message(&socket, &session, &message);
     });
     info!(
         "run {run_id}: {} review comment(s) sent to the manager as one message (batch {batch_id}{})",
@@ -21584,7 +21611,7 @@ pub(crate) async fn check_output_validation_with_retry(
             } else {
                 let msg = outputs_validator::corrective_message(&violations);
                 let session_name = tmux_session_manager::node_session_name(run_id, node_id, iter);
-                tmux_session_manager::send_keys(&state.tmux_socket(), &session_name, &msg);
+                tmux_session_manager::send_message(&state.tmux_socket(), &session_name, &msg);
 
                 let retry_event = event_log::Event {
                     id: None,
@@ -24636,6 +24663,373 @@ mod tests {
 
     /// An empty cohort (no Runs in the window) is not an error — an empty
     /// Performance payload, distinct from the source-wide-unreadable case below.
+    /// #792: the Steering metric at the derivation seam — a forged event log
+    /// plus session files in temporary roots for the three instrumented
+    /// harnesses, read back through `GET /stats/performance`.
+    #[tokio::test]
+    async fn stats_performance_steering_counts_typed_turns_after_launch_per_harness() {
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let mut state = test_state().await;
+        let home = state
+            .repo_root
+            .join(".pdo")
+            .join("test-stats-performance-steering")
+            .join(uuid::Uuid::new_v4().to_string());
+        let _cleanup = Cleanup(home.clone());
+        std::fs::create_dir_all(&home).unwrap();
+        Arc::get_mut(&mut state).unwrap().sandbox_home_override = Some(home.clone());
+        let repo = state.repo_root.to_string_lossy().into_owned();
+
+        async fn insert_event(
+            db: &sqlx::SqlitePool,
+            run: &str,
+            ts: &str,
+            kind: &str,
+            node: Option<&str>,
+            iter: Option<i64>,
+            payload: serde_json::Value,
+        ) {
+            sqlx::query(
+                "INSERT INTO events (run_id, ts, kind, node_id, iter, payload) \
+                 VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(run)
+            .bind(ts)
+            .bind(kind)
+            .bind(node)
+            .bind(iter)
+            .bind(payload.to_string())
+            .execute(db)
+            .await
+            .unwrap();
+        }
+
+        let run = "steer-r1";
+        insert_event(
+            &state.db,
+            run,
+            "2026-08-01T09:00:00Z",
+            "run_started",
+            None,
+            None,
+            serde_json::json!({
+                "pipeline_id":"sp","pipeline_name":"Steered pipeline","target_repo":repo,"harness":"claude",
+                "node_defs":[
+                    {"id":"coder","name":"Coder","node_type":"agent","isolated_worktree":true},
+                    {"id":"pilot","name":"Pilot","node_type":"agent","isolated_worktree":true},
+                    {"id":"pi-node","name":"Pi node","node_type":"agent","isolated_worktree":true},
+                    {"id":"ship","name":"Ship","node_type":"agent","isolated_worktree":true}
+                ]
+            }),
+        )
+        .await;
+        let mut minute = 10;
+        let mut events = Vec::new();
+        for (node, iter, harness, session) in [
+            ("coder", 1, "claude", "c1"),
+            ("coder", 2, "claude", "c2"),
+            ("coder", 3, "claude", "c3"),
+            ("pilot", 1, "copilot", "cp1"),
+            ("pi-node", 1, "pi", "pi1"),
+            ("ship", 1, "opencode", "oc1"),
+        ] {
+            let start = format!("2026-08-01T09:{minute:02}:00Z");
+            let end = format!("2026-08-01T09:{:02}:00Z", minute + 1);
+            minute += 2;
+            let payload = serde_json::json!({
+                "node_type":"agent","isolated_worktree":true,"harness":harness,"session_id":session
+            });
+            events.push((node, iter, start, end, payload));
+        }
+        for (node, iter, start, end, payload) in &events {
+            insert_event(
+                &state.db,
+                run,
+                start,
+                "node_started",
+                Some(node),
+                Some(*iter),
+                payload.clone(),
+            )
+            .await;
+            insert_event(
+                &state.db,
+                run,
+                end,
+                "node_completed",
+                Some(node),
+                Some(*iter),
+                serde_json::json!({}),
+            )
+            .await;
+        }
+        insert_event(
+            &state.db,
+            run,
+            "2026-08-01T09:40:00Z",
+            "run_completed",
+            None,
+            None,
+            serde_json::json!({}),
+        )
+        .await;
+
+        // --- claude: c1 = launch + 2 human turns + 1 runtime turn + a tool
+        // result, a skill load (isMeta) and a compaction summary — count 2. Its
+        // subagent file carries human-looking turns that must never count. c2 =
+        // launch only — count 0 (readable, autonomous). c3 = assistant lines only
+        // — unreadable, never 0.
+        let claude_root = home.join(".claude").join("projects");
+        let assistant = r#"{"type":"assistant","message":{"model":"claude-opus-4-8","usage":{"input_tokens":1000,"output_tokens":0}}}"#;
+        let user = |text: &str| {
+            format!(
+                r#"{{"type":"user","message":{{"role":"user","content":{}}}}}"#,
+                serde_json::Value::from(text)
+            )
+        };
+        let claude_dir = |iter: i64| {
+            let dir = claude_root.join(stale_detector::encode_working_dir(
+                &worktree_ops::sub_worktree_path(&state.repo_root, run, "coder", iter),
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            dir
+        };
+        let c1_dir = claude_dir(1);
+        std::fs::write(
+            c1_dir.join("c1.jsonl"),
+            [
+                user("launch prompt").as_str(),
+                assistant,
+                r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":"x"}]},"toolUseResult":{"stdout":"x"}}"#,
+                r#"{"type":"user","isMeta":true,"message":{"role":"user","content":[{"type":"text","text":"Base directory for this skill: /s"}]}}"#,
+                user("first steer").as_str(),
+                assistant,
+                user("[pdo-runtime] your output is missing frontmatter").as_str(),
+                r#"{"type":"user","isCompactSummary":true,"message":{"role":"user","content":"This session is being continued"}}"#,
+                user("second steer").as_str(),
+                assistant,
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let sub_dir = c1_dir.join("c1").join("subagents");
+        std::fs::create_dir_all(&sub_dir).unwrap();
+        std::fs::write(
+            sub_dir.join("explore.jsonl"),
+            [
+                user("subagent prompt").as_str(),
+                assistant,
+                user("looks like a steer but nobody typed it").as_str(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            claude_dir(2).join("c2.jsonl"),
+            [user("launch prompt").as_str(), assistant].join("\n"),
+        )
+        .unwrap();
+        std::fs::write(claude_dir(3).join("c3.jsonl"), assistant).unwrap();
+
+        // --- copilot: launch + runtime + one human turn — count 1.
+        let copilot_dir = home.join(".copilot").join("session-state").join("cp1");
+        std::fs::create_dir_all(&copilot_dir).unwrap();
+        std::fs::write(
+            copilot_dir.join("events.jsonl"),
+            [
+                r#"{"type":"session.start","data":{"selectedModel":"gpt-5.6-sol","reasoningEffort":"medium"}}"#,
+                r#"{"type":"user.message","data":{"content":"launch prompt"}}"#,
+                r#"{"type":"user.message","data":{"content":"[pdo-runtime] retry"}}"#,
+                r#"{"type":"user.message","data":{"content":"human steer"}}"#,
+                r#"{"type":"session.shutdown","data":{"usage":{"inputTokens":4000,"outputTokens":0},"totalNanoAiu":1000000000}}"#,
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        // --- pi: launch + two human turns — count 2.
+        let pi_dir =
+            home.join(".pi")
+                .join("agent")
+                .join("sessions")
+                .join(pi_session::session_dir_name(
+                    &worktree_ops::sub_worktree_path(&state.repo_root, run, "pi-node", 1),
+                ));
+        std::fs::create_dir_all(&pi_dir).unwrap();
+        std::fs::write(
+            pi_dir.join("2026-08-01T09-18-00-000Z_pi1.jsonl"),
+            [
+                r#"{"type":"session","id":"pi1"}"#,
+                r#"{"type":"message","id":"a","message":{"role":"user","content":[{"type":"text","text":"launch prompt"}]}}"#,
+                r#"{"type":"message","id":"b","message":{"role":"assistant","model":"claude-sonnet-4-5","provider":"anthropic","content":[{"type":"text","text":"ok"}],"usage":{"totalTokens":3000,"cost":{"total":0.01}}}}"#,
+                r#"{"type":"message","id":"c","message":{"role":"user","content":"steer one"}}"#,
+                r#"{"type":"message","id":"d","message":{"role":"user","content":"steer two"}}"#,
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/stats/performance?from=2026-08-01T00:00:00Z&to=2026-08-02T00:00:00Z")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+
+        let harness = |row: &serde_json::Value, name: &str| -> serde_json::Value {
+            row["harnesses"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|h| h["harness"] == name)
+                .unwrap_or_else(|| panic!("no {name} in {row:#?}"))
+                .clone()
+        };
+        let pipeline = &body["by_pipeline"][0];
+        assert_eq!(pipeline["id"], "sp");
+        let node = |id: &str| -> serde_json::Value {
+            pipeline["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|n| n["id"] == id)
+                .unwrap()
+                .clone()
+        };
+
+        // claude: two readable counts (2, 0) out of three executions, one steered.
+        let coder = harness(&node("coder"), "claude");
+        assert_eq!(coder["steering"]["measured"], 2, "{coder:#?}");
+        assert_eq!(coder["steering"]["expected"], 3);
+        assert_eq!(coder["steering"]["stats"]["max"], 2.0);
+        assert_eq!(coder["steering"]["stats"]["min"], 0.0);
+        assert_eq!(coder["steering"]["stats"]["mean"], 1.0);
+        assert_eq!(
+            coder["steering"]["missing_reasons"],
+            serde_json::json!(["no readable human turn in transcript"])
+        );
+        assert_eq!(
+            coder["steered"],
+            serde_json::json!({"steered":1,"readable":2})
+        );
+        // The additive contract: the two existing metrics are untouched.
+        assert_eq!(coder["context"]["measured"], 3);
+        assert_eq!(coder["duration"]["measured"], 3);
+
+        // The subagent is never steered: a declared absence, no expected observation.
+        let explore = harness(&node("coder")["subagents"][0], "claude");
+        assert_eq!(explore["steering"]["expected"], 0);
+        assert_eq!(explore["steering"]["measured"], 0);
+        assert_eq!(
+            explore["steering"]["missing_reasons"],
+            serde_json::json!(["subagents are never steered"])
+        );
+        assert_eq!(
+            explore["steered"],
+            serde_json::json!({"steered":0,"readable":0})
+        );
+
+        // copilot / pi: their own formats.
+        let pilot = harness(&node("pilot"), "copilot");
+        assert_eq!(pilot["steering"]["stats"]["max"], 1.0, "{pilot:#?}");
+        assert_eq!(
+            pilot["steered"],
+            serde_json::json!({"steered":1,"readable":1})
+        );
+        let pi_node = harness(&node("pi-node"), "pi");
+        assert_eq!(pi_node["steering"]["stats"]["max"], 2.0, "{pi_node:#?}");
+        assert_eq!(
+            pi_node["steered"],
+            serde_json::json!({"steered":1,"readable":1})
+        );
+
+        // opencode: unavailable with a named reason, never 0.
+        let ship = harness(&node("ship"), "opencode");
+        assert_eq!(ship["steering"]["measured"], 0);
+        assert_eq!(ship["steering"]["expected"], 1);
+        assert!(ship["steering"]["stats"].is_null());
+        assert_eq!(
+            ship["steering"]["missing_reasons"],
+            serde_json::json!(["session not resolvable on opencode"])
+        );
+        assert_eq!(
+            ship["steered"],
+            serde_json::json!({"steered":0,"readable":0})
+        );
+
+        // The cohort total pools the raw counts: 2, 0 (claude) — per harness.
+        let total_claude = harness(&body["total"], "claude");
+        assert_eq!(
+            total_claude["steered"],
+            serde_json::json!({"steered":1,"readable":2})
+        );
+
+        // Infrastructure: « runtime messages only », never 0.
+        let pm = &body["infrastructure"][0];
+        assert_eq!(pm["id"], "pipeline-manager");
+        let pm_claude = harness(pm, "claude");
+        assert_eq!(pm_claude["steering"]["expected"], 1);
+        assert_eq!(pm_claude["steering"]["measured"], 0);
+        assert_eq!(
+            pm_claude["steering"]["missing_reasons"],
+            serde_json::json!(["runtime messages only"])
+        );
+        let infra_total = harness(&body["infrastructure_total"], "claude");
+        assert_eq!(
+            infra_total["steered"],
+            serde_json::json!({"steered":0,"readable":0})
+        );
+
+        // The « By model » axis carries the metric too, down to the Node row,
+        // and the Node's own model × effort couples on the by_pipeline side.
+        let by_model = body["by_model"].as_array().unwrap();
+        let opus = by_model
+            .iter()
+            .find(|m| m["id"] == "claude-opus-4-8")
+            .unwrap_or_else(|| panic!("{by_model:#?}"));
+        let opus_claude = harness(opus, "claude");
+        assert_eq!(
+            opus_claude["steered"],
+            serde_json::json!({"steered":1,"readable":2})
+        );
+        let opus_node = &opus["efforts"][0]["pipelines"][0]["nodes"][0];
+        assert_eq!(opus_node["id"], "coder");
+        assert_eq!(harness(opus_node, "claude")["steering"]["measured"], 2);
+        let couples = node("coder")["models"].as_array().unwrap().clone();
+        let opus_couple = couples
+            .iter()
+            .find(|c| c["model"] == "claude-opus-4-8")
+            .unwrap();
+        assert_eq!(
+            harness(opus_couple, "claude")["steered"],
+            serde_json::json!({"steered":1,"readable":2})
+        );
+        let sonnet = by_model
+            .iter()
+            .find(|m| m["id"] == "claude-sonnet-4-5")
+            .unwrap();
+        assert_eq!(
+            harness(sonnet, "pi")["steered"],
+            serde_json::json!({"steered":1,"readable":1})
+        );
+    }
+
     #[tokio::test]
     async fn stats_performance_empty_cohort_is_not_an_error() {
         let state = test_state().await;
@@ -31253,19 +31647,31 @@ edges:
             .unwrap();
 
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let val: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(val["renamed"], true);
         assert_eq!(val["id"], "renamed-pipeline");
         assert_eq!(val["name"], "Renamed Pipeline");
 
         assert!(!dir.join("old-name.yaml").exists(), "old yaml must be gone");
-        assert!(!dir.join("old-name.prompts").exists(), "old sidecar must be gone");
+        assert!(
+            !dir.join("old-name.prompts").exists(),
+            "old sidecar must be gone"
+        );
         let new_yaml = std::fs::read_to_string(dir.join("renamed-pipeline.yaml")).unwrap();
         assert!(new_yaml.contains("name: Renamed Pipeline"));
-        assert!(new_yaml.contains("# my pipeline, hand-annotated"), "comments must survive");
-        assert!(new_yaml.contains("custom-field: keep-me"), "unknown keys must survive");
-        let prompt = std::fs::read_to_string(dir.join("renamed-pipeline.prompts/worker.md")).unwrap();
+        assert!(
+            new_yaml.contains("# my pipeline, hand-annotated"),
+            "comments must survive"
+        );
+        assert!(
+            new_yaml.contains("custom-field: keep-me"),
+            "unknown keys must survive"
+        );
+        let prompt =
+            std::fs::read_to_string(dir.join("renamed-pipeline.prompts/worker.md")).unwrap();
         assert_eq!(prompt, "Role prompt.");
     }
 
@@ -31293,7 +31699,10 @@ edges:
 
         assert_eq!(resp.status(), StatusCode::CONFLICT);
         let dir = tmp.path().join(".pdo/pipelines");
-        assert!(dir.join("collider-a.yaml").exists(), "source must be untouched");
+        assert!(
+            dir.join("collider-a.yaml").exists(),
+            "source must be untouched"
+        );
         assert!(dir.join("collider-b.yaml").exists());
     }
 
@@ -31390,7 +31799,9 @@ edges:
             .unwrap();
 
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let val: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(val["renamed"], false);
         assert_eq!(val["id"], "steady");
@@ -31428,7 +31839,9 @@ edges:
             .unwrap();
 
         assert_eq!(resp.status(), StatusCode::CONFLICT);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let val: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert!(val["error"].as_str().unwrap().contains("active run"));
         assert!(tmp.path().join(".pdo/pipelines/busy-rename.yaml").exists());
@@ -31507,13 +31920,18 @@ edges:
             .unwrap();
 
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let val: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(val["renamed"], true);
         assert_eq!(val["id"], "fresh-stem");
 
         assert!(!dir.join("stale-stem.yaml").exists());
-        assert!(!dir.join("stale-stem.prompts").exists(), "old sidecar must not survive the move");
+        assert!(
+            !dir.join("stale-stem.prompts").exists(),
+            "old sidecar must not survive the move"
+        );
         assert!(dir.join("fresh-stem.yaml").exists());
         let prompt = std::fs::read_to_string(dir.join("fresh-stem.prompts/start.md")).unwrap();
         assert_eq!(prompt, "New prompt.");
@@ -31544,11 +31962,16 @@ edges:
             .unwrap();
 
         assert_eq!(resp.status(), StatusCode::CONFLICT);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let val: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert!(val.get("message").is_some());
         let dir = tmp.path().join(".pdo/pipelines");
-        assert!(dir.join("moving.yaml").exists(), "old file must be untouched");
+        assert!(
+            dir.join("moving.yaml").exists(),
+            "old file must be untouched"
+        );
         assert!(dir.join("occupied.yaml").exists());
     }
 
@@ -43737,7 +44160,9 @@ edges:
             .unwrap();
 
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let val: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(val["id"], "foo-bar");
         assert_eq!(val["name"], "Foo Bar");

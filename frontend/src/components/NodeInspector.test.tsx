@@ -42,8 +42,14 @@ vi.mock("../api", () => ({
           name: "claude",
           source: "builtin",
           installed: true,
-          models: ["sonnet", "opus", "haiku", "opusplan"],
+          // #798: two models of the SAME harness with disjoint effort support —
+          // the reported regression pair. `union-alpha` supports ONLY `off`.
+          models: ["sonnet", "opus", "haiku", "opusplan", "union-alpha", "GPT5.4"],
           efforts: ["low", "medium", "high", "xhigh", "max"],
+          model_efforts: {
+            "union-alpha": ["off"],
+            "GPT5.4": ["off", "low", "medium", "high", "xhigh"],
+          },
           has_effort: true,
           version: "claude 1.0",
         },
@@ -373,6 +379,78 @@ describe("NodeInspector — per-node effort field (#424, #616)", () => {
     useEditStore.getState().updateNode("rv1", { effort: "turbo" });
     renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
     expect(screen.getByTestId("node-effort-option-passthrough")).toHaveTextContent("turbo");
+  });
+
+  // #798: the effort offer follows the node's SELECTED model against its resolved
+  // harness. The reported pair: `union-alpha` supports ONLY `off`; `GPT5.4` the
+  // full off..xhigh scale.
+  describe("per-model effort support (#798)", () => {
+    function node() {
+      return useEditStore.getState().openTabs[0].pipeline.nodes[0];
+    }
+
+    it("a supported (model, effort) pair renders checked with no warning", async () => {
+      seedNode({ model: "GPT5.4", effort: "low" });
+      renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+      // Resolved harness: the claude floor (no pin); GPT5.4's own offer applies.
+      expect(screen.getByTestId("node-harness-resolved")).toHaveTextContent("claude");
+      expect(await screen.findByTestId("node-effort-option-low")).toHaveAttribute(
+        "aria-checked",
+        "true",
+      );
+      expect(screen.getByTestId("node-effort-option-xhigh")).toBeInTheDocument();
+      expect(screen.queryByTestId("node-effort-unsupported")).toBeNull();
+    });
+
+    it("a stored effort unsupported by the NEW model warns, stays visible, and is not silently deleted", async () => {
+      const user = userEvent.setup();
+      seedNode({ model: "GPT5.4", effort: "low" });
+      renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+      await screen.findByTestId("node-effort-option-low");
+
+      // Switch the model to union-alpha (off-only): the stored `low` is now
+      // unsupported. It must NOT persist as an ordinary supported choice, and
+      // must NOT be silently deleted either (ADR-0001).
+      await user.click(screen.getByTestId("node-model-trigger"));
+      await user.click(await screen.findByTestId("node-model-option-union-alpha"));
+
+      expect(node().model).toBe("union-alpha");
+      expect(node().effort).toBe("low"); // preserved, never silently deleted
+      // Not offered as a supported option any more…
+      expect(screen.queryByTestId("node-effort-option-low")).toBeNull();
+      // …but kept visible, flagged unsupported, with the way out.
+      const extra = screen.getByTestId("node-effort-option-passthrough");
+      expect(extra).toHaveTextContent("low");
+      expect(extra).toHaveAttribute("data-unsupported", "true");
+      expect(screen.getByTestId("node-effort-unsupported")).toBeInTheDocument();
+
+      // The user resolves it explicitly: Default resets.
+      await user.click(screen.getByTestId("node-effort-option-default"));
+      expect(node().effort).toBeNull();
+    });
+
+    it("a model without a key retains the harness's global efforts (fallback, no exceptions)", async () => {
+      seedNode({ model: "sonnet", effort: "max" });
+      renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+      // `sonnet` has no model_efforts key: the global offer applies — `max` is a
+      // supported choice, not a warning.
+      expect(await screen.findByTestId("node-effort-option-max")).toHaveAttribute(
+        "aria-checked",
+        "true",
+      );
+      expect(screen.queryByTestId("node-effort-unsupported")).toBeNull();
+    });
+
+    it("a harness unknown to the catalogue preserves the pass-through UI (no warning)", async () => {
+      seedNode({ pin_harness: "mystery", effort: "turbo" });
+      renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+      expect(screen.getByTestId("node-harness-resolved")).toHaveTextContent("mystery");
+      const extra = screen.getByTestId("node-effort-option-passthrough");
+      expect(extra).toHaveTextContent("turbo");
+      expect(extra).toHaveAttribute("aria-checked", "true");
+      expect(extra).not.toHaveAttribute("data-unsupported");
+      expect(screen.queryByTestId("node-effort-unsupported")).toBeNull();
+    });
   });
 });
 

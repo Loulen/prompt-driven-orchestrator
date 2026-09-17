@@ -16,7 +16,7 @@ import type { InheritedTier } from "../lib/skillSelection";
 import HarnessSelect from "./HarnessSelect";
 import ModelPicker from "./ModelPicker";
 import EffortPicker from "./EffortPicker";
-import { findHarnessOption, resolveEditorHarness } from "../lib/harness";
+import { findHarnessOption, effortOffer, resolveEditorHarness } from "../lib/harness";
 import {
   WORKSPACE_CHOICES,
   carriesIsolation,
@@ -129,6 +129,12 @@ export default function NodeInspector({
   const provisioningOpen = provisioningOpenFor === node.id;
   const resolvedHarness = resolveEditorHarness(node);
   const harnessOption = findHarnessOption(harnessCatalog, resolvedHarness);
+  // #798: the effort picker's offer is read against the node's SELECTED model —
+  // a per-model key in the served `model_efforts` is authoritative for it
+  // (`[]` included), a missing key retains the harness's global efforts. When
+  // the offer is authoritative, a stored effort outside it renders as an
+  // unsupported passthrough — warned, kept, never silently deleted (ADR-0001).
+  const effort = effortOffer(harnessOption, node.model);
 
   // Inputs are emergent (#149): derived from the pipeline's incoming edges,
   // not declared on the node. Same-named edges pool into one list input.
@@ -565,7 +571,8 @@ export default function NodeInspector({
               <EffortPicker
                 value={node.effort ?? null}
                 onChange={(value) => handleField("effort", value)}
-                efforts={harnessOption?.efforts ?? []}
+                efforts={effort.levels}
+                strict={effort.authoritative}
                 testid="node-effort"
                 disabled={!(harnessOption?.hasEffort ?? true)}
               />

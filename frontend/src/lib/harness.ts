@@ -60,6 +60,12 @@ export interface HarnessOption {
   modelContexts: Record<string, string>;
   /** Offered effort levels, served. Empty ⇒ no effort axis. */
   efforts: string[];
+  /** #798: the effort levels an exact model id supports, keyed by that id
+   *  verbatim. A key PRESENT for a model is authoritative for it (`[]` included);
+   *  a key MISSING falls back to {@link HarnessOption.efforts}. Optional so a
+   *  HarnessOption literal predating #798 still typechecks; absent ⇒ the global
+   *  `efforts` apply to every model. */
+  modelEfforts?: Record<string, string[]>;
   /** The served effort-axis fact — whether to grey the effort picker. */
   hasEffort: boolean;
   /** The probed binary version the offer was read at, for the provenance line. */
@@ -83,8 +89,8 @@ const FLOOR_CATALOG: HarnessCatalog = {
     // with `GET /settings`. `hasEffort` seeds the two embedded facts so the picker
     // is not mis-greyed for the split-second before the fetch resolves; the served
     // value replaces it. Not a source of truth (the daemon re-resolves at spawn).
-    { name: "claude", installed: true, models: [], modelContexts: {}, efforts: [], hasEffort: true, version: null },
-    { name: "opencode", installed: true, models: [], modelContexts: {}, efforts: [], hasEffort: false, version: null },
+    { name: "claude", installed: true, models: [], modelContexts: {}, efforts: [], modelEfforts: {}, hasEffort: true, version: null },
+    { name: "opencode", installed: true, models: [], modelContexts: {}, efforts: [], modelEfforts: {}, hasEffort: false, version: null },
   ],
   descriptors: [],
 };
@@ -111,6 +117,9 @@ export function harnessCatalog(
       models: h.models ?? [],
       modelContexts: h.model_contexts ?? {},
       efforts: h.efforts ?? [],
+      // #798: the per-model effort support, served. Defaulted for a daemon
+      // predating #798: absent ⇒ every model falls back to the global efforts.
+      modelEfforts: h.model_efforts ?? {},
       hasEffort: h.has_effort ?? true,
       version: h.version ?? null,
     });
@@ -139,6 +148,35 @@ export function findHarnessOption(
  *  can't honour anyway. */
 export function harnessHasEffort(catalog: HarnessCatalog, name: string): boolean {
   return findHarnessOption(catalog, name)?.hasEffort ?? true;
+}
+
+/** The selected model's offer. Missing capability data falls back to the
+ *  harness list without claiming that other stored values are unsupported. */
+export interface EffortOffer {
+  /** The effort stops the picker renders as regular supported options. */
+  levels: string[];
+  /** True only for a model-specific answer, including an empty list.
+   *  Unsupported stored values remain visible with a warning. */
+  authoritative: boolean;
+}
+
+/** Compute the offer for a harness option and the model the surface selected or
+ *  resolved (the flat `model` the pickers edit — see `foldHarnessOntoNode`). */
+export function effortOffer(
+  option: HarnessOption | undefined,
+  model: string | null | undefined,
+): EffortOffer {
+  if (!option) return { levels: [], authoritative: false };
+  if (
+    model &&
+    option.modelEfforts &&
+    Object.prototype.hasOwnProperty.call(option.modelEfforts, model)
+  ) {
+    // Present key — `[]` included — is authoritative for this model.
+    return { levels: option.modelEfforts[model], authoritative: true };
+  }
+  // A harness-wide list does not establish support for an unknown model.
+  return { levels: option.efforts, authoritative: false };
 }
 
 /** The harness an editor node resolves to, with only the tiers a client knows:

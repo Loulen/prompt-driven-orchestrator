@@ -20,8 +20,14 @@ vi.mock("../api", () => ({
           name: "claude",
           source: "builtin",
           installed: true,
-          models: ["sonnet", "opus", "haiku"],
+          // #798: two models of the SAME harness with disjoint effort support —
+          // the reported regression pair. `union-alpha` supports ONLY `off`.
+          models: ["sonnet", "opus", "haiku", "union-alpha", "GPT5.4"],
           efforts: ["low", "medium", "high", "xhigh", "max"],
+          model_efforts: {
+            "union-alpha": ["off"],
+            "GPT5.4": ["off", "low", "medium", "high", "xhigh"],
+          },
           has_effort: true,
           version: "claude 1.0",
         },
@@ -206,5 +212,89 @@ describe("MergeInspector", () => {
       "aria-disabled",
       "true",
     );
+  });
+
+  // #798: the effort offer follows the node's SELECTED model. The reported pair:
+  // `union-alpha` supports ONLY `off`; `GPT5.4` the full off..xhigh scale.
+  describe("per-model effort support (#798)", () => {
+    function node() {
+      return useEditStore.getState().openTabs[0].pipeline.nodes.find((n) => n.id === "mg1");
+    }
+
+    it("a supported (model, effort) pair renders checked with no warning", async () => {
+      setStoreState(makeMergeNode({ model: "GPT5.4", effort: "low" }));
+      render(<MergeInspector />);
+      expect(await screen.findByTestId("merge-effort-option-low")).toHaveAttribute(
+        "aria-checked",
+        "true",
+      );
+      // GPT5.4's own list — xhigh is supported for THIS model, no warning.
+      expect(screen.getByTestId("merge-effort-option-xhigh")).toBeInTheDocument();
+      expect(screen.queryByTestId("merge-effort-unsupported")).toBeNull();
+    });
+
+    it("a stored effort unsupported by the NEW model warns, stays visible, and is not silently deleted", async () => {
+      const user = userEvent.setup();
+      setStoreState(makeMergeNode({ model: "GPT5.4", effort: "low" }));
+      render(<MergeInspector />);
+      await screen.findByTestId("merge-effort-option-low");
+
+      // Switch the model to union-alpha (off-only): the stored `low` is now
+      // unsupported. It must NOT persist as an ordinary supported choice, and
+      // must NOT be silently deleted either (ADR-0001).
+      await user.click(screen.getByTestId("merge-model-trigger"));
+      await user.click(await screen.findByTestId("merge-model-option-union-alpha"));
+
+      expect(node()?.model).toBe("union-alpha");
+      expect(node()?.effort).toBe("low"); // preserved, never silently deleted
+      // Not offered as a supported option any more…
+      expect(screen.queryByTestId("merge-effort-option-low")).toBeNull();
+      // …but kept visible, flagged unsupported, with the way out.
+      const extra = screen.getByTestId("merge-effort-option-passthrough");
+      expect(extra).toHaveTextContent("low");
+      expect(extra).toHaveAttribute("aria-checked", "true");
+      expect(extra).toHaveAttribute("data-unsupported", "true");
+      expect(screen.getByTestId("merge-effort-unsupported")).toBeInTheDocument();
+
+      // The user resolves it explicitly: Default resets.
+      await user.click(screen.getByTestId("merge-effort-option-default"));
+      expect(node()?.effort).toBeNull();
+    });
+
+    it("a supported effort of the new model can be picked explicitly", async () => {
+      const user = userEvent.setup();
+      setStoreState(makeMergeNode({ model: "GPT5.4", effort: "low" }));
+      render(<MergeInspector />);
+      await screen.findByTestId("merge-effort-option-low");
+      await user.click(screen.getByTestId("merge-model-trigger"));
+      await user.click(await screen.findByTestId("merge-model-option-union-alpha"));
+      await user.click(await screen.findByTestId("merge-effort-option-off"));
+      expect(node()?.effort).toBe("off");
+      expect(screen.queryByTestId("merge-effort-unsupported")).toBeNull();
+    });
+
+    it("a model without a key retains the harness's global efforts (fallback, no exceptions)", async () => {
+      setStoreState(makeMergeNode({ model: "sonnet", effort: "max" }));
+      render(<MergeInspector />);
+      // `sonnet` has no model_efforts key: the global offer applies — `max` is a
+      // supported choice, not a warning.
+      expect(await screen.findByTestId("merge-effort-option-max")).toHaveAttribute(
+        "aria-checked",
+        "true",
+      );
+      expect(screen.queryByTestId("merge-effort-unsupported")).toBeNull();
+    });
+
+    it("a harness unknown to the catalogue preserves the pass-through UI (no warning)", async () => {
+      setStoreState(makeMergeNode({ pin_harness: "mystery", effort: "turbo" }));
+      render(<MergeInspector />);
+      expect(screen.getByTestId("merge-harness-resolved")).toHaveTextContent("mystery");
+      await waitFor(() => expect(vi.mocked(fetchSettings)).toHaveBeenCalled());
+      const extra = screen.getByTestId("merge-effort-option-passthrough");
+      expect(extra).toHaveTextContent("turbo");
+      expect(extra).toHaveAttribute("aria-checked", "true");
+      expect(extra).not.toHaveAttribute("data-unsupported");
+      expect(screen.queryByTestId("merge-effort-unsupported")).toBeNull();
+    });
   });
 });

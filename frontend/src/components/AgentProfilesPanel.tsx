@@ -10,7 +10,7 @@ import type { AgentProfile, AgentProfileReferents } from "../types";
 import ModelPicker from "./ModelPicker";
 import EffortPicker from "./EffortPicker";
 import HarnessSelect from "./HarnessSelect";
-import { findHarnessOption } from "../lib/harness";
+import { findHarnessOption, effortOffer } from "../lib/harness";
 import { useHarnessCatalog } from "../hooks/useHarnessCatalog";
 
 /**
@@ -44,6 +44,12 @@ export default function AgentProfilesPanel({
   const catalog = useHarnessCatalog();
   const selected = profiles.find((profile) => profile.id === selectedId) ?? null;
   const harnessOption = findHarnessOption(catalog, draft.harness);
+  // #798: the effort offer is read against the model the form has selected — a
+  // per-model key in the served `model_efforts` is authoritative for it
+  // (`[]` included), a missing key retains the harness's global efforts. When
+  // authoritative, a stored effort outside the offer renders as an unsupported
+  // passthrough — warned, kept, never silently deleted (ADR-0001).
+  const effort = effortOffer(harnessOption, draft.model);
 
   const edit = (profile: AgentProfile) => {
     setSelectedId(profile.id);
@@ -206,8 +212,9 @@ export default function AgentProfilesPanel({
                 Effort <span className="text-fg-4">optional</span>
                 <EffortPicker
                   value={draft.effort}
-                  onChange={(effort) => setDraft({ ...draft, effort })}
-                  efforts={harnessOption?.efforts ?? []}
+                  onChange={(next) => setDraft({ ...draft, effort: next })}
+                  efforts={effort.levels}
+                  strict={effort.authoritative}
                   testid="agent-profile-effort"
                   disabled={!(harnessOption?.hasEffort ?? true)}
                 />

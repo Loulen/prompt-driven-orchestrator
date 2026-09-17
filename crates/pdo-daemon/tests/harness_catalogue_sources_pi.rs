@@ -26,7 +26,7 @@ const HELP: &str = include_str!("fixtures/catalogue/pi-0.85.1-help.txt");
 const LIST_MODELS: &str = include_str!("fixtures/catalogue/pi-0.85.1-list-models.txt");
 
 /// Write an executable fake `pi` that answers `--version`, `--help` and
-/// `--list-models`, and **hangs** on anything else — so an unadvertised source
+/// `--list-models` and model-capability RPC, and **hangs** on anything else so an unadvertised source
 /// (`completion bash`, `help config`) being run would time the probe out visibly.
 #[cfg(unix)]
 fn write_fake_pi(dir: &std::path::Path, version: &str, list_models: &str) {
@@ -34,10 +34,19 @@ fn write_fake_pi(dir: &std::path::Path, version: &str, list_models: &str) {
     let arm =
         |argv: &str, out: &str| format!("  '{argv}') printf '%s' {};;\n", sh_single_quote(out));
     let script = format!(
-        "#!/bin/sh\ncase \"$*\" in\n  '--version') printf '%s\\n' {};\n    ;;\n{}{}  *) sleep 30;;\nesac\n",
+        "#!/bin/sh\ncase \"$*\" in\n  '--version') printf '%s\\n' {};\n    ;;\n{}{}  *'--mode rpc') {};;\n  *) sleep 30;;\nesac\n",
         sh_single_quote(version),
         arm("--help", HELP),
         arm("--list-models", list_models),
+        r#"
+        while IFS= read -r request; do
+          case "$request" in
+            *get_available_models*) printf '%s\n' '{"type":"response","command":"get_available_models","success":true,"data":{"models":[{"provider":"openrouter","id":"stealth/union-alpha"}]}}';;
+            *set_model*) printf '%s\n' '{"type":"response","command":"set_model","success":true}';;
+            *get_available_thinking_levels*) printf '%s\n' '{"type":"response","command":"get_available_thinking_levels","success":true,"data":{"levels":["off"]}}';;
+          esac
+        done
+        "#,
     );
     let bin = dir.join("pi");
     std::fs::write(&bin, script).unwrap();
@@ -126,4 +135,8 @@ async fn pis_catalogue_comes_from_its_model_table_and_its_thinking_line() {
         vec!["off", "minimal", "low", "medium", "high", "xhigh", "max"]
     );
     assert_eq!(pi["has_effort"], true);
+    assert_eq!(
+        strings(&pi["model_efforts"]["openrouter/stealth/union-alpha"]),
+        vec!["off"]
+    );
 }

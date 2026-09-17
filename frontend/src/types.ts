@@ -410,6 +410,13 @@ export interface HarnessListItem {
   model_contexts?: Record<string, string>;
   /** #616/ADR-0053: the effort levels the binary offers. Empty ⇒ no effort axis. */
   efforts?: string[];
+  /** #798: the effort levels an exact model id supports, keyed by that id as it
+   *  appears in `models`, verbatim. A key PRESENT for a model is authoritative
+   *  for it — `[]` included, meaning the model supports no effort level. A key
+   *  MISSING for a model falls back to the harness's global `efforts` (no
+   *  client-side exceptions). Optional so a daemon predating #798 still
+   *  typechecks — the consumer then treats every model as `efforts` says. */
+  model_efforts?: Record<string, string[]>;
   /** #616/ADR-0053: the served effort-axis fact — whether this harness has an
    *  effort axis at all. Drives the effort-picker greying, replacing the client's
    *  hard-coded map. */

@@ -10991,10 +10991,11 @@ fn catalogue_version_ttl() -> Duration {
 /// 2. Past the window, `--version` is re-read (off the runtime thread). If it
 ///    matches the cached version, the catalogue is still current: restamp and
 ///    return it, no `--help` run.
-/// 3. On a first miss or a changed version, `--help` is re-read and parsed, and the
-///    new `{version, catalogue}` cached.
+/// 3. On a first miss or a changed version, the catalogue ladder is re-run (help,
+///    and every source the binary declares — the RPC session included, #798) and
+///    the new `{version, catalogue}` cached.
 ///
-/// Both subprocess reads run under `spawn_blocking` with the probe's own timeout, so
+/// All subprocess reads run under `spawn_blocking` with the probe's own timeouts, so
 /// a wedged binary can never hang the settings response — it degrades to the last
 /// good catalogue (or an empty one), i.e. the free-text fallback.
 async fn catalogue_for(
@@ -11031,6 +11032,36 @@ async fn catalogue_for(
     let cached = harness_catalogue::CachedCatalogue { version, catalogue };
     guard.insert(harness.to_string(), (Instant::now(), cached.clone()));
     cached
+}
+
+/// One harness's picker entry of `GET /settings → harness_descriptors.harnesses`
+/// (#586, #616, #705, #798). PURE — the probed facts in, the wire JSON out — so the
+/// shape is pinned by a test without a database or an installed binary.
+fn harness_catalogue_entry(
+    name: &str,
+    source: &str,
+    installed: bool,
+    cached: &harness_catalogue::CachedCatalogue,
+    has_effort: bool,
+) -> serde_json::Value {
+    serde_json::json!({
+        "name": name,
+        "source": source,
+        "installed": installed,
+        "version": cached.version,
+        "models": cached.catalogue.models,
+        // #705: the context window a source published beside each id (`pi
+        // --list-models`), keyed by id — a picker hint, verbatim. Empty when no
+        // source names one.
+        "model_contexts": cached.catalogue.model_contexts,
+        // #798: the per-model effort table, keyed by id like `model_contexts`. A
+        // MISSING key is unknown — the client falls back to the global `efforts`
+        // axis; a PRESENT key (an empty vec included) is the model's known offer,
+        // verbatim from the binary's RPC report.
+        "model_efforts": cached.catalogue.model_efforts,
+        "efforts": cached.catalogue.efforts,
+        "has_effort": has_effort,
+    })
 }
 
 /// Probe every installed harness's catalogue once, populating the cache, so the
@@ -11384,19 +11415,13 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
             .map(|d| d.has_effort_hole())
             .unwrap_or(false);
         let has_effort = cached.catalogue.has_effort_axis() || has_effort_hole;
-        harness_list.push(serde_json::json!({
-            "name": h.name,
-            "source": h.source.as_str(),
-            "installed": installed,
-            "version": cached.version,
-            "models": cached.catalogue.models,
-            // #705: the context window a source published beside each id (`pi
-            // --list-models`), keyed by id — a picker hint, verbatim. Empty when no
-            // source names one.
-            "model_contexts": cached.catalogue.model_contexts,
-            "efforts": cached.catalogue.efforts,
-            "has_effort": has_effort,
-        }));
+        harness_list.push(harness_catalogue_entry(
+            &h.name,
+            h.source.as_str(),
+            installed,
+            &cached,
+            has_effort,
+        ));
     }
     let harness_descriptors_view = match &host_home_path {
         Some(home) => serde_json::json!({
@@ -45241,5 +45266,69 @@ edges:
         assert!(dir.join("foo-bar.yaml").exists());
         let content = std::fs::read_to_string(dir.join("foo-bar.yaml")).unwrap();
         assert!(content.contains("name: Foo Bar"));
+    }
+
+    /// #798: the picker entry serves the per-model effort table beside
+    /// `model_contexts`, verbatim — and the semantics it carries are the wire
+    /// contract: an absent key would be unknown (global fallback), a present one
+    /// (here, `[off]` included) is the model's known offer.
+    #[test]
+    fn harness_catalogue_entry_serves_the_per_model_effort_table() {
+        let mut catalogue = harness_catalogue::Catalogue::default();
+        catalogue.models = vec![
+            "openrouter/openai/gpt-5.4".to_string(),
+            "openrouter/stealth/union-alpha".to_string(),
+        ];
+        catalogue.efforts = vec![
+            "off".to_string(),
+            "minimal".to_string(),
+            "low".to_string(),
+            "medium".to_string(),
+            "high".to_string(),
+            "xhigh".to_string(),
+            "max".to_string(),
+        ];
+        catalogue
+            .model_contexts
+            .insert("openrouter/openai/gpt-5.4".to_string(), "400K".to_string());
+        catalogue.model_efforts.insert(
+            "openrouter/openai/gpt-5.4".to_string(),
+            vec![
+                "off".to_string(),
+                "low".to_string(),
+                "medium".to_string(),
+                "high".to_string(),
+                "xhigh".to_string(),
+            ],
+        );
+        catalogue.model_efforts.insert(
+            "openrouter/stealth/union-alpha".to_string(),
+            vec!["off".to_string()],
+        );
+        let entry = harness_catalogue_entry(
+            "pi",
+            "builtin",
+            true,
+            &harness_catalogue::CachedCatalogue {
+                version: Some("pi 0.85.1".to_string()),
+                catalogue,
+            },
+            true,
+        );
+
+        assert_eq!(entry["name"], "pi");
+        assert_eq!(entry["version"], "pi 0.85.1");
+        // The exact levels the binary reported, beside the context window, keyed
+        // by the same ids as `models`.
+        assert_eq!(
+            entry["model_efforts"]["openrouter/openai/gpt-5.4"],
+            serde_json::json!(["off", "low", "medium", "high", "xhigh"])
+        );
+        assert_eq!(
+            entry["model_efforts"]["openrouter/stealth/union-alpha"],
+            serde_json::json!(["off"])
+        );
+        assert_eq!(entry["model_contexts"]["openrouter/openai/gpt-5.4"], "400K");
+        assert_eq!(entry["efforts"].as_array().map(Vec::len), Some(7));
     }
 }

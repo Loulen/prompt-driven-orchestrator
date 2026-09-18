@@ -1110,6 +1110,21 @@ export interface RunState {
   target_repos?: RepoPin[];
   source_branch?: string | null;
   /**
+   * The commit `pdo/run-<id>` was cut from, frozen at Run start (#417). Absent on
+   * a pre-#417 Run, or when the source ref could not be resolved at creation.
+   */
+  fork_sha?: string | null;
+  /**
+   * Why the **pre-cut fetch** of the Trigger fire that created this Run failed
+   * (#804, ADR-0070 §1). Absent on every other Run — a manual launch fetched from
+   * the form, and a CLI-created child cuts without fetching by design.
+   *
+   * Its presence is **not** a failure: the Run started, from the last state known
+   * locally. It drives a sentence on the Run detail, nothing else — never the
+   * status dot, never the Runs list.
+   */
+  source_fetch_error?: BranchFetchError | null;
+  /**
    * Isolation for this Run (#403 / #407 / #410 / #432): `"off"`, or the name of the
    * **staging profile** it launched with. Absent on host/historical runs (projected as
    * `off` server-side and skipped from the payload when off). Immutable once the Run

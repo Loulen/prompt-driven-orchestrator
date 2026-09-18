@@ -2870,3 +2870,59 @@ describe("NewRunModal — harness selector (#551)", () => {
     });
   });
 });
+
+/**
+ * #804 / ADR-0070 §1: the source-branch field is told what it is choosing FOR.
+ * A one-shot Run says nothing about locality — the form just fetched, what you
+ * see is what launches. A Trigger is a template, so a local branch earns an
+ * honest reminder: every fire cuts from its local state, and the pre-fire fetch
+ * cannot move it.
+ */
+describe("NewRunModal — a Trigger's source branch warns on a local one (#804)", () => {
+  const tracked = (name: string): BranchRef => ({
+    name,
+    kind: "local",
+    upstream: `origin/${name}`,
+  });
+
+  async function openWithBranches() {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Auditor", scope: "repo", prompt_required: false }),
+    ]);
+    listBranchesReturns([tracked("main"), remote("origin/feature-remote-only")]);
+    renderModal();
+    await enterValidRepo();
+  }
+
+  it("says nothing while the form launches one Run", async () => {
+    await openWithBranches();
+    expect(selectedBranch()).toContain("main");
+    expect(screen.queryByTestId("source-branch-local-warning")).not.toBeInTheDocument();
+  });
+
+  it("warns as soon as the form becomes a Trigger", async () => {
+    await openWithBranches();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    expect(screen.getByTestId("source-branch-local-warning")).toHaveAccessibleName(
+      expect.stringContaining("Prefer origin/main"),
+    );
+  });
+
+  it("falls silent once the Trigger points at the tracking ref", async () => {
+    await openWithBranches();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    await pickBranch("origin/feature-remote-only");
+    expect(selectedBranch()).toContain("origin/feature-remote-only");
+    expect(screen.queryByTestId("source-branch-local-warning")).not.toBeInTheDocument();
+    // The slot stays, so nothing moved while the user clicked.
+    expect(screen.getByTestId("source-branch-local-warning-slot")).toBeInTheDocument();
+  });
+
+  it("leaves the field alone again when the form goes back to Run now", async () => {
+    await openWithBranches();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    expect(screen.getByTestId("source-branch-local-warning")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("mode-run"));
+    expect(screen.queryByTestId("source-branch-local-warning")).not.toBeInTheDocument();
+  });
+});

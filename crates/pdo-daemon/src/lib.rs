@@ -759,6 +759,18 @@ struct CreateRunRequest {
     /// Run-level provisioning rules, composed and frozen with Instance + Project.
     #[serde(default)]
     provisioning: provisioning::ProvisioningRules,
+    /// Why the **pre-cut fetch** of a Trigger fire did not happen (#804,
+    /// ADR-0070 §1), frozen into `RunStarted` so the Run can say it started on
+    /// local state instead of a refreshed one. `None` on every other path, and on
+    /// a fire whose fetch worked.
+    ///
+    /// `#[serde(skip)]` — and therefore absent from [`CREATE_RUN_FIELDS`] — because
+    /// the daemon decides this at the fire, never a caller. Gating it on
+    /// `triggered_by` instead would be wrong twice over: that key IS accepted in a
+    /// body, so any `POST /runs` could claim a fire, and a CLI-created child keeps
+    /// its fetch-free cut by design (ADR-0070 §3).
+    #[serde(skip)]
+    source_fetch_error: Option<FetchError>,
 }
 
 /// The top-level keys `POST /runs` accepts, kept in lock-step with
@@ -6818,6 +6830,22 @@ async fn fire_one_trigger(
 
     match plan.decision {
         fire_decision::FireDecision::Fire { input } => {
+            // #804 / ADR-0070 §1: refresh the remotes BEFORE the cut, so a Trigger
+            // whose source is a tracking ref fires on the server's state rather than
+            // on whatever the last manual fetch happened to leave behind. Here, in
+            // the `Fire` arm only: a tick we are about to skip must not touch the
+            // network. Never a fast-forward — nobody is around to arbitrate one.
+            //
+            // It holds the (serialized) tick for up to `FETCH_TIMEOUT`, exactly as
+            // the guard subprocess above already does and for the same reason: a
+            // fire is read-decide-act, and the act needs the decision's inputs to
+            // still be true. `next_fire_at` was written before this match, so a slow
+            // fetch delays THIS fire without ever shifting the schedule.
+            let source_fetch_error = fetch_before_trigger_cut(&trigger_fetch_targets(
+                trigger.target_repo.as_deref(),
+                trigger.target_repos.as_deref(),
+            ))
+            .await;
             let req = CreateRunRequest {
                 pipeline: trigger.pipeline_id.clone(),
                 input,
@@ -6859,6 +6887,7 @@ async fn fire_one_trigger(
                 // run-level preference, so `pdo fail` resolves through project/instance.
                 auto_fail: None,
                 provisioning: provisioning::ProvisioningRules::default(),
+                source_fetch_error,
             };
             let record = match create_run_inner(state, req, Vec::new(), None).await {
                 Ok(run_id) => trigger_store::FireRecord {
@@ -9593,6 +9622,9 @@ async fn parse_multipart_create_run(
         auto_name,
         auto_fail,
         provisioning,
+        // A multipart `POST /runs` is a manual launch: the form already fetched
+        // before it opened, so nothing is refreshed here (#804, ADR-0070 §3).
+        source_fetch_error: None,
     };
     Ok((req, attachments))
 }
@@ -10181,6 +10213,14 @@ async fn create_run_inner(
     }
     if let Some(ref branch) = effective_source_branch {
         run_payload["source_branch"] = serde_json::json!(branch);
+    }
+    // #804 / ADR-0070 §1: the Trigger fire could not refresh the remotes before
+    // cutting. The Run is NOT failed by it — it was cut from the last state known
+    // locally, and the Run detail says exactly that instead of leaving someone to
+    // wonder why the fork point looks old. Written ONLY on failure, so every other
+    // Run's payload keeps its historical shape.
+    if let Some(ref err) = req.source_fetch_error {
+        run_payload["source_fetch_error"] = serde_json::json!(err);
     }
     // FREEZE the resolved fork point into `RunStarted`. A resolve failure leaves it
     // absent, and the read-side `run_diff_base` ladder recovers via `source_branch`,
@@ -21884,6 +21924,74 @@ async fn fetch_all_remotes(repo: &Path) -> Option<FetchError> {
         kind: FetchErrorKind::Failed,
         message: "the in-flight fetch ended without a result".into(),
     }))
+}
+
+/// Every repository a Trigger fire is about to cut from, **primary first** (#804).
+///
+/// Takes the Trigger's two stored fields verbatim (the secondary list is raw JSON
+/// TEXT, see [`trigger_store::Trigger::target_repos`]) and mirrors the very
+/// normalisation `create_run_inner` applies: the scalar is the primary when it is
+/// set, else row 0 of the list. Blanks and duplicates fall out — a repo named twice
+/// is one repo to fetch, and the ORDER is what makes "primary first" decidable by
+/// the caller, which reports only the primary's failure.
+///
+/// Pure, and separate from the fetch, so the list rule is testable without git: a
+/// malformed `target_repos` deferring to a mono-repo fire is the same rule the fire
+/// itself applies, and the two must not drift.
+fn trigger_fetch_targets(target_repo: Option<&str>, target_repos_json: Option<&str>) -> Vec<String> {
+    let secondaries = target_repos_json
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .and_then(|s| serde_json::from_str::<Vec<TargetRepoInput>>(s).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|r| r.repo);
+
+    let mut targets: Vec<String> = Vec::new();
+    for candidate in target_repo
+        .map(str::to_string)
+        .into_iter()
+        .chain(secondaries)
+    {
+        let path = candidate.trim().to_string();
+        if !path.is_empty() && !targets.contains(&path) {
+            targets.push(path);
+        }
+    }
+    targets
+}
+
+/// Fetch every remote of every repository a Trigger fire will cut from, before the
+/// cut (#804, ADR-0070 §1). Answers the **primary**'s failure — the one the Run
+/// surfaces — or `None` when it worked.
+///
+/// A failure NEVER stops the fire: the Run is cut from the last state known locally
+/// and carries the reason, because losing a scheduled fire to a network blip is the
+/// worse outcome by far (spec #801, story 21). Never a fast-forward either, in any
+/// of these repos: there is nobody at a Trigger to arbitrate one (ADR-0070 §2).
+///
+/// A secondary's failure is logged, not surfaced: its base ref is pinned to a SHA
+/// the moment after, and the Run detail states freshness for the source branch —
+/// one repo, one sentence. A path that is not a repository is skipped rather than
+/// reported, because the create chokepoint is about to refuse the fire naming that
+/// very path, and a git-remote error here would bury that message under a fetch one.
+async fn fetch_before_trigger_cut(targets: &[String]) -> Option<FetchError> {
+    let mut primary_error = None;
+    for (index, path) in targets.iter().enumerate() {
+        let Ok(repo) = validate_target_repo(path) else {
+            continue;
+        };
+        let outcome = fetch_all_remotes(&repo).await;
+        if index == 0 {
+            primary_error = outcome;
+        } else if let Some(error) = outcome {
+            warn!(
+                "trigger fire: pre-cut fetch of secondary repo {path} failed: {}",
+                error.message
+            );
+        }
+    }
+    primary_error
 }
 
 /// The fetch itself, with no in-flight bookkeeping. Split out so the join logic above
@@ -40214,6 +40322,122 @@ edges: []
                 .contains_key(&path),
             "the flight is released, so the next ask fetches for real"
         );
+    }
+
+    // ── #804: the pre-cut fetch of a Trigger fire ───────────────────────────────
+
+    #[test]
+    fn trigger_fetch_targets_leads_with_the_primary_and_fetches_a_repo_once() {
+        let targets = trigger_fetch_targets(
+            Some("/repos/primary"),
+            Some(r#"[{"repo":"/repos/primary"},{"repo":"/repos/lib"}]"#),
+        );
+        assert_eq!(
+            targets,
+            vec!["/repos/primary".to_string(), "/repos/lib".to_string()],
+            "the primary leads (its failure is the one the Run shows) and the row-0 \
+             echo of it is not a second repo to fetch"
+        );
+    }
+
+    #[test]
+    fn trigger_fetch_targets_takes_row_zero_as_the_primary_when_the_scalar_is_blank() {
+        // The multi-repo modal carries the primary in row 0; `create_run_inner`
+        // normalises exactly this way, and the fetch order must agree with it.
+        let targets =
+            trigger_fetch_targets(Some("   "), Some(r#"[{"repo":"/repos/a"},{"repo":"/repos/b"}]"#));
+        assert_eq!(
+            targets,
+            vec!["/repos/a".to_string(), "/repos/b".to_string()]
+        );
+    }
+
+    #[test]
+    fn trigger_fetch_targets_defers_to_a_mono_repo_fire_on_an_unreadable_list() {
+        // Same rule the fire itself applies to `target_repos`: blank, absent or
+        // malformed all mean "mono-repo", never "no repo at all".
+        for stored in [None, Some(""), Some("not json")] {
+            assert_eq!(
+                trigger_fetch_targets(Some("/repos/only"), stored),
+                vec!["/repos/only".to_string()],
+                "stored list {stored:?} must leave the primary standing"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn the_pre_cut_fetch_makes_the_source_fresh_at_the_fire() {
+        let (origin, work) = init_repo_with_remote();
+        // Someone pushed since the last fetch — the very case a scheduled fire
+        // used to miss, cutting an "up to date" worktree from a stale ref.
+        commit_n(origin.path(), 2, "pushed-since");
+        assert_eq!(
+            branch_named(&list_branches(work.path()).unwrap(), "main").behind,
+            Some(0),
+            "stale refs still look level before the fire"
+        );
+
+        let targets = trigger_fetch_targets(Some(work.path().to_str().unwrap()), None);
+        assert_eq!(fetch_before_trigger_cut(&targets).await, None);
+
+        assert_eq!(
+            branch_named(&list_branches(work.path()).unwrap(), "main").behind,
+            Some(2),
+            "the cut that follows sees the two commits pushed since"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_pre_cut_fetch_names_the_reason_and_still_lets_the_fire_through() {
+        let (_origin, work) = init_repo_with_remote();
+        run_git(
+            work.path(),
+            &["remote", "set-url", "origin", "/nonexistent/repo.git"],
+        );
+
+        let targets = trigger_fetch_targets(Some(work.path().to_str().unwrap()), None);
+        let error = fetch_before_trigger_cut(&targets)
+            .await
+            .expect("the reason the Run will carry");
+        assert!(
+            !error.message.is_empty(),
+            "git's own words are what the Run detail quotes"
+        );
+        // ADR-0070 §1 / story 21: nothing here refuses the fire. The source ref is
+        // still resolvable, so the cut that follows happens on local state.
+        assert!(validate_source_branch(work.path(), "main").is_ok());
+    }
+
+    #[tokio::test]
+    async fn the_pre_cut_fetch_refreshes_secondaries_but_only_the_primary_is_reported() {
+        let (_primary_origin, primary) = init_repo_with_remote();
+        let (secondary_origin, secondary) = init_repo_with_remote();
+        commit_n(secondary_origin.path(), 1, "secondary-move");
+
+        let targets = trigger_fetch_targets(
+            Some(primary.path().to_str().unwrap()),
+            Some(&format!(
+                r#"[{{"repo":"{}"}}]"#,
+                secondary.path().to_str().unwrap()
+            )),
+        );
+        assert_eq!(fetch_before_trigger_cut(&targets).await, None);
+
+        assert_eq!(
+            branch_named(&list_branches(secondary.path()).unwrap(), "main").behind,
+            Some(1),
+            "a secondary is cut from the same repo state as the primary, so it \
+             is refreshed by the same gesture"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_pre_cut_fetch_stays_silent_about_a_path_that_is_not_a_repository() {
+        // The create chokepoint is about to refuse this fire naming the path; a
+        // `git remote` error here would bury that message under a fetch one.
+        let tmp = tempfile::tempdir().unwrap();
+        let targets = trigger_fetch_targets(Some(tmp.path().to_str().unwrap()), None);
+        assert_eq!(fetch_before_trigger_cut(&targets).await, None);
     }
 
     #[test]

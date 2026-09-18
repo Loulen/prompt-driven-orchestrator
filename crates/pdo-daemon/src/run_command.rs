@@ -2127,6 +2127,11 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                     .find(|scoped| scoped.scope == crate::provisioning::ProvisioningScope::Run)
                     .map(|scoped| scoped.rules.clone())
                     .unwrap_or_default(),
+                // NOT carried over from the original (#804): the reason a fetch
+                // failed minutes or days ago says nothing about this new cut, and
+                // a retry is a manual gesture — it fetches no more than any other
+                // `POST /runs` does.
+                source_fetch_error: None,
             };
             // ADR-0064: a retried Run is created by the daemon, not from a node
             // session — it is a root even when the archived original had a parent.

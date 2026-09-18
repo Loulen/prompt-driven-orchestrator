@@ -1953,6 +1953,36 @@ describe("StatsCharts — node kind filter (#810)", () => {
     expect(names.some((text) => text.includes("build"))).toBe(false);
   });
 
+  it("says so, with a way out, when the filter empties a drill level", async () => {
+    const user = userEvent.setup();
+    const onNodeKindsChange = vi.fn();
+    // No node of « Mixed pipeline » is an orchestrator: the leaf of the model
+    // path has rows to show, and the filter takes them all.
+    renderKinds({ nodeKinds: ["orchestrator"], onNodeKindsChange });
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Performance grouping" }),
+      "model",
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Open claude-opus-5" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Open high" }));
+    await user.click(
+      screen.getByRole("button", { name: "Open Mixed pipeline" }),
+    );
+
+    expect(screen.queryAllByTestId("stats-detail-row")).toHaveLength(0);
+    expect(
+      screen.getByText(/No node of the selected kinds at this level/),
+    ).toBeInTheDocument();
+    await user.click(screen.getByTestId("stats-show-all-kinds"));
+    expect(onNodeKindsChange).toHaveBeenCalledWith([
+      "interactive",
+      "orchestrator",
+      "standard",
+    ]);
+  });
+
   it("offers a way back when every kind is unchecked, and a reset when the state deviates", async () => {
     const user = userEvent.setup();
     const onNodeKindsChange = vi.fn();

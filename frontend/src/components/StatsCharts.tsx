@@ -1279,6 +1279,33 @@ function KindBadges({ row }: { row: StatsPerformanceEntity }) {
   );
 }
 
+/** The kind filter left nothing on screen (#810) — the whole tab when every
+ *  chip is off, a drill level when its every Node row is hidden. Both say the
+ *  same sentence and carry the same way out: a filter that empties a table must
+ *  own the emptiness rather than leave bare headers explaining nothing. */
+function NoNodeOfSelectedKinds({
+  where,
+  onShowAll,
+}: {
+  /** Names what was emptied: « in this period » / « at this level ». */
+  where: string;
+  onShowAll: () => void;
+}) {
+  return (
+    <EmptyNote>
+      No node of the selected kinds {where}.{" "}
+      <button
+        type="button"
+        data-testid="stats-show-all-kinds"
+        onClick={onShowAll}
+        className="underline decoration-dotted underline-offset-2 hover:text-fg-2"
+      >
+        show all kinds
+      </button>
+    </EmptyNote>
+  );
+}
+
 /** The value a partially filtered row shows in place of a number. */
 function FilteredValue({ testid }: { testid?: string }) {
   return (
@@ -2116,17 +2143,10 @@ function PerformanceTab({
       <TooltipProvider>
         <div data-testid="stats-chart-performance">
           {filterStrip}
-          <EmptyNote>
-            No node of the selected kinds in this period.{" "}
-            <button
-              type="button"
-              data-testid="stats-show-all-kinds"
-              onClick={() => onNodeKindsChange([...ALL_NODE_KINDS])}
-              className="underline decoration-dotted underline-offset-2 hover:text-fg-2"
-            >
-              show all kinds
-            </button>
-          </EmptyNote>
+          <NoNodeOfSelectedKinds
+            where="in this period"
+            onShowAll={() => onNodeKindsChange([...ALL_NODE_KINDS])}
+          />
         </div>
       </TooltipProvider>
     );
@@ -2190,11 +2210,16 @@ function PerformanceTab({
           : hasHiddenNode(selected, nodeKinds);
 
   let detailRows: StatsPerformanceEntity[];
+  // The Node population the level would show without the kind filter — set only
+  // on a Node level, so an empty table can tell « nothing here » from « the
+  // filter took everything » (#810).
+  let unfilteredNodes: StatsPerformanceEntity[] | null = null;
   let detailRenderName: ((row: StatsPerformanceEntity) => React.ReactNode) | undefined;
   let onOpen: ((row: StatsPerformanceEntity) => void) | undefined;
   if (axis === "model") {
     if (modelPipeline) {
       // Node leaves are the floor: the model × effort path is the drill.
+      unfilteredNodes = modelPipeline.nodes;
       detailRows = visibleNodes(modelPipeline.nodes);
     } else if (effort) {
       detailRows = effort.pipelines;
@@ -2224,13 +2249,21 @@ function PerformanceTab({
       onOpen = (row) => setSelectedModelId(row.id);
     }
   } else if (selected) {
-    detailRows =
-      selected.id === "__infrastructure__"
-        ? performance.infrastructure
-        : visibleNodes(selected.nodes);
+    if (selected.id === "__infrastructure__") {
+      detailRows = performance.infrastructure;
+    } else {
+      unfilteredNodes = selected.nodes;
+      detailRows = visibleNodes(selected.nodes);
+    }
   } else {
     detailRows = masterRows;
   }
+
+  // A Node level the filter emptied: the table would stand there with its
+  // headers and not a row, saying nothing about why. Same state, same way out
+  // as every chip off.
+  const detailEmptiedByKind =
+    detailRows.length === 0 && (unfilteredNodes?.length ?? 0) > 0;
 
   // Rows whose own aggregate no longer describes what is visible under them.
   // Never a value recomputed from the visible nodes' six stats: a median of
@@ -2391,17 +2424,24 @@ function PerformanceTab({
             <CohortLine completedOnly={completedOnly} />
           </div>
           <div className="mt-4 min-h-[240px]">
-            <PerformanceTable
-              key={`${axis}-${selectedId ?? ""}-${selectedModelId ?? "total"}-${selectedEffortId ?? "total"}-${selectedPipelineId ?? ""}`}
-              rows={detailRows}
-              harnesses={performance.harnesses}
-              sort={sort}
-              excludeUserWait={excludeUserWait}
-              renderName={detailRenderName}
-              onOpen={onOpen}
-              expandablePairs={axis === "pipeline"}
-              filteredRowIds={filteredRowIds}
-            />
+            {detailEmptiedByKind ? (
+              <NoNodeOfSelectedKinds
+                where="at this level"
+                onShowAll={() => onNodeKindsChange([...ALL_NODE_KINDS])}
+              />
+            ) : (
+              <PerformanceTable
+                key={`${axis}-${selectedId ?? ""}-${selectedModelId ?? "total"}-${selectedEffortId ?? "total"}-${selectedPipelineId ?? ""}`}
+                rows={detailRows}
+                harnesses={performance.harnesses}
+                sort={sort}
+                excludeUserWait={excludeUserWait}
+                renderName={detailRenderName}
+                onOpen={onOpen}
+                expandablePairs={axis === "pipeline"}
+                filteredRowIds={filteredRowIds}
+              />
+            )}
           </div>
         </div>
       </div>

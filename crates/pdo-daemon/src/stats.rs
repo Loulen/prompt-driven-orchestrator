@@ -40,6 +40,28 @@ pub(crate) struct StatsQuery {
     pub to: String,
     /// `day` | `week` | `month`.
     pub bucket: String,
+    /// « Runs terminés seulement » (#810): narrow the cohort to Runs that
+    /// reached `RunCompleted`. Wire default `false` — the whole cohort, whatever
+    /// each Run's final status. Shared verbatim with `/stats/performance` so the
+    /// three sections describe the same Runs; Overview then shows **zero
+    /// errors** rather than hiding its card (nothing is masked).
+    #[serde(default)]
+    pub completed_only: bool,
+}
+
+/// The SQL fragment that narrows a Run-keyed query to the « completed runs
+/// only » cohort (#810), or nothing at all. Written once so Overview, Sessions
+/// and Cost can never drift into describing different Runs. The alias names the
+/// table the caller's rows are keyed by.
+fn completed_only_sql(completed_only: bool, run_alias: &str) -> String {
+    if completed_only {
+        format!(
+            " AND EXISTS (SELECT 1 FROM events done \
+               WHERE done.run_id = {run_alias}.run_id AND done.kind = 'run_completed')"
+        )
+    } else {
+        String::new()
+    }
 }
 
 /// Map a bucket granularity to its SQLite `strftime` format. `None` for an
@@ -223,18 +245,23 @@ struct SessionStats {
 }
 
 /// Count events of one `kind` per period bucket. Backed by `idx_events_kind_ts`.
+/// Under `completed_only` (#810) an event only counts if its Run reached
+/// `RunCompleted` — which is what turns the Errors series to zero: a Run with a
+/// `run_completed` has no `run_failed` of its own.
 async fn count_events_by_bucket(
     db: &sqlx::SqlitePool,
     fmt: &str,
     kind: &str,
     from: &str,
     to: &str,
+    completed_only: bool,
 ) -> Result<Vec<BucketCount>, sqlx::Error> {
-    let rows = sqlx::query_as::<_, (String, i64)>(
-        "SELECT strftime(?, ts) AS bucket, COUNT(*) AS count \
-         FROM events WHERE kind = ? AND ts >= ? AND ts < ? \
+    let rows = sqlx::query_as::<_, (String, i64)>(&format!(
+        "SELECT strftime(?, e.ts) AS bucket, COUNT(*) AS count \
+         FROM events e WHERE e.kind = ? AND e.ts >= ? AND e.ts < ?{} \
          GROUP BY bucket ORDER BY bucket",
-    )
+        completed_only_sql(completed_only, "e")
+    ))
     .bind(fmt)
     .bind(kind)
     .bind(from)
@@ -308,14 +335,15 @@ async fn session_stats(
         Option<i64>,
         Option<String>,
     );
-    let rows = sqlx::query_as::<_, SessionRow>(
+    let rows = sqlx::query_as::<_, SessionRow>(&format!(
         "SELECT strftime(?, cohort.ts), cohort.run_id, cohort.payload, event.id, \
                 event.node_id, event.iter, event.payload \
          FROM events cohort \
          JOIN events event ON event.run_id = cohort.run_id AND event.kind = 'node_started' \
-         WHERE cohort.kind = 'run_started' AND cohort.ts >= ? AND cohort.ts < ? \
+         WHERE cohort.kind = 'run_started' AND cohort.ts >= ? AND cohort.ts < ?{} \
          ORDER BY cohort.ts, event.id",
-    )
+        completed_only_sql(q.completed_only, "cohort")
+    ))
     .bind(fmt)
     .bind(&q.from)
     .bind(&q.to)
@@ -457,13 +485,15 @@ async fn compute_overview(
     fmt: &str,
     from: &str,
     to: &str,
+    completed_only: bool,
 ) -> Result<StatsOverview, sqlx::Error> {
     // `run_skipped` is NOT an error (invariant #4): errors = `run_failed` only.
-    let runs = count_events_by_bucket(db, fmt, "run_started", from, to).await?;
-    let errors = count_events_by_bucket(db, fmt, "run_failed", from, to).await?;
+    let runs = count_events_by_bucket(db, fmt, "run_started", from, to, completed_only).await?;
+    let errors = count_events_by_bucket(db, fmt, "run_failed", from, to, completed_only).await?;
     // Sessions = `node_started` starts (re-spawns and loop laps included, manager
     // excluded by construction) — the same cumulative count as the per-run stat.
-    let sessions = count_events_by_bucket(db, fmt, "node_started", from, to).await?;
+    let sessions =
+        count_events_by_bucket(db, fmt, "node_started", from, to, completed_only).await?;
     let fires = fires_by_pipeline(db, from, to).await?;
     let created = triggers_created_runs(db, from, to).await?;
 
@@ -500,7 +530,7 @@ pub(crate) async fn stats_overview(
             .into_response();
     };
     match (
-        compute_overview(&state.db, fmt, &q.from, &q.to).await,
+        compute_overview(&state.db, fmt, &q.from, &q.to, q.completed_only).await,
         session_stats(&state, &q, fmt).await,
     ) {
         (Ok(mut overview), Ok(sessions)) => {
@@ -1447,10 +1477,14 @@ pub(crate) async fn stats_cost(
             .into_response();
     };
 
-    let rows = match sqlx::query_as::<_, (String, String, Option<String>)>(
-        "SELECT run_id, strftime(?, ts) AS bucket, payload \
-         FROM events WHERE kind = 'run_started' AND ts >= ? AND ts < ? ORDER BY ts",
-    )
+    // #810: the memo this fold reads is per-Run (`compute_run_cost_breakdown_cached`,
+    // keyed by the Run's own event fingerprint), so the cohort switch cannot
+    // stale it — it selects which Runs enter the fold, never what one Run costs.
+    let rows = match sqlx::query_as::<_, (String, String, Option<String>)>(&format!(
+        "SELECT e.run_id, strftime(?, e.ts) AS bucket, e.payload \
+         FROM events e WHERE e.kind = 'run_started' AND e.ts >= ? AND e.ts < ?{} ORDER BY e.ts",
+        completed_only_sql(q.completed_only, "e")
+    ))
     .bind(fmt)
     .bind(&q.from)
     .bind(&q.to)
@@ -1734,7 +1768,9 @@ mod tests {
     async fn overview_runs_errors_sessions_per_day() {
         let db = mem_db().await;
         seed_oracle(&db).await;
-        let ov = compute_overview(&db, "%Y-%m-%d", FROM, TO).await.unwrap();
+        let ov = compute_overview(&db, "%Y-%m-%d", FROM, TO, false)
+            .await
+            .unwrap();
 
         assert_eq!(
             ov.runs,
@@ -1779,7 +1815,7 @@ mod tests {
         let db = mem_db().await;
         seed_oracle(&db).await;
         // A window that ends exactly at the 17th 00:00 excludes the 17th's runs.
-        let ov = compute_overview(&db, "%Y-%m-%d", FROM, "2026-07-17T00:00:00Z")
+        let ov = compute_overview(&db, "%Y-%m-%d", FROM, "2026-07-17T00:00:00Z", false)
             .await
             .unwrap();
         let total_runs: i64 = ov.runs.iter().map(|b| b.count).sum();
@@ -1966,7 +2002,9 @@ mod tests {
         // ordinary Run everywhere on the read side.
         let db = mem_db().await;
         seed_run(&db, "legacy", "alpha", None, "2026-07-15", "run_completed").await;
-        let ov = compute_overview(&db, "%Y-%m-%d", FROM, TO).await.unwrap();
+        let ov = compute_overview(&db, "%Y-%m-%d", FROM, TO, false)
+            .await
+            .unwrap();
         assert_eq!(ov.runs.len(), 1);
         assert_eq!(ov.runs[0].count, 1);
     }

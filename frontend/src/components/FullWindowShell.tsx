@@ -4,8 +4,13 @@ import { X } from "lucide-react";
 export interface RailItem {
   id: string;
   label: string;
-  /** Unsaved edits live under this entry — renders an amber dot (#690). */
+  /** Something under this entry deviates from its saved/default state —
+   *  renders an amber dot (#690: unsaved edits; #810: Stats filters that differ
+   *  from the defaults). */
   dirty?: boolean;
+  /** What the dot means, for screen readers and the hover title. Defaults to
+   *  Settings' « Unsaved changes » — Stats says why its numbers moved instead. */
+  dirtyLabel?: string;
 }
 
 interface Props {
@@ -133,7 +138,8 @@ export default function FullWindowShell({
                 <span>{item.label}</span>
                 {item.dirty && (
                   <span
-                    aria-label="Unsaved changes"
+                    aria-label={item.dirtyLabel ?? "Unsaved changes"}
+                    title={item.dirtyLabel ?? "Unsaved changes"}
                     data-testid={`${railTestIdPrefix}-${item.id}-dirty`}
                     className="h-1.5 w-1.5 shrink-0 rounded-full bg-st-await"
                   />

@@ -18,9 +18,11 @@ import type { StatsOverview, StatsCost, StatsPerformance } from "../types";
  * lazy chunk on the cost tab) is visible, not a blank tab.
  *
  * `reloadKey` (#427) is a **dependency only** — bumping it refetches, and it is
- * never passed to an API call. Threading it into `fetchStatsCost` would change
- * that function's arity, which the tests below assert exactly (Vitest compares
- * arity strictly). Precedent: `refreshKey` in `TriggerDetailPanel`.
+ * never passed to an API call (`fetchStatsPerformance` receives `reloadKey > 0`
+ * as its `refresh` flag, not the key itself). Precedent: `refreshKey` in
+ * `TriggerDetailPanel`. `completedOnly` (#810) is the opposite: it IS part of
+ * the request — the cohort the daemon must fold — so it travels to all three
+ * endpoints and into both request keys.
  */
 export function useStats(
   open: boolean,
@@ -30,6 +32,13 @@ export function useStats(
   costActive: boolean,
   performanceActive: boolean,
   reloadKey: number = 0,
+  /**
+   * « Runs terminés seulement » (#810) — the cohort, not a display option: it
+   * travels to the THREE fetches so Overview, Cost and Performance always
+   * describe the same Runs, and it sits in every request key so flipping it
+   * refetches rather than showing the other cohort's numbers.
+   */
+  completedOnly: boolean = false,
 ) {
   const [overview, setOverview] = useState<StatsOverview | null>(null);
   const [cost, setCost] = useState<StatsCost | null>(null);
@@ -41,16 +50,16 @@ export function useStats(
   const [overviewReloadKey, setOverviewReloadKey] = useState(0);
   const [costReloadKey, setCostReloadKey] = useState(0);
   const [performanceReloadKey, setPerformanceReloadKey] = useState(0);
-  const costRequestKey = `${from}\u0000${to}\u0000${bucket}\u0000${reloadKey}`;
+  const costRequestKey = `${from}\u0000${to}\u0000${bucket}\u0000${reloadKey}\u0000${completedOnly}`;
   const requestedCostKey = useRef<string | null>(null);
-  const performanceRequestKey = `${from}\u0000${to}\u0000${reloadKey}`;
+  const performanceRequestKey = `${from}\u0000${to}\u0000${reloadKey}\u0000${completedOnly}`;
   const requestedPerformanceKey = useRef<string | null>(null);
 
   // Overview: eager on open + on every period change.
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    fetchStatsOverview(from, to, bucket)
+    fetchStatsOverview(from, to, bucket, completedOnly)
       .then((data) => {
         if (!cancelled) {
           setOverview(data);
@@ -68,14 +77,14 @@ export function useStats(
     return () => {
       cancelled = true;
     };
-  }, [open, from, to, bucket, reloadKey]);
+  }, [open, from, to, bucket, reloadKey, completedOnly]);
 
   // Cost: lazy — only once the cost tab is active, then on period change too.
   useEffect(() => {
     if (!open || !costActive) return;
     if (requestedCostKey.current === costRequestKey) return;
     requestedCostKey.current = costRequestKey;
-    fetchStatsCost(from, to, bucket)
+    fetchStatsCost(from, to, bucket, completedOnly)
       .then((data) => {
         if (requestedCostKey.current === costRequestKey) {
           setCost(data);
@@ -90,13 +99,22 @@ export function useStats(
           setCostReloadKey(reloadKey);
         }
       });
-  }, [open, costActive, from, to, bucket, reloadKey, costRequestKey]);
+  }, [
+    open,
+    costActive,
+    from,
+    to,
+    bucket,
+    reloadKey,
+    completedOnly,
+    costRequestKey,
+  ]);
 
   useEffect(() => {
     if (!open || !performanceActive) return;
     if (requestedPerformanceKey.current === performanceRequestKey) return;
     requestedPerformanceKey.current = performanceRequestKey;
-    fetchStatsPerformance(from, to, reloadKey > 0)
+    fetchStatsPerformance(from, to, reloadKey > 0, completedOnly)
       .then((data) => {
         if (requestedPerformanceKey.current === performanceRequestKey) {
           setPerformance(data);
@@ -111,7 +129,15 @@ export function useStats(
           setPerformanceReloadKey(reloadKey);
         }
       });
-  }, [open, performanceActive, from, to, reloadKey, performanceRequestKey]);
+  }, [
+    open,
+    performanceActive,
+    from,
+    to,
+    reloadKey,
+    completedOnly,
+    performanceRequestKey,
+  ]);
 
   return {
     overview,

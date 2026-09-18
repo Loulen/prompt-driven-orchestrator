@@ -21938,7 +21938,10 @@ async fn fetch_all_remotes(repo: &Path) -> Option<FetchError> {
 /// Pure, and separate from the fetch, so the list rule is testable without git: a
 /// malformed `target_repos` deferring to a mono-repo fire is the same rule the fire
 /// itself applies, and the two must not drift.
-fn trigger_fetch_targets(target_repo: Option<&str>, target_repos_json: Option<&str>) -> Vec<String> {
+fn trigger_fetch_targets(
+    target_repo: Option<&str>,
+    target_repos_json: Option<&str>,
+) -> Vec<String> {
     let secondaries = target_repos_json
         .map(str::trim)
         .filter(|s| !s.is_empty())
@@ -26766,6 +26769,567 @@ mod tests {
         assert_eq!(
             harness(sonnet, "pi")["steered"],
             serde_json::json!({"steered":1,"readable":1})
+        );
+    }
+
+    /// `GET /stats/performance` (#810, story #808) — the **durée active** and
+    /// the **genre de nœud**, read at the HTTP seam over a forged event log.
+    ///
+    /// One Run exercises every wait rule at once: a `declared` wait lifted by a
+    /// `NodeResumed`, a `completion_not_released` wait lifted by a
+    /// `NodeCompletionReleased`, a `children_pending` marker that opens NOTHING
+    /// (an orchestrator on `pdo run wait` is working), a `NodeAwaitingUser`
+    /// with no cause at all (ignored — defensive, for pre-ADR-0069 history), a
+    /// wait closed by the very terminal that records the observation, and the
+    /// Infrastructure row subtracting the sum of its Nodes' waits. The same
+    /// payloads carry the genre: frozen on `NodeStarted`, or read off the Run's
+    /// pipeline snapshot when the startup event predates the freeze.
+    #[tokio::test]
+    async fn stats_performance_subtracts_declared_waits_and_carries_the_node_kind() {
+        let state = test_state().await;
+        let repo = state.repo_root.to_string_lossy().into_owned();
+
+        async fn insert_event(
+            db: &sqlx::SqlitePool,
+            run: &str,
+            ts: &str,
+            kind: &str,
+            node: Option<&str>,
+            iter: Option<i64>,
+            payload: serde_json::Value,
+        ) {
+            sqlx::query(
+                "INSERT INTO events (run_id, ts, kind, node_id, iter, payload) \
+                 VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(run)
+            .bind(ts)
+            .bind(kind)
+            .bind(node)
+            .bind(iter)
+            .bind(payload.to_string())
+            .execute(db)
+            .await
+            .unwrap();
+        }
+
+        // `orch`'s snapshot says orchestrator; its `node_started` will NOT, so
+        // the fold must fall back to the snapshot (pre-#810 history).
+        insert_event(
+            &state.db,
+            "wait-r1",
+            "2033-03-10T10:00:00Z",
+            "run_started",
+            None,
+            None,
+            serde_json::json!({
+                "pipeline_id":"wp1","pipeline_name":"Wait Pipeline","target_repo":repo,"harness":"claude",
+                "node_defs":[
+                    {"id":"chat","name":"chat","node_type":"agent","isolated_worktree":true},
+                    {"id":"orch","name":"orch","node_type":"agent","isolated_worktree":true,"orchestrator":true},
+                    {"id":"plain","name":"plain","node_type":"agent","isolated_worktree":true},
+                    {"id":"late","name":"late","node_type":"agent","isolated_worktree":true}
+                ]
+            }),
+        )
+        .await;
+
+        // `chat` — interactive, two waits of two different causes, both lifted.
+        // 10 min wall-clock, 3 min waited → 7 min active.
+        for (ts, kind, payload) in [
+            (
+                "2033-03-10T10:00:00Z",
+                "node_started",
+                serde_json::json!({"node_type":"agent","isolated_worktree":true,"harness":"claude","interactive":true,"orchestrator":false,"model":"claude-opus-5"}),
+            ),
+            (
+                "2033-03-10T10:01:00Z",
+                "node_awaiting_user",
+                serde_json::json!({"cause":"declared","message":"Strip or card?"}),
+            ),
+            (
+                "2033-03-10T10:03:00Z",
+                "node_resumed",
+                serde_json::json!({}),
+            ),
+            (
+                "2033-03-10T10:04:00Z",
+                "node_awaiting_user",
+                serde_json::json!({"cause":"completion_not_released"}),
+            ),
+            (
+                "2033-03-10T10:05:00Z",
+                "node_completion_released",
+                serde_json::json!({}),
+            ),
+            (
+                "2033-03-10T10:10:00Z",
+                "node_completed",
+                serde_json::json!({}),
+            ),
+        ] {
+            insert_event(
+                &state.db,
+                "wait-r1",
+                ts,
+                kind,
+                Some("chat"),
+                Some(1),
+                payload,
+            )
+            .await;
+        }
+
+        // `orch` — the binding marker (`reason: children_pending`) opens no wait.
+        // 6 min wall-clock, 6 min active. No `orchestrator` in the payload.
+        for (ts, kind, payload) in [
+            (
+                "2033-03-10T10:00:00Z",
+                "node_started",
+                serde_json::json!({"node_type":"agent","isolated_worktree":true,"harness":"claude"}),
+            ),
+            (
+                "2033-03-10T10:02:00Z",
+                "node_awaiting_user",
+                serde_json::json!({"reason":"children_pending","active":["c1"],"failed":[]}),
+            ),
+            (
+                "2033-03-10T10:06:00Z",
+                "node_completed",
+                serde_json::json!({}),
+            ),
+        ] {
+            insert_event(
+                &state.db,
+                "wait-r1",
+                ts,
+                kind,
+                Some("orch"),
+                Some(1),
+                payload,
+            )
+            .await;
+        }
+
+        // `plain` — a `NodeAwaitingUser` with no cause at all is ignored.
+        // 4 min wall-clock, 4 min active.
+        for (ts, kind, payload) in [
+            (
+                "2033-03-10T10:00:00Z",
+                "node_started",
+                serde_json::json!({"node_type":"agent","isolated_worktree":true,"harness":"claude"}),
+            ),
+            (
+                "2033-03-10T10:01:00Z",
+                "node_awaiting_user",
+                serde_json::json!({}),
+            ),
+            (
+                "2033-03-10T10:04:00Z",
+                "node_completed",
+                serde_json::json!({}),
+            ),
+        ] {
+            insert_event(
+                &state.db,
+                "wait-r1",
+                ts,
+                kind,
+                Some("plain"),
+                Some(1),
+                payload,
+            )
+            .await;
+        }
+
+        // `late` — still awaiting when it completes: the terminal closes the
+        // wait. 12 min wall-clock, 10 min waited → 2 min active.
+        for (ts, kind, payload) in [
+            (
+                "2033-03-10T10:00:00Z",
+                "node_started",
+                serde_json::json!({"node_type":"agent","isolated_worktree":true,"harness":"claude"}),
+            ),
+            (
+                "2033-03-10T10:02:00Z",
+                "node_awaiting_user",
+                serde_json::json!({"cause":"declared"}),
+            ),
+            (
+                "2033-03-10T10:12:00Z",
+                "node_completed",
+                serde_json::json!({}),
+            ),
+        ] {
+            insert_event(
+                &state.db,
+                "wait-r1",
+                ts,
+                kind,
+                Some("late"),
+                Some(1),
+                payload,
+            )
+            .await;
+        }
+
+        // Infrastructure: 20 min of Run, 3 + 10 min of declared wait → 7 min.
+        insert_event(
+            &state.db,
+            "wait-r1",
+            "2033-03-10T10:20:00Z",
+            "run_completed",
+            None,
+            None,
+            serde_json::json!({}),
+        )
+        .await;
+
+        // A second Run of the same pipeline that FAILS: its successful node is
+        // an observation for the default cohort and vanishes under
+        // `completed_only`.
+        insert_event(
+            &state.db,
+            "wait-r2",
+            "2033-03-10T11:00:00Z",
+            "run_started",
+            None,
+            None,
+            serde_json::json!({
+                "pipeline_id":"wp2","pipeline_name":"Doomed Pipeline","target_repo":repo,"harness":"claude",
+                "node_defs":[{"id":"doomed","name":"doomed","node_type":"agent","isolated_worktree":true}]
+            }),
+        )
+        .await;
+        insert_event(
+            &state.db,
+            "wait-r2",
+            "2033-03-10T11:00:00Z",
+            "node_started",
+            Some("doomed"),
+            Some(1),
+            serde_json::json!({"node_type":"agent","isolated_worktree":true,"harness":"claude"}),
+        )
+        .await;
+        insert_event(
+            &state.db,
+            "wait-r2",
+            "2033-03-10T11:05:00Z",
+            "node_completed",
+            Some("doomed"),
+            Some(1),
+            serde_json::json!({}),
+        )
+        .await;
+        insert_event(
+            &state.db,
+            "wait-r2",
+            "2033-03-10T11:10:00Z",
+            "run_failed",
+            None,
+            None,
+            serde_json::json!({}),
+        )
+        .await;
+
+        async fn call(state: &Arc<AppState>, uri: &str) -> serde_json::Value {
+            let response = build_router(state.clone())
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            serde_json::from_slice(
+                &axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap(),
+            )
+            .unwrap()
+        }
+
+        fn node<'a>(
+            body: &'a serde_json::Value,
+            pipeline: &str,
+            id: &str,
+        ) -> &'a serde_json::Value {
+            body["by_pipeline"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|p| p["id"] == pipeline)
+                .unwrap_or_else(|| panic!("pipeline {pipeline} missing from {body}"))["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|n| n["id"] == id)
+                .unwrap_or_else(|| panic!("node {id} missing"))
+        }
+
+        fn claude_metric<'a>(entity: &'a serde_json::Value, metric: &str) -> &'a serde_json::Value {
+            &entity["harnesses"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|h| h["harness"] == "claude")
+                .unwrap()[metric]
+        }
+
+        let from = "2033-03-10T00:00:00Z";
+        let to = "2033-03-11T00:00:00Z";
+        let body = call(&state, &format!("/stats/performance?from={from}&to={to}")).await;
+
+        const MIN: f64 = 60_000.0;
+        for (id, wall, active) in [
+            ("chat", 10.0, 7.0),
+            ("orch", 6.0, 6.0),
+            ("plain", 4.0, 4.0),
+            ("late", 12.0, 2.0),
+        ] {
+            let row = node(&body, "wp1", id);
+            assert_eq!(
+                claude_metric(row, "duration")["stats"]["median"],
+                wall * MIN,
+                "{id} wall-clock"
+            );
+            assert_eq!(
+                claude_metric(row, "active_duration")["stats"]["median"],
+                active * MIN,
+                "{id} active duration"
+            );
+            // Coverage never disagrees between the two readings: the metric
+            // swap must not change `n=`.
+            assert_eq!(
+                claude_metric(row, "duration")["measured"],
+                claude_metric(row, "active_duration")["measured"],
+                "{id} coverage"
+            );
+        }
+
+        // The genre travels on every Node row: frozen in the payload for
+        // `chat`, read off the Run's snapshot for `orch`.
+        assert_eq!(node(&body, "wp1", "chat")["interactive"], true);
+        assert_eq!(node(&body, "wp1", "chat")["orchestrator"], false);
+        assert_eq!(node(&body, "wp1", "orch")["orchestrator"], true);
+        assert_eq!(node(&body, "wp1", "orch")["interactive"], false);
+        assert_eq!(node(&body, "wp1", "plain")["interactive"], false);
+        assert_eq!(node(&body, "wp1", "plain")["orchestrator"], false);
+        // A Pipeline row is not a Node: it carries no kind at all.
+        assert!(
+            body["by_pipeline"][0].get("interactive").is_none(),
+            "a Pipeline row carries no kind: {}",
+            body["by_pipeline"][0]
+        );
+
+        // The « By model » axis carries the same genre on its Node leaves.
+        let model_node = &body["by_model"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["id"] == "claude-opus-5")
+            .unwrap()["efforts"][0]["pipelines"][0]["nodes"][0];
+        assert_eq!(model_node["id"], "chat");
+        assert_eq!(model_node["interactive"], true);
+        assert_eq!(
+            claude_metric(model_node, "active_duration")["stats"]["median"],
+            7.0 * MIN
+        );
+
+        // Infrastructure: the Run's own span minus the sum of its Nodes' waits.
+        let manager = body["infrastructure"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == "pipeline-manager")
+            .unwrap();
+        assert_eq!(
+            claude_metric(manager, "duration")["stats"]["median"],
+            20.0 * MIN
+        );
+        assert_eq!(
+            claude_metric(manager, "active_duration")["stats"]["median"],
+            7.0 * MIN
+        );
+        assert!(
+            body["by_pipeline"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p["id"] == "wp2"),
+            "the failed Run's successful execution counts in the default cohort"
+        );
+
+        // --- « Runs terminés seulement » --------------------------------------
+        let before = stats_performance::recompute_count_for_test(from, to);
+        let narrowed = call(
+            &state,
+            &format!("/stats/performance?from={from}&to={to}&completed_only=true"),
+        )
+        .await;
+        assert_eq!(
+            stats_performance::recompute_count_for_test(from, to),
+            before + 1,
+            "the cohort switch is part of the memo key: it must not serve the other cohort"
+        );
+        assert!(
+            !narrowed["by_pipeline"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p["id"] == "wp2"),
+            "a Run without a run_completed leaves the cohort whole: {narrowed}"
+        );
+        assert_eq!(
+            claude_metric(node(&narrowed, "wp1", "chat"), "active_duration")["stats"]["median"],
+            7.0 * MIN,
+            "the completed Run is untouched by the cohort switch"
+        );
+        // A repeat of the narrowed request is served from ITS memo entry.
+        let repeat = call(
+            &state,
+            &format!("/stats/performance?from={from}&to={to}&completed_only=true"),
+        )
+        .await;
+        assert_eq!(
+            stats_performance::recompute_count_for_test(from, to),
+            before + 1,
+            "each cohort keeps its own memo entry"
+        );
+        assert_eq!(narrowed, repeat);
+    }
+
+    /// `GET /stats/overview` and `GET /stats/cost` (#810) — the SAME cohort
+    /// switch, so the three sections never describe different Runs. Overview
+    /// keeps its Errors series and shows **zero**, rather than hiding the card.
+    #[tokio::test]
+    async fn stats_overview_and_cost_share_the_completed_only_cohort() {
+        let state = test_state().await;
+        let repo = state.repo_root.to_string_lossy().into_owned();
+
+        async fn insert_event(
+            db: &sqlx::SqlitePool,
+            run: &str,
+            ts: &str,
+            kind: &str,
+            node: Option<&str>,
+            iter: Option<i64>,
+            payload: serde_json::Value,
+        ) {
+            sqlx::query(
+                "INSERT INTO events (run_id, ts, kind, node_id, iter, payload) \
+                 VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(run)
+            .bind(ts)
+            .bind(kind)
+            .bind(node)
+            .bind(iter)
+            .bind(payload.to_string())
+            .execute(db)
+            .await
+            .unwrap();
+        }
+
+        for (run, pipeline, terminal) in [
+            ("cohort-done", "cdone", "run_completed"),
+            ("cohort-failed", "cfail", "run_failed"),
+        ] {
+            insert_event(
+                &state.db,
+                run,
+                "2033-04-02T09:00:00Z",
+                "run_started",
+                None,
+                None,
+                serde_json::json!({
+                    "pipeline_id":pipeline,"pipeline_name":pipeline,"target_repo":repo,"harness":"claude",
+                    "node_defs":[{"id":"worker","name":"Worker","node_type":"agent","isolated_worktree":true}]
+                }),
+            )
+            .await;
+            insert_event(
+                &state.db,
+                run,
+                "2033-04-02T09:05:00Z",
+                "node_started",
+                Some("worker"),
+                Some(1),
+                serde_json::json!({"node_type":"agent","isolated_worktree":true,"harness":"claude","session_id":run}),
+            )
+            .await;
+            insert_event(
+                &state.db,
+                run,
+                "2033-04-02T09:30:00Z",
+                terminal,
+                None,
+                None,
+                serde_json::json!({}),
+            )
+            .await;
+        }
+
+        async fn call(state: &Arc<AppState>, uri: &str) -> serde_json::Value {
+            let response = build_router(state.clone())
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{uri}");
+            serde_json::from_slice(
+                &axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap(),
+            )
+            .unwrap()
+        }
+
+        fn total(series: &serde_json::Value) -> i64 {
+            series
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row["count"].as_i64().unwrap())
+                .sum()
+        }
+
+        let window = "from=2033-04-02T00:00:00Z&to=2033-04-03T00:00:00Z&bucket=day";
+        let whole = call(&state, &format!("/stats/overview?{window}")).await;
+        assert_eq!(total(&whole["runs"]), 2);
+        assert_eq!(total(&whole["errors"]), 1);
+        assert_eq!(total(&whole["sessions"]), 2);
+
+        let narrowed = call(
+            &state,
+            &format!("/stats/overview?{window}&completed_only=true"),
+        )
+        .await;
+        assert_eq!(total(&narrowed["runs"]), 1);
+        assert_eq!(
+            total(&narrowed["errors"]),
+            0,
+            "zero errors, card kept — nothing is masked: {narrowed}"
+        );
+        assert_eq!(total(&narrowed["sessions"]), 1);
+        assert_eq!(
+            narrowed["sessions_by_pipeline"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| p["id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["cdone"],
+        );
+
+        let cost = call(&state, &format!("/stats/cost?{window}")).await;
+        assert_eq!(cost["by_pipeline"].as_array().unwrap().len(), 2);
+        let narrowed_cost =
+            call(&state, &format!("/stats/cost?{window}&completed_only=true")).await;
+        assert_eq!(
+            narrowed_cost["by_pipeline"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| p["id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["cdone"],
         );
     }
 
@@ -40344,8 +40908,10 @@ edges: []
     fn trigger_fetch_targets_takes_row_zero_as_the_primary_when_the_scalar_is_blank() {
         // The multi-repo modal carries the primary in row 0; `create_run_inner`
         // normalises exactly this way, and the fetch order must agree with it.
-        let targets =
-            trigger_fetch_targets(Some("   "), Some(r#"[{"repo":"/repos/a"},{"repo":"/repos/b"}]"#));
+        let targets = trigger_fetch_targets(
+            Some("   "),
+            Some(r#"[{"repo":"/repos/a"},{"repo":"/repos/b"}]"#),
+        );
         assert_eq!(
             targets,
             vec!["/repos/a".to_string(), "/repos/b".to_string()]

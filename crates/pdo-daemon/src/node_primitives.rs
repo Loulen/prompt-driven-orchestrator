@@ -552,6 +552,11 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
             "prompt_preview": full_prompt.chars().take(500).collect::<String>(),
             "node_type": node_type_str(&node.node_type),
             "interactive": node.interactive,
+            // #810/ADR-0007: FREEZE the « Orchestrator » toggle beside
+            // `interactive`. The two together are the node's **genre** (kind),
+            // the axis Stats › Performance filters on; reading the document at
+            // stat time would reclassify history after an edit.
+            "orchestrator": node.orchestrator,
             // #653/ADR-0060: FREEZE where this NodeRun works. Mirrors the
             // `spawn_node` payload — every later reader asks this event.
             "isolated_worktree": has_sub_worktree,
@@ -598,19 +603,14 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         inject_hook: params.inject_hook && !is_script,
     };
 
-    let mut events = vec![node_started];
-
-    if node.interactive {
-        events.push(event_log::Event {
-            id: None,
-            run_id: params.run_id.to_string(),
-            ts: event_log::now_iso(),
-            kind: EventKind::NodeAwaitingUser,
-            node_id: Some(params.node_id.to_string()),
-            iter: Some(params.iter),
-            payload: None,
-        });
-    }
+    // #588/#810 / ADR-0069 §1: NO `NodeAwaitingUser` at spawn, interactive or
+    // not — the contract the reference primitive (`node_spawn::spawn_node`)
+    // already honoured, now honoured here too. A fresh interactive node is
+    // `running`, with the colour of a working node; the wait is declared by its
+    // agent (`pdo wait-user`) or by a refused unreleased completion. Stats reads
+    // the same log: a payload-less wait event would be an attente with no cause,
+    // and the active duration would subtract time nobody waited.
+    let events = vec![node_started];
 
     StartNodeResult {
         outcome: PrimitiveOutcome::Executed,
@@ -1255,6 +1255,71 @@ mod tests {
             result.spawn.unwrap().inject_hook,
             "an agent node must arm the Stop hook when the setting is on"
         );
+    }
+
+    /// #810 / ADR-0069 §1 — the start primitive emits ONE event for an
+    /// interactive node: its `NodeStarted`. The spawn wait of #588 is gone, so a
+    /// fresh interactive node projects `running` and Stats never sees an
+    /// attente with no cause. The same payload freezes the node's **genre**
+    /// (`interactive` + `orchestrator`, ADR-0007), which Performance filters on.
+    #[test]
+    fn start_node_emits_no_wait_at_spawn_and_freezes_the_node_kind() {
+        let mut interactive_orchestrator = make_node("griller", NodeType::Agent, &[], &["out"]);
+        interactive_orchestrator.interactive = true;
+        interactive_orchestrator.orchestrator = true;
+        let pipeline = PipelineDef {
+            name: "test".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![interactive_orchestrator],
+            edges: vec![],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+        };
+        let run_state = empty_run_state();
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts_dir = tmp.path().join("artifacts");
+        std::fs::create_dir_all(&artifacts_dir).unwrap();
+
+        let params = StartNodeParams {
+            run_id: "run-1",
+            node_id: "griller",
+            iter: 1,
+            overrides: None,
+            pipeline: &pipeline,
+            run_state: &run_state,
+            artifacts_dir: &artifacts_dir,
+            worktree_dir: tmp.path(),
+            repo_root: tmp.path(),
+            pipeline_path: &tmp.path().join("pipeline.yaml"),
+            resolved_vars: &HashMap::new(),
+            daemon_port: 5172,
+            tmux_cmd_override: Some("exec true"),
+            docker_cmd_override: None,
+            default_model: None,
+            default_harness: None,
+            default_harness_models: Default::default(),
+            project_harness: None,
+            inject_hook: true,
+            harness_registry: None,
+            sandbox_home_root: None,
+        };
+        let result = start_node(&params);
+
+        assert_eq!(result.outcome, PrimitiveOutcome::Executed);
+        assert_eq!(
+            result
+                .events
+                .iter()
+                .map(|e| e.kind.clone())
+                .collect::<Vec<_>>(),
+            vec![EventKind::NodeStarted],
+            "no NodeAwaitingUser at spawn, interactive or not (ADR-0069 §1)"
+        );
+        let payload = result.events[0].payload.as_ref().unwrap();
+        assert_eq!(payload["interactive"], serde_json::json!(true));
+        assert_eq!(payload["orchestrator"], serde_json::json!(true));
     }
 
     #[test]

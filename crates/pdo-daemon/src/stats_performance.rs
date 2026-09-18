@@ -154,6 +154,13 @@ pub(crate) struct PerformanceQuery {
     /// Explicit user refresh bypasses an otherwise-current memo entry.
     #[serde(default)]
     pub refresh: bool,
+    /// « Runs terminés seulement » (#810): narrow the cohort to Runs started in
+    /// the window that reached `RunCompleted`. Wire default `false` — the whole
+    /// cohort, whatever each Run's final status — shared verbatim with
+    /// `/stats/overview` and `/stats/cost` so the three sections describe the
+    /// same Runs.
+    #[serde(default)]
+    pub completed_only: bool,
 }
 
 /// One metric's coverage for one row × one harness. **Never null on the wire**:
@@ -179,12 +186,17 @@ pub(crate) struct SteeredRate {
 }
 
 /// Matches the frontend's `StatsHarnessPerformance` — `context`/`duration`/
-/// `steering` are never `null` (see [`StatsDistribution`]).
+/// `active_duration`/`steering` are never `null` (see [`StatsDistribution`]).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) struct StatsHarnessPerformance {
     pub harness: String,
     pub context: StatsDistribution,
     pub duration: StatsDistribution,
+    /// **Durée active** (#810): the same executions as `duration`, each minus
+    /// its **declared wait** — always present beside the wall-clock, never
+    /// replacing it, so the client swaps the two readings with no refetch. See
+    /// [`declared_waits`] for what opens and closes a wait.
+    pub active_duration: StatsDistribution,
     /// Steering messages per execution (#792) — additive, unit « messages ».
     pub steering: StatsDistribution,
     /// Share of executions with ≥ 1 steering message (#792).
@@ -209,6 +221,17 @@ pub(crate) struct PerformanceEntity {
     pub harnesses: Vec<StatsHarnessPerformance>,
     pub nodes: Vec<PerformanceEntity>,
     pub subagents: Vec<PerformanceEntity>,
+    /// The node's **genre** (#810), on Node rows only — `None` (omitted on the
+    /// wire) on a Pipeline, a subagent group, an Infrastructure role or a level
+    /// of the « By model » tree, which have no kind and are never filtered by
+    /// it. Read off the execution's frozen `NodeStarted` (ADR-0007), with the
+    /// Run's pipeline snapshot as the fallback for a payload that predates the
+    /// freeze. Both flags travel: a node can be interactive AND orchestrator,
+    /// and then matches either chip.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interactive: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub orchestrator: Option<bool>,
     /// The Node's observations split into model × effort couples (ADR-0065) —
     /// Node leaves only, so the drill-down ends there; omitted (never an empty
     /// array) on the other levels, and on the `by_model` Node rows (the path is
@@ -311,7 +334,7 @@ pub(crate) async fn stats_performance(
     State(state): State<Arc<AppState>>,
     Query(q): Query<PerformanceQuery>,
 ) -> Response {
-    match compute_performance(&state, &q.from, &q.to, q.refresh).await {
+    match compute_performance(&state, &q.from, &q.to, q.refresh, q.completed_only).await {
         Ok(payload) => Json(payload).into_response(),
         Err(error) => error.into_response(),
     }
@@ -400,6 +423,8 @@ const INFRA_STEERING_REASON: &str = "runtime messages only";
 struct HarnessAcc {
     context: MetricAcc,
     duration: MetricAcc,
+    /// #810 — the same executions as `duration`, declared wait subtracted.
+    active_duration: MetricAcc,
     steering: MetricAcc,
 }
 
@@ -409,10 +434,20 @@ impl HarnessAcc {
             harness,
             context: self.context.finish(),
             duration: self.duration.finish(),
+            active_duration: self.active_duration.finish(),
             steered: self.steering.steered(),
             steering: self.steering.finish(),
         }
     }
+}
+
+/// A Node's **genre** (#810): the two frozen flags read together. Not an enum —
+/// a node can be both, and then matches either chip; « Standard » is the
+/// absence of both, never a third stored value.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct NodeKind {
+    interactive: bool,
+    orchestrator: bool,
 }
 
 fn finish_by_harness(acc: BTreeMap<String, HarnessAcc>) -> Vec<StatsHarnessPerformance> {
@@ -427,6 +462,10 @@ struct SubagentAcc {
 #[derive(Debug, Default)]
 struct NodeAcc {
     name: String,
+    /// #810 — the genre of the LAST observed execution of this Node in the
+    /// cohort, same "latest wins" rule as `name`: a node re-flagged mid-period
+    /// reads as what it is now, and its older executions stay on the row.
+    kind: NodeKind,
     by_harness: BTreeMap<String, HarnessAcc>,
     subagents: BTreeMap<String, SubagentAcc>,
     /// The Node's model × effort couples (ADR-0065): the same observations as
@@ -444,6 +483,10 @@ fn finish_subagents(subagents: BTreeMap<String, SubagentAcc>) -> Vec<Performance
             harnesses: finish_by_harness(acc.by_harness),
             nodes: Vec::new(),
             subagents: Vec::new(),
+            // A subagent group has no kind of its own: it follows its Node
+            // (#810), which the client already renders under the parent row.
+            interactive: None,
+            orchestrator: None,
             models: Vec::new(),
         })
         .collect()
@@ -456,6 +499,8 @@ fn finish_node(id: String, acc: NodeAcc) -> PerformanceEntity {
         harnesses: finish_by_harness(acc.by_harness),
         nodes: Vec::new(),
         subagents: finish_subagents(acc.subagents),
+        interactive: Some(acc.kind.interactive),
+        orchestrator: Some(acc.kind.orchestrator),
         models: wire_model_pairs(acc.pairs),
     }
 }
@@ -469,6 +514,10 @@ fn finish_infra_role(id: &str, name: &str, acc: NodeAcc) -> PerformanceEntity {
         harnesses: finish_by_harness(acc.by_harness),
         nodes: Vec::new(),
         subagents: finish_subagents(acc.subagents),
+        // An Infrastructure role is not a Node: it has no kind, and the kind
+        // filter leaves it intact (#810).
+        interactive: None,
+        orchestrator: None,
         // Infrastructure carries no model identity (module doc): an empty
         // `models` is omitted on the wire, never an empty array.
         models: Vec::new(),
@@ -493,6 +542,11 @@ fn finish_pipeline(id: String, acc: PipelineAcc) -> PerformanceEntity {
             .map(|(id, node)| finish_node(id, node))
             .collect(),
         subagents: Vec::new(),
+        // A Pipeline row is not a Node: no kind (#810). Under a partial kind
+        // filter the client shows « filtered » here rather than recomputing a
+        // total the six stats cannot rebuild.
+        interactive: None,
+        orchestrator: None,
         models: Vec::new(),
     }
 }
@@ -536,12 +590,15 @@ impl ModelPairAcc {
         harness: &str,
         context: (Option<f64>, Option<&str>),
         duration: (Option<f64>, Option<&str>),
+        active_duration: (Option<f64>, Option<&str>),
         steering: Reading<'_>,
         identity: &ModelIdentity,
     ) {
         let acc = self.by_harness.entry(harness.to_string()).or_default();
         acc.context.observe(context.0, context.1);
         acc.duration.observe(duration.0, duration.1);
+        acc.active_duration
+            .observe(active_duration.0, active_duration.1);
         acc.steering.record(steering);
         if identity.model_observed {
             self.model_observed += 1;
@@ -561,6 +618,9 @@ impl ModelPairAcc {
 #[derive(Debug, Default)]
 struct ModelAxisNodeAcc {
     name: String,
+    /// #810 — the same genre the `by_pipeline` Node row carries, so the kind
+    /// filter reads identically on both axes.
+    kind: NodeKind,
     pairs: BTreeMap<ModelEffortKey, ModelPairAcc>,
 }
 
@@ -599,17 +659,23 @@ fn record_model_observation(
     pipeline_name: &str,
     node_id: &str,
     node_name: &str,
+    node_kind: NodeKind,
     harness: &str,
     identity: &ModelIdentity,
     context: (Option<f64>, Option<&str>),
     duration: (Option<f64>, Option<&str>),
+    active_duration: (Option<f64>, Option<&str>),
     steering: Reading<'_>,
 ) {
     let key = (identity.model.clone(), identity.effort.clone());
-    node_pairs
-        .entry(key.clone())
-        .or_default()
-        .observe(harness, context, duration, steering, identity);
+    node_pairs.entry(key.clone()).or_default().observe(
+        harness,
+        context,
+        duration,
+        active_duration,
+        steering,
+        identity,
+    );
 
     let model_acc = model_axis.entry(identity.model.clone()).or_default();
     let effort_acc = model_acc
@@ -623,13 +689,21 @@ fn record_model_observation(
     pipeline_acc.name = pipeline_name.to_string();
     let node_acc = pipeline_acc.nodes.entry(node_id.to_string()).or_default();
     node_acc.name = node_name.to_string();
+    node_acc.kind = node_kind;
     for acc in [
         model_acc.pairs.entry(key.clone()).or_default(),
         effort_acc.pairs.entry(key.clone()).or_default(),
         pipeline_acc.pairs.entry(key.clone()).or_default(),
         node_acc.pairs.entry(key).or_default(),
     ] {
-        acc.observe(harness, context, duration, steering, identity);
+        acc.observe(
+            harness,
+            context,
+            duration,
+            active_duration,
+            steering,
+            identity,
+        );
     }
 }
 
@@ -642,6 +716,7 @@ fn pool_pairs(pairs: &BTreeMap<ModelEffortKey, ModelPairAcc>) -> PerformanceAggr
             let target = by_harness.entry(harness.clone()).or_default();
             target.context.fold(&acc.context);
             target.duration.fold(&acc.duration);
+            target.active_duration.fold(&acc.active_duration);
             target.steering.fold(&acc.steering);
         }
     }
@@ -714,6 +789,8 @@ fn wire_model_axis(
                                     harnesses: pool_pairs(&node_acc.pairs).harnesses,
                                     nodes: Vec::new(),
                                     subagents: Vec::new(),
+                                    interactive: Some(node_acc.kind.interactive),
+                                    orchestrator: Some(node_acc.kind.orchestrator),
                                     models: Vec::new(),
                                 })
                                 .collect();
@@ -723,6 +800,8 @@ fn wire_model_axis(
                                 harnesses: pool_pairs(&pipeline_acc.pairs).harnesses,
                                 nodes,
                                 subagents: Vec::new(),
+                                interactive: None,
+                                orchestrator: None,
                                 models: Vec::new(),
                             }
                         })
@@ -734,6 +813,8 @@ fn wire_model_axis(
                             harnesses: pool_pairs(&effort_acc.pairs).harnesses,
                             nodes: Vec::new(),
                             subagents: Vec::new(),
+                            interactive: None,
+                            orchestrator: None,
                             models: Vec::new(),
                         },
                         effort,
@@ -749,6 +830,8 @@ fn wire_model_axis(
                     harnesses: pool_pairs(&model_acc.pairs).harnesses,
                     nodes: Vec::new(),
                     subagents: Vec::new(),
+                    interactive: None,
+                    orchestrator: None,
                     models: Vec::new(),
                 },
                 provenance: crate::stats::provenance(model_observed, model_requested),
@@ -760,7 +843,21 @@ fn wire_model_axis(
 
 // --- Node identity/type resolution ---------------------------------------------
 
-fn node_defs_from_payload(payload: &Value) -> BTreeMap<String, (String, String, bool)> {
+/// One node of the Run's frozen pipeline snapshot (`run_started.node_defs`) —
+/// the fallback every per-execution reader falls back to when the startup event
+/// predates the field it wants.
+struct NodeDefSnapshot {
+    name: String,
+    node_type: String,
+    /// #653/ADR-0060 — where the node works.
+    isolated: bool,
+    /// #723/#724 — the « Orchestrator » toggle as the Run froze it. Present in
+    /// every snapshot since #723, so it covers the `NodeStarted` payloads that
+    /// predate the per-execution freeze of #810.
+    orchestrator: bool,
+}
+
+fn node_defs_from_payload(payload: &Value) -> BTreeMap<String, NodeDefSnapshot> {
     let mut defs = BTreeMap::new();
     if let Some(list) = payload.get("node_defs").and_then(|v| v.as_array()) {
         for def in list {
@@ -783,7 +880,19 @@ fn node_defs_from_payload(payload: &Value) -> BTreeMap<String, (String, String, 
                 .get("isolated_worktree")
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(matches!(node_type.as_str(), "agent" | "merge"));
-            defs.insert(id.to_string(), (name, node_type, isolated));
+            let orchestrator = def
+                .get("orchestrator")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            defs.insert(
+                id.to_string(),
+                NodeDefSnapshot {
+                    name,
+                    node_type,
+                    isolated,
+                    orchestrator,
+                },
+            );
         }
     }
     defs
@@ -840,6 +949,94 @@ fn duration_millis(started_at: &str, completed_at: &str) -> Option<f64> {
     let start = parse_ts(started_at)?;
     let end = parse_ts(completed_at)?;
     Some((end - start).num_milliseconds() as f64)
+}
+
+// --- Declared wait / active duration (#810, ADR-0069) --------------------------
+
+/// The cause a `NodeAwaitingUser` carries. `declared_wait` writes `cause`; the
+/// orchestrator binding's marker writes `reason` (ADR-0064) — the projection
+/// reads both keys, and so does this. `None` = an event with no cause at all:
+/// **ignored**, never a wait. Only a pre-#810 spawn event could be in that
+/// shape (the primitive no longer writes one), and projecting it as a wait
+/// would subtract time nobody waited.
+fn awaiting_cause(payload: Option<&Value>) -> Option<&str> {
+    payload
+        .and_then(|p| p.get("cause").or_else(|| p.get("reason")))
+        .and_then(|v| v.as_str())
+}
+
+/// Does this cause open a declared wait? `children_pending` does not: an
+/// orchestrator parked on `pdo run wait` is working, not waiting on a human
+/// (CONTEXT.md § Durée active). Nor does `child_awaiting`, which is derived at
+/// read and never written to the log.
+fn opens_declared_wait(cause: &str) -> bool {
+    cause == crate::event_log::AWAITING_CAUSE_DECLARED
+        || cause == crate::event_log::AWAITING_CAUSE_COMPLETION_NOT_RELEASED
+}
+
+/// The declared wait of every execution `(node_id, iter)` of one Run, in
+/// milliseconds — what [`StatsHarnessPerformance::active_duration`] subtracts
+/// from the wall-clock.
+///
+/// An interval opens on a `NodeAwaitingUser` of cause `declared` or
+/// `completion_not_released` and closes on the FIRST `NodeResumed`,
+/// `NodeCompletionReleased` or terminal event of the same key. A repeated
+/// `NodeAwaitingUser` with no lift in between does not reopen it (a refreshed
+/// question is the same wait). An interval still open when the log ends
+/// contributes nothing — that execution never completed, so it is not an
+/// observation either.
+///
+/// A `NodeStarted` on a key **resets** it: a stopped-then-restarted attempt
+/// runs at the same `(node, iter)`, and the wait of the attempt that was thrown
+/// away is not the wait of the one that succeeded. The Infrastructure row sums
+/// these same per-execution waits, so a run's active duration always agrees
+/// with the nodes shown under it.
+fn declared_waits(events: &[crate::event_log::Event]) -> HashMap<(String, i64), f64> {
+    let mut open: HashMap<(String, i64), String> = HashMap::new();
+    let mut waited: HashMap<(String, i64), f64> = HashMap::new();
+    for event in events {
+        let Some(node_id) = event.node_id.clone() else {
+            continue;
+        };
+        let key = (node_id, event.iter.unwrap_or(1));
+        match event.kind {
+            EventKind::NodeStarted => {
+                open.remove(&key);
+                waited.remove(&key);
+            }
+            EventKind::NodeAwaitingUser => {
+                let Some(cause) = awaiting_cause(event.payload.as_ref()) else {
+                    continue;
+                };
+                if !opens_declared_wait(cause) {
+                    continue;
+                }
+                open.entry(key).or_insert_with(|| event.ts.clone());
+            }
+            EventKind::NodeResumed
+            | EventKind::NodeCompletionReleased
+            | EventKind::NodeCompleted
+            | EventKind::NodeAutoCompleted
+            | EventKind::NodeFailed
+            | EventKind::NodeStopped
+            | EventKind::NodeInterrupted
+            | EventKind::NodeStale => {
+                if let Some(started_at) = open.remove(&key) {
+                    if let Some(millis) = duration_millis(&started_at, &event.ts) {
+                        *waited.entry(key).or_insert(0.0) += millis.max(0.0);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    waited
+}
+
+/// One execution's wall-clock minus its declared wait, floored at zero (a clock
+/// skew between two events must not produce a negative duration).
+fn active_millis(duration: Option<f64>, waited: f64) -> Option<f64> {
+    duration.map(|value| (value - waited).max(0.0))
 }
 
 /// Pick the store root a harness's transcript is read from: the per-Run,
@@ -1034,6 +1231,9 @@ struct PendingNode {
     session_id: Option<String>,
     /// Where the NodeRun works (#653) — its own sub-worktree, or the Run's.
     isolated: bool,
+    /// The genre this attempt was launched with (#810), frozen in `NodeStarted`
+    /// (ADR-0007) with the Run's snapshot as the fallback.
+    kind: NodeKind,
     /// The requested model × effort, frozen in the startup event (ADR-0046) —
     /// the fallback when the source is mute (ADR-0065 §1).
     requested_model: Option<String>,
@@ -1071,6 +1271,7 @@ fn fold_subagents(
     pipeline_name: &str,
     node_id: &str,
     node_name: &str,
+    node_kind: NodeKind,
     files: Vec<(String, String)>,
     harness: &str,
 ) {
@@ -1084,12 +1285,15 @@ fn fold_subagents(
         );
         let span = crate::context_peak::claude_transcript_time_span(&text);
         let sub_duration = span.and_then(|(a, b)| duration_millis(&a, &b));
-        sub_acc.duration.observe(
-            sub_duration,
-            sub_duration
-                .is_none()
-                .then_some("no reliable start/end bounds in subagent transcript"),
-        );
+        let sub_duration_reason = sub_duration
+            .is_none()
+            .then_some("no reliable start/end bounds in subagent transcript");
+        sub_acc.duration.observe(sub_duration, sub_duration_reason);
+        // #810: nobody declares a wait inside a subagent — its active duration
+        // IS its duration, and the metric swap leaves a subagent row unchanged.
+        sub_acc
+            .active_duration
+            .observe(sub_duration, sub_duration_reason);
         // #792: nobody types in a subagent — a declared absence, no expected
         // observation, so a Node's steered rate is never diluted by its
         // subagents.
@@ -1129,18 +1333,15 @@ fn fold_subagents(
                         pipeline_name,
                         node_id,
                         node_name,
+                        node_kind,
                         harness,
                         &model_identity,
                         (
                             peak.map(|p| p as f64),
                             (peak.is_none()).then_some("no readable context usage in transcript"),
                         ),
-                        (
-                            sub_duration,
-                            sub_duration
-                                .is_none()
-                                .then_some("no reliable start/end bounds in subagent transcript"),
-                        ),
+                        (sub_duration, sub_duration_reason),
+                        (sub_duration, sub_duration_reason),
                         Reading::NotApplicable(SUBAGENT_STEERING_REASON),
                     );
                 }
@@ -1170,6 +1371,8 @@ fn record_node_success(
     working_dir: &Path,
     pending: &PendingNode,
     completed_at: &str,
+    // The declared wait this execution accumulated (#810), in milliseconds.
+    waited_millis: f64,
     seen_roots: &mut HashSet<PathBuf>,
 ) -> Result<(), PerformanceError> {
     let harness = pending.harness.clone();
@@ -1183,6 +1386,10 @@ fn record_node_success(
     )?;
     let duration = duration_millis(&pending.started_at, completed_at);
     let duration_reason = duration.is_none().then_some("unparseable timestamp");
+    // #810: the same observation, declared wait subtracted. Absent for exactly
+    // the same reason the wall-clock is — the two coverages never disagree, so
+    // the client's metric swap never changes `n=`.
+    let active_duration = active_millis(duration, waited_millis);
     let (steering, steering_reason) = main_session_steering(
         &harness,
         root,
@@ -1199,6 +1406,8 @@ fn record_node_success(
     ] {
         acc.context.observe(context, reason);
         acc.duration.observe(duration, duration_reason);
+        acc.active_duration
+            .observe(active_duration, duration_reason);
         acc.steering.record(steering_reading);
     }
 
@@ -1221,10 +1430,12 @@ fn record_node_success(
             pipeline_name,
             node_id,
             node_name,
+            pending.kind,
             &harness,
             &identity,
             (context, reason),
             (duration, duration_reason),
+            (active_duration, duration_reason),
             steering_reading,
         );
     }
@@ -1238,6 +1449,7 @@ fn record_node_success(
         pipeline_name,
         node_id,
         node_name,
+        pending.kind,
         files,
         &harness,
     );
@@ -1387,6 +1599,10 @@ fn record_infra_success(
     excluded_session_ids: &HashSet<String>,
     directory_ambiguous: bool,
     duration: Option<f64>,
+    // #810 — the wall-clock minus the declared wait this role's span covered:
+    // the sum of every Node wait of the Run for the Pipeline Manager, the
+    // duration itself for a Merge resolver (no wait is possible on one).
+    active_duration: Option<f64>,
     seen_roots: &mut HashSet<PathBuf>,
 ) -> Result<(), PerformanceError> {
     let (context, reason, subs) = if run_harness != crate::harness_registry::CLAUDE {
@@ -1412,29 +1628,23 @@ fn record_infra_success(
         )
     };
 
-    let harness_acc = acc.by_harness.entry(run_harness.to_string()).or_default();
-    harness_acc.context.observe(context, reason);
-    harness_acc.duration.observe(
-        duration,
-        duration.is_none().then_some("unparseable timestamp"),
-    );
-    // #792: what reaches an Infrastructure role's session is the daemon's own
-    // text (review batches), never human piloting — unavailable, with the reason.
-    harness_acc
-        .steering
-        .observe(None, Some(INFRA_STEERING_REASON));
-
-    let total_acc = infra_total_by_harness
-        .entry(run_harness.to_string())
-        .or_default();
-    total_acc.context.observe(context, reason);
-    total_acc.duration.observe(
-        duration,
-        duration.is_none().then_some("unparseable timestamp"),
-    );
-    total_acc
-        .steering
-        .observe(None, Some(INFRA_STEERING_REASON));
+    let duration_reason = duration.is_none().then_some("unparseable timestamp");
+    for target in [
+        acc.by_harness.entry(run_harness.to_string()).or_default(),
+        infra_total_by_harness
+            .entry(run_harness.to_string())
+            .or_default(),
+    ] {
+        target.context.observe(context, reason);
+        target.duration.observe(duration, duration_reason);
+        target
+            .active_duration
+            .observe(active_duration, duration_reason);
+        // #792: what reaches an Infrastructure role's session is the daemon's
+        // own text (review batches), never human piloting — unavailable, with
+        // the reason.
+        target.steering.observe(None, Some(INFRA_STEERING_REASON));
+    }
 
     if run_harness == crate::harness_registry::CLAUDE {
         // Infrastructure stays off the « By model » axis and its Node couples
@@ -1448,6 +1658,7 @@ fn record_infra_success(
             "",
             "",
             "",
+            NodeKind::default(),
             subs,
             run_harness,
         );
@@ -1531,6 +1742,7 @@ async fn compute_performance(
     from: &str,
     to: &str,
     refresh: bool,
+    completed_only: bool,
 ) -> Result<StatsPerformance, PerformanceError> {
     let rows = sqlx::query_as::<_, (String, Option<String>)>(
         "SELECT run_id, payload FROM events \
@@ -1551,6 +1763,11 @@ async fn compute_performance(
 
     let mut contexts: Vec<RunContext> = Vec::new();
     let mut key_hasher = DefaultHasher::new();
+    // #810: the cohort switch is part of the memo identity. Two cohorts over the
+    // same window read the same event logs, so their footprints can coincide —
+    // without this, toggling « completed runs only » could serve the other
+    // cohort's answer.
+    completed_only.hash(&mut key_hasher);
     for (run_id, payload) in rows {
         let payload: Value = payload
             .as_deref()
@@ -1576,6 +1793,14 @@ async fn compute_performance(
         let events = crate::load_events(&state.db, &run_id)
             .await
             .map_err(|e| PerformanceError::Db(e.to_string()))?;
+
+        // #810 « Runs terminés seulement »: the cohort becomes the Runs started
+        // in the window that reached `RunCompleted`. A Run left out here is left
+        // out whole — its successful Node executions included; « completed » is
+        // a property of the Run, not of the execution.
+        if completed_only && !events.iter().any(|e| e.kind == EventKind::RunCompleted) {
+            continue;
+        }
 
         run_id.hash(&mut key_hasher);
         crate::run_cost::event_fingerprint(&events).hash(&mut key_hasher);
@@ -1669,6 +1894,15 @@ fn fold_performance(contexts: Vec<RunContext>) -> Result<StatsPerformance, Perfo
         let pipeline_acc = pipelines.entry(pipeline_id.clone()).or_default();
         pipeline_acc.name = pipeline_name.clone();
 
+        // #810: the declared wait of every execution of this Run, resolved in
+        // one pass BEFORE the fold — a wait closed by the very `NodeCompleted`
+        // that records the observation must already be counted when it lands.
+        let waits = declared_waits(&events);
+        // The Run's own active duration subtracts every Node wait it contains
+        // (ADR-0069 / CONTEXT.md § Durée active): the Infrastructure row stays
+        // consistent with the nodes shown under it.
+        let run_waited: f64 = waits.values().sum();
+
         let mut pending: HashMap<(String, i64), PendingNode> = HashMap::new();
         let mut node_starts: HashMap<(String, i64), Vec<NodeStartRecord>> = HashMap::new();
         let mut pipeline_manager_started: Option<String> = None;
@@ -1688,7 +1922,7 @@ fn fold_performance(contexts: Vec<RunContext>) -> Result<StatsPerformance, Perfo
                     let node_type = event_payload
                         .and_then(|p| p.get("node_type"))
                         .and_then(|v| v.as_str())
-                        .or_else(|| node_defs.get(&node_id).map(|(_, ty, _)| ty.as_str()))
+                        .or_else(|| node_defs.get(&node_id).map(|d| d.node_type.as_str()))
                         .unwrap_or("")
                         .to_string();
                     // #653/ADR-0060: the FROZEN isolation of this attempt, else
@@ -1697,8 +1931,24 @@ fn fold_performance(contexts: Vec<RunContext>) -> Result<StatsPerformance, Perfo
                     let isolated = event_payload
                         .and_then(|p| p.get("isolated_worktree"))
                         .and_then(serde_json::Value::as_bool)
-                        .or_else(|| node_defs.get(&node_id).map(|(_, _, iso)| *iso))
+                        .or_else(|| node_defs.get(&node_id).map(|d| d.isolated))
                         .unwrap_or(false);
+                    // #810/ADR-0007: the genre this attempt was launched with.
+                    // `interactive` has been frozen since #588; `orchestrator`
+                    // since #810 — an older payload falls back to the Run's
+                    // pipeline snapshot, which has carried it since #723, so
+                    // history stays classified.
+                    let kind = NodeKind {
+                        interactive: event_payload
+                            .and_then(|p| p.get("interactive"))
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false),
+                        orchestrator: event_payload
+                            .and_then(|p| p.get("orchestrator"))
+                            .and_then(serde_json::Value::as_bool)
+                            .or_else(|| node_defs.get(&node_id).map(|d| d.orchestrator))
+                            .unwrap_or(false),
+                    };
                     let harness = event_payload
                         .and_then(|p| p.get("harness"))
                         .and_then(|v| v.as_str())
@@ -1742,6 +1992,7 @@ fn fold_performance(contexts: Vec<RunContext>) -> Result<StatsPerformance, Perfo
                             harness,
                             session_id,
                             isolated,
+                            kind,
                             requested_model,
                             requested_effort,
                         },
@@ -1754,10 +2005,11 @@ fn fold_performance(contexts: Vec<RunContext>) -> Result<StatsPerformance, Perfo
                     if let Some(p) = pending.remove(&(node_id.clone(), iter)) {
                         let node_name = node_defs
                             .get(&node_id)
-                            .map(|(name, ..)| name.clone())
+                            .map(|d| d.name.clone())
                             .unwrap_or_else(|| node_id.clone());
                         let node_acc = pipeline_acc.nodes.entry(node_id.clone()).or_default();
                         node_acc.name = node_name.clone();
+                        node_acc.kind = p.kind;
                         let working_dir = if p.isolated {
                             crate::worktree_ops::sub_worktree_path(
                                 &repo_root,
@@ -1783,6 +2035,7 @@ fn fold_performance(contexts: Vec<RunContext>) -> Result<StatsPerformance, Perfo
                             &working_dir,
                             &p,
                             &event.ts,
+                            waits.get(&(node_id.clone(), iter)).copied().unwrap_or(0.0),
                             &mut seen_roots,
                         )?;
                     }
@@ -1844,6 +2097,9 @@ fn fold_performance(contexts: Vec<RunContext>) -> Result<StatsPerformance, Perfo
                             &excluded,
                             ambiguous,
                             duration,
+                            // #810: a Merge resolver cannot declare a wait —
+                            // its active duration IS its wall-clock.
+                            duration,
                             &mut seen_roots,
                         )?;
                     }
@@ -1876,6 +2132,9 @@ fn fold_performance(contexts: Vec<RunContext>) -> Result<StatsPerformance, Perfo
                             &excluded,
                             ambiguous,
                             duration,
+                            // #810: the Run's own span minus every declared
+                            // wait its Nodes accumulated.
+                            active_millis(duration, run_waited),
                             &mut seen_roots,
                         )?;
                     }

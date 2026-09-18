@@ -1,5 +1,5 @@
 import { Fragment, useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, Info } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Info } from "lucide-react";
 import {
   Bar,
   BarChart,
@@ -37,6 +37,7 @@ import { harnessColor } from "../lib/harness";
 import { cssColor } from "../lib/cssColor";
 import { useTheme } from "../hooks/useTheme";
 import { Tooltip, TooltipProvider } from "./ui/tooltip";
+import { ALL_NODE_KINDS, type NodeKind } from "../lib/statsPrefs";
 
 export type StatsTab = "runs" | "sessions" | "triggers" | "cost" | "performance";
 
@@ -91,6 +92,36 @@ function EmptyNote({ children }: { children: React.ReactNode }) {
   return (
     <div className="px-1 py-8 text-center text-fg-4" style={{ fontSize: "11.5px" }}>
       {children}
+    </div>
+  );
+}
+
+/** Which Runs the figures on screen describe (#810). Always visible, never a
+ *  silent filter: amber once « completed runs only » narrows the cohort, muted
+ *  otherwise, and explicit about what was left out. */
+function CohortLine({
+  completedOnly,
+  note,
+}: {
+  completedOnly: boolean;
+  /** An extra clause for a tab the cohort does not govern. */
+  note?: string;
+}) {
+  return (
+    <div
+      data-testid="stats-cohort-line"
+      className={completedOnly ? "text-st-await" : "text-fg-4"}
+      style={{ fontSize: "10.5px" }}
+    >
+      Cohort: runs started in the period
+      {completedOnly ? (
+        <>
+          {" · "}
+          <span className="font-medium">completed runs only</span> (failed,
+          stopped and running runs left out)
+        </>
+      ) : null}
+      {note ? ` · ${note}` : ""}
     </div>
   );
 }
@@ -184,8 +215,15 @@ function HarnessBars({
   );
 }
 
-function RunsTab({ overview }: { overview: StatsOverview }) {
-  if (overview.buckets.length === 0) return <EmptyNote>No runs in this period.</EmptyNote>;
+function RunsTab({
+  overview,
+  completedOnly,
+}: {
+  overview: StatsOverview;
+  completedOnly: boolean;
+}) {
+  if (overview.buckets.length === 0)
+    return <EmptyNote>No runs in this period.</EmptyNote>;
   const runs = new Map(overview.runs.map((row) => [row.bucket, row.count]));
   const errors = new Map(overview.errors.map((row) => [row.bucket, row.count]));
   const data = overview.buckets.map((bucket) => ({
@@ -193,8 +231,31 @@ function RunsTab({ overview }: { overview: StatsOverview }) {
     runs: runs.get(bucket) ?? 0,
     errors: errors.get(bucket) ?? 0,
   }));
+  const totalErrors = overview.errors.reduce((sum, row) => sum + row.count, 0);
   return (
     <div data-testid="stats-chart-runs">
+      {completedOnly && (
+        // #810: the card stays, at zero — nothing is masked. A completed Run
+        // carries no `run_failed` of its own, so the series is 0 by
+        // construction; a Run that failed, was reopened and then completed is
+        // the one shape that can still count.
+        <TooltipProvider>
+          <div className="mb-3" style={{ fontSize: "11px" }}>
+            <Tooltip
+              content="0 by construction: a completed run has no run_failed of its own."
+              side="top"
+            >
+              <span
+                className="rounded bg-bg-3 px-2 py-1 text-fg-2"
+                data-testid="stats-kpi-errors-completed-only"
+              >
+                Errors: <span className="font-mono text-fg">{totalErrors}</span>{" "}
+                (completed only)
+              </span>
+            </Tooltip>
+          </div>
+        </TooltipProvider>
+      )}
       <ChartFrame>
         <BarChart data={data} margin={{ top: 8, right: 8, left: -18 }}>
           <CartesianGrid stroke={CHART.grid} strokeDasharray="3 3" vertical={false} />
@@ -222,7 +283,9 @@ function MasterList<T extends { id: string; name: string }>({
 }: {
   rows: T[];
   selected: string | null;
-  valueLabel: (row: T) => string;
+  /** A node, not a string: a partially filtered Performance row renders an
+   *  italic « filtered » here instead of a number (#810). */
+  valueLabel: (row: T) => React.ReactNode;
   onSelect: (id: string | null) => void;
   ariaLabel?: string;
   /** Model ids are ids — render them mono (ADR-0065 §2). */
@@ -1092,11 +1155,140 @@ type PerformanceMetric = "context" | "duration" | "steering";
 
 const PERFORMANCE_METRICS: readonly PerformanceMetric[] = ["context", "duration", "steering"];
 
-const PERFORMANCE_METRIC_LABEL: Record<PerformanceMetric, string> = {
+/** The wire field a metric actually reads. « exclude user wait » (#810) swaps
+ *  Duration's for `active_duration` — the same executions, each minus its
+ *  declared wait — with **no refetch**: both distributions always travel. */
+type PerformanceField = "context" | "duration" | "active_duration" | "steering";
+
+function metricField(
+  metric: PerformanceMetric,
+  excludeUserWait: boolean,
+): PerformanceField {
+  return metric === "duration" && excludeUserWait ? "active_duration" : metric;
+}
+
+/** The logical metric a field belongs to — what decides its unit and format.
+ *  Active duration is a duration: same milliseconds, same `6m20s`. */
+function fieldMetric(field: PerformanceField): PerformanceMetric {
+  return field === "active_duration" ? "duration" : field;
+}
+
+const PERFORMANCE_FIELD_LABEL: Record<PerformanceField, string> = {
   context: "Context",
   duration: "Duration",
+  active_duration: "Duration (active)",
   steering: "Steering",
 };
+
+/** Where the active duration comes from (#810) — the column header « i », the
+ *  card « i » and the sort label say it in the same words. */
+const ACTIVE_DURATION_COPY = "declared waits subtracted (ADR-0069)";
+
+/** Why a partially filtered row cannot show a number (#810): six stats are not
+ *  observations, so no honest total can be rebuilt from the visible nodes. */
+const FILTERED_BY_KIND_COPY =
+  "Filtered by node kind: totals are not recomputed from the visible nodes' six stats";
+
+/** « duration » / « active duration » — the word every Performance label uses
+ *  under the current toggle, so the headline, the cards, the sort select and
+ *  the aside never disagree about what is being measured. */
+function durationWord(excludeUserWait: boolean): string {
+  return excludeUserWait ? "active duration" : "duration";
+}
+
+function performanceSortLabel(
+  metric: PerformanceMetric,
+  excludeUserWait: boolean,
+): string {
+  return metric === "duration" ? durationWord(excludeUserWait) : metric;
+}
+
+// --- Node kind (#810, CONTEXT.md § Genre de nœud) ------------------------------
+
+/** Does this row carry a kind? Only Node rows do — a Pipeline, a subagent
+ *  group, an Infrastructure role and every level of the « By model » tree
+ *  answer `false` and are never touched by the filter. */
+function isNodeRow(row: StatsPerformanceEntity): boolean {
+  return row.interactive !== undefined || row.orchestrator !== undefined;
+}
+
+/** The kinds a Node row matches. Both flags count: a node that is interactive
+ *  AND orchestrator appears under either chip, so no execution is hidden by an
+ *  exclusive classification. */
+function rowKinds(row: StatsPerformanceEntity): NodeKind[] {
+  const kinds: NodeKind[] = [];
+  if (row.interactive) kinds.push("interactive");
+  if (row.orchestrator) kinds.push("orchestrator");
+  if (kinds.length === 0) kinds.push("standard");
+  return kinds;
+}
+
+function matchesKinds(row: StatsPerformanceEntity, kinds: NodeKind[]): boolean {
+  if (!isNodeRow(row)) return true;
+  return rowKinds(row).some((kind) => kinds.includes(kind));
+}
+
+/** How many Node rows of the whole period carry each kind — the counts on the
+ *  chips. Read from the Pipeline tree, the canonical node population; the
+ *  « By model » axis re-buckets those same executions. */
+function nodeKindCounts(
+  rows: StatsPerformanceEntity[],
+): Record<NodeKind, number> {
+  const counts: Record<NodeKind, number> = {
+    interactive: 0,
+    orchestrator: 0,
+    standard: 0,
+  };
+  for (const pipeline of rows) {
+    for (const node of pipeline.nodes) {
+      for (const kind of rowKinds(node)) counts[kind] += 1;
+    }
+  }
+  return counts;
+}
+
+/** Does the kind filter hide at least one Node of this pipeline? A pipeline
+ *  whose every node is visible keeps its own total; one that lost a node shows
+ *  « filtered ». */
+function hasHiddenNode(
+  pipeline: StatsPerformanceEntity,
+  kinds: NodeKind[],
+): boolean {
+  return pipeline.nodes.some((node) => !matchesKinds(node, kinds));
+}
+
+/** The badges the Name cell carries for a Node row (#810) — nothing at all for
+ *  a standard node: an absence needs no mark. */
+function KindBadges({ row }: { row: StatsPerformanceEntity }) {
+  if (!isNodeRow(row)) return null;
+  const kinds = rowKinds(row).filter((kind) => kind !== "standard");
+  if (kinds.length === 0) return null;
+  return (
+    <>
+      {kinds.map((kind) => (
+        <span
+          key={kind}
+          data-testid={`stats-node-kind-${kind}`}
+          className="shrink-0 rounded border border-line-strong px-1 font-mono text-fg-4"
+          style={{ fontSize: "9px" }}
+        >
+          {kind}
+        </span>
+      ))}
+    </>
+  );
+}
+
+/** The value a partially filtered row shows in place of a number. */
+function FilteredValue({ testid }: { testid?: string }) {
+  return (
+    <Tooltip content={FILTERED_BY_KIND_COPY} side="top">
+      <span className="italic text-fg-4" data-testid={testid}>
+        filtered
+      </span>
+    </Tooltip>
+  );
+}
 
 /** Where the Steering metric comes from (#792) — the header « i », the card
  *  « i » and every steering tooltip say it in the same words. */
@@ -1113,9 +1305,11 @@ function steeredPercent(rate: StatsSteeredRate | undefined): string | null {
 function performanceScore(
   aggregate: StatsPerformanceAggregate,
   metric: PerformanceMetric,
+  excludeUserWait = false,
 ): [number, number] {
+  const field = metricField(metric, excludeUserWait);
   const distributions = aggregate.harnesses
-    .map((item) => item[metric])
+    .map((item) => item[field])
     .filter((item) => item.stats !== null);
   return [
     Math.max(-1, ...distributions.map((item) => item.stats!.mean)),
@@ -1123,13 +1317,12 @@ function performanceScore(
   ];
 }
 
-function sortPerformance<T extends StatsPerformanceAggregate & { name: string }>(
-  rows: T[],
-  metric: PerformanceMetric,
-): T[] {
+function sortPerformance<
+  T extends StatsPerformanceAggregate & { name: string },
+>(rows: T[], metric: PerformanceMetric, excludeUserWait = false): T[] {
   return [...rows].sort((a, b) => {
-    const [aMean, aMedian] = performanceScore(a, metric);
-    const [bMean, bMedian] = performanceScore(b, metric);
+    const [aMean, aMedian] = performanceScore(a, metric, excludeUserWait);
+    const [bMean, bMedian] = performanceScore(b, metric, excludeUserWait);
     return bMean - aMean || bMedian - aMedian || a.name.localeCompare(b.name);
   });
 }
@@ -1151,13 +1344,19 @@ function formatPerformanceValue(value: number, metric: PerformanceMetric): strin
 function distributionDetail(
   name: string,
   harness: string,
-  metric: PerformanceMetric,
+  field: PerformanceField,
   value: StatsDistribution,
 ): string {
-  const label = PERFORMANCE_METRIC_LABEL[metric];
+  const metric = fieldMetric(field);
+  const label = PERFORMANCE_FIELD_LABEL[field];
   const fmt = (raw: number) => formatPerformanceValue(raw, metric);
   const stats = value.stats;
-  const provenance = metric === "steering" ? ` Steering ${STEERING_PROVENANCE_COPY}.` : "";
+  const provenance =
+    metric === "steering"
+      ? ` Steering ${STEERING_PROVENANCE_COPY}.`
+      : field === "active_duration"
+        ? ` Active duration: ${ACTIVE_DURATION_COPY}.`
+        : "";
   if (!stats) {
     return `${name} · ${harness} · ${label}. 0 measured of ${value.expected} successful executions. Missing: ${value.missing_reasons.join("; ")}.${provenance}`;
   }
@@ -1170,22 +1369,33 @@ function distributionDetail(
 function DistributionPlot({
   name,
   harness,
-  metric,
+  field,
   value,
   scaleMax,
   steered,
+  waitMillis,
+  ghost,
 }: {
   name: string;
   harness: string;
-  metric: PerformanceMetric;
+  field: PerformanceField;
   value: StatsDistribution;
   scaleMax: number;
   /** The row × harness steered rate — read for the Steering metric only, where
    *  the line under the plot adds « · 23 % steered » (#792). */
   steered?: StatsSteeredRate;
+  /** How much declared wait this row × harness lost to the active reading
+   *  (#810), in milliseconds — the amber « −1m02s wait » that names what moved.
+   *  Absent when the toggle is off or nothing was waited. */
+  waitMillis?: number;
+  /** The wall-clock Q1–Q3 the active box replaced (#810), drawn behind it as a
+   *  dashed ghost: the reading the toggle hid stays reachable at a glance
+   *  instead of vanishing. */
+  ghost?: { q1: number; q3: number } | null;
 }) {
+  const metric = fieldMetric(field);
   if (!value.stats) {
-    const detail = distributionDetail(name, harness, metric, value);
+    const detail = distributionDetail(name, harness, field, value);
     return (
       <Tooltip content={detail} side="top">
         <button
@@ -1199,8 +1409,9 @@ function DistributionPlot({
     );
   }
   const stats = value.stats;
-  const pct = (raw: number) => `${Math.max(0, Math.min(100, (raw / scaleMax) * 100))}%`;
-  const detail = distributionDetail(name, harness, metric, value);
+  const pct = (raw: number) =>
+    `${Math.max(0, Math.min(100, (raw / scaleMax) * 100))}%`;
+  const detail = distributionDetail(name, harness, field, value);
   const partial = value.measured < value.expected;
   const steeredLine = metric === "steering" ? steeredPercent(steered) : null;
   return (
@@ -1211,6 +1422,16 @@ function DistributionPlot({
         data-scale-max={scaleMax}
         aria-hidden="true"
       >
+        {ghost && (
+          <span
+            className="absolute top-[4px] h-[7px] border border-dashed border-fg-4 opacity-40"
+            data-testid="performance-wallclock-ghost"
+            style={{
+              left: pct(ghost.q1),
+              width: pct(Math.max(ghost.q3 - ghost.q1, scaleMax * 0.005)),
+            }}
+          />
+        )}
         <span
           className="absolute top-[7px] h-px bg-fg-4"
           style={{ left: pct(stats.min), width: pct(stats.max - stats.min) }}
@@ -1242,13 +1463,39 @@ function DistributionPlot({
           {formatPerformanceValue(stats.mean, metric)} avg · n={value.measured}
           {partial ? " ⚠" : ""}
           {steeredLine ? ` · ${steeredLine} steered` : ""}
+          {waitMillis ? (
+            <span
+              className="text-st-await"
+              data-testid="performance-wait-delta"
+            >
+              {" "}
+              −{formatPerformanceValue(waitMillis, "duration")} wait
+            </span>
+          ) : null}
         </button>
       </Tooltip>
     </div>
   );
 }
 
-function PerformanceCards({ aggregate }: { aggregate: StatsPerformanceAggregate }) {
+function PerformanceCards({
+  aggregate,
+  excludeUserWait,
+  partialByKind,
+}: {
+  aggregate: StatsPerformanceAggregate;
+  excludeUserWait: boolean;
+  /** The kind filter hides part of what this aggregate pooled (#810). The head
+   *  cards then fall back to « — »: they would otherwise show a number for a
+   *  population that is no longer on screen, and a median of medians is not a
+   *  median. */
+  partialByKind: boolean;
+}) {
+  const durationField = metricField("duration", excludeUserWait);
+  const central = (value: StatsDistribution, metric: PerformanceMetric) => {
+    if (partialByKind || !value.stats) return "—";
+    return formatPerformanceValue(value.stats.median, metric);
+  };
   return (
     <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
       {aggregate.harnesses.map((item) => (
@@ -1265,26 +1512,31 @@ function PerformanceCards({ aggregate }: { aggregate: StatsPerformanceAggregate 
             {item.harness}
           </div>
           <div className="font-mono text-fg">
-            {item.context.stats
-              ? formatPerformanceValue(item.context.stats.median, "context")
-              : "—"}{" "}
-            median context
+            {central(item.context, "context")} median context
+          </div>
+          <div className="flex items-center gap-1 font-mono text-fg-3">
+            <span>
+              {central(item[durationField], "duration")} median{" "}
+              {durationWord(excludeUserWait)}
+            </span>
+            {excludeUserWait && (
+              <Tooltip content={ACTIVE_DURATION_COPY} side="top">
+                <span
+                  role="img"
+                  aria-label={ACTIVE_DURATION_COPY}
+                  className="inline-flex text-fg-4"
+                >
+                  <Info size={11} />
+                </span>
+              </Tooltip>
+            )}
           </div>
           <div className="font-mono text-fg-3">
-            {item.duration.stats
-              ? formatPerformanceValue(item.duration.stats.median, "duration")
-              : "—"}{" "}
-            median duration
-          </div>
-          <div className="font-mono text-fg-3">
-            {item.steering.stats
-              ? formatPerformanceValue(item.steering.stats.median, "steering")
-              : "—"}{" "}
-            median steering
+            {central(item.steering, "steering")} median steering
           </div>
         </div>
       ))}
-      <SteeredCard aggregate={aggregate} />
+      <SteeredCard aggregate={aggregate} partialByKind={partialByKind} />
     </div>
   );
 }
@@ -1293,7 +1545,13 @@ function PerformanceCards({ aggregate }: { aggregate: StatsPerformanceAggregate 
  *  executions with ≥ 1 steering message, its coverage « steered / readable »
  *  and a thin bar; « — » with the reason when no count was readable. Follows
  *  the drill like the other cards (it reads the same aggregate). */
-function SteeredCard({ aggregate }: { aggregate: StatsPerformanceAggregate }) {
+function SteeredCard({
+  aggregate,
+  partialByKind = false,
+}: {
+  aggregate: StatsPerformanceAggregate;
+  partialByKind?: boolean;
+}) {
   return (
     <div
       className="rounded-md border border-line bg-bg-3 p-3 sm:col-span-2"
@@ -1315,7 +1573,10 @@ function SteeredCard({ aggregate }: { aggregate: StatsPerformanceAggregate }) {
       </div>
       <div className="grid gap-1.5">
         {aggregate.harnesses.map((item) => {
-          const percent = steeredPercent(item.steered);
+          // #810: a partial kind filter hides part of the executions this rate
+          // was computed over — « filtered », never a share of a population the
+          // user cannot see.
+          const percent = partialByKind ? null : steeredPercent(item.steered);
           const ratio = item.steered.readable
             ? (item.steered.steered / item.steered.readable) * 100
             : 0;
@@ -1343,6 +1604,8 @@ function SteeredCard({ aggregate }: { aggregate: StatsPerformanceAggregate }) {
                     />
                   </span>
                 </>
+              ) : partialByKind ? (
+                <FilteredValue />
               ) : (
                 <span className="text-fg-4">
                   — {item.steering.missing_reasons[0] ?? "no readable execution"}
@@ -1383,13 +1646,18 @@ function PerformanceTable({
   rows,
   harnesses,
   sort,
+  excludeUserWait,
   renderName,
   onOpen,
   expandablePairs = false,
+  filteredRowIds,
 }: {
   rows: StatsPerformanceEntity[];
   harnesses: string[];
   sort: PerformanceMetric;
+  /** Swaps the Duration column to the active reading (#810) — header, plots,
+   *  tooltips and the row's « −…s wait » alike. */
+  excludeUserWait: boolean;
   /** Replaces the default (button-or-plain) name cell — the model axis marks
    *  provenance and renders "not set" in its own voice (#737). */
   renderName?: (row: StatsPerformanceEntity) => React.ReactNode;
@@ -1397,31 +1665,44 @@ function PerformanceTable({
   /** Node rows gain a chevron unfolding their model × effort couples (ADR-0065).
    *  Off on the model axis, where the model × effort path is already the drill. */
   expandablePairs?: boolean;
+  /** Rows whose aggregate pooled executions the kind filter now hides (#810):
+   *  their cells read « filtered » rather than a total that no longer describes
+   *  what is on screen. */
+  filteredRowIds?: Set<string>;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   // The couples' own expansion, dying with the table like `expanded` — the
   // parent keys the table on the drill path, so a stale set never leaks.
-  const [couplesExpanded, setCouplesExpanded] = useState<Set<string>>(new Set());
-  const ordered = sortPerformance(rows, sort);
+  const [couplesExpanded, setCouplesExpanded] = useState<Set<string>>(
+    new Set(),
+  );
+  const ordered = sortPerformance(rows, sort, excludeUserWait);
   const visible = ordered.flatMap((row) => [
     { row, child: false },
     ...(expanded.has(row.id)
-      ? sortPerformance(row.subagents, sort).map((child) => ({ row: child, child: true }))
+      ? sortPerformance(row.subagents, sort, excludeUserWait).map((child) => ({
+          row: child,
+          child: true,
+        }))
       : []),
   ]);
   // The shared scale is drawn from the rows and their subagents — a couple's
   // peaks/durations come from those same session files, so they fit it.
   const scaleRows = rows.flatMap((row) => [row, ...row.subagents]);
-  const scaleMax = (metric: PerformanceMetric) =>
+  const scaleMax = (field: PerformanceField) =>
     Math.max(
       1,
       ...scaleRows.flatMap((row) =>
-        row.harnesses.map((item) => item[metric].stats?.max ?? 0),
+        row.harnesses.map((item) => item[field].stats?.max ?? 0),
       ),
     );
+  const fieldByMetric = (metric: PerformanceMetric) =>
+    metricField(metric, excludeUserWait);
   const maxByMetric: Record<PerformanceMetric, number> = {
     context: scaleMax("context"),
-    duration: scaleMax("duration"),
+    // #810: the active reading has its own max — zooming out to the wall-clock
+    // scale would leave every active box crushed against the left edge.
+    duration: scaleMax(fieldByMetric("duration")),
     steering: scaleMax("steering"),
   };
 
@@ -1429,38 +1710,54 @@ function PerformanceTable({
     name: string,
     rowHarnesses: StatsHarnessPerformance[] | undefined,
     metric: PerformanceMetric,
-  ) => (
-    <td key={metric} className="py-2 pr-3 align-top">
-      <div className="grid gap-1.5">
-        {harnesses.map((harness) => {
-          const item = rowHarnesses?.find((entry) => entry.harness === harness);
-          return (
-            <div key={harness} className="flex items-start gap-2">
-              <span
-                className="mt-1 h-[7px] w-[7px] shrink-0 rounded-full"
-                style={{ backgroundColor: harnessColor(harness) }}
-              />
-              <DistributionPlot
-                name={name}
-                harness={harness}
-                metric={metric}
-                value={
-                  item?.[metric] ?? {
-                    stats: null,
-                    measured: 0,
-                    expected: 0,
-                    missing_reasons: [`never ran on ${harness}`],
+  ) => {
+    const field = fieldByMetric(metric);
+    return (
+      <td key={metric} className="py-2 pr-3 align-top">
+        <div className="grid gap-1.5">
+          {harnesses.map((harness) => {
+            const item = rowHarnesses?.find(
+              (entry) => entry.harness === harness,
+            );
+            // What the active reading took off this row × harness, on the value
+            // the row displays. Shown only when it is not zero: a node nobody
+            // ever waited on carries no annotation.
+            const wait =
+              field === "active_duration" &&
+              item?.duration.stats &&
+              item.active_duration.stats
+                ? item.duration.stats.median - item.active_duration.stats.median
+                : 0;
+            return (
+              <div key={harness} className="flex items-start gap-2">
+                <span
+                  className="mt-1 h-[7px] w-[7px] shrink-0 rounded-full"
+                  style={{ backgroundColor: harnessColor(harness) }}
+                />
+                <DistributionPlot
+                  name={name}
+                  harness={harness}
+                  field={field}
+                  value={
+                    item?.[field] ?? {
+                      stats: null,
+                      measured: 0,
+                      expected: 0,
+                      missing_reasons: [`never ran on ${harness}`],
+                    }
                   }
-                }
-                scaleMax={maxByMetric[metric]}
-                steered={item?.steered}
-              />
-            </div>
-          );
-        })}
-      </div>
-    </td>
-  );
+                  scaleMax={maxByMetric[metric]}
+                  steered={item?.steered}
+                  waitMillis={wait > 0 ? wait : undefined}
+                  ghost={wait > 0 ? (item?.duration.stats ?? null) : null}
+                />
+              </div>
+            );
+          })}
+        </div>
+      </td>
+    );
+  };
 
   return (
     <TooltipProvider>
@@ -1469,7 +1766,27 @@ function PerformanceTable({
           <tr>
             <th className="w-48 pb-2 font-medium">Name</th>
             <th className="pb-2 font-medium">Context (peak tokens)</th>
-            <th className="pb-2 font-medium">Duration (wall-clock)</th>
+            <th
+              className="pb-2 font-medium"
+              data-testid="stats-performance-duration-header"
+            >
+              {excludeUserWait ? (
+                <span className="inline-flex items-center gap-1">
+                  Duration (active)
+                  <Tooltip content={ACTIVE_DURATION_COPY} side="top">
+                    <span
+                      role="img"
+                      aria-label={ACTIVE_DURATION_COPY}
+                      className="inline-flex text-fg-4"
+                    >
+                      <Info size={11} />
+                    </span>
+                  </Tooltip>
+                </span>
+              ) : (
+                "Duration (wall-clock)"
+              )}
+            </th>
             <th className="pb-2 font-medium">
               <span className="inline-flex items-center gap-1">
                 Steering (messages / execution)
@@ -1552,11 +1869,18 @@ function PerformanceTable({
                           <span>{content}</span>
                         );
                       })()}
+                      {!child && <KindBadges row={row} />}
                     </span>
                   </td>
-                  {PERFORMANCE_METRICS.map((metric) =>
-                    metricCell(row.name, row.harnesses, metric),
-                  )}
+                  {filteredRowIds?.has(row.id)
+                    ? PERFORMANCE_METRICS.map((metric) => (
+                        <td key={metric} className="py-2 pr-3 align-top">
+                          <FilteredValue testid="stats-performance-filtered-cell" />
+                        </td>
+                      ))
+                    : PERFORMANCE_METRICS.map((metric) =>
+                        metricCell(row.name, row.harnesses, metric),
+                      )}
                 </tr>
                 {couplesExpanded.has(row.id)
                   ? couples.map((pair) => (
@@ -1612,12 +1936,120 @@ function PerformanceTable({
 
 type PerformanceAxis = "pipeline" | "model";
 
+/** The Performance filter strip (#810): the two controls sit ABOVE the detail
+ *  pane, where their effect is read — not in the shell header, which carries the
+ *  cohort. `reset filters` appears only once the state deviates. */
+function PerformanceFilterStrip({
+  counts,
+  excludeUserWait,
+  nodeKinds,
+  deviates,
+  onExcludeUserWaitChange,
+  onNodeKindsChange,
+  onResetFilters,
+}: {
+  counts: Record<NodeKind, number>;
+  excludeUserWait: boolean;
+  nodeKinds: NodeKind[];
+  deviates: boolean;
+  onExcludeUserWaitChange: (value: boolean) => void;
+  onNodeKindsChange: (kinds: NodeKind[]) => void;
+  onResetFilters: () => void;
+}) {
+  const toggleKind = (kind: NodeKind) =>
+    onNodeKindsChange(
+      nodeKinds.includes(kind)
+        ? nodeKinds.filter((item) => item !== kind)
+        : [...ALL_NODE_KINDS].filter(
+            (item) => item === kind || nodeKinds.includes(item),
+          ),
+    );
+  return (
+    <div
+      className="mb-3 flex flex-wrap items-center gap-2"
+      style={{ fontSize: "11px" }}
+      data-testid="stats-performance-filters"
+    >
+      <button
+        type="button"
+        role="checkbox"
+        aria-checked={excludeUserWait}
+        data-testid="stats-exclude-user-wait"
+        onClick={() => onExcludeUserWaitChange(!excludeUserWait)}
+        className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 ${
+          excludeUserWait
+            ? "border-st-done bg-st-done/15 text-fg"
+            : "border-line-strong bg-bg-3 text-fg-2"
+        }`}
+      >
+        {excludeUserWait && (
+          <Check size={10} strokeWidth={3} aria-hidden="true" />
+        )}
+        exclude user wait
+        <Tooltip content={ACTIVE_DURATION_COPY} side="top">
+          <span
+            role="img"
+            aria-label={ACTIVE_DURATION_COPY}
+            className="inline-flex text-fg-4"
+          >
+            <Info size={11} />
+          </span>
+        </Tooltip>
+      </button>
+      <span className="ml-2 text-fg-4">Node kind</span>
+      {ALL_NODE_KINDS.map((kind) => {
+        const on = nodeKinds.includes(kind);
+        return (
+          <button
+            key={kind}
+            type="button"
+            aria-pressed={on}
+            data-testid={`stats-node-kind-chip-${kind}`}
+            onClick={() => toggleKind(kind)}
+            className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 capitalize ${
+              on
+                ? "border-st-done bg-st-done/15 text-fg"
+                : "border-line bg-bg-3 text-fg-4 line-through"
+            }`}
+          >
+            {on && <Check size={10} strokeWidth={3} aria-hidden="true" />}
+            {kind}
+            <span className="font-mono text-fg-4">{counts[kind]}</span>
+          </button>
+        );
+      })}
+      {deviates && (
+        <button
+          type="button"
+          data-testid="stats-reset-filters"
+          onClick={onResetFilters}
+          className="ml-2 text-fg-4 underline decoration-dotted underline-offset-2 hover:text-fg-2"
+        >
+          reset filters
+        </button>
+      )}
+    </div>
+  );
+}
+
 function PerformanceTab({
   performance,
   error,
+  completedOnly,
+  excludeUserWait,
+  nodeKinds,
+  onExcludeUserWaitChange,
+  onNodeKindsChange,
+  onResetFilters,
 }: {
   performance: StatsPerformance | null;
   error: string | null;
+  completedOnly: boolean;
+  excludeUserWait: boolean;
+  nodeKinds: NodeKind[];
+  onExcludeUserWaitChange: (value: boolean) => void;
+  onNodeKindsChange: (kinds: NodeKind[]) => void;
+  onResetFilters: () => void;
 }) {
   // The second select (#737): grouping (« By pipeline » / « By model »), fully
   // independent of the sort (« By context » / « By duration ») beside it.
@@ -1659,6 +2091,47 @@ function PerformanceTab({
     setSelectedPipelineId(null);
   };
 
+  // --- Node kind filter (#810) ------------------------------------------------
+  const kindCounts = nodeKindCounts(performance.by_pipeline);
+  const kindFilterActive = nodeKinds.length < ALL_NODE_KINDS.length;
+  const anyHidden =
+    kindFilterActive &&
+    performance.by_pipeline.some((row) => hasHiddenNode(row, nodeKinds));
+  const visibleNodes = (rows: StatsPerformanceEntity[]) =>
+    rows.filter((row) => matchesKinds(row, nodeKinds));
+  const filterStrip = (
+    <PerformanceFilterStrip
+      counts={kindCounts}
+      excludeUserWait={excludeUserWait}
+      nodeKinds={nodeKinds}
+      deviates={kindFilterActive || !excludeUserWait}
+      onExcludeUserWaitChange={onExcludeUserWaitChange}
+      onNodeKindsChange={onNodeKindsChange}
+      onResetFilters={onResetFilters}
+    />
+  );
+
+  if (nodeKinds.length === 0) {
+    return (
+      <TooltipProvider>
+        <div data-testid="stats-chart-performance">
+          {filterStrip}
+          <EmptyNote>
+            No node of the selected kinds in this period.{" "}
+            <button
+              type="button"
+              data-testid="stats-show-all-kinds"
+              onClick={() => onNodeKindsChange([...ALL_NODE_KINDS])}
+              className="underline decoration-dotted underline-offset-2 hover:text-fg-2"
+            >
+              show all kinds
+            </button>
+          </EmptyNote>
+        </div>
+      </TooltipProvider>
+    );
+  }
+
   const infrastructureRow: StatsPerformanceEntity = {
     id: "__infrastructure__",
     name: "Infrastructure",
@@ -1681,10 +2154,22 @@ function PerformanceTab({
       ? (effort.pipelines.find((row) => row.id === selectedPipelineId) ?? null)
       : null;
 
+  // A Pipeline whose every node is hidden leaves the master list; one that was
+  // selected then falls back to Total, because `selected` is looked up in the
+  // filtered rows.
+  const pipelineRows = performance.by_pipeline.filter(
+    (row) =>
+      row.nodes.length === 0 ||
+      row.nodes.some((node) => matchesKinds(node, nodeKinds)),
+  );
   const masterRows =
     axis === "model"
-      ? sortPerformance(performance.by_model, sort)
-      : sortPerformance([...performance.by_pipeline, infrastructureRow], sort);
+      ? sortPerformance(performance.by_model, sort, excludeUserWait)
+      : sortPerformance(
+          [...pipelineRows, infrastructureRow],
+          sort,
+          excludeUserWait,
+        );
   const selected =
     axis === "pipeline" ? (masterRows.find((row) => row.id === selectedId) ?? null) : null;
   const aggregate =
@@ -1692,13 +2177,25 @@ function PerformanceTab({
       ? (modelPipeline ?? effort ?? model ?? performance.total)
       : (selected ?? performance.total);
 
+  // Is what the head cards, the headline and the Steered card summarise still
+  // the population on screen? Infrastructure is never filtered by kind, so a
+  // selected Infrastructure row always reads its own true numbers.
+  const partialByKind =
+    axis === "model"
+      ? anyHidden
+      : selected === null
+        ? anyHidden
+        : selected.id === "__infrastructure__"
+          ? false
+          : hasHiddenNode(selected, nodeKinds);
+
   let detailRows: StatsPerformanceEntity[];
   let detailRenderName: ((row: StatsPerformanceEntity) => React.ReactNode) | undefined;
   let onOpen: ((row: StatsPerformanceEntity) => void) | undefined;
   if (axis === "model") {
     if (modelPipeline) {
       // Node leaves are the floor: the model × effort path is the drill.
-      detailRows = modelPipeline.nodes;
+      detailRows = visibleNodes(modelPipeline.nodes);
     } else if (effort) {
       detailRows = effort.pipelines;
       onOpen = (row) => setSelectedPipelineId(row.id);
@@ -1728,18 +2225,43 @@ function PerformanceTab({
     }
   } else if (selected) {
     detailRows =
-      selected.id === "__infrastructure__" ? performance.infrastructure : selected.nodes;
+      selected.id === "__infrastructure__"
+        ? performance.infrastructure
+        : visibleNodes(selected.nodes);
   } else {
     detailRows = masterRows;
   }
 
+  // Rows whose own aggregate no longer describes what is visible under them.
+  // Never a value recomputed from the visible nodes' six stats: a median of
+  // medians is not a median (spec #809).
+  const filteredRowIds = new Set<string>();
+  if (kindFilterActive) {
+    if (axis === "pipeline") {
+      for (const row of performance.by_pipeline) {
+        if (hasHiddenNode(row, nodeKinds)) filteredRowIds.add(row.id);
+      }
+    } else if (anyHidden) {
+      for (const row of detailRows) {
+        if (!isNodeRow(row)) filteredRowIds.add(row.id);
+      }
+    }
+  }
+
+  const durationField = metricField("duration", excludeUserWait);
   const contexts = aggregate.harnesses.map((item) =>
     item.context.stats ? formatPerformanceValue(item.context.stats.median, "context") : "—",
   );
   const durations = aggregate.harnesses.map((item) =>
-    item.duration.stats ? formatPerformanceValue(item.duration.stats.median, "duration") : "—",
+    item[durationField].stats
+      ? formatPerformanceValue(item[durationField].stats!.median, "duration")
+      : "—",
   );
-  const steered = aggregate.harnesses.map((item) => steeredPercent(item.steered) ?? "—");
+  const steered = aggregate.harnesses.map(
+    (item) => steeredPercent(item.steered) ?? "—",
+  );
+  const headlineValue = (values: string[]) =>
+    partialByKind ? <FilteredValue /> : <>{values.join(" / ") || "—"}</>;
 
   // The model axis's breadcrumb; « By pipeline » keeps its one-line header.
   const crumbs: { label: string; onClick?: () => void }[] = [
@@ -1763,93 +2285,127 @@ function PerformanceTab({
   );
 
   return (
-    <div className="relative flex min-h-full" data-testid="stats-chart-performance">
-      <aside className="w-[290px] shrink-0 border-r border-line pr-4">
-        <div className="mb-2 flex items-center justify-between gap-2">
-          <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
-            Ranked by {sort}
-          </span>
-          <span className="flex items-center gap-1.5">
-            <select
-              aria-label="Performance grouping"
-              value={axis}
-              onChange={(event) => {
-                setAxis(event.target.value as PerformanceAxis);
-                toTotal();
-              }}
-              className="rounded border border-line bg-bg-3 px-2 py-1 text-fg-2"
-            >
-              <option value="pipeline">By pipeline</option>
-              <option value="model">By model</option>
-            </select>
-            <select
-              aria-label="Performance sort"
-              value={sort}
-              onChange={(event) => setSort(event.target.value as PerformanceMetric)}
-              className="rounded border border-line bg-bg-3 px-2 py-1 text-fg-2"
-            >
-              <option value="context">By context</option>
-              <option value="duration">By duration</option>
-              <option value="steering">By steering</option>
-            </select>
-          </span>
-        </div>
-        <MasterList
-          rows={masterRows}
-          selected={axis === "model" ? selectedModelId : selectedId}
-          monoName={axis === "model"}
-          ariaLabel="Performance groups"
-          valueLabel={(row) => {
-            const [mean] = performanceScore(row, sort);
-            return mean < 0 ? "—" : formatPerformanceValue(mean, sort);
-          }}
-          onSelect={(id) => {
-            if (axis === "model") {
-              setSelectedModelId(id);
-              setSelectedEffortId(null);
-              setSelectedPipelineId(null);
-            } else {
-              setSelectedId(id);
-            }
-          }}
-        />
-        {axis === "model" && (
-          <div className="mt-3 text-fg-4" style={{ fontSize: "10.5px" }}>
-            Model ids verbatim, one row per id — the same id run through two
-            harnesses is one row, one column per harness. Hover a model or an
-            effort for where the value was read.
+    // #810 — the filter strip, the master-list « filtered » marks and the card
+    // « i » all carry tooltips outside `PerformanceTable`'s own provider.
+    <TooltipProvider>
+      <div
+        className="relative flex min-h-full"
+        data-testid="stats-chart-performance"
+      >
+        <aside className="w-[290px] shrink-0 border-r border-line pr-4">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
+              Ranked by {performanceSortLabel(sort, excludeUserWait)}
+            </span>
+            <span className="flex items-center gap-1.5">
+              <select
+                aria-label="Performance grouping"
+                value={axis}
+                onChange={(event) => {
+                  setAxis(event.target.value as PerformanceAxis);
+                  toTotal();
+                }}
+                className="rounded border border-line bg-bg-3 px-2 py-1 text-fg-2"
+              >
+                <option value="pipeline">By pipeline</option>
+                <option value="model">By model</option>
+              </select>
+              <select
+                aria-label="Performance sort"
+                value={sort}
+                onChange={(event) =>
+                  setSort(event.target.value as PerformanceMetric)
+                }
+                className="rounded border border-line bg-bg-3 px-2 py-1 text-fg-2"
+              >
+                <option value="context">By context</option>
+                <option value="duration">
+                  By {durationWord(excludeUserWait)}
+                </option>
+                <option value="steering">By steering</option>
+              </select>
+            </span>
           </div>
-        )}
-      </aside>
-      <div className="min-w-0 flex-1 pl-5">
-        {axis === "model" ? (
-          <Breadcrumb testid="stats-performance-breadcrumb" crumbs={clickableCrumbs} />
-        ) : (
-          <div className="mb-3 text-fg-4" style={{ fontSize: "10.5px" }}>
-            Total{selected ? ` / ${selected.name}` : ""}
-          </div>
-        )}
-        <HarnessLegend harnesses={performance.harnesses} />
-        <div className="mt-4 text-fg" data-testid="stats-performance-headline">
-          {contexts.join(" / ") || "—"} median peak context · {durations.join(" / ") || "—"} median
-          duration · {steered.join(" / ") || "—"} steered
-        </div>
-        <div className="mt-4">
-          <PerformanceCards aggregate={aggregate} />
-        </div>
-        <div className="mt-4 min-h-[240px]">
-          <PerformanceTable
-            key={`${axis}-${selectedId ?? ""}-${selectedModelId ?? "total"}-${selectedEffortId ?? "total"}-${selectedPipelineId ?? ""}`}
-            rows={detailRows}
-            harnesses={performance.harnesses}
-            sort={sort}
-            renderName={detailRenderName}
-            onOpen={onOpen}
-            expandablePairs={axis === "pipeline"}
+          <MasterList
+            rows={masterRows}
+            selected={axis === "model" ? selectedModelId : selectedId}
+            monoName={axis === "model"}
+            ariaLabel="Performance groups"
+            valueLabel={(row) => {
+              if (
+                filteredRowIds.has(row.id) ||
+                (axis === "model" && anyHidden)
+              ) {
+                return <FilteredValue />;
+              }
+              const [mean] = performanceScore(row, sort, excludeUserWait);
+              return mean < 0 ? "—" : formatPerformanceValue(mean, sort);
+            }}
+            onSelect={(id) => {
+              if (axis === "model") {
+                setSelectedModelId(id);
+                setSelectedEffortId(null);
+                setSelectedPipelineId(null);
+              } else {
+                setSelectedId(id);
+              }
+            }}
           />
+          {axis === "model" && (
+            <div className="mt-3 text-fg-4" style={{ fontSize: "10.5px" }}>
+              Model ids verbatim, one row per id — the same id run through two
+              harnesses is one row, one column per harness. Hover a model or an
+              effort for where the value was read.
+            </div>
+          )}
+        </aside>
+        <div className="min-w-0 flex-1 pl-5">
+          {filterStrip}
+          {axis === "model" ? (
+            <Breadcrumb
+              testid="stats-performance-breadcrumb"
+              crumbs={clickableCrumbs}
+            />
+          ) : (
+            <div className="mb-3 text-fg-4" style={{ fontSize: "10.5px" }}>
+              Total{selected ? ` / ${selected.name}` : ""}
+            </div>
+          )}
+          <HarnessLegend harnesses={performance.harnesses} />
+          <div
+            className="mt-4 text-fg"
+            data-testid="stats-performance-headline"
+          >
+            {headlineValue(contexts)} median peak context ·{" "}
+            {headlineValue(durations)} median {durationWord(excludeUserWait)} ·{" "}
+            {headlineValue(steered)} steered
+          </div>
+          <div className="mt-4">
+            <PerformanceCards
+              aggregate={aggregate}
+              excludeUserWait={excludeUserWait}
+              partialByKind={partialByKind}
+            />
+          </div>
+          <div className="mt-4">
+            <CohortLine completedOnly={completedOnly} />
+          </div>
+          <div className="mt-4 min-h-[240px]">
+            <PerformanceTable
+              key={`${axis}-${selectedId ?? ""}-${selectedModelId ?? "total"}-${selectedEffortId ?? "total"}-${selectedPipelineId ?? ""}`}
+              rows={detailRows}
+              harnesses={performance.harnesses}
+              sort={sort}
+              excludeUserWait={excludeUserWait}
+              renderName={detailRenderName}
+              onOpen={onOpen}
+              expandablePairs={axis === "pipeline"}
+              filteredRowIds={filteredRowIds}
+            />
+          </div>
         </div>
       </div>
-    </div>
+    </TooltipProvider>
   );
 }
 
@@ -1860,6 +2416,17 @@ export interface StatsChartsProps {
   costError: string | null;
   performance?: StatsPerformance | null;
   performanceError?: string | null;
+  /** The cohort the shell fetched with (#810) — displayed, never applied here:
+   *  the narrowing happened in the daemon. */
+  completedOnly?: boolean;
+  /** Performance filters, owned by the shell so the rail can carry their cue
+   *  (#810). Defaulted to the wire reading — wall-clock, every kind — so a
+   *  caller that does not care keeps the pre-#810 rendering. */
+  excludeUserWait?: boolean;
+  nodeKinds?: NodeKind[];
+  onExcludeUserWaitChange?: (value: boolean) => void;
+  onNodeKindsChange?: (kinds: NodeKind[]) => void;
+  onResetFilters?: () => void;
 }
 
 export default function StatsCharts({
@@ -1869,6 +2436,12 @@ export default function StatsCharts({
   costError,
   performance = null,
   performanceError = null,
+  completedOnly = false,
+  excludeUserWait = false,
+  nodeKinds = [...ALL_NODE_KINDS],
+  onExcludeUserWaitChange = () => {},
+  onNodeKindsChange = () => {},
+  onResetFilters = () => {},
 }: StatsChartsProps) {
   // #759: subscribing here re-renders the whole chart subtree on a theme switch,
   // so every `CHART.*` / `harnessColor()` read below resolves against the new
@@ -1876,13 +2449,41 @@ export default function StatsCharts({
   useTheme();
 
   if (tab === "performance") {
-    return <PerformanceTab performance={performance} error={performanceError} />;
+    // Performance places the cohort line itself, under its head cards.
+    return (
+      <PerformanceTab
+        performance={performance}
+        error={performanceError}
+        completedOnly={completedOnly}
+        excludeUserWait={excludeUserWait}
+        nodeKinds={nodeKinds}
+        onExcludeUserWaitChange={onExcludeUserWaitChange}
+        onNodeKindsChange={onNodeKindsChange}
+        onResetFilters={onResetFilters}
+      />
+    );
   }
-  if (tab === "cost") {
-    return <CostTab cost={cost} error={costError} />;
-  }
-  if (!overview) return <EmptyNote>Loading…</EmptyNote>;
-  if (tab === "runs") return <RunsTab overview={overview} />;
-  if (tab === "sessions") return <SessionsTab overview={overview} />;
-  return <TriggersTab overview={overview} />;
+  const body = () => {
+    if (tab === "cost") return <CostTab cost={cost} error={costError} />;
+    if (!overview) return <EmptyNote>Loading…</EmptyNote>;
+    if (tab === "runs")
+      return <RunsTab overview={overview} completedOnly={completedOnly} />;
+    if (tab === "sessions") return <SessionsTab overview={overview} />;
+    return <TriggersTab overview={overview} />;
+  };
+  return (
+    <div className="flex min-h-full flex-col gap-3">
+      <CohortLine
+        completedOnly={completedOnly}
+        note={
+          // Trigger fires are not Runs: the cohort selects which Runs are
+          // counted, and says so rather than implying it filtered the fires.
+          tab === "triggers"
+            ? "trigger fires are not filtered by run status"
+            : undefined
+        }
+      />
+      <div className="min-h-0 flex-1">{body()}</div>
+    </div>
+  );
 }

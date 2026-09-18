@@ -16,6 +16,30 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.91.0
+**Durée active hors attente déclarée, filtre par genre de nœud, runs terminés seulement** (#810, story #808).
+
+- Dans Performance, une bascule **exclude user wait** remplace la durée murale par la **durée
+  active** : l'attente déclarée (`pdo wait-user`, complétion non libérée) est soustraite, pour les
+  nœuds comme pour la ligne Infrastructure, sans refetch. Badge ambre `−Xm wait` et boîte fantôme
+  de la durée murale sur les box-plots. Une attente `children_pending` ne soustrait rien
+  (ADR-0069).
+- Filtre multi-sélection par **genre de nœud** (Standard / Interactive / Orchestrator) sur les
+  lignes Node des axes Pipeline et Modèle ; un nœud à la fois interactif et orchestrateur matche les
+  deux. Sous un filtre partiel, les totaux Pipeline et les cartes de tête lisent « filtered »,
+  jamais une valeur recalculée ; un niveau vidé affiche « No node of the selected kinds at this
+  level · show all kinds ».
+- Dans la coquille Stats, une bascule **completed runs only** (ON par défaut dans le navigateur)
+  restreint la cohorte des trois sections aux Runs arrivés à `completed` ; Overview affiche
+  « Errors: 0 (completed only) » avec une ligne de cohorte ambre. Les trois réglages sont
+  mémorisés par navigateur (`localStorage`, clés `pdo.stats.*`).
+- Un nœud interactif fraîchement lancé est `running` : la primitive de démarrage n'émet plus
+  d'attente au spawn, seule la déclaration le passe orange.
+- Daemon, additif : `active_duration` partout où `duration` existe dans `GET /stats/performance` ;
+  `orchestrator` gelé dans le payload `NodeStarted` à côté d'`interactive` (repli sur le snapshot
+  du pipeline pour l'historique) ; paramètre `completed_only` sur `/stats/overview`, `/stats/cost`
+  et `/stats/performance`, inclus dans les clés de mémo.
+
 ## 1.90.0
 **Médiane partout, niveaux de zoom et axes indépendants des box-plots** (#811, story #808).
 

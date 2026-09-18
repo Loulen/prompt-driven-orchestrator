@@ -27,6 +27,7 @@ const COST: StatsCost = {
   total: {
     usd: null,
     average_usd: null,
+    median_usd: null,
     estimated: true,
     partial: false,
     executions: 0,

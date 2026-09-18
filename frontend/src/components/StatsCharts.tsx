@@ -33,6 +33,14 @@ import type {
   StatsSteeredRate,
 } from "../types";
 import { formatCostAmount } from "../lib/costLabel";
+import {
+  loadStatsAxis,
+  loadStatsZoom,
+  saveStatsAxis,
+  saveStatsZoom,
+  type StatsAxis,
+  type StatsZoom,
+} from "../lib/uiPrefs";
 import { harnessColor } from "../lib/harness";
 import { cssColor } from "../lib/cssColor";
 import { useTheme } from "../hooks/useTheme";
@@ -427,9 +435,9 @@ function HarnessCards({ aggregate }: { aggregate: StatsCostAggregate }) {
             {formatCostAmount(metric.usd, metric.partial, metric.estimated)}
           </div>
           <div className="mt-1 text-fg-4" style={{ fontSize: "10px" }}>
-            {metric.average_usd === null
-              ? "— avg"
-              : `${formatCostAmount(metric.average_usd, metric.partial, metric.estimated)} avg`}
+            {metric.median_usd === null
+              ? "— median"
+              : `${formatCostAmount(metric.median_usd, metric.partial, metric.estimated)} median`}
           </div>
         </div>
       ))}
@@ -456,9 +464,9 @@ function CostCell({
           className="text-fg-4 underline decoration-dotted underline-offset-2"
           style={{ fontSize: "9.5px" }}
         >
-          {metric.average_usd === null
-            ? "— avg"
-            : `${formatCostAmount(metric.average_usd, metric.partial, metric.estimated)} avg`}
+          {metric.median_usd === null
+            ? "— median"
+            : `${formatCostAmount(metric.median_usd, metric.partial, metric.estimated)} median`}
         </button>
       </Tooltip>
     </div>
@@ -631,6 +639,7 @@ function pairMetric(pair: StatsModelEffortPair): StatsHarnessCost {
     readable: pair.readable,
     unknown: pair.unknown,
     average_usd: pair.average_usd,
+    median_usd: pair.median_usd,
     unpriced_models: pair.unpriced_models,
     missing_reasons: pair.missing_reasons,
   };
@@ -763,6 +772,7 @@ function CostTable({
                         readable: row.readable,
                         unknown: row.unknown,
                         average_usd: row.average_usd,
+                        median_usd: row.median_usd,
                         unpriced_models: row.unpriced_models,
                         missing_reasons: row.missing_reasons,
                       }}
@@ -1057,8 +1067,8 @@ function CostTab({
         <div className="mt-4 text-fg" data-testid="stats-selection-headline">
           {formatCostAmount(aggregate.usd, aggregate.partial, aggregate.estimated)} total
           {" · "}
-          {formatCostAmount(aggregate.average_usd, aggregate.partial, aggregate.estimated)} per{" "}
-          {detailUnit}
+          {formatCostAmount(aggregate.median_usd, aggregate.partial, aggregate.estimated)} median
+          per {detailUnit}
         </div>
         <div className="mt-4">
           <HarnessCards aggregate={aggregate} />
@@ -1092,6 +1102,169 @@ type PerformanceMetric = "context" | "duration" | "steering";
 
 const PERFORMANCE_METRICS: readonly PerformanceMetric[] = ["context", "duration", "steering"];
 
+/**
+ * The box-plot zoom level (#811, CONTEXT.md « Niveau de zoom d'un box-plot »):
+ * one setting for the whole Performance section, deciding what a plot draws AND
+ * where the axis tops out. The three levels differ only by which pair of
+ * statistics bounds the drawing — everything below reads these two tables
+ * rather than branching on the level by hand.
+ *
+ * The daemon never sends the observations (ADR-0029 / the glossary), so a level
+ * can only be a choice among the statistics it already sent: that is why
+ * `fence_low`/`fence_high` are computed server-side.
+ */
+const ZOOM_LOW: Record<StatsZoom, "min" | "fence_low" | "q1"> = {
+  full: "min",
+  fenced: "fence_low",
+  box: "q1",
+};
+
+const ZOOM_HIGH: Record<StatsZoom, "max" | "fence_high" | "q3"> = {
+  full: "max",
+  fenced: "fence_high",
+  box: "q3",
+};
+
+const ZOOM_LEVELS: readonly StatsZoom[] = ["full", "fenced", "box"];
+
+const ZOOM_LABEL: Record<StatsZoom, string> = {
+  full: "Full",
+  fenced: "Fenced",
+  box: "Box",
+};
+
+/** What the shared axis is capped at, said in the toolbar's caption. */
+const ZOOM_CAP_COPY: Record<StatsZoom, string> = {
+  full: "max",
+  fenced: "fence high",
+  box: "Q3",
+};
+
+/** A 16×8 miniature of what the level draws — whiskers to the extremes (Full),
+ *  shorter whiskers with a point left outside (Fenced), the bare box (Box). */
+function ZoomGlyph({ level }: { level: StatsZoom }) {
+  return (
+    <svg
+      width="16"
+      height="8"
+      viewBox="0 0 16 8"
+      aria-hidden="true"
+      className="shrink-0 overflow-visible"
+      data-testid={`stats-zoom-glyph-${level}`}
+    >
+      {level !== "box" && (
+        <line
+          x1={level === "full" ? 0.5 : 3}
+          x2={level === "full" ? 15.5 : 12}
+          y1="4"
+          y2="4"
+          stroke="currentColor"
+          strokeWidth="1"
+          opacity="0.55"
+        />
+      )}
+      <rect
+        x={level === "box" ? 3.5 : 5.5}
+        y="1.5"
+        width={level === "box" ? 9 : 5}
+        height="5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1"
+      />
+      <line x1="8" y1="0.5" x2="8" y2="7.5" stroke="currentColor" strokeWidth="1" />
+      {level === "fenced" && <circle cx="15" cy="4" r="1" fill="currentColor" opacity="0.55" />}
+    </svg>
+  );
+}
+
+/** The three-position zoom control: one radiogroup, roving tabindex, ← → walk
+ *  the levels (a select would hide two of the three states behind a click). */
+function ZoomSegments({
+  value,
+  onChange,
+}: {
+  value: StatsZoom;
+  onChange: (zoom: StatsZoom) => void;
+}) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Box-plot zoom"
+      data-testid="stats-performance-zoom"
+      className="flex items-center gap-0.5 rounded border border-line bg-bg-3 p-0.5"
+      onKeyDown={(event) => {
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        event.preventDefault();
+        const delta = event.key === "ArrowRight" ? 1 : -1;
+        const index = ZOOM_LEVELS.indexOf(value);
+        const next = ZOOM_LEVELS[(index + delta + ZOOM_LEVELS.length) % ZOOM_LEVELS.length];
+        onChange(next);
+        // Roving tabindex: the selection carries the focus, so a second arrow
+        // press keeps walking instead of falling back to the group.
+        event.currentTarget
+          .querySelector<HTMLButtonElement>(`[data-zoom="${next}"]`)
+          ?.focus();
+      }}
+    >
+      {ZOOM_LEVELS.map((level) => {
+        const selected = level === value;
+        return (
+          <button
+            key={level}
+            type="button"
+            role="radio"
+            aria-checked={selected}
+            data-zoom={level}
+            tabIndex={selected ? 0 : -1}
+            onClick={() => onChange(level)}
+            className={`flex items-center gap-1.5 rounded px-2 py-0.5 transition-colors ${
+              selected ? "bg-bg-5 text-fg" : "text-fg-3 hover:text-fg-2"
+            }`}
+          >
+            <ZoomGlyph level={level} />
+            {ZOOM_LABEL[level]}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** « Independent scales »: each row on its own axis instead of the shared one.
+ *  Same switch idiom as Settings › Interface — this is a per-browser reading
+ *  preference, not a daemon knob. */
+function IndependentScalesSwitch({
+  checked,
+  onChange,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <span className="flex items-center gap-2">
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        aria-label="Independent scales"
+        data-testid="stats-performance-independent-scales"
+        onClick={() => onChange(!checked)}
+        className={`relative h-3.5 w-6 shrink-0 rounded-full transition-colors ${
+          checked ? "bg-acc" : "bg-fg-5"
+        }`}
+      >
+        <span
+          className={`absolute top-0.5 h-2.5 w-2.5 rounded-full bg-bg-1 transition-all ${
+            checked ? "left-3" : "left-0.5"
+          }`}
+        />
+      </button>
+      <span className="text-fg-3">Independent scales</span>
+    </span>
+  );
+}
+
 const PERFORMANCE_METRIC_LABEL: Record<PerformanceMetric, string> = {
   context: "Context",
   duration: "Duration",
@@ -1110,6 +1283,10 @@ function steeredPercent(rate: StatsSteeredRate | undefined): string | null {
   return `${Math.round((rate.steered / rate.readable) * 100)} %`;
 }
 
+/** A row's ranking score on a metric: its worst harness's **median** first, the
+ *  mean only as a tie-break (#811 — « Médiane, jamais la moyenne »: the median
+ *  ranks and labels, the mean survives in the tooltip). `-1` for a row with no
+ *  measured distribution at all, so it sinks below any real value. */
 function performanceScore(
   aggregate: StatsPerformanceAggregate,
   metric: PerformanceMetric,
@@ -1118,8 +1295,8 @@ function performanceScore(
     .map((item) => item[metric])
     .filter((item) => item.stats !== null);
   return [
-    Math.max(-1, ...distributions.map((item) => item.stats!.mean)),
     Math.max(-1, ...distributions.map((item) => item.stats!.median)),
+    Math.max(-1, ...distributions.map((item) => item.stats!.mean)),
   ];
 }
 
@@ -1128,9 +1305,9 @@ function sortPerformance<T extends StatsPerformanceAggregate & { name: string }>
   metric: PerformanceMetric,
 ): T[] {
   return [...rows].sort((a, b) => {
-    const [aMean, aMedian] = performanceScore(a, metric);
-    const [bMean, bMedian] = performanceScore(b, metric);
-    return bMean - aMean || bMedian - aMedian || a.name.localeCompare(b.name);
+    const [aMedian, aMean] = performanceScore(a, metric);
+    const [bMedian, bMean] = performanceScore(b, metric);
+    return bMedian - aMedian || bMean - aMean || a.name.localeCompare(b.name);
   });
 }
 
@@ -1153,6 +1330,9 @@ function distributionDetail(
   harness: string,
   metric: PerformanceMetric,
   value: StatsDistribution,
+  /** The six numbers never move; the Fenced level appends the two bounds it
+   *  draws its whiskers at, so the reader can name what cropped the plot. */
+  zoom: StatsZoom = "full",
 ): string {
   const label = PERFORMANCE_METRIC_LABEL[metric];
   const fmt = (raw: number) => formatPerformanceValue(raw, metric);
@@ -1164,7 +1344,11 @@ function distributionDetail(
   const reasons = value.missing_reasons.length
     ? ` Missing: ${value.missing_reasons.join("; ")}.`
     : "";
-  return `${name} · ${harness} · ${label}. Max ${fmt(stats.max)} · Q3 ${fmt(stats.q3)} · Mean ${fmt(stats.mean)} · Median ${fmt(stats.median)} · Q1 ${fmt(stats.q1)} · Min ${fmt(stats.min)}. ${value.measured} measured of ${value.expected} successful executions.${reasons}${provenance}`;
+  const fences =
+    zoom === "fenced"
+      ? ` · Fence high ${fmt(stats.fence_high)} · Fence low ${fmt(stats.fence_low)}`
+      : "";
+  return `${name} · ${harness} · ${label}. Max ${fmt(stats.max)} · Q3 ${fmt(stats.q3)} · Mean ${fmt(stats.mean)} · Median ${fmt(stats.median)} · Q1 ${fmt(stats.q1)} · Min ${fmt(stats.min)}${fences}. ${value.measured} measured of ${value.expected} successful executions.${reasons}${provenance}`;
 }
 
 function DistributionPlot({
@@ -1173,6 +1357,8 @@ function DistributionPlot({
   metric,
   value,
   scaleMax,
+  zoom,
+  rowMax = null,
   steered,
 }: {
   name: string;
@@ -1180,12 +1366,18 @@ function DistributionPlot({
   metric: PerformanceMetric;
   value: StatsDistribution;
   scaleMax: number;
+  /** What the whiskers reach and where the axis tops out (#811). */
+  zoom: StatsZoom;
+  /** The row's own cap, printed under the plot when « independent scales » is
+   *  on — without it, two rows drawn full width read as comparable when they
+   *  are not. `null` on the shared axis, where the header says the cap once. */
+  rowMax?: number | null;
   /** The row × harness steered rate — read for the Steering metric only, where
    *  the line under the plot adds « · 23 % steered » (#792). */
   steered?: StatsSteeredRate;
 }) {
   if (!value.stats) {
-    const detail = distributionDetail(name, harness, metric, value);
+    const detail = distributionDetail(name, harness, metric, value, zoom);
     return (
       <Tooltip content={detail} side="top">
         <button
@@ -1200,21 +1392,33 @@ function DistributionPlot({
   }
   const stats = value.stats;
   const pct = (raw: number) => `${Math.max(0, Math.min(100, (raw / scaleMax) * 100))}%`;
-  const detail = distributionDetail(name, harness, metric, value);
+  const detail = distributionDetail(name, harness, metric, value, zoom);
   const partial = value.measured < value.expected;
   const steeredLine = metric === "steering" ? steeredPercent(steered) : null;
+  const low = stats[ZOOM_LOW[zoom]];
+  const high = stats[ZOOM_HIGH[zoom]];
+  // A clip mark says « something exists beyond the frame » without drawing it.
+  // Fenced marks both tails (an outlier on either side is news); Box marks only
+  // the long tail — below Q1 half the sample is always out, which is the level's
+  // whole point, not an event.
+  const clippedHigh = zoom !== "full" && stats.max > high;
+  const clippedLow = zoom === "fenced" && stats.min < low;
   return (
     <div className="flex min-w-0 flex-col gap-1">
       <div
         className="relative h-4 min-w-28"
         data-testid={`performance-${metric}-boxplot`}
         data-scale-max={scaleMax}
+        data-zoom={zoom}
         aria-hidden="true"
       >
-        <span
-          className="absolute top-[7px] h-px bg-fg-4"
-          style={{ left: pct(stats.min), width: pct(stats.max - stats.min) }}
-        />
+        {zoom !== "box" && (
+          <span
+            className="absolute top-[7px] h-px bg-fg-4"
+            data-testid={`performance-${metric}-whisker`}
+            style={{ left: pct(low), width: pct(high - low) }}
+          />
+        )}
         <span
           className="absolute top-[4px] h-[7px] border border-current opacity-70"
           style={{
@@ -1227,10 +1431,24 @@ function DistributionPlot({
           className="absolute top-[3px] h-[9px] w-px bg-fg"
           style={{ left: pct(stats.median) }}
         />
-        <span
-          className="absolute top-[5px] h-[5px] w-[5px] -translate-x-1/2 rounded-full bg-current"
-          style={{ color: harnessColor(harness), left: pct(stats.mean) }}
-        />
+        {clippedLow && (
+          <span
+            className="absolute left-0 top-0 font-mono leading-4 text-fg-4"
+            style={{ fontSize: "9px" }}
+            data-testid={`performance-${metric}-clip-low`}
+          >
+            ‹
+          </span>
+        )}
+        {clippedHigh && (
+          <span
+            className="absolute right-0 top-0 font-mono leading-4 text-fg-4"
+            style={{ fontSize: "9px" }}
+            data-testid={`performance-${metric}-clip-high`}
+          >
+            ›
+          </span>
+        )}
       </div>
       <Tooltip content={detail} side="top">
         <button
@@ -1239,9 +1457,12 @@ function DistributionPlot({
           className="w-fit text-left font-mono text-fg-4 underline decoration-dotted underline-offset-2"
           style={{ fontSize: "9.5px" }}
         >
-          {formatPerformanceValue(stats.mean, metric)} avg · n={value.measured}
+          {formatPerformanceValue(stats.median, metric)} median · n={value.measured}
           {partial ? " ⚠" : ""}
           {steeredLine ? ` · ${steeredLine} steered` : ""}
+          {rowMax !== null && (
+            <span className="text-fg-5"> · ⤒ {formatPerformanceValue(rowMax, metric)}</span>
+          )}
         </button>
       </Tooltip>
     </div>
@@ -1383,6 +1604,8 @@ function PerformanceTable({
   rows,
   harnesses,
   sort,
+  zoom,
+  independentAxis,
   renderName,
   onOpen,
   expandablePairs = false,
@@ -1390,6 +1613,10 @@ function PerformanceTable({
   rows: StatsPerformanceEntity[];
   harnesses: string[];
   sort: PerformanceMetric;
+  /** Section-level, from `PerformanceTab` — the whole table draws one level. */
+  zoom: StatsZoom;
+  /** Each row on its own axis instead of one axis per metric (#811). */
+  independentAxis: boolean;
   /** Replaces the default (button-or-plain) name cell — the model axis marks
    *  provenance and renders "not set" in its own voice (#737). */
   renderName?: (row: StatsPerformanceEntity) => React.ReactNode;
@@ -1403,32 +1630,49 @@ function PerformanceTable({
   // parent keys the table on the drill path, so a stale set never leaks.
   const [couplesExpanded, setCouplesExpanded] = useState<Set<string>>(new Set());
   const ordered = sortPerformance(rows, sort);
-  const visible = ordered.flatMap((row) => [
-    { row, child: false },
-    ...(expanded.has(row.id)
-      ? sortPerformance(row.subagents, sort).map((child) => ({ row: child, child: true }))
-      : []),
-  ]);
-  // The shared scale is drawn from the rows and their subagents — a couple's
-  // peaks/durations come from those same session files, so they fit it.
-  const scaleRows = rows.flatMap((row) => [row, ...row.subagents]);
-  const scaleMax = (metric: PerformanceMetric) =>
+  // A metric's axis tops out at the chosen level's high statistic over the
+  // entities it covers — `max`, `fence_high` or `q3` (#811). `1` as a floor so
+  // an all-zero metric never divides by zero.
+  const axisMax = (entities: StatsPerformanceEntity[], metric: PerformanceMetric) =>
     Math.max(
       1,
-      ...scaleRows.flatMap((row) =>
-        row.harnesses.map((item) => item[metric].stats?.max ?? 0),
+      ...entities.flatMap((row) =>
+        row.harnesses.map((item) => item[metric].stats?.[ZOOM_HIGH[zoom]] ?? 0),
       ),
     );
-  const maxByMetric: Record<PerformanceMetric, number> = {
-    context: scaleMax("context"),
-    duration: scaleMax("duration"),
-    steering: scaleMax("steering"),
-  };
+  const scalesOf = (entities: StatsPerformanceEntity[]): Record<PerformanceMetric, number> => ({
+    context: axisMax(entities, "context"),
+    duration: axisMax(entities, "duration"),
+    steering: axisMax(entities, "steering"),
+  });
+  // The shared scale is drawn from the rows and their subagents — a couple's
+  // peaks/durations come from those same session files, so they fit it. The
+  // independent one applies the very same rule one row at a time, subagents
+  // folded into their Node's row (issue AC).
+  const sharedScales = scalesOf(rows.flatMap((row) => [row, ...row.subagents]));
+  const scalesByRow = new Map(
+    ordered.map((row) => [row.id, scalesOf([row, ...row.subagents])] as const),
+  );
+  const scalesFor = (rowId: string) =>
+    independentAxis ? (scalesByRow.get(rowId) ?? sharedScales) : sharedScales;
+
+  const visible = ordered.flatMap((row) => [
+    { row, child: false, scales: scalesFor(row.id) },
+    ...(expanded.has(row.id)
+      ? sortPerformance(row.subagents, sort).map((child) => ({
+          row: child,
+          child: true,
+          // A subagent reads its parent's axis: it belongs to that Node's row.
+          scales: scalesFor(row.id),
+        }))
+      : []),
+  ]);
 
   const metricCell = (
     name: string,
     rowHarnesses: StatsHarnessPerformance[] | undefined,
     metric: PerformanceMetric,
+    scales: Record<PerformanceMetric, number>,
   ) => (
     <td key={metric} className="py-2 pr-3 align-top">
       <div className="grid gap-1.5">
@@ -1452,7 +1696,9 @@ function PerformanceTable({
                     missing_reasons: [`never ran on ${harness}`],
                   }
                 }
-                scaleMax={maxByMetric[metric]}
+                scaleMax={scales[metric]}
+                zoom={zoom}
+                rowMax={independentAxis ? scales[metric] : null}
                 steered={item?.steered}
               />
             </div>
@@ -1487,7 +1733,7 @@ function PerformanceTable({
           </tr>
         </thead>
         <tbody>
-          {visible.map(({ row, child }) => {
+          {visible.map(({ row, child, scales }) => {
             const couples = !child && expandablePairs ? (row.models ?? []) : [];
             return (
               <Fragment key={`${child ? "subagent" : "entity"}-${row.id}`}>
@@ -1555,7 +1801,7 @@ function PerformanceTable({
                     </span>
                   </td>
                   {PERFORMANCE_METRICS.map((metric) =>
-                    metricCell(row.name, row.harnesses, metric),
+                    metricCell(row.name, row.harnesses, metric, scales),
                   )}
                 </tr>
                 {couplesExpanded.has(row.id)
@@ -1596,6 +1842,7 @@ function PerformanceTable({
                             `${pair.model} · ${pair.effort ?? "not set"}`,
                             pair.harnesses,
                             metric,
+                            scales,
                           ),
                         )}
                       </tr>
@@ -1630,6 +1877,20 @@ function PerformanceTab({
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const [selectedEffortId, setSelectedEffortId] = useState<string | null>(null);
   const [selectedPipelineId, setSelectedPipelineId] = useState<string | null>(null);
+  // #811 — box-plot reading preferences, restored from this browser on mount
+  // (lazy initialiser: one read, not one per render) and written at the change,
+  // like the theme. They live HERE, at the section, so they survive the drill,
+  // the grouping switch and the table's keyed remount below.
+  const [zoom, setZoom] = useState<StatsZoom>(loadStatsZoom);
+  const [axisMode, setAxisMode] = useState<StatsAxis>(loadStatsAxis);
+  const changeZoom = (next: StatsZoom) => {
+    setZoom(next);
+    saveStatsZoom(next);
+  };
+  const changeAxisMode = (next: StatsAxis) => {
+    setAxisMode(next);
+    saveStatsAxis(next);
+  };
 
   if (error) {
     return (
@@ -1767,7 +2028,7 @@ function PerformanceTab({
       <aside className="w-[290px] shrink-0 border-r border-line pr-4">
         <div className="mb-2 flex items-center justify-between gap-2">
           <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
-            Ranked by {sort}
+            Ranked by {sort} (median)
           </span>
           <span className="flex items-center gap-1.5">
             <select
@@ -1800,8 +2061,8 @@ function PerformanceTab({
           monoName={axis === "model"}
           ariaLabel="Performance groups"
           valueLabel={(row) => {
-            const [mean] = performanceScore(row, sort);
-            return mean < 0 ? "—" : formatPerformanceValue(mean, sort);
+            const [median] = performanceScore(row, sort);
+            return median < 0 ? "—" : formatPerformanceValue(median, sort);
           }}
           onSelect={(id) => {
             if (axis === "model") {
@@ -1837,12 +2098,33 @@ function PerformanceTab({
         <div className="mt-4">
           <PerformanceCards aggregate={aggregate} />
         </div>
-        <div className="mt-4 min-h-[240px]">
+        <div
+          className="mt-5 flex flex-wrap items-center justify-between gap-3"
+          data-testid="stats-performance-toolbar"
+          style={{ fontSize: "10.5px" }}
+        >
+          <span className="text-fg-4">
+            Distributions per node ·{" "}
+            {axisMode === "independent"
+              ? "each row on its own axis"
+              : `shared axis per metric, capped at ${ZOOM_CAP_COPY[zoom]}`}
+          </span>
+          <span className="flex items-center gap-3">
+            <ZoomSegments value={zoom} onChange={changeZoom} />
+            <IndependentScalesSwitch
+              checked={axisMode === "independent"}
+              onChange={(checked) => changeAxisMode(checked ? "independent" : "shared")}
+            />
+          </span>
+        </div>
+        <div className="mt-2 min-h-[240px]">
           <PerformanceTable
             key={`${axis}-${selectedId ?? ""}-${selectedModelId ?? "total"}-${selectedEffortId ?? "total"}-${selectedPipelineId ?? ""}`}
             rows={detailRows}
             harnesses={performance.harnesses}
             sort={sort}
+            zoom={zoom}
+            independentAxis={axisMode === "independent"}
             renderName={detailRenderName}
             onOpen={onOpen}
             expandablePairs={axis === "pipeline"}

@@ -1,4 +1,10 @@
-import type { BranchFetchError, BranchRef } from "../types";
+import type {
+  BranchFetchError,
+  BranchRef,
+  FastForwardReason,
+  FastForwardRefusal,
+  FastForwardResult,
+} from "../types";
 
 /**
  * The branch a fresh repo seeds its source/base select with (#454, #571).
@@ -250,4 +256,142 @@ export function syncState({
  */
 export function upstreamSwitchTarget(branch: BranchRef | undefined): string | null {
   return branch?.upstream ?? null;
+}
+
+/**
+ * Whether the popover offers a **fast-forward** for this branch (#803, ADR-0070 §2).
+ *
+ * Optimistic at the click, named at the refusal: the button appears on what the
+ * enriched list already knows — a local branch, a tracking branch present, strictly
+ * behind it, **zero commits of its own**. The two remaining conditions (a clean
+ * checkout, nobody else holding the branch) are deliberately NOT pre-computed: they
+ * are properties of a working tree that can change between a render and a click, so
+ * checking them per render would be a race that always loses. They are answered by
+ * the daemon's 409 instead, which is the only moment at which the answer is true.
+ *
+ * `unknown` counts as ineligible: after a failed fetch nobody knows how far behind
+ * the branch is, and offering to advance it onto a ref nobody could refresh would be
+ * the staleness this feature exists to remove.
+ */
+export function canFastForward(branch: BranchRef | undefined): boolean {
+  const gap = branchGap(branch);
+  return gap?.kind === "behind";
+}
+
+/**
+ * Whether a fast-forward would move FILES, which decides what the popover promises
+ * (#803, design card Q).
+ *
+ * The daemon's list says which branch is HEAD, and that is the only thing that
+ * changes the answer: advancing the checked-out branch walks the working tree
+ * forward, advancing any other one moves a ref and touches nothing on disk. Both
+ * deserve a sentence — silence about the first would be an unstated surprise, and
+ * silence about the second would let it inherit the first's caution for nothing.
+ *
+ * `undefined` = the list does not say (a branch it does not carry): promise neither.
+ */
+export function fastForwardTouchesCheckout(
+  branch: BranchRef | undefined,
+): boolean | undefined {
+  return branch?.head;
+}
+
+/**
+ * The fast-forward leg of the sync popover (#803): what the LAST click produced,
+ * layered over the #802 `SyncState` rather than replacing it.
+ *
+ * Two levels, on purpose. `SyncState` answers "how fresh is this branch?" and is
+ * derived from the list; this answers "what happened when I clicked?" and is
+ * derived from one response. Folding them into a single union would make every
+ * fetch erase the refusal the person is still reading.
+ *
+ * The two benign races never reach here: `up_to_date` and `no_upstream` come back
+ * with a refreshed list that already says so, so the caller drops them and lets the
+ * plain #802 state speak (design cards R4/R5 — "no red").
+ */
+export type FastForwardState =
+  | { kind: "idle" }
+  /** POST in flight: every button is deferred, the popover stays open. */
+  | { kind: "running" }
+  | { kind: "done"; result: FastForwardResult }
+  /** A refusal worth showing: `dirty_tree` or `checked_out_elsewhere` only. */
+  | { kind: "refused"; refusal: FastForwardRefusal }
+  /** The call itself failed — nothing moved, and we cannot say why. */
+  | { kind: "error"; message: string };
+
+/**
+ * Whether a 409 deserves a refusal card, or is a race that heals itself.
+ *
+ * `up_to_date` / `no_upstream` mean the list we rendered from was stale — someone
+ * pulled, or unset the upstream, between the render and the click. The refreshed
+ * list that came with the 409 already tells the truth, so showing an error would
+ * paint a problem where the only event was a beat of latency.
+ */
+export function isBenignRefusal(refusal: FastForwardRefusal): boolean {
+  return refusal.reason === "up_to_date" || refusal.reason === "no_upstream";
+}
+
+/**
+ * The cause clause of the refusal card's headline — one arm per reason (#803).
+ *
+ * An exhaustive `switch`, not a test on `dirty_tree` with everything else in the
+ * `else`: the first version of the card did exactly that, so a **diverged** branch
+ * was announced as "checked out in another worktree" — a cause that did not exist,
+ * sending the reader to hunt for a worktree nobody had. A wrong cause is worse than
+ * a vague one, because it is actionable in the wrong direction.
+ *
+ * An unrecognised reason (a daemon newer than this build) falls back to a sentence
+ * that claims nothing; the card shows the daemon's own message underneath it.
+ */
+export function refusalHeadline(reason: FastForwardReason | string): string {
+  switch (reason) {
+    case "dirty_tree":
+      return "working tree not clean";
+    case "checked_out_elsewhere":
+      return "checked out in another worktree";
+    case "diverged":
+      return "the branch has diverged";
+    case "no_upstream":
+      return "no tracking branch";
+    case "up_to_date":
+      return "already up to date";
+    default:
+      return "the daemon refused";
+  }
+}
+
+/**
+ * Whether the card quotes the daemon's own sentence in a detail block.
+ *
+ * Only where the card cannot say it better itself. The prototype's R1/R2 carry no
+ * such block, and they need none: a dirty tree has the `M path` listing, and a
+ * branch held elsewhere has the worktree path in its sentence — quoting the daemon
+ * under either would print the same fact twice.
+ *
+ * It earns its place in exactly two cases: **`diverged`**, whose counts ("1 commit(s)
+ * 'origin/main' does not") exist nowhere else on this card, and a reason this build
+ * does not recognise, where the daemon's words are all there is to show.
+ */
+export function showsRefusalMessage(refusal: FastForwardRefusal): boolean {
+  if (refusal.message.trim() === "") return false;
+  return (
+    refusal.reason === "diverged" ||
+    !["dirty_tree", "checked_out_elsewhere", "no_upstream", "up_to_date"].includes(
+      refusal.reason,
+    )
+  );
+}
+
+/** Whether "Try again" makes sense: only when the person can act on the cause. */
+export function isRetryableRefusal(refusal: FastForwardRefusal): boolean {
+  // A dirty tree is fixed by a commit or a stash, and then the same click works.
+  // A branch checked out elsewhere is not: retrying changes nothing until someone
+  // switches that worktree, so offering a retry would be an invitation to a loop.
+  return refusal.reason === "dirty_tree";
+}
+
+/** `Fast-forward main`, with a long branch name elided (design Q2). */
+export function fastForwardLabel(branch: string, max = 18): string {
+  const name = branch.length > max ? `${branch.slice(0, max - 1)}…` : branch;
+  return `Fast-forward ${name}`;
 }

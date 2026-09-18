@@ -1275,6 +1275,13 @@ export interface BranchRef {
   /** Tip commit date, ISO-8601 with offset. */
   last_commit_at?: string | null;
   last_commit_subject?: string | null;
+  /**
+   * #803: this branch is the repo's checked-out one (`HEAD`). Decides one
+   * sentence in the fast-forward popover — advancing HEAD walks the working
+   * tree forward, advancing any other branch is a pure ref move that changes no
+   * file. Never true for a remote-tracking ref.
+   */
+  head?: boolean;
 }
 
 /**
@@ -1302,6 +1309,93 @@ export interface BranchFetchError {
   /** git's own stderr, shown verbatim as the popover's detail line. */
   message: string;
 }
+
+/**
+ * Why a fast-forward did not happen (#803, ADR-0070 §2).
+ *
+ * `diverged` · `no_upstream` · `up_to_date` are already knowable from the list,
+ * so the UI never offers the button for them — a 409 naming one of those three
+ * is a RACE between the render and the click, and reads as benign: the popover
+ * flips to the matching #802 state rather than painting an error.
+ *
+ * `dirty_tree` · `checked_out_elsewhere` can only be known at click time (a tree
+ * can get dirty between a render and a click), and are the two real refusals.
+ */
+export type FastForwardReason =
+  | "dirty_tree"
+  | "checked_out_elsewhere"
+  | "diverged"
+  | "no_upstream"
+  | "up_to_date";
+
+export interface FastForwardRefusal {
+  reason: FastForwardReason;
+  /** The daemon's own sentence, shown when we have nothing better to say. */
+  message: string;
+  /** The checkout involved — ours for `dirty_tree`, another for `checked_out_elsewhere`. */
+  checkout?: string | null;
+  /** `XY path` lines of the modified tracked files, capped by the daemon. */
+  dirty_files?: string[];
+  /** How many tracked files are modified — uncapped, so it may exceed the list. */
+  dirty_count?: number | null;
+}
+
+/** What a successful fast-forward moved (#803) — the "done" card's sentence. */
+export interface FastForwardResult {
+  branch: string;
+  upstream: string;
+  /** Short SHAs, before → after. */
+  from: string;
+  to: string;
+  /** Commits gained: the number that was the `n↓` before the click. */
+  commits: number;
+  subject?: string | null;
+  /**
+   * The checkout whose FILES moved with the ref, or absent for a pure ref move
+   * (the branch was checked out nowhere). The distinction is stated out loud in
+   * both directions — "none of your files change" is the whole reason the
+   * un-checked-out case needs no warning.
+   */
+  moved_checkout?: string | null;
+}
+
+/**
+ * The outcome of `POST /repos/fast-forward` (#803). Both arms carry the REFRESHED
+ * branch list, so a refusal is as good a reason to update the numbers on screen as
+ * a success — which is what lets the two benign races self-heal.
+ */
+export type FastForwardOutcome =
+  | { kind: "done"; result: FastForwardResult; list: BranchList }
+  | { kind: "refused"; refusal: FastForwardRefusal; list: BranchList | null }
+  /** The call itself failed (daemon down). Nothing moved, nothing is known. */
+  | { kind: "error"; message: string };
+
+/**
+ * A Run's **dérive de la source** (#803, ADR-0070 §4; CONTEXT.md § « Dérive de la
+ * source »): `ahead` commits made by the Run, `behind` commits arrived on its
+ * source, both since the fork point.
+ *
+ * Recomputed on every read over local refs. Never fetches — the Run view's fetch
+ * button (the #802 verb) is the only thing that refreshes the remote side.
+ */
+export type SourceDrift =
+  | {
+      state: "available";
+      source_branch: string;
+      /** Short SHA of the fork point. */
+      fork: string;
+      ahead: number;
+      /** ONE number (spec #801 Q3): max of the local and upstream sides. */
+      behind: number;
+      /** What the local source branch gained; absent when the source is a tracking ref. */
+      local_behind?: number | null;
+      /** The source's tracking branch and what IT gained; absent when it tracks nothing. */
+      upstream?: string | null;
+      upstream_behind?: number | null;
+      last_fetch_at?: string | null;
+    }
+  /** The Run's branch or its source is gone — expected on an archived Run. */
+  | { state: "unavailable"; reason: string };
 
 export type PipelineScope = "instance" | "repo" | "user" | "library";
 

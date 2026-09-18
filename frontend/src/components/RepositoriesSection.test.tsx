@@ -2,7 +2,7 @@ import { render, screen, fireEvent, waitFor, within } from "@testing-library/rea
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import RepositoriesSection from "./RepositoriesSection";
 import type { RunState, RunStatus, RepoPin } from "../types";
-import { editRunRepos, validateRepo, listBranches } from "../api";
+import { editRunRepos, validateRepo, listBranches, fetchSourceDrift } from "../api";
 
 vi.mock("../api", () => ({
   editRunRepos: vi.fn(async () => ({ kind: "ok", run: {} as RunState })),
@@ -21,6 +21,11 @@ vi.mock("../api", () => ({
     last_fetch_at: null,
     fetch_error: null,
   })),
+  // #803: the primary row carries the Run's drift. Unreadable by default, so the
+  // tests that predate it see the row exactly as they did.
+  fetchSourceDrift: vi.fn(async () => {
+    throw new Error("no drift in this test");
+  }),
 }));
 
 // The store is a zustand hook (selector in, slice out) — stub it to a stable empty
@@ -33,11 +38,14 @@ vi.mock("../stores/recentReposStore", () => ({
 const editRunReposMock = vi.mocked(editRunRepos);
 const validateRepoMock = vi.mocked(validateRepo);
 const listBranchesMock = vi.mocked(listBranches);
+const fetchSourceDriftMock = vi.mocked(fetchSourceDrift);
 
 beforeEach(() => {
   editRunReposMock.mockClear();
   validateRepoMock.mockClear();
   listBranchesMock.mockClear();
+  fetchSourceDriftMock.mockClear();
+  fetchSourceDriftMock.mockRejectedValue(new Error("no drift in this test"));
 });
 
 function makeRun(status: RunStatus, failure_reason?: string): RunState {
@@ -168,5 +176,61 @@ describe("RepositoriesSection (Run panel · Repositories tab)", () => {
     expect(screen.queryByTestId("remove-secondary-repo-lib")).toBeNull();
     expect(screen.queryByTestId("add-secondary-repo")).toBeNull();
     expect(screen.queryByTestId("spawn-visibility-note")).toBeNull();
+  });
+});
+
+/**
+ * #803/ADR-0070 §4 — the primary row gains the second line the secondaries always
+ * had, plus the drift chip. Same measurement as the Info tab's Source block, from
+ * the same hook: two renderings of one number, never two computations of it.
+ */
+describe("RepositoriesSection — source drift on the primary (#803)", () => {
+  const DRIFT = {
+    state: "available" as const,
+    source_branch: "main",
+    fork: "a1b2c3d",
+    ahead: 1,
+    behind: 3,
+    local_behind: 1,
+    upstream: "origin/main",
+    upstream_behind: 3,
+    last_fetch_at: "2026-09-18T10:00:00.000Z",
+  };
+
+  it("shows branch · fork and the drift on the primary", async () => {
+    fetchSourceDriftMock.mockResolvedValue(DRIFT);
+    render(<RepositoriesSection run={makeMultiRepoRun("running", [])} onEdited={() => {}} />);
+
+    expect(await screen.findByTestId("primary-repo-fork")).toHaveTextContent("main · a1b2c3d");
+    const chip = screen.getByTestId("primary-repo-drift");
+    expect(chip).toHaveTextContent("1↑");
+    expect(chip).toHaveTextContent("3↓");
+  });
+
+  /**
+   * A secondary is pinned to a SHA at add time: it does not move, and it has no
+   * « Run branch » to drift from. A chip there would be a zero dressed up as a
+   * measurement.
+   */
+  it("never chips a secondary", async () => {
+    fetchSourceDriftMock.mockResolvedValue(DRIFT);
+    const run = makeMultiRepoRun("running", [
+      { repo: "/repos/lib", alias: "lib", sha: "cafebabe1234", base_branch: "main" },
+    ]);
+    render(<RepositoriesSection run={run} onEdited={() => {}} />);
+
+    await screen.findByTestId("primary-repo-drift");
+    expect(
+      within(screen.getByTestId("secondary-repo-lib")).queryByTestId("source-drift-chip"),
+    ).toBeNull();
+  });
+
+  it("says unavailable on an archived Run whose branch is gone", async () => {
+    fetchSourceDriftMock.mockResolvedValue({ state: "unavailable", reason: "branch deleted" });
+    render(<RepositoriesSection run={makeMultiRepoRun("archived", [])} onEdited={() => {}} />);
+
+    expect(await screen.findByTestId("primary-repo-drift")).toHaveTextContent("unavailable");
+    // No second line: there is no fork to name once the measurement is impossible.
+    expect(screen.queryByTestId("primary-repo-fork")).not.toBeInTheDocument();
   });
 });

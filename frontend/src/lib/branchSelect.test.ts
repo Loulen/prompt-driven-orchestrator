@@ -1,13 +1,20 @@
 import { describe, it, expect } from "vitest";
-import type { BranchRef } from "../types";
+import type { BranchRef, FastForwardRefusal } from "../types";
 import {
   branchGap,
+  canFastForward,
+  fastForwardLabel,
+  fastForwardTouchesCheckout,
   filterBranches,
   gapLabel,
   groupBranches,
   highlightSegments,
+  isBenignRefusal,
+  isRetryableRefusal,
   pickDefaultBranch,
+  refusalHeadline,
   shortAge,
+  showsRefusalMessage,
   syncState,
   upstreamSwitchTarget,
 } from "./branchSelect";
@@ -268,5 +275,146 @@ describe("upstreamSwitchTarget (#802)", () => {
     expect(upstreamSwitchTarget(local("solo"))).toBeNull();
     expect(upstreamSwitchTarget(remote("origin/main"))).toBeNull();
     expect(upstreamSwitchTarget(undefined)).toBeNull();
+  });
+});
+
+/**
+ * #803/ADR-0070 §2 — what the LIST alone decides about the fast-forward.
+ *
+ * Optimistic at the click, named at the refusal: the two conditions that need a
+ * working tree inspected are deliberately absent here, because checking them per
+ * render is a race that always loses (a tree can get dirty between a render and a
+ * click). They come back from the daemon's 409 instead.
+ */
+describe("canFastForward (#803)", () => {
+  it("offers it on a branch strictly behind its upstream", () => {
+    expect(canFastForward(tracking("main", 0, 3))).toBe(true);
+  });
+
+  it.each([
+    ["diverged", tracking("main", 1, 3)],
+    ["ahead only — the upstream has nothing to take", tracking("main", 2, 0)],
+    ["level", tracking("main", 0, 0)],
+    ["no upstream", local("solo")],
+    ["a remote-tracking ref, which IS the upstream", remote("origin/main")],
+    // A failed fetch leaves the counts unknowable: advancing onto a ref nobody
+    // could refresh is the staleness the feature exists to remove.
+    ["unknown after a failed fetch", local("main", { upstream: "origin/main" })],
+  ])("offers nothing for %s", (_case, branch) => {
+    expect(canFastForward(branch)).toBe(false);
+  });
+
+  it("offers nothing when there is no selection at all", () => {
+    expect(canFastForward(undefined)).toBe(false);
+  });
+});
+
+describe("fastForwardTouchesCheckout (#803)", () => {
+  /**
+   * The promise the popover makes before the click. Advancing HEAD walks the
+   * working tree forward; advancing any other branch moves a ref and touches no
+   * file — and both deserve saying, since silence about the first is a surprise
+   * and silence about the second inherits the first's caution for nothing.
+   */
+  it("says the checkout moves for the checked-out branch", () => {
+    expect(fastForwardTouchesCheckout(tracking("main", 0, 3, { head: true }))).toBe(true);
+  });
+
+  it("says no file changes for any other branch", () => {
+    expect(fastForwardTouchesCheckout(tracking("main", 0, 3, { head: false }))).toBe(false);
+  });
+
+  it("promises neither when the list does not say", () => {
+    expect(fastForwardTouchesCheckout(tracking("main", 0, 3))).toBeUndefined();
+    expect(fastForwardTouchesCheckout(undefined)).toBeUndefined();
+  });
+});
+
+describe("refusals (#803)", () => {
+  const refusal = (reason: FastForwardRefusal["reason"]): FastForwardRefusal => ({
+    reason,
+    message: "",
+  });
+
+  /**
+   * `up_to_date` and `no_upstream` can only arrive as a RACE — the button is never
+   * shown for either. The refreshed list beside the 409 already tells the truth, so
+   * an error card would paint a problem where the only event was a beat of latency.
+   */
+  it("treats the two races as benign", () => {
+    expect(isBenignRefusal(refusal("up_to_date"))).toBe(true);
+    expect(isBenignRefusal(refusal("no_upstream"))).toBe(true);
+  });
+
+  it("treats the two click-time refusals as real", () => {
+    expect(isBenignRefusal(refusal("dirty_tree"))).toBe(false);
+    expect(isBenignRefusal(refusal("checked_out_elsewhere"))).toBe(false);
+  });
+
+  /**
+   * "Try again" only where the person can act on the cause. Retrying a branch
+   * someone else's worktree holds changes nothing: the offer would be a loop.
+   */
+  it("offers a retry only for a dirty tree", () => {
+    expect(isRetryableRefusal(refusal("dirty_tree"))).toBe(true);
+    expect(isRetryableRefusal(refusal("checked_out_elsewhere"))).toBe(false);
+    expect(isRetryableRefusal(refusal("diverged"))).toBe(false);
+  });
+
+  /**
+   * Every reason gets its OWN headline. The first version of the card tested for
+   * `dirty_tree` and gave everything else the "checked out in another worktree"
+   * copy, so a diverged branch was announced with a cause that did not exist — and
+   * a wrong cause is worse than a vague one, because it is actionable in the wrong
+   * direction (found by the #803 Feature Path).
+   */
+  it.each([
+    ["dirty_tree", "working tree not clean"],
+    ["checked_out_elsewhere", "checked out in another worktree"],
+    ["diverged", "the branch has diverged"],
+    ["no_upstream", "no tracking branch"],
+    ["up_to_date", "already up to date"],
+  ] as const)("names %s as its own cause", (reason, headline) => {
+    expect(refusalHeadline(reason)).toBe(headline);
+  });
+
+  it("claims no cause at all for a reason it does not know", () => {
+    // A daemon newer than this build. The card shows its message instead; making
+    // one up is exactly the bug above, with no reason code to catch it next time.
+    const headline = refusalHeadline("locked_index");
+    expect(headline).toBe("the daemon refused");
+    expect(headline).not.toContain("worktree");
+  });
+
+  it("quotes the daemon only where the card cannot say it better", () => {
+    const said = (reason: string) =>
+      showsRefusalMessage({
+        reason: reason as FastForwardRefusal["reason"],
+        message: "'main' has 1 commit(s) origin/main does not",
+      });
+    // `diverged`: the counts are in that sentence and nowhere else on the card.
+    expect(said("diverged")).toBe(true);
+    // An unknown reason: the daemon's words are all there is.
+    expect(said("locked_index")).toBe(true);
+    // The prototype's R1/R2 carry no quote block, and need none — the listing and
+    // the worktree path already say it, and printing it twice is noise.
+    expect(said("dirty_tree")).toBe(false);
+    expect(said("checked_out_elsewhere")).toBe(false);
+    // Nothing to quote: an empty block would be a hole in the card.
+    expect(showsRefusalMessage({ reason: "diverged", message: "  " })).toBe(false);
+  });
+});
+
+describe("fastForwardLabel (#803)", () => {
+  // The glossary says fast-forward and bans "pull": the button uses the git term
+  // and names the branch, which is also what makes it unambiguous on a secondary.
+  it("names the branch and the git verb", () => {
+    expect(fastForwardLabel("main")).toBe("Fast-forward main");
+  });
+
+  it("elides a branch name too long for the button", () => {
+    const label = fastForwardLabel("feature/a-very-long-branch-name");
+    expect(label.startsWith("Fast-forward feature/")).toBe(true);
+    expect(label.endsWith("…")).toBe(true);
   });
 });

@@ -16,6 +16,23 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.88.0
+**Fast-forward sans perte depuis le popover de synchro et dérive de la source affichée sur le
+Run** (#803, story #801).
+
+- Le popover de synchro de New Run propose un **fast-forward** de la branche locale quand elle
+  est strictement en retard sur sa branche de suivi. Le verbe daemon (`POST /repos/fast-forward`)
+  avance la référence *et* l'arbre de travail ; il refuse sans rien toucher, avec une cause nommée
+  (`dirty_tree`, `diverged`, `checked_out_elsewhere`, `no_upstream`, `up_to_date`), et chaque
+  refus offre le raccourci « Lancer depuis `origin/<branche>` ». PDO ne merge, ne rebase et ne
+  pousse jamais.
+- Le popover relit l'écart ahead/behind à chaque ouverture (sans fetch implicite, ADR-0070) et la
+  carte de résultat s'efface sur « Fetch again ».
+- La vue d'un Run affiche la **dérive de sa source** en chip `n↑ m↓` (Info et onglet
+  Repositories) : commits sur la branche du Run depuis la coupe, et commits arrivés sur la source
+  (`main +x · origin/main +y`) ; un bouton fetch met à jour la part distante. Un Run archivé passe
+  le chip en `unavailable`.
+
 ## 1.87.0
 **Quick pick de branches, fetch à l'ouverture et bouton de synchro** (#802, story #801).
 

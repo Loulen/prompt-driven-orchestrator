@@ -4,6 +4,8 @@ import type { RunState } from "../types";
 import { editRunRepos } from "../api";
 import { useRecentReposStore } from "../stores/recentReposStore";
 import SecondaryRepoRow, { type SecondaryRepo } from "./SecondaryRepoRow";
+import { SourceDriftChip } from "./InspectorPrimitives";
+import { useSourceDrift } from "../hooks/useSourceDrift";
 
 /** A Run is editable (its repo list can change) exactly while it is live — the same
  *  set the server's `is_live` enforces. A terminal Run's list is frozen. */
@@ -33,6 +35,9 @@ export default function RepositoriesSection({
 }) {
   const editable = LIVE_STATUSES.has(run.status);
   const recentRepos = useRecentReposStore((s) => s.recentRepos);
+  // #803: the same measurement the Info tab's Source block shows, from the same
+  // hook — two renderings of one number, never two computations of it.
+  const { drift, fetchError } = useSourceDrift(run);
 
   // The draft "+ Add repository" row, when open. `null` = no row shown. It is a
   // self-validating `SecondaryRepoRow`; adding is a per-action `editRunRepos`, not a
@@ -94,14 +99,37 @@ export default function RepositoriesSection({
       </span>
 
       {/* Primary — locked, read-only. It never has an alias, so it can be neither
-          removed nor re-pointed mid-run. */}
+          removed nor re-pointed mid-run.
+
+          #803: it gains the second line the secondaries always had (branch · sha)
+          plus the drift chip. Only the primary has one: a secondary is pinned to a
+          SHA at add time, so it does not move and has no « Run branch » to drift
+          from — a chip there would be a zero dressed up as a measurement. */}
       <div
         className="flex items-center gap-2 rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5"
         data-testid="primary-repo-row"
       >
-        <span className="flex-1 truncate font-mono text-fg" title={run.target_repo ?? ""}>
-          {run.target_repo}
-        </span>
+        <div className="flex min-w-0 flex-1 flex-col">
+          <span className="truncate font-mono text-fg" title={run.target_repo ?? ""}>
+            {run.target_repo}
+          </span>
+          {drift?.state === "available" && (
+            <span
+              className="flex items-center gap-1 font-mono text-fg-4"
+              style={{ fontSize: "10px" }}
+              data-testid="primary-repo-fork"
+            >
+              <GitBranch size={10} className="text-fg-4" />
+              {drift.source_branch} · {drift.fork}
+            </span>
+          )}
+        </div>
+        <SourceDriftChip
+          drift={drift}
+          runId={run.run_id}
+          fetchError={fetchError}
+          testid="primary-repo-drift"
+        />
         <span
           className="rounded bg-bg-4 px-1.5 py-0.5 font-medium text-fg-3"
           style={{ fontSize: "9.5px" }}

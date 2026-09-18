@@ -33,6 +33,8 @@ export function useLaunchTargets(open: boolean) {
     fetching,
     load,
     refetch: refetchRemotes,
+    reread: rereadBranches,
+    fastForward,
     clear,
   } = useBranchList();
 
@@ -101,5 +103,7 @@ export function useLaunchTargets(open: boolean) {
     fetchError,
     fetching,
     refetchRemotes,
+    rereadBranches,
+    fastForward,
   };
 }

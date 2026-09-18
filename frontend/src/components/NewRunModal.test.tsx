@@ -4,11 +4,22 @@ import userEvent from "@testing-library/user-event";
 import NewRunModal from "./NewRunModal";
 import { mergeAttachments, overLimitIndices } from "../lib/attachments";
 import { useEditStore } from "../stores/editStore";
-import type { BranchRef, InstanceSettings, PipelineListEntry, Trigger } from "../types";
+import type {
+  BranchList,
+  BranchRef,
+  InstanceSettings,
+  PipelineListEntry,
+  Trigger,
+} from "../types";
 
-// #571: /repos/branches returns `[{name, kind}]`. Terse constructors for fixtures.
+// #571: a branch is `{name, kind}`. Terse constructors for fixtures.
 const local = (name: string): BranchRef => ({ name, kind: "local" });
 const remote = (name: string): BranchRef => ({ name, kind: "remote" });
+
+/** #802: both branch verbs answer the list PLUS the date it is good as of. */
+function branchList(branches: BranchRef[], over: Partial<BranchList> = {}): BranchList {
+  return { branches, last_fetch_at: null, fetch_error: null, ...over };
+}
 
 const makePipeline = (overrides: Partial<PipelineListEntry> = {}): PipelineListEntry => ({
   id: "test-pipe",
@@ -74,11 +85,11 @@ vi.mock("../api", () => ({
   createTrigger: vi.fn().mockResolvedValue({ id: "trg-test" }),
   updateTrigger: vi.fn().mockResolvedValue({ id: "trg-test" }),
   validateRepo: vi.fn().mockResolvedValue({ valid: true }),
-  listBranches: vi.fn().mockResolvedValue([
-    { name: "main", kind: "local" },
-    { name: "dev", kind: "local" },
-    { name: "feature-x", kind: "local" },
-  ]),
+  listBranches: vi.fn(),
+  // #802: the form fetches every remote on open and on repo change. Mocked here
+  // so no test accidentally exercises the real request; `listBranchesReturns`
+  // keeps the two verbs answering the same repo state.
+  fetchRemotes: vi.fn(),
   testGuard: vi.fn().mockResolvedValue({
     outcome: "pass",
     stdout: "",
@@ -88,9 +99,38 @@ vi.mock("../api", () => ({
   }),
 }));
 
-const { validateRepo, listBranches, createRun, createTrigger, updateTrigger, fetchPipelines, fetchSettings, testGuard } = await import("../api");
+const { validateRepo, listBranches, fetchRemotes, createRun, createTrigger, updateTrigger, fetchPipelines, fetchSettings, testGuard } = await import("../api");
 
 const noop = () => {};
+
+/**
+ * Point BOTH branch verbs at the same repo state (#802). The daemon's fetch
+ * answers the SAME list, refreshed; a fixture where only `listBranches` knows the
+ * branches would have the fetch wipe them a beat later, which no real daemon
+ * does. Tests about the fetch itself re-point `fetchRemotes` afterwards.
+ */
+function listBranchesReturns(branches: BranchRef[], over: Partial<BranchList> = {}) {
+  vi.mocked(fetchRemotes).mockResolvedValue(branchList(branches, over));
+  return vi.mocked(listBranches).mockResolvedValue(branchList(branches, over));
+}
+
+/**
+ * Pick a branch through the quick pick, the way a person does: open the field,
+ * click the row. Replaces the `fireEvent.change` on the old `<select>` (#802).
+ */
+async function pickBranch(name: string, prefix = "source-branch") {
+  fireEvent.click(screen.getByTestId(`${prefix}-trigger`));
+  const option = await screen.findByText((_, el) =>
+    el?.getAttribute("data-testid") === `${prefix}-option` &&
+    el.getAttribute("data-branch") === name,
+  );
+  fireEvent.mouseDown(option.closest("button")!);
+}
+
+/** The branch the field currently holds — what a launch would post. */
+function selectedBranch(prefix = "source-branch"): string {
+  return screen.getByTestId(`${prefix}-trigger`).textContent ?? "";
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -98,7 +138,7 @@ beforeEach(() => {
   // `mockResolvedValue` set inside one test leaks into every later one. The
   // repo-switch tests (#454) re-point this mock per repo, so restore the
   // documented default here rather than trusting each test to clean up.
-  vi.mocked(listBranches).mockResolvedValue([local("main"), local("dev"), local("feature-x")]);
+  listBranchesReturns([local("main"), local("dev"), local("feature-x")]);
   vi.useFakeTimers({ shouldAdvanceTime: true });
   useEditStore.setState({
     openTabs: [],
@@ -287,39 +327,39 @@ describe("NewRunModal — multi-repo form flow", () => {
     });
   });
 
-  it("renders a source branch dropdown populated after repo validation", async () => {
+  it("offers the repo's branches in the quick pick after validation", async () => {
     renderModal();
     await enterValidRepo();
 
+    fireEvent.click(screen.getByTestId("source-branch-trigger"));
     await waitFor(() => {
-      const branchSelect = screen.getByLabelText(/source branch/i) as HTMLSelectElement;
-      const options = Array.from(branchSelect.options).map((o) => o.value);
-      expect(options).toContain("main");
-      expect(options).toContain("dev");
-      expect(options).toContain("feature-x");
+      const offered = screen
+        .getAllByTestId("source-branch-option")
+        .map((o) => o.getAttribute("data-branch"));
+      expect(offered).toEqual(expect.arrayContaining(["main", "dev", "feature-x"]));
     });
   });
 
-  // #571: remote-tracking refs render under a "Remote" optgroup, locals under
+  // #571: remote-tracking refs render under a "Remote" group, locals under
   // "Local", and the default lands on the local `main` — never a remote while a
   // local exists.
   it("groups branches into Local and Remote, defaulting to a local (#571)", async () => {
-    vi.mocked(listBranches).mockResolvedValue([
-      local("main"),
-      remote("origin/feature-remote-only"),
-    ]);
+    listBranchesReturns([local("main"), remote("origin/feature-remote-only")]);
     renderModal();
     await enterValidRepo();
 
-    const branchSelect = screen.getByLabelText(/source branch/i) as HTMLSelectElement;
-    await waitFor(() => {
-      expect(branchSelect.querySelector('optgroup[label="Local"]')).not.toBeNull();
-    });
-    const remoteGroup = branchSelect.querySelector('optgroup[label="Remote"]');
-    expect(remoteGroup).not.toBeNull();
-    expect(remoteGroup!.querySelector("option")!.value).toBe("origin/feature-remote-only");
-    // Default is the local main, not the remote.
-    expect(branchSelect.value).toBe("main");
+    // The default is the local main, not the remote.
+    await waitFor(() => expect(selectedBranch()).toContain("main"));
+
+    fireEvent.click(screen.getByTestId("source-branch-trigger"));
+    const popover = await screen.findByTestId("source-branch-popover");
+    expect(within(popover).getByText("Local")).toBeInTheDocument();
+    expect(within(popover).getByText("Remote")).toBeInTheDocument();
+    expect(
+      within(popover)
+        .getAllByTestId("source-branch-option")
+        .map((o) => o.getAttribute("data-branch")),
+    ).toEqual(["main", "origin/feature-remote-only"]);
   });
 
   // #571 / #452: what the field shows is what launches. A remote source is posted
@@ -328,15 +368,14 @@ describe("NewRunModal — multi-repo form flow", () => {
     vi.mocked(fetchPipelines).mockResolvedValue([
       makePipeline({ id: "p1", name: "P1", scope: "repo" }),
     ]);
-    vi.mocked(listBranches).mockResolvedValue([
+    listBranchesReturns([
       local("main"),
       remote("origin/feature-remote-only"),
     ]);
     renderModal();
     await enterValidRepo();
 
-    const branchSelect = screen.getByLabelText(/source branch/i) as HTMLSelectElement;
-    fireEvent.change(branchSelect, { target: { value: "origin/feature-remote-only" } });
+    await pickBranch("origin/feature-remote-only");
     fireEvent.change(screen.getByTestId("pipeline-select"), { target: { value: "p1" } });
     fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), {
       target: { value: "do the thing" },
@@ -360,27 +399,26 @@ describe("NewRunModal — multi-repo form flow", () => {
    */
   describe("changing the target repo re-selects the source branch (#454)", () => {
     /**
-     * Asserting `branchSelect.value` CANNOT catch this bug, and that is the whole
-     * point of it: a `<select>` whose React value matches none of its options
-     * reports the FIRST option's value. So the DOM read `master` even while the
-     * state held `main` — the read that looks like a check and passes either way.
-     * Only what the form actually submits distinguishes the two.
+     * Asserting the DOM value CANNOT catch this bug in its original form, and that
+     * is the whole point of it: a `<select>` whose React value matches none of its
+     * options reports the FIRST option's value, so the DOM read `master` even while
+     * the state held `main` — a read that looks like a check and passes either way.
+     * Only what the form actually submits distinguishes the two. (#802's quick pick
+     * renders the held value verbatim, which closes that particular blind spot, but
+     * the submitted value stays the assertion that matters.)
      */
     it("launches against the re-selected branch, not the stale one", async () => {
       vi.mocked(fetchPipelines).mockResolvedValue([
         makePipeline({ id: "p1", name: "P1", scope: "repo" }),
       ]);
-      vi.mocked(listBranches).mockResolvedValue([local("main"), local("dev"), local("feature-x")]);
+      listBranchesReturns([local("main"), local("dev"), local("feature-x")]);
       renderModal();
       await enterValidRepo("/home/user/project-a"); // → main
 
-      vi.mocked(listBranches).mockResolvedValue([local("master")]);
+      listBranchesReturns([local("master")]);
       await enterValidRepo("/home/user/project-b");
 
-      const branchSelect = screen.getByLabelText(/source branch/i) as HTMLSelectElement;
-      await waitFor(() => {
-        expect(Array.from(branchSelect.options).map((o) => o.value)).toEqual(["master"]);
-      });
+      await waitFor(() => expect(selectedBranch()).toContain("master"));
 
       fireEvent.change(screen.getByTestId("pipeline-select"), { target: { value: "p1" } });
       fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), {
@@ -409,15 +447,14 @@ describe("NewRunModal — multi-repo form flow", () => {
       vi.mocked(fetchPipelines).mockResolvedValue([
         makePipeline({ id: "p1", name: "P1", scope: "repo" }),
       ]);
-      vi.mocked(listBranches).mockResolvedValue([local("main"), local("dev"), local("feature-x")]);
+      listBranchesReturns([local("main"), local("dev"), local("feature-x")]);
       renderModal();
       await enterValidRepo("/home/user/project-a");
 
-      const branchSelect = screen.getByLabelText(/source branch/i) as HTMLSelectElement;
-      fireEvent.change(branchSelect, { target: { value: "feature-x" } });
-      expect(branchSelect.value).toBe("feature-x");
+      await pickBranch("feature-x");
+      expect(selectedBranch()).toContain("feature-x");
 
-      vi.mocked(listBranches).mockResolvedValue([local("main"), local("feature-x")]);
+      listBranchesReturns([local("main"), local("feature-x")]);
       await enterValidRepo("/home/user/project-b");
 
       fireEvent.change(screen.getByTestId("pipeline-select"), { target: { value: "p1" } });
@@ -452,8 +489,7 @@ describe("NewRunModal — multi-repo form flow", () => {
 
     await enterValidRepo();
 
-    const branchSelect = screen.getByLabelText(/source branch/i) as HTMLSelectElement;
-    fireEvent.change(branchSelect, { target: { value: "dev" } });
+    await pickBranch("dev");
 
     const inputTextarea = screen.getByPlaceholderText(/free-text prompt/i);
     fireEvent.change(inputTextarea, { target: { value: "implement feature X" } });
@@ -2463,10 +2499,10 @@ describe("NewRunModal — multi-repo (#465)", () => {
     await waitFor(() => {
       expect(validateRepo).toHaveBeenCalledWith("/home/user/secondary");
     });
-    // The secondary's own branch select must resolve (proves per-row listBranches).
+    // The secondary's own branch field must resolve (proves per-row listBranches).
     await waitFor(() => {
       expect(
-        within(secRow).getByTestId("secondary-branch-select-0"),
+        within(secRow).getByTestId("secondary-branch-0-trigger"),
       ).toBeInTheDocument();
     });
 
@@ -2541,7 +2577,7 @@ describe("NewRunModal — multi-repo (#465)", () => {
     vi.mocked(fetchPipelines).mockResolvedValue([
       makePipeline({ id: "p1", name: "P1", scope: "repo" }),
     ]);
-    vi.mocked(listBranches).mockResolvedValue([
+    listBranchesReturns([
       local("main"),
       remote("origin/feature-remote-only"),
     ]);
@@ -2554,14 +2590,9 @@ describe("NewRunModal — multi-repo (#465)", () => {
       target: { value: "/home/user/secondary" },
     });
     await vi.advanceTimersByTimeAsync(500);
-    const secSelect = (await within(secRow).findByTestId(
-      "secondary-branch-select-0",
-    )) as HTMLSelectElement;
+    await within(secRow).findByTestId("secondary-branch-0-trigger");
     // The remote group is present, and the row can carry a remote base.
-    await waitFor(() => {
-      expect(secSelect.querySelector('optgroup[label="Remote"]')).not.toBeNull();
-    });
-    fireEvent.change(secSelect, { target: { value: "origin/feature-remote-only" } });
+    await pickBranch("origin/feature-remote-only", "secondary-branch-0");
 
     fireEvent.change(screen.getByTestId("pipeline-select"), { target: { value: "p1" } });
     fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), {
@@ -2590,7 +2621,7 @@ describe("NewRunModal — multi-repo (#465)", () => {
     vi.mocked(fetchPipelines).mockResolvedValue([
       makePipeline({ id: "p1", name: "P1", scope: "repo" }),
     ]);
-    vi.mocked(listBranches).mockResolvedValue([
+    listBranchesReturns([
       local("main"),
       remote("origin/feature-remote-only"),
     ]);
@@ -2603,14 +2634,9 @@ describe("NewRunModal — multi-repo (#465)", () => {
       target: { value: "/home/user/secondary" },
     });
     await vi.advanceTimersByTimeAsync(500);
-    const secSelect = (await within(secRow).findByTestId(
-      "secondary-branch-select-0",
-    )) as HTMLSelectElement;
+    await within(secRow).findByTestId("secondary-branch-0-trigger");
     // The remote group is present, and the row can carry a remote base.
-    await waitFor(() => {
-      expect(secSelect.querySelector('optgroup[label="Remote"]')).not.toBeNull();
-    });
-    fireEvent.change(secSelect, { target: { value: "origin/feature-remote-only" } });
+    await pickBranch("origin/feature-remote-only", "secondary-branch-0");
 
     fireEvent.change(screen.getByTestId("pipeline-select"), { target: { value: "p1" } });
     fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), {

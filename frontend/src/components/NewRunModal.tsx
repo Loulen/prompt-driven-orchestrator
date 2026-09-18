@@ -10,6 +10,7 @@ import SecondaryRepoRow, {
   SecondaryRepoLabel,
   type SecondaryRepo,
 } from "./SecondaryRepoRow";
+import SourceBranchField from "./SourceBranchField";
 import GuardTestResult from "./GuardTestResult";
 import AgentControl from "./AgentControl";
 import HarnessSelect from "./HarnessSelect";
@@ -90,6 +91,13 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     setSourceBranch,
     loadBranches,
     clearBranches,
+    // #802/ADR-0070: the freshness of the branch list — when it was last fetched,
+    // whether a fetch is in flight, and why the last one failed. Fed straight to
+    // the sync button, which is the only place the écart amont is stated.
+    lastFetchAt,
+    fetchError: branchFetchError,
+    fetching: branchesFetching,
+    refetchRemotes,
   } = useLaunchTargets(open);
 
   // Multi-repo state: the target repo field, its debounced verdict, and the border it
@@ -1010,47 +1018,24 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
                   <GitBranch size={12} className="text-fg-3" />
                   Source branch
                 </label>
-                <select
+                {/* #802/ADR-0070: the `<select>` is gone. It could show neither how
+                    old a branch was nor how far behind its upstream, and its
+                    value-not-in-options fallback was the #454 shows-one-sends-another
+                    trap. The quick pick renders the held value verbatim, so the
+                    switch to an unlisted `origin/<x>` (the popover's shortcut) is
+                    safe — a `<select>` could not have expressed it at all. */}
+                <SourceBranchField
                   id="source-branch"
-                  className="w-full rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5 font-mono text-fg transition-colors focus:border-acc focus:outline-none disabled:opacity-40"
-                  style={{ fontSize: "12px" }}
-                  disabled={branches.length === 0}
                   value={sourceBranch}
-                  onChange={(e) => setSourceBranch(e.target.value)}
-                  data-testid="source-branch-select"
-                >
-                  {branchesLoading && (
-                    <option value="">Loading branches...</option>
-                  )}
-                  {!branchesLoading && branches.length === 0 && (
-                    <option value="">Loading...</option>
-                  )}
-                  {/* #571: two groups, Local then Remote — mirroring the pipeline
-                      select below. The `value` is the branch name verbatim
-                      (`origin/x` for a remote), so what shows is what launches. */}
-                  {branches.some((b) => b.kind === "local") && (
-                    <optgroup label="Local">
-                      {branches
-                        .filter((b) => b.kind === "local")
-                        .map((b) => (
-                          <option key={`local-${b.name}`} value={b.name}>
-                            {b.name}
-                          </option>
-                        ))}
-                    </optgroup>
-                  )}
-                  {branches.some((b) => b.kind === "remote") && (
-                    <optgroup label="Remote">
-                      {branches
-                        .filter((b) => b.kind === "remote")
-                        .map((b) => (
-                          <option key={`remote-${b.name}`} value={b.name}>
-                            {b.name}
-                          </option>
-                        ))}
-                    </optgroup>
-                  )}
-                </select>
+                  onChange={setSourceBranch}
+                  branches={branches}
+                  loading={branchesLoading}
+                  fetching={branchesFetching}
+                  lastFetchAt={lastFetchAt}
+                  fetchError={branchFetchError}
+                  onFetch={refetchRemotes}
+                  testIdPrefix="source-branch"
+                />
               </div>
             )}
 

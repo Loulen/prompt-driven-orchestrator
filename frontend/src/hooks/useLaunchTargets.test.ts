@@ -2,16 +2,33 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { useLaunchTargets } from "./useLaunchTargets";
 import * as api from "../api";
-import type { BranchRef, PipelineListEntry } from "../types";
+import type { BranchList, BranchRef, PipelineListEntry } from "../types";
 
 vi.mock("../api", () => ({
   fetchPipelines: vi.fn(),
   listBranches: vi.fn(),
+  fetchRemotes: vi.fn(),
 }));
 
-// #571: /repos/branches returns `[{name, kind}]`. These keep the fixtures terse.
+// #571: a branch is `{name, kind}`. These keep the fixtures terse.
 const local = (name: string): BranchRef => ({ name, kind: "local" });
 const remote = (name: string): BranchRef => ({ name, kind: "remote" });
+
+/** #802: both branch verbs answer the list PLUS the date it is good as of. */
+function branchList(branches: BranchRef[], over: Partial<BranchList> = {}): BranchList {
+  return { branches, last_fetch_at: null, fetch_error: null, ...over };
+}
+
+/**
+ * Point BOTH branch verbs at the same repo state. The daemon's fetch answers the
+ * SAME list, refreshed — a fixture where only `listBranches` knows the branches
+ * would have the fetch wipe them a beat later, which no real daemon does. Tests
+ * about the fetch itself re-point `fetchRemotes` afterwards.
+ */
+function listBranchesReturns(branches: BranchRef[], over: Partial<BranchList> = {}) {
+  vi.mocked(api.fetchRemotes).mockResolvedValue(branchList(branches, over));
+  return vi.mocked(api.listBranches).mockResolvedValue(branchList(branches, over));
+}
 
 function pipeline(over: Partial<PipelineListEntry> = {}): PipelineListEntry {
   return {
@@ -28,9 +45,9 @@ function pipeline(over: Partial<PipelineListEntry> = {}): PipelineListEntry {
 
 beforeEach(() => {
   vi.mocked(api.fetchPipelines).mockReset().mockResolvedValue([]);
-  vi.mocked(api.listBranches)
-    .mockReset()
-    .mockResolvedValue([local("main"), local("dev"), local("feature-x")]);
+  vi.mocked(api.listBranches).mockReset();
+  vi.mocked(api.fetchRemotes).mockReset();
+  listBranchesReturns([local("main"), local("dev"), local("feature-x")]);
 });
 
 function setup(open = true) {
@@ -134,9 +151,12 @@ describe("useLaunchTargets — the branches", () => {
   });
 
   it("flags the load while it is in flight", async () => {
-    let release!: (branches: BranchRef[]) => void;
+    let release!: (list: BranchList) => void;
+    // Both verbs answer the same repo state (see `listBranchesReturns`); only the
+    // list is held open, so the flag is about the LIST arriving.
+    vi.mocked(api.fetchRemotes).mockResolvedValue(branchList([local("main")]));
     vi.mocked(api.listBranches).mockReturnValue(
-      new Promise<BranchRef[]>((resolve) => {
+      new Promise<BranchList>((resolve) => {
         release = resolve;
       }),
     );
@@ -148,7 +168,7 @@ describe("useLaunchTargets — the branches", () => {
     expect(result.current.branchesLoading).toBe(true);
 
     await act(async () => {
-      release([local("main")]);
+      release(branchList([local("main")]));
       await pending;
     });
     expect(result.current.branchesLoading).toBe(false);
@@ -167,7 +187,7 @@ describe("useLaunchTargets — the branches", () => {
     await load(result, "/home/user/project-a");
     expect(result.current.sourceBranch).toBe("main");
 
-    vi.mocked(api.listBranches).mockResolvedValue([local("master")]);
+    listBranchesReturns([local("master")]);
     await load(result, "/home/user/project-b");
     expect(result.current.sourceBranch).toBe("master");
   });
@@ -179,7 +199,7 @@ describe("useLaunchTargets — the branches", () => {
     await load(result, "/home/user/project-a");
     act(() => result.current.setSourceBranch("feature-x"));
 
-    vi.mocked(api.listBranches).mockResolvedValue([local("main"), local("feature-x")]);
+    listBranchesReturns([local("main"), local("feature-x")]);
     await load(result, "/home/user/project-b");
     expect(result.current.sourceBranch).toBe("feature-x");
   });
@@ -187,7 +207,7 @@ describe("useLaunchTargets — the branches", () => {
   it("prefers main, then master, then whatever comes first", async () => {
     const { result } = setup();
 
-    vi.mocked(api.listBranches).mockResolvedValue([
+    listBranchesReturns([
       local("dev"),
       local("master"),
       local("main"),
@@ -195,11 +215,11 @@ describe("useLaunchTargets — the branches", () => {
     await load(result, "/a");
     expect(result.current.sourceBranch).toBe("main");
 
-    vi.mocked(api.listBranches).mockResolvedValue([local("dev"), local("master")]);
+    listBranchesReturns([local("dev"), local("master")]);
     await load(result, "/b");
     expect(result.current.sourceBranch).toBe("master");
 
-    vi.mocked(api.listBranches).mockResolvedValue([local("topic"), local("other")]);
+    listBranchesReturns([local("topic"), local("other")]);
     await load(result, "/c");
     expect(result.current.sourceBranch).toBe("topic");
   });
@@ -210,7 +230,7 @@ describe("useLaunchTargets — the branches", () => {
   // remotes share the list.
   it("never defaults to a remote while a local exists (#571)", async () => {
     const { result } = setup();
-    vi.mocked(api.listBranches).mockResolvedValue([
+    listBranchesReturns([
       local("master"),
       remote("origin/main"),
       remote("origin/master"),
@@ -224,7 +244,7 @@ describe("useLaunchTargets — the branches", () => {
   it("falls back to a remote only when there is no local (#571)", async () => {
     const { result } = setup();
 
-    vi.mocked(api.listBranches).mockResolvedValue([
+    listBranchesReturns([
       remote("origin/dev"),
       remote("origin/master"),
       remote("origin/main"),
@@ -232,14 +252,14 @@ describe("useLaunchTargets — the branches", () => {
     await load(result, "/a");
     expect(result.current.sourceBranch).toBe("origin/main");
 
-    vi.mocked(api.listBranches).mockResolvedValue([
+    listBranchesReturns([
       remote("origin/dev"),
       remote("origin/master"),
     ]);
     await load(result, "/b");
     expect(result.current.sourceBranch).toBe("origin/master");
 
-    vi.mocked(api.listBranches).mockResolvedValue([
+    listBranchesReturns([
       remote("upstream/topic"),
       remote("origin/other"),
     ]);
@@ -251,7 +271,7 @@ describe("useLaunchTargets — the branches", () => {
   // re-list that still offers it (no needless re-seed to the default local).
   it("keeps a chosen remote branch when the repo still offers it (#571)", async () => {
     const { result } = setup();
-    vi.mocked(api.listBranches).mockResolvedValue([
+    listBranchesReturns([
       local("main"),
       remote("origin/feature-x"),
     ]);
@@ -267,7 +287,7 @@ describe("useLaunchTargets — the branches", () => {
     await load(result, "/a");
     expect(result.current.sourceBranch).toBe("main");
 
-    vi.mocked(api.listBranches).mockResolvedValue([]);
+    listBranchesReturns([]);
     await load(result, "/b");
     expect(result.current.branches).toEqual([]);
     expect(result.current.sourceBranch).toBe("main");
@@ -290,5 +310,189 @@ describe("useLaunchTargets — the branches", () => {
     act(() => result.current.clearBranches());
     expect(result.current.branches).toEqual([]);
     expect(result.current.sourceBranch).toBe("");
+  });
+});
+
+/**
+ * #802/ADR-0070. The écart amont is only worth the date it carries, so loading a
+ * repo's branches also fetches its remotes. Everything below is about that fetch
+ * NEVER being allowed to cost anything: not the list, not the selection, not the
+ * ability to launch.
+ */
+describe("useLaunchTargets — the fetch on open and on repo change (#802)", () => {
+  async function load(
+    result: { current: ReturnType<typeof useLaunchTargets> },
+    repoPath: string,
+  ) {
+    await act(async () => {
+      await result.current.loadBranches(repoPath);
+    });
+  }
+
+  it("fetches the repo's remotes when its branches are loaded", async () => {
+    const { result } = setup();
+    await load(result, "/home/user/project");
+    expect(api.fetchRemotes).toHaveBeenCalledWith("/home/user/project");
+  });
+
+  it("re-fetches when the target repo changes", async () => {
+    const { result } = setup();
+    await load(result, "/a");
+    await load(result, "/b");
+    expect(vi.mocked(api.fetchRemotes).mock.calls.map(([p]) => p)).toEqual(["/a", "/b"]);
+  });
+
+  it("lands the refreshed list and its date in place", async () => {
+    const { result } = setup();
+    vi.mocked(api.fetchRemotes).mockResolvedValue(
+      branchList([{ ...local("main"), upstream: "origin/main", ahead: 0, behind: 3 }], {
+        last_fetch_at: "2026-09-18T09:00:00Z",
+      }),
+    );
+    await load(result, "/a");
+    await waitFor(() => expect(result.current.branches[0]?.behind).toBe(3));
+    expect(result.current.lastFetchAt).toBe("2026-09-18T09:00:00Z");
+    expect(result.current.fetchError).toBeNull();
+    expect(result.current.fetching).toBe(false);
+  });
+
+  /**
+   * The load and the fetch race by construction (the fetch is started first and
+   * awaited last). Whichever lands second must not undo the selection the first
+   * one seeded — a refetch keeps the user's pick, always.
+   */
+  it("keeps the selection across a refetch", async () => {
+    const { result } = setup();
+    await load(result, "/a");
+    act(() => result.current.setSourceBranch("feature-x"));
+
+    vi.mocked(api.fetchRemotes).mockResolvedValue(
+      branchList([local("main"), local("dev"), local("feature-x")], {
+        last_fetch_at: "2026-09-18T09:00:00Z",
+      }),
+    );
+    await act(async () => {
+      result.current.refetchRemotes();
+    });
+    await waitFor(() => expect(result.current.lastFetchAt).toBe("2026-09-18T09:00:00Z"));
+    expect(result.current.sourceBranch).toBe("feature-x");
+  });
+
+  /**
+   * ADR-0070 §1. A repo with no remote, an offline machine and a missing key are
+   * all legitimate; the only consequence is that the écart becomes unknown.
+   */
+  it("keeps the list, the selection and the date when the fetch fails", async () => {
+    const { result } = setup();
+    vi.mocked(api.fetchRemotes).mockResolvedValue(
+      branchList([local("main"), local("dev"), local("feature-x")], {
+        last_fetch_at: "2026-09-16T08:00:00Z",
+        fetch_error: { kind: "network", message: "ssh: Could not resolve hostname" },
+      }),
+    );
+    await load(result, "/a");
+    await waitFor(() => expect(result.current.fetchError?.kind).toBe("network"));
+    expect(result.current.branches).toHaveLength(3);
+    expect(result.current.sourceBranch).toBe("main");
+    expect(result.current.lastFetchAt).toBe("2026-09-16T08:00:00Z");
+  });
+
+  /**
+   * The list and the fetch are started together and answer in either order. The
+   * fetch returns the SAME list refreshed, so a late `listBranches` landing on top
+   * would put the pre-fetch écart back on screen — stale numbers presented as
+   * current, which is the whole bug this feature removes.
+   */
+  it("does not let a late plain list overwrite a landed fetch", async () => {
+    let releaseList!: (list: BranchList) => void;
+    vi.mocked(api.listBranches).mockReturnValue(
+      new Promise<BranchList>((resolve) => {
+        releaseList = resolve;
+      }),
+    );
+    vi.mocked(api.fetchRemotes).mockResolvedValue(
+      branchList([{ ...local("main"), upstream: "origin/main", ahead: 0, behind: 3 }], {
+        last_fetch_at: "2026-09-18T09:00:00Z",
+      }),
+    );
+
+    const { result } = setup();
+    let pending!: Promise<void>;
+    act(() => {
+      pending = result.current.loadBranches("/a");
+    });
+    await waitFor(() => expect(result.current.branches[0]?.behind).toBe(3));
+
+    await act(async () => {
+      // The pre-fetch answer, arriving last: `main` with no upstream knowledge.
+      releaseList(branchList([local("main")]));
+      await pending;
+    });
+    expect(result.current.branches[0]?.behind).toBe(3);
+    expect(result.current.lastFetchAt).toBe("2026-09-18T09:00:00Z");
+  });
+
+  it("survives a fetch request that throws outright", async () => {
+    const { result } = setup();
+    vi.mocked(api.fetchRemotes).mockRejectedValue(new Error("daemon unreachable"));
+    await load(result, "/a");
+    await waitFor(() => expect(result.current.fetchError?.message).toContain("daemon unreachable"));
+    expect(result.current.branches).toHaveLength(3);
+    expect(result.current.fetching).toBe(false);
+  });
+
+  /**
+   * The user can change repo while a fetch is in the air. A late answer about the
+   * PREVIOUS repo landing on the current one is the multi-repo shape of the #454
+   * stale-branch bug: the field would show branches of a repo nobody selected.
+   */
+  it("ignores a fetch that answers about a repo the user has left", async () => {
+    let releaseSlow!: (list: BranchList) => void;
+    vi.mocked(api.fetchRemotes).mockReturnValueOnce(
+      new Promise<BranchList>((resolve) => {
+        releaseSlow = resolve;
+      }),
+    );
+    const { result } = setup();
+    await load(result, "/slow");
+
+    listBranchesReturns([local("other")]);
+    vi.mocked(api.fetchRemotes).mockResolvedValue(branchList([local("other")]));
+    await load(result, "/fast");
+    expect(result.current.branches).toEqual([local("other")]);
+
+    await act(async () => {
+      releaseSlow(
+        branchList([local("stale-a"), local("stale-b")], {
+          last_fetch_at: "1999-01-01T00:00:00Z",
+        }),
+      );
+    });
+    expect(result.current.branches).toEqual([local("other")]);
+    expect(result.current.lastFetchAt).not.toBe("1999-01-01T00:00:00Z");
+  });
+
+  it("clearBranches drops the freshness state with the list", async () => {
+    const { result } = setup();
+    vi.mocked(api.fetchRemotes).mockResolvedValue(
+      branchList([local("main")], {
+        last_fetch_at: "2026-09-18T09:00:00Z",
+        fetch_error: { kind: "auth", message: "Permission denied" },
+      }),
+    );
+    await load(result, "/a");
+    await waitFor(() => expect(result.current.fetchError).not.toBeNull());
+
+    act(() => result.current.clearBranches());
+    expect(result.current.lastFetchAt).toBeNull();
+    expect(result.current.fetchError).toBeNull();
+  });
+
+  it("refetches nothing when no repo is loaded", async () => {
+    const { result } = setup();
+    await act(async () => {
+      result.current.refetchRemotes();
+    });
+    expect(api.fetchRemotes).not.toHaveBeenCalled();
   });
 });

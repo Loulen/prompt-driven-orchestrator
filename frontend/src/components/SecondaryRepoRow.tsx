@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { GitBranch, X } from "lucide-react";
-import { validateRepo, listBranches } from "../api";
+import { validateRepo } from "../api";
 import { pickDefaultBranch } from "../lib/branchSelect";
-import type { BranchRef } from "../types";
+import { useBranchList } from "../hooks/useBranchList";
 import RepoCombobox from "./RepoCombobox";
+import SourceBranchField from "./SourceBranchField";
 
 /** One secondary repo line of the multi-repo create modal (#465, ADR-0042/0047).
  *  `valid` is `null` while unknown/empty, so `canLaunch` can require every
@@ -31,6 +32,12 @@ interface Props {
  * `validateRepo` + `listBranches` effect (mirroring the primary's) and reports
  * `valid`/`baseBranch` back up. Encapsulating the async here is what lets the
  * parent hold a plain array of rows without calling hooks in a loop.
+ *
+ * #802/ADR-0070: it also fetches its own repo's remotes — one fetch per repo,
+ * this row's own. The problem is identical here (a secondary pinned on a base
+ * branch several commits behind is the same silent staleness), so it carries the
+ * same quick pick and the same sync button as the primary, from the same
+ * component.
  */
 export default function SecondaryRepoRow({
   index,
@@ -41,9 +48,19 @@ export default function SecondaryRepoRow({
 }: Props) {
   const [validating, setValidating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [branches, setBranches] = useState<BranchRef[]>([]);
-  const [branchesLoading, setBranchesLoading] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // #802: the same branch state, the same fetch, the same race rules as the
+  // primary field — from the same hook, so the two cannot drift (#571's lesson).
+  const {
+    branches,
+    loading: branchesLoading,
+    lastFetchAt,
+    fetchError,
+    fetching,
+    load,
+    refetch: refetchRemotes,
+    clear: clearBranches,
+  } = useBranchList();
 
   const path = repo.path;
 
@@ -57,7 +74,7 @@ export default function SecondaryRepoRow({
       if (!path.trim()) {
         if (cancelled) return;
         setError(null);
-        setBranches([]);
+        clearBranches();
         onChange(index, { valid: null });
         return;
       }
@@ -68,35 +85,24 @@ export default function SecondaryRepoRow({
         if (cancelled) return;
         if (!result.valid) {
           setError(result.error ?? "Not a valid git repository");
-          setBranches([]);
+          clearBranches();
           onChange(index, { valid: false });
           return;
         }
         onChange(index, { valid: true });
-        setBranchesLoading(true);
-        try {
-          const branchList = await listBranches(path.trim());
-          if (cancelled) return;
-          setBranches(branchList);
-          // Seed the base branch when the held value is not one THIS repo has
-          // (mirror of the primary's #454 membership test, now on `name`). The
-          // default is locality-aware (#571): never a remote while a local exists.
-          if (
-            branchList.length > 0 &&
-            !branchList.some((b) => b.name === repo.baseBranch)
-          ) {
-            const def = pickDefaultBranch(branchList);
-            if (def) onChange(index, { baseBranch: def });
-          }
-        } catch {
-          if (!cancelled) setBranches([]);
-        } finally {
-          if (!cancelled) setBranchesLoading(false);
+        const list = await load(path.trim());
+        if (cancelled || !list) return;
+        // Seed the base branch when the held value is not one THIS repo has
+        // (mirror of the primary's #454 membership test, now on `name`). The
+        // default is locality-aware (#571): never a remote while a local exists.
+        if (list.length > 0 && !list.some((b) => b.name === repo.baseBranch)) {
+          const def = pickDefaultBranch(list);
+          if (def) onChange(index, { baseBranch: def });
         }
       } catch {
         if (cancelled) return;
         setError("Failed to validate repository");
-        setBranches([]);
+        clearBranches();
         onChange(index, { valid: false });
       } finally {
         if (!cancelled) setValidating(false);
@@ -142,42 +148,20 @@ export default function SecondaryRepoRow({
         </button>
       </div>
       {repo.valid && (
-        <select
-          className="w-full rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5 font-mono text-fg transition-colors focus:border-acc focus:outline-none disabled:opacity-40"
-          style={{ fontSize: "12px" }}
-          disabled={branches.length === 0}
+        // #802: the same quick pick and the same sync button as the primary, from
+        // the same component — the #571 lesson about duplicated branch logic.
+        <SourceBranchField
           value={repo.baseBranch}
-          onChange={(e) => onChange(index, { baseBranch: e.target.value })}
-          data-testid={`secondary-branch-select-${index}`}
-        >
-          {branchesLoading && <option value="">Loading branches...</option>}
-          {!branchesLoading && branches.length === 0 && (
-            <option value="">Loading...</option>
-          )}
-          {/* #571: Local / Remote groups, mirroring the primary select. */}
-          {branches.some((b) => b.kind === "local") && (
-            <optgroup label="Local">
-              {branches
-                .filter((b) => b.kind === "local")
-                .map((b) => (
-                  <option key={`local-${b.name}`} value={b.name}>
-                    {b.name}
-                  </option>
-                ))}
-            </optgroup>
-          )}
-          {branches.some((b) => b.kind === "remote") && (
-            <optgroup label="Remote">
-              {branches
-                .filter((b) => b.kind === "remote")
-                .map((b) => (
-                  <option key={`remote-${b.name}`} value={b.name}>
-                    {b.name}
-                  </option>
-                ))}
-            </optgroup>
-          )}
-        </select>
+          onChange={(branch) => onChange(index, { baseBranch: branch })}
+          branches={branches}
+          loading={branchesLoading}
+          fetching={fetching}
+          lastFetchAt={lastFetchAt}
+          fetchError={fetchError}
+          onFetch={refetchRemotes}
+          testIdPrefix={`secondary-branch-${index}`}
+          ariaLabel={`Base branch for secondary repository ${index + 1}`}
+        />
       )}
       {repo.valid && (
         <label

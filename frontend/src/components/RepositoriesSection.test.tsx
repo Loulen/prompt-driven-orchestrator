@@ -9,7 +9,18 @@ vi.mock("../api", () => ({
   // A draft `SecondaryRepoRow` self-validates via these; stub them so a draft can
   // reach `valid === true` (which is what reveals the read-only checkbox).
   validateRepo: vi.fn(async () => ({ valid: true })),
-  listBranches: vi.fn(async () => ["main"]),
+  // #802: both branch verbs answer `{branches, last_fetch_at, fetch_error}` — the
+  // row fetches its own repo's remotes beside the list.
+  listBranches: vi.fn(async () => ({
+    branches: [{ name: "main", kind: "local" as const }],
+    last_fetch_at: null,
+    fetch_error: null,
+  })),
+  fetchRemotes: vi.fn(async () => ({
+    branches: [{ name: "main", kind: "local" as const }],
+    last_fetch_at: null,
+    fetch_error: null,
+  })),
 }));
 
 // The store is a zustand hook (selector in, slice out) — stub it to a stable empty

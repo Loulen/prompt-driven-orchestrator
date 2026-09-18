@@ -439,8 +439,16 @@ async fn list_branches_endpoint_returns_branches() {
         .unwrap();
 
     assert_eq!(resp.status(), 200);
-    // The payload is `[{name, kind}]` now (#571), not a flat `string[]`.
-    let branches: Vec<serde_json::Value> = resp.json().await.unwrap();
+    // #571 made the payload `[{name, kind}]` rather than a flat `string[]`; #802
+    // wrapped it in `{branches, last_fetch_at, fetch_error}` so the numbers on each
+    // entry always travel with the date they are good as of.
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["last_fetch_at"].is_null(), "never fetched: {body}");
+    assert!(
+        body["fetch_error"].is_null(),
+        "a plain read attempts no fetch: {body}"
+    );
+    let branches = body["branches"].as_array().unwrap().clone();
     let named = |n: &str| {
         branches
             .iter()
@@ -468,7 +476,8 @@ async fn list_branches_endpoint_returns_remote_branches_with_kind() {
         .unwrap();
 
     assert_eq!(resp.status(), 200);
-    let branches: Vec<serde_json::Value> = resp.json().await.unwrap();
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let branches = body["branches"].as_array().unwrap().clone();
 
     let kind_of = |n: &str| -> Option<String> {
         branches
@@ -638,6 +647,142 @@ async fn list_branches_rejects_non_git_path() {
         .await
         .unwrap();
 
+    assert_eq!(resp.status(), 400);
+}
+
+/// #802/ADR-0070 over HTTP: the fetch verb makes commits that landed on the bare
+/// origin visible, and dates the écart it just refreshed. This is the feature's
+/// whole promise — "the numbers reflect the server, not my last manual fetch" —
+/// measured end to end rather than on the git helpers alone.
+#[tokio::test]
+async fn fetch_endpoint_refreshes_the_gap_against_the_bare_origin() {
+    let origin = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    stage_remote_repo(origin.path(), work.path()).unwrap();
+
+    // A second clone pushes three commits, so `work`'s refs are now stale and it
+    // has no way of knowing — exactly the state the launch form used to hide.
+    let other = tempfile::tempdir().unwrap();
+    let git = |dir: &std::path::Path, args: &[&str]| {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    git(
+        other.path(),
+        &[
+            "clone",
+            origin.path().to_str().unwrap(),
+            other.path().to_str().unwrap(),
+        ],
+    );
+    git(other.path(), &["config", "user.email", "test@test.com"]);
+    git(other.path(), &["config", "user.name", "Test"]);
+    for i in 0..3 {
+        git(
+            other.path(),
+            &["commit", "-m", &format!("upstream {i}"), "--allow-empty"],
+        );
+    }
+    git(other.path(), &["push", "origin", "main"]);
+
+    let daemon = TestDaemon::spawn(seed_daemon_repo).await.unwrap();
+    let client = reqwest::Client::new();
+    let work_path = work.path().to_str().unwrap();
+
+    let behind_of = |body: &serde_json::Value| -> Option<i64> {
+        body["branches"]
+            .as_array()?
+            .iter()
+            .find(|b| b["name"].as_str() == Some("main"))?["behind"]
+            .as_i64()
+    };
+
+    // Before: the plain read reports the stale refs, and says so by being level.
+    let before: serde_json::Value = client
+        .get(format!("{}/repos/branches", daemon.url()))
+        .query(&[("path", work_path)])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        behind_of(&before),
+        Some(0),
+        "stale refs still look level: {before}"
+    );
+
+    let after: serde_json::Value = client
+        .post(format!("{}/repos/fetch", daemon.url()))
+        .query(&[("path", work_path)])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        after["fetch_error"].is_null(),
+        "the fetch succeeded: {after}"
+    );
+    assert_eq!(
+        behind_of(&after),
+        Some(3),
+        "the fetch revealed three commits: {after}"
+    );
+    assert!(
+        after["last_fetch_at"].as_str().is_some(),
+        "the refreshed numbers must travel with their date: {after}"
+    );
+}
+
+/// A repo with no remote is a legitimate case, not an error: 200 with a NAMED
+/// reason, the list intact, so nothing downstream refuses to launch (ADR-0070 §1).
+#[tokio::test]
+async fn fetch_endpoint_names_a_repo_without_a_remote_and_keeps_the_list() {
+    let target_repo = tempfile::tempdir().unwrap();
+    git_init_with_commit(target_repo.path()).unwrap();
+
+    let daemon = TestDaemon::spawn(seed_daemon_repo).await.unwrap();
+    let resp = reqwest::Client::new()
+        .post(format!("{}/repos/fetch", daemon.url()))
+        .query(&[("path", target_repo.path().to_str().unwrap())])
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        resp.status(),
+        200,
+        "a purely local repo is not a client error"
+    );
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["fetch_error"]["kind"], "no_remote", "{body}");
+    assert!(
+        !body["branches"].as_array().unwrap().is_empty(),
+        "a failed fetch never empties the list: {body}"
+    );
+}
+
+#[tokio::test]
+async fn fetch_endpoint_rejects_non_git_path() {
+    let non_git_dir = tempfile::tempdir().unwrap();
+    let daemon = TestDaemon::spawn(seed_daemon_repo).await.unwrap();
+    let resp = reqwest::Client::new()
+        .post(format!("{}/repos/fetch", daemon.url()))
+        .query(&[("path", non_git_dir.path().to_str().unwrap())])
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 400);
 }
 

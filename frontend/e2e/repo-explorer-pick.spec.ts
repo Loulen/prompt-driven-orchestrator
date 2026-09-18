@@ -75,8 +75,8 @@ test("explorer lists dirs-only, navigates, and picks a git repo through validati
 
   // The pick reused the existing validation/branch-loading flow — no new logic.
   await expect(page.getByTestId("repo-valid")).toBeVisible({ timeout: 10_000 });
-  await expect(page.getByTestId("source-branch-select")).toBeVisible();
-  await expect(page.getByTestId("source-branch-select")).toContainText("main");
+  await expect(page.getByTestId("source-branch-trigger")).toBeVisible();
+  await expect(page.getByTestId("source-branch-trigger")).toContainText("main");
 });
 
 test("picking a non-git folder validates red (any folder pickable, git gates)", async ({

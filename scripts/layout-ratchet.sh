@@ -34,9 +34,21 @@ cd "$(git rev-parse --show-toplevel)"
 #   down when tidied.
 # frontend/src/components: 191 admits OrchestrationTab.test.tsx (#783) — the tab
 #   and its shared pastilles had no component test; the stale pill needed one.
+# frontend/src/components: 194 (#802) admits SourceBranchField.tsx and its test, and
+#   re-admits one file that landed on main past the previous baseline. The field is
+#   ONE new concern — choosing a source branch and seeing its freshness — and it is
+#   deliberately one sibling rather than two (quick pick + sync button): the primary
+#   field and every secondary row use the same component, which is the only thing
+#   that keeps them from drifting the way #571 documented. Its pure logic went into
+#   the EXISTING lib/branchSelect.ts, and its fetch/race rules into hooks/ (neither
+#   is a watched directory), so nothing that could live in a sibling opened a file.
+# crates/pdo-daemon/src: 90 reconciles a drift already present on main (the CI
+#   ratchet was red there before #802). #802 itself adds NO daemon file: the fetch
+#   verb, the enriched branch list and their tests all folded into lib.rs beside
+#   `list_branches`, which already owned the concern. Ratchet down when tidied.
 BASELINES='
-frontend/src/components 191
-crates/pdo-daemon/src 87
+frontend/src/components 194
+crates/pdo-daemon/src 90
 '
 
 fail=0

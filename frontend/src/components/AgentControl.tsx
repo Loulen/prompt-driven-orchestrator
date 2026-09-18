@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Bookmark, Check, ChevronDown, ChevronLeft, GitFork, SlidersHorizontal, TriangleAlert } from "lucide-react";
 import type { AgentChoice, AgentCombination, AgentProfile } from "../types";
 import type { HarnessCatalog } from "../lib/harness";
-import { findHarnessOption } from "../lib/harness";
+import { findHarnessOption, effortOffer } from "../lib/harness";
 import HarnessSelect from "./HarnessSelect";
 import ModelPicker from "./ModelPicker";
 import EffortPicker from "./EffortPicker";
@@ -50,6 +50,12 @@ export default function AgentControl({
     : choice?.mode === "custom" ? SlidersHorizontal
     : GitFork;
   const harnessOption = findHarnessOption(catalog, custom.harness);
+  // #798: the custom pane's effort offer is read against the model THIS pane has
+  // selected (seeded from the choice when editing an existing custom, else from
+  // the inherited combination it opens on) — per-model key authoritative
+  // (`[]` included), missing key on the harness's global efforts; authoritative
+  // ⇒ a stored effort outside the offer warns instead of silently persisting.
+  const effort = effortOffer(harnessOption, custom.model);
 
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -150,8 +156,9 @@ export default function AgentControl({
                   Effort <span className="text-fg-4">optional</span>
                   <EffortPicker
                     value={custom.effort ?? null}
-                    onChange={(effort) => setCustom({ ...custom, effort })}
-                    efforts={harnessOption?.efforts ?? []}
+                    onChange={(next) => setCustom({ ...custom, effort: next })}
+                    efforts={effort.levels}
+                    strict={effort.authoritative}
                     testid={`${testId}-custom-effort`}
                     disabled={!(harnessOption?.hasEffort ?? true)}
                   />

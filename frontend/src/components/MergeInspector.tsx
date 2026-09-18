@@ -4,7 +4,7 @@ import ModelPicker from "./ModelPicker";
 import EffortPicker from "./EffortPicker";
 import HarnessSelect from "./HarnessSelect";
 import { useHarnessCatalog } from "../hooks/useHarnessCatalog";
-import { findHarnessOption, resolveEditorHarness } from "../lib/harness";
+import { findHarnessOption, effortOffer, resolveEditorHarness } from "../lib/harness";
 
 export default function MergeInspector() {
   const openTabs = useEditStore((s) => s.openTabs);
@@ -28,6 +28,11 @@ export default function MergeInspector() {
   // the model/effort mean and whether the effort picker greys.
   const resolvedHarness = resolveEditorHarness(node);
   const harnessOption = findHarnessOption(harnessCatalog, resolvedHarness);
+  // #798: same offer rule as every consumer — read against the node's SELECTED
+  // model, per-model key authoritative (`[]` included), missing key on the
+  // harness's global efforts; authoritative ⇒ unsupported stored values warn
+  // instead of silently persisting (ADR-0001).
+  const effort = effortOffer(harnessOption, node.model);
 
   return (
     <aside className="flex h-full flex-col bg-bg-2 overflow-y-auto">
@@ -93,7 +98,8 @@ export default function MergeInspector() {
           <EffortPicker
             value={node.effort ?? null}
             onChange={(v) => updateNode(node.id, { effort: v })}
-            efforts={harnessOption?.efforts ?? []}
+            efforts={effort.levels}
+            strict={effort.authoritative}
             testid="merge-effort"
             disabled={!(harnessOption?.hasEffort ?? true)}
           />

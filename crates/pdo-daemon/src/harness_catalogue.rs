@@ -17,33 +17,43 @@
 //! environment. The two responsibilities meet in [`crate::lib`]'s settings view and
 //! the boot probe.
 //!
-//! ## Four sources, machine-generated first (#629, #705, ADR-0056)
+//! ## Five sources, machine-generated first (#629, #705, #798, ADR-0056)
 //!
 //! A binary does not always print its enumeration where a `--help` reader looks.
 //! Measured on `copilot` 1.0.80: `--help` enumerates the effort stops but describes
 //! `--model` in prose, while the ids live in two other places. Measured on `pi`
 //! 0.85.1: `--help` describes `--model` as a pattern but a `--list-models` flag prints
-//! the whole embedded catalogue as a table. So the module exposes **four readers**,
+//! the whole embedded catalogue as a table. So the module exposes **five readers**,
 //! which the runner tries in preference order:
 //!
 //! 1. [`parse_completion_script`] — the shell-completion script (`<bin> completion
 //!    bash`). Machine-**generated** from the CLI's own declared choices, so it is the
-//!    most stable of the four and the one ADR-0056 prefers.
+//!    most stable of the five and the one ADR-0056 prefers.
 //! 2. [`parse_list_models`] — the model table (`<bin> --list-models`), generated from
 //!    the binary's embedded catalogue, carrying each model's **context window** (#705,
 //!    ADR-0056 §1 as amended by #702).
 //! 3. [`parse_settings_prose`] — the settings help topic (`<bin> help config`), where
 //!    a CLI documents each setting and bullets its allowed values.
 //! 4. [`parse_help`] — the `--help` reader of #616.
+//! 5. the **RPC model-effort table** (#798) — a `--mode rpc` session whose models are
+//!    listed (`get_available_models`) and then interrogated one by one (`set_model` +
+//!    `get_available_thinking_levels`), so the levels come from the binary's own
+//!    report *per model*, not from a model-name rule nor a `reasoning` boolean.
+//!    Measured on pi 0.85.1: `openrouter/stealth/union-alpha` reports `[off]` where
+//!    `openrouter/openai/gpt-5.4` reports `[off, low, medium, high, xhigh]` — no name
+//!    rule predicts that. It is the only source that answers the per-model axis
+//!    ([`Catalogue::model_efforts`]), and the most expensive by far, so it is gated
+//!    on the binary declaring every flag the session passes ([`rpc_probe_allowed`])
+//!    and bounded in time and model count.
 //!
-//! Each axis (models, efforts) takes the **highest-preference source that offers one**
-//! — see [`Catalogue::fill_missing_from`]. The two richer sources are only *run*
-//! against a binary whose `--help` declares them ([`advertises_subcommand`]); the
-//! runner's doc says why that gate is load-bearing.
+//! Each axis (models, efforts, per-model efforts) takes the **highest-preference
+//! source that offers one** — see [`Catalogue::fill_missing_from`]. The two richer
+//! sources are only *run* against a binary whose `--help` declares them
+//! ([`advertises_subcommand`]); the runner's doc says why that gate is load-bearing.
 //!
 //! ## Best-effort, never a contract (ADR-0053 §Limites)
 //!
-//! None of the four is an API: `--help` and `help config` are prose, a completion
+//! None of the five is an API: `--help` and `help config` are prose, a completion
 //! script is generated bash, a model table is aligned text. Each reader scans for the enumerations a CLI
 //! conventionally prints beside `--model` / `--effort` (`[a|b|c]`, `<a|b|c>`,
 //! `Choices: a, b, c`, `One of: …`, a bare parenthesised `(a, b, c)`, a run of quoted
@@ -77,6 +87,19 @@ pub(crate) struct Catalogue {
     /// `models`: [`Self::fill_missing_from`] moves the two together, so a window can
     /// never describe a model from another source.
     pub(crate) model_contexts: std::collections::BTreeMap<String, String>,
+    /// The **thinking levels offered per model** (#798), keyed by the model id
+    /// exactly as [`Self::models`] spells it (`provider/id` — the rendering
+    /// `--list-models` offers), to the levels the binary itself reports for that
+    /// model (pi's RPC `get_available_thinking_levels`), verbatim and in the
+    /// binary's order. A **missing key** is *unknown*: the client falls back to the
+    /// global [`Self::efforts`] axis. A **present** key — an empty vec included — is
+    /// *known*: the model offers exactly those levels (empty: none). Never inferred
+    /// from the model's name or a `reasoning` boolean: measured on pi 0.85.1,
+    /// `openrouter/stealth/union-alpha` reports `[off]` where
+    /// `openrouter/openai/gpt-5.4` reports `[off, low, medium, high, xhigh]`, and no
+    /// name rule predicts that. Filled only by the RPC source; every other source
+    /// leaves it empty (⇒ every model unknown, the pre-#798 behaviour).
+    pub(crate) model_efforts: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 impl Catalogue {
@@ -86,7 +109,7 @@ impl Catalogue {
     /// launch template carries an `{effort}` hole but whose help enumerates none
     /// (or vice-versa) is folded in by the caller — see the settings view.
     pub(crate) fn has_effort_axis(&self) -> bool {
-        !self.efforts.is_empty()
+        !self.efforts.is_empty() || !self.model_efforts.is_empty()
     }
 
     /// Fold a lower-preference source into this one, **per axis** (#629, ADR-0056).
@@ -97,6 +120,8 @@ impl Catalogue {
     ///
     /// The caller folds in **preference order**, so "already offered" means "answered
     /// by a source that outranks this one" — not "answered by whichever ran first".
+    /// The per-model effort table folds like a third axis: only the RPC source
+    /// answers it, so in practice the fold moves it or nothing.
     pub(crate) fn fill_missing_from(&mut self, other: Catalogue) {
         if self.models.is_empty() {
             self.models = other.models;
@@ -104,6 +129,9 @@ impl Catalogue {
         }
         if self.efforts.is_empty() {
             self.efforts = other.efforts;
+        }
+        if self.model_efforts.is_empty() {
+            self.model_efforts = other.model_efforts;
         }
     }
 
@@ -578,6 +606,104 @@ fn is_plausible_model_row_cell(cell: &str) -> bool {
         })
 }
 
+/// The flags the RPC model-effort probe passes besides `--mode rpc` (#798). Every
+/// one must be declared by the binary's `--help` before the probe may pass it: the
+/// same load-bearing gate as [`advertises_subcommand`] — an unknown flag is at best
+/// an error, at worst a prompt, and the session runs inside a `/settings` response.
+/// Together they make the session **inert**: no persistence, no extensions, no
+/// skills, no prompt templates, no themes, no context files, no network, no trust
+/// of project-local files — a discovery probe, not a working session.
+pub(crate) const RPC_HYGIENE_FLAGS: &[&str] = &[
+    "--no-session",
+    "--no-extensions",
+    "--no-skills",
+    "--no-prompt-templates",
+    "--no-themes",
+    "--no-context-files",
+    "--offline",
+    "--no-approve",
+];
+
+/// Whether `help` (a binary's `--help`) declares everything the RPC model-effort
+/// probe passes (#798): a `--mode` option whose own line offers `rpc`, and every
+/// [`RPC_HYGIENE_FLAGS`]. PURE; the runner uses it as its gate. Loose on purpose,
+/// like its siblings: a false positive costs one bounded probe that finds nothing,
+/// a false negative costs the per-model axis (the global efforts still stand).
+pub(crate) fn rpc_probe_allowed(help: &str) -> bool {
+    let mode_offers_rpc = help.lines().any(|line| {
+        line.split_whitespace()
+            .next()
+            .is_some_and(|w| w.trim_end_matches(',') == "--mode")
+            && line.split_whitespace().any(|w| w == "rpc")
+    });
+    mode_offers_rpc && RPC_HYGIENE_FLAGS.iter().all(|f| advertises_flag(help, f))
+}
+
+/// Whether `v` (a parsed RPC line) is a **successful response** of `command` — the
+/// envelope every RPC reader requires before it looks at `data`. An event, a
+/// failure, or another command's response is refused whole: a parser never
+/// scavenges a payload out of the wrong message.
+fn rpc_response_is(v: &serde_json::Value, command: &str) -> bool {
+    v["type"].as_str() == Some("response")
+        && v["command"].as_str() == Some(command)
+        && v["success"].as_bool() == Some(true)
+}
+
+/// The (provider, model id) pairs one `get_available_models` RPC response line
+/// offers (#798). PURE: a JSON line in, pairs out. Anything else — an event, a
+/// failure response, another command, malformed JSON — is an empty vec: the runner
+/// skips and waits, bounded, for the line it asked for. Each pair keeps its two
+/// fields verbatim; the runner composes the catalogue key as `provider/id`, the
+/// same rendering `--list-models` uses, so the keys meet [`Catalogue::models`]
+/// entries without translation.
+pub(crate) fn parse_rpc_models(line: &str) -> Vec<(String, String)> {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+        return Vec::new();
+    };
+    if !rpc_response_is(&v, "get_available_models") {
+        return Vec::new();
+    }
+    let Some(models) = v["data"]["models"].as_array() else {
+        return Vec::new();
+    };
+    models
+        .iter()
+        .filter_map(|m| {
+            let provider = m["provider"].as_str()?;
+            let id = m["id"].as_str()?;
+            (is_plausible_model_row_cell(provider) && is_plausible_model_row_cell(id))
+                .then(|| (provider.to_string(), id.to_string()))
+        })
+        .collect()
+}
+
+/// The thinking levels one `get_available_thinking_levels` RPC response reports
+/// (#798), verbatim and in the binary's order — `Some` also for an **empty** list
+/// (a present key that says the model offers none). `None` for anything that is
+/// not a successful response of that command, so a failure response leaves the
+/// model *unknown* (the global fallback) instead of *known-empty*.
+pub(crate) fn parse_rpc_thinking_levels(line: &str) -> Option<Vec<String>> {
+    let v = serde_json::from_str::<serde_json::Value>(line).ok()?;
+    if !rpc_response_is(&v, "get_available_thinking_levels") {
+        return None;
+    }
+    let levels = v["data"]["levels"].as_array()?;
+    levels
+        .iter()
+        .map(|level| {
+            let level = level.as_str()?;
+            is_plausible_level(level).then(|| level.to_string())
+        })
+        .collect()
+}
+
+/// A level token of the RPC table: short, whitespace-free, non-empty. Looser than
+/// [`is_plausible_value`] (a level id is a single word — `off`, `xhigh`) but strict
+/// enough that a mis-parsed sentence can never become a level.
+fn is_plausible_level(tok: &str) -> bool {
+    !tok.is_empty() && tok.len() <= 32 && tok.chars().all(|c| !c.is_whitespace() && !c.is_control())
+}
+
 /// Backstop bound on one case arm's body, for a generator that ends its arms some
 /// way other than `;;` / `esac`. The `compgen -W` list *itself* may be far longer
 /// (copilot's is ~700 chars); this bounds only where we look for the `-W`.
@@ -875,6 +1001,169 @@ mod tests {
         empty.fill_missing_from(table);
         assert_eq!(empty.models.len(), 17);
         assert_eq!(empty.model_contexts.len(), 17);
+    }
+
+    #[test]
+    fn the_pi_help_declares_everything_the_rpc_probe_passes() {
+        // #798: the real pi 0.85.1 `--help` passes the gate — its `--mode` line
+        // offers `rpc`, and every hygiene flag is declared. This is what lets the
+        // runner open a bounded RPC session on the installed binary.
+        assert!(rpc_probe_allowed(PI_HELP));
+    }
+
+    #[test]
+    fn a_mode_line_without_rpc_or_a_missing_hygiene_flag_refuses_the_rpc_probe() {
+        // The gate is per flag, not vibes: `--mode` that enumerates no `rpc` is a
+        // different binary shape; so is one missing hygiene flag (we never pass an
+        // argv token the binary didn't announce — the claude hazard).
+        let no_rpc = "  --mode <mode>                  Output mode: text (default), json\n";
+        let mut flags = String::from("Options:\n");
+        for flag in RPC_HYGIENE_FLAGS {
+            flags.push_str(&format!("  {flag}   off\n"));
+        }
+        let hygiene_only = format!("{flags}  --mode <mode>  Output mode: text, json, or rpc\n");
+        assert!(!rpc_probe_allowed(no_rpc));
+        assert!(rpc_probe_allowed(&hygiene_only));
+        // One flag short and the whole session is refused.
+        let mut short = flags.clone();
+        short.push_str("  --mode <mode>  Output mode: text, json, or rpc\n");
+        let dropped = short.replace("--no-approve", "--no-other-flag");
+        assert!(!rpc_probe_allowed(&dropped));
+    }
+
+    #[test]
+    fn rpc_model_responses_parse_to_verbatim_provider_id_pairs() {
+        // The measured shape of pi 0.85.1's `get_available_models` response
+        // (abridged to the issue's two models): `data.models`, each a Model object
+        // with `provider` and `id`.
+        let line = r#"{"id":"1","type":"response","command":"get_available_models","success":true,"data":{"models":[{"id":"openai/gpt-5.4","name":"GPT 5.4","provider":"openrouter","reasoning":true},{"id":"stealth/union-alpha","name":"Union","provider":"openrouter","reasoning":false}]}}"#;
+        assert_eq!(
+            parse_rpc_models(line),
+            vec![
+                ("openrouter".to_string(), "openai/gpt-5.4".to_string()),
+                ("openrouter".to_string(), "stealth/union-alpha".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn anything_but_a_successful_models_response_is_no_models() {
+        // Events, failures, other commands, garbage: all an empty vec, so the
+        // runner's skip-and-wait loop never scavenges the wrong line.
+        assert!(parse_rpc_models("not json at all").is_empty());
+        assert!(parse_rpc_models(r#"{"type":"agent_start"}"#).is_empty());
+        assert!(parse_rpc_models(
+            r#"{"id":"1","type":"response","command":"get_available_models","success":false,"error":"nope"}"#
+        )
+        .is_empty());
+        assert!(parse_rpc_models(
+            r#"{"id":"1","type":"response","command":"set_model","success":true,"data":{}}"#
+        )
+        .is_empty());
+        // A model row missing a field is dropped, not half-kept.
+        assert!(parse_rpc_models(
+            r#"{"id":"1","type":"response","command":"get_available_models","success":true,"data":{"models":[{"id":"no-provider"}]}}"#
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn rpc_thinking_levels_are_verbatim_in_the_binary_s_order() {
+        // The issue's exact repro, byte for byte from the binary's report.
+        let gpt54 = r#"{"id":"t","type":"response","command":"get_available_thinking_levels","success":true,"data":{"levels":["off","low","medium","high","xhigh"]}}"#;
+        assert_eq!(
+            parse_rpc_thinking_levels(gpt54),
+            Some(vec![
+                "off".to_string(),
+                "low".to_string(),
+                "medium".to_string(),
+                "high".to_string(),
+                "xhigh".to_string(),
+            ])
+        );
+        // A non-reasoning model still answers — `[off]` is a KNOWN offer of one
+        // level, not an unknown: `parse_rpc_thinking_levels` must not collapse it
+        // to None (that would silently fall back to the global axis).
+        let union_alpha = r#"{"id":"t","type":"response","command":"get_available_thinking_levels","success":true,"data":{"levels":["off"]}}"#;
+        assert_eq!(
+            parse_rpc_thinking_levels(union_alpha),
+            Some(vec!["off".to_string()])
+        );
+        // An empty list is present-and-empty: known to offer nothing.
+        assert_eq!(
+            parse_rpc_thinking_levels(
+                r#"{"id":"t","type":"response","command":"get_available_thinking_levels","success":true,"data":{"levels":[]}}"#
+            ),
+            Some(Vec::new())
+        );
+    }
+
+    #[test]
+    fn anything_but_a_successful_levels_response_is_none() {
+        assert_eq!(parse_rpc_thinking_levels("garbage"), None);
+        assert_eq!(
+            parse_rpc_thinking_levels(r#"{"type":"message_start"}"#),
+            None
+        );
+        assert_eq!(
+            parse_rpc_thinking_levels(
+                r#"{"id":"t","type":"response","command":"get_available_thinking_levels","success":false,"error":"no model"}"#
+            ),
+            None,
+            "a failure leaves the model UNKNOWN, not known-empty"
+        );
+    }
+
+    #[test]
+    fn malformed_levels_are_unknown_not_an_authoritative_subset() {
+        for levels in [serde_json::json!([null]), serde_json::json!(["off", 42])] {
+            let response = serde_json::json!({
+                "type": "response", "command": "get_available_thinking_levels",
+                "success": true, "data": {"levels": levels},
+            });
+            assert_eq!(parse_rpc_thinking_levels(&response.to_string()), None);
+        }
+    }
+
+    #[test]
+    fn model_efforts_alone_declare_an_effort_axis() {
+        let catalogue = Catalogue {
+            model_efforts: [("provider/model".into(), vec!["off".into()])].into(),
+            ..Default::default()
+        };
+        assert!(catalogue.has_effort_axis());
+    }
+
+    #[test]
+    fn model_efforts_fold_like_a_third_axis() {
+        // `fill_missing_from` moves the per-model table only when this catalogue
+        // has none — an already-answered axis is never overwritten, and an empty
+        // per-model vec is an ANSWER (it must survive the fold, not read as
+        // "unanswered").
+        let mut with_answer = Catalogue {
+            model_efforts: [("p/m".to_string(), Vec::new())].into_iter().collect(),
+            ..Default::default()
+        };
+        with_answer.fill_missing_from(Catalogue {
+            model_efforts: [("other/m".to_string(), vec!["off".to_string()])]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        });
+        assert_eq!(with_answer.model_efforts.len(), 1);
+        assert!(with_answer.model_efforts.contains_key("p/m"));
+
+        let mut empty = Catalogue::default();
+        empty.fill_missing_from(Catalogue {
+            model_efforts: [("p/m".to_string(), vec!["off".to_string()])]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        });
+        assert_eq!(
+            empty.model_efforts.get("p/m").map(Vec::as_slice),
+            Some(["off".to_string()].as_slice())
+        );
     }
 
     #[test]

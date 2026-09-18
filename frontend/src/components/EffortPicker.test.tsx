@@ -135,4 +135,76 @@ describe("EffortPicker (#424, #616)", () => {
     await userEvent.click(high);
     expect(onChange).toHaveBeenCalledWith("high");
   });
+
+  // #798: with `strict`, the levels are the AUTHORITATIVE support for the
+  // selected model — a stored value outside them is unsupported, warned, kept.
+  describe("strict — unsupported stored value (#798)", () => {
+    it("keeps the unsupported value visible, flags it, and warns — never deletes it", () => {
+      render(
+        <EffortPicker value="low" onChange={() => {}} efforts={["off"]} testid="node-effort" strict />,
+      );
+      // Preserved in its own pass-through segment, checked, flagged unsupported.
+      const extra = screen.getByTestId("node-effort-option-passthrough");
+      expect(extra).toHaveTextContent("low");
+      expect(extra).toHaveAttribute("aria-checked", "true");
+      expect(extra).toHaveAttribute("data-unsupported", "true");
+      // …and the warning names the way out: a supported level, or Default.
+      expect(screen.getByTestId("node-effort-unsupported")).toHaveTextContent(
+        /low.*not supported by the selected model/s,
+      );
+    });
+
+    it("does not offer the unsupported value as a supported option", () => {
+      // The supported list is EXACTLY Default + the served levels + the flagged
+      // passthrough — the unsupported value renders no radio among the levels.
+      render(
+        <EffortPicker value="max" onChange={() => {}} efforts={["off"]} testid="merge-effort" strict />,
+      );
+      expect(screen.getAllByRole("radio")).toHaveLength(3); // default, off, passthrough
+      expect(screen.queryByTestId("merge-effort-option-max")).toBeNull();
+      expect(screen.getByTestId("merge-effort-option-off")).toBeInTheDocument();
+    });
+
+    it("warns nothing for a supported value", () => {
+      render(
+        <EffortPicker value="off" onChange={() => {}} efforts={["off", "low"]} testid="node-effort" strict />,
+      );
+      expect(screen.queryByTestId("node-effort-unsupported")).toBeNull();
+      expect(screen.queryByTestId("node-effort-option-passthrough")).toBeNull();
+    });
+
+    it("an authoritative empty list (`[]`) warns on ANY stored value", () => {
+      render(<EffortPicker value="low" onChange={() => {}} efforts={[]} testid="node-effort" strict />);
+      expect(screen.getByTestId("node-effort-unsupported")).toBeInTheDocument();
+      expect(screen.getAllByRole("radio")).toHaveLength(2); // Default + preserved value
+    });
+
+    it("clicking a supported level replaces the unsupported one explicitly", async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+      render(
+        <EffortPicker value="low" onChange={onChange} efforts={["off"]} testid="node-effort" strict />,
+      );
+      await user.click(screen.getByTestId("node-effort-option-off"));
+      expect(onChange).toHaveBeenCalledWith("off");
+    });
+
+    it("clicking Default resets the unsupported value explicitly", async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+      render(
+        <EffortPicker value="low" onChange={onChange} efforts={["off"]} testid="node-effort" strict />,
+      );
+      await user.click(screen.getByTestId("node-effort-option-default"));
+      expect(onChange).toHaveBeenCalledWith(null);
+    });
+
+    it("without strict (capabilities unknown), the historical pass-through stands — no warning", () => {
+      render(<EffortPicker value="low" onChange={() => {}} efforts={["off"]} testid="node-effort" />);
+      expect(screen.getByTestId("node-effort-option-passthrough")).not.toHaveAttribute(
+        "data-unsupported",
+      );
+      expect(screen.queryByTestId("node-effort-unsupported")).toBeNull();
+    });
+  });
 });

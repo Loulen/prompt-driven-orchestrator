@@ -729,3 +729,58 @@ describe("PipelineInfoPanel — Repositories tab and Info header (#752)", () => 
     expect(screen.queryByTestId("run-failure-reason")).toBeNull();
   });
 });
+
+/**
+ * #804 / ADR-0070 §1. A Trigger fires, its pre-cut fetch fails, and the Run starts
+ * anyway on the last state known locally. The Info tab is where someone lands when
+ * a Run looks odd, so it must say that plainly — without dressing it up as a
+ * failure, because nothing failed.
+ */
+describe("PipelineInfoPanel — a Run cut after a failed pre-cut fetch (#804)", () => {
+  const FETCH_ERROR = {
+    kind: "network",
+    message: "fatal: unable to access 'https://github.com/Loulen/pdo.git/': Could not resolve host",
+  };
+
+  it("Info says the Run started on local state, and why", () => {
+    renderPanel(
+      makeRun({
+        source_branch: "origin/main",
+        source_fetch_error: FETCH_ERROR,
+      } as Partial<RunState>),
+    );
+    const box = screen.getByTestId("run-source-fetch-error");
+    expect(box).toHaveTextContent("Started on local state · fetch failed");
+    expect(box).toHaveTextContent("origin/main");
+    expect(box).toHaveTextContent("could not be refreshed before the cut");
+    expect(box).toHaveTextContent("last state known locally");
+  });
+
+  it("quotes git verbatim, in full on hover", () => {
+    renderPanel(makeRun({ source_fetch_error: FETCH_ERROR } as Partial<RunState>));
+    expect(screen.getByTestId("run-source-fetch-stderr")).toHaveAttribute(
+      "title",
+      FETCH_ERROR.message,
+    );
+  });
+
+  it("speaks of the source ref when the Run named no branch", () => {
+    renderPanel(makeRun({ source_fetch_error: FETCH_ERROR } as Partial<RunState>));
+    expect(screen.getByTestId("run-source-fetch-error")).toHaveTextContent(
+      "The source ref could not be refreshed before the cut.",
+    );
+  });
+
+  it("does not turn the Run red — it did not fail", () => {
+    renderPanel(
+      makeRun({ status: "running", source_fetch_error: FETCH_ERROR } as Partial<RunState>),
+    );
+    expect(screen.queryByTestId("run-failure-reason")).toBeNull();
+    expect(screen.queryByTestId("run-awaiting-reason")).toBeNull();
+  });
+
+  it("stays out of the way of every other Run", () => {
+    renderPanel(makeRun({ source_branch: "main" }));
+    expect(screen.queryByTestId("run-source-fetch-error")).toBeNull();
+  });
+});

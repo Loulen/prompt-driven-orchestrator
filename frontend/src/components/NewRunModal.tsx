@@ -1024,7 +1024,12 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
                     trap. The quick pick renders the held value verbatim, so the
                     switch to an unlisted `origin/<x>` (the popover's shortcut) is
                     safe — a `<select>` could not have expressed it at all. */}
+                {/* #804: the same field, told what it is choosing FOR. In Trigger
+                    mode — creating one, or editing one through the list's pencil —
+                    a local branch earns a warning, because every fire will cut from
+                    its local state and the pre-fire fetch cannot move it. */}
                 <SourceBranchField
+                  purpose={mode === "trigger" ? "trigger" : "run"}
                   id="source-branch"
                   value={sourceBranch}
                   onChange={setSourceBranch}

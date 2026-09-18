@@ -960,6 +960,21 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
+/// Why a Trigger's **pre-cut fetch** did not happen (#804, ADR-0070 §1) — the
+/// `{kind, message}` pair the branch verbs already answer, so the Run detail and
+/// the launch form speak of a failed fetch in exactly one shape.
+///
+/// `kind` is a plain `String`, deliberately NOT the daemon's closed
+/// `FetchErrorKind` enum: this is projected out of a stored payload, and a Run
+/// written by a newer binary that named a kind this one has never heard of must
+/// still read back — historical data stays readable, that is the one guarantee
+/// the project makes across versions. The surface renders `message` anyway.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceFetchError {
+    pub kind: String,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunState {
     pub run_id: String,
@@ -1133,6 +1148,18 @@ pub struct RunState {
     pub sandbox_prep: Option<SandboxPrepState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_branch: Option<String>,
+    /// Why the **pre-cut fetch** of the Trigger fire that created this Run failed
+    /// (#804, ADR-0070 §1), frozen from the `RunStarted` payload.
+    ///
+    /// Set ONLY on a fired Run whose fetch did not happen. Absent on every manual
+    /// Run (its form fetched before it opened), on every CLI-created child (it cuts
+    /// without fetching, by design — ADR-0070 §3) and on every fire that refreshed
+    /// fine. Its presence is **not** a failure signal: the Run started, from the
+    /// last state known locally, and the detail says so rather than leaving someone
+    /// to wonder why the fork point looks old. Nothing branches on it — it drives a
+    /// sentence, never `status`, admission or liveness.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_fetch_error: Option<SourceFetchError>,
     /// The commit `pdo/run-<id>` was cut from at Run start — the run's fork point,
     /// FROZEN here from the `RunStarted` payload (#417), same immutability posture as
     /// `source_branch`/`harness`/`RepoPin.sha`. The stable 3-dot base for the LOC stat
@@ -1286,6 +1313,7 @@ impl RunState {
             sandbox_image_raw_error: None,
             sandbox_prep: None,
             source_branch: None,
+            source_fetch_error: None,
             fork_sha: None,
             harness: None,
             agent_choice: None,
@@ -1885,6 +1913,30 @@ fn apply_run_event(state: &mut RunState, event: &Event) {
                 }
                 if let Some(sb) = payload.get("source_branch").and_then(|v| v.as_str()) {
                     state.source_branch = Some(sb.to_string());
+                }
+                // #804 (ADR-0070 §1): the reason a Trigger fire could not refresh the
+                // remotes before cutting. Read field by field rather than through a
+                // typed `from_value`, so a payload whose `kind` this binary does not
+                // know still projects its prose — the Run must stay readable, and this
+                // key drives a sentence, nothing else. An entry with no `message` has
+                // nothing to say and is dropped rather than rendered empty.
+                if let Some(raw) = payload.get("source_fetch_error") {
+                    let message = raw
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string();
+                    if !message.is_empty() {
+                        state.source_fetch_error = Some(SourceFetchError {
+                            kind: raw
+                                .get("kind")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("failed")
+                                .to_string(),
+                            message,
+                        });
+                    }
                 }
                 // #417: the FROZEN fork point, projected the same way as `source_branch`.
                 // The create chokepoint writes this key for every new Run (a resolvable
@@ -5964,6 +6016,96 @@ mod tests {
 
         let state = project(&events).unwrap();
         assert!(state.name.is_none());
+    }
+
+    /// #804 / ADR-0070 §1: a fire whose pre-cut fetch failed still produced a Run.
+    /// The projection carries the reason so the detail can say "started on local
+    /// state" — and says nothing about `status`, which stays whatever the run did.
+    #[test]
+    fn run_started_projects_the_pre_cut_fetch_failure() {
+        let events = vec![make_event_with_payload(
+            EventKind::RunStarted,
+            None,
+            serde_json::json!({
+                "pipeline_name": "test-pipe",
+                "input": "do stuff",
+                "source_branch": "origin/main",
+                "source_fetch_error": {
+                    "kind": "network",
+                    "message": "fatal: unable to access 'https://github.com/…': Could not resolve host",
+                },
+            }),
+        )];
+
+        let state = project(&events).unwrap();
+        let error = state.source_fetch_error.expect("the reason the Run carries");
+        assert_eq!(error.kind, "network");
+        assert!(error.message.contains("Could not resolve host"));
+        assert_eq!(state.source_branch.as_deref(), Some("origin/main"));
+        assert_eq!(
+            state.status,
+            RunStatus::Running,
+            "a failed pre-cut fetch is not a failed Run"
+        );
+    }
+
+    #[test]
+    fn run_started_without_a_fetch_failure_carries_none() {
+        let events = vec![make_event_with_payload(
+            EventKind::RunStarted,
+            None,
+            serde_json::json!({ "pipeline_name": "test-pipe", "input": "do stuff" }),
+        )];
+        assert!(project(&events).unwrap().source_fetch_error.is_none());
+    }
+
+    /// The historical-readability guarantee, at this key: a Run written by a newer
+    /// binary naming a kind this one never heard of must still read back with its
+    /// prose intact. A `kind` that is missing altogether degrades to `failed`
+    /// rather than dropping the sentence.
+    #[test]
+    fn an_unknown_fetch_failure_kind_still_projects_its_prose() {
+        let events = vec![make_event_with_payload(
+            EventKind::RunStarted,
+            None,
+            serde_json::json!({
+                "pipeline_name": "test-pipe",
+                "input": "do stuff",
+                "source_fetch_error": { "kind": "proxy_refused", "message": "407 from the proxy" },
+            }),
+        )];
+        let error = project(&events).unwrap().source_fetch_error.unwrap();
+        assert_eq!(error.kind, "proxy_refused");
+        assert_eq!(error.message, "407 from the proxy");
+
+        let events = vec![make_event_with_payload(
+            EventKind::RunStarted,
+            None,
+            serde_json::json!({
+                "pipeline_name": "test-pipe",
+                "input": "do stuff",
+                "source_fetch_error": { "message": "no kind at all" },
+            }),
+        )];
+        let error = project(&events).unwrap().source_fetch_error.unwrap();
+        assert_eq!(error.kind, "failed");
+        assert_eq!(error.message, "no kind at all");
+    }
+
+    /// An entry with nothing to say is dropped rather than rendered as an empty
+    /// box on the Run detail.
+    #[test]
+    fn a_fetch_failure_with_no_message_projects_nothing() {
+        let events = vec![make_event_with_payload(
+            EventKind::RunStarted,
+            None,
+            serde_json::json!({
+                "pipeline_name": "test-pipe",
+                "input": "do stuff",
+                "source_fetch_error": { "kind": "failed", "message": "   " },
+            }),
+        )];
+        assert!(project(&events).unwrap().source_fetch_error.is_none());
     }
 
     #[test]

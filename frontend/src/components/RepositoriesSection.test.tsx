@@ -170,3 +170,50 @@ describe("RepositoriesSection (Run panel · Repositories tab)", () => {
     expect(screen.queryByTestId("spawn-visibility-note")).toBeNull();
   });
 });
+
+/**
+ * #804: the primary pin now states its cut point like the secondaries always did,
+ * and marks it when a Trigger's pre-cut fetch failed. A complement to the Info
+ * tab's sentence, not a replacement — nobody opens Repositories to find out why a
+ * Run looks odd, but once here the pin should not be the only one saying nothing.
+ */
+describe("the primary repo's cut point (#804)", () => {
+  const FETCH_ERROR = { kind: "network", message: "fatal: unable to access …: Could not resolve host" };
+
+  function makeCutRun(over: Partial<RunState> = {}): RunState {
+    return {
+      ...makeMultiRepoRun("running", []),
+      source_branch: "origin/main",
+      fork_sha: "0c051abf9911223344",
+      ...over,
+    } as RunState;
+  }
+
+  it("names the branch and the commit the Run was cut from", () => {
+    render(<RepositoriesSection run={makeCutRun()} />);
+    const cut = screen.getByTestId("primary-repo-cut");
+    expect(cut).toHaveTextContent("origin/main");
+    // The short sha, as the secondaries show theirs.
+    expect(cut).toHaveTextContent("0c051abf");
+    expect(cut).not.toHaveTextContent("0c051abf99");
+  });
+
+  it("falls back to HEAD when the Run named no source branch", () => {
+    render(<RepositoriesSection run={makeCutRun({ source_branch: null })} />);
+    expect(screen.getByTestId("primary-repo-cut")).toHaveTextContent("HEAD");
+  });
+
+  it("marks the pin when the pre-cut fetch failed, with git's reason on hover", () => {
+    render(<RepositoriesSection run={makeCutRun({ source_fetch_error: FETCH_ERROR })} />);
+    const mark = screen.getByTestId("primary-repo-fetch-failed");
+    expect(mark).toHaveAccessibleName(
+      `Fetch failed before the cut — cut from local state. ${FETCH_ERROR.message}`,
+    );
+    expect(mark).toHaveAttribute("title", expect.stringContaining("cut from local state"));
+  });
+
+  it("leaves the pin unmarked on every other Run", () => {
+    render(<RepositoriesSection run={makeCutRun()} />);
+    expect(screen.queryByTestId("primary-repo-fetch-failed")).toBeNull();
+  });
+});

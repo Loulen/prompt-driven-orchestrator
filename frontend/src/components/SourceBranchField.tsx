@@ -41,6 +41,14 @@ import {
  */
 
 interface Props {
+  /**
+   * What the chosen branch is FOR (#804). `"run"` — the default — is a one-shot
+   * launch: the form just fetched, so what you see is what you get. `"trigger"`
+   * is a template that will fire again and again, which is the only context where
+   * a *local* branch is worth a warning: the pre-fire fetch cannot move it, so
+   * every fire cuts from wherever that branch was left on disk.
+   */
+  purpose?: "run" | "trigger";
   /** The held `source_branch` / `base_branch`, posted verbatim. */
   value: string;
   onChange: (branch: string) => void;
@@ -64,6 +72,7 @@ interface Props {
 }
 
 export default function SourceBranchField({
+  purpose = "run",
   value,
   onChange,
   branches,
@@ -327,11 +336,54 @@ export default function SourceBranchField({
           }}
           upstream={upstreamSwitchTarget(selected)}
           branchName={value}
+          purpose={purpose}
           testIdPrefix={testIdPrefix}
         />
+
+        {/* ── #804: the one thing a Trigger's source branch can be wrong about.
+            The slot is rendered for EVERY branch in Trigger mode and only filled
+            for a local one, so switching selection never shifts the row under the
+            cursor. Nothing to click: the escape hatch (`Launch from origin/…`)
+            already lives one button to the left, and a second affordance saying
+            the same thing would just be another place to disagree with it. */}
+        {purpose === "trigger" && (
+          <span
+            className="flex w-3 shrink-0 self-stretch items-center justify-center"
+            data-testid={`${testIdPrefix}-local-warning-slot`}
+          >
+            {selected?.kind === "local" && (
+              <span
+                role="img"
+                title={localBranchWarning(selected)}
+                aria-label={localBranchWarning(selected)}
+                data-testid={`${testIdPrefix}-local-warning`}
+              >
+                <TriangleAlert size={12} className="text-fg-4" aria-hidden />
+              </span>
+            )}
+          </span>
+        )}
       </div>
     </div>
   );
+}
+
+/**
+ * What a local branch means on a Trigger, said plainly (#804, ADR-0070 §1) — an
+ * honest reminder, not an error: the choice is legitimate, it just does not mean
+ * what "fetch before the cut" might suggest.
+ *
+ * The recommendation is dropped when the branch tracks nothing, because there
+ * would be no `origin/<branch>` to point at — naming one that does not exist
+ * would send the reader to a ref the picker cannot offer.
+ */
+function localBranchWarning(branch: BranchRef): string {
+  const base =
+    "Local branch — each fire cuts from its local state, which the pre-fire fetch does not move.";
+  // The same target the sync popover's shortcut offers, so the two never name
+  // different refs.
+  const target = upstreamSwitchTarget(branch);
+  return target ? `${base} Prefer ${target}.` : base;
 }
 
 /**
@@ -492,6 +544,7 @@ function SyncButton({
   onSwitchToUpstream,
   upstream,
   branchName,
+  purpose,
   testIdPrefix,
 }: {
   state: SyncState;
@@ -501,6 +554,7 @@ function SyncButton({
   onSwitchToUpstream: () => void;
   upstream: string | null;
   branchName: string;
+  purpose: "run" | "trigger";
   testIdPrefix: string;
 }) {
   const gap = state.kind === "gap" ? state.gap : null;
@@ -572,6 +626,7 @@ function SyncButton({
           onSwitchToUpstream={onSwitchToUpstream}
           upstream={upstream}
           branchName={branchName}
+          purpose={purpose}
           testIdPrefix={testIdPrefix}
         />
       )}
@@ -585,6 +640,7 @@ function SyncPopover({
   onSwitchToUpstream,
   upstream,
   branchName,
+  purpose,
   testIdPrefix,
 }: {
   state: SyncState;
@@ -592,6 +648,7 @@ function SyncPopover({
   onSwitchToUpstream: () => void;
   upstream: string | null;
   branchName: string;
+  purpose: "run" | "trigger";
   testIdPrefix: string;
 }) {
   const fetchAgain = (
@@ -698,7 +755,20 @@ function SyncPopover({
           <Title icon={<Cloud size={12} className="text-acc" />}>
             Remote ref — as of last fetch
           </Title>
-          <Body>{fetchedSentence(state.lastFetchAt)}</Body>
+          {/* #804: on a Trigger, "as of last fetch" understates it — the fire
+              refreshes this ref itself. Said here rather than as a second icon:
+              a tracking ref is the RIGHT choice, and the popover is where someone
+              already comes to ask what the fire will do about freshness. */}
+          <Body>
+            {fetchedSentence(state.lastFetchAt)}
+            {purpose === "trigger" && (
+              <span data-testid={`${testIdPrefix}-sync-trigger-note`}>
+                {" "}
+                Fetched before the cut on each fire. A failed fetch still fires: the Run cuts
+                from the last known state and records the reason.
+              </span>
+            )}
+          </Body>
           <div className="mt-2 flex flex-wrap gap-1.5">{fetchAgain}</div>
         </>
       )}

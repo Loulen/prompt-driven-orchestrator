@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { FolderGit2, GitBranch, X, Plus } from "lucide-react";
+import { CloudOff, FolderGit2, GitBranch, X, Plus } from "lucide-react";
 import type { RunState } from "../types";
 import { editRunRepos } from "../api";
 import { useRecentReposStore } from "../stores/recentReposStore";
@@ -94,14 +94,45 @@ export default function RepositoriesSection({
       </span>
 
       {/* Primary — locked, read-only. It never has an alias, so it can be neither
-          removed nor re-pointed mid-run. */}
+          removed nor re-pointed mid-run.
+
+          #804: it now carries a `branch · sha` line like the secondaries. The
+          asymmetry was never intentional — the primary is the repo whose source
+          branch someone picked, so it is the one whose cut point is worth naming —
+          and it is where a Trigger's failed pre-cut fetch belongs on this tab. */}
       <div
         className="flex items-center gap-2 rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5"
         data-testid="primary-repo-row"
       >
-        <span className="flex-1 truncate font-mono text-fg" title={run.target_repo ?? ""}>
-          {run.target_repo}
-        </span>
+        <div className="flex min-w-0 flex-1 flex-col">
+          <span className="truncate font-mono text-fg" title={run.target_repo ?? ""}>
+            {run.target_repo}
+          </span>
+          <span
+            className="flex items-center gap-1 font-mono text-fg-4"
+            style={{ fontSize: "10px" }}
+            data-testid="primary-repo-cut"
+          >
+            <GitBranch size={10} className="shrink-0 text-fg-4" />
+            {run.source_branch ?? "HEAD"}
+            {run.fork_sha && ` · ${run.fork_sha.slice(0, 8)}`}
+            {/* Icon only, reason on hover: the Info tab already says it in full
+                (that is where someone lands from the status dot). Here it is a
+                marker on the pin, so the branch · sha reads as "and this is why
+                it may look older than you expect". */}
+            {run.source_fetch_error && (
+              <span
+                role="img"
+                className="flex shrink-0 items-center text-st-stale"
+                title={`Fetch failed before the cut — cut from local state. ${run.source_fetch_error.message}`}
+                aria-label={`Fetch failed before the cut — cut from local state. ${run.source_fetch_error.message}`}
+                data-testid="primary-repo-fetch-failed"
+              >
+                <CloudOff size={10} aria-hidden />
+              </span>
+            )}
+          </span>
+        </div>
         <span
           className="rounded bg-bg-4 px-1.5 py-0.5 font-medium text-fg-3"
           style={{ fontSize: "9.5px" }}

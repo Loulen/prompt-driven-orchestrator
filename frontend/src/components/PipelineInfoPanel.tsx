@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from "react";
-import { Info, Terminal, X, FileText, Code, Box, Loader, Bot, Copy, Download, ChevronDown, ChevronRight, Play, PowerOff, FileDiff, FolderGit2 } from "lucide-react";
+import { Info, Terminal, X, FileText, Code, Box, Loader, Bot, Copy, Download, ChevronDown, ChevronRight, Play, PowerOff, FileDiff, FolderGit2, CloudOff } from "lucide-react";
 import { SectionHead } from "./InspectorPrimitives";
 import TmuxTerminal from "./TmuxTerminal";
 import DiffTab from "./DiffTab";
@@ -662,6 +662,47 @@ function InfoTab({
               {run.awaiting_reason_code ? "Interrupted · awaiting you" : "Awaiting you"}
             </div>
             <div className="mt-0.5 break-words">{run.awaiting_reason}</div>
+          </div>
+        )}
+        {/* #804 / ADR-0070 §1: a Trigger fire that could not refresh the remotes
+            before cutting. Deliberately NOT red and NOT a failure — this Run ran;
+            it simply started from the last state known locally, which is the one
+            thing you cannot deduce from anywhere else on the page. Stale-tinted
+            (the same amber as a stale node), between the awaiting box and the
+            harness: it explains what the Run started ON, so it belongs with the
+            other facts about its start. */}
+        {run?.source_fetch_error && (
+          <div
+            className="mt-2 rounded border border-st-stale/30 bg-st-stale-bg px-2 py-1.5 text-fg-2"
+            style={{ fontSize: "10.5px" }}
+            data-testid="run-source-fetch-error"
+          >
+            <div className="flex items-center gap-1.5 font-medium text-st-stale">
+              <CloudOff size={11} className="shrink-0" />
+              Started on local state · fetch failed
+            </div>
+            <div className="mt-0.5 break-words">
+              {run.source_branch ? (
+                <>
+                  Source branch <span className="font-mono">{run.source_branch}</span> could not
+                  be refreshed before the cut.
+                </>
+              ) : (
+                <>The source ref could not be refreshed before the cut.</>
+              )}{" "}
+              The Run starts from the last state known locally.
+            </div>
+            {/* git's own words, one line: enough to recognise "no network" from
+                "no key" at a glance, the whole of it on hover and selectable for
+                a paste into a terminal. */}
+            <div
+              className="mt-1 truncate font-mono text-fg-4"
+              style={{ fontSize: "9.5px" }}
+              title={run.source_fetch_error.message}
+              data-testid="run-source-fetch-stderr"
+            >
+              {run.source_fetch_error.message}
+            </div>
           </div>
         )}
         {run?.harness && (

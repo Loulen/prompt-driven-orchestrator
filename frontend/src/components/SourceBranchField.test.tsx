@@ -409,3 +409,79 @@ describe("the sync popover", () => {
     expect(screen.getByTestId("branch-sync-popover")).toHaveTextContent("fast-forward: #803");
   });
 });
+
+/**
+ * #804 / ADR-0070 §1. A Trigger is a Run template that fires again and again, so
+ * the one thing its source branch can be *wrong* about is being local: the fire
+ * fetches before the cut, and a fetch cannot move a local branch. Everything here
+ * is invisible in `run` mode, where the form has just fetched and the launch is
+ * one-shot.
+ */
+describe("the Trigger's source branch (#804)", () => {
+  const warning = () => screen.queryByTestId("branch-local-warning");
+
+  it("warns on a local branch and points at the tracking ref to prefer", () => {
+    setup({ purpose: "trigger", value: "main" });
+    expect(warning()).toHaveAccessibleName(
+      "Local branch — each fire cuts from its local state, which the pre-fire fetch does not move. Prefer origin/main.",
+    );
+    // Hover carries the same words: nothing here is clickable, the sentence IS
+    // the affordance.
+    expect(warning()).toHaveAttribute(
+      "title",
+      expect.stringContaining("the pre-fire fetch does not move"),
+    );
+  });
+
+  it("drops the recommendation when the branch tracks nothing to prefer", () => {
+    setup({ purpose: "trigger", value: "local-only" });
+    expect(warning()).toHaveAccessibleName(
+      "Local branch — each fire cuts from its local state, which the pre-fire fetch does not move.",
+    );
+  });
+
+  it("says nothing about a tracking ref — that is the right choice", () => {
+    setup({ purpose: "trigger", value: "origin/feature-remote-only" });
+    expect(warning()).not.toBeInTheDocument();
+  });
+
+  it("never warns on a one-shot Run, local branch or not", () => {
+    setup({ value: "main" });
+    expect(warning()).not.toBeInTheDocument();
+  });
+
+  it("reserves the icon's width whatever is selected, so nothing jumps", () => {
+    // Switching a Trigger's source from `main` to `origin/main` is one click in
+    // the popover; the field must not shift under the cursor while it happens.
+    const local = setup({ purpose: "trigger", value: "main" });
+    expect(within(local.container).getByTestId("branch-local-warning-slot")).toBeInTheDocument();
+    expect(within(local.container).getByTestId("branch-local-warning")).toBeInTheDocument();
+
+    const remote = setup({ purpose: "trigger", value: "origin/feature-remote-only" });
+    expect(within(remote.container).getByTestId("branch-local-warning-slot")).toBeInTheDocument();
+    expect(
+      within(remote.container).queryByTestId("branch-local-warning"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("costs the Run form nothing — no slot at all outside Trigger mode", () => {
+    setup({ value: "main" });
+    expect(screen.queryByTestId("branch-local-warning-slot")).not.toBeInTheDocument();
+  });
+
+  it("tells the sync popover of a tracking ref what a fire will do about it", () => {
+    setup({ purpose: "trigger", value: "origin/feature-remote-only" });
+    openSync();
+    const popover = screen.getByTestId("branch-sync-popover");
+    expect(popover).toHaveTextContent("Fetched before the cut on each fire.");
+    // Story 21: a failed fetch must not read as a lost fire.
+    expect(popover).toHaveTextContent("A failed fetch still fires");
+    expect(popover).toHaveTextContent("records the reason");
+  });
+
+  it("keeps that sentence out of the Run form", () => {
+    setup({ value: "origin/feature-remote-only" });
+    openSync();
+    expect(screen.queryByTestId("branch-sync-trigger-note")).not.toBeInTheDocument();
+  });
+});

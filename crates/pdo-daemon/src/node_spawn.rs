@@ -1212,6 +1212,15 @@ pub(crate) async fn spawn_node(
                 "prompt_preview": full_prompt.chars().take(500).collect::<String>(),
                 "node_type": node.node_type.as_str(),
                 "interactive": node.interactive,
+                // #810/ADR-0007: FREEZE the « Orchestrator » toggle beside
+                // `interactive`. The two together are the node's **genre**
+                // (kind) — the axis Stats › Performance filters on. Frozen for
+                // the same reason as the isolation below: reading the document
+                // at stat time would reclassify history after an edit. A
+                // pre-#810 `NodeStarted` has no key; its reader falls back to
+                // the Run's pipeline snapshot, which has carried `orchestrator`
+                // since #723.
+                "orchestrator": node.orchestrator,
                 // #653/ADR-0060: FREEZE where this NodeRun works. Every later
                 // reader — the re-spawn above, the restart probe, the completion
                 // path's merge-back decision — asks this event, never the

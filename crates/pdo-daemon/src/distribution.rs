@@ -13,9 +13,22 @@
 //! only for an empty sample — the caller (never this module) turns "no readable
 //! values" into a coverage/absence-reasons pair; a distribution itself does not
 //! know why a value is missing, only how many there were.
+//!
+//! ## Tukey fences (#811, story #808)
+//!
+//! The « Fenced » zoom level of a box-plot draws its whiskers at the **Tukey
+//! fences** rather than at min/max: the smallest observation still inside
+//! `[Q1 − 1.5 IQR, Q3 + 1.5 IQR]` and the largest one. They are computed
+//! **here**, on the observations, because the observations never leave the
+//! daemon (CONTEXT.md, « Niveau de zoom d'un box-plot »: « Aucun point
+//! individuel : le daemon ne renvoie jamais les observations ») — the frontend
+//! could not derive them from the six numbers alone. A fence is always an
+//! actual observation, never the theoretical bound: that is what makes the
+//! whisker a real value the tooltip can name.
 
-/// The six statistics one boxplot cell renders: the box (Q1–Q3), the median
-/// line, the mean dot, and the whiskers (min/max).
+/// The statistics one boxplot cell renders: the box (Q1–Q3), the median line,
+/// the mean (tooltip only since #811), the min/max whiskers of the « Full »
+/// zoom level and the Tukey fences of the « Fenced » one.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
 pub(crate) struct SixStats {
     pub mean: f64,
@@ -24,6 +37,13 @@ pub(crate) struct SixStats {
     pub q3: f64,
     pub min: f64,
     pub max: f64,
+    /// Smallest observation ≥ `q1 - 1.5 * (q3 - q1)` (#811). Equals `min` when
+    /// nothing lies below the bound, `q1` when the IQR is zero, and the single
+    /// value of a one-observation sample.
+    pub fence_low: f64,
+    /// Largest observation ≤ `q3 + 1.5 * (q3 - q1)` (#811). Mirror of
+    /// [`Self::fence_low`].
+    pub fence_high: f64,
 }
 
 /// The R-7 quantile of `sorted` (already sorted ascending, non-empty) at
@@ -57,14 +77,47 @@ pub(crate) fn r7_distribution(values: &[f64]) -> Option<SixStats> {
     let mut sorted = values.to_vec();
     sorted.sort_by(f64::total_cmp);
     let mean = sorted.iter().sum::<f64>() / sorted.len() as f64;
+    let q1 = r7_quantile(&sorted, 0.25);
+    let q3 = r7_quantile(&sorted, 0.75);
+    let (fence_low, fence_high) = tukey_fences(&sorted, q1, q3);
     Some(SixStats {
         mean,
         median: r7_quantile(&sorted, 0.5),
-        q1: r7_quantile(&sorted, 0.25),
-        q3: r7_quantile(&sorted, 0.75),
+        q1,
+        q3,
         min: sorted[0],
         max: *sorted.last().expect("non-empty"),
+        fence_low,
+        fence_high,
     })
+}
+
+/// The pair of **observed** Tukey fences of a sorted, non-empty sample: the
+/// smallest value ≥ `q1 - 1.5 IQR` and the largest ≤ `q3 + 1.5 IQR`.
+///
+/// Both searches always succeed — `q1` itself is ≥ the lower bound and `q3` ≤
+/// the upper one, and an R-7 quartile always sits inside `[min, max]` — so the
+/// fallbacks below never fire in practice; they keep the function total rather
+/// than panicking on an impossible sample. A zero IQR collapses the bounds onto
+/// the quartiles, which is exactly the acceptance criterion ("IQR nul donne des
+/// bornes égales à Q1 et Q3"), and a one-value sample collapses everything onto
+/// that value.
+fn tukey_fences(sorted: &[f64], q1: f64, q3: f64) -> (f64, f64) {
+    let whisker = 1.5 * (q3 - q1);
+    let low_bound = q1 - whisker;
+    let high_bound = q3 + whisker;
+    let fence_low = sorted
+        .iter()
+        .copied()
+        .find(|value| *value >= low_bound)
+        .unwrap_or(q1);
+    let fence_high = sorted
+        .iter()
+        .rev()
+        .copied()
+        .find(|value| *value <= high_bound)
+        .unwrap_or(q3);
+    (fence_low, fence_high)
 }
 
 #[cfg(test)]
@@ -122,8 +175,62 @@ mod tests {
                 q3: 42.0,
                 min: 42.0,
                 max: 42.0,
+                fence_low: 42.0,
+                fence_high: 42.0,
             }
         );
+    }
+
+    #[test]
+    fn tukey_fences_fall_back_on_min_and_max_when_no_observation_is_an_outlier() {
+        // A tight sample: every value sits inside [Q1 − 1.5 IQR, Q3 + 1.5 IQR],
+        // so the Fenced level draws exactly the same whiskers as Full.
+        let stats = r7_distribution(&[10.0, 20.0, 30.0, 40.0, 50.0]).unwrap();
+        assert!(close(stats.q1, 20.0), "{stats:?}");
+        assert!(close(stats.q3, 40.0), "{stats:?}");
+        assert_eq!(stats.fence_low, stats.min);
+        assert_eq!(stats.fence_high, stats.max);
+    }
+
+    #[test]
+    fn tukey_fences_cut_an_outlier_on_one_side_only() {
+        // The story's very shape (#808): comparable runs and one much longer.
+        // Q1 = 22.5, Q3 = 47.5, IQR = 25 → bounds [-15, 85]; only 500 is out,
+        // and the low fence stays on the untouched min.
+        let stats = r7_distribution(&[10.0, 20.0, 30.0, 40.0, 50.0, 500.0]).unwrap();
+        assert_eq!(stats.max, 500.0);
+        assert_eq!(stats.fence_low, 10.0, "{stats:?}");
+        assert_eq!(stats.fence_high, 50.0, "{stats:?}");
+
+        // Mirror image: the outlier below, the high fence untouched.
+        let stats = r7_distribution(&[-500.0, 10.0, 20.0, 30.0, 40.0, 50.0]).unwrap();
+        assert_eq!(stats.min, -500.0);
+        assert_eq!(stats.fence_low, 10.0, "{stats:?}");
+        assert_eq!(stats.fence_high, 50.0, "{stats:?}");
+    }
+
+    #[test]
+    fn a_zero_iqr_puts_both_fences_on_the_quartiles() {
+        // #811 AC: "IQR nul donne des bornes égales à Q1 et Q3" — with no
+        // spread between the quartiles the bounds are the quartiles themselves,
+        // so both extremes fall outside and the Fenced level collapses to the
+        // median line.
+        let stats = r7_distribution(&[1.0, 5.0, 5.0, 5.0, 5.0, 5.0, 9.0]).unwrap();
+        assert!(close(stats.q1, 5.0), "{stats:?}");
+        assert!(close(stats.q3, 5.0), "{stats:?}");
+        assert_eq!(stats.fence_low, stats.q1, "{stats:?}");
+        assert_eq!(stats.fence_high, stats.q3, "{stats:?}");
+        assert_eq!(stats.min, 1.0);
+        assert_eq!(stats.max, 9.0);
+    }
+
+    #[test]
+    fn a_fence_is_always_an_observation_never_the_theoretical_bound() {
+        // Q1 = 2, Q3 = 4, IQR = 2 → bounds [-1, 7]; the fences land on 1 and 5,
+        // the observations, not on -1 and 7.
+        let stats = r7_distribution(&[1.0, 2.0, 3.0, 4.0, 5.0]).unwrap();
+        assert_eq!(stats.fence_low, 1.0, "{stats:?}");
+        assert_eq!(stats.fence_high, 5.0, "{stats:?}");
     }
 
     #[test]

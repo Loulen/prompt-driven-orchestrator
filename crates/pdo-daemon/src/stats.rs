@@ -40,6 +40,28 @@ pub(crate) struct StatsQuery {
     pub to: String,
     /// `day` | `week` | `month`.
     pub bucket: String,
+    /// « Runs terminés seulement » (#810): narrow the cohort to Runs that
+    /// reached `RunCompleted`. Wire default `false` — the whole cohort, whatever
+    /// each Run's final status. Shared verbatim with `/stats/performance` so the
+    /// three sections describe the same Runs; Overview then shows **zero
+    /// errors** rather than hiding its card (nothing is masked).
+    #[serde(default)]
+    pub completed_only: bool,
+}
+
+/// The SQL fragment that narrows a Run-keyed query to the « completed runs
+/// only » cohort (#810), or nothing at all. Written once so Overview, Sessions
+/// and Cost can never drift into describing different Runs. The alias names the
+/// table the caller's rows are keyed by.
+fn completed_only_sql(completed_only: bool, run_alias: &str) -> String {
+    if completed_only {
+        format!(
+            " AND EXISTS (SELECT 1 FROM events done \
+               WHERE done.run_id = {run_alias}.run_id AND done.kind = 'run_completed')"
+        )
+    } else {
+        String::new()
+    }
 }
 
 /// Map a bucket granularity to its SQLite `strftime` format. `None` for an
@@ -223,18 +245,23 @@ struct SessionStats {
 }
 
 /// Count events of one `kind` per period bucket. Backed by `idx_events_kind_ts`.
+/// Under `completed_only` (#810) an event only counts if its Run reached
+/// `RunCompleted` — which is what turns the Errors series to zero: a Run with a
+/// `run_completed` has no `run_failed` of its own.
 async fn count_events_by_bucket(
     db: &sqlx::SqlitePool,
     fmt: &str,
     kind: &str,
     from: &str,
     to: &str,
+    completed_only: bool,
 ) -> Result<Vec<BucketCount>, sqlx::Error> {
-    let rows = sqlx::query_as::<_, (String, i64)>(
-        "SELECT strftime(?, ts) AS bucket, COUNT(*) AS count \
-         FROM events WHERE kind = ? AND ts >= ? AND ts < ? \
+    let rows = sqlx::query_as::<_, (String, i64)>(&format!(
+        "SELECT strftime(?, e.ts) AS bucket, COUNT(*) AS count \
+         FROM events e WHERE e.kind = ? AND e.ts >= ? AND e.ts < ?{} \
          GROUP BY bucket ORDER BY bucket",
-    )
+        completed_only_sql(completed_only, "e")
+    ))
     .bind(fmt)
     .bind(kind)
     .bind(from)
@@ -308,14 +335,15 @@ async fn session_stats(
         Option<i64>,
         Option<String>,
     );
-    let rows = sqlx::query_as::<_, SessionRow>(
+    let rows = sqlx::query_as::<_, SessionRow>(&format!(
         "SELECT strftime(?, cohort.ts), cohort.run_id, cohort.payload, event.id, \
                 event.node_id, event.iter, event.payload \
          FROM events cohort \
          JOIN events event ON event.run_id = cohort.run_id AND event.kind = 'node_started' \
-         WHERE cohort.kind = 'run_started' AND cohort.ts >= ? AND cohort.ts < ? \
+         WHERE cohort.kind = 'run_started' AND cohort.ts >= ? AND cohort.ts < ?{} \
          ORDER BY cohort.ts, event.id",
-    )
+        completed_only_sql(q.completed_only, "cohort")
+    ))
     .bind(fmt)
     .bind(&q.from)
     .bind(&q.to)
@@ -457,13 +485,15 @@ async fn compute_overview(
     fmt: &str,
     from: &str,
     to: &str,
+    completed_only: bool,
 ) -> Result<StatsOverview, sqlx::Error> {
     // `run_skipped` is NOT an error (invariant #4): errors = `run_failed` only.
-    let runs = count_events_by_bucket(db, fmt, "run_started", from, to).await?;
-    let errors = count_events_by_bucket(db, fmt, "run_failed", from, to).await?;
+    let runs = count_events_by_bucket(db, fmt, "run_started", from, to, completed_only).await?;
+    let errors = count_events_by_bucket(db, fmt, "run_failed", from, to, completed_only).await?;
     // Sessions = `node_started` starts (re-spawns and loop laps included, manager
     // excluded by construction) — the same cumulative count as the per-run stat.
-    let sessions = count_events_by_bucket(db, fmt, "node_started", from, to).await?;
+    let sessions =
+        count_events_by_bucket(db, fmt, "node_started", from, to, completed_only).await?;
     let fires = fires_by_pipeline(db, from, to).await?;
     let created = triggers_created_runs(db, from, to).await?;
 
@@ -500,7 +530,7 @@ pub(crate) async fn stats_overview(
             .into_response();
     };
     match (
-        compute_overview(&state.db, fmt, &q.from, &q.to).await,
+        compute_overview(&state.db, fmt, &q.from, &q.to, q.completed_only).await,
         session_stats(&state, &q, fmt).await,
     ) {
         (Ok(mut overview), Ok(sessions)) => {
@@ -541,6 +571,10 @@ pub(crate) struct StatsHarnessCost {
     pub readable: i64,
     pub unknown: i64,
     pub average_usd: Option<f64>,
+    /// The **median** cost per readable execution (#811) — the value the Cost
+    /// tab shows, `average_usd` staying on the wire beside it. See
+    /// [`CostMetricAcc::median_usd`].
+    pub median_usd: Option<f64>,
     pub unpriced_models: Vec<String>,
     pub missing_reasons: Vec<String>,
     /// Where THIS harness's model value in the row was read from (ADR-0065 §1)
@@ -562,6 +596,10 @@ pub(crate) struct StatsHarnessCost {
 pub(crate) struct StatsCostAggregate {
     pub usd: Option<f64>,
     pub average_usd: Option<f64>,
+    /// The **median** cost per readable execution (#811) — additive beside
+    /// `average_usd`, which stays for the tooltip and for any client that has
+    /// not caught up. See [`CostMetricAcc::median_usd`].
+    pub median_usd: Option<f64>,
     pub estimated: bool,
     pub partial: bool,
     pub executions: i64,
@@ -678,11 +716,38 @@ struct CostMetricAcc {
     executions: i64,
     readable: i64,
     unknown: i64,
+    /// One entry per **readable** execution, the raw material of `median_usd`
+    /// (#811). Kept alongside `readable_usd` rather than replacing it: the sum
+    /// is what an average needs, and a median needs the sample itself. Every
+    /// `add_*` below pushes exactly `readable` entries summing to
+    /// `readable_usd`, so the two figures always describe the same population.
+    readable_values: Vec<f64>,
     unpriced_models: BTreeSet<String>,
     missing_reasons: BTreeSet<String>,
 }
 
 impl CostMetricAcc {
+    /// Spread one readable slice's dollars over the executions it covers — a
+    /// contribution carries a single figure for `n` executions, and only the
+    /// per-execution values make a median. Splitting evenly leaves the mean
+    /// untouched (`n × usd/n = usd`), so `median_usd` and `average_usd` stay
+    /// two readings of one population instead of two populations.
+    fn record_readable(&mut self, usd: f64, executions: i64) {
+        if executions <= 0 {
+            return;
+        }
+        let each = usd / executions as f64;
+        self.readable_values
+            .extend(std::iter::repeat_n(each, executions as usize));
+    }
+
+    /// R-7 median of the readable executions' costs (#811), `None` when no
+    /// execution's cost was readable — never `0`, exactly like `average_usd`.
+    /// R-7 so Cost and Performance say « median » about the same estimator.
+    fn median_usd(&self) -> Option<f64> {
+        crate::distribution::r7_distribution(&self.readable_values).map(|stats| stats.median)
+    }
+
     fn add_contribution(&mut self, contribution: &crate::run_cost::CostContribution) {
         self.executions += contribution.executions;
         self.readable += contribution.readable_executions;
@@ -692,6 +757,7 @@ impl CostMetricAcc {
             self.has_usd = true;
             if contribution.readable_executions > 0 {
                 self.readable_usd += usd;
+                self.record_readable(usd, contribution.readable_executions);
             }
         }
         self.estimated |= contribution.form == Some(crate::event_log::CostForm::Derived);
@@ -729,6 +795,7 @@ impl CostMetricAcc {
         }
         if all_readable {
             self.readable_usd += run_usd;
+            self.readable_values.push(run_usd);
         }
         self.readable += i64::from(all_readable);
         self.unknown += i64::from(!all_readable);
@@ -738,6 +805,7 @@ impl CostMetricAcc {
         StatsCostAggregate {
             usd: self.has_usd.then_some(self.usd),
             average_usd: (self.readable > 0).then_some(self.readable_usd / self.readable as f64),
+            median_usd: self.median_usd(),
             estimated: self.estimated,
             partial: self.partial,
             executions: self.executions,
@@ -759,6 +827,7 @@ impl CostMetricAcc {
             readable: self.readable,
             unknown: self.unknown.max(0),
             average_usd: (self.readable > 0).then_some(self.readable_usd / self.readable as f64),
+            median_usd: self.median_usd(),
             unpriced_models: self.unpriced_models.iter().cloned().collect(),
             missing_reasons: self.missing_reasons.iter().cloned().collect(),
             provenance: None,
@@ -780,6 +849,7 @@ impl CostMetricAcc {
             self.usd += usd;
             self.has_usd = true;
             self.readable_usd += usd;
+            self.record_readable(usd, slice.executions);
         }
         self.estimated |= slice.estimated;
         self.partial |= slice.partial;
@@ -1447,10 +1517,14 @@ pub(crate) async fn stats_cost(
             .into_response();
     };
 
-    let rows = match sqlx::query_as::<_, (String, String, Option<String>)>(
-        "SELECT run_id, strftime(?, ts) AS bucket, payload \
-         FROM events WHERE kind = 'run_started' AND ts >= ? AND ts < ? ORDER BY ts",
-    )
+    // #810: the memo this fold reads is per-Run (`compute_run_cost_breakdown_cached`,
+    // keyed by the Run's own event fingerprint), so the cohort switch cannot
+    // stale it — it selects which Runs enter the fold, never what one Run costs.
+    let rows = match sqlx::query_as::<_, (String, String, Option<String>)>(&format!(
+        "SELECT e.run_id, strftime(?, e.ts) AS bucket, e.payload \
+         FROM events e WHERE e.kind = 'run_started' AND e.ts >= ? AND e.ts < ?{} ORDER BY e.ts",
+        completed_only_sql(q.completed_only, "e")
+    ))
     .bind(fmt)
     .bind(&q.from)
     .bind(&q.to)
@@ -1734,7 +1808,9 @@ mod tests {
     async fn overview_runs_errors_sessions_per_day() {
         let db = mem_db().await;
         seed_oracle(&db).await;
-        let ov = compute_overview(&db, "%Y-%m-%d", FROM, TO).await.unwrap();
+        let ov = compute_overview(&db, "%Y-%m-%d", FROM, TO, false)
+            .await
+            .unwrap();
 
         assert_eq!(
             ov.runs,
@@ -1779,7 +1855,7 @@ mod tests {
         let db = mem_db().await;
         seed_oracle(&db).await;
         // A window that ends exactly at the 17th 00:00 excludes the 17th's runs.
-        let ov = compute_overview(&db, "%Y-%m-%d", FROM, "2026-07-17T00:00:00Z")
+        let ov = compute_overview(&db, "%Y-%m-%d", FROM, "2026-07-17T00:00:00Z", false)
             .await
             .unwrap();
         let total_runs: i64 = ov.runs.iter().map(|b| b.count).sum();
@@ -1946,6 +2022,102 @@ mod tests {
         assert_eq!(future.missing_reasons, vec!["harness has no cost source"]);
     }
 
+    /// #811 — « Médiane, jamais la moyenne »: a skewed cohort (one execution an
+    /// order of magnitude above the others, exactly the story's shape) where the
+    /// median and the average disagree, mixed with an execution whose cost is
+    /// unreadable. Both figures read the SAME readable population: the unreadable
+    /// execution enters neither, and it is a median of 2 against an average of 11,
+    /// not a second average under another name.
+    #[test]
+    fn cost_median_reads_only_readable_executions_and_resists_one_outlier() {
+        fn run(bucket: &str, usd: Option<f64>) -> CostRunRow {
+            CostRunRow {
+                bucket: bucket.to_string(),
+                pipeline_id: "p".to_string(),
+                pipeline_name: "Pipeline".to_string(),
+                project_id: "/repo".to_string(),
+                project_name: "repo".to_string(),
+                node_names: BTreeMap::from([("n".to_string(), "Node".to_string())]),
+                contributions: vec![crate::run_cost::CostContribution {
+                    harness: "claude".to_string(),
+                    scope: crate::run_cost::CostScope::Node,
+                    node_id: Some("n".to_string()),
+                    executions: 1,
+                    readable_executions: i64::from(usd.is_some()),
+                    usd,
+                    form: Some(crate::event_log::CostForm::Derived),
+                    reported_in_usd: false,
+                    partial: false,
+                    unpriced_models: Vec::new(),
+                    unavailable_reasons: match usd {
+                        Some(_) => Vec::new(),
+                        None => vec!["no readable transcript".to_string()],
+                    },
+                    model_slices: Vec::new(),
+                }],
+            }
+        }
+
+        let stats = fold_harness_cost(
+            &[
+                run("2026-07-15", Some(1.0)),
+                run("2026-07-16", Some(2.0)),
+                run("2026-07-17", Some(30.0)),
+                run("2026-07-18", None),
+            ],
+            Vec::new(),
+        );
+
+        assert_eq!(stats.total.executions, 4);
+        assert_eq!(stats.total.readable, 3);
+        assert_eq!(stats.total.unknown, 1);
+        assert_eq!(stats.total.median_usd, Some(2.0));
+        assert_eq!(stats.total.average_usd, Some(11.0));
+        // The per-harness slice tells the same story, and so does the Node row —
+        // which folds contributions one by one rather than Run by Run.
+        let claude = &stats.total.harnesses[0];
+        assert_eq!(claude.harness, "claude");
+        assert_eq!(claude.median_usd, Some(2.0));
+        assert_eq!(claude.average_usd, Some(11.0));
+        let node = &stats.by_pipeline[0].nodes[0];
+        assert_eq!(node.name, "Node");
+        assert_eq!(node.aggregate.median_usd, Some(2.0));
+        assert_eq!(node.aggregate.average_usd, Some(11.0));
+    }
+
+    #[test]
+    fn a_cohort_without_one_readable_cost_has_no_median_rather_than_zero() {
+        // Same discipline as `average_usd`: « un coût inconnu reste visible comme
+        // « — », jamais comme `$0` » (CONTEXT.md).
+        let stats = fold_harness_cost(
+            &[CostRunRow {
+                bucket: "2026-07-15".to_string(),
+                pipeline_id: "p".to_string(),
+                pipeline_name: "Pipeline".to_string(),
+                project_id: "/repo".to_string(),
+                project_name: "repo".to_string(),
+                node_names: BTreeMap::new(),
+                contributions: vec![crate::run_cost::CostContribution {
+                    harness: "future".to_string(),
+                    scope: crate::run_cost::CostScope::Node,
+                    node_id: Some("n".to_string()),
+                    executions: 1,
+                    readable_executions: 0,
+                    usd: None,
+                    form: None,
+                    reported_in_usd: false,
+                    partial: false,
+                    unpriced_models: Vec::new(),
+                    unavailable_reasons: vec!["harness has no cost source".to_string()],
+                    model_slices: Vec::new(),
+                }],
+            }],
+            Vec::new(),
+        );
+        assert_eq!(stats.total.median_usd, None);
+        assert_eq!(stats.total.average_usd, None);
+    }
+
     #[test]
     fn cost_project_root_buckets_a_legacy_null_target_run_under_the_daemon_root() {
         // #470/ADR-0033: the write boundary is hardened, this READ is not. A
@@ -1966,7 +2138,9 @@ mod tests {
         // ordinary Run everywhere on the read side.
         let db = mem_db().await;
         seed_run(&db, "legacy", "alpha", None, "2026-07-15", "run_completed").await;
-        let ov = compute_overview(&db, "%Y-%m-%d", FROM, TO).await.unwrap();
+        let ov = compute_overview(&db, "%Y-%m-%d", FROM, TO, false)
+            .await
+            .unwrap();
         assert_eq!(ov.runs.len(), 1);
         assert_eq!(ov.runs[0].count, 1);
     }

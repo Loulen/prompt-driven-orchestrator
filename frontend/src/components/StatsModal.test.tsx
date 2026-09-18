@@ -45,6 +45,7 @@ const COST: StatsCost = {
   total: {
     usd: null,
     average_usd: null,
+    median_usd: null,
     estimated: true,
     partial: false,
     executions: 0,
@@ -288,7 +289,72 @@ describe("StatsModal — price sync (#427, ADR-0034)", () => {
     // `useStats.test.ts` asserts exactly (Vitest compares arity strictly). The modal
     // owns the period, so assert the SHAPE, not literal dates.
     const args = fetchStatsCostMock.mock.calls.at(-1)!;
-    expect(args).toHaveLength(3);
+    expect(args).toHaveLength(4);
     expect(args[2]).toBe("day"); // the 30d default preset's bucket
+  });
+});
+
+describe("StatsModal — cohort and Performance filters (#810)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("opens on « completed runs only », passes it to the three fetches, and remembers the change", async () => {
+    const user = userEvent.setup();
+    const { unmount } = render(<StatsModal open onClose={() => {}} />);
+
+    // A fresh browser opens on the reading the design settled on.
+    const toggle = await screen.findByTestId("stats-completed-only");
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    await waitFor(() =>
+      expect(fetchStatsOverviewMock).toHaveBeenLastCalledWith(
+        expect.any(String),
+        expect.any(String),
+        "day",
+        true,
+      ),
+    );
+
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    await waitFor(() =>
+      expect(fetchStatsOverviewMock).toHaveBeenLastCalledWith(
+        expect.any(String),
+        expect.any(String),
+        "day",
+        false,
+      ),
+    );
+    expect(localStorage.getItem("pdo.stats.completed_only")).toBe("false");
+
+    // Per browser, like the theme: reopening restores it.
+    unmount();
+    render(<StatsModal open onClose={() => {}} />);
+    expect(await screen.findByTestId("stats-completed-only")).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
+  });
+
+  it("marks the Performance rail entry when its filters deviate from the defaults", async () => {
+    // No cue on the defaults…
+    const { unmount } = render(<StatsModal open onClose={() => {}} />);
+    expect(
+      await screen.findByTestId("stats-tab-performance"),
+    ).not.toHaveAttribute("data-dirty");
+    unmount();
+
+    // …and one when a stored filter would silently change the numbers.
+    localStorage.setItem(
+      "pdo.stats.node_kinds",
+      JSON.stringify(["interactive"]),
+    );
+    render(<StatsModal open onClose={() => {}} />);
+    const rail = await screen.findByTestId("stats-tab-performance");
+    expect(rail).toHaveAttribute("data-dirty", "true");
+    expect(screen.getByTestId("stats-tab-performance-dirty")).toHaveAttribute(
+      "aria-label",
+      "Performance filters differ from the defaults",
+    );
   });
 });

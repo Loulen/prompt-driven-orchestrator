@@ -1733,6 +1733,10 @@ export interface StatsHarnessCost {
   readable: number;
   unknown: number;
   average_usd: number | null;
+  /** Median cost per readable execution (#811) — what the tab shows; the
+   *  average stays on the wire beside it. Null, never 0, when no cost is
+   *  readable. */
+  median_usd: number | null;
   unpriced_models: string[];
   missing_reasons: string[];
   /** Where THIS harness's model value in the row was read from (ADR-0065 §1) —
@@ -1749,6 +1753,8 @@ export interface StatsHarnessCost {
 export interface StatsCostAggregate {
   usd: number | null;
   average_usd: number | null;
+  /** Median cost per readable execution (#811) — see `StatsHarnessCost`. */
+  median_usd: number | null;
   estimated: boolean;
   partial: boolean;
   executions: number;
@@ -1843,6 +1849,13 @@ export interface StatsDistribution {
     mean: number;
     q3: number;
     max: number;
+    /** Smallest observation ≥ `q1 − 1.5 IQR` (#811) — the « Fenced » zoom
+     *  level's low whisker. Computed by the daemon because the observations
+     *  never leave it. Equals `min` when nothing is an outlier, `q1` when the
+     *  IQR is zero. */
+    fence_low: number;
+    /** Largest observation ≤ `q3 + 1.5 IQR` (#811) — mirror of `fence_low`. */
+    fence_high: number;
   } | null;
   measured: number;
   expected: number;
@@ -1861,6 +1874,11 @@ export interface StatsHarnessPerformance {
   harness: string;
   context: StatsDistribution;
   duration: StatsDistribution;
+  /** **Durée active** (#810): the same executions as `duration`, each minus its
+   *  declared wait (a `pdo wait-user` question, an unreleased completion —
+   *  ADR-0069). Always sent beside the wall-clock, so « exclude user wait »
+   *  swaps the reading with no refetch. A subagent's equals its `duration`. */
+  active_duration: StatsDistribution;
   /** Steering messages per successful execution (#792): the turns a human
    *  typed into the main session after its launch — derived from the harness
    *  transcript, launch prompt and `[pdo-runtime]` messages excluded. Unit:
@@ -1878,6 +1896,12 @@ export interface StatsPerformanceEntity extends StatsPerformanceAggregate {
   name: string;
   nodes: StatsPerformanceEntity[];
   subagents: StatsPerformanceEntity[];
+  /** The node's **genre** (#810), on Node rows only — absent on a Pipeline, a
+   *  subagent group, an Infrastructure role and every level of the « By model »
+   *  tree, which have no kind and are never filtered by it. Both flags travel:
+   *  a node can be interactive AND orchestrator, and matches either chip. */
+  interactive?: boolean;
+  orchestrator?: boolean;
   /** The Node's observations split into model × effort couples (ADR-0065) —
    *  Node leaves only, in « By pipeline »; the server omits it (never sends an
    *  empty array) on other levels, and the « By model » path is already the

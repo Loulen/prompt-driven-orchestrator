@@ -59,6 +59,7 @@ export default function SecondaryRepoRow({
     fetching,
     load,
     refetch: refetchRemotes,
+    fastForward,
     clear: clearBranches,
   } = useBranchList();
 
@@ -159,6 +160,7 @@ export default function SecondaryRepoRow({
           lastFetchAt={lastFetchAt}
           fetchError={fetchError}
           onFetch={refetchRemotes}
+          onFastForward={fastForward}
           testIdPrefix={`secondary-branch-${index}`}
           ariaLabel={`Base branch for secondary repository ${index + 1}`}
         />

@@ -1,4 +1,4 @@
-import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, StatsPerformance, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, UpdateStatus, UpdateChangelog, UpdateApplyResponse, Project, BranchList, AgentChoice, AgentProfile, AgentProfileReferents, ProvisioningPlan, ProvisioningRules, Skill, SkillBank, SkillDetail, SkillFile, SkillFileContent, SkillFilesUpload, SkillFolder, SkillReferents, SkillRef, SkillScanResult, SkillImportItem, SkillImportReport, SkillRescanReport, RecentSkillSource, StructuredDiff, RunRefs,
+import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, StatsPerformance, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, UpdateStatus, UpdateChangelog, UpdateApplyResponse, Project, BranchList, FastForwardOutcome, FastForwardRefusal, FastForwardResult, SourceDrift, AgentChoice, AgentProfile, AgentProfileReferents, ProvisioningPlan, ProvisioningRules, Skill, SkillBank, SkillDetail, SkillFile, SkillFileContent, SkillFilesUpload, SkillFolder, SkillReferents, SkillRef, SkillScanResult, SkillImportItem, SkillImportReport, SkillRescanReport, RecentSkillSource, StructuredDiff, RunRefs,
   ReviewCommentsListResponse,
   ReviewDecisionResponse,
   SendReviewCommentInput,
@@ -1242,6 +1242,76 @@ export function fetchRemotes(repoPath: string): Promise<BranchList> {
     "POST",
     `/repos/fetch?path=${encodeURIComponent(repoPath)}`,
     { label: "POST /repos/fetch" },
+  );
+}
+
+/**
+ * Fast-forward a local branch onto its tracking branch (#803, ADR-0070 §2).
+ *
+ * Raw mode: a 409 here is a **named refusal**, not a failed call — it carries the
+ * reason to show AND the refreshed list, so letting `request` throw would lose both.
+ * The only write PDO performs on a local branch; never a merge, rebase or push.
+ *
+ * Callers must treat every outcome as non-blocking: a refusal changes nothing in
+ * the repo and never stops a launch (the shortcut to `origin/<branch>` is the exit
+ * that always works).
+ */
+export async function fastForwardBranch(
+  repoPath: string,
+  branch: string,
+): Promise<FastForwardOutcome> {
+  let resp: Response;
+  try {
+    resp = await request<Response>(
+      "POST",
+      `/repos/fast-forward?path=${encodeURIComponent(repoPath)}`,
+      { body: { branch }, responseMode: "raw", label: "POST /repos/fast-forward" },
+    );
+  } catch (e) {
+    return { kind: "error", message: e instanceof Error ? e.message : String(e) };
+  }
+  const parsed: unknown = await resp.json().catch(() => null);
+  if (resp.ok) {
+    const b = parsed as { fast_forward: FastForwardResult } & BranchList;
+    return { kind: "done", result: b.fast_forward, list: listOf(b) };
+  }
+  const b = parsed as ({ refusal?: FastForwardRefusal } & Partial<BranchList>) | null;
+  if (b?.refusal) {
+    // The list travels with the refusal: two of the five reasons are races the
+    // client heals by simply re-reading the truth.
+    return {
+      kind: "refused",
+      refusal: b.refusal,
+      list: Array.isArray(b.branches) ? listOf(b as BranchList) : null,
+    };
+  }
+  return {
+    kind: "error",
+    message: apiErrorMessage(parsed, `fast-forward refused: ${resp.status}`),
+  };
+}
+
+/** Lift the flattened `BranchList` out of a fast-forward response body. */
+function listOf(b: BranchList): BranchList {
+  return {
+    branches: b.branches,
+    last_fetch_at: b.last_fetch_at ?? null,
+    fetch_error: b.fetch_error ?? null,
+  };
+}
+
+/**
+ * A Run's drift from its source branch since the fork (#803, ADR-0070 §4).
+ *
+ * A pure READ over local refs — it never fetches, because opening a Run must not
+ * put traffic on someone's repository. `unavailable` is a 200, not an error: an
+ * archived Run whose branch was cleaned up is the expected end of a Run's life.
+ */
+export function fetchSourceDrift(runId: string): Promise<SourceDrift> {
+  return request<SourceDrift>(
+    "GET",
+    `/runs/${encodeURIComponent(runId)}/source-drift`,
+    { label: `GET /runs/${runId}/source-drift` },
   );
 }
 

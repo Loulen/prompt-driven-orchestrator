@@ -2,12 +2,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { useLaunchTargets } from "./useLaunchTargets";
 import * as api from "../api";
-import type { BranchList, BranchRef, PipelineListEntry } from "../types";
+import type { BranchList, BranchRef, FastForwardOutcome, PipelineListEntry } from "../types";
 
 vi.mock("../api", () => ({
   fetchPipelines: vi.fn(),
   listBranches: vi.fn(),
   fetchRemotes: vi.fn(),
+  fastForwardBranch: vi.fn(),
 }));
 
 // #571: a branch is `{name, kind}`. These keep the fixtures terse.
@@ -47,6 +48,7 @@ beforeEach(() => {
   vi.mocked(api.fetchPipelines).mockReset().mockResolvedValue([]);
   vi.mocked(api.listBranches).mockReset();
   vi.mocked(api.fetchRemotes).mockReset();
+  vi.mocked(api.fastForwardBranch).mockReset();
   listBranchesReturns([local("main"), local("dev"), local("feature-x")]);
 });
 
@@ -494,5 +496,119 @@ describe("useLaunchTargets — the fetch on open and on repo change (#802)", () 
       result.current.refetchRemotes();
     });
     expect(api.fetchRemotes).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * #803/ADR-0070 §2 — the fast-forward's race rules, which the popover must not
+ * have to remember. Nothing here asserts on a request shape: what matters is what
+ * the numbers on screen say afterwards.
+ */
+describe("useLaunchTargets — the fast-forward (#803)", () => {
+  async function load(
+    result: { current: ReturnType<typeof useLaunchTargets> },
+    repoPath: string,
+  ) {
+    await act(async () => {
+      await result.current.loadBranches(repoPath);
+    });
+  }
+
+  const ffDone = (branches: BranchRef[]) => ({
+    kind: "done" as const,
+    result: {
+      branch: "main",
+      upstream: "origin/main",
+      from: "a1b2c3d",
+      to: "e4f5a6b",
+      commits: 3,
+    },
+    list: branchList(branches),
+  });
+
+  it("refreshes the list from the 200, so the écart it erased disappears", async () => {
+    const { result } = setup();
+    listBranchesReturns([{ name: "main", kind: "local", upstream: "origin/main", ahead: 0, behind: 3 }]);
+    await load(result, "/a");
+    await waitFor(() => expect(result.current.branches).toHaveLength(1));
+
+    vi.mocked(api.fastForwardBranch).mockResolvedValue(
+      ffDone([{ name: "main", kind: "local", upstream: "origin/main", ahead: 0, behind: 0 }]),
+    );
+    await act(async () => {
+      await result.current.fastForward("main");
+    });
+    expect(result.current.branches[0].behind).toBe(0);
+  });
+
+  /**
+   * The two benign races. The 409 carries the SAME refreshed list, and applying it
+   * is what lets `up_to_date` heal into "level" instead of an error card.
+   */
+  it("refreshes the list from a 409 too", async () => {
+    const { result } = setup();
+    listBranchesReturns([{ name: "main", kind: "local", upstream: "origin/main", ahead: 0, behind: 3 }]);
+    await load(result, "/a");
+    await waitFor(() => expect(result.current.branches).toHaveLength(1));
+
+    vi.mocked(api.fastForwardBranch).mockResolvedValue({
+      kind: "refused",
+      refusal: { reason: "up_to_date", message: "already up to date" },
+      list: branchList([{ name: "main", kind: "local", upstream: "origin/main", ahead: 0, behind: 0 }]),
+    });
+    await act(async () => {
+      await result.current.fastForward("main");
+    });
+    expect(result.current.branches[0].behind).toBe(0);
+  });
+
+  /**
+   * A fast-forward makes no remote attempt, so its unfailing `fetch_error: null`
+   * says nothing about whether the last fetch worked — erasing a real failure here
+   * would turn "gap unknown" back into numbers presented as current.
+   */
+  it("never clears a live fetch failure", async () => {
+    const { result } = setup();
+    listBranchesReturns([local("main")], {
+      fetch_error: { kind: "network", message: "could not resolve host" },
+    });
+    await load(result, "/a");
+    await waitFor(() => expect(result.current.fetchError).not.toBeNull());
+
+    vi.mocked(api.fastForwardBranch).mockResolvedValue(ffDone([local("main")]));
+    await act(async () => {
+      await result.current.fastForward("main");
+    });
+    expect(result.current.fetchError).not.toBeNull();
+  });
+
+  it("drops a second click while one is in flight", async () => {
+    const { result } = setup();
+    listBranchesReturns([local("main")]);
+    await load(result, "/a");
+
+    let release: (o: FastForwardOutcome) => void = () => {};
+    vi.mocked(api.fastForwardBranch).mockReturnValue(
+      new Promise<FastForwardOutcome>((r) => (release = r)),
+    );
+    let second: unknown;
+    await act(async () => {
+      const first = result.current.fastForward("main");
+      // The daemon would answer the second with `up_to_date` — a refusal for a
+      // click that did exactly what was asked is a lie about the repository.
+      second = await result.current.fastForward("main");
+      release(ffDone([local("main")]));
+      await first;
+    });
+    expect(second).toBeNull();
+    expect(api.fastForwardBranch).toHaveBeenCalledTimes(1);
+  });
+
+  it("fast-forwards nothing when no repo is loaded", async () => {
+    const { result } = setup();
+    await act(async () => {
+      expect(await result.current.fastForward("main")).toBeNull();
+    });
+    expect(api.fastForwardBranch).not.toHaveBeenCalled();
   });
 });

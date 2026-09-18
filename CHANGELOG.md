@@ -16,6 +16,20 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.89.0
+**Fetch avant la coupe et avertissement sur la branche source** (#804, story #801).
+
+- Un Trigger qui tire sur `origin/<branche>` **fetch d'abord** (borné à 20 s) puis coupe sur le
+  tip amont réel : un commit poussé et jamais fetché est quand même pris. Un tick
+  `skipped-overlap` ne touche pas au réseau.
+- Un fetch raté **ne bloque pas** le tir : le Run démarre sur le dernier état connu localement,
+  et l'événement `run_started` porte `source_fetch_error` (`kind` + stderr de git). La vue du Run
+  le dit sans le peindre en échec : encart « Started on local state · fetch failed » dans Info,
+  marqueur `CloudOff` sur la ligne `branche · sha` du dépôt primaire dans Repositories.
+- Dans le formulaire de Trigger (création et édition), une branche **locale** porte un
+  avertissement : chaque tir coupe depuis son état local, que le fetch ne fait pas bouger ;
+  préférer `origin/<branche>`. La liste et le détail du Trigger ne changent pas.
+
 ## 1.88.0
 **Fast-forward sans perte depuis le popover de synchro et dérive de la source affichée sur le
 Run** (#803, story #801).

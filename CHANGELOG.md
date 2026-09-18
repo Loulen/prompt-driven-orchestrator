@@ -16,6 +16,21 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.90.0
+**Médiane partout, niveaux de zoom et axes indépendants des box-plots** (#811, story #808).
+
+- Partout où Stats résume une distribution, la valeur centrale est la **médiane** : tri et
+  libellés de la liste maître, tick des box-plots de Performance, cartes et coût par exécution
+  de Cost (« median » remplace « avg »). La moyenne ne subsiste que dans le tooltip, comme
+  sixième valeur. Les totaux ne changent pas.
+- Les box-plots de Performance gagnent un **zoom à trois niveaux** (Full, Fenced, Box : axe
+  calé sur le max, la borne haute de Tukey ou Q3) et une bascule **« independent scales »**
+  (chaque ligne sur son propre axe). Une marque « › » / « ‹ » signale une observation hors
+  cadre sans la dessiner. Zoom et axe sont mémorisés par navigateur (`localStorage`).
+- Daemon, additif : `GET /stats/cost` expose `median_usd` à côté d'`average_usd` ;
+  `GET /stats/performance` ajoute `fence_low` / `fence_high` (bornes de Tukey observées) aux
+  six stats, calculées côté daemon (ADR-0029).
+
 ## 1.89.0
 **Fetch avant la coupe et avertissement sur la branche source** (#804, story #801).
 

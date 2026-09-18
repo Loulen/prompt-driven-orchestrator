@@ -6038,7 +6038,9 @@ mod tests {
         )];
 
         let state = project(&events).unwrap();
-        let error = state.source_fetch_error.expect("the reason the Run carries");
+        let error = state
+            .source_fetch_error
+            .expect("the reason the Run carries");
         assert_eq!(error.kind, "network");
         assert!(error.message.contains("Could not resolve host"));
         assert_eq!(state.source_branch.as_deref(), Some("origin/main"));

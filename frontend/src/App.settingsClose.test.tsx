@@ -182,6 +182,7 @@ vi.mock("./api", () => {
   const emptyAggregate = {
     usd: null,
     average_usd: null,
+    median_usd: null,
     estimated: false,
     partial: false,
     executions: 0,

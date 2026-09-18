@@ -12,7 +12,12 @@ import {
   Search,
   TriangleAlert,
 } from "lucide-react";
-import type { BranchFetchError, BranchRef, FastForwardOutcome } from "../types";
+import type {
+  BranchFetchError,
+  BranchRef,
+  FastForwardOutcome,
+  FastForwardRefusal,
+} from "../types";
 import {
   branchGap,
   canFastForward,
@@ -24,7 +29,9 @@ import {
   highlightSegments,
   isBenignRefusal,
   isRetryableRefusal,
+  refusalHeadline,
   shortAge,
+  showsRefusalMessage,
   syncState,
   upstreamSwitchTarget,
   type BranchGap,
@@ -64,6 +71,20 @@ interface Props {
   /** Refetch all remotes. Called only from the sync popover's explicit button. */
   onFetch: () => void;
   /**
+   * Re-read the list from LOCAL refs — no network (#803).
+   *
+   * Called when the sync popover opens, and nowhere else. The écart the popover
+   * shows now decides whether a BUTTON THAT ACTS is offered, so it may not be a
+   * number cached since the modal opened: commit in a terminal while the form sits
+   * there and the cached list still says "1 behind, 0 ahead", still offering a
+   * fast-forward on a branch that has already diverged. Re-reading refs is local
+   * and cheap; it is not the fetch the footer promises to do only on open, on repo
+   * change and on the button — no remote is contacted here.
+   *
+   * Optional: a call site with nothing to re-read simply never refreshes.
+   */
+  onReread?: () => void;
+  /**
    * Fast-forward a local branch onto its tracking branch (#803, ADR-0070 §2).
    *
    * Called ONLY from the popover's own button — never on open, never on a repo
@@ -90,6 +111,7 @@ export default function SourceBranchField({
   lastFetchAt,
   fetchError,
   onFetch,
+  onReread,
   onFastForward,
   testIdPrefix,
   id,
@@ -190,6 +212,21 @@ export default function SourceBranchField({
         : { kind: "refused", refusal: outcome.refusal },
     );
   }, [onFastForward, value, ffOwner]);
+
+  /**
+   * "Fetch again" retires the result card before it asks (#803).
+   *
+   * The card answers "what happened when I clicked?" about a list that the fetch is
+   * on its way to replace. Left standing, it outlives what it describes: the chip on
+   * the button flips back to `1↓` while the body still reads "fast-forwarded", and
+   * the fast-forward button — which lives in the freshness card, not this one — is
+   * unreachable until the popover is closed and reopened. Asking again is the same
+   * gesture as reopening: it retires the answer to the previous question.
+   */
+  const fetchAndRetire = useCallback(() => {
+    setFf({ owner: "", state: { kind: "idle" } });
+    onFetch();
+  }, [onFetch]);
 
   const closePicker = useCallback(() => {
     setPickerOpen(false);
@@ -390,13 +427,17 @@ export default function SourceBranchField({
           open={syncOpen}
           onToggle={() => {
             // A click opens the state; it never refetches by itself — the fetch is
-            // an action you choose in the popover, having read what it will do.
+            // an action you choose in the popover, having read what it will do. It
+            // does RE-READ the local refs, which is a different thing entirely: no
+            // network, and it is what keeps the fast-forward button from being
+            // offered for a branch that diverged while the form sat open.
             setPickerOpen(false);
+            if (!syncOpen) onReread?.();
             setSyncOpen((o) => !o);
             // A new opening retires the previous card (see `ff` above).
             setSyncOpenings((n) => n + 1);
           }}
-          onFetch={onFetch}
+          onFetch={fetchAndRetire}
           // #803: only ever offered when the LIST says the branch is a local one
           // strictly behind its upstream. The other conditions are click-time.
           onFastForward={
@@ -932,11 +973,14 @@ function SyncPopover({
 /**
  * What the fast-forward click produced (#803) — in flight, done, or refused.
  *
- * The two refusals that reach here are the two that could NOT be known before the
- * click (a dirty tree, a branch held by another worktree). Both are named with the
- * daemon's own reason code, because the code is what the person will search for and
- * what a bug report should carry; and both lead with the shortcut, which is the exit
- * that works regardless of the state of any checkout.
+ * The refusals this card normally shows are the two that could NOT be known before
+ * the click (a dirty tree, a branch held by another worktree), but it renders EVERY
+ * reason the daemon can name: the popover's numbers are only as fresh as the last
+ * list, so a branch can diverge between the render and the click and come back with
+ * a reason the button's own precondition said was impossible. Each is named with the
+ * daemon's own reason code — the code is what a person searches for and what a bug
+ * report should carry — and all of them lead with the shortcut, the exit that works
+ * regardless of the state of any checkout.
  */
 function FastForwardCard({
   ff,
@@ -1037,10 +1081,7 @@ function FastForwardCard({
     <>
       <Title icon={<OctagonX size={12} className="text-st-failed" />}>
         <span className="flex flex-wrap items-baseline gap-1.5">
-          <span>
-            Can&apos;t fast-forward —{" "}
-            {dirty ? "working tree not clean" : "checked out in another worktree"}
-          </span>
+          <span>Can&apos;t fast-forward — {refusalHeadline(refusal.reason)}</span>
           <span
             className="rounded bg-bg-2 px-1 py-0.5 font-mono font-normal text-fg-4"
             style={{ fontSize: "9px" }}
@@ -1051,25 +1092,21 @@ function FastForwardCard({
         </span>
       </Title>
       <Body>
-        <span className="font-mono text-fg-2">{branchName}</span> is checked out at{" "}
-        <span className="font-mono text-fg-2">
-          {refusal.checkout ? shortPath(refusal.checkout) : "another checkout"}
-        </span>
-        {dirty ? (
-          <>
-            {" "}
-            and {refusal.dirty_count ?? refusal.dirty_files?.length ?? 0} tracked file
-            {(refusal.dirty_count ?? 1) > 1 ? "s are" : " is"} modified. PDO won&apos;t
-            touch them. Commit or stash, then try again
-            {upstream ? <> — or launch from {upstream}.</> : "."}
-          </>
-        ) : (
-          <>
-            . PDO only fast-forwards a branch in the repository you launch from.
-            {upstream ? <> Launch from {upstream} instead.</> : ""}
-          </>
-        )}
+        <RefusalSentence refusal={refusal} branchName={branchName} upstream={upstream} />
       </Body>
+      {/* The daemon's own sentence, verbatim, wherever the listing above is not the
+          better detail. It carries what this card cannot derive — how many commits
+          diverged — and it is the only thing we have for a reason this build does
+          not know about. Same block as the error card: a quoted answer, not ours. */}
+      {showsRefusalMessage(refusal) && (
+        <div
+          className="mt-2 max-h-16 overflow-y-auto rounded border border-line bg-bg-2 px-1.5 py-1 font-mono text-fg-3"
+          style={{ fontSize: "9.5px" }}
+          data-testid={`${testIdPrefix}-sync-ff-message`}
+        >
+          {refusal.message}
+        </div>
+      )}
       {dirty && (refusal.dirty_files?.length ?? 0) > 0 && (
         <div
           className="mt-2 max-h-16 overflow-y-auto rounded border border-line bg-bg-2 px-1.5 py-1 font-mono text-fg-3"
@@ -1104,6 +1141,88 @@ function FastForwardCard({
       </div>
     </>
   );
+}
+
+/**
+ * What the refusal MEANS, in the reader's terms — one sentence per reason (#803).
+ *
+ * Every arm names a cause that is actually true of the state the daemon refused on,
+ * and points at the exit for that cause: commit or stash for a dirty tree, another
+ * checkout to switch for a held branch, a reconcile in the terminal for a divergence.
+ * The default arm deliberately explains nothing and leaves the daemon's message
+ * (rendered by the caller) to speak — inventing a cause is how the first version of
+ * this card told people to look for a worktree that did not exist.
+ */
+function RefusalSentence({
+  refusal,
+  branchName,
+  upstream,
+}: {
+  refusal: FastForwardRefusal;
+  branchName: string;
+  upstream: string | null;
+}) {
+  const name = <span className="font-mono text-fg-2">{branchName}</span>;
+  const up = upstream ? (
+    <span className="font-mono text-fg-2">{upstream}</span>
+  ) : (
+    "its upstream"
+  );
+  const checkout = (
+    <span className="font-mono text-fg-2">
+      {refusal.checkout ? shortPath(refusal.checkout) : "another checkout"}
+    </span>
+  );
+
+  switch (refusal.reason) {
+    case "dirty_tree": {
+      const count = refusal.dirty_count ?? refusal.dirty_files?.length ?? 0;
+      return (
+        <>
+          {name} is checked out at {checkout} and {count} tracked file
+          {count > 1 ? "s are" : " is"} modified. PDO won&apos;t touch them. Commit or
+          stash, then try again
+          {upstream ? <> — or launch from {up}.</> : "."}
+        </>
+      );
+    }
+    case "checked_out_elsewhere":
+      return (
+        <>
+          {name} is checked out at {checkout}. PDO only fast-forwards a branch in the
+          repository you launch from.
+          {upstream ? <> Launch from {up} instead.</> : ""}
+        </>
+      );
+    case "diverged":
+      return (
+        <>
+          {name} has commits {up} does not, so a fast-forward would drop them — and PDO
+          never merges or rebases. Reconcile in your terminal, or launch from {up} and
+          leave {name} exactly as it is.
+        </>
+      );
+    case "no_upstream":
+      return (
+        <>
+          {name} tracks nothing any more, so there is no branch to fast-forward onto.
+          Nothing moved.
+        </>
+      );
+    case "up_to_date":
+      return (
+        <>
+          {name} already has everything {up} has — the list this popover was drawn from
+          was a beat old. Nothing moved.
+        </>
+      );
+    default:
+      return (
+        <>
+          Nothing moved: {name} is exactly as it was. The daemon&apos;s reason is below.
+        </>
+      );
+  }
 }
 
 /** `~/…/prompt-driven-orchestrator` — a path the popover can fit on one line. */

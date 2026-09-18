@@ -578,6 +578,59 @@ describe("the fast-forward", () => {
   });
 
   /**
+   * The refusal the popover's own precondition said was impossible. The list is only
+   * as fresh as the last read, so a commit made in a terminal while the popover sits
+   * open turns "1 behind, 0 ahead" into a divergence and the button is still on offer.
+   *
+   * The first version of the card tested for `dirty_tree` and gave EVERYTHING else
+   * the "checked out in another worktree" copy, so this 409 told the reader their
+   * branch was held by a worktree that did not exist — sending them to hunt for it
+   * (found by the #803 Feature Path).
+   */
+  it("names a divergence as a divergence, not as a worktree", async () => {
+    ffSetup(
+      refused({
+        reason: "diverged",
+        message: "'main' has 1 commit(s) 'origin/main' does not: a fast-forward would drop them",
+      }),
+    );
+    openSync();
+    fireEvent.click(screen.getByTestId("branch-sync-ff"));
+
+    const popover = await screen.findByTestId("branch-sync-popover");
+    expect(popover).toHaveTextContent("the branch has diverged");
+    expect(popover).not.toHaveTextContent("another worktree");
+    expect(popover).not.toHaveTextContent("another checkout");
+    expect(screen.getByTestId("branch-sync-ff-reason")).toHaveTextContent("diverged");
+    // The counts live in the daemon's sentence and nowhere else on this card.
+    expect(screen.getByTestId("branch-sync-ff-message")).toHaveTextContent(
+      "has 1 commit(s) 'origin/main' does not",
+    );
+    // Reconciling is the exit, and it is the person's to make: PDO never merges.
+    expect(popover).toHaveTextContent("Reconcile in your terminal");
+    expect(screen.queryByTestId("branch-sync-ff-retry")).not.toBeInTheDocument();
+    expect(screen.getByTestId("branch-sync-switch")).toBeInTheDocument();
+  });
+
+  it("invents no cause for a reason it does not know", async () => {
+    // A daemon newer than this build. Quoting it is honest; picking a neighbour's
+    // sentence is how the diverged card got its wrong worktree.
+    ffSetup(
+      refused({
+        reason: "locked_index" as FastForwardRefusal["reason"],
+        message: "index.lock exists: another git process is running",
+      }),
+    );
+    openSync();
+    fireEvent.click(screen.getByTestId("branch-sync-ff"));
+
+    const popover = await screen.findByTestId("branch-sync-popover");
+    expect(popover).toHaveTextContent("the daemon refused");
+    expect(popover).not.toHaveTextContent("worktree");
+    expect(screen.getByTestId("branch-sync-ff-message")).toHaveTextContent("index.lock exists");
+  });
+
+  /**
    * The two benign races. Someone pulled (or unset the upstream) between the render
    * and the click: the refreshed list that came back already says so, and painting
    * an error for a beat of latency would be a lie about the repository.
@@ -656,5 +709,52 @@ describe("the fast-forward", () => {
       />,
     );
     expect(screen.queryByTestId("branch-sync-ff-moved")).not.toBeInTheDocument();
+  });
+
+  /**
+   * A result card describes a list the fetch is on its way to replace. Left standing
+   * it outlives what it describes: the chip flips back to `1↓` while the body still
+   * reads "fast-forwarded", and the fast-forward button — which lives in the
+   * freshness card, not this one — is unreachable until the popover is closed and
+   * reopened (found by the #803 Feature Path).
+   */
+  it("retires the result when you ask the question again", async () => {
+    const { onFetch } = ffSetup(done());
+    openSync();
+    fireEvent.click(screen.getByTestId("branch-sync-ff"));
+    await screen.findByTestId("branch-sync-ff-moved");
+
+    fireEvent.click(screen.getByTestId("branch-sync-fetch"));
+    expect(onFetch).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("branch-sync-ff-moved")).not.toBeInTheDocument();
+    const popover = screen.getByTestId("branch-sync-popover");
+    expect(popover).toHaveAttribute("data-ff-state", "idle");
+    // The freshness card is back, and with it the button the stale card hid.
+    expect(screen.getByTestId("branch-sync-ff")).toBeInTheDocument();
+  });
+
+  /**
+   * #803 — the popover's numbers now decide whether a button that MOVES A BRANCH is
+   * offered, so they may not be a count cached when the modal opened. Refs move
+   * outside PDO; re-reading them is local, and is not the fetch the footer promises.
+   */
+  it("re-reads the local refs when it opens", () => {
+    const onReread = vi.fn();
+    const { onFetch } = ffSetup(done(), { onReread });
+    openSync();
+    expect(onReread).toHaveBeenCalledTimes(1);
+    expect(onFetch).not.toHaveBeenCalled();
+
+    // Closing asks nothing, and the next opening asks again.
+    openSync();
+    expect(onReread).toHaveBeenCalledTimes(1);
+    openSync();
+    expect(onReread).toHaveBeenCalledTimes(2);
+  });
+
+  it("opens without a re-read when the call site has nothing to re-read", () => {
+    ffSetup(done());
+    openSync();
+    expect(screen.getByTestId("branch-sync-popover")).toBeInTheDocument();
   });
 });

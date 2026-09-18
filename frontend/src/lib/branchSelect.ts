@@ -1,6 +1,7 @@
 import type {
   BranchFetchError,
   BranchRef,
+  FastForwardReason,
   FastForwardRefusal,
   FastForwardResult,
 } from "../types";
@@ -328,6 +329,57 @@ export type FastForwardState =
  */
 export function isBenignRefusal(refusal: FastForwardRefusal): boolean {
   return refusal.reason === "up_to_date" || refusal.reason === "no_upstream";
+}
+
+/**
+ * The cause clause of the refusal card's headline — one arm per reason (#803).
+ *
+ * An exhaustive `switch`, not a test on `dirty_tree` with everything else in the
+ * `else`: the first version of the card did exactly that, so a **diverged** branch
+ * was announced as "checked out in another worktree" — a cause that did not exist,
+ * sending the reader to hunt for a worktree nobody had. A wrong cause is worse than
+ * a vague one, because it is actionable in the wrong direction.
+ *
+ * An unrecognised reason (a daemon newer than this build) falls back to a sentence
+ * that claims nothing; the card shows the daemon's own message underneath it.
+ */
+export function refusalHeadline(reason: FastForwardReason | string): string {
+  switch (reason) {
+    case "dirty_tree":
+      return "working tree not clean";
+    case "checked_out_elsewhere":
+      return "checked out in another worktree";
+    case "diverged":
+      return "the branch has diverged";
+    case "no_upstream":
+      return "no tracking branch";
+    case "up_to_date":
+      return "already up to date";
+    default:
+      return "the daemon refused";
+  }
+}
+
+/**
+ * Whether the card quotes the daemon's own sentence in a detail block.
+ *
+ * Only where the card cannot say it better itself. The prototype's R1/R2 carry no
+ * such block, and they need none: a dirty tree has the `M path` listing, and a
+ * branch held elsewhere has the worktree path in its sentence — quoting the daemon
+ * under either would print the same fact twice.
+ *
+ * It earns its place in exactly two cases: **`diverged`**, whose counts ("1 commit(s)
+ * 'origin/main' does not") exist nowhere else on this card, and a reason this build
+ * does not recognise, where the daemon's words are all there is to show.
+ */
+export function showsRefusalMessage(refusal: FastForwardRefusal): boolean {
+  if (refusal.message.trim() === "") return false;
+  return (
+    refusal.reason === "diverged" ||
+    !["dirty_tree", "checked_out_elsewhere", "no_upstream", "up_to_date"].includes(
+      refusal.reason,
+    )
+  );
 }
 
 /** Whether "Try again" makes sense: only when the person can act on the cause. */

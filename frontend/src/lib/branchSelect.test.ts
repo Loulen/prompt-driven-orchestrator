@@ -12,7 +12,9 @@ import {
   isBenignRefusal,
   isRetryableRefusal,
   pickDefaultBranch,
+  refusalHeadline,
   shortAge,
+  showsRefusalMessage,
   syncState,
   upstreamSwitchTarget,
 } from "./branchSelect";
@@ -357,6 +359,49 @@ describe("refusals (#803)", () => {
     expect(isRetryableRefusal(refusal("dirty_tree"))).toBe(true);
     expect(isRetryableRefusal(refusal("checked_out_elsewhere"))).toBe(false);
     expect(isRetryableRefusal(refusal("diverged"))).toBe(false);
+  });
+
+  /**
+   * Every reason gets its OWN headline. The first version of the card tested for
+   * `dirty_tree` and gave everything else the "checked out in another worktree"
+   * copy, so a diverged branch was announced with a cause that did not exist — and
+   * a wrong cause is worse than a vague one, because it is actionable in the wrong
+   * direction (found by the #803 Feature Path).
+   */
+  it.each([
+    ["dirty_tree", "working tree not clean"],
+    ["checked_out_elsewhere", "checked out in another worktree"],
+    ["diverged", "the branch has diverged"],
+    ["no_upstream", "no tracking branch"],
+    ["up_to_date", "already up to date"],
+  ] as const)("names %s as its own cause", (reason, headline) => {
+    expect(refusalHeadline(reason)).toBe(headline);
+  });
+
+  it("claims no cause at all for a reason it does not know", () => {
+    // A daemon newer than this build. The card shows its message instead; making
+    // one up is exactly the bug above, with no reason code to catch it next time.
+    const headline = refusalHeadline("locked_index");
+    expect(headline).toBe("the daemon refused");
+    expect(headline).not.toContain("worktree");
+  });
+
+  it("quotes the daemon only where the card cannot say it better", () => {
+    const said = (reason: string) =>
+      showsRefusalMessage({
+        reason: reason as FastForwardRefusal["reason"],
+        message: "'main' has 1 commit(s) origin/main does not",
+      });
+    // `diverged`: the counts are in that sentence and nowhere else on the card.
+    expect(said("diverged")).toBe(true);
+    // An unknown reason: the daemon's words are all there is.
+    expect(said("locked_index")).toBe(true);
+    // The prototype's R1/R2 carry no quote block, and need none — the listing and
+    // the worktree path already say it, and printing it twice is noise.
+    expect(said("dirty_tree")).toBe(false);
+    expect(said("checked_out_elsewhere")).toBe(false);
+    // Nothing to quote: an empty block would be a hole in the card.
+    expect(showsRefusalMessage({ reason: "diverged", message: "  " })).toBe(false);
   });
 });
 

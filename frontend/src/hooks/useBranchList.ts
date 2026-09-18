@@ -49,16 +49,20 @@ export function useBranchList() {
   }, []);
 
   /**
-   * Which verb an incoming list came from. Three, because they differ on the two
+   * Which verb an incoming list came from. Four, because they differ on the two
    * questions that decide whether a late answer may overwrite the screen:
    *
-   * - `list` — `GET /repos/branches`, may be superseded (see rule 2 of the header);
+   * - `list` — the initial `GET /repos/branches`, may be superseded (see rule 2 of
+   *   the header);
    * - `fetch` — the only verb that may write the fetch VERDICT;
    * - `fast-forward` — read after the move, so it outranks a plain list in the air,
    *   but it made no remote attempt, so its unfailing `fetch_error: null` says
-   *   nothing about whether the last fetch worked and must not erase one.
+   *   nothing about whether the last fetch worked and must not erase one;
+   * - `reread` — the same GET as `list`, asked deliberately and later (#803), so it
+   *   is NOT superseded by an older fetch; it makes no remote attempt either, and so
+   *   is just as forbidden from speaking for the fetch.
    */
-  type ListSource = "list" | "fetch" | "fast-forward";
+  type ListSource = "list" | "fetch" | "fast-forward" | "reread";
 
   const apply = useCallback((repoPath: string, list: BranchList, from: ListSource) => {
     if (currentRepo.current !== repoPath) return false;
@@ -137,6 +141,27 @@ export function useBranchList() {
   }, [sync]);
 
   /**
+   * Re-read the list from local refs, without touching the network (#803).
+   *
+   * The écart the popover shows decides whether a button that MOVES A BRANCH is
+   * offered, and refs move outside PDO: a commit made in a terminal while the form
+   * sits open turns "1 behind, 0 ahead" into a divergence with nothing on screen
+   * saying so — and the fast-forward stays on offer for a branch that can no longer
+   * take one (found by the #803 Feature Path). Both numbers are one local read away.
+   *
+   * A failure keeps what is on screen: this refreshes an answer we already have, so
+   * losing it to a transient error would be a downgrade, not a correction. And it
+   * never writes the fetch verdict — nothing was fetched.
+   */
+  const reread = useCallback(() => {
+    const repoPath = currentRepo.current;
+    if (!repoPath) return;
+    void listBranches(repoPath)
+      .then((list) => apply(repoPath, list, "reread"))
+      .catch(() => {});
+  }, [apply]);
+
+  /**
    * Fast-forward a local branch of the repo currently displayed (#803, ADR-0070 §2).
    *
    * Three rules the popover does not have to remember:
@@ -184,6 +209,7 @@ export function useBranchList() {
     fetching,
     load,
     refetch,
+    reread,
     fastForward,
     clear,
   };

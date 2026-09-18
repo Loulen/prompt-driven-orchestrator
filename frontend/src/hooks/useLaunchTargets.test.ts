@@ -500,6 +500,101 @@ describe("useLaunchTargets — the fetch on open and on repo change (#802)", () 
 });
 
 /**
+ * #803 — the LOCAL re-read the sync popover asks for when it opens. Refs move
+ * outside PDO, and the écart on screen decides whether a button that moves a branch
+ * is offered; both numbers are one local read away, and no remote is involved.
+ */
+describe("useLaunchTargets — re-reading the local refs (#803)", () => {
+  async function load(
+    result: { current: ReturnType<typeof useLaunchTargets> },
+    repoPath: string,
+  ) {
+    await act(async () => {
+      await result.current.loadBranches(repoPath);
+    });
+  }
+
+  it("re-reads the list without touching the network", async () => {
+    const { result } = setup();
+    listBranchesReturns([{ ...local("main"), upstream: "origin/main", ahead: 0, behind: 1 }]);
+    await load(result, "/a");
+    await waitFor(() => expect(result.current.branches[0]?.behind).toBe(1));
+
+    // The commit someone made in a terminal while the form sat open: the branch
+    // has diverged, and nothing on screen would say so without this read.
+    vi.mocked(api.listBranches).mockResolvedValue(
+      branchList([{ ...local("main"), upstream: "origin/main", ahead: 1, behind: 1 }]),
+    );
+    const fetchesBefore = vi.mocked(api.fetchRemotes).mock.calls.length;
+    await act(async () => {
+      result.current.rereadBranches();
+    });
+    await waitFor(() => expect(result.current.branches[0]?.ahead).toBe(1));
+    expect(vi.mocked(api.fetchRemotes).mock.calls).toHaveLength(fetchesBefore);
+  });
+
+  /**
+   * The rule that keeps a plain list from overwriting a landed fetch must NOT swallow
+   * this one: a re-read is asked deliberately and answered later, so it is the newest
+   * truth about the refs — the very reason it was asked.
+   */
+  it("is not dropped by the fetch that already landed", async () => {
+    const { result } = setup();
+    listBranchesReturns([{ ...local("main"), upstream: "origin/main", ahead: 0, behind: 3 }], {
+      last_fetch_at: "2026-09-18T09:00:00Z",
+    });
+    await load(result, "/a");
+    await waitFor(() => expect(result.current.branches[0]?.behind).toBe(3));
+
+    vi.mocked(api.listBranches).mockResolvedValue(
+      branchList([{ ...local("main"), upstream: "origin/main", ahead: 2, behind: 3 }]),
+    );
+    await act(async () => {
+      result.current.rereadBranches();
+    });
+    await waitFor(() => expect(result.current.branches[0]?.ahead).toBe(2));
+  });
+
+  /** It fetched nothing, so its `fetch_error: null` is not a success (rule 2). */
+  it("never clears a live fetch failure", async () => {
+    const { result } = setup();
+    listBranchesReturns([local("main")], {
+      fetch_error: { kind: "network", message: "could not resolve host" },
+    });
+    await load(result, "/a");
+    await waitFor(() => expect(result.current.fetchError).not.toBeNull());
+
+    vi.mocked(api.listBranches).mockResolvedValue(branchList([local("main"), local("dev")]));
+    await act(async () => {
+      result.current.rereadBranches();
+    });
+    await waitFor(() => expect(result.current.branches).toHaveLength(2));
+    expect(result.current.fetchError).not.toBeNull();
+  });
+
+  it("keeps what is on screen when the re-read fails", async () => {
+    const { result } = setup();
+    await load(result, "/a");
+    await waitFor(() => expect(result.current.branches).toHaveLength(3));
+
+    vi.mocked(api.listBranches).mockRejectedValue(new Error("daemon unreachable"));
+    await act(async () => {
+      result.current.rereadBranches();
+    });
+    // Refreshing an answer we already have must never cost us the answer.
+    expect(result.current.branches).toHaveLength(3);
+  });
+
+  it("re-reads nothing when no repo is loaded", async () => {
+    const { result } = setup();
+    await act(async () => {
+      result.current.rereadBranches();
+    });
+    expect(api.listBranches).not.toHaveBeenCalled();
+  });
+});
+
+/**
  * #803/ADR-0070 §2 — the fast-forward's race rules, which the popover must not
  * have to remember. Nothing here asserts on a request shape: what matters is what
  * the numbers on screen say afterwards.

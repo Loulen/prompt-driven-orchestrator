@@ -1733,6 +1733,10 @@ export interface StatsHarnessCost {
   readable: number;
   unknown: number;
   average_usd: number | null;
+  /** Median cost per readable execution (#811) — what the tab shows; the
+   *  average stays on the wire beside it. Null, never 0, when no cost is
+   *  readable. */
+  median_usd: number | null;
   unpriced_models: string[];
   missing_reasons: string[];
   /** Where THIS harness's model value in the row was read from (ADR-0065 §1) —
@@ -1749,6 +1753,8 @@ export interface StatsHarnessCost {
 export interface StatsCostAggregate {
   usd: number | null;
   average_usd: number | null;
+  /** Median cost per readable execution (#811) — see `StatsHarnessCost`. */
+  median_usd: number | null;
   estimated: boolean;
   partial: boolean;
   executions: number;
@@ -1843,6 +1849,13 @@ export interface StatsDistribution {
     mean: number;
     q3: number;
     max: number;
+    /** Smallest observation ≥ `q1 − 1.5 IQR` (#811) — the « Fenced » zoom
+     *  level's low whisker. Computed by the daemon because the observations
+     *  never leave it. Equals `min` when nothing is an outlier, `q1` when the
+     *  IQR is zero. */
+    fence_low: number;
+    /** Largest observation ≤ `q3 + 1.5 IQR` (#811) — mirror of `fence_low`. */
+    fence_high: number;
   } | null;
   measured: number;
   expected: number;

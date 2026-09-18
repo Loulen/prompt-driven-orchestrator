@@ -571,6 +571,10 @@ pub(crate) struct StatsHarnessCost {
     pub readable: i64,
     pub unknown: i64,
     pub average_usd: Option<f64>,
+    /// The **median** cost per readable execution (#811) — the value the Cost
+    /// tab shows, `average_usd` staying on the wire beside it. See
+    /// [`CostMetricAcc::median_usd`].
+    pub median_usd: Option<f64>,
     pub unpriced_models: Vec<String>,
     pub missing_reasons: Vec<String>,
     /// Where THIS harness's model value in the row was read from (ADR-0065 §1)
@@ -592,6 +596,10 @@ pub(crate) struct StatsHarnessCost {
 pub(crate) struct StatsCostAggregate {
     pub usd: Option<f64>,
     pub average_usd: Option<f64>,
+    /// The **median** cost per readable execution (#811) — additive beside
+    /// `average_usd`, which stays for the tooltip and for any client that has
+    /// not caught up. See [`CostMetricAcc::median_usd`].
+    pub median_usd: Option<f64>,
     pub estimated: bool,
     pub partial: bool,
     pub executions: i64,
@@ -708,11 +716,38 @@ struct CostMetricAcc {
     executions: i64,
     readable: i64,
     unknown: i64,
+    /// One entry per **readable** execution, the raw material of `median_usd`
+    /// (#811). Kept alongside `readable_usd` rather than replacing it: the sum
+    /// is what an average needs, and a median needs the sample itself. Every
+    /// `add_*` below pushes exactly `readable` entries summing to
+    /// `readable_usd`, so the two figures always describe the same population.
+    readable_values: Vec<f64>,
     unpriced_models: BTreeSet<String>,
     missing_reasons: BTreeSet<String>,
 }
 
 impl CostMetricAcc {
+    /// Spread one readable slice's dollars over the executions it covers — a
+    /// contribution carries a single figure for `n` executions, and only the
+    /// per-execution values make a median. Splitting evenly leaves the mean
+    /// untouched (`n × usd/n = usd`), so `median_usd` and `average_usd` stay
+    /// two readings of one population instead of two populations.
+    fn record_readable(&mut self, usd: f64, executions: i64) {
+        if executions <= 0 {
+            return;
+        }
+        let each = usd / executions as f64;
+        self.readable_values
+            .extend(std::iter::repeat_n(each, executions as usize));
+    }
+
+    /// R-7 median of the readable executions' costs (#811), `None` when no
+    /// execution's cost was readable — never `0`, exactly like `average_usd`.
+    /// R-7 so Cost and Performance say « median » about the same estimator.
+    fn median_usd(&self) -> Option<f64> {
+        crate::distribution::r7_distribution(&self.readable_values).map(|stats| stats.median)
+    }
+
     fn add_contribution(&mut self, contribution: &crate::run_cost::CostContribution) {
         self.executions += contribution.executions;
         self.readable += contribution.readable_executions;
@@ -722,6 +757,7 @@ impl CostMetricAcc {
             self.has_usd = true;
             if contribution.readable_executions > 0 {
                 self.readable_usd += usd;
+                self.record_readable(usd, contribution.readable_executions);
             }
         }
         self.estimated |= contribution.form == Some(crate::event_log::CostForm::Derived);
@@ -759,6 +795,7 @@ impl CostMetricAcc {
         }
         if all_readable {
             self.readable_usd += run_usd;
+            self.readable_values.push(run_usd);
         }
         self.readable += i64::from(all_readable);
         self.unknown += i64::from(!all_readable);
@@ -768,6 +805,7 @@ impl CostMetricAcc {
         StatsCostAggregate {
             usd: self.has_usd.then_some(self.usd),
             average_usd: (self.readable > 0).then_some(self.readable_usd / self.readable as f64),
+            median_usd: self.median_usd(),
             estimated: self.estimated,
             partial: self.partial,
             executions: self.executions,
@@ -789,6 +827,7 @@ impl CostMetricAcc {
             readable: self.readable,
             unknown: self.unknown.max(0),
             average_usd: (self.readable > 0).then_some(self.readable_usd / self.readable as f64),
+            median_usd: self.median_usd(),
             unpriced_models: self.unpriced_models.iter().cloned().collect(),
             missing_reasons: self.missing_reasons.iter().cloned().collect(),
             provenance: None,
@@ -810,6 +849,7 @@ impl CostMetricAcc {
             self.usd += usd;
             self.has_usd = true;
             self.readable_usd += usd;
+            self.record_readable(usd, slice.executions);
         }
         self.estimated |= slice.estimated;
         self.partial |= slice.partial;
@@ -1980,6 +2020,102 @@ mod tests {
         assert_eq!(future.usd, None);
         assert_eq!(future.unknown, 1);
         assert_eq!(future.missing_reasons, vec!["harness has no cost source"]);
+    }
+
+    /// #811 — « Médiane, jamais la moyenne »: a skewed cohort (one execution an
+    /// order of magnitude above the others, exactly the story's shape) where the
+    /// median and the average disagree, mixed with an execution whose cost is
+    /// unreadable. Both figures read the SAME readable population: the unreadable
+    /// execution enters neither, and it is a median of 2 against an average of 11,
+    /// not a second average under another name.
+    #[test]
+    fn cost_median_reads_only_readable_executions_and_resists_one_outlier() {
+        fn run(bucket: &str, usd: Option<f64>) -> CostRunRow {
+            CostRunRow {
+                bucket: bucket.to_string(),
+                pipeline_id: "p".to_string(),
+                pipeline_name: "Pipeline".to_string(),
+                project_id: "/repo".to_string(),
+                project_name: "repo".to_string(),
+                node_names: BTreeMap::from([("n".to_string(), "Node".to_string())]),
+                contributions: vec![crate::run_cost::CostContribution {
+                    harness: "claude".to_string(),
+                    scope: crate::run_cost::CostScope::Node,
+                    node_id: Some("n".to_string()),
+                    executions: 1,
+                    readable_executions: i64::from(usd.is_some()),
+                    usd,
+                    form: Some(crate::event_log::CostForm::Derived),
+                    reported_in_usd: false,
+                    partial: false,
+                    unpriced_models: Vec::new(),
+                    unavailable_reasons: match usd {
+                        Some(_) => Vec::new(),
+                        None => vec!["no readable transcript".to_string()],
+                    },
+                    model_slices: Vec::new(),
+                }],
+            }
+        }
+
+        let stats = fold_harness_cost(
+            &[
+                run("2026-07-15", Some(1.0)),
+                run("2026-07-16", Some(2.0)),
+                run("2026-07-17", Some(30.0)),
+                run("2026-07-18", None),
+            ],
+            Vec::new(),
+        );
+
+        assert_eq!(stats.total.executions, 4);
+        assert_eq!(stats.total.readable, 3);
+        assert_eq!(stats.total.unknown, 1);
+        assert_eq!(stats.total.median_usd, Some(2.0));
+        assert_eq!(stats.total.average_usd, Some(11.0));
+        // The per-harness slice tells the same story, and so does the Node row —
+        // which folds contributions one by one rather than Run by Run.
+        let claude = &stats.total.harnesses[0];
+        assert_eq!(claude.harness, "claude");
+        assert_eq!(claude.median_usd, Some(2.0));
+        assert_eq!(claude.average_usd, Some(11.0));
+        let node = &stats.by_pipeline[0].nodes[0];
+        assert_eq!(node.name, "Node");
+        assert_eq!(node.aggregate.median_usd, Some(2.0));
+        assert_eq!(node.aggregate.average_usd, Some(11.0));
+    }
+
+    #[test]
+    fn a_cohort_without_one_readable_cost_has_no_median_rather_than_zero() {
+        // Same discipline as `average_usd`: « un coût inconnu reste visible comme
+        // « — », jamais comme `$0` » (CONTEXT.md).
+        let stats = fold_harness_cost(
+            &[CostRunRow {
+                bucket: "2026-07-15".to_string(),
+                pipeline_id: "p".to_string(),
+                pipeline_name: "Pipeline".to_string(),
+                project_id: "/repo".to_string(),
+                project_name: "repo".to_string(),
+                node_names: BTreeMap::new(),
+                contributions: vec![crate::run_cost::CostContribution {
+                    harness: "future".to_string(),
+                    scope: crate::run_cost::CostScope::Node,
+                    node_id: Some("n".to_string()),
+                    executions: 1,
+                    readable_executions: 0,
+                    usd: None,
+                    form: None,
+                    reported_in_usd: false,
+                    partial: false,
+                    unpriced_models: Vec::new(),
+                    unavailable_reasons: vec!["harness has no cost source".to_string()],
+                    model_slices: Vec::new(),
+                }],
+            }],
+            Vec::new(),
+        );
+        assert_eq!(stats.total.median_usd, None);
+        assert_eq!(stats.total.average_usd, None);
     }
 
     #[test]

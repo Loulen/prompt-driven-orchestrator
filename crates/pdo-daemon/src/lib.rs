@@ -24662,6 +24662,10 @@ mod tests {
             .unwrap();
         assert_eq!(claude["usd"], 10.0);
         assert!(claude["average_usd"].is_null());
+        // #811: `median_usd` travels beside `average_usd` on the same readable
+        // population — no execution's cost is readable here, so both stay null
+        // rather than collapsing to $0.
+        assert!(claude["median_usd"].is_null());
         assert_eq!(claude["estimated"], true);
         assert_eq!(claude["executions"], 3);
         assert_eq!(claude["readable"], 0);
@@ -24691,6 +24695,7 @@ mod tests {
         assert_eq!(copilot["readable"], 1);
         assert_eq!(copilot["unknown"], 0);
         assert_eq!(copilot["average_usd"], 1.0);
+        assert_eq!(copilot["median_usd"], 1.0);
         for metric in body["total"]["harnesses"].as_array().unwrap() {
             assert!(metric["unknown"].as_i64().unwrap() <= metric["executions"].as_i64().unwrap());
         }
@@ -24713,6 +24718,12 @@ mod tests {
         assert_eq!(worker["executions"], 5);
         assert_eq!(worker["readable"], 2);
         assert_eq!(worker["unknown"], 3);
+        // #811, mixed readable/unreadable: the three unreadable executions enter
+        // neither figure, and the two readable ones leave a median (the midpoint
+        // of a pair, so it coincides with the average here — same population,
+        // two readings).
+        assert!(!worker["median_usd"].is_null(), "got: {worker:#?}");
+        assert_eq!(worker["median_usd"], worker["average_usd"]);
         let infrastructure = pipeline["nodes"]
             .as_array()
             .unwrap()
@@ -25203,6 +25214,12 @@ mod tests {
         assert_eq!(worker_claude["context"]["stats"]["max"], 30000.0);
         assert_eq!(worker_claude["context"]["stats"]["mean"], 25000.0);
         assert_eq!(worker_claude["context"]["stats"]["median"], 25000.0);
+        // #811 — the Tukey fences the « Fenced » zoom level draws its whiskers
+        // at, on every `by_pipeline` distribution. This cohort holds no outlier,
+        // so they land on min/max: the same picture as « Full », which is the
+        // honest answer, not a missing field.
+        assert_eq!(worker_claude["context"]["stats"]["fence_low"], 20000.0);
+        assert_eq!(worker_claude["context"]["stats"]["fence_high"], 30000.0);
         assert_eq!(worker_claude["duration"]["measured"], 3);
         assert_eq!(worker_claude["duration"]["stats"]["min"], 300000.0);
         assert_eq!(worker_claude["duration"]["stats"]["max"], 600000.0);
@@ -25335,6 +25352,13 @@ mod tests {
         assert_eq!(pm_claude["duration"]["expected"], 2);
         assert_eq!(pm_claude["duration"]["stats"]["min"], 1200000.0);
         assert_eq!(pm_claude["duration"]["stats"]["max"], 3300000.0);
+        // #811 — fences on the `infrastructure` tree too, including the
+        // one-observation Context distribution, where they collapse onto the
+        // single value (never a null, never a theoretical bound).
+        assert_eq!(pm_claude["duration"]["stats"]["fence_low"], 1200000.0);
+        assert_eq!(pm_claude["duration"]["stats"]["fence_high"], 3300000.0);
+        assert_eq!(pm_claude["context"]["stats"]["fence_low"], 12000.0);
+        assert_eq!(pm_claude["context"]["stats"]["fence_high"], 12000.0);
         let pm_subagents = pipeline_manager["subagents"].as_array().unwrap();
         assert_eq!(pm_subagents.len(), 1, "got: {pm_subagents:#?}");
         let pm_reviewer_claude = pm_subagents[0]["harnesses"]
@@ -26258,6 +26282,16 @@ mod tests {
         assert_eq!(
             opus_node["harnesses"][0]["duration"]["stats"]["max"],
             600000.0
+        );
+        // #811 — fences on the `by_model` tree as well; one observation puts
+        // both of them on it.
+        assert_eq!(
+            opus_node["harnesses"][0]["context"]["stats"]["fence_low"],
+            20000.0
+        );
+        assert_eq!(
+            opus_node["harnesses"][0]["context"]["stats"]["fence_high"],
+            20000.0
         );
         // The by_model Node row carries no couples — the path IS the drill, so
         // the empty field is omitted on the wire (never an empty array).

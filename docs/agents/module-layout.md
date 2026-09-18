@@ -32,8 +32,11 @@ never exceed its baseline.
 
 | Watched directory          | Baseline |
 | -------------------------- | -------- |
-| `frontend/src/components`  | 157      |
-| `crates/pdo-daemon/src`    | 75       |
+| `frontend/src/components`  | 194      |
+| `crates/pdo-daemon/src`    | 90       |
+
+The numbers above drift; `scripts/layout-ratchet.sh` is the source of truth, and its comments
+carry the reason each baseline moved.
 
 Colocated Rust unit tests (`#[cfg(test)] mod tests` at the bottom of a module) are **counted with
 their module** — they are part of the same file, so a tidied module that absorbs a sibling drops the

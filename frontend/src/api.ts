@@ -1,4 +1,4 @@
-import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, StatsPerformance, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, UpdateStatus, UpdateChangelog, UpdateApplyResponse, Project, BranchRef, AgentChoice, AgentProfile, AgentProfileReferents, ProvisioningPlan, ProvisioningRules, Skill, SkillBank, SkillDetail, SkillFile, SkillFileContent, SkillFilesUpload, SkillFolder, SkillReferents, SkillRef, SkillScanResult, SkillImportItem, SkillImportReport, SkillRescanReport, RecentSkillSource, StructuredDiff, RunRefs,
+import type { PipelineListEntry, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortSide, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, StatsPerformance, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, UpdateStatus, UpdateChangelog, UpdateApplyResponse, Project, BranchList, AgentChoice, AgentProfile, AgentProfileReferents, ProvisioningPlan, ProvisioningRules, Skill, SkillBank, SkillDetail, SkillFile, SkillFileContent, SkillFilesUpload, SkillFolder, SkillReferents, SkillRef, SkillScanResult, SkillImportItem, SkillImportReport, SkillRescanReport, RecentSkillSource, StructuredDiff, RunRefs,
   ReviewCommentsListResponse,
   ReviewDecisionResponse,
   SendReviewCommentInput,
@@ -1217,11 +1217,31 @@ export async function validateRepo(path: string): Promise<ValidateRepoResponse> 
   return resp.json();
 }
 
-export function listBranches(repoPath: string): Promise<BranchRef[]> {
-  return request<BranchRef[]>(
+export function listBranches(repoPath: string): Promise<BranchList> {
+  return request<BranchList>(
     "GET",
     `/repos/branches?path=${encodeURIComponent(repoPath)}`,
     { label: "GET /repos/branches" },
+  );
+}
+
+/**
+ * Fetch every remote of `repoPath` (pruning refs that vanished), then answer the
+ * refreshed list (#802, ADR-0070 §1).
+ *
+ * Read-only on the remote side and never blocking on this side: a fetch that fails
+ * still resolves, with `fetch_error` set and the on-disk list intact. Callers must
+ * NOT treat a failure as a reason to clear branches or to refuse a launch — a repo
+ * that is offline, has no remote, or has no key is a legitimate repo.
+ *
+ * Only one fetch per repo runs at a time daemon-side: overlapping asks (form opened,
+ * repo changed, sync clicked) join the one in flight.
+ */
+export function fetchRemotes(repoPath: string): Promise<BranchList> {
+  return request<BranchList>(
+    "POST",
+    `/repos/fetch?path=${encodeURIComponent(repoPath)}`,
+    { label: "POST /repos/fetch" },
   );
 }
 

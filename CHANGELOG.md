@@ -16,6 +16,20 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.87.0
+**Quick pick de branches, fetch à l'ouverture et bouton de synchro** (#802, story #801).
+
+- Le champ « branche source » de New Run devient un quick pick à la VS Code : recherche par
+  fragment, branches locales et distantes groupées, âge et sujet du dernier commit, chip
+  d'écart `n↑ m↓` par ligne.
+- Ouvrir la modale ou changer de dépôt cible déclenche un `git fetch` (borné à 20 s) ; la
+  fraîcheur (`fetched N ago`) est lue depuis `.git/FETCH_HEAD`, sans état stocké côté PDO.
+- Un bouton de synchro expose cinq états (`behind`, `diverged`, `up to date`, `fetching`,
+  `unknown`) ; un fetch raté n'écrase pas la date du dernier succès et ne bloque pas le
+  lancement. Le raccourci bascule la sélection sur `origin/<branche>`, et le Run coupe alors
+  sur le tip amont réel.
+- Chaque dépôt secondaire porte sa propre fraîcheur (même composant).
+
 ## 1.86.2
 **Niveaux d'effort par modèle** (#798).
 

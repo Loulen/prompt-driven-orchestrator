@@ -1257,6 +1257,50 @@ export interface PipelineVariableInfo {
 export interface BranchRef {
   name: string;
   kind: "local" | "remote";
+  /**
+   * #802: the tracking branch's short name (`origin/main`), when this local
+   * branch has one. Absent for remote-tracking refs — they ARE the upstream.
+   */
+  upstream?: string | null;
+  /**
+   * The écart amont as of the last fetch: commits this branch has that its
+   * upstream does not (`ahead`) and the other way round (`behind`).
+   *
+   * `null`/absent is not zero. A branch tracking nothing has no écart at all,
+   * and an upstream that was pruned away leaves the counts unknowable — both
+   * must read as "nothing to say", never as "up to date".
+   */
+  ahead?: number | null;
+  behind?: number | null;
+  /** Tip commit date, ISO-8601 with offset. */
+  last_commit_at?: string | null;
+  last_commit_subject?: string | null;
+}
+
+/**
+ * What both `GET /repos/branches` and `POST /repos/fetch` answer (#802).
+ *
+ * One shape for the two verbs, so a refetch replaces the list in place. The
+ * numbers in `branches` are only ever as good as `last_fetch_at` — that date is
+ * read off the repo's own `FETCH_HEAD`, so a `git fetch` typed in a terminal
+ * counts exactly as much as one of ours.
+ */
+export interface BranchList {
+  branches: BranchRef[];
+  last_fetch_at: string | null;
+  /**
+   * Set only by the fetch verb, only when the fetch failed. The list beside it
+   * is still the truth on disk: a failed fetch degrades the écart to "unknown",
+   * it never blocks a launch (ADR-0070 §1).
+   */
+  fetch_error: BranchFetchError | null;
+}
+
+export interface BranchFetchError {
+  /** `no_remote` · `timeout` · `auth` · `network` · `failed`. */
+  kind: string;
+  /** git's own stderr, shown verbatim as the popover's detail line. */
+  message: string;
 }
 
 export type PipelineScope = "instance" | "repo" | "user" | "library";

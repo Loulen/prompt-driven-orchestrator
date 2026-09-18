@@ -3603,8 +3603,39 @@ async fn repos_branches(Query(q): Query<RepoPathQuery>) -> Response {
                 .into_response();
         }
     };
-    match list_branches(&repo) {
-        Ok(branches) => Json(branches).into_response(),
+    match branch_list(&repo) {
+        Ok(list) => Json(list).into_response(),
+        Err(msg) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": msg })),
+        )
+            .into_response(),
+    }
+}
+
+/// Fetch every remote of the target repo, then answer the refreshed list (#802).
+///
+/// A failed fetch is **200 with `fetch_error` set**, not an HTTP error: the list is
+/// still the truth on disk, launching is still possible, and a 4xx/5xx would push the
+/// client into an error path for a repo that is merely offline (ADR-0070 §1). The only
+/// non-200 here is a target repo that is not a repo at all.
+async fn repos_fetch(Query(q): Query<RepoPathQuery>) -> Response {
+    let repo = match validate_target_repo(&q.path) {
+        Ok(p) => p,
+        Err(msg) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": msg })),
+            )
+                .into_response();
+        }
+    };
+    let fetch_error = fetch_all_remotes(&repo).await;
+    match branch_list(&repo) {
+        Ok(mut list) => {
+            list.fetch_error = fetch_error;
+            Json(list).into_response()
+        }
         Err(msg) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": msg })),
@@ -5073,6 +5104,10 @@ fn build_router(state: Arc<AppState>) -> Router {
         // prefix already covers it (no vite proxy edit).
         .route("/library/import", post(import_library_pipeline))
         .route("/repos/branches", get(repos_branches))
+        // #802/ADR-0070: the ONE place the daemon talks to a remote, and only on a
+        // human intention (form opened, repo changed, sync clicked). Read-only:
+        // fetch + prune, never a push, a merge or a rebase.
+        .route("/repos/fetch", post(repos_fetch))
         .route("/repos/validate", get(repos_validate))
         .route("/repos/recent", get(repos_recent))
         .route("/repos/provisioning/preview", post(preview_provisioning))
@@ -21272,10 +21307,27 @@ async fn patch_run_repos(
 /// ref keeps its `origin/` prefix. NEVER re-derive locality by string surgery: a
 /// *local* branch may legitimately be named `origin/x`, so `kind` — classified from
 /// the full refname — is the only authoritative signal.
+///
+/// #802/ADR-0070: the entry also carries what makes freshness *visible* at launch —
+/// the upstream branch, the écart amont (`ahead`/`behind`) **as of the last fetch**,
+/// and the tip commit's date and subject. Every extra field is optional on purpose:
+/// a branch with no upstream has no écart (not a zero one), and a repo git cannot
+/// read a date from is not an error.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct BranchEntry {
     name: String,
     kind: BranchKind,
+    /// The tracking branch's short name (`origin/main`), when this local branch has
+    /// one. Always `None` for a remote-tracking ref — it *is* the upstream.
+    upstream: Option<String>,
+    /// Commits this branch has that its upstream does not, as of the last fetch.
+    /// `None` when there is no upstream, or when the upstream ref is gone.
+    ahead: Option<u32>,
+    /// Commits the upstream has that this branch does not, as of the last fetch.
+    behind: Option<u32>,
+    /// Tip commit date, ISO-8601 with offset (`git`'s `iso-strict`).
+    last_commit_at: Option<String>,
+    last_commit_subject: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -21284,6 +21336,53 @@ enum BranchKind {
     Local,
     Remote,
 }
+
+/// What `GET /repos/branches` and `POST /repos/fetch` both answer (#802).
+///
+/// One shape for the two verbs, so a refetch replaces the list in place instead of
+/// teaching the client a second format. `last_fetch_at` is **derived from the repo
+/// itself** (the mtime of `FETCH_HEAD`), never stored by PDO: a fetch anyone ran —
+/// from a terminal, from an IDE — dates the numbers just as well as ours.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct BranchList {
+    branches: Vec<BranchEntry>,
+    /// RFC-3339 timestamp of the last successful fetch, or `None` when the repo has
+    /// never fetched (fresh `git init`, or a clone that never refreshed).
+    last_fetch_at: Option<String>,
+    /// Only ever set by the fetch verb, and only when the fetch failed. The list
+    /// beside it is still the truth on disk — a failed fetch degrades the écart to
+    /// "unknown, as of `last_fetch_at`", it never empties the list (ADR-0070 §1).
+    fetch_error: Option<FetchError>,
+}
+
+/// Why a fetch did not happen, named rather than raw (#802). The client picks its
+/// wording from `kind`; `message` carries git's own stderr for the detail line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum FetchErrorKind {
+    /// The repo has no remote at all — a legitimate, purely local repo.
+    NoRemote,
+    /// Exceeded `FETCH_TIMEOUT`.
+    Timeout,
+    /// Credentials missing or refused. Never a prompt: the fetch runs
+    /// non-interactive, so this is what a missing key looks like.
+    Auth,
+    /// Host unreachable / unresolvable.
+    Network,
+    /// Anything else git refused to do.
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct FetchError {
+    kind: FetchErrorKind,
+    message: String,
+}
+
+/// How long a fetch may take before it is abandoned (spec #801: "de l'ordre de vingt
+/// secondes"). The form fetches on open, so an unreachable remote must not keep a
+/// spinner alive for git's own (unbounded) patience.
+const FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// The configured remote names, longest first so stripping a remote's `<name>/`
 /// prefix off a tracking ref is unambiguous even when a remote name itself
@@ -21348,10 +21447,20 @@ fn list_branches(repo: &Path) -> Result<Vec<BranchEntry>, String> {
         .args([
             "for-each-ref",
             "--sort=refname",
-            "--format=%(refname)%09%(refname:short)%09%(symref)",
+            // Subject LAST: it is the only field that may itself contain a tab, so a
+            // `splitn` on the count of the fields before it cannot be derailed by it.
+            "--format=%(refname)%09%(refname:short)%09%(symref)%09%(upstream:short)\
+             %09%(upstream:track)%09%(committerdate:iso-strict)%09%(contents:subject)",
             "refs/heads",
             "refs/remotes",
         ])
+        // Belt and braces on a guarantee we depend on but do not control: the
+        // `ahead %d` / `behind %d` / `gone` words of `%(upstream:track)` are git's
+        // UNTRANSLATED plumbing strings — `for-each-ref` never calls
+        // `setup_ref_filter_porcelain_msg()`, unlike `git branch -vv`, whose
+        // localized output must never be parsed. Pinning the locale costs nothing
+        // and keeps that distinction from becoming load-bearing by accident.
+        .env("LC_ALL", "C")
         .current_dir(repo)
         .output();
     let stdout = match output {
@@ -21365,38 +21474,58 @@ fn list_branches(repo: &Path) -> Result<Vec<BranchEntry>, String> {
     let stdout = String::from_utf8_lossy(&stdout);
 
     let mut locals: Vec<BranchEntry> = Vec::new();
-    let mut remote_pairs: Vec<(String, String)> = Vec::new();
+    let mut remote_pairs: Vec<(String, BranchEntry)> = Vec::new();
     let mut local_names: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for line in stdout.lines() {
-        let mut fields = line.split('\t');
+        let mut fields = line.splitn(7, '\t');
         let refname = fields.next().unwrap_or("");
         let short = fields.next().unwrap_or("");
         let symref = fields.next().unwrap_or("");
+        let upstream = fields.next().unwrap_or("");
+        let track = fields.next().unwrap_or("");
+        let date = fields.next().unwrap_or("");
+        let subject = fields.next().unwrap_or("");
         if !symref.is_empty() {
             continue;
         }
+        let some = |s: &str| (!s.is_empty()).then(|| s.to_string());
         // Classify by the FULL refname prefix, never the short name: a local branch
         // literally named `origin/ambig` lives under refs/heads/ and must list local.
         if refname.starts_with("refs/heads/") {
+            let (ahead, behind) = parse_upstream_track(track, !upstream.is_empty());
             local_names.insert(short.to_string());
             locals.push(BranchEntry {
                 name: short.to_string(),
                 kind: BranchKind::Local,
+                upstream: some(upstream),
+                ahead,
+                behind,
+                last_commit_at: some(date),
+                last_commit_subject: some(subject),
             });
         } else if refname.starts_with("refs/remotes/") {
             let bare = strip_remote_prefix(short, &remotes);
-            remote_pairs.push((short.to_string(), bare));
+            remote_pairs.push((
+                bare,
+                BranchEntry {
+                    name: short.to_string(),
+                    kind: BranchKind::Remote,
+                    // A remote-tracking ref IS the upstream; it has no écart of its own.
+                    upstream: None,
+                    ahead: None,
+                    behind: None,
+                    last_commit_at: some(date),
+                    last_commit_subject: some(subject),
+                },
+            ));
         }
     }
 
     let mut remotes_out: Vec<BranchEntry> = remote_pairs
         .into_iter()
-        .filter(|(_short, bare)| !local_names.contains(bare))
-        .map(|(short, _bare)| BranchEntry {
-            name: short,
-            kind: BranchKind::Remote,
-        })
+        .filter(|(bare, _entry)| !local_names.contains(bare))
+        .map(|(_bare, entry)| entry)
         .collect();
 
     locals.sort_by(|a, b| a.name.cmp(&b.name));
@@ -21405,6 +21534,345 @@ fn list_branches(repo: &Path) -> Result<Vec<BranchEntry>, String> {
     let mut out = locals;
     out.extend(remotes_out);
     Ok(out)
+}
+
+/// Read `git`'s `%(upstream:track)` column into the écart amont (#802).
+///
+/// git prints `[ahead 2]`, `[behind 3]`, `[ahead 2, behind 3]`, `[gone]`, or an
+/// EMPTY string when the branch is exactly level with its upstream. That last case
+/// is why `has_upstream` is a separate argument: empty-and-tracking means `0↑ 0↓`
+/// ("up to date"), empty-and-not-tracking means *there is no écart to speak of*, and
+/// collapsing the two would paint a ✓ on every branch that tracks nothing.
+///
+/// `[gone]` — the upstream was pruned away — keeps `upstream` set but leaves the
+/// counts unknown; there is nothing left to count against.
+fn parse_upstream_track(track: &str, has_upstream: bool) -> (Option<u32>, Option<u32>) {
+    if !has_upstream {
+        return (None, None);
+    }
+    let inner = track.trim().trim_start_matches('[').trim_end_matches(']');
+    if inner.is_empty() {
+        return (Some(0), Some(0));
+    }
+    if inner == "gone" {
+        return (None, None);
+    }
+    let mut ahead = Some(0);
+    let mut behind = Some(0);
+    for part in inner.split(',') {
+        let part = part.trim();
+        if let Some(n) = part.strip_prefix("ahead ") {
+            ahead = n.trim().parse().ok();
+        } else if let Some(n) = part.strip_prefix("behind ") {
+            behind = n.trim().parse().ok();
+        }
+    }
+    (ahead, behind)
+}
+
+/// The repo's common git dir — where `FETCH_HEAD` lives. `--git-common-dir` (not
+/// `--git-dir`) because a linked worktree has its own git dir but shares the common
+/// one, and PDO's own Runs live in linked worktrees: reading the per-worktree dir
+/// would report "never fetched" for every Run worktree.
+fn git_common_dir(repo: &Path) -> Option<PathBuf> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--git-common-dir"])
+        .current_dir(repo)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if raw.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(&raw);
+    Some(if path.is_absolute() {
+        path
+    } else {
+        repo.join(path)
+    })
+}
+
+/// When this repo last fetched successfully, read off `FETCH_HEAD`'s mtime (#802).
+///
+/// Derived, never stored (ADR-0070 §1): git rewrites `FETCH_HEAD` on every successful
+/// fetch, whoever ran it — a `git fetch` in a terminal dates the écart just as well as
+/// one of ours, and a PDO-owned timestamp would claim otherwise.
+///
+/// An EMPTY `FETCH_HEAD` reads as "never" rather than "just now": a fetch that reached
+/// no remote truncates the file to zero bytes and re-dates it, so its mtime dates a
+/// FAILURE. Trusting it would print "fetched 2 s ago" over numbers nobody refreshed —
+/// the precise lie this feature exists to remove. (PDO's own fetch restores the file
+/// when it fails, see `run_git_fetch`; this guard covers the failed fetches run
+/// outside PDO, from a terminal or an IDE.)
+fn last_fetch_at(repo: &Path) -> Option<String> {
+    let meta = std::fs::metadata(git_common_dir(repo)?.join("FETCH_HEAD")).ok()?;
+    if meta.len() == 0 {
+        return None;
+    }
+    Some(chrono::DateTime::<chrono::Utc>::from(meta.modified().ok()?).to_rfc3339())
+}
+
+/// `FETCH_HEAD` as it stood before a fetch attempt, so a failed attempt can put it
+/// back exactly as it was (#802).
+///
+/// git opens `FETCH_HEAD` for writing at the START of a fetch, so a fetch that reaches
+/// no remote leaves it truncated and freshly dated — which would wipe out the "dernier
+/// fetch réussi" the unknown state is supposed to report, and re-date it to the moment
+/// of the failure. Restoring is not a mutation of the repo: it leaves it byte- and
+/// mtime-identical to before PDO asked.
+struct FetchHeadSnapshot {
+    path: PathBuf,
+    /// `None` when the file did not exist at all (a repo that never fetched).
+    before: Option<(Vec<u8>, std::time::SystemTime)>,
+}
+
+impl FetchHeadSnapshot {
+    fn take(repo: &Path) -> Option<Self> {
+        let path = git_common_dir(repo)?.join("FETCH_HEAD");
+        let before = std::fs::metadata(&path)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|modified| Some((std::fs::read(&path).ok()?, modified)));
+        Some(Self { path, before })
+    }
+
+    /// Put `FETCH_HEAD` back. Best-effort throughout: a repo we cannot write to is a
+    /// reason to leave it alone, never a reason to fail a read-only fetch.
+    fn restore(&self) {
+        match &self.before {
+            Some((bytes, modified)) => {
+                if std::fs::write(&self.path, bytes).is_ok() {
+                    if let Ok(file) = std::fs::OpenOptions::new().write(true).open(&self.path) {
+                        let _ = file.set_modified(*modified);
+                    }
+                }
+            }
+            // Nothing was there before; the failed attempt's empty husk is the only
+            // trace, and `last_fetch_at` already reads it as "never".
+            None => {
+                let _ = std::fs::remove_file(&self.path);
+            }
+        }
+    }
+}
+
+/// The whole answer of `GET /repos/branches`: the list plus the date it is good as of.
+fn branch_list(repo: &Path) -> Result<BranchList, String> {
+    Ok(BranchList {
+        branches: list_branches(repo)?,
+        last_fetch_at: last_fetch_at(repo),
+        fetch_error: None,
+    })
+}
+
+/// Classify git's fetch stderr into a named reason (#802).
+///
+/// Matching on git's prose is unavoidable — `git fetch` exits 128 for everything —
+/// but the *consequence* of a mis-classification is only a slightly wrong sentence in
+/// the popover: the stderr line itself is always shown, and no branch of the UI
+/// behaves differently per kind. Hence substring matching rather than an exhaustive
+/// parser that would rot faster.
+fn classify_fetch_error(stderr: &str) -> FetchErrorKind {
+    let s = stderr.to_lowercase();
+    let network = [
+        "could not resolve host",
+        "could not resolve hostname",
+        "temporary failure in name resolution",
+        "connection refused",
+        "connection timed out",
+        "network is unreachable",
+        "no route to host",
+        "operation timed out",
+        "failed to connect",
+    ];
+    let auth = [
+        "permission denied",
+        "authentication failed",
+        "could not read username",
+        "could not read password",
+        "terminal prompts disabled",
+        "access denied",
+        "invalid username or password",
+        "publickey",
+    ];
+    if network.iter().any(|m| s.contains(m)) {
+        return FetchErrorKind::Network;
+    }
+    if auth.iter().any(|m| s.contains(m)) {
+        return FetchErrorKind::Auth;
+    }
+    FetchErrorKind::Failed
+}
+
+/// The in-flight fetch of each repo, so concurrent callers **join** the running one
+/// instead of starting a second (spec #801). The value is the outcome slot the leader
+/// publishes into; followers clone the receiver and await it.
+#[allow(clippy::type_complexity)]
+fn fetch_in_flight() -> &'static std::sync::Mutex<
+    std::collections::HashMap<PathBuf, tokio::sync::watch::Receiver<Option<Option<FetchError>>>>,
+> {
+    static FLIGHTS: std::sync::OnceLock<
+        std::sync::Mutex<
+            std::collections::HashMap<
+                PathBuf,
+                tokio::sync::watch::Receiver<Option<Option<FetchError>>>,
+            >,
+        >,
+    > = std::sync::OnceLock::new();
+    FLIGHTS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Fetch every remote of `repo`, pruning refs that vanished server-side. Returns
+/// `None` on success, or the named reason it did not happen (#802, ADR-0070 §1).
+///
+/// Read-only and **non-interactive by construction**: `GIT_TERMINAL_PROMPT=0` plus a
+/// batch-mode ssh, so a missing credential fails with git's own message instead of
+/// hanging on a prompt nobody can see (the `skill_import` clone precedent). Bounded by
+/// `FETCH_TIMEOUT`. Never pushes, merges or rebases — that is the whole of ADR-0070 §2.
+///
+/// Only ONE fetch per repo runs at a time: the form fetches on open and on repo
+/// change, and the sync popover refetches, so three overlapping asks on the same repo
+/// are routine. The second and third await the first's outcome.
+async fn fetch_all_remotes(repo: &Path) -> Option<FetchError> {
+    enum Role {
+        Leader(tokio::sync::watch::Sender<Option<Option<FetchError>>>),
+        Follower(tokio::sync::watch::Receiver<Option<Option<FetchError>>>),
+    }
+    let role = {
+        let mut map = fetch_in_flight().lock().unwrap_or_else(|p| p.into_inner());
+        match map.get(repo) {
+            Some(rx) => Role::Follower(rx.clone()),
+            None => {
+                let (tx, rx) = tokio::sync::watch::channel(None);
+                map.insert(repo.to_path_buf(), rx);
+                Role::Leader(tx)
+            }
+        }
+    };
+
+    let mut rx = match role {
+        Role::Follower(rx) => rx,
+        Role::Leader(tx) => {
+            let outcome = run_git_fetch(repo).await;
+            // Leave the map BEFORE publishing, so a caller arriving after the result
+            // starts a fresh fetch rather than joining a finished one. Followers that
+            // already cloned the receiver still read the value: a watch receiver keeps
+            // the last value after the sender is dropped.
+            fetch_in_flight()
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .remove(repo);
+            let _ = tx.send(Some(outcome.clone()));
+            return outcome;
+        }
+    };
+
+    loop {
+        if rx.borrow().is_some() {
+            break;
+        }
+        if rx.changed().await.is_err() {
+            break;
+        }
+    }
+    let published = rx.borrow().clone();
+    published.unwrap_or(Some(FetchError {
+        kind: FetchErrorKind::Failed,
+        message: "the in-flight fetch ended without a result".into(),
+    }))
+}
+
+/// The fetch itself, with no in-flight bookkeeping. Split out so the join logic above
+/// stays readable, and so tests can drive a real `git fetch` against a bare origin.
+async fn run_git_fetch(repo: &Path) -> Option<FetchError> {
+    match git_remote_names(repo) {
+        // A repo with no remote is a legitimate case, not a failure to report as one:
+        // named so the popover can say "no remote" instead of quoting git at the user.
+        Ok(remotes) if remotes.is_empty() => {
+            return Some(FetchError {
+                kind: FetchErrorKind::NoRemote,
+                message: "this repository has no remote".into(),
+            });
+        }
+        Ok(_) => {}
+        Err(e) => {
+            return Some(FetchError {
+                kind: FetchErrorKind::Failed,
+                message: e,
+            });
+        }
+    }
+
+    // Keep an operator's own `GIT_SSH_COMMAND` (a jump host, an identity file) and
+    // only append the batch flag — replacing it would break the very setups that need
+    // a custom command, in the name of not prompting.
+    let ssh_command = match std::env::var("GIT_SSH_COMMAND") {
+        Ok(existing) if !existing.trim().is_empty() => format!("{existing} -oBatchMode=yes"),
+        _ => "ssh -oBatchMode=yes".to_string(),
+    };
+
+    // Taken BEFORE the attempt: git truncates FETCH_HEAD on its way in, so by the time
+    // we know the fetch failed the previous date is already gone.
+    let snapshot = FetchHeadSnapshot::take(repo);
+    let failed = |error: FetchError| {
+        if let Some(snapshot) = &snapshot {
+            snapshot.restore();
+        }
+        Some(error)
+    };
+
+    let mut cmd = tokio::process::Command::new("git");
+    cmd.args(["fetch", "--all", "--prune", "--quiet"])
+        .current_dir(repo)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_ASKPASS", "true")
+        .env("SSH_ASKPASS_REQUIRE", "never")
+        .env("GIT_SSH_COMMAND", ssh_command)
+        .env("LC_ALL", "C")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+
+    let spawned = match cmd.spawn() {
+        Ok(child) => child,
+        Err(e) => {
+            return failed(FetchError {
+                kind: FetchErrorKind::Failed,
+                message: format!("cannot run git: {e}"),
+            });
+        }
+    };
+
+    match tokio::time::timeout(FETCH_TIMEOUT, spawned.wait_with_output()).await {
+        Ok(Ok(output)) if output.status.success() => None,
+        Ok(Ok(output)) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let message = if stderr.is_empty() {
+                format!("git fetch exited with {}", output.status)
+            } else {
+                stderr.clone()
+            };
+            failed(FetchError {
+                kind: classify_fetch_error(&stderr),
+                message,
+            })
+        }
+        Ok(Err(e)) => failed(FetchError {
+            kind: FetchErrorKind::Failed,
+            message: format!("git fetch failed: {e}"),
+        }),
+        Err(_) => failed(FetchError {
+            kind: FetchErrorKind::Timeout,
+            message: format!(
+                "git fetch did not finish within {}s",
+                FETCH_TIMEOUT.as_secs()
+            ),
+        }),
+    }
 }
 
 /// Resolve the repository a Run works in, for a **projected** `RunState`.
@@ -38808,10 +39276,9 @@ edges: []
         let (_origin, work) = init_repo_with_remote();
         let branches = list_branches(work.path()).unwrap();
         assert!(
-            branches.contains(&BranchEntry {
-                name: "origin/feature-remote-only".into(),
-                kind: BranchKind::Remote,
-            }),
+            branches
+                .iter()
+                .any(|b| b.name == "origin/feature-remote-only" && b.kind == BranchKind::Remote),
             "remote-only tracking ref must be listed: {branches:?}"
         );
     }
@@ -38838,10 +39305,9 @@ edges: []
         // The clone created a local `main` tracking `origin/main`; the remote twin
         // is dropped, the local kept.
         assert!(
-            branches.contains(&BranchEntry {
-                name: "main".into(),
-                kind: BranchKind::Local,
-            }),
+            branches
+                .iter()
+                .any(|b| b.name == "main" && b.kind == BranchKind::Local),
             "local main must be listed: {branches:?}"
         );
         assert!(
@@ -38883,6 +39349,264 @@ edges: []
             panic!("expected at least one local and one remote: {branches:?}");
         };
         assert!(ll < fr, "all locals must precede all remotes: {branches:?}");
+    }
+
+    // ── #802 / ADR-0070: écart amont, dates, and the fetch verb ──────────────
+    //
+    // Every test below drives a REAL pair of repos (a clone of a filesystem
+    // "origin"), because the whole point of the feature is what git reports about
+    // an actual divergence. The prior art is `validate_source_branch`'s suite.
+
+    /// Add `count` commits on `dir`'s current branch. Used to move an origin ahead
+    /// of its clone without a push (the origin here has a worktree, so a push to
+    /// its checked-out branch would be refused).
+    fn commit_n(dir: &std::path::Path, count: usize, prefix: &str) {
+        for i in 0..count {
+            let file = dir.join(format!("{prefix}-{i}.txt"));
+            std::fs::write(&file, format!("{prefix} {i}\n")).unwrap();
+            run_git(dir, &["add", "."]);
+            run_git(dir, &["commit", "-m", &format!("{prefix} {i}")]);
+        }
+    }
+
+    fn branch_named<'a>(branches: &'a [BranchEntry], name: &str) -> &'a BranchEntry {
+        branches
+            .iter()
+            .find(|b| b.name == name)
+            .unwrap_or_else(|| panic!("no branch {name} in {branches:?}"))
+    }
+
+    #[test]
+    fn list_branches_reports_the_gap_after_origin_moves_ahead() {
+        let (origin, work) = init_repo_with_remote();
+        commit_n(origin.path(), 3, "upstream-move");
+        run_git(work.path(), &["fetch", "--quiet", "origin"]);
+
+        let main = branch_named(&list_branches(work.path()).unwrap(), "main").clone();
+        assert_eq!(main.upstream.as_deref(), Some("origin/main"));
+        assert_eq!(main.behind, Some(3), "three commits arrived on origin");
+        assert_eq!(main.ahead, Some(0));
+    }
+
+    #[test]
+    fn list_branches_reports_a_diverged_gap_on_both_axes() {
+        let (origin, work) = init_repo_with_remote();
+        commit_n(origin.path(), 2, "theirs");
+        commit_n(work.path(), 1, "mine");
+        run_git(work.path(), &["fetch", "--quiet", "origin"]);
+
+        let main = branch_named(&list_branches(work.path()).unwrap(), "main").clone();
+        assert_eq!((main.ahead, main.behind), (Some(1), Some(2)));
+    }
+
+    #[test]
+    fn list_branches_reports_a_zero_gap_when_level_with_upstream() {
+        let (_origin, work) = init_repo_with_remote();
+        // A tracking branch that is exactly level: `%(upstream:track)` is EMPTY here,
+        // which must read as `0↑ 0↓` ("up to date"), never as "no upstream".
+        let main = branch_named(&list_branches(work.path()).unwrap(), "main").clone();
+        assert_eq!(main.upstream.as_deref(), Some("origin/main"));
+        assert_eq!((main.ahead, main.behind), (Some(0), Some(0)));
+    }
+
+    #[test]
+    fn list_branches_leaves_a_branch_without_upstream_without_a_gap() {
+        let (_origin, work) = init_repo_with_remote();
+        run_git(work.path(), &["checkout", "-q", "-b", "local-only"]);
+
+        let solo = branch_named(&list_branches(work.path()).unwrap(), "local-only").clone();
+        assert_eq!(solo.upstream, None);
+        assert_eq!(
+            (solo.ahead, solo.behind),
+            (None, None),
+            "a branch tracking nothing has no écart — not a zero one"
+        );
+    }
+
+    #[test]
+    fn list_branches_carries_the_tip_commit_date_and_subject() {
+        let (_origin, work) = init_repo_with_remote();
+        std::fs::write(work.path().join("z.txt"), "z\n").unwrap();
+        run_git(work.path(), &["add", "."]);
+        run_git(work.path(), &["commit", "-m", "a readable subject"]);
+
+        let main = branch_named(&list_branches(work.path()).unwrap(), "main").clone();
+        assert_eq!(
+            main.last_commit_subject.as_deref(),
+            Some("a readable subject")
+        );
+        let date = main.last_commit_at.expect("a tip date");
+        assert!(
+            chrono::DateTime::parse_from_rfc3339(&date).is_ok(),
+            "the date must parse as RFC-3339 for the client: {date}"
+        );
+    }
+
+    #[test]
+    fn parse_upstream_track_reads_each_shape_git_prints() {
+        assert_eq!(parse_upstream_track("", true), (Some(0), Some(0)));
+        assert_eq!(parse_upstream_track("[ahead 2]", true), (Some(2), Some(0)));
+        assert_eq!(parse_upstream_track("[behind 3]", true), (Some(0), Some(3)));
+        assert_eq!(
+            parse_upstream_track("[ahead 2, behind 3]", true),
+            (Some(2), Some(3))
+        );
+        // Pruned upstream: still tracking something, but nothing left to count.
+        assert_eq!(parse_upstream_track("[gone]", true), (None, None));
+        // No upstream at all — the empty column must NOT read as "level".
+        assert_eq!(parse_upstream_track("", false), (None, None));
+    }
+
+    #[test]
+    fn classify_fetch_error_names_the_common_refusals() {
+        assert_eq!(
+            classify_fetch_error("ssh: Could not resolve hostname github.com"),
+            FetchErrorKind::Network
+        );
+        assert_eq!(
+            classify_fetch_error("git@github.com: Permission denied (publickey)."),
+            FetchErrorKind::Auth
+        );
+        assert_eq!(
+            classify_fetch_error("fatal: couldn't find remote ref"),
+            FetchErrorKind::Failed
+        );
+    }
+
+    #[test]
+    fn last_fetch_at_is_absent_before_any_fetch_and_set_after_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_test_repo(tmp.path());
+        assert_eq!(
+            last_fetch_at(tmp.path()),
+            None,
+            "a repo that never fetched has no date to show"
+        );
+
+        let (_origin, work) = init_repo_with_remote();
+        run_git(work.path(), &["fetch", "--quiet", "origin"]);
+        let date = last_fetch_at(work.path()).expect("FETCH_HEAD dates the fetch");
+        assert!(
+            chrono::DateTime::parse_from_rfc3339(&date).is_ok(),
+            "{date}"
+        );
+    }
+
+    #[test]
+    fn last_fetch_at_reads_an_empty_fetch_head_as_never() {
+        // What a fetch that reached no remote leaves behind — freshly dated, but
+        // zero bytes. Reporting its mtime would print "fetched just now" over
+        // numbers nobody refreshed. Reproduced here as a plain truncation, which is
+        // exactly what a terminal `git fetch` does when it fails.
+        let (_origin, work) = init_repo_with_remote();
+        run_git(work.path(), &["fetch", "--quiet", "origin"]);
+        std::fs::write(work.path().join(".git/FETCH_HEAD"), b"").unwrap();
+        assert_eq!(last_fetch_at(work.path()), None);
+    }
+
+    #[tokio::test]
+    async fn fetch_all_remotes_makes_a_new_origin_commit_visible() {
+        let (origin, work) = init_repo_with_remote();
+        // Origin moves ahead and the clone has NOT fetched: the gap is invisible.
+        commit_n(origin.path(), 3, "after-clone");
+        let before = branch_named(&list_branches(work.path()).unwrap(), "main").clone();
+        assert_eq!(before.behind, Some(0), "stale refs still look level");
+
+        assert_eq!(
+            fetch_all_remotes(work.path()).await,
+            None,
+            "fetch succeeded"
+        );
+
+        let after = branch_named(&list_branches(work.path()).unwrap(), "main").clone();
+        assert_eq!(
+            after.behind,
+            Some(3),
+            "the fetch made the three commits visible"
+        );
+        assert!(last_fetch_at(work.path()).is_some());
+    }
+
+    #[tokio::test]
+    async fn fetch_all_remotes_prunes_a_branch_that_vanished_upstream() {
+        let (origin, work) = init_repo_with_remote();
+        run_git(origin.path(), &["branch", "-D", "feature-remote-only"]);
+
+        assert_eq!(fetch_all_remotes(work.path()).await, None);
+
+        let branches = list_branches(work.path()).unwrap();
+        assert!(
+            !branches
+                .iter()
+                .any(|b| b.name == "origin/feature-remote-only"),
+            "a ref deleted upstream must be pruned away: {branches:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_all_remotes_names_a_repo_with_no_remote() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_test_repo(tmp.path());
+        let error = fetch_all_remotes(tmp.path()).await.expect("a named reason");
+        assert_eq!(
+            error.kind,
+            FetchErrorKind::NoRemote,
+            "a purely local repo is a legitimate case with its own name"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_fetch_leaves_the_list_and_the_previous_date_intact() {
+        let (_origin, work) = init_repo_with_remote();
+        run_git(work.path(), &["fetch", "--quiet", "origin"]);
+        let dated_at = last_fetch_at(work.path()).expect("a first successful fetch");
+
+        // Break the remote the way an offline machine or a moved repo would.
+        run_git(
+            work.path(),
+            &["remote", "set-url", "origin", "/nonexistent/repo.git"],
+        );
+        let error = fetch_all_remotes(work.path()).await.expect("a failure");
+        assert!(
+            !error.message.is_empty(),
+            "git's own words reach the popover"
+        );
+
+        // ADR-0070 §1: the écart degrades to "unknown, as of the last successful
+        // fetch" — the list itself is untouched and launching stays possible.
+        let branches = list_branches(work.path()).unwrap();
+        assert!(branches.iter().any(|b| b.name == "main"));
+        // git truncates and re-dates FETCH_HEAD on its way into a doomed fetch, so
+        // without the restore this reads as "fetched just now" over refs nobody
+        // refreshed — and the popover's "last successful fetch 2 d ago" would be a
+        // fabrication. The date must be the one the LAST SUCCESS left.
+        assert_eq!(
+            last_fetch_at(work.path()).as_deref(),
+            Some(dated_at.as_str()),
+            "a failed fetch must leave the last successful fetch's date standing"
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_fetches_of_one_repo_share_a_single_flight() {
+        let (_origin, work) = init_repo_with_remote();
+        let path = work.path().to_path_buf();
+        let outcomes = futures_util::future::join_all((0..4).map(|_| {
+            let path = path.clone();
+            async move { fetch_all_remotes(&path).await }
+        }))
+        .await;
+        assert!(
+            outcomes.iter().all(|o| o.is_none()),
+            "every joined caller reads the leader's outcome: {outcomes:?}"
+        );
+        assert!(
+            !fetch_in_flight()
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .contains_key(&path),
+            "the flight is released, so the next ask fetches for real"
+        );
     }
 
     #[test]
@@ -45274,20 +45998,22 @@ edges:
     /// (here, `[off]` included) is the model's known offer.
     #[test]
     fn harness_catalogue_entry_serves_the_per_model_effort_table() {
-        let mut catalogue = harness_catalogue::Catalogue::default();
-        catalogue.models = vec![
-            "openrouter/openai/gpt-5.4".to_string(),
-            "openrouter/stealth/union-alpha".to_string(),
-        ];
-        catalogue.efforts = vec![
-            "off".to_string(),
-            "minimal".to_string(),
-            "low".to_string(),
-            "medium".to_string(),
-            "high".to_string(),
-            "xhigh".to_string(),
-            "max".to_string(),
-        ];
+        let mut catalogue = harness_catalogue::Catalogue {
+            models: vec![
+                "openrouter/openai/gpt-5.4".to_string(),
+                "openrouter/stealth/union-alpha".to_string(),
+            ],
+            efforts: vec![
+                "off".to_string(),
+                "minimal".to_string(),
+                "low".to_string(),
+                "medium".to_string(),
+                "high".to_string(),
+                "xhigh".to_string(),
+                "max".to_string(),
+            ],
+            ..Default::default()
+        };
         catalogue
             .model_contexts
             .insert("openrouter/openai/gpt-5.4".to_string(), "400K".to_string());

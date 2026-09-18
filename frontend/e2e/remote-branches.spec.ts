@@ -108,29 +108,34 @@ test("offers remote branches grouped, defaults local, launches one verbatim", as
   await expect(page.getByTestId("target-repo-input")).toBeVisible();
   await page.getByTestId("target-repo-input").fill(WORK);
 
-  // The select appears once the repo validates and its branches load.
-  const branchSelect = page.getByTestId("source-branch-select");
-  await expect(branchSelect).toBeVisible({ timeout: 10_000 });
-
-  // Two groups: Local (main, local-branch) and Remote (origin/feature-remote-only).
-  await expect(branchSelect.locator('optgroup[label="Local"]')).toHaveCount(1);
-  await expect(branchSelect.locator('optgroup[label="Remote"]')).toHaveCount(1);
-  await expect(branchSelect.locator('option[value="main"]')).toHaveCount(1);
-  await expect(branchSelect.locator('option[value="local-branch"]')).toHaveCount(1);
-  await expect(
-    branchSelect.locator('option[value="origin/feature-remote-only"]'),
-  ).toHaveCount(1);
-
-  // Deduped / filtered out: no origin/main twin, no symref.
-  await expect(branchSelect.locator('option[value="origin/main"]')).toHaveCount(0);
-  await expect(branchSelect.locator('option[value="origin/HEAD"]')).toHaveCount(0);
-  await expect(branchSelect.locator('option[value="origin"]')).toHaveCount(0);
+  // The quick pick appears once the repo validates and its branches load (#802).
+  const branchField = page.getByTestId("source-branch-trigger");
+  await expect(branchField).toBeVisible({ timeout: 10_000 });
 
   // Default lands on the LOCAL main — never a remote while a local exists.
-  await expect(branchSelect).toHaveValue("main");
+  await expect(branchField).toContainText("main");
+
+  await branchField.click();
+  const picker = page.getByTestId("source-branch-popover");
+  await expect(picker).toBeVisible();
+
+  // Two groups: Local (main, local-branch) and Remote (origin/feature-remote-only).
+  await expect(picker.getByText("Local", { exact: true })).toHaveCount(1);
+  await expect(picker.getByText("Remote", { exact: true })).toHaveCount(1);
+  const option = (name: string) =>
+    picker.locator(`[data-testid="source-branch-option"][data-branch="${name}"]`);
+  await expect(option("main")).toHaveCount(1);
+  await expect(option("local-branch")).toHaveCount(1);
+  await expect(option("origin/feature-remote-only")).toHaveCount(1);
+
+  // Deduped / filtered out: no origin/main twin, no symref.
+  await expect(option("origin/main")).toHaveCount(0);
+  await expect(option("origin/HEAD")).toHaveCount(0);
+  await expect(option("origin")).toHaveCount(0);
 
   // Launch from the remote-only ref.
-  await branchSelect.selectOption("origin/feature-remote-only");
+  await option("origin/feature-remote-only").click();
+  await expect(branchField).toContainText("origin/feature-remote-only");
   await page.getByTestId("pipeline-select").selectOption({ label: PIPELINE_NAME });
   await page.getByPlaceholder(/free-text prompt/i).fill("remote branch e2e");
   await expect(page.getByTestId("launch-button")).toBeEnabled();

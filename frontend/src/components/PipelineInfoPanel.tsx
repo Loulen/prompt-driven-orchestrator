@@ -1,16 +1,18 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from "react";
-import { Info, Terminal, X, FileText, Code, Box, Loader, Bot, Copy, Download, ChevronDown, ChevronRight, Play, PowerOff, FileDiff, FolderGit2, CloudOff } from "lucide-react";
-import { SectionHead } from "./InspectorPrimitives";
+import { Info, Terminal, X, FileText, Code, Box, Loader, Bot, Copy, Download, ChevronDown, ChevronRight, Play, PowerOff, RefreshCw, FileDiff, FolderGit2, CloudOff } from "lucide-react";
+import { SectionHead, SourceDriftChip } from "./InspectorPrimitives";
 import TmuxTerminal from "./TmuxTerminal";
 import DiffTab from "./DiffTab";
 import RepositoriesSection from "./RepositoriesSection";
 import { deliverySignature } from "../lib/diffTab";
 import { useReviewUnread } from "../hooks/useReviewUnread";
+import { useSourceDrift } from "../hooks/useSourceDrift";
 import type { CollapsedFiles } from "../lib/diffTab";
 import type { LibraryPipelineEntry } from "../api";
 import { fetchPipelineDocument, fetchPipelineSkillsSidecar, fetchRunPipelineDocument, fetchRunPipelineSkillsSidecar, openLibraryAssistant, startRunManager, stopRunManager } from "../api";
 import type { RunState, PipelineDef } from "../types";
 import { isLiveRun } from "../types";
+import { shortAge } from "../lib/branchSelect";
 import { formatDuration, useRunDuration } from "../lib/runDuration";
 import { formatEstCost } from "../lib/costLabel";
 import { serializePipeline } from "../lib/serializePipeline";
@@ -579,6 +581,77 @@ function AssistantTab() {
   );
 }
 
+/**
+ * The **Source** block of the Info tab (#803, ADR-0070 §4): where the Run was cut
+ * from, its fork point, and how far the two have drifted apart since.
+ *
+ * Sits under Harness because it answers the same class of question — what this Run
+ * is anchored to — and because the drift is what tells you, before you go near a
+ * merge, whether the return will be a fast-forward or a conversation.
+ *
+ * The fetch button is the ONLY gesture here, and it is explicit: displaying a Run
+ * never touches the network (ADR-0070 §1). It reuses the #802 verb, so a fetch run
+ * from a Run refreshes exactly what the next launch form will read — same repository.
+ * An archived Run whose branch was cleaned up loses it: there is nothing to refresh.
+ */
+function SourceBlock({ run }: { run: RunState }) {
+  const { drift, fetching, fetchError, refresh } = useSourceDrift(run);
+  if (!drift) return null;
+  const available = drift.state === "available";
+
+  return (
+    <div
+      className="mt-2 rounded border border-line-strong bg-bg-3 px-2 py-1.5"
+      style={{ fontSize: "10.5px" }}
+      data-testid="run-source-block"
+    >
+      <div className="flex items-center gap-2">
+        <span className="shrink-0 text-fg-4">Source</span>
+        <span className="min-w-0 flex-1 truncate font-mono text-fg-2">
+          {available ? drift.source_branch : (run.source_branch ?? "—")}
+        </span>
+        <SourceDriftChip drift={drift} runId={run.run_id} fetchError={fetchError} />
+      </div>
+      <div className="mt-1 flex items-center gap-2 text-fg-4" style={{ fontSize: "10px" }}>
+        <span className="shrink-0">fork</span>
+        <span className="min-w-0 flex-1 truncate font-mono">
+          {available ? drift.fork : "—"}
+        </span>
+        {available ? (
+          <>
+            <span className="shrink-0">
+              {shortAge(drift.last_fetch_at)
+                ? `fetched ${shortAge(drift.last_fetch_at)} ago`
+                : "never fetched"}
+            </span>
+            {run.target_repo && (
+              <button
+                type="button"
+                onClick={() => void refresh()}
+                disabled={fetching}
+                className="shrink-0 rounded p-0.5 text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg-2 disabled:opacity-40"
+                // Icon only: there is no decision to take here, only a refresh —
+                // the popover of the launch form exists because THERE a choice
+                // follows. Without the button, "fetched 2 h ago" is information
+                // with no way out.
+                title="Fetch all remotes of this repository, then recompute"
+                aria-label="Fetch all remotes"
+                data-testid="run-source-fetch"
+              >
+                <RefreshCw size={11} className={fetching ? "animate-spin" : undefined} />
+              </button>
+            )}
+          </>
+        ) : (
+          <span className="shrink-0" data-testid="run-source-unavailable">
+            {drift.reason}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function InfoTab({
   run,
   pipeline,
@@ -711,6 +784,7 @@ function InfoTab({
             <span className="rounded bg-bg-3 px-1.5 py-0.5 font-mono text-fg-2">{run.harness}</span>
           </div>
         )}
+        {run && <SourceBlock run={run} />}
         {run && (
           <div
             className="mt-2 rounded border border-line-strong bg-bg-3 px-2 py-1.5 text-fg-3"

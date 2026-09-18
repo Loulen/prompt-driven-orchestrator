@@ -98,6 +98,8 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     fetchError: branchFetchError,
     fetching: branchesFetching,
     refetchRemotes,
+    rereadBranches,
+    fastForward,
   } = useLaunchTargets(open);
 
   // Multi-repo state: the target repo field, its debounced verdict, and the border it
@@ -1039,6 +1041,8 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
                   lastFetchAt={lastFetchAt}
                   fetchError={branchFetchError}
                   onFetch={refetchRemotes}
+                  onReread={rereadBranches}
+                  onFastForward={fastForward}
                   testIdPrefix="source-branch"
                 />
               </div>

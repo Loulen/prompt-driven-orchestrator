@@ -3656,6 +3656,75 @@ async fn repos_fetch(Query(q): Query<RepoPathQuery>) -> Response {
     }
 }
 
+#[derive(Deserialize)]
+struct FastForwardBody {
+    /// The LOCAL branch to advance. A remote-tracking ref is refused up front — it
+    /// is the upstream, there is nothing to move.
+    branch: String,
+}
+
+/// Fast-forward a local branch onto its tracking branch (#803, ADR-0070 §2).
+///
+/// **200** with what moved plus the refreshed list; **409** with the named refusal
+/// AND the same refreshed list, so the two benign races (`up_to_date`, `no_upstream`)
+/// let the client flip to the corresponding #802 state instead of painting an error.
+/// A 400 is reserved for a request that never made sense: a repo that is not a repo,
+/// an empty branch, a branch that is not a local one.
+async fn repos_fast_forward(
+    Query(q): Query<RepoPathQuery>,
+    Json(body): Json<FastForwardBody>,
+) -> Response {
+    let repo = match validate_target_repo(&q.path) {
+        Ok(p) => p,
+        Err(msg) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": msg })),
+            )
+                .into_response();
+        }
+    };
+    let branch = body.branch.trim();
+    if branch.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "branch is required" })),
+        )
+            .into_response();
+    }
+    if !ref_exists(&repo, &format!("refs/heads/{branch}")) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": format!("'{branch}' is not a local branch of {}", repo.display())
+            })),
+        )
+            .into_response();
+    }
+
+    let outcome = fast_forward_branch(&repo, branch);
+    // Read the list AFTER the attempt, in both directions: a 200 must answer with
+    // the branch already moved, and a 409 with whatever the race actually left.
+    let list = match branch_list(&repo) {
+        Ok(list) => list,
+        Err(msg) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": msg })),
+            )
+                .into_response();
+        }
+    };
+    match outcome {
+        Ok(fast_forward) => Json(FastForwardOk { fast_forward, list }).into_response(),
+        Err(refusal) => (
+            StatusCode::CONFLICT,
+            Json(FastForwardRefusedBody { refusal, list }),
+        )
+            .into_response(),
+    }
+}
+
 async fn repos_validate(Query(q): Query<RepoPathQuery>) -> Response {
     match validate_target_repo(&q.path) {
         Ok(_) => Json(serde_json::json!({ "valid": true })).into_response(),
@@ -5024,6 +5093,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/runs/{run_id}/diff/structured", get(run_diff_structured))
         .route("/runs/{run_id}/file", get(run_file_at_ref))
         .route("/runs/{run_id}/refs", get(run_refs))
+        .route("/runs/{run_id}/source-drift", get(run_source_drift))
         .route("/runs/{run_id}/review/comments", get(list_review_comments))
         .route(
             "/runs/{run_id}/review/comments/{comment_id}/reply",
@@ -5120,6 +5190,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         // human intention (form opened, repo changed, sync clicked). Read-only:
         // fetch + prune, never a push, a merge or a rebase.
         .route("/repos/fetch", post(repos_fetch))
+        .route("/repos/fast-forward", post(repos_fast_forward))
         .route("/repos/validate", get(repos_validate))
         .route("/repos/recent", get(repos_recent))
         .route("/repos/provisioning/preview", post(preview_provisioning))
@@ -15212,6 +15283,25 @@ async fn run_refs(
     Json(run_refs::collect(&run_id, &run_state, &events, &sha_of)).into_response()
 }
 
+/// `GET /runs/<id>/source-drift` (#803, ADR-0070 §4): how far the Run and its source
+/// have drifted apart since the fork point.
+///
+/// A READ over local refs, recomputed per call — no fetch, ever (opening a Run must
+/// not put traffic on someone's repository). A Run whose branch or source is gone
+/// answers `unavailable` with a reason, **200**: an archived Run is the expected end
+/// of a Run's life, not an error to report as one.
+async fn run_source_drift(
+    State(state): State<Arc<AppState>>,
+    AxumPath(run_id): AxumPath<String>,
+) -> Response {
+    let (_events, run_state) = match load_projected(&state, &run_id).await {
+        Ok(t) => t,
+        Err(resp) => return *resp,
+    };
+    let repo = effective_repo_root(&state, &run_state);
+    Json(source_drift(&repo, &run_id, &run_state)).into_response()
+}
+
 #[derive(Deserialize)]
 struct ListReviewCommentsQuery {
     /// `open` (default for the CLI) | `resolved` | `all` (default here: the UI
@@ -21368,6 +21458,11 @@ struct BranchEntry {
     /// Tip commit date, ISO-8601 with offset (`git`'s `iso-strict`).
     last_commit_at: Option<String>,
     last_commit_subject: Option<String>,
+    /// #803: this branch is the repo's checked-out one. Decides one sentence in
+    /// the fast-forward popover — advancing HEAD walks the working tree forward,
+    /// advancing any other branch is a pure ref move that changes no file.
+    /// Always `false` for a remote-tracking ref.
+    head: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -21490,7 +21585,7 @@ fn list_branches(repo: &Path) -> Result<Vec<BranchEntry>, String> {
             // Subject LAST: it is the only field that may itself contain a tab, so a
             // `splitn` on the count of the fields before it cannot be derailed by it.
             "--format=%(refname)%09%(refname:short)%09%(symref)%09%(upstream:short)\
-             %09%(upstream:track)%09%(committerdate:iso-strict)%09%(contents:subject)",
+             %09%(upstream:track)%09%(HEAD)%09%(committerdate:iso-strict)%09%(contents:subject)",
             "refs/heads",
             "refs/remotes",
         ])
@@ -21518,12 +21613,15 @@ fn list_branches(repo: &Path) -> Result<Vec<BranchEntry>, String> {
     let mut local_names: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for line in stdout.lines() {
-        let mut fields = line.splitn(7, '\t');
+        let mut fields = line.splitn(8, '\t');
         let refname = fields.next().unwrap_or("");
         let short = fields.next().unwrap_or("");
         let symref = fields.next().unwrap_or("");
         let upstream = fields.next().unwrap_or("");
         let track = fields.next().unwrap_or("");
+        // `%(HEAD)` is `*` for the checked-out branch, a space otherwise — git's
+        // own marker, so a detached HEAD marks nothing and no branch claims it.
+        let head = fields.next().unwrap_or("").trim() == "*";
         let date = fields.next().unwrap_or("");
         let subject = fields.next().unwrap_or("");
         if !symref.is_empty() {
@@ -21543,6 +21641,7 @@ fn list_branches(repo: &Path) -> Result<Vec<BranchEntry>, String> {
                 behind,
                 last_commit_at: some(date),
                 last_commit_subject: some(subject),
+                head,
             });
         } else if refname.starts_with("refs/remotes/") {
             let bare = strip_remote_prefix(short, &remotes);
@@ -21557,6 +21656,8 @@ fn list_branches(repo: &Path) -> Result<Vec<BranchEntry>, String> {
                     behind: None,
                     last_commit_at: some(date),
                     last_commit_subject: some(subject),
+                    // A remote-tracking ref is never anyone's HEAD.
+                    head: false,
                 },
             ));
         }
@@ -21981,6 +22082,512 @@ async fn run_git_fetch(repo: &Path) -> Option<FetchError> {
             ),
         }),
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Fast-forward of a local branch (#803, ADR-0070 §2)
+//
+// The ONLY write PDO ever performs on a local branch, and only on an explicit
+// click. Never a merge commit, never a rebase, never a push: either the ref moves
+// on its own (`update-ref`, branch not checked out anywhere) or git's own
+// `merge --ff-only` walks the checkout forward. Both are reversible by reflog.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Why a fast-forward did not happen, named rather than raw (#803).
+///
+/// Three of these — `diverged`, `no_upstream`, `up_to_date` — are already knowable
+/// from the enriched list (#802), so the UI does not even offer the button for them;
+/// they are answered here only for the RACE between the list and the click. The other
+/// two need the checkout inspected at click time, which is precisely why they cannot
+/// be pre-computed: a tree can get dirty between a render and a click.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum FastForwardRefusal {
+    /// The branch is checked out HERE and tracked files are modified.
+    DirtyTree,
+    /// The branch is checked out in ANOTHER worktree — not ours to move.
+    CheckedOutElsewhere,
+    /// The branch has commits the upstream does not: a ff would drop them.
+    Diverged,
+    /// The branch tracks nothing, so there is nothing to fast-forward to.
+    NoUpstream,
+    /// The upstream has nothing this branch lacks.
+    UpToDate,
+}
+
+/// A refused fast-forward, with everything the popover needs to name it (#803).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct FastForwardRefused {
+    reason: FastForwardRefusal,
+    message: String,
+    /// The checkout the branch sits in — ours for `dirty_tree`, someone else's for
+    /// `checked_out_elsewhere`. `None` for the three list-knowable reasons.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    checkout: Option<String>,
+    /// `M path` lines of the modified TRACKED files, capped (`dirty_tree` only).
+    /// Untracked files never appear: they do not block a fast-forward.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    dirty_files: Vec<String>,
+    /// How many tracked files are modified, uncapped — `dirty_files` may be shorter.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dirty_count: Option<u32>,
+}
+
+/// How many `git status` lines travel in a refusal. The popover shows a short
+/// listing, not a diff: past a handful the count alone says it.
+const DIRTY_FILES_SHOWN: usize = 8;
+
+/// What a successful fast-forward moved (#803) — the S3 card's sentence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct FastForwardDone {
+    branch: String,
+    upstream: String,
+    /// Short SHA the branch sat on before.
+    from: String,
+    /// Short SHA it sits on now.
+    to: String,
+    /// Commits gained — the number that was the `n↓` before the click.
+    commits: u32,
+    /// The new tip's commit subject, for the `from → to · subject` line.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    subject: Option<String>,
+    /// The checkout whose FILES moved with the ref, when the branch was checked
+    /// out in the repo we launch from. `None` = a pure ref move, nothing on disk
+    /// changed — a distinction the popover states out loud before and after.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    moved_checkout: Option<String>,
+}
+
+/// The 200 of `POST /repos/fast-forward`: what moved, plus the list refreshed from
+/// the same repo, so the client replaces its branches in place instead of asking
+/// again (and reading a list from between the two calls).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct FastForwardOk {
+    fast_forward: FastForwardDone,
+    #[serde(flatten)]
+    list: BranchList,
+}
+
+/// The 409 of `POST /repos/fast-forward`: the named refusal, plus the SAME refreshed
+/// list. The list travels with a refusal too, because two of the five reasons are
+/// races the client recovers from by simply re-reading the truth (`up_to_date`,
+/// `no_upstream`): it flips to the corresponding #802 state instead of painting an
+/// error for something benign.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct FastForwardRefusedBody {
+    refusal: FastForwardRefused,
+    #[serde(flatten)]
+    list: BranchList,
+}
+
+/// One line of `git worktree list --porcelain`: which checkout holds which branch.
+///
+/// Parsed rather than `git branch --show-current`-ed per worktree: the porcelain
+/// format is stable, names every worktree of the repo in one call, and reports a
+/// detached HEAD as the ABSENCE of a `branch` line (so a detached checkout never
+/// claims a branch it does not hold).
+fn worktree_holding_branch(repo: &Path, branch: &str) -> Option<PathBuf> {
+    let output = std::process::Command::new("git")
+        .args(["worktree", "list", "--porcelain"])
+        .current_dir(repo)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let wanted = format!("refs/heads/{branch}");
+    let mut current: Option<&str> = None;
+    for line in stdout.lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            current = Some(path);
+        } else if let Some(r) = line.strip_prefix("branch ") {
+            if r == wanted {
+                return current.map(PathBuf::from);
+            }
+        }
+    }
+    None
+}
+
+/// The modified TRACKED files of a checkout, as `git status --porcelain` reports
+/// them (`XY path`). Untracked files are excluded on purpose: they survive a
+/// fast-forward untouched, so refusing over them would refuse the commonest tree
+/// there is (#803, spec #801).
+fn dirty_tracked_files(checkout: &Path) -> Vec<String> {
+    let output = std::process::Command::new("git")
+        .args(["status", "--porcelain", "--untracked-files=no"])
+        .current_dir(checkout)
+        .output();
+    match output {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .map(|l| l.trim_end().to_string())
+            .filter(|l| !l.is_empty())
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// `git rev-list --left-right --count a...b` → `(ahead, behind)`, or `None` when
+/// either side does not resolve.
+fn ahead_behind(repo: &Path, branch: &str, upstream: &str) -> Option<(u32, u32)> {
+    let range = format!("refs/heads/{branch}...refs/remotes/{upstream}");
+    let output = std::process::Command::new("git")
+        .args(["rev-list", "--left-right", "--count", &range])
+        .current_dir(repo)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut parts = stdout.split_whitespace();
+    let ahead = parts.next()?.parse().ok()?;
+    let behind = parts.next()?.parse().ok()?;
+    Some((ahead, behind))
+}
+
+/// The tracking branch of a local branch, short form (`origin/main`), or `None`.
+fn upstream_of(repo: &Path, branch: &str) -> Option<String> {
+    let spec = format!("{branch}@{{upstream}}");
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "--symbolic-full-name", &spec])
+        .current_dir(repo)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!name.is_empty()).then_some(name)
+}
+
+/// Short SHA + subject of a ref, for the "a1b2c3d → e4f5a6b · subject" line.
+fn tip_summary(repo: &Path, r: &str) -> (String, Option<String>) {
+    let output = std::process::Command::new("git")
+        .args(["log", "-1", "--format=%h%x09%s", r])
+        .current_dir(repo)
+        .output();
+    match output {
+        Ok(o) if o.status.success() => {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            let line = stdout.trim_end_matches('\n');
+            let mut fields = line.splitn(2, '\t');
+            let sha = fields.next().unwrap_or("").to_string();
+            let subject = fields
+                .next()
+                .map(|s| s.to_string())
+                .filter(|s| !s.is_empty());
+            (sha, subject)
+        }
+        _ => (String::new(), None),
+    }
+}
+
+/// Fast-forward `branch` onto its tracking branch, if and only if it is lossless
+/// (#803, ADR-0070 §2).
+///
+/// The conditions are cumulative and checked in the order a person would read them:
+/// a tracking branch exists → the branch is strictly behind (no commit of its own to
+/// drop) → nobody else's checkout holds it → if OUR checkout holds it, its tracked
+/// files are unmodified. Only then does anything move, and what moves is decided by
+/// where the branch lives:
+///
+/// - checked out **here** → `git merge --ff-only` in that checkout, so the working
+///   tree walks forward with the ref (`update-ref` alone would leave every fetched
+///   commit staged as a deletion — the one way this could destroy work);
+/// - checked out **nowhere** → `git update-ref` with the old value as a guard, a pure
+///   ref move that touches no file at all.
+///
+/// Never a `git pull`: that is a fetch *and* a merge, and the merge is exactly the
+/// thing ADR-0070 forbids.
+fn fast_forward_branch(repo: &Path, branch: &str) -> Result<FastForwardDone, FastForwardRefused> {
+    let refused = |reason: FastForwardRefusal, message: String| FastForwardRefused {
+        reason,
+        message,
+        checkout: None,
+        dirty_files: Vec::new(),
+        dirty_count: None,
+    };
+
+    let Some(upstream) = upstream_of(repo, branch) else {
+        return Err(refused(
+            FastForwardRefusal::NoUpstream,
+            format!("'{branch}' tracks no branch, so there is nothing to fast-forward to"),
+        ));
+    };
+
+    let Some((ahead, behind)) = ahead_behind(repo, branch, &upstream) else {
+        return Err(refused(
+            FastForwardRefusal::NoUpstream,
+            format!("the gap between '{branch}' and '{upstream}' could not be read"),
+        ));
+    };
+
+    // Order matters: "behind 0" is `up_to_date` even when ahead > 0 — there is
+    // genuinely nothing upstream to take. Divergence is only a refusal when a
+    // fast-forward would have had somewhere to go and local commits in the way.
+    if behind == 0 {
+        return Err(refused(
+            FastForwardRefusal::UpToDate,
+            format!("'{branch}' already has everything '{upstream}' has"),
+        ));
+    }
+    if ahead > 0 {
+        return Err(refused(
+            FastForwardRefusal::Diverged,
+            format!(
+                "'{branch}' has {ahead} commit(s) '{upstream}' does not: a fast-forward \
+                 would drop them"
+            ),
+        ));
+    }
+
+    let holder = worktree_holding_branch(repo, branch);
+    let here = holder.as_deref().is_some_and(|h| same_checkout(h, repo));
+    if let Some(elsewhere) = holder.as_ref().filter(|_| !here) {
+        return Err(FastForwardRefused {
+            reason: FastForwardRefusal::CheckedOutElsewhere,
+            message: format!(
+                "'{branch}' is checked out in another worktree; PDO only fast-forwards a \
+                 branch in the repository you launch from"
+            ),
+            checkout: Some(elsewhere.display().to_string()),
+            dirty_files: Vec::new(),
+            dirty_count: None,
+        });
+    }
+
+    if here {
+        let dirty = dirty_tracked_files(repo);
+        if !dirty.is_empty() {
+            return Err(FastForwardRefused {
+                reason: FastForwardRefusal::DirtyTree,
+                message: format!(
+                    "'{branch}' is checked out here and {} tracked file(s) are modified; \
+                     PDO will not touch them",
+                    dirty.len()
+                ),
+                checkout: Some(repo.display().to_string()),
+                dirty_count: Some(dirty.len() as u32),
+                dirty_files: dirty.into_iter().take(DIRTY_FILES_SHOWN).collect(),
+            });
+        }
+    }
+
+    let from = rev_parse_short(repo, &format!("refs/heads/{branch}")).unwrap_or_default();
+    let target_full = format!("refs/remotes/{upstream}");
+    let Some(target_sha) = structured_diff::rev_parse(repo, &target_full) else {
+        return Err(refused(
+            FastForwardRefusal::NoUpstream,
+            format!("'{upstream}' does not resolve any more — fetch and try again"),
+        ));
+    };
+
+    let outcome = if here {
+        // `--ff-only` can only ever move the ref; it refuses rather than create a
+        // merge commit, which is the guarantee ADR-0070 §2 asks for in git's own
+        // words rather than in ours.
+        std::process::Command::new("git")
+            .args(["merge", "--ff-only", "--quiet", &target_full])
+            .current_dir(repo)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+    } else {
+        let old =
+            structured_diff::rev_parse(repo, &format!("refs/heads/{branch}")).unwrap_or_default();
+        // The old value is passed as a guard: if anything moved the branch between
+        // our check and this call, git refuses instead of overwriting the winner.
+        std::process::Command::new("git")
+            .args([
+                "update-ref",
+                &format!("refs/heads/{branch}"),
+                &target_sha,
+                &old,
+            ])
+            .current_dir(repo)
+            .output()
+    };
+
+    match outcome {
+        Ok(o) if o.status.success() => {}
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr).trim().to_string();
+            return Err(refused(
+                FastForwardRefusal::Diverged,
+                if stderr.is_empty() {
+                    format!("git refused to fast-forward '{branch}'")
+                } else {
+                    stderr
+                },
+            ));
+        }
+        Err(e) => {
+            return Err(refused(
+                FastForwardRefusal::Diverged,
+                format!("failed to run git: {e}"),
+            ));
+        }
+    }
+
+    let (to, subject) = tip_summary(repo, &format!("refs/heads/{branch}"));
+    Ok(FastForwardDone {
+        branch: branch.to_string(),
+        upstream,
+        from,
+        to,
+        commits: behind,
+        subject,
+        moved_checkout: here.then(|| repo.display().to_string()),
+    })
+}
+
+/// Short SHA of a ref (`--short` leaves git to pick a unambiguous length).
+fn rev_parse_short(repo: &Path, r: &str) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--short", r])
+        .current_dir(repo)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!sha.is_empty()).then_some(sha)
+}
+
+/// Whether two paths name the same checkout. Canonicalised on BOTH sides — the
+/// target repo is stored verbatim (ADR-0033) while `git worktree list` prints
+/// resolved paths, so a `/tmp` that is a symlink to `/private/tmp` (macOS) would
+/// otherwise make our own checkout look like somebody else's and refuse every
+/// fast-forward on the platform.
+fn same_checkout(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Dérive de la source d'un Run (#803, ADR-0070 §4)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The Run's drift from its source branch since the fork point (#803, CONTEXT.md
+/// § « Dérive de la source »).
+///
+/// A **measurement on local refs**, recomputed on every read and never a stored
+/// snapshot: `ahead` is what the Run produced, `behind` what arrived on its source.
+/// Nothing here fetches — ADR-0070 §1 is explicit that displaying a Run must not put
+/// traffic on someone's repo; the Run view's fetch button is the only refresh, and it
+/// is the #802 verb.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+enum SourceDrift {
+    Available {
+        /// The Run's source branch, verbatim as it was stored.
+        source_branch: String,
+        /// The fork point the Run was cut at, short.
+        fork: String,
+        /// Commits the Run's branch made since the fork.
+        ahead: u32,
+        /// Commits that arrived on the source since the fork — ONE number, the max
+        /// of the local branch's and its tracking branch's (spec #801 Q3): the chip
+        /// keeps the `n↑ m↓` shape of the form, and the tooltip splits the two.
+        behind: u32,
+        /// What the LOCAL source branch gained. `None` when the source is itself a
+        /// remote-tracking ref (there is no local side to count).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        local_behind: Option<u32>,
+        /// The source's tracking branch and what IT gained. `None` when the source
+        /// tracks nothing (or already IS a tracking ref).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        upstream: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        upstream_behind: Option<u32>,
+        /// When the repo last fetched successfully — the date the `behind` side of
+        /// the remote is good as of. Same derivation as the form's (`FETCH_HEAD`).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        last_fetch_at: Option<String>,
+    },
+    /// The measurement cannot be made — an archived Run whose branch was cleaned
+    /// up, a source branch that was deleted. **Not an error**: it is the expected
+    /// end of a Run's life, and `reason` says which.
+    Unavailable { reason: String },
+}
+
+/// Compute a Run's drift from its source (#803). Pure over a repo on disk, so the
+/// tests drive it against real temporary repositories rather than a mocked git.
+fn source_drift(repo: &Path, run_id: &str, run_state: &event_log::RunState) -> SourceDrift {
+    let unavailable = |reason: &str| SourceDrift::Unavailable {
+        reason: reason.to_string(),
+    };
+
+    let tip = run_refs::tip_branch(run_id);
+    if structured_diff::rev_parse(repo, &tip).is_none() {
+        return unavailable("the Run's branch no longer exists");
+    }
+    let fork_ref = run_refs::fork_base(run_state);
+    let Some(fork_sha) = structured_diff::rev_parse(repo, fork_ref) else {
+        return unavailable("the Run's fork point no longer resolves");
+    };
+    let Some(source) = run_state.source_branch.as_deref().filter(|s| !s.is_empty()) else {
+        return unavailable("this Run recorded no source branch");
+    };
+    if structured_diff::rev_parse(repo, source).is_none() {
+        return unavailable("the source branch no longer exists");
+    }
+
+    let Some(ahead) = count_commits(repo, &fork_sha, &tip) else {
+        return unavailable("the Run's branch could not be counted");
+    };
+
+    // The source may be a local branch or a tracking ref (both are legitimate Run
+    // sources, #571). Only a LOCAL one has an upstream to count separately.
+    let is_local = ref_exists(repo, &format!("refs/heads/{source}"));
+    let local_behind = count_commits(repo, &fork_sha, source);
+    let upstream = is_local.then(|| upstream_of(repo, source)).flatten();
+    let upstream_behind = upstream
+        .as_deref()
+        .and_then(|u| count_commits(repo, &fork_sha, &format!("refs/remotes/{u}")));
+
+    SourceDrift::Available {
+        source_branch: source.to_string(),
+        fork: short_sha(&fork_sha),
+        ahead,
+        behind: local_behind.unwrap_or(0).max(upstream_behind.unwrap_or(0)),
+        local_behind: is_local.then_some(local_behind).flatten(),
+        upstream,
+        upstream_behind,
+        last_fetch_at: last_fetch_at(repo),
+    }
+}
+
+/// `git rev-list --count from..to` — commits `to` has that `from` does not.
+fn count_commits(repo: &Path, from: &str, to: &str) -> Option<u32> {
+    let range = format!("{from}..{to}");
+    let output = std::process::Command::new("git")
+        .args(["rev-list", "--count", &range])
+        .current_dir(repo)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout).trim().parse().ok()
+}
+
+fn ref_exists(repo: &Path, fullref: &str) -> bool {
+    std::process::Command::new("git")
+        .args(["show-ref", "--verify", "--quiet", fullref])
+        .current_dir(repo)
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
+/// The 7-char form every other PDO surface shows a SHA in.
+fn short_sha(sha: &str) -> String {
+    sha.chars().take(7).collect()
 }
 
 /// Resolve the repository a Run works in, for a **projected** `RunState`.
@@ -39864,6 +40471,465 @@ edges: []
         // `show-ref --verify` probe must NOT — `mai*` is not a real branch.
         let err = validate_source_branch(tmp.path(), "mai*").unwrap_err();
         assert!(err.contains("does not exist"), "message was: {err}");
+    }
+
+    // ── Fast-forward (#803, ADR-0070 §2) ────────────────────────────────────
+    //
+    // Every case is driven against a REAL repository with a real origin: the
+    // question "did the branch move, and did the files move with it?" has no
+    // meaningful answer over a mocked git.
+
+    /// A clone whose `main` is `n` commits behind `origin/main`, already fetched
+    /// so the gap is visible without any network.
+    fn clone_behind_origin(n: usize) -> (tempfile::TempDir, tempfile::TempDir) {
+        let (origin, work) = init_repo_with_remote();
+        commit_n(origin.path(), n, "upstream-move");
+        run_git(work.path(), &["fetch", "--quiet", "origin"]);
+        (origin, work)
+    }
+
+    fn head_sha(repo: &std::path::Path) -> String {
+        structured_diff::rev_parse(repo, "HEAD").expect("HEAD resolves")
+    }
+
+    #[test]
+    fn fast_forward_moves_a_behind_branch_and_its_checkout() {
+        let (origin, work) = clone_behind_origin(3);
+        let before = head_sha(work.path());
+
+        let done = fast_forward_branch(work.path(), "main").expect("a lossless fast-forward");
+
+        assert_eq!(done.commits, 3, "the count is the écart that was shown");
+        assert_eq!(done.upstream, "origin/main");
+        assert_eq!(
+            head_sha(work.path()),
+            head_sha(origin.path()),
+            "the branch now sits on the upstream tip"
+        );
+        assert_ne!(head_sha(work.path()), before, "and it actually moved");
+        // `main` IS checked out here, so the working tree walked forward with the
+        // ref — the file the origin added must exist on disk.
+        assert_eq!(
+            done.moved_checkout.as_deref(),
+            Some(work.path().display().to_string().as_str()),
+            "the popover must be able to name the checkout that moved"
+        );
+        assert!(
+            work.path().join("upstream-move-2.txt").exists(),
+            "an `update-ref` alone would have left the fetched files missing"
+        );
+        // The gap is gone from the list the same response carries.
+        let branches = list_branches(work.path()).unwrap();
+        assert_eq!(branch_named(&branches, "main").behind, Some(0));
+    }
+
+    #[test]
+    fn fast_forward_of_an_unchecked_out_branch_is_a_pure_ref_move() {
+        let (origin, work) = init_repo_with_remote();
+        // `feature-remote-only` exists on origin only; give the clone a local
+        // branch tracking it, WITHOUT checking it out (main stays HEAD).
+        run_git(
+            work.path(),
+            &[
+                "branch",
+                "--track",
+                "feature-remote-only",
+                "origin/feature-remote-only",
+            ],
+        );
+        run_git(origin.path(), &["checkout", "feature-remote-only"]);
+        commit_n(origin.path(), 2, "remote-side");
+        run_git(origin.path(), &["checkout", "main"]);
+        run_git(work.path(), &["fetch", "--quiet", "origin"]);
+
+        let head_before = head_sha(work.path());
+        let done =
+            fast_forward_branch(work.path(), "feature-remote-only").expect("a pure ref move");
+
+        assert_eq!(done.commits, 2);
+        assert!(
+            done.moved_checkout.is_none(),
+            "no checkout holds the branch: none of the user's files change"
+        );
+        assert_eq!(
+            head_sha(work.path()),
+            head_before,
+            "the CHECKED-OUT branch must not budge when another branch is advanced"
+        );
+        assert!(
+            !work.path().join("remote-side-0.txt").exists(),
+            "a pure ref move touches no file in the working tree"
+        );
+        let branches = list_branches(work.path()).unwrap();
+        assert_eq!(
+            branch_named(&branches, "feature-remote-only").behind,
+            Some(0),
+            "the ref really moved, not just the report"
+        );
+    }
+
+    #[test]
+    fn fast_forward_refuses_a_dirty_tree_and_names_the_files() {
+        let (_origin, work) = clone_behind_origin(2);
+        std::fs::write(work.path().join("README.md"), "# dirtied\n").unwrap();
+        let before = head_sha(work.path());
+
+        let refusal = fast_forward_branch(work.path(), "main").expect_err("a named refusal");
+
+        assert_eq!(refusal.reason, FastForwardRefusal::DirtyTree);
+        assert_eq!(refusal.dirty_count, Some(1));
+        assert!(
+            refusal.dirty_files.iter().any(|l| l.contains("README.md")),
+            "the popover lists what is in the way: {:?}",
+            refusal.dirty_files
+        );
+        assert!(refusal.checkout.is_some(), "and where to look");
+        assert_eq!(
+            head_sha(work.path()),
+            before,
+            "a refusal changes nothing at all"
+        );
+    }
+
+    #[test]
+    fn fast_forward_ignores_untracked_files() {
+        let (origin, work) = clone_behind_origin(1);
+        // Untracked files survive a fast-forward untouched: refusing over them
+        // would refuse the commonest working tree there is.
+        std::fs::write(work.path().join("scratch.txt"), "notes\n").unwrap();
+
+        fast_forward_branch(work.path(), "main").expect("untracked files never block");
+
+        assert_eq!(head_sha(work.path()), head_sha(origin.path()));
+        assert!(
+            work.path().join("scratch.txt").exists(),
+            "and they are still there afterwards"
+        );
+    }
+
+    #[test]
+    fn fast_forward_refuses_a_diverged_branch() {
+        let (_origin, work) = clone_behind_origin(3);
+        commit_n(work.path(), 1, "local-work");
+        let before = head_sha(work.path());
+
+        let refusal = fast_forward_branch(work.path(), "main").expect_err("a named refusal");
+
+        assert_eq!(refusal.reason, FastForwardRefusal::Diverged);
+        assert_eq!(
+            head_sha(work.path()),
+            before,
+            "the local commit is exactly what must not be dropped"
+        );
+    }
+
+    #[test]
+    fn fast_forward_refuses_a_branch_checked_out_in_another_worktree() {
+        let (_origin, work) = clone_behind_origin(2);
+        // Park `main` in a sibling worktree, the shape a PDO Run itself creates.
+        let elsewhere = tempfile::tempdir().unwrap();
+        let park = elsewhere.path().join("parked");
+        run_git(work.path(), &["checkout", "-q", "-b", "side"]);
+        run_git(
+            work.path(),
+            &["worktree", "add", park.to_str().unwrap(), "main"],
+        );
+        let before = structured_diff::rev_parse(work.path(), "refs/heads/main").unwrap();
+
+        let refusal = fast_forward_branch(work.path(), "main").expect_err("a named refusal");
+
+        assert_eq!(refusal.reason, FastForwardRefusal::CheckedOutElsewhere);
+        assert!(
+            refusal
+                .checkout
+                .as_deref()
+                .is_some_and(|c| c.contains("parked")),
+            "the worktree is named so the person knows where to look: {refusal:?}"
+        );
+        assert_eq!(
+            structured_diff::rev_parse(work.path(), "refs/heads/main").unwrap(),
+            before
+        );
+    }
+
+    #[test]
+    fn fast_forward_refuses_a_branch_without_an_upstream() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_test_repo(tmp.path());
+        run_git(tmp.path(), &["checkout", "-q", "-b", "solo"]);
+
+        let refusal = fast_forward_branch(tmp.path(), "solo").expect_err("a named refusal");
+
+        assert_eq!(refusal.reason, FastForwardRefusal::NoUpstream);
+    }
+
+    #[test]
+    fn fast_forward_refuses_a_branch_already_up_to_date() {
+        let (_origin, work) = init_repo_with_remote();
+
+        let refusal = fast_forward_branch(work.path(), "main").expect_err("a named refusal");
+
+        assert_eq!(
+            refusal.reason,
+            FastForwardRefusal::UpToDate,
+            "the benign race: nothing to take, and nothing red about it"
+        );
+    }
+
+    #[tokio::test]
+    async fn fast_forward_endpoint_answers_200_with_the_refreshed_list() {
+        let (_origin, work) = clone_behind_origin(2);
+        let app = build_router(test_state().await);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/repos/fast-forward?path={}",
+                        work.path().to_str().unwrap()
+                    ))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"branch":"main"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["fast_forward"]["commits"], 2);
+        assert_eq!(json["fast_forward"]["upstream"], "origin/main");
+        // The list travels in the SAME response: the client never has to make a
+        // second call and read a repo from between the two.
+        let main = json["branches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|b| b["name"] == "main")
+            .expect("main is listed");
+        assert_eq!(main["behind"], 0);
+    }
+
+    #[tokio::test]
+    async fn fast_forward_endpoint_answers_409_with_the_reason_and_the_list() {
+        let (_origin, work) = clone_behind_origin(2);
+        std::fs::write(work.path().join("README.md"), "# dirty\n").unwrap();
+        let app = build_router(test_state().await);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/repos/fast-forward?path={}",
+                        work.path().to_str().unwrap()
+                    ))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"branch":"main"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["refusal"]["reason"], "dirty_tree");
+        assert!(
+            json["branches"].is_array(),
+            "the list is still there: {json}"
+        );
+    }
+
+    #[tokio::test]
+    async fn fast_forward_endpoint_rejects_a_remote_tracking_ref() {
+        let (_origin, work) = init_repo_with_remote();
+        let app = build_router(test_state().await);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/repos/fast-forward?path={}",
+                        work.path().to_str().unwrap()
+                    ))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"branch":"origin/feature-remote-only"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // Not a 409: a tracking ref IS the upstream, so asking to advance it is a
+        // malformed request, not a refusal with a reason to show.
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // ── Dérive de la source (#803, ADR-0070 §4) ──────────────────────────────
+
+    /// A repo carrying a Run: a `pdo/run-<id>` branch cut from `main`, with the
+    /// fork SHA frozen in the projected state the way `RunStarted` does.
+    fn repo_with_run(
+        run_id: &str,
+        source: &str,
+    ) -> (tempfile::TempDir, tempfile::TempDir, event_log::RunState) {
+        let (origin, work) = init_repo_with_remote();
+        let fork = head_sha(work.path());
+        run_git(
+            work.path(),
+            &["branch", &run_refs::tip_branch(run_id), &fork],
+        );
+        let mut run_state = event_log::RunState::new(run_id.into(), "pipe".into());
+        run_state.target_repo = Some(work.path().display().to_string());
+        run_state.source_branch = Some(source.into());
+        run_state.fork_sha = Some(fork);
+        (origin, work, run_state)
+    }
+
+    /// Commit `n` times on a branch without disturbing the checkout: a worktree in
+    /// a temp dir, committed in, then removed.
+    fn commit_on_branch(repo: &std::path::Path, branch: &str, n: usize, prefix: &str) {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wt");
+        run_git(
+            repo,
+            &["worktree", "add", "-q", path.to_str().unwrap(), branch],
+        );
+        commit_n(&path, n, prefix);
+        run_git(
+            repo,
+            &["worktree", "remove", "--force", path.to_str().unwrap()],
+        );
+    }
+
+    #[test]
+    fn source_drift_counts_both_sides_since_the_fork() {
+        let run_id = "eaea593";
+        let (origin, work, run_state) = repo_with_run(run_id, "main");
+        // One commit on the Run's branch, one on the local source, three on origin.
+        commit_on_branch(work.path(), &run_refs::tip_branch(run_id), 1, "run-side");
+        commit_n(work.path(), 1, "source-side");
+        commit_n(origin.path(), 3, "origin-side");
+        run_git(work.path(), &["fetch", "--quiet", "origin"]);
+
+        let drift = source_drift(work.path(), run_id, &run_state);
+
+        match drift {
+            SourceDrift::Available {
+                ahead,
+                behind,
+                local_behind,
+                upstream,
+                upstream_behind,
+                source_branch,
+                ..
+            } => {
+                assert_eq!(source_branch, "main");
+                assert_eq!(ahead, 1, "what the Run produced");
+                // ONE number on the chip (spec #801 Q3): the MAX of the two sides,
+                // never their sum — the local commit and the three on origin are
+                // different commits off the same fork, and "4 arrived" would claim
+                // a distance nobody has to travel. The split lives in the tooltip,
+                // which is exactly the design's `main +1 · origin/main +3` line.
+                assert_eq!(behind, 3);
+                assert_eq!(local_behind, Some(1));
+                assert_eq!(upstream.as_deref(), Some("origin/main"));
+                assert_eq!(upstream_behind, Some(3));
+            }
+            other => panic!("expected an available drift, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn source_drift_is_zero_for_a_run_that_just_started() {
+        let run_id = "fresh01";
+        let (_origin, work, run_state) = repo_with_run(run_id, "main");
+
+        match source_drift(work.path(), run_id, &run_state) {
+            SourceDrift::Available { ahead, behind, .. } => {
+                assert_eq!((ahead, behind), (0, 0));
+            }
+            other => panic!("expected an available drift, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn source_drift_is_unavailable_once_the_run_branch_is_gone() {
+        let run_id = "cleaned";
+        let (_origin, work, run_state) = repo_with_run(run_id, "main");
+        run_git(
+            work.path(),
+            &["branch", "-D", &run_refs::tip_branch(run_id)],
+        );
+
+        match source_drift(work.path(), run_id, &run_state) {
+            // An archived Run is the expected end of a Run's life: named, not an
+            // error, and never a fabricated zero.
+            SourceDrift::Unavailable { reason } => {
+                assert!(reason.contains("branch"), "reason was: {reason}");
+            }
+            other => panic!("expected unavailable, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn source_drift_of_a_remote_source_has_no_local_side() {
+        let run_id = "remotesrc";
+        let (_origin, work, mut run_state) = repo_with_run(run_id, "origin/feature-remote-only");
+        // The fork of this Run is `main`'s tip; `origin/feature-remote-only` is one
+        // commit past it (the clone's fixture), so the source side counts 1.
+        run_state.fork_sha = Some(head_sha(work.path()));
+
+        match source_drift(work.path(), run_id, &run_state) {
+            SourceDrift::Available {
+                behind,
+                local_behind,
+                upstream,
+                ..
+            } => {
+                assert_eq!(behind, 1);
+                assert!(
+                    local_behind.is_none(),
+                    "a tracking ref has no local branch to count"
+                );
+                assert!(upstream.is_none(), "and it IS the upstream");
+            }
+            other => panic!("expected an available drift, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn source_drift_endpoint_answers_200_even_when_it_cannot_measure() {
+        // The contract the Run view leans on: `unavailable` is a 200 with a reason,
+        // never a 4xx/5xx. An archived Run whose branch was cleaned up is the
+        // expected end of a Run's life, and an error path there would make the
+        // panel shout about something that is simply over.
+        let daemon_dir = tempfile::tempdir().unwrap();
+        init_test_repo(daemon_dir.path());
+        let target_dir = tempfile::tempdir().unwrap();
+        let run_id = "drift-run";
+        let state = test_state_with_dir(daemon_dir.path()).await;
+        seed_run_in_other_repo(&state, target_dir.path(), run_id).await;
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/runs/{run_id}/source-drift"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let json: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+        // This fixture records no source branch, so the measurement cannot be made.
+        assert_eq!(json["state"], "unavailable");
+        assert!(
+            json["reason"].as_str().is_some_and(|r| !r.is_empty()),
+            "the reason is what the panel shows instead of numbers: {json}"
+        );
     }
 
     #[tokio::test]

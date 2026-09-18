@@ -7,6 +7,10 @@ import type { RunState } from "../types";
 // module anyway so the unit test never touches the network.
 vi.mock("../api", () => ({
   fetchRunStructuredDiff: vi.fn().mockResolvedValue({ files: [], additions: 0, deletions: 0, files_changed: 0 }),
+  // #803: the Info tab reads the Run's drift on mount. Unreadable here, so the
+  // Source block never renders and these stay tests about the Stats block.
+  fetchSourceDrift: vi.fn().mockRejectedValue(new Error("no drift in this test")),
+  fetchRemotes: vi.fn(),
 }));
 
 import PipelineInfoPanel from "./PipelineInfoPanel";

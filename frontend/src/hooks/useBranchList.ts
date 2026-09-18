@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from "react";
-import { fetchRemotes, listBranches } from "../api";
-import type { BranchFetchError, BranchList, BranchRef } from "../types";
+import { fastForwardBranch, fetchRemotes, listBranches } from "../api";
+import type { BranchFetchError, BranchList, BranchRef, FastForwardOutcome } from "../types";
 
 /**
  * One repo's branches and the freshness of the numbers on them (#802, ADR-0070).
@@ -48,16 +48,32 @@ export function useBranchList() {
     setFetching(false);
   }, []);
 
-  const apply = useCallback((repoPath: string, list: BranchList, fromFetch: boolean) => {
+  /**
+   * Which verb an incoming list came from. Four, because they differ on the two
+   * questions that decide whether a late answer may overwrite the screen:
+   *
+   * - `list` — the initial `GET /repos/branches`, may be superseded (see rule 2 of
+   *   the header);
+   * - `fetch` — the only verb that may write the fetch VERDICT;
+   * - `fast-forward` — read after the move, so it outranks a plain list in the air,
+   *   but it made no remote attempt, so its unfailing `fetch_error: null` says
+   *   nothing about whether the last fetch worked and must not erase one;
+   * - `reread` — the same GET as `list`, asked deliberately and later (#803), so it
+   *   is NOT superseded by an older fetch; it makes no remote attempt either, and so
+   *   is just as forbidden from speaking for the fetch.
+   */
+  type ListSource = "list" | "fetch" | "fast-forward" | "reread";
+
+  const apply = useCallback((repoPath: string, list: BranchList, from: ListSource) => {
     if (currentRepo.current !== repoPath) return false;
-    if (!fromFetch && fetchLanded.current) return false;
+    if (from === "list" && fetchLanded.current) return false;
     setBranches(list.branches);
     setLastFetchAt(list.last_fetch_at);
-    // Only a FETCH may write the fetch verdict. `GET /repos/branches` makes no
-    // attempt, so its unfailing `fetch_error: null` is not a success — and letting
-    // it land would erase a real failure whenever the plain list answered second,
-    // turning "gap unknown" back into numbers presented as current.
-    if (fromFetch) {
+    // Only a FETCH may write the fetch verdict. The other two make no attempt, so
+    // their unfailing `fetch_error: null` is not a success — and letting one land
+    // would erase a real failure whenever it answered second, turning "gap unknown"
+    // back into numbers presented as current.
+    if (from === "fetch") {
       fetchLanded.current = true;
       setFetchError(list.fetch_error);
     }
@@ -73,7 +89,7 @@ export function useBranchList() {
     async (repoPath: string) => {
       setFetching(true);
       try {
-        apply(repoPath, await fetchRemotes(repoPath), true);
+        apply(repoPath, await fetchRemotes(repoPath), "fetch");
       } catch (e) {
         // The request itself failed (daemon down, repo refused). Same contract as
         // a named fetch failure: say the écart is unknown, change nothing else.
@@ -107,7 +123,7 @@ export function useBranchList() {
       try {
         const list = await listBranches(repoPath);
         if (currentRepo.current !== repoPath) return null;
-        apply(repoPath, list, false);
+        apply(repoPath, list, "list");
         return list.branches;
       } catch {
         if (currentRepo.current === repoPath) setBranches([]);
@@ -124,5 +140,77 @@ export function useBranchList() {
     if (currentRepo.current) void sync(currentRepo.current);
   }, [sync]);
 
-  return { branches, loading, lastFetchAt, fetchError, fetching, load, refetch, clear };
+  /**
+   * Re-read the list from local refs, without touching the network (#803).
+   *
+   * The écart the popover shows decides whether a button that MOVES A BRANCH is
+   * offered, and refs move outside PDO: a commit made in a terminal while the form
+   * sits open turns "1 behind, 0 ahead" into a divergence with nothing on screen
+   * saying so — and the fast-forward stays on offer for a branch that can no longer
+   * take one (found by the #803 Feature Path). Both numbers are one local read away.
+   *
+   * A failure keeps what is on screen: this refreshes an answer we already have, so
+   * losing it to a transient error would be a downgrade, not a correction. And it
+   * never writes the fetch verdict — nothing was fetched.
+   */
+  const reread = useCallback(() => {
+    const repoPath = currentRepo.current;
+    if (!repoPath) return;
+    void listBranches(repoPath)
+      .then((list) => apply(repoPath, list, "reread"))
+      .catch(() => {});
+  }, [apply]);
+
+  /**
+   * Fast-forward a local branch of the repo currently displayed (#803, ADR-0070 §2).
+   *
+   * Three rules the popover does not have to remember:
+   *
+   * 1. **One in flight per repo.** A second click while the first POST is out is
+   *    dropped rather than queued: the daemon would answer the second with
+   *    `up_to_date`, and a refusal for a click that did exactly what was asked is a
+   *    lie about the repository.
+   * 2. **The refreshed list lands from BOTH arms.** The 200 and the 409 carry the
+   *    same shape, and a refusal is as good a reason to update the numbers as a
+   *    success — it is what lets the `up_to_date`/`no_upstream` races self-heal into
+   *    the matching #802 state instead of an error card.
+   * 3. **A late answer about the PREVIOUS repo is dropped**, like every other
+   *    async result here (`apply` owns that check).
+   *
+   * The refreshed list lands as `fast-forward`, not `fetch`: it was read AFTER the
+   * move, so it outranks any plain list still in the air (rule 2 of this hook's
+   * header), but it made no remote attempt and so may not speak for the fetch.
+   */
+  const ffInFlight = useRef(false);
+  const fastForward = useCallback(
+    async (branch: string): Promise<FastForwardOutcome | null> => {
+      const repoPath = currentRepo.current;
+      if (!repoPath || ffInFlight.current) return null;
+      ffInFlight.current = true;
+      try {
+        const outcome = await fastForwardBranch(repoPath, branch);
+        if (outcome.kind === "done") apply(repoPath, outcome.list, "fast-forward");
+        else if (outcome.kind === "refused" && outcome.list) {
+          apply(repoPath, outcome.list, "fast-forward");
+        }
+        return outcome;
+      } finally {
+        ffInFlight.current = false;
+      }
+    },
+    [apply],
+  );
+
+  return {
+    branches,
+    loading,
+    lastFetchAt,
+    fetchError,
+    fetching,
+    load,
+    refetch,
+    reread,
+    fastForward,
+    clear,
+  };
 }

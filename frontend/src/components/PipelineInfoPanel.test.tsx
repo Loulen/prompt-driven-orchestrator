@@ -20,6 +20,8 @@ const {
   fetchPipelineSkillsSidecar,
   startRunManager,
   stopRunManager,
+  fetchSourceDrift,
+  fetchRemotes,
 } = vi.hoisted(() => ({
   openLibraryAssistant: vi.fn(),
   closeLibraryAssistant: vi.fn(),
@@ -28,6 +30,10 @@ const {
   fetchPipelineSkillsSidecar: vi.fn(),
   startRunManager: vi.fn(),
   stopRunManager: vi.fn(),
+  // #803: the Run view reads its drift on mount. Mocked so no test touches the
+  // network, and so the ones that do not care about it see no Source block.
+  fetchSourceDrift: vi.fn(),
+  fetchRemotes: vi.fn(),
 }));
 vi.mock("../api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api")>();
@@ -40,6 +46,8 @@ vi.mock("../api", async (importOriginal) => {
     fetchPipelineSkillsSidecar,
     startRunManager,
     stopRunManager,
+    fetchSourceDrift,
+    fetchRemotes,
   };
 });
 
@@ -77,6 +85,14 @@ function renderPanel(run: RunState | null) {
     />,
   );
 }
+
+beforeEach(() => {
+  fetchSourceDrift.mockReset();
+  fetchRemotes.mockReset();
+  // Unless a test says otherwise, the drift is simply not readable: the block
+  // disappears rather than claiming a zero.
+  fetchSourceDrift.mockRejectedValue(new Error("no drift in this test"));
+});
 
 describe("PipelineInfoPanel — sandbox surface (#410)", () => {
   it("shows the sandbox badge for a sandboxed run (minimal)", () => {
@@ -782,5 +798,97 @@ describe("PipelineInfoPanel — a Run cut after a failed pre-cut fetch (#804)", 
   it("stays out of the way of every other Run", () => {
     renderPanel(makeRun({ source_branch: "main" }));
     expect(screen.queryByTestId("run-source-fetch-error")).toBeNull();
+  });
+});
+
+/**
+ * #803/ADR-0070 §4 — the Source block of the Info tab: where the Run was cut from,
+ * its fork point, how far it has drifted, and the ONE explicit gesture that
+ * refreshes the remote half.
+ */
+describe("PipelineInfoPanel — the Source block (#803)", () => {
+  const DRIFT = {
+    state: "available" as const,
+    source_branch: "main",
+    fork: "a1b2c3d",
+    ahead: 1,
+    behind: 3,
+    local_behind: 1,
+    upstream: "origin/main",
+    upstream_behind: 3,
+    last_fetch_at: "2026-09-18T10:00:00.000Z",
+  };
+
+  it("shows the source, the fork and the drift once the Run answers", async () => {
+    fetchSourceDrift.mockResolvedValue(DRIFT);
+    renderPanel(makeRun({ target_repo: "/home/me/pdo", source_branch: "main" }));
+
+    const block = await screen.findByTestId("run-source-block");
+    expect(block).toHaveTextContent("main");
+    expect(block).toHaveTextContent("a1b2c3d");
+    const chip = screen.getByTestId("source-drift-chip");
+    expect(chip).toHaveTextContent("1↑");
+    expect(chip).toHaveTextContent("3↓");
+    // The tooltip is where the single `m` splits into its two sides.
+    expect(chip.getAttribute("title")).toContain("main +1 · origin/main +3");
+  });
+
+  /**
+   * ADR-0070 §1: opening a Run must not put traffic on someone's repository. The
+   * READ of the drift is local; the fetch happens only when the button is pressed.
+   */
+  it("never fetches on display — only the button does", async () => {
+    fetchSourceDrift.mockResolvedValue(DRIFT);
+    fetchRemotes.mockResolvedValue({ branches: [], last_fetch_at: null, fetch_error: null });
+    renderPanel(makeRun({ target_repo: "/home/me/pdo", source_branch: "main" }));
+
+    await screen.findByTestId("run-source-block");
+    expect(fetchRemotes).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("run-source-fetch"));
+    await waitFor(() => expect(fetchRemotes).toHaveBeenCalledWith("/home/me/pdo"));
+    // And it recomputes afterwards: a fetch nobody re-read would be a spinner.
+    await waitFor(() => expect(fetchSourceDrift).toHaveBeenCalledTimes(2));
+  });
+
+  it("degrades the source side to `?` when the fetch fails, keeping the Run's own count", async () => {
+    fetchSourceDrift.mockResolvedValue(DRIFT);
+    fetchRemotes.mockResolvedValue({
+      branches: [],
+      last_fetch_at: null,
+      fetch_error: { kind: "network", message: "could not resolve host" },
+    });
+    renderPanel(makeRun({ target_repo: "/home/me/pdo", source_branch: "main" }));
+    await screen.findByTestId("run-source-block");
+
+    fireEvent.click(screen.getByTestId("run-source-fetch"));
+    await waitFor(() =>
+      expect(screen.getByTestId("source-drift-chip")).toHaveAttribute("data-drift", "unknown"),
+    );
+    const chip = screen.getByTestId("source-drift-chip");
+    expect(chip).toHaveTextContent("1↑");
+    expect(chip).toHaveTextContent("?");
+    expect(chip.getAttribute("title")).toContain("could not resolve host");
+  });
+
+  /**
+   * An archived Run whose branch was cleaned up. Grey, named, and the fetch button
+   * gone — there is nothing left to refresh, so offering the gesture would be a
+   * button that cannot change anything.
+   */
+  it("says unavailable and drops the fetch button once the Run's branch is gone", async () => {
+    fetchSourceDrift.mockResolvedValue({ state: "unavailable", reason: "branch deleted" });
+    renderPanel(makeRun({ status: "archived", target_repo: "/home/me/pdo" }));
+
+    await screen.findByTestId("run-source-block");
+    expect(screen.getByTestId("source-drift-chip")).toHaveTextContent("unavailable");
+    expect(screen.getByTestId("run-source-unavailable")).toHaveTextContent("branch deleted");
+    expect(screen.queryByTestId("run-source-fetch")).not.toBeInTheDocument();
+  });
+
+  it("shows no Source block on a template", () => {
+    renderPanel(null);
+    expect(screen.queryByTestId("run-source-block")).not.toBeInTheDocument();
+    expect(fetchSourceDrift).not.toHaveBeenCalled();
   });
 });

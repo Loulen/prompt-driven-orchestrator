@@ -16,6 +16,17 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.86.2
+**Niveaux d'effort par modèle** (#798).
+
+- Le catalogue du harnais gagne une cinquième source (RPC) : une session `--mode rpc` liste
+  les modèles puis interroge **les niveaux de réflexion offerts par chaque modèle**
+  (`get_available_thinking_levels`). Le catalogue expose désormais `model_efforts` —
+  clé absente = inconnu (repli sur l'axe global), clé présente (même vide) = connue.
+- Les sélecteurs d'effort (profil d'agent, agent personnalisé d'instance, Node Inspector,
+  Merge Inspector) n'offrent que les niveaux que le modèle sélectionné supporte ; une valeur
+  explicite devenue non supportée reste visible mais désactivée, avec un avertissement.
+
 ## 1.86.1
 **Outputs hérités d'une exécution précédente** (#796).
 

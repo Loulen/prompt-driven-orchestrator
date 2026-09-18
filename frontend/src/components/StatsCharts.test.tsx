@@ -1,6 +1,6 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, it, expect } from "vitest";
+import { beforeEach, describe, it, expect, vi } from "vitest";
 
 import StatsCharts from "./StatsCharts";
 import type {
@@ -441,6 +441,19 @@ const distribution = (
   missing_reasons: measured === expected ? [] : ["no reliable bounds"],
 });
 
+/** Duration + active duration (#810), the pair the wire always sends together.
+ *  `waitMillis` is what the declared wait took off the active reading; `0` — the
+ *  common case — makes the two readings identical. */
+const durations = (
+  mean: number,
+  measured = 2,
+  expected = 2,
+  waitMillis = 0,
+) => ({
+  duration: distribution(mean, measured, expected),
+  active_duration: distribution(mean - waitMillis, measured, expected),
+});
+
 /** A Steering distribution (#792): `mean` messages per execution over
  *  `measured` readable counts, plus the steered rate it carries. */
 const steering = (mean: number, steered = 1, readable = 2, expected = readable) => ({
@@ -472,7 +485,12 @@ const DESIGN_MODELS: PerformanceModelEffortPair[] = [
     effort: null,
     effort_provenance: null,
     harnesses: [
-      { harness: "claude", context: distribution(150_000, 1, 1), duration: distribution(360_000, 1, 1), ...steering(0.8) },
+      {
+        harness: "claude",
+        context: distribution(150_000, 1, 1),
+        ...durations(360_000, 1, 1),
+        ...steering(0.8),
+      },
     ],
   },
   {
@@ -481,7 +499,12 @@ const DESIGN_MODELS: PerformanceModelEffortPair[] = [
     effort: "high",
     effort_provenance: "requested",
     harnesses: [
-      { harness: "claude", context: distribution(95_000, 1, 1), duration: distribution(340_000, 1, 1), ...steering(0.8) },
+      {
+        harness: "claude",
+        context: distribution(95_000, 1, 1),
+        ...durations(340_000, 1, 1),
+        ...steering(0.8),
+      },
     ],
   },
 ];
@@ -490,13 +513,28 @@ const PERFORMANCE: StatsPerformance = {
   harnesses: ["claude", "copilot"],
   total: {
     harnesses: [
-      { harness: "claude", context: distribution(96_000), duration: distribution(410_000), ...steering(0.8) },
-      { harness: "copilot", context: distribution(68_000), duration: distribution(505_000), ...steering(0.8) },
+      {
+        harness: "claude",
+        context: distribution(96_000),
+        ...durations(410_000),
+        ...steering(0.8),
+      },
+      {
+        harness: "copilot",
+        context: distribution(68_000),
+        ...durations(505_000),
+        ...steering(0.8),
+      },
     ],
   },
   infrastructure_total: {
     harnesses: [
-      { harness: "claude", context: distribution(20_000), duration: distribution(120_000), ...steering(0.8) },
+      {
+        harness: "claude",
+        context: distribution(20_000),
+        ...durations(120_000),
+        ...steering(0.8),
+      },
     ],
   },
   by_pipeline: [
@@ -504,16 +542,36 @@ const PERFORMANCE: StatsPerformance = {
       id: "pipeline-id",
       name: "Implement loop",
       harnesses: [
-        { harness: "claude", context: distribution(90_000), duration: distribution(300_000), ...steering(0.8) },
-        { harness: "copilot", context: distribution(60_000), duration: distribution(500_000), ...steering(0.8) },
+        {
+          harness: "claude",
+          context: distribution(90_000),
+          ...durations(300_000),
+          ...steering(0.8),
+        },
+        {
+          harness: "copilot",
+          context: distribution(60_000),
+          ...durations(500_000),
+          ...steering(0.8),
+        },
       ],
       nodes: [
         {
           id: "design-id",
           name: "Design",
           harnesses: [
-            { harness: "claude", context: distribution(141_000), duration: distribution(350_000), ...steering(0.8) },
-            { harness: "copilot", context: distribution(84_000), duration: distribution(420_000, 1, 2), ...steering(0.8) },
+            {
+              harness: "claude",
+              context: distribution(141_000),
+              ...durations(350_000),
+              ...steering(0.8),
+            },
+            {
+              harness: "copilot",
+              context: distribution(84_000),
+              ...durations(420_000, 1, 2),
+              ...steering(0.8),
+            },
           ],
           nodes: [],
           models: DESIGN_MODELS,
@@ -526,6 +584,12 @@ const PERFORMANCE: StatsPerformance = {
                   harness: "claude",
                   context: distribution(55_000),
                   duration: {
+                    stats: null,
+                    measured: 0,
+                    expected: 1,
+                    missing_reasons: ["no reliable bounds"],
+                  },
+                  active_duration: {
                     stats: null,
                     measured: 0,
                     expected: 1,
@@ -554,7 +618,12 @@ const PERFORMANCE: StatsPerformance = {
       id: "pipeline-manager",
       name: "Pipeline Manager",
       harnesses: [
-        { harness: "claude", context: distribution(20_000), duration: distribution(120_000), ...steering(0.8) },
+        {
+          harness: "claude",
+          context: distribution(20_000),
+          ...durations(120_000),
+          ...steering(0.8),
+        },
       ],
       nodes: [],
       subagents: [],
@@ -934,7 +1003,7 @@ describe("StatsCharts — Performance › Steering (#792)", () => {
         {
           harness: "claude",
           context: distribution(20_000),
-          duration: distribution(120_000),
+          ...durations(120_000),
           ...infraSteering,
         },
       ],
@@ -947,7 +1016,7 @@ describe("StatsCharts — Performance › Steering (#792)", () => {
           {
             harness: "claude",
             context: distribution(20_000),
-            duration: distribution(120_000),
+            ...durations(120_000),
             ...infraSteering,
           },
         ],
@@ -960,13 +1029,13 @@ describe("StatsCharts — Performance › Steering (#792)", () => {
         {
           harness: "claude",
           context: distribution(96_000),
-          duration: distribution(410_000),
+          ...durations(410_000),
           ...steering(0.8, 7, 30),
         },
         {
           harness: "copilot",
           context: distribution(68_000),
-          duration: distribution(505_000),
+          ...durations(505_000),
           ...steering(0, 0, 12),
         },
         {
@@ -977,7 +1046,7 @@ describe("StatsCharts — Performance › Steering (#792)", () => {
             expected: 3,
             missing_reasons: ["harness has no context-usage source"],
           },
-          duration: distribution(60_000, 3, 3),
+          ...durations(60_000, 3, 3),
           steering: {
             stats: null,
             measured: 0,
@@ -996,7 +1065,7 @@ describe("StatsCharts — Performance › Steering (#792)", () => {
           {
             harness: "claude",
             context: distribution(90_000),
-            duration: distribution(300_000),
+            ...durations(300_000),
             ...steering(0.8, 7, 30),
           },
         ],
@@ -1008,7 +1077,7 @@ describe("StatsCharts — Performance › Steering (#792)", () => {
               {
                 harness: "claude",
                 context: distribution(141_000),
-                duration: distribution(350_000),
+                ...durations(350_000),
                 ...steering(2.3, 10, 10),
               },
             ],
@@ -1024,7 +1093,7 @@ describe("StatsCharts — Performance › Steering (#792)", () => {
                   {
                     harness: "claude",
                     context: distribution(141_000),
-                    duration: distribution(350_000),
+                    ...durations(350_000),
                     ...steering(2.3, 10, 10),
                   },
                 ],
@@ -1043,7 +1112,7 @@ describe("StatsCharts — Performance › Steering (#792)", () => {
                   expected: 3,
                   missing_reasons: ["harness has no context-usage source"],
                 },
-                duration: distribution(60_000, 3, 3),
+                ...durations(60_000, 3, 3),
                 steering: {
                   stats: null,
                   measured: 0,
@@ -1152,7 +1221,12 @@ describe("StatsCharts — Performance « By model » (#737, ADR-0065)", () => {
     harnesses: ["claude", "copilot"],
     total: {
       harnesses: [
-        { harness: "claude", context: distribution(96_000), duration: distribution(410_000), ...steering(0.8) },
+        {
+          harness: "claude",
+          context: distribution(96_000),
+          ...durations(410_000),
+          ...steering(0.8),
+        },
       ],
     },
     infrastructure_total: { harnesses: [] },
@@ -1164,7 +1238,12 @@ describe("StatsCharts — Performance « By model » (#737, ADR-0065)", () => {
         name: "claude-opus-4-8",
         provenance: "observed",
         harnesses: [
-          { harness: "claude", context: distribution(140_000), duration: distribution(350_000), ...steering(0.8) },
+          {
+            harness: "claude",
+            context: distribution(140_000),
+            ...durations(350_000),
+            ...steering(0.8),
+          },
         ],
         nodes: [],
         subagents: [],
@@ -1175,7 +1254,12 @@ describe("StatsCharts — Performance « By model » (#737, ADR-0065)", () => {
             effort: "high",
             provenance: "observed",
             harnesses: [
-              { harness: "claude", context: distribution(140_000), duration: distribution(350_000), ...steering(0.8) },
+              {
+                harness: "claude",
+                context: distribution(140_000),
+                ...durations(350_000),
+                ...steering(0.8),
+              },
             ],
             nodes: [],
             subagents: [],
@@ -1184,14 +1268,24 @@ describe("StatsCharts — Performance « By model » (#737, ADR-0065)", () => {
                 id: "pipeline-id",
                 name: "Implement loop",
                 harnesses: [
-                  { harness: "claude", context: distribution(140_000), duration: distribution(350_000), ...steering(0.8) },
+                  {
+                    harness: "claude",
+                    context: distribution(140_000),
+                    ...durations(350_000),
+                    ...steering(0.8),
+                  },
                 ],
                 nodes: [
                   {
                     id: "design-id",
                     name: "Design",
                     harnesses: [
-                      { harness: "claude", context: distribution(140_000), duration: distribution(350_000), ...steering(0.8) },
+                      {
+                        harness: "claude",
+                        context: distribution(140_000),
+                        ...durations(350_000),
+                        ...steering(0.8),
+                      },
                     ],
                     nodes: [],
                     subagents: [],
@@ -1207,7 +1301,12 @@ describe("StatsCharts — Performance « By model » (#737, ADR-0065)", () => {
             effort: null,
             provenance: null,
             harnesses: [
-              { harness: "claude", context: distribution(55_000), duration: distribution(90_000), ...steering(0.8) },
+              {
+                harness: "claude",
+                context: distribution(55_000),
+                ...durations(90_000),
+                ...steering(0.8),
+              },
             ],
             nodes: [],
             subagents: [],
@@ -1220,7 +1319,12 @@ describe("StatsCharts — Performance « By model » (#737, ADR-0065)", () => {
         name: "sonnet",
         provenance: "mixed",
         harnesses: [
-          { harness: "claude", context: distribution(95_000), duration: distribution(340_000), ...steering(0.8) },
+          {
+            harness: "claude",
+            context: distribution(95_000),
+            ...durations(340_000),
+            ...steering(0.8),
+          },
         ],
         nodes: [],
         subagents: [],
@@ -1231,7 +1335,12 @@ describe("StatsCharts — Performance « By model » (#737, ADR-0065)", () => {
             effort: null,
             provenance: null,
             harnesses: [
-              { harness: "claude", context: distribution(95_000), duration: distribution(340_000), ...steering(0.8) },
+              {
+                harness: "claude",
+                context: distribution(95_000),
+                ...durations(340_000),
+                ...steering(0.8),
+              },
             ],
             nodes: [],
             subagents: [],
@@ -1468,6 +1577,527 @@ describe("StatsCharts — Performance « By model » (#737, ADR-0065)", () => {
   });
 });
 
+// --- #810: active duration, node kind filter, cohort line ---------------------
+
+/** A Performance payload built for #810: three nodes of three genres under one
+ *  pipeline, a second pipeline whose only node is standard (so it disappears
+ *  when Standard is unchecked), an Infrastructure row (never filtered), and a
+ *  « By model » tree over the same executions. `chat` waited 1m02s. */
+const KIND_PERFORMANCE: StatsPerformance = {
+  harnesses: ["claude"],
+  total: {
+    harnesses: [
+      {
+        harness: "claude",
+        context: distribution(100_000),
+        ...durations(600_000, 2, 2, 62_000),
+        ...steering(0.8),
+      },
+    ],
+  },
+  infrastructure_total: {
+    harnesses: [
+      {
+        harness: "claude",
+        context: distribution(20_000),
+        ...durations(1_200_000, 2, 2, 62_000),
+        ...steering(0.8),
+      },
+    ],
+  },
+  by_pipeline: [
+    {
+      id: "mixed",
+      name: "Mixed pipeline",
+      harnesses: [
+        {
+          harness: "claude",
+          context: distribution(110_000),
+          ...durations(500_000, 2, 2, 62_000),
+          ...steering(0.8),
+        },
+      ],
+      subagents: [],
+      nodes: [
+        {
+          id: "chat",
+          name: "grill-with-docs",
+          interactive: true,
+          orchestrator: false,
+          harnesses: [
+            {
+              harness: "claude",
+              context: distribution(118_000),
+              ...durations(200_000, 2, 2, 62_000),
+              ...steering(1.2),
+            },
+          ],
+          nodes: [],
+          subagents: [],
+        },
+        {
+          id: "orch",
+          name: "orchestrate",
+          interactive: false,
+          orchestrator: true,
+          harnesses: [
+            {
+              harness: "claude",
+              context: distribution(140_000),
+              ...durations(660_000),
+              ...steering(2.1),
+            },
+          ],
+          nodes: [],
+          subagents: [],
+        },
+        {
+          id: "build",
+          name: "build",
+          interactive: false,
+          orchestrator: false,
+          harnesses: [
+            {
+              harness: "claude",
+              context: distribution(90_000),
+              ...durations(300_000),
+              ...steering(0.1),
+            },
+          ],
+          nodes: [],
+          subagents: [],
+        },
+      ],
+    },
+    {
+      id: "standard-only",
+      name: "Standard only",
+      harnesses: [
+        {
+          harness: "claude",
+          context: distribution(70_000),
+          ...durations(120_000),
+          ...steering(0.2),
+        },
+      ],
+      subagents: [],
+      nodes: [
+        {
+          id: "lonely",
+          name: "lonely",
+          interactive: false,
+          orchestrator: false,
+          harnesses: [
+            {
+              harness: "claude",
+              context: distribution(70_000),
+              ...durations(120_000),
+              ...steering(0.2),
+            },
+          ],
+          nodes: [],
+          subagents: [],
+        },
+      ],
+    },
+  ],
+  infrastructure: [
+    {
+      id: "pipeline-manager",
+      name: "Pipeline Manager",
+      harnesses: [
+        {
+          harness: "claude",
+          context: distribution(20_000),
+          ...durations(1_200_000, 2, 2, 62_000),
+          ...steering(0.8),
+        },
+      ],
+      nodes: [],
+      subagents: [],
+    },
+  ],
+  by_model: [
+    {
+      id: "claude-opus-5",
+      name: "claude-opus-5",
+      provenance: "observed",
+      harnesses: [
+        {
+          harness: "claude",
+          context: distribution(118_000),
+          ...durations(200_000, 2, 2, 62_000),
+          ...steering(1.2),
+        },
+      ],
+      nodes: [],
+      subagents: [],
+      efforts: [
+        {
+          id: "high",
+          name: "high",
+          effort: "high",
+          provenance: "observed",
+          harnesses: [
+            {
+              harness: "claude",
+              context: distribution(118_000),
+              ...durations(200_000, 2, 2, 62_000),
+              ...steering(1.2),
+            },
+          ],
+          nodes: [],
+          subagents: [],
+          pipelines: [
+            {
+              id: "mixed",
+              name: "Mixed pipeline",
+              harnesses: [
+                {
+                  harness: "claude",
+                  context: distribution(118_000),
+                  ...durations(200_000, 2, 2, 62_000),
+                  ...steering(1.2),
+                },
+              ],
+              subagents: [],
+              nodes: [
+                {
+                  id: "chat",
+                  name: "grill-with-docs",
+                  interactive: true,
+                  orchestrator: false,
+                  harnesses: [
+                    {
+                      harness: "claude",
+                      context: distribution(118_000),
+                      ...durations(200_000, 2, 2, 62_000),
+                      ...steering(1.2),
+                    },
+                  ],
+                  nodes: [],
+                  subagents: [],
+                },
+                {
+                  id: "build",
+                  name: "build",
+                  interactive: false,
+                  orchestrator: false,
+                  harnesses: [
+                    {
+                      harness: "claude",
+                      context: distribution(90_000),
+                      ...durations(300_000),
+                      ...steering(0.1),
+                    },
+                  ],
+                  nodes: [],
+                  subagents: [],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+};
+
+function renderKinds(
+  props: Partial<React.ComponentProps<typeof StatsCharts>> = {},
+) {
+  return render(
+    <StatsCharts
+      tab="performance"
+      overview={null}
+      cost={null}
+      costError={null}
+      performance={KIND_PERFORMANCE}
+      {...props}
+    />,
+  );
+}
+
+describe("StatsCharts — active duration (#810)", () => {
+  it("reads the wall-clock by default and swaps to the active duration on the toggle", async () => {
+    const { rerender } = renderKinds();
+
+    // Off: Duration is the wall-clock — 200 000 ms on `chat`, 3m20s.
+    expect(
+      screen.getByTestId("stats-performance-duration-header"),
+    ).toHaveTextContent("Duration (wall-clock)");
+    expect(screen.getByTestId("stats-performance-headline")).toHaveTextContent(
+      "10m00s median duration",
+    );
+    expect(
+      screen.queryByTestId("performance-wait-delta"),
+    ).not.toBeInTheDocument();
+
+    // On: the same executions, 1m02s of declared wait subtracted. No refetch is
+    // possible here — the component only ever receives one payload.
+    rerender(
+      <StatsCharts
+        tab="performance"
+        overview={null}
+        cost={null}
+        costError={null}
+        performance={KIND_PERFORMANCE}
+        excludeUserWait
+      />,
+    );
+    expect(
+      screen.getByTestId("stats-performance-duration-header"),
+    ).toHaveTextContent("Duration (active)");
+    expect(screen.getByTestId("stats-performance-headline")).toHaveTextContent(
+      "8m58s median active duration",
+    );
+    expect(
+      screen.getByTestId("stats-performance-card-claude"),
+    ).toHaveTextContent("8m58s median active duration");
+    // The sort select and the aside name the same reading.
+    expect(
+      screen.getByRole("option", { name: "By active duration" }),
+    ).toBeInTheDocument();
+
+    // Every affected row says what it lost, in the same words.
+    const deltas = screen.getAllByTestId("performance-wait-delta");
+    expect(deltas.length).toBeGreaterThan(0);
+    expect(deltas[0]).toHaveTextContent("−1m02s wait");
+    // The wall-clock the toggle hid stays reachable: a dashed ghost box behind
+    // the active one, on exactly the rows that lost something.
+    expect(screen.getAllByTestId("performance-wallclock-ghost")).toHaveLength(
+      deltas.length,
+    );
+    expect(
+      screen.getAllByLabelText(/declared waits subtracted \(ADR-0069\)/).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("ranks the master list on the active reading when the toggle is on", async () => {
+    const user = userEvent.setup();
+    const { rerender } = renderKinds();
+    const sortBy = async () =>
+      user.selectOptions(
+        screen.getByRole("combobox", { name: "Performance sort" }),
+        "duration",
+      );
+    await sortBy();
+
+    const infrastructureValue = () =>
+      within(
+        within(screen.getByRole("listbox", { name: "Performance groups" }))
+          .getByText("Infrastructure")
+          .closest("button")!,
+      ).getByText(/m\d\ds$/).textContent;
+
+    expect(screen.getByText(/Ranked by duration/)).toBeInTheDocument();
+    expect(infrastructureValue()).toBe("20m00s");
+
+    rerender(
+      <StatsCharts
+        tab="performance"
+        overview={null}
+        cost={null}
+        costError={null}
+        performance={KIND_PERFORMANCE}
+        excludeUserWait
+      />,
+    );
+    await sortBy();
+    // The rank score now reads `active_duration`: 20m00s minus the 1m02s the
+    // Run waited on its nodes.
+    expect(screen.getByText(/Ranked by active duration/)).toBeInTheDocument();
+    expect(infrastructureValue()).toBe("18m58s");
+  });
+});
+
+describe("StatsCharts — node kind filter (#810)", () => {
+  it("counts each kind, filters Node rows and leaves Infrastructure alone", async () => {
+    const user = userEvent.setup();
+    const onNodeKindsChange = vi.fn();
+    renderKinds({ onNodeKindsChange });
+
+    expect(
+      screen.getByTestId("stats-node-kind-chip-interactive"),
+    ).toHaveTextContent("1");
+    expect(
+      screen.getByTestId("stats-node-kind-chip-orchestrator"),
+    ).toHaveTextContent("1");
+    // `build` + `lonely`
+    expect(
+      screen.getByTestId("stats-node-kind-chip-standard"),
+    ).toHaveTextContent("2");
+
+    await user.click(screen.getByTestId("stats-node-kind-chip-standard"));
+    expect(onNodeKindsChange).toHaveBeenCalledWith([
+      "interactive",
+      "orchestrator",
+    ]);
+  });
+
+  it("hides the unchecked kind, drops a pipeline with no visible node, and refuses to recompute a partial total", async () => {
+    const user = userEvent.setup();
+    renderKinds({ nodeKinds: ["interactive", "orchestrator"] });
+
+    // The master list loses the pipeline whose only node is standard.
+    const groups = screen.getByRole("listbox", { name: "Performance groups" });
+    expect(within(groups).queryByText("Standard only")).not.toBeInTheDocument();
+    expect(within(groups).getByText("Mixed pipeline")).toBeInTheDocument();
+    // Its value is « filtered », never a total rebuilt from the visible nodes.
+    expect(within(groups).getAllByText("filtered").length).toBeGreaterThan(0);
+
+    // Head cards and headline say the same thing.
+    expect(
+      screen.getByTestId("stats-performance-card-claude"),
+    ).toHaveTextContent("— median context");
+    expect(screen.getByTestId("stats-performance-headline")).toHaveTextContent(
+      "filtered",
+    );
+
+    // Drill into the pipeline: only the two matching nodes remain, each with
+    // its kind badge; a node that is both would carry two.
+    await user.click(within(groups).getByText("Mixed pipeline"));
+    const names = screen
+      .getAllByTestId("stats-detail-row")
+      .map((row) => row.textContent ?? "");
+    expect(names.some((text) => text.includes("grill-with-docs"))).toBe(true);
+    expect(names.some((text) => text.includes("orchestrate"))).toBe(true);
+    expect(names.some((text) => text.includes("build"))).toBe(false);
+    expect(
+      screen.getByTestId("stats-node-kind-interactive"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId("stats-node-kind-orchestrator"),
+    ).toBeInTheDocument();
+
+    // Infrastructure is never touched by the kind filter.
+    await user.click(within(groups).getByText("Infrastructure"));
+    expect(
+      screen.getByTestId("stats-performance-card-claude"),
+    ).toHaveTextContent("20m00s median duration");
+    expect(
+      screen.getByTestId("stats-performance-headline"),
+    ).not.toHaveTextContent("filtered");
+  });
+
+  it("applies the same filter to the « By model » tree", async () => {
+    const user = userEvent.setup();
+    renderKinds({ nodeKinds: ["interactive"] });
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Performance grouping" }),
+      "model",
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Open claude-opus-5" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Open high" }));
+    await user.click(
+      screen.getByRole("button", { name: "Open Mixed pipeline" }),
+    );
+
+    const names = screen
+      .getAllByTestId("stats-detail-row")
+      .map((row) => row.textContent ?? "");
+    expect(names.some((text) => text.includes("grill-with-docs"))).toBe(true);
+    expect(names.some((text) => text.includes("build"))).toBe(false);
+  });
+
+  it("says so, with a way out, when the filter empties a drill level", async () => {
+    const user = userEvent.setup();
+    const onNodeKindsChange = vi.fn();
+    // No node of « Mixed pipeline » is an orchestrator: the leaf of the model
+    // path has rows to show, and the filter takes them all.
+    renderKinds({ nodeKinds: ["orchestrator"], onNodeKindsChange });
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Performance grouping" }),
+      "model",
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Open claude-opus-5" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Open high" }));
+    await user.click(
+      screen.getByRole("button", { name: "Open Mixed pipeline" }),
+    );
+
+    expect(screen.queryAllByTestId("stats-detail-row")).toHaveLength(0);
+    expect(
+      screen.getByText(/No node of the selected kinds at this level/),
+    ).toBeInTheDocument();
+    await user.click(screen.getByTestId("stats-show-all-kinds"));
+    expect(onNodeKindsChange).toHaveBeenCalledWith([
+      "interactive",
+      "orchestrator",
+      "standard",
+    ]);
+  });
+
+  it("offers a way back when every kind is unchecked, and a reset when the state deviates", async () => {
+    const user = userEvent.setup();
+    const onNodeKindsChange = vi.fn();
+    const onResetFilters = vi.fn();
+    renderKinds({ nodeKinds: [], onNodeKindsChange, onResetFilters });
+
+    expect(
+      screen.getByText(/No node of the selected kinds in this period/),
+    ).toBeInTheDocument();
+    await user.click(screen.getByTestId("stats-show-all-kinds"));
+    expect(onNodeKindsChange).toHaveBeenCalledWith([
+      "interactive",
+      "orchestrator",
+      "standard",
+    ]);
+
+    await user.click(screen.getByTestId("stats-reset-filters"));
+    expect(onResetFilters).toHaveBeenCalled();
+  });
+});
+
+describe("StatsCharts — cohort line (#810)", () => {
+  it("names the cohort on every section, and says what « completed runs only » left out", () => {
+    const { rerender, unmount } = render(
+      <StatsCharts
+        tab="runs"
+        overview={OVERVIEW}
+        cost={null}
+        costError={null}
+      />,
+    );
+    expect(screen.getByTestId("stats-cohort-line")).toHaveTextContent(
+      "Cohort: runs started in the period",
+    );
+    expect(screen.getByTestId("stats-cohort-line")).not.toHaveTextContent(
+      "completed runs only",
+    );
+    expect(
+      screen.queryByTestId("stats-kpi-errors-completed-only"),
+    ).not.toBeInTheDocument();
+
+    rerender(
+      <StatsCharts
+        tab="runs"
+        overview={OVERVIEW}
+        cost={null}
+        costError={null}
+        completedOnly
+      />,
+    );
+    expect(screen.getByTestId("stats-cohort-line")).toHaveTextContent(
+      "completed runs only (failed, stopped and running runs left out)",
+    );
+    // The Errors card stays, at zero — nothing is masked.
+    expect(
+      screen.getByTestId("stats-kpi-errors-completed-only"),
+    ).toHaveTextContent("Errors:");
+    unmount();
+
+    renderKinds({ completedOnly: true });
+    expect(screen.getByTestId("stats-cohort-line")).toHaveTextContent(
+      "completed runs only",
+    );
+  });
+});
+
 /**
  * #811 (story #808) — the median everywhere, the three box-plot zoom levels and
  * the independent-axis toggle.
@@ -1505,6 +2135,14 @@ describe("StatsCharts — Performance zoom, median and axes (#811)", () => {
     harness: "claude",
     context: distribution(50_000, 10, 10),
     duration: { stats: duration, measured: 10, expected: 10, missing_reasons: [] },
+    // No declared wait in this fixture (#810): the active reading is the
+    // wall-clock one, so the zoom assertions read the same numbers either way.
+    active_duration: {
+      stats: duration,
+      measured: 10,
+      expected: 10,
+      missing_reasons: [],
+    },
     ...steering(0, 0, 10),
   });
 

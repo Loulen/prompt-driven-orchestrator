@@ -348,13 +348,23 @@ export function syncCostPrices(): Promise<SyncCostPricesReport> {
  * Cheap instance stats over `[from, to)` bucketed by `bucket` (#377): runs,
  * errors (`run_failed`), sessions, fires-per-pipeline, and the "triggers that
  * created a run" KPI. Indexed SQL — safe to fetch on modal open.
+ * `completed_only` (#810) narrows the Run cohort to Runs that reached
+ * `completed`; the Errors series then reads zero rather than disappearing.
  */
 export function fetchStatsOverview(
   from: string,
   to: string,
   bucket: string,
+  completedOnly = false,
 ): Promise<StatsOverview> {
-  return request<StatsOverview>("GET", "/stats/overview", { query: { from, to, bucket } });
+  return request<StatsOverview>("GET", "/stats/overview", {
+    query: {
+      from,
+      to,
+      bucket,
+      ...(completedOnly ? { completed_only: true } : {}),
+    },
+  });
 }
 
 /**
@@ -366,18 +376,37 @@ export function fetchStatsCost(
   from: string,
   to: string,
   bucket: string,
+  completedOnly = false,
 ): Promise<StatsCost> {
-  return request<StatsCost>("GET", "/stats/cost", { query: { from, to, bucket } });
+  return request<StatsCost>("GET", "/stats/cost", {
+    query: {
+      from,
+      to,
+      bucket,
+      ...(completedOnly ? { completed_only: true } : {}),
+    },
+  });
 }
 
-/** Context and wall-clock distributions. Heavy journal reads, so callers load it lazily. */
+/**
+ * Context, wall-clock and **active** duration distributions. Heavy journal
+ * reads, so callers load it lazily. `completed_only` (#810) narrows the cohort
+ * to Runs that reached `completed`; omitted when false, so an unchanged call
+ * sends the byte-identical query it always did.
+ */
 export function fetchStatsPerformance(
   from: string,
   to: string,
   refresh = false,
+  completedOnly = false,
 ): Promise<StatsPerformance> {
   return request<StatsPerformance>("GET", "/stats/performance", {
-    query: { from, to, ...(refresh ? { refresh: true } : {}) },
+    query: {
+      from,
+      to,
+      ...(refresh ? { refresh: true } : {}),
+      ...(completedOnly ? { completed_only: true } : {}),
+    },
   });
 }
 

@@ -62,7 +62,7 @@ describe("useStats (#377)", () => {
   it("fetches overview eagerly on open, but not cost", async () => {
     const { result } = renderHook(() => useStats(true, "F", "T", "day", false, false));
     await waitFor(() => expect(result.current.overview).toEqual(OVERVIEW));
-    expect(api.fetchStatsOverview).toHaveBeenCalledWith("F", "T", "day");
+    expect(api.fetchStatsOverview).toHaveBeenCalledWith("F", "T", "day", false);
     expect(api.fetchStatsCost).not.toHaveBeenCalled();
     expect(api.fetchStatsPerformance).not.toHaveBeenCalled();
   });
@@ -85,7 +85,7 @@ describe("useStats (#377)", () => {
 
     rerender({ costActive: true });
     await waitFor(() => expect(result.current.cost).toEqual(COST));
-    expect(api.fetchStatsCost).toHaveBeenCalledWith("F", "T", "day");
+    expect(api.fetchStatsCost).toHaveBeenCalledWith("F", "T", "day", false);
   });
 
   it("fetches performance lazily and does not refetch when returning to the tab", async () => {
@@ -96,8 +96,15 @@ describe("useStats (#377)", () => {
     expect(api.fetchStatsPerformance).not.toHaveBeenCalled();
 
     rerender({ active: true });
-    await waitFor(() => expect(result.current.performance).toEqual(PERFORMANCE));
-    expect(api.fetchStatsPerformance).toHaveBeenCalledWith("F", "T", false);
+    await waitFor(() =>
+      expect(result.current.performance).toEqual(PERFORMANCE),
+    );
+    expect(api.fetchStatsPerformance).toHaveBeenCalledWith(
+      "F",
+      "T",
+      false,
+      false,
+    );
 
     rerender({ active: false });
     rerender({ active: true });
@@ -110,10 +117,24 @@ describe("useStats (#377)", () => {
       ({ reloadKey }) => useStats(true, "F", "T", "day", false, true, reloadKey),
       { initialProps: { reloadKey: 0 } },
     );
-    await waitFor(() => expect(api.fetchStatsPerformance).toHaveBeenCalledWith("F", "T", false));
+    await waitFor(() =>
+      expect(api.fetchStatsPerformance).toHaveBeenCalledWith(
+        "F",
+        "T",
+        false,
+        false,
+      ),
+    );
 
     rerender({ reloadKey: 1 });
-    await waitFor(() => expect(api.fetchStatsPerformance).toHaveBeenLastCalledWith("F", "T", true));
+    await waitFor(() =>
+      expect(api.fetchStatsPerformance).toHaveBeenLastCalledWith(
+        "F",
+        "T",
+        true,
+        false,
+      ),
+    );
   });
 
   it("does not refetch cost when returning from another section", async () => {
@@ -137,8 +158,15 @@ describe("useStats (#377)", () => {
     );
     await waitFor(() => expect(api.fetchStatsOverview).toHaveBeenCalledTimes(1));
     rerender({ bucket: "week" });
-    await waitFor(() => expect(api.fetchStatsOverview).toHaveBeenCalledTimes(2));
-    expect(api.fetchStatsOverview).toHaveBeenLastCalledWith("F", "T", "week");
+    await waitFor(() =>
+      expect(api.fetchStatsOverview).toHaveBeenCalledTimes(2),
+    );
+    expect(api.fetchStatsOverview).toHaveBeenLastCalledWith(
+      "F",
+      "T",
+      "week",
+      false,
+    );
   });
 
   it("surfaces an overview fetch error", async () => {
@@ -159,5 +187,46 @@ describe("useStats (#377)", () => {
     const { result } = renderHook(() => useStats(true, "F", "T", "day", false, true));
     await waitFor(() => expect(result.current.performanceError).toBe("journal unreadable"));
     expect(result.current.error).toBeNull();
+  });
+});
+
+describe("useStats — « Runs terminés seulement » (#810)", () => {
+  it("passes the cohort to the three endpoints and refetches when it flips", async () => {
+    const { result, rerender } = renderHook(
+      ({ completedOnly }) =>
+        useStats(true, "F", "T", "day", true, true, 0, completedOnly),
+      { initialProps: { completedOnly: true } },
+    );
+
+    await waitFor(() =>
+      expect(result.current.performance).toEqual(PERFORMANCE),
+    );
+    expect(api.fetchStatsOverview).toHaveBeenCalledWith("F", "T", "day", true);
+    expect(api.fetchStatsCost).toHaveBeenCalledWith("F", "T", "day", true);
+    expect(api.fetchStatsPerformance).toHaveBeenCalledWith(
+      "F",
+      "T",
+      false,
+      true,
+    );
+
+    // The cohort is part of the request, not a display option: flipping it must
+    // refetch rather than reinterpret the payload in hand.
+    rerender({ completedOnly: false });
+    await waitFor(() =>
+      expect(api.fetchStatsPerformance).toHaveBeenLastCalledWith(
+        "F",
+        "T",
+        false,
+        false,
+      ),
+    );
+    expect(api.fetchStatsOverview).toHaveBeenLastCalledWith(
+      "F",
+      "T",
+      "day",
+      false,
+    );
+    expect(api.fetchStatsCost).toHaveBeenLastCalledWith("F", "T", "day", false);
   });
 });

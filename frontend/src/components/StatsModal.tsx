@@ -1,10 +1,22 @@
 import { lazy, Suspense, useMemo, useState } from "react";
-import { RotateCw } from "lucide-react";
+import { Check, RotateCw } from "lucide-react";
 import FullWindowShell from "./FullWindowShell";
 import { syncCostPrices } from "../api";
 import { useStats } from "../hooks/useStats";
 import type { PriceRow, StatsCost, SyncCostPricesReport } from "../types";
 import type { StatsTab } from "./StatsCharts";
+import {
+  ALL_NODE_KINDS,
+  DEFAULT_EXCLUDE_USER_WAIT,
+  loadCompletedOnly,
+  loadExcludeUserWait,
+  loadNodeKinds,
+  performanceFiltersDeviate,
+  saveCompletedOnly,
+  saveExcludeUserWait,
+  saveNodeKinds,
+  type NodeKind,
+} from "../lib/statsPrefs";
 
 const StatsCharts = lazy(() => import("./StatsCharts"));
 
@@ -182,7 +194,16 @@ export default function StatsModal({
 }: Props) {
   const [preset, setPreset] = useState<Preset>("30d");
   const [tab, setTab] = useState<StatsTab>(initialTab);
-  const [pricingOpen, setPricingOpen] = useState(initialPricingOpen && initialTab === "cost");
+  // #810 — the three per-browser settings. Read ONCE at mount (lazy initial
+  // state), written at the change: the shell owns them because the cohort feeds
+  // the three fetches and the Performance filters feed the rail's cue, neither
+  // of which `StatsCharts` can reach.
+  const [completedOnly, setCompletedOnly] = useState(loadCompletedOnly);
+  const [excludeUserWait, setExcludeUserWait] = useState(loadExcludeUserWait);
+  const [nodeKinds, setNodeKinds] = useState<NodeKind[]>(loadNodeKinds);
+  const [pricingOpen, setPricingOpen] = useState(
+    initialPricingOpen && initialTab === "cost",
+  );
   const [reloadKey, setReloadKey] = useState(0);
   const [syncReport, setSyncReport] = useState<SyncCostPricesReport | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -208,6 +229,7 @@ export default function StatsModal({
     tab === "cost",
     tab === "performance",
     reloadKey,
+    completedOnly,
   );
 
   if (!open) return null;
@@ -220,6 +242,36 @@ export default function StatsModal({
   const refresh = () => {
     setReloadKey((value) => value + 1);
   };
+
+  const onCompletedOnlyChange = (value: boolean) => {
+    setCompletedOnly(value);
+    saveCompletedOnly(value);
+  };
+  const onExcludeUserWaitChange = (value: boolean) => {
+    setExcludeUserWait(value);
+    saveExcludeUserWait(value);
+  };
+  const onNodeKindsChange = (kinds: NodeKind[]) => {
+    setNodeKinds(kinds);
+    saveNodeKinds(kinds);
+  };
+  const onResetFilters = () => {
+    onExcludeUserWaitChange(DEFAULT_EXCLUDE_USER_WAIT);
+    onNodeKindsChange([...ALL_NODE_KINDS]);
+  };
+
+  // The rail cue (#810): the Performance filters survive a reload, so without a
+  // mark nobody would know why the numbers differ from the defaults.
+  const filtersDeviate = performanceFiltersDeviate(excludeUserWait, nodeKinds);
+  const rail = TABS.map((item) =>
+    item.id === "performance" && filtersDeviate
+      ? {
+          ...item,
+          dirty: true,
+          dirtyLabel: "Performance filters differ from the defaults",
+        }
+      : item,
+  );
 
   const onSyncPrices = async () => {
     setSyncing(true);
@@ -249,7 +301,7 @@ export default function StatsModal({
       onClose={onClose}
       onEscape={onEscape}
       closeLabel="Close stats"
-      rail={TABS}
+      rail={rail}
       activeRail={tab}
       onRailChange={(id) => {
         setTab(id as StatsTab);
@@ -259,24 +311,59 @@ export default function StatsModal({
       railTestIdPrefix="stats-tab"
       mainClassName={`min-w-0 flex-1 overflow-y-auto p-5 ${refreshing ? "opacity-65" : ""}`}
       headerExtras={
-        <div className="flex items-center gap-1" role="group" aria-label="Period">
-          {PRESETS.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              aria-pressed={preset === item.id}
-              data-testid={`stats-period-${item.id}`}
-              onClick={() => setPreset(item.id)}
-              className={`rounded-md border px-2.5 py-1 ${
-                preset === item.id
-                  ? "border-acc bg-acc/15 text-fg"
-                  : "border-line-strong bg-bg-3 text-fg-2"
+        <div className="flex items-center gap-1">
+          <div
+            className="flex items-center gap-1"
+            role="group"
+            aria-label="Period"
+          >
+            {PRESETS.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                aria-pressed={preset === item.id}
+                data-testid={`stats-period-${item.id}`}
+                onClick={() => setPreset(item.id)}
+                className={`rounded-md border px-2.5 py-1 ${
+                  preset === item.id
+                    ? "border-acc bg-acc/15 text-fg"
+                    : "border-line-strong bg-bg-3 text-fg-2"
+                }`}
+                style={{ fontSize: "11px" }}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+          {/* #810 — the cohort, not a period: same pill language, its own group
+              behind a thin divider, because it answers « which Runs? » and
+              applies to every section at once. */}
+          <span className="mx-2 h-4 w-px bg-line-strong" aria-hidden="true" />
+          <button
+            type="button"
+            role="checkbox"
+            aria-checked={completedOnly}
+            data-testid="stats-completed-only"
+            onClick={() => onCompletedOnlyChange(!completedOnly)}
+            className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 ${
+              completedOnly
+                ? "border-st-done bg-st-done/15 text-fg"
+                : "border-line-strong bg-bg-3 text-fg-2"
+            }`}
+            style={{ fontSize: "11px" }}
+          >
+            <span
+              className={`grid h-3 w-3 place-items-center rounded-sm border ${
+                completedOnly
+                  ? "border-st-done bg-st-done text-bg-4"
+                  : "border-line-strong"
               }`}
-              style={{ fontSize: "11px" }}
+              aria-hidden="true"
             >
-              {item.label}
-            </button>
-          ))}
+              {completedOnly && <Check size={9} strokeWidth={3} />}
+            </span>
+            completed runs only
+          </button>
         </div>
       }
       headerActions={
@@ -352,6 +439,12 @@ export default function StatsModal({
           costError={costError}
           performance={performance}
           performanceError={performanceError}
+          completedOnly={completedOnly}
+          excludeUserWait={excludeUserWait}
+          nodeKinds={nodeKinds}
+          onExcludeUserWaitChange={onExcludeUserWaitChange}
+          onNodeKindsChange={onNodeKindsChange}
+          onResetFilters={onResetFilters}
         />
       </Suspense>
     </FullWindowShell>

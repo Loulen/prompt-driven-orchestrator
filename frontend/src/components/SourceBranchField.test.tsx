@@ -568,10 +568,12 @@ describe("the fast-forward", () => {
     openSync();
     fireEvent.click(screen.getByTestId("branch-sync-ff"));
 
-    const popover = await screen.findByTestId("branch-sync-popover");
-    // The popover is already open before the refusal lands: wait for the copy,
-    // not for the element (flaked under full-suite load otherwise).
-    await waitFor(() => expect(popover).toHaveTextContent("checked out in another worktree"));
+    // Wait for the REFUSAL, not for the popover: the popover was already open
+    // when the click happened, so finding it proves nothing and the assertions
+    // below would race the fast-forward promise (observed flaking under load).
+    await screen.findByTestId("branch-sync-ff-reason");
+    const popover = screen.getByTestId("branch-sync-popover");
+    expect(popover).toHaveTextContent("checked out in another worktree");
     expect(popover).toHaveTextContent("…/2026-x/worktree");
     // Retrying changes nothing until someone switches that worktree: offering it
     // would be an invitation to a loop.

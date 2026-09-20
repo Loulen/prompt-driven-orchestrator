@@ -61,6 +61,7 @@ mod pty_bridge;
 mod reap_policy;
 pub(crate) mod recovery;
 pub(crate) mod repo_edit_refusal;
+mod repo_scaffold;
 pub(crate) mod restart_verdict;
 pub(crate) mod retry_verdict;
 mod review_comments;
@@ -3732,6 +3733,39 @@ async fn repos_validate(Query(q): Query<RepoPathQuery>) -> Response {
     }
 }
 
+#[derive(Deserialize)]
+struct CreateRepoRequest {
+    parent: String,
+    name: String,
+    #[serde(default)]
+    files: Vec<repo_scaffold::ScaffoldFile>,
+}
+
+/// POST /repos/create — make a git repository at `<parent>/<name>` (#824).
+///
+/// A generic verb with no tour vocabulary in it (ADR-0071 §3): the *First run*
+/// tour calls it with `/tmp` + `pdo-tutorial`, and that is the only thing tying
+/// the two together. Idempotent on an existing repository, refuses by name on an
+/// existing non-repository — see `repo_scaffold` for the three outcomes.
+///
+/// Deliberately **not** recorded in recent repositories: that list is built from
+/// `run_started` events, and a scaffolded repo has never run anything. The user
+/// browses to it once, and it joins the recents the moment a Run uses it.
+async fn repos_create(Json(req): Json<CreateRepoRequest>) -> Response {
+    match repo_scaffold::create_repo(&req.parent, &req.name, &req.files) {
+        Ok(outcome) => Json(serde_json::json!({
+            "path": outcome.path.to_string_lossy(),
+            "created": outcome.created,
+        }))
+        .into_response(),
+        Err(msg) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": msg })),
+        )
+            .into_response(),
+    }
+}
+
 async fn repos_recent(State(state): State<Arc<AppState>>) -> Response {
     let rows: Result<Vec<(String,)>, _> = sqlx::query_as(
         "SELECT payload FROM events \
@@ -5192,6 +5226,9 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/repos/fetch", post(repos_fetch))
         .route("/repos/fast-forward", post(repos_fast_forward))
         .route("/repos/validate", get(repos_validate))
+        // #824 — create a repository from a parent + a name + initial files. The
+        // only write-a-new-repo verb in the crate; knows nothing about tours.
+        .route("/repos/create", post(repos_create))
         .route("/repos/recent", get(repos_recent))
         .route("/repos/provisioning/preview", post(preview_provisioning))
         // Filesystem explorer — not repo-specific (it also serves the settings
@@ -34634,6 +34671,78 @@ edges:
             .unwrap();
 
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// #824 — `POST /repos/create` over the real router: the three outcomes of
+    /// `repo_scaffold` as a client sees them (200 + created, 200 + reused, 400 +
+    /// the refusal sentence). The verb's own semantics are covered unit-side; this
+    /// is the wire contract the tour reads.
+    #[tokio::test]
+    async fn repos_create_creates_reuses_and_refuses() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state_with_dir(tmp.path()).await;
+        let parent = tmp.path().join("parent");
+        std::fs::create_dir(&parent).unwrap();
+
+        let body = serde_json::json!({
+            "parent": parent.to_string_lossy(),
+            "name": "pdo-tutorial",
+            "files": [{ "path": "notes.txt", "content": "hello\n" }],
+        })
+        .to_string();
+
+        let post = |body: String| {
+            let app = build_router(state.clone());
+            async move {
+                app.oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/repos/create")
+                        .header("content-type", "application/json")
+                        .body(Body::from(body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+            }
+        };
+        let read = |resp: Response| async move {
+            let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()
+        };
+
+        let resp = post(body.clone()).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let created = read(resp).await;
+        assert_eq!(created["created"], true);
+        assert_eq!(
+            created["path"],
+            parent.join("pdo-tutorial").to_string_lossy().as_ref()
+        );
+        assert!(parent.join("pdo-tutorial").join("notes.txt").exists());
+
+        // Second call: same path, no second commit.
+        let resp = post(body).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(read(resp).await["created"], false);
+
+        // A folder that is not a repository is refused, by name.
+        std::fs::create_dir(parent.join("occupied")).unwrap();
+        let resp = post(
+            serde_json::json!({ "parent": parent.to_string_lossy(), "name": "occupied" })
+                .to_string(),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            read(resp).await["error"],
+            format!(
+                "{} exists and is not a git repository",
+                parent.join("occupied").display()
+            )
+        );
     }
 
     #[tokio::test]

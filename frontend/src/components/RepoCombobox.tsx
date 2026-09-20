@@ -10,6 +10,14 @@ interface Props {
   repoValidating: boolean;
   repoError: string | null;
   borderClass: string;
+  /**
+   * Open the explorer HERE instead of at the field's current value (#824). For a
+   * host walking someone to a repository they have never seen — it is not in
+   * recents, so the field cannot point at it and the folder would have to be
+   * climbed to by hand. Read when the explorer opens; changing it later does not
+   * move an open explorer, which would fight the user's own navigation.
+   */
+  explorerStartPath?: string;
 }
 
 function splitPath(fullPath: string): { folder: string; parent: string } {
@@ -30,6 +38,7 @@ export default function RepoCombobox({
   repoValidating,
   repoError,
   borderClass,
+  explorerStartPath,
 }: Props) {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -182,7 +191,14 @@ export default function RepoCombobox({
           // Open-at (Option B): a current absolute value opens at that dir (usually the
           // last repo, pre-filled from recents); else the backend default. A stale value
           // degrades gracefully — the backend clamps a non-existent path to the default.
-          startPath={value.trim().startsWith("/") ? value.trim() : undefined}
+          // An explicit override from the host wins over both (#824).
+          startPath={
+            explorerStartPath?.trim().startsWith("/")
+              ? explorerStartPath.trim()
+              : value.trim().startsWith("/")
+                ? value.trim()
+                : undefined
+          }
           onPick={onChange}
           onClose={() => setExplorerOpen(false)}
         />

@@ -16,6 +16,24 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.95.0
+**Tour *First run* et dépôt d'entraînement** (#824, spec #821, story #816, ADR-0071).
+
+- Nouveau verbe daemon `POST /repos/create` : crée un dépôt git minimal dans un dossier parent
+  (un commit sur `main`, `README.md` et `notes.txt`), renvoie le même chemin sans nouveau commit
+  s'il existe déjà, et refuse par un message nommé un dossier existant qui n'est pas un dépôt.
+  Le dépôt créé n'entre pas dans les récents.
+- Le tour **First run** (Settings › Tutorials) est actif : à l'entrée il crée — ou réutilise —
+  `/tmp/pdo-tutorial` et le pipeline `tutorial-interactive`, puis guide jusqu'au Start : nom du
+  Run, explorateur ouvert sur `/tmp` avec l'entrée pointée et défilée à l'écran, pipeline, profil
+  Default, les deux skills PDO, le prompt, puis le lancement. Un geste hors cible n'avance pas.
+- Une carte de fin nomme le Run créé, prévient de la question de confiance du harness dans
+  `/tmp/pdo-tutorial`, et enchaîne sur *First pipeline*. Un Start refusé s'arrête proprement en
+  citant la raison du daemon, formulaire intact, sans Run créé.
+- Moteur de tours : une cible qui disparaît transitoirement (dossier replié, filtre) n'abandonne
+  plus le tour ; le Projecteur se rabat sur le conteneur le temps qu'elle revienne.
+- Sélecteur de skills : le nom d'une ligne bascule la skill, plus seulement sa case.
+
 ## 1.94.0
 **Mode tutoriel : Projecteur, moteur de tours et tour *First pipeline*** (#823, spec #821, story #816, ADR-0071).
 
@@ -39,40 +57,6 @@ contribution sont dans `CONTRIBUTING.md`.
   estimée, une coche sur les tours terminés et un lien « Reset tutorial memory ». Coches et
   proposition de bienvenue vivent dans le navigateur, comme le thème — jamais côté daemon.
 - Le tour *First run* est annoncé et grisé : il arrive avec #824.
-
-## 1.93.0
-**Filtres par onglet, mode de durée Total/Active/Waiting, couverture, réglages éphémères** (#819, story #817).
-
-- La barre de titre de Stats ne garde que la période (et Pricing details sur Cost). Chaque onglet
-  porte sa **bande de filtres** avec sa cohorte « completed runs only » et son propre défaut :
-  activée sur Performance, désactivée sur Overview / Sessions / Triggers et sur Cost. Basculer la
-  cohorte ne refetch que l'onglet concerné.
-- Sur Performance, la bascule « exclude user wait » devient un contrôle à trois positions
-  **Total / Active / Waiting** (défaut Active). Cartes, en-tête de colonne, box-plots, libellés et
-  tri suivent le mode, côté client, sans refetch. En Active et Waiting, un « i » donne
-  « n exécutions sur N ont déclaré au moins une attente ».
-- **Cassant côté navigateur** : les réglages Stats sont **éphémères**. Plus aucune clé
-  `pdo.stats.*` n'est lue ni écrite (les anciennes restent inertes dans `localStorage`) ; l'état vit
-  tant que Stats est montée, rouvrir réinitialise. Échelles indépendantes activées par défaut.
-  Plus de pastille de déviation sur le rail.
-- Daemon, additif : `GET /stats/performance` porte `wait_duration` à côté de `duration` et
-  `active_duration` à chaque niveau (Total = Active + Waiting par exécution), plus
-  `waited_executions` et `executions` pour la couverture.
-
-## 1.92.0
-**L'archivage d'un Run parent entraîne ses Runs enfants terminés** (#815).
-
-- `cleanup_run` archive le Run **et ses descendants terminés** (enfants, petits-enfants, résolus
-  par `parent_run_id`), petits-enfants d'abord, par le même chemin de démontage : worktrees et
-  dossiers de run des enfants sont réclamés avec le parent. Les descendants déjà archivés sont
-  ignorés sans erreur ; la réponse `200` liste les `archived_children`.
-- Un descendant **vivant** (running, awaiting-user, paused) n'est jamais archivé en cascade : la
-  requête est refusée en `409` avec la liste `live_children` et rien n'est touché. Arrêter
-  l'enfant d'abord.
-- Dans l'UI, la boîte de confirmation Cleanup compte les enfants terminés qui partiront avec le
-  parent et prévient quand un enfant encore vivant fera refuser la demande par le daemon.
-- `pdo reap` : un parent moissonné emporte ses enfants terminés même plus jeunes que leur TTL ;
-  un parent dont le sous-arbre tourne encore reste listé jusqu'à ce qu'il se pose.
 
 ## 1.91.0
 **Durée active hors attente déclarée, filtre par genre de nœud, runs terminés seulement** (#810, story #808).

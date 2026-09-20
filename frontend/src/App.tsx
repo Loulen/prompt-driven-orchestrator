@@ -286,9 +286,9 @@ export default function App() {
   }, []);
   // #823 — guided tours. The controller lives here because two surfaces start a
   // tour (the welcome modal and Settings › Tutorials) and a tour outlives both.
-  // `runs.length` is passed in rather than fetched: the tour observes what the UI
-  // already knows (ADR-0071 §3).
-  const tour = useTour(runs.length);
+  // The run list is passed in rather than fetched: the tour observes what the UI
+  // already knows (ADR-0071 §3) — how many Runs there are, and which is newest.
+  const tour = useTour(runs);
   const [tourOffered, setTourOffered] = useState(loadTourOffered);
   const showWelcome = shouldOfferWelcome({
     offered: tourOffered,
@@ -309,8 +309,10 @@ export default function App() {
   const startFullTour = useCallback(() => {
     markTourOffered();
     setTourOffered(true);
-    const [first] = fullTourSequence();
-    if (first) tour.start(first);
+    // #824: two tours exist now, so « Full tour » finally means a sequence. The
+    // rest of the chain rides along, and each end card's primary runs the next.
+    const [first, ...rest] = fullTourSequence();
+    if (first) tour.start(first, rest);
   }, [tour]);
   // #386: how the always-mounted New Run modal should open. Drives a one-shot
   // reset on every reopen so a dismissed "Edit trigger" can't leak into a fresh
@@ -1066,6 +1068,10 @@ export default function App() {
         onManageStagingProfiles={() =>
           openSettings({ category: "sandbox", section: "staging-profiles" })
         }
+        // #824: the one thing a tour cannot do by observing — the training repo is
+        // not in recents (nothing has run in it), so the step that says "click the
+        // magnifier" also says where it opens. Undefined outside a tour.
+        repoExplorerStartPath={tour.view?.step?.explorerStart}
       />
       <SettingsSurface
         // #717: keys MUST be namespaced per sibling — two always-mounted siblings sharing a

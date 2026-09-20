@@ -94,6 +94,15 @@ export default function AgentControl({
       <button
         type="button"
         data-testid={testId}
+        // #824: what is chosen, machine-readable. The visible label is the
+        // profile's NAME, which is renameable and sits next to a combination
+        // summary in the same text node — nothing an observer can match on. The
+        // id is fixed forever, so `profile:default` says exactly one thing.
+        data-choice={
+          choice?.mode === "profile"
+            ? `profile:${choice.profile_id}`
+            : (choice?.mode ?? "inherit")
+        }
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
         className={`flex w-full items-center gap-2 rounded border bg-bg-3 px-2 py-1.5 text-left ${
@@ -179,6 +188,7 @@ export default function AgentControl({
             <>
               {allowInherit && (
                 <ChoiceRow
+                  testId={`${testId}-choice-inherit`}
                   name="Inherit"
                   summary={combinationLabel(inherited)}
                   selected={!choice || choice.mode === "inherit"}
@@ -192,6 +202,10 @@ export default function AgentControl({
               {profiles.map((profile) => (
                 <ChoiceRow
                   key={profile.id}
+                  // #824: one stable testid per profile, keyed on the id rather
+                  // than the (renameable) name — a guided tour has to be able to
+                  // aim at « Default », and the reserved id is the fixed part.
+                  testId={`${testId}-choice-${profile.id}`}
                   name={profile.name}
                   summary={combinationLabel(profile)}
                   selected={choice?.mode === "profile" && choice.profile_id === profile.id}
@@ -203,6 +217,7 @@ export default function AgentControl({
               ))}
               <div className="mt-1 border-t border-line pt-1">
                 <ChoiceRow
+                  testId={`${testId}-choice-custom`}
                   name="Custom…"
                   summary="A combination for this tier only"
                   selected={choice?.mode === "custom"}
@@ -228,14 +243,16 @@ function ChoiceRow({
   summary,
   selected,
   onClick,
+  testId,
 }: {
   name: string;
   summary: string;
   selected: boolean;
   onClick: () => void;
+  testId?: string;
 }) {
   return (
-    <button type="button" onClick={onClick} className="relative block w-full rounded px-1.5 py-1 text-left hover:bg-bg-3">
+    <button type="button" data-testid={testId} onClick={onClick} className="relative block w-full rounded px-1.5 py-1 text-left hover:bg-bg-3">
       <span className={`block font-medium ${selected ? "text-acc" : "text-fg"}`} style={{ fontSize: 10.5 }}>{name}</span>
       <span className="block font-mono text-fg-4" style={{ fontSize: 9 }}>{summary}</span>
       {selected && <Check size={12} className="absolute right-1.5 top-2 text-acc" />}

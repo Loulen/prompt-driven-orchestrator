@@ -39,6 +39,13 @@ export interface TourAppState {
   libraryPipelineIds: string[];
   /** How many Runs this instance has (the welcome-modal rule reads it too). */
   runCount: number;
+  /**
+   * The newest Run in the list, or `null` on a Run-less instance (#824). The
+   * *First run* tour ends on a recap of the Run the user just launched, and the
+   * modal that held its name is closed by then — so the name has to come from the
+   * list, which the UI has loaded anyway (ADR-0071 §3).
+   */
+  latestRun: { id: string; name: string } | null;
 }
 
 /**
@@ -47,6 +54,13 @@ export interface TourAppState {
  */
 export interface TourObservation {
   app: TourAppState;
+  /**
+   * The app state as it was the moment the tour started (#824). "Has something
+   * appeared *because of this tour*" is not answerable from the present alone: an
+   * instance with nine Runs already has `runCount > 0` before the user clicks
+   * anything, so *First run*'s last step compares against this instead.
+   */
+  baseline: TourAppState;
   /** Does this CSS selector resolve right now? */
   present: (selector: string) => boolean;
   /**
@@ -56,6 +70,12 @@ export interface TourObservation {
    * to blur the field first, which is precisely the gesture `Next` is meant to be.
    */
   value: (selector: string) => string | null;
+  /**
+   * The rendered text of an element (#824). Read by a step that must quote the app
+   * back at the user — the daemon's refusal under a Launch button is prose the
+   * modal owns, and a tour that paraphrased it would be inventing a reason.
+   */
+  text: (selector: string) => string | null;
 }
 
 export interface TourStep {
@@ -65,12 +85,18 @@ export interface TourStep {
   /** Two sentences max (CONTEXT.md § « Étape de tour »). */
   body: string;
   /**
-   * The step's target(s), resolved from the observed state because most of them
-   * only exist once the user has created the node they point at. The Projecteur's
-   * hole is the union of their bounding boxes; an empty list means "missing", which
-   * is what eventually stops the tour.
+   * The step's target(s), resolved from the observation because most of them only
+   * exist once the user has created the node they point at. The Projecteur's hole
+   * is the union of their bounding boxes; an empty list means "missing", which is
+   * what eventually stops the tour.
+   *
+   * It reads the DOM too, not just the app state, so **one** step can re-aim as
+   * the user works: "choose `tutorial-interactive`" points at the menu's trigger
+   * while the menu is shut and at the option once it is open (#824). Two steps for
+   * that would spend a card on "now open this menu", and a tour is nine cards long
+   * because each one is an idea.
    */
-  target: (app: TourAppState) => string[];
+  target: (o: TourObservation) => string[];
   /** How the failure card names what the tour was waiting for. */
   waitingFor: string;
   /** One extra sentence on the failure card, in the user's terms. */
@@ -100,7 +126,83 @@ export interface TourStep {
    * there is nothing to observe, so the popover shows an always-enabled `Next`.
    */
   done?: (o: TourObservation) => boolean;
+  /**
+   * A live checklist under the body (#824), for the one step that asks for **two**
+   * gestures at once (tick both PDO skills). Splitting it in two steps would spend
+   * a whole card on "now tick the other one"; showing nothing would make the first
+   * tick look like it did nothing. This says what happened.
+   */
+  checklist?: (o: TourObservation) => TourChecklistItem[];
+  /**
+   * Open the filesystem explorer at this path while the step is current (#824),
+   * instead of at the field's own value. The tour cannot type for the user
+   * (ADR-0071 §2), so an explorer that had to be navigated to `/tmp` by hand would
+   * be four folder clicks of nothing.
+   */
+  explorerStart?: string;
+  /**
+   * The step is **refused** rather than merely unfinished: the app is showing a
+   * reason the user must read (a daemon that would not launch the Run). Returns
+   * that reason verbatim, or `null` while nothing is wrong.
+   *
+   * Checked before `done`, so a refusal cannot be raced past by a condition that
+   * happens to hold. A refused tour stops on its own card and is **not** marked
+   * done — the user's form is left exactly as they filled it.
+   */
+  refused?: (o: TourObservation) => string | null;
+  /** Headline of the refusal card, e.g. "The Run could not be launched". */
+  refusalTitle?: string;
+  /** One sentence under the quoted reason, in the user's terms. */
+  refusalHint?: string;
 }
+
+export interface TourChecklistItem {
+  label: string;
+  done: boolean;
+}
+
+/**
+ * One thing a tour needs to *exist* before its first step can point at anything
+ * (#824) — a training repository, a pipeline in the Library. Run while the intro
+ * card is on screen, in parallel, and every one of them must be **idempotent**:
+ * replaying the tour has to be free, and a user who edited what a previous run
+ * created keeps their edit.
+ *
+ * The daemon verbs behind these know nothing about tours (ADR-0071 §3); `run` is
+ * where a tour's content binds one to its own arguments.
+ */
+export interface TourPreparation {
+  id: string;
+  /** Shown while it is in flight, e.g. "Pipeline tutorial-interactive in the Library…". */
+  pending: string;
+  /** Shown once it has answered, e.g. "Training repository /tmp/pdo-tutorial ready". */
+  ready: string;
+  /** Headline when THIS one refuses, e.g. "The training repository could not be created". */
+  failureTitle: string;
+  /** Idempotent. Rejects with the daemon's own sentence, which is quoted verbatim. */
+  run: () => Promise<void>;
+}
+
+/**
+ * The card a tour opens on, before any target is lit (#824). It is where a tour
+ * says what it is about to do, and — when it has preparations — where it waits
+ * for them: `Start` stays dead until every one has answered, because a tour that
+ * began half-prepared would fail on a step whose target was never created.
+ */
+export interface TourIntro {
+  /** Headline, e.g. "Launch your first Run". */
+  title: string;
+  /** What the tour will do, in the user's terms. */
+  body: string;
+  /** The reassurance under the checklist ("Nothing here touches your own repositories."). */
+  footnote: string;
+  prepare: TourPreparation[];
+}
+
+/** End-card bullets, possibly derived from what the tour ended up observing. */
+export type TourRecap =
+  | { label: string; text: string }[]
+  | ((app: TourAppState) => { label: string; text: string }[]);
 
 export interface TourDef {
   id: string;
@@ -111,21 +213,53 @@ export interface TourDef {
   /** Rough duration in minutes, shown next to Start. */
   minutes: number;
   steps: TourStep[];
+  /** The welcome card and its preparations. Absent → the tour starts on step 1. */
+  intro?: TourIntro;
   /** End card headline, e.g. "You built …". */
-  recapIntro: string;
+  recapIntro: string | ((app: TourAppState) => string);
   /** End card bullets: what the thing the user just built actually does. */
-  recap: { label: string; text: string }[];
+  recap: TourRecap;
+  /**
+   * End-card wording, when "done — Finish" is not what the moment is. *First run*
+   * ends on something that is *starting*, and its primary just gets out of the way.
+   */
+  outro?: {
+    /** Replaces "<Tour> — done". */
+    title?: string;
+    /** Replaces "Finish", e.g. "Open the Run". */
+    primaryLabel?: string;
+    /** A closing sentence under the bullets, pointing at what comes next. */
+    closing?: string;
+  };
 }
 
-export type TourPhase = "running" | "failed" | "finished";
+/** Resolve the two end-card fields, which a tour may make depend on what it saw. */
+export function recapIntroOf(tour: TourDef, app: TourAppState): string {
+  return typeof tour.recapIntro === "function" ? tour.recapIntro(app) : tour.recapIntro;
+}
+
+export function recapOf(tour: TourDef, app: TourAppState): { label: string; text: string }[] {
+  return typeof tour.recap === "function" ? tour.recap(app) : tour.recap;
+}
+
+export type TourPhase = "intro" | "running" | "failed" | "finished";
 
 export interface TourFailure {
   stepId: string;
   /** 1-based, so the card can say "step 15 of 33" without arithmetic. */
   stepNumber: number;
   total: number;
+  /**
+   * `missing` — the target never appeared, and the tour cannot go on.
+   * `refused` — the app said no, out loud; `reason` is its words (#824).
+   */
+  kind: "missing" | "refused";
   waitingFor: string;
   hint?: string;
+  /** Only on a refusal: the app's own sentence, quoted rather than paraphrased. */
+  reason?: string;
+  /** Only on a refusal: the headline that replaces "This step could not be completed". */
+  title?: string;
 }
 
 export interface TourRun {
@@ -144,6 +278,12 @@ export interface TourRun {
    */
   satisfiedOnEntry: boolean;
   failure: TourFailure | null;
+  /**
+   * The app state the machine last read. The end card needs it *after* the tour
+   * has stopped ticking, and by then the modal that held the Run's name is closed
+   * — so the recap reads this rather than a live observation.
+   */
+  observedApp: TourAppState;
 }
 
 /** A missing target stops the tour after this long, unless the step says otherwise. */
@@ -187,10 +327,30 @@ function enterStep(tour: TourDef, index: number, o: TourObservation): TourRun {
     missingSince: null,
     satisfiedOnEntry: step ? isStepDone(step, o) : false,
     failure: null,
+    observedApp: o.app,
   };
 }
 
+/**
+ * Start the tour. A tour with an {@link TourIntro} opens on its card instead of
+ * its first step — the card is where its preparations run, and where `Start` is.
+ */
 export function startTour(tour: TourDef, o: TourObservation): TourRun {
+  if (!tour.intro) return enterStep(tour, 0, o);
+  return {
+    tourId: tour.id,
+    phase: "intro",
+    index: 0,
+    missingSince: null,
+    satisfiedOnEntry: false,
+    failure: null,
+    observedApp: o.app,
+  };
+}
+
+/** The intro card's `Start`: leave the card and enter the first step. */
+export function beginSteps(tour: TourDef, run: TourRun, o: TourObservation): TourRun {
+  if (run.phase !== "intro") return run;
   return enterStep(tour, 0, o);
 }
 
@@ -227,7 +387,34 @@ export function skipStep(tour: TourDef, run: TourRun, o: TourObservation): TourR
 export function observeTour(tour: TourDef, run: TourRun, o: TourObservation, now: number): TourRun {
   if (run.phase !== "running") return run;
   const step = currentStep(tour, run);
-  if (!step) return { ...run, phase: "finished" };
+  if (!step) return { ...run, phase: "finished", observedApp: o.app };
+
+  // A refusal outranks everything, the condition included (#824). The app is
+  // saying no in prose; a tour that walked on because some other predicate went
+  // true would be talking over it.
+  const refusal = step.refused?.(o) ?? null;
+  if (refusal) {
+    return {
+      ...run,
+      phase: "failed",
+      observedApp: o.app,
+      failure: {
+        stepId: step.id,
+        stepNumber: run.index + 1,
+        total: tour.steps.length,
+        kind: "refused",
+        waitingFor: step.waitingFor,
+        hint: step.refusalHint,
+        reason: refusal,
+        title: step.refusalTitle,
+      },
+    };
+  }
+
+  // `observedApp` is refreshed on transitions only (`enterStep`, and the two
+  // failure branches), never on every tick: the state object is rebuilt each time
+  // it is read, so copying it here would make `observeTour` return a new run ten
+  // times a second and re-render the whole tour layer with it.
 
   if (isStepDone(step, o)) {
     const cleared = run.missingSince === null ? run : { ...run, missingSince: null };
@@ -238,7 +425,7 @@ export function observeTour(tour: TourDef, run: TourRun, o: TourObservation, now
     return goNext(tour, cleared, o);
   }
 
-  const selectors = step.target(o.app);
+  const selectors = step.target(o);
   const present = selectors.length > 0 && selectors.every((s) => o.present(s));
   if (present) return run.missingSince === null ? run : { ...run, missingSince: null };
 
@@ -249,10 +436,12 @@ export function observeTour(tour: TourDef, run: TourRun, o: TourObservation, now
       ...run,
       phase: "failed",
       missingSince,
+      observedApp: o.app,
       failure: {
         stepId: step.id,
         stepNumber: run.index + 1,
         total: tour.steps.length,
+        kind: "missing",
         waitingFor: step.waitingFor,
         hint: step.failureHint,
       },

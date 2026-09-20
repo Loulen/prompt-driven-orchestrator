@@ -27,6 +27,7 @@ const EMPTY_APP: TourAppState = {
   dirty: false,
   libraryPipelineIds: [],
   runCount: 0,
+  latestRun: null,
 };
 
 function obs(
@@ -36,8 +37,10 @@ function obs(
 ): TourObservation {
   return {
     app: { ...EMPTY_APP, ...app },
+    baseline: EMPTY_APP,
     present: (selector) => present.includes(selector),
     value: (selector) => values[selector] ?? null,
+    text: (selector) => values[selector] ?? null,
   };
 }
 
@@ -211,6 +214,7 @@ describe("a target that never appears", () => {
     run = observeTour(tour, run, obs([]), 1_000 + DEFAULT_TARGET_TIMEOUT_MS);
     expect(run.phase).toBe("failed");
     expect(run.failure).toEqual({
+      kind: "missing",
       stepId: "prompt",
       stepNumber: 1,
       total: 2,

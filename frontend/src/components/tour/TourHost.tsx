@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import Projecteur from "./Projecteur";
 import TourPopover from "./TourPopover";
-import { TourEndCard, TourFailedCard } from "./TourCards";
+import { TourEndCard, TourFailedCard, TourIntroCard } from "./TourCards";
 import WelcomeModal from "./WelcomeModal";
 import { findTour, fullTourSequence } from "../../lib/tours";
-import { markTourOffered } from "../../lib/tourMemory";
+import { markTourDone, markTourOffered } from "../../lib/tourMemory";
 import type { TourController } from "../../hooks/useTour";
 
 /**
@@ -35,7 +35,7 @@ const ESC_OWNERS =
   '[role="menu"], [role="listbox"], [role="dialog"], [data-slot="dropdown-menu-content"], [data-testid="new-pipeline-dialog"]';
 
 export default function TourHost({ controller, showWelcome, onWelcomeAnswered, onOpenTutorials }: Props) {
-  const { view, start, quit, next, skip, finish } = controller;
+  const { view, start, quit, next, skip, finish, begin, retryPrep } = controller;
   const [quitNotice, setQuitNotice] = useState(false);
 
   const startById = useCallback(
@@ -83,8 +83,8 @@ export default function TourHost({ controller, showWelcome, onWelcomeAnswered, o
           onStartFullTour={() => {
             markTourOffered();
             onWelcomeAnswered();
-            const [first] = fullTourSequence();
-            if (first) start(first);
+            const [first, ...rest] = fullTourSequence();
+            if (first) start(first, rest);
           }}
           onStartTour={(tourId) => {
             markTourOffered();
@@ -98,6 +98,22 @@ export default function TourHost({ controller, showWelcome, onWelcomeAnswered, o
         />
       )}
 
+      {/* #824 — the card a tour opens on, while its preparations run. Nothing is
+          targeted yet, so the whole window dims. */}
+      {view && view.run.phase === "intro" && view.prep && (
+        <Projecteur hole={null}>
+          <TourIntroCard
+            tour={view.tour}
+            prep={view.prep}
+            onStart={begin}
+            onRetry={retryPrep}
+            // Leaving here is leaving before step 1: nothing to notice, and
+            // whatever the preparations created is idempotent and stays.
+            onClose={quit}
+          />
+        </Projecteur>
+      )}
+
       {view && view.run.phase === "running" && view.step && (
         <Projecteur hole={view.hole} zone={view.zone}>
           <TourPopover
@@ -108,6 +124,7 @@ export default function TourHost({ controller, showWelcome, onWelcomeAnswered, o
             hole={view.hole}
             ready={view.ready}
             awaitingConfirm={view.awaitingConfirm}
+            checklist={view.checklist}
             onNext={next}
             onSkip={skip}
             onQuit={quitWithNotice}
@@ -119,11 +136,16 @@ export default function TourHost({ controller, showWelcome, onWelcomeAnswered, o
         <Projecteur hole={null}>
           <TourEndCard
             tour={view.tour}
+            app={view.run.observedApp}
+            nextTour={view.nextTour}
             onFinish={finish}
             onStartTour={(tourId) => {
-              // Finishing this one before chaining: the checkmark belongs to the
-              // tour that was actually completed, not to the one started next.
-              finish();
+              // The checkmark belongs to the tour that was actually completed,
+              // not to the one started next. Deliberately NOT `finish()`: that
+              // also advances a pending Full-tour chain, so picking a tour from
+              // the list would start two at once. Picking one by hand leaves the
+              // sequence, which `start` does by taking no chain.
+              markTourDone(view.tour.id);
               startById(tourId);
             }}
           />

@@ -10,6 +10,10 @@
 //
 // The fix namespaces the keys (`settings-N` / `stats-N`); these tests fail if the
 // colliding sibling keys ever come back.
+//
+// The harness below — the real App with both full-window surfaces and a complete
+// api fixture — also carries the other host-level contracts of those two surfaces
+// (see the #819 block at the bottom).
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -309,6 +313,8 @@ vi.mock("./api", () => {
         by_pipeline: [],
         by_model: [],
         infrastructure: [],
+        waited_executions: 0,
+        executions: 0,
       }),
       syncCostPrices: vi.fn().mockResolvedValue({
         noop: true,
@@ -421,5 +427,35 @@ describe("App — Settings surface closes (#717 sibling-key regression)", () => 
     await openSettings(user);
     await user.keyboard("{Escape}");
     await expectClosed();
+  }, 20_000);
+});
+
+// ---------------------------------------------------------------------------
+// #819 — « Réglages de Stats éphémères », through the real App. StatsModal's own
+// tests pin the rule at its seam; this one pins the path a user walks, because
+// the rule was first shipped broken by the host alone: the surface kept its state
+// behind `open={false}`, and the chart icon reopened Stats exactly where it was
+// closed — deviated period included.
+// ---------------------------------------------------------------------------
+
+describe("App — Stats reopens on its defaults (#819)", () => {
+  it("forgets a deviated period between two opens", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByTestId("open-stats"));
+    await screen.findByTestId("stats-modal");
+    expect(screen.getByTestId("stats-period-30d")).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(screen.getByTestId("stats-period-7d"));
+    expect(screen.getByTestId("stats-period-7d")).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(screen.getByRole("button", { name: "Close stats" }));
+    await waitFor(() => expect(screen.queryByTestId("stats-modal")).not.toBeInTheDocument());
+
+    await user.click(screen.getByTestId("open-stats"));
+    await screen.findByTestId("stats-modal");
+    expect(screen.getByTestId("stats-period-30d")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("stats-period-7d")).toHaveAttribute("aria-pressed", "false");
   }, 20_000);
 });

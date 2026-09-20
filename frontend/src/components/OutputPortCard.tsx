@@ -13,6 +13,12 @@ const PORT_TYPE_OPTIONS: { value: PortType; label: string }[] = [
 
 interface OutputPortCardProps {
   port: PortDef;
+  /**
+   * #823: the card's slot in the Outputs list. `output-port-card-<name>` moves
+   * with every keystroke in the name field, so a tour that asks the user to
+   * RENAME a port could not keep pointing at it. The slot does not move.
+   */
+  index?: number;
   highlighted?: boolean;
   onUpdate: (updates: Partial<PortDef>) => void;
   onRemove: () => void;
@@ -23,6 +29,7 @@ interface OutputPortCardProps {
 
 export default function OutputPortCard({
   port,
+  index,
   highlighted,
   onUpdate,
   onRemove,
@@ -63,6 +70,7 @@ export default function OutputPortCard({
   return (
     <div
       data-testid={`output-port-card-${port.name}`}
+      data-output-index={index}
       className={`op-tab${collapsed ? " collapsed" : ""}`}
     >
       <div className="op-head">

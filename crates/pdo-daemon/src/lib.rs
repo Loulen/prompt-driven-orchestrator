@@ -7551,6 +7551,14 @@ async fn create_pipeline(
     let scaffold = format!(
         "name: {safe_name}\nversion: \"1.0\"\n\nvariables: {{}}\n\nnodes:\n  - id: start\n    name: Start\n    type: start\n    outputs:\n      - name: user_prompt\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\n\nedges: []\n"
     );
+    // #823: every other handler that writes a pipeline file marks the write as its
+    // own; this one never did, so the watcher's debounce (1 s) re-announced the
+    // brand-new file as an EXTERNAL change. A client that had already opened the
+    // pipeline — which is exactly what the New Pipeline dialog does — and started
+    // editing it within that second was then shown a conflict dialog against a
+    // document nobody else had touched. The client already knows about this file:
+    // it asked for it.
+    mark_self_write(&state.recent_writes, &path);
     let write_result = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -34279,6 +34287,41 @@ edges:
         assert!(yaml_path.exists());
         let content = std::fs::read_to_string(&yaml_path).unwrap();
         assert!(content.contains("name: new-pipeline"));
+    }
+
+    /// #823 — the file a client just asked us to create is not an external change.
+    ///
+    /// Without the `mark_self_write`, the watcher's 1 s debounce re-announced the
+    /// brand-new YAML as `pipeline_changed`, and a client that had already opened
+    /// it and started editing (what the New Pipeline dialog does) was shown a
+    /// conflict against a document nobody else had touched. The assertion is on the
+    /// suppression map the watcher consults, which is the whole mechanism.
+    #[tokio::test]
+    async fn create_pipeline_marks_its_own_write() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state_with_dir(tmp.path()).await;
+        let app = build_router(state.clone());
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/pipelines")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name": "fresh"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+
+        let yaml_path = tmp.path().join(".pdo").join("pipelines").join("fresh.yaml");
+        let guard = state.recent_writes.lock().unwrap();
+        assert!(
+            guard.contains_key(&yaml_path),
+            "the created pipeline must be recorded as a self-write, else the \
+             watcher re-announces it as an external change",
+        );
     }
 
     #[tokio::test]

@@ -48,6 +48,7 @@ import { announceSkillTiersChanged } from "../hooks/useSkillTiers";
 import { useScrollSpy } from "../hooks/useScrollSpy";
 import AgentProfilesPanel from "./AgentProfilesPanel";
 import StagingProfilesPanel from "./StagingProfilesPanel";
+import TutorialsSection from "./tour/TutorialsSection";
 import {
   SETTINGS_CATEGORIES,
   findCategory,
@@ -95,6 +96,10 @@ interface Props {
   onOpenChangelog?: () => void;
   /** #699: Version & update › « Update » — the host owns the confirm and the waiting flow. */
   onRequestUpdate?: () => void;
+  /** #823: Tutorials › Start / Replay. Fired AFTER this surface has closed. */
+  onStartTour?: (tourId: string) => void;
+  /** #823: Tutorials › Full tour. Fired AFTER this surface has closed. */
+  onStartFullTour?: () => void;
 }
 
 /** Advisory ceiling: caps above this enter the tmux-server-collapse zone
@@ -258,6 +263,8 @@ export default function SettingsSurface({
   onOpenStats,
   onOpenChangelog,
   onRequestUpdate,
+  onStartTour,
+  onStartFullTour,
 }: Props) {
   const { settings, settled, save, refresh } = useSettings(open);
   const { profiles: agentProfiles, refresh: refreshAgentProfiles } = useAgentProfiles(open);
@@ -283,6 +290,8 @@ export default function SettingsSurface({
   const [confirmClose, setConfirmClose] = useState(false);
   const saveButtonRef = useRef<HTMLButtonElement>(null);
   const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** #823 — a Tutorials Start waiting for this surface to actually close. */
+  const pendingTour = useRef<(() => void) | null>(null);
 
   useEffect(
     () => () => {
@@ -465,12 +474,29 @@ export default function SettingsSurface({
     setConfirmClose(false);
     setSaveState({ status: "idle" });
     onClose();
+    // #823: a tour parked by `startTourAfterClose` runs once the surface is
+    // actually gone — a Projecteur aiming at the app under a full-window
+    // Settings would point at nothing.
+    const parked = pendingTour.current;
+    pendingTour.current = null;
+    parked?.();
   };
 
   /** ✕, Cancel, Escape: guarded by the dirty draft (story 16). */
   const requestClose = () => {
     if (isDirty) setConfirmClose(true);
     else closeNow();
+  };
+
+  /**
+   * #823 — Tutorials › Start / Replay. The tour goes through the SAME dirty guard
+   * as every other exit: a half-edited instance form is not something to drop
+   * because the reader clicked "Replay". Cancelling the confirm cancels the tour
+   * too, which is why the parked action is cleared on the way out either way.
+   */
+  const startTourAfterClose = (run: () => void) => {
+    pendingTour.current = run;
+    requestClose();
   };
 
   // Escape order: tooltip (Radix, before us) → skill bank if open → confirm-close if dirty
@@ -777,6 +803,14 @@ export default function SettingsSurface({
                   active={open}
                   onOpenChangelog={onOpenChangelog}
                 />
+                {/* #823 — guided tours. Every entry closes this surface first:
+                    a tour points at the app, which is underneath it. */}
+                <Section section={item.sections[4]}>
+                  <TutorialsSection
+                    onStartTour={(tourId) => startTourAfterClose(() => onStartTour?.(tourId))}
+                    onStartFullTour={() => startTourAfterClose(() => onStartFullTour?.())}
+                  />
+                </Section>
               </>
             )}
 
@@ -1126,7 +1160,11 @@ export default function SettingsSurface({
         <ConfirmCloseDialog
           rollup={rollup}
           saving={saveState.status === "saving"}
-          onKeep={() => setConfirmClose(false)}
+          onKeep={() => {
+            setConfirmClose(false);
+            // Staying also cancels a tour parked by Tutorials (#823).
+            pendingTour.current = null;
+          }}
           onDiscard={closeNow}
           onSaveAndClose={async () => {
             const ok = await handleSave();
@@ -1303,6 +1341,15 @@ function Section({ section, children }: { section: SettingsSection; children: Re
               title="Each edit is written when you make it. The Save button below does not apply here."
             >
               saves as you go
+            </span>
+          )}
+          {section.deviceLocal && (
+            <span
+              className="rounded-full border border-acc-border bg-acc-bg px-2 py-0.5 font-normal text-acc"
+              style={{ fontSize: "9.5px" }}
+              data-testid={`settings-section-${section.id}-device-local`}
+            >
+              Device-local · saved immediately
             </span>
           )}
         </h3>

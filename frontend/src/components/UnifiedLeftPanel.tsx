@@ -902,6 +902,7 @@ export default function UnifiedLeftPanel({
             )}
             <button
               onClick={onNewRun}
+              data-testid="new-run-button"
               className={`${availableRepos.length > 0 ? "ml-1.5" : "ml-auto"} flex cursor-pointer items-center gap-1 rounded bg-acc px-1.5 py-0.5 font-medium text-on-acc transition-colors hover:bg-acc-dim`}
               style={{ fontSize: "10.5px" }}
             >
@@ -1151,6 +1152,7 @@ export default function UnifiedLeftPanel({
         </button>
         <button
           onClick={() => setShowNewModal(true)}
+          data-testid="new-pipeline-button"
           className="ml-1.5 grid h-5 w-5 cursor-pointer place-items-center rounded border border-line-strong bg-bg-3 text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg"
           title="New pipeline"
         >
@@ -1370,6 +1372,7 @@ function NewPipelineModal({ onClose }: { onClose: () => void }) {
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="my-pipeline"
+          data-testid="new-pipeline-name"
           className="mb-3 w-full rounded border border-line-strong bg-bg-3 px-2 py-1.5 text-fg outline-none focus:border-acc"
           autoFocus
           onKeyDown={(e) => e.key === "Enter" && handleCreate()}

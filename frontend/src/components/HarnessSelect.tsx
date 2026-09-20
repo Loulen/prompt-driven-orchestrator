@@ -12,8 +12,13 @@ import { cn } from "@/lib/utils";
 import type { HarnessCatalog, HarnessOption } from "../lib/harness";
 
 /** The resolved row's marker: an accent bar flush left and a check, both in the
- *  accent colour — the design's "this is what runs" cue (picker-simple.png). */
-function SelectedMarker() {
+ *  accent colour — the design's "this is what runs" cue (picker-simple.png).
+ *
+ *  Exported because the New Run pipeline menu (#822) is the same family of
+ *  dropdown and must wear the same marker; a second copy of these six lines is
+ *  exactly how two menus start looking subtly different. Rows that host it need
+ *  `relative pl-6` for the absolute positioning to land. */
+export function SelectedMarker() {
   return (
     <>
       <span

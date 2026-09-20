@@ -760,6 +760,44 @@ describe("UnifiedLeftPanel archived section (#136)", () => {
 // delete via the library store. The pre-fix code called removePipeline(id) with
 // no scope, which routed to DELETE /pipelines/{id} and destroyed the same-named
 // repo YAML + .prompts/ sidecar.
+/**
+ * #822: the three left-panel targets a guided tour aims at. They are the contract
+ * the tour tickets (#823-#825) build on — a rename must break a test here rather
+ * than a tour step nobody runs until the day it matters. Behaviour is unchanged:
+ * each assertion goes through the control and checks what it already did.
+ */
+describe("UnifiedLeftPanel — stable tour targets (#822)", () => {
+  it("names the New Run button, and it still opens a run", () => {
+    const onNewRun = vi.fn();
+    render(
+      <UnifiedLeftPanel
+        runs={[]}
+        selectedRunId={null}
+        onSelectRun={noop}
+        onNewRun={onNewRun}
+        libraryPipelines={[]}
+        onLibraryPipelinesChanged={noop}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("new-run-button"));
+    expect(onNewRun).toHaveBeenCalled();
+  });
+
+  it("names the new-pipeline button and the name field of the modal it opens", async () => {
+    renderPanel();
+    fireEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
+
+    fireEvent.click(screen.getByTestId("new-pipeline-button"));
+
+    const name = await screen.findByTestId("new-pipeline-name");
+    fireEvent.change(name, { target: { value: "tutorial-interactive" } });
+    expect(name).toHaveValue("tutorial-interactive");
+    // Unchanged behaviour: the name gates Create.
+    expect(screen.getByRole("button", { name: "Create" })).toBeEnabled();
+  });
+});
+
 describe("UnifiedLeftPanel pipeline delete", () => {
   const libEntry: PipelineListEntry = {
     id: "simple-bugfix",

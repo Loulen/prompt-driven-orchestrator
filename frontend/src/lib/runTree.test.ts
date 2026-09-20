@@ -4,6 +4,7 @@ import type { RunListEntry } from "../types";
 import {
   ancestorIds,
   buildRunTree,
+  cascadeImpact,
   filterRunTree,
   flattenAll,
   flattenVisible,
@@ -157,5 +158,39 @@ describe("flattenVisible", () => {
     expect(kidClosed).toEqual(["epic", "kid", "kid2", "orphan", "solo"]);
     const epicClosed = flattenVisible(forest, (id) => id !== "epic").map((n) => n.run.run_id);
     expect(epicClosed).toEqual(["epic", "orphan", "solo"]);
+  });
+});
+
+describe("cascadeImpact (#815)", () => {
+  const forest: RunListEntry[] = [
+    run("root", { status: "completed" }),
+    run("done", { parent_run_id: "root", status: "completed" }),
+    run("failed", { parent_run_id: "root", status: "failed" }),
+    run("gone", { parent_run_id: "root", status: "archived" }),
+    run("grand-done", { parent_run_id: "done", status: "skipped" }),
+    run("grand-live", { parent_run_id: "failed", status: "awaiting_user" }),
+    run("other-root", { status: "completed" }),
+    run("other-kid", { parent_run_id: "other-root", status: "completed" }),
+  ];
+
+  it("counts terminated and live descendants recursively, skipping archived ones", () => {
+    expect(cascadeImpact(forest, ["root"])).toEqual({ finished: 3, live: 1 });
+  });
+
+  it("does not count a descendant that is itself selected", () => {
+    expect(cascadeImpact(forest, ["root", "done"])).toEqual({ finished: 2, live: 1 });
+  });
+
+  it("is zero for a childless run and sums over several selected roots", () => {
+    expect(cascadeImpact(forest, ["other-kid"])).toEqual({ finished: 0, live: 0 });
+    expect(cascadeImpact(forest, ["root", "other-root"])).toEqual({ finished: 4, live: 1 });
+  });
+
+  it("survives a corrupted cycle", () => {
+    const loop: RunListEntry[] = [
+      run("a", { parent_run_id: "b", status: "completed" }),
+      run("b", { parent_run_id: "a", status: "completed" }),
+    ];
+    expect(cascadeImpact(loop, ["a"])).toEqual({ finished: 1, live: 0 });
   });
 });

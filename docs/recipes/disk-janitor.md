@@ -75,6 +75,17 @@ over it, and (unless `--count`/`--dry-run`) archives each selected Run with
 `$PDO_DAEMON_URL` (injected into every node session; falls back to the built-in
 default — set it explicitly for manual/prod use, e.g. `http://localhost:6160`).
 
+**Cascade (#815).** `cleanup_run` archives the run **and its terminated
+descendants** (children, grandchildren, …, resolved by `parent_run_id`),
+grandchildren first, through the same teardown path — so archiving a parent
+reclaims its children's worktrees and run dirs too. Already-archived descendants
+are skipped silently. A **live** descendant (running / awaiting-user / paused) is
+never archived by the cascade: the request is refused with `409` and a
+`live_children` list, and nothing is touched — stop the child first. The `200`
+body lists the `archived_children`. For `pdo reap` this means a reaped parent may
+take along terminal children younger than their own TTL (they belong to it), and a
+parent whose subtree still runs stays listed until it settles.
+
 **Graded TTL policy** (`reap_policy::ReapPolicy`, all overridable):
 
 | category | default TTL | flag | rationale |

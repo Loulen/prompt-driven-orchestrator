@@ -62,58 +62,8 @@ export function saveChildRunsExpanded(v: boolean): void {
 }
 
 /**
- * #811 — Stats › Performance box-plot reading preferences, « par navigateur,
- * comme le thème » (CONTEXT.md, « Niveau de zoom d'un box-plot »). Two keys
- * under the `pdo.stats.` namespace rather than one object: they are set from
- * two independent controls, and a corrupt half should not cost the other one.
- *
- * Stored as the bare word, not JSON: the value IS the vocabulary
- * (`full`/`fenced`/`box`, `shared`/`independent`), and a reader poking at
- * localStorage should see it as such.
+ * Stats keeps **no** per-browser preference (#819). The box-plot zoom and the
+ * axis mode used to live here under `pdo.stats.*`; they are now ephemeral like
+ * every other Stats setting — see `lib/statsFilters.ts`. Stale keys from an
+ * older build are left alone: never read, never written, never cleaned up.
  */
-export type StatsZoom = "full" | "fenced" | "box";
-export type StatsAxis = "shared" | "independent";
-
-const ZOOM_KEY = "pdo.stats.zoom";
-const AXIS_KEY = "pdo.stats.axis";
-
-const ZOOMS: readonly StatsZoom[] = ["full", "fenced", "box"];
-const AXES: readonly StatsAxis[] = ["shared", "independent"];
-
-/** Absent / unknown word → `"full"`: min–max whiskers, today's picture, so a
- *  fresh browser never opens on a cropped plot it did not ask for. */
-export function loadStatsZoom(): StatsZoom {
-  try {
-    const raw = localStorage.getItem(ZOOM_KEY);
-    return ZOOMS.find((zoom) => zoom === raw) ?? "full";
-  } catch {
-    return "full";
-  }
-}
-
-export function saveStatsZoom(zoom: StatsZoom): void {
-  try {
-    localStorage.setItem(ZOOM_KEY, zoom);
-  } catch {
-    // quota / disabled / private mode → in-memory only for this session
-  }
-}
-
-/** Absent / unknown word → `"shared"`: one axis per metric, so rows stay
- *  comparable until the reader asks otherwise. */
-export function loadStatsAxis(): StatsAxis {
-  try {
-    const raw = localStorage.getItem(AXIS_KEY);
-    return AXES.find((axis) => axis === raw) ?? "shared";
-  } catch {
-    return "shared";
-  }
-}
-
-export function saveStatsAxis(axis: StatsAxis): void {
-  try {
-    localStorage.setItem(AXIS_KEY, axis);
-  } catch {
-    // quota / disabled / private mode → in-memory only for this session
-  }
-}

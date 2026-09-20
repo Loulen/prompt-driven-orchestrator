@@ -21,11 +21,49 @@ vi.mock("../api", () => ({
 // recharts is heavy and code-split behind `React.lazy`; the charts are strictly
 // presentational and irrelevant to what this file asserts (the sync button lives in
 // StatsModal precisely because StatsCharts has no access to the refetch).
+//
+// The stub DOES surface the filter contract (#819): the band lives in the
+// charts, its state in the shell, so what this file can assert about the band is
+// what crosses that seam — the values handed down, and what a change sends back.
 vi.mock("./StatsCharts", () => ({
-  default: () => <div data-testid="stats-charts-stub" />,
+  default: ({
+    completedOnly,
+    onCompletedOnlyChange,
+    band,
+    onBandChange,
+    onResetFilters,
+  }: {
+    completedOnly: boolean;
+    onCompletedOnlyChange: (value: boolean) => void;
+    band: PerformanceBand;
+    onBandChange: (band: PerformanceBand) => void;
+    onResetFilters: () => void;
+  }) => (
+    <div
+      data-testid="stats-charts-stub"
+      data-completed-only={String(completedOnly)}
+      data-duration-mode={band.durationMode}
+      data-zoom={band.zoom}
+      data-axis={band.axis}
+      data-node-kinds={band.nodeKinds.join(",")}
+    >
+      <button
+        type="button"
+        data-testid="stub-toggle-cohort"
+        onClick={() => onCompletedOnlyChange(!completedOnly)}
+      />
+      <button
+        type="button"
+        data-testid="stub-waiting-mode"
+        onClick={() => onBandChange({ ...band, durationMode: "waiting" })}
+      />
+      <button type="button" data-testid="stub-reset" onClick={onResetFilters} />
+    </div>
+  ),
 }));
 
 import StatsModal from "./StatsModal";
+import type { PerformanceBand } from "../lib/statsFilters";
 import type { StatsCost, StatsOverview, SyncCostPricesReport } from "../types";
 
 const OVERVIEW: StatsOverview = {
@@ -96,8 +134,11 @@ beforeEach(() => {
     by_pipeline: [],
     by_model: [],
     infrastructure: [],
+    waited_executions: 0,
+    executions: 0,
   });
   syncCostPricesMock.mockReset().mockResolvedValue(report());
+  localStorage.clear();
 });
 
 describe("StatsModal — price sync (#427, ADR-0034)", () => {
@@ -294,67 +335,200 @@ describe("StatsModal — price sync (#427, ADR-0034)", () => {
   });
 });
 
-describe("StatsModal — cohort and Performance filters (#810)", () => {
-  beforeEach(() => {
-    localStorage.clear();
+describe("StatsModal — per-tab filters, ephemeral (#819)", () => {
+  const stub = () => screen.getByTestId("stats-charts-stub");
+  const cohortOf = (calls: unknown[][]) => calls.at(-1)!.at(-1);
+
+  it("keeps only the period in the title bar", async () => {
+    const user = userEvent.setup();
+    render(<StatsModal open onClose={() => {}} />);
+
+    expect(await screen.findByTestId("stats-tab-runs")).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Period" })).toBeInTheDocument();
+    // The cohort left the bar for the tabs: it is per tab now.
+    expect(screen.queryByTestId("stats-completed-only")).not.toBeInTheDocument();
+
+    // Pricing details is the one section-specific button the bar still carries.
+    await user.click(screen.getByTestId("stats-tab-cost"));
+    expect(screen.getByTestId("stats-pricing-trigger")).toBeInTheDocument();
   });
 
-  it("opens on « completed runs only », passes it to the three fetches, and remembers the change", async () => {
+  it("opens each tab on its own cohort, and a flip refetches that tab alone", async () => {
     const user = userEvent.setup();
-    const { unmount } = render(<StatsModal open onClose={() => {}} />);
-
-    // A fresh browser opens on the reading the design settled on.
-    const toggle = await screen.findByTestId("stats-completed-only");
-    expect(toggle).toHaveAttribute("aria-checked", "true");
-    await waitFor(() =>
-      expect(fetchStatsOverviewMock).toHaveBeenLastCalledWith(
-        expect.any(String),
-        expect.any(String),
-        "day",
-        true,
-      ),
-    );
-
-    await user.click(toggle);
-    expect(toggle).toHaveAttribute("aria-checked", "false");
-    await waitFor(() =>
-      expect(fetchStatsOverviewMock).toHaveBeenLastCalledWith(
-        expect.any(String),
-        expect.any(String),
-        "day",
-        false,
-      ),
-    );
-    expect(localStorage.getItem("pdo.stats.completed_only")).toBe("false");
-
-    // Per browser, like the theme: reopening restores it.
-    unmount();
     render(<StatsModal open onClose={() => {}} />);
-    expect(await screen.findByTestId("stats-completed-only")).toHaveAttribute(
-      "aria-checked",
+
+    // Overview: every run, so an error is never hidden by default.
+    await waitFor(() => expect(fetchStatsOverviewMock).toHaveBeenCalled());
+    expect(cohortOf(fetchStatsOverviewMock.mock.calls)).toBe(false);
+    expect(await screen.findByTestId("stats-charts-stub")).toHaveAttribute(
+      "data-completed-only",
       "false",
     );
+
+    // Cost: every run too — the spend of a failed run is still spend.
+    await user.click(screen.getByTestId("stats-tab-cost"));
+    await waitFor(() => expect(fetchStatsCostMock).toHaveBeenCalled());
+    expect(cohortOf(fetchStatsCostMock.mock.calls)).toBe(false);
+
+    // Performance: completed runs only, so durations are not polluted by runs
+    // still in flight.
+    await user.click(screen.getByTestId("stats-tab-performance"));
+    await waitFor(() => expect(fetchStatsPerformanceMock).toHaveBeenCalled());
+    expect(cohortOf(fetchStatsPerformanceMock.mock.calls)).toBe(true);
+    expect(stub()).toHaveAttribute("data-completed-only", "true");
+
+    // Flipping Performance's cohort refetches Performance — and nothing else.
+    const costCalls = fetchStatsCostMock.mock.calls.length;
+    const overviewCalls = fetchStatsOverviewMock.mock.calls.length;
+    await user.click(screen.getByTestId("stub-toggle-cohort"));
+    await waitFor(() =>
+      expect(cohortOf(fetchStatsPerformanceMock.mock.calls)).toBe(false),
+    );
+    expect(fetchStatsCostMock).toHaveBeenCalledTimes(costCalls);
+    expect(fetchStatsOverviewMock).toHaveBeenCalledTimes(overviewCalls);
+
+    // …and Cost is where it was left.
+    await user.click(screen.getByTestId("stats-tab-cost"));
+    expect(stub()).toHaveAttribute("data-completed-only", "false");
   });
 
-  it("marks the Performance rail entry when its filters deviate from the defaults", async () => {
-    // No cue on the defaults…
-    const { unmount } = render(<StatsModal open onClose={() => {}} />);
-    expect(
-      await screen.findByTestId("stats-tab-performance"),
-    ).not.toHaveAttribute("data-dirty");
-    unmount();
-
-    // …and one when a stored filter would silently change the numbers.
-    localStorage.setItem(
-      "pdo.stats.node_kinds",
-      JSON.stringify(["interactive"]),
-    );
+  it("shares one cohort between Overview, Sessions and Triggers", async () => {
+    const user = userEvent.setup();
     render(<StatsModal open onClose={() => {}} />);
-    const rail = await screen.findByTestId("stats-tab-performance");
-    expect(rail).toHaveAttribute("data-dirty", "true");
-    expect(screen.getByTestId("stats-tab-performance-dirty")).toHaveAttribute(
-      "aria-label",
-      "Performance filters differ from the defaults",
+
+    await user.click(await screen.findByTestId("stub-toggle-cohort"));
+    await waitFor(() =>
+      expect(cohortOf(fetchStatsOverviewMock.mock.calls)).toBe(true),
     );
+    // The three tabs read the same response, so they read the same cohort.
+    for (const tab of ["sessions", "triggers"]) {
+      await user.click(screen.getByTestId(`stats-tab-${tab}`));
+      expect(stub()).toHaveAttribute("data-completed-only", "true");
+    }
+  });
+
+  it("opens Performance on Active, every kind, Full and independent scales", async () => {
+    const user = userEvent.setup();
+    render(<StatsModal open onClose={() => {}} />);
+    await user.click(await screen.findByTestId("stats-tab-performance"));
+
+    expect(stub()).toHaveAttribute("data-duration-mode", "active");
+    expect(stub()).toHaveAttribute("data-zoom", "full");
+    expect(stub()).toHaveAttribute("data-axis", "independent");
+    expect(stub()).toHaveAttribute(
+      "data-node-kinds",
+      "interactive,orchestrator,standard",
+    );
+  });
+
+  it("keeps a change across tabs, and forgets it when Stats is closed and reopened", async () => {
+    // The close/reopen cycle is driven through the `open` prop, as the app drives
+    // it: this component stays mounted across opens (#717 keeps both full-window
+    // siblings in the tree), so a surface holding its state behind `open={false}`
+    // would hand the deviated band straight back — the bug this pins.
+    const user = userEvent.setup();
+    const onClose = () => {};
+    const { rerender } = render(<StatsModal open onClose={onClose} />);
+    await user.click(await screen.findByTestId("stats-tab-performance"));
+    await user.click(screen.getByTestId("stub-waiting-mode"));
+    await user.click(screen.getByTestId("stub-toggle-cohort"));
+    await user.click(screen.getByTestId("stats-period-7d"));
+    expect(stub()).toHaveAttribute("data-duration-mode", "waiting");
+    await waitFor(() => expect(stub()).toHaveAttribute("data-completed-only", "false"));
+
+    // A trip to another tab and back keeps it: the shell outlives the sections.
+    await user.click(screen.getByTestId("stats-tab-cost"));
+    await user.click(screen.getByTestId("stats-tab-performance"));
+    expect(stub()).toHaveAttribute("data-duration-mode", "waiting");
+
+    // Closing does not: the open is the lifetime of every Stats setting.
+    rerender(<StatsModal open={false} onClose={onClose} />);
+    expect(screen.queryByTestId("stats-modal")).not.toBeInTheDocument();
+
+    rerender(<StatsModal open onClose={onClose} />);
+    // Period back to 30 days, section back to the first one…
+    expect(await screen.findByTestId("stats-period-30d")).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByTestId("stats-period-7d")).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByTestId("stats-tab-runs")).toHaveAttribute("aria-selected", "true");
+    // …and Performance back on its own defaults.
+    await user.click(screen.getByTestId("stats-tab-performance"));
+    expect(stub()).toHaveAttribute("data-duration-mode", "active");
+    expect(stub()).toHaveAttribute("data-completed-only", "true");
+    expect(stub()).toHaveAttribute("data-zoom", "full");
+    expect(stub()).toHaveAttribute("data-axis", "independent");
+    expect(localStorage.getItem("pdo.stats.completed_only")).toBeNull();
+    expect(localStorage.getItem("pdo.stats.zoom")).toBeNull();
+  });
+
+  it("drops the pricing drawer and the entry tab of a programmatic open (#690)", async () => {
+    // Settings › Diagnostics enters on Cost with the drawer open. That entry
+    // belongs to the open that carries it: the same surface reopened bare lands
+    // on the defaults like any other open.
+    const onClose = () => {};
+    const { rerender } = render(
+      <StatsModal open onClose={onClose} initialTab="cost" initialPricingOpen />,
+    );
+    expect(await screen.findByTestId("stats-pricing-details")).toBeInTheDocument();
+    expect(screen.getByTestId("stats-tab-cost")).toHaveAttribute("aria-selected", "true");
+
+    rerender(<StatsModal open={false} onClose={onClose} initialTab="cost" initialPricingOpen />);
+    rerender(<StatsModal open onClose={onClose} />);
+
+    expect(await screen.findByTestId("stats-tab-runs")).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.queryByTestId("stats-pricing-details")).not.toBeInTheDocument();
+  });
+
+  it("ignores a stale per-browser key an older build left behind", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem("pdo.stats.completed_only", "false");
+    localStorage.setItem("pdo.stats.exclude_user_wait", "false");
+    localStorage.setItem("pdo.stats.node_kinds", JSON.stringify(["interactive"]));
+    render(<StatsModal open onClose={() => {}} />);
+    await user.click(await screen.findByTestId("stats-tab-performance"));
+
+    expect(stub()).toHaveAttribute("data-completed-only", "true");
+    expect(stub()).toHaveAttribute("data-duration-mode", "active");
+    expect(stub()).toHaveAttribute(
+      "data-node-kinds",
+      "interactive,orchestrator,standard",
+    );
+  });
+
+  it("puts the tab back on its defaults on reset", async () => {
+    const user = userEvent.setup();
+    render(<StatsModal open onClose={() => {}} />);
+    await user.click(await screen.findByTestId("stats-tab-performance"));
+    await user.click(screen.getByTestId("stub-waiting-mode"));
+    await user.click(screen.getByTestId("stub-toggle-cohort"));
+    await waitFor(() =>
+      expect(stub()).toHaveAttribute("data-completed-only", "false"),
+    );
+
+    await user.click(screen.getByTestId("stub-reset"));
+    expect(stub()).toHaveAttribute("data-duration-mode", "active");
+    expect(stub()).toHaveAttribute("data-completed-only", "true");
+  });
+
+  it("never marks the rail, whatever the band says", async () => {
+    const user = userEvent.setup();
+    render(<StatsModal open onClose={() => {}} />);
+    await user.click(await screen.findByTestId("stats-tab-performance"));
+    await user.click(screen.getByTestId("stub-waiting-mode"));
+    await user.click(screen.getByTestId("stub-toggle-cohort"));
+
+    // The band is on screen and says exactly what it does: a deliberate reading
+    // is not an anomaly to flag.
+    expect(screen.getByTestId("stats-tab-performance")).not.toHaveAttribute(
+      "data-dirty",
+    );
+    expect(
+      screen.queryByTestId("stats-tab-performance-dirty"),
+    ).not.toBeInTheDocument();
   });
 });

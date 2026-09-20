@@ -1876,9 +1876,15 @@ export interface StatsHarnessPerformance {
   duration: StatsDistribution;
   /** **Durée active** (#810): the same executions as `duration`, each minus its
    *  declared wait (a `pdo wait-user` question, an unreleased completion —
-   *  ADR-0069). Always sent beside the wall-clock, so « exclude user wait »
-   *  swaps the reading with no refetch. A subagent's equals its `duration`. */
+   *  ADR-0069). Always sent beside the wall-clock, so the duration mode swaps
+   *  the reading with no refetch. A subagent's equals its `duration`. */
   active_duration: StatsDistribution;
+  /** **Attente déclarée** (#819): the third reading of the same executions —
+   *  the declared wait alone, the human brain time an execution cost.
+   *  `duration = active_duration + wait_duration`, execution by execution. A
+   *  subagent's is `0`; the Infrastructure row's is the sum of its Run's node
+   *  waits. Zero is data, never an absence. */
+  wait_duration: StatsDistribution;
   /** Steering messages per successful execution (#792): the turns a human
    *  typed into the main session after its launch — derived from the harness
    *  transcript, launch prompt and `[pdo-runtime]` messages excluded. Unit:
@@ -1947,6 +1953,13 @@ export interface StatsPerformance {
   /** The « By model » axis (ADR-0065): the same observations bucketed by the
    *  model of the session file each came from (#737). */
   by_model: StatsModelPerformanceEntity[];
+  /** How many of `executions` declared at least one wait (#819) — the coverage
+   *  behind the « i » of the duration mode. For the others, Active = Total and
+   *  Waiting = 0. */
+  waited_executions: number;
+  /** The Node executions this response folded — Infrastructure roles and
+   *  subagents excluded, neither declaring a wait of its own. */
+  executions: number;
 }
 
 // ---------------------------------------------------------------------------

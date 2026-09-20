@@ -16,6 +16,25 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.92.0
+**Filtres par onglet, mode de durée Total/Active/Waiting, couverture, réglages éphémères** (#819, story #817).
+
+- La barre de titre de Stats ne garde que la période (et Pricing details sur Cost). Chaque onglet
+  porte sa **bande de filtres** avec sa cohorte « completed runs only » et son propre défaut :
+  activée sur Performance, désactivée sur Overview / Sessions / Triggers et sur Cost. Basculer la
+  cohorte ne refetch que l'onglet concerné.
+- Sur Performance, la bascule « exclude user wait » devient un contrôle à trois positions
+  **Total / Active / Waiting** (défaut Active). Cartes, en-tête de colonne, box-plots, libellés et
+  tri suivent le mode, côté client, sans refetch. En Active et Waiting, un « i » donne
+  « n exécutions sur N ont déclaré au moins une attente ».
+- **Cassant côté navigateur** : les réglages Stats sont **éphémères**. Plus aucune clé
+  `pdo.stats.*` n'est lue ni écrite (les anciennes restent inertes dans `localStorage`) ; l'état vit
+  tant que Stats est montée, rouvrir réinitialise. Échelles indépendantes activées par défaut.
+  Plus de pastille de déviation sur le rail.
+- Daemon, additif : `GET /stats/performance` porte `wait_duration` à côté de `duration` et
+  `active_duration` à chaque niveau (Total = Active + Waiting par exécution), plus
+  `waited_executions` et `executions` pour la couverture.
+
 ## 1.91.0
 **Durée active hors attente déclarée, filtre par genre de nœud, runs terminés seulement** (#810, story #808).
 

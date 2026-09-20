@@ -2449,8 +2449,14 @@ mod tests {
             events.push(lap2);
         }
         let waits = declared_waits(&events);
-        assert_eq!(waits.get(&("chat".to_string(), 1)).copied(), Some(2.0 * MIN));
-        assert_eq!(waits.get(&("chat".to_string(), 2)).copied(), Some(4.0 * MIN));
+        assert_eq!(
+            waits.get(&("chat".to_string(), 1)).copied(),
+            Some(2.0 * MIN)
+        );
+        assert_eq!(
+            waits.get(&("chat".to_string(), 2)).copied(),
+            Some(4.0 * MIN)
+        );
     }
 
     #[test]

@@ -18,8 +18,9 @@ interface Props {
   onClose: () => void;
   /**
    * Programmatic entry (#690): the tab to land on and whether the pricing drawer opens
-   * with it — Settings › Diagnostics links to Cost › Pricing details. Read once at mount,
-   * so the host bumps the component `key` when it wants them applied.
+   * with it — Settings › Diagnostics links to Cost › Pricing details. Read once at mount
+   * — which is each open (#819) — so a host wanting them applied to a Stats already on
+   * screen bumps the component `key`.
    */
   initialTab?: StatsTab;
   initialPricingOpen?: boolean;
@@ -179,12 +180,29 @@ function PricingDetails({
   );
 }
 
-export default function StatsModal({
-  open,
+/**
+ * **Réglages de Stats éphémères** (#819, CONTEXT.md): a close forgets every
+ * setting, an open rebuilds them. The settings live in plain `useState` on the
+ * surface below, so the open IS their lifetime — this wrapper renders nothing
+ * while Stats is closed, React unmounts the surface, and the next open starts
+ * from the literals again (period, per-tab cohorts, band, section).
+ *
+ * The lifetime belongs here and not to the host: the app keeps this component
+ * mounted across opens (#717 wants both full-window siblings in the tree with
+ * stable keys), so a surface that held its state while `open` was false carried
+ * a deviated band back into the next open — the whole rule, silently undone by
+ * a detail of the host's tree.
+ */
+export default function StatsModal({ open, ...rest }: Props) {
+  if (!open) return null;
+  return <StatsSurface {...rest} />;
+}
+
+function StatsSurface({
   onClose,
   initialTab = "runs",
   initialPricingOpen = false,
-}: Props) {
+}: Omit<Props, "open">) {
   const [preset, setPreset] = useState<Preset>("30d");
   const [tab, setTab] = useState<StatsTab>(initialTab);
   // #819 — the filter state, plain `useState` on literal defaults: nothing is
@@ -222,7 +240,9 @@ export default function StatsModal({
     costReloadKey,
     performanceReloadKey,
   } = useStats(
-    open,
+    // The surface only exists while Stats is open, so the hook's gate is simply
+    // its mount: no fetch is ever armed behind a closed window.
+    true,
     period.from,
     period.to,
     period.bucket,
@@ -235,8 +255,6 @@ export default function StatsModal({
       performance: performanceCompletedOnly,
     },
   );
-
-  if (!open) return null;
 
   const refreshing =
     overviewReloadKey !== reloadKey ||

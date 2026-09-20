@@ -28,13 +28,20 @@ const LIST_MODELS: &str = include_str!("fixtures/catalogue/pi-0.85.1-list-models
 /// Write an executable fake `pi` that answers `--version`, `--help` and
 /// `--list-models` and model-capability RPC, and **hangs** on anything else so an unadvertised source
 /// (`completion bash`, `help config`) being run would time the probe out visibly.
+///
+/// Every invocation is also appended to `<bin>.trace`, which is what the test
+/// actually asserts on: the hang is the hazard being reproduced, the trace is the
+/// evidence. Reading the elapsed time of the settings call instead made the test
+/// fail on a loaded machine — a 20 s budget against a 30 s hang is a margin the
+/// scheduler can eat, and a probe that took 21 s tells us nothing about *which*
+/// source ran.
 #[cfg(unix)]
 fn write_fake_pi(dir: &std::path::Path, version: &str, list_models: &str) {
     use std::os::unix::fs::PermissionsExt;
     let arm =
         |argv: &str, out: &str| format!("  '{argv}') printf '%s' {};;\n", sh_single_quote(out));
     let script = format!(
-        "#!/bin/sh\ncase \"$*\" in\n  '--version') printf '%s\\n' {};\n    ;;\n{}{}  *'--mode rpc') {};;\n  *) sleep 30;;\nesac\n",
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$0.trace\"\ncase \"$*\" in\n  '--version') printf '%s\\n' {};\n    ;;\n{}{}  *'--mode rpc') {};;\n  *) sleep 30;;\nesac\n",
         sh_single_quote(version),
         arm("--help", HELP),
         arm("--list-models", list_models),
@@ -51,6 +58,14 @@ fn write_fake_pi(dir: &std::path::Path, version: &str, list_models: &str) {
     let bin = dir.join("pi");
     std::fs::write(&bin, script).unwrap();
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // Start the ledger empty: the dir is process-wide and outlives a single test.
+    let _ = std::fs::remove_file(pi_trace(dir));
+}
+
+/// Where the fake `pi` records the argv of every invocation.
+#[cfg(unix)]
+fn pi_trace(dir: &std::path::Path) -> std::path::PathBuf {
+    dir.join("pi.trace")
 }
 
 /// Single-quote `s` for `/bin/sh`, closing and reopening around embedded quotes.
@@ -92,19 +107,28 @@ async fn pis_catalogue_comes_from_its_model_table_and_its_thinking_line() {
         .await
         .unwrap();
 
-    let started = std::time::Instant::now();
     let settings: serde_json::Value = reqwest::get(format!("{}/settings", daemon.url()))
         .await
         .unwrap()
         .json()
         .await
         .unwrap();
-    // ADR-0056 §1 bis: neither unadvertised subcommand was run — the fake would have
-    // hung 30 s on each; the whole settings read must come back well inside that.
+    // ADR-0056 §1 bis: neither unadvertised subcommand was run. The fake hangs 30 s
+    // on each, so running one is loud either way — but the trace says which, and
+    // says it without measuring a clock the test scheduler also owns.
+    let trace = std::fs::read_to_string(pi_trace(&bindir)).unwrap_or_default();
+    let ran: Vec<&str> = trace.lines().collect();
     assert!(
-        started.elapsed() < std::time::Duration::from_secs(20),
-        "an unadvertised source must never be run: {:?}",
-        started.elapsed()
+        !ran.iter().any(|argv| argv.contains("completion")),
+        "pi declares no completion subcommand — it must never be run: {ran:?}"
+    );
+    assert!(
+        !ran.iter().any(|argv| argv.starts_with("help")),
+        "pi declares no help subcommand — it must never be run: {ran:?}"
+    );
+    assert!(
+        ran.contains(&"--list-models"),
+        "the model table IS advertised, so it is the source that ran: {ran:?}"
     );
 
     let pi = served_harness(&settings, "pi");

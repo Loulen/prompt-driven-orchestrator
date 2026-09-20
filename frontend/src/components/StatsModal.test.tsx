@@ -421,25 +421,67 @@ describe("StatsModal — per-tab filters, ephemeral (#819)", () => {
     );
   });
 
-  it("keeps a change across tabs, and forgets it when Stats is reopened", async () => {
+  it("keeps a change across tabs, and forgets it when Stats is closed and reopened", async () => {
+    // The close/reopen cycle is driven through the `open` prop, as the app drives
+    // it: this component stays mounted across opens (#717 keeps both full-window
+    // siblings in the tree), so a surface holding its state behind `open={false}`
+    // would hand the deviated band straight back — the bug this pins.
     const user = userEvent.setup();
-    const { unmount } = render(<StatsModal open onClose={() => {}} />);
+    const onClose = () => {};
+    const { rerender } = render(<StatsModal open onClose={onClose} />);
     await user.click(await screen.findByTestId("stats-tab-performance"));
     await user.click(screen.getByTestId("stub-waiting-mode"));
+    await user.click(screen.getByTestId("stub-toggle-cohort"));
+    await user.click(screen.getByTestId("stats-period-7d"));
     expect(stub()).toHaveAttribute("data-duration-mode", "waiting");
+    await waitFor(() => expect(stub()).toHaveAttribute("data-completed-only", "false"));
 
     // A trip to another tab and back keeps it: the shell outlives the sections.
     await user.click(screen.getByTestId("stats-tab-cost"));
     await user.click(screen.getByTestId("stats-tab-performance"));
     expect(stub()).toHaveAttribute("data-duration-mode", "waiting");
 
-    // Reopening does not: nothing about Stats is persisted.
-    unmount();
-    render(<StatsModal open onClose={() => {}} />);
-    await user.click(await screen.findByTestId("stats-tab-performance"));
+    // Closing does not: the open is the lifetime of every Stats setting.
+    rerender(<StatsModal open={false} onClose={onClose} />);
+    expect(screen.queryByTestId("stats-modal")).not.toBeInTheDocument();
+
+    rerender(<StatsModal open onClose={onClose} />);
+    // Period back to 30 days, section back to the first one…
+    expect(await screen.findByTestId("stats-period-30d")).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByTestId("stats-period-7d")).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByTestId("stats-tab-runs")).toHaveAttribute("aria-selected", "true");
+    // …and Performance back on its own defaults.
+    await user.click(screen.getByTestId("stats-tab-performance"));
     expect(stub()).toHaveAttribute("data-duration-mode", "active");
+    expect(stub()).toHaveAttribute("data-completed-only", "true");
+    expect(stub()).toHaveAttribute("data-zoom", "full");
+    expect(stub()).toHaveAttribute("data-axis", "independent");
     expect(localStorage.getItem("pdo.stats.completed_only")).toBeNull();
     expect(localStorage.getItem("pdo.stats.zoom")).toBeNull();
+  });
+
+  it("drops the pricing drawer and the entry tab of a programmatic open (#690)", async () => {
+    // Settings › Diagnostics enters on Cost with the drawer open. That entry
+    // belongs to the open that carries it: the same surface reopened bare lands
+    // on the defaults like any other open.
+    const onClose = () => {};
+    const { rerender } = render(
+      <StatsModal open onClose={onClose} initialTab="cost" initialPricingOpen />,
+    );
+    expect(await screen.findByTestId("stats-pricing-details")).toBeInTheDocument();
+    expect(screen.getByTestId("stats-tab-cost")).toHaveAttribute("aria-selected", "true");
+
+    rerender(<StatsModal open={false} onClose={onClose} initialTab="cost" initialPricingOpen />);
+    rerender(<StatsModal open onClose={onClose} />);
+
+    expect(await screen.findByTestId("stats-tab-runs")).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.queryByTestId("stats-pricing-details")).not.toBeInTheDocument();
   });
 
   it("ignores a stale per-browser key an older build left behind", async () => {

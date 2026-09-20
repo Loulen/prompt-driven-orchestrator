@@ -309,6 +309,8 @@ vi.mock("./api", () => {
         by_pipeline: [],
         by_model: [],
         infrastructure: [],
+        waited_executions: 0,
+        executions: 0,
       }),
       syncCostPrices: vi.fn().mockResolvedValue({
         noop: true,

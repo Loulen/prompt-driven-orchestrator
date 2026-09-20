@@ -1,8 +1,14 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, it, expect, vi } from "vitest";
+import { useState } from "react";
+import { describe, it, expect, vi } from "vitest";
 
 import StatsCharts from "./StatsCharts";
+import {
+  DEFAULT_PERFORMANCE_BAND,
+  TAB_COHORT_DEFAULTS,
+  type PerformanceBand,
+} from "../lib/statsFilters";
 import type {
   PerformanceModelEffortPair,
   StatsCost,
@@ -12,6 +18,58 @@ import type {
   StatsOverview,
   StatsPerformance,
 } from "../types";
+
+/** The reading the suites written before the duration mode (#819) were built
+ *  against: the wall-clock, one shared axis. Passed explicitly so their
+ *  assertions keep saying what they meant — the surface's OWN defaults (Active,
+ *  independent scales) are asserted by the #819 suite and by `StatsModal`'s. */
+const WALL_CLOCK_BAND: PerformanceBand = {
+  ...DEFAULT_PERFORMANCE_BAND,
+  durationMode: "total",
+  axis: "shared",
+};
+
+/**
+ * The shell's half of the contract (#819), in its smallest honest form: the
+ * band state lives ABOVE `StatsCharts`, so a click on a band control travels up
+ * and comes back down as a prop — exactly how `StatsModal` wires it. A test
+ * that only reads never needs this; one that clicks the band does.
+ */
+function PerformanceSurface({
+  performance,
+  initialBand = WALL_CLOCK_BAND,
+  initialCompletedOnly = TAB_COHORT_DEFAULTS.performance,
+  onBandChange,
+}: {
+  performance: StatsPerformance | null;
+  initialBand?: PerformanceBand;
+  initialCompletedOnly?: boolean;
+  onBandChange?: (band: PerformanceBand) => void;
+}) {
+  const [band, setBand] = useState(initialBand);
+  const [completedOnly, setCompletedOnly] = useState(initialCompletedOnly);
+  return (
+    <StatsCharts
+      tab="performance"
+      overview={null}
+      cost={null}
+      costError={null}
+      performance={performance}
+      performanceError={null}
+      completedOnly={completedOnly}
+      onCompletedOnlyChange={setCompletedOnly}
+      band={band}
+      onBandChange={(next) => {
+        onBandChange?.(next);
+        setBand(next);
+      }}
+      onResetFilters={() => {
+        setBand(DEFAULT_PERFORMANCE_BAND);
+        setCompletedOnly(TAB_COHORT_DEFAULTS.performance);
+      }}
+    />
+  );
+}
 
 // The resolved price table (#528) lives on the Stats → Cost tab, fed by
 // `/stats/cost`. `by_period: []` means no spend, so the recharts chart never
@@ -441,9 +499,10 @@ const distribution = (
   missing_reasons: measured === expected ? [] : ["no reliable bounds"],
 });
 
-/** Duration + active duration (#810), the pair the wire always sends together.
- *  `waitMillis` is what the declared wait took off the active reading; `0` — the
- *  common case — makes the two readings identical. */
+/** The three duration readings (#810, #819), the triple the wire always sends
+ *  together: wall-clock, wall-clock minus the declared wait, and that wait
+ *  alone. `waitMillis` is what was declared; `0` — the common case — makes
+ *  Active equal Total and Waiting a measured zero. */
 const durations = (
   mean: number,
   measured = 2,
@@ -452,6 +511,7 @@ const durations = (
 ) => ({
   duration: distribution(mean, measured, expected),
   active_duration: distribution(mean - waitMillis, measured, expected),
+  wait_duration: distribution(waitMillis, measured, expected),
 });
 
 /** A Steering distribution (#792): `mean` messages per execution over
@@ -595,6 +655,14 @@ const PERFORMANCE: StatsPerformance = {
                     expected: 1,
                     missing_reasons: ["no reliable bounds"],
                   },
+                  // Absent for the same reason as the other two: the coverage
+                  // never disagrees between readings (#819).
+                  wait_duration: {
+                    stats: null,
+                    measured: 0,
+                    expected: 1,
+                    missing_reasons: ["no reliable bounds"],
+                  },
                   steering: {
                     stats: null,
                     measured: 0,
@@ -630,6 +698,9 @@ const PERFORMANCE: StatsPerformance = {
     },
   ],
   by_model: [],
+  // #819 — the wait coverage: six Node executions, none of which declared one.
+  waited_executions: 0,
+  executions: 6,
 };
 
 describe("StatsCharts — harness drill-down (#638)", () => {
@@ -900,6 +971,7 @@ describe("StatsCharts — Performance (#585)", () => {
     render(
       <StatsCharts
         tab="performance"
+        band={WALL_CLOCK_BAND}
         overview={null}
         cost={null}
         costError={null}
@@ -910,7 +982,7 @@ describe("StatsCharts — Performance (#585)", () => {
 
     expect(screen.getByText("Ranked by context (median)")).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "Context (peak tokens)" })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "Duration (wall-clock)" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Duration" })).toBeInTheDocument();
     await user.click(screen.getByRole("option", { name: /Implement loop/ }));
     expect(screen.getByText("Design")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Expand Design subagents" }));
@@ -922,6 +994,7 @@ describe("StatsCharts — Performance (#585)", () => {
     render(
       <StatsCharts
         tab="performance"
+        band={WALL_CLOCK_BAND}
         overview={null}
         cost={null}
         costError={null}
@@ -948,6 +1021,7 @@ describe("StatsCharts — Performance (#585)", () => {
     const { rerender } = render(
       <StatsCharts
         tab="performance"
+        band={WALL_CLOCK_BAND}
         overview={null}
         cost={null}
         costError={null}
@@ -960,6 +1034,7 @@ describe("StatsCharts — Performance (#585)", () => {
     rerender(
       <StatsCharts
         tab="performance"
+        band={WALL_CLOCK_BAND}
         overview={null}
         cost={null}
         costError={null}
@@ -972,6 +1047,7 @@ describe("StatsCharts — Performance (#585)", () => {
     rerender(
       <StatsCharts
         tab="performance"
+        band={WALL_CLOCK_BAND}
         overview={null}
         cost={null}
         costError={null}
@@ -1135,6 +1211,7 @@ describe("StatsCharts — Performance › Steering (#792)", () => {
     return render(
       <StatsCharts
         tab="performance"
+        band={WALL_CLOCK_BAND}
         overview={null}
         cost={null}
         costError={null}
@@ -1349,12 +1426,15 @@ describe("StatsCharts — Performance « By model » (#737, ADR-0065)", () => {
         ],
       },
     ],
+    waited_executions: 0,
+    executions: 4,
   };
 
   function renderModel(performance: StatsPerformance = BY_MODEL) {
     return render(
       <StatsCharts
         tab="performance"
+        band={WALL_CLOCK_BAND}
         overview={null}
         cost={null}
         costError={null}
@@ -1459,6 +1539,7 @@ describe("StatsCharts — Performance « By model » (#737, ADR-0065)", () => {
     const { unmount } = render(
       <StatsCharts
         tab="performance"
+        band={WALL_CLOCK_BAND}
         overview={null}
         cost={null}
         costError={null}
@@ -1490,6 +1571,7 @@ describe("StatsCharts — Performance « By model » (#737, ADR-0065)", () => {
     render(
       <StatsCharts
         tab="performance"
+        band={WALL_CLOCK_BAND}
         overview={null}
         cost={null}
         costError={null}
@@ -1510,6 +1592,7 @@ describe("StatsCharts — Performance « By model » (#737, ADR-0065)", () => {
     render(
       <StatsCharts
         tab="performance"
+        band={WALL_CLOCK_BAND}
         overview={null}
         cost={null}
         costError={null}
@@ -1540,6 +1623,7 @@ describe("StatsCharts — Performance « By model » (#737, ADR-0065)", () => {
     render(
       <StatsCharts
         tab="performance"
+        band={WALL_CLOCK_BAND}
         overview={null}
         cost={null}
         costError={null}
@@ -1801,87 +1885,109 @@ const KIND_PERFORMANCE: StatsPerformance = {
       ],
     },
   ],
+  // #819 — one of the four Node executions declared a wait (`chat`, 1m02s).
+  waited_executions: 1,
+  executions: 4,
 };
 
 function renderKinds(
-  props: Partial<React.ComponentProps<typeof StatsCharts>> = {},
+  props: Partial<React.ComponentProps<typeof PerformanceSurface>> = {},
 ) {
   return render(
-    <StatsCharts
-      tab="performance"
-      overview={null}
-      cost={null}
-      costError={null}
-      performance={KIND_PERFORMANCE}
-      {...props}
-    />,
+    <PerformanceSurface performance={KIND_PERFORMANCE} {...props} />,
   );
 }
 
-describe("StatsCharts — active duration (#810)", () => {
-  it("reads the wall-clock by default and swaps to the active duration on the toggle", async () => {
-    const { rerender } = renderKinds();
+describe("StatsCharts — duration mode (#819)", () => {
+  /** The band, with the surface's own defaults: Active, every kind, Full,
+   *  independent scales. */
+  const renderModes = () => renderKinds({ initialBand: DEFAULT_PERFORMANCE_BAND });
 
-    // Off: Duration is the wall-clock — 200 000 ms on `chat`, 3m20s.
-    expect(
-      screen.getByTestId("stats-performance-duration-header"),
-    ).toHaveTextContent("Duration (wall-clock)");
-    expect(screen.getByTestId("stats-performance-headline")).toHaveTextContent(
-      "10m00s median duration",
+  const header = () => screen.getByTestId("stats-performance-duration-header");
+  const headline = () => screen.getByTestId("stats-performance-headline");
+  const mode = (name: string) =>
+    within(screen.getByRole("radiogroup", { name: "Duration mode" })).getByRole(
+      "radio",
+      { name },
     );
-    expect(
-      screen.queryByTestId("performance-wait-delta"),
-    ).not.toBeInTheDocument();
 
-    // On: the same executions, 1m02s of declared wait subtracted. No refetch is
-    // possible here — the component only ever receives one payload.
-    rerender(
-      <StatsCharts
-        tab="performance"
-        overview={null}
-        cost={null}
-        costError={null}
-        performance={KIND_PERFORMANCE}
-        excludeUserWait
-      />,
-    );
-    expect(
-      screen.getByTestId("stats-performance-duration-header"),
-    ).toHaveTextContent("Duration (active)");
-    expect(screen.getByTestId("stats-performance-headline")).toHaveTextContent(
+  it("opens on Active — the declared wait subtracted, and said so everywhere", () => {
+    renderModes();
+
+    expect(mode("Active")).toHaveAttribute("aria-checked", "true");
+    expect(header()).toHaveTextContent("Active");
+    // The same executions as the wall-clock, 1m02s of declared wait off.
+    expect(headline()).toHaveTextContent("8m58s median active duration");
+    expect(screen.getByTestId("stats-performance-card-claude")).toHaveTextContent(
       "8m58s median active duration",
     );
-    expect(
-      screen.getByTestId("stats-performance-card-claude"),
-    ).toHaveTextContent("8m58s median active duration");
-    // The sort select and the aside name the same reading.
     expect(
       screen.getByRole("option", { name: "By active duration" }),
     ).toBeInTheDocument();
 
-    // Every affected row says what it lost, in the same words.
+    // Every affected row says what it lost, and keeps the wall-clock reachable
+    // behind a dashed ghost box (#810).
     const deltas = screen.getAllByTestId("performance-wait-delta");
     expect(deltas.length).toBeGreaterThan(0);
     expect(deltas[0]).toHaveTextContent("−1m02s wait");
-    // The wall-clock the toggle hid stays reachable: a dashed ghost box behind
-    // the active one, on exactly the rows that lost something.
     expect(screen.getAllByTestId("performance-wallclock-ghost")).toHaveLength(
       deltas.length,
     );
-    expect(
-      screen.getAllByLabelText(/declared waits subtracted \(ADR-0069\)/).length,
-    ).toBeGreaterThan(0);
   });
 
-  it("ranks the master list on the active reading when the toggle is on", async () => {
+  it("reads the wall-clock in Total, and stops qualifying anything", async () => {
     const user = userEvent.setup();
-    const { rerender } = renderKinds();
-    const sortBy = async () =>
-      user.selectOptions(
-        screen.getByRole("combobox", { name: "Performance sort" }),
-        "duration",
-      );
-    await sortBy();
+    renderModes();
+
+    await user.click(mode("Total"));
+    expect(header()).toHaveTextContent("Duration");
+    expect(headline()).toHaveTextContent("10m00s median duration");
+    expect(
+      screen.getByRole("option", { name: "By duration" }),
+    ).toBeInTheDocument();
+    // Nothing was subtracted, so nothing is annotated — and there is nothing to
+    // qualify: the coverage « i » belongs to the other two readings.
+    expect(
+      screen.queryByTestId("performance-wait-delta"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByTestId("stats-wait-coverage")).not.toBeInTheDocument();
+  });
+
+  it("reads the declared wait alone in Waiting, where a zero is data", async () => {
+    const user = userEvent.setup();
+    renderModes();
+
+    await user.click(mode("Waiting"));
+    expect(header()).toHaveTextContent("Waiting");
+    expect(headline()).toHaveTextContent("1m02s median waiting");
+    expect(screen.getByTestId("stats-performance-card-claude")).toHaveTextContent(
+      "1m02s median waiting",
+    );
+    expect(
+      screen.getByRole("option", { name: "By waiting" }),
+    ).toBeInTheDocument();
+
+    // A node nobody waited on plots a flat 0 — not « no data », not an empty
+    // state: zeros are the answer to the question.
+    await user.click(
+      within(screen.getByRole("listbox", { name: "Performance groups" })).getByText(
+        "Mixed pipeline",
+      ),
+    );
+    const orchestrate = screen.getByRole("button", {
+      name: /^orchestrate · claude · Waiting/,
+    });
+    expect(orchestrate).toHaveTextContent("0s median · n=2");
+    expect(screen.queryByText(/No node of the selected kinds/)).toBeNull();
+  });
+
+  it("ranks the master list on the mode in force", async () => {
+    const user = userEvent.setup();
+    renderModes();
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Performance sort" }),
+      "duration",
+    );
 
     const infrastructureValue = () =>
       within(
@@ -1890,32 +1996,82 @@ describe("StatsCharts — active duration (#810)", () => {
           .closest("button")!,
       ).getByText(/m\d\ds$/).textContent;
 
+    // Active: 20m00s of Run minus the 1m02s it waited on its nodes.
+    expect(screen.getByText(/Ranked by active duration/)).toBeInTheDocument();
+    expect(infrastructureValue()).toBe("18m58s");
+
+    await user.click(mode("Total"));
     expect(screen.getByText(/Ranked by duration/)).toBeInTheDocument();
     expect(infrastructureValue()).toBe("20m00s");
 
-    rerender(
-      <StatsCharts
-        tab="performance"
-        overview={null}
-        cost={null}
-        costError={null}
-        performance={KIND_PERFORMANCE}
-        excludeUserWait
-      />,
+    await user.click(mode("Waiting"));
+    expect(screen.getByText(/Ranked by waiting/)).toBeInTheDocument();
+    expect(infrastructureValue()).toBe("1m02s");
+  });
+
+  it("walks the three modes with the arrow keys, like the zoom control", async () => {
+    const user = userEvent.setup();
+    renderModes();
+
+    mode("Active").focus();
+    await user.keyboard("{ArrowRight}");
+    expect(mode("Waiting")).toHaveAttribute("aria-checked", "true");
+    await user.keyboard("{ArrowLeft}");
+    expect(mode("Active")).toHaveAttribute("aria-checked", "true");
+    await user.keyboard("{ArrowLeft}");
+    expect(mode("Total")).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("shows the wait coverage in Active and Waiting only, in n of N", async () => {
+    const user = userEvent.setup();
+    renderModes();
+
+    // One of the four Node executions of the cohort declared a wait — which is
+    // why every other row reads Active = Total and Waiting = 0.
+    expect(screen.getByTestId("stats-wait-coverage")).toHaveAttribute(
+      "aria-label",
+      expect.stringContaining("1 executions of 4 declared at least one wait"),
     );
-    await sortBy();
-    // The rank score now reads `active_duration`: 20m00s minus the 1m02s the
-    // Run waited on its nodes.
-    expect(screen.getByText(/Ranked by active duration/)).toBeInTheDocument();
-    expect(infrastructureValue()).toBe("18m58s");
+    await user.click(mode("Waiting"));
+    expect(screen.getByTestId("stats-wait-coverage")).toBeInTheDocument();
+    await user.click(mode("Total"));
+    expect(screen.queryByTestId("stats-wait-coverage")).not.toBeInTheDocument();
+  });
+
+  it("says a declared wait in words — no decision reference anywhere on screen", async () => {
+    const user = userEvent.setup();
+    const { container } = renderModes();
+
+    // Every visible string and every label a tooltip reads out, in the three
+    // modes and on the other tabs: no « ADR-… », no issue number (#819).
+    const forbidden = /ADR-\d|#\d{3}/;
+    const screened = () => {
+      const labels = Array.from(
+        container.querySelectorAll("[aria-label], [title]"),
+      ).flatMap((node) => [
+        node.getAttribute("aria-label") ?? "",
+        node.getAttribute("title") ?? "",
+      ]);
+      return [container.textContent ?? "", ...labels].join(" ");
+    };
+
+    expect(screened()).toMatch(/waiting for you \(pdo wait-user\)/);
+    for (const label of ["Total", "Waiting", "Active"]) {
+      await user.click(mode(label));
+      expect(screened()).not.toMatch(forbidden);
+    }
   });
 });
 
 describe("StatsCharts — node kind filter (#810)", () => {
+  const withKinds = (nodeKinds: PerformanceBand["nodeKinds"]) => ({
+    initialBand: { ...WALL_CLOCK_BAND, nodeKinds },
+  });
+
   it("counts each kind, filters Node rows and leaves Infrastructure alone", async () => {
     const user = userEvent.setup();
-    const onNodeKindsChange = vi.fn();
-    renderKinds({ onNodeKindsChange });
+    const onBandChange = vi.fn();
+    renderKinds({ onBandChange });
 
     expect(
       screen.getByTestId("stats-node-kind-chip-interactive"),
@@ -1929,15 +2085,18 @@ describe("StatsCharts — node kind filter (#810)", () => {
     ).toHaveTextContent("2");
 
     await user.click(screen.getByTestId("stats-node-kind-chip-standard"));
-    expect(onNodeKindsChange).toHaveBeenCalledWith([
-      "interactive",
-      "orchestrator",
-    ]);
+    expect(onBandChange).toHaveBeenCalledWith(
+      expect.objectContaining({ nodeKinds: ["interactive", "orchestrator"] }),
+    );
+    expect(screen.getByTestId("stats-node-kind-chip-standard")).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
   });
 
   it("hides the unchecked kind, drops a pipeline with no visible node, and refuses to recompute a partial total", async () => {
     const user = userEvent.setup();
-    renderKinds({ nodeKinds: ["interactive", "orchestrator"] });
+    renderKinds(withKinds(["interactive", "orchestrator"]));
 
     // The master list loses the pipeline whose only node is standard.
     const groups = screen.getByRole("listbox", { name: "Performance groups" });
@@ -1982,7 +2141,7 @@ describe("StatsCharts — node kind filter (#810)", () => {
 
   it("applies the same filter to the « By model » tree", async () => {
     const user = userEvent.setup();
-    renderKinds({ nodeKinds: ["interactive"] });
+    renderKinds(withKinds(["interactive"]));
     await user.selectOptions(
       screen.getByRole("combobox", { name: "Performance grouping" }),
       "model",
@@ -2004,10 +2163,9 @@ describe("StatsCharts — node kind filter (#810)", () => {
 
   it("says so, with a way out, when the filter empties a drill level", async () => {
     const user = userEvent.setup();
-    const onNodeKindsChange = vi.fn();
     // No node of « Mixed pipeline » is an orchestrator: the leaf of the model
     // path has rows to show, and the filter takes them all.
-    renderKinds({ nodeKinds: ["orchestrator"], onNodeKindsChange });
+    renderKinds(withKinds(["orchestrator"]));
     await user.selectOptions(
       screen.getByRole("combobox", { name: "Performance grouping" }),
       "model",
@@ -2025,31 +2183,70 @@ describe("StatsCharts — node kind filter (#810)", () => {
       screen.getByText(/No node of the selected kinds at this level/),
     ).toBeInTheDocument();
     await user.click(screen.getByTestId("stats-show-all-kinds"));
-    expect(onNodeKindsChange).toHaveBeenCalledWith([
-      "interactive",
-      "orchestrator",
-      "standard",
-    ]);
+    for (const kind of ["interactive", "orchestrator", "standard"]) {
+      expect(screen.getByTestId(`stats-node-kind-chip-${kind}`)).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+    }
   });
 
-  it("offers a way back when every kind is unchecked, and a reset when the state deviates", async () => {
+  it("offers a way back when every kind is unchecked, and a reset when the band deviates", async () => {
     const user = userEvent.setup();
-    const onNodeKindsChange = vi.fn();
-    const onResetFilters = vi.fn();
-    renderKinds({ nodeKinds: [], onNodeKindsChange, onResetFilters });
+    renderKinds(withKinds([]));
 
     expect(
       screen.getByText(/No node of the selected kinds in this period/),
     ).toBeInTheDocument();
     await user.click(screen.getByTestId("stats-show-all-kinds"));
-    expect(onNodeKindsChange).toHaveBeenCalledWith([
-      "interactive",
-      "orchestrator",
-      "standard",
-    ]);
+    expect(
+      screen.getByTestId("stats-node-kind-chip-standard"),
+    ).toHaveAttribute("aria-pressed", "true");
 
+    // Still deviating (Total instead of Active, shared scales): reset puts the
+    // tab back on everything it opens with.
     await user.click(screen.getByTestId("stats-reset-filters"));
-    expect(onResetFilters).toHaveBeenCalled();
+    expect(
+      within(screen.getByRole("radiogroup", { name: "Duration mode" })).getByRole(
+        "radio",
+        { name: "Active" },
+      ),
+    ).toHaveAttribute("aria-checked", "true");
+    expect(
+      screen.getByRole("switch", { name: "Independent scales" }),
+    ).toHaveAttribute("aria-checked", "true");
+    expect(screen.queryByTestId("stats-reset-filters")).not.toBeInTheDocument();
+  });
+
+  it("keeps the band above an empty pane — the cohort that emptied it must stay reachable", () => {
+    render(
+      <PerformanceSurface
+        performance={{
+          ...KIND_PERFORMANCE,
+          by_pipeline: [],
+          infrastructure: [],
+          by_model: [],
+        }}
+        initialBand={DEFAULT_PERFORMANCE_BAND}
+        initialCompletedOnly
+      />,
+    );
+
+    expect(
+      screen.getByText("No successful executions in this period."),
+    ).toBeInTheDocument();
+    // « completed runs only » is what may have emptied it: leaving it out of
+    // reach would make a fresh instance a dead end.
+    expect(screen.getByTestId("stats-completed-only")).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    expect(screen.getByTestId("stats-performance-filters")).toBeInTheDocument();
+  });
+
+  it("keeps the reset out of the band until something deviates", () => {
+    renderKinds({ initialBand: DEFAULT_PERFORMANCE_BAND });
+    expect(screen.queryByTestId("stats-reset-filters")).not.toBeInTheDocument();
   });
 });
 
@@ -2091,10 +2288,63 @@ describe("StatsCharts — cohort line (#810)", () => {
     ).toHaveTextContent("Errors:");
     unmount();
 
-    renderKinds({ completedOnly: true });
+    renderKinds({ initialCompletedOnly: true });
     expect(screen.getByTestId("stats-cohort-line")).toHaveTextContent(
       "completed runs only",
     );
+  });
+});
+
+describe("StatsCharts — the cohort band of the other tabs (#819)", () => {
+  const renderTab = (
+    tab: "runs" | "sessions" | "triggers" | "cost",
+    onCompletedOnlyChange = vi.fn(),
+  ) => {
+    render(
+      <StatsCharts
+        tab={tab}
+        overview={OVERVIEW}
+        cost={COST}
+        costError={null}
+        onCompletedOnlyChange={onCompletedOnlyChange}
+      />,
+    );
+    return onCompletedOnlyChange;
+  };
+
+  it("gives each tab a band naming it, opening on all runs", () => {
+    for (const [tab, label] of [
+      ["runs", "Overview filters"],
+      ["sessions", "Sessions filters"],
+      ["triggers", "Triggers filters"],
+      ["cost", "Cost filters"],
+    ] as const) {
+      const { unmount } = render(
+        <StatsCharts
+          tab={tab}
+          overview={OVERVIEW}
+          cost={COST}
+          costError={null}
+        />,
+      );
+      const band = screen.getByTestId("stats-filter-band");
+      expect(band).toHaveTextContent(label);
+      expect(band).toHaveTextContent("default: all runs");
+      expect(screen.getByTestId("stats-completed-only")).toHaveAttribute(
+        "aria-checked",
+        "false",
+      );
+      // One control whose default is « off »: unticking IS the reset.
+      expect(screen.queryByTestId("stats-reset-filters")).not.toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  it("hands a cohort change back to the shell, which owns the fetch", async () => {
+    const user = userEvent.setup();
+    const onCompletedOnlyChange = renderTab("cost");
+    await user.click(screen.getByTestId("stats-completed-only"));
+    expect(onCompletedOnlyChange).toHaveBeenCalledWith(true);
   });
 });
 
@@ -2136,9 +2386,16 @@ describe("StatsCharts — Performance zoom, median and axes (#811)", () => {
     context: distribution(50_000, 10, 10),
     duration: { stats: duration, measured: 10, expected: 10, missing_reasons: [] },
     // No declared wait in this fixture (#810): the active reading is the
-    // wall-clock one, so the zoom assertions read the same numbers either way.
+    // wall-clock one, so the zoom assertions read the same numbers either way,
+    // and Waiting is a measured zero (#819).
     active_duration: {
       stats: duration,
+      measured: 10,
+      expected: 10,
+      missing_reasons: [],
+    },
+    wait_duration: {
+      stats: { ...duration, min: 0, q1: 0, median: 0, mean: 0, q3: 0, max: 0, fence_low: 0, fence_high: 0 },
       measured: 10,
       expected: 10,
       missing_reasons: [],
@@ -2172,21 +2429,15 @@ describe("StatsCharts — Performance zoom, median and axes (#811)", () => {
     ],
     infrastructure: [],
     by_model: [],
+    waited_executions: 0,
+    executions: 20,
   };
 
-  beforeEach(() => localStorage.clear());
 
   function renderZoomed() {
-    return render(
-      <StatsCharts
-        tab="performance"
-        overview={null}
-        cost={null}
-        costError={null}
-        performance={ZOOMED}
-        performanceError={null}
-      />,
-    );
+    // The zoom and the scales are band controls, so the state must live above
+    // the component for a click to come back down (#819).
+    return render(<PerformanceSurface performance={ZOOMED} />);
   }
 
   /** The first duration plot of the table, i.e. the first ranked row's. */
@@ -2319,13 +2570,19 @@ describe("StatsCharts — Performance zoom, median and axes (#811)", () => {
     );
   });
 
-  it("restores the zoom and the axis from this browser and writes them back at the change", async () => {
+  it("keeps the zoom and the scales out of this browser: a stale key changes nothing (#819)", async () => {
     const user = userEvent.setup();
+    // What an older build had written. Nothing reads it any more, and nothing
+    // writes over it: Stats keeps no per-browser preference.
     localStorage.setItem("pdo.stats.zoom", "box");
     localStorage.setItem("pdo.stats.axis", "independent");
-    const { unmount } = renderZoomed();
+    const { unmount } = render(
+      <PerformanceSurface performance={ZOOMED} initialBand={DEFAULT_PERFORMANCE_BAND} />,
+    );
 
-    expect(screen.getByRole("radio", { name: "Box" })).toHaveAttribute("aria-checked", "true");
+    // The surface's own defaults, whatever the store says: Full whiskers, each
+    // row on its own axis.
+    expect(screen.getByRole("radio", { name: "Full" })).toHaveAttribute("aria-checked", "true");
     expect(screen.getByRole("switch", { name: "Independent scales" })).toHaveAttribute(
       "aria-checked",
       "true",
@@ -2333,27 +2590,18 @@ describe("StatsCharts — Performance zoom, median and axes (#811)", () => {
 
     await user.click(screen.getByRole("radio", { name: "Fenced" }));
     await user.click(screen.getByRole("switch", { name: "Independent scales" }));
-    expect(localStorage.getItem("pdo.stats.zoom")).toBe("fenced");
-    expect(localStorage.getItem("pdo.stats.axis")).toBe("shared");
+    expect(localStorage.getItem("pdo.stats.zoom")).toBe("box");
+    expect(localStorage.getItem("pdo.stats.axis")).toBe("independent");
 
-    // And the next visit opens on them.
+    // And remounting the surface reapplies the defaults, never the last choice.
     unmount();
-    renderZoomed();
-    expect(screen.getByRole("radio", { name: "Fenced" })).toHaveAttribute("aria-checked", "true");
-    expect(screen.getByRole("switch", { name: "Independent scales" })).toHaveAttribute(
-      "aria-checked",
-      "false",
+    render(
+      <PerformanceSurface performance={ZOOMED} initialBand={DEFAULT_PERFORMANCE_BAND} />,
     );
-  });
-
-  it("falls back on Full and the shared axis when the stored word is not one of ours", () => {
-    localStorage.setItem("pdo.stats.zoom", "logarithmic");
-    localStorage.setItem("pdo.stats.axis", "");
-    renderZoomed();
     expect(screen.getByRole("radio", { name: "Full" })).toHaveAttribute("aria-checked", "true");
     expect(screen.getByRole("switch", { name: "Independent scales" })).toHaveAttribute(
       "aria-checked",
-      "false",
+      "true",
     );
   });
 

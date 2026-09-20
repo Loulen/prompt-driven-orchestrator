@@ -20,9 +20,10 @@ import type { StatsOverview, StatsCost, StatsPerformance } from "../types";
  * `reloadKey` (#427) is a **dependency only** — bumping it refetches, and it is
  * never passed to an API call (`fetchStatsPerformance` receives `reloadKey > 0`
  * as its `refresh` flag, not the key itself). Precedent: `refreshKey` in
- * `TriggerDetailPanel`. `completedOnly` (#810) is the opposite: it IS part of
- * the request — the cohort the daemon must fold — so it travels to all three
- * endpoints and into both request keys.
+ * `TriggerDetailPanel`. The cohorts (#819) are the opposite: each IS part of a
+ * request — the Runs the daemon must fold — so each travels to its own endpoint
+ * and sits in that endpoint's request key alone. Flipping one tab's cohort
+ * refetches that tab, and only that tab.
  */
 export function useStats(
   open: boolean,
@@ -33,13 +34,18 @@ export function useStats(
   performanceActive: boolean,
   reloadKey: number = 0,
   /**
-   * « Runs terminés seulement » (#810) — the cohort, not a display option: it
-   * travels to the THREE fetches so Overview, Cost and Performance always
-   * describe the same Runs, and it sits in every request key so flipping it
-   * refetches rather than showing the other cohort's numbers.
+   * « Runs terminés seulement » (#819), **per tab**. Overview, Sessions and
+   * Triggers read one response, so they share `overview`; Cost and Performance
+   * each own theirs. Wire default `false` everywhere — the caller decides which
+   * tab opens narrowed.
    */
-  completedOnly: boolean = false,
+  cohorts: { overview?: boolean; cost?: boolean; performance?: boolean } = {},
 ) {
+  const {
+    overview: overviewCompletedOnly = false,
+    cost: costCompletedOnly = false,
+    performance: performanceCompletedOnly = false,
+  } = cohorts;
   const [overview, setOverview] = useState<StatsOverview | null>(null);
   const [cost, setCost] = useState<StatsCost | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -50,16 +56,16 @@ export function useStats(
   const [overviewReloadKey, setOverviewReloadKey] = useState(0);
   const [costReloadKey, setCostReloadKey] = useState(0);
   const [performanceReloadKey, setPerformanceReloadKey] = useState(0);
-  const costRequestKey = `${from}\u0000${to}\u0000${bucket}\u0000${reloadKey}\u0000${completedOnly}`;
+  const costRequestKey = `${from}\u0000${to}\u0000${bucket}\u0000${reloadKey}\u0000${costCompletedOnly}`;
   const requestedCostKey = useRef<string | null>(null);
-  const performanceRequestKey = `${from}\u0000${to}\u0000${reloadKey}\u0000${completedOnly}`;
+  const performanceRequestKey = `${from}\u0000${to}\u0000${reloadKey}\u0000${performanceCompletedOnly}`;
   const requestedPerformanceKey = useRef<string | null>(null);
 
   // Overview: eager on open + on every period change.
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    fetchStatsOverview(from, to, bucket, completedOnly)
+    fetchStatsOverview(from, to, bucket, overviewCompletedOnly)
       .then((data) => {
         if (!cancelled) {
           setOverview(data);
@@ -77,14 +83,14 @@ export function useStats(
     return () => {
       cancelled = true;
     };
-  }, [open, from, to, bucket, reloadKey, completedOnly]);
+  }, [open, from, to, bucket, reloadKey, overviewCompletedOnly]);
 
   // Cost: lazy — only once the cost tab is active, then on period change too.
   useEffect(() => {
     if (!open || !costActive) return;
     if (requestedCostKey.current === costRequestKey) return;
     requestedCostKey.current = costRequestKey;
-    fetchStatsCost(from, to, bucket, completedOnly)
+    fetchStatsCost(from, to, bucket, costCompletedOnly)
       .then((data) => {
         if (requestedCostKey.current === costRequestKey) {
           setCost(data);
@@ -106,7 +112,7 @@ export function useStats(
     to,
     bucket,
     reloadKey,
-    completedOnly,
+    costCompletedOnly,
     costRequestKey,
   ]);
 
@@ -114,7 +120,7 @@ export function useStats(
     if (!open || !performanceActive) return;
     if (requestedPerformanceKey.current === performanceRequestKey) return;
     requestedPerformanceKey.current = performanceRequestKey;
-    fetchStatsPerformance(from, to, reloadKey > 0, completedOnly)
+    fetchStatsPerformance(from, to, reloadKey > 0, performanceCompletedOnly)
       .then((data) => {
         if (requestedPerformanceKey.current === performanceRequestKey) {
           setPerformance(data);
@@ -135,7 +141,7 @@ export function useStats(
     from,
     to,
     reloadKey,
-    completedOnly,
+    performanceCompletedOnly,
     performanceRequestKey,
   ]);
 

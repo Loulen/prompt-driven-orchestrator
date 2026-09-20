@@ -50,6 +50,8 @@ const PERFORMANCE = {
   by_pipeline: [],
   by_model: [],
   infrastructure: [],
+  waited_executions: 0,
+  executions: 0,
 };
 
 beforeEach(() => {
@@ -190,29 +192,44 @@ describe("useStats (#377)", () => {
   });
 });
 
-describe("useStats — « Runs terminés seulement » (#810)", () => {
-  it("passes the cohort to the three endpoints and refetches when it flips", async () => {
-    const { result, rerender } = renderHook(
-      ({ completedOnly }) =>
-        useStats(true, "F", "T", "day", true, true, 0, completedOnly),
-      { initialProps: { completedOnly: true } },
+describe("useStats — « Runs terminés seulement », per tab (#819)", () => {
+  it("sends each tab its own cohort", async () => {
+    const { result } = renderHook(() =>
+      useStats(true, "F", "T", "day", true, true, 0, {
+        overview: false,
+        cost: false,
+        performance: true,
+      }),
     );
 
     await waitFor(() =>
       expect(result.current.performance).toEqual(PERFORMANCE),
     );
-    expect(api.fetchStatsOverview).toHaveBeenCalledWith("F", "T", "day", true);
-    expect(api.fetchStatsCost).toHaveBeenCalledWith("F", "T", "day", true);
-    expect(api.fetchStatsPerformance).toHaveBeenCalledWith(
-      "F",
-      "T",
-      false,
-      true,
+    // Performance opens narrowed; Overview and Cost open on every Run.
+    expect(api.fetchStatsOverview).toHaveBeenCalledWith("F", "T", "day", false);
+    expect(api.fetchStatsCost).toHaveBeenCalledWith("F", "T", "day", false);
+    expect(api.fetchStatsPerformance).toHaveBeenCalledWith("F", "T", false, true);
+  });
+
+  it("refetches the tab whose cohort flipped, and only that one", async () => {
+    const { rerender } = renderHook(
+      ({ performance }) =>
+        useStats(true, "F", "T", "day", true, true, 0, {
+          overview: false,
+          cost: false,
+          performance,
+        }),
+      { initialProps: { performance: true } },
     );
 
+    await waitFor(() => expect(api.fetchStatsPerformance).toHaveBeenCalledTimes(1));
+    const overviewCalls = vi.mocked(api.fetchStatsOverview).mock.calls.length;
+    const costCalls = vi.mocked(api.fetchStatsCost).mock.calls.length;
+
     // The cohort is part of the request, not a display option: flipping it must
-    // refetch rather than reinterpret the payload in hand.
-    rerender({ completedOnly: false });
+    // refetch rather than reinterpret the payload in hand — and it narrows one
+    // section, so it refetches one endpoint.
+    rerender({ performance: false });
     await waitFor(() =>
       expect(api.fetchStatsPerformance).toHaveBeenLastCalledWith(
         "F",
@@ -221,12 +238,35 @@ describe("useStats — « Runs terminés seulement » (#810)", () => {
         false,
       ),
     );
-    expect(api.fetchStatsOverview).toHaveBeenLastCalledWith(
-      "F",
-      "T",
-      "day",
-      false,
+    expect(api.fetchStatsOverview).toHaveBeenCalledTimes(overviewCalls);
+    expect(api.fetchStatsCost).toHaveBeenCalledTimes(costCalls);
+  });
+
+  it("refetches Overview alone when the shared cohort of its three tabs flips", async () => {
+    const { rerender } = renderHook(
+      ({ overview }) =>
+        useStats(true, "F", "T", "day", true, true, 0, {
+          overview,
+          cost: false,
+          performance: true,
+        }),
+      { initialProps: { overview: false } },
     );
-    expect(api.fetchStatsCost).toHaveBeenLastCalledWith("F", "T", "day", false);
+
+    await waitFor(() => expect(api.fetchStatsCost).toHaveBeenCalledTimes(1));
+    const costCalls = vi.mocked(api.fetchStatsCost).mock.calls.length;
+    const performanceCalls = vi.mocked(api.fetchStatsPerformance).mock.calls.length;
+
+    rerender({ overview: true });
+    await waitFor(() =>
+      expect(api.fetchStatsOverview).toHaveBeenLastCalledWith(
+        "F",
+        "T",
+        "day",
+        true,
+      ),
+    );
+    expect(api.fetchStatsCost).toHaveBeenCalledTimes(costCalls);
+    expect(api.fetchStatsPerformance).toHaveBeenCalledTimes(performanceCalls);
   });
 });

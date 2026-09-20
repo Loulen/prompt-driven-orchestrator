@@ -32,6 +32,21 @@
 //! steered (nobody types in one), so its `steering` is a declared absence with
 //! `expected = 0`.
 //!
+//! ### The three duration readings (#810, #819, ADR-0069)
+//!
+//! Every level carries `duration`, `active_duration` and `wait_duration` side
+//! by side — the wall-clock, the wall-clock minus the execution's **declared
+//! wait**, and that wait alone. One fold produces the three, so the client
+//! switches « mode de durée » (Total / Active / Waiting) without a refetch and
+//! without a coverage change: the three share the wall-clock's absence reason,
+//! so `n=` is identical in all three modes. What opens and closes a wait is
+//! [`declared_waits`]; a subagent and a Merge resolver measure `0` (nobody can
+//! declare a wait on one), and the Pipeline Manager carries the sum of its
+//! Run's Node waits, so Infrastructure reconciles with the rows under it.
+//! Beside them, `waited_executions` / `executions` (#819) say how many Node
+//! executions declared at least one wait — the coverage the client shows
+//! behind its « i ». Nothing is inferred from a transcript or a silence.
+//!
 //! ### The « By model » axis (#737, ADR-0065)
 //!
 //! `by_model` is a second, additive tree over the SAME observations — Modèle →
@@ -186,7 +201,8 @@ pub(crate) struct SteeredRate {
 }
 
 /// Matches the frontend's `StatsHarnessPerformance` — `context`/`duration`/
-/// `active_duration`/`steering` are never `null` (see [`StatsDistribution`]).
+/// `active_duration`/`wait_duration`/`steering` are never `null` (see
+/// [`StatsDistribution`]).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) struct StatsHarnessPerformance {
     pub harness: String,
@@ -197,6 +213,13 @@ pub(crate) struct StatsHarnessPerformance {
     /// replacing it, so the client swaps the two readings with no refetch. See
     /// [`declared_waits`] for what opens and closes a wait.
     pub active_duration: StatsDistribution,
+    /// **Attente déclarée** (#819): the third reading of the very same
+    /// executions — the declared wait ALONE, the human brain time an execution
+    /// cost. `duration = active_duration + wait_duration` execution by
+    /// execution (both derived from one wall-clock, so the identity holds up to
+    /// the zero clamp). Zero is data, not an absence: a node nobody ever waited
+    /// on measures `0`, and a subagent measures `0` by construction.
+    pub wait_duration: StatsDistribution,
     /// Steering messages per execution (#792) — additive, unit « messages ».
     pub steering: StatsDistribution,
     /// Share of executions with ≥ 1 steering message (#792).
@@ -300,6 +323,17 @@ pub(crate) struct StatsPerformance {
     /// executions only — Infrastructure roles carry no model identity and stay
     /// on `by_pipeline` (module doc, « The « By model » axis »).
     pub by_model: Vec<StatsModelPerformanceEntity>,
+    /// **Couverture de l'attente** (#819): how many of [`Self::executions`]
+    /// declared at least one wait. Counted over the Node executions this
+    /// response folded — Infrastructure roles and subagents excluded, because
+    /// neither declares a wait of its own. The client reads the pair as « n
+    /// executions of N declared at least one wait »: for the others, Active =
+    /// Total and Waiting = 0, which is the whole history before declared waits
+    /// existed. Never inferred from a transcript or a silence.
+    pub waited_executions: i64,
+    /// Node executions of the cohort — the denominator of
+    /// [`Self::waited_executions`].
+    pub executions: i64,
 }
 
 /// Why the whole request failed, distinct from a per-observation absence
@@ -425,6 +459,8 @@ struct HarnessAcc {
     duration: MetricAcc,
     /// #810 — the same executions as `duration`, declared wait subtracted.
     active_duration: MetricAcc,
+    /// #819 — the same executions as `duration`, the declared wait alone.
+    wait_duration: MetricAcc,
     steering: MetricAcc,
 }
 
@@ -435,9 +471,56 @@ impl HarnessAcc {
             context: self.context.finish(),
             duration: self.duration.finish(),
             active_duration: self.active_duration.finish(),
+            wait_duration: self.wait_duration.finish(),
             steered: self.steering.steered(),
             steering: self.steering.finish(),
         }
+    }
+}
+
+/// One execution's three duration readings, recorded together everywhere the
+/// fold observes a duration: the wall-clock, minus its declared wait, and the
+/// declared wait alone. The three share ONE absence reason, so the coverage
+/// (`n=`) never disagrees between modes — switching mode must not change how
+/// many executions the reader is looking at.
+#[derive(Debug, Clone, Copy)]
+struct DurationReading<'a> {
+    total: Option<f64>,
+    active: Option<f64>,
+    waiting: Option<f64>,
+    reason: Option<&'a str>,
+}
+
+impl<'a> DurationReading<'a> {
+    /// The three readings of one execution: `waited` milliseconds of declared
+    /// wait taken off `total`. The wait is clamped into `[0, total]` so the
+    /// identity `Total = Active + Waiting` holds exactly, even when a clock
+    /// skew reports more wait than wall-clock.
+    fn new(total: Option<f64>, waited: f64, reason: Option<&'a str>) -> Self {
+        let waiting = total.map(|value| waited.clamp(0.0, value));
+        Self {
+            total,
+            active: active_millis(total, waited),
+            waiting,
+            reason,
+        }
+    }
+
+    /// An execution nobody can declare a wait on (a subagent, a Merge
+    /// resolver): Waiting is `0`, and Active IS the wall-clock.
+    fn unwaited(total: Option<f64>, reason: Option<&'a str>) -> Self {
+        Self::new(total, 0.0, reason)
+    }
+}
+
+impl HarnessAcc {
+    /// Observe one execution's three duration readings at once — the only way
+    /// they are ever recorded, so no accumulator can drift out of coverage with
+    /// the other two.
+    fn observe_durations(&mut self, reading: DurationReading<'_>) {
+        self.duration.observe(reading.total, reading.reason);
+        self.active_duration.observe(reading.active, reading.reason);
+        self.wait_duration.observe(reading.waiting, reading.reason);
     }
 }
 
@@ -582,23 +665,19 @@ struct ModelPairAcc {
 }
 
 impl ModelPairAcc {
-    /// Observe one session file's context peak + duration + steering into this
+    /// Observe one session file's context peak + durations + steering into this
     /// bucket.
-    #[allow(clippy::too_many_arguments)]
     fn observe(
         &mut self,
         harness: &str,
         context: (Option<f64>, Option<&str>),
-        duration: (Option<f64>, Option<&str>),
-        active_duration: (Option<f64>, Option<&str>),
+        durations: DurationReading<'_>,
         steering: Reading<'_>,
         identity: &ModelIdentity,
     ) {
         let acc = self.by_harness.entry(harness.to_string()).or_default();
         acc.context.observe(context.0, context.1);
-        acc.duration.observe(duration.0, duration.1);
-        acc.active_duration
-            .observe(active_duration.0, active_duration.1);
+        acc.observe_durations(durations);
         acc.steering.record(steering);
         if identity.model_observed {
             self.model_observed += 1;
@@ -663,19 +742,14 @@ fn record_model_observation(
     harness: &str,
     identity: &ModelIdentity,
     context: (Option<f64>, Option<&str>),
-    duration: (Option<f64>, Option<&str>),
-    active_duration: (Option<f64>, Option<&str>),
+    durations: DurationReading<'_>,
     steering: Reading<'_>,
 ) {
     let key = (identity.model.clone(), identity.effort.clone());
-    node_pairs.entry(key.clone()).or_default().observe(
-        harness,
-        context,
-        duration,
-        active_duration,
-        steering,
-        identity,
-    );
+    node_pairs
+        .entry(key.clone())
+        .or_default()
+        .observe(harness, context, durations, steering, identity);
 
     let model_acc = model_axis.entry(identity.model.clone()).or_default();
     let effort_acc = model_acc
@@ -696,14 +770,7 @@ fn record_model_observation(
         pipeline_acc.pairs.entry(key.clone()).or_default(),
         node_acc.pairs.entry(key).or_default(),
     ] {
-        acc.observe(
-            harness,
-            context,
-            duration,
-            active_duration,
-            steering,
-            identity,
-        );
+        acc.observe(harness, context, durations, steering, identity);
     }
 }
 
@@ -717,6 +784,7 @@ fn pool_pairs(pairs: &BTreeMap<ModelEffortKey, ModelPairAcc>) -> PerformanceAggr
             target.context.fold(&acc.context);
             target.duration.fold(&acc.duration);
             target.active_duration.fold(&acc.active_duration);
+            target.wait_duration.fold(&acc.wait_duration);
             target.steering.fold(&acc.steering);
         }
     }
@@ -1288,12 +1356,11 @@ fn fold_subagents(
         let sub_duration_reason = sub_duration
             .is_none()
             .then_some("no reliable start/end bounds in subagent transcript");
-        sub_acc.duration.observe(sub_duration, sub_duration_reason);
-        // #810: nobody declares a wait inside a subagent — its active duration
-        // IS its duration, and the metric swap leaves a subagent row unchanged.
-        sub_acc
-            .active_duration
-            .observe(sub_duration, sub_duration_reason);
+        // #810/#819: nobody declares a wait inside a subagent — its active
+        // duration IS its duration and its Waiting is a measured `0`, so the
+        // mode switch leaves a subagent row at the same coverage.
+        let sub_durations = DurationReading::unwaited(sub_duration, sub_duration_reason);
+        sub_acc.observe_durations(sub_durations);
         // #792: nobody types in a subagent — a declared absence, no expected
         // observation, so a Node's steered rate is never diluted by its
         // subagents.
@@ -1340,8 +1407,7 @@ fn fold_subagents(
                             peak.map(|p| p as f64),
                             (peak.is_none()).then_some("no readable context usage in transcript"),
                         ),
-                        (sub_duration, sub_duration_reason),
-                        (sub_duration, sub_duration_reason),
+                        sub_durations,
                         Reading::NotApplicable(SUBAGENT_STEERING_REASON),
                     );
                 }
@@ -1386,10 +1452,11 @@ fn record_node_success(
     )?;
     let duration = duration_millis(&pending.started_at, completed_at);
     let duration_reason = duration.is_none().then_some("unparseable timestamp");
-    // #810: the same observation, declared wait subtracted. Absent for exactly
-    // the same reason the wall-clock is — the two coverages never disagree, so
-    // the client's metric swap never changes `n=`.
-    let active_duration = active_millis(duration, waited_millis);
+    // #810/#819: the same observation read three ways — wall-clock, declared
+    // wait subtracted, declared wait alone. All three absent for exactly the
+    // same reason the wall-clock is, so the client's mode switch never changes
+    // `n=`.
+    let durations = DurationReading::new(duration, waited_millis, duration_reason);
     let (steering, steering_reason) = main_session_steering(
         &harness,
         root,
@@ -1405,9 +1472,7 @@ fn record_node_success(
         total_by_harness.entry(harness.clone()).or_default(),
     ] {
         acc.context.observe(context, reason);
-        acc.duration.observe(duration, duration_reason);
-        acc.active_duration
-            .observe(active_duration, duration_reason);
+        acc.observe_durations(durations);
         acc.steering.record(steering_reading);
     }
 
@@ -1434,8 +1499,7 @@ fn record_node_success(
             &harness,
             &identity,
             (context, reason),
-            (duration, duration_reason),
-            (active_duration, duration_reason),
+            durations,
             steering_reading,
         );
     }
@@ -1599,10 +1663,10 @@ fn record_infra_success(
     excluded_session_ids: &HashSet<String>,
     directory_ambiguous: bool,
     duration: Option<f64>,
-    // #810 — the wall-clock minus the declared wait this role's span covered:
-    // the sum of every Node wait of the Run for the Pipeline Manager, the
-    // duration itself for a Merge resolver (no wait is possible on one).
-    active_duration: Option<f64>,
+    // #810/#819 — the wall-clock, and the declared wait this role's span
+    // covered: the sum of every Node wait of the Run for the Pipeline Manager,
+    // nothing at all for a Merge resolver (no wait is possible on one).
+    waited_millis: f64,
     seen_roots: &mut HashSet<PathBuf>,
 ) -> Result<(), PerformanceError> {
     let (context, reason, subs) = if run_harness != crate::harness_registry::CLAUDE {
@@ -1629,6 +1693,7 @@ fn record_infra_success(
     };
 
     let duration_reason = duration.is_none().then_some("unparseable timestamp");
+    let durations = DurationReading::new(duration, waited_millis, duration_reason);
     for target in [
         acc.by_harness.entry(run_harness.to_string()).or_default(),
         infra_total_by_harness
@@ -1636,10 +1701,7 @@ fn record_infra_success(
             .or_default(),
     ] {
         target.context.observe(context, reason);
-        target.duration.observe(duration, duration_reason);
-        target
-            .active_duration
-            .observe(active_duration, duration_reason);
+        target.observe_durations(durations);
         // #792: what reaches an Infrastructure role's session is the daemon's
         // own text (review batches), never human piloting — unavailable, with
         // the reason.
@@ -1862,6 +1924,12 @@ fn fold_performance(contexts: Vec<RunContext>) -> Result<StatsPerformance, Perfo
     let mut pipeline_manager_acc = NodeAcc::default();
     let mut merge_resolver_acc = NodeAcc::default();
     let mut harnesses_seen: BTreeSet<String> = BTreeSet::new();
+    // #819 — the wait coverage, counted in this very fold over the Node
+    // executions it records (Infrastructure and subagents excluded: neither
+    // declares a wait). One increment per execution, whatever its harness or
+    // how many model buckets it lands in.
+    let mut executions: i64 = 0;
+    let mut waited_executions: i64 = 0;
 
     for RunContext {
         run_id,
@@ -2021,6 +2089,11 @@ fn fold_performance(contexts: Vec<RunContext>) -> Result<StatsPerformance, Perfo
                             crate::worktree_ops::worktree_dir_for_run(&repo_root, &run_id)
                         };
                         harnesses_seen.insert(p.harness.clone());
+                        let waited = waits.get(&(node_id.clone(), iter)).copied().unwrap_or(0.0);
+                        executions += 1;
+                        if waited > 0.0 {
+                            waited_executions += 1;
+                        }
                         record_node_success(
                             node_acc,
                             &mut pipeline_acc.by_harness,
@@ -2035,7 +2108,7 @@ fn fold_performance(contexts: Vec<RunContext>) -> Result<StatsPerformance, Perfo
                             &working_dir,
                             &p,
                             &event.ts,
-                            waits.get(&(node_id.clone(), iter)).copied().unwrap_or(0.0),
+                            waited,
                             &mut seen_roots,
                         )?;
                     }
@@ -2099,7 +2172,7 @@ fn fold_performance(contexts: Vec<RunContext>) -> Result<StatsPerformance, Perfo
                             duration,
                             // #810: a Merge resolver cannot declare a wait —
                             // its active duration IS its wall-clock.
-                            duration,
+                            0.0,
                             &mut seen_roots,
                         )?;
                     }
@@ -2132,9 +2205,10 @@ fn fold_performance(contexts: Vec<RunContext>) -> Result<StatsPerformance, Perfo
                             &excluded,
                             ambiguous,
                             duration,
-                            // #810: the Run's own span minus every declared
-                            // wait its Nodes accumulated.
-                            active_millis(duration, run_waited),
+                            // #810: the Run's own span carries every declared
+                            // wait its Nodes accumulated — so the three modes
+                            // reconcile at the Infrastructure level too.
+                            run_waited,
                             &mut seen_roots,
                         )?;
                     }
@@ -2180,5 +2254,267 @@ fn fold_performance(contexts: Vec<RunContext>) -> Result<StatsPerformance, Perfo
             harnesses: finish_by_harness(infrastructure_total_by_harness),
         },
         by_model: wire_model_axis(model_axis),
+        waited_executions,
+        executions,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    //! Direct tests of the wait fold (#819) — the interval construction and the
+    //! three readings it feeds. Until now both were reachable only through the
+    //! HTTP handler, which needs a database, a forged event log and a
+    //! transcript corpus to say anything about a subtraction of two timestamps.
+    //! These sit on the same seam the handler uses, one level below it.
+    use super::*;
+    use crate::event_log::EventKind;
+    use pretty_assertions::assert_eq;
+
+    const MIN: f64 = 60_000.0;
+
+    fn event(ts: &str, kind: EventKind, node: &str, payload: Value) -> crate::event_log::Event {
+        crate::event_log::Event {
+            id: None,
+            run_id: "r1".to_string(),
+            ts: format!("2033-03-10T{ts}:00Z"),
+            kind,
+            node_id: Some(node.to_string()),
+            iter: Some(1),
+            payload: Some(payload),
+        }
+    }
+
+    fn awaiting(ts: &str, node: &str, cause: &str) -> crate::event_log::Event {
+        event(
+            ts,
+            EventKind::NodeAwaitingUser,
+            node,
+            serde_json::json!({ "cause": cause }),
+        )
+    }
+
+    fn waited(events: &[crate::event_log::Event], node: &str) -> f64 {
+        declared_waits(events)
+            .get(&(node.to_string(), 1))
+            .copied()
+            .unwrap_or(0.0)
+    }
+
+    #[test]
+    fn a_declared_wait_runs_from_the_question_to_the_first_lift() {
+        let events = [
+            event("10:00", EventKind::NodeStarted, "chat", Value::Null),
+            awaiting("10:01", "chat", crate::event_log::AWAITING_CAUSE_DECLARED),
+            event("10:04", EventKind::NodeResumed, "chat", Value::Null),
+            event("10:10", EventKind::NodeCompleted, "chat", Value::Null),
+        ];
+        assert_eq!(waited(&events, "chat"), 3.0 * MIN);
+    }
+
+    #[test]
+    fn two_waits_of_one_execution_add_up_whatever_lifts_them() {
+        let events = [
+            event("10:00", EventKind::NodeStarted, "chat", Value::Null),
+            awaiting("10:01", "chat", crate::event_log::AWAITING_CAUSE_DECLARED),
+            event("10:03", EventKind::NodeResumed, "chat", Value::Null),
+            awaiting(
+                "10:04",
+                "chat",
+                crate::event_log::AWAITING_CAUSE_COMPLETION_NOT_RELEASED,
+            ),
+            event(
+                "10:05",
+                EventKind::NodeCompletionReleased,
+                "chat",
+                Value::Null,
+            ),
+            event("10:10", EventKind::NodeCompleted, "chat", Value::Null),
+        ];
+        assert_eq!(waited(&events, "chat"), 3.0 * MIN);
+    }
+
+    #[test]
+    fn a_repeated_question_with_no_lift_in_between_is_still_one_wait() {
+        // A refreshed question is the same wait: the interval opens once, at the
+        // FIRST marker, and closes at the first lift — never restarts its clock.
+        let events = [
+            event("10:00", EventKind::NodeStarted, "chat", Value::Null),
+            awaiting("10:01", "chat", crate::event_log::AWAITING_CAUSE_DECLARED),
+            awaiting("10:03", "chat", crate::event_log::AWAITING_CAUSE_DECLARED),
+            event("10:05", EventKind::NodeResumed, "chat", Value::Null),
+        ];
+        assert_eq!(waited(&events, "chat"), 4.0 * MIN);
+    }
+
+    #[test]
+    fn a_terminal_event_closes_a_wait_that_was_never_lifted() {
+        let events = [
+            event("10:00", EventKind::NodeStarted, "late", Value::Null),
+            awaiting("10:02", "late", crate::event_log::AWAITING_CAUSE_DECLARED),
+            event("10:12", EventKind::NodeCompleted, "late", Value::Null),
+        ];
+        assert_eq!(waited(&events, "late"), 10.0 * MIN);
+    }
+
+    #[test]
+    fn an_interval_still_open_when_the_log_ends_contributes_nothing() {
+        // That execution never completed, so it is not an observation either.
+        let events = [
+            event("10:00", EventKind::NodeStarted, "open", Value::Null),
+            awaiting("10:02", "open", crate::event_log::AWAITING_CAUSE_DECLARED),
+        ];
+        assert_eq!(waited(&events, "open"), 0.0);
+    }
+
+    #[test]
+    fn children_pending_and_child_awaiting_open_nothing() {
+        // An orchestrator parked on `pdo run wait` is working; a derived child
+        // wait is never written to the log in the first place (ADR-0069 §4).
+        for cause in [
+            "children_pending",
+            crate::event_log::AWAITING_CAUSE_CHILD_AWAITING,
+        ] {
+            let events = [
+                event("10:00", EventKind::NodeStarted, "orch", Value::Null),
+                awaiting("10:02", "orch", cause),
+                event("10:06", EventKind::NodeCompleted, "orch", Value::Null),
+            ];
+            assert_eq!(waited(&events, "orch"), 0.0, "cause {cause}");
+        }
+    }
+
+    #[test]
+    fn an_awaiting_marker_with_no_cause_at_all_is_ignored() {
+        let events = [
+            event("10:00", EventKind::NodeStarted, "plain", Value::Null),
+            event(
+                "10:01",
+                EventKind::NodeAwaitingUser,
+                "plain",
+                serde_json::json!({}),
+            ),
+            event("10:04", EventKind::NodeCompleted, "plain", Value::Null),
+        ];
+        assert_eq!(waited(&events, "plain"), 0.0);
+    }
+
+    #[test]
+    fn the_orchestrator_bindings_reason_key_is_read_like_a_cause() {
+        let events = [
+            event("10:00", EventKind::NodeStarted, "orch", Value::Null),
+            event(
+                "10:02",
+                EventKind::NodeAwaitingUser,
+                "orch",
+                serde_json::json!({"reason":"children_pending","active":["c1"]}),
+            ),
+            event("10:06", EventKind::NodeCompleted, "orch", Value::Null),
+        ];
+        assert_eq!(waited(&events, "orch"), 0.0);
+    }
+
+    #[test]
+    fn a_restart_at_the_same_key_throws_away_the_abandoned_attempts_wait() {
+        // The wait of the attempt that was thrown away is not the wait of the
+        // one that succeeded.
+        let events = [
+            event("10:00", EventKind::NodeStarted, "chat", Value::Null),
+            awaiting("10:01", "chat", crate::event_log::AWAITING_CAUSE_DECLARED),
+            event("10:06", EventKind::NodeStopped, "chat", Value::Null),
+            event("10:07", EventKind::NodeStarted, "chat", Value::Null),
+            awaiting("10:08", "chat", crate::event_log::AWAITING_CAUSE_DECLARED),
+            event("10:09", EventKind::NodeResumed, "chat", Value::Null),
+            event("10:12", EventKind::NodeCompleted, "chat", Value::Null),
+        ];
+        assert_eq!(waited(&events, "chat"), 1.0 * MIN);
+    }
+
+    #[test]
+    fn each_execution_of_the_same_node_keeps_its_own_wait() {
+        let mut events = vec![
+            event("10:00", EventKind::NodeStarted, "chat", Value::Null),
+            awaiting("10:01", "chat", crate::event_log::AWAITING_CAUSE_DECLARED),
+            event("10:03", EventKind::NodeResumed, "chat", Value::Null),
+            event("10:05", EventKind::NodeCompleted, "chat", Value::Null),
+        ];
+        // The second lap of the very same Node: another `(node, iter)` key.
+        for offset in ["10:06", "10:07", "10:11", "10:12"] {
+            let mut lap2 = match offset {
+                "10:06" => event(offset, EventKind::NodeStarted, "chat", Value::Null),
+                "10:07" => awaiting(offset, "chat", crate::event_log::AWAITING_CAUSE_DECLARED),
+                "10:11" => event(offset, EventKind::NodeResumed, "chat", Value::Null),
+                _ => event(offset, EventKind::NodeCompleted, "chat", Value::Null),
+            };
+            lap2.iter = Some(2);
+            events.push(lap2);
+        }
+        let waits = declared_waits(&events);
+        assert_eq!(waits.get(&("chat".to_string(), 1)).copied(), Some(2.0 * MIN));
+        assert_eq!(waits.get(&("chat".to_string(), 2)).copied(), Some(4.0 * MIN));
+    }
+
+    #[test]
+    fn the_three_readings_split_one_wall_clock_in_two() {
+        let reading = DurationReading::new(Some(10.0 * MIN), 3.0 * MIN, None);
+        assert_eq!(reading.total, Some(10.0 * MIN));
+        assert_eq!(reading.active, Some(7.0 * MIN));
+        assert_eq!(reading.waiting, Some(3.0 * MIN));
+        assert_eq!(
+            reading.active.unwrap() + reading.waiting.unwrap(),
+            reading.total.unwrap(),
+            "Total = Active + Waiting, execution by execution"
+        );
+    }
+
+    #[test]
+    fn an_execution_nobody_waited_on_measures_a_waiting_of_zero() {
+        // Zero is data, not an absence: the row plots a flat box at 0 rather
+        // than « no data », and the coverage stays the wall-clock's.
+        let reading = DurationReading::new(Some(4.0 * MIN), 0.0, None);
+        assert_eq!(reading.waiting, Some(0.0));
+        assert_eq!(reading.active, reading.total);
+    }
+
+    #[test]
+    fn a_wait_longer_than_the_wall_clock_clamps_without_breaking_the_identity() {
+        // A clock skew must not produce a negative Active, nor a Waiting the
+        // Total cannot account for.
+        let reading = DurationReading::new(Some(2.0 * MIN), 5.0 * MIN, None);
+        assert_eq!(reading.active, Some(0.0));
+        assert_eq!(reading.waiting, Some(2.0 * MIN));
+        assert_eq!(
+            reading.active.unwrap() + reading.waiting.unwrap(),
+            reading.total.unwrap()
+        );
+    }
+
+    #[test]
+    fn an_unmeasurable_wall_clock_leaves_the_three_readings_absent_together() {
+        // The coverage must never disagree between modes: switching mode cannot
+        // change how many executions the reader is looking at.
+        let reading = DurationReading::new(None, 3.0 * MIN, Some("unparseable timestamp"));
+        assert_eq!(reading.total, None);
+        assert_eq!(reading.active, None);
+        assert_eq!(reading.waiting, None);
+
+        let mut acc = HarnessAcc::default();
+        acc.observe_durations(reading);
+        let finished = acc.finish("claude".to_string());
+        for metric in [
+            &finished.duration,
+            &finished.active_duration,
+            &finished.wait_duration,
+        ] {
+            assert_eq!(metric.measured, 0);
+            assert_eq!(metric.expected, 1);
+            assert_eq!(metric.missing_reasons, vec!["unparseable timestamp"]);
+        }
+    }
+
+    #[test]
+    fn an_unwaited_reading_is_the_wall_clock_and_a_zero() {
+        let reading = DurationReading::unwaited(Some(90_000.0), None);
+        assert_eq!(reading.active, Some(90_000.0));
+        assert_eq!(reading.waiting, Some(0.0));
+    }
 }

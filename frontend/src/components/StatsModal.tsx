@@ -1,22 +1,15 @@
 import { lazy, Suspense, useMemo, useState } from "react";
-import { Check, RotateCw } from "lucide-react";
+import { RotateCw } from "lucide-react";
 import FullWindowShell from "./FullWindowShell";
 import { syncCostPrices } from "../api";
 import { useStats } from "../hooks/useStats";
 import type { PriceRow, StatsCost, SyncCostPricesReport } from "../types";
 import type { StatsTab } from "./StatsCharts";
 import {
-  ALL_NODE_KINDS,
-  DEFAULT_EXCLUDE_USER_WAIT,
-  loadCompletedOnly,
-  loadExcludeUserWait,
-  loadNodeKinds,
-  performanceFiltersDeviate,
-  saveCompletedOnly,
-  saveExcludeUserWait,
-  saveNodeKinds,
-  type NodeKind,
-} from "../lib/statsPrefs";
+  DEFAULT_PERFORMANCE_BAND,
+  TAB_COHORT_DEFAULTS,
+  type PerformanceBand,
+} from "../lib/statsFilters";
 
 const StatsCharts = lazy(() => import("./StatsCharts"));
 
@@ -194,13 +187,20 @@ export default function StatsModal({
 }: Props) {
   const [preset, setPreset] = useState<Preset>("30d");
   const [tab, setTab] = useState<StatsTab>(initialTab);
-  // #810 — the three per-browser settings. Read ONCE at mount (lazy initial
-  // state), written at the change: the shell owns them because the cohort feeds
-  // the three fetches and the Performance filters feed the rail's cue, neither
-  // of which `StatsCharts` can reach.
-  const [completedOnly, setCompletedOnly] = useState(loadCompletedOnly);
-  const [excludeUserWait, setExcludeUserWait] = useState(loadExcludeUserWait);
-  const [nodeKinds, setNodeKinds] = useState<NodeKind[]>(loadNodeKinds);
+  // #819 — the filter state, plain `useState` on literal defaults: nothing is
+  // read from or written to this browser, so every mount of the surface opens
+  // on the defaults (« Réglages de Stats éphémères »). The shell owns it
+  // because the cohorts feed the fetches, which `StatsCharts` cannot reach;
+  // switching tabs keeps it, since the shell outlives the sections.
+  const [overviewCompletedOnly, setOverviewCompletedOnly] = useState<boolean>(
+    TAB_COHORT_DEFAULTS.overview,
+  );
+  const [costCompletedOnly, setCostCompletedOnly] = useState<boolean>(
+    TAB_COHORT_DEFAULTS.cost,
+  );
+  const [performanceCompletedOnly, setPerformanceCompletedOnly] =
+    useState<boolean>(TAB_COHORT_DEFAULTS.performance);
+  const [band, setBand] = useState<PerformanceBand>(DEFAULT_PERFORMANCE_BAND);
   const [pricingOpen, setPricingOpen] = useState(
     initialPricingOpen && initialTab === "cost",
   );
@@ -229,7 +229,11 @@ export default function StatsModal({
     tab === "cost",
     tab === "performance",
     reloadKey,
-    completedOnly,
+    {
+      overview: overviewCompletedOnly,
+      cost: costCompletedOnly,
+      performance: performanceCompletedOnly,
+    },
   );
 
   if (!open) return null;
@@ -243,35 +247,31 @@ export default function StatsModal({
     setReloadKey((value) => value + 1);
   };
 
+  // The cohort of the section on screen (#819). Overview, Sessions and Triggers
+  // read one response, so they read and write one state; Cost and Performance
+  // each own theirs, and flipping one leaves the others exactly where they are.
+  const completedOnly =
+    tab === "cost"
+      ? costCompletedOnly
+      : tab === "performance"
+        ? performanceCompletedOnly
+        : overviewCompletedOnly;
   const onCompletedOnlyChange = (value: boolean) => {
-    setCompletedOnly(value);
-    saveCompletedOnly(value);
+    if (tab === "cost") setCostCompletedOnly(value);
+    else if (tab === "performance") setPerformanceCompletedOnly(value);
+    else setOverviewCompletedOnly(value);
   };
-  const onExcludeUserWaitChange = (value: boolean) => {
-    setExcludeUserWait(value);
-    saveExcludeUserWait(value);
-  };
-  const onNodeKindsChange = (kinds: NodeKind[]) => {
-    setNodeKinds(kinds);
-    saveNodeKinds(kinds);
-  };
+  // « reset filters » puts the tab back on what it opens with — cohort, mode,
+  // kinds, zoom and scales. The grouping and the sort are not filters and are
+  // left alone.
   const onResetFilters = () => {
-    onExcludeUserWaitChange(DEFAULT_EXCLUDE_USER_WAIT);
-    onNodeKindsChange([...ALL_NODE_KINDS]);
+    setPerformanceCompletedOnly(TAB_COHORT_DEFAULTS.performance);
+    setBand(DEFAULT_PERFORMANCE_BAND);
   };
 
-  // The rail cue (#810): the Performance filters survive a reload, so without a
-  // mark nobody would know why the numbers differ from the defaults.
-  const filtersDeviate = performanceFiltersDeviate(excludeUserWait, nodeKinds);
-  const rail = TABS.map((item) =>
-    item.id === "performance" && filtersDeviate
-      ? {
-          ...item,
-          dirty: true,
-          dirtyLabel: "Performance filters differ from the defaults",
-        }
-      : item,
-  );
+  // No rail badge, whatever the band says (#819): the band is on screen, and a
+  // deliberate reading is not an anomaly to flag.
+  const rail = TABS;
 
   const onSyncPrices = async () => {
     setSyncing(true);
@@ -311,6 +311,8 @@ export default function StatsModal({
       railTestIdPrefix="stats-tab"
       mainClassName={`min-w-0 flex-1 overflow-y-auto p-5 ${refreshing ? "opacity-65" : ""}`}
       headerExtras={
+        // #819 — the period is the only global setting left in the bar: every
+        // other filter belongs to the tab it changes, in that tab's band.
         <div className="flex items-center gap-1">
           <div
             className="flex items-center gap-1"
@@ -335,35 +337,6 @@ export default function StatsModal({
               </button>
             ))}
           </div>
-          {/* #810 — the cohort, not a period: same pill language, its own group
-              behind a thin divider, because it answers « which Runs? » and
-              applies to every section at once. */}
-          <span className="mx-2 h-4 w-px bg-line-strong" aria-hidden="true" />
-          <button
-            type="button"
-            role="checkbox"
-            aria-checked={completedOnly}
-            data-testid="stats-completed-only"
-            onClick={() => onCompletedOnlyChange(!completedOnly)}
-            className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 ${
-              completedOnly
-                ? "border-st-done bg-st-done/15 text-fg"
-                : "border-line-strong bg-bg-3 text-fg-2"
-            }`}
-            style={{ fontSize: "11px" }}
-          >
-            <span
-              className={`grid h-3 w-3 place-items-center rounded-sm border ${
-                completedOnly
-                  ? "border-st-done bg-st-done text-bg-4"
-                  : "border-line-strong"
-              }`}
-              aria-hidden="true"
-            >
-              {completedOnly && <Check size={9} strokeWidth={3} />}
-            </span>
-            completed runs only
-          </button>
         </div>
       }
       headerActions={
@@ -440,10 +413,9 @@ export default function StatsModal({
           performance={performance}
           performanceError={performanceError}
           completedOnly={completedOnly}
-          excludeUserWait={excludeUserWait}
-          nodeKinds={nodeKinds}
-          onExcludeUserWaitChange={onExcludeUserWaitChange}
-          onNodeKindsChange={onNodeKindsChange}
+          onCompletedOnlyChange={onCompletedOnlyChange}
+          band={band}
+          onBandChange={setBand}
           onResetFilters={onResetFilters}
         />
       </Suspense>

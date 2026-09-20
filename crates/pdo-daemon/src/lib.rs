@@ -27112,11 +27112,11 @@ mod tests {
         let body = call(&state, &format!("/stats/performance?from={from}&to={to}")).await;
 
         const MIN: f64 = 60_000.0;
-        for (id, wall, active) in [
-            ("chat", 10.0, 7.0),
-            ("orch", 6.0, 6.0),
-            ("plain", 4.0, 4.0),
-            ("late", 12.0, 2.0),
+        for (id, wall, active, waiting) in [
+            ("chat", 10.0, 7.0, 3.0),
+            ("orch", 6.0, 6.0, 0.0),
+            ("plain", 4.0, 4.0, 0.0),
+            ("late", 12.0, 2.0, 10.0),
         ] {
             let row = node(&body, "wp1", id);
             assert_eq!(
@@ -27129,14 +27129,34 @@ mod tests {
                 active * MIN,
                 "{id} active duration"
             );
-            // Coverage never disagrees between the two readings: the metric
-            // swap must not change `n=`.
+            // #819 — the third reading: the declared wait alone. A node nobody
+            // waited on measures a real `0`, never an absence.
             assert_eq!(
-                claude_metric(row, "duration")["measured"],
-                claude_metric(row, "active_duration")["measured"],
-                "{id} coverage"
+                claude_metric(row, "wait_duration")["stats"]["median"],
+                waiting * MIN,
+                "{id} waiting"
             );
+            assert_eq!(
+                active * MIN + waiting * MIN,
+                wall * MIN,
+                "{id}: Total = Active + Waiting"
+            );
+            // Coverage never disagrees between the three readings: the mode
+            // switch must not change `n=`.
+            for metric in ["active_duration", "wait_duration"] {
+                assert_eq!(
+                    claude_metric(row, "duration")["measured"],
+                    claude_metric(row, metric)["measured"],
+                    "{id} {metric} coverage"
+                );
+            }
         }
+
+        // #819 — the wait coverage the « i » reads: the five Node executions of
+        // the default cohort (four here plus the failed Run's `doomed`), two of
+        // which declared a wait. Infrastructure is not an execution.
+        assert_eq!(body["executions"], 5);
+        assert_eq!(body["waited_executions"], 2);
 
         // The genre travels on every Node row: frozen in the payload for
         // `chat`, read off the Run's snapshot for `orch`.
@@ -27182,6 +27202,12 @@ mod tests {
             claude_metric(manager, "active_duration")["stats"]["median"],
             7.0 * MIN
         );
+        // #819 — and its Waiting is that same sum, so the three modes reconcile
+        // at the Infrastructure level too.
+        assert_eq!(
+            claude_metric(manager, "wait_duration")["stats"]["median"],
+            13.0 * MIN
+        );
         assert!(
             body["by_pipeline"]
                 .as_array()
@@ -27216,6 +27242,10 @@ mod tests {
             7.0 * MIN,
             "the completed Run is untouched by the cohort switch"
         );
+        // The coverage follows the cohort it describes: `doomed` left with its
+        // Run, so the denominator drops to the four executions on screen.
+        assert_eq!(narrowed["executions"], 4);
+        assert_eq!(narrowed["waited_executions"], 2);
         // A repeat of the narrowed request is served from ITS memo entry.
         let repeat = call(
             &state,

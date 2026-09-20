@@ -74,7 +74,9 @@ Features validated while crossing the tour:
 11. The **intermediate card** says how far along the full tour is, recaps what was actually observed,
     and offers *Finish here* or *Continue · First pipeline*.
 12. **Continue** → the artifact modal closes and the *First pipeline* tour starts on a clear screen.
-    Carry it to its end card and `Finish`.
+    Carry it to its end card and `Finish`. Every card the tour has you create must be **on screen**
+    when it asks you to click it, and the two edges out of the tester are drawn from the handle the
+    card names (`out`, not `image_list`).
 13. Open **Settings › Tutorials** → both tours are ticked.
 
 ## Checks
@@ -98,6 +100,15 @@ Features validated while crossing the tour:
   into the background and eat every click the next tour asks for.
 - Each node the reader creates in *First pipeline* lands **clear of the others** and of the End
   marker, so the edges the tour then asks them to select can actually be clicked.
+- **Every lit target is reachable with the mouse, at an ordinary window size** — no step asks for a
+  click outside the visible canvas, and no step needs a wider window, a zoom-out or a pan to be
+  satisfied. The tour overlay owns the wheel and the drag, so a target off screen is a dead end.
+- A step that asks for a drag from a node with **two output handles** names the one to use, and an
+  edge drawn from the other one does **not** count as the step done.
+- A `Create` the daemon refuses **says so in the dialog** (replay the tour keeping the pipeline it
+  builds: the name is then taken), and the tour stops on its refusal card rather than waiting on a
+  button that does nothing.
+- The tutorial Run's canvas shows Start, the agent and End **side by side**, none on top of another.
 
 ### Internals
 

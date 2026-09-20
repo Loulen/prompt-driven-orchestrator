@@ -38,6 +38,7 @@ import {
   TUTORIAL_RUN_PIPELINE_ID,
   TUTORIAL_TERMINAL_LINE,
 } from "./firstRun";
+import { CARD_HEIGHT, CARD_WIDTH } from "../nodePlacement";
 
 const TOUR = FIRST_RUN_TOUR;
 const STEPS = TOUR.steps;
@@ -1083,6 +1084,32 @@ describe("what the intro card prepares", () => {
     expect(yaml).toContain("Summary of what you changed");
     expect(yaml).not.toContain("pin_harness");
     expect(Object.keys(prompts)).toEqual(["assistant"]);
+  });
+
+  /**
+   * The very first canvas a newcomer sees had two cards on top of each other
+   * (#825, FP iteration 2): only `assistant` carried a `view`, so the canvas laid
+   * Start and End out itself, in a column that ran straight under it.
+   */
+  it("gives every node of the tutorial pipeline a place of its own", async () => {
+    const api = await import("../../api");
+    vi.mocked(api.fetchPipelines).mockResolvedValueOnce([]);
+    await TOUR.intro!.prepare[1].run();
+    const [, yaml] = vi.mocked(api.savePipeline).mock.calls.at(-1)!;
+
+    const views = [...yaml.matchAll(/view:\s*\{\s*x:\s*(-?\d+),\s*y:\s*(-?\d+)\s*\}/g)].map((m) => ({
+      x: Number(m[1]),
+      y: Number(m[2]),
+    }));
+    expect(views, "one per node: start, assistant, end").toHaveLength(3);
+    for (let i = 0; i < views.length; i++) {
+      for (let j = i + 1; j < views.length; j++) {
+        const apart =
+          Math.abs(views[i].x - views[j].x) >= CARD_WIDTH ||
+          Math.abs(views[i].y - views[j].y) >= CARD_HEIGHT;
+        expect(apart, `node ${i} sits on node ${j}`).toBe(true);
+      }
+    }
   });
 
   /**

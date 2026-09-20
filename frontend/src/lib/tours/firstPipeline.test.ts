@@ -21,6 +21,7 @@ import {
   skipStep,
   startTour,
   stepBody,
+  stepNote,
   type TourAppState,
   type TourObservation,
   type TourStep,
@@ -354,6 +355,87 @@ describe("walking the whole tour", () => {
   });
 });
 
+/**
+ * The two accidents the FP found on a live instance (#825, iteration 2): an edge
+ * drawn from the wrong handle, and a pipeline name already taken. Both used to be
+ * dead ends — the tour walked on, or waited, and the reader had only `✕ quit`.
+ */
+describe("the accidents a reader can have", () => {
+  /** Play the tour up to `stepId`, performing every scripted gesture on the way. */
+  function upTo(fake: FakeApp, stepId: string) {
+    const script = gestures(fake);
+    for (const step of STEPS) {
+      if (step.id === stepId) return step;
+      script[step.id]();
+    }
+    throw new Error(`no step ${stepId}`);
+  }
+
+  it.each([
+    ["edge-tester-implementer", { node: "n1", port: "in" }],
+    ["edge-tester-end", { node: "end", port: "result" }],
+  ])("does not count %s as drawn when it came from image_list", (stepId, target) => {
+    const fake = new FakeApp();
+    const step = upTo(fake, stepId);
+
+    fake.addEdge({ source: { node: "n2", port: "image_list" }, target });
+    expect(step.done!(fake.obs()), "an edge with no verdict on it").toBe(false);
+
+    fake.addEdge({ source: { node: "n2", port: "out" }, target });
+    expect(step.done!(fake.obs())).toBe(true);
+  });
+
+  /**
+   * And the step after it points at the right edge of the two, rather than at
+   * whichever was drawn first — a condition authored on the screenshot edge is a
+   * condition on a port that has no `verdict`.
+   */
+  it("selects the out edge even when a stray image_list edge exists", () => {
+    const fake = new FakeApp();
+    // Stop before the return edge is drawn, then draw the wrong one first — the
+    // order the accident happens in.
+    upTo(fake, "edge-tester-implementer");
+    const step = STEPS.find((s) => s.id === "select-loop-edge")!;
+    fake.addEdge({ source: { node: "n2", port: "image_list" }, target: { node: "n1", port: "in" } });
+    fake.addEdge({ source: { node: "n2", port: "out" }, target: { node: "n1", port: "in" } });
+
+    fake.selectEdge(1); // the image_list one
+    expect(step.done!(fake.obs())).toBe(false);
+    fake.selectEdge(2); // the out one
+    expect(step.done!(fake.obs())).toBe(true);
+  });
+
+  /**
+   * A reader who kept the pipeline at the end of a previous run meets a 409, and
+   * `Create` does nothing at all. The tour cannot advance and never will, so it
+   * says so on its own card instead of waiting on a dead button.
+   */
+  it("stops on a refusal card when the pipeline name is already taken", () => {
+    const fake = new FakeApp();
+    const script = gestures(fake);
+    let run = startTour(FIRST_PIPELINE_TOUR, fake.obs());
+    let clock = 0;
+    for (const id of ["pipelines-tab", "new-pipeline", "name-pipeline"]) {
+      script[id]();
+      clock += 200;
+      run = observeTour(FIRST_PIPELINE_TOUR, run, fake.obs(), clock);
+      if (needsConfirm(FIRST_PIPELINE_TOUR, run, fake.obs())) {
+        run = confirmStep(FIRST_PIPELINE_TOUR, run, fake.obs());
+      }
+    }
+    expect(currentStep(FIRST_PIPELINE_TOUR, run)?.id).toBe("create-pipeline");
+
+    // The dialog says what the daemon said, and stays open.
+    fake.type('[data-testid="new-pipeline-error"]', `A pipeline named ${TUTORIAL_PIPELINE_ID} already exists.`);
+    run = observeTour(FIRST_PIPELINE_TOUR, run, fake.obs(), clock + 200);
+
+    expect(run.phase).toBe("failed");
+    expect(run.failure?.kind).toBe("refused");
+    expect(run.failure?.reason).toContain("already exists");
+    expect(run.failure?.hint).toContain(TUTORIAL_PIPELINE_ID);
+  });
+});
+
 /** Every *First pipeline* step declares a plain string body; resolving it needs
  *  an observation all the same, so the shape checks below borrow a fresh one. */
 const SHAPE_OBS = new FakeApp().obs();
@@ -388,6 +470,19 @@ describe("the shape of every step", () => {
   it("makes Save non-skippable and Keep-or-delete skippable", () => {
     expect(STEPS.find((s) => s.id === "save")?.skippable).toBeFalsy();
     expect(STEPS.find((s) => s.id === "keep-or-delete")?.skippable).toBe(true);
+  });
+
+  it("names the handle to drag from, on a node that has two", () => {
+    // The FP drew the return edge from `image_list` — the card said "drag from
+    // tester" and the tester has two output handles by then. The edge was made
+    // normally, and two steps later the When editor offered `iter` and no
+    // `verdict`, with no way back (#825, FP iteration 2).
+    for (const id of ["edge-tester-implementer", "edge-tester-end"]) {
+      const step = STEPS.find((s) => s.id === id)!;
+      const said = `${bodyOf(step)} ${stepNote(step, SHAPE_OBS) ?? ""}`;
+      expect(said, id).toContain("out");
+      expect(said, id).toContain("image_list");
+    }
   });
 
   it("never claims Interactive opens a terminal", () => {

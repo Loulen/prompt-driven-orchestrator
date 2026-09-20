@@ -10,6 +10,7 @@ import TourHost from "./TourHost";
 import { useTour } from "../../hooks/useTour";
 import { loadTourOffered, loadToursDone } from "../../lib/tourMemory";
 import { registerTransientOverlay } from "../../lib/overlays";
+import { registerCanvasReveal } from "../../lib/canvasReveal";
 import { FIRST_PIPELINE_TOUR } from "../../lib/tours";
 import type { TourDef } from "../../lib/tour";
 
@@ -288,6 +289,63 @@ describe("scrolling the target into view", () => {
       // own property that throws for every later test in this file.
       if (original) Element.prototype.scrollIntoView = original;
       else Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+    }
+  });
+
+  /**
+   * A canvas card cannot be scrolled to (#825, FP iteration 2). It is absolutely
+   * positioned inside a transformed viewport, so `scrollIntoView` moves nothing —
+   * and the *First pipeline* tour dead-ended on « click the new card » with the
+   * card drawn past the right edge of the canvas and the overlay owning the
+   * wheel. The canvas is asked instead.
+   */
+  const CANVAS_TOUR: TourDef = {
+    ...TOUR,
+    id: "first-run",
+    steps: [
+      {
+        id: "one",
+        title: "Click the new card",
+        body: "The inspector follows it.",
+        target: () => ['.react-flow__node[data-id="n1"]'],
+        waitingFor: "the new node on the canvas",
+      },
+    ],
+  };
+
+  it("asks the canvas for a node target instead of scrolling the page", async () => {
+    const reveal = vi.fn();
+    const off = registerCanvasReveal(reveal);
+    const card = document.createElement("div");
+    card.className = "react-flow__node";
+    card.setAttribute("data-id", "n1");
+    document.body.appendChild(card);
+    try {
+      render(<Harness tour={CANVAS_TOUR} />);
+      await user().click(screen.getByTestId("start"));
+      tick();
+
+      expect(reveal).toHaveBeenCalledWith("n1");
+      // Once per aim, like the scroll: a canvas re-centring itself ten times a
+      // second would be yanking the graph around under the reader's mouse.
+      tick(1_000);
+      expect(reveal).toHaveBeenCalledTimes(1);
+    } finally {
+      off();
+      card.remove();
+    }
+  });
+
+  it("leaves an ordinary target to the page's own scrolling", async () => {
+    const reveal = vi.fn();
+    const off = registerCanvasReveal(reveal);
+    try {
+      render(<Harness />);
+      await user().click(screen.getByTestId("start"));
+      tick();
+      expect(reveal).not.toHaveBeenCalled();
+    } finally {
+      off();
     }
   });
 });

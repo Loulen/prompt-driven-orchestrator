@@ -58,6 +58,29 @@ Corrections issues du passage de la Feature Path sur une vraie instance :
   désormais l'empreinte des cartes, pas 30 pixels. Deux cartes posées à 40 pixels enterraient l'arête
   qui les relie, que *First pipeline* demande justement de cliquer.
 
+Second passage de la Feature Path :
+
+- **Un nouveau node reste à l'écran.** La grille d'évitement raisonnait en unités de canvas et
+  ignorait le viewport : sur un pipeline neuf, que le canvas cadre au zoom 2, un pas à droite fait
+  440 pixels et la deuxième carte de *First pipeline* naissait **hors du canvas**, injoignable, avec
+  un tour qui la demandait. La recherche connaît désormais la zone visible et n'y répond que par une
+  place qu'on voit ; et le cadrage automatique **ne grossit plus au-delà de 1:1**, si bien qu'une
+  carte a la taille pour laquelle elle a été dessinée.
+- **Un tour peut montrer un node du canvas.** Une carte vit dans un viewport transformé : la faire
+  défiler ne la déplace pas. Le canvas se déclare capable de l'amener au centre (`lib/canvasReveal.ts`,
+  même patron que `lib/overlays.ts`) et le tour le lui demande — une fois par visée, et seulement si
+  la carte n'est pas déjà dans le cadre.
+- **Les deux étapes d'arête de *First pipeline* nomment la sortie** à tirer. Le tester a deux
+  poignées à ce moment-là ; une arête partie d'`image_list` ne porte aucun `verdict`, et la condition
+  demandée deux étapes plus loin devenait impossible à écrire. Le geste ne compte plus que depuis
+  `out`, et la ligne grise nomme l'autre poignée.
+- **Un `Create` refusé le dit.** La modale New Pipeline avalait l'erreur du daemon : bouton sans
+  effet, aucun message. Elle affiche désormais la phrase du daemon — et, pour un nom déjà pris, le
+  dit dans les termes du lecteur. Le tour *First pipeline* s'arrête alors sur sa carte de refus au
+  lieu d'attendre un bouton mort.
+- **Le pipeline `tutorial-interactive` ne se chevauche plus** : ses trois nodes portent une position,
+  au lieu de laisser le canvas empiler Start sous l'agent.
+
 ## 1.95.0
 **Tour *First run* et dépôt d'entraînement** (#824, spec #821, story #816, ADR-0071).
 

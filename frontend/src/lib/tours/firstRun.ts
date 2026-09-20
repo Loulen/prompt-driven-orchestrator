@@ -67,6 +67,12 @@ const NOTES = `Notes\n`;
  *
  * Interactive is the whole point — the node waits for the user instead of running
  * to completion on its own, which is what makes the Run worth looking at.
+ *
+ * All three nodes carry a `view` (#825, FP iteration 2). Only `assistant` used to,
+ * so the canvas laid Start and End out itself — in a column at x = 200, straight
+ * under the agent at x = 260. The very first canvas a newcomer sees had two cards
+ * on top of each other. Three cards in a row, a step apart, is what the graph
+ * actually is.
  */
 const TUTORIAL_PIPELINE_YAML = `name: ${TUTORIAL_RUN_PIPELINE_ID}
 version: "1.0"
@@ -79,6 +85,7 @@ nodes:
     type: start
     outputs:
       - name: user_prompt
+    view: { x: 80, y: 120 }
   - id: assistant
     name: assistant
     type: agent
@@ -90,12 +97,13 @@ nodes:
       - name: out
         port_type: markdown
         instructions: ${TUTORIAL_OUT_EXPECTED}
-    view: { x: 260, y: 80 }
+    view: { x: 360, y: 120 }
   - id: end
     name: End
     type: end
     inputs:
       - name: result
+    view: { x: 640, y: 120 }
 
 edges:
   - source: { node: start, port: user_prompt }

@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useEditStore } from "../stores/editStore";
 import { dismissTransientOverlays } from "../lib/overlays";
+import { canvasNodeIdOf, revealCanvasNode } from "../lib/canvasReveal";
 import {
   beginSteps,
   canAdvance,
@@ -602,9 +603,20 @@ export function useTour(
       const aim = `${tour.id}:${active.index}:${selectors.join("|")}`;
       if (elements[0] && scrolledFor.current !== aim) {
         scrolledFor.current = aim;
-        const r = elements[0].getBoundingClientRect();
-        if (r.top < 0 || r.bottom > window.innerHeight) {
-          elements[0].scrollIntoView({ block: "center", behavior: "smooth" });
+        // A canvas card cannot be scrolled to: it is absolutely positioned inside
+        // a transformed viewport, so `scrollIntoView` on it moves nothing and a
+        // node outside the visible canvas stays outside it — lit, unreachable, and
+        // with the overlay owning the wheel there is no panning out of that (#825,
+        // FP iteration 2). The canvas is asked instead, and decides for itself
+        // whether the card is already in frame.
+        const nodeId = canvasNodeIdOf(elements[0]);
+        if (nodeId) {
+          revealCanvasNode(nodeId);
+        } else {
+          const r = elements[0].getBoundingClientRect();
+          if (r.top < 0 || r.bottom > window.innerHeight) {
+            elements[0].scrollIntoView({ block: "center", behavior: "smooth" });
+          }
         }
       }
     };

@@ -16,6 +16,30 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.94.0
+**Mode tutoriel : Projecteur, moteur de tours et tour *First pipeline*** (#823, spec #821, story #816, ADR-0071).
+
+- Au premier lancement — clé navigateur absente **et** instance sans aucun Run — une **modale de
+  bienvenue** propose le full tour, un tour précis ou « plus tard ». N'importe lequel des trois
+  choix pose la clé : on n'est jamais sollicité deux fois.
+- Pendant un tour, le **Projecteur** grise tout l'écran sauf la cible de l'étape (au-dessus des
+  modales et des menus portalisés) et absorbe les clics ailleurs. Un popover ancré au trou donne
+  l'instruction, la progression `Step n of N`, le bloc à copier des saisies libres, `Skip` quand
+  l'étape le permet et `Quit tour` toujours — Échap aussi, sauf quand un menu ou un dialogue le
+  réclame d'abord.
+- Une étape avance sur l'**état réellement observé**, jamais sur un délai ; une cible absente plus
+  de quelques secondes arrête le tour proprement (« This step could not be completed ») au lieu
+  d'attendre. Les définitions de tours sont de simples données : ajouter un tour ne touche pas au
+  moteur.
+- Le tour **First pipeline** construit `tutorial-implement-test` de bout en bout : deux nœuds
+  interactifs (implémenteur dans le worktree du Run, testeur isolé), leurs prompts et leurs
+  outputs, un schéma `verdict` en énumération `pass`/`fail`, un port `image_list`, puis les trois
+  edges dont deux conditionnelles.
+- Nouvelle section **Settings › General › Tutorials** : full tour, un bouton par tour avec sa durée
+  estimée, une coche sur les tours terminés et un lien « Reset tutorial memory ». Coches et
+  proposition de bienvenue vivent dans le navigateur, comme le thème — jamais côté daemon.
+- Le tour *First run* est annoncé et grisé : il arrive avec #824.
+
 ## 1.93.0
 **Filtres par onglet, mode de durée Total/Active/Waiting, couverture, réglages éphémères** (#819, story #817).
 

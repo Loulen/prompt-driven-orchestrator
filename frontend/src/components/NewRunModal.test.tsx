@@ -132,6 +132,46 @@ function selectedBranch(prefix = "source-branch"): string {
   return screen.getByTestId(`${prefix}-trigger`).textContent ?? "";
 }
 
+/**
+ * `userEvent` bound to this file's fake timers. The pipeline menu is the app's own
+ * dropdown since #822, and Base UI opens it on a real pointer sequence — a bare
+ * `fireEvent.click` dispatches no pointerdown and leaves the popup shut.
+ */
+function menuUser() {
+  return userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+}
+
+/** Open the pipeline menu and wait for its popup. */
+async function openPipelineMenu() {
+  await menuUser().click(screen.getByTestId("pipeline-select"));
+  return screen.findByTestId("pipeline-select-menu");
+}
+
+/**
+ * Pick a pipeline the way a person does (#822): open the menu, click the row.
+ * Replaces the `fireEvent.change` the old `<select>` took.
+ */
+async function pickPipeline(id: string) {
+  const user = menuUser();
+  await user.click(screen.getByTestId("pipeline-select"));
+  await user.click(await screen.findByTestId(`pipeline-select-option-${id}`));
+}
+
+/** The pipeline the closed field shows — what a launch would post. */
+function selectedPipeline(): string {
+  return screen.getByTestId("pipeline-select").textContent ?? "";
+}
+
+/** The rows the OPEN menu offers, in order, by pipeline id then name. */
+function pipelineOptions(): Array<{ id: string; name: string }> {
+  return Array.from(
+    screen.getByTestId("pipeline-select-menu").querySelectorAll("[data-pipeline-id]"),
+  ).map((row) => ({
+    id: row.getAttribute("data-pipeline-id") ?? "",
+    name: row.textContent?.replace(/(instance|repo|user|library)$/, "") ?? "",
+  }));
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   // `clearAllMocks` wipes recorded calls but KEEPS implementations, so a
@@ -181,9 +221,10 @@ describe("NewRunModal — pipeline picker", () => {
     renderModal();
     await enterValidRepo();
 
-    const select = screen.getByTestId("pipeline-select") as HTMLSelectElement;
-    expect(Array.from(select.options).find((option) => option.value === "review")?.textContent)
-      .toBe("Review Pipeline");
+    await openPipelineMenu();
+    expect(screen.getByTestId("pipeline-select-option-review")).toHaveTextContent(
+      "Review Pipeline",
+    );
   });
 
   it("does not group legacy-scoped responses", async () => {
@@ -193,10 +234,11 @@ describe("NewRunModal — pipeline picker", () => {
     renderModal();
     await enterValidRepo();
 
-    const select = screen.getByTestId("pipeline-select") as HTMLSelectElement;
-    expect(select.querySelectorAll("optgroup")).toHaveLength(0);
-    expect(Array.from(select.options).find((option) => option.value === "lib-pipe")?.textContent)
-      .toBe("Library Pipeline");
+    const menu = await openPipelineMenu();
+    // The menu is flat — no scope headers the way the harness picker has (#822):
+    // grouping would reorder the list, and "the first pipeline" is the default.
+    expect(menu.querySelectorAll("[data-slot='dropdown-menu-label']")).toHaveLength(0);
+    expect(pipelineOptions()).toEqual([{ id: "lib-pipe", name: "Library Pipeline" }]);
   });
 
   it("shows one flat instance pipeline list", async () => {
@@ -207,9 +249,9 @@ describe("NewRunModal — pipeline picker", () => {
     renderModal();
     await enterValidRepo();
 
-    const select = screen.getByTestId("pipeline-select") as HTMLSelectElement;
-    expect(select.querySelectorAll("optgroup")).toHaveLength(0);
-    expect(Array.from(select.options).map((option) => option.textContent)).toEqual([
+    const menu = await openPipelineMenu();
+    expect(menu.querySelectorAll("[data-slot='dropdown-menu-label']")).toHaveLength(0);
+    expect(pipelineOptions().map((o) => o.name)).toEqual([
       "Library Pipeline",
       "Repo Pipeline",
     ]);
@@ -220,8 +262,11 @@ describe("NewRunModal — pipeline picker", () => {
     renderModal();
     await enterValidRepo();
 
-    const option = screen.getByText(/no pipelines found/i);
-    expect(option).toBeInTheDocument();
+    // #822: the dead end is stated ON the trigger, which is disabled — a menu with
+    // nothing choosable in it has nothing to offer.
+    const trigger = screen.getByTestId("pipeline-select");
+    expect(trigger).toHaveTextContent(/no pipelines found/i);
+    expect(trigger).toBeDisabled();
   });
 
   it("pre-selects the first repo pipeline when available", async () => {
@@ -232,8 +277,240 @@ describe("NewRunModal — pipeline picker", () => {
     renderModal();
     await enterValidRepo();
 
-    const select = screen.getByTestId("pipeline-select") as HTMLSelectElement;
-    expect(select.value).toBe("first-repo");
+    expect(selectedPipeline()).toBe("First Repo");
+  });
+});
+
+/**
+ * The filter field at the head of the popup (#822) — the one thing the pipeline menu
+ * has that the harness and model pickers do not.
+ */
+describe("NewRunModal — pipeline filter", () => {
+  const threePipelines = [
+    makePipeline({ id: "implement-loop", name: "implement-loop", scope: "instance" }),
+    makePipeline({ id: "review-loop", name: "review-loop", scope: "instance" }),
+    makePipeline({ id: "grill-and-spec", name: "grill-and-spec", scope: "repo" }),
+  ];
+
+  it("opens on the full list with the filter focused", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue(threePipelines);
+    renderModal();
+    await enterValidRepo();
+
+    await openPipelineMenu();
+    expect(pipelineOptions().map((o) => o.id)).toEqual([
+      "implement-loop",
+      "review-loop",
+      "grill-and-spec",
+    ]);
+    // Typing filters immediately: the field already has the caret.
+    expect(screen.getByTestId("pipeline-select-filter")).toHaveFocus();
+    // Each row states its scope — the information grouping would have carried,
+    // without the reordering grouping would have cost.
+    expect(screen.getByTestId("pipeline-select-option-grill-and-spec")).toHaveTextContent(
+      "repo",
+    );
+    expect(screen.getByTestId("pipeline-select-option-review-loop")).toHaveTextContent(
+      "instance",
+    );
+  });
+
+  it("marks the selected row and no other", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue(threePipelines);
+    renderModal();
+    await enterValidRepo();
+
+    await openPipelineMenu();
+    // The accent check is an SVG rendered only on the selected row (HarnessSelect's
+    // marker, shared so the two menus cannot drift).
+    expect(
+      screen.getByTestId("pipeline-select-option-implement-loop").querySelector("svg"),
+    ).not.toBeNull();
+    expect(
+      screen.getByTestId("pipeline-select-option-review-loop").querySelector("svg"),
+    ).toBeNull();
+  });
+
+  it("underlines the matched fragment in the surviving rows", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue(threePipelines);
+    renderModal();
+    await enterValidRepo();
+
+    await openPipelineMenu();
+    await menuUser().type(screen.getByTestId("pipeline-select-filter"), "view");
+
+    const row = await screen.findByTestId("pipeline-select-option-review-loop");
+    await waitFor(() =>
+      expect(row.querySelector(".underline")).toHaveTextContent("view"),
+    );
+  });
+
+  it("walks from the field into the list with ↓ and back with ↑", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue(threePipelines);
+    renderModal();
+    await enterValidRepo();
+
+    await openPipelineMenu();
+    const user = menuUser();
+    const filter = screen.getByTestId("pipeline-select-filter");
+
+    await user.keyboard("{ArrowDown}");
+    await waitFor(() =>
+      expect(screen.getByTestId("pipeline-select-option-implement-loop")).toHaveFocus(),
+    );
+
+    // From the first row, ↑ goes to the field above it on screen — not around to
+    // the bottom of the list, which is where the menu's own looping would land.
+    await user.keyboard("{ArrowUp}");
+    await waitFor(() => expect(filter).toHaveFocus());
+  });
+
+  it("takes the first remaining row on Enter from the field", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue(threePipelines);
+    renderModal();
+    await enterValidRepo();
+
+    await openPipelineMenu();
+    const user = menuUser();
+    await user.type(screen.getByTestId("pipeline-select-filter"), "review");
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => expect(selectedPipeline()).toBe("review-loop"));
+  });
+
+  it("sends a letter typed on a row back to the field", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue(threePipelines);
+    renderModal();
+    await enterValidRepo();
+
+    await openPipelineMenu();
+    const user = menuUser();
+    await user.keyboard("{ArrowDown}"); // focus is on a row now
+    await user.keyboard("r");
+
+    // One filtering gesture: the letter lands in the field and narrows the list,
+    // rather than driving the menu's own typeahead in parallel.
+    const filter = screen.getByTestId("pipeline-select-filter");
+    await waitFor(() => expect(filter).toHaveValue("r"));
+    expect(filter).toHaveFocus();
+  });
+
+  it("empties the fragment on the first Escape and closes on the second", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue(threePipelines);
+    renderModal();
+    await enterValidRepo();
+
+    await openPipelineMenu();
+    const user = menuUser();
+    await user.type(screen.getByTestId("pipeline-select-filter"), "review");
+    await waitFor(() => expect(pipelineOptions()).toHaveLength(1));
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(pipelineOptions()).toHaveLength(3));
+    expect(screen.getByTestId("pipeline-select-filter")).toHaveValue("");
+
+    await user.keyboard("{Escape}");
+    await waitFor(() =>
+      expect(screen.queryByTestId("pipeline-select-menu")).not.toBeInTheDocument(),
+    );
+    // Nothing was chosen: the selection is the one the menu opened on.
+    expect(selectedPipeline()).toBe("implement-loop");
+  });
+
+  it("narrows the list to the pipelines whose name holds the fragment", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue(threePipelines);
+    renderModal();
+    await enterValidRepo();
+
+    await openPipelineMenu();
+    await menuUser().type(screen.getByTestId("pipeline-select-filter"), "LOOP");
+
+    // Case-insensitive, and on the NAME only — `grill-and-spec` is gone.
+    await waitFor(() =>
+      expect(pipelineOptions().map((o) => o.id)).toEqual([
+        "implement-loop",
+        "review-loop",
+      ]),
+    );
+  });
+
+  it("selects a filtered pipeline and shows it on the closed trigger", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue(threePipelines);
+    renderModal();
+    await enterValidRepo();
+    expect(selectedPipeline()).toBe("implement-loop"); // the auto-selected first
+
+    await openPipelineMenu();
+    const user = menuUser();
+    await user.type(screen.getByTestId("pipeline-select-filter"), "review");
+    await user.click(await screen.findByTestId("pipeline-select-option-review-loop"));
+
+    expect(selectedPipeline()).toBe("review-loop");
+    await waitFor(() =>
+      expect(screen.queryByTestId("pipeline-select-menu")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("says so when nothing matches, and leaves the selection alone", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue(threePipelines);
+    renderModal();
+    await enterValidRepo();
+
+    await openPipelineMenu();
+    await menuUser().type(screen.getByTestId("pipeline-select-filter"), "deploy");
+
+    const empty = await screen.findByTestId("pipeline-select-empty");
+    expect(empty).toHaveTextContent("No pipeline matches “deploy”");
+    expect(pipelineOptions()).toEqual([]);
+    // The fragment is a lens, not an action.
+    expect(selectedPipeline()).toBe("implement-loop");
+  });
+
+  it("forgets the fragment when the menu closes", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue(threePipelines);
+    renderModal();
+    await enterValidRepo();
+
+    await openPipelineMenu();
+    const user = menuUser();
+    await user.type(screen.getByTestId("pipeline-select-filter"), "review");
+    await user.click(await screen.findByTestId("pipeline-select-option-review-loop"));
+
+    await openPipelineMenu();
+    expect(screen.getByTestId("pipeline-select-filter")).toHaveValue("");
+    expect(pipelineOptions()).toHaveLength(3);
+  });
+
+  it("launches the pipeline chosen through the filter", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue(threePipelines);
+    renderModal();
+    await enterValidRepo();
+
+    await openPipelineMenu();
+    const user = menuUser();
+    await user.type(screen.getByTestId("pipeline-select-filter"), "review");
+    await user.click(await screen.findByTestId("pipeline-select-option-review-loop"));
+    fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), {
+      target: { value: "do the thing" },
+    });
+
+    vi.useRealTimers();
+    fireEvent.click(screen.getByRole("button", { name: /launch/i }));
+
+    await waitFor(() =>
+      expect(createRun).toHaveBeenCalledWith(
+        expect.objectContaining({ pipeline_id: "review-loop" }),
+      ),
+    );
+  });
+
+  it("disables the trigger, rather than opening an empty menu, before a repo is chosen", () => {
+    vi.mocked(fetchPipelines).mockResolvedValue(threePipelines);
+    renderModal();
+
+    const trigger = screen.getByTestId("pipeline-select");
+    expect(trigger).toBeDisabled();
+    expect(trigger).toHaveTextContent("Select a repository first");
   });
 });
 
@@ -245,7 +522,8 @@ describe("NewRunModal — drift indicator", () => {
     renderModal();
     await enterValidRepo();
 
-    await waitFor(() => expect(screen.getByRole("option", { name: /Drifted Pipe/ })).toBeInTheDocument());
+    await openPipelineMenu();
+    expect(screen.getByTestId("pipeline-select-option-drifted")).toBeInTheDocument();
     expect(screen.queryByTestId("drift-indicator")).not.toBeInTheDocument();
     expect(screen.queryByTestId("drift-warning")).not.toBeInTheDocument();
   });
@@ -257,7 +535,8 @@ describe("NewRunModal — drift indicator", () => {
     renderModal();
     await enterValidRepo();
 
-    await waitFor(() => expect(screen.getByRole("option", { name: "Synced Pipe" })).toBeInTheDocument());
+    await openPipelineMenu();
+    expect(screen.getByTestId("pipeline-select-option-synced")).toBeInTheDocument();
     expect(screen.queryByTestId("library-star")).not.toBeInTheDocument();
     expect(screen.queryByTestId("drift-indicator")).not.toBeInTheDocument();
   });
@@ -269,9 +548,8 @@ describe("NewRunModal — drift indicator", () => {
     renderModal();
     await enterValidRepo();
 
-    const select = screen.getByTestId("pipeline-select") as HTMLSelectElement;
-    const option = Array.from(select.options).find((entry) => entry.value === "drifted");
-    expect(option!.textContent).toBe("Drifted Pipe");
+    await openPipelineMenu();
+    expect(pipelineOptions()).toEqual([{ id: "drifted", name: "Drifted Pipe" }]);
   });
 });
 
@@ -283,9 +561,8 @@ describe("NewRunModal — instance pipelines", () => {
     renderModal();
     await enterValidRepo();
 
-    await waitFor(() => {
-      expect(screen.getByRole("option", { name: "Instance Pipeline" })).toBeInTheDocument();
-    });
+    await openPipelineMenu();
+    expect(screen.getByTestId("pipeline-select-option-instance-pipe")).toBeInTheDocument();
     expect(screen.queryByTestId("promote-button")).not.toBeInTheDocument();
     expect(screen.queryByTestId("library-star")).not.toBeInTheDocument();
   });
@@ -376,7 +653,7 @@ describe("NewRunModal — multi-repo form flow", () => {
     await enterValidRepo();
 
     await pickBranch("origin/feature-remote-only");
-    fireEvent.change(screen.getByTestId("pipeline-select"), { target: { value: "p1" } });
+    await pickPipeline("p1");
     fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), {
       target: { value: "do the thing" },
     });
@@ -420,7 +697,7 @@ describe("NewRunModal — multi-repo form flow", () => {
 
       await waitFor(() => expect(selectedBranch()).toContain("master"));
 
-      fireEvent.change(screen.getByTestId("pipeline-select"), { target: { value: "p1" } });
+      await pickPipeline("p1");
       fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), {
         target: { value: "do the thing" },
       });
@@ -457,7 +734,7 @@ describe("NewRunModal — multi-repo form flow", () => {
       listBranchesReturns([local("main"), local("feature-x")]);
       await enterValidRepo("/home/user/project-b");
 
-      fireEvent.change(screen.getByTestId("pipeline-select"), { target: { value: "p1" } });
+      await pickPipeline("p1");
       fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), {
         target: { value: "do the thing" },
       });
@@ -866,12 +1143,22 @@ describe("NewRunModal — image upload", () => {
     });
     await waitFor(() => expect(screen.getAllByTestId("file-chip")).toHaveLength(1));
 
-    fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+    // #822: Cancel is one of the tour's stable targets, so this drives it by
+    // selector — a rename has to break here, not in a tour step.
+    fireEvent.click(screen.getByTestId("new-run-cancel"));
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByTestId("attachments-close-warning")).toHaveTextContent(
       "1 attachment will be lost",
     );
-    fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+    fireEvent.click(screen.getByTestId("new-run-cancel"));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes straight away through Cancel when there is nothing to lose (#822)", () => {
+    const onClose = vi.fn();
+    render(<NewRunModal open={true} onClose={onClose} onCreated={noop} />);
+
+    fireEvent.click(screen.getByTestId("new-run-cancel"));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
@@ -952,10 +1239,7 @@ describe("NewRunModal — form persistence across close/reopen", () => {
 
     await enterValidRepo("/home/user/my-repo");
 
-    await waitFor(() => {
-      const select = screen.getByTestId("pipeline-select") as HTMLSelectElement;
-      expect(select.value).toBe("p1");
-    });
+    await waitFor(() => expect(selectedPipeline()).toBe("My Pipeline"));
 
     rerender(<NewRunModal open={false} onClose={noop} onCreated={noop} />);
     rerender(<NewRunModal open={true} onClose={noop} onCreated={noop} />);
@@ -963,8 +1247,7 @@ describe("NewRunModal — form persistence across close/reopen", () => {
     const repoInput = screen.getByLabelText(/target repository/i) as HTMLInputElement;
     expect(repoInput.value).toBe("/home/user/my-repo");
 
-    const select = screen.getByTestId("pipeline-select") as HTMLSelectElement;
-    expect(select.value).toBe("p1");
+    expect(selectedPipeline()).toBe("My Pipeline");
   });
 
   it("preserves images across close/reopen", async () => {
@@ -1646,9 +1929,7 @@ describe("NewRunModal — run-now and edit from a Trigger (#162)", () => {
       expect(screen.getByTestId("mode-trigger")).toHaveAttribute("aria-selected", "true");
     });
     // Prefilled with the trigger's current pipeline.
-    await waitFor(() => {
-      expect(screen.getByTestId("pipeline-select")).toHaveValue("p1");
-    });
+    await waitFor(() => expect(selectedPipeline()).toBe("Auditor"));
 
     // Let the debounced repo validation resolve so the form is submittable.
     await vi.advanceTimersByTimeAsync(500);
@@ -1656,9 +1937,7 @@ describe("NewRunModal — run-now and edit from a Trigger (#162)", () => {
 
     // Change the pipeline — the dropdown is interactive in edit mode, and the
     // change must now actually reach the server (it used to be silently dropped).
-    fireEvent.change(screen.getByTestId("pipeline-select"), {
-      target: { value: "p2" },
-    });
+    await pickPipeline("p2");
 
     vi.useRealTimers();
     await waitFor(() => expect(screen.getByTestId("save-trigger-button")).toBeEnabled());
@@ -1783,9 +2062,7 @@ describe("NewRunModal — open-intent reset (#386)", () => {
     });
     await vi.advanceTimersByTimeAsync(500);
     await waitFor(() => expect(validateRepo).toHaveBeenCalledWith("/home/user/project"));
-    await waitFor(() => {
-      expect(screen.getByTestId("pipeline-select")).toHaveValue("p1");
-    });
+    await waitFor(() => expect(selectedPipeline()).toBe("Auditor"));
 
     rerender(<NewRunModal open={false} onClose={noop} onCreated={noop}
       openIntent={{ kind: "edit-trigger", trigger }} />);
@@ -1796,7 +2073,7 @@ describe("NewRunModal — open-intent reset (#386)", () => {
     await waitFor(() => {
       expect(screen.getByPlaceholderText(/free-text prompt/i)).toHaveValue("");
     });
-    expect((screen.getByTestId("pipeline-select") as HTMLSelectElement).value).not.toBe("p1");
+    expect(selectedPipeline()).not.toBe("Auditor");
   });
 });
 
@@ -2460,9 +2737,7 @@ describe("NewRunModal — the target repo is required at the boundary (#470)", (
 
     renderModal();
     await enterValidRepo();
-    await waitFor(() => {
-      expect(screen.getByTestId("pipeline-select")).toHaveValue("p1");
-    });
+    await waitFor(() => expect(selectedPipeline()).toBe("Auditor"));
 
     vi.useRealTimers();
     // Assert enabled first: a silently-disabled Launch would make the assertion
@@ -2506,7 +2781,7 @@ describe("NewRunModal — multi-repo (#465)", () => {
       ).toBeInTheDocument();
     });
 
-    fireEvent.change(screen.getByTestId("pipeline-select"), { target: { value: "p1" } });
+    await pickPipeline("p1");
     fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), {
       target: { value: "do the thing" },
     });
@@ -2556,7 +2831,7 @@ describe("NewRunModal — multi-repo (#465)", () => {
     fireEvent.click(checkbox);
     expect(checkbox).toBeChecked();
 
-    fireEvent.change(screen.getByTestId("pipeline-select"), { target: { value: "p1" } });
+    await pickPipeline("p1");
     fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), {
       target: { value: "do the thing" },
     });
@@ -2594,7 +2869,7 @@ describe("NewRunModal — multi-repo (#465)", () => {
     // The remote group is present, and the row can carry a remote base.
     await pickBranch("origin/feature-remote-only", "secondary-branch-0");
 
-    fireEvent.change(screen.getByTestId("pipeline-select"), { target: { value: "p1" } });
+    await pickPipeline("p1");
     fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), {
       target: { value: "do the thing" },
     });
@@ -2638,7 +2913,7 @@ describe("NewRunModal — multi-repo (#465)", () => {
     // The remote group is present, and the row can carry a remote base.
     await pickBranch("origin/feature-remote-only", "secondary-branch-0");
 
-    fireEvent.change(screen.getByTestId("pipeline-select"), { target: { value: "p1" } });
+    await pickPipeline("p1");
     fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), {
       target: { value: "do the thing" },
     });
@@ -2665,7 +2940,7 @@ describe("NewRunModal — multi-repo (#465)", () => {
     renderModal();
     await enterValidRepo("/home/user/only");
 
-    fireEvent.change(screen.getByTestId("pipeline-select"), { target: { value: "p1" } });
+    await pickPipeline("p1");
     fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), {
       target: { value: "do the thing" },
     });
@@ -2687,7 +2962,7 @@ describe("NewRunModal — multi-repo (#465)", () => {
     ]);
     renderModal();
     await enterValidRepo("/home/user/primary");
-    fireEvent.change(screen.getByTestId("pipeline-select"), { target: { value: "p1" } });
+    await pickPipeline("p1");
     fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), {
       target: { value: "do the thing" },
     });

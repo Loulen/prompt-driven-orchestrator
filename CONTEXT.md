@@ -880,6 +880,18 @@ Le `forget` (`DELETE /runs/<id>`, autorisé sur un Run `archived`) est **durable
 
 Pas de notifications système v1. Le status icon suffit. Si ça manque, opt-in plus tard.
 
+### Tours guidés — onboarding (#816, ADR-0071)
+
+**Tour** : parcours guidé nommé, en anglais dans l'UI, composé d'**étapes de tour** ; il pilote la vraie UI de l'instance et observe son vrai état, jamais une maquette ni un état simulé. Deux tours v1 : *First run* (lancer un Run sur une pipeline à un node interactif) et *First pipeline* (implémenteur + testeur en boucle sur `verdict`). Le **full tour** les enchaîne. _Éviter_ : « tutoriel » pour désigner un parcours (c'est le nom du mode), « walkthrough », « démo ».
+
+**Étape de tour** : une cible dans l'UI, une instruction (un impératif + deux phrases max), une condition d'avancement observée sur l'état réel (jamais un délai), et un drapeau *skippable* décidé étape par étape. Une saisie libre est validée par un bouton Next et propose un bloc à copier-coller. Une cible absente au-delà de quelques secondes arrête le tour proprement, jamais de saut silencieux. Le tour n'agit jamais à la place de l'utilisateur.
+
+**Projecteur** : l'overlay qui grise tout l'écran sauf la cible de l'étape et bloque les clics hors cible ; « Quit tour » et Échap restent toujours accessibles. Dans un menu ouvert, il se recentre sur l'option attendue. _Éviter_ : « spotlight » (nom UI, pas glossaire), « highlight », « coach mark ».
+
+**Dépôt d'entraînement** : dépôt git jetable créé par le daemon sous `/tmp` pour un Tour, via un verbe générique de création de dépôt (dossier parent, nom, fichiers initiaux, commit sur `main`) ; réutilisé s'il existe encore. Le daemon ignore la notion de tour. _Éviter_ : « faux repo », « sandbox repo » (collision avec *Sandbox*).
+
+**Modale de bienvenue** : proposée au premier lancement quand le navigateur ne porte pas la clé « tutoriel proposé » **et** que l'instance n'a aucun Run ; choix full tour / un tour / plus tard, jamais de démarrage forcé. Les tours restent relançables depuis la section *Tutorials* des Settings, qui marque les tours terminés (mémoire navigateur).
+
 ---
 
 ## Stack technique

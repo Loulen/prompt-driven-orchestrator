@@ -14,7 +14,7 @@
 // The harness below — the real App with both full-window surfaces and a complete
 // api fixture — also carries the other host-level contracts of those two surfaces
 // (see the #819 block at the bottom).
-import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
@@ -394,6 +394,13 @@ async function expectClosed() {
 // ---------------------------------------------------------------------------
 
 describe("App — Settings surface closes (#717 sibling-key regression)", () => {
+  beforeEach(() => {
+    // #823: this fixture is a Run-less instance, so the welcome modal would
+    // otherwise cover the app in every case below. Answer it up front — these
+    // tests are about Settings, not about tours.
+    localStorage.setItem("pdo.tour.offered", "1");
+  });
+
   it("closes via the header ✕ after a Stats open/close cycle", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -458,4 +465,66 @@ describe("App — Stats reopens on its defaults (#819)", () => {
     expect(screen.getByTestId("stats-period-30d")).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByTestId("stats-period-7d")).toHaveAttribute("aria-pressed", "false");
   }, 20_000);
+});
+
+// ---------------------------------------------------------------------------
+// #823 — the welcome modal's wiring. The rule itself is unit-tested
+// (`lib/tourMemory.test.ts`) and the modal's three answers in
+// `components/tour/TourHost.test.tsx`; what only a real App mount can show is
+// that App feeds the rule the LOADED run list rather than the empty array it
+// starts from. This file owns the only complete App fixture, hence its home here.
+// ---------------------------------------------------------------------------
+
+describe("App — the welcome modal (#823)", () => {
+  it("proposes a tour on a fresh browser with no Run", async () => {
+    localStorage.clear();
+    render(<App />);
+    expect(await screen.findByTestId("tour-welcome")).toBeInTheDocument();
+  });
+
+  it("never proposes one to a browser that already answered", async () => {
+    localStorage.clear();
+    localStorage.setItem("pdo.tour.offered", "1");
+    render(<App />);
+    await screen.findByTestId("open-settings");
+    await waitFor(() => expect(screen.queryByTestId("settings-loading")).not.toBeInTheDocument());
+    expect(screen.queryByTestId("tour-welcome")).not.toBeInTheDocument();
+  });
+
+  it("does not flash before the run list has answered", async () => {
+    localStorage.clear();
+    const { fetchRuns } = await import("./api");
+    let release: (runs: unknown[]) => void = () => {};
+    vi.mocked(fetchRuns).mockReturnValueOnce(
+      new Promise((resolve) => {
+        release = resolve as (runs: unknown[]) => void;
+      }) as ReturnType<typeof fetchRuns>,
+    );
+
+    render(<App />);
+    await screen.findByTestId("open-settings");
+    expect(screen.queryByTestId("tour-welcome")).not.toBeInTheDocument();
+
+    release([]);
+    expect(await screen.findByTestId("tour-welcome")).toBeInTheDocument();
+  });
+
+  it("takes an instance that already has Runs for what it is", async () => {
+    localStorage.clear();
+    const { fetchRuns } = await import("./api");
+    vi.mocked(fetchRuns).mockResolvedValueOnce([
+      {
+        run_id: "r1",
+        name: "a run",
+        pipeline_name: "p",
+        status: "done",
+        created_at: "2026-09-20T10:00:00Z",
+      },
+    ] as unknown as Awaited<ReturnType<typeof fetchRuns>>);
+
+    render(<App />);
+    await screen.findByTestId("open-settings");
+    await waitFor(() => expect(screen.queryByTestId("settings-loading")).not.toBeInTheDocument());
+    expect(screen.queryByTestId("tour-welcome")).not.toBeInTheDocument();
+  });
 });

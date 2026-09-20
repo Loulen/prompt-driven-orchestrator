@@ -846,6 +846,9 @@ export default function UnifiedLeftPanel({
             key={tab.id}
             role="tab"
             aria-selected={activeTab === tab.id}
+            // #823: a tour has to be able to aim at a tab — its first step opens
+            // the one the rest of the tour lives in.
+            data-testid={`left-tab-${tab.id}`}
             onClick={() => setActiveTab(tab.id)}
             className={`flex flex-1 cursor-pointer items-center justify-center gap-1.5 border-b-2 font-medium transition-colors ${
               activeTab === tab.id
@@ -916,6 +919,7 @@ export default function UnifiedLeftPanel({
             )}
             <button
               onClick={onNewRun}
+              data-testid="new-run-button"
               className={`${availableRepos.length > 0 ? "ml-1.5" : "ml-auto"} flex cursor-pointer items-center gap-1 rounded bg-acc px-1.5 py-0.5 font-medium text-on-acc transition-colors hover:bg-acc-dim`}
               style={{ fontSize: "10.5px" }}
             >
@@ -1168,6 +1172,7 @@ export default function UnifiedLeftPanel({
         </button>
         <button
           onClick={() => setShowNewModal(true)}
+          data-testid="new-pipeline-button"
           className="ml-1.5 grid h-5 w-5 cursor-pointer place-items-center rounded border border-line-strong bg-bg-3 text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg"
           title="New pipeline"
         >
@@ -1202,6 +1207,9 @@ export default function UnifiedLeftPanel({
           {pipelines.map((p) => (
             <LibraryRow
               key={p.id}
+              // #823: the tour's last step points at the row of the pipeline the
+              // user just built — keep it or delete it, both from here.
+              testId={`library-row-${p.id}`}
               name={p.name}
               nodeCount={p.node_count}
               checked={librarySel.has(`${p.scope}-${p.id}`)}
@@ -1376,6 +1384,9 @@ function NewPipelineModal({ onClose }: { onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
       <div
+        // #823: the Projecteur's hole covers the WHOLE dialog on the naming step,
+        // so the dialog itself needs a target, not just its field.
+        data-testid="new-pipeline-dialog"
         className="w-[360px] rounded-lg border border-line bg-bg-4 p-4"
         style={{ fontSize: "12px" }}
       >
@@ -1388,6 +1399,7 @@ function NewPipelineModal({ onClose }: { onClose: () => void }) {
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="my-pipeline"
+          data-testid="new-pipeline-name"
           className="mb-3 w-full rounded border border-line-strong bg-bg-3 px-2 py-1.5 text-fg outline-none focus:border-acc"
           autoFocus
           onKeyDown={(e) => e.key === "Enter" && handleCreate()}
@@ -1402,6 +1414,7 @@ function NewPipelineModal({ onClose }: { onClose: () => void }) {
           </button>
           <button
             onClick={handleCreate}
+            data-testid="new-pipeline-create"
             disabled={!name.trim()}
             className="rounded bg-acc px-3 py-1 font-medium text-bg-0 transition-colors hover:bg-acc-dim disabled:opacity-50"
           >

@@ -101,6 +101,27 @@ export function resolvedCron({
 }
 
 /**
+ * The pipelines a filter fragment leaves standing in the Pipeline menu (#822).
+ *
+ * Case-insensitive substring on the NAME only. The name is what the menu shows, so
+ * matching it is the only rule whose result a reader can check by looking: matching
+ * the id (a file stem) or the path would keep rows whose visible text contains
+ * nothing of what was typed. A blank fragment matches everything — the menu opens on
+ * the full list and costs nothing to whoever types nothing.
+ *
+ * Order is preserved (the daemon's, i.e. the one the old `<select>` had), so the
+ * "first pipeline" default and the keyboard cursor never jump as characters land.
+ */
+export function filterPipelines(
+  pipelines: PipelineListEntry[],
+  query: string,
+): PipelineListEntry[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return pipelines;
+  return pipelines.filter((p) => p.name.toLowerCase().includes(needle));
+}
+
+/**
  * A prompt-optional pipeline (#158) may launch with an empty prompt; the entry node
  * sources its own work. Prompt-required (the default) still demands non-empty input.
  */

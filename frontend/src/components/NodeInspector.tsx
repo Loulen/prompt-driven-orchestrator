@@ -599,7 +599,10 @@ export default function NodeInspector({
           </p>
         )}
         <textarea
-          data-testid={isScript ? "script-body" : undefined}
+          // #822: a script node's body keeps `script-body` (what it has always been
+          // called, and what the script tests point at); the agentic prompt gets the
+          // stable target the First pipeline tour types into.
+          data-testid={isScript ? "script-body" : "node-prompt-input"}
           value={promptContent}
           onChange={(e) => updatePrompt(node.id, e.target.value)}
           className={`min-h-[120px] w-full resize-y rounded border border-line-strong bg-bg-3 px-2 py-1.5 font-mono text-fg outline-none focus:border-acc ${
@@ -722,6 +725,7 @@ function NameInput({
       }}
       className="w-full rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg outline-none focus:border-acc"
       placeholder={placeholder}
+      data-testid="node-name-input"
     />
   );
 }

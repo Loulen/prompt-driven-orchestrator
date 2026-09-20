@@ -50,6 +50,19 @@ export async function openPipelineForEdit(page: Page, name: string): Promise<voi
 }
 
 /**
+ * Choose a pipeline in the New Run form by its id — the YAML file stem (#822).
+ *
+ * The field is the app's own dropdown menu now, not a `<select>`, so there is no
+ * `selectOption` to call: open the trigger, click the row. Addressing the row by id
+ * rather than by label is the point of the change — a native `<option>` could not
+ * carry a selector, which is why a tour's Projecteur could never aim at one.
+ */
+export async function pickPipeline(page: Page, pipelineId: string): Promise<void> {
+  await page.getByTestId("pipeline-select").click();
+  await page.getByTestId(`pipeline-select-option-${pipelineId}`).click();
+}
+
+/**
  * Select a run, select one of its nodes, and reveal the **Run inspector**
  * details pane (Inputs/Outputs sections, Mark complete, the failure banner).
  *

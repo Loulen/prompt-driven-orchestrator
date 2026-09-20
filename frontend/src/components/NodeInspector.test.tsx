@@ -227,6 +227,37 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+/**
+ * #822: the two fields a guided tour types into. They are the contract the tour
+ * tickets (#823-#825) build on, so a rename has to break a test here rather than a
+ * tour step nobody runs until the day it matters.
+ */
+describe("NodeInspector — stable tour targets (#822)", () => {
+  it("names the Name field and the prompt body, and keeps editing them working", () => {
+    seedTabWithReviewer(false, "Review this code.");
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    const name = screen.getByTestId("node-name-input");
+    expect(name).toHaveValue("reviewer");
+    fireEvent.change(name, { target: { value: "implementer" } });
+    fireEvent.blur(name);
+    expect(useEditStore.getState().openTabs[0].pipeline.nodes[0].name).toBe("implementer");
+
+    const prompt = screen.getByTestId("node-prompt-input");
+    expect(prompt).toHaveValue("Review this code.");
+    fireEvent.change(prompt, { target: { value: "Implement it." } });
+    expect(useEditStore.getState().openTabs[0].prompts.rv1).toBe("Implement it.");
+  });
+
+  it("leaves a script node's body under its own name", () => {
+    seedTabWithScript();
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+
+    expect(screen.getByTestId("script-body")).toBeInTheDocument();
+    expect(screen.queryByTestId("node-prompt-input")).toBeNull();
+  });
+});
+
 describe("NodeInspector — script node surface (#248)", () => {
   it("shows the Script (bash) body editor and hides the model field", () => {
     seedTabWithScript();

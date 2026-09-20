@@ -658,11 +658,17 @@ export default function NodeInspector({
         )}
 
         {/* Outputs — declared: the node's production contract (CONTEXT.md § Node). */}
-        <SectionHead title="Outputs" count={node.outputs.length} onAdd={handleAddOutput} />
+        <SectionHead
+          title="Outputs"
+          count={node.outputs.length}
+          onAdd={handleAddOutput}
+          addTestId="add-output-port"
+        />
         <div className="flex flex-col">
           {node.outputs.map((port, i) => (
             <OutputPortCard
               key={i}
+              index={i}
               port={port}
               highlighted={highlightedPort === port.name}
               onUpdate={(updates) => handleUpdateOutput(i, updates)}

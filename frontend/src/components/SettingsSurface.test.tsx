@@ -1757,7 +1757,14 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
       within(screen.getByTestId("settings-page-general").querySelector("nav") as HTMLElement)
         .getAllByRole("button")
         .map((button) => button.textContent);
-    expect(entries()).toEqual(["Interface", "Runtime limits", "Runs", "Version & update"]);
+    // #823 added Tutorials as General's fifth section.
+    expect(entries()).toEqual([
+      "Interface",
+      "Runtime limits",
+      "Runs",
+      "Version & update",
+      "Tutorials",
+    ]);
     expect(screen.getByTestId("settings-section-interface")).toHaveAttribute("aria-current", "true");
 
     fireEvent.click(screen.getByTestId("settings-category-diagnostics"));
@@ -2311,5 +2318,86 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
     expect(updateSettingsMock.mock.calls[0][0].skills).toEqual([
       expect.objectContaining({ id: "sk-1" }),
     ]);
+  });
+});
+
+/**
+ * #823 — Tutorials, General's fifth section. Presentation only: it edits nothing
+ * on the daemon, so it never dirties the form, and starting a tour must go through
+ * the same close (and the same dirty guard) as every other exit — a Projecteur
+ * aiming at the app under a full-window Settings would point at nothing.
+ */
+describe("SettingsSurface — Tutorials (#823)", () => {
+  beforeEach(() => {
+    fetchSettingsMock.mockReset();
+    updateSettingsMock.mockReset();
+    browseFsMock.mockReset();
+    browseFsMock.mockResolvedValue(BROWSE_HOME);
+    resetProfileMocks();
+    fetchSettingsMock.mockResolvedValue(sample());
+    localStorage.clear();
+    useEditStore.setState({ singleTabMode: false, pendingSingleTab: null, openTabs: [], activeTabId: null });
+  });
+
+  it("sits in General, badged as this browser's memory", async () => {
+    render(<SettingsSurface open onClose={() => {}} />);
+    await screen.findByTestId("setting-session-cap");
+    expect(screen.getByTestId("settings-section-body-tutorials")).toBeInTheDocument();
+    expect(screen.getByTestId("settings-tutorials")).toBeInTheDocument();
+    expect(screen.getByTestId("settings-section-tutorials-device-local")).toHaveTextContent(
+      "Device-local",
+    );
+  });
+
+  it("closes the surface, then starts the tour", async () => {
+    const onClose = vi.fn();
+    const onStartTour = vi.fn();
+    render(<SettingsSurface open onClose={onClose} onStartTour={onStartTour} />);
+    await screen.findByTestId("setting-session-cap");
+
+    fireEvent.click(screen.getByTestId("tutorials-start-first-pipeline"));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onStartTour).toHaveBeenCalledWith("first-pipeline");
+    // Order matters, and it is checked: the close happened first.
+    expect(onClose.mock.invocationCallOrder[0]).toBeLessThan(
+      onStartTour.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("never dirties the instance form", async () => {
+    render(<SettingsSurface open onClose={() => {}} />);
+    await screen.findByTestId("setting-session-cap");
+    fireEvent.click(screen.getByTestId("tutorials-reset"));
+    expect(screen.getByTestId("settings-footer")).toHaveTextContent("No unsaved changes");
+  });
+
+  it("asks about a dirty form before leaving for a tour, and cancels the tour if you stay", async () => {
+    const onClose = vi.fn();
+    const onStartTour = vi.fn();
+    render(<SettingsSurface open onClose={onClose} onStartTour={onStartTour} />);
+    await screen.findByTestId("setting-session-cap");
+    fireEvent.change(screen.getByTestId("setting-session-cap"), { target: { value: "12" } });
+
+    fireEvent.click(screen.getByTestId("tutorials-start-first-pipeline"));
+    expect(screen.getByTestId("settings-confirm-close")).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("settings-confirm-keep"));
+    expect(onStartTour).not.toHaveBeenCalled();
+  });
+
+  it("runs the parked tour once the dirty draft is discarded", async () => {
+    const onClose = vi.fn();
+    const onStartFullTour = vi.fn();
+    render(<SettingsSurface open onClose={onClose} onStartFullTour={onStartFullTour} />);
+    await screen.findByTestId("setting-session-cap");
+    fireEvent.change(screen.getByTestId("setting-session-cap"), { target: { value: "12" } });
+
+    fireEvent.click(screen.getByTestId("tutorials-start-full"));
+    fireEvent.click(screen.getByTestId("settings-confirm-discard"));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onStartFullTour).toHaveBeenCalledTimes(1);
   });
 });

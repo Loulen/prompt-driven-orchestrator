@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, within } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import SourceBranchField from "./SourceBranchField";
 import type {
   BranchFetchError,
@@ -642,8 +642,13 @@ describe("the fast-forward", () => {
       openSync();
       fireEvent.click(screen.getByTestId("branch-sync-ff"));
 
+      // The popover is ALREADY open when the click lands (`openSync` opened it), so
+      // `findByTestId` returns it while the call is still in flight — every other
+      // case here waits on text that only the settled call paints, but "idle" is
+      // also the state the button starts from. Wait for the call to settle, or the
+      // assertion reads `running` on a slow machine and calls it a regression.
       const popover = await screen.findByTestId("branch-sync-popover");
-      expect(popover).toHaveAttribute("data-ff-state", "idle");
+      await waitFor(() => expect(popover).toHaveAttribute("data-ff-state", "idle"));
       expect(popover).not.toHaveTextContent("Can't fast-forward");
       expect(screen.queryByTestId("branch-sync-ff-reason")).not.toBeInTheDocument();
     },

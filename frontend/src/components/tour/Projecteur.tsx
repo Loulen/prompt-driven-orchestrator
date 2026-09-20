@@ -25,6 +25,13 @@ interface Props {
    * the right one, it does not forbid the others (spec #821, story 17).
    */
   zone?: TourRect | null;
+  /**
+   * The zone IS the step's target (#825) — a whole panel to roam in rather than a
+   * control to hit. The dim lightens, and the ring gives way to the dashed
+   * outline: a ring around six hundred pixels reads as "click this", and the one
+   * step that lights a panel is the one with nothing to click.
+   */
+  wide?: boolean;
   /** Clicking the dim quits nothing; it is absorbed. The popover goes here. */
   children?: ReactNode;
 }
@@ -43,9 +50,10 @@ function blockerStyle(rect: TourRect | null, side: "top" | "bottom" | "left" | "
   }
 }
 
-export default function Projecteur({ hole, zone, children }: Props) {
+export default function Projecteur({ hole, zone, wide, children }: Props) {
   // The cut-out the blockers leave open. A soft step opens the whole menu.
   const opening = zone ?? hole;
+  const dim = wide ? "bg-tour-dim-soft" : "bg-tour-dim";
 
   // `overflow-hidden` on the root: a target that is momentarily off-screen puts
   // its ring and its bottom blocker thousands of pixels down, and an overlay that
@@ -57,7 +65,7 @@ export default function Projecteur({ hole, zone, children }: Props) {
           <div
             key={side}
             data-testid={`projecteur-blocker-${side}`}
-            className="pointer-events-auto absolute bg-tour-dim"
+            className={`pointer-events-auto absolute ${dim}`}
             style={blockerStyle(opening, side)}
             // Absorbed, not acted on: a stray click during a tour should do
             // nothing at all — not quit, not advance, not reach the app.
@@ -68,7 +76,7 @@ export default function Projecteur({ hole, zone, children }: Props) {
       ) : (
         <div
           data-testid="projecteur-blocker-all"
-          className="pointer-events-auto absolute inset-0 bg-tour-dim"
+          className={`pointer-events-auto absolute inset-0 ${dim}`}
           onClick={(e) => e.preventDefault()}
           onMouseDown={(e) => e.preventDefault()}
         />
@@ -85,7 +93,7 @@ export default function Projecteur({ hole, zone, children }: Props) {
 
       {/* The ring on the target itself. Never interactive: it must not stand
           between the pointer and the thing the instruction points at. */}
-      {hole && (
+      {hole && !wide && (
         <div
           data-testid="projecteur-hole"
           className="pointer-events-none absolute rounded-md ring-2 ring-acc"

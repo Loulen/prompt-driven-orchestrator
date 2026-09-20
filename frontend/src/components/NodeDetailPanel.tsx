@@ -1139,6 +1139,7 @@ export default function NodeDetailPanel({
             {inputs.length > 0 && (
               <IOSection
                 title="Inputs"
+                kind="input"
                 ports={inputs}
                 runId={runId}
                 onOpenFile={(portName, files, portType) =>
@@ -1151,6 +1152,7 @@ export default function NodeDetailPanel({
             {outputs.length > 0 && (
               <IOSection
                 title="Outputs"
+                kind="output"
                 ports={outputs}
                 runId={runId}
                 showFrontmatter
@@ -1470,12 +1472,16 @@ function IterSelector({
 
 function IOSection({
   title,
+  kind,
   ports,
   runId,
   showFrontmatter,
   onOpenFile,
 }: {
   title: string;
+  /** #825: what a row of this section is, on the row itself — the *First run*
+   *  tour points at `out` under Outputs, and `out` also exists under Inputs. */
+  kind: "input" | "output";
   ports: PortIO[];
   runId: string;
   showFrontmatter?: boolean;
@@ -1497,6 +1503,7 @@ function IOSection({
           <PortRow
             key={port.port}
             port={port}
+            kind={kind}
             runId={runId}
             showFrontmatter={showFrontmatter}
             onOpen={() => onOpenFile(port.port, port.files, port.port_type ?? "markdown")}
@@ -1523,11 +1530,13 @@ function fileBadge(name: string): string {
 
 function PortRow({
   port,
+  kind,
   runId,
   showFrontmatter,
   onOpen,
 }: {
   port: PortIO;
+  kind: "input" | "output";
   runId: string;
   showFrontmatter?: boolean;
   onOpen: () => void;
@@ -1786,6 +1795,9 @@ function PortRow({
         <button
           type="button"
           onClick={onOpen}
+          data-testid="port-row"
+          data-port={port.port}
+          data-kind={kind}
           className="port-row grid w-full cursor-pointer items-center gap-2 rounded-md border border-line bg-bg-3 px-2.5 py-2 transition-colors hover:bg-bg-4"
           style={gridStyle}
         >
@@ -1798,6 +1810,9 @@ function PortRow({
 
   return (
     <div
+      data-testid="port-row"
+      data-port={port.port}
+      data-kind={kind}
       className="port-row grid items-center gap-2 rounded-md border border-line bg-bg-3 px-2.5 py-2 opacity-60"
       style={gridStyle}
     >

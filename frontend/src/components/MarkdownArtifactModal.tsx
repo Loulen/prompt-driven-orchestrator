@@ -49,6 +49,8 @@ interface Props {
   footer?: ReactNode;
   /** #698: Tailwind width class; artifacts use the 560px default. */
   widthClass?: string;
+  /** #825: an artifact modal is a *targetable* surface now — the *First run*
+   *  tour ends on "open `out`", and « the file opened » is what says it did. */
   testId?: string;
 }
 
@@ -62,7 +64,7 @@ export default function MarkdownArtifactModal({
   banner,
   footer,
   widthClass = "w-[560px]",
-  testId,
+  testId = "artifact-modal",
 }: Props) {
   const isInline = source.kind === "inline";
   const inlineContent = source.kind === "inline" ? source.content : null;
@@ -294,6 +296,14 @@ export default function MarkdownArtifactModal({
         className={`flex max-h-[80vh] ${widthClass} max-w-[calc(100vw-32px)] flex-col overflow-hidden rounded-lg border border-line-strong bg-bg-2`}
         style={{ boxShadow: "0 30px 80px rgba(0,0,0,0.6)" }}
         data-testid={testId}
+        data-port={portName}
+        // #825: `role="dialog"` is what makes this modal an Escape *owner* while
+        // it is up. Its own handler already closes it on Escape, on `window`,
+        // where `stopPropagation` would be a no-op — without the role, one press
+        // would close the artifact AND throw the running tour away with it.
+        role="dialog"
+        aria-modal="true"
+        aria-label={portName}
       >
         {/* Header */}
         <div className="flex items-center justify-between border-b border-line px-4 py-3">

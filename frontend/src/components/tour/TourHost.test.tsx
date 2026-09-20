@@ -108,7 +108,7 @@ describe("running a tour", () => {
     await user().click(screen.getByTestId("start"));
     tick();
     expect(screen.getByTestId("projecteur")).toBeInTheDocument();
-    expect(screen.getByTestId("tour-progress")).toHaveTextContent("Step 1 of 2");
+    expect(screen.getByTestId("tour-progress")).toHaveTextContent("First pipeline · 1 / 2");
   });
 
   it("advances on the real gesture, with no extra click", async () => {
@@ -141,6 +141,35 @@ describe("running a tour", () => {
     await user().keyboard("{Escape}");
     expect(screen.getByTestId("projecteur")).toBeInTheDocument();
     menu.remove();
+  });
+
+  /**
+   * #825 — the tour asks the reader to type into the agent's own tmux session.
+   * Escape in there is the agent's key (vim, the harness's own menus), so the
+   * step the tour just asked for must not be the step that throws it away.
+   * Checked on the keystroke's TARGET, not on the terminal's presence: it is on
+   * screen for four steps, and Escape anywhere else still quits.
+   */
+  it("lets the node's terminal keep Escape while it has the keystroke", async () => {
+    render(<Harness />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+
+    const terminal = document.createElement("div");
+    terminal.setAttribute("data-testid", "tmux-terminal");
+    const input = document.createElement("input");
+    terminal.appendChild(input);
+    document.body.appendChild(terminal);
+
+    input.focus();
+    await user().keyboard("{Escape}");
+    expect(screen.getByTestId("projecteur")).toBeInTheDocument();
+
+    // …and the same key, aimed anywhere else, still quits.
+    input.blur();
+    await user().keyboard("{Escape}");
+    expect(screen.queryByTestId("projecteur")).not.toBeInTheDocument();
+    terminal.remove();
   });
 
   it("quits from the popover's own button", async () => {

@@ -16,6 +16,31 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.96.0
+**Le tour *First run* va jusqu'à l'output, et le full tour s'enchaîne** (#825, spec #821, story #816, ADR-0071).
+
+- Le tour **First run** ne s'arrête plus au lancement : six étapes de lecture enseignent la vie d'un
+  node interactif — retrouver le Run dans la liste, ouvrir le node, parler à l'agent dans son propre
+  terminal (bloc à copier), libérer la complétion (ADR-0068), attendre la fin du node, ouvrir
+  l'output. Chaque avancement est observé sur l'état réel du Run que l'inspecteur charge déjà ; le
+  daemon ne sait toujours rien des tours.
+- **L'attente de fin de node n'a aucune limite de temps** : un agent met le temps qu'il met. Le
+  popover le dit, coche en direct « complétion libérée » / « node terminé », et éclaire tout
+  l'inspecteur en **zone souple** — pointillés, grisé plus clair, terminal lisible et cliquable
+  pendant l'attente. Un node qui échoue est une fin lui aussi : l'étape le nomme et demande un Next
+  pour que la phrase soit lue.
+- **Full tour** : entre deux tours, une carte intermédiaire dit où en est l'enchaînement et pose le
+  choix — *Finish here* ou *Continue*. Un tour qui **s'arrête proprement** (cible absente, lancement
+  refusé) propose quand même le tour suivant, sans être marqué terminé.
+- Le popover porte désormais sa sortie en petit (`✕ quit`) au lieu d'un bouton, et dit en une ligne
+  grise ce qu'il attend (« advances once released ») quand il n'y a rien à cliquer. **Échap
+  appartient au terminal du node** tant qu'il a le focus : le tour ne vole plus les touches de
+  l'agent.
+- Nouvelles cibles stables : les lignes de ports d'un node (`out` sous Outputs) et la modale
+  d'artefact, qui devient un propriétaire d'Échap (`role="dialog"`).
+- `docs/test-scenarios/HP-03` — le full tour est **proposé** comme 3ᵉ Happy Path (curation humaine à
+  la MR integration→develop).
+
 ## 1.95.0
 **Tour *First run* et dépôt d'entraînement** (#824, spec #821, story #816, ADR-0071).
 

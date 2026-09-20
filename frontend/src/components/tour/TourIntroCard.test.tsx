@@ -191,7 +191,7 @@ describe("the intro card", () => {
 
     expect(screen.queryByTestId("tour-intro-card")).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByTestId("tour-popover")).toBeInTheDocument());
-    expect(screen.getByTestId("tour-progress")).toHaveTextContent("Step 1 of 1");
+    expect(screen.getByTestId("tour-progress")).toHaveTextContent("First run · 1 / 1");
   });
 
   /**
@@ -348,7 +348,7 @@ describe("a Full tour", () => {
     document.body.append(opened);
     await waitFor(() => expect(screen.getByTestId("tour-end-card")).toBeInTheDocument());
 
-    expect(screen.getByTestId("tour-finish")).toHaveTextContent("Next tour · First pipeline");
+    expect(screen.getByTestId("tour-finish")).toHaveTextContent("Continue · First pipeline");
     await user().click(screen.getByTestId("tour-finish"));
 
     expect(Object.keys(loadToursDone())).toEqual(["first-run"]);

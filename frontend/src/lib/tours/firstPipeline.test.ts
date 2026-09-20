@@ -20,8 +20,10 @@ import {
   observeTour,
   skipStep,
   startTour,
+  stepBody,
   type TourAppState,
   type TourObservation,
+  type TourStep,
 } from "../tour";
 import type { EdgeDef, NodeDef, PipelineDef } from "../../types";
 import { FIRST_PIPELINE_TOUR, TUTORIAL_PIPELINE_ID } from "./firstPipeline";
@@ -46,6 +48,7 @@ class FakeApp {
     libraryPipelineIds: [],
     runCount: 0,
     latestRun: null,
+    activeRunId: null,
   };
   /** Frozen at construction: what "this tour caused it" is measured against. */
   readonly baseline: TourAppState = { ...this.app };
@@ -310,7 +313,7 @@ describe("walking the whole tour", () => {
       if (run.phase !== "running" || currentStep(FIRST_PIPELINE_TOUR, run)?.id !== step.id) continue;
 
       // Still here: the step wants an explicit gesture from the popover.
-      if (needsConfirm(FIRST_PIPELINE_TOUR, run)) {
+      if (needsConfirm(FIRST_PIPELINE_TOUR, run, fake.obs())) {
         expect(canAdvance(FIRST_PIPELINE_TOUR, run, fake.obs()), `Next stuck on "${step.id}"`).toBe(
           true,
         );
@@ -351,6 +354,11 @@ describe("walking the whole tour", () => {
   });
 });
 
+/** Every *First pipeline* step declares a plain string body; resolving it needs
+ *  an observation all the same, so the shape checks below borrow a fresh one. */
+const SHAPE_OBS = new FakeApp().obs();
+const bodyOf = (step: TourStep) => stepBody(step, SHAPE_OBS);
+
 describe("the shape of every step", () => {
   it("has a unique id", () => {
     expect(new Set(STEPS.map((s) => s.id)).size).toBe(STEPS.length);
@@ -360,9 +368,10 @@ describe("the shape of every step", () => {
     for (const step of STEPS) {
       expect(step.title.length, step.id).toBeLessThanOrEqual(64);
       expect(step.title.endsWith("."), step.id).toBe(false);
-      const sentences = step.body.split(/(?<=[.!?])\s+/).filter(Boolean);
-      expect(sentences.length, `${step.id}: ${step.body}`).toBeLessThanOrEqual(3);
-      expect(step.body.trim(), step.id).not.toBe("");
+      const body = bodyOf(step);
+      const sentences = body.split(/(?<=[.!?])\s+/).filter(Boolean);
+      expect(sentences.length, `${step.id}: ${body}`).toBeLessThanOrEqual(3);
+      expect(body.trim(), step.id).not.toBe("");
     }
   });
 
@@ -385,8 +394,8 @@ describe("the shape of every step", () => {
     // The correction the user made on the design, round 1. Every node has a
     // terminal; Interactive is about completion and about waiting on answers.
     for (const step of STEPS.filter((s) => s.id.includes("interactive"))) {
-      expect(step.body.toLowerCase(), step.id).not.toMatch(/opens? a terminal/);
-      expect(step.body.toLowerCase(), step.id).toContain("complete");
+      expect(bodyOf(step).toLowerCase(), step.id).not.toMatch(/opens? a terminal/);
+      expect(bodyOf(step).toLowerCase(), step.id).toContain("complete");
     }
   });
 });

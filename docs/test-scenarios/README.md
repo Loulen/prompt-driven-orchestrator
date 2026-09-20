@@ -28,11 +28,19 @@ Two levels:
 |---|---|---|---|
 | [HP-01](HP-01-author-and-save.md) | Author & save a pipeline | pipeline authoring, library, unified canvas | active |
 | [HP-02](HP-02-run-to-completion.md) | Launch a run to completion | run lifecycle, dataflow, artifacts, stats, **sandbox A/B (`full` vs `off`)**, **harness three-way pin (`claude` / `opencode` / `copilot`)** | active |
-| HP-03 | *(reserved — free slot)* | candidate: Triggers, once it is core | — |
+| [HP-03](HP-03-guided-onboarding.md) | A newcomer takes the full tour | tutorial mode, Projecteur, training repository, interactive node + completion guard, artifact | proposed (#825) |
 
-The 3rd slot is intentionally free. To add it: allocate `HP-03`, follow `SCENARIO-FORMAT.md`, update
-this table, and run it once to confirm it's executable — within the **max 3** limit (otherwise merge
-two journeys, drop a non-critical one, or graft drive-by).
+**The 3rd slot went to onboarding (#825, spec #821), not to Triggers.** The full tour is the only
+journey that is *somebody's first five minutes*: it crosses the welcome modal, the New Run form, a
+real Run on a real agent, the completion guard and the artifact panel, and it breaks **silently** —
+a tour whose target moved does not fail a build, it strands a newcomer on a dimmed screen. It also
+costs almost nothing beyond what HP-02 already spends, since the Run it launches is one small node.
+Triggers remain the natural candidate the day they become core: by then this slot is the one to
+argue with (merge two journeys, drop a non-critical one, or graft drive-by) — the limit of **3**
+stands, and curation is a human decision at the integration→develop MR.
+
+> HP-03 is **proposed** rather than active: it is offered for the human curation that the git-flow
+> puts on the integration→develop MR. Run it once to confirm it is executable before promoting it.
 
 **Sandbox (PRD #403) is grafted onto HP-02 as an A/B drive-by rather than given its own slot.** The
 pair `full` + `off` is what makes it meaningful: the `off` twin is the control (a Run that silently

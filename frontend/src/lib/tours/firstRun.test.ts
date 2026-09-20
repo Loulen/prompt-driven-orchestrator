@@ -1,15 +1,16 @@
 /**
- * The *First run* tour definition (#824).
+ * The *First run* tour definition (#824, extended by #825).
  *
  * Same two kinds of check as *First pipeline*. The **walk** plays the whole tour
- * against a simulated New Run form: the user does exactly the gesture each step
- * describes, and the machine must reach `finished` without stalling. A step whose
- * condition its own copy cannot satisfy is caught here rather than by a person
- * four minutes into a real tour.
+ * against a simulated app — the New Run form, then the Run the launch created:
+ * the user does exactly the gesture each step describes, and the machine must
+ * reach `finished` without stalling. A step whose condition its own copy cannot
+ * satisfy is caught here rather than by a person ten minutes into a real tour.
  *
  * Then the cases the walk cannot express: the two-beat targets (trigger, then the
  * option inside the popup), the wrong pick that must NOT advance, the refused
- * Launch, and the recap that names the Run the user actually created.
+ * Launch, the unbounded wait and what it says when the node ends badly, and the
+ * recap that names what the tour actually observed.
  */
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -21,14 +22,20 @@ import {
   recapOf,
   skipStep,
   startTour,
+  stepBody,
+  stepNote,
   type TourAppState,
   type TourObservation,
+  type TourRun,
+  type TourRunNode,
+  type TourStep,
 } from "../tour";
 import {
   FIRST_RUN_TOUR,
   TUTORIAL_PROMPT,
   TUTORIAL_REPO_PATH,
   TUTORIAL_RUN_PIPELINE_ID,
+  TUTORIAL_TERMINAL_LINE,
 } from "./firstRun";
 
 const TOUR = FIRST_RUN_TOUR;
@@ -58,6 +65,14 @@ const SKILLS_FOLDER = t("run-skill-selector-folder-skf-pdo");
 const skillOption = (id: string) => t(`run-skill-selector-option-${id}`);
 const skillChosen = (id: string) => t(`run-skill-selector-row-${id}`);
 const PROMPT_INPUT = t("input-textarea");
+// #825 — the reading half: the Run, its node, and what the node produced.
+const NODE_ID = "assistant";
+const NODE_CARD = `.react-flow__node[data-id="${NODE_ID}"]`;
+const INSPECTOR_RUN = t("inspector-pane-run");
+const TERMINAL = t("tmux-terminal");
+const RELEASE = t("release-completion-btn");
+const OUT_ROW = `${t("port-row")}[data-kind="output"][data-port="out"]`;
+const OUT_MODAL = `${t("artifact-modal")}[data-port="out"]`;
 const LAUNCH = t("launch-button");
 const LAUNCH_ERROR = t("launch-error");
 
@@ -70,6 +85,7 @@ const EMPTY_APP: TourAppState = {
   libraryPipelineIds: [],
   runCount: 0,
   latestRun: null,
+  activeRunId: null,
 };
 
 // ---- the simulator --------------------------------------------------------
@@ -85,7 +101,7 @@ const EMPTY_APP: TourAppState = {
  * user pressed anything.
  */
 class FakeApp {
-  app: TourAppState = { ...EMPTY_APP, runCount: 2, latestRun: { id: "r-old", name: "older" } };
+  app: TourAppState = { ...EMPTY_APP, runCount: 2, latestRun: { id: "r-old", name: "older", nodes: [] } };
   /** Frozen at construction — what "did this tour cause it?" is measured against. */
   readonly baseline: TourAppState = { ...this.app };
   private dom = new Set<string>([RUNS_TAB, NEW_RUN]);
@@ -175,15 +191,69 @@ class FakeApp {
     this.app = {
       ...this.app,
       runCount: this.app.runCount + 1,
-      latestRun: { id: "r-new", name },
+      // The list entry only. Its nodes arrive with the detail, which the UI
+      // fetches when the Run is opened — which is what step 10 asks for.
+      latestRun: { id: "r-new", name, nodes: [] },
     };
+    this.show(runRow("r-new"));
   }
 
   /** A launch the daemon refused: the modal stays, with its error line showing. */
   refuseLaunch(reason: string) {
     this.say(LAUNCH_ERROR, reason);
   }
+
+  // ---- the reading half (#825) --------------------------------------------
+
+  /** Clicking the Run's row: its tab opens on the canvas, and the detail lands
+   *  with the node the tour is about to talk about. */
+  openRun() {
+    this.show(NODE_CARD);
+    this.app = {
+      ...this.app,
+      activeRunId: this.app.latestRun?.id ?? null,
+      latestRun: this.app.latestRun
+        ? {
+            ...this.app.latestRun,
+            nodes: [{ id: NODE_ID, name: NODE_ID, type: "agent", status: "running", released: false }],
+          }
+        : null,
+    };
+  }
+
+  /** Clicking the node card: the Run pane of the inspector takes over, with the
+   *  live terminal and the completion guard's buttons in it. */
+  selectNode() {
+    this.show(INSPECTOR_RUN, TERMINAL, RELEASE);
+    this.app = { ...this.app, selection: { kind: "node", id: NODE_ID, edgeIndex: null } };
+  }
+
+  releaseCompletion() {
+    this.patchNode({ released: true });
+  }
+
+  /** The node stops. Only a completed one leaves an output row behind. */
+  finishNode(status = "completed") {
+    this.hide(RELEASE);
+    this.patchNode({ status });
+    if (status === "completed") this.show(OUT_ROW);
+  }
+
+  openOutput() {
+    this.show(OUT_MODAL);
+  }
+
+  private patchNode(patch: Partial<TourRunNode>) {
+    const run = this.app.latestRun;
+    if (!run) return;
+    this.app = {
+      ...this.app,
+      latestRun: { ...run, nodes: run.nodes.map((n) => ({ ...n, ...patch })) },
+    };
+  }
 }
+
+const runRow = (id: string) => `[data-run-row="${id}"]`;
 
 /** What the user does at each step. Keys are checked against the definition, so a
  *  new step with no gesture fails loudly instead of being walked past. */
@@ -209,6 +279,14 @@ function gestures(fake: FakeApp): Record<string, () => void> {
     },
     "write-prompt": () => fake.type(PROMPT_INPUT, TUTORIAL_PROMPT),
     launch: () => fake.launch(),
+    "find-run": () => fake.openRun(),
+    "open-node": () => fake.selectNode(),
+    // Nothing observable: what happens in tmux is a pane of text. The walk's
+    // `Next` is the gesture.
+    "talk-to-agent": () => {},
+    "release-completion": () => fake.releaseCompletion(),
+    "wait-for-node": () => fake.finishNode("completed"),
+    "open-output": () => fake.openOutput(),
   };
 }
 
@@ -233,7 +311,7 @@ function walk(fake: FakeApp, script: Record<string, () => void>) {
     run = observeTour(TOUR, run, fake.obs(), clock);
     if (run.phase !== "running" || currentStep(TOUR, run)?.id !== step.id) continue;
 
-    if (needsConfirm(TOUR, run)) {
+    if (needsConfirm(TOUR, run, fake.obs())) {
       expect(canAdvance(TOUR, run, fake.obs()), `Next stuck on "${step.id}"`).toBe(true);
       run = confirmStep(TOUR, run, fake.obs());
     } else if (step.skippable) {
@@ -456,7 +534,7 @@ describe("a wrong choice does not advance the tour", () => {
 
     expect(currentStep(TOUR, run)?.id).toBe("add-skills");
     expect(run.satisfiedOnEntry).toBe(true);
-    expect(needsConfirm(TOUR, run)).toBe(true);
+    expect(needsConfirm(TOUR, run, fake.obs())).toBe(true);
     expect(canAdvance(TOUR, run, fake.obs())).toBe(true);
 
     // And it does NOT flash past: another tick leaves it exactly where it is.
@@ -493,7 +571,7 @@ describe("the Launch step", () => {
     }
 
     let run = startTour(TOUR, fake.obs());
-    run = { ...run, phase: "running" as const, index: STEPS.length - 1 };
+    run = { ...run, phase: "running" as const, index: STEPS.findIndex((s) => s.id === "launch") };
 
     fake.refuseLaunch('harness "claude" not found on PATH');
     run = observeTour(TOUR, run, fake.obs(), 1_000);
@@ -502,7 +580,7 @@ describe("the Launch step", () => {
     expect(run.failure).toMatchObject({
       kind: "refused",
       stepId: "launch",
-      stepNumber: STEPS.length,
+      stepNumber: STEPS.findIndex((s) => s.id === "launch") + 1,
       reason: 'harness "claude" not found on PATH',
       title: "The Run could not be launched",
     });
@@ -520,7 +598,7 @@ describe("the Launch step", () => {
   it("prefers the refusal to the condition when both hold", () => {
     const fake = new FakeApp();
     let run = startTour(TOUR, fake.obs());
-    run = { ...run, phase: "running" as const, index: STEPS.length - 1 };
+    run = { ...run, phase: "running" as const, index: STEPS.findIndex((s) => s.id === "launch") };
 
     fake.launch();
     fake.refuseLaunch("sandbox unavailable");
@@ -528,6 +606,239 @@ describe("the Launch step", () => {
 
     expect(run.phase).toBe("failed");
     expect(run.failure?.reason).toBe("sandbox unavailable");
+  });
+});
+
+// ---- reading the Run (#825) -----------------------------------------------
+
+/** Put the machine on a named step, with the app already where that step starts. */
+function at(fake: FakeApp, id: string): TourRun {
+  const run = startTour(TOUR, fake.obs());
+  return { ...run, phase: "running", index: STEPS.findIndex((s) => s.id === id) };
+}
+
+describe("finding the Run, and opening its node", () => {
+  it("points at the row of the Run this tour launched, and advances when its tab opens", () => {
+    const fake = new FakeApp();
+    const step = stepById("find-run");
+    fake.launch();
+
+    expect(step.target(fake.obs())).toEqual([runRow("r-new")]);
+    expect(step.done!(fake.obs())).toBe(false);
+    fake.openRun();
+    expect(step.done!(fake.obs())).toBe(true);
+  });
+
+  /**
+   * « Open the session » is two gestures a newcomer does not know: the Run is a
+   * row, the node is where the agent lives. Neither is the run list's own
+   * `open-session-button`, which opens a bash shell on a FINISHED run — the wrong
+   * thing, and absent while the node runs.
+   */
+  it("aims at the node card on the canvas, never at the run list's shell button", () => {
+    const fake = new FakeApp();
+    const step = stepById("open-node");
+    fake.launch();
+    // Before the detail lands there is no node to aim at, and no claim to make.
+    expect(step.target(fake.obs())).toEqual([]);
+    fake.openRun();
+    expect(step.target(fake.obs())).toEqual([NODE_CARD]);
+    expect(step.target(fake.obs())).not.toContain(t("open-session-button"));
+  });
+
+  /** The Run pane can be up for another node entirely: both halves are required. */
+  it("waits for the inspector to show THIS node", () => {
+    const fake = new FakeApp();
+    const step = stepById("open-node");
+    fake.launch();
+    fake.openRun();
+    expect(step.done!(fake.obs())).toBe(false);
+
+    fake.selectNode();
+    expect(step.done!(fake.obs())).toBe(true);
+
+    fake.app = { ...fake.app, selection: { kind: "node", id: "someone-else", edgeIndex: null } };
+    expect(step.done!(fake.obs())).toBe(false);
+  });
+
+  it("names the node the Run actually has, rather than assuming one", () => {
+    const fake = new FakeApp();
+    fake.launch();
+    fake.openRun();
+    fake.app = {
+      ...fake.app,
+      latestRun: {
+        ...fake.app.latestRun!,
+        nodes: [{ id: "n1", name: "reviewer", type: "agent", status: "running", released: false }],
+      },
+    };
+    expect(stepBody(stepById("open-node"), fake.obs())).toContain("reviewer");
+  });
+});
+
+describe("the completion guard", () => {
+  it("advances on the release flag, not on the click", () => {
+    const fake = new FakeApp();
+    const step = stepById("release-completion");
+    fake.launch();
+    fake.openRun();
+    fake.selectNode();
+
+    expect(step.target(fake.obs())).toEqual([RELEASE]);
+    expect(step.done!(fake.obs())).toBe(false);
+    fake.releaseCompletion();
+    expect(step.done!(fake.obs())).toBe(true);
+  });
+
+  /**
+   * « Mark complete » is the other button, and it ends the node without ever
+   * setting the flag. Reading only the flag would strand the tour on a card about
+   * a gesture whose button is no longer on screen.
+   */
+  it("treats a node that stopped as past this step, whatever opened its guard", () => {
+    const fake = new FakeApp();
+    fake.launch();
+    fake.openRun();
+    fake.selectNode();
+    fake.finishNode("completed");
+    expect(stepById("release-completion").done!(fake.obs())).toBe(true);
+  });
+
+  it("names the look-alike button it is NOT about", () => {
+    expect(stepNote(stepById("release-completion"), new FakeApp().obs())).toContain(
+      "Mark complete",
+    );
+  });
+});
+
+describe("waiting for the node to finish", () => {
+  const waitStep = () => stepById("wait-for-node");
+
+  /** The ticket's « sans limite de temps »: an agent takes as long as it takes. */
+  it("never gives up, however long the node runs", () => {
+    const fake = new FakeApp();
+    fake.launch();
+    fake.openRun();
+    fake.selectNode();
+    fake.releaseCompletion();
+    let run = at(fake, "wait-for-node");
+    // The inspector is on screen throughout, and a whole hour passes.
+    for (const clock of [100, 5_000, 60_000, 3_600_000]) {
+      run = observeTour(TOUR, run, fake.obs(), clock);
+    }
+    expect(run.phase).toBe("running");
+    expect(currentStep(TOUR, run)?.id).toBe("wait-for-node");
+    expect(waitStep().targetTimeoutMs).toBeNull();
+  });
+
+  it("lights the whole inspector as a zone to roam in", () => {
+    const fake = new FakeApp();
+    fake.launch();
+    fake.openRun();
+    fake.selectNode();
+    expect(waitStep().target(fake.obs())).toEqual([INSPECTOR_RUN]);
+    expect(waitStep().soft).toBe(true);
+    expect(waitStep().waitingNote).toContain("no time limit");
+  });
+
+  it("slides on by itself when the node completes", () => {
+    const fake = new FakeApp();
+    fake.launch();
+    fake.openRun();
+    fake.selectNode();
+    fake.releaseCompletion();
+    let run = at(fake, "wait-for-node");
+    fake.finishNode("completed");
+    run = observeTour(TOUR, run, fake.obs(), 1_000);
+    expect(currentStep(TOUR, run)?.id).toBe("open-output");
+  });
+
+  /**
+   * A failure is still an ending, so the step is done — but it stops for a click,
+   * because the sentence explaining what happened is the only thing it has left
+   * to give.
+   */
+  it("stops for a Next when the node ended without completing", () => {
+    const fake = new FakeApp();
+    fake.launch();
+    fake.openRun();
+    fake.selectNode();
+    fake.releaseCompletion();
+    let run = at(fake, "wait-for-node");
+    fake.finishNode("failed");
+    run = observeTour(TOUR, run, fake.obs(), 1_000);
+
+    expect(currentStep(TOUR, run)?.id).toBe("wait-for-node");
+    expect(needsConfirm(TOUR, run, fake.obs())).toBe(true);
+    expect(canAdvance(TOUR, run, fake.obs())).toBe(true);
+    // The instruction gives way to the explanation.
+    expect(stepBody(waitStep(), fake.obs())).toBe("");
+    expect(stepNote(waitStep(), fake.obs())).toContain("ended without completing");
+    expect(waitStep().checklist!(fake.obs())[1]).toMatchObject({ done: true, badge: "failed" });
+  });
+
+  /**
+   * The engine has no « back ». A reader who skipped the release would otherwise
+   * sit in front of a spinner that can never end — so the checklist says, in
+   * place, what the node is waiting for. The button is inside the soft zone.
+   */
+  it("says in the checklist why nothing is happening after a skipped release", () => {
+    const fake = new FakeApp();
+    fake.launch();
+    fake.openRun();
+    fake.selectNode();
+
+    const [released, finished] = waitStep().checklist!(fake.obs());
+    expect(released).toMatchObject({ done: false });
+    expect(released.note).toContain("Mark ready for completion");
+    expect(finished).toMatchObject({ done: false, badge: undefined });
+
+    fake.releaseCompletion();
+    expect(waitStep().checklist!(fake.obs())[0]).toMatchObject({ done: true, note: undefined });
+  });
+
+  /** Skipping a wait means "I have seen enough" (design Q3): the steps after it
+   *  are about a file the node has not written. */
+  it("ends the tour on Skip, rather than pointing at an output nobody wrote", () => {
+    const fake = new FakeApp();
+    fake.launch();
+    fake.openRun();
+    fake.selectNode();
+    const run = skipStep(TOUR, at(fake, "wait-for-node"), fake.obs());
+    expect(run.phase).toBe("finished");
+  });
+});
+
+describe("opening the output", () => {
+  it("points at the out row under Outputs, and advances when the file opens", () => {
+    const fake = new FakeApp();
+    const step = stepById("open-output");
+    fake.launch();
+    fake.openRun();
+    fake.selectNode();
+    fake.finishNode("completed");
+
+    expect(step.target(fake.obs())).toEqual([OUT_ROW]);
+    expect(step.done!(fake.obs())).toBe(false);
+    fake.openOutput();
+    expect(step.done!(fake.obs())).toBe(true);
+  });
+
+  /** A node that failed writes nothing: the tour stops on the usual card, with a
+   *  hint that says why the row is not there. */
+  it("stops cleanly when a failed node left no output", () => {
+    const fake = new FakeApp();
+    fake.launch();
+    fake.openRun();
+    fake.selectNode();
+    fake.finishNode("failed");
+
+    let run = at(fake, "open-output");
+    for (const clock of [0, 20_000]) run = observeTour(TOUR, run, fake.obs(), clock);
+
+    expect(run.phase).toBe("failed");
+    expect(run.failure).toMatchObject({ kind: "missing", stepId: "open-output" });
+    expect(run.failure?.hint).toContain("writes no output");
   });
 });
 
@@ -548,59 +859,103 @@ describe("the recap", () => {
     expect(first.label).toBe("your Run");
   });
 
-  it("ends on something that is starting, not on « done »", () => {
-    expect(TOUR.outro?.title).toBe("Your Run is starting");
-    expect(TOUR.outro?.primaryLabel).toBe("Open the Run");
+  /**
+   * The card is the honest record of what the tour saw (#825). A reader who
+   * skipped the wait must not be congratulated for a node that is still running,
+   * and one whose node failed must not be told it finished on its own.
+   */
+  it("says where the node actually got to", () => {
+    const fake = new FakeApp();
+    fake.launch();
+    fake.openRun();
+    expect(recapOf(TOUR, fake.app)[1].text).toContain("still running");
+    expect(recapOf(TOUR, fake.app)[1].text).toContain("guarded until a human releases it");
+
+    fake.releaseCompletion();
+    expect(recapOf(TOUR, fake.app)[1].text).toContain("released by you");
+
+    fake.finishNode("failed");
+    expect(recapOf(TOUR, fake.app)[1].text).toContain("ended");
+    expect(recapOf(TOUR, fake.app)[1].text).not.toContain("finished on its own");
+
+    fake.finishNode("completed");
+    expect(recapOf(TOUR, fake.app)[1].text).toContain("finished on its own");
   });
 
-  /**
-   * The training repository has never been seen by the harness, so the first
-   * thing the « live session » shows is a trust prompt. The end card names it:
-   * a security question nobody announced reads as the tour having broken
-   * something.
-   */
-  it("warns that the harness will ask about the brand-new training repository", () => {
-    expect(TOUR.outro?.closing).toContain("trust");
-    expect(TOUR.outro?.closing).toContain(TUTORIAL_REPO_PATH);
+  /** The tour no longer ends at Launch, so « Open the Run » would send the reader
+   *  where they already are (#825). */
+  it("ends on « done », with no button that goes nowhere", () => {
+    expect(TOUR.outro?.title).toBeUndefined();
+    expect(TOUR.outro?.primaryLabel).toBeUndefined();
+    expect(TOUR.outro?.closing).toContain("every interactive node");
   });
 });
 
 // ---- the shape of the definition -----------------------------------------
 
 describe("the definition holds the copy rules", () => {
-  it("is nine steps, about four minutes", () => {
-    expect(STEPS).toHaveLength(9);
-    expect(TOUR.minutes).toBe(4);
+  it("is the nine form steps plus the six reading ones", () => {
+    expect(STEPS).toHaveLength(15);
+    expect(STEPS.slice(9).map((s) => s.id)).toEqual([
+      "find-run",
+      "open-node",
+      "talk-to-agent",
+      "release-completion",
+      "wait-for-node",
+      "open-output",
+    ]);
+    expect(TOUR.minutes).toBeGreaterThanOrEqual(4);
   });
 
   it("gives every step an imperative title and at most two sentences", () => {
+    const fake = new FakeApp();
     for (const step of STEPS) {
       expect(step.title, step.id).not.toMatch(/\.$/);
-      const sentences = step.body.split(/(?<=[.!?])\s+/).filter(Boolean);
-      expect(sentences.length, `"${step.id}" body: ${step.body}`).toBeLessThanOrEqual(2);
+      const body = stepBody(step, fake.obs());
+      const sentences = body.split(/(?<=[.!?])\s+/).filter(Boolean);
+      expect(sentences.length, `"${step.id}" body: ${body}`).toBeLessThanOrEqual(2);
     }
   });
 
-  it("carries a block to paste for every free input", () => {
+  /**
+   * Every free input carries the exact block to paste — the prompt, the Run's
+   * name, and the line to type into the agent's own session (#825) — and hands
+   * the moment to the user instead of advancing the instant they stop typing.
+   * For the terminal there is nothing to observe at all, which is the strongest
+   * form of the same rule: `Next` is the only way on.
+   */
+  it("carries a block to paste for every free input, and waits for Next", () => {
+    const free = ["name-run", "write-prompt", "talk-to-agent"];
     for (const step of STEPS) {
-      const free = step.id === "name-run" || step.id === "write-prompt";
-      expect(Boolean(step.copyBlock), step.id).toBe(free);
-      // A free input also hands the moment to the user rather than auto-advancing
-      // the instant they stop typing.
-      if (free) expect(step.confirm, step.id).toBe(true);
+      expect(Boolean(step.copyBlock), step.id).toBe(free.includes(step.id));
+      if (free.includes(step.id)) expect(step.confirm === true || !step.done, step.id).toBe(true);
     }
+    expect(stepById("talk-to-agent").copyBlock).toBe(TUTORIAL_TERMINAL_LINE);
   });
 
   /**
    * The ticket says "Start"; the button says **Launch** (design Q1). The copy
    * names what is on screen — a tour that told someone to press a button that is
-   * not there is worse than no tour.
+   * not there is worse than no tour. Same correction for "the session": the UI
+   * calls it the terminal, inside the Run inspector (#825).
    */
   it("says Launch, because that is what the button says", () => {
+    const fake = new FakeApp();
     const step = stepById("launch");
     expect(step.title).toContain("Launch");
-    expect(step.body).toContain("Launch");
-    expect(STEPS.some((s) => /\bStart\b/.test(s.body) || /\bStart\b/.test(s.title))).toBe(false);
+    expect(stepBody(step, fake.obs())).toContain("Launch");
+    const says = (s: TourStep, re: RegExp) =>
+      re.test(stepBody(s, fake.obs())) || re.test(s.title);
+    expect(STEPS.some((s) => says(s, /\bStart\b/))).toBe(false);
+    expect(stepBody(stepById("talk-to-agent"), fake.obs())).toContain("terminal");
+  });
+
+  /** Every reading step is optional: a reader who already knows this half should
+   *  not have to sit through it to earn the checkmark. */
+  it("makes every reading step skippable, and only the wait unbounded", () => {
+    for (const step of STEPS.slice(9)) expect(step.skippable, step.id).toBe(true);
+    const unbounded = STEPS.filter((s) => s.targetTimeoutMs === null);
+    expect(unbounded.map((s) => s.id)).toEqual(["wait-for-node"]);
   });
 
   it("gives every step a waitingFor, so a stop can name what it wanted", () => {

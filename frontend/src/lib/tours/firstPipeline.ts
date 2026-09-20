@@ -427,4 +427,9 @@ export const FIRST_PIPELINE_TOUR: TourDef = {
       text: "tester → implementer when verdict eq fail; tester → End when verdict eq pass.",
     },
   ],
+  // #825 — what the card of a Full tour's *previous* leg says when that leg was
+  // refused. *First run* is the one that can be stopped by the machine (no
+  // harness on PATH, no sandbox); this tour never spawns anything, so a refusal
+  // there is no reason to abandon the chain.
+  chainNote: "This one does not need a running agent: it only builds a pipeline.",
 };

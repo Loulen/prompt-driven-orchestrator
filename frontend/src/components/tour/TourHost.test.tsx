@@ -41,7 +41,7 @@ const TOUR: TourDef = {
 };
 
 function Harness({ showWelcome = false, tour = TOUR }: { showWelcome?: boolean; tour?: TourDef }) {
-  const controller = useTour(0);
+  const controller = useTour([]);
   const [opened, setOpened] = useState(false);
   const [answered, setAnswered] = useState(false);
   const [tutorials, setTutorials] = useState(false);
@@ -192,8 +192,8 @@ describe("the welcome modal", () => {
     render(<Harness showWelcome />);
     expect(screen.getByTestId("tour-welcome-full")).toBeInTheDocument();
     expect(screen.getByTestId("tour-welcome-first-pipeline")).toBeEnabled();
-    // #824 has not built *First run* yet: announced, greyed, unstartable.
-    expect(screen.getByTestId("tour-welcome-first-run")).toBeDisabled();
+    // #824 built *First run*: no greyed placeholder left in the catalog.
+    expect(screen.getByTestId("tour-welcome-first-run")).toBeEnabled();
     expect(screen.getByTestId("tour-welcome-later")).toBeInTheDocument();
   });
 
@@ -216,11 +216,16 @@ describe("the welcome modal", () => {
     );
   });
 
+  /**
+   * The full tour now leads with *First run* (#824, design Q6), and that tour
+   * opens on its intro card rather than on a step — its first target does not
+   * exist until the card's preparations have answered.
+   */
   it("the full tour sets the key too", async () => {
     render(<Harness showWelcome />);
     await user().click(screen.getByTestId("tour-welcome-full"));
     expect(loadTourOffered()).toBe(true);
     tick();
-    expect(screen.getByTestId("tour-popover")).toBeInTheDocument();
+    expect(screen.getByTestId("tour-intro-card")).toBeInTheDocument();
   });
 });

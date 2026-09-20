@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useEditStore } from "../stores/editStore";
 import {
+  beginSteps,
   canAdvance,
   confirmStep,
   currentStep,
@@ -23,6 +24,7 @@ import {
   skipStep,
   startTour,
   type TourAppState,
+  type TourChecklistItem,
   type TourDef,
   type TourObservation,
   type TourRun,
@@ -53,6 +55,25 @@ export interface TourView {
   ready: boolean;
   /** The step waits for `Next` instead of advancing on its own. */
   awaitingConfirm: boolean;
+  /** The step's live checklist, recomputed each tick. Empty when it declares none. */
+  checklist: TourChecklistItem[];
+  /** The intro card's state, while `run.phase === "intro"` (#824). */
+  prep: TourPrepView | null;
+  /**
+   * The next leg of a **Full tour**, or `null` for a tour started on its own
+   * (#824). The end card's primary chains to it instead of closing — that is the
+   * whole difference between "the Full tour" and "two tours you start by hand".
+   */
+  nextTour: TourDef | null;
+}
+
+/** What the intro card shows while it prepares what the tour needs (#824). */
+export interface TourPrepView {
+  items: { id: string; label: string; done: boolean }[];
+  /** Every preparation has answered: `Start` is live. */
+  ready: boolean;
+  /** One refused. The card swaps to its error state and the tour never starts. */
+  failure: { title: string; reason: string } | null;
 }
 
 /** How often the machine is pumped. Fast enough to feel immediate, cheap enough
@@ -68,8 +89,15 @@ const HOLE_PADDING = 6;
  * (Base UI's `Menu.Popup` via `components/ui/dropdown-menu`), listed so the zone
  * never silently degrades to "block the whole menu but one option" if the
  * primitive's markup shifts.
+ *
+ * `[role="dialog"]` joined the list in #824: three of *First run*'s targets sit
+ * inside one (the filesystem explorer, the Agent popover, the Skills popover), and
+ * those are exactly the surfaces where the user must keep every other control —
+ * scroll the tree, climb a folder, press "Select this folder". Nearest ancestor
+ * wins, so the New Run modal underneath is never the zone.
  */
-const MENU_CONTAINERS = '[role="menu"], [role="listbox"], [data-slot="dropdown-menu-content"]';
+const MENU_CONTAINERS =
+  '[role="menu"], [role="listbox"], [role="dialog"], [data-slot="dropdown-menu-content"]';
 
 function rectOf(el: Element): TourRect {
   const r = el.getBoundingClientRect();
@@ -113,9 +141,21 @@ function visible(el: Element | null): el is Element {
  * The slice of app state the step predicates read. Built fresh on every tick from
  * what the UI has already loaded — the tour issues no request of its own.
  */
-export function readTourAppState(runCount: number): TourAppState {
+/**
+ * The Runs the tour is allowed to see — the same list the left panel renders.
+ * Only a count and the newest entry are read; the shape is narrowed here so the
+ * hook never depends on the full `RunListEntry`.
+ */
+export interface TourRunsInput {
+  length: number;
+  0?: { run_id: string; name?: string | null; pipeline_name?: string };
+}
+
+export function readTourAppState(runs: TourRunsInput): TourAppState {
   const s = useEditStore.getState();
   const tab = s.openTabs.find((t) => t.id === s.activeTabId) ?? null;
+  // `GET /runs` answers newest-first, so `[0]` is the Run a tour just caused.
+  const newest = runs[0] ?? null;
   return {
     pipelineId: tab?.id ?? null,
     pipeline: tab?.pipeline ?? null,
@@ -127,13 +167,17 @@ export function readTourAppState(runCount: number): TourAppState {
     },
     dirty: tab?.dirty ?? false,
     libraryPipelineIds: s.pipelines.map((p) => p.id),
-    runCount,
+    runCount: runs.length,
+    latestRun: newest
+      ? { id: newest.run_id, name: newest.name?.trim() || newest.run_id }
+      : null,
   };
 }
 
-function observation(runCount: number): TourObservation {
+function observation(runs: TourRunsInput, baseline: TourAppState): TourObservation {
   return {
-    app: readTourAppState(runCount),
+    app: readTourAppState(runs),
+    baseline,
     present: (selector) => {
       try {
         return visible(document.querySelector(selector));
@@ -150,49 +194,93 @@ function observation(runCount: number): TourObservation {
         return null;
       }
     },
+    text: (selector) => {
+      try {
+        const el = document.querySelector(selector);
+        // An element that is in the document but has no box is not showing
+        // anything to anyone — same rule as `present`.
+        return visible(el) ? (el.textContent?.trim() ?? null) || null : null;
+      } catch {
+        return null;
+      }
+    },
   };
 }
 
 export interface TourController {
   /** The live view, or null when no tour is running. */
   view: TourView | null;
-  start: (tour: TourDef) => void;
+  /**
+   * Start a tour. `rest` is the remaining legs of a Full tour: the end card then
+   * chains into the next one rather than offering a way out.
+   */
+  start: (tour: TourDef, rest?: TourDef[]) => void;
   /** Leave without marking anything: an abandoned tour is not a finished one. */
   quit: () => void;
   next: () => void;
   skip: () => void;
-  /** The end card's Finish — the only thing that writes the "done" key. */
+  /** The end card's primary — the only thing that writes the "done" key. */
   finish: () => void;
+  /** The intro card's `Start`: enter the first step. */
+  begin: () => void;
+  /** The intro card's `Retry` after a refused preparation. */
+  retryPrep: () => void;
 }
 
-export function useTour(runCount: number): TourController {
+const NO_PREP: TourPrepView = { items: [], ready: true, failure: null };
+
+export function useTour(runs: TourRunsInput): TourController {
   const [tour, setTour] = useState<TourDef | null>(null);
   const [run, setRun] = useState<TourRun | null>(null);
   const [hole, setHole] = useState<TourRect | null>(null);
   const [zone, setZone] = useState<TourRect | null>(null);
   const [ready, setReady] = useState(false);
   const [awaitingConfirm, setAwaitingConfirm] = useState(false);
+  const [checklist, setChecklist] = useState<TourChecklistItem[]>([]);
+  const [prep, setPrep] = useState<TourPrepView | null>(null);
+  /** The legs of a Full tour still to come, in order. Empty for a lone tour. */
+  const [chain, setChain] = useState<TourDef[]>([]);
+  // Bumped by `retryPrep` to re-run the preparation effect after a refusal.
+  const [prepAttempt, setPrepAttempt] = useState(0);
   // Latest values for the interval, which is installed once per tour and must not
   // churn on every keystroke. Mirrored in effects, never during render
   // (`react-hooks/refs`) — and declared BEFORE the pump effect below so a commit
   // refreshes them first.
   const runRef = useRef<TourRun | null>(null);
-  const runCountRef = useRef(runCount);
+  const runsRef = useRef<TourRunsInput>(runs);
   const scrolledFor = useRef<string | null>(null);
+  // What the app looked like when this tour started — every observation carries
+  // it, so a step can ask "did THIS tour cause that?" (#824).
+  const baselineRef = useRef<TourAppState | null>(null);
   useEffect(() => {
     runRef.current = run;
   }, [run]);
   useEffect(() => {
-    runCountRef.current = runCount;
-  }, [runCount]);
+    runsRef.current = runs;
+  }, [runs]);
 
-  const start = useCallback((next: TourDef) => {
-    const first = startTour(next, observation(runCountRef.current));
+  const observe = useCallback(
+    () => observation(runsRef.current, baselineRef.current ?? readTourAppState(runsRef.current)),
+    [],
+  );
+
+  const start = useCallback((next: TourDef, rest: TourDef[] = []) => {
+    const baseline = readTourAppState(runsRef.current);
+    baselineRef.current = baseline;
+    const first = startTour(next, observation(runsRef.current, baseline));
     scrolledFor.current = null;
     setTour(next);
     setRun(first);
     setHole(null);
     setZone(null);
+    setChecklist([]);
+    // Bumped rather than reset: the attempt counter is what re-arms the
+    // preparation effect, and a tour definition is a module constant — so two
+    // starts of the SAME tour would otherwise leave the effect's deps untouched
+    // and the card waiting forever on preparations that never re-ran.
+    setPrepAttempt((n) => n + 1);
+    setPrep(next.intro ? null : NO_PREP);
+    setChain(rest);
   }, []);
 
   const quit = useCallback(() => {
@@ -200,22 +288,97 @@ export function useTour(runCount: number): TourController {
     setRun(null);
     setHole(null);
     setZone(null);
+    setChecklist([]);
+    setPrep(null);
+    setChain([]);
+    baselineRef.current = null;
   }, []);
 
+  /**
+   * The end card's primary. Marks this tour done, then either chains into the next
+   * leg of a Full tour or closes. The checkmark belongs to the tour that was
+   * actually completed, so it is written before the next one starts.
+   */
   const finish = useCallback(() => {
     if (tour) markTourDone(tour.id);
-    quit();
-  }, [tour, quit]);
+    const [next, ...rest] = chain;
+    if (next) start(next, rest);
+    else quit();
+  }, [tour, chain, start, quit]);
 
   const next = useCallback(() => {
     if (!tour || !run) return;
-    setRun(confirmStep(tour, run, observation(runCountRef.current)));
-  }, [tour, run]);
+    setRun(confirmStep(tour, run, observe()));
+  }, [tour, run, observe]);
 
   const skip = useCallback(() => {
     if (!tour || !run) return;
-    setRun(skipStep(tour, run, observation(runCountRef.current)));
-  }, [tour, run]);
+    setRun(skipStep(tour, run, observe()));
+  }, [tour, run, observe]);
+
+  const begin = useCallback(() => {
+    if (!tour || !run) return;
+    scrolledFor.current = null;
+    setRun(beginSteps(tour, run, observe()));
+  }, [tour, run, observe]);
+
+  const retryPrep = useCallback(() => {
+    setPrep(null);
+    setPrepAttempt((n) => n + 1);
+  }, []);
+
+  // Preparation (#824): every item of the intro runs in parallel the moment the
+  // card opens, and `Start` waits for all of them. Idempotent by contract, so a
+  // Retry — or a replayed tour — costs nothing when the work is already done.
+  const intro = tour?.intro ?? null;
+  useEffect(() => {
+    if (!intro) return;
+    let cancelled = false;
+    const done = new Set<string>();
+    const render = (failure: TourPrepView["failure"]) => {
+      if (cancelled) return;
+      setPrep({
+        items: intro.prepare.map((p) => ({
+          id: p.id,
+          label: done.has(p.id) ? p.ready : p.pending,
+          done: done.has(p.id),
+        })),
+        ready: done.size === intro.prepare.length,
+        failure,
+      });
+    };
+    render(null);
+    void Promise.all(
+      intro.prepare.map((item) =>
+        item
+          .run()
+          .then(() => {
+            done.add(item.id);
+            render(null);
+          })
+          .catch((e: unknown) => {
+            // The daemon's sentence, quoted. The first refusal wins the card:
+            // once it is showing a reason, a second one would only overwrite it.
+            if (cancelled) return;
+            setPrep((current) =>
+              current?.failure
+                ? current
+                : {
+                    items: current?.items ?? [],
+                    ready: false,
+                    failure: {
+                      title: item.failureTitle,
+                      reason: e instanceof Error ? e.message : String(e),
+                    },
+                  },
+            );
+          }),
+      ),
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [intro, prepAttempt]);
 
   // One pump for everything: the machine, the hole, and the Next button's state.
   // Splitting them would mean three passes over the same `querySelector` results.
@@ -224,7 +387,7 @@ export function useTour(runCount: number): TourController {
     const pump = () => {
       const current = runRef.current;
       if (!current || current.phase !== "running") return;
-      const obs = observation(runCountRef.current);
+      const obs = observe();
       const advanced = observeTour(tour, current, obs, Date.now());
       if (advanced !== current) {
         runRef.current = advanced;
@@ -235,11 +398,12 @@ export function useTour(runCount: number): TourController {
       if (!step || active.phase !== "running") {
         setHole(null);
         setZone(null);
+        setChecklist([]);
         return;
       }
 
       const elements = step
-        .target(obs.app)
+        .target(obs)
         .map((selector) => {
           try {
             return document.querySelector(selector);
@@ -261,6 +425,15 @@ export function useTour(runCount: number): TourController {
 
       setReady(canAdvance(tour, active, obs));
       setAwaitingConfirm(needsConfirm(tour, active));
+      // Compared item by item: a fresh array every tick would re-render the
+      // popover ten times a second for a list that changes twice per tour.
+      const nextChecklist = step.checklist?.(obs) ?? [];
+      setChecklist((prev) =>
+        prev.length === nextChecklist.length &&
+        prev.every((item, i) => item.label === nextChecklist[i].label && item.done === nextChecklist[i].done)
+          ? prev
+          : nextChecklist,
+      );
 
       // One scrollIntoView per step, on entry only (design Q5): following the
       // target continuously would fight the user's own scrolling.
@@ -284,7 +457,7 @@ export function useTour(runCount: number): TourController {
       window.removeEventListener("resize", onViewportChange);
       window.removeEventListener("scroll", onViewportChange, true);
     };
-  }, [tour]);
+  }, [tour, observe]);
 
   const view = useMemo<TourView | null>(() => {
     if (!tour || !run) return null;
@@ -298,8 +471,11 @@ export function useTour(runCount: number): TourController {
       zone,
       ready,
       awaitingConfirm,
+      checklist,
+      prep: run.phase === "intro" ? (prep ?? { items: [], ready: false, failure: null }) : null,
+      nextTour: chain[0] ?? null,
     };
-  }, [tour, run, hole, zone, ready, awaitingConfirm]);
+  }, [tour, run, hole, zone, ready, awaitingConfirm, checklist, prep, chain]);
 
-  return { view, start, quit, next, skip, finish };
+  return { view, start, quit, next, skip, finish, begin, retryPrep };
 }

@@ -1,8 +1,8 @@
 import { useLayoutEffect, useRef, useState } from "react";
-import { Check, Copy } from "lucide-react";
+import { Check, Circle, Copy } from "lucide-react";
 import { placePopover, type PopoverSide } from "../../lib/tourPlacement";
 import type { TourRect } from "../../hooks/useTour";
-import type { TourDef, TourStep } from "../../lib/tour";
+import type { TourChecklistItem, TourDef, TourStep } from "../../lib/tour";
 
 /**
  * The instruction card of a running tour (#823).
@@ -23,6 +23,8 @@ interface Props {
   ready: boolean;
   /** This step waits for `Next` rather than advancing on its own. */
   awaitingConfirm: boolean;
+  /** Live sub-conditions of a step that asks for more than one gesture (#824). */
+  checklist: TourChecklistItem[];
   onNext: () => void;
   onSkip: () => void;
   onQuit: () => void;
@@ -52,6 +54,7 @@ export default function TourPopover({
   hole,
   ready,
   awaitingConfirm,
+  checklist,
   onNext,
   onSkip,
   onQuit,
@@ -77,7 +80,7 @@ export default function TourPopover({
         { width: window.innerWidth, height: window.innerHeight },
       ),
     );
-  }, [hole, step.id]);
+  }, [hole, step.id, checklist]);
 
   const copy = () => {
     if (!step.copyBlock) return;
@@ -116,6 +119,29 @@ export default function TourPopover({
       <p className="text-fg-2" style={{ fontSize: "11px", lineHeight: 1.5 }}>
         {step.body}
       </p>
+
+      {/* A step that asks for two gestures says which one is still missing. The
+          honest answer to "I ticked one and nothing happened": something did. */}
+      {checklist.length > 0 && (
+        <ul className="flex flex-col gap-1" data-testid="tour-checklist">
+          {checklist.map((item) => (
+            <li
+              key={item.label}
+              data-testid={`tour-checklist-${item.label}`}
+              data-done={item.done ? "true" : "false"}
+              className={`flex items-center gap-1.5 ${item.done ? "text-acc" : "text-fg-4"}`}
+              style={{ fontSize: "10.5px" }}
+            >
+              {item.done ? (
+                <Check size={11} className="shrink-0" />
+              ) : (
+                <Circle size={11} className="shrink-0" />
+              )}
+              <span className="min-w-0 flex-1 truncate font-mono">{item.label}</span>
+            </li>
+          ))}
+        </ul>
+      )}
 
       {step.copyBlock && (
         <div className="flex items-start gap-1.5 rounded border border-line bg-bg-3 p-1.5">

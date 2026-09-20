@@ -6,8 +6,14 @@
 
 import type { TourDef } from "../tour";
 import { FIRST_PIPELINE_TOUR } from "./firstPipeline";
+import { FIRST_RUN_TOUR } from "./firstRun";
 
 export { FIRST_PIPELINE_TOUR, TUTORIAL_PIPELINE_ID } from "./firstPipeline";
+export {
+  FIRST_RUN_TOUR,
+  TUTORIAL_REPO_PATH,
+  TUTORIAL_RUN_PIPELINE_ID,
+} from "./firstRun";
 
 export interface TourCatalogEntry {
   id: string;
@@ -21,27 +27,28 @@ export interface TourCatalogEntry {
 
 /**
  * Order matters: it is the order of the **full tour**, and the order the welcome
- * modal and Settings list the tours in. *First pipeline* comes first because it
- * builds the thing *First run* then launches.
+ * modal and Settings list the tours in.
  *
- * *First run* is declared here without a definition on purpose: #824 builds it, and
- * a placeholder that says "soon" is more honest than a list that pretends PDO has
- * one tour. The welcome modal and Settings render it greyed and unstartable.
+ * *First run* leads (#824, design Q6). #823 had *First pipeline* first, on the
+ * reasoning that it builds a pipeline *First run* could then launch — but the
+ * training pipeline is prepared for you, so nothing depends on that order any
+ * more, and *First run* is half as long and ends with something moving on screen.
+ * A newcomer's first four minutes should produce a live Run, not a saved file.
  */
 export const TOUR_CATALOG: TourCatalogEntry[] = [
+  {
+    id: FIRST_RUN_TOUR.id,
+    title: FIRST_RUN_TOUR.title,
+    blurb: FIRST_RUN_TOUR.blurb,
+    minutes: FIRST_RUN_TOUR.minutes,
+    def: FIRST_RUN_TOUR,
+  },
   {
     id: FIRST_PIPELINE_TOUR.id,
     title: FIRST_PIPELINE_TOUR.title,
     blurb: FIRST_PIPELINE_TOUR.blurb,
     minutes: FIRST_PIPELINE_TOUR.minutes,
     def: FIRST_PIPELINE_TOUR,
-  },
-  {
-    id: "first-run",
-    title: "First run",
-    blurb: "Launch a Run on a one-node pipeline and talk to the node in its terminal.",
-    minutes: null,
-    def: null,
   },
 ];
 
@@ -55,10 +62,8 @@ export function findTour(id: string): TourDef | null {
 }
 
 /**
- * What « Full tour » starts. It chains every available tour, which today is the
- * single one that exists — so the button starts *First pipeline* rather than
- * being hidden or lying about a second leg (#823: « le bouton Full tour lance ce
- * seul tour pour l'instant »).
+ * What « Full tour » starts: every available tour, in catalog order — *First run*,
+ * then *First pipeline* (#824). The end card of each offers the next.
  */
 export function fullTourSequence(): TourDef[] {
   return availableTours();

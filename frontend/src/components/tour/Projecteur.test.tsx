@@ -103,6 +103,7 @@ describe("the popover", () => {
           hole={HOLE}
           ready
           awaitingConfirm={false}
+          checklist={[]}
           onNext={onNext}
           onSkip={onSkip}
           onQuit={onQuit}

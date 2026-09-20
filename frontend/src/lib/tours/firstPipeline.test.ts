@@ -45,15 +45,20 @@ class FakeApp {
     dirty: false,
     libraryPipelineIds: [],
     runCount: 0,
+    latestRun: null,
   };
+  /** Frozen at construction: what "this tour caused it" is measured against. */
+  readonly baseline: TourAppState = { ...this.app };
   private dom = new Set<string>(['[data-testid="left-tab-library"]']);
   private values: Record<string, string> = {};
 
   obs(): TourObservation {
     return {
       app: this.app,
+      baseline: this.baseline,
       present: (selector) => this.dom.has(selector) || this.canvas(selector),
       value: (selector) => this.values[selector] ?? null,
+      text: (selector) => this.values[selector] ?? null,
     };
   }
 

@@ -248,6 +248,7 @@ export function useTour(runs: TourRunsInput): TourController {
   // refreshes them first.
   const runRef = useRef<TourRun | null>(null);
   const runsRef = useRef<TourRunsInput>(runs);
+  /** The last aim scrolled to — step and selectors both (see the pump's scroll block). */
   const scrolledFor = useRef<string | null>(null);
   // What the app looked like when this tour started — every observation carries
   // it, so a step can ask "did THIS tour cause that?" (#824).
@@ -402,8 +403,8 @@ export function useTour(runs: TourRunsInput): TourController {
         return;
       }
 
-      const elements = step
-        .target(obs)
+      const selectors = step.target(obs);
+      const elements = selectors
         .map((selector) => {
           try {
             return document.querySelector(selector);
@@ -435,11 +436,23 @@ export function useTour(runs: TourRunsInput): TourController {
           : nextChecklist,
       );
 
-      // One scrollIntoView per step, on entry only (design Q5): following the
-      // target continuously would fight the user's own scrolling.
-      const key = `${tour.id}:${active.index}`;
-      if (scrolledFor.current !== key && elements[0]) {
-        scrolledFor.current = key;
+      // One scrollIntoView per **aim**, not per step (design Q5, fixed in #824).
+      // Following the target continuously would fight the user's own scrolling,
+      // so the scroll only ever fires when the step points somewhere new — and a
+      // step does point somewhere new while the user works: `pick-repo` rings the
+      // explorer dialog while its listing loads, and the `pdo-tutorial` row only
+      // once that row exists. Keyed on the step alone, the single scroll was spent
+      // on the dialog, and the row stayed wherever an eleven-thousand-pixel `/tmp`
+      // had put it — a dimmed explorer with nothing on screen to click.
+      //
+      // What keeps this from chasing the user is the out-of-view test below, not
+      // the key: once a target has been brought into view, re-aiming back onto it
+      // scrolls nothing. So the key can be "the last aim" rather than "every aim
+      // seen", and a user who climbs out of `/tmp` and back gets the row put in
+      // front of them a second time instead of the dimmed explorer again.
+      const aim = `${tour.id}:${active.index}:${selectors.join("|")}`;
+      if (elements[0] && scrolledFor.current !== aim) {
+        scrolledFor.current = aim;
         const r = elements[0].getBoundingClientRect();
         if (r.top < 0 || r.bottom > window.innerHeight) {
           elements[0].scrollIntoView({ block: "center", behavior: "smooth" });

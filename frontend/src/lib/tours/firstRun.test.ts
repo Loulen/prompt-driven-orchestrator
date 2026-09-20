@@ -160,6 +160,14 @@ class FakeApp {
   closeSkillsPopover() {
     this.hide(SKILLS_POPOVER, SKILLS_FOLDER, skillOption("pdo-orchestrate"), skillOption("pdo-interactive"));
   }
+  /** The folder's chevron: its rows go, the folder itself stays on screen. */
+  collapseSkillsFolder() {
+    this.hide(skillOption("pdo-orchestrate"), skillOption("pdo-interactive"));
+  }
+  /** A filter that matches nothing: even the PDO folder leaves the tree. */
+  filterSkillsAway() {
+    this.hide(SKILLS_FOLDER, skillOption("pdo-orchestrate"), skillOption("pdo-interactive"));
+  }
 
   /** A launch the daemon accepted: the modal closes itself, the Run is in the list. */
   launch(name = "my-first-run") {
@@ -298,6 +306,52 @@ describe("targets that re-aim as the user works", () => {
       skillOption("pdo-orchestrate"),
       skillOption("pdo-interactive"),
     ]);
+  });
+
+  /**
+   * Collapsing the folder is not a mistake, and it is the one gesture that takes
+   * the two rows off screen while leaving the step's subject in plain sight. An
+   * `every` over the three selectors read that as "the target is gone" and
+   * counted down to a failure card the user could not understand.
+   */
+  it("keeps pointing at the PDO folder when its rows are collapsed away", () => {
+    const fake = new FakeApp();
+    fake.openModal();
+    fake.openSkillsPopover();
+    fake.collapseSkillsFolder();
+
+    const target = stepById("add-skills").target(fake.obs());
+    expect(target).toEqual([SKILLS_FOLDER]);
+    // …and it is a target the machine can still see, which is the whole point.
+    expect(target.every((s) => fake.obs().present(s))).toBe(true);
+  });
+
+  it("falls back to the picker when a filter hides the PDO folder too", () => {
+    const fake = new FakeApp();
+    fake.openModal();
+    fake.openSkillsPopover();
+    fake.filterSkillsAway();
+    expect(stepById("add-skills").target(fake.obs())).toEqual([SKILLS_POPOVER]);
+  });
+
+  it("does not stop the tour while the folder stays collapsed", () => {
+    const fake = new FakeApp();
+    fake.openModal();
+    let run = startTour(TOUR, fake.obs());
+    run = {
+      ...run,
+      phase: "running" as const,
+      index: STEPS.findIndex((s) => s.id === "add-skills"),
+    };
+    fake.openSkillsPopover();
+    fake.collapseSkillsFolder();
+
+    // Well past the 5 s the engine gives a missing target.
+    for (const clock of [100, 3_000, 9_000, 20_000]) {
+      run = observeTour(TOUR, run, fake.obs(), clock);
+    }
+    expect(run.phase).toBe("running");
+    expect(currentStep(TOUR, run)?.id).toBe("add-skills");
   });
 
   /**
@@ -497,6 +551,17 @@ describe("the recap", () => {
   it("ends on something that is starting, not on « done »", () => {
     expect(TOUR.outro?.title).toBe("Your Run is starting");
     expect(TOUR.outro?.primaryLabel).toBe("Open the Run");
+  });
+
+  /**
+   * The training repository has never been seen by the harness, so the first
+   * thing the « live session » shows is a trust prompt. The end card names it:
+   * a security question nobody announced reads as the tour having broken
+   * something.
+   */
+  it("warns that the harness will ask about the brand-new training repository", () => {
+    expect(TOUR.outro?.closing).toContain("trust");
+    expect(TOUR.outro?.closing).toContain(TUTORIAL_REPO_PATH);
   });
 });
 

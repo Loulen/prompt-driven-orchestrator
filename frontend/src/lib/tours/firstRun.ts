@@ -258,10 +258,20 @@ const STEPS: TourStep[] = [
     body: "In the PDO folder, tick both skills. A skill is text added to the agent's prompt: one teaches it to drive PDO, the other to talk with you inside a node.",
     // The folder and its two children are lit as one rectangle; ticking the
     // folder's own box satisfies the step too, since it selects both.
-    target: (o) =>
-      o.present(SKILLS_POPOVER)
-        ? [SKILLS_PDO_FOLDER, skillRow(ORCHESTRATE_ID), skillRow(INTERACTIVE_ID)]
-        : [SKILLS_TRIGGER],
+    //
+    // Which children are *there* is the user's business, though: collapsing the
+    // folder, or filtering, removes the rows without removing the step's subject.
+    // An `every` over the three selectors turned that into a five-second countdown
+    // to "the PDO folder did not appear" while the folder sat in plain sight, so
+    // the target keeps only the rows that exist — and falls back to the picker
+    // itself when the filter hides the folder too, the way `pick-repo` falls back
+    // to the explorer.
+    target: (o) => {
+      if (!o.present(SKILLS_POPOVER)) return [SKILLS_TRIGGER];
+      if (!o.present(SKILLS_PDO_FOLDER)) return [SKILLS_POPOVER];
+      const rows = [ORCHESTRATE_ID, INTERACTIVE_ID].map(skillRow).filter((s) => o.present(s));
+      return [SKILLS_PDO_FOLDER, ...rows];
+    },
     soft: true,
     waitingFor: "the PDO folder in the Skills picker",
     failureHint: "Type pdo in the picker's filter if the folder is out of view.",
@@ -347,7 +357,9 @@ export const FIRST_RUN_TOUR: TourDef = {
   outro: {
     title: "Your Run is starting",
     primaryLabel: "Open the Run",
-    closing:
-      "The node is now a live session. Reading it, and answering the agent when it waits for you, is the next tour.",
+    // The trust prompt is named here because it is the very first thing a brand-new
+    // training repository makes the harness ask, and an end card that promised « a
+    // live session » and delivered a security question would read as a bug.
+    closing: `The node is now a live session; your harness may first ask whether you trust \`${TUTORIAL_REPO_PATH}\`, a folder it has never seen — say yes, the tour just created it. Reading the session, and answering the agent when it waits for you, is the next tour.`,
   },
 };

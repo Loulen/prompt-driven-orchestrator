@@ -16,6 +16,24 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.95.0
+**Tour *First run* et dépôt d'entraînement** (#824, spec #821, story #816, ADR-0071).
+
+- Nouveau verbe daemon `POST /repos/create` : crée un dépôt git minimal dans un dossier parent
+  (un commit sur `main`, `README.md` et `notes.txt`), renvoie le même chemin sans nouveau commit
+  s'il existe déjà, et refuse par un message nommé un dossier existant qui n'est pas un dépôt.
+  Le dépôt créé n'entre pas dans les récents.
+- Le tour **First run** (Settings › Tutorials) est actif : à l'entrée il crée — ou réutilise —
+  `/tmp/pdo-tutorial` et le pipeline `tutorial-interactive`, puis guide jusqu'au Start : nom du
+  Run, explorateur ouvert sur `/tmp` avec l'entrée pointée et défilée à l'écran, pipeline, profil
+  Default, les deux skills PDO, le prompt, puis le lancement. Un geste hors cible n'avance pas.
+- Une carte de fin nomme le Run créé, prévient de la question de confiance du harness dans
+  `/tmp/pdo-tutorial`, et enchaîne sur *First pipeline*. Un Start refusé s'arrête proprement en
+  citant la raison du daemon, formulaire intact, sans Run créé.
+- Moteur de tours : une cible qui disparaît transitoirement (dossier replié, filtre) n'abandonne
+  plus le tour ; le Projecteur se rabat sur le conteneur le temps qu'elle revienne.
+- Sélecteur de skills : le nom d'une ligne bascule la skill, plus seulement sa case.
+
 ## 1.94.0
 **Mode tutoriel : Projecteur, moteur de tours et tour *First pipeline*** (#823, spec #821, story #816, ADR-0071).
 

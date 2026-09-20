@@ -41,7 +41,7 @@ const TOUR: TourDef = {
 };
 
 function Harness({ showWelcome = false, tour = TOUR }: { showWelcome?: boolean; tour?: TourDef }) {
-  const controller = useTour(0);
+  const controller = useTour([]);
   const [opened, setOpened] = useState(false);
   const [answered, setAnswered] = useState(false);
   const [tutorials, setTutorials] = useState(false);
@@ -53,6 +53,11 @@ function Harness({ showWelcome = false, tour = TOUR }: { showWelcome?: boolean; 
       <div id="target">
         <button data-testid="do-it" onClick={() => setOpened(true)}>
           do it
+        </button>
+        {/* Takes `#opened` away again — a step's target can stop resolving
+            without the user having done anything wrong (#824). */}
+        <button data-testid="undo-it" onClick={() => setOpened(false)}>
+          undo it
         </button>
       </div>
       {opened && <div id="opened" />}
@@ -147,6 +152,82 @@ describe("running a tour", () => {
   });
 });
 
+/**
+ * *First run* step 4 (#824): the explorer opens on `/tmp`, and the step rings the
+ * dialog while its listing loads, then the `pdo-tutorial` row once that row is
+ * there. Keyed on the step alone, the one scroll of the step was spent on the
+ * dialog — and on a host with a busy `/tmp`, the row sat eleven thousand pixels
+ * below the fold with nothing on screen for the user to click.
+ */
+describe("scrolling the target into view", () => {
+  const REAIMING_TOUR: TourDef = {
+    ...TOUR,
+    id: "first-run",
+    steps: [
+      {
+        id: "one",
+        title: "Pick the row",
+        body: "The row only appears once the listing has loaded.",
+        // The two-beat target of `pick-repo`, in miniature.
+        target: (o) => (o.present("#opened") ? ["#opened"] : ["#target"]),
+        waitingFor: "the row",
+      },
+    ],
+  };
+
+  /** `#opened` lands far below the fold; everything else is comfortably in view. */
+  function stubFarRow() {
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: Element,
+    ) {
+      const far = this instanceof HTMLElement && this.id === "opened";
+      const rect = far
+        ? { width: 200, height: 20, top: 11_000, left: 0, bottom: 11_020, right: 200, x: 0, y: 11_000 }
+        : { width: 10, height: 10, top: 0, left: 0, bottom: 10, right: 10, x: 0, y: 0 };
+      return { ...rect, toJSON: () => rect } as DOMRect;
+    });
+  }
+
+  it("scrolls again when the step re-aims at a target that only just appeared", async () => {
+    const scrollIntoView = vi.fn();
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrollIntoView;
+    stubFarRow();
+    try {
+      render(<Harness tour={REAIMING_TOUR} />);
+      await user().click(screen.getByTestId("start"));
+      tick();
+      // The first aim (`#target`) is already in view: nothing to scroll.
+      expect(scrollIntoView).not.toHaveBeenCalled();
+
+      await user().click(screen.getByTestId("do-it"));
+      tick();
+
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect((scrollIntoView.mock.instances[0] as HTMLElement).id).toBe("opened");
+
+      // …and it does not keep scrolling: the aim has not changed, so the user's
+      // own scrolling is theirs from here on.
+      tick(1_000);
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+
+      // Leaving the row and coming back — climbing a folder out of `/tmp` and
+      // returning — puts it in front of the user again rather than leaving them
+      // with a dimmed dialog and nothing to click.
+      await user().click(screen.getByTestId("undo-it"));
+      tick();
+      await user().click(screen.getByTestId("do-it"));
+      tick();
+      expect(scrollIntoView).toHaveBeenCalledTimes(2);
+    } finally {
+      // jsdom ships no `scrollIntoView`: putting `undefined` back would leave an
+      // own property that throws for every later test in this file.
+      if (original) Element.prototype.scrollIntoView = original;
+      else Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+    }
+  });
+});
+
 describe("the two ways a tour ends", () => {
   it("recaps at the end, and only Finish marks it done", async () => {
     render(<Harness />);
@@ -192,8 +273,8 @@ describe("the welcome modal", () => {
     render(<Harness showWelcome />);
     expect(screen.getByTestId("tour-welcome-full")).toBeInTheDocument();
     expect(screen.getByTestId("tour-welcome-first-pipeline")).toBeEnabled();
-    // #824 has not built *First run* yet: announced, greyed, unstartable.
-    expect(screen.getByTestId("tour-welcome-first-run")).toBeDisabled();
+    // #824 built *First run*: no greyed placeholder left in the catalog.
+    expect(screen.getByTestId("tour-welcome-first-run")).toBeEnabled();
     expect(screen.getByTestId("tour-welcome-later")).toBeInTheDocument();
   });
 
@@ -216,11 +297,16 @@ describe("the welcome modal", () => {
     );
   });
 
+  /**
+   * The full tour now leads with *First run* (#824, design Q6), and that tour
+   * opens on its intro card rather than on a step — its first target does not
+   * exist until the card's preparations have answered.
+   */
   it("the full tour sets the key too", async () => {
     render(<Harness showWelcome />);
     await user().click(screen.getByTestId("tour-welcome-full"));
     expect(loadTourOffered()).toBe(true);
     tick();
-    expect(screen.getByTestId("tour-popover")).toBeInTheDocument();
+    expect(screen.getByTestId("tour-intro-card")).toBeInTheDocument();
   });
 });

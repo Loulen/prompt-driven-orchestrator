@@ -47,8 +47,11 @@ export default function Projecteur({ hole, zone, children }: Props) {
   // The cut-out the blockers leave open. A soft step opens the whole menu.
   const opening = zone ?? hole;
 
+  // `overflow-hidden` on the root: a target that is momentarily off-screen puts
+  // its ring and its bottom blocker thousands of pixels down, and an overlay that
+  // grew to match would hand the page a scroll range that belongs to nothing.
   return (
-    <div className="pointer-events-none fixed inset-0 z-[120]" data-testid="projecteur">
+    <div className="pointer-events-none fixed inset-0 z-[120] overflow-hidden" data-testid="projecteur">
       {opening ? (
         (["top", "bottom", "left", "right"] as const).map((side) => (
           <div

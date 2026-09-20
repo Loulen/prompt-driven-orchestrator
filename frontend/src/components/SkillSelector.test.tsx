@@ -83,6 +83,35 @@ describe("SkillSelector", () => {
     expect(onChange).toHaveBeenLastCalledWith([{ id: "c", name: "code-review" }]);
   });
 
+  /**
+   * The name is what people aim at, and a picker that only answers on its
+   * 14-pixel checkbox reads as broken — the *First run* tour says "tick both
+   * skills" and sends a first-time user straight at the row (#824).
+   */
+  it("toggles a skill from its name, not only from the checkbox", () => {
+    const onChange = vi.fn();
+    render(
+      <SkillSelector
+        tier="run"
+        own={[]}
+        inherited={[{ tier: "instance", skills: [{ id: "a", name: "tdd" }] }]}
+        bank={bank}
+        onChange={onChange}
+        testId="sel"
+      />,
+    );
+    fireEvent.click(screen.getByTestId("sel"));
+    fireEvent.click(screen.getByTestId("sel-label-c"));
+    expect(onChange).toHaveBeenLastCalledWith([{ id: "c", name: "code-review" }]);
+
+    // An inherited skill has no gesture to offer: the name is as locked as the box.
+    onChange.mockClear();
+    const inherited = screen.getByTestId("sel-label-a") as HTMLButtonElement;
+    expect(inherited.disabled).toBe(true);
+    fireEvent.click(inherited);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it("checking a folder checks its skills at this instant; unchecking removes them (FP step 3)", () => {
     const onChange = vi.fn();
     const { rerender } = render(

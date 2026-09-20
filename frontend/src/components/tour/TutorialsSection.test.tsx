@@ -22,10 +22,22 @@ describe("the Tutorials section", () => {
     expect(screen.getByTestId("tutorials-row-first-run")).toBeInTheDocument();
   });
 
-  it("cannot start a tour that does not exist yet", () => {
+  /**
+   * #824 shipped *First run*, so the greyed "soon" placeholder #823 listed is
+   * gone: both rows are startable, and *First run* leads (design Q6 — it is
+   * shorter and ends with a Run on screen).
+   */
+  it("lists both tours startable, First run first", () => {
     setup();
-    expect(screen.getByTestId("tutorials-start-first-run")).toBeDisabled();
-    expect(screen.getByTestId("tutorials-row-first-run")).toHaveTextContent("soon");
+    expect(screen.getByTestId("tutorials-start-first-run")).toBeEnabled();
+    expect(screen.getByTestId("tutorials-row-first-run")).not.toHaveTextContent("soon");
+    expect(screen.getByTestId("tutorials-row-first-run")).toHaveTextContent("~4 min");
+
+    const rows = screen.getAllByTestId(/^tutorials-row-/);
+    expect(rows.map((row) => row.dataset.testid ?? row.getAttribute("data-testid"))).toEqual([
+      "tutorials-row-first-run",
+      "tutorials-row-first-pipeline",
+    ]);
   });
 
   it("ticks a finished tour and offers to replay it (story 6)", () => {

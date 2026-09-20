@@ -351,6 +351,11 @@ export default function FsExplorerModal({
                     picked === entry.path || pickedMany.includes(entry.path) ? "bg-bg-5" : ""
                   }`}
                   data-testid={`${testIdPrefix}-entry`}
+                  // #824: which entry this row is. Every row shares one testid,
+                  // so nothing outside could aim at a named folder — and a guided
+                  // tour that says "click pdo-tutorial" has to be able to ring
+                  // that row rather than whichever one happens to be first.
+                  data-entry-name={entry.name}
                 >
                   {multi && !entry.is_dir && (
                     <span

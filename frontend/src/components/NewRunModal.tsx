@@ -82,9 +82,16 @@ interface Props {
    * on `pdo:settings-changed` so a profile created there is offered when Settings closes.
    */
   onManageStagingProfiles?: () => void;
+  /**
+   * Open the target-repository explorer at this path rather than at the field's
+   * value (#824). Set by whoever is walking the user to a repository that is not
+   * in their recents; unset in every ordinary open. The modal only forwards it —
+   * it has no opinion on who is asking or why.
+   */
+  repoExplorerStartPath?: string;
 }
 
-export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN_INTENT, onTriggerSaved, onManageStagingProfiles }: Props) {
+export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN_INTENT, onTriggerSaved, onManageStagingProfiles, repoExplorerStartPath }: Props) {
   // What this Run/Trigger can be launched against: the instance's pipelines and the
   // target repo's branches, both served by the daemon (#359).
   const {
@@ -1013,6 +1020,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
                 repoValidating={repoValidating}
                 repoError={repoError}
                 borderClass={repoBorderClass}
+                explorerStartPath={repoExplorerStartPath}
               />
             </div>
 
@@ -2035,6 +2043,11 @@ function PipelineSelect({
       <DropdownMenuTrigger
         id="pipeline-select"
         data-testid="pipeline-select"
+        // #824: the selected id on the trigger, the way each option already
+        // carries its own. The visible label is the pipeline's display name; an
+        // observer that had to match on it would be matching on a string the
+        // pipeline is free to change.
+        data-pipeline-id={value || undefined}
         disabled={disabled}
         className="flex w-full cursor-pointer items-center justify-between gap-2 rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5 text-left font-mono text-fg outline-none transition-colors focus:border-acc data-[popup-open]:border-acc disabled:cursor-not-allowed disabled:opacity-40"
         style={{ fontSize: "12px" }}

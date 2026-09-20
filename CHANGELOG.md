@@ -16,6 +16,21 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.92.0
+**L'archivage d'un Run parent entraîne ses Runs enfants terminés** (#815).
+
+- `cleanup_run` archive le Run **et ses descendants terminés** (enfants, petits-enfants, résolus
+  par `parent_run_id`), petits-enfants d'abord, par le même chemin de démontage : worktrees et
+  dossiers de run des enfants sont réclamés avec le parent. Les descendants déjà archivés sont
+  ignorés sans erreur ; la réponse `200` liste les `archived_children`.
+- Un descendant **vivant** (running, awaiting-user, paused) n'est jamais archivé en cascade : la
+  requête est refusée en `409` avec la liste `live_children` et rien n'est touché. Arrêter
+  l'enfant d'abord.
+- Dans l'UI, la boîte de confirmation Cleanup compte les enfants terminés qui partiront avec le
+  parent et prévient quand un enfant encore vivant fera refuser la demande par le daemon.
+- `pdo reap` : un parent moissonné emporte ses enfants terminés même plus jeunes que leur TTL ;
+  un parent dont le sous-arbre tourne encore reste listé jusqu'à ce qu'il se pose.
+
 ## 1.91.0
 **Durée active hors attente déclarée, filtre par genre de nœud, runs terminés seulement** (#810, story #808).
 

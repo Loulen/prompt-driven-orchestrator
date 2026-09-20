@@ -214,3 +214,45 @@ export function flattenVisible(
 export function flattenAll(nodes: RunTreeNode[]): RunListEntry[] {
   return flattenVisible(nodes, () => true).map((n) => n.run);
 }
+
+/** What archiving a set of runs drags along through the daemon's cascade (#815). */
+export interface CascadeImpact {
+  /** Terminated, not-yet-archived descendants the cascade will archive too. */
+  finished: number;
+  /** Live descendants: the daemon refuses (409) the parent's archive while any exists. */
+  live: number;
+}
+
+/**
+ * The descendants (children, grandchildren, …) of the runs in `selectedIds`
+ * that the daemon's `cleanup_run` cascade touches (#815), following the raw
+ * `parent_run_id` link exactly like the daemon does. Runs already in the
+ * selection are not counted twice (they are archived on their own), and
+ * already-archived descendants are skipped, as the cascade skips them.
+ * Guarded against cycles.
+ */
+export function cascadeImpact(runs: RunListEntry[], selectedIds: Iterable<string>): CascadeImpact {
+  const selected = new Set(selectedIds);
+  const childrenOf = new Map<string, RunListEntry[]>();
+  for (const r of runs) {
+    if (!r.parent_run_id) continue;
+    const list = childrenOf.get(r.parent_run_id) ?? [];
+    list.push(r);
+    childrenOf.set(r.parent_run_id, list);
+  }
+  const impact: CascadeImpact = { finished: 0, live: 0 };
+  const seen = new Set<string>();
+  const walk = (parentId: string) => {
+    for (const child of childrenOf.get(parentId) ?? []) {
+      if (seen.has(child.run_id)) continue;
+      seen.add(child.run_id);
+      if (!selected.has(child.run_id) && child.status !== "archived") {
+        if (isLiveRun(child.status)) impact.live += 1;
+        else impact.finished += 1;
+      }
+      walk(child.run_id);
+    }
+  };
+  for (const id of selected) walk(id);
+  return impact;
+}

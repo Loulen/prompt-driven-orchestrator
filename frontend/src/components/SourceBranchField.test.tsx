@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, within } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import SourceBranchField from "./SourceBranchField";
 import type {
   BranchFetchError,
@@ -569,7 +569,9 @@ describe("the fast-forward", () => {
     fireEvent.click(screen.getByTestId("branch-sync-ff"));
 
     const popover = await screen.findByTestId("branch-sync-popover");
-    expect(popover).toHaveTextContent("checked out in another worktree");
+    // The popover is already open before the refusal lands: wait for the copy,
+    // not for the element (flaked under full-suite load otherwise).
+    await waitFor(() => expect(popover).toHaveTextContent("checked out in another worktree"));
     expect(popover).toHaveTextContent("…/2026-x/worktree");
     // Retrying changes nothing until someone switches that worktree: offering it
     // would be an invitation to a loop.

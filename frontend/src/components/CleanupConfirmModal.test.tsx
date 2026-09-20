@@ -126,4 +126,30 @@ describe("CleanupConfirmModal", () => {
     fireEvent.click(screen.getByText("Cancel"));
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
+
+  it("spells out the cascade (#815): finished children archived too, live ones refused", () => {
+    render(
+      <CleanupConfirmModal
+        runId="run-abcdef1"
+        onConfirm={() => {}}
+        onCancel={() => {}}
+        cascade={{ finished: 2, live: 1 }}
+      />,
+    );
+    expect(screen.getByTestId("cleanup-cascade")).toHaveTextContent(
+      "2 finished child runs will be archived with it. 1 child run is still live: the daemon will refuse until it is stopped.",
+    );
+  });
+
+  it("says nothing about children when there are none", () => {
+    render(
+      <CleanupConfirmModal
+        runId="run-abcdef1"
+        onConfirm={() => {}}
+        onCancel={() => {}}
+        cascade={{ finished: 0, live: 0 }}
+      />,
+    );
+    expect(screen.queryByTestId("cleanup-cascade")).not.toBeInTheDocument();
+  });
 });

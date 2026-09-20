@@ -13,6 +13,7 @@ import { groupByProject, type ProjectRef } from "../lib/groupByRepo";
 import {
   ancestorIds,
   buildRunTree,
+  cascadeImpact,
   filterRunTree,
   flattenAll,
   flattenVisible,
@@ -79,6 +80,16 @@ interface Props {
    *  #258 per-path grouping, unchanged). */
   projects?: Project[];
   onProjectsChanged?: () => void;
+}
+
+/**
+ * Title of the bulk cleanup confirm (#815): the selected runs plus the finished
+ * child runs the daemon's cascade archives with them.
+ */
+function cleanupTitle(selected: number, finishedChildren: number): string {
+  const runs = `${selected} run${selected === 1 ? "" : "s"}`;
+  if (finishedChildren === 0) return `Cleanup ${runs}?`;
+  return `Cleanup ${runs} and ${finishedChildren} finished child run${finishedChildren === 1 ? "" : "s"}?`;
 }
 
 export default function UnifiedLeftPanel({
@@ -754,6 +765,9 @@ export default function UnifiedLeftPanel({
     .map(asRunItem);
   // Live runs the cleanup would stop (running/awaiting/paused) — the bar's caveat.
   const runningWillStop = selectedRuns.filter((r) => isLiveRun(r.status)).length;
+  // #815 — the daemon's cleanup cascades to terminated descendants and refuses
+  // a parent whose subtree still has a live run; the dialog says so upfront.
+  const cleanupCascade = cascadeImpact(runs, cleanupItems.map((i) => i.id));
   const handleRunsSettled = useCallback(
     (o: BulkOutcome) => deselect("runs", o.succeeded.map((r) => r.id)),
     [deselect],
@@ -1067,12 +1081,15 @@ export default function UnifiedLeftPanel({
           <BulkActionModal
             destructive
             runningLabel="Cleaning up"
-            title={`Cleanup ${cleanupItems.length} run${cleanupItems.length === 1 ? "" : "s"}?`}
+            title={cleanupTitle(cleanupItems.length, cleanupCascade.finished)}
             description={
               <>
                 This removes the selected runs' worktrees from disk and archives them.
                 {runningWillStop > 0
                   ? ` ${runningWillStop} running run${runningWillStop === 1 ? "" : "s"} will be stopped first.`
+                  : ""}
+                {cleanupCascade.live > 0
+                  ? ` ${cleanupCascade.live} child run${cleanupCascade.live === 1 ? " is" : "s are"} still live: the daemon will refuse to archive ${cleanupCascade.live === 1 ? "its" : "their"} parent until ${cleanupCascade.live === 1 ? "it is" : "they are"} stopped.`
                   : ""}{" "}
                 Completed outputs are kept — each run stays viewable (read-only). This can't be
                 undone.
@@ -1280,6 +1297,7 @@ export default function UnifiedLeftPanel({
           isLive={
             isLiveRun(confirmCleanup.status)
           }
+          cascade={cascadeImpact(runs, [confirmCleanup.runId])}
           onConfirm={() => handleCleanup(confirmCleanup.runId)}
           onCancel={() => setConfirmCleanup(null)}
         />

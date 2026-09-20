@@ -20680,6 +20680,62 @@ fn spawn_terminal_attach(terminal: &str, socket: &str, session_name: &str) -> Re
     Ok(())
 }
 
+/// Every descendant of `run_id` (children, grandchildren, …) resolved through
+/// the same mechanical `parent_run_id` link as `list_run_children`, in
+/// **post-order**: a run always comes after all of its own descendants, so a
+/// cascade that walks the list front to back tears grandchildren down before
+/// their parent. Pure over the projected store; `run_id` itself is not listed.
+fn descendant_runs_post_order(
+    runs: &[event_log::RunState],
+    run_id: &str,
+) -> Vec<event_log::RunState> {
+    let mut out = Vec::new();
+    for child in runs {
+        if child.parent_run_id.as_deref() != Some(run_id) {
+            continue;
+        }
+        out.extend(descendant_runs_post_order(runs, &child.run_id));
+        out.push(child.clone());
+    }
+    out
+}
+
+/// Project every run of the store (the read model behind `list_run_children`).
+/// Unreadable or empty logs are skipped, never fatal: the cascade must not be
+/// blocked by an unrelated corrupt run.
+async fn load_all_projected_runs(state: &AppState) -> Result<Vec<event_log::RunState>> {
+    let mut states = Vec::new();
+    for id in load_all_run_ids(&state.db).await? {
+        let Ok(events) = load_events(&state.db, &id).await else {
+            continue;
+        };
+        if let Some(run_state) = event_log::project(&events) {
+            states.push(run_state);
+        }
+    }
+    Ok(states)
+}
+
+/// `POST /runs/{run_id}/commands {"kind":"cleanup_run"}` — archive a run **and
+/// its terminated descendants** (#815).
+///
+/// The daemon already treats children as belonging to their parent (run tree,
+/// `GET /runs/{id}/children`, `pdo complete` refused while children are in
+/// flight), so archiving the root must reclaim the children's worktrees and
+/// run dirs too, recursively, through the same teardown path
+/// ([`archive_single_run`]). Descendants are archived grandchildren-first, the
+/// parent last, so a failure mid-cascade never leaves an archived parent above
+/// a still-live subtree.
+///
+/// Live descendants (running, awaiting-user, paused) are **never** archived by
+/// the cascade: the request is refused with `409` naming them, and nothing is
+/// touched. That is the conservative choice of the two the issue allowed
+/// (refuse vs. archive the parent and orphan the live children): killing a
+/// running child is not something an archive of its parent should do
+/// implicitly, and orphaning it would silently break the tree the UI renders.
+/// Stop the child first, then archive. Already-archived descendants are
+/// skipped silently (idempotent): only the root itself being archived is a
+/// `409`, as before.
 async fn cleanup_run(state: &AppState, run_id: &str) -> Response {
     let _page_mount_guard = state.page_mount_lock.lock().await;
     let (_, run_state) = match load_projected(state, run_id).await {
@@ -20695,13 +20751,84 @@ async fn cleanup_run(state: &AppState, run_id: &str) -> Response {
             .into_response();
     }
 
-    if let Err(error) = page_mount::remove_for_run(&state.db, run_id).await {
-        error!("cleanup_run: failed to remove page mounts for run {run_id}: {error}");
+    let all_runs = match load_all_projected_runs(state).await {
+        Ok(runs) => runs,
+        Err(e) => {
+            error!("cleanup_run: cannot list runs to resolve the children of {run_id}: {e:#}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("error: {e}") })),
+            )
+                .into_response();
+        }
+    };
+    let descendants = descendant_runs_post_order(&all_runs, run_id);
+
+    let live: Vec<&str> = descendants
+        .iter()
+        .filter(|d| d.status.is_live())
+        .map(|d| d.run_id.as_str())
+        .collect();
+    if !live.is_empty() {
         return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "page mount cleanup failed" })),
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": format!(
+                    "run has {} live child run(s); stop them before archiving the parent",
+                    live.len()
+                ),
+                "live_children": live,
+            })),
         )
             .into_response();
+    }
+
+    let mut archived_children: Vec<String> = Vec::new();
+    for child in &descendants {
+        if child.status == event_log::RunStatus::Archived {
+            continue;
+        }
+        if let Err(resp) = archive_single_run(state, child).await {
+            return *resp;
+        }
+        archived_children.push(child.run_id.clone());
+    }
+
+    if let Err(resp) = archive_single_run(state, &run_state).await {
+        return *resp;
+    }
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "status": "archived",
+            "archived_children": archived_children,
+        })),
+    )
+        .into_response()
+}
+
+/// Tear ONE run down and mark it `Archived`: kill its tmux sessions, merge and
+/// purge its sandbox, preserve its outputs to the durable store, remove its
+/// worktrees, branches, secondary snapshots and run dir, then append
+/// `RunArchived`. No cascade and no status precondition here — the caller
+/// ([`cleanup_run`]) holds the page-mount lock and has already decided this
+/// run must go.
+async fn archive_single_run(
+    state: &AppState,
+    run_state: &event_log::RunState,
+) -> Result<(), Box<Response>> {
+    let run_id = run_state.run_id.as_str();
+
+    if let Err(error) = page_mount::remove_for_run(&state.db, run_id).await {
+        error!("cleanup_run: failed to remove page mounts for run {run_id}: {error}");
+        return Err(Box::new(
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "page mount cleanup failed" })),
+            )
+                .into_response(),
+        ));
     }
 
     let socket = state.tmux_socket();
@@ -20736,7 +20863,7 @@ async fn cleanup_run(state: &AppState, run_id: &str) -> Response {
         }
     }
 
-    let repo_root = effective_repo_root(state, &run_state);
+    let repo_root = effective_repo_root(state, run_state);
     let run_dir = repo_root.join(".pdo").join("runs").join(run_id);
 
     // Copy the run's outputs to the durable store BEFORE any worktree is destroyed,
@@ -20864,15 +20991,13 @@ async fn cleanup_run(state: &AppState, run_id: &str) -> Response {
     };
     if let Err(e) = append_event(state, &archived_event).await {
         error!("failed to append run_archived: {e}");
-        return (StatusCode::INTERNAL_SERVER_ERROR, "event log error").into_response();
+        return Err(Box::new(
+            (StatusCode::INTERNAL_SERVER_ERROR, "event log error").into_response(),
+        ));
     }
 
     info!("Run {run_id} archived (cleanup complete)");
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({ "status": "archived" })),
-    )
-        .into_response()
+    Ok(())
 }
 
 /// DELETE /runs/{run_id} — permanently forget an archived run, removing every event
@@ -29525,6 +29650,234 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::CONFLICT);
+    }
+
+    /// Seed a run under `parent`: `RunStarted` (with `parent_run_id`), one
+    /// node started, and — unless `live` — the node completed and the run
+    /// completed. A live child stays `Running`.
+    async fn seed_child_run(state: &Arc<AppState>, run_id: &str, parent: &str, live: bool) {
+        let mut events = vec![
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::RunStarted,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({
+                    "pipeline_name": "child-pipe",
+                    "parent_run_id": parent,
+                    "parent_node_id": "spawner",
+                })),
+            },
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeStarted,
+                node_id: Some("worker".into()),
+                iter: Some(1),
+                payload: None,
+            },
+        ];
+        if !live {
+            events.push(event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeCompleted,
+                node_id: Some("worker".into()),
+                iter: Some(1),
+                payload: None,
+            });
+            events.push(event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::RunCompleted,
+                node_id: None,
+                iter: None,
+                payload: None,
+            });
+        }
+        for ev in &events {
+            append_event(state, ev).await.unwrap();
+        }
+    }
+
+    async fn status_of(state: &Arc<AppState>, run_id: &str) -> event_log::RunStatus {
+        let events = load_events(&state.db, run_id).await.unwrap();
+        event_log::project(&events).unwrap().status
+    }
+
+    /// #815: archiving a parent archives its terminated descendants,
+    /// recursively (grandchild included), reclaims their run dirs, and does
+    /// not choke on a descendant that was already archived by hand.
+    #[tokio::test]
+    async fn cleanup_run_cascades_to_terminated_descendants() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_test_repo(repo);
+        let state = test_state_with_dir(repo).await;
+
+        let parent = "cascade-parent";
+        seed_completed_run(&state, parent).await;
+        seed_child_run(&state, "cascade-child-a", parent, false).await;
+        seed_child_run(&state, "cascade-child-b", parent, false).await;
+        seed_child_run(&state, "cascade-grandchild", "cascade-child-a", false).await;
+        seed_child_run(&state, "cascade-archived", parent, false).await;
+        // Archived by hand beforehand: the cascade must skip it silently.
+        assert_eq!(
+            post_cleanup_run(&state, "cascade-archived").await,
+            StatusCode::OK
+        );
+        // An unrelated run must be left alone.
+        seed_completed_run(&state, "cascade-stranger").await;
+
+        // Real worktrees for two descendants: the cascade must reclaim them.
+        let mut worktrees = Vec::new();
+        for id in ["cascade-child-b", "cascade-grandchild"] {
+            let wt_dir = repo.join(".pdo/runs").join(id).join("worktree");
+            create_worktree(repo, &wt_dir, &format!("pdo/run-{id}"), "HEAD").unwrap();
+            assert!(wt_dir.exists());
+            worktrees.push(wt_dir);
+        }
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{parent}/commands"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"kind": "cleanup_run"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["status"], "archived");
+        // Every non-archived descendant is reported exactly once (the
+        // already-archived child is not), and in post-order: the grandchild
+        // is torn down before its parent child-a. Sibling order is the
+        // store's, not asserted.
+        let archived: Vec<&str> = body["archived_children"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        let mut sorted = archived.clone();
+        sorted.sort_unstable();
+        assert_eq!(
+            sorted,
+            ["cascade-child-a", "cascade-child-b", "cascade-grandchild"]
+        );
+        let pos = |id: &str| archived.iter().position(|r| *r == id).unwrap();
+        assert!(
+            pos("cascade-grandchild") < pos("cascade-child-a"),
+            "grandchild must be archived before its parent: {archived:?}"
+        );
+
+        for id in [
+            parent,
+            "cascade-child-a",
+            "cascade-child-b",
+            "cascade-grandchild",
+            "cascade-archived",
+        ] {
+            assert_eq!(
+                status_of(&state, id).await,
+                event_log::RunStatus::Archived,
+                "{id} must be archived"
+            );
+        }
+        assert_eq!(
+            status_of(&state, "cascade-stranger").await,
+            event_log::RunStatus::Completed,
+            "an unrelated run must not be archived by the cascade"
+        );
+        for wt_dir in &worktrees {
+            assert!(
+                !wt_dir.exists(),
+                "cascade must remove the descendant worktree {}",
+                wt_dir.display()
+            );
+        }
+        for id in ["cascade-child-b", "cascade-grandchild"] {
+            assert!(
+                !repo.join(".pdo/runs").join(id).exists(),
+                "cascade must remove the descendant run dir of {id}"
+            );
+        }
+    }
+
+    /// #815: a live descendant (even a grandchild) refuses the whole archive
+    /// with 409 and nothing is archived — not the parent, not the terminated
+    /// siblings. Stop the child first, then archive.
+    #[tokio::test]
+    async fn cleanup_run_refuses_when_a_descendant_is_live() {
+        let state = test_state().await;
+        let parent = "live-parent";
+        seed_completed_run(&state, parent).await;
+        seed_child_run(&state, "live-child-done", parent, false).await;
+        seed_child_run(&state, "live-child-mid", parent, false).await;
+        seed_child_run(&state, "live-grandchild", "live-child-mid", true).await;
+
+        let app = build_router(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{parent}/commands"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"kind": "cleanup_run"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            body["live_children"],
+            serde_json::json!(["live-grandchild"])
+        );
+        assert!(body["error"].as_str().unwrap().contains("live child run"));
+
+        assert_eq!(
+            status_of(&state, parent).await,
+            event_log::RunStatus::Completed
+        );
+        assert_eq!(
+            status_of(&state, "live-child-done").await,
+            event_log::RunStatus::Completed
+        );
+        assert_eq!(
+            status_of(&state, "live-child-mid").await,
+            event_log::RunStatus::Completed
+        );
+        assert_eq!(
+            status_of(&state, "live-grandchild").await,
+            event_log::RunStatus::Running
+        );
+
+        // Archiving the live grandchild's own terminated sibling directly still works:
+        // the cascade only constrains the subtree being archived.
+        assert_eq!(
+            post_cleanup_run(&state, "live-child-done").await,
+            StatusCode::OK
+        );
     }
 
     #[tokio::test]
@@ -39249,7 +39602,11 @@ edges:
         let (status, ct, body) = command_triplet(&state, run_id, r#"{"kind":"cleanup_run"}"#).await;
         assert_eq!(
             (status, ct.as_str(), body.as_str()),
-            (StatusCode::OK, JSON_CT, r#"{"status":"archived"}"#)
+            (
+                StatusCode::OK,
+                JSON_CT,
+                r#"{"archived_children":[],"status":"archived"}"#
+            )
         );
 
         let (status, ct, body) = command_triplet(&state, run_id, r#"{"kind":"cleanup_run"}"#).await;

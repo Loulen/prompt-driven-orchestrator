@@ -701,6 +701,42 @@ describe("finding the Run, and opening its node", () => {
     expect(step.done!(fake.obs())).toBe(false);
   });
 
+  /**
+   * Opening the Run selects the node it is running, so this step is usually
+   * entered already satisfied — and a card that instructs a click which changes
+   * nothing reads as an overlay that swallowed it. Same shape, same answer as
+   * `find-run`: say what already happened (FP finding, #825).
+   */
+  it("says the inspector is already on the node instead of asking for a dead click", () => {
+    const fake = new FakeApp();
+    let run = at(fake, "find-run");
+    fake.launch();
+    fake.openRun();
+    fake.selectNode();
+    run = observeTour(TOUR, run, fake.obs(), 100);
+    run = confirmStep(TOUR, run, fake.obs());
+
+    expect(currentStep(TOUR, run)?.id).toBe("open-node");
+    // Entered satisfied: it stops for a `Next` rather than flashing past…
+    expect(run.satisfiedOnEntry).toBe(true);
+    expect(needsConfirm(TOUR, run, fake.obs())).toBe(true);
+    // …and the card describes the state instead of ordering a click.
+    const body = stepBody(stepById("open-node"), fake.obs());
+    expect(body).toContain("already showing");
+    expect(body).not.toContain("Click the");
+  });
+
+  it("asks for the click while the inspector is not on the node", () => {
+    const fake = new FakeApp();
+    fake.launch();
+    fake.openRun();
+    const run = at(fake, "open-node");
+    expect(stepBody(stepById("open-node"), fake.obs())).toContain("Click the");
+    expect(canAdvance(TOUR, run, fake.obs())).toBe(false);
+    // No `confirm` of its own: the click the card asks for is what advances it.
+    expect(needsConfirm(TOUR, run, fake.obs())).toBe(false);
+  });
+
   it("names the node the Run actually has, rather than assuming one", () => {
     const fake = new FakeApp();
     fake.launch();
@@ -769,6 +805,23 @@ describe("waiting for the node to finish", () => {
     expect(run.phase).toBe("running");
     expect(currentStep(TOUR, run)?.id).toBe("wait-for-node");
     expect(waitStep().targetTimeoutMs).toBeNull();
+  });
+
+  /**
+   * The card used to open on « Nothing to do », and that is a lie in an ordinary
+   * race: an agent that called `pdo complete` before the release was refused, and
+   * parks on a question — the node then ends only once somebody answers it. The
+   * terminal is inside the soft zone, so the reader can (FP finding, #825).
+   */
+  it("tells the reader to answer the agent instead of promising there is nothing to do", () => {
+    const fake = new FakeApp();
+    fake.launch();
+    fake.openRun();
+    fake.selectNode();
+    fake.releaseCompletion();
+
+    expect(stepBody(waitStep(), fake.obs())).not.toContain("Nothing to do");
+    expect(stepNote(waitStep(), fake.obs())).toContain("answer it");
   });
 
   it("lights the whole inspector as a zone to roam in", () => {

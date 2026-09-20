@@ -460,15 +460,27 @@ const STEPS: TourStep[] = [
   },
   {
     id: "open-node",
+    // Opening a Run puts the selection on its live node, so on the nominal path
+    // this step is entered already satisfied and stops for a `Next` — the same
+    // shape as `find-run` above. It says so rather than instructing a click that
+    // would change nothing, which a reader reads as an overlay swallowing their
+    // click (FP finding, #825).
     title: "Open the node",
-    body: (o) =>
-      `Click the ${followedNode(o.app)?.name ?? "agent"} node. It is the one agent of this pipeline; the inspector on the right shows its live terminal.`,
+    body: (o) => {
+      const name = followedNode(o.app)?.name ?? "agent";
+      return inspectorShows(o, followedNode(o.app))
+        ? `The inspector on the right is already showing the ${name} node — opening a Run selects the node it is running. It is the one agent of this pipeline, and that pane is its live terminal.`
+        : `Click the ${name} node. It is the one agent of this pipeline; the inspector on the right shows its live terminal.`;
+    },
     target: (o) => nodeSel(followedNode(o.app)),
     waitingFor: "the agent node on the canvas",
     failureHint: "It sits between Start and End; scroll or zoom the canvas to bring it into view.",
     targetTimeoutMs: READING_TIMEOUT_MS,
     skippable: true,
     advanceHint: "advances when the inspector shows the node",
+    // No `confirm`: a reader who still owes the click should have it advance the
+    // moment they make it. The `Next` on this card comes from `satisfiedOnEntry`,
+    // which is the case the branched body above is written for.
     done: (o) => inspectorShows(o, followedNode(o.app)),
   },
   {
@@ -512,11 +524,17 @@ const STEPS: TourStep[] = [
     body: (o) =>
       endedBadly(followedNode(o.app))
         ? ""
-        : "Nothing to do: the agent writes its output and completes. Watch the status pill at the top of the inspector turn from Running to Completed.",
+        : "The agent writes its output and completes. Watch the status pill at the top of the inspector turn from Running to Completed.",
+    // The nominal card used to open on « Nothing to do », and that is not always
+    // true: an agent quick enough to run `pdo complete` before the release is
+    // refused, and parks on a question — the node then ends only once somebody
+    // answers it (FP finding, #825). Ordinary, not exotic, and it lands in the
+    // first five minutes of a newcomer. The terminal is inside the soft zone, so
+    // they can answer from where they are standing.
     note: (o) =>
       endedBadly(followedNode(o.app))
         ? "The node ended without completing. Its terminal above says why; the tour goes on to the output, which may be missing."
-        : null,
+        : "If the agent asks you something in the terminal above, answer it — the step waits for as long as it takes.",
     // The whole inspector, as a zone rather than a target: during a wait of
     // unknown length the reader must keep the terminal — read it, scroll it,
     // answer a late question. The rest of the app stays blocked.

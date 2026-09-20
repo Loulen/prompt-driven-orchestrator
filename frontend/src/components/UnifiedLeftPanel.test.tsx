@@ -2107,6 +2107,22 @@ describe("UnifiedLeftPanel run multi-select (#577)", () => {
     expect(screen.getByText("Cleanup 1 run?")).toBeInTheDocument();
   });
 
+  it("the cleanup confirm counts the finished child runs the daemon archives with the parent (#815)", () => {
+    const family: RunListEntry[] = [
+      { run_id: "p1", pipeline_name: "p", status: "completed", started_at: null, name: "Parent", effective_repo: "/repo/a" },
+      { run_id: "c1", pipeline_name: "p", status: "completed", started_at: null, name: "Kid One", effective_repo: "/repo/a", parent_run_id: "p1" },
+      { run_id: "c2", pipeline_name: "p", status: "failed", started_at: null, name: "Kid Two", effective_repo: "/repo/a", parent_run_id: "p1" },
+      { run_id: "c3", pipeline_name: "p", status: "running", started_at: null, name: "Kid Live", effective_repo: "/repo/a", parent_run_id: "p1" },
+    ];
+    renderPanel({ runs: family });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Parent" }));
+    fireEvent.keyDown(screen.getByText("Parent"), { key: "Delete" });
+    expect(screen.getByText("Cleanup 1 run and 2 finished child runs?")).toBeInTheDocument();
+    expect(
+      screen.getByText(/1 child run is still live: the daemon will refuse/),
+    ).toBeInTheDocument();
+  });
+
   it("group-header select-all toggles the whole repo group", () => {
     const runs: RunListEntry[] = [
       { run_id: "a1", pipeline_name: "p", status: "completed", started_at: null, name: "Alpha One", effective_repo: "/repo/alpha" },

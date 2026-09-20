@@ -1,10 +1,31 @@
 import { useEffect, useState } from "react";
+import type { CascadeImpact } from "../lib/runTree";
 
 interface Props {
   runId: string;
   onConfirm: () => void;
   onCancel: () => void;
   isLive?: boolean;
+  /** #815 — what the daemon's cascade drags along (finished children archived
+   *  too; live children make the daemon refuse). Absent = childless. */
+  cascade?: CascadeImpact;
+}
+
+/** The cascade sentence for the dialog body, or null when there is nothing to say. */
+function cascadeCopy(cascade: CascadeImpact | undefined): string | null {
+  if (!cascade || (cascade.finished === 0 && cascade.live === 0)) return null;
+  const parts: string[] = [];
+  if (cascade.finished > 0) {
+    parts.push(
+      `${cascade.finished} finished child run${cascade.finished === 1 ? "" : "s"} will be archived with it.`,
+    );
+  }
+  if (cascade.live > 0) {
+    parts.push(
+      `${cascade.live} child run${cascade.live === 1 ? " is" : "s are"} still live: the daemon will refuse until ${cascade.live === 1 ? "it is" : "they are"} stopped.`,
+    );
+  }
+  return parts.join(" ");
 }
 
 // Spelled out so the consequences of archiving a *live* run are explicit. The
@@ -22,7 +43,9 @@ export default function CleanupConfirmModal({
   onConfirm,
   onCancel,
   isLive = false,
+  cascade,
 }: Props) {
+  const cascadeText = cascadeCopy(cascade);
   // The 7-hex unique suffix (clean, no dash) of the run id. Run-specific so the
   // user proves they are archiving the run they think they are.
   const shortId = runId.slice(-7);
@@ -51,6 +74,11 @@ export default function CleanupConfirmModal({
             <p className="mt-2 text-fg-3" style={{ fontSize: "12px" }}>
               {LIVE_BODY}
             </p>
+            {cascadeText && (
+              <p className="mt-2 text-fg-3" style={{ fontSize: "12px" }} data-testid="cleanup-cascade">
+                {cascadeText}
+              </p>
+            )}
             <label className="mt-3 block text-fg-3" style={{ fontSize: "12px" }}>
               Type{" "}
               <code className="rounded bg-bg-4 px-1 py-0.5 font-mono text-fg">
@@ -81,6 +109,11 @@ export default function CleanupConfirmModal({
               are kept — the run stays viewable (read-only) after archiving.
               Proceed?
             </p>
+            {cascadeText && (
+              <p className="mt-2 text-fg-3" style={{ fontSize: "12px" }} data-testid="cleanup-cascade">
+                {cascadeText}
+              </p>
+            )}
           </>
         )}
         <div className="mt-4 flex justify-end gap-2">

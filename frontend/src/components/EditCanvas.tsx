@@ -27,6 +27,7 @@ import { RetryAllConfirmModal } from "./UnifiedLeftPanel";
 import { buildLoopRegionNodes, buildNoteNodes, deriveEditEdges, deriveEditNodes, edgeIndexFromId } from "./editNodeDerivation";
 import { useEditStore } from "../stores/editStore";
 import { generateNodeId } from "../lib/nanoid";
+import { CARD_HEIGHT, CARD_WIDTH, fallbackNodeSpot, freeDropSpot } from "../lib/nodePlacement";
 import { collectionFanoutFields, collectionFanoutNudges, regionsDestroyedByEdgeRemoval } from "../lib/loopRegions";
 import DestroyLoopModal from "./DestroyLoopModal";
 import PortRow from "./PortRow";
@@ -705,9 +706,6 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
 
   const computeDropPosition = (): { x: number; y: number } => {
     const wrapper = reactFlowRef.current;
-    // Approximate default node-card footprint; nodes auto-size around this.
-    const APPROX_W = 180;
-    const APPROX_H = 80;
     let cx: number;
     let cy: number;
     if (wrapper) {
@@ -722,25 +720,21 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
       cx = 200;
       cy = 200;
     }
-    let x = Math.round(cx - APPROX_W / 2);
-    let y = Math.round(cy - APPROX_H / 2);
-    // Nudge to avoid stacking new nodes on top of existing ones at the same spot.
-    const existing = pipeline?.nodes ?? [];
-    const THRESHOLD = 30;
-    let guard = 0;
-    while (
-      guard++ < 20 &&
-      existing.some(
-        (n) =>
-          n.view != null &&
-          Math.abs(n.view.x - x) < THRESHOLD &&
-          Math.abs(n.view.y - y) < THRESHOLD,
-      )
-    ) {
-      x += 40;
-      y += 40;
-    }
-    return { x, y };
+    // Moved aside until it clears every card already on the canvas — footprints,
+    // not a few pixels (`lib/nodePlacement.ts`): a card dropped 40 pixels off
+    // another one is a card on top of another one, and the edges between them
+    // are then unreachable.
+    // A node with no persisted position is on screen too — a fresh pipeline's
+    // Start and End are written without a `view`, and the search that could not
+    // see them dropped the first agent right on End.
+    const occupied = (pipeline?.nodes ?? []).map((n, i) => {
+      const fallback = fallbackNodeSpot(i);
+      return { x: n.view?.x ?? fallback.x, y: n.view?.y ?? fallback.y };
+    });
+    return freeDropSpot(
+      { x: Math.round(cx - CARD_WIDTH / 2), y: Math.round(cy - CARD_HEIGHT / 2) },
+      occupied,
+    );
   };
 
   const handleAddNode = (type: NodeType) => {

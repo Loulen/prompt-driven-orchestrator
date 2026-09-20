@@ -41,6 +41,23 @@ contribution sont dans `CONTRIBUTING.md`.
 - `docs/test-scenarios/HP-03` — le full tour est **proposé** comme 3ᵉ Happy Path (curation humaine à
   la MR integration→develop).
 
+Corrections issues du passage de la Feature Path sur une vraie instance :
+
+- **Un tour démarre sur une scène dégagée.** La modale d'artefact que *First run* fait ouvrir à sa
+  dernière étape restait montée pendant que *First pipeline* démarrait : son fond plein écran
+  avalait tous les clics, l'app gelée derrière une modale dont le tour ne parlait plus. Les surfaces
+  flottantes se déclarent désormais congédiables (`lib/overlays.ts`) et le démarrage d'un tour les
+  ferme — sans qu'aucune d'elles sache ce qu'est un tour.
+- **« Find your Run » s'affiche enfin.** Le Start ouvre lui-même l'onglet du Run, donc la condition
+  de l'étape était vraie un tick après son entrée et le tour sautait de 9 à 11 sans rien montrer.
+  L'étape demande maintenant un `Next` explicite et dit ce qui vient de se passer.
+- **La carte de fin ne recouvre plus l'output.** La dernière étape se recentre sur l'artefact ouvert
+  — zone souple à lire, popover à côté — et attend `Next` : le récapitulatif n'arrive qu'une fois la
+  page lue.
+- **Un nouveau node ne tombe plus sur un autre** (hors #825, révélé par la FP) : l'évitement compare
+  désormais l'empreinte des cartes, pas 30 pixels. Deux cartes posées à 40 pixels enterraient l'arête
+  qui les relie, que *First pipeline* demande justement de cliquer.
+
 ## 1.95.0
 **Tour *First run* et dépôt d'entraînement** (#824, spec #821, story #816, ADR-0071).
 

@@ -5,10 +5,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import TourHost from "./TourHost";
 import { useTour } from "../../hooks/useTour";
 import { loadTourOffered, loadToursDone } from "../../lib/tourMemory";
+import { registerTransientOverlay } from "../../lib/overlays";
 import { FIRST_PIPELINE_TOUR } from "../../lib/tours";
 import type { TourDef } from "../../lib/tour";
 
@@ -40,16 +41,50 @@ const TOUR: TourDef = {
   ],
 };
 
-function Harness({ showWelcome = false, tour = TOUR }: { showWelcome?: boolean; tour?: TourDef }) {
+/** The next leg of a Full tour, for the handover (#825). One acknowledge step. */
+const NEXT_TOUR: TourDef = {
+  id: "first-run",
+  title: "First run",
+  blurb: "",
+  minutes: 1,
+  recapIntro: "You ran a Run.",
+  recap: [],
+  steps: [
+    {
+      id: "only",
+      title: "Click the thing",
+      body: "The only step.",
+      target: () => ["#target"],
+      waitingFor: "the thing",
+    },
+  ],
+};
+
+/**
+ * Something built like the markdown artifact viewer: a full-screen backdrop that
+ * blocks the app, and knows how to close itself when asked (#825). The real one
+ * is what *First run* leaves open on its last step.
+ */
+function FakeOverlay({ onClose }: { onClose: () => void }) {
+  useEffect(() => registerTransientOverlay(onClose), [onClose]);
+  return <div data-testid="fake-overlay" className="fixed inset-0" />;
+}
+
+function Harness({ showWelcome = false, tour = TOUR, chain = [] as TourDef[] }: { showWelcome?: boolean; tour?: TourDef; chain?: TourDef[] }) {
   const controller = useTour([]);
+  const [overlay, setOverlay] = useState(false);
   const [opened, setOpened] = useState(false);
   const [answered, setAnswered] = useState(false);
   const [tutorials, setTutorials] = useState(false);
   return (
     <>
-      <button data-testid="start" onClick={() => controller.start(tour)}>
+      <button data-testid="start" onClick={() => controller.start(tour, chain)}>
         start
       </button>
+      <button data-testid="open-overlay" onClick={() => setOverlay(true)}>
+        open overlay
+      </button>
+      {overlay && <FakeOverlay onClose={() => setOverlay(false)} />}
       <div id="target">
         <button data-testid="do-it" onClick={() => setOpened(true)}>
           do it
@@ -294,6 +329,45 @@ describe("the two ways a tour ends", () => {
     await user().click(screen.getByTestId("tour-failed-back"));
     expect(screen.getByTestId("tutorials-open")).toBeInTheDocument();
     expect(loadToursDone()).toEqual({});
+  });
+});
+
+/**
+ * #825 — the FP of the Full tour found the handover frozen: *First run* ends on
+ * « open `out` », and the artifact modal that opens was still mounted when
+ * *First pipeline* started pointing at the Pipelines tab. Its backdrop ate every
+ * click, on the first screen a newcomer sees after their first Run.
+ */
+describe("a tour starts on a clear stage", () => {
+  it("closes a modal left floating over the app", async () => {
+    render(<Harness />);
+    await user().click(screen.getByTestId("open-overlay"));
+    expect(screen.getByTestId("fake-overlay")).toBeInTheDocument();
+
+    await user().click(screen.getByTestId("start"));
+    tick();
+
+    expect(screen.queryByTestId("fake-overlay")).not.toBeInTheDocument();
+    expect(screen.getByTestId("tour-popover")).toBeInTheDocument();
+  });
+
+  it("clears it on the handover to the next leg of a Full tour", async () => {
+    render(<Harness chain={[NEXT_TOUR]} />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    await user().click(screen.getByTestId("do-it"));
+    tick();
+    await user().click(screen.getByTestId("tour-next"));
+
+    // The last step of a tour is exactly where a modal gets opened and left.
+    await user().click(screen.getByTestId("open-overlay"));
+    expect(screen.getByTestId("fake-overlay")).toBeInTheDocument();
+
+    await user().click(screen.getByTestId("tour-finish"));
+    tick();
+
+    expect(screen.queryByTestId("fake-overlay")).not.toBeInTheDocument();
+    expect(screen.getByTestId("tour-progress")).toHaveTextContent("First run · 1 / 1");
   });
 });
 

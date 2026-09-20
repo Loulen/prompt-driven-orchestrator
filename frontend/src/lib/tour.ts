@@ -209,8 +209,13 @@ export interface TourStep {
    * - the target IS the zone (#825): the whole Run inspector, during a wait of
    *   unknown length. Read the terminal, scroll it, answer a late question — the
    *   one thing that step must not do is lock the reader out of the screen.
+   *
+   * A predicate when the target only *becomes* a zone: the last step of *First
+   * run* rings the `out` row to be clicked, and lights the artifact that opens
+   * as a page to read. Same step, two shapes, because « now read it » is not an
+   * idea worth a card of its own.
    */
-  soft?: boolean;
+  soft?: boolean | ((o: TourObservation) => boolean);
   /**
    * The observed condition that completes the step. **Absent means "acknowledge"**:
    * there is nothing to observe, so the popover shows an always-enabled `Next`.
@@ -350,6 +355,11 @@ export function stepBody(step: TourStep, o: TourObservation): string {
 export function stepNote(step: TourStep, o: TourObservation): string | null {
   if (!step.note) return null;
   return typeof step.note === "function" ? step.note(o) : step.note;
+}
+
+/** Is the step's lit area a zone to roam in **right now** (#825)? */
+export function stepSoft(step: TourStep, o: TourObservation): boolean {
+  return typeof step.soft === "function" ? step.soft(o) : step.soft === true;
 }
 
 /** Resolve the two end-card fields, which a tour may make depend on what it saw. */

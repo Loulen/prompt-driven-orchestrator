@@ -6,6 +6,7 @@ import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { fetchArtifact, fetchNodeIO, artifactUrl } from "../api";
 import type { FileInfo } from "../api";
+import { registerTransientOverlay } from "../lib/overlays";
 import type { IterationInfo, PortType } from "../types";
 import type { Element } from "hast";
 import ImageLightbox from "./ImageLightbox";
@@ -215,6 +216,12 @@ export default function MarkdownArtifactModal({
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [handleKeyDown]);
+
+  // This modal's backdrop covers the window, so it blocks the app for as long as
+  // it is up — including for whoever needs the app next. Declaring it dismissable
+  // is how a guided tour starting on top of it gets a clear stage instead of a
+  // frozen screen (`lib/overlays.ts`, #825). Nothing here knows what a tour is.
+  useEffect(() => registerTransientOverlay(onClose), [onClose]);
 
   // #369: memoise the markdown component overrides so their identities survive a
   // poll-driven re-render (see the module-scope note on REMARK_PLUGINS). `setLightbox`

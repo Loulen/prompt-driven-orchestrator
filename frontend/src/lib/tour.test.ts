@@ -13,6 +13,7 @@ import {
   observeTour,
   skipStep,
   startTour,
+  stepSoft,
   type TourAppState,
   type TourDef,
   type TourObservation,
@@ -245,6 +246,24 @@ describe("a step that decides for itself whether to stop", () => {
     expect(needsConfirm(tour, run, badly)).toBe(true);
     expect(canAdvance(tour, run, badly)).toBe(true);
     expect(confirmStep(tour, run, badly).index).toBe(1);
+  });
+});
+
+/**
+ * #825 — `soft` as a predicate: a step whose target changes shape under the
+ * user. The last step of *First run* rings the `out` row to be clicked, then
+ * lights the artifact that opens as a page to read.
+ */
+describe("a lit area that becomes a zone to roam in", () => {
+  it("is resolved against the observation, like the body and the note", () => {
+    const opened = step("out", { soft: (o) => o.present("#modal") });
+    expect(stepSoft(opened, obs(["#out"]))).toBe(false);
+    expect(stepSoft(opened, obs(["#out", "#modal"]))).toBe(true);
+  });
+
+  it("still reads a plain flag, and treats its absence as a target to hit", () => {
+    expect(stepSoft(step("menu", { soft: true }), obs([]))).toBe(true);
+    expect(stepSoft(step("plain"), obs([]))).toBe(false);
   });
 });
 

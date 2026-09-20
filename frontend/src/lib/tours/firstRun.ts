@@ -202,6 +202,15 @@ function runRowSel(app: TourAppState): string | null {
 }
 
 /**
+ * The canvas is showing the Run this tour launched (#825). A question rather
+ * than a tab-id comparison inlined twice: the step that waits on it also has to
+ * *say* whether it already happened.
+ */
+function runIsOpen(app: TourAppState): boolean {
+  return app.latestRun != null && app.activeRunId === app.latestRun.id;
+}
+
+/**
  * The one agent node of the training pipeline — the node every reading step is
  * about. Resolved from the Run rather than hard-coded on `assistant`: a user who
  * edited `tutorial-interactive` (the preparation leaves their edit alone, by
@@ -411,7 +420,17 @@ const STEPS: TourStep[] = [
   {
     id: "find-run",
     title: "Find your Run",
-    body: "Click your Run at the top of the list. Every Run is a row here; the dot is its status, blue while it runs.",
+    // Launch opens the Run's tab itself, so on the nominal path the condition
+    // goes true a tick after this step is entered — too late for
+    // `satisfiedOnEntry`, and a step that advanced on its own was therefore
+    // never seen by anybody (the FP of #825 watched the tour jump from 9 to 11).
+    // It still has an idea to give — the list on the left is where your Runs
+    // live — so it stops for a `Next` once the Run is open, and says what
+    // already happened rather than instructing a click nobody needs to make.
+    body: (o) =>
+      runIsOpen(o.app)
+        ? "Your Run is the top row of the list on the left, and Launch already opened its tab. Every Run is a row here; the dot is its status, blue while it runs."
+        : "Click your Run at the top of the list. Every Run is a row here; the dot is its status, blue while it runs.",
     // Strictly the row. Falling back to the Runs tab would keep a target alive
     // forever, and « waiting on something that will never come » is precisely
     // what story 18 asks a tour not to do.
@@ -424,8 +443,12 @@ const STEPS: TourStep[] = [
     targetTimeoutMs: READING_TIMEOUT_MS,
     skippable: true,
     advanceHint: "advances when the Run opens",
+    // Only once it IS open: while the reader still has the click to make, the
+    // footer says what the tour is waiting for, and a `Next` nobody can press
+    // would be a control in the way of the instruction.
+    confirm: (o) => runIsOpen(o.app),
     // The Run's tab is open on the canvas — which is what clicking the row does.
-    done: (o) => o.app.latestRun != null && o.app.activeRunId === o.app.latestRun.id,
+    done: (o) => runIsOpen(o.app),
   },
   {
     id: "open-node",
@@ -533,15 +556,28 @@ const STEPS: TourStep[] = [
   {
     id: "open-output",
     title: "Open the output",
-    body: `Click ${TUTORIAL_OUT_PORT}. It is the file the agent wrote — the summary your prompt asked for — and the only thing the next node would have received.`,
-    target: () => [OUT_ROW],
+    // Two beats, one card: click the row, then read what opened.
+    body: (o) =>
+      o.present(OUT_MODAL)
+        ? "This is what the agent wrote — the summary your prompt asked for, and the only thing the next node would have received. Read it, then press Next."
+        : `Click ${TUTORIAL_OUT_PORT}. It is the file the agent wrote — the summary your prompt asked for — and the only thing the next node would have received.`,
+    // Re-aims onto the artifact the click opened, the way `pick-repo` re-aims
+    // onto the explorer. Without it the tour ends the instant the file appears,
+    // and the recap card lands on top of the summary it just told the reader to
+    // open — the one thing this step exists to show them (FP finding, #825).
+    target: (o) => (o.present(OUT_MODAL) ? [OUT_MODAL] : [OUT_ROW]),
+    // A page to read, not a control to hit: once the artifact is up it is lit as
+    // a zone — dashed, lighter dim, scrollable — and the popover moves beside it.
+    soft: (o) => o.present(OUT_MODAL),
     waitingFor: `the ${TUTORIAL_OUT_PORT} row under Outputs`,
     failureHint: "A node that failed or was stopped writes no output.",
     targetTimeoutMs: READING_TIMEOUT_MS,
     skippable: true,
     advanceHint: "advances when the file opens",
-    // Observed once. Closing the modal afterwards does not un-do the step: the
-    // tour has already moved to its recap.
+    // The reader owns the last moment of the tour: once the file is up, `Next`
+    // is what goes to the recap — so the recap cannot land on the summary
+    // before it has been read. Until then the footer keeps its waiting line.
+    confirm: (o) => o.present(OUT_MODAL),
     done: (o) => o.present(OUT_MODAL),
   },
 ];

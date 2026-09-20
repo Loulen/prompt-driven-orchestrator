@@ -24,6 +24,7 @@ import {
   startTour,
   stepBody,
   stepNote,
+  stepSoft,
   type TourAppState,
   type TourObservation,
   type TourRun,
@@ -630,6 +631,44 @@ describe("finding the Run, and opening its node", () => {
   });
 
   /**
+   * Launch opens the Run's tab itself, a tick after this step is entered — so
+   * `satisfiedOnEntry` is false and a step that advanced on its own was never
+   * shown to anybody (the FP of #825 watched the tour jump from 9 to 11). It
+   * asks for an explicit `Next` instead, and says what already happened rather
+   * than instructing a click nobody needs to make.
+   */
+  it("shows its card even when Launch already opened the Run", () => {
+    const fake = new FakeApp();
+    let run = at(fake, "launch");
+    fake.launch();
+    run = observeTour(TOUR, run, fake.obs(), 100);
+    expect(currentStep(TOUR, run)?.id).toBe("find-run");
+
+    // The app catches up a tick later: the tab opens by itself.
+    fake.openRun();
+    run = observeTour(TOUR, run, fake.obs(), 200);
+
+    expect(currentStep(TOUR, run)?.id).toBe("find-run");
+    expect(needsConfirm(TOUR, run, fake.obs())).toBe(true);
+    expect(canAdvance(TOUR, run, fake.obs())).toBe(true);
+    expect(stepBody(stepById("find-run"), fake.obs())).toContain("already opened its tab");
+    // …and only the reader's click moves it on.
+    expect(currentStep(TOUR, confirmStep(TOUR, run, fake.obs()))?.id).toBe("open-node");
+  });
+
+  it("asks for the click when the reader is somewhere else", () => {
+    const fake = new FakeApp();
+    fake.launch();
+    const run = at(fake, "find-run");
+    expect(stepBody(stepById("find-run"), fake.obs())).toContain("Click your Run");
+    expect(canAdvance(TOUR, run, fake.obs())).toBe(false);
+    // …and no dead `Next` in the way of the instruction: the footer keeps the
+    // waiting line the design drew, until there is something to confirm.
+    expect(needsConfirm(TOUR, run, fake.obs())).toBe(false);
+    expect(stepById("find-run").advanceHint).toContain("advances");
+  });
+
+  /**
    * « Open the session » is two gestures a newcomer does not know: the Run is a
    * row, the node is where the agent lives. Neither is the run list's own
    * `open-session-button`, which opens a bash shell on a FINISHED run — the wrong
@@ -810,7 +849,7 @@ describe("waiting for the node to finish", () => {
 });
 
 describe("opening the output", () => {
-  it("points at the out row under Outputs, and advances when the file opens", () => {
+  it("points at the out row under Outputs, and is satisfied when the file opens", () => {
     const fake = new FakeApp();
     const step = stepById("open-output");
     fake.launch();
@@ -822,6 +861,37 @@ describe("opening the output", () => {
     expect(step.done!(fake.obs())).toBe(false);
     fake.openOutput();
     expect(step.done!(fake.obs())).toBe(true);
+  });
+
+  /**
+   * The step ends the tour, and the recap card is centred — so a step that
+   * advanced the instant the artifact appeared put the card straight on top of
+   * the summary it had just told the reader to open (FP finding, #825). It
+   * re-aims onto the artifact instead: lit as a zone to read, popover beside it,
+   * and the reader presses `Next` when they are done.
+   */
+  it("re-aims onto the artifact and lets the reader read it before the recap", () => {
+    const fake = new FakeApp();
+    const step = stepById("open-output");
+    fake.launch();
+    fake.openRun();
+    fake.selectNode();
+    fake.finishNode("completed");
+
+    expect(stepSoft(step, fake.obs())).toBe(false);
+    let run = at(fake, "open-output");
+    // Before the click the footer is the waiting line, not a dead button.
+    expect(needsConfirm(TOUR, run, fake.obs())).toBe(false);
+    fake.openOutput();
+    run = observeTour(TOUR, run, fake.obs(), 1_000);
+
+    expect(currentStep(TOUR, run)?.id).toBe("open-output");
+    expect(step.target(fake.obs())).toEqual([OUT_MODAL]);
+    expect(stepSoft(step, fake.obs())).toBe(true);
+    expect(stepBody(step, fake.obs())).toContain("Read it");
+    expect(needsConfirm(TOUR, run, fake.obs())).toBe(true);
+    expect(canAdvance(TOUR, run, fake.obs())).toBe(true);
+    expect(confirmStep(TOUR, run, fake.obs()).phase).toBe("finished");
   });
 
   /** A node that failed writes nothing: the tour stops on the usual card, with a

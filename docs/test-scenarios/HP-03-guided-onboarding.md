@@ -59,19 +59,22 @@ Features validated while crossing the tour:
    pipeline in the **pipeline menu**, pick the `Default` agent profile, tick **both** PDO skills
    (the card's checklist ticks as you go), paste the prompt → each step advances **on the gesture**,
    with no extra confirmation but the ones the card asks for.
-5. **Launch** → the Run appears in the list on the left and the tour points at it.
-6. Open the Run → its tab opens on the canvas; open the **node** → the inspector shows its live
-   terminal.
+5. **Launch** → the Run appears in the list on the left and the tour points at its row. Launch also
+   opens the Run's tab by itself, so the card says so and waits for a `Next` — the step is shown,
+   never skipped past.
+6. Open the **node** on the canvas → the inspector shows its live terminal.
 7. **Talk to the agent**: the card hands over a line to copy; paste it into the terminal and press
    Enter. **Escape inside the terminal belongs to the agent** — it must not end the tour.
 8. Click **Mark ready for completion** → the tour advances on the released guard, not on the click.
 9. The **wait** step lights the whole inspector as a soft zone — the terminal stays readable and
    usable — shows a two-item checklist (released / finished) and says it has **no time limit**. It
    ends by itself when the node's status becomes terminal.
-10. Open the node's **`out`** output → the artifact modal shows the summary the agent wrote.
+10. Open the node's **`out`** output → the artifact modal shows the summary the agent wrote, lit as a
+    soft zone with the card beside it. Read it, then `Next`.
 11. The **intermediate card** says how far along the full tour is, recaps what was actually observed,
     and offers *Finish here* or *Continue · First pipeline*.
-12. **Continue** → the *First pipeline* tour starts. Carry it to its end card and `Finish`.
+12. **Continue** → the artifact modal closes and the *First pipeline* tour starts on a clear screen.
+    Carry it to its end card and `Finish`.
 13. Open **Settings › Tutorials** → both tours are ticked.
 
 ## Checks
@@ -90,6 +93,11 @@ Features validated while crossing the tour:
 - The recap names **what happened**: the Run's own name, whether the completion was released, and
   where the node got to. A node still running is never described as finished.
 - Settings › Tutorials shows a checkmark on both tours, with the day each was finished.
+- **The handover leaves nothing behind**: after *Continue*, no artifact modal is still up, and the
+  first step of *First pipeline* takes a real click — an overlay that survived the chain would dim
+  into the background and eat every click the next tour asks for.
+- Each node the reader creates in *First pipeline* lands **clear of the others** and of the End
+  marker, so the edges the tour then asks them to select can actually be clicked.
 
 ### Internals
 

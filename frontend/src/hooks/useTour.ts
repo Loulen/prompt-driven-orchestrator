@@ -14,6 +14,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useEditStore } from "../stores/editStore";
+import { dismissTransientOverlays } from "../lib/overlays";
 import {
   beginSteps,
   canAdvance,
@@ -25,6 +26,7 @@ import {
   startTour,
   stepBody,
   stepNote,
+  stepSoft,
   type TourAppState,
   type TourChecklistItem,
   type TourDef,
@@ -368,6 +370,13 @@ export function useTour(
   );
 
   const start = useCallback((next: TourDef, rest: TourDef[] = []) => {
+    // A tour starts on a clear stage (#825). It points at the app from above
+    // every modal, so a transient overlay left open — the `out` artifact the
+    // previous leg of a Full tour just told the reader to open — would dim into
+    // the background while its full-screen backdrop went on eating every click
+    // the first step asks for. Settings closes itself for the same reason; this
+    // is that rule for the surfaces that cannot see a tour coming.
+    dismissTransientOverlays();
     const baseline = readTourAppState(runsRef.current, runDetailRef.current);
     baselineRef.current = baseline;
     const first = startTour(next, observation(runsRef.current, runDetailRef.current, baseline));
@@ -549,8 +558,9 @@ export function useTour(
       // the ring gives way to the dashed outline, because a ring on a 600-pixel
       // pane would read as "click this", which is the one thing that step is not
       // asking for.
-      const menu = step.soft ? elements[0]?.closest(MENU_CONTAINERS) ?? null : null;
-      const wide = step.soft === true && menu === null && nextHole !== null;
+      const soft = stepSoft(step, obs);
+      const menu = soft ? elements[0]?.closest(MENU_CONTAINERS) ?? null : null;
+      const wide = soft && menu === null && nextHole !== null;
       const nextZone = menu ? union([rectOf(menu)], HOLE_PADDING) : wide ? nextHole : null;
       setZone((prev) => (sameRect(prev, nextZone) ? prev : nextZone));
       setWideZone(wide);

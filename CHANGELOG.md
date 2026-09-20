@@ -16,7 +16,7 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
-## 1.93.0
+## 1.94.0
 **Mode tutoriel : Projecteur, moteur de tours et tour *First pipeline*** (#823, spec #821, story #816, ADR-0071).
 
 - Au premier lancement — clé navigateur absente **et** instance sans aucun Run — une **modale de

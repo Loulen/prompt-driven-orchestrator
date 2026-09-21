@@ -12,6 +12,7 @@ export type SettingsSectionId =
   | "runtime-limits"
   | "runs"
   | "version-update"
+  | "tutorials"
   | "harness-models"
   | "agent-profiles"
   | "pipeline-manager"
@@ -33,6 +34,12 @@ export interface SettingsSection {
    * form's Save ignores it. Rendered as a `saves as you go` badge next to the title.
    */
   ownPersistence?: boolean;
+  /**
+   * #823: the section edits nothing on the daemon — its state is this browser's
+   * (localStorage), like the theme. Rendered as the `Device-local · saved
+   * immediately` badge the Interface controls already wear.
+   */
+  deviceLocal?: boolean;
 }
 
 export interface SettingsCategory {
@@ -69,6 +76,17 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
         // #697: « Check now » acts at once and the check switch is written at the
         // change — the form's Save does not apply here.
         ownPersistence: true,
+      },
+      {
+        id: "tutorials",
+        // #823: guided tours. Nothing here belongs to the instance form — the
+        // checkmarks live in this browser — so the section contributes no field
+        // to the dirty set and wears the device-local badge rather than the
+        // "saves as you go" one (which speaks of a REST resource it has none of).
+        label: "Tutorials",
+        description:
+          "Guided tours in the real UI: the tour points, you click. Completion is remembered in this browser only.",
+        deviceLocal: true,
       },
     ],
   },

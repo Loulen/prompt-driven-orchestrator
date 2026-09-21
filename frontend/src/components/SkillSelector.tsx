@@ -283,9 +283,19 @@ export default function SkillSelector({
                         className="accent-acc"
                         title={from && !isOwn ? `Inherited from the ${from.map((t) => SKILL_TIER_LABEL[t].toLowerCase()).join(", ")} tier` : undefined}
                       />
-                      <span className={`min-w-0 flex-1 truncate font-mono ${from && !isOwn ? "text-fg-4" : "text-fg"}`}>
+                      {/* The name is the target everyone aims at — a picker whose
+                          rows only answer on the 14-pixel checkbox reads as broken
+                          (#824). Same gesture, same disabled rule as the box. */}
+                      <button
+                        type="button"
+                        tabIndex={-1}
+                        disabled={!isOwn && !!from}
+                        onClick={() => toggleSkill(skill.id, skill.name)}
+                        data-testid={`${testId}-label-${skill.id}`}
+                        className={`min-w-0 flex-1 truncate text-left font-mono disabled:cursor-default ${from && !isOwn ? "text-fg-4" : "text-fg"}`}
+                      >
                         {skill.name}
-                      </span>
+                      </button>
                       {from && !isOwn && (
                         <span className="rounded border border-line px-1 uppercase tracking-wider text-fg-4" style={{ fontSize: 8 }}>
                           {from.map((t) => SKILL_TIER_LABEL[t]).join(" · ")}

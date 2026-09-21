@@ -18,6 +18,7 @@ vi.mock("remark-gfm", () => ({ default: () => null }));
 import MarkdownArtifactModal from "./MarkdownArtifactModal";
 import type { IterationInfo } from "../types";
 import type { FileInfo } from "../api";
+import { dismissTransientOverlays } from "../lib/overlays";
 
 function makeFile(path: string, exists = true): FileInfo {
   return { path, exists, size: 0, frontmatter: null };
@@ -454,6 +455,49 @@ describe("MarkdownArtifactModal", () => {
       expect(screen.getByText("File does not exist yet.")).toBeInTheDocument();
       // A non-existent file must never trigger a fetch.
       expect(fetchArtifactMock).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * #825 — the modal's backdrop covers the window, so it blocks the app for as
+   * long as it is up. It declares itself dismissable so that whoever needs the
+   * app next can clear the stage: a guided tour starting on top of an artifact
+   * viewer left open used to point at controls nobody could click.
+   */
+  describe("as a transient overlay", () => {
+    it("closes itself when the app is asked for a clear stage", async () => {
+      const onClose = vi.fn();
+      render(
+        <MarkdownArtifactModal
+          runId="run-1"
+          portName="out"
+          source={{ kind: "static", files: [makeFile("/path/out.md")] }}
+          onClose={onClose}
+        />,
+      );
+      await act(async () => {});
+
+      dismissTransientOverlays();
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it("stops answering once unmounted", async () => {
+      const onClose = vi.fn();
+      const view = render(
+        <MarkdownArtifactModal
+          runId="run-1"
+          portName="out"
+          source={{ kind: "static", files: [makeFile("/path/out.md")] }}
+          onClose={onClose}
+        />,
+      );
+      await act(async () => {});
+      view.unmount();
+
+      dismissTransientOverlays();
+
+      expect(onClose).not.toHaveBeenCalled();
     });
   });
 });

@@ -1246,6 +1246,40 @@ export async function validateRepo(path: string): Promise<ValidateRepoResponse> 
   return resp.json();
 }
 
+export interface CreateRepoFile {
+  /** Relative to the new repository; may name a subfolder. */
+  path: string;
+  content: string;
+}
+
+export interface CreateRepoResponse {
+  /** Absolute path of the repository, created or already there. */
+  path: string;
+  /** `false` when an existing repository was reused untouched. */
+  created: boolean;
+}
+
+/**
+ * Create a git repository at `<parent>/<name>` with `files` and one commit on
+ * `main` (#824) — a generic verb, not a tour one. Idempotent: an existing
+ * repository at that path is handed back as is, with no second commit and no
+ * write over what the user did in it. An existing *non*-repository is refused,
+ * and the {@link ApiError} carries the daemon's sentence for quoting verbatim.
+ *
+ * The created path is deliberately NOT added to recent repositories — that list
+ * is built from Runs, and nothing has run here yet.
+ */
+export function createRepo(
+  parent: string,
+  name: string,
+  files: CreateRepoFile[] = [],
+): Promise<CreateRepoResponse> {
+  return request<CreateRepoResponse>("POST", "/repos/create", {
+    body: { parent, name, files },
+    label: "POST /repos/create",
+  });
+}
+
 export function listBranches(repoPath: string): Promise<BranchList> {
   return request<BranchList>(
     "GET",

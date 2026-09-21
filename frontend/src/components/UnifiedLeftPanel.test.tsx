@@ -5,12 +5,13 @@ import userEvent from "@testing-library/user-event";
 import UnifiedLeftPanel from "./UnifiedLeftPanel";
 import type { PipelineListEntry, RunListEntry, Trigger } from "../types";
 import type { LibraryPipelineEntry } from "../api";
-import { cleanupRun, deleteLibraryPipeline, deletePipeline, duplicateLibraryPipeline, fetchPipelines, importPipelineDocument, importWorkflow, openRunShell, pauseRun, renamePipeline, renameRun, resumeRun, retryAll } from "../api";
+import { ApiError, cleanupRun, createPipeline, deleteLibraryPipeline, deletePipeline, duplicateLibraryPipeline, fetchPipelines, importPipelineDocument, importWorkflow, openRunShell, pauseRun, renamePipeline, renameRun, resumeRun, retryAll } from "../api";
 import { useEditStore } from "../stores/editStore";
 import { useSelectionStore } from "../stores/selectionStore";
 import { useRecentReposStore } from "../stores/recentReposStore";
 
 const mockRenameRun = vi.mocked(renameRun);
+const mockCreatePipeline = vi.mocked(createPipeline);
 const mockRenamePipeline = vi.mocked(renamePipeline);
 const mockDeletePipeline = vi.mocked(deletePipeline);
 const mockFetchPipelines = vi.mocked(fetchPipelines);
@@ -26,6 +27,16 @@ const mockImportPipelineDocument = vi.mocked(importPipelineDocument);
 const originalOpenPipeline = useEditStore.getState().openPipeline;
 
 vi.mock("../api", () => ({
+  // The real error class: the component narrows on `instanceof` to tell a name
+  // collision from anything else, so a stand-in `Error` would not be the test.
+  ApiError: class ApiError extends Error {
+    readonly status?: number;
+    constructor(message: string, opts: { status?: number } = {}) {
+      super(message);
+      this.name = "ApiError";
+      this.status = opts.status;
+    }
+  },
   cleanupRun: vi.fn().mockResolvedValue(undefined),
   forgetRun: vi.fn().mockResolvedValue(undefined),
   pauseRun: vi.fn().mockResolvedValue(undefined),
@@ -760,6 +771,99 @@ describe("UnifiedLeftPanel archived section (#136)", () => {
 // delete via the library store. The pre-fix code called removePipeline(id) with
 // no scope, which routed to DELETE /pipelines/{id} and destroyed the same-named
 // repo YAML + .prompts/ sidecar.
+/**
+ * #822: the three left-panel targets a guided tour aims at. They are the contract
+ * the tour tickets (#823-#825) build on — a rename must break a test here rather
+ * than a tour step nobody runs until the day it matters. Behaviour is unchanged:
+ * each assertion goes through the control and checks what it already did.
+ */
+describe("UnifiedLeftPanel — stable tour targets (#822)", () => {
+  it("names the New Run button, and it still opens a run", () => {
+    const onNewRun = vi.fn();
+    render(
+      <UnifiedLeftPanel
+        runs={[]}
+        selectedRunId={null}
+        onSelectRun={noop}
+        onNewRun={onNewRun}
+        libraryPipelines={[]}
+        onLibraryPipelinesChanged={noop}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("new-run-button"));
+    expect(onNewRun).toHaveBeenCalled();
+  });
+
+  it("names the new-pipeline button and the name field of the modal it opens", async () => {
+    renderPanel();
+    fireEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
+
+    fireEvent.click(screen.getByTestId("new-pipeline-button"));
+
+    const name = await screen.findByTestId("new-pipeline-name");
+    fireEvent.change(name, { target: { value: "tutorial-interactive" } });
+    expect(name).toHaveValue("tutorial-interactive");
+    // Unchanged behaviour: the name gates Create.
+    expect(screen.getByRole("button", { name: "Create" })).toBeEnabled();
+  });
+});
+
+/**
+ * #825 (FP iteration 2). A refused Create used to be swallowed whole: no message,
+ * no error state, the Create button simply doing nothing. The ordinary way to
+ * meet it is to replay the *First pipeline* tour on an instance where you kept
+ * the pipeline it builds — the tour hard-codes the name, and every click is a
+ * silent 409.
+ */
+describe("UnifiedLeftPanel — a refused pipeline creation", () => {
+  async function createNamed(name: string) {
+    renderPanel();
+    fireEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
+    fireEvent.click(screen.getByTestId("new-pipeline-button"));
+    fireEvent.change(await screen.findByTestId("new-pipeline-name"), { target: { value: name } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+  }
+
+  it("says the name is taken, and keeps the dialog open to fix it", async () => {
+    mockCreatePipeline.mockRejectedValueOnce(
+      new ApiError("pipeline already exists", { status: 409 }),
+    );
+
+    await createNamed("tutorial-implement-test");
+
+    const error = await screen.findByTestId("new-pipeline-error");
+    expect(error).toHaveTextContent(/tutorial-implement-test already exists/i);
+    expect(screen.getByTestId("new-pipeline-dialog")).toBeInTheDocument();
+  });
+
+  /** Anything else is quoted as the daemon phrased it, rather than paraphrased. */
+  it("quotes any other refusal verbatim", async () => {
+    mockCreatePipeline.mockRejectedValueOnce(
+      new ApiError("the pipelines directory is read-only", { status: 500 }),
+    );
+
+    await createNamed("whatever");
+
+    expect(await screen.findByTestId("new-pipeline-error")).toHaveTextContent(
+      "the pipelines directory is read-only",
+    );
+  });
+
+  /** Editing the name is the user answering the sentence, so it stops applying. */
+  it("clears the message as soon as the name changes", async () => {
+    mockCreatePipeline.mockRejectedValueOnce(
+      new ApiError("pipeline already exists", { status: 409 }),
+    );
+
+    await createNamed("tutorial-implement-test");
+    await screen.findByTestId("new-pipeline-error");
+
+    fireEvent.change(screen.getByTestId("new-pipeline-name"), { target: { value: "other-name" } });
+    expect(screen.queryByTestId("new-pipeline-error")).not.toBeInTheDocument();
+  });
+});
+
 describe("UnifiedLeftPanel pipeline delete", () => {
   const libEntry: PipelineListEntry = {
     id: "simple-bugfix",

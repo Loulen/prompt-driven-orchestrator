@@ -51,6 +51,10 @@ import InspectorTabs from "./components/InspectorTabs";
 import { useInspectorTab } from "./hooks/useInspectorTab";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { useEditStore } from "./stores/editStore";
+import TourHost from "./components/tour/TourHost";
+import { useTour } from "./hooks/useTour";
+import { loadTourOffered, markTourOffered, shouldOfferWelcome } from "./lib/tourMemory";
+import { findTour, fullTourSequence } from "./lib/tours";
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -62,16 +66,21 @@ const DEFAULT_SIZES = { left: 15, center: 60, right: 25 };
 
 function useRuns() {
   const [runs, setRuns] = useState<RunListEntry[]>([]);
+  // #823: « no Run at all » is half of the welcome-modal rule, and an empty array
+  // before the first fetch means exactly the same thing as a Run-less instance.
+  // Without this flag the modal would flash on every load, everywhere.
+  const [loaded, setLoaded] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
       setRuns(await fetchRuns());
+      setLoaded(true);
     } catch {
       // ignore
     }
   }, []);
 
-  return { runs, refresh };
+  return { runs, runsLoaded: loaded, refresh };
 }
 
 function useSessions() {
@@ -155,7 +164,7 @@ function useSelectedRun() {
 export default function App() {
   const { status, subscribe } = useDaemonSocket();
   const { entries: libraryEntries, refresh: refreshLibrary } = useLibrary();
-  const { runs, refresh: refreshRuns } = useRuns();
+  const { runs, runsLoaded, refresh: refreshRuns } = useRuns();
   const { sessions, refresh: refreshSessions } = useSessions();
   // #697: the daemon's cached version-check state, for the status-bar badge.
   const { status: updateStatus, refresh: refreshUpdateStatus } = useUpdateStatus();
@@ -275,6 +284,39 @@ export default function App() {
     setSettingsOpen(false);
     setStatsOpen(true);
   }, []);
+  // #823 — guided tours. The controller lives here because two surfaces start a
+  // tour (the welcome modal and Settings › Tutorials) and a tour outlives both.
+  // The run list is passed in rather than fetched: the tour observes what the UI
+  // already knows (ADR-0071 §3) — how many Runs there are, and which is newest.
+  // #825 adds the selected Run's detail, for the same reason and on the same
+  // terms: the reading steps need a node's status and its completion guard, and
+  // the inspector is already polling both.
+  const tour = useTour(runs, selectedRun);
+  const [tourOffered, setTourOffered] = useState(loadTourOffered);
+  const showWelcome = shouldOfferWelcome({
+    offered: tourOffered,
+    runsLoaded,
+    runCount: runs.length,
+  });
+  const startTourById = useCallback(
+    (tourId: string) => {
+      // Starting a tour is also an answer to "have you been offered one?" — a
+      // reader who replays from Settings must not meet the modal on next load.
+      markTourOffered();
+      setTourOffered(true);
+      const def = findTour(tourId);
+      if (def) tour.start(def);
+    },
+    [tour],
+  );
+  const startFullTour = useCallback(() => {
+    markTourOffered();
+    setTourOffered(true);
+    // #824: two tours exist now, so « Full tour » finally means a sequence. The
+    // rest of the chain rides along, and each end card's primary runs the next.
+    const [first, ...rest] = fullTourSequence();
+    if (first) tour.start(first, rest);
+  }, [tour]);
   // #386: how the always-mounted New Run modal should open. Drives a one-shot
   // reset on every reopen so a dismissed "Edit trigger" can't leak into a fresh
   // "New run" / "New trigger". Defaults to a plain run.
@@ -1029,6 +1071,10 @@ export default function App() {
         onManageStagingProfiles={() =>
           openSettings({ category: "sandbox", section: "staging-profiles" })
         }
+        // #824: the one thing a tour cannot do by observing — the training repo is
+        // not in recents (nothing has run in it), so the step that says "click the
+        // magnifier" also says where it opens. Undefined outside a tour.
+        repoExplorerStartPath={tour.view?.step?.explorerStart}
       />
       <SettingsSurface
         // #717: keys MUST be namespaced per sibling — two always-mounted siblings sharing a
@@ -1044,6 +1090,8 @@ export default function App() {
         onOpenStats={openStats}
         onOpenChangelog={() => setChangelogOpen(true)}
         onRequestUpdate={() => setUpdateConfirmOpen(true)}
+        onStartTour={startTourById}
+        onStartFullTour={startFullTour}
       />
       <StatsModal
         // #717: see the SettingsSurface key above — sibling keys must never collide.
@@ -1076,6 +1124,14 @@ export default function App() {
         tabs={pendingSingleTab?.victims ?? []}
         onCancel={cancelPendingSingleTab}
         onConfirm={confirmPendingSingleTab}
+      />
+      {/* #823 — the Projecteur, the tour popover, the welcome modal and the two
+          end cards. Mounted last so it paints over every surface above. */}
+      <TourHost
+        controller={tour}
+        showWelcome={showWelcome}
+        onWelcomeAnswered={() => setTourOffered(true)}
+        onOpenTutorials={() => openSettings({ category: "general", section: "tutorials" })}
       />
       {runNowError && (
         <div

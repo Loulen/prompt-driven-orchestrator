@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { E2E_TARGET_REPO } from "./helpers";
+import { E2E_TARGET_REPO, pickPipeline } from "./helpers";
 
 // Layer 3b — « New run » attachments (#779).
 // Verifies: the drop zone accepts a non-image file next to an image, shows it as
@@ -55,7 +55,7 @@ test("a dropped file becomes a chip and reaches the run as `files`", async ({
   await page.getByRole("button", { name: "New Run" }).click();
   await expect(page.getByTestId("target-repo-input")).toBeVisible();
   await page.getByTestId("target-repo-input").fill(E2E_TARGET_REPO);
-  await page.getByTestId("pipeline-select").selectOption({ label: PIPELINE_NAME });
+  await pickPipeline(page, PIPELINE_NAME);
   await page.getByPlaceholder(/free-text prompt/i).fill("e2e attachments");
 
   // Empty state: the helper names the budget the daemon enforces.

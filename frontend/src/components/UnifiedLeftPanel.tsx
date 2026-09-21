@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, Copy, FileUp, Pause, Pencil, Play, Plus, RotateCcw, SquareTerminal, Trash2, X, Zap } from "lucide-react";
 import { isLiveRun, isTerminalRun, type RunListEntry, type RunStatus, type PipelineListEntry, type Trigger, type Project } from "../types";
 import type { LibraryPipelineEntry } from "../api";
-import { cleanupRun, createPipeline, duplicatePipeline, forgetRun, importPipelineDocument, importWorkflow, openRunShell, pauseRun, renameRun, resumeRun, retryAll } from "../api";
+import { ApiError, cleanupRun, createPipeline, duplicatePipeline, forgetRun, importPipelineDocument, importWorkflow, openRunShell, pauseRun, renameRun, resumeRun, retryAll } from "../api";
 import { announceSkillsChanged } from "../hooks/useSkillBank";
 import { useEditStore } from "../stores/editStore";
 import { useSelectionStore } from "../stores/selectionStore";
@@ -846,6 +846,9 @@ export default function UnifiedLeftPanel({
             key={tab.id}
             role="tab"
             aria-selected={activeTab === tab.id}
+            // #823: a tour has to be able to aim at a tab — its first step opens
+            // the one the rest of the tour lives in.
+            data-testid={`left-tab-${tab.id}`}
             onClick={() => setActiveTab(tab.id)}
             className={`flex flex-1 cursor-pointer items-center justify-center gap-1.5 border-b-2 font-medium transition-colors ${
               activeTab === tab.id
@@ -916,6 +919,7 @@ export default function UnifiedLeftPanel({
             )}
             <button
               onClick={onNewRun}
+              data-testid="new-run-button"
               className={`${availableRepos.length > 0 ? "ml-1.5" : "ml-auto"} flex cursor-pointer items-center gap-1 rounded bg-acc px-1.5 py-0.5 font-medium text-on-acc transition-colors hover:bg-acc-dim`}
               style={{ fontSize: "10.5px" }}
             >
@@ -1168,6 +1172,7 @@ export default function UnifiedLeftPanel({
         </button>
         <button
           onClick={() => setShowNewModal(true)}
+          data-testid="new-pipeline-button"
           className="ml-1.5 grid h-5 w-5 cursor-pointer place-items-center rounded border border-line-strong bg-bg-3 text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg"
           title="New pipeline"
         >
@@ -1202,6 +1207,9 @@ export default function UnifiedLeftPanel({
           {pipelines.map((p) => (
             <LibraryRow
               key={p.id}
+              // #823: the tour's last step points at the row of the pipeline the
+              // user just built — keep it or delete it, both from here.
+              testId={`library-row-${p.id}`}
               name={p.name}
               nodeCount={p.node_count}
               checked={librarySel.has(`${p.scope}-${p.id}`)}
@@ -1358,24 +1366,44 @@ export default function UnifiedLeftPanel({
 
 function NewPipelineModal({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState("");
+  // #825 (FP iteration 2): what the daemon said when it refused. This used to be
+  // swallowed, and a refused Create was a button that did nothing — no message,
+  // no error state, the dialog simply sitting there. The way to meet it is
+  // ordinary: replay the *First pipeline* tour on an instance where you kept the
+  // pipeline it builds, and every click on Create is a silent 409.
+  const [error, setError] = useState<string | null>(null);
+
   const loadPipelines = useEditStore((s) => s.loadPipelines);
   const openPipeline = useEditStore((s) => s.openPipeline);
 
   async function handleCreate() {
     if (!name.trim()) return;
+    setError(null);
     try {
       const result = await createPipeline(name.trim());
       await loadPipelines();
       await openPipeline(result.id);
       onClose();
-    } catch {
-      // ignore
+    } catch (e) {
+      // The collision is the one a reader can act on, so it is said in their
+      // terms — « pipeline already exists » does not name the pipeline. Anything
+      // else is quoted as the daemon phrased it rather than paraphrased.
+      setError(
+        e instanceof ApiError && e.status === 409
+          ? `A pipeline named ${name.trim()} already exists. Open it from the list, or pick another name.`
+          : e instanceof Error && e.message
+            ? e.message
+            : "The pipeline could not be created.",
+      );
     }
   }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
       <div
+        // #823: the Projecteur's hole covers the WHOLE dialog on the naming step,
+        // so the dialog itself needs a target, not just its field.
+        data-testid="new-pipeline-dialog"
         className="w-[360px] rounded-lg border border-line bg-bg-4 p-4"
         style={{ fontSize: "12px" }}
       >
@@ -1386,12 +1414,29 @@ function NewPipelineModal({ onClose }: { onClose: () => void }) {
         </label>
         <input
           value={name}
-          onChange={(e) => setName(e.target.value)}
+          onChange={(e) => {
+            setName(e.target.value);
+            // The refusal was about the name that was in the field; editing it
+            // is the user answering, so the sentence stops applying.
+            setError(null);
+          }}
           placeholder="my-pipeline"
+          data-testid="new-pipeline-name"
           className="mb-3 w-full rounded border border-line-strong bg-bg-3 px-2 py-1.5 text-fg outline-none focus:border-acc"
           autoFocus
           onKeyDown={(e) => e.key === "Enter" && handleCreate()}
         />
+
+        {error && (
+          <div
+            data-testid="new-pipeline-error"
+            role="alert"
+            className="rounded border border-st-failed/40 bg-st-failed/10 px-2 py-1.5 text-st-failed"
+            style={{ fontSize: "11px" }}
+          >
+            {error}
+          </div>
+        )}
 
         <div className="mt-4 flex justify-end gap-2">
           <button
@@ -1402,6 +1447,7 @@ function NewPipelineModal({ onClose }: { onClose: () => void }) {
           </button>
           <button
             onClick={handleCreate}
+            data-testid="new-pipeline-create"
             disabled={!name.trim()}
             className="rounded bg-acc px-3 py-1 font-medium text-bg-0 transition-colors hover:bg-acc-dim disabled:opacity-50"
           >

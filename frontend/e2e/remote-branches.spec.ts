@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { cleanupRuns } from "./helpers";
+import { cleanupRuns, pickPipeline } from "./helpers";
 
 // Layer 3b (real browser ↔ real daemon) for #571. The New Run source-branch
 // select must offer remote-tracking refs in a "Remote" group, default to a local
@@ -136,7 +136,7 @@ test("offers remote branches grouped, defaults local, launches one verbatim", as
   // Launch from the remote-only ref.
   await option("origin/feature-remote-only").click();
   await expect(branchField).toContainText("origin/feature-remote-only");
-  await page.getByTestId("pipeline-select").selectOption({ label: PIPELINE_NAME });
+  await pickPipeline(page, PIPELINE_NAME);
   await page.getByPlaceholder(/free-text prompt/i).fill("remote branch e2e");
   await expect(page.getByTestId("launch-button")).toBeEnabled();
   await page.getByTestId("launch-button").click();

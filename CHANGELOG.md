@@ -16,6 +16,122 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.97.0
+**Mode tutoriel livré sur `main`** (spec #821, story #816, tickets #822 à #825).
+
+- Release d'intégration : réunit sur `main` la branche `integration/816-tutorial-mode` (1.94.0 à
+  1.96.0 : menu pipeline maison et cibles stables, Projecteur et moteur de tours, tours *First
+  pipeline* et *First run*, dépôt d'entraînement, full tour) et les releases 1.92.0 / 1.93.0 déjà
+  sur `main`. Aucun changement fonctionnel propre à cette version.
+- Le CHANGELOG retrouve les entrées 1.92.0 et 1.93.0, perdues lors d'une réconciliation.
+
+## 1.96.0
+**Le tour *First run* va jusqu'à l'output, et le full tour s'enchaîne** (#825, spec #821, story #816, ADR-0071).
+
+- Le tour **First run** ne s'arrête plus au lancement : six étapes de lecture enseignent la vie d'un
+  node interactif — retrouver le Run dans la liste, ouvrir le node, parler à l'agent dans son propre
+  terminal (bloc à copier), libérer la complétion (ADR-0068), attendre la fin du node, ouvrir
+  l'output. Chaque avancement est observé sur l'état réel du Run que l'inspecteur charge déjà ; le
+  daemon ne sait toujours rien des tours.
+- **L'attente de fin de node n'a aucune limite de temps** : un agent met le temps qu'il met. Le
+  popover le dit, coche en direct « complétion libérée » / « node terminé », et éclaire tout
+  l'inspecteur en **zone souple** — pointillés, grisé plus clair, terminal lisible et cliquable
+  pendant l'attente. Un node qui échoue est une fin lui aussi : l'étape le nomme et demande un Next
+  pour que la phrase soit lue.
+- **Full tour** : entre deux tours, une carte intermédiaire dit où en est l'enchaînement et pose le
+  choix — *Finish here* ou *Continue*. Un tour qui **s'arrête proprement** (cible absente, lancement
+  refusé) propose quand même le tour suivant, sans être marqué terminé.
+- Le popover porte désormais sa sortie en petit (`✕ quit`) au lieu d'un bouton, et dit en une ligne
+  grise ce qu'il attend (« advances once released ») quand il n'y a rien à cliquer. **Échap
+  appartient au terminal du node** tant qu'il a le focus : le tour ne vole plus les touches de
+  l'agent.
+- Nouvelles cibles stables : les lignes de ports d'un node (`out` sous Outputs) et la modale
+  d'artefact, qui devient un propriétaire d'Échap (`role="dialog"`).
+- `docs/test-scenarios/HP-03` — le full tour est **proposé** comme 3ᵉ Happy Path (curation humaine à
+  la MR integration→develop).
+
+Corrections issues du passage de la Feature Path sur une vraie instance :
+
+- **Un tour démarre sur une scène dégagée.** La modale d'artefact que *First run* fait ouvrir à sa
+  dernière étape restait montée pendant que *First pipeline* démarrait : son fond plein écran
+  avalait tous les clics, l'app gelée derrière une modale dont le tour ne parlait plus. Les surfaces
+  flottantes se déclarent désormais congédiables (`lib/overlays.ts`) et le démarrage d'un tour les
+  ferme — sans qu'aucune d'elles sache ce qu'est un tour.
+- **« Find your Run » s'affiche enfin.** Le Start ouvre lui-même l'onglet du Run, donc la condition
+  de l'étape était vraie un tick après son entrée et le tour sautait de 9 à 11 sans rien montrer.
+  L'étape demande maintenant un `Next` explicite et dit ce qui vient de se passer.
+- **La carte de fin ne recouvre plus l'output.** La dernière étape se recentre sur l'artefact ouvert
+  — zone souple à lire, popover à côté — et attend `Next` : le récapitulatif n'arrive qu'une fois la
+  page lue.
+- **Un nouveau node ne tombe plus sur un autre** (hors #825, révélé par la FP) : l'évitement compare
+  désormais l'empreinte des cartes, pas 30 pixels. Deux cartes posées à 40 pixels enterraient l'arête
+  qui les relie, que *First pipeline* demande justement de cliquer.
+
+Second passage de la Feature Path :
+
+- **Un nouveau node reste à l'écran.** La grille d'évitement raisonnait en unités de canvas et
+  ignorait le viewport : sur un pipeline neuf, que le canvas cadre au zoom 2, un pas à droite fait
+  440 pixels et la deuxième carte de *First pipeline* naissait **hors du canvas**, injoignable, avec
+  un tour qui la demandait. La recherche connaît désormais la zone visible et n'y répond que par une
+  place qu'on voit ; et le cadrage automatique **ne grossit plus au-delà de 1:1**, si bien qu'une
+  carte a la taille pour laquelle elle a été dessinée.
+- **Un tour peut montrer un node du canvas.** Une carte vit dans un viewport transformé : la faire
+  défiler ne la déplace pas. Le canvas se déclare capable de l'amener au centre (`lib/canvasReveal.ts`,
+  même patron que `lib/overlays.ts`) et le tour le lui demande — une fois par visée, et seulement si
+  la carte n'est pas déjà dans le cadre.
+- **Les deux étapes d'arête de *First pipeline* nomment la sortie** à tirer. Le tester a deux
+  poignées à ce moment-là ; une arête partie d'`image_list` ne porte aucun `verdict`, et la condition
+  demandée deux étapes plus loin devenait impossible à écrire. Le geste ne compte plus que depuis
+  `out`, et la ligne grise nomme l'autre poignée.
+- **Un `Create` refusé le dit.** La modale New Pipeline avalait l'erreur du daemon : bouton sans
+  effet, aucun message. Elle affiche désormais la phrase du daemon — et, pour un nom déjà pris, le
+  dit dans les termes du lecteur. Le tour *First pipeline* s'arrête alors sur sa carte de refus au
+  lieu d'attendre un bouton mort.
+- **Le pipeline `tutorial-interactive` ne se chevauche plus** : ses trois nodes portent une position,
+  au lieu de laisser le canvas empiler Start sous l'agent.
+
+## 1.95.0
+**Tour *First run* et dépôt d'entraînement** (#824, spec #821, story #816, ADR-0071).
+
+- Nouveau verbe daemon `POST /repos/create` : crée un dépôt git minimal dans un dossier parent
+  (un commit sur `main`, `README.md` et `notes.txt`), renvoie le même chemin sans nouveau commit
+  s'il existe déjà, et refuse par un message nommé un dossier existant qui n'est pas un dépôt.
+  Le dépôt créé n'entre pas dans les récents.
+- Le tour **First run** (Settings › Tutorials) est actif : à l'entrée il crée — ou réutilise —
+  `/tmp/pdo-tutorial` et le pipeline `tutorial-interactive`, puis guide jusqu'au Start : nom du
+  Run, explorateur ouvert sur `/tmp` avec l'entrée pointée et défilée à l'écran, pipeline, profil
+  Default, les deux skills PDO, le prompt, puis le lancement. Un geste hors cible n'avance pas.
+- Une carte de fin nomme le Run créé, prévient de la question de confiance du harness dans
+  `/tmp/pdo-tutorial`, et enchaîne sur *First pipeline*. Un Start refusé s'arrête proprement en
+  citant la raison du daemon, formulaire intact, sans Run créé.
+- Moteur de tours : une cible qui disparaît transitoirement (dossier replié, filtre) n'abandonne
+  plus le tour ; le Projecteur se rabat sur le conteneur le temps qu'elle revienne.
+- Sélecteur de skills : le nom d'une ligne bascule la skill, plus seulement sa case.
+
+## 1.94.0
+**Mode tutoriel : Projecteur, moteur de tours et tour *First pipeline*** (#823, spec #821, story #816, ADR-0071).
+
+- Au premier lancement — clé navigateur absente **et** instance sans aucun Run — une **modale de
+  bienvenue** propose le full tour, un tour précis ou « plus tard ». N'importe lequel des trois
+  choix pose la clé : on n'est jamais sollicité deux fois.
+- Pendant un tour, le **Projecteur** grise tout l'écran sauf la cible de l'étape (au-dessus des
+  modales et des menus portalisés) et absorbe les clics ailleurs. Un popover ancré au trou donne
+  l'instruction, la progression `Step n of N`, le bloc à copier des saisies libres, `Skip` quand
+  l'étape le permet et `Quit tour` toujours — Échap aussi, sauf quand un menu ou un dialogue le
+  réclame d'abord.
+- Une étape avance sur l'**état réellement observé**, jamais sur un délai ; une cible absente plus
+  de quelques secondes arrête le tour proprement (« This step could not be completed ») au lieu
+  d'attendre. Les définitions de tours sont de simples données : ajouter un tour ne touche pas au
+  moteur.
+- Le tour **First pipeline** construit `tutorial-implement-test` de bout en bout : deux nœuds
+  interactifs (implémenteur dans le worktree du Run, testeur isolé), leurs prompts et leurs
+  outputs, un schéma `verdict` en énumération `pass`/`fail`, un port `image_list`, puis les trois
+  edges dont deux conditionnelles.
+- Nouvelle section **Settings › General › Tutorials** : full tour, un bouton par tour avec sa durée
+  estimée, une coche sur les tours terminés et un lien « Reset tutorial memory ». Coches et
+  proposition de bienvenue vivent dans le navigateur, comme le thème — jamais côté daemon.
+- Le tour *First run* est annoncé et grisé : il arrive avec #824.
+
 ## 1.93.0
 **Filtres par onglet, mode de durée Total/Active/Waiting, couverture, réglages éphémères** (#819, story #817).
 

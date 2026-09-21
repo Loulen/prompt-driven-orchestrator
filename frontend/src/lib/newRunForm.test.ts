@@ -6,6 +6,7 @@ import {
   buildVariables,
   canCreateTrigger,
   canLaunch,
+  filterPipelines,
   harnessState,
   hasRequiredPrompt,
   overrideCount,
@@ -210,6 +211,36 @@ describe("resolvedCron", () => {
   // a schedule.
   it("resolves an empty custom expression to the empty string", () => {
     expect(resolvedCron({ ...daily, cronPresetId: "custom" })).toBe("");
+  });
+});
+
+describe("filterPipelines (#822)", () => {
+  const list = [
+    pipeline({ id: "implement-loop", name: "implement-loop", scope: "instance" }),
+    pipeline({ id: "review-loop", name: "Review Loop", scope: "instance" }),
+    pipeline({ id: "tdd", name: "tdd-strict", path: "/repo/.pdo/pipelines/loop.yaml" }),
+  ];
+  const ids = (query: string) => filterPipelines(list, query).map((p) => p.id);
+
+  it("keeps everything for a blank fragment", () => {
+    expect(ids("")).toEqual(["implement-loop", "review-loop", "tdd"]);
+    expect(ids("   ")).toEqual(["implement-loop", "review-loop", "tdd"]);
+  });
+
+  it("matches a substring of the name, case-insensitively, in the daemon's order", () => {
+    expect(ids("LOOP")).toEqual(["implement-loop", "review-loop"]);
+    expect(ids("ment")).toEqual(["implement-loop"]);
+  });
+
+  it("matches the name only — not the path, not the id", () => {
+    // `tdd`'s FILE is `loop.yaml`, which the menu never shows: a row surviving a
+    // fragment its visible text does not contain reads as a bug.
+    expect(ids("loop")).not.toContain("tdd");
+    expect(ids("tdd-strict")).toEqual(["tdd"]);
+  });
+
+  it("returns nothing when no name holds the fragment", () => {
+    expect(ids("deploy")).toEqual([]);
   });
 });
 

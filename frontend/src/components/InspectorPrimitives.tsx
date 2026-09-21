@@ -5,10 +5,13 @@ export function SectionHead({
   title,
   count,
   onAdd,
+  addTestId,
 }: {
   title: string;
   count?: number;
   onAdd?: () => void;
+  /** #823: gives the `+ Add` a stable target a tour can aim the Projecteur at. */
+  addTestId?: string;
 }) {
   return (
     <div className="flex items-center justify-between border-b border-line-soft pb-1 pt-1">
@@ -21,6 +24,7 @@ export function SectionHead({
       {onAdd && (
         <button
           onClick={onAdd}
+          data-testid={addTestId}
           className="cursor-pointer text-fg-4 hover:text-acc"
           style={{ fontSize: "10px" }}
         >

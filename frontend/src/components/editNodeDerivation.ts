@@ -4,6 +4,7 @@ import type { EdgeWaypoint, LoopRegion, NodeStatus, NodeType, PipelineDef, PortS
 import type { OrthogonalEdgeData } from "./OrthogonalEdge";
 import { anchorHandleId, isEmergentInputNode } from "../lib/anchorSide";
 import { isNodeIsolated } from "../lib/nodeIsolation";
+import { fallbackNodeSpot } from "../lib/nodePlacement";
 
 /**
  * A run "reaches its end" when it terminates successfully (`completed`). At
@@ -61,13 +62,17 @@ export function deriveEditNodes(
   return pipeline.nodes.map((n, i) => {
     const status = statusForNode(n.id, runState);
     const loopBadge = loopBadgeByMember.get(n.id);
+    // Shared with the drop search (`lib/nodePlacement.ts`): a node the document
+    // gives no position for is on screen all the same, and a new card must not
+    // land on it.
+    const fallback = fallbackNodeSpot(i);
     if (n.type === "merge") {
       return {
         id: n.id,
         type: "merge",
         position: {
-          x: n.view?.x ?? 200,
-          y: n.view?.y ?? 80 + i * 140,
+          x: n.view?.x ?? fallback.x,
+          y: n.view?.y ?? fallback.y,
         },
         data: {
           label: n.name ?? n.id,
@@ -82,8 +87,8 @@ export function deriveEditNodes(
       id: n.id,
       type: "edit",
       position: {
-        x: n.view?.x ?? 200,
-        y: n.view?.y ?? 80 + i * 140,
+        x: n.view?.x ?? fallback.x,
+        y: n.view?.y ?? fallback.y,
       },
       data: {
         label: n.name ?? n.id,

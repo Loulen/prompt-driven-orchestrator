@@ -570,6 +570,18 @@ describe("the shape of every step", () => {
     }
   });
 
+  it("sends every edge step to the out handle, never under the card", () => {
+    // The first edge said "the handle under implementer". Under the card there
+    // is only the bottom anchor, an edge *target* and never a source, so the
+    // drag moved the node and made no edge — with no feedback about why
+    // (#825, FP iteration 5). All three edge steps now name `out`.
+    for (const step of STEPS.filter((s) => s.id.startsWith("edge-"))) {
+      const said = `${bodyOf(step)} ${stepNote(step, SHAPE_OBS) ?? ""}`;
+      expect(said, step.id).toContain("out handle");
+      expect(said.toLowerCase(), step.id).not.toMatch(/\bunder\b/);
+    }
+  });
+
   it("never claims Interactive opens a terminal", () => {
     // The correction the user made on the design, round 1. Every node has a
     // terminal; Interactive is about completion and about waiting on answers.

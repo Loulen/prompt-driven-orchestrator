@@ -359,7 +359,12 @@ const STEPS: TourStep[] = [
   {
     id: "edge-implementer-tester",
     title: "Connect implementer to tester",
-    body: "Drag from the handle under implementer onto tester. The edge is the hand-off: when the first finishes, the second starts.",
+    // "the handle under implementer" sent the FP's reader to the card's bottom
+    // anchor, which is an edge *target* (`__anchor:bottom`, `anchorSide.ts`) and
+    // never a source: the drag slid the node instead of drawing an edge. The
+    // `out` handle is a dot on the right edge — say so, the way the two edge
+    // steps after this one do (#825).
+    body: "Drag from the implementer's out handle, the dot on the right edge of its card, onto tester. The edge is the hand-off: when the first finishes, the second starts.",
     target: (o) => [...nodeSel(agent(o.app, 0)), ...nodeSel(agent(o.app, 1))],
     waitingFor: "the two agent cards",
     done: (o) => edgeIndex(o.app.pipeline, agent(o.app, 0), agent(o.app, 1)) >= 0,

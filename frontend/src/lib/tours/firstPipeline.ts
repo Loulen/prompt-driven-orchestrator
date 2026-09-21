@@ -110,6 +110,8 @@ const NEW_PIPELINE_DIALOG = '[data-testid="new-pipeline-dialog"]';
 const NEW_PIPELINE_ERROR = '[data-testid="new-pipeline-error"]';
 /** An output card, addressed by its slot rather than its (editable) port name. */
 const outputSlot = (i: number) => `[data-output-index="${i}"]`;
+/** The delete confirmation's box — the dialog itself, not its full-screen backdrop. */
+const DELETE_CONFIRM = '[data-testid="confirm-delete-modal"]';
 
 function selected(app: TourAppState, node: NodeDef | null): boolean {
   return !!node && app.selection.kind === "node" && app.selection.id === node.id;
@@ -444,8 +446,21 @@ const STEPS: TourStep[] = [
   {
     id: "keep-or-delete",
     title: "Keep it, or delete it",
-    body: "The row is yours now: open it again later, or use its trash to remove it. Skip keeps it.",
-    target: (o) => (o.app.pipelineId ? [`[data-testid="library-row-${cssEscape(o.app.pipelineId)}"]`] : []),
+    // Two beats, one card: the trash, then the confirmation it opens.
+    body: (o) =>
+      o.present(DELETE_CONFIRM)
+        ? "Delete removes the YAML and its prompt files from disk, for good. Cancel leaves the row alone, and Skip ends the tour without deleting anything."
+        : "The row is yours now: open it again later, or use its trash to remove it. Skip keeps it.",
+    // Re-aims onto the confirmation, the way `open-output` re-aims onto the
+    // artifact. Without it the card instructs a click it then prevents: the
+    // dialog is drawn centred, outside the hole, and both of its buttons come
+    // back as the projecteur's blocker (FP finding, #825).
+    target: (o) => {
+      if (o.present(DELETE_CONFIRM)) return [DELETE_CONFIRM];
+      return o.app.pipelineId
+        ? [`[data-testid="library-row-${cssEscape(o.app.pipelineId)}"]`]
+        : [];
+    },
     waitingFor: "the pipeline's row in the Library",
     skippable: true,
     done: (o) => !!o.app.pipelineId && !o.app.libraryPipelineIds.includes(o.app.pipelineId),

@@ -161,6 +161,16 @@ class FakeApp {
     };
   }
 
+  /** What confirming the trash does: the row and its dialog go, and so does the
+   *  entry the last step watches. */
+  deleteFromLibrary() {
+    this.hide(DELETE_CONFIRM, `[data-testid="library-row-${TUTORIAL_PIPELINE_ID}"]`);
+    this.app = {
+      ...this.app,
+      libraryPipelineIds: this.app.libraryPipelineIds.filter((id) => id !== TUTORIAL_PIPELINE_ID),
+    };
+  }
+
   private patch(fn: (p: PipelineDef) => void) {
     const pipeline = { ...this.app.pipeline! };
     fn(pipeline);
@@ -171,6 +181,9 @@ class FakeApp {
 const NAME_INPUT = '[data-testid="node-name-input"]';
 const PROMPT_INPUT = '[data-testid="node-prompt-input"]';
 const ADD_MENU = '[data-testid="add-menu-node"]';
+/** The delete confirmation's own box — see the last step's re-aim (#825). */
+const DELETE_CONFIRM = '[data-testid="confirm-delete-modal"]';
+const LIBRARY_ROW = `[data-testid="library-row-${TUTORIAL_PIPELINE_ID}"]`;
 
 /**
  * What the user does at each step, keyed by step id. The keys are checked against
@@ -436,8 +449,80 @@ describe("the accidents a reader can have", () => {
   });
 });
 
-/** Every *First pipeline* step declares a plain string body; resolving it needs
- *  an observation all the same, so the shape checks below borrow a fresh one. */
+/**
+ * The last step of *First pipeline* offers the trash, and the trash opens a
+ * confirmation that is drawn **centred** — outside the row the step lights. The
+ * projecteur's blockers therefore intercepted both Cancel and Delete: the one
+ * action the card instructed was the one it prevented, and the dialog stayed on
+ * screen (FP finding, #825). The step re-aims onto the dialog, the way
+ * `open-output` re-aims onto the artifact it told the reader to open.
+ */
+describe("the last step, and the confirmation its trash opens", () => {
+  const step = STEPS.find((s) => s.id === "keep-or-delete")!;
+
+  /** A saved pipeline, its row in the Library, the tour sitting on its last step. */
+  function atTheLastStep(): FakeApp {
+    const fake = new FakeApp();
+    const script = gestures(fake);
+    for (const s of STEPS) script[s.id]();
+    return fake;
+  }
+
+  it("lights the row, then the dialog the trash opens", () => {
+    const fake = atTheLastStep();
+    expect(step.target(fake.obs())).toEqual([LIBRARY_ROW]);
+
+    fake.show(DELETE_CONFIRM);
+    expect(step.target(fake.obs())).toEqual([DELETE_CONFIRM]);
+  });
+
+  it("says what the dialog's two buttons do, once it is up", () => {
+    const fake = atTheLastStep();
+    expect(stepBody(step, fake.obs())).toContain("trash");
+
+    fake.show(DELETE_CONFIRM);
+    const body = stepBody(step, fake.obs());
+    expect(body).toContain("Delete");
+    expect(body).toContain("Cancel");
+  });
+
+  it("goes back to the row when the reader cancels, and stays on the step", () => {
+    // The same walk as above, stopped one step short: gesture, observe, confirm
+    // what asks for a click — none of the steps before the last one is skippable.
+    const fake = new FakeApp();
+    const script = gestures(fake);
+    let run = startTour(FIRST_PIPELINE_TOUR, fake.obs());
+    let clock = 0;
+    for (const s of STEPS) {
+      if (s.id === "keep-or-delete") break;
+      script[s.id]();
+      run = observeTour(FIRST_PIPELINE_TOUR, run, fake.obs(), (clock += 200));
+      if (needsConfirm(FIRST_PIPELINE_TOUR, run, fake.obs())) {
+        run = confirmStep(FIRST_PIPELINE_TOUR, run, fake.obs());
+      }
+    }
+    expect(currentStep(FIRST_PIPELINE_TOUR, run)?.id).toBe("keep-or-delete");
+
+    fake.show(DELETE_CONFIRM);
+    run = observeTour(FIRST_PIPELINE_TOUR, run, fake.obs(), (clock += 200));
+    expect(run.phase).toBe("running");
+    expect(currentStep(FIRST_PIPELINE_TOUR, run)?.id).toBe("keep-or-delete");
+
+    fake.hide(DELETE_CONFIRM);
+    run = observeTour(FIRST_PIPELINE_TOUR, run, fake.obs(), (clock += 200));
+    expect(run.phase).toBe("running");
+    expect(step.target(fake.obs())).toEqual([LIBRARY_ROW]);
+
+    // And confirming really does end the tour on its recap.
+    fake.show(DELETE_CONFIRM);
+    fake.deleteFromLibrary();
+    run = observeTour(FIRST_PIPELINE_TOUR, run, fake.obs(), clock + 200);
+    expect(run.phase).toBe("finished");
+  });
+});
+
+/** Resolving a step's body needs an observation even when it does not depend on
+ *  one, so the shape checks below borrow a fresh (empty) app to read them. */
 const SHAPE_OBS = new FakeApp().obs();
 const bodyOf = (step: TourStep) => stepBody(step, SHAPE_OBS);
 

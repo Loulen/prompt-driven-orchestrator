@@ -242,11 +242,20 @@ function endedBadly(node: TourRunNode | null): boolean {
   return isNodeFinished(node) && node?.status !== "completed";
 }
 
-/** How the recap names where the node got to. A tour that was skipped early has
- *  no business claiming the node finished. */
+/**
+ * How the recap names where the node got to. A tour that was skipped early has
+ * no business claiming the node finished.
+ *
+ * It names the **status**, and nothing about how the node got there: « finished
+ * on its own » was false for every reader whose agent stopped to ask a question
+ * — `completed` covers the node that ended by itself and the one that ended
+ * because somebody answered it in the terminal (FP finding, #825). That is the
+ * same claim the wait card stopped making one step earlier; the summary the
+ * reader takes away must not put it back.
+ */
 function nodeEnding(node: TourRunNode | null): string {
   if (node == null) return "not opened";
-  if (node.status === "completed") return "finished on its own";
+  if (node.status === "completed") return "finished `completed`";
   if (isNodeFinished(node)) return `ended \`${node.status}\``;
   return "still running";
 }

@@ -986,7 +986,7 @@ describe("the recap", () => {
   /**
    * The card is the honest record of what the tour saw (#825). A reader who
    * skipped the wait must not be congratulated for a node that is still running,
-   * and one whose node failed must not be told it finished on its own.
+   * and one whose node failed must not be told it finished.
    */
   it("says where the node actually got to", () => {
     const fake = new FakeApp();
@@ -999,11 +999,30 @@ describe("the recap", () => {
     expect(recapOf(TOUR, fake.app)[1].text).toContain("released by you");
 
     fake.finishNode("failed");
-    expect(recapOf(TOUR, fake.app)[1].text).toContain("ended");
-    expect(recapOf(TOUR, fake.app)[1].text).not.toContain("finished on its own");
+    expect(recapOf(TOUR, fake.app)[1].text).toContain("ended `failed`");
+    expect(recapOf(TOUR, fake.app)[1].text).not.toContain("finished");
 
     fake.finishNode("completed");
-    expect(recapOf(TOUR, fake.app)[1].text).toContain("finished on its own");
+    expect(recapOf(TOUR, fake.app)[1].text).toContain("finished `completed`");
+  });
+
+  /**
+   * The wait card stopped promising there was nothing to do, because the agent
+   * can stop and ask a question mid-run. The recap is one card later and was
+   * still saying the node « finished on its own » — false for exactly the reader
+   * who had to answer it (FP finding, #825). It names the status instead, which
+   * is true of both endings.
+   */
+  it("never claims the node finished by itself", () => {
+    const fake = new FakeApp();
+    fake.launch();
+    fake.openRun();
+    fake.releaseCompletion();
+    fake.finishNode("completed");
+
+    for (const bullet of recapOf(TOUR, fake.app)) {
+      expect(bullet.text).not.toContain("on its own");
+    }
   });
 
   /** The tour no longer ends at Launch, so « Open the Run » would send the reader

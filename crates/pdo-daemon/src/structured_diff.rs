@@ -11,7 +11,7 @@
 //! The raw-patch endpoints (`GET /runs/<id>/diff`, `…/nodes/<node>/diff`) are
 //! untouched; this module only adds a second reading of the same `git diff`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
@@ -140,8 +140,13 @@ pub(crate) fn is_safe_path(p: &str) -> bool {
 }
 
 fn run_git(repo: &Path, args: &[&str]) -> Result<Vec<u8>, GitError> {
+    run_git_env(repo, args, &[])
+}
+
+fn run_git_env(repo: &Path, args: &[&str], envs: &[(&str, &Path)]) -> Result<Vec<u8>, GitError> {
     let out = std::process::Command::new("git")
         .args(args)
+        .envs(envs.iter().map(|(k, v)| (*k, *v)))
         .current_dir(repo)
         .output()
         .map_err(GitError::Spawn)?;
@@ -160,6 +165,104 @@ pub(crate) fn rev_parse(repo: &Path, r: &str) -> Option<String> {
         .ok()
         .map(|b| String::from_utf8_lossy(&b).trim().to_string())
         .filter(|s| !s.is_empty())
+}
+
+/// Resolve a ref to its commit SHA, else — a snapshot tree of the `worktree` ref
+/// (#835) — to its tree id. `None` when it is neither.
+pub(crate) fn rev_parse_object(repo: &Path, r: &str) -> Option<String> {
+    rev_parse(repo, r).or_else(|| {
+        let spec = format!("{r}^{{tree}}");
+        run_git(repo, &["rev-parse", "--verify", "--quiet", &spec])
+            .ok()
+            .map(|b| String::from_utf8_lossy(&b).trim().to_string())
+            .filter(|s| !s.is_empty())
+    })
+}
+
+/// Snapshot the working tree of `worktree` as a **tree object** (#835): the
+/// tracked files as they are on disk plus the untracked, non-ignored ones,
+/// `.pdo/` left out like everywhere else. Returns the tree id.
+///
+/// Works on a *copy* of the worktree's index (`GIT_INDEX_FILE`), so the node's
+/// own staging area is never touched; `git add -A` onto that copy then
+/// `write-tree` writes only the blobs that are new to the object store (a
+/// dangling tree `git gc` reclaims later). Reading the Run's diff thus never
+/// commits, stages or otherwise moves anything the node can observe.
+pub(crate) fn snapshot_worktree(worktree: &Path) -> Result<String, GitError> {
+    let index = run_git(worktree, &["rev-parse", "--git-path", "index"])?;
+    let index = String::from_utf8_lossy(&index).trim().to_string();
+    let index = {
+        let p = PathBuf::from(&index);
+        if p.is_absolute() {
+            p
+        } else {
+            worktree.join(p)
+        }
+    };
+    let tmp = std::env::temp_dir().join(format!(
+        "pdo-snapshot-{}-{}.index",
+        std::process::id(),
+        SNAPSHOT_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    // A worktree with nothing ever staged has no index file yet: start empty.
+    if index.exists() {
+        std::fs::copy(&index, &tmp).map_err(GitError::Spawn)?;
+    }
+    let env: &[(&str, &Path)] = &[("GIT_INDEX_FILE", tmp.as_path())];
+    let result = run_git_env(
+        worktree,
+        &[
+            "-c",
+            "core.quotepath=false",
+            "add",
+            "-A",
+            "--",
+            ".",
+            ":(exclude).pdo/",
+        ],
+        env,
+    )
+    .and_then(|_| run_git_env(worktree, &["write-tree"], env))
+    .map(|b| String::from_utf8_lossy(&b).trim().to_string());
+    let _ = std::fs::remove_file(&tmp);
+    result
+}
+
+static SNAPSHOT_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The merge-base of `from_ref` and the worktree's `HEAD` — the left side of the
+/// fork → worktree default (#835), so the source branch moving after the fork
+/// never shows up as the Run's work (the three-dot semantics of [`compute`]).
+pub(crate) fn merge_base_with_head(worktree: &Path, from_ref: &str) -> Result<String, GitError> {
+    run_git(worktree, &["merge-base", from_ref, "HEAD"])
+        .map(|b| String::from_utf8_lossy(&b).trim().to_string())
+}
+
+/// The structured diff of `from_ref` → the Run's working tree (#835): the
+/// worktree is snapshotted as a tree ([`snapshot_worktree`]) and compared
+/// two-dot against `from_ref` — or, when `three_dot`, against the merge-base
+/// of `from_ref` and the worktree's `HEAD`, mirroring the fork → tip default.
+/// `to_ref` is what the caller asked for (the `worktree` id), reported verbatim;
+/// `to_sha` is the snapshot tree id.
+pub(crate) fn compute_worktree(
+    worktree: &Path,
+    from_ref: &str,
+    to_ref: &str,
+    three_dot: bool,
+) -> Result<StructuredDiff, GitError> {
+    let snapshot = snapshot_worktree(worktree)?;
+    let base = if three_dot {
+        merge_base_with_head(worktree, from_ref)?
+    } else {
+        from_ref.to_string()
+    };
+    let mut d = compute(worktree, &base, &snapshot, false)?;
+    d.from_ref = from_ref.to_string();
+    d.from_sha = rev_parse(worktree, from_ref);
+    d.to_ref = to_ref.to_string();
+    d.to_sha = Some(snapshot);
+    d.three_dot = three_dot;
+    Ok(d)
 }
 
 /// Compute the structured diff of `from_ref` → `to_ref` in `repo`.
@@ -199,8 +302,8 @@ pub(crate) fn compute(
     Ok(StructuredDiff {
         from_ref: from_ref.to_string(),
         to_ref: to_ref.to_string(),
-        from_sha: rev_parse(repo, from_ref),
-        to_sha: rev_parse(repo, to_ref),
+        from_sha: rev_parse_object(repo, from_ref),
+        to_sha: rev_parse_object(repo, to_ref),
         three_dot,
         files,
         additions,
@@ -861,5 +964,109 @@ mod tests {
         assert_eq!(content, b"new\n");
         let missing = file_at_ref(repo, "main", "b.txt").unwrap_err();
         assert!(missing.is_unknown_revision() || matches!(missing, GitError::Failed { .. }));
+    }
+
+    #[test]
+    fn compute_worktree_sees_uncommitted_and_untracked_without_touching_the_index() {
+        // #835: on a dirty tree, the worktree diff shows the modified tracked
+        // file and the untracked one (not `.pdo/`, not the ignored file), the
+        // node's own index stays as it was, and `git status` is unchanged.
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(repo)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["config", "user.email", "t@t"]);
+        git(&["config", "user.name", "t"]);
+        git(&["config", "commit.gpgsign", "false"]);
+        std::fs::write(repo.join("a.txt"), "one\ntwo\n").unwrap();
+        std::fs::write(repo.join(".gitignore"), "ignored.txt\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "c0"]);
+        let c0 = git(&["rev-parse", "HEAD"]);
+        git(&["checkout", "-q", "-b", "work"]);
+        // One commit on the run branch.
+        std::fs::write(repo.join("committed.txt"), "c\n").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", "c1"]);
+        // Advance main after the fork: three-dot must not show it.
+        git(&["checkout", "-q", "main"]);
+        std::fs::write(repo.join("main_only.txt"), "m\n").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", "c2"]);
+        git(&["checkout", "-q", "work"]);
+        // Then a dirty tree on top of the run branch.
+        std::fs::write(repo.join("a.txt"), "one\nTWO\nthree\n").unwrap();
+        std::fs::write(repo.join("untracked.txt"), "new\n").unwrap();
+        std::fs::write(repo.join("ignored.txt"), "nope\n").unwrap();
+        std::fs::create_dir_all(repo.join(".pdo")).unwrap();
+        std::fs::write(repo.join(".pdo/art.txt"), "blackboard\n").unwrap();
+        let status_before = git(&["status", "--porcelain"]);
+
+        let d = compute_worktree(repo, "main", "worktree", true).unwrap();
+        assert!(d.three_dot);
+        assert_eq!(d.from_ref, "main");
+        assert_eq!(d.to_ref, "worktree");
+        let mut paths: Vec<_> = d
+            .files
+            .iter()
+            .map(|f| f.new_path.clone().unwrap())
+            .collect();
+        paths.sort();
+        assert_eq!(
+            paths,
+            vec!["a.txt", "committed.txt", "untracked.txt"],
+            "{d:?}"
+        );
+        assert_eq!((d.additions, d.deletions), (4, 1));
+
+        // The snapshot is a tree the object store knows: file-at-ref and a
+        // two-dot diff against it work like for any ref (comments re-map, #752).
+        let snapshot = d.to_sha.clone().unwrap();
+        assert_eq!(
+            rev_parse_object(repo, &snapshot).as_deref(),
+            Some(snapshot.as_str())
+        );
+        assert!(rev_parse(repo, &snapshot).is_none(), "a tree, not a commit");
+        assert_eq!(
+            file_at_ref(repo, &snapshot, "untracked.txt").unwrap(),
+            b"new\n"
+        );
+        let only_dirty = compute_path(repo, "HEAD", &snapshot, "a.txt").unwrap();
+        assert_eq!(only_dirty.len(), 1);
+
+        // Nothing moved for the node: same status, same index, same HEAD.
+        assert_eq!(git(&["status", "--porcelain"]), status_before);
+        assert_eq!(git(&["diff", "--cached", "--name-only"]), "");
+        assert_ne!(git(&["rev-parse", "HEAD"]), c0);
+
+        // Two-dot from an explicit ref: main's advance shows up as a deletion.
+        let d2 = compute_worktree(repo, "main", "worktree", false).unwrap();
+        assert!(!d2.three_dot);
+        assert!(d2
+            .files
+            .iter()
+            .any(|f| f.old_path.as_deref() == Some("main_only.txt")));
+
+        // A clean tree snapshots to HEAD's own tree: fork → worktree == fork → tip.
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", "c3"]);
+        let clean = compute_worktree(repo, "main", "worktree", true).unwrap();
+        assert_eq!(clean.to_sha, rev_parse_object(repo, "HEAD^{tree}"));
+        assert_eq!(
+            clean.files_changed,
+            compute(repo, "main", "work", true).unwrap().files_changed
+        );
     }
 }

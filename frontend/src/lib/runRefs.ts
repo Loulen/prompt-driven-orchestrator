@@ -4,9 +4,16 @@ import type { DiffFile, DiffHunk, NodeState, RunDelivery, RunRef, RunRefs } from
 // diff"). Pure: no React, no fetch — so the URL contract, the pair semantics and
 // the hunk re-serialisation are unit-testable, and the page file stays a view.
 
-/** The default pair — the same bounds as the Diff tab and the LOC stat. */
+/**
+ * The fallback default pair, used until the Run's refs are known. The daemon
+ * decides the real default (`default_from`/`default_to` of `GET /runs/<id>/refs`):
+ * fork → `worktree` while the Run's worktree exists (#835: commits *and*
+ * uncommitted edits, so a running node needs no commit to be reviewed),
+ * fork → `tip` once it is gone. `defaultPair` reads it.
+ */
 export const DEFAULT_FROM = "fork";
 export const DEFAULT_TO = "tip";
+export const WORKTREE_ID = "worktree";
 
 /** Split | Unified, remembered on this browser (AC: "mémorisée localement"). */
 export type ViewMode = "split" | "unified";
@@ -52,6 +59,17 @@ export interface RefPair {
   to: string;
 }
 
+/** The Run's default pair as the daemon states it, the fallback until then. */
+export function defaultPair(refs: RunRefs | null | undefined): RefPair {
+  return { from: refs?.default_from || DEFAULT_FROM, to: refs?.default_to || DEFAULT_TO };
+}
+
+/** Whether the query string names a pair at all (else the page follows the daemon's default). */
+export function hasExplicitPair(search: string): boolean {
+  const params = new URLSearchParams(search);
+  return params.has("from") || params.has("to");
+}
+
 /** `/runs/<id>/review` — the only real URL of the app so far. */
 export const REVIEW_PATH_RE = /^\/runs\/([^/]+)\/review\/?$/;
 
@@ -66,11 +84,11 @@ export function reviewRunIdFromPath(pathname: string): string | null {
  * the canonical link is the short one; ids, never SHAs, so the link keeps its
  * meaning while the Run moves.
  */
-export function reviewUrl(runId: string, pair?: Partial<RefPair>): string {
-  const from = pair?.from ?? DEFAULT_FROM;
-  const to = pair?.to ?? DEFAULT_TO;
+export function reviewUrl(runId: string, pair?: Partial<RefPair>, defaults: RefPair = defaultPair(null)): string {
+  const from = pair?.from ?? defaults.from;
+  const to = pair?.to ?? defaults.to;
   const params = new URLSearchParams();
-  if (from !== DEFAULT_FROM || to !== DEFAULT_TO) {
+  if (from !== defaults.from || to !== defaults.to) {
     params.set("from", from);
     params.set("to", to);
   }
@@ -79,16 +97,16 @@ export function reviewUrl(runId: string, pair?: Partial<RefPair>): string {
 }
 
 /** The pair carried by a query string, defaults filled in. */
-export function pairFromSearch(search: string): RefPair {
+export function pairFromSearch(search: string, defaults: RefPair = defaultPair(null)): RefPair {
   const params = new URLSearchParams(search);
   return {
-    from: params.get("from") || DEFAULT_FROM,
-    to: params.get("to") || DEFAULT_TO,
+    from: params.get("from") || defaults.from,
+    to: params.get("to") || defaults.to,
   };
 }
 
-export function isDefaultPair(pair: RefPair): boolean {
-  return pair.from === DEFAULT_FROM && pair.to === DEFAULT_TO;
+export function isDefaultPair(pair: RefPair, defaults: RefPair = defaultPair(null)): boolean {
+  return pair.from === defaults.from && pair.to === defaults.to;
 }
 
 /**

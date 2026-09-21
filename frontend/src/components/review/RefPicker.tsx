@@ -7,7 +7,8 @@ import type { RefPair } from "../../lib/runRefs";
 /**
  * One side of the Review page's `source → destination` pair (#749, design
  * option A): a button showing the chosen Run ref, opening a popover with the
- * **Run** group (fork point, Run tip) and the **Deliveries** group — one row per
+ * **Run** group (fork point, Run tip, Working tree while the Run's worktree
+ * exists — #835) and the **Deliveries** group — one row per
  * node delivery, whose `before`/`after` (or `● live`) buttons pick that side,
  * and whose header sets **both** sides to the delivery in one click.
  *
@@ -63,7 +64,7 @@ export default function RefPicker({ side, value, other, refs, disabled, onPick, 
   const matches = (text: string) => !q || text.toLowerCase().includes(q);
 
   const runRefs = useMemo(
-    () => (refs ? refs.refs.filter((r) => r.kind === "fork" || r.kind === "tip") : []),
+    () => (refs ? refs.refs.filter((r) => r.kind === "fork" || r.kind === "tip" || r.kind === "worktree") : []),
     [refs],
   );
 
@@ -78,8 +79,9 @@ export default function RefPicker({ side, value, other, refs, disabled, onPick, 
     onPick(id);
   };
 
-  const isNode = current && current.kind !== "fork" && current.kind !== "tip";
+  const isNode = current && current.kind !== "fork" && current.kind !== "tip" && current.kind !== "worktree";
   const isLive = current?.kind === "live";
+  const isWorktree = current?.kind === "worktree";
 
   return (
     <div ref={rootRef} className="relative">
@@ -102,7 +104,7 @@ export default function RefPicker({ side, value, other, refs, disabled, onPick, 
             node
           </span>
         )}
-        {isLive && (
+        {(isLive || isWorktree) && (
           <span
             className="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-st-running"
             aria-hidden
@@ -281,7 +283,8 @@ export default function RefPicker({ side, value, other, refs, disabled, onPick, 
 
           <div className="border-t border-line px-2.5 py-1 text-fg-4" style={{ fontSize: "10px" }}>
             Refs are frozen SHAs from the event log; <span className="text-st-running">live</span> follows
-            the node's sub-worktree.
+            the node's sub-worktree; <span className="text-st-running">Working tree</span> is the Run's worktree
+            as it is now, uncommitted edits included.
           </div>
         </div>
       )}

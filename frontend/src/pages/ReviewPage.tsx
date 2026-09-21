@@ -61,13 +61,14 @@ import {
 } from "../lib/reviewComments";
 import type { Anchor, MappingMap, ReviewDraft, ReviewEntry, SeenMap } from "../lib/reviewComments";
 import {
-  DEFAULT_FROM,
-  DEFAULT_TO,
+  defaultPair,
+  hasExplicitPair,
   defaultCollapsed,
   deliveryOfPair,
   deliverySignature,
   filePath,
   isDefaultPair,
+  WORKTREE_ID,
   pairFromSearch,
   readListOpen,
   readView,
@@ -145,6 +146,12 @@ export default function ReviewPage({ runId }: Props) {
   const [run, setRun] = useState<RunState | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
   const [refs, setRefs] = useState<RunRefs | null>(null);
+  // #835: the default pair is the daemon's (fork → worktree while the Run's
+  // worktree exists, fork → tip after). Until the refs are in, the URL pair
+  // is read against the fallback; the diff waits for the refs so a URL with no
+  // pair loads the real default once, not tip then worktree.
+  const [refsSettled, setRefsSettled] = useState(false);
+  const urlExplicit = useRef(hasExplicitPair(window.location.search));
   const [pair, setPairState] = useState<RefPair>(() => pairFromSearch(window.location.search));
   const [notice, setNotice] = useState<string | null>(null);
   const [view, setView] = useState<ViewMode>(() => readView());
@@ -223,9 +230,13 @@ export default function ReviewPage({ runId }: Props) {
       .then((r) => {
         if (stale) return;
         setRefs(r);
+        // No pair in the URL: follow the daemon's default (#835).
+        if (!urlExplicit.current) setPairState(defaultPair(r));
+        setRefsSettled(true);
       })
       .catch(() => {
         // The pickers show ids; the diff loads with the URL pair anyway.
+        if (!stale) setRefsSettled(true);
       });
     return () => {
       stale = true;
@@ -252,6 +263,7 @@ export default function ReviewPage({ runId }: Props) {
 
   // Validate the URL pair once the refs are known; a bad ref falls back with a notice.
   const reconciledFor = useRef<RunRefs | null>(null);
+  const defaults = useMemo(() => defaultPair(refs), [refs]);
   useEffect(() => {
     if (!refs || reconciledFor.current === refs) return;
     reconciledFor.current = refs;
@@ -259,7 +271,7 @@ export default function ReviewPage({ runId }: Props) {
     if (n) {
       setNotice(n);
       setPairState(next);
-      window.history.replaceState(null, "", reviewUrl(runId, next));
+      window.history.replaceState(null, "", reviewUrl(runId, next, defaultPair(refs)));
     }
   }, [refs, runId]);
 
@@ -267,11 +279,12 @@ export default function ReviewPage({ runId }: Props) {
   const sameRef = pair.from === pair.to;
   const { from: pairFrom, to: pairTo } = pair;
   const loadKey = `${pairFrom}|${pairTo}|${reloadTick}`;
+  const { from: defaultFrom, to: defaultTo } = defaults;
   useEffect(() => {
-    if (isArchived || sameRef) return;
+    if (isArchived || sameRef || !refsSettled) return;
     let stale = false;
     const key = `${pairFrom}|${pairTo}|${reloadTick}`;
-    const query = pairFrom === DEFAULT_FROM && pairTo === DEFAULT_TO ? undefined : { from: pairFrom, to: pairTo };
+    const query = pairFrom === defaultFrom && pairTo === defaultTo ? undefined : { from: pairFrom, to: pairTo };
     fetchRunStructuredDiff(runId, query)
       .then((d) => {
         if (stale) return;
@@ -287,7 +300,7 @@ export default function ReviewPage({ runId }: Props) {
     return () => {
       stale = true;
     };
-  }, [runId, pairFrom, pairTo, reloadTick, isArchived, sameRef]);
+  }, [runId, pairFrom, pairTo, reloadTick, isArchived, sameRef, refsSettled, defaultFrom, defaultTo]);
   /** What the current key has: the loaded diff, an error, or nothing yet. */
   const current = useMemo<Load>(
     () => (load.kind !== "none" && load.key === loadKey ? load : { kind: "none" }),
@@ -375,21 +388,25 @@ export default function ReviewPage({ runId }: Props) {
   // --- URL ↔ pair -------------------------------------------------------------
   const setPair = useCallback(
     (next: RefPair) => {
+      urlExplicit.current = true;
       setPairState(next);
       setCollapsed(null);
       setCurrentIdx(0);
       setNotice(null);
       setNodeDelivered(null);
-      window.history.replaceState(null, "", reviewUrl(runId, next));
+      window.history.replaceState(null, "", reviewUrl(runId, next, defaults));
       mainRef.current?.scrollTo?.({ top: 0 });
     },
-    [runId],
+    [runId, defaults],
   );
   useEffect(() => {
-    const onPop = () => setPairState(pairFromSearch(window.location.search));
+    const onPop = () => {
+      urlExplicit.current = hasExplicitPair(window.location.search);
+      setPairState(pairFromSearch(window.location.search, defaults));
+    };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
-  }, []);
+  }, [defaults]);
 
   // --- View persistence -------------------------------------------------------
   const changeView = (v: ViewMode) => {
@@ -834,7 +851,9 @@ export default function ReviewPage({ runId }: Props) {
 
   const delivery = refs ? deliveryOfPair(pair, refs) : null;
   const stats = current.kind === "ready" ? current.diff : null;
-  const pairIsDefault = isDefaultPair(pair);
+  const pairIsDefault = isDefaultPair(pair, defaults);
+  const defaultLabel = `${defaults.from} → ${defaults.to}`;
+  const showsWorktree = pair.to === WORKTREE_ID;
 
   if (runError) {
     return (
@@ -903,13 +922,13 @@ export default function ReviewPage({ runId }: Props) {
           {!pairIsDefault && (
             <button
               type="button"
-              onClick={() => setPair({ from: DEFAULT_FROM, to: DEFAULT_TO })}
+              onClick={() => setPair(defaults)}
               title="Back to the default pair"
               data-testid="review-reset"
               className="cursor-pointer rounded px-1.5 py-0.5 text-fg-4 hover:bg-bg-3 hover:text-fg-2"
               style={{ fontSize: "10px" }}
             >
-              fork → tip
+              {defaultLabel}
             </button>
           )}
         </div>
@@ -1094,7 +1113,7 @@ export default function ReviewPage({ runId }: Props) {
           </>
         )}
         <a
-          href={reviewUrl(runId, pair)}
+          href={reviewUrl(runId, pair, defaults)}
           target="_blank"
           rel="noreferrer"
           title="Open in a new tab — the URL carries the pair"
@@ -1163,6 +1182,23 @@ export default function ReviewPage({ runId }: Props) {
               <span className="text-fg-4">Your scroll position is kept.</span>
             </div>
           )}
+          {showsWorktree && !tipMoved && !isArchived && run?.status === "running" && (
+            <div
+              className="flex items-center gap-2.5 border-b border-line bg-bg-2 px-3 py-1 text-fg-3"
+              style={{ fontSize: "10.5px" }}
+              data-testid="review-worktree-note"
+            >
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-st-running" />
+              Working tree as of load — commits and uncommitted edits of the running Run ·
+              <button
+                type="button"
+                onClick={reload}
+                className="cursor-pointer rounded border border-line-strong px-2 py-px hover:bg-bg-3"
+              >
+                Reload
+              </button>
+            </div>
+          )}
           {nodeDelivered && refs && (
             <div
               className="sticky top-0 z-[15] flex items-center gap-2.5 border-b border-st-running/35 bg-st-running-bg px-3 py-1.5 text-st-running"
@@ -1221,12 +1257,12 @@ export default function ReviewPage({ runId }: Props) {
               )}
               <button
                 type="button"
-                onClick={() => setPair({ from: DEFAULT_FROM, to: DEFAULT_TO })}
+                onClick={() => setPair(defaults)}
                 className="ml-auto cursor-pointer text-fg-3 hover:text-fg"
                 style={{ fontSize: "10.5px" }}
                 data-testid="review-whole-run"
               >
-                Whole Run instead (fork → tip)
+                Whole Run instead ({defaultLabel})
               </button>
             </div>
           )}

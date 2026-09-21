@@ -2225,7 +2225,8 @@ export interface DiffFile {
 // Review page's URL carries; labels are built by the daemon.
 // ---------------------------------------------------------------------------
 
-export type RunRefKind = "fork" | "tip" | "before" | "after" | "live";
+/** `worktree` (#835): the Run's working tree, uncommitted edits included — its `sha` is a snapshot tree id. */
+export type RunRefKind = "fork" | "tip" | "before" | "after" | "live" | "worktree";
 
 export interface RunRef {
   id: string;

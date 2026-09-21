@@ -1401,8 +1401,9 @@ function NewPipelineModal({ onClose }: { onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
       <div
-        // #823: the Projecteur's hole covers the WHOLE dialog on the naming step,
-        // so the dialog itself needs a target, not just its field.
+        // #823: the *First pipeline* tour watches for the dialog itself (its
+        // presence ends the « create a new pipeline » step); the naming step
+        // lights only the field, so Create stays under the dim until asked (#837).
         data-testid="new-pipeline-dialog"
         className="w-[360px] rounded-lg border border-line bg-bg-4 p-4"
         style={{ fontSize: "12px" }}

@@ -81,6 +81,8 @@ describe("SkillSelector", () => {
     expect(free.checked).toBe(false);
     fireEvent.click(free);
     expect(onChange).toHaveBeenLastCalledWith([{ id: "c", name: "code-review" }]);
+    // The pick made, the picker folds away (#837): it was hiding the fields below.
+    expect(screen.queryByTestId("sel-popover")).toBeNull();
   });
 
   /**
@@ -103,9 +105,11 @@ describe("SkillSelector", () => {
     fireEvent.click(screen.getByTestId("sel"));
     fireEvent.click(screen.getByTestId("sel-label-c"));
     expect(onChange).toHaveBeenLastCalledWith([{ id: "c", name: "code-review" }]);
+    expect(screen.queryByTestId("sel-popover")).toBeNull();
 
     // An inherited skill has no gesture to offer: the name is as locked as the box.
     onChange.mockClear();
+    fireEvent.click(screen.getByTestId("sel"));
     const inherited = screen.getByTestId("sel-label-a") as HTMLButtonElement;
     expect(inherited.disabled).toBe(true);
     fireEvent.click(inherited);
@@ -134,10 +138,14 @@ describe("SkillSelector", () => {
         testId="sel"
       />,
     );
+    // Ticking the folder closed the picker (#837); reopen it for the uncheck.
+    expect(screen.queryByTestId("sel-popover")).toBeNull();
+    fireEvent.click(screen.getByTestId("sel"));
     const box = screen.getByTestId("sel-folder-check-f-method") as HTMLInputElement;
     expect(box.checked).toBe(true);
     fireEvent.click(box);
     expect(onChange).toHaveBeenLastCalledWith([{ id: "c", name: "code-review" }]);
+    expect(screen.queryByTestId("sel-popover")).toBeNull();
   });
 
   it("warns on an id the bank no longer has, without dropping it (FP step 4)", () => {

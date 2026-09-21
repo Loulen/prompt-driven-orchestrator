@@ -101,9 +101,16 @@ export default function SkillSelector({
     .map((row) => row.name)
     .join(", ");
 
+  // A pick closes the picker (#837). The popover is an overlay that hides the
+  // fields under it, and it had no way out but a click elsewhere or Escape; a
+  // reader who ticked what they came for was left with a panel in the way. The
+  // effective list under the button shows what was picked, with a remove button
+  // per own skill, so a second skill is one reopen away and an undo needs no
+  // reopen at all.
   const toggleSkill = (id: string, name: string) => {
     if (readOnly) return;
     onChange(ownIds.has(id) ? removeRef(own, id) : addRefs(own, [{ id, name }]));
+    setOpen(false);
   };
   const toggleFolder = (folderId: string) => {
     if (readOnly) return;
@@ -115,6 +122,7 @@ export default function SkillSelector({
     } else {
       onChange(addRefs(own, toRefs(skills)));
     }
+    setOpen(false);
   };
   const toggleExpanded = (folderId: string) => {
     setCollapsedOverride((prev) => {

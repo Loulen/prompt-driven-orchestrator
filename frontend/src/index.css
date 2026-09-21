@@ -110,6 +110,11 @@
      a tour teaches where things ARE, so it must not black the room out. */
   --color-tour-dim: rgba(0, 0, 0, 0.62);
 
+  /* #825 — the dim of a step whose lit area is a whole panel to roam in (the
+     wait for a node to finish). Lighter, because the reader is meant to READ in
+     there — the terminal behind it is the point of the step, not its backdrop. */
+  --color-tour-dim-soft: rgba(0, 0, 0, 0.48);
+
   /* Typography */
   --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-mono: "Geist Mono", ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
@@ -247,6 +252,7 @@
   /* Projecteur dim (#823). Lighter on a light ground: the same black at 0.62
      over a white app reads as a power cut rather than a spotlight. */
   --color-tour-dim: rgba(20, 24, 31, 0.45);
+  --color-tour-dim-soft: rgba(20, 24, 31, 0.32);
 }
 
 *,

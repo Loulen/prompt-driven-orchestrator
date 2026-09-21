@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, Copy, FileUp, Pause, Pencil, Play, Plus, RotateCcw, SquareTerminal, Trash2, X, Zap } from "lucide-react";
 import { isLiveRun, isTerminalRun, type RunListEntry, type RunStatus, type PipelineListEntry, type Trigger, type Project } from "../types";
 import type { LibraryPipelineEntry } from "../api";
-import { cleanupRun, createPipeline, duplicatePipeline, forgetRun, importPipelineDocument, importWorkflow, openRunShell, pauseRun, renameRun, resumeRun, retryAll } from "../api";
+import { ApiError, cleanupRun, createPipeline, duplicatePipeline, forgetRun, importPipelineDocument, importWorkflow, openRunShell, pauseRun, renameRun, resumeRun, retryAll } from "../api";
 import { announceSkillsChanged } from "../hooks/useSkillBank";
 import { useEditStore } from "../stores/editStore";
 import { useSelectionStore } from "../stores/selectionStore";
@@ -1366,18 +1366,35 @@ export default function UnifiedLeftPanel({
 
 function NewPipelineModal({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState("");
+  // #825 (FP iteration 2): what the daemon said when it refused. This used to be
+  // swallowed, and a refused Create was a button that did nothing — no message,
+  // no error state, the dialog simply sitting there. The way to meet it is
+  // ordinary: replay the *First pipeline* tour on an instance where you kept the
+  // pipeline it builds, and every click on Create is a silent 409.
+  const [error, setError] = useState<string | null>(null);
+
   const loadPipelines = useEditStore((s) => s.loadPipelines);
   const openPipeline = useEditStore((s) => s.openPipeline);
 
   async function handleCreate() {
     if (!name.trim()) return;
+    setError(null);
     try {
       const result = await createPipeline(name.trim());
       await loadPipelines();
       await openPipeline(result.id);
       onClose();
-    } catch {
-      // ignore
+    } catch (e) {
+      // The collision is the one a reader can act on, so it is said in their
+      // terms — « pipeline already exists » does not name the pipeline. Anything
+      // else is quoted as the daemon phrased it rather than paraphrased.
+      setError(
+        e instanceof ApiError && e.status === 409
+          ? `A pipeline named ${name.trim()} already exists. Open it from the list, or pick another name.`
+          : e instanceof Error && e.message
+            ? e.message
+            : "The pipeline could not be created.",
+      );
     }
   }
 
@@ -1397,13 +1414,29 @@ function NewPipelineModal({ onClose }: { onClose: () => void }) {
         </label>
         <input
           value={name}
-          onChange={(e) => setName(e.target.value)}
+          onChange={(e) => {
+            setName(e.target.value);
+            // The refusal was about the name that was in the field; editing it
+            // is the user answering, so the sentence stops applying.
+            setError(null);
+          }}
           placeholder="my-pipeline"
           data-testid="new-pipeline-name"
           className="mb-3 w-full rounded border border-line-strong bg-bg-3 px-2 py-1.5 text-fg outline-none focus:border-acc"
           autoFocus
           onKeyDown={(e) => e.key === "Enter" && handleCreate()}
         />
+
+        {error && (
+          <div
+            data-testid="new-pipeline-error"
+            role="alert"
+            className="rounded border border-st-failed/40 bg-st-failed/10 px-2 py-1.5 text-st-failed"
+            style={{ fontSize: "11px" }}
+          >
+            {error}
+          </div>
+        )}
 
         <div className="mt-4 flex justify-end gap-2">
           <button

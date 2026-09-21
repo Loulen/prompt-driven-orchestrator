@@ -20,8 +20,11 @@ import {
   observeTour,
   skipStep,
   startTour,
+  stepBody,
+  stepNote,
   type TourAppState,
   type TourObservation,
+  type TourStep,
 } from "../tour";
 import type { EdgeDef, NodeDef, PipelineDef } from "../../types";
 import { FIRST_PIPELINE_TOUR, TUTORIAL_PIPELINE_ID } from "./firstPipeline";
@@ -46,6 +49,7 @@ class FakeApp {
     libraryPipelineIds: [],
     runCount: 0,
     latestRun: null,
+    activeRunId: null,
   };
   /** Frozen at construction: what "this tour caused it" is measured against. */
   readonly baseline: TourAppState = { ...this.app };
@@ -157,6 +161,16 @@ class FakeApp {
     };
   }
 
+  /** What confirming the trash does: the row and its dialog go, and so does the
+   *  entry the last step watches. */
+  deleteFromLibrary() {
+    this.hide(DELETE_CONFIRM, `[data-testid="library-row-${TUTORIAL_PIPELINE_ID}"]`);
+    this.app = {
+      ...this.app,
+      libraryPipelineIds: this.app.libraryPipelineIds.filter((id) => id !== TUTORIAL_PIPELINE_ID),
+    };
+  }
+
   private patch(fn: (p: PipelineDef) => void) {
     const pipeline = { ...this.app.pipeline! };
     fn(pipeline);
@@ -167,6 +181,9 @@ class FakeApp {
 const NAME_INPUT = '[data-testid="node-name-input"]';
 const PROMPT_INPUT = '[data-testid="node-prompt-input"]';
 const ADD_MENU = '[data-testid="add-menu-node"]';
+/** The delete confirmation's own box — see the last step's re-aim (#825). */
+const DELETE_CONFIRM = '[data-testid="confirm-delete-modal"]';
+const LIBRARY_ROW = `[data-testid="library-row-${TUTORIAL_PIPELINE_ID}"]`;
 
 /**
  * What the user does at each step, keyed by step id. The keys are checked against
@@ -310,7 +327,7 @@ describe("walking the whole tour", () => {
       if (run.phase !== "running" || currentStep(FIRST_PIPELINE_TOUR, run)?.id !== step.id) continue;
 
       // Still here: the step wants an explicit gesture from the popover.
-      if (needsConfirm(FIRST_PIPELINE_TOUR, run)) {
+      if (needsConfirm(FIRST_PIPELINE_TOUR, run, fake.obs())) {
         expect(canAdvance(FIRST_PIPELINE_TOUR, run, fake.obs()), `Next stuck on "${step.id}"`).toBe(
           true,
         );
@@ -351,6 +368,164 @@ describe("walking the whole tour", () => {
   });
 });
 
+/**
+ * The two accidents the FP found on a live instance (#825, iteration 2): an edge
+ * drawn from the wrong handle, and a pipeline name already taken. Both used to be
+ * dead ends — the tour walked on, or waited, and the reader had only `✕ quit`.
+ */
+describe("the accidents a reader can have", () => {
+  /** Play the tour up to `stepId`, performing every scripted gesture on the way. */
+  function upTo(fake: FakeApp, stepId: string) {
+    const script = gestures(fake);
+    for (const step of STEPS) {
+      if (step.id === stepId) return step;
+      script[step.id]();
+    }
+    throw new Error(`no step ${stepId}`);
+  }
+
+  it.each([
+    ["edge-tester-implementer", { node: "n1", port: "in" }],
+    ["edge-tester-end", { node: "end", port: "result" }],
+  ])("does not count %s as drawn when it came from image_list", (stepId, target) => {
+    const fake = new FakeApp();
+    const step = upTo(fake, stepId);
+
+    fake.addEdge({ source: { node: "n2", port: "image_list" }, target });
+    expect(step.done!(fake.obs()), "an edge with no verdict on it").toBe(false);
+
+    fake.addEdge({ source: { node: "n2", port: "out" }, target });
+    expect(step.done!(fake.obs())).toBe(true);
+  });
+
+  /**
+   * And the step after it points at the right edge of the two, rather than at
+   * whichever was drawn first — a condition authored on the screenshot edge is a
+   * condition on a port that has no `verdict`.
+   */
+  it("selects the out edge even when a stray image_list edge exists", () => {
+    const fake = new FakeApp();
+    // Stop before the return edge is drawn, then draw the wrong one first — the
+    // order the accident happens in.
+    upTo(fake, "edge-tester-implementer");
+    const step = STEPS.find((s) => s.id === "select-loop-edge")!;
+    fake.addEdge({ source: { node: "n2", port: "image_list" }, target: { node: "n1", port: "in" } });
+    fake.addEdge({ source: { node: "n2", port: "out" }, target: { node: "n1", port: "in" } });
+
+    fake.selectEdge(1); // the image_list one
+    expect(step.done!(fake.obs())).toBe(false);
+    fake.selectEdge(2); // the out one
+    expect(step.done!(fake.obs())).toBe(true);
+  });
+
+  /**
+   * A reader who kept the pipeline at the end of a previous run meets a 409, and
+   * `Create` does nothing at all. The tour cannot advance and never will, so it
+   * says so on its own card instead of waiting on a dead button.
+   */
+  it("stops on a refusal card when the pipeline name is already taken", () => {
+    const fake = new FakeApp();
+    const script = gestures(fake);
+    let run = startTour(FIRST_PIPELINE_TOUR, fake.obs());
+    let clock = 0;
+    for (const id of ["pipelines-tab", "new-pipeline", "name-pipeline"]) {
+      script[id]();
+      clock += 200;
+      run = observeTour(FIRST_PIPELINE_TOUR, run, fake.obs(), clock);
+      if (needsConfirm(FIRST_PIPELINE_TOUR, run, fake.obs())) {
+        run = confirmStep(FIRST_PIPELINE_TOUR, run, fake.obs());
+      }
+    }
+    expect(currentStep(FIRST_PIPELINE_TOUR, run)?.id).toBe("create-pipeline");
+
+    // The dialog says what the daemon said, and stays open.
+    fake.type('[data-testid="new-pipeline-error"]', `A pipeline named ${TUTORIAL_PIPELINE_ID} already exists.`);
+    run = observeTour(FIRST_PIPELINE_TOUR, run, fake.obs(), clock + 200);
+
+    expect(run.phase).toBe("failed");
+    expect(run.failure?.kind).toBe("refused");
+    expect(run.failure?.reason).toContain("already exists");
+    expect(run.failure?.hint).toContain(TUTORIAL_PIPELINE_ID);
+  });
+});
+
+/**
+ * The last step of *First pipeline* offers the trash, and the trash opens a
+ * confirmation that is drawn **centred** — outside the row the step lights. The
+ * projecteur's blockers therefore intercepted both Cancel and Delete: the one
+ * action the card instructed was the one it prevented, and the dialog stayed on
+ * screen (FP finding, #825). The step re-aims onto the dialog, the way
+ * `open-output` re-aims onto the artifact it told the reader to open.
+ */
+describe("the last step, and the confirmation its trash opens", () => {
+  const step = STEPS.find((s) => s.id === "keep-or-delete")!;
+
+  /** A saved pipeline, its row in the Library, the tour sitting on its last step. */
+  function atTheLastStep(): FakeApp {
+    const fake = new FakeApp();
+    const script = gestures(fake);
+    for (const s of STEPS) script[s.id]();
+    return fake;
+  }
+
+  it("lights the row, then the dialog the trash opens", () => {
+    const fake = atTheLastStep();
+    expect(step.target(fake.obs())).toEqual([LIBRARY_ROW]);
+
+    fake.show(DELETE_CONFIRM);
+    expect(step.target(fake.obs())).toEqual([DELETE_CONFIRM]);
+  });
+
+  it("says what the dialog's two buttons do, once it is up", () => {
+    const fake = atTheLastStep();
+    expect(stepBody(step, fake.obs())).toContain("trash");
+
+    fake.show(DELETE_CONFIRM);
+    const body = stepBody(step, fake.obs());
+    expect(body).toContain("Delete");
+    expect(body).toContain("Cancel");
+  });
+
+  it("goes back to the row when the reader cancels, and stays on the step", () => {
+    // The same walk as above, stopped one step short: gesture, observe, confirm
+    // what asks for a click — none of the steps before the last one is skippable.
+    const fake = new FakeApp();
+    const script = gestures(fake);
+    let run = startTour(FIRST_PIPELINE_TOUR, fake.obs());
+    let clock = 0;
+    for (const s of STEPS) {
+      if (s.id === "keep-or-delete") break;
+      script[s.id]();
+      run = observeTour(FIRST_PIPELINE_TOUR, run, fake.obs(), (clock += 200));
+      if (needsConfirm(FIRST_PIPELINE_TOUR, run, fake.obs())) {
+        run = confirmStep(FIRST_PIPELINE_TOUR, run, fake.obs());
+      }
+    }
+    expect(currentStep(FIRST_PIPELINE_TOUR, run)?.id).toBe("keep-or-delete");
+
+    fake.show(DELETE_CONFIRM);
+    run = observeTour(FIRST_PIPELINE_TOUR, run, fake.obs(), (clock += 200));
+    expect(run.phase).toBe("running");
+    expect(currentStep(FIRST_PIPELINE_TOUR, run)?.id).toBe("keep-or-delete");
+
+    fake.hide(DELETE_CONFIRM);
+    run = observeTour(FIRST_PIPELINE_TOUR, run, fake.obs(), (clock += 200));
+    expect(run.phase).toBe("running");
+    expect(step.target(fake.obs())).toEqual([LIBRARY_ROW]);
+
+    // And confirming really does end the tour on its recap.
+    fake.show(DELETE_CONFIRM);
+    fake.deleteFromLibrary();
+    run = observeTour(FIRST_PIPELINE_TOUR, run, fake.obs(), clock + 200);
+    expect(run.phase).toBe("finished");
+  });
+});
+
+/** Resolving a step's body needs an observation even when it does not depend on
+ *  one, so the shape checks below borrow a fresh (empty) app to read them. */
+const SHAPE_OBS = new FakeApp().obs();
+const bodyOf = (step: TourStep) => stepBody(step, SHAPE_OBS);
+
 describe("the shape of every step", () => {
   it("has a unique id", () => {
     expect(new Set(STEPS.map((s) => s.id)).size).toBe(STEPS.length);
@@ -360,9 +535,10 @@ describe("the shape of every step", () => {
     for (const step of STEPS) {
       expect(step.title.length, step.id).toBeLessThanOrEqual(64);
       expect(step.title.endsWith("."), step.id).toBe(false);
-      const sentences = step.body.split(/(?<=[.!?])\s+/).filter(Boolean);
-      expect(sentences.length, `${step.id}: ${step.body}`).toBeLessThanOrEqual(3);
-      expect(step.body.trim(), step.id).not.toBe("");
+      const body = bodyOf(step);
+      const sentences = body.split(/(?<=[.!?])\s+/).filter(Boolean);
+      expect(sentences.length, `${step.id}: ${body}`).toBeLessThanOrEqual(3);
+      expect(body.trim(), step.id).not.toBe("");
     }
   });
 
@@ -381,12 +557,37 @@ describe("the shape of every step", () => {
     expect(STEPS.find((s) => s.id === "keep-or-delete")?.skippable).toBe(true);
   });
 
+  it("names the handle to drag from, on a node that has two", () => {
+    // The FP drew the return edge from `image_list` — the card said "drag from
+    // tester" and the tester has two output handles by then. The edge was made
+    // normally, and two steps later the When editor offered `iter` and no
+    // `verdict`, with no way back (#825, FP iteration 2).
+    for (const id of ["edge-tester-implementer", "edge-tester-end"]) {
+      const step = STEPS.find((s) => s.id === id)!;
+      const said = `${bodyOf(step)} ${stepNote(step, SHAPE_OBS) ?? ""}`;
+      expect(said, id).toContain("out");
+      expect(said, id).toContain("image_list");
+    }
+  });
+
+  it("sends every edge step to the out handle, never under the card", () => {
+    // The first edge said "the handle under implementer". Under the card there
+    // is only the bottom anchor, an edge *target* and never a source, so the
+    // drag moved the node and made no edge — with no feedback about why
+    // (#825, FP iteration 5). All three edge steps now name `out`.
+    for (const step of STEPS.filter((s) => s.id.startsWith("edge-"))) {
+      const said = `${bodyOf(step)} ${stepNote(step, SHAPE_OBS) ?? ""}`;
+      expect(said, step.id).toContain("out handle");
+      expect(said.toLowerCase(), step.id).not.toMatch(/\bunder\b/);
+    }
+  });
+
   it("never claims Interactive opens a terminal", () => {
     // The correction the user made on the design, round 1. Every node has a
     // terminal; Interactive is about completion and about waiting on answers.
     for (const step of STEPS.filter((s) => s.id.includes("interactive"))) {
-      expect(step.body.toLowerCase(), step.id).not.toMatch(/opens? a terminal/);
-      expect(step.body.toLowerCase(), step.id).toContain("complete");
+      expect(bodyOf(step).toLowerCase(), step.id).not.toMatch(/opens? a terminal/);
+      expect(bodyOf(step).toLowerCase(), step.id).toContain("complete");
     }
   });
 });

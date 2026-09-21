@@ -5,10 +5,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import TourHost from "./TourHost";
 import { useTour } from "../../hooks/useTour";
 import { loadTourOffered, loadToursDone } from "../../lib/tourMemory";
+import { registerTransientOverlay } from "../../lib/overlays";
+import { registerCanvasReveal } from "../../lib/canvasReveal";
 import { FIRST_PIPELINE_TOUR } from "../../lib/tours";
 import type { TourDef } from "../../lib/tour";
 
@@ -40,16 +42,50 @@ const TOUR: TourDef = {
   ],
 };
 
-function Harness({ showWelcome = false, tour = TOUR }: { showWelcome?: boolean; tour?: TourDef }) {
+/** The next leg of a Full tour, for the handover (#825). One acknowledge step. */
+const NEXT_TOUR: TourDef = {
+  id: "first-run",
+  title: "First run",
+  blurb: "",
+  minutes: 1,
+  recapIntro: "You ran a Run.",
+  recap: [],
+  steps: [
+    {
+      id: "only",
+      title: "Click the thing",
+      body: "The only step.",
+      target: () => ["#target"],
+      waitingFor: "the thing",
+    },
+  ],
+};
+
+/**
+ * Something built like the markdown artifact viewer: a full-screen backdrop that
+ * blocks the app, and knows how to close itself when asked (#825). The real one
+ * is what *First run* leaves open on its last step.
+ */
+function FakeOverlay({ onClose }: { onClose: () => void }) {
+  useEffect(() => registerTransientOverlay(onClose), [onClose]);
+  return <div data-testid="fake-overlay" className="fixed inset-0" />;
+}
+
+function Harness({ showWelcome = false, tour = TOUR, chain = [] as TourDef[] }: { showWelcome?: boolean; tour?: TourDef; chain?: TourDef[] }) {
   const controller = useTour([]);
+  const [overlay, setOverlay] = useState(false);
   const [opened, setOpened] = useState(false);
   const [answered, setAnswered] = useState(false);
   const [tutorials, setTutorials] = useState(false);
   return (
     <>
-      <button data-testid="start" onClick={() => controller.start(tour)}>
+      <button data-testid="start" onClick={() => controller.start(tour, chain)}>
         start
       </button>
+      <button data-testid="open-overlay" onClick={() => setOverlay(true)}>
+        open overlay
+      </button>
+      {overlay && <FakeOverlay onClose={() => setOverlay(false)} />}
       <div id="target">
         <button data-testid="do-it" onClick={() => setOpened(true)}>
           do it
@@ -108,7 +144,7 @@ describe("running a tour", () => {
     await user().click(screen.getByTestId("start"));
     tick();
     expect(screen.getByTestId("projecteur")).toBeInTheDocument();
-    expect(screen.getByTestId("tour-progress")).toHaveTextContent("Step 1 of 2");
+    expect(screen.getByTestId("tour-progress")).toHaveTextContent("First pipeline · 1 / 2");
   });
 
   it("advances on the real gesture, with no extra click", async () => {
@@ -141,6 +177,35 @@ describe("running a tour", () => {
     await user().keyboard("{Escape}");
     expect(screen.getByTestId("projecteur")).toBeInTheDocument();
     menu.remove();
+  });
+
+  /**
+   * #825 — the tour asks the reader to type into the agent's own tmux session.
+   * Escape in there is the agent's key (vim, the harness's own menus), so the
+   * step the tour just asked for must not be the step that throws it away.
+   * Checked on the keystroke's TARGET, not on the terminal's presence: it is on
+   * screen for four steps, and Escape anywhere else still quits.
+   */
+  it("lets the node's terminal keep Escape while it has the keystroke", async () => {
+    render(<Harness />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+
+    const terminal = document.createElement("div");
+    terminal.setAttribute("data-testid", "tmux-terminal");
+    const input = document.createElement("input");
+    terminal.appendChild(input);
+    document.body.appendChild(terminal);
+
+    input.focus();
+    await user().keyboard("{Escape}");
+    expect(screen.getByTestId("projecteur")).toBeInTheDocument();
+
+    // …and the same key, aimed anywhere else, still quits.
+    input.blur();
+    await user().keyboard("{Escape}");
+    expect(screen.queryByTestId("projecteur")).not.toBeInTheDocument();
+    terminal.remove();
   });
 
   it("quits from the popover's own button", async () => {
@@ -226,6 +291,63 @@ describe("scrolling the target into view", () => {
       else Reflect.deleteProperty(Element.prototype, "scrollIntoView");
     }
   });
+
+  /**
+   * A canvas card cannot be scrolled to (#825, FP iteration 2). It is absolutely
+   * positioned inside a transformed viewport, so `scrollIntoView` moves nothing —
+   * and the *First pipeline* tour dead-ended on « click the new card » with the
+   * card drawn past the right edge of the canvas and the overlay owning the
+   * wheel. The canvas is asked instead.
+   */
+  const CANVAS_TOUR: TourDef = {
+    ...TOUR,
+    id: "first-run",
+    steps: [
+      {
+        id: "one",
+        title: "Click the new card",
+        body: "The inspector follows it.",
+        target: () => ['.react-flow__node[data-id="n1"]'],
+        waitingFor: "the new node on the canvas",
+      },
+    ],
+  };
+
+  it("asks the canvas for a node target instead of scrolling the page", async () => {
+    const reveal = vi.fn();
+    const off = registerCanvasReveal(reveal);
+    const card = document.createElement("div");
+    card.className = "react-flow__node";
+    card.setAttribute("data-id", "n1");
+    document.body.appendChild(card);
+    try {
+      render(<Harness tour={CANVAS_TOUR} />);
+      await user().click(screen.getByTestId("start"));
+      tick();
+
+      expect(reveal).toHaveBeenCalledWith("n1");
+      // Once per aim, like the scroll: a canvas re-centring itself ten times a
+      // second would be yanking the graph around under the reader's mouse.
+      tick(1_000);
+      expect(reveal).toHaveBeenCalledTimes(1);
+    } finally {
+      off();
+      card.remove();
+    }
+  });
+
+  it("leaves an ordinary target to the page's own scrolling", async () => {
+    const reveal = vi.fn();
+    const off = registerCanvasReveal(reveal);
+    try {
+      render(<Harness />);
+      await user().click(screen.getByTestId("start"));
+      tick();
+      expect(reveal).not.toHaveBeenCalled();
+    } finally {
+      off();
+    }
+  });
 });
 
 describe("the two ways a tour ends", () => {
@@ -265,6 +387,45 @@ describe("the two ways a tour ends", () => {
     await user().click(screen.getByTestId("tour-failed-back"));
     expect(screen.getByTestId("tutorials-open")).toBeInTheDocument();
     expect(loadToursDone()).toEqual({});
+  });
+});
+
+/**
+ * #825 — the FP of the Full tour found the handover frozen: *First run* ends on
+ * « open `out` », and the artifact modal that opens was still mounted when
+ * *First pipeline* started pointing at the Pipelines tab. Its backdrop ate every
+ * click, on the first screen a newcomer sees after their first Run.
+ */
+describe("a tour starts on a clear stage", () => {
+  it("closes a modal left floating over the app", async () => {
+    render(<Harness />);
+    await user().click(screen.getByTestId("open-overlay"));
+    expect(screen.getByTestId("fake-overlay")).toBeInTheDocument();
+
+    await user().click(screen.getByTestId("start"));
+    tick();
+
+    expect(screen.queryByTestId("fake-overlay")).not.toBeInTheDocument();
+    expect(screen.getByTestId("tour-popover")).toBeInTheDocument();
+  });
+
+  it("clears it on the handover to the next leg of a Full tour", async () => {
+    render(<Harness chain={[NEXT_TOUR]} />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    await user().click(screen.getByTestId("do-it"));
+    tick();
+    await user().click(screen.getByTestId("tour-next"));
+
+    // The last step of a tour is exactly where a modal gets opened and left.
+    await user().click(screen.getByTestId("open-overlay"));
+    expect(screen.getByTestId("fake-overlay")).toBeInTheDocument();
+
+    await user().click(screen.getByTestId("tour-finish"));
+    tick();
+
+    expect(screen.queryByTestId("fake-overlay")).not.toBeInTheDocument();
+    expect(screen.getByTestId("tour-progress")).toHaveTextContent("First run · 1 / 1");
   });
 });
 

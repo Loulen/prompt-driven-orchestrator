@@ -184,11 +184,25 @@ export function TourIntroCard({
   );
 }
 
+/**
+ * The card a tour ends on — and, mid-Full-tour, the card BETWEEN two tours
+ * (#825). Same recap either way; what changes is the way out.
+ *
+ * Alone, it offers the other tours and one `Finish`. Inside a chain it says how
+ * far the Full tour has got, names the next leg, and puts the decision on two
+ * explicit buttons: *Finish here* stops the chain, *Continue* starts the next
+ * one. Both mark THIS tour done — it was finished. A single "Next tour" button
+ * with the ✕ as the only way out would hide half of that choice, which is the
+ * thing the welcome modal deliberately did not do.
+ */
 export function TourEndCard({
   tour,
   app,
   nextTour,
+  /** How many legs of the Full tour are done / in total. Absent outside a chain. */
+  chainProgress,
   onFinish,
+  onFinishHere,
   onStartTour,
 }: {
   tour: TourDef;
@@ -196,19 +210,38 @@ export function TourEndCard({
   app: TourAppState;
   /** The next leg of a Full tour: the primary then chains instead of closing. */
   nextTour?: TourDef | null;
+  chainProgress?: { done: number; total: number } | null;
   onFinish: () => void;
+  onFinishHere: () => void;
   onStartTour: (tourId: string) => void;
 }) {
   // Mid-Full-tour, the remaining leg is the primary, so it is not also offered as
-  // an afterthought below.
-  const others = TOUR_CATALOG.filter(
-    (entry) => entry.id !== tour.id && entry.id !== nextTour?.id,
-  );
+  // an afterthought below — the chain already answers "what next".
+  const others = nextTour ? [] : TOUR_CATALOG.filter((entry) => entry.id !== tour.id);
   const recap = recapOf(tour, app);
 
   return (
     <CardShell testId="tour-end-card">
-      <div className="flex items-center gap-2">
+      {chainProgress && (
+        <>
+          <div
+            className="font-semibold uppercase tracking-wide text-fg-4"
+            style={{ fontSize: "9.5px", letterSpacing: "0.08em" }}
+            data-testid="tour-chain-progress"
+          >
+            Full tour · {chainProgress.done} of {chainProgress.total} done
+          </div>
+          <div className="mt-2 flex gap-1">
+            {Array.from({ length: chainProgress.total }, (_, i) => (
+              <span
+                key={i}
+                className={`h-1 flex-1 rounded-full ${i < chainProgress.done ? "bg-acc" : "bg-bg-4"}`}
+              />
+            ))}
+          </div>
+        </>
+      )}
+      <div className={`flex items-center gap-2 ${chainProgress ? "mt-3" : ""}`}>
         <CircleCheck size={18} className="shrink-0 text-acc" />
         <h2 className="font-semibold text-fg" style={{ fontSize: "14px" }}>
           {tour.outro?.title ?? `${tour.title} — done`}
@@ -232,10 +265,18 @@ export function TourEndCard({
         ))}
       </ul>
 
-      {tour.outro?.closing && (
-        <p className="mt-2.5 text-fg-3" style={{ fontSize: "11px", lineHeight: 1.55 }}>
-          {withCode(tour.outro.closing)}
+      {nextTour ? (
+        <p className="mt-2.5 text-fg-3" style={{ fontSize: "11px", lineHeight: 1.55 }} data-testid="tour-end-next-line">
+          Next: <span className="font-semibold text-fg">{nextTour.title}</span> (~{nextTour.minutes} min)
+          {" — "}
+          {nextTour.blurb}
         </p>
+      ) : (
+        tour.outro?.closing && (
+          <p className="mt-2.5 text-fg-3" style={{ fontSize: "11px", lineHeight: 1.55 }}>
+            {withCode(tour.outro.closing)}
+          </p>
+        )
       )}
 
       {others.length > 0 && (
@@ -244,7 +285,7 @@ export function TourEndCard({
             className="mt-4 font-semibold uppercase tracking-wide text-fg-4"
             style={{ fontSize: "9.5px", letterSpacing: "0.08em" }}
           >
-            Next
+            Other tours
           </div>
           <div className="mt-1.5 flex flex-col gap-1.5">
             {others.map((entry) => (
@@ -273,7 +314,18 @@ export function TourEndCard({
         </>
       )}
 
-      <div className="mt-4 flex justify-end">
+      <div className="mt-4 flex justify-end gap-2">
+        {nextTour && (
+          <button
+            type="button"
+            onClick={onFinishHere}
+            data-testid="tour-finish-here"
+            className="cursor-pointer rounded border border-line-strong bg-bg-3 px-3 py-1 text-fg-3 transition-colors hover:text-fg"
+            style={{ fontSize: "11.5px" }}
+          >
+            Finish here
+          </button>
+        )}
         <button
           type="button"
           onClick={onFinish}
@@ -281,26 +333,40 @@ export function TourEndCard({
           className="cursor-pointer rounded bg-acc px-3 py-1 font-medium text-on-acc transition-colors hover:bg-acc-dim"
           style={{ fontSize: "11.5px" }}
         >
-          {/* In a Full tour the primary moves on; on its own it gets out of the
-              way. Either way it is the same click — `onFinish` marks this tour
-              done first, then chains or closes. */}
-          {nextTour ? `Next tour · ${nextTour.title}` : (tour.outro?.primaryLabel ?? "Finish")}
+          {/* Either way it is the same click — `onFinish` marks this tour done
+              first, then chains or closes. */}
+          {nextTour ? `Continue · ${nextTour.title}` : (tour.outro?.primaryLabel ?? "Finish")}
         </button>
       </div>
     </CardShell>
   );
 }
 
+/**
+ * The card a tour stops on: a target that never appeared, or an app that said no
+ * out loud (#823, #824).
+ *
+ * Inside a Full tour it gains the chain's next leg as its primary (#825). A
+ * refusal at Launch is a lesson about the machine — no harness on `PATH` — not a
+ * reason to lose the tour that would have taught something else entirely. The
+ * stopped tour is **not** marked done either way.
+ */
 export function TourFailedCard({
   tour,
   failure,
+  nextTour,
   onClose,
   onBackToTours,
+  onContinue,
 }: {
   tour: TourDef;
   failure: TourFailure;
+  /** The pending leg of a Full tour, or `null` — the last leg stopping offers no
+   *  Continue, because there is nothing to continue into. */
+  nextTour?: TourDef | null;
   onClose: () => void;
   onBackToTours: () => void;
+  onContinue: () => void;
 }) {
   return (
     <CardShell testId="tour-failed-card">
@@ -310,6 +376,7 @@ export function TourFailedCard({
       >
         <TriangleAlert size={12} />
         {tour.title} · step {failure.stepNumber} of {failure.total}
+        {nextTour && <span data-testid="tour-failed-chain"> · Full tour</span>}
       </div>
       <h2 className="mt-1.5 font-semibold text-fg" style={{ fontSize: "14px" }}>
         {failure.title ?? "This step could not be completed"}
@@ -345,6 +412,18 @@ export function TourFailedCard({
           </p>
         </>
       )}
+      {/* Why Continue is worth pressing, in the next tour's own words: the thing
+          that just refused is not what the next leg needs. Only on a refusal —
+          a target that failed to appear says nothing about the machine. */}
+      {nextTour?.chainNote && failure.kind === "refused" && (
+        <p
+          className="mt-2 text-fg-4"
+          style={{ fontSize: "10.5px", lineHeight: 1.55 }}
+          data-testid="tour-failed-chain-note"
+        >
+          {nextTour.chainNote}
+        </p>
+      )}
       <div className="mt-4 flex justify-end gap-2">
         <button
           type="button"
@@ -359,11 +438,26 @@ export function TourFailedCard({
           type="button"
           onClick={onBackToTours}
           data-testid="tour-failed-back"
-          className="cursor-pointer rounded bg-acc px-3 py-1 font-medium text-on-acc transition-colors hover:bg-acc-dim"
+          className={
+            nextTour
+              ? "cursor-pointer rounded border border-line-strong bg-bg-3 px-3 py-1 text-fg-3 transition-colors hover:text-fg"
+              : "cursor-pointer rounded bg-acc px-3 py-1 font-medium text-on-acc transition-colors hover:bg-acc-dim"
+          }
           style={{ fontSize: "11.5px" }}
         >
           Back to tours
         </button>
+        {nextTour && (
+          <button
+            type="button"
+            onClick={onContinue}
+            data-testid="tour-failed-continue"
+            className="cursor-pointer rounded bg-acc px-3 py-1 font-medium text-on-acc transition-colors hover:bg-acc-dim"
+            style={{ fontSize: "11.5px" }}
+          >
+            Continue · {nextTour.title}
+          </button>
+        )}
       </div>
     </CardShell>
   );

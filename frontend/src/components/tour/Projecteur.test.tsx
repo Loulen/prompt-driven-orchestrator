@@ -86,6 +86,18 @@ describe("the Projecteur dims and absorbs", () => {
     // …and the ring still points at the one the tour means.
     expect(px(screen.getByTestId("projecteur-hole"), "left")).toBe(HOLE.left);
   });
+
+  // #825 — the wait step lights a whole panel to roam in, not a control to hit.
+  it("lightens the dim and drops the ring when the zone IS the target", () => {
+    render(<Projecteur hole={HOLE} zone={HOLE} wide />);
+    expect(screen.getByTestId("projecteur-blocker-top")).toHaveClass("bg-tour-dim-soft");
+    expect(screen.getByTestId("projecteur-zone")).toHaveClass("border-dashed");
+    // A ring around six hundred pixels would read as « click this », and this is
+    // the one step with nothing to click.
+    expect(screen.queryByTestId("projecteur-hole")).not.toBeInTheDocument();
+    // The panel itself stays uncovered, so the terminal in it is still usable.
+    expect(px(screen.getByTestId("projecteur-blocker-left"), "width")).toBe(HOLE.left);
+  });
 });
 
 describe("the popover", () => {
@@ -101,6 +113,10 @@ describe("the popover", () => {
           stepNumber={3}
           total={12}
           hole={HOLE}
+          // The hook resolves these against the observation before handing them
+          // over (#825); every step in this file declares a plain string.
+          body={typeof s.body === "string" ? s.body : ""}
+          note={null}
           ready
           awaitingConfirm={false}
           checklist={[]}
@@ -117,7 +133,7 @@ describe("the popover", () => {
   it("shows the instruction and the progress", () => {
     renderPopover(step());
     expect(screen.getByTestId("tour-popover")).toHaveTextContent("Create a new pipeline");
-    expect(screen.getByTestId("tour-progress")).toHaveTextContent("Step 3 of 12");
+    expect(screen.getByTestId("tour-progress")).toHaveTextContent("First pipeline · 3 / 12");
   });
 
   it("keeps Quit clickable over the dim", async () => {
@@ -160,5 +176,65 @@ describe("the popover", () => {
     expect(writeText).toHaveBeenCalledWith("tutorial-implement-test");
     expect(screen.getByTestId("tour-copy")).toHaveTextContent("Copied");
     vi.unstubAllGlobals();
+  });
+
+  // ---- #825 --------------------------------------------------------------
+
+  it("says what it is waiting for when there is no button to press", () => {
+    renderPopover(step({ skippable: true, advanceHint: "advances once released" }));
+    expect(screen.getByTestId("tour-advance-hint")).toHaveTextContent("advances once released");
+    // The hint replaces the button; showing both would be the card asking for a
+    // click it is not waiting for.
+    expect(screen.queryByTestId("tour-next")).not.toBeInTheDocument();
+  });
+
+  it("drops the hint once the step asks for a click", () => {
+    renderPopover(step({ confirm: true, advanceHint: "advances on its own" }), {
+      awaitingConfirm: true,
+    });
+    expect(screen.queryByTestId("tour-advance-hint")).not.toBeInTheDocument();
+    expect(screen.getByTestId("tour-next")).toBeEnabled();
+  });
+
+  it("turns a spinner while an unbounded wait is unsatisfied", () => {
+    renderPopover(step({ waitingNote: "Waiting for the node to finish · no time limit" }), {
+      ready: false,
+    });
+    expect(screen.getByTestId("tour-waiting")).toHaveTextContent("no time limit");
+  });
+
+  it("stops waiting once the condition is met", () => {
+    // A spinner still turning under a satisfied checklist would be the card
+    // contradicting itself.
+    renderPopover(step({ waitingNote: "Waiting for the node to finish · no time limit" }), {
+      ready: true,
+    });
+    expect(screen.queryByTestId("tour-waiting")).not.toBeInTheDocument();
+  });
+
+  it("shows a checklist item's blocker in place, and badges an ending that is not a success", () => {
+    renderPopover(step(), {
+      checklist: [
+        { label: "completion released", done: false, note: "the node waits for it" },
+        { label: "node finished", done: true, badge: "failed" },
+      ],
+    });
+    expect(screen.getByTestId("tour-checklist-note")).toHaveTextContent("the node waits for it");
+    expect(screen.getByTestId("tour-checklist-badge")).toHaveTextContent("failed");
+    expect(screen.getByTestId("tour-checklist-node finished")).toHaveAttribute("data-done", "true");
+  });
+
+  it("renders the resolved body and note the hook hands over", () => {
+    renderPopover(step(), {
+      body: "Nothing to do: the agent writes its output.",
+      note: "The node ended without completing.",
+    });
+    expect(screen.getByTestId("tour-body")).toHaveTextContent("the agent writes its output");
+    expect(screen.getByTestId("tour-note")).toHaveTextContent("ended without completing");
+  });
+
+  it("renders no body paragraph at all when the step has nothing left to instruct", () => {
+    renderPopover(step(), { body: "" });
+    expect(screen.queryByTestId("tour-body")).not.toBeInTheDocument();
   });
 });

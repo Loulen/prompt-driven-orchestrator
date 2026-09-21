@@ -53,15 +53,42 @@ function nodeSel(node: NodeDef | null): string[] {
   return node ? [`.react-flow__node[data-id="${cssEscape(node.id)}"]`] : [];
 }
 
-/** Edges are keyed `e-<index>` on the canvas (`deriveEditEdges`), so an edge target
- *  is its index in the document — which is also what `selection.edgeIndex` holds. */
-function edgeIndex(pipeline: PipelineDef | null, from: NodeDef | null, to: NodeDef | null): number {
+/**
+ * Edges are keyed `e-<index>` on the canvas (`deriveEditEdges`), so an edge target
+ * is its index in the document — which is also what `selection.edgeIndex` holds.
+ *
+ * `fromPort` matters once the source has more than one: the tester carries `out`
+ * AND `image_list`, and only `out` holds the `verdict` the next step conditions
+ * on. An edge drawn from the wrong handle is a dead end two steps later — the
+ * When editor offers the fields of the port it came from, and there is no
+ * `verdict` in a screenshot (#825, FP iteration 2). So the step does not count it
+ * as done, and goes on asking for the one it named.
+ */
+function edgeIndex(
+  pipeline: PipelineDef | null,
+  from: NodeDef | null,
+  to: NodeDef | null,
+  fromPort?: string,
+): number {
   if (!pipeline || !from || !to) return -1;
-  return pipeline.edges.findIndex((e) => e.source.node === from.id && e.target.node === to.id);
+  return pipeline.edges.findIndex(
+    (e) =>
+      e.source.node === from.id &&
+      e.target.node === to.id &&
+      (fromPort == null || e.source.port === fromPort),
+  );
 }
 
-function edgeSel(app: TourAppState, from: NodeDef | null, to: NodeDef | null): string[] {
-  const i = edgeIndex(app.pipeline, from, to);
+/** The tester's verdict port — the one every condition in this tour reads. */
+const OUT_PORT = "out";
+
+function edgeSel(
+  app: TourAppState,
+  from: NodeDef | null,
+  to: NodeDef | null,
+  fromPort?: string,
+): string[] {
+  const i = edgeIndex(app.pipeline, from, to, fromPort);
   return i < 0 ? [] : [`.react-flow__edge[data-id="e-${i}"]`];
 }
 
@@ -79,8 +106,12 @@ const NAME_INPUT = '[data-testid="node-name-input"]';
 const PROMPT_INPUT = '[data-testid="node-prompt-input"]';
 const ADD_MENU_NODE = '[data-testid="add-menu-node"]';
 const NEW_PIPELINE_DIALOG = '[data-testid="new-pipeline-dialog"]';
+/** The dialog's own sentence when the daemon refused — quoted, never paraphrased. */
+const NEW_PIPELINE_ERROR = '[data-testid="new-pipeline-error"]';
 /** An output card, addressed by its slot rather than its (editable) port name. */
 const outputSlot = (i: number) => `[data-output-index="${i}"]`;
+/** The delete confirmation's box — the dialog itself, not its full-screen backdrop. */
+const DELETE_CONFIRM = '[data-testid="confirm-delete-modal"]';
 
 function selected(app: TourAppState, node: NodeDef | null): boolean {
   return !!node && app.selection.kind === "node" && app.selection.id === node.id;
@@ -128,6 +159,13 @@ const STEPS: TourStep[] = [
     body: "Click Create. PDO writes the file and opens it in the editor, with a Start and an End marker already in place.",
     target: () => ['[data-testid="new-pipeline-create"]'],
     waitingFor: "the Create button",
+    // A reader who kept the pipeline at the end of a previous run of this tour
+    // meets a name that is already taken, and the daemon refuses. Nothing here
+    // can advance, so the tour says so instead of waiting on a button that will
+    // go on doing nothing (#825, FP iteration 2).
+    refused: (o) => o.text(NEW_PIPELINE_ERROR),
+    refusalTitle: "The pipeline could not be created",
+    refusalHint: `You may already have a ${TUTORIAL_PIPELINE_ID} from a previous run of this tour — open it from the Pipelines list, or delete it and start the tour again.`,
     done: (o) => !o.present(NEW_PIPELINE_DIALOG) && o.app.pipeline != null,
   },
   {
@@ -321,7 +359,12 @@ const STEPS: TourStep[] = [
   {
     id: "edge-implementer-tester",
     title: "Connect implementer to tester",
-    body: "Drag from the handle under implementer onto tester. The edge is the hand-off: when the first finishes, the second starts.",
+    // "the handle under implementer" sent the FP's reader to the card's bottom
+    // anchor, which is an edge *target* (`__anchor:bottom`, `anchorSide.ts`) and
+    // never a source: the drag slid the node instead of drawing an edge. The
+    // `out` handle is a dot on the right edge — say so, the way the two edge
+    // steps after this one do (#825).
+    body: "Drag from the implementer's out handle, the dot on the right edge of its card, onto tester. The edge is the hand-off: when the first finishes, the second starts.",
     target: (o) => [...nodeSel(agent(o.app, 0)), ...nodeSel(agent(o.app, 1))],
     waitingFor: "the two agent cards",
     done: (o) => edgeIndex(o.app.pipeline, agent(o.app, 0), agent(o.app, 1)) >= 0,
@@ -329,20 +372,25 @@ const STEPS: TourStep[] = [
   {
     id: "edge-tester-implementer",
     title: "Draw the way back",
-    body: "Now drag from tester onto implementer. That second edge is what makes this a loop rather than a line.",
+    body: "Now drag from the tester's out handle onto implementer. That second edge is what makes this a loop rather than a line.",
+    // The tester grew a second output two steps ago, and the two handles look
+    // alike. An edge out of `image_list` carries a screenshot, not a verdict, so
+    // the condition the next step writes would have no field to read (#825).
+    note: "The lower handle is image_list — an edge from it carries the screenshot, and no verdict to route on.",
     target: (o) => [...nodeSel(agent(o.app, 1)), ...nodeSel(agent(o.app, 0))],
     waitingFor: "the two agent cards",
-    done: (o) => edgeIndex(o.app.pipeline, agent(o.app, 1), agent(o.app, 0)) >= 0,
+    done: (o) => edgeIndex(o.app.pipeline, agent(o.app, 1), agent(o.app, 0), OUT_PORT) >= 0,
   },
   {
     id: "select-loop-edge",
     title: "Select the edge back to implementer",
     body: "Click the edge you just drew. Its inspector opens on the right, where a condition is authored.",
-    target: (o) => edgeSel(o.app, agent(o.app, 1), agent(o.app, 0)),
+    target: (o) => edgeSel(o.app, agent(o.app, 1), agent(o.app, 0), OUT_PORT),
     waitingFor: "the tester → implementer edge",
     done: (o) =>
       o.app.selection.kind === "edge" &&
-      o.app.selection.edgeIndex === edgeIndex(o.app.pipeline, agent(o.app, 1), agent(o.app, 0)),
+      o.app.selection.edgeIndex ===
+        edgeIndex(o.app.pipeline, agent(o.app, 1), agent(o.app, 0), OUT_PORT),
   },
   {
     id: "loop-condition",
@@ -352,27 +400,32 @@ const STEPS: TourStep[] = [
     waitingFor: "the When editor of the selected edge",
     failureHint: "The edge was deselected before the condition was saved.",
     done: (o) => {
-      const i = edgeIndex(o.app.pipeline, agent(o.app, 1), agent(o.app, 0));
+      const i = edgeIndex(o.app.pipeline, agent(o.app, 1), agent(o.app, 0), OUT_PORT);
       return i >= 0 && whenEquals(o.app.pipeline?.edges[i]?.when, "verdict", "fail");
     },
   },
   {
     id: "edge-tester-end",
     title: "Connect tester to End",
-    body: "Drag from tester onto the End marker. End is where a Run stops, and it needs a route in.",
+    body: "Drag from the tester's out handle onto the End marker. End is where a Run stops, and it needs a route in.",
+    // Same pair of look-alike handles as the loop edge, same consequence: the
+    // `verdict eq pass` of the next step can only be written on an edge that
+    // carries the verdict (#825).
+    note: "Again out, not image_list: the condition below it reads the verdict in out's frontmatter.",
     target: (o) => [...nodeSel(agent(o.app, 1)), ...nodeSel(endNode(o.app))],
     waitingFor: "the tester card and the End marker",
-    done: (o) => edgeIndex(o.app.pipeline, agent(o.app, 1), endNode(o.app)) >= 0,
+    done: (o) => edgeIndex(o.app.pipeline, agent(o.app, 1), endNode(o.app), OUT_PORT) >= 0,
   },
   {
     id: "select-end-edge",
     title: "Select the edge to End",
     body: "Click that last edge. Same inspector, one more condition to write.",
-    target: (o) => edgeSel(o.app, agent(o.app, 1), endNode(o.app)),
+    target: (o) => edgeSel(o.app, agent(o.app, 1), endNode(o.app), OUT_PORT),
     waitingFor: "the tester → End edge",
     done: (o) =>
       o.app.selection.kind === "edge" &&
-      o.app.selection.edgeIndex === edgeIndex(o.app.pipeline, agent(o.app, 1), endNode(o.app)),
+      o.app.selection.edgeIndex ===
+        edgeIndex(o.app.pipeline, agent(o.app, 1), endNode(o.app), OUT_PORT),
   },
   {
     id: "end-condition",
@@ -382,7 +435,7 @@ const STEPS: TourStep[] = [
     waitingFor: "the When editor of the selected edge",
     failureHint: "The edge was deselected before the condition was saved.",
     done: (o) => {
-      const i = edgeIndex(o.app.pipeline, agent(o.app, 1), endNode(o.app));
+      const i = edgeIndex(o.app.pipeline, agent(o.app, 1), endNode(o.app), OUT_PORT);
       return i >= 0 && whenEquals(o.app.pipeline?.edges[i]?.when, "verdict", "pass");
     },
   },
@@ -398,8 +451,21 @@ const STEPS: TourStep[] = [
   {
     id: "keep-or-delete",
     title: "Keep it, or delete it",
-    body: "The row is yours now: open it again later, or use its trash to remove it. Skip keeps it.",
-    target: (o) => (o.app.pipelineId ? [`[data-testid="library-row-${cssEscape(o.app.pipelineId)}"]`] : []),
+    // Two beats, one card: the trash, then the confirmation it opens.
+    body: (o) =>
+      o.present(DELETE_CONFIRM)
+        ? "Delete removes the YAML and its prompt files from disk, for good. Cancel leaves the row alone, and Skip ends the tour without deleting anything."
+        : "The row is yours now: open it again later, or use its trash to remove it. Skip keeps it.",
+    // Re-aims onto the confirmation, the way `open-output` re-aims onto the
+    // artifact. Without it the card instructs a click it then prevents: the
+    // dialog is drawn centred, outside the hole, and both of its buttons come
+    // back as the projecteur's blocker (FP finding, #825).
+    target: (o) => {
+      if (o.present(DELETE_CONFIRM)) return [DELETE_CONFIRM];
+      return o.app.pipelineId
+        ? [`[data-testid="library-row-${cssEscape(o.app.pipelineId)}"]`]
+        : [];
+    },
     waitingFor: "the pipeline's row in the Library",
     skippable: true,
     done: (o) => !!o.app.pipelineId && !o.app.libraryPipelineIds.includes(o.app.pipelineId),
@@ -427,4 +493,9 @@ export const FIRST_PIPELINE_TOUR: TourDef = {
       text: "tester → implementer when verdict eq fail; tester → End when verdict eq pass.",
     },
   ],
+  // #825 — what the card of a Full tour's *previous* leg says when that leg was
+  // refused. *First run* is the one that can be stopped by the machine (no
+  // harness on PATH, no sandbox); this tour never spawns anything, so a refusal
+  // there is no reason to abandon the chain.
+  chainNote: "This one does not need a running agent: it only builds a pipeline.",
 };

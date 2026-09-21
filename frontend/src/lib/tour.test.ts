@@ -13,6 +13,7 @@ import {
   observeTour,
   skipStep,
   startTour,
+  stepSoft,
   type TourAppState,
   type TourDef,
   type TourObservation,
@@ -28,6 +29,7 @@ const EMPTY_APP: TourAppState = {
   libraryPipelineIds: [],
   runCount: 0,
   latestRun: null,
+  activeRunId: null,
 };
 
 function obs(
@@ -145,7 +147,7 @@ describe("free input and acknowledge steps", () => {
       step("b"),
     );
     let run = startTour(tour, obs(["#name"]));
-    expect(needsConfirm(tour, run)).toBe(true);
+    expect(needsConfirm(tour, run, obs(["#name"]))).toBe(true);
     expect(canAdvance(tour, run, obs(["#name"]))).toBe(false);
 
     const filled = obs(["#name"], { "#f": "tester" });
@@ -166,7 +168,7 @@ describe("free input and acknowledge steps", () => {
   it("a step with no condition is an acknowledge step: Next, always enabled", () => {
     const tour = tourOf(step("read"), step("b"));
     let run = startTour(tour, obs(["#read"]));
-    expect(needsConfirm(tour, run)).toBe(true);
+    expect(needsConfirm(tour, run, obs(["#read"]))).toBe(true);
     expect(canAdvance(tour, run, obs(["#read"]))).toBe(true);
     run = observeTour(tour, run, obs(["#read"]), 9_999);
     expect(run.index).toBe(0);
@@ -199,6 +201,69 @@ describe("skipping", () => {
     const tour = tourOf(step("save", { done: () => false }), step("b"));
     const run = startTour(tour, obs(["#save"]));
     expect(skipStep(tour, run, obs(["#save"]))).toBe(run);
+  });
+
+  /**
+   * #825 — a step may declare that skipping it ends the tour. The case is a
+   * *wait*: skipping it means "I have seen enough", and every step after it is
+   * about something the thing being waited for has not produced yet. Landing on
+   * the recap, which says what was actually observed, beats a failure card.
+   */
+  it("ends the tour when the skipped step says the rest depends on it", () => {
+    const tour = tourOf(
+      step("wait", { skippable: true, skipEndsTour: true, done: () => false }),
+      step("after", { done: () => false }),
+    );
+    const run = skipStep(tour, startTour(tour, obs(["#wait"])), obs(["#wait"]));
+    expect(run.phase).toBe("finished");
+    expect(run.index).toBe(tour.steps.length);
+  });
+});
+
+describe("a step that decides for itself whether to stop", () => {
+  /**
+   * #825 — `confirm` as a predicate: the wait step slides on by itself when its
+   * subject ended well, and asks for a click when it did not, because the
+   * sentence explaining the accident has to be read.
+   */
+  it("auto-advances or waits for Next depending on what it observed", () => {
+    const tour = tourOf(
+      step("wait", {
+        done: (o) => o.present("#ended"),
+        confirm: (o) => o.present("#badly"),
+      }),
+      step("b"),
+    );
+
+    const fine = obs(["#wait", "#ended"]);
+    expect(needsConfirm(tour, startTour(tour, obs(["#wait"])), fine)).toBe(false);
+    expect(observeTour(tour, startTour(tour, obs(["#wait"])), fine, 10).index).toBe(1);
+
+    const badly = obs(["#wait", "#ended", "#badly"]);
+    let run = startTour(tour, obs(["#wait"]));
+    run = observeTour(tour, run, badly, 10);
+    expect(run.index).toBe(0);
+    expect(needsConfirm(tour, run, badly)).toBe(true);
+    expect(canAdvance(tour, run, badly)).toBe(true);
+    expect(confirmStep(tour, run, badly).index).toBe(1);
+  });
+});
+
+/**
+ * #825 — `soft` as a predicate: a step whose target changes shape under the
+ * user. The last step of *First run* rings the `out` row to be clicked, then
+ * lights the artifact that opens as a page to read.
+ */
+describe("a lit area that becomes a zone to roam in", () => {
+  it("is resolved against the observation, like the body and the note", () => {
+    const opened = step("out", { soft: (o) => o.present("#modal") });
+    expect(stepSoft(opened, obs(["#out"]))).toBe(false);
+    expect(stepSoft(opened, obs(["#out", "#modal"]))).toBe(true);
+  });
+
+  it("still reads a plain flag, and treats its absence as a target to hit", () => {
+    expect(stepSoft(step("menu", { soft: true }), obs([]))).toBe(true);
+    expect(stepSoft(step("plain"), obs([]))).toBe(false);
   });
 });
 

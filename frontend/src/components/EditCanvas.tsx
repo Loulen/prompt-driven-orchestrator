@@ -27,6 +27,8 @@ import { RetryAllConfirmModal } from "./UnifiedLeftPanel";
 import { buildLoopRegionNodes, buildNoteNodes, deriveEditEdges, deriveEditNodes, edgeIndexFromId } from "./editNodeDerivation";
 import { useEditStore } from "../stores/editStore";
 import { generateNodeId } from "../lib/nanoid";
+import { CARD_HEIGHT, CARD_WIDTH, fallbackNodeSpot, freeDropSpot } from "../lib/nodePlacement";
+import { registerCanvasReveal } from "../lib/canvasReveal";
 import { collectionFanoutFields, collectionFanoutNudges, regionsDestroyedByEdgeRemoval } from "../lib/loopRegions";
 import DestroyLoopModal from "./DestroyLoopModal";
 import PortRow from "./PortRow";
@@ -470,6 +472,34 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
     setEdges(derivedEdges);
   }, [derivedEdges, setEdges]);
 
+  // #825 (FP iteration 2): the canvas's answer to `scrollIntoView`. A card is
+  // inside a transformed viewport, so scrolling the page never reaches it — a
+  // guided tour pointing at a node the reader has panned away from would light a
+  // rectangle off screen and wait forever. Panning only ever happens when the
+  // card is NOT already in frame: whoever asks is describing a wish, and a canvas
+  // that re-centred on every ask would be yanking itself around under the mouse.
+  useEffect(
+    () =>
+      registerCanvasReveal((nodeId) => {
+        const wrapper = reactFlowRef.current;
+        if (!wrapper) return;
+        const rect = wrapper.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return;
+        const node = reactFlow.getInternalNode(nodeId);
+        if (!node) return;
+        const { x, y } = node.internals.positionAbsolute;
+        const w = node.measured.width ?? CARD_WIDTH;
+        const h = node.measured.height ?? CARD_HEIGHT;
+        const topLeft = reactFlow.screenToFlowPosition({ x: rect.left, y: rect.top });
+        const bottomRight = reactFlow.screenToFlowPosition({ x: rect.right, y: rect.bottom });
+        const inFrame =
+          x >= topLeft.x && y >= topLeft.y && x + w <= bottomRight.x && y + h <= bottomRight.y;
+        if (inFrame) return;
+        reactFlow.setCenter(x + w / 2, y + h / 2, { zoom: reactFlow.getZoom(), duration: 250 });
+      }),
+    [reactFlow],
+  );
+
   // Index the just-drawn edge will occupy, captured at `onConnect` and consumed
   // by `onConnectEnd` to stamp the drop-position anchor side (#168). The edge is
   // appended, so its index is the edge count at draw time.
@@ -703,44 +733,55 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
     );
   }
 
-  const computeDropPosition = (): { x: number; y: number } => {
+  /**
+   * What the reader can actually see, in canvas units (#825, FP iteration 2). A
+   * drop search that knows only canvas units puts the second card of a fresh
+   * pipeline off the right edge of the screen, because « one card to the right »
+   * is 440 pixels at the zoom a two-marker canvas fit-views to.
+   *
+   * `null` when there is nothing to measure — jsdom, or a canvas not laid out
+   * yet — and the search then walks blind rather than inside a zero-sized box.
+   */
+  const visibleCanvasRect = (): { x: number; y: number; width: number; height: number } | null => {
     const wrapper = reactFlowRef.current;
-    // Approximate default node-card footprint; nodes auto-size around this.
-    const APPROX_W = 180;
-    const APPROX_H = 80;
+    if (!wrapper) return null;
+    const rect = wrapper.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    const topLeft = reactFlow.screenToFlowPosition({ x: rect.left, y: rect.top });
+    const bottomRight = reactFlow.screenToFlowPosition({ x: rect.right, y: rect.bottom });
+    const width = bottomRight.x - topLeft.x;
+    const height = bottomRight.y - topLeft.y;
+    if (!(width > 0) || !(height > 0)) return null;
+    return { x: topLeft.x, y: topLeft.y, width, height };
+  };
+
+  const computeDropPosition = (): { x: number; y: number } => {
+    const visible = visibleCanvasRect();
     let cx: number;
     let cy: number;
-    if (wrapper) {
-      const rect = wrapper.getBoundingClientRect();
-      const flow = reactFlow.screenToFlowPosition({
-        x: rect.left + rect.width / 2,
-        y: rect.top + rect.height / 2,
-      });
-      cx = flow.x;
-      cy = flow.y;
+    if (visible) {
+      cx = visible.x + visible.width / 2;
+      cy = visible.y + visible.height / 2;
     } else {
       cx = 200;
       cy = 200;
     }
-    let x = Math.round(cx - APPROX_W / 2);
-    let y = Math.round(cy - APPROX_H / 2);
-    // Nudge to avoid stacking new nodes on top of existing ones at the same spot.
-    const existing = pipeline?.nodes ?? [];
-    const THRESHOLD = 30;
-    let guard = 0;
-    while (
-      guard++ < 20 &&
-      existing.some(
-        (n) =>
-          n.view != null &&
-          Math.abs(n.view.x - x) < THRESHOLD &&
-          Math.abs(n.view.y - y) < THRESHOLD,
-      )
-    ) {
-      x += 40;
-      y += 40;
-    }
-    return { x, y };
+    // Moved aside until it clears every card already on the canvas — footprints,
+    // not a few pixels (`lib/nodePlacement.ts`): a card dropped 40 pixels off
+    // another one is a card on top of another one, and the edges between them
+    // are then unreachable.
+    // A node with no persisted position is on screen too — a fresh pipeline's
+    // Start and End are written without a `view`, and the search that could not
+    // see them dropped the first agent right on End.
+    const occupied = (pipeline?.nodes ?? []).map((n, i) => {
+      const fallback = fallbackNodeSpot(i);
+      return { x: n.view?.x ?? fallback.x, y: n.view?.y ?? fallback.y };
+    });
+    return freeDropSpot(
+      { x: Math.round(cx - CARD_WIDTH / 2), y: Math.round(cy - CARD_HEIGHT / 2) },
+      occupied,
+      visible,
+    );
   };
 
   const handleAddNode = (type: NodeType) => {
@@ -878,6 +919,12 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
           connectionLineComponent={DragConnectionLine}
           deleteKeyCode={null}
           fitView
+          // #825 (FP iteration 2): never magnify. A pipeline with two markers in
+          // it fit-views to zoom 2 by default, which makes a card 360 pixels wide
+          // and fits barely two of them across the canvas — the reader's first
+          // pipeline then runs out of screen after one node. Cards at the size
+          // they were drawn, and a small graph simply sits in the middle.
+          fitViewOptions={{ maxZoom: 1 }}
           proOptions={{ hideAttribution: true }}
           className="bg-bg-1"
           // #315: drag + connect are off on an archived run; click-to-select stays on.

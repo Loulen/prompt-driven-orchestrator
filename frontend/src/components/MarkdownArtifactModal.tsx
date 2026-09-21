@@ -6,6 +6,7 @@ import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { fetchArtifact, fetchNodeIO, artifactUrl } from "../api";
 import type { FileInfo } from "../api";
+import { registerTransientOverlay } from "../lib/overlays";
 import type { IterationInfo, PortType } from "../types";
 import type { Element } from "hast";
 import ImageLightbox from "./ImageLightbox";
@@ -49,6 +50,8 @@ interface Props {
   footer?: ReactNode;
   /** #698: Tailwind width class; artifacts use the 560px default. */
   widthClass?: string;
+  /** #825: an artifact modal is a *targetable* surface now — the *First run*
+   *  tour ends on "open `out`", and « the file opened » is what says it did. */
   testId?: string;
 }
 
@@ -62,7 +65,7 @@ export default function MarkdownArtifactModal({
   banner,
   footer,
   widthClass = "w-[560px]",
-  testId,
+  testId = "artifact-modal",
 }: Props) {
   const isInline = source.kind === "inline";
   const inlineContent = source.kind === "inline" ? source.content : null;
@@ -214,6 +217,12 @@ export default function MarkdownArtifactModal({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [handleKeyDown]);
 
+  // This modal's backdrop covers the window, so it blocks the app for as long as
+  // it is up — including for whoever needs the app next. Declaring it dismissable
+  // is how a guided tour starting on top of it gets a clear stage instead of a
+  // frozen screen (`lib/overlays.ts`, #825). Nothing here knows what a tour is.
+  useEffect(() => registerTransientOverlay(onClose), [onClose]);
+
   // #369: memoise the markdown component overrides so their identities survive a
   // poll-driven re-render (see the module-scope note on REMARK_PLUGINS). `setLightbox`
   // is a stable useState setter, so an empty dep array is correct and keeps the
@@ -294,6 +303,14 @@ export default function MarkdownArtifactModal({
         className={`flex max-h-[80vh] ${widthClass} max-w-[calc(100vw-32px)] flex-col overflow-hidden rounded-lg border border-line-strong bg-bg-2`}
         style={{ boxShadow: "0 30px 80px rgba(0,0,0,0.6)" }}
         data-testid={testId}
+        data-port={portName}
+        // #825: `role="dialog"` is what makes this modal an Escape *owner* while
+        // it is up. Its own handler already closes it on Escape, on `window`,
+        // where `stopPropagation` would be a no-op — without the role, one press
+        // would close the artifact AND throw the running tour away with it.
+        role="dialog"
+        aria-modal="true"
+        aria-label={portName}
       >
         {/* Header */}
         <div className="flex items-center justify-between border-b border-line px-4 py-3">

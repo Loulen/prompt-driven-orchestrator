@@ -14,6 +14,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useEditStore } from "../stores/editStore";
+import { dismissTransientOverlays } from "../lib/overlays";
+import { canvasNodeIdOf, revealCanvasNode } from "../lib/canvasReveal";
 import {
   beginSteps,
   canAdvance,
@@ -23,11 +25,15 @@ import {
   observeTour,
   skipStep,
   startTour,
+  stepBody,
+  stepNote,
+  stepSoft,
   type TourAppState,
   type TourChecklistItem,
   type TourDef,
   type TourObservation,
   type TourRun,
+  type TourRunNode,
   type TourStep,
 } from "../lib/tour";
 import { markTourDone } from "../lib/tourMemory";
@@ -49,12 +55,21 @@ export interface TourView {
   total: number;
   /** Union of the step's targets, padded — the hole in the dim. */
   hole: TourRect | null;
-  /** On a `soft` step, the open menu the hole sits in (drawn dashed, clickable). */
+  /**
+   * The soft area the hole sits in, drawn dashed: the open menu an option lives
+   * in, or — when the step's own target is the zone (#825) — the hole itself.
+   */
   zone: TourRect | null;
+  /** The zone IS the target: the dim lightens and no ring is drawn (#825). */
+  wideZone: boolean;
   /** The step's condition holds: `Next` is enabled. */
   ready: boolean;
   /** The step waits for `Next` instead of advancing on its own. */
   awaitingConfirm: boolean;
+  /** The step's body, resolved against what the tour is observing (#825). */
+  body: string;
+  /** The step's quieter second paragraph, resolved the same way. */
+  note: string | null;
   /** The step's live checklist, recomputed each tick. Empty when it declares none. */
   checklist: TourChecklistItem[];
   /** The intro card's state, while `run.phase === "intro"` (#824). */
@@ -151,7 +166,57 @@ export interface TourRunsInput {
   0?: { run_id: string; name?: string | null; pipeline_name?: string };
 }
 
-export function readTourAppState(runs: TourRunsInput): TourAppState {
+/**
+ * The selected Run's detail, narrowed to what the reading steps read (#825) —
+ * the shape `RunState` already has, minus everything else, so the hook never
+ * depends on the full projection. `null` while no Run is open.
+ */
+export interface TourRunDetailInput {
+  run_id: string;
+  nodes: Record<
+    string,
+    {
+      node_id: string;
+      status: string;
+      iter: number;
+      iterations: { iter: number; completion_released?: boolean }[];
+    }
+  >;
+  node_defs?: { id: string; name?: string | null; node_type: string }[];
+}
+
+/**
+ * The Run's nodes, in the order its frozen pipeline declares them, each carrying
+ * its status and whether the human has opened its completion guard (ADR-0068).
+ *
+ * The release flag lives on the *current iteration*, not on the node: a retried
+ * node is guarded again, and a tour that read the first iteration's flag would
+ * tell the user they had already released a node that is waiting for them.
+ */
+function runNodes(detail: TourRunDetailInput): TourRunNode[] {
+  const defs = detail.node_defs ?? [];
+  const order = defs.length > 0 ? defs.map((d) => d.id) : Object.keys(detail.nodes);
+  return order.flatMap((id) => {
+    const node = detail.nodes[id];
+    if (!node) return [];
+    const def = defs.find((d) => d.id === id);
+    const iteration = node.iterations.find((it) => it.iter === node.iter);
+    return [
+      {
+        id,
+        name: def?.name?.trim() || id,
+        type: def?.node_type ?? "agent",
+        status: node.status,
+        released: iteration?.completion_released === true,
+      },
+    ];
+  });
+}
+
+export function readTourAppState(
+  runs: TourRunsInput,
+  detail: TourRunDetailInput | null = null,
+): TourAppState {
   const s = useEditStore.getState();
   const tab = s.openTabs.find((t) => t.id === s.activeTabId) ?? null;
   // `GET /runs` answers newest-first, so `[0]` is the Run a tour just caused.
@@ -169,14 +234,26 @@ export function readTourAppState(runs: TourRunsInput): TourAppState {
     libraryPipelineIds: s.pipelines.map((p) => p.id),
     runCount: runs.length,
     latestRun: newest
-      ? { id: newest.run_id, name: newest.name?.trim() || newest.run_id }
+      ? {
+          id: newest.run_id,
+          name: newest.name?.trim() || newest.run_id,
+          // Only the detail OF THAT Run: the inspector may well be showing
+          // another one, and a tour reading a stranger's nodes would advance on
+          // somebody else's progress.
+          nodes: detail?.run_id === newest.run_id ? runNodes(detail) : [],
+        }
       : null,
+    activeRunId: tab?.runId ?? null,
   };
 }
 
-function observation(runs: TourRunsInput, baseline: TourAppState): TourObservation {
+function observation(
+  runs: TourRunsInput,
+  detail: TourRunDetailInput | null,
+  baseline: TourAppState,
+): TourObservation {
   return {
-    app: readTourAppState(runs),
+    app: readTourAppState(runs, detail),
     baseline,
     present: (selector) => {
       try {
@@ -221,6 +298,19 @@ export interface TourController {
   skip: () => void;
   /** The end card's primary — the only thing that writes the "done" key. */
   finish: () => void;
+  /**
+   * « Finish here » on the intermediate card of a Full tour (#825): this tour is
+   * done, the chain is not continued. The checkmark is earned either way — what
+   * stops is the sequence, not the achievement.
+   */
+  finishHere: () => void;
+  /**
+   * « Continue · <next> » on the card of a tour that STOPPED (#825). Marks
+   * nothing: a tour that could not finish has not been done. The chain survives
+   * the stop, because a refused Launch says something about the machine, not
+   * about the tour that comes next.
+   */
+  continueChain: () => void;
   /** The intro card's `Start`: enter the first step. */
   begin: () => void;
   /** The intro card's `Retry` after a refused preparation. */
@@ -229,13 +319,19 @@ export interface TourController {
 
 const NO_PREP: TourPrepView = { items: [], ready: true, failure: null };
 
-export function useTour(runs: TourRunsInput): TourController {
+export function useTour(
+  runs: TourRunsInput,
+  runDetail: TourRunDetailInput | null = null,
+): TourController {
   const [tour, setTour] = useState<TourDef | null>(null);
   const [run, setRun] = useState<TourRun | null>(null);
   const [hole, setHole] = useState<TourRect | null>(null);
   const [zone, setZone] = useState<TourRect | null>(null);
+  const [wideZone, setWideZone] = useState(false);
   const [ready, setReady] = useState(false);
   const [awaitingConfirm, setAwaitingConfirm] = useState(false);
+  const [body, setBody] = useState("");
+  const [note, setNote] = useState<string | null>(null);
   const [checklist, setChecklist] = useState<TourChecklistItem[]>([]);
   const [prep, setPrep] = useState<TourPrepView | null>(null);
   /** The legs of a Full tour still to come, in order. Empty for a lone tour. */
@@ -248,6 +344,7 @@ export function useTour(runs: TourRunsInput): TourController {
   // refreshes them first.
   const runRef = useRef<TourRun | null>(null);
   const runsRef = useRef<TourRunsInput>(runs);
+  const runDetailRef = useRef<TourRunDetailInput | null>(runDetail);
   /** The last aim scrolled to — step and selectors both (see the pump's scroll block). */
   const scrolledFor = useRef<string | null>(null);
   // What the app looked like when this tour started — every observation carries
@@ -259,22 +356,40 @@ export function useTour(runs: TourRunsInput): TourController {
   useEffect(() => {
     runsRef.current = runs;
   }, [runs]);
+  useEffect(() => {
+    runDetailRef.current = runDetail;
+  }, [runDetail]);
 
   const observe = useCallback(
-    () => observation(runsRef.current, baselineRef.current ?? readTourAppState(runsRef.current)),
+    () =>
+      observation(
+        runsRef.current,
+        runDetailRef.current,
+        baselineRef.current ?? readTourAppState(runsRef.current, runDetailRef.current),
+      ),
     [],
   );
 
   const start = useCallback((next: TourDef, rest: TourDef[] = []) => {
-    const baseline = readTourAppState(runsRef.current);
+    // A tour starts on a clear stage (#825). It points at the app from above
+    // every modal, so a transient overlay left open — the `out` artifact the
+    // previous leg of a Full tour just told the reader to open — would dim into
+    // the background while its full-screen backdrop went on eating every click
+    // the first step asks for. Settings closes itself for the same reason; this
+    // is that rule for the surfaces that cannot see a tour coming.
+    dismissTransientOverlays();
+    const baseline = readTourAppState(runsRef.current, runDetailRef.current);
     baselineRef.current = baseline;
-    const first = startTour(next, observation(runsRef.current, baseline));
+    const first = startTour(next, observation(runsRef.current, runDetailRef.current, baseline));
     scrolledFor.current = null;
     setTour(next);
     setRun(first);
     setHole(null);
     setZone(null);
+    setWideZone(false);
     setChecklist([]);
+    setBody("");
+    setNote(null);
     // Bumped rather than reset: the attempt counter is what re-arms the
     // preparation effect, and a tour definition is a module constant — so two
     // starts of the SAME tour would otherwise leave the effect's deps untouched
@@ -289,7 +404,10 @@ export function useTour(runs: TourRunsInput): TourController {
     setRun(null);
     setHole(null);
     setZone(null);
+    setWideZone(false);
     setChecklist([]);
+    setBody("");
+    setNote(null);
     setPrep(null);
     setChain([]);
     baselineRef.current = null;
@@ -306,6 +424,20 @@ export function useTour(runs: TourRunsInput): TourController {
     if (next) start(next, rest);
     else quit();
   }, [tour, chain, start, quit]);
+
+  /** « Finish here »: same checkmark, no chain (#825). */
+  const finishHere = useCallback(() => {
+    if (tour) markTourDone(tour.id);
+    quit();
+  }, [tour, quit]);
+
+  /** « Continue » on a stopped tour's card (#825): the chain goes on, the
+   *  checkmark does not get written — nothing was finished. */
+  const continueChain = useCallback(() => {
+    const [next, ...rest] = chain;
+    if (next) start(next, rest);
+    else quit();
+  }, [chain, start, quit]);
 
   const next = useCallback(() => {
     if (!tour || !run) return;
@@ -399,6 +531,7 @@ export function useTour(runs: TourRunsInput): TourController {
       if (!step || active.phase !== "running") {
         setHole(null);
         setZone(null);
+        setWideZone(false);
         setChecklist([]);
         return;
       }
@@ -420,18 +553,35 @@ export function useTour(runs: TourRunsInput): TourController {
       // A portal menu: the dashed zone is the menu the option lives in, resolved
       // from the target rather than declared, so a step never has to know which
       // popup primitive rendered it.
-      const menu = step.soft ? elements[0]?.closest(MENU_CONTAINERS) ?? null : null;
-      const nextZone = menu ? union([rectOf(menu)], HOLE_PADDING) : null;
+      //
+      // With no menu around it, a soft step's zone is the target ITSELF (#825):
+      // « you may roam in here » applied to a whole panel. The dim lightens and
+      // the ring gives way to the dashed outline, because a ring on a 600-pixel
+      // pane would read as "click this", which is the one thing that step is not
+      // asking for.
+      const soft = stepSoft(step, obs);
+      const menu = soft ? elements[0]?.closest(MENU_CONTAINERS) ?? null : null;
+      const wide = soft && menu === null && nextHole !== null;
+      const nextZone = menu ? union([rectOf(menu)], HOLE_PADDING) : wide ? nextHole : null;
       setZone((prev) => (sameRect(prev, nextZone) ? prev : nextZone));
+      setWideZone(wide);
 
       setReady(canAdvance(tour, active, obs));
-      setAwaitingConfirm(needsConfirm(tour, active));
+      setAwaitingConfirm(needsConfirm(tour, active, obs));
+      setBody(stepBody(step, obs));
+      setNote(stepNote(step, obs));
       // Compared item by item: a fresh array every tick would re-render the
       // popover ten times a second for a list that changes twice per tour.
       const nextChecklist = step.checklist?.(obs) ?? [];
       setChecklist((prev) =>
         prev.length === nextChecklist.length &&
-        prev.every((item, i) => item.label === nextChecklist[i].label && item.done === nextChecklist[i].done)
+        prev.every(
+          (item, i) =>
+            item.label === nextChecklist[i].label &&
+            item.done === nextChecklist[i].done &&
+            item.note === nextChecklist[i].note &&
+            item.badge === nextChecklist[i].badge,
+        )
           ? prev
           : nextChecklist,
       );
@@ -453,9 +603,20 @@ export function useTour(runs: TourRunsInput): TourController {
       const aim = `${tour.id}:${active.index}:${selectors.join("|")}`;
       if (elements[0] && scrolledFor.current !== aim) {
         scrolledFor.current = aim;
-        const r = elements[0].getBoundingClientRect();
-        if (r.top < 0 || r.bottom > window.innerHeight) {
-          elements[0].scrollIntoView({ block: "center", behavior: "smooth" });
+        // A canvas card cannot be scrolled to: it is absolutely positioned inside
+        // a transformed viewport, so `scrollIntoView` on it moves nothing and a
+        // node outside the visible canvas stays outside it — lit, unreachable, and
+        // with the overlay owning the wheel there is no panning out of that (#825,
+        // FP iteration 2). The canvas is asked instead, and decides for itself
+        // whether the card is already in frame.
+        const nodeId = canvasNodeIdOf(elements[0]);
+        if (nodeId) {
+          revealCanvasNode(nodeId);
+        } else {
+          const r = elements[0].getBoundingClientRect();
+          if (r.top < 0 || r.bottom > window.innerHeight) {
+            elements[0].scrollIntoView({ block: "center", behavior: "smooth" });
+          }
         }
       }
     };
@@ -482,13 +643,16 @@ export function useTour(runs: TourRunsInput): TourController {
       total: tour.steps.length,
       hole,
       zone,
+      wideZone,
       ready,
       awaitingConfirm,
+      body,
+      note,
       checklist,
       prep: run.phase === "intro" ? (prep ?? { items: [], ready: false, failure: null }) : null,
       nextTour: chain[0] ?? null,
     };
-  }, [tour, run, hole, zone, ready, awaitingConfirm, checklist, prep, chain]);
+  }, [tour, run, hole, zone, wideZone, ready, awaitingConfirm, body, note, checklist, prep, chain]);
 
-  return { view, start, quit, next, skip, finish, begin, retryPrep };
+  return { view, start, quit, next, skip, finish, finishHere, continueChain, begin, retryPrep };
 }

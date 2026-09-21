@@ -34,8 +34,35 @@ interface Props {
 const ESC_OWNERS =
   '[role="menu"], [role="listbox"], [role="dialog"], [data-slot="dropdown-menu-content"], [data-testid="new-pipeline-dialog"]';
 
+/**
+ * Surfaces that own Escape **while the keystroke is theirs** (#825) — the
+ * embedded tmux terminal. Escape in there is the agent's key (vim, the harness's
+ * own menus), and a tour that swallowed it would make the step it just asked for
+ * ("click in the terminal and paste the line") the step that throws it away.
+ *
+ * Checked on the event's target rather than on presence: the terminal is on
+ * screen for four of the tour's steps, and Escape outside it must still quit.
+ */
+const ESC_TARGET_OWNERS = '[data-testid="tmux-terminal"]';
+
+/**
+ * How far along the **Full tour** the intermediate card sits (#825), or `null`
+ * for a tour started on its own — there is no chain to report on.
+ *
+ * Derived from the catalog rather than carried in the controller: a chain is
+ * always the full sequence (only « Full tour » builds one), so its position is a
+ * lookup, and one less thing to keep in sync with the tour that is running.
+ */
+function chainProgress(tourId: string, nextTourId: string | null) {
+  if (!nextTourId) return null;
+  const sequence = fullTourSequence();
+  const index = sequence.findIndex((entry) => entry.id === tourId);
+  return index < 0 ? null : { done: index + 1, total: sequence.length };
+}
+
 export default function TourHost({ controller, showWelcome, onWelcomeAnswered, onOpenTutorials }: Props) {
-  const { view, start, quit, next, skip, finish, begin, retryPrep } = controller;
+  const { view, start, quit, next, skip, finish, finishHere, continueChain, begin, retryPrep } =
+    controller;
   const [quitNotice, setQuitNotice] = useState(false);
 
   const startById = useCallback(
@@ -70,6 +97,8 @@ export default function TourHost({ controller, showWelcome, onWelcomeAnswered, o
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       if (document.querySelector(ESC_OWNERS)) return;
+      const target = event.target;
+      if (target instanceof Element && target.closest(ESC_TARGET_OWNERS)) return;
       quitWithNotice();
     };
     window.addEventListener("keydown", onKey);
@@ -115,13 +144,15 @@ export default function TourHost({ controller, showWelcome, onWelcomeAnswered, o
       )}
 
       {view && view.run.phase === "running" && view.step && (
-        <Projecteur hole={view.hole} zone={view.zone}>
+        <Projecteur hole={view.hole} zone={view.zone} wide={view.wideZone}>
           <TourPopover
             tour={view.tour}
             step={view.step}
             stepNumber={view.stepNumber}
             total={view.total}
             hole={view.hole}
+            body={view.body}
+            note={view.note}
             ready={view.ready}
             awaitingConfirm={view.awaitingConfirm}
             checklist={view.checklist}
@@ -138,7 +169,9 @@ export default function TourHost({ controller, showWelcome, onWelcomeAnswered, o
             tour={view.tour}
             app={view.run.observedApp}
             nextTour={view.nextTour}
+            chainProgress={chainProgress(view.tour.id, view.nextTour?.id ?? null)}
             onFinish={finish}
+            onFinishHere={finishHere}
             onStartTour={(tourId) => {
               // The checkmark belongs to the tour that was actually completed,
               // not to the one started next. Deliberately NOT `finish()`: that
@@ -157,11 +190,13 @@ export default function TourHost({ controller, showWelcome, onWelcomeAnswered, o
           <TourFailedCard
             tour={view.tour}
             failure={view.run.failure}
+            nextTour={view.nextTour}
             onClose={quit}
             onBackToTours={() => {
               quit();
               onOpenTutorials();
             }}
+            onContinue={continueChain}
           />
         </Projecteur>
       )}

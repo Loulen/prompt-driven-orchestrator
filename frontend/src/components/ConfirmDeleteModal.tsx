@@ -55,6 +55,10 @@ export default function ConfirmDeleteModal({
       onClick={onClose}
     >
       <div
+        // The dialog box, not the full-screen backdrop: the *First pipeline*
+        // tour re-aims its last step onto this rectangle so the projecteur's
+        // hole lands on Cancel/Delete rather than swallowing them (#825).
+        data-testid="confirm-delete-modal"
         className="w-[360px] rounded-lg border border-line bg-bg-2 p-4 shadow-lg"
         style={{ fontSize: "12px" }}
         onClick={(e) => e.stopPropagation()}

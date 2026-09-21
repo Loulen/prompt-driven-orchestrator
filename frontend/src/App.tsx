@@ -288,7 +288,10 @@ export default function App() {
   // tour (the welcome modal and Settings › Tutorials) and a tour outlives both.
   // The run list is passed in rather than fetched: the tour observes what the UI
   // already knows (ADR-0071 §3) — how many Runs there are, and which is newest.
-  const tour = useTour(runs);
+  // #825 adds the selected Run's detail, for the same reason and on the same
+  // terms: the reading steps need a node's status and its completion guard, and
+  // the inspector is already polling both.
+  const tour = useTour(runs, selectedRun);
   const [tourOffered, setTourOffered] = useState(loadTourOffered);
   const showWelcome = shouldOfferWelcome({
     offered: tourOffered,

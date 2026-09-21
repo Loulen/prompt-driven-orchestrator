@@ -46,9 +46,15 @@ cd "$(git rev-parse --show-toplevel)"
 #   ratchet was red there before #802). #802 itself adds NO daemon file: the fetch
 #   verb, the enriched branch list and their tests all folded into lib.rs beside
 #   `list_branches`, which already owned the concern. Ratchet down when tidied.
+# crates/pdo-daemon/src: 91 (#824, release 1.97.0) admits repo_scaffold.rs — the generic
+#   "create a git repository from scratch" verb the *First run* tour calls for its
+#   training repo. It is ONE new concern with three outcomes and no existing sibling
+#   owns it (worktree/branch modules operate on an existing repo, never create one);
+#   folding it into lib.rs would only hide 400 lines of git plumbing there. The
+#   integration PRs landed past the 90 baseline and left main red.
 BASELINES='
 frontend/src/components 194
-crates/pdo-daemon/src 90
+crates/pdo-daemon/src 91
 '
 
 fail=0

@@ -106,12 +106,18 @@ const NAME_INPUT = '[data-testid="node-name-input"]';
 const PROMPT_INPUT = '[data-testid="node-prompt-input"]';
 const ADD_MENU_NODE = '[data-testid="add-menu-node"]';
 const NEW_PIPELINE_DIALOG = '[data-testid="new-pipeline-dialog"]';
+const NEW_PIPELINE_NAME = '[data-testid="new-pipeline-name"]';
 /** The dialog's own sentence when the daemon refused — quoted, never paraphrased. */
 const NEW_PIPELINE_ERROR = '[data-testid="new-pipeline-error"]';
 /** An output card, addressed by its slot rather than its (editable) port name. */
 const outputSlot = (i: number) => `[data-output-index="${i}"]`;
 /** The delete confirmation's box — the dialog itself, not its full-screen backdrop. */
 const DELETE_CONFIRM = '[data-testid="confirm-delete-modal"]';
+
+/** The dialog is gone and a pipeline is open: Create (or Enter) did its job. */
+function pipelineCreated(o: TourObservation): boolean {
+  return !o.present(NEW_PIPELINE_DIALOG) && o.app.pipeline != null;
+}
 
 function selected(app: TourAppState, node: NodeDef | null): boolean {
   return !!node && app.selection.kind === "node" && app.selection.id === node.id;
@@ -146,17 +152,32 @@ const STEPS: TourStep[] = [
     id: "name-pipeline",
     title: "Name the pipeline",
     body: "Paste the name below into the field. The name becomes the YAML file in your Library.",
-    target: () => [NEW_PIPELINE_DIALOG],
-    waitingFor: "the New Pipeline dialog",
+    // Strictly the field (#837). Lighting the whole dialog put an enabled
+    // `Create` inside the hole, five centimetres from `Next`, and a reader who
+    // clicked it — the natural gesture — closed the dialog under a step whose
+    // condition then went false: five seconds later the tour stopped on
+    // « nothing was created » while the pipeline sat open in the editor.
+    // Under the blocker, Create is absorbed until the step that asks for it.
+    target: () => [NEW_PIPELINE_NAME],
+    waitingFor: "the Name field of the New Pipeline dialog",
     failureHint: "The dialog was closed before the name was entered.",
     copyBlock: TUTORIAL_PIPELINE_ID,
-    confirm: true,
-    done: (o) => filled(o, '[data-testid="new-pipeline-name"]'),
+    // Enter in the field creates the pipeline too, and that closes the dialog.
+    // The step then has nothing left to confirm: it slides on to `Create it`,
+    // which is entered satisfied and says so.
+    confirm: (o) => o.present(NEW_PIPELINE_DIALOG),
+    done: (o) => pipelineCreated(o) || filled(o, NEW_PIPELINE_NAME),
   },
   {
     id: "create-pipeline",
     title: "Create it",
-    body: "Click Create. PDO writes the file and opens it in the editor, with a Start and an End marker already in place.",
+    // Entered satisfied when Enter already did the work (see the step above):
+    // the card then says what happened rather than instructing a click that
+    // nobody can make — the button is gone.
+    body: (o) =>
+      pipelineCreated(o)
+        ? "Enter already created it: PDO wrote the file and opened it in the editor, with a Start and an End marker already in place."
+        : "Click Create. PDO writes the file and opens it in the editor, with a Start and an End marker already in place.",
     target: () => ['[data-testid="new-pipeline-create"]'],
     waitingFor: "the Create button",
     // A reader who kept the pipeline at the end of a previous run of this tour
@@ -166,7 +187,7 @@ const STEPS: TourStep[] = [
     refused: (o) => o.text(NEW_PIPELINE_ERROR),
     refusalTitle: "The pipeline could not be created",
     refusalHint: `You may already have a ${TUTORIAL_PIPELINE_ID} from a previous run of this tour — open it from the Pipelines list, or delete it and start the tour again.`,
-    done: (o) => !o.present(NEW_PIPELINE_DIALOG) && o.app.pipeline != null,
+    done: pipelineCreated,
   },
   {
     id: "open-add-menu",

@@ -16,6 +16,15 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.97.2
+**Tour guidé : scroll hors spotlight, dropdown skills, « Create » à l'étape 3** (#837).
+
+- La molette dans la zone assombrie du projecteur fait défiler la modale au lieu d'être avalée.
+- Cocher un skill referme le sélecteur de skills.
+- Étape 3 du tour « première pipeline » : « Create » reste inatteignable sous un bloqueur tant que
+  l'étape ne l'a pas allumé ; la touche Entrée fait bifurquer le texte de l'étape 4 au lieu de
+  perdre la pipeline.
+
 ## 1.97.1
 **La diff par défaut du pane review montre l'arbre de travail du run** (#835).
 

@@ -100,6 +100,65 @@ describe("the Projecteur dims and absorbs", () => {
   });
 });
 
+// #837 — the blockers swallow the click and only the click. A wheel over the dim
+// scrolls the modal beneath, wherever the cursor is; the blockers have no
+// scrollable ancestor, so without the relay Firefox left the modal frozen
+// outside the lit rectangle.
+describe("the Projecteur lets the wheel through", () => {
+  function scrollableModal() {
+    const modal = document.createElement("div");
+    modal.setAttribute("data-testid", "modal");
+    modal.style.overflowY = "auto";
+    Object.defineProperty(modal, "clientHeight", { value: 100 });
+    Object.defineProperty(modal, "scrollHeight", { value: 400 });
+    Object.defineProperty(modal, "clientWidth", { value: 300 });
+    Object.defineProperty(modal, "scrollWidth", { value: 300 });
+    document.body.appendChild(modal);
+    return modal;
+  }
+
+  it("scrolls the element under a blocker and cancels the browser's own scroll", () => {
+    const modal = scrollableModal();
+    render(<Projecteur hole={HOLE} />);
+    const blocker = screen.getByTestId("projecteur-blocker-bottom");
+    document.elementsFromPoint = vi.fn(() => [blocker, screen.getByTestId("projecteur"), modal, document.body]);
+
+    const wheel = new WheelEvent("wheel", { deltaY: 300, clientX: 50, clientY: 500, bubbles: true, cancelable: true });
+    blocker.dispatchEvent(wheel);
+
+    expect(modal.scrollTop).toBe(300);
+    // Chromium already scrolls the modal on its own; relaying without cancelling
+    // would move it twice.
+    expect(wheel.defaultPrevented).toBe(true);
+    modal.remove();
+  });
+
+  it("also relays when the whole window is dimmed", () => {
+    const modal = scrollableModal();
+    render(<Projecteur hole={null} />);
+    const blocker = screen.getByTestId("projecteur-blocker-all");
+    document.elementsFromPoint = vi.fn(() => [blocker, modal]);
+    blocker.dispatchEvent(new WheelEvent("wheel", { deltaY: 40, bubbles: true, cancelable: true }));
+    expect(modal.scrollTop).toBe(40);
+    modal.remove();
+  });
+
+  it("leaves a wheel over the popover alone", () => {
+    const modal = scrollableModal();
+    render(
+      <Projecteur hole={HOLE}>
+        <div data-testid="card" className="pointer-events-auto" />
+      </Projecteur>,
+    );
+    document.elementsFromPoint = vi.fn(() => [screen.getByTestId("card"), modal]);
+    const wheel = new WheelEvent("wheel", { deltaY: 300, bubbles: true, cancelable: true });
+    screen.getByTestId("card").dispatchEvent(wheel);
+    expect(modal.scrollTop).toBe(0);
+    expect(wheel.defaultPrevented).toBe(false);
+    modal.remove();
+  });
+});
+
 describe("the popover", () => {
   function renderPopover(s: TourStep, overrides: Partial<Parameters<typeof TourPopover>[0]> = {}) {
     const onQuit = vi.fn();

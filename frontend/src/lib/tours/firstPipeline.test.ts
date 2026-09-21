@@ -419,6 +419,47 @@ describe("the accidents a reader can have", () => {
   });
 
   /**
+   * #837 — the naming step lit the whole dialog, Create included, and a reader
+   * who clicked it (the natural gesture) lost the tour: the dialog closed, the
+   * field's condition went false, and five seconds later the tour stopped on
+   * « nothing was created » while the pipeline sat open in the editor.
+   */
+  it("lights only the Name field on the naming step, so Create stays under the dim", () => {
+    const fake = new FakeApp();
+    const step = STEPS.find((s) => s.id === "name-pipeline")!;
+    expect(step.target(fake.obs())).toEqual(['[data-testid="new-pipeline-name"]']);
+  });
+
+  it("carries on when Enter in the Name field created the pipeline during the naming step", () => {
+    const fake = new FakeApp();
+    const script = gestures(fake);
+    let run = startTour(FIRST_PIPELINE_TOUR, fake.obs());
+    let clock = 0;
+    for (const id of ["pipelines-tab", "new-pipeline"]) {
+      script[id]();
+      clock += 200;
+      run = observeTour(FIRST_PIPELINE_TOUR, run, fake.obs(), clock);
+    }
+    expect(currentStep(FIRST_PIPELINE_TOUR, run)?.id).toBe("name-pipeline");
+
+    // Typed, then Enter: the dialog is gone and the pipeline is open.
+    script["name-pipeline"]();
+    script["create-pipeline"]();
+    for (let i = 0; i < 40; i++) {
+      clock += 200;
+      run = observeTour(FIRST_PIPELINE_TOUR, run, fake.obs(), clock);
+    }
+
+    // No failure card, and no `Next` owed on a field that no longer exists: the
+    // tour is on `Create it`, entered satisfied, saying what already happened.
+    expect(run.phase).toBe("running");
+    expect(currentStep(FIRST_PIPELINE_TOUR, run)?.id).toBe("create-pipeline");
+    expect(run.satisfiedOnEntry).toBe(true);
+    expect(needsConfirm(FIRST_PIPELINE_TOUR, run, fake.obs())).toBe(true);
+    expect(stepBody(currentStep(FIRST_PIPELINE_TOUR, run)!, fake.obs())).toContain("already created");
+  });
+
+  /**
    * A reader who kept the pipeline at the end of a previous run meets a 409, and
    * `Create` does nothing at all. The tour cannot advance and never will, so it
    * says so on its own card instead of waiting on a dead button.

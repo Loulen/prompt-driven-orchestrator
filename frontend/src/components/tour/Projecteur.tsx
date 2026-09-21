@@ -1,5 +1,6 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import type { TourRect } from "../../hooks/useTour";
+import { relayWheel } from "../../lib/tourScroll";
 
 /**
  * The **Projecteur** (#823, CONTEXT.md § « Tours guidés ») — the overlay that dims
@@ -14,6 +15,10 @@ import type { TourRect } from "../../hooks/useTour";
  * It sits above modals and portal menus on purpose (`z-[120]`, one layer over the
  * `z-[70]` ceiling the rest of the app uses): a tour that guides through a dialog
  * has to dim around that dialog, not disappear behind it.
+ *
+ * The blockers swallow clicks, and ONLY clicks (#837). A wheel gesture over the
+ * dim is relayed to whatever scrolls beneath it: a tour that pointed at one row
+ * of a modal must still let the reader scroll the rest of that modal.
  */
 
 interface Props {
@@ -54,17 +59,38 @@ export default function Projecteur({ hole, zone, wide, children }: Props) {
   // The cut-out the blockers leave open. A soft step opens the whole menu.
   const opening = zone ?? hole;
   const dim = wide ? "bg-tour-dim-soft" : "bg-tour-dim";
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  // The wheel goes through, the click does not (#837). A native, non-passive
+  // listener: React registers `onWheel` passively, and a passive handler cannot
+  // cancel the browser's own scroll — which on Chromium already reaches the
+  // modal by accident, so relaying without cancelling would scroll it twice.
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const onWheel = (e: WheelEvent) => {
+      const target = e.target instanceof Element ? e.target : null;
+      // Only the dim relays. The popover (a child of this root) keeps its own
+      // scrolling, and the hole is empty — a wheel there never reaches us.
+      if (!target?.hasAttribute("data-projecteur-blocker")) return;
+      e.preventDefault();
+      relayWheel(root, e);
+    };
+    root.addEventListener("wheel", onWheel, { passive: false });
+    return () => root.removeEventListener("wheel", onWheel);
+  }, []);
 
   // `overflow-hidden` on the root: a target that is momentarily off-screen puts
   // its ring and its bottom blocker thousands of pixels down, and an overlay that
   // grew to match would hand the page a scroll range that belongs to nothing.
   return (
-    <div className="pointer-events-none fixed inset-0 z-[120] overflow-hidden" data-testid="projecteur">
+    <div ref={rootRef} className="pointer-events-none fixed inset-0 z-[120] overflow-hidden" data-testid="projecteur">
       {opening ? (
         (["top", "bottom", "left", "right"] as const).map((side) => (
           <div
             key={side}
             data-testid={`projecteur-blocker-${side}`}
+            data-projecteur-blocker=""
             className={`pointer-events-auto absolute ${dim}`}
             style={blockerStyle(opening, side)}
             // Absorbed, not acted on: a stray click during a tour should do
@@ -76,6 +102,7 @@ export default function Projecteur({ hole, zone, wide, children }: Props) {
       ) : (
         <div
           data-testid="projecteur-blocker-all"
+          data-projecteur-blocker=""
           className={`pointer-events-auto absolute inset-0 ${dim}`}
           onClick={(e) => e.preventDefault()}
           onMouseDown={(e) => e.preventDefault()}

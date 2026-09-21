@@ -12,6 +12,13 @@
 //! `pdo/sub-*` branches, which die at merge-back, never become an identity
 //! (ADR-0067 §1). The diff and file-at-ref endpoints accept those ids and
 //! resolve them here, so the labels and the resolution have one source.
+//!
+//! While the Run's shared worktree exists, a **`worktree`** ref (#835) points at
+//! its working tree — commits *and* uncommitted edits, untracked files included.
+//! It is the default destination: a running node does not have to commit for
+//! its work to show in the Review page. Its `sha` is the id of a **snapshot
+//! tree** written by `structured_diff::snapshot_worktree` (not a commit): a
+//! comment anchored on it keeps a stable object to re-map from (#752).
 
 use serde::Serialize;
 
@@ -19,6 +26,8 @@ use crate::event_log::{Event, EventKind, NodeStatus, RunState};
 
 pub(crate) const FORK_ID: &str = "fork";
 pub(crate) const TIP_ID: &str = "tip";
+/// The Run's shared working tree — commits plus uncommitted edits (#835).
+pub(crate) const WORKTREE_ID: &str = "worktree";
 
 #[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -28,6 +37,8 @@ pub(crate) enum RefKind {
     Before,
     After,
     Live,
+    /// The Run's shared working tree, uncommitted edits included (#835).
+    Worktree,
 }
 
 /// One Run ref, as the UI and the CLI see it.
@@ -82,7 +93,8 @@ pub(crate) struct Delivery {
 /// The answer of `GET /runs/<id>/refs`.
 #[derive(Serialize, Debug, Clone)]
 pub(crate) struct RunRefs {
-    /// Order: fork, deliveries in delivery order, live branches, tip.
+    /// Order: fork, deliveries in delivery order, live branches, tip, worktree
+    /// (when the Run's worktree exists).
     pub refs: Vec<RunRef>,
     pub deliveries: Vec<Delivery>,
     pub default_from: &'static str,
@@ -92,6 +104,12 @@ pub(crate) struct RunRefs {
 /// The Run's branch — the tip.
 pub(crate) fn tip_branch(run_id: &str) -> String {
     format!("pdo/run-{run_id}")
+}
+
+/// What the `worktree` ref shows as its git side: the Run's worktree, relative
+/// to the target repository (the path `worktree_ops::worktree_dir_for_run` builds).
+pub(crate) fn worktree_display(run_id: &str) -> String {
+    format!(".pdo/runs/{run_id}/worktree")
 }
 
 /// The Run's stable base: its frozen fork SHA, else the source branch, else
@@ -199,6 +217,12 @@ fn live_nodes(run_id: &str, run_state: &RunState) -> Vec<(String, i64, String)> 
 /// Build the Run's refs. `sha_of` resolves a git ref to a commit SHA (`None`
 /// when it does not exist) — injected so the listing is testable without a
 /// repository; the HTTP handler passes `structured_diff::rev_parse`.
+/// `worktree` is `Some` while the Run's worktree directory exists, `None` once
+/// it is gone: with it the `worktree` ref is listed and is the default
+/// destination (#835). The inner value is the worktree's snapshot tree id
+/// (`structured_diff::snapshot_worktree`), `None` when snapshotting failed — the
+/// ref is still listed (without a `sha`) so this listing and the diff endpoint,
+/// which defaults on the directory alone, never disagree on the default.
 ///
 /// A live branch that no longer resolves (merged back between two projections)
 /// is dropped: offering it would make the picker lie.
@@ -207,6 +231,7 @@ pub(crate) fn collect(
     run_state: &RunState,
     events: &[Event],
     sha_of: &dyn Fn(&str) -> Option<String>,
+    worktree: Option<Option<&str>>,
 ) -> RunRefs {
     let mut refs: Vec<RunRef> = Vec::new();
     let mut deliveries: Vec<Delivery> = Vec::new();
@@ -296,11 +321,28 @@ pub(crate) fn collect(
         iter: None,
     });
 
+    let default_to = match worktree {
+        Some(snapshot) => {
+            refs.push(RunRef {
+                id: WORKTREE_ID.to_string(),
+                kind: RefKind::Worktree,
+                label: "Working tree".to_string(),
+                sha: snapshot.map(str::to_string),
+                git_ref: worktree_display(run_id),
+                node_id: None,
+                node_name: None,
+                iter: None,
+            });
+            WORKTREE_ID
+        }
+        None => TIP_ID,
+    };
+
     RunRefs {
         refs,
         deliveries,
         default_from: FORK_ID,
-        default_to: TIP_ID,
+        default_to,
     }
 }
 
@@ -309,6 +351,9 @@ pub(crate) fn collect(
 pub(crate) enum Resolved {
     /// A Run ref id, resolved to the git ref to hand to `git`.
     Git(String),
+    /// The `worktree` id (#835): the Run's working tree, snapshotted by the
+    /// caller (`structured_diff::snapshot_worktree`) — a 404 when it is gone.
+    Worktree,
     /// Shaped like a Run ref id but the Run knows no such ref (a node that never
     /// delivered at that iter, a node that is not running, …).
     Unknown,
@@ -328,6 +373,9 @@ pub(crate) fn resolve_id(
     }
     if id == TIP_ID {
         return Resolved::Git(tip_branch(run_id));
+    }
+    if id == WORKTREE_ID {
+        return Resolved::Worktree;
     }
     if let Some(rest) = id.strip_prefix("node:") {
         // `<node id>:<iter>:<side>` — the node id may itself contain `:`, so
@@ -365,10 +413,11 @@ pub(crate) fn resolve_id(
     Resolved::NotAnId
 }
 
-/// `true` when the pair is the fork → tip default, which is compared three-dot
-/// (merge-base) like the LOC stat. `None` = the side was not given.
+/// `true` when the pair is the fork → tip (or fork → worktree, #835) default,
+/// which is compared three-dot (merge-base) like the LOC stat. `None` = the
+/// side was not given.
 pub(crate) fn is_default_pair(from: Option<&str>, to: Option<&str>) -> bool {
-    matches!(from, None | Some(FORK_ID)) && matches!(to, None | Some(TIP_ID))
+    matches!(from, None | Some(FORK_ID)) && matches!(to, None | Some(TIP_ID) | Some(WORKTREE_ID))
 }
 
 #[cfg(test)]
@@ -464,7 +513,7 @@ mod tests {
                 _ => None,
             }
         };
-        let refs = collect(RUN, &state, &events, &sha_of);
+        let refs = collect(RUN, &state, &events, &sha_of, None);
 
         let ids: Vec<&str> = refs.refs.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(
@@ -521,7 +570,7 @@ mod tests {
         let events = two_deliveries_and_a_live_node();
         let state = project(&events).unwrap();
         let sha_of = |_: &str| -> Option<String> { None };
-        let refs = collect(RUN, &state, &events, &sha_of);
+        let refs = collect(RUN, &state, &events, &sha_of, None);
         assert!(refs.refs.iter().all(|r| r.kind != RefKind::Live));
         assert_eq!(refs.deliveries.len(), 2);
         // Fork and tip stay listed even unresolved (an archived Run): the UI
@@ -535,7 +584,7 @@ mod tests {
         let mut events = two_deliveries_and_a_live_node();
         events.push(delivered(RUN, "design", 1, "aaa1", "eee5"));
         let state = project(&events).unwrap();
-        let refs = collect(RUN, &state, &events, &|_| None);
+        let refs = collect(RUN, &state, &events, &|_| None, None);
         let design_after = refs
             .refs
             .iter()
@@ -564,7 +613,7 @@ mod tests {
             delivered(RUN, "w-1", 2, "a", "b"),
         ];
         let state = project(&events).unwrap();
-        let refs = collect(RUN, &state, &events, &|_| None);
+        let refs = collect(RUN, &state, &events, &|_| None, None);
         assert_eq!(refs.refs[1].label, "w-1 · iter 2 · before");
     }
 
@@ -575,6 +624,7 @@ mod tests {
         let r = |id: &str| resolve_id(RUN, &state, &events, id);
         assert_eq!(r("fork"), Resolved::Git("f0f0f0f".into()));
         assert_eq!(r("tip"), Resolved::Git("pdo/run-20260909-run".into()));
+        assert_eq!(r("worktree"), Resolved::Worktree);
         assert_eq!(r("node:design:1:before"), Resolved::Git("aaa1".into()));
         assert_eq!(r("node:design:1:after"), Resolved::Git("bbb2".into()));
         assert_eq!(r("node:impl:1:after"), Resolved::Git("ccc3".into()));
@@ -607,9 +657,45 @@ mod tests {
     }
 
     #[test]
+    fn a_present_worktree_is_listed_last_and_becomes_the_default_destination() {
+        // #835: the Run's working tree is a ref while it exists, and the default
+        // `to`; its sha is the snapshot tree id handed in, not a commit.
+        let events = two_deliveries_and_a_live_node();
+        let state = project(&events).unwrap();
+        let refs = collect(RUN, &state, &events, &|_| None, Some(Some("7ee7ee7")));
+        let last = refs.refs.last().unwrap();
+        assert_eq!(last.id, "worktree");
+        assert_eq!(last.kind, RefKind::Worktree);
+        assert_eq!(last.label, "Working tree");
+        assert_eq!(last.sha.as_deref(), Some("7ee7ee7"));
+        assert_eq!(last.git_ref, ".pdo/runs/20260909-run/worktree");
+        assert_eq!(
+            refs.refs[refs.refs.len() - 2].id,
+            "tip",
+            "tip stays offered"
+        );
+        assert_eq!(refs.default_from, "fork");
+        assert_eq!(refs.default_to, "worktree");
+        // Worktree present but unsnapshottable: still listed (no sha) and still
+        // the default, so the listing agrees with the diff endpoint.
+        let unsnapped = collect(RUN, &state, &events, &|_| None, Some(None));
+        let last = unsnapped.refs.last().unwrap();
+        assert_eq!(last.id, "worktree");
+        assert_eq!(last.sha, None);
+        assert_eq!(unsnapped.default_to, "worktree");
+        // Without a worktree (finished, archived): no such ref, tip is the default.
+        let gone = collect(RUN, &state, &events, &|_| None, None);
+        assert!(gone.refs.iter().all(|r| r.id != "worktree"));
+        assert_eq!(gone.default_to, "tip");
+    }
+
+    #[test]
     fn default_pair_is_fork_to_tip_or_nothing() {
         assert!(is_default_pair(None, None));
         assert!(is_default_pair(Some("fork"), Some("tip")));
+        assert!(is_default_pair(Some("fork"), Some("worktree")));
+        assert!(is_default_pair(None, Some("worktree")));
+        assert!(!is_default_pair(Some("tip"), Some("worktree")));
         assert!(is_default_pair(Some("fork"), None));
         assert!(!is_default_pair(Some("tip"), Some("fork")));
         assert!(!is_default_pair(

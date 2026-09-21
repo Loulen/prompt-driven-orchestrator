@@ -15154,18 +15154,50 @@ async fn run_diff(
 struct StructuredDiffQuery {
     /// Source ref. Defaults to the Run's fork point (`run_diff_base`).
     from: Option<String>,
-    /// Destination ref. Defaults to the Run's tip (`pdo/run-<id>`).
+    /// Destination ref. Defaults to the Run's working tree while it exists
+    /// (#835), else to the Run's tip (`pdo/run-<id>`).
     to: Option<String>,
+}
+
+/// The Run's shared worktree, when it still exists on disk (#835). `None` once
+/// the Run is finished and cleaned up, or archived: the `worktree` ref is gone.
+fn run_worktree_dir(
+    state: &AppState,
+    run_state: &event_log::RunState,
+    run_id: &str,
+) -> Option<PathBuf> {
+    let dir = worktree_ops::worktree_dir_for_run(&effective_repo_root(state, run_state), run_id);
+    worktree_ops::is_git_worktree(&dir).then_some(dir)
+}
+
+/// The id a `from`/`to`/`ref` query defaults to when absent: the working tree
+/// while it exists (#835), the tip otherwise — the same rule as `run_refs::collect`.
+fn default_to_id(worktree: Option<&PathBuf>) -> &'static str {
+    if worktree.is_some() {
+        run_refs::WORKTREE_ID
+    } else {
+        run_refs::TIP_ID
+    }
+}
+
+/// What a `from`/`to`/`ref` query value resolved to (#835).
+enum RefTarget {
+    /// A git ref (branch, SHA) to hand to `git`.
+    Git(String),
+    /// The Run's working tree — read from the worktree dir / its snapshot tree.
+    Worktree,
 }
 
 /// `GET /runs/<id>/diff/structured[?from=<ref>&to=<ref>]` (#748, ADR-0067).
 ///
 /// Files → hunks → lines for a pair of Run refs, computed in the Run's
-/// **effective** repository. With no query the pair is fork → tip and the range
-/// is three-dot with `.pdo/` excluded — byte-for-byte the bounds of the LOC
-/// stat, so "counted" and "shown" agree. An explicit pair is compared two-dot
-/// (two arbitrary Run refs: a node's `before`/`after`, …). The raw-patch
-/// endpoints stay as they are.
+/// **effective** repository. With no query the pair is fork → worktree while
+/// the Run's worktree exists (#835: commits *and* uncommitted edits, so a
+/// running node needs no commit to be reviewed), fork → tip once it is gone;
+/// either way the range is three-dot with `.pdo/` excluded — the bounds of the
+/// LOC stat, so "counted" and "shown" agree (a clean tree makes both defaults
+/// coincide). An explicit pair is compared two-dot (two arbitrary Run refs: a
+/// node's `before`/`after`, …). The raw-patch endpoints stay as they are.
 async fn run_diff_structured(
     State(state): State<Arc<AppState>>,
     AxumPath(run_id): AxumPath<String>,
@@ -15175,8 +15207,10 @@ async fn run_diff_structured(
         Ok(t) => t,
         Err(resp) => return *resp,
     };
-    // #749: a side is a stable Run ref id (`fork`, `tip`, `node:<id>:<iter>:before`,
-    // `live:<id>`) resolved against the log, or — compatibility — a raw git ref.
+    // #749: a side is a stable Run ref id (`fork`, `tip`, `worktree`,
+    // `node:<id>:<iter>:before`, `live:<id>`) resolved against the log, or —
+    // compatibility — a raw git ref.
+    let worktree = run_worktree_dir(&state, &run_state, &run_id);
     let from = match resolve_ref_param(
         &run_id,
         &run_state,
@@ -15184,7 +15218,14 @@ async fn run_diff_structured(
         q.from.as_deref(),
         run_refs::FORK_ID,
     ) {
-        Ok(r) => r,
+        Ok(RefTarget::Git(r)) => r,
+        Ok(RefTarget::Worktree) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                "the working tree can only be the destination of a diff",
+            )
+                .into_response();
+        }
         Err(resp) => return *resp,
     };
     let to = match resolve_ref_param(
@@ -15192,16 +15233,27 @@ async fn run_diff_structured(
         &run_state,
         &events,
         q.to.as_deref(),
-        run_refs::TIP_ID,
+        default_to_id(worktree.as_ref()),
     ) {
         Ok(r) => r,
         Err(resp) => return *resp,
     };
-    // Three-dot only for the fork → tip default (the LOC bounds); any other pair
-    // is two arbitrary Run refs compared two-dot.
+    // Three-dot only for the fork → tip/worktree default (the LOC bounds); any
+    // other pair is two arbitrary Run refs compared two-dot.
     let three_dot = run_refs::is_default_pair(q.from.as_deref(), q.to.as_deref());
-    let repo = effective_repo_root(&state, &run_state);
-    match structured_diff::compute(&repo, &from, &to, three_dot) {
+    let result = match to {
+        RefTarget::Git(to) => {
+            let repo = effective_repo_root(&state, &run_state);
+            structured_diff::compute(&repo, &from, &to, three_dot)
+        }
+        RefTarget::Worktree => {
+            let Some(dir) = worktree else {
+                return (StatusCode::NOT_FOUND, "run worktree not found").into_response();
+            };
+            structured_diff::compute_worktree(&dir, &from, run_refs::WORKTREE_ID, three_dot)
+        }
+    };
+    match result {
         Ok(d) => Json(d).into_response(),
         Err(e) if e.is_unknown_revision() => {
             (StatusCode::NOT_FOUND, "run branch not found").into_response()
@@ -15213,7 +15265,8 @@ async fn run_diff_structured(
 #[derive(Deserialize)]
 struct FileAtRefQuery {
     path: String,
-    /// Defaults to the Run's tip (`pdo/run-<id>`).
+    /// Defaults to the Run's working tree while it exists (#835), else to the
+    /// Run's tip (`pdo/run-<id>`).
     #[serde(rename = "ref")]
     git_ref: Option<String>,
 }
@@ -15239,18 +15292,37 @@ async fn run_file_at_ref(
             .into_response();
     }
     // #749: stable Run ref ids resolve like on the structured diff endpoint.
-    let git_ref = match resolve_ref_param(
+    let worktree = run_worktree_dir(&state, &run_state, &run_id);
+    let target = match resolve_ref_param(
         &run_id,
         &run_state,
         &events,
         q.git_ref.as_deref(),
-        run_refs::TIP_ID,
+        default_to_id(worktree.as_ref()),
     ) {
         Ok(r) => r,
         Err(resp) => return *resp,
     };
     let repo = effective_repo_root(&state, &run_state);
-    match structured_diff::file_at_ref(&repo, &git_ref, &q.path) {
+    let content = match target {
+        RefTarget::Git(git_ref) => structured_diff::file_at_ref(&repo, &git_ref, &q.path),
+        // #835: the working tree's file is the file on disk (untracked included).
+        RefTarget::Worktree => {
+            let Some(dir) = worktree else {
+                return (StatusCode::NOT_FOUND, "run worktree not found").into_response();
+            };
+            match std::fs::read(dir.join(&q.path)) {
+                Ok(bytes) => Ok(bytes),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    return (StatusCode::NOT_FOUND, "file not found at ref").into_response();
+                }
+                Err(e) => {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+                }
+            }
+        }
+    };
+    match content {
         Ok(bytes) => match String::from_utf8(bytes) {
             Ok(text) => (
                 StatusCode::OK,
@@ -15280,18 +15352,20 @@ async fn run_file_at_ref(
 }
 
 /// Resolve one `from`/`to`/`ref` query value (#749): absent ⇒ `default_id`; a
-/// stable Run ref id ⇒ its git ref (404 when the Run knows no such ref); anything
-/// else ⇒ a raw git ref, kept for compatibility once it passes the injection guard.
+/// stable Run ref id ⇒ its git ref (404 when the Run knows no such ref) or the
+/// working tree (#835); anything else ⇒ a raw git ref, kept for compatibility
+/// once it passes the injection guard.
 fn resolve_ref_param(
     run_id: &str,
     run_state: &event_log::RunState,
     events: &[event_log::Event],
     value: Option<&str>,
     default_id: &str,
-) -> Result<String, Box<Response>> {
+) -> Result<RefTarget, Box<Response>> {
     let value = value.unwrap_or(default_id);
     match run_refs::resolve_id(run_id, run_state, events, value) {
-        run_refs::Resolved::Git(r) => Ok(r),
+        run_refs::Resolved::Git(r) => Ok(RefTarget::Git(r)),
+        run_refs::Resolved::Worktree => Ok(RefTarget::Worktree),
         run_refs::Resolved::Unknown => Err(Box::new(
             (
                 StatusCode::NOT_FOUND,
@@ -15305,16 +15379,17 @@ fn resolve_ref_param(
                     (StatusCode::BAD_REQUEST, format!("invalid ref: {value:?}")).into_response(),
                 ));
             }
-            Ok(value.to_string())
+            Ok(RefTarget::Git(value.to_string()))
         }
     }
 }
 
 /// `GET /runs/<id>/refs` (#749, ADR-0067 §1): the Run's refs — fork point, Run
 /// tip, every node delivery's `before`/`after` from the event log (labelled by
-/// node name and `iter`), and the live sub-worktree branch of a running isolated
-/// node — plus the ready-made delivery pairs. Labels are built here so the UI
-/// and the CLI agree. SHAs are resolved in the Run's effective repository.
+/// node name and `iter`), the live sub-worktree branch of a running isolated
+/// node, and the Run's working tree while it exists (#835, the default
+/// destination) — plus the ready-made delivery pairs. Labels are built here so
+/// the UI and the CLI agree. SHAs are resolved in the Run's effective repository.
 async fn run_refs(
     State(state): State<Arc<AppState>>,
     AxumPath(run_id): AxumPath<String>,
@@ -15325,7 +15400,16 @@ async fn run_refs(
     };
     let repo = effective_repo_root(&state, &run_state);
     let sha_of = |r: &str| structured_diff::rev_parse(&repo, r);
-    Json(run_refs::collect(&run_id, &run_state, &events, &sha_of)).into_response()
+    let snapshot = run_worktree_dir(&state, &run_state, &run_id)
+        .map(|dir| structured_diff::snapshot_worktree(&dir).ok());
+    Json(run_refs::collect(
+        &run_id,
+        &run_state,
+        &events,
+        &sha_of,
+        snapshot.as_ref().map(Option::as_deref),
+    ))
+    .into_response()
 }
 
 /// `GET /runs/<id>/source-drift` (#803, ADR-0070 §4): how far the Run and its source
@@ -15412,6 +15496,7 @@ async fn list_review_comments(
         }))
         .into_response();
     }
+    let worktree = run_worktree_dir(&state, &run_state, &run_id);
     let from = match resolve_ref_param(
         &run_id,
         &run_state,
@@ -15427,14 +15512,22 @@ async fn list_review_comments(
         &run_state,
         &events,
         q.to.as_deref(),
-        run_refs::TIP_ID,
+        default_to_id(worktree.as_ref()),
     ) {
         Ok(r) => r,
         Err(resp) => return *resp,
     };
     let repo = effective_repo_root(&state, &run_state);
-    let from_sha = structured_diff::rev_parse(&repo, &from);
-    let to_sha = structured_diff::rev_parse(&repo, &to);
+    // #835: the working tree's "SHA" is its snapshot tree id, a real object of
+    // the repository — the two-dot re-map below diffs against it like any ref.
+    let sha_of_target = |t: &RefTarget| match t {
+        RefTarget::Git(r) => structured_diff::rev_parse_object(&repo, r),
+        RefTarget::Worktree => worktree
+            .as_ref()
+            .and_then(|dir| structured_diff::snapshot_worktree(dir).ok()),
+    };
+    let from_sha = sha_of_target(&from);
+    let to_sha = sha_of_target(&to);
     let diff_path = |orig: &str, target: &str, path: &str| {
         if !structured_diff::is_safe_path(path)
             || !structured_diff::is_safe_ref(orig)
@@ -15836,8 +15929,20 @@ async fn send_review_comments(
     }
 
     // 2. Validate + resolve every anchor before touching anything.
-    let sha_of = |r: &str| structured_diff::rev_parse(&repo, r);
-    let refs = run_refs::collect(&run_id, &run_state, &events, &sha_of);
+    let sha_of = |r: &str| structured_diff::rev_parse_object(&repo, r);
+    // #835: an anchor on the working tree freezes its snapshot tree id — the
+    // stable object the re-map (#752) diffs from once the tree moves on.
+    let worktree = run_worktree_dir(&state, &run_state, &run_id);
+    let snapshot = worktree
+        .as_ref()
+        .map(|dir| structured_diff::snapshot_worktree(dir).ok());
+    let refs = run_refs::collect(
+        &run_id,
+        &run_state,
+        &events,
+        &sha_of,
+        snapshot.as_ref().map(Option::as_deref),
+    );
     let label_of = |id: &str| -> String {
         refs.refs
             .iter()
@@ -15869,10 +15974,11 @@ async fn send_review_comments(
             return bad(i, "empty text");
         }
         let from_id = c.from.as_deref().unwrap_or(run_refs::FORK_ID);
-        let to_id = c.to.as_deref().unwrap_or(run_refs::TIP_ID);
+        let to_id = c.to.as_deref().unwrap_or(default_to_id(worktree.as_ref()));
         let resolve = |id: &str| -> Option<String> {
             match run_refs::resolve_id(&run_id, &run_state, &events, id) {
                 run_refs::Resolved::Git(r) => Some(r),
+                run_refs::Resolved::Worktree => snapshot.clone().flatten(),
                 _ => None,
             }
         };
@@ -42783,6 +42889,7 @@ edges: []
 
         let app = build_router(state);
         let resp = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .uri(format!("/runs/{run_id}/diff/structured"))
@@ -42795,18 +42902,39 @@ edges: []
         let json: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
 
         assert_eq!(json["three_dot"], serde_json::json!(true));
-        assert_eq!(
-            json["to_ref"],
-            serde_json::json!(format!("pdo/run-{run_id}"))
-        );
+        // #835: the worktree exists, so the default destination is the working
+        // tree; clean after the commit, its snapshot is HEAD's own tree and the
+        // bounds equal fork → tip.
+        assert_eq!(json["to_ref"], serde_json::json!("worktree"));
         assert_eq!(
             json["from_sha"],
             serde_json::json!(run_state.fork_sha.clone().unwrap())
         );
         assert_eq!(
             json["to_sha"].as_str().unwrap(),
+            git_in(&wt_dir, &["rev-parse", "HEAD^{tree}"])
+        );
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/runs/{run_id}/diff/structured?from=fork&to=tip"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let tip_json: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+        assert_eq!(
+            tip_json["to_ref"],
+            serde_json::json!(format!("pdo/run-{run_id}"))
+        );
+        assert_eq!(
+            tip_json["to_sha"].as_str().unwrap(),
             git_in(&wt_dir, &["rev-parse", "HEAD"])
         );
+        assert_eq!(tip_json["files"], json["files"]);
 
         assert_eq!(
             json["files_changed"].as_u64().unwrap(),
@@ -42931,6 +43059,7 @@ edges: []
                 "node:worker-2:1:after",
                 "live:impl-1",
                 "tip",
+                "worktree",
             ]
         );
         let refs = json["refs"].as_array().unwrap();
@@ -42942,8 +43071,16 @@ edges: []
         );
         assert_eq!(refs[5]["sha"], serde_json::json!(c2));
         assert_eq!(refs[6]["sha"], serde_json::json!(c2));
+        // #835: the working tree is a ref while the worktree exists — clean here,
+        // so its snapshot is HEAD's tree — and the default destination.
+        assert_eq!(refs[7]["kind"], serde_json::json!("worktree"));
+        assert_eq!(refs[7]["label"], serde_json::json!("Working tree"));
+        assert_eq!(
+            refs[7]["sha"].as_str().unwrap(),
+            git_in(&wt_dir, &["rev-parse", "HEAD^{tree}"])
+        );
         assert_eq!(json["default_from"], serde_json::json!("fork"));
-        assert_eq!(json["default_to"], serde_json::json!("tip"));
+        assert_eq!(json["default_to"], serde_json::json!("worktree"));
         let deliveries = json["deliveries"].as_array().unwrap();
         assert_eq!(deliveries.len(), 3);
         assert_eq!(deliveries[0]["status"], serde_json::json!("delivered"));
@@ -43054,6 +43191,131 @@ edges: []
             StatusCode::NOT_FOUND,
             "one.rs did not exist before"
         );
+    }
+
+    #[tokio::test]
+    async fn default_review_diff_shows_the_dirty_worktree_of_a_running_run() {
+        // #835: with no query, the structured diff is fork → working tree: a
+        // modified tracked file and an untracked file show up while nothing is
+        // committed; the file endpoint reads the file on disk; a comment
+        // anchored on the working tree freezes the snapshot tree id; and once
+        // the worktree is gone, the default falls back to fork → tip.
+        let daemon_dir = tempfile::tempdir().unwrap();
+        init_test_repo(daemon_dir.path());
+        let target_dir = tempfile::tempdir().unwrap();
+        let target = target_dir.path();
+        let run_id = "dirty-run";
+        let state = test_state_with_dir(daemon_dir.path()).await;
+        let wt_dir = seed_run_in_other_repo(&state, target, run_id).await;
+        let head = git_in(&wt_dir, &["rev-parse", "HEAD"]);
+        std::fs::write(wt_dir.join("README.md"), "# test\n\nuncommitted\n").unwrap();
+        std::fs::write(wt_dir.join("REPRO_835.md"), "untracked\n").unwrap();
+        std::fs::create_dir_all(wt_dir.join(".pdo/artifacts")).unwrap();
+        std::fs::write(wt_dir.join(".pdo/artifacts/out.md"), "blackboard\n").unwrap();
+        // The documented target-repo setup (ADR-0060) ignores `.pdo/` as a
+        // directory: the snapshot must not trip on it (#835 FP finding).
+        let common_dir = git_in(
+            &wt_dir,
+            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        );
+        std::fs::create_dir_all(Path::new(&common_dir).join("info")).unwrap();
+        std::fs::write(Path::new(&common_dir).join("info/exclude"), ".pdo/\n").unwrap();
+        let status_before = git_in(&wt_dir, &["status", "--porcelain"]);
+
+        let app = build_router(state);
+        let get = |uri: String| {
+            app.clone()
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        };
+
+        let resp = get(format!("/runs/{run_id}/diff/structured"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let json: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+        assert_eq!(json["to_ref"], serde_json::json!("worktree"));
+        assert_eq!(json["three_dot"], serde_json::json!(true));
+        let mut paths: Vec<&str> = json["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["new_path"].as_str().unwrap())
+            .collect();
+        paths.sort();
+        assert_eq!(paths, vec!["README.md", "REPRO_835.md"], "{json}");
+        let snapshot = json["to_sha"].as_str().unwrap().to_string();
+        assert_ne!(snapshot, head);
+        // The run branch itself has not moved: fork → tip is still empty.
+        let resp = get(format!("/runs/{run_id}/diff/structured?to=tip"))
+            .await
+            .unwrap();
+        let tip: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+        assert_eq!(tip["files_changed"], serde_json::json!(0));
+        // Reading the diff moved nothing for the node.
+        assert_eq!(git_in(&wt_dir, &["status", "--porcelain"]), status_before);
+        assert_eq!(git_in(&wt_dir, &["rev-parse", "HEAD"]), head);
+
+        // The working tree is the destination only.
+        let resp = get(format!(
+            "/runs/{run_id}/diff/structured?from=worktree&to=tip"
+        ))
+        .await
+        .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        // File at the default ref = the file on disk, untracked included.
+        let resp = get(format!("/runs/{run_id}/file?path=REPRO_835.md"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(body_string(resp).await, "untracked\n");
+        let resp = get(format!("/runs/{run_id}/file?path=REPRO_835.md&ref=tip"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let resp = get(format!("/runs/{run_id}/file?path=nope.md&ref=worktree"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+        // The refs endpoint lists it with the same snapshot id.
+        let resp = get(format!("/runs/{run_id}/refs")).await.unwrap();
+        let refs: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+        let wt = refs["refs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == serde_json::json!("worktree"))
+            .expect("worktree ref listed");
+        assert_eq!(wt["sha"], serde_json::json!(snapshot));
+        assert_eq!(refs["default_to"], serde_json::json!("worktree"));
+
+        // Worktree gone (finished + cleaned, or archived): back to fork → tip.
+        git_in(
+            target,
+            &["worktree", "remove", "--force", wt_dir.to_str().unwrap()],
+        );
+        let resp = get(format!("/runs/{run_id}/refs")).await.unwrap();
+        let refs: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+        assert!(refs["refs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r["id"] != serde_json::json!("worktree")));
+        assert_eq!(refs["default_to"], serde_json::json!("tip"));
+        let resp = get(format!("/runs/{run_id}/diff/structured"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let json: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+        assert_eq!(
+            json["to_ref"],
+            serde_json::json!(format!("pdo/run-{run_id}"))
+        );
+        let resp = get(format!("/runs/{run_id}/diff/structured?to=worktree"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

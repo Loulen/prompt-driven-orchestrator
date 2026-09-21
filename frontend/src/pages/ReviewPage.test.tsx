@@ -230,6 +230,41 @@ describe("ReviewPage (#749)", () => {
     expect(screen.getByTestId("review-back")).toHaveTextContent("implement-loop");
   });
 
+  it("follows the daemon's default: fork → working tree while the Run's worktree exists (#835)", async () => {
+    const WT_REFS: RunRefs = {
+      ...REFS,
+      default_to: "worktree",
+      refs: [
+        ...REFS.refs,
+        { id: "worktree", kind: "worktree", label: "Working tree", git_ref: `.pdo/runs/${RUN_ID}/worktree`, sha: "7ee7ee7ee7ee7ee7ee7ee7ee7ee7ee7ee7ee7ee7" },
+      ],
+    };
+    mockedRefs.mockResolvedValue(WT_REFS);
+    mockedRun.mockResolvedValue(makeRun({ status: "running", completed_at: null }));
+    mockedDiff.mockResolvedValue(diff([file({ path: "README.md" })], { to_ref: "worktree", to_sha: "7ee7ee7ee7ee7ee7ee7ee7ee7ee7ee7ee7ee7ee7" }));
+    render(<ReviewPage runId={RUN_ID} />);
+    await waitFor(() => expect(screen.getAllByTestId("review-file")).toHaveLength(1));
+    // One fetch, the daemon's default (no pair) — never a tip fetch first.
+    expect(mockedDiff).toHaveBeenCalledTimes(1);
+    expect(mockedDiff).toHaveBeenCalledWith(RUN_ID, undefined);
+    expect(screen.getByTestId("review-to")).toHaveTextContent("Working tree");
+    expect(screen.getByTestId("review-to")).toHaveTextContent("7ee7ee7");
+    expect(window.location.search).toBe("");
+    expect(screen.queryByTestId("review-reset")).toBeNull();
+    expect(screen.getByTestId("review-worktree-note")).toHaveTextContent("uncommitted");
+    // The context expansion reads the new side at the worktree ref.
+    await waitFor(() => expect(mockedFile).toHaveBeenCalledWith(RUN_ID, "README.md", "worktree"));
+    // Tip stays one click away, and is then explicit in the URL; the reset goes back to the default.
+    fireEvent.click(screen.getByTestId("review-to"));
+    fireEvent.click(screen.getByTestId("review-ref-option-tip"));
+    await waitFor(() => expect(mockedDiff).toHaveBeenCalledWith(RUN_ID, { from: "fork", to: "tip" }));
+    expect(window.location.search).toBe("?from=fork&to=tip");
+    expect(screen.getByTestId("review-reset")).toHaveTextContent("fork → worktree");
+    fireEvent.click(screen.getByTestId("review-reset"));
+    await waitFor(() => expect(window.location.search).toBe(""));
+    expect(screen.getByTestId("review-to")).toHaveTextContent("Working tree");
+  });
+
   it("fetches the full content at both refs for context expansion, only for existing sides", async () => {
     render(<ReviewPage runId={RUN_ID} />);
     await waitFor(() => expect(screen.getAllByTestId("review-file")).toHaveLength(2));

@@ -18,6 +18,8 @@ import {
   statusLetter,
   writeView,
   deliverySignature,
+  defaultPair,
+  hasExplicitPair,
 } from "./runRefs";
 import type { DiffFile, RunRefs } from "../types";
 
@@ -79,6 +81,29 @@ describe("Review URL contract (#749)", () => {
     expect(pairFromSearch("?to=live:rev")).toEqual({ from: "fork", to: "live:rev" });
     expect(isDefaultPair(pairFromSearch(""))).toBe(true);
     expect(isDefaultPair({ from: "tip", to: "fork" })).toBe(false);
+  });
+
+  it("follows the daemon's default pair — fork → worktree while the Run's worktree exists (#835)", () => {
+    const WT_REFS: RunRefs = {
+      ...REFS,
+      default_to: "worktree",
+      refs: [...REFS.refs, { id: "worktree", kind: "worktree", label: "Working tree", git_ref: ".pdo/runs/x/worktree", sha: "7ee7" }],
+    };
+    const d = defaultPair(WT_REFS);
+    expect(d).toEqual({ from: "fork", to: "worktree" });
+    expect(defaultPair(null)).toEqual({ from: "fork", to: "tip" });
+    expect(defaultPair(REFS)).toEqual({ from: "fork", to: "tip" });
+    // The URL leaves the default out, whatever it is; tip spelled out is then explicit.
+    expect(reviewUrl("r1", d, d)).toBe("/runs/r1/review");
+    expect(reviewUrl("r1", { from: "fork", to: "tip" }, d)).toBe("/runs/r1/review?from=fork&to=tip");
+    expect(pairFromSearch("", d)).toEqual(d);
+    expect(pairFromSearch("?to=tip", d)).toEqual({ from: "fork", to: "tip" });
+    expect(isDefaultPair(d, d)).toBe(true);
+    expect(isDefaultPair({ from: "fork", to: "tip" }, d)).toBe(false);
+    expect(hasExplicitPair("")).toBe(false);
+    expect(hasExplicitPair("?to=tip")).toBe(true);
+    // A bad side falls back to the daemon's default, not the hard-coded tip.
+    expect(reconcilePair({ from: "fork", to: "ghost" }, WT_REFS).pair).toEqual(d);
   });
 
   it("falls back to the default side for an unknown ref, with a notice", () => {

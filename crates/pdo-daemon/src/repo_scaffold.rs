@@ -106,12 +106,16 @@ fn check_relative(path: &str) -> Result<(), String> {
     }
     let p = Path::new(trimmed);
     if p.is_absolute() {
-        return Err(format!("file path must be relative to the repository: {path}"));
+        return Err(format!(
+            "file path must be relative to the repository: {path}"
+        ));
     }
     if p.components()
         .any(|c| matches!(c, std::path::Component::ParentDir))
     {
-        return Err(format!("file path must not climb out of the repository: {path}"));
+        return Err(format!(
+            "file path must not climb out of the repository: {path}"
+        ));
     }
     Ok(())
 }
@@ -130,7 +134,9 @@ pub(crate) fn create_repo(
         return Err(format!("parent must be an absolute path: {parent}"));
     }
     if !parent_path.is_dir() {
-        return Err(format!("parent does not exist or is not a directory: {parent}"));
+        return Err(format!(
+            "parent does not exist or is not a directory: {parent}"
+        ));
     }
 
     let trimmed = name.trim();
@@ -207,10 +213,7 @@ fn scaffold_into(target: &Path, files: &[ScaffoldFile]) -> Result<(), String> {
     git(target, &["add", "-A"])?;
     // `--no-verify` because a global `core.hooksPath` would otherwise run the
     // user's hooks inside a repository they have never seen.
-    git(
-        target,
-        &["commit", "--no-verify", "-m", "Initial commit"],
-    )?;
+    git(target, &["commit", "--no-verify", "-m", "Initial commit"])?;
     Ok(())
 }
 
@@ -252,7 +255,10 @@ mod tests {
         let outcome = create_repo(
             tmp.path().to_str().unwrap(),
             "pdo-tutorial",
-            &[file("README.md", "# Tutorial\nA throwaway repo.\n"), file("notes.txt", "")],
+            &[
+                file("README.md", "# Tutorial\nA throwaway repo.\n"),
+                file("notes.txt", ""),
+            ],
         )
         .unwrap();
 
@@ -271,7 +277,8 @@ mod tests {
     #[test]
     fn the_initial_commit_is_signed_by_the_repo_local_identity() {
         let tmp = tempfile::tempdir().unwrap();
-        let outcome = create_repo(tmp.path().to_str().unwrap(), "r", &[file("a.txt", "a")]).unwrap();
+        let outcome =
+            create_repo(tmp.path().to_str().unwrap(), "r", &[file("a.txt", "a")]).unwrap();
 
         let out = Command::new("git")
             .args(["log", "-1", "--format=%an <%ae>"])
@@ -312,14 +319,18 @@ mod tests {
 
         assert_eq!(
             err,
-            format!("{} exists and is not a git repository", tmp.path().join("pdo-tutorial").display())
+            format!(
+                "{} exists and is not a git repository",
+                tmp.path().join("pdo-tutorial").display()
+            )
         );
     }
 
     #[test]
     fn a_folder_inside_another_repo_is_not_a_repo_root() {
         let tmp = tempfile::tempdir().unwrap();
-        let outer = create_repo(tmp.path().to_str().unwrap(), "outer", &[file("a.txt", "a")]).unwrap();
+        let outer =
+            create_repo(tmp.path().to_str().unwrap(), "outer", &[file("a.txt", "a")]).unwrap();
         std::fs::create_dir(outer.path.join("inner")).unwrap();
 
         // `rev-parse --git-dir` would say yes here; `--show-toplevel` says outer.

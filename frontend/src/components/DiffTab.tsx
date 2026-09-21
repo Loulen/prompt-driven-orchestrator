@@ -262,10 +262,10 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
               Files
             </button>
           )}
-          {/* #749: the way to the Review page (fork → tip, same tab). */}
+          {/* #749: the way to the Review page (the Run's default pair, same tab). */}
           <a
             href={reviewUrl(run.run_id)}
-            title="Open the Review page (fork → tip)"
+            title="Open the Review page"
             className="flex items-center gap-1 rounded border border-line-strong bg-bg-3 px-2 py-0.5 text-fg-3 transition-colors hover:text-fg-2"
             style={{ fontSize: "10.5px" }}
             data-testid="diff-review-button"

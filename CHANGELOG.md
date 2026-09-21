@@ -16,6 +16,18 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.97.1
+**La diff par défaut du pane review montre l'arbre de travail du run** (#835).
+
+- Pour un run en cours, `/runs/<id>/review` et `GET /runs/<id>/diff/structured` sans paramètres
+  comparent le point de fork à un instantané de l'arbre de travail (modifs non commitées et
+  fichiers non suivis inclus, `.pdo/` exclu) au lieu de `fork → tip`. Les sélecteurs de ref
+  proposent « Working tree » ; `?from=fork&to=tip` reste inchangé. Run terminé : la valeur par
+  défaut coïncide avec `fork → tip`.
+- L'instantané fonctionne aussi quand le dépôt cible ignore `.pdo/` (`.gitignore` ou
+  `.git/info/exclude`), et `/refs` comme `/diff` échouent de manière cohérente si l'instantané
+  échoue. La lecture ne touche jamais l'index, le status ni le HEAD du nœud.
+
 ## 1.97.0
 **Mode tutoriel livré sur `main`** (spec #821, story #816, tickets #822 à #825).
 

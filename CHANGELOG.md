@@ -16,6 +16,15 @@ Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les mét
 déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
 contribution sont dans `CONTRIBUTING.md`.
 
+## 1.97.0
+**Mode tutoriel livré sur `main`** (spec #821, story #816, tickets #822 à #825).
+
+- Release d'intégration : réunit sur `main` la branche `integration/816-tutorial-mode` (1.94.0 à
+  1.96.0 : menu pipeline maison et cibles stables, Projecteur et moteur de tours, tours *First
+  pipeline* et *First run*, dépôt d'entraînement, full tour) et les releases 1.92.0 / 1.93.0 déjà
+  sur `main`. Aucun changement fonctionnel propre à cette version.
+- Le CHANGELOG retrouve les entrées 1.92.0 et 1.93.0, perdues lors d'une réconciliation.
+
 ## 1.96.0
 **Le tour *First run* va jusqu'à l'output, et le full tour s'enchaîne** (#825, spec #821, story #816, ADR-0071).
 
@@ -122,6 +131,40 @@ Second passage de la Feature Path :
   estimée, une coche sur les tours terminés et un lien « Reset tutorial memory ». Coches et
   proposition de bienvenue vivent dans le navigateur, comme le thème — jamais côté daemon.
 - Le tour *First run* est annoncé et grisé : il arrive avec #824.
+
+## 1.93.0
+**Filtres par onglet, mode de durée Total/Active/Waiting, couverture, réglages éphémères** (#819, story #817).
+
+- La barre de titre de Stats ne garde que la période (et Pricing details sur Cost). Chaque onglet
+  porte sa **bande de filtres** avec sa cohorte « completed runs only » et son propre défaut :
+  activée sur Performance, désactivée sur Overview / Sessions / Triggers et sur Cost. Basculer la
+  cohorte ne refetch que l'onglet concerné.
+- Sur Performance, la bascule « exclude user wait » devient un contrôle à trois positions
+  **Total / Active / Waiting** (défaut Active). Cartes, en-tête de colonne, box-plots, libellés et
+  tri suivent le mode, côté client, sans refetch. En Active et Waiting, un « i » donne
+  « n exécutions sur N ont déclaré au moins une attente ».
+- **Cassant côté navigateur** : les réglages Stats sont **éphémères**. Plus aucune clé
+  `pdo.stats.*` n'est lue ni écrite (les anciennes restent inertes dans `localStorage`) ; l'état vit
+  tant que Stats est montée, rouvrir réinitialise. Échelles indépendantes activées par défaut.
+  Plus de pastille de déviation sur le rail.
+- Daemon, additif : `GET /stats/performance` porte `wait_duration` à côté de `duration` et
+  `active_duration` à chaque niveau (Total = Active + Waiting par exécution), plus
+  `waited_executions` et `executions` pour la couverture.
+
+## 1.92.0
+**L'archivage d'un Run parent entraîne ses Runs enfants terminés** (#815).
+
+- `cleanup_run` archive le Run **et ses descendants terminés** (enfants, petits-enfants, résolus
+  par `parent_run_id`), petits-enfants d'abord, par le même chemin de démontage : worktrees et
+  dossiers de run des enfants sont réclamés avec le parent. Les descendants déjà archivés sont
+  ignorés sans erreur ; la réponse `200` liste les `archived_children`.
+- Un descendant **vivant** (running, awaiting-user, paused) n'est jamais archivé en cascade : la
+  requête est refusée en `409` avec la liste `live_children` et rien n'est touché. Arrêter
+  l'enfant d'abord.
+- Dans l'UI, la boîte de confirmation Cleanup compte les enfants terminés qui partiront avec le
+  parent et prévient quand un enfant encore vivant fera refuser la demande par le daemon.
+- `pdo reap` : un parent moissonné emporte ses enfants terminés même plus jeunes que leur TTL ;
+  un parent dont le sous-arbre tourne encore reste listé jusqu'à ce qu'il se pose.
 
 ## 1.91.0
 **Durée active hors attente déclarée, filtre par genre de nœud, runs terminés seulement** (#810, story #808).

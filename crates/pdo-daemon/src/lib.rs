@@ -15401,13 +15401,13 @@ async fn run_refs(
     let repo = effective_repo_root(&state, &run_state);
     let sha_of = |r: &str| structured_diff::rev_parse(&repo, r);
     let snapshot = run_worktree_dir(&state, &run_state, &run_id)
-        .and_then(|dir| structured_diff::snapshot_worktree(&dir).ok());
+        .map(|dir| structured_diff::snapshot_worktree(&dir).ok());
     Json(run_refs::collect(
         &run_id,
         &run_state,
         &events,
         &sha_of,
-        snapshot.as_deref(),
+        snapshot.as_ref().map(Option::as_deref),
     ))
     .into_response()
 }
@@ -15935,8 +15935,14 @@ async fn send_review_comments(
     let worktree = run_worktree_dir(&state, &run_state, &run_id);
     let snapshot = worktree
         .as_ref()
-        .and_then(|dir| structured_diff::snapshot_worktree(dir).ok());
-    let refs = run_refs::collect(&run_id, &run_state, &events, &sha_of, snapshot.as_deref());
+        .map(|dir| structured_diff::snapshot_worktree(dir).ok());
+    let refs = run_refs::collect(
+        &run_id,
+        &run_state,
+        &events,
+        &sha_of,
+        snapshot.as_ref().map(Option::as_deref),
+    );
     let label_of = |id: &str| -> String {
         refs.refs
             .iter()
@@ -15972,7 +15978,7 @@ async fn send_review_comments(
         let resolve = |id: &str| -> Option<String> {
             match run_refs::resolve_id(&run_id, &run_state, &events, id) {
                 run_refs::Resolved::Git(r) => Some(r),
-                run_refs::Resolved::Worktree => snapshot.clone(),
+                run_refs::Resolved::Worktree => snapshot.clone().flatten(),
                 _ => None,
             }
         };
@@ -43206,6 +43212,14 @@ edges: []
         std::fs::write(wt_dir.join("REPRO_835.md"), "untracked\n").unwrap();
         std::fs::create_dir_all(wt_dir.join(".pdo/artifacts")).unwrap();
         std::fs::write(wt_dir.join(".pdo/artifacts/out.md"), "blackboard\n").unwrap();
+        // The documented target-repo setup (ADR-0060) ignores `.pdo/` as a
+        // directory: the snapshot must not trip on it (#835 FP finding).
+        let common_dir = git_in(
+            &wt_dir,
+            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        );
+        std::fs::create_dir_all(Path::new(&common_dir).join("info")).unwrap();
+        std::fs::write(Path::new(&common_dir).join("info/exclude"), ".pdo/\n").unwrap();
         let status_before = git_in(&wt_dir, &["status", "--porcelain"]);
 
         let app = build_router(state);

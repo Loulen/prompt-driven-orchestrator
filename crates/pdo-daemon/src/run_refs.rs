@@ -217,9 +217,12 @@ fn live_nodes(run_id: &str, run_state: &RunState) -> Vec<(String, i64, String)> 
 /// Build the Run's refs. `sha_of` resolves a git ref to a commit SHA (`None`
 /// when it does not exist) — injected so the listing is testable without a
 /// repository; the HTTP handler passes `structured_diff::rev_parse`.
-/// `worktree_snapshot` is the snapshot tree id of the Run's worktree when it
-/// exists (`structured_diff::snapshot_worktree`), `None` once it is gone: with
-/// it the `worktree` ref is listed and is the default destination (#835).
+/// `worktree` is `Some` while the Run's worktree directory exists, `None` once
+/// it is gone: with it the `worktree` ref is listed and is the default
+/// destination (#835). The inner value is the worktree's snapshot tree id
+/// (`structured_diff::snapshot_worktree`), `None` when snapshotting failed — the
+/// ref is still listed (without a `sha`) so this listing and the diff endpoint,
+/// which defaults on the directory alone, never disagree on the default.
 ///
 /// A live branch that no longer resolves (merged back between two projections)
 /// is dropped: offering it would make the picker lie.
@@ -228,7 +231,7 @@ pub(crate) fn collect(
     run_state: &RunState,
     events: &[Event],
     sha_of: &dyn Fn(&str) -> Option<String>,
-    worktree_snapshot: Option<&str>,
+    worktree: Option<Option<&str>>,
 ) -> RunRefs {
     let mut refs: Vec<RunRef> = Vec::new();
     let mut deliveries: Vec<Delivery> = Vec::new();
@@ -318,13 +321,13 @@ pub(crate) fn collect(
         iter: None,
     });
 
-    let default_to = match worktree_snapshot {
+    let default_to = match worktree {
         Some(snapshot) => {
             refs.push(RunRef {
                 id: WORKTREE_ID.to_string(),
                 kind: RefKind::Worktree,
                 label: "Working tree".to_string(),
-                sha: Some(snapshot.to_string()),
+                sha: snapshot.map(str::to_string),
                 git_ref: worktree_display(run_id),
                 node_id: None,
                 node_name: None,
@@ -659,7 +662,7 @@ mod tests {
         // `to`; its sha is the snapshot tree id handed in, not a commit.
         let events = two_deliveries_and_a_live_node();
         let state = project(&events).unwrap();
-        let refs = collect(RUN, &state, &events, &|_| None, Some("7ee7ee7"));
+        let refs = collect(RUN, &state, &events, &|_| None, Some(Some("7ee7ee7")));
         let last = refs.refs.last().unwrap();
         assert_eq!(last.id, "worktree");
         assert_eq!(last.kind, RefKind::Worktree);
@@ -673,6 +676,13 @@ mod tests {
         );
         assert_eq!(refs.default_from, "fork");
         assert_eq!(refs.default_to, "worktree");
+        // Worktree present but unsnapshottable: still listed (no sha) and still
+        // the default, so the listing agrees with the diff endpoint.
+        let unsnapped = collect(RUN, &state, &events, &|_| None, Some(None));
+        let last = unsnapped.refs.last().unwrap();
+        assert_eq!(last.id, "worktree");
+        assert_eq!(last.sha, None);
+        assert_eq!(unsnapped.default_to, "worktree");
         // Without a worktree (finished, archived): no such ref, tip is the default.
         let gone = collect(RUN, &state, &events, &|_| None, None);
         assert!(gone.refs.iter().all(|r| r.id != "worktree"));

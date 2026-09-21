@@ -209,19 +209,18 @@ pub(crate) fn snapshot_worktree(worktree: &Path) -> Result<String, GitError> {
         std::fs::copy(&index, &tmp).map_err(GitError::Spawn)?;
     }
     let env: &[(&str, &Path)] = &[("GIT_INDEX_FILE", tmp.as_path())];
+    // Stage everything, then put `.pdo/` back to its `HEAD` state. Not a
+    // `:(exclude).pdo/` pathspec: naming `.pdo` in the pathspec makes `git add`
+    // treat it as explicitly requested, and it aborts ("paths are ignored by one
+    // of your .gitignore files") when the target repo gitignores `.pdo/` — the
+    // documented setup (ADR-0060). `git reset -- .pdo` on the copied index is a
+    // no-op when nothing under `.pdo` was staged or is tracked.
     let result = run_git_env(
         worktree,
-        &[
-            "-c",
-            "core.quotepath=false",
-            "add",
-            "-A",
-            "--",
-            ".",
-            ":(exclude).pdo/",
-        ],
+        &["-c", "core.quotepath=false", "add", "-A", "--", "."],
         env,
     )
+    .and_then(|_| run_git_env(worktree, &["reset", "-q", "--", ".pdo"], env))
     .and_then(|_| run_git_env(worktree, &["write-tree"], env))
     .map(|b| String::from_utf8_lossy(&b).trim().to_string());
     let _ = std::fs::remove_file(&tmp);
@@ -1068,5 +1067,75 @@ mod tests {
             clean.files_changed,
             compute(repo, "main", "work", true).unwrap().files_changed
         );
+    }
+
+    #[test]
+    fn snapshot_worktree_works_when_the_target_repo_gitignores_the_pdo_directory() {
+        // #835 FP finding: `git add -A -- . ':(exclude).pdo/'` aborts when
+        // `.pdo/` is gitignored as a directory — the documented target-repo
+        // setup (ADR-0060). The snapshot must succeed, leave `.pdo/` out, and
+        // keep a `.pdo` path that *is* tracked at HEAD exactly as HEAD has it.
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(repo)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["config", "user.email", "t@t"]);
+        git(&["config", "user.name", "t"]);
+        git(&["config", "commit.gpgsign", "false"]);
+        std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+        std::fs::write(repo.join(".gitignore"), ".pdo/\ntarget/\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "c0"]);
+        std::fs::write(repo.join("a.txt"), "one\nTWO\n").unwrap();
+        std::fs::write(repo.join("untracked.txt"), "new\n").unwrap();
+        std::fs::create_dir_all(repo.join(".pdo/runs")).unwrap();
+        std::fs::write(repo.join(".pdo/runs/art.txt"), "blackboard\n").unwrap();
+        let status_before = git(&["status", "--porcelain"]);
+
+        let d = compute_worktree(repo, "main", "worktree", true).unwrap();
+        let mut paths: Vec<_> = d
+            .files
+            .iter()
+            .map(|f| f.new_path.clone().unwrap())
+            .collect();
+        paths.sort();
+        assert_eq!(paths, vec!["a.txt", "untracked.txt"], "{d:?}");
+        assert_eq!(git(&["status", "--porcelain"]), status_before);
+
+        // Same rule when `.pdo` is *not* ignored: it stays out of the snapshot.
+        std::fs::write(repo.join(".gitignore"), "target/\n").unwrap();
+        let d = compute_worktree(repo, "main", "worktree", true).unwrap();
+        let mut paths: Vec<_> = d
+            .files
+            .iter()
+            .map(|f| f.new_path.clone().unwrap())
+            .collect();
+        paths.sort();
+        assert_eq!(paths, vec![".gitignore", "a.txt", "untracked.txt"], "{d:?}");
+
+        // A `.pdo` path tracked at HEAD is snapshotted as HEAD has it — neither
+        // dropped nor updated from the disk.
+        std::fs::write(repo.join(".pdo/pipeline.yaml"), "v1\n").unwrap();
+        git(&["add", "-f", ".pdo/pipeline.yaml"]);
+        git(&["commit", "-q", "-m", "c1"]);
+        std::fs::write(repo.join(".pdo/pipeline.yaml"), "v2\n").unwrap();
+        let snapshot = snapshot_worktree(repo).unwrap();
+        assert_eq!(
+            file_at_ref(repo, &snapshot, ".pdo/pipeline.yaml").unwrap(),
+            b"v1\n"
+        );
+        assert!(file_at_ref(repo, &snapshot, ".pdo/runs/art.txt").is_err());
     }
 }

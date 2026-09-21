@@ -168,9 +168,18 @@ async fn sent_comments_are_events_projected_pushed_and_start_the_manager() {
     assert_eq!(sent[1]["id"], "rc-002");
     assert_eq!(sent[0]["batch_id"], sent[1]["batch_id"]);
     assert_eq!(sent[0]["from_ref"], "fork");
-    assert_eq!(sent[0]["to_ref"], "tip");
+    // #835: no pair given and the worktree exists → the anchor is the working
+    // tree, frozen as its snapshot tree id (here HEAD's tree: the tree is clean).
+    assert_eq!(sent[0]["to_ref"], "worktree");
     assert!(sent[0]["from_sha"].as_str().unwrap().len() == 40, "{body}");
     assert!(sent[0]["to_sha"].as_str().unwrap().len() == 40, "{body}");
+    let head_tree = git(&wt_dir, &["rev-parse", "HEAD^{tree}"]);
+    assert_eq!(
+        sent[0]["to_sha"],
+        String::from_utf8_lossy(&head_tree.stdout).trim(),
+        "{body}"
+    );
+    assert_eq!(sent[1]["to_ref"], "tip");
     assert_ne!(sent[0]["from_sha"], sent[0]["to_sha"]);
     let excerpt = sent[0]["excerpt"].as_str().unwrap();
     assert!(

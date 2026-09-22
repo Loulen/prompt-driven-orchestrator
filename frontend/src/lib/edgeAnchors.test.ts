@@ -374,6 +374,84 @@ describe("enforcePerpendicularEnds — around the target card (#844 FP iter-3)",
   });
 });
 
+describe("enforcePerpendicularEnds — a manual route around its target (#844 FP iter-4)", () => {
+  // « charlie »: a manual edge from Alpha's bottom into Charlie's (default) left
+  // side, Charlie right below the source.
+  const CHARLIE = { x: 121, y: 481, width: 160, height: 35 };
+  const src = { x: 240, y: 195 };
+  const tgt = { x: 121, y: 498 };
+  const enforce = (interior: Point[]) =>
+    enforcePerpendicularEnds([src, ...interior, tgt], "bottom", "left", LEG, CHARLIE);
+
+  function throughCard(points: Point[]): boolean {
+    for (let i = 1; i < points.length - 1; i++) {
+      const [a, b] = [points[i - 1], points[i]];
+      const spans = (lo: number, hi: number, e0: number, e1: number) =>
+        Math.min(lo, hi) < e1 && Math.max(lo, hi) > e0;
+      if (
+        spans(a.x, b.x, CHARLIE.x, CHARLIE.x + CHARLIE.width) &&
+        spans(a.y, b.y, CHARLIE.y, CHARLIE.y + CHARLIE.height)
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function expectStable(pts: Point[]) {
+    expect(enforce(storableWaypoints(pts))).toEqual(pts);
+    expect(enforcePerpendicularEnds(pts, "bottom", "left", LEG, CHARLIE)).toEqual(pts);
+  }
+
+  it("turns after the user's last pin, not at the source approach (finding 1)", () => {
+    // Pins on the straight run down: collinear, but still the user's intent.
+    const pts = enforce([{ x: 240, y: 300 }, { x: 240, y: 400 }]);
+    expect(pts).toEqual([
+      src,
+      { x: 240, y: 235 },
+      { x: 240, y: 400 },
+      { x: 81, y: 400 },
+      { x: 81, y: 498 },
+      tgt,
+    ]);
+    expect(throughCard(pts)).toBe(false);
+    expectStable(pts);
+  });
+
+  it("keeps a corridor dragged BELOW the card where it was put (finding 2)", () => {
+    // The y=400 corridor dragged 140px down, past Charlie.
+    const pts = enforce([{ x: 240, y: 540 }, { x: 81, y: 540 }]);
+    expect(pts).toEqual([
+      src,
+      { x: 240, y: 235 },
+      { x: 321, y: 235 },
+      { x: 321, y: 540 },
+      { x: 81, y: 540 },
+      { x: 81, y: 498 },
+      tgt,
+    ]);
+    expect(throughCard(pts)).toBe(false);
+    expect(orthogonal(pts)).toBe(true);
+    expectStable(pts);
+  });
+
+  it("goes round by the far side when the near one would swallow the dragged run", () => {
+    // Vertical nearer the card's LEFT border: going round on the left lands on
+    // the approach column and drops the run at y=540 — so round the right.
+    const pts = enforcePerpendicularEnds(
+      [{ x: 160, y: 195 }, { x: 160, y: 540 }, { x: 81, y: 540 }, tgt],
+      "bottom",
+      "left",
+      LEG,
+      CHARLIE,
+    );
+    expect(pts).toContainEqual({ x: 81, y: 540 });
+    expect(pts.some((p) => p.y === 540 && p.x > CHARLIE.x + CHARLIE.width)).toBe(true);
+    expect(throughCard(pts)).toBe(false);
+    expect(orthogonal(pts)).toBe(true);
+  });
+});
+
 describe("storableWaypoints", () => {
   it("stores only the points BETWEEN the two legs — the legs are re-derived", () => {
     const enforced = [

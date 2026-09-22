@@ -382,50 +382,117 @@ export function enforcePerpendicularEnds(
     ...dedupeCollinear(squared.slice(1, -1)),
     squared[squared.length - 1],
   ];
-  return targetRect ? aroundTarget(enforced, targetSide, leg, targetRect) : enforced;
+  return targetRect ? aroundTarget(squared, enforced, targetSide, leg, targetRect) : enforced;
 }
 
 /**
- * Re-lays the tail of an enforced path around the target card when it runs
- * through it.
+ * Re-lays an enforced path around the target card when it runs through it.
  *
  * The router plans as if every wire left by the right, and enforcement only
  * INSERTS bends, so a wire leaving a card's bottom towards a target right below
  * it, arriving on its (default) left side, was squared down the middle of the
  * target, across it, out of its far border and back in: the leg into the card
- * then drew an arrowhead from empty space (#844 FP iter-3). The fix keeps the
- * route up to the last point genuinely clear of the card, then lands with the
- * same around-the-card connector the drawing gesture uses, so the auto route and
- * a drawn one arrive the same way.
+ * then drew an arrowhead from empty space (#844 FP iter-3).
  *
- * A fixed point like the rest of enforcement: a tail already clear of the card is
- * returned untouched, so re-enforcing the stored waypoints reproduces the route.
+ * Two repairs, the gentler first:
+ * 1. A segment that merely PASSES through the card (both ends outside it) is
+ *    pushed sideways into the nearer free corridor. Everything else — in
+ *    particular a segment the user has just dragged past the card — stays where
+ *    it was put, so the wire goes around the far side instead of jumping back
+ *    against the pointer (#844 FP iter-4, finding 2).
+ * 2. Otherwise the tail ends inside the card: keep the route up to the last
+ *    point genuinely clear of it, then land with the same around-the-card
+ *    connector the drawing gesture uses. The clip reads `squared` — the path
+ *    BEFORE the final collinear merge — so the user's pins on a straight run
+ *    still count as « clear » and the wire turns after the last of them, not at
+ *    the source approach (#844 FP iter-4, finding 1).
+ *
+ * A fixed point like the rest of enforcement: a body already clear of the card
+ * is returned untouched, so re-enforcing the stored waypoints reproduces the
+ * route. A card too close to go around returns the square route unchanged.
  */
 function aroundTarget(
+  squared: Point[],
   enforced: Point[],
   targetSide: PortSide,
   leg: number,
   rect: AnchorRect,
 ): Point[] {
-  const tgt = enforced[enforced.length - 1];
   // Everything but the perpendicular leg, which ends ON the border by design.
-  const body = enforced.slice(0, -1);
-  if (!crossesRect(body, rect)) return enforced;
+  if (!crossesRect(enforced.slice(0, -1), rect)) return enforced;
+  const clear = (path: Point[]) => !crossesRect(path.slice(0, -1), rect);
+  const tidy = (path: Point[]) => [
+    path[0],
+    ...dedupeCollinear(path.slice(1, -1)),
+    path[path.length - 1],
+  ];
+
+  // The square path with only its reversal spurs removed: a wire doubling back
+  // on itself is noise, a pin on a straight run is intent.
+  const path = [squared[0], ...dropSpurs(squared.slice(1, -1)), squared[squared.length - 1]];
+
+  // Nearer corridor first. A candidate must still pass through every point of
+  // the route: going round by the side the wire lands on can collapse the detour
+  // onto the landing and silently drop the very segment the user placed.
+  for (const far of [false, true]) {
+    const shifted = tidy(sidestepCrossings(path, rect, leg, far));
+    if (clear(shifted) && path.every((p) => onPolyline(p, shifted))) return shifted;
+  }
+
+  const tgt = path[path.length - 1];
   // Never clip into the source leg: the first two points are pinned.
-  const kept = [...enforced.slice(0, 2), ...clipOutside(enforced.slice(2, -2), rect, leg - TOL)];
+  const kept = [...path.slice(0, 2), ...clipOutside(path.slice(2, -2), rect, leg - TOL)];
   let from = kept.length;
   // The kept prefix may still run into the card on its last segment.
   while (from > 2 && crossesRect(kept.slice(0, from), rect)) from--;
   const prefix = kept.slice(0, from);
   const connector = landingConnector(prefix[prefix.length - 1], tgt, targetSide, leg, rect);
-  const rerouted = [
-    prefix[0],
-    ...dedupeCollinear([...prefix.slice(1), ...connector.slice(1, -1)]),
-    tgt,
-  ];
+  const rerouted = tidy([...prefix, ...connector.slice(1, -1), tgt]);
   // A card too close to the source to go around cleanly: keep the square route
   // rather than trade one crossing for another.
-  return crossesRect(rerouted.slice(0, -1), rect) ? enforced : rerouted;
+  return clear(rerouted) ? rerouted : enforced;
+}
+
+/**
+ * Pushes every segment that runs straight THROUGH `rect` — both of its ends
+ * outside the card — into the free corridor one leg beyond the nearer parallel
+ * border (the farther one when `far`): `a → b` becomes `a → a' → b' → b`. The
+ * two legs (first and last segment) are left alone, and so is a segment ending
+ * inside the card, which sidestepping cannot fix. Only inserts points, like
+ * `squareUp`.
+ */
+function sidestepCrossings(
+  points: Point[],
+  rect: AnchorRect,
+  leg: number,
+  far: boolean,
+): Point[] {
+  const corridor = (v: number, low: number, high: number) => {
+    const near = nearerCorridor(v, low, high, leg);
+    return far ? (near < low ? high + leg : low - leg) : near;
+  };
+  const strictlyInside = (p: Point) =>
+    p.x > rect.x + TOL &&
+    p.x < rect.x + rect.width - TOL &&
+    p.y > rect.y + TOL &&
+    p.y < rect.y + rect.height - TOL;
+  const out: Point[] = [points[0]];
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1];
+    const b = points[i];
+    const isLeg = i === 1 || i === points.length - 1;
+    if (!isLeg && !strictlyInside(a) && !strictlyInside(b) && crossesRect([a, b], rect)) {
+      if (Math.abs(a.x - b.x) < TOL) {
+        const x = corridor(a.x, rect.x, rect.x + rect.width);
+        out.push({ x, y: a.y }, { x, y: b.y });
+      } else {
+        const y = corridor(a.y, rect.y, rect.y + rect.height);
+        out.push({ x: a.x, y }, { x: b.x, y });
+      }
+    }
+    out.push(b);
+  }
+  return out;
 }
 
 /**
@@ -485,6 +552,42 @@ function dedupeCollinear(points: Point[]): Point[] {
         (Math.abs(a.y - b.y) < TOL && Math.abs(b.y - c.y) < TOL) ||
         (Math.abs(a.x - b.x) < TOL && Math.abs(b.x - c.x) < TOL);
       if (!straight) break;
+      out.splice(out.length - 2, 1);
+    }
+  }
+  return out;
+}
+
+/** Whether `p` lies on one of the axis-aligned segments of `points`. */
+function onPolyline(p: Point, points: Point[]): boolean {
+  for (let i = 1; i < points.length; i++) {
+    const [a, b] = [points[i - 1], points[i]];
+    const within = (v: number, e0: number, e1: number) =>
+      v >= Math.min(e0, e1) - TOL && v <= Math.max(e0, e1) + TOL;
+    if (within(p.x, a.x, b.x) && within(p.y, a.y, b.y)) return true;
+  }
+  return false;
+}
+
+/**
+ * Collinear merge restricted to REVERSALS: a point where the wire runs out along
+ * an axis and straight back is dropped; a point in the middle of a run going one
+ * way is kept. The first and last element always survive.
+ */
+function dropSpurs(points: Point[]): Point[] {
+  const out: Point[] = [];
+  for (const p of points) {
+    const last = out[out.length - 1];
+    if (last && Math.abs(last.x - p.x) < TOL && Math.abs(last.y - p.y) < TOL) continue;
+    out.push({ ...p });
+    while (out.length >= 3) {
+      const [a, b, c] = out.slice(-3);
+      const vertical = Math.abs(a.x - b.x) < TOL && Math.abs(b.x - c.x) < TOL;
+      const horizontal = Math.abs(a.y - b.y) < TOL && Math.abs(b.y - c.y) < TOL;
+      const reverses = vertical
+        ? (b.y - a.y) * (c.y - b.y) < 0
+        : horizontal && (b.x - a.x) * (c.x - b.x) < 0;
+      if (!reverses) break;
       out.splice(out.length - 2, 1);
     }
   }

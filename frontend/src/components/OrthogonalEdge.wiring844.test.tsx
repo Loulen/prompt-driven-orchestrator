@@ -339,3 +339,50 @@ describe("OrthogonalEdge — an auto route never runs through its target card (#
     expect(last.x - before.x).toBe(40);
   });
 });
+
+describe("OrthogonalEdge — dragging a corridor past the target (#844 FP iter-4)", () => {
+  // Same stacked pair: a manual route turning left above the target, then down
+  // into its left side.
+  const BELOW = { x: 20, y: 200, width: 200, height: 80 };
+  const stacked: Node[] = [
+    nodes[0],
+    { ...nodes[1], position: { x: BELOW.x, y: BELOW.y } },
+  ];
+  const data = edgeData({
+    mode: "manual",
+    waypoints: [{ x: 100, y: 160 }, { x: -20, y: 160 }],
+    targetSide: "left",
+    sourceAnchor: { side: "bottom", offset: 100 },
+    targetAnchor: { side: "left", offset: 40 },
+  });
+
+  it("keeps the dragged segment under the pointer and goes round the card", () => {
+    harness(data, stacked);
+    // Segment 2 is the horizontal corridor at y=160.
+    const handle = document.querySelector('[data-testid="edge-seg-handle-e-0-2"]')!;
+    fireEvent.pointerDown(handle, { button: 0 });
+    fireEvent.pointerMove(window, { clientX: 40, clientY: 320 });
+
+    // The store holds what the render will draw next: the run at y=320 survives
+    // (it used to jump back up above the card, against the pointer).
+    const live = useEditStore.getState().openTabs[0].pipeline.edges[0].waypoints ?? [];
+    expect(live.some((w) => w.y === 320)).toBe(true);
+
+    fireEvent.pointerUp(window);
+    const saved = useEditStore.getState().openTabs[0].pipeline.edges[0].waypoints ?? [];
+    expect(saved.some((w) => w.y === 320)).toBe(true);
+    const route = [{ x: 100, y: 80 }, { x: 100, y: 120 }, ...saved, { x: -20, y: 240 }, { x: 20, y: 240 }];
+    for (let i = 1; i < route.length; i++) {
+      const [a, b] = [route[i - 1], route[i]];
+      expect(a.x === b.x || a.y === b.y).toBe(true);
+      const spans = (lo: number, hi: number, e0: number, e1: number) =>
+        Math.min(lo, hi) < e1 && Math.max(lo, hi) > e0;
+      if (i < route.length - 1) {
+        const inside =
+          spans(a.x, b.x, BELOW.x, BELOW.x + BELOW.width) &&
+          spans(a.y, b.y, BELOW.y, BELOW.y + BELOW.height);
+        expect(inside).toBe(false);
+      }
+    }
+  });
+});

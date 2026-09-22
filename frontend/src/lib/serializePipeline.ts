@@ -187,6 +187,24 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
     if (e.target_side && e.target_side !== "left") {
       edge.target_side = e.target_side;
     }
+    // Per-edge anchors (#844). Layout, like the three above: they say WHERE on a
+    // card's border the wire leaves and lands, so a shared workflow keeps the
+    // wiring it was drawn with. Absent ⇒ the side's middle (the pre-#844
+    // geometry), so an untouched edge round-trips byte for byte. The offset is
+    // rounded on persist — sub-pixel handle centres are what turn a straight wire
+    // into a three-segment path with two phantom handles.
+    if (e.source_anchor) {
+      edge.source_anchor = {
+        side: e.source_anchor.side,
+        offset: Math.round(e.source_anchor.offset),
+      };
+    }
+    if (e.target_anchor) {
+      edge.target_anchor = {
+        side: e.target_anchor.side,
+        offset: Math.round(e.target_anchor.offset),
+      };
+    }
     // Labels and draw order (#845). Layout again, and again emitted only when
     // NON-DEFAULT, so a pipeline nobody re-decorated saves back byte-identical:
     //  - `show_output_labels` has no constant default (it is derived from the

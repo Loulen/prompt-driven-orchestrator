@@ -2,7 +2,7 @@ import type { Edge, Node } from "@xyflow/react";
 import { MarkerType } from "@xyflow/react";
 import type { EdgeWaypoint, LoopRegion, NodeStatus, NodeType, PipelineDef, PortSide, RunState, RunStatus } from "../types";
 import type { OrthogonalEdgeData } from "./OrthogonalEdge";
-import { anchorHandleId, isEmergentInputNode } from "../lib/anchorSide";
+import { anchorHandleId, isEmergentInputNode, rimHandleId } from "../lib/anchorSide";
 import { isNodeIsolated } from "../lib/nodeIsolation";
 import { fallbackNodeSpot } from "../lib/nodePlacement";
 import { carriedPorts, declaredOutputs, primaryPort } from "../lib/edgePorts";
@@ -81,7 +81,6 @@ export function deriveEditNodes(
           nodeId: n.id,
           status,
           inputSide: n.inputs[0]?.side ?? "left",
-          outputSide: n.outputs[0]?.side ?? "right",
         },
       };
     }
@@ -498,6 +497,44 @@ function resolveTargetHandle(
   return anchorHandleId(targetSide ?? "left");
 }
 
+/**
+ * The side the arrow physically arrives on — what the edge's geometry must use,
+ * as opposed to the persisted `target_side`.
+ *
+ * They differ exactly where the target keeps a DECLARED handle: `target_side` is
+ * an emergent-body notion (#168) and such a node never has one, so the persisted
+ * value reads back as the `left` default while the handle sits wherever the port
+ * declares (the End marker's `result` on its top border, a merge's `branches` on
+ * its own side). Routing to `left` there lays the perpendicular landing leg on a
+ * border the wire does not touch.
+ */
+export function resolveTargetGeometrySide(
+  target: PipelineDef["nodes"][number],
+  targetSide: PortSide,
+): PortSide {
+  if (isEmergentInputNode(target.type)) return targetSide;
+  return target.inputs[0]?.side ?? "left";
+}
+
+/**
+ * The side a wire leaves its source by. A drawn edge (#844) says so itself in
+ * `source_anchor`. An edge drawn before #844 has no anchor: it left from its
+ * output's DECLARED side — where the per-output dot used to sit — so that is the
+ * fallback, `right` only when the port declares none. Falling straight back to
+ * `right` sent every legacy `side: bottom|left|top` output out the wrong border,
+ * back through its own card and into the target from the opposite side (#844 FP
+ * iter-2, blocking).
+ */
+export function resolveSourceSide(
+  source: PipelineDef["nodes"][number] | undefined,
+  edge: PipelineDef["edges"][number],
+): PortSide {
+  if (edge.source_anchor) return edge.source_anchor.side;
+  const port = primaryPort(edge.source);
+  const declared = source?.outputs.find((p) => p.name === port) ?? source?.outputs[0];
+  return declared?.side ?? "right";
+}
+
 export function deriveEditEdges(pipeline: PipelineDef): Edge<EditEdgeData>[] {
   const endNodeId = pipeline.nodes.find((n) => n.type === "end")?.id;
 
@@ -514,6 +551,10 @@ export function deriveEditEdges(pipeline: PipelineDef): Edge<EditEdgeData>[] {
 
   return pipeline.edges.map((e, i) => {
     const isEndEdge = endNodeId != null && e.target.node === endNodeId;
+    const sourceSide = resolveSourceSide(
+      pipeline.nodes.find((n) => n.id === e.source.node),
+      e,
+    );
     const targetNode = pipeline.nodes.find((n) => n.id === e.target.node);
     // The persisted anchor side (#168). Only meaningful for an emergent body
     // target; declared/structural handles ignore it. Defaults to `left` so an
@@ -522,6 +563,15 @@ export function deriveEditEdges(pipeline: PipelineDef): Edge<EditEdgeData>[] {
     const targetHandle = targetNode
       ? resolveTargetHandle(targetNode, e.target.port, targetSide)
       : e.target.port || null;
+    // The side the wire actually ARRIVES on, which is not always the persisted
+    // one: a target that keeps a declared handle (End's `result`, a merge's
+    // `branches`) ignores `target_side` entirely and pins the arrow on its own
+    // side. Handing the edge the persisted `left` there made it lay the landing
+    // leg across a side the handle is not on — a wire entering the card from the
+    // left to reach a pin on its top border (#844, FP finding 2).
+    const geometrySide: PortSide = targetNode
+      ? resolveTargetGeometrySide(targetNode, targetSide)
+      : targetSide;
     const isElse = e.else === true;
     const hasWhen = e.when != null && Object.keys(e.when).length > 0;
     const isConditional = isElse || hasWhen;
@@ -558,9 +608,12 @@ export function deriveEditEdges(pipeline: PipelineDef): Edge<EditEdgeData>[] {
       id: `e-${i}`,
       source: e.source.node,
       target: e.target.node,
-      // The arrow binds to the PRIMARY carried port's handle; a multi-port
-      // edge (ADR-0073) is still one arrow, drawn from one place.
-      sourceHandle: primaryPort(e.source) || null,
+      // #844: the arrow binds to the RIM strip of the side it leaves by — there
+      // is no per-output handle any more. xyflow needs the binding for
+      // connectivity and for its own geometry only; the drawn departure POINT
+      // comes from `source_anchor` inside the edge component. An edge drawn
+      // before #844 has no anchor and leaves by its output's declared side.
+      sourceHandle: rimHandleId(sourceSide),
       targetHandle,
       type: "orthogonal",
       // Draw order (#845): edges sit ABOVE the node cards by default, so an
@@ -573,7 +626,10 @@ export function deriveEditEdges(pipeline: PipelineDef): Edge<EditEdgeData>[] {
         edgeIndex: i,
         mode: e.mode ?? null,
         waypoints,
-        targetSide,
+        targetSide: geometrySide,
+        sourceSide,
+        sourceAnchor: e.source_anchor ?? null,
+        targetAnchor: e.target_anchor ?? null,
         isConditional,
         isElse,
         label,

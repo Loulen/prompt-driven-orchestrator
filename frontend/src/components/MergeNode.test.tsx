@@ -19,7 +19,6 @@ const baseMergeEditData = {
   label: "merge-point",
   nodeId: "mg1",
   inputSide: "left" as const,
-  outputSide: "right" as const,
 };
 
 const baseMergeRunData = {
@@ -28,7 +27,6 @@ const baseMergeRunData = {
   status: "completed" as NodeStatus,
   iter: 1,
   inputSide: "left" as const,
-  outputSide: "right" as const,
 };
 
 function editProps(
@@ -103,10 +101,15 @@ describe("MergeEditNode", () => {
     expect(screen.getByText("mg1")).toBeInTheDocument();
   });
 
-  it("renders labeled rows for ports", () => {
+  it("renders the declared input row and the four rim drag-sources (#844)", () => {
     render(<MergeEditNode {...editProps()} />, { wrapper: Wrapper });
     expect(screen.getByTestId("port-input-branches")).toBeInTheDocument();
-    expect(screen.getByTestId("port-output-merged")).toBeInTheDocument();
+    // No output dot any more — the whole rim starts a wire, here as on a work
+    // card, and `merged` is named on the edges that carry it.
+    expect(screen.queryByTestId("port-output-merged")).not.toBeInTheDocument();
+    for (const side of ["top", "bottom", "left", "right"]) {
+      expect(screen.getByTestId(`rim-source-${side}`)).toBeInTheDocument();
+    }
   });
 
   it("shows selected ring when selected", () => {
@@ -132,10 +135,10 @@ describe("MergeRunNode", () => {
     expect(screen.getByTestId("node-icon-merge")).toBeInTheDocument();
   });
 
-  it("renders labeled rows for ports", () => {
+  it("renders the declared input row (the run card draws no wire)", () => {
     render(<MergeRunNode {...runProps()} />, { wrapper: Wrapper });
     expect(screen.getByTestId("port-input-branches")).toBeInTheDocument();
-    expect(screen.getByTestId("port-output-merged")).toBeInTheDocument();
+    expect(screen.queryByTestId("port-output-merged")).not.toBeInTheDocument();
   });
 
   it("shows status text", () => {

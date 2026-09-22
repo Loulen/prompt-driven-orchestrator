@@ -64,7 +64,77 @@ describe("deriveEditEdges targetHandle anchoring (#149)", () => {
     );
     const edges = deriveEditEdges(p);
     expect(edges[0].targetHandle).toBe("__anchor:left");
-    expect(edges[0].sourceHandle).toBe("plan");
+    // #844: the arrow leaves by a RIM strip, not by a per-output handle — there
+    // is no output dot to bind to any more. Un-anchored ⇒ the output's declared
+    // side (right here).
+    expect(edges[0].sourceHandle).toBe("rim-right");
+  });
+
+  it("binds the departure to the rim of the side the wire was drawn from (#844)", () => {
+    const p = pipeline(
+      [node("src", "agent", [], ["plan"]), node("dst", "agent", [], ["code"])],
+      [
+        {
+          source: { node: "src", port: "plan" },
+          target: { node: "dst", port: "plan" },
+          source_anchor: { side: "bottom", offset: 80 },
+          target_anchor: { side: "top", offset: 36 },
+          target_side: "top",
+        },
+      ],
+    );
+    const edges = deriveEditEdges(p);
+    expect(edges[0].sourceHandle).toBe("rim-bottom");
+    // The anchors ride on the edge data: the component draws from them, not
+    // from xyflow's handle centres.
+    expect(edges[0].data?.sourceAnchor).toEqual({ side: "bottom", offset: 80 });
+    expect(edges[0].data?.targetAnchor).toEqual({ side: "top", offset: 36 });
+  });
+
+  it.each<[PortSide]>([["bottom"], ["left"], ["top"]])(
+    "leaves an un-anchored edge by its output's declared %s side, not rightwards (#844 FP iter-2)",
+    (side) => {
+      // A pipeline saved before #844 has no `source_anchor`. Its wires left from
+      // the output dot, which sat on the port's declared side. Defaulting them
+      // to the right rim sent every one out the wrong border, back across its
+      // own card and into the target from the opposite side.
+      const src: NodeDef = {
+        ...node("src", "agent", [], []),
+        outputs: [
+          { name: "other", repeated: false, side: "right" },
+          { name: "plan", repeated: false, side },
+        ],
+      };
+      const p = pipeline(
+        [src, node("dst", "agent", [], ["code"])],
+        [{ source: { node: "src", port: "plan" }, target: { node: "dst", port: "plan" } }],
+      );
+      const edges = deriveEditEdges(p);
+      expect(edges[0].sourceHandle).toBe(`rim-${side}`);
+      expect(edges[0].data?.sourceSide).toBe(side);
+      expect(edges[0].data?.sourceAnchor).toBeNull();
+    },
+  );
+
+  it("lets a drawn anchor win over the output's declared side", () => {
+    const src: NodeDef = {
+      ...node("src", "agent", [], []),
+      outputs: [{ name: "plan", repeated: false, side: "bottom" }],
+    };
+    const edges = deriveEditEdges(
+      pipeline(
+        [src, node("dst", "agent", [], ["code"])],
+        [
+          {
+            source: { node: "src", port: "plan" },
+            target: { node: "dst", port: "plan" },
+            source_anchor: { side: "right", offset: 12 },
+          },
+        ],
+      ),
+    );
+    expect(edges[0].sourceHandle).toBe("rim-right");
+    expect(edges[0].data?.sourceSide).toBe("right");
   });
 
   it("keeps the declared port for the End node (it retains a `result` input handle)", () => {
@@ -74,6 +144,35 @@ describe("deriveEditEdges targetHandle anchoring (#149)", () => {
     );
     const edges = deriveEditEdges(p);
     expect(edges[0].targetHandle).toBe("result");
+  });
+
+  it("routes to the side the declared handle is actually ON (#844, FP finding 2)", () => {
+    // A declared-port target has no say in `target_side` — nothing ever persists
+    // one for it — so the field reads back as the `left` default while the handle
+    // sits where the port declares it. Handing the edge that `left` laid the
+    // perpendicular landing leg across a border the wire never touches, and the
+    // approach to that phantom border was persisted as waypoints inside the card.
+    const end = node("end", "end", ["result"], []);
+    end.inputs[0].side = "top";
+    const p = pipeline(
+      [node("src", "agent", [], ["plan"]), end],
+      [{ source: { node: "src", port: "plan" }, target: { node: "end", port: "result" } }],
+    );
+    expect(deriveEditEdges(p)[0].data?.targetSide).toBe("top");
+  });
+
+  it("still routes an emergent target to its persisted side", () => {
+    const p = pipeline(
+      [node("src", "agent", [], ["plan"]), node("dst", "agent", [], [])],
+      [
+        {
+          source: { node: "src", port: "plan" },
+          target: { node: "dst", port: "plan" },
+          target_side: "bottom",
+        },
+      ],
+    );
+    expect(deriveEditEdges(p)[0].data?.targetSide).toBe("bottom");
   });
 
   it("keeps the declared port for structural nodes (merge)", () => {
@@ -381,7 +480,8 @@ describe("deriveEditEdges — multi-output edges (#843)", () => {
       ]),
     );
     expect(edges).toHaveLength(1);
-    expect(edges[0].sourceHandle).toBe("out");
+    // One arrow, drawn from one place: the rim of the departure side (#844).
+    expect(edges[0].sourceHandle).toBe("rim-right");
   });
 
   it("renders the condition pill with the output prefix once two ports are carried", () => {

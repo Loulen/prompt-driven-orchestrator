@@ -190,14 +190,17 @@ Une edge câble **un ou plusieurs output ports d'un même node source** vers un 
 
 Le tracé d'une edge est **orthogonal**. La création à la souris est **progressive** : le tracé suit le curseur par incréments sur la **grille de câblage**, chaque cellule franchie ajoutant un segment ; l'edge naît donc en `mode: manual` avec ses `waypoints`. `Shift` enfoncé libère le tracé de la grille (il colle au curseur) ; relâcher `Shift` **ré-origine la grille sur le point courant**. La même sémantique de `Shift` vaut pour le drag d'un segment existant, qui snappe à la grille par défaut ; les autres waypoints ne sont **jamais re-snappés**. « Re-route automatically » efface les waypoints et recalcule un tracé auto-routé, lui aussi aligné sur la grille.
 
-- **Grille de câblage** *(terme)* : pas fixe, **constante du produit, jamais un réglage** (ADR-0072). Distincte de la grille décorative du fond. _Éviter_ : « snap grid utilisateur », « pas de grille du projet ».
-- Supprimer un waypoint = dragger jusqu'à aligner deux segments (fusion). Aucun geste au clic droit sur un segment.
+- **Grille de câblage** *(terme)* : pas fixe, **constante du produit, jamais un réglage** (ADR-0072). Distincte de la grille décorative du fond. Seul son **feedback** pendant le geste (`none` / `dots` / `lines`, défaut `dots`) est un réglage de confort par navigateur. _Éviter_ : « snap grid utilisateur », « pas de grille du projet ».
+- Supprimer un waypoint = dragger jusqu'à aligner deux segments (fusion). Aucun geste au clic droit sur un segment ; le clic droit sur une poignée de segment **ne fait rien**.
+- **Jambe perpendiculaire** *(terme)* : le premier et le dernier segment d'une edge sortent et entrent **perpendiculairement** au côté qu'ils touchent, sur au moins une cellule (plancher 16 px). Ils sont **structurels** : ni poignée de drag, ni waypoint persisté — ils se redérivent des ancres à chaque rendu. Les `waypoints` ne stockent que les points **entre** les deux jambes. _Éviter_ : persister les points d'approche (ils dérivent et le rendu contourne la copie périmée).
 
 `mode` + `waypoints` (comme `view` sur les nœuds) sont du **layout, pas de la sémantique** : ils persistent **dans le fichier pipeline** (le routage voyage quand un workflow est partagé) mais sont **exclus du diff sémantique** — deux pipelines ne différant que par leur layout comparent **égaux**. Le partitionnement layout/sémantique a un propriétaire unique côté frontend, miroité côté daemon avec des gardes d'exhaustivité (#154, #355, #395).
 
-### Ancrage de l'edge entrante — `target_side` (#168)
+### Ancrage de l'edge entrante — `target_side` (#168) et ancres par edge (#844)
 
 Les inputs étant émergents, une flèche entrante atterrit **sur le corps** du nœud cible. `target_side` mémorise de quel côté (le plus proche du point de dépôt). C'est du **layout** : persiste dans le fichier, exclu du diff sémantique. Les ports **déclarés** gardent leur côté fixe.
+
+- **Ancre d'edge** *(terme, `{side, offset}`)* : **où** sur le bord d'une carte un fil part (`source_anchor`) ou atterrit (`target_anchor`) — le côté, plus la distance **le long** de ce côté, à au moins 10 px des coins. Le départ est snappé sur la grille de câblage (la première cellule est alors déjà alignée), l'arrivée est prise **au pixel** (la flèche atterrit là où on a visé). Absente ⇒ le **milieu** du côté, c'est-à-dire la géométrie d'avant #844 : un pipeline existant se rouvre et se sauve à l'identique. Layout, comme `target_side`. _Éviter_ : « position du port » (l'ancre n'appartient pas à un port, mais à l'edge).
 
 ### Labels et ordre de dessin — layout par edge
 

@@ -381,6 +381,51 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
     expect(yaml).not.toContain("target_side:");
   });
 
+  it("serializes both per-edge anchors, rounded, so the wiring survives reload (#844)", () => {
+    const impl: NodeDef = {
+      id: "impl", name: "impl", type: "agent",
+      inputs: [], outputs: [{ name: "out", repeated: false, side: "right" }],
+      interactive: false, view: { x: 200, y: 0 },
+    };
+    const yaml = serializePipeline(
+      makeFullPipeline([impl], [
+        {
+          source: { node: "start", port: "user_prompt" },
+          target: { node: "impl", port: "user_prompt" },
+          target_side: "top",
+          source_anchor: { side: "bottom", offset: 80 },
+          // Sub-pixel offsets are what turn a straight wire into a
+          // three-segment path with two phantom handles; they round on persist.
+          target_anchor: { side: "top", offset: 36.4 },
+        },
+      ]),
+    );
+    expect(yaml).toContain("side: bottom");
+    expect(yaml).toContain("offset: 80");
+    expect(yaml).toContain("offset: 36");
+    expect(yaml).not.toContain("36.4");
+  });
+
+  it("omits the anchors on an edge that was never wired by hand (#844)", () => {
+    const impl: NodeDef = {
+      id: "impl", name: "impl", type: "agent",
+      inputs: [], outputs: [{ name: "out", repeated: false, side: "right" }],
+      interactive: false, view: { x: 200, y: 0 },
+    };
+    const yaml = serializePipeline(
+      makeFullPipeline([impl], [
+        {
+          source: { node: "start", port: "user_prompt" },
+          target: { node: "impl", port: "user_prompt" },
+        },
+      ]),
+    );
+    // Absent ⇒ the side's middle, the pre-#844 geometry: a pipeline drawn before
+    // this feature round-trips byte for byte.
+    expect(yaml).not.toContain("source_anchor");
+    expect(yaml).not.toContain("target_anchor");
+  });
+
   it("serializes an edge's label layout and draw order (#845)", () => {
     const impl: NodeDef = {
       id: "impl", name: "impl", type: "agent",

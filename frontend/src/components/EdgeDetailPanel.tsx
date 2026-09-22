@@ -695,7 +695,7 @@ function RoutingSection({
           <div className="text-fg-4" style={{ fontSize: "10px" }}>
             {isManual
               ? `Route persisted as ${waypoints.length} waypoint${waypoints.length === 1 ? "" : "s"}; survives node moves.`
-              : "Right-angle route, re-computed on every node move."}
+              : "Right-angle route on the wiring grid, re-computed on every node move."}
           </div>
         </div>
       </div>

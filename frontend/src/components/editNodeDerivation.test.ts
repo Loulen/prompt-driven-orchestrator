@@ -495,6 +495,47 @@ describe("deriveEditEdges — labels and draw order (#845)", () => {
     expect(EDGE_UNDER_NODES).toBe(0);
   });
 
+  it("tells the edge whether it draws under the nodes, for its labels and handles", () => {
+    const edges = deriveEditEdges(
+      pipeline(
+        ["out"],
+        [
+          { source: { node: "design", port: "out" }, target: { node: "orch", port: "out" } },
+          {
+            source: { node: "design", port: "out" },
+            target: { node: "orch", port: "out" },
+            below_nodes: true,
+          },
+        ],
+      ),
+    );
+    expect(edges.map((e) => e.data!.belowNodes)).toEqual([false, true]);
+  });
+
+  it("numbers the label slots across fan-out edges leaving from the same port", () => {
+    // FP #845 finding: two edges out of `design.spec` placed their tags at the
+    // same default spot, one hiding the other.
+    const edges = deriveEditEdges(
+      pipeline(
+        ["out", "spec"],
+        [
+          { source: { node: "design", ports: ["spec", "out"] }, target: { node: "orch", port: "out" } },
+          { source: { node: "design", port: "spec" }, target: { node: "orch", port: "out" } },
+          // a different departure point starts its own count
+          { source: { node: "design", port: "out" }, target: { node: "orch", port: "out" } },
+          // hidden labels take no slot
+          {
+            source: { node: "design", port: "spec" },
+            target: { node: "orch", port: "out" },
+            show_output_labels: false,
+          },
+          { source: { node: "design", port: "spec" }, target: { node: "orch", port: "out" } },
+        ],
+      ),
+    );
+    expect(edges.map((e) => e.data!.outputLabelSlot)).toEqual([0, 2, 0, 3, 3]);
+  });
+
   it("hands the pinned label positions through to the edge", () => {
     const edges = deriveEditEdges(
       pipeline(

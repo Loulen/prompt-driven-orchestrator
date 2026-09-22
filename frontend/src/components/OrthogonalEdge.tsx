@@ -19,12 +19,13 @@ import {
 } from "../lib/edgePath";
 import {
   conditionLabelOffset,
-  firstSegmentHeading,
+  departureHeading,
   midpointAxis,
   outputLabelPlacement,
 } from "../lib/edgeLabels";
 import { useEditStore } from "../stores/editStore";
 import type { EdgeDef, EdgeWaypoint, PortSide } from "../types";
+import { EDGE_LABELS_ABOVE_NODES, EDGE_LABELS_UNDER_NODES } from "./editNodeDerivation";
 
 export interface OrthogonalEdgeData extends Record<string, unknown> {
   edgeIndex: number;
@@ -51,6 +52,12 @@ export interface OrthogonalEdgeData extends Record<string, unknown> {
   outputLabelPos?: Record<string, EdgeWaypoint> | null;
   /** Pinned absolute position of the condition pill (#845). */
   conditionLabelPos?: EdgeWaypoint | null;
+  /** First placement slot of this edge's output labels (#845): non-zero when
+   *  an earlier edge leaves from the same point, so the two sets don't stack. */
+  outputLabelSlot?: number;
+  /** `below_nodes` (#845): the edge — and so its labels and handles — draws
+   *  under the node cards. */
+  belowNodes?: boolean;
 }
 
 /**
@@ -69,6 +76,7 @@ export default function OrthogonalEdge({
   targetY,
   source,
   target,
+  sourcePosition,
   markerEnd,
   data,
 }: EdgeProps<Edge<OrthogonalEdgeData>>) {
@@ -271,8 +279,16 @@ export default function OrthogonalEdge({
   // around the base of the arrow until the author drags them elsewhere.
   const ports = data?.ports ?? [];
   const showOutputLabels = data?.showOutputLabels === true && ports.length > 0;
-  const heading = firstSegmentHeading(points);
+  const heading = departureHeading(sourcePosition as PortSide | undefined, points);
   const outputLabelPos = data?.outputLabelPos ?? null;
+  const labelSlot = data?.outputLabelSlot ?? 0;
+  // Everything this edge portals into the label layer stacks with the edge
+  // (#845). The layer itself is not a stacking context, so this z-index
+  // competes with the node cards directly: over them for an edge drawn above,
+  // level with the edge — and so painted under the later node layer — for one
+  // drawn under. One notch over the edge also keeps its hit-stroke from
+  // swallowing the pointer aimed at a label or handle.
+  const labelZ = data?.belowNodes ? EDGE_LABELS_UNDER_NODES : EDGE_LABELS_ABOVE_NODES;
 
   return (
     <>
@@ -302,7 +318,7 @@ export default function OrthogonalEdge({
             two kinds of label are never read as the same thing. */}
         {showOutputLabels &&
           ports.map((port, i) => {
-            const place = outputLabelPlacement(i, heading.axis, heading.dir);
+            const place = outputLabelPlacement(labelSlot + i, heading.axis, heading.dir);
             const pinned = outputLabelPos?.[port];
             const x = pinned ? pinned.x : points[0].x + place.x;
             const y = pinned ? pinned.y : points[0].y + place.y;
@@ -333,6 +349,7 @@ export default function OrthogonalEdge({
                   // merely click-through, it is invisible to the mouse — and
                   // what looks like a drag is the pane panning underneath.
                   pointerEvents: "all",
+                  zIndex: labelZ,
                   fontFamily: "var(--font-mono, monospace)",
                   fontSize: 9.5,
                   lineHeight: 1.3,
@@ -373,6 +390,7 @@ export default function OrthogonalEdge({
               // Grabbable, not click-through (#845): a plain click still hands
               // the selection to the edge, so the pill never blocks it.
               pointerEvents: "all",
+              zIndex: labelZ,
               cursor: "grab",
               whiteSpace: "nowrap",
             }}
@@ -391,7 +409,7 @@ export default function OrthogonalEdge({
               data-testid={`edge-seg-handle-${id}-${h.segmentIndex}`}
               onPointerDown={onHandleDrag(h.segmentIndex, h.orientation)}
               onContextMenu={onHandleDelete(h.segmentIndex)}
-              style={segHandleStyle(h.x, h.y, h.orientation, strokeColor)}
+              style={{ ...segHandleStyle(h.x, h.y, h.orientation, strokeColor), zIndex: labelZ }}
             />
           ))}
       </EdgeLabelRenderer>

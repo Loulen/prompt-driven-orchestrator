@@ -10,6 +10,7 @@
  * implemented on the same integration branch without fighting over one file.
  */
 
+import type { PortSide } from "../types";
 import type { Point } from "./orthogonalRouter";
 
 export type LabelAxis = "horizontal" | "vertical";
@@ -31,6 +32,12 @@ export function segmentAxis(a: Point, b: Point): LabelAxis | null {
  * card. The label is anchored on its near edge instead and grows away from the
  * node, along the wire.
  *
+ * Further ranks step out ACROSS the wire on a horizontal departure, but DOWN
+ * it on a vertical one: a tag is one short line tall and a word wide, so a
+ * 15 px step sideways clears the previous rank's height yet lands a vertical
+ * departure's next tag half on top of the previous one (FP #845, a fan-out
+ * sibling's labels read "spec sc").
+ *
  * `dir` is +1 when the first segment travels right (horizontal) or down
  * (vertical), -1 otherwise.
  */
@@ -47,10 +54,10 @@ export function outputLabelPlacement(
   const ACROSS = 20; // first rank's clearance from the stroke
   const RANK = 15; // each further rank steps out by this much
   const rank = Math.floor(index / 2);
-  const across = (index % 2 === 0 ? -1 : 1) * (ACROSS + rank * RANK);
+  const side = index % 2 === 0 ? -1 : 1;
   return firstAxis === "horizontal"
-    ? { x: dir * GAP, y: across, align: dir > 0 ? "start" : "end" }
-    : { x: across, y: dir * ALONG, align: across < 0 ? "end" : "start" };
+    ? { x: dir * GAP, y: side * (ACROSS + rank * RANK), align: dir > 0 ? "start" : "end" }
+    : { x: side * ACROSS, y: dir * (ALONG + rank * RANK), align: side < 0 ? "end" : "start" };
 }
 
 /**
@@ -101,6 +108,55 @@ export function firstSegmentHeading(points: Point[]): { axis: LabelAxis; dir: 1 
   const axis = segmentAxis(from, to) ?? "horizontal";
   const delta = axis === "horizontal" ? to.x - from.x : to.y - from.y;
   return { axis, dir: delta < 0 ? -1 : 1 };
+}
+
+/**
+ * Axis and direction the arrow LEAVES its source card on — what the alternating
+ * output placement is read against (#845).
+ *
+ * The card side the edge departs from wins over the first segment: an edge that
+ * leaves the bottom rim and immediately jogs sideways has a short HORIZONTAL
+ * first segment, and reading that as the departure axis puts label 0 "above"
+ * the start point — i.e. back inside the card it just left, over the node's
+ * name. The side says which way is out of the card; the first segment is only
+ * the fallback for an edge whose source side is unknown.
+ */
+export function departureHeading(
+  sourceSide: PortSide | null | undefined,
+  points: Point[],
+): { axis: LabelAxis; dir: 1 | -1 } {
+  switch (sourceSide) {
+    case "right":
+      return { axis: "horizontal", dir: 1 };
+    case "left":
+      return { axis: "horizontal", dir: -1 };
+    case "bottom":
+      return { axis: "vertical", dir: 1 };
+    case "top":
+      return { axis: "vertical", dir: -1 };
+    default:
+      return firstSegmentHeading(points);
+  }
+}
+
+/**
+ * First placement slot of each edge's output labels (#845), in edge order.
+ *
+ * Edges that leave from the SAME departure point (same source node, same
+ * source handle) share one base: placing each edge's labels from slot 0 stacks
+ * the fan-out edges' tags pixel on pixel, and one hides the other until the
+ * author drags it. Numbering the slots across the group walks the later edges'
+ * labels outwards instead. An edge whose labels are hidden takes no slot.
+ */
+export function outputLabelSlots(
+  edges: { departure: string; labelCount: number }[],
+): number[] {
+  const used = new Map<string, number>();
+  return edges.map(({ departure, labelCount }) => {
+    const slot = used.get(departure) ?? 0;
+    used.set(departure, slot + labelCount);
+    return slot;
+  });
 }
 
 /** Orientation of the segment the path's midpoint falls on. */

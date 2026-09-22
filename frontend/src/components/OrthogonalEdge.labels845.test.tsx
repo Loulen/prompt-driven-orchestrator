@@ -1,6 +1,6 @@
 import { render, act, fireEvent } from "@testing-library/react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { ReactFlowProvider } from "@xyflow/react";
+import { Position, ReactFlowProvider } from "@xyflow/react";
 import OrthogonalEdge, { type OrthogonalEdgeData } from "./OrthogonalEdge";
 import { useEditStore } from "../stores/editStore";
 import type { EdgeDef, PipelineDef } from "../types";
@@ -310,5 +310,77 @@ describe("condition label (#845)", () => {
 
     expect(useEditStore.getState().selection).toMatchObject({ kind: "edge", edgeIndex: 0 });
     expect(currentEdge().condition_label_pos).toBeUndefined();
+  });
+});
+
+describe("default placement out of the source card (#845 FP findings)", () => {
+  it("places the labels below a bottom-rim departure, even when the route jogs sideways first", () => {
+    // Source on the bottom rim at (0, 0), target down and slightly to the
+    // right: the router's first segment is a short horizontal jog. Label 0 used
+    // to go 20 px ABOVE the start point — inside the card it just left.
+    seedEdge();
+    const { container } = render(
+      <OrthogonalEdge
+        {...edgeProps()}
+        sourcePosition={Position.Bottom}
+        targetX={26}
+        targetY={200}
+      />,
+      { wrapper: Wrapper },
+    );
+
+    for (const port of ["out", "spec"]) {
+      expect(labelPoint(label(container, `edge-output-label-e-0-${port}`)).y).toBeGreaterThan(0);
+    }
+  });
+
+  it("starts at its slot, so a fan-out sibling's tags do not land on this edge's", () => {
+    seedEdge();
+    const { container: first } = render(<OrthogonalEdge {...edgeProps()} />, { wrapper: Wrapper });
+    const { container: second } = render(
+      <OrthogonalEdge {...edgeProps({ outputLabelSlot: 2 })} />,
+      { wrapper: Wrapper },
+    );
+
+    const taken = ["out", "spec"].map((p) => labelPoint(label(first, `edge-output-label-e-0-${p}`)));
+    for (const p of ["out", "spec"]) {
+      const at = labelPoint(label(second, `edge-output-label-e-0-${p}`));
+      expect(taken).not.toContainEqual(at);
+    }
+  });
+});
+
+describe("draw order of the labels and handles (#845)", () => {
+  const conditional = { label: "out.ready = true" };
+
+  function renderSelected(belowNodes: boolean) {
+    seedEdge();
+    useEditStore.setState({ selection: { kind: "edge", id: null, edgeIndex: 0 } });
+    return render(<OrthogonalEdge {...edgeProps({ ...conditional, belowNodes })} />, {
+      wrapper: Wrapper,
+    }).container;
+  }
+
+  function zIndices(container: HTMLElement): string[] {
+    return Array.from(
+      container.querySelectorAll<HTMLElement>(
+        '[data-testid^="edge-output-label-"], [data-testid^="edge-condition-label-"], [data-testid^="edge-seg-handle-"]',
+      ),
+    ).map((el) => el.style.zIndex);
+  }
+
+  it("lifts them one notch over an edge drawn above the cards", () => {
+    const z = zIndices(renderSelected(false));
+    // two tags, the pill, and at least one segment handle
+    expect(z.length).toBeGreaterThanOrEqual(4);
+    expect(new Set(z)).toEqual(new Set(["1002"]));
+  });
+
+  it("sends them under the cards with an edge drawn under nodes", () => {
+    // FP #845 finding: the handle (and the pill) of a "Draw under nodes" edge
+    // stayed painted over the card the stroke passed under.
+    const z = zIndices(renderSelected(true));
+    expect(z.length).toBeGreaterThanOrEqual(4);
+    expect(new Set(z)).toEqual(new Set(["0"]));
   });
 });

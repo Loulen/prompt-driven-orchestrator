@@ -6,7 +6,7 @@ import { anchorHandleId, isEmergentInputNode } from "../lib/anchorSide";
 import { isNodeIsolated } from "../lib/nodeIsolation";
 import { fallbackNodeSpot } from "../lib/nodePlacement";
 import { carriedPorts, declaredOutputs, primaryPort } from "../lib/edgePorts";
-import { resolveOutputLabels } from "../lib/edgeLabels";
+import { outputLabelSlots, resolveOutputLabels } from "../lib/edgeLabels";
 
 /**
  * A run "reaches its end" when it terminates successfully (`completed`). At
@@ -423,10 +423,13 @@ export type EditEdgeData = OrthogonalEdgeData;
  * edge above 1000 draws over the node cards (nodes render around 0-1000 in the
  * same stacking context) and one at 0 draws under them.
  *
- * `.react-flow__edgelabel-renderer` is lifted to 1002 in `index.css` to match:
- * an elevated edge would otherwise sit above the label layer and let its 14px
+ * The labels and segment handles follow suit ({@link EDGE_LABELS_ABOVE_NODES}
+ * / {@link EDGE_LABELS_UNDER_NODES}, set per element in `OrthogonalEdge`): an
+ * elevated edge would otherwise sit above its own labels and let its 14px
  * invisible hit-stroke swallow every pointer event aimed at a label or a
- * segment handle — silently, with nothing in the console to explain it.
+ * segment handle — silently, with nothing in the console to explain it — and
+ * an edge sent under the cards would keep its labels and handles painted over
+ * them.
  *
  * 1001 clears xyflow's `elevateNodesOnSelect` (+1000 on the selected card), and
  * deliberately only TIES with {@link REGION_CHROME_Z}: the node layer is painted
@@ -435,6 +438,10 @@ export type EditEdgeData = OrthogonalEdgeData;
  */
 export const EDGE_ABOVE_NODES = 1001;
 export const EDGE_UNDER_NODES = 0;
+/** Labels and handles of an edge drawn above the cards: one notch over it. */
+export const EDGE_LABELS_ABOVE_NODES = 1002;
+/** Labels and handles of an edge drawn under the cards: level with it. */
+export const EDGE_LABELS_UNDER_NODES = 0;
 
 /**
  * Derives xyflow edges from a pipeline. Conditional edges (ADR-0011) carry an
@@ -493,6 +500,17 @@ function resolveTargetHandle(
 
 export function deriveEditEdges(pipeline: PipelineDef): Edge<EditEdgeData>[] {
   const endNodeId = pipeline.nodes.find((n) => n.type === "end")?.id;
+
+  // Output-label slots (#845): fan-out edges drawn from one departure point
+  // number their labels across the group, so their tags do not stack.
+  const labelSlots = outputLabelSlots(
+    pipeline.edges.map((e) => ({
+      departure: `${e.source.node}\u0000${primaryPort(e.source)}`,
+      labelCount: resolveOutputLabels(e.show_output_labels, declaredOutputs(pipeline, e).length)
+        ? carriedPorts(e.source).length
+        : 0,
+    })),
+  );
 
   return pipeline.edges.map((e, i) => {
     const isEndEdge = endNodeId != null && e.target.node === endNodeId;
@@ -565,6 +583,8 @@ export function deriveEditEdges(pipeline: PipelineDef): Edge<EditEdgeData>[] {
         showOutputLabels,
         outputLabelPos: e.output_label_pos ?? null,
         conditionLabelPos: e.condition_label_pos ?? null,
+        outputLabelSlot: labelSlots[i],
+        belowNodes: e.below_nodes === true,
       },
       markerEnd: {
         type: MarkerType.ArrowClosed,

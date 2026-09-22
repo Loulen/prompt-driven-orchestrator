@@ -344,21 +344,23 @@ body {
   transform: translate(-50%, -50%);
 }
 
-/* Edge labels above the elevated edges (#845).
+/* Edge labels stack WITH their edge (#845).
  *
- * Edges draw ABOVE the node cards now, which means giving each edge's SVG layer
- * a zIndex (1001, `EDGE_ABOVE_NODES` in editNodeDerivation.ts). That same layer
- * then sits above `.react-flow__edgelabel-renderer`, which is where the output
- * labels, the condition pill and the segment handles live — and the edge's own
- * invisible 14px hit-stroke swallows every pointer event aimed at them, so
- * labels cannot be grabbed and handles cannot be dragged, with nothing in the
- * console to say why.
+ * Edges draw above the node cards by default (zIndex 1001, `EDGE_ABOVE_NODES`)
+ * or under them (0, "Draw under nodes"). The output labels, the condition pill
+ * and the segment handles all live in `.react-flow__edgelabel-renderer`, one
+ * layer shared by every edge — so a z-index on the LAYER can only put all of
+ * them above the cards or all of them below. Lifted to 1002 as a whole, an edge
+ * sent under the cards kept its pill and handles painted over them.
  *
- * Lift the label layer one notch above the elevated edges. It keeps xyflow's
- * `pointer-events: none` (only its children opt back in), so this changes the
- * hit ORDER without making the layer itself catch anything. */
+ * So the layer must stay a plain positioned box, not a stacking context: each
+ * label and handle carries its own z-index (`EDGE_LABELS_ABOVE_NODES` = 1002,
+ * one notch over its elevated edge so the edge's invisible 14px hit-stroke
+ * cannot swallow the pointer aimed at it; `EDGE_LABELS_UNDER_NODES` = 0, level
+ * with an edge drawn under) and competes with the node cards directly. Never
+ * give this layer a z-index. */
 .react-flow__edgelabel-renderer {
-  z-index: 1002;
+  z-index: auto;
 }
 
 /* Output port dot (#170) — plain filled green dot straddling the node border.

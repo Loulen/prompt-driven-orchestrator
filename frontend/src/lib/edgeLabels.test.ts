@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
   conditionLabelOffset,
+  departureHeading,
   firstSegmentHeading,
   midpointAxis,
   outputLabelPlacement,
+  outputLabelSlots,
   outputLabelsDefault,
   resolveOutputLabels,
   segmentAxis,
@@ -47,6 +49,18 @@ describe("outputLabelPlacement (#845)", () => {
     expect(second.y).toBe(first.y);
     expect(first.align).toBe("end");
     expect(second.align).toBe("start");
+  });
+
+  it("walks further ranks DOWN a vertical wire, so a wide tag never lands on the previous one", () => {
+    const [a, b, c, d] = [0, 1, 2, 3].map((i) => outputLabelPlacement(i, "vertical", 1));
+    // same side, same column — the rank moves along the wire, by a full line
+    expect(c.x).toBe(a.x);
+    expect(d.x).toBe(b.x);
+    expect(c.y - a.y).toBeGreaterThanOrEqual(15);
+    expect(d.y - b.y).toBeGreaterThanOrEqual(15);
+    expect(outputLabelPlacement(2, "vertical", -1).y).toBeLessThan(
+      outputLabelPlacement(0, "vertical", -1).y,
+    );
   });
 
   it("sends the labels up the wire when the arrow leaves upwards", () => {
@@ -131,5 +145,62 @@ describe("midpointAxis", () => {
 
   it("falls back to horizontal for a point off the path", () => {
     expect(midpointAxis(path, { x: -500, y: -500 })).toBe("horizontal");
+  });
+});
+
+describe("departureHeading", () => {
+  it("reads the departure from the source card's side, not the first segment", () => {
+    // FP #845 finding: an edge leaving the BOTTOM rim that jogs 26 px sideways
+    // has a horizontal first segment. Read against it, label 0 went "above" the
+    // start point — back inside the card, over the node's name.
+    const jog = [
+      { x: 0, y: 0 },
+      { x: 26, y: 0 },
+      { x: 26, y: 120 },
+    ];
+    const heading = departureHeading("bottom", jog);
+    expect(heading).toEqual({ axis: "vertical", dir: 1 });
+    // Both of the first two labels land below the rim (y > 0), out of the card.
+    for (const i of [0, 1]) {
+      expect(outputLabelPlacement(i, heading.axis, heading.dir).y).toBeGreaterThan(0);
+    }
+  });
+
+  it("maps every side to the way out of the card", () => {
+    expect(departureHeading("right", [])).toEqual({ axis: "horizontal", dir: 1 });
+    expect(departureHeading("left", [])).toEqual({ axis: "horizontal", dir: -1 });
+    expect(departureHeading("top", [])).toEqual({ axis: "vertical", dir: -1 });
+  });
+
+  it("falls back to the first segment when the side is unknown", () => {
+    const up = [
+      { x: 0, y: 0 },
+      { x: 0, y: -40 },
+    ];
+    expect(departureHeading(undefined, up)).toEqual(firstSegmentHeading(up));
+  });
+});
+
+describe("outputLabelSlots", () => {
+  it("numbers the labels across edges that leave from the same point", () => {
+    // FP #845 finding: two edges fanning out of `designer.spec` both placed
+    // their tag at slot 0 — pixel on pixel.
+    expect(
+      outputLabelSlots([
+        { departure: "designer/spec", labelCount: 2 },
+        { departure: "designer/spec", labelCount: 1 },
+        { departure: "builder/out", labelCount: 1 },
+        { departure: "designer/spec", labelCount: 1 },
+      ]),
+    ).toEqual([0, 2, 0, 3]);
+  });
+
+  it("gives no slot to an edge whose labels are hidden", () => {
+    expect(
+      outputLabelSlots([
+        { departure: "a/x", labelCount: 0 },
+        { departure: "a/x", labelCount: 1 },
+      ]),
+    ).toEqual([0, 0]);
   });
 });

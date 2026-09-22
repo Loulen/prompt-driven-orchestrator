@@ -6,6 +6,7 @@ import {
   approachPoint,
   clipOutside,
   enforcePerpendicularEnds,
+  handlePin,
   landingConnector,
   landingLeg,
   dropAnchor,
@@ -122,6 +123,101 @@ describe("landingConnector", () => {
     const before = pts[pts.length - 2];
     expect(before.x).toBe(anchor.x);
     expect(anchor.y - before.y).toBe(LEG);
+  });
+});
+
+describe("landingConnector — around the card (#844, FP finding 2)", () => {
+  /** Segments — the landing leg excepted — running through the card's inside. */
+  function crossings(points: Point[], rect: typeof RECT): number {
+    let n = 0;
+    for (let i = 1; i < points.length - 1; i++) {
+      const [a, b] = [points[i - 1], points[i]];
+      const spans = (lo: number, hi: number, e0: number, e1: number) =>
+        Math.min(lo, hi) < e1 && Math.max(lo, hi) > e0;
+      if (
+        spans(a.x, b.x, rect.x, rect.x + rect.width) &&
+        spans(a.y, b.y, rect.y, rect.y + rect.height)
+      ) {
+        n++;
+      }
+    }
+    return n;
+  }
+
+  it("does not walk through the card to reach a landing on its far side", () => {
+    // Aiming at the BOTTOM border from above. The approach point is one leg BELOW
+    // the card, so the plain L dives across the body, overshoots and doubles back
+    // in — the spur the FP caught, persisted as waypoints inside the node.
+    const anchor = { x: 200, y: 180 }; // middle of RECT's bottom border
+    const from = { x: 120, y: 20 };
+    expect(crossings(landingConnector(from, anchor, "bottom", LEG), RECT)).toBeGreaterThan(0);
+    const around = landingConnector(from, anchor, "bottom", LEG, RECT);
+    expect(orthogonal(around)).toBe(true);
+    expect(crossings(around, RECT)).toBe(0);
+    expect(around[around.length - 1]).toEqual(anchor);
+  });
+
+  it("turns the arrowhead the right way round when the wire is dead in line", () => {
+    // Straight above the anchor, the plain connector collapsed to one segment
+    // running from above INTO the bottom border: the wire pierced the card and
+    // the arrowhead pointed out of it instead of in.
+    const anchor = { x: 200, y: 180 };
+    const straight = landingConnector({ x: 200, y: 20 }, anchor, "bottom", LEG);
+    expect(straight[straight.length - 2].y).toBeLessThan(anchor.y);
+    const around = landingConnector({ x: 200, y: 20 }, anchor, "bottom", LEG, RECT);
+    expect(crossings(around, RECT)).toBe(0);
+    // Now arriving from BELOW, one leg out, as a bottom landing must.
+    expect(around[around.length - 2]).toEqual({ x: anchor.x, y: anchor.y + LEG });
+  });
+
+  it("leaves by the corridor on its own side of the card", () => {
+    const anchor = { x: 200, y: 180 };
+    // Above the card's left third: it comes down the LEFT, never across to the
+    // far border. (A wire already clear of the card needs no detour at all — the
+    // corridor only opens for one that would otherwise cross.)
+    const left = landingConnector({ x: 120, y: 20 }, anchor, "bottom", LEG, RECT);
+    expect(left[1].x).toBe(RECT.x - LEG);
+    // …and the mirror image above its right third.
+    const right = landingConnector({ x: 280, y: 20 }, anchor, "bottom", LEG, RECT);
+    expect(right[1].x).toBe(RECT.x + RECT.width + LEG);
+  });
+
+  it("still lands perpendicular, one leg long, after the detour", () => {
+    const anchor = { x: 100, y: 140 }; // middle of the LEFT border
+    const pts = landingConnector({ x: 500, y: 140 }, anchor, "left", LEG, RECT);
+    expect(crossings(pts, RECT)).toBe(0);
+    const [before, last] = pts.slice(-2);
+    expect(last).toEqual(anchor);
+    expect(before.y).toBe(anchor.y);
+    expect(anchor.x - before.x).toBe(LEG);
+  });
+
+  it("adds nothing when the landing is already reachable head-on", () => {
+    const anchor = { x: 160, y: 100 };
+    expect(landingConnector({ x: 0, y: 20 }, anchor, "top", LEG, RECT)).toEqual(
+      landingConnector({ x: 0, y: 20 }, anchor, "top", LEG),
+    );
+  });
+});
+
+describe("handlePin", () => {
+  it("pins on the middle of the handle's own side, from its centre", () => {
+    // The End marker's `result` handle covers the whole card: its centre is the
+    // card's centre, and the edge is pinned on the middle of its declared side —
+    // the very point xyflow hands the renderer as `targetX/targetY`.
+    const centre = { x: 200, y: 140 };
+    const size = { width: 200, height: 80 };
+    expect(handlePin(centre, size, "top")).toEqual({ x: 200, y: 100 });
+    expect(handlePin(centre, size, "bottom")).toEqual({ x: 200, y: 180 });
+    expect(handlePin(centre, size, "left")).toEqual({ x: 100, y: 140 });
+    expect(handlePin(centre, size, "right")).toEqual({ x: 300, y: 140 });
+  });
+
+  it("is the side middle of the card for a card-sized handle", () => {
+    const centre = { x: RECT.x + RECT.width / 2, y: RECT.y + RECT.height / 2 };
+    for (const side of ["top", "bottom", "left", "right"] as const) {
+      expect(handlePin(centre, RECT, side)).toEqual(anchorPoint(RECT, null, side));
+    }
   });
 });
 

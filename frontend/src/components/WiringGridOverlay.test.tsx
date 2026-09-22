@@ -39,6 +39,35 @@ describe("WiringGridOverlay (#844)", () => {
     expect(grid.style.backgroundImage).toContain("to bottom");
   });
 
+  // The overlay is drawn in FLOW coordinates, so the browser rasterises it scaled
+  // by the zoom: a width written in flow px comes out multiplied by it. Half a
+  // flow pixel — what the `lines` variant used to ask for — is under half a device
+  // pixel at the zoom a canvas fits itself to, and Chrome rasterises it away
+  // completely. The setting was shipped painting nothing (#844, FP finding 1).
+  const widths = (variant: "dots" | "lines", zoom: number): number[] => {
+    render(
+      <WiringGridOverlay
+        origin={{ x: 0, y: 0 }}
+        step={WIRING_GRID_STEP}
+        variant={variant}
+        zoom={zoom}
+      />,
+    );
+    const grid = screen.getAllByTestId("wiring-grid").pop()!;
+    return [...grid.style.backgroundImage.matchAll(/([\d.]+)px/g)].map((m) => Number(m[1]));
+  };
+
+  it.each([0.5, 0.9614, 1, 2])("keeps every wiring-grid line a screen pixel wide at zoom %s", (zoom) => {
+    for (const w of widths("lines", zoom)) {
+      expect(w * zoom).toBeCloseTo(1, 5);
+    }
+  });
+
+  it("scales the dots the same way, so they survive a zoomed-out canvas too", () => {
+    const [radius] = widths("dots", 0.5);
+    expect(radius * 0.5).toBeCloseTo(0.8, 5);
+  });
+
   it("never eats a pointer event — it is a reading aid, not a surface", () => {
     render(<WiringGridOverlay origin={{ x: 0, y: 0 }} step={WIRING_GRID_STEP} variant="dots" />);
     expect(screen.getByTestId("wiring-grid").style.pointerEvents).toBe("none");

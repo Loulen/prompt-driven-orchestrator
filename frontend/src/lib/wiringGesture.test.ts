@@ -8,7 +8,7 @@ import {
   type WiringGesture,
 } from "./wiringGesture";
 import { isAxisAligned, WIRING_GRID_STEP } from "./wiringGrid";
-import { enforcePerpendicularEnds, landingLeg } from "./anchorSide";
+import { enforcePerpendicularEnds, landingConnector, landingLeg } from "./anchorSide";
 
 const STEP = WIRING_GRID_STEP;
 const LEG = landingLeg(STEP);
@@ -22,6 +22,32 @@ function orthogonal(points: Point[]): boolean {
     if (!isAxisAligned(points[i - 1], points[i])) return false;
   }
   return true;
+}
+
+/**
+ * The segments of a path that run through a card's inside — the landing leg
+ * excepted, which is the one segment that is SUPPOSED to touch the border.
+ *
+ * Stronger than « no waypoint inside the card »: the spur the FP found crossed
+ * the whole body with both of its ends outside it.
+ */
+function crossings(
+  points: Point[],
+  rect: { x: number; y: number; width: number; height: number },
+): [Point, Point][] {
+  const out: [Point, Point][] = [];
+  for (let i = 1; i < points.length - 1; i++) {
+    const [a, b] = [points[i - 1], points[i]];
+    const spans = (lo: number, hi: number, e0: number, e1: number) =>
+      Math.min(lo, hi) < e1 && Math.max(lo, hi) > e0;
+    if (
+      spans(a.x, b.x, rect.x, rect.x + rect.width) &&
+      spans(a.y, b.y, rect.y, rect.y + rect.height)
+    ) {
+      out.push([a, b]);
+    }
+  }
+  return out;
 }
 
 /** Walk the gesture through a list of frames. */
@@ -175,9 +201,62 @@ describe("gesturePath — landing", () => {
   });
 });
 
+describe("gesturePath — landing on the far side of the card (FP finding 2)", () => {
+  // Aiming at the BOTTOM of a card the wire reaches from above. The approach point
+  // is one leg below the card, so the naive L walks the whole card body, overshoots
+  // and doubles back in — invisible under an opaque card, and persisted.
+  const overshoot = walk(startGesture(FROM, "bottom", STEP), [
+    { cursor: { x: 80, y: 280 } },
+    { cursor: { x: 470, y: 285 } },
+  ]);
+
+  it("goes AROUND the card instead of through it", () => {
+    const landing = landingAt({ x: 470, y: 470 }, TGT_RECT);
+    expect(landing.anchor.side).toBe("bottom");
+    const path = gesturePath(overshoot, landing, STEP);
+    expect(orthogonal(path)).toBe(true);
+    expect(crossings(path, TGT_RECT)).toEqual([]);
+  });
+
+  it("still enters perpendicular, and still ends on the anchor", () => {
+    const landing = landingAt({ x: 470, y: 470 }, TGT_RECT);
+    const path = gesturePath(overshoot, landing, STEP);
+    const [before, last] = path.slice(-2);
+    expect(last).toEqual(landing.point);
+    expect(before.x).toBe(landing.point.x);
+    // Entering the bottom border means travelling UPWARDS into it.
+    expect(before.y - last.y).toBeGreaterThanOrEqual(LEG);
+  });
+
+  it("keeps the connector it always had when the landing is head-on", () => {
+    // The detour is paid for only where it is needed: a landing the wire reaches
+    // head-on still gets the plain L, rect or no rect.
+    const landing = landingAt({ x: 470, y: 412 }, TGT_RECT);
+    const tip = overshoot.trace.points[overshoot.trace.points.length - 1];
+    expect(gesturePath(overshoot, landing, STEP)).toEqual([
+      ...overshoot.trace.points.slice(0, -1),
+      ...landingConnector(tip, landing.point, "top", LEG),
+    ]);
+  });
+});
+
 describe("landingAt", () => {
   it("takes the side aimed at and the position along it, per pixel", () => {
     expect(landingAt({ x: 470, y: 412 }, TGT_RECT).anchor).toEqual({ side: "top", offset: 70 });
     expect(landingAt({ x: 408, y: 450 }, TGT_RECT).anchor).toEqual({ side: "left", offset: 50 });
+  });
+
+  it("obeys a target that pins the wire to its own declared handle", () => {
+    // End's `result`, a merge's `branches`: the drop position has no say. The
+    // preview must land where the edge will actually be pinned, or it draws — and
+    // persists — the approach to a border the wire never touches.
+    const pin = { side: "top" as const, point: { x: 500, y: 400 } };
+    const landing = landingAt({ x: 470, y: 470 }, TGT_RECT, pin);
+    expect(landing.anchor.side).toBe("top");
+    expect(landing.point).toEqual(pin.point);
+  });
+
+  it("falls back to the drop rule when nothing is pinned", () => {
+    expect(landingAt({ x: 470, y: 470 }, TGT_RECT, null).anchor.side).toBe("bottom");
   });
 });

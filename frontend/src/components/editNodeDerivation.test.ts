@@ -93,6 +93,35 @@ describe("deriveEditEdges targetHandle anchoring (#149)", () => {
     expect(edges[0].targetHandle).toBe("result");
   });
 
+  it("routes to the side the declared handle is actually ON (#844, FP finding 2)", () => {
+    // A declared-port target has no say in `target_side` — nothing ever persists
+    // one for it — so the field reads back as the `left` default while the handle
+    // sits where the port declares it. Handing the edge that `left` laid the
+    // perpendicular landing leg across a border the wire never touches, and the
+    // approach to that phantom border was persisted as waypoints inside the card.
+    const end = node("end", "end", ["result"], []);
+    end.inputs[0].side = "top";
+    const p = pipeline(
+      [node("src", "agent", [], ["plan"]), end],
+      [{ source: { node: "src", port: "plan" }, target: { node: "end", port: "result" } }],
+    );
+    expect(deriveEditEdges(p)[0].data?.targetSide).toBe("top");
+  });
+
+  it("still routes an emergent target to its persisted side", () => {
+    const p = pipeline(
+      [node("src", "agent", [], ["plan"]), node("dst", "agent", [], [])],
+      [
+        {
+          source: { node: "src", port: "plan" },
+          target: { node: "dst", port: "plan" },
+          target_side: "bottom",
+        },
+      ],
+    );
+    expect(deriveEditEdges(p)[0].data?.targetSide).toBe("bottom");
+  });
+
   it("keeps the declared port for structural nodes (merge)", () => {
     const p = pipeline(
       [node("src", "agent", [], ["plan"]), node("m", "merge", ["branches"], ["merged"])],

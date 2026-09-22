@@ -14,6 +14,7 @@
 import type { EdgeAnchor, PortSide } from "../types";
 import type { Point } from "./orthogonalRouter";
 import {
+  anchorFromPoint,
   anchorPoint,
   approachPoint,
   clipOutside,
@@ -140,6 +141,7 @@ export function gesturePath(
         landing.point,
         landing.anchor.side,
         leg,
+        landing.rect,
       ),
     ];
   }
@@ -147,9 +149,31 @@ export function gesturePath(
   return gesture.trace.points;
 }
 
-/** The landing the cursor is currently aiming at on `rect`. The SAME rule the
- *  drop will use, so the previewed arrowhead is where the wire gets pinned. */
-export function landingAt(cursor: Point, rect: AnchorRect): LandingTarget {
+/**
+ * The landing the cursor is currently aiming at on `rect`. The SAME rule the drop
+ * will use, so the previewed arrowhead is where the wire gets pinned.
+ *
+ * `pinned` is the escape hatch for a target that does NOT anchor by drop position:
+ * the End marker's declared `result`, a merge's `branches`. Those keep their own
+ * fixed handle, so the wire lands on it whatever the cursor aimed at — and the
+ * preview has to say so. Previewing a drop-chosen side there drew a landing the
+ * edge would never render, and the points of that phantom approach were persisted
+ * as waypoints inside the card (#844, FP finding 2).
+ */
+export function landingAt(
+  cursor: Point,
+  rect: AnchorRect,
+  pinned?: { side: PortSide; point: Point } | null,
+): LandingTarget {
+  if (pinned) {
+    // The offset merely DESCRIBES the pin (nothing persists it for such a
+    // target); `point` is the pin itself, taken from the handle, never clamped.
+    return {
+      rect,
+      anchor: anchorFromPoint(pinned.point, rect, pinned.side, 0),
+      point: pinned.point,
+    };
+  }
   const anchor = dropAnchor(cursor, rect);
   return { rect, anchor, point: anchorPoint(rect, anchor, anchor.side) };
 }

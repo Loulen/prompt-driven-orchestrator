@@ -470,6 +470,25 @@ function resolveTargetHandle(
   return anchorHandleId(targetSide ?? "left");
 }
 
+/**
+ * The side the arrow physically arrives on — what the edge's geometry must use,
+ * as opposed to the persisted `target_side`.
+ *
+ * They differ exactly where the target keeps a DECLARED handle: `target_side` is
+ * an emergent-body notion (#168) and such a node never has one, so the persisted
+ * value reads back as the `left` default while the handle sits wherever the port
+ * declares (the End marker's `result` on its top border, a merge's `branches` on
+ * its own side). Routing to `left` there lays the perpendicular landing leg on a
+ * border the wire does not touch.
+ */
+export function resolveTargetGeometrySide(
+  target: PipelineDef["nodes"][number],
+  targetSide: PortSide,
+): PortSide {
+  if (isEmergentInputNode(target.type)) return targetSide;
+  return target.inputs[0]?.side ?? "left";
+}
+
 export function deriveEditEdges(pipeline: PipelineDef): Edge<EditEdgeData>[] {
   const endNodeId = pipeline.nodes.find((n) => n.type === "end")?.id;
 
@@ -483,6 +502,15 @@ export function deriveEditEdges(pipeline: PipelineDef): Edge<EditEdgeData>[] {
     const targetHandle = targetNode
       ? resolveTargetHandle(targetNode, e.target.port, targetSide)
       : e.target.port || null;
+    // The side the wire actually ARRIVES on, which is not always the persisted
+    // one: a target that keeps a declared handle (End's `result`, a merge's
+    // `branches`) ignores `target_side` entirely and pins the arrow on its own
+    // side. Handing the edge the persisted `left` there made it lay the landing
+    // leg across a side the handle is not on — a wire entering the card from the
+    // left to reach a pin on its top border (#844, FP finding 2).
+    const geometrySide: PortSide = targetNode
+      ? resolveTargetGeometrySide(targetNode, targetSide)
+      : targetSide;
     const isElse = e.else === true;
     const hasWhen = e.when != null && Object.keys(e.when).length > 0;
     const isConditional = isElse || hasWhen;
@@ -523,7 +551,7 @@ export function deriveEditEdges(pipeline: PipelineDef): Edge<EditEdgeData>[] {
         edgeIndex: i,
         mode: e.mode ?? null,
         waypoints,
-        targetSide,
+        targetSide: geometrySide,
         sourceAnchor: e.source_anchor ?? null,
         targetAnchor: e.target_anchor ?? null,
         isConditional,

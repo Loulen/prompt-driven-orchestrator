@@ -255,12 +255,20 @@ export function approachPoint(anchor: Point, side: PortSide, leg: number): Point
  * arrive there moving PARALLEL to the side, so the only turn left is the one into
  * the card. Hence the intermediate point, which the collinear merge drops whenever
  * the approach is already lined up.
+ *
+ * `rect` (the target card) makes the connector go AROUND it rather than through
+ * it. The approach point sits one leg beyond the chosen side, so whenever the wire
+ * arrives from any other side the plain L walks straight across the card body,
+ * overshoots past the far border and doubles back in — invisible under an opaque
+ * card, but persisted, and on show the moment edges are drawn above nodes. The
+ * detour leaves by the nearest free corridor instead (#844, FP finding 2).
  */
 export function landingConnector(
   from: Point,
   anchor: Point,
   side: PortSide,
   leg: number,
+  rect?: AnchorRect,
 ): Point[] {
   const approach = approachPoint(anchor, side, leg);
   // `left`/`right`: the leg is horizontal, so we must enter `approach` vertically
@@ -268,7 +276,45 @@ export function landingConnector(
   const bend = sideIsHorizontal(side)
     ? { x: from.x, y: approach.y }
     : { x: approach.x, y: from.y };
-  return dedupeCollinear([from, bend, approach, anchor]);
+  const direct = [from, bend, approach, anchor];
+  if (!rect || !crossesRect(direct.slice(0, 3), rect)) return dedupeCollinear(direct);
+
+  // Around the card: out to a corridor one leg clear of the nearer parallel
+  // border, along it, then back in line with the approach. Every leg of this
+  // shape stays outside the card given `from` is outside it — which is what
+  // `clipOutside` guarantees the caller.
+  const detour = sideIsHorizontal(side)
+    ? (() => {
+        const x = nearerCorridor(from.x, rect.x, rect.x + rect.width, leg);
+        return [{ x, y: from.y }, { x, y: approach.y }];
+      })()
+    : (() => {
+        const y = nearerCorridor(from.y, rect.y, rect.y + rect.height, leg);
+        return [{ x: from.x, y }, { x: approach.x, y }];
+      })();
+  return dedupeCollinear([from, ...detour, approach, anchor]);
+}
+
+/** The free lane one leg beyond whichever of the two borders `v` is nearer. */
+function nearerCorridor(v: number, low: number, high: number, leg: number): number {
+  return v - low <= high - v ? low - leg : high + leg;
+}
+
+/** Whether any segment of an axis-aligned polyline runs through `rect`'s inside.
+ *  Touching a border is not crossing it: a wire may run along a card's edge. */
+function crossesRect(points: Point[], rect: AnchorRect): boolean {
+  const x0 = rect.x;
+  const x1 = rect.x + rect.width;
+  const y0 = rect.y;
+  const y1 = rect.y + rect.height;
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1];
+    const b = points[i];
+    const spanLow = (lo: number, hi: number, e0: number, e1: number) =>
+      Math.min(lo, hi) < e1 - TOL && Math.max(lo, hi) > e0 + TOL;
+    if (spanLow(a.x, b.x, x0, x1) && spanLow(a.y, b.y, y0, y1)) return true;
+  }
+  return false;
 }
 
 /**
@@ -432,6 +478,33 @@ export function clipOutside(points: Point[], rect: AnchorRect, margin: number): 
  */
 export function storableWaypoints(enforced: Point[]): Point[] {
   return enforced.length <= 4 ? [] : enforced.slice(2, -2).map((p) => ({ ...p }));
+}
+
+/**
+ * Where a declared handle pins an edge: the middle of the handle's own `side`,
+ * from the handle's CENTRE and size.
+ *
+ * This is xyflow's `getHandlePosition` rule, restated — the renderer is handed
+ * exactly this point as `targetX/targetY`, so a preview that lands anywhere else
+ * draws a wire the edge will not keep. It matters most for the End marker, whose
+ * declared `result` handle covers the whole card: its centre is the card's centre
+ * and its pin is the middle of its declared side.
+ */
+export function handlePin(
+  centre: Point,
+  size: { width: number; height: number },
+  side: PortSide,
+): Point {
+  switch (side) {
+    case "top":
+      return { x: centre.x, y: centre.y - size.height / 2 };
+    case "bottom":
+      return { x: centre.x, y: centre.y + size.height / 2 };
+    case "left":
+      return { x: centre.x - size.width / 2, y: centre.y };
+    case "right":
+      return { x: centre.x + size.width / 2, y: centre.y };
+  }
 }
 
 /** The xyflow handle id of the rim drag-source strip on `side` (#844). */

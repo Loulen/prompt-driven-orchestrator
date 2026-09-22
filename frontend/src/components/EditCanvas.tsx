@@ -26,7 +26,7 @@ import type { LibraryEntry, LibraryPipelineEntry } from "../api";
 import { openRunShell, reopenRun, retryAll } from "../api";
 import RunShellModal from "./RunShellModal";
 import { RetryAllConfirmModal } from "./UnifiedLeftPanel";
-import { buildLoopRegionNodes, buildNoteNodes, deriveEditEdges, deriveEditNodes, edgeIndexFromId } from "./editNodeDerivation";
+import { buildLoopRegionNodes, buildNoteNodes, deriveEditEdges, deriveEditNodes, edgeIndexFromId, resolveTargetGeometrySide } from "./editNodeDerivation";
 import { useEditStore } from "../stores/editStore";
 import { generateNodeId } from "../lib/nanoid";
 import { CARD_HEIGHT, CARD_WIDTH, fallbackNodeSpot, freeDropSpot } from "../lib/nodePlacement";
@@ -34,7 +34,7 @@ import { registerCanvasReveal } from "../lib/canvasReveal";
 import { collectionFanoutFields, collectionFanoutNudges, regionsDestroyedByEdgeRemoval } from "../lib/loopRegions";
 import DestroyLoopModal from "./DestroyLoopModal";
 import NodeRimHandles from "./NodeRimHandles";
-import WiringGridOverlay from "./WiringGridOverlay";
+import { ViewportWiringGridOverlay } from "./WiringGridOverlay";
 import { NodeTypeIcon, IsolationMarker } from "./NodeTypeIcon";
 import { NodeCard } from "./NodeCard";
 import { LoopRegionNode } from "./LoopRegionNode";
@@ -743,11 +743,16 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
       // TYPE: a work node carrying a vestigial declared `in` still anchors (#175).
       const anchorsByDrop = targetDef != null && isEmergentInputNode(targetDef.type);
       const targetAnchor = anchorsByDrop ? dropAnchor(drop, rect) : null;
-      // The side the edge will actually RENDER with. A declared-port target keeps
-      // its fixed handle and persists no `target_side`, which reads back as
-      // `left`; enforcing the landing leg against any other side would save a
-      // route that differs from the one drawn.
-      const side = targetAnchor?.side ?? "left";
+      // The side the edge will actually RENDER with — the same answer
+      // `deriveEditEdges` gives it on the next render. A declared-port target
+      // persists no `target_side` (it has no say in one), so the route must be
+      // enforced against the side its handle is DECLARED on, not against the
+      // `left` that absence reads back as: enforcing on `left` saved a landing
+      // into a border the wire never touches, and its phantom approach ended up
+      // in the file as waypoints inside the card (#844, FP finding 2).
+      const side =
+        targetAnchor?.side ??
+        (targetDef ? resolveTargetGeometrySide(targetDef, "left") : "left");
 
       // The traced waypoints ARE the route: the edge is born `mode: manual`
       // (#844). `drawnEdgeLayout` owns which fields a drop writes and which it
@@ -1034,7 +1039,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
               from the path as soon as the canvas is panned or zoomed. */}
           {wiring && gridFeedback !== "none" && (
             <ViewportPortal>
-              <WiringGridOverlay
+              <ViewportWiringGridOverlay
                 origin={gridOrigin}
                 step={WIRING_GRID_STEP}
                 variant={gridFeedback}

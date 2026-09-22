@@ -3,6 +3,7 @@ import { drawnEdgeLayout } from "./drawnEdge";
 import { WIRING_GRID_STEP } from "./wiringGrid";
 import { anchorPoint, enforcePerpendicularEnds, landingLeg } from "./anchorSide";
 import type { Point } from "./orthogonalRouter";
+import { advanceGesture, gesturePath, landingAt, startGesture } from "./wiringGesture";
 
 const SRC_RECT = { x: 0, y: 0, width: 200, height: 80 };
 const TGT_RECT = { x: 400, y: 400, width: 200, height: 80 };
@@ -109,6 +110,75 @@ describe("drawnEdgeLayout (#844)", () => {
     expect("waypoints" in layout).toBe(false);
     // The anchors still ride along: the wire's endpoints ARE the gesture.
     expect(layout.source_anchor).toEqual(SOURCE_ANCHOR);
+  });
+
+  it("never saves a route that runs through the target card (#844, FP finding 2)", () => {
+    // The whole chain, as the canvas runs it: a gesture that dives at the BOTTOM
+    // of an End marker whose `result` handle is declared on its TOP border. The
+    // preview is pinned to that handle — the drop position has no say — so the
+    // route persisted is the one that will be rendered, and it goes round the
+    // card rather than through it. Before the fix the preview landed on the
+    // bottom, and its approach to that phantom border was written to the file as
+    // waypoints inside the node.
+    const pin = { side: "top" as const, point: anchorPoint(TGT_RECT, null, "top") };
+    let gesture = startGesture(SRC, "bottom", WIRING_GRID_STEP);
+    for (const cursor of [
+      { x: 80, y: 240 },
+      { x: 500, y: 245 },
+      { x: 500, y: 470 }, // over the card: the trace freezes
+    ]) {
+      gesture = advanceGesture(gesture, {
+        cursor,
+        shift: false,
+        overTarget: cursor.y > TGT_RECT.y,
+        step: WIRING_GRID_STEP,
+      });
+    }
+    const traced = gesturePath(
+      gesture,
+      landingAt({ x: 500, y: 470 }, TGT_RECT, pin),
+      WIRING_GRID_STEP,
+    );
+
+    const layout = drawnEdgeLayout({
+      traced,
+      sourceAnchor: SOURCE_ANCHOR,
+      targetAnchor: null,
+      targetSide: "top",
+      anchorsByDrop: false,
+    });
+    // No waypoint inside the card…
+    for (const w of layout.waypoints ?? []) {
+      const inside =
+        w.x > TGT_RECT.x &&
+        w.x < TGT_RECT.x + TGT_RECT.width &&
+        w.y > TGT_RECT.y &&
+        w.y < TGT_RECT.y + TGT_RECT.height;
+      expect({ ...w, inside }).toEqual({ ...w, inside: false });
+    }
+    // …and, the stronger property, no SEGMENT of the reloaded route through it
+    // either: the spur the FP caught had both its ends outside the card and its
+    // body straight across it.
+    const leg = landingLeg(WIRING_GRID_STEP);
+    const reloaded = enforcePerpendicularEnds(
+      [SRC, ...(layout.waypoints ?? []), pin.point],
+      "bottom",
+      "top",
+      leg,
+    );
+    for (let i = 1; i < reloaded.length - 1; i++) {
+      const [a, b] = [reloaded[i - 1], reloaded[i]];
+      const spans = (lo: number, hi: number, e0: number, e1: number) =>
+        Math.min(lo, hi) < e1 && Math.max(lo, hi) > e0;
+      expect({
+        segment: [a, b],
+        through:
+          spans(a.x, b.x, TGT_RECT.x, TGT_RECT.x + TGT_RECT.width) &&
+          spans(a.y, b.y, TGT_RECT.y, TGT_RECT.y + TGT_RECT.height),
+      }).toEqual({ segment: [a, b], through: false });
+    }
+    // …and what is reloaded is what was drawn.
+    expect(reloaded).toEqual(enforcePerpendicularEnds(traced, "bottom", "top", leg));
   });
 
   it("writes nothing at all for a drop that carried no gesture and no anchor", () => {

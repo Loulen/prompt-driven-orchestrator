@@ -5,6 +5,8 @@ SHELL := /usr/bin/env bash
 PORT := 6172
 VITE_PORT := 5174
 SANDBOX := /tmp/pdo-dev-sandbox
+# The one file carrying the generated harness support table (#855).
+SUPPORT_TABLE := docs/reference/harnesses.md
 
 # ---- installed global daemon (build-from-source; runs as a systemd --user service) ----
 REPO_URL      := git@github.com:Loulen/prompt-driven-orchestrator.git
@@ -17,11 +19,11 @@ help:
 	@echo "  make dev     Run dev daemon (port $(PORT)) + Vite (port $(VITE_PORT)) for chrome-MCP testing"
 	@echo "  make build   cargo build + pnpm run build (frontend embedded into daemon)"
 	@echo "  make test    cargo nextest + doctests + vitest"
-	@echo "  make check   cargo check + tsc --noEmit + the README support table is current"
+	@echo "  make check   cargo check + tsc --noEmit + the harness support table (docs/reference/harnesses.md) is current"
 	@echo "  make lint    cargo clippy + eslint"
 	@echo "  make fmt     cargo fmt"
 	@echo "  make clean   cargo clean + rm frontend/dist"
-	@echo "  make support-table  Regenerate the README harness support table from the code"
+	@echo "  make support-table  Regenerate the harness support table in docs/reference/harnesses.md from the code"
 	@echo ""
 	@echo "Installed global daemon ($(PDO_PROD_DIR), port $(PDO_PROD_PORT)):"
 	@echo "  make install          Clone if needed + build release + install $(PDO_BIN)"
@@ -57,16 +59,16 @@ test:
 check:
 	cargo check --workspace
 	cd frontend && pnpm run typecheck
-	# The README support table is generated from the capability declaration in
-	# crates/pdo-daemon/src/harness_probes.rs (#617). A hand-edited table would be
-	# wrong at the next capability; this fails and names the drift instead. Fix it
-	# with `make support-table`, never by editing the README block.
-	cargo run --quiet -p pdo-daemon -- docs support-table --check --file $(CURDIR)/README.md
+	# The harness support table in docs/reference/harnesses.md is generated from the
+	# capability declaration in crates/pdo-daemon/src/harness_probes.rs (#617). A
+	# hand-edited table would be wrong at the next capability; this fails and names
+	# the drift instead. Fix it with `make support-table`, never by editing the block.
+	cargo run --quiet -p pdo-daemon -- docs support-table --check --file $(CURDIR)/$(SUPPORT_TABLE)
 
-# Rewrite the README's generated block from the code. Run it after adding a
-# harness, adding a capability, or moving a "last validated version".
+# Rewrite the generated block of docs/reference/harnesses.md from the code. Run it
+# after adding a harness, adding a capability, or moving a "last validated version".
 support-table:
-	cargo run --quiet -p pdo-daemon -- docs support-table --write --file $(CURDIR)/README.md
+	cargo run --quiet -p pdo-daemon -- docs support-table --write --file $(CURDIR)/$(SUPPORT_TABLE)
 
 lint:
 	cargo clippy --workspace --all-targets -- -D warnings

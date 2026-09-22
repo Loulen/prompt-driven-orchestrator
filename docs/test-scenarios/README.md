@@ -62,5 +62,5 @@ costs almost nothing — panes inside one Run, no staging, no image — which is
 three journeys, and a fourth would have re-driven the entire run lifecycle to observe one harness.
 Added to the existing pin it costs one more pane and buys the full spread of PDO's instrumentation
 in a single Run — five capabilities (`claude`), three (`copilot`), none (`opencode`) — which is
-exactly what the README's **Support** table publishes. That makes HP-02 the one place the published
+exactly what the **support table** of `docs/reference/harnesses.md` publishes. That makes HP-02 the one place the published
 table and the running product are compared.

@@ -1003,7 +1003,7 @@ Règle de récupération des prompts : string-literal sans interpolation → ver
 ## Médias du README
 
 **Instance de démo** :
-Daemon PDO jetable, étanche à l'instance de l'utilisateur (son propre répertoire courant, son propre `HOME`, son propre port), sur laquelle `make readme-media` enregistre les médias du README. Les scènes live y tournent avec de vrais agents ; l'historique (Stats, fires, runs terminés) y est **moqué** (ADR-0072).
+Daemon PDO jetable, étanche à l'instance de l'utilisateur (son propre répertoire courant, son propre `HOME`, son propre port), sur laquelle `make readme-media` enregistre les médias du README. Les scènes live y tournent avec de vrais agents ; l'historique (Stats, fires, runs terminés) y est **moqué** (ADR-0074).
 _Éviter_ : « mode démo » (PDO n'a pas de mode démo, ADR-0071), « instance de test ».
 
 **Scène** :

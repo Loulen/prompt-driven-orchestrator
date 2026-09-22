@@ -48,7 +48,8 @@ Features validated while crossing the editing screens (grafted from retired per-
    grid on the current point. Drop on another node's **card body** → an emergent input edge is created,
    named after the source document (there is no input dot to aim at), carrying the source's **first
    declared output**, pinned as `mode: manual` with the waypoints just drawn, and landing
-   **perpendicular** to the side it was aimed at.
+   **perpendicular** to the side it was aimed at. Which outputs it carries is changed afterwards in
+   the edge panel's **Outputs** section (one checkbox per declared output), never by redrawing.
    Then **reshape it**: select the edge, drag a middle segment → it snaps to the grid (Shift frees it)
    and the neighbouring waypoints do not move; drag it until it lines up with a neighbour → the
    waypoint between them is **merged away** on release. **Right-click on a segment handle does
